@@ -37,6 +37,16 @@ pub fn printed_name(name: &str) -> String {
     if name.starts_with('"') || !name.contains('$') { name.to_owned() } else { format!("\"{name}\"") }
 }
 
+impl Labels {
+    /// The label of a block, `%` left off.
+    pub fn block_label(
+        &self,
+        block: BlockId,
+    ) -> String {
+        self.blocks.get(&block).cloned().unwrap_or_default()
+    }
+}
+
 /// `Type::print`.
 pub fn type_text(ty: Ty) -> String {
     match ty {

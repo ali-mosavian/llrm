@@ -19,7 +19,7 @@ fn test_a_global_is_aligned_to_its_types_preferred_alignment() {
           ret ptr addrspace(1) %p\n\
         }\n";
     let module = llrm_mir::parse::module(text).expect("parses");
-    assert_eq!(print_module_values(&module), "@f\n%p\t(6 + @g)<nuw><nsw>\tU: [6,-9)\tS: [-32762,32767)\n");
+    assert_eq!(print_module_values(&module), "@f\n%p\t(6 + @g)<nuw><nsw> U: [6,-9) S: [-32762,32767)\n");
 }
 
 /// `for (i = 0; ; i++)` with a loop-invariant bound: the PHI is the add
@@ -36,12 +36,17 @@ fn test_a_counted_loop_phi_is_an_add_recurrence() {
           br i1 %cmp, label %loop, label %exit\n\
         exit:\n  %r = mul i32 %inc, 4\n  ret i32 %r\n}\n";
     let module = llrm_mir::parse::module(text).expect("parses");
+    let printed = print_module_values(&module);
+    // The text up to the exit values, which the trip counts decide.
+    let heads: Vec<&str> = printed.lines().map(|line| line.split("\t\t").next().expect("a line")).collect();
     assert_eq!(
-        print_module_values(&module),
-        "@f\n\
-         %i\t{0,+,1}<nuw><nsw><%loop>\tU: [0,-2147483648)\tS: [0,-2147483648)\n\
-         %inc\t{1,+,1}<nuw><nsw><%loop>\tU: [1,-2147483648)\tS: [1,-2147483648)\n\
-         %r\t{4,+,4}<%loop>\tU: [0,-3)\tS: [-2147483648,2147483645)\n"
+        heads,
+        [
+            "@f",
+            "%i\t{0,+,1}<nuw><nsw><%loop> U: [0,-2147483648) S: [0,-2147483648)",
+            "%inc\t{1,+,1}<nuw><nsw><%loop> U: [1,-2147483648) S: [1,-2147483648)",
+            "%r\t{4,+,4}<%loop> U: [0,-3) S: [-2147483648,2147483645)",
+        ]
     );
 }
 

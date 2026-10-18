@@ -3,9 +3,9 @@
 
     tools/scev/values.py [--bin PATH] [FILE.ll ...]    (default: the analysis corpus)
 
-Compares, per non-compare instruction, the expression and its unsigned and
-signed ranges (the "Classifying expressions" lines); the exit counts and loop
-dispositions on the same lines belong to the trip-count stage. Prints
+Compares, per non-compare instruction, the whole "Classifying expressions"
+line: the expression, its ranges, its value at the loop's scope, its exit
+value and its loop dispositions. Prints
 `files total / compared / failed / missing`, then each mismatch. Exit 1 on any
 mismatch or missing side; the pinned opt is refused if it is not LLVM 24.0.0git.
 """
@@ -36,7 +36,7 @@ def parse_opt(text):
         elif function is not None and line.startswith("  %") and " = " in line:
             name = line.strip().split(" = ", 1)[0]
         elif function is not None and line.startswith("  -->  ") and name:
-            body = line[len("  -->  "):].split("\t\t")[0].split("  -->  ")[0]
+            body = line[len("  -->  "):].replace("\t\t", "\t")
             out[function].append((name, body))
             name = None
     return out
@@ -49,8 +49,8 @@ def parse_llrm(text):
             function = line[1:]
             out[function] = []
         else:
-            name, expr, unsigned, signed = line.split("\t")
-            out[function].append((name, f"{expr} {unsigned} {signed}"))
+            name, body = line.split("\t", 1)
+            out[function].append((name, body))
     return out
 
 

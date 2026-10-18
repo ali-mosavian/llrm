@@ -5,14 +5,17 @@
 use llrm_mir::module::Operand;
 use llrm_mir::opcode::Opcode;
 
+use super::expr::{Kind, Scev, Use};
 use super::print::Labels;
 use super::{Cx, ScalarEvolution};
 
 impl ScalarEvolution {
-    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L14220
-    /// The "Classifying expressions" lines of `print`: for each SCEVable
-    /// instruction that is not a compare, `%name<TAB>expr<TAB>U: range<TAB>S:
-    /// range`.
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L14396
+    /// The "Classifying expressions" part of `print`: for each SCEVable
+    /// instruction that is not a compare, `%name<TAB>` and the text LLVM
+    /// writes after `-->`. The order of the queries is LLVM's: each one can
+    /// make the next see more or less of what has been computed, and so can
+    /// decide flags and ranges.
     pub fn print_values(
         &mut self,
         cx: &Cx,
@@ -30,19 +33,76 @@ impl ScalarEvolution {
                 if !self.is_value_scevable(cx, value) {
                     continue;
                 }
+                out += &self.print_value_name(labels, value);
+                out.push('\t');
                 let sv = self.get_scev(cx, value);
-                let unsigned = self.get_unsigned_range(cx, sv);
-                let signed = self.get_signed_range(cx, sv);
-                out += &format!(
-                    "{}\t{}\tU: {}\tS: {}\n",
-                    self.print_value_name(labels, value),
-                    self.print(cx, labels, sv),
-                    unsigned.print(),
-                    signed.print()
-                );
+                out += &self.print(cx, labels, sv);
+                if !matches!(self.node(sv).kind, Kind::CouldNotCompute) {
+                    out += &self.print_ranges(cx, sv);
+                }
+
+                let l = cx.loops.get_loop_for(block).map(|one| one.get_header());
+                let at_use = self.get_scev_at_scope_use(cx, sv, l);
+                if at_use != Use::of(sv) {
+                    out += "  -->  ";
+                    out += &self.print_use(cx, labels, at_use);
+                    if !matches!(self.node(at_use.scev).kind, Kind::CouldNotCompute) {
+                        out += &self.print_ranges(cx, at_use.scev);
+                    }
+                }
+
+                if let Some(l) = l {
+                    let loop_ = super::disposition::loop_of(cx, l);
+                    out += "\t\tExits: ";
+                    let parent = loop_.get_parent_loop().map(|one| one.get_header());
+                    let exit_value = self.get_scev_at_scope_use(cx, sv, parent);
+                    if !self.is_loop_invariant(cx, exit_value.scev, Some(l)) {
+                        out += "<<Unknown>>";
+                    } else {
+                        out += &self.print_use(cx, labels, exit_value);
+                    }
+
+                    let mut headers = vec![];
+                    let mut at = Some(loop_);
+                    while let Some(one) = at {
+                        headers.push(one.get_header());
+                        at = one.get_parent_loop();
+                    }
+                    let mut inner = Vec::new();
+                    loop_.get_inner_loops_in_preorder(&mut inner);
+                    headers.extend(inner.into_iter().map(|one| one.get_header()));
+                    let mut separator = "\t\tLoopDispositions: { ";
+                    for header in headers {
+                        out += separator;
+                        separator = ", ";
+                        out += &format!(
+                            "%{}: {}",
+                            labels.block_label(header),
+                            match self.get_loop_disposition(cx, sv, Some(header)) {
+                                super::disposition::LoopDisposition::Variant => "Variant",
+                                super::disposition::LoopDisposition::Invariant => "Invariant",
+                                super::disposition::LoopDisposition::Computable => "Computable",
+                                super::disposition::LoopDisposition::Uniform => "Uniform",
+                            }
+                        );
+                    }
+                    out += " }";
+                }
+                out.push('\n');
             }
         }
         out
+    }
+
+    /// ` U: <range> S: <range>`.
+    fn print_ranges(
+        &mut self,
+        cx: &Cx,
+        s: Scev,
+    ) -> String {
+        let unsigned = self.get_unsigned_range(cx, s);
+        let signed = self.get_signed_range(cx, s);
+        format!(" U: {} S: {}", unsigned.print(), signed.print())
     }
 }
 
