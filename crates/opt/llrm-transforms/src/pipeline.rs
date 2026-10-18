@@ -156,8 +156,8 @@ use crate::settled::{self, Settled};
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fixednarrow, floatloop, fold, gepoffset,
     globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute, loopfuse,
-    loopidioms, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt, peel,
-    phiopt, ports, promote, rotate, simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam,
+    loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt,
+    peel, phiopt, ports, promote, rotate, simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam,
     unswitch, window,
 };
 
@@ -231,8 +231,8 @@ pub struct Options {
     pub llvm_order: bool,
     /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating;
-    /// `LLRM_EXP_ROTATE` sets it, off by default (the loop passes refuse a
-    /// rotated loop: docs/architecture/rotate-refusals.md).
+    /// `LLRM_EXP_ROTATE` sets it, off by default until the loop passes take a
+    /// rotated loop (they refuse one: docs/architecture/rotate-refusals.md).
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); `LLRM_EXP_MEM2REG` sets it, off by default.
@@ -725,7 +725,7 @@ pub(crate) fn llvm_order(
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
             // Without the rotate slot the first LICM keeps speculating, as the
             // single hoist did.
-            let rotating = applied.options.copy_headers && !size && applied.options.rotate_slot;
+            let rotating = applied.options.rotate_slot;
             list.extend([
                 slot("floatloop@724", Box::new(floatloop::FloatLoop)),
                 // LPM1
@@ -740,7 +740,10 @@ pub(crate) fn llvm_order(
                 loopmotion("loopmotion@724"),
             ]);
             if rotating {
-                list.push(slot("rotate@728", Box::new(rotate::Rotate { proven: false, copy: true })));
+                list.push(slot(
+                    "rotate@728",
+                    Box::new(looprotate::LoopRotate { duplicate_headers: applied.options.copy_headers && !size }),
+                ));
                 list.extend(canonical("loopsimplify@728", "lcssa@728"));
             }
             list.extend([
@@ -1345,6 +1348,7 @@ impl Fixed {
         // Only a list that rounds more than once can come back to a state, so
         // only that one hashes the body (LLVM's order runs its lists once).
         let mut history = (self.rounds > 1).then(|| BTreeSet::from([print::fingerprint(unit.function)]));
+
         run.fixed += 1;
         // The last round unrolled a loop: the straight line it made is cleaned
         // by the round after the budget, as gcc's cleanup follows its complete
