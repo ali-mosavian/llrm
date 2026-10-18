@@ -237,7 +237,16 @@ impl llrm_target::Target for M32 {
     }
 
     fn cost_model(&self) -> CostModel {
-        |prices| llrm_target::described_by_size(prices, Some(OPCOSTS.size_costs()))
+        |prices| {
+            llrm_target::described_with(
+                prices,
+                Some(OPCOSTS.size_costs()),
+                // Every CPU the target accepts (i486, pentium) prices alike:
+                // the x87 tables.
+                llrm_x86::tti::X86::of_cpu("i486")
+                    .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
+            )
+        }
     }
 
     fn results(
@@ -310,6 +319,37 @@ mod tests {
         assert!(!model.port_touches_memory((0x3DA, 0x3DA)), "the VGA status register");
         assert!(model.port_touches_memory((0x0B, 0x0B)), "the 8237's mode register may start a transfer");
         assert!(model.port_touches_memory((0x300, 0x300)), "a port the platform does not list");
+    }
+
+    /// The flat 32-bit target hands a pass that translates LLVM's the x87 X86
+    /// cost model (`Machine::tti`): i486 and pentium price alike there.
+    #[test]
+    fn test_m32_states_llvms_cost_model_for_the_passes_that_translate_it() {
+        use llrm_mir::tti::{ArithOp, Cost, CostKind, OperandInfo, Ty};
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout().spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M32.flat_ports(),
+        };
+        let tti = (M32.cost_model())(&prices).tti().expect("m32 states its cost model");
+        let divide = tti.arithmetic_cost(
+            ArithOp::SDiv,
+            Ty::Int(32),
+            CostKind::RecipThroughput,
+            OperandInfo::ANY,
+            OperandInfo::ANY,
+        );
+        assert_eq!(divide, Cost::of(25));
     }
 
     /// -Os on m32 priced in clocks: the description had no byte table, so

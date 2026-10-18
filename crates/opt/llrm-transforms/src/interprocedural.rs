@@ -1258,6 +1258,7 @@ pub fn optimized_with<E: From<String>>(
                             params,
                             size,
                             threshold.limit == 0,
+                            program.target.tti().as_deref(),
                         ),
                         Default::default(),
                     )

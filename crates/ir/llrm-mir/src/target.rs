@@ -26,6 +26,13 @@ pub trait Machine {
     /// What each operation costs on this target, for profitability.
     fn costs(&self) -> OperationCosts;
 
+    /// LLVM's per-instruction cost model of this target, for the passes that
+    /// translate LLVM's (InlineCost, the SCEV expander, loop strength
+    /// reduction); none: they price by the generic rules.
+    fn tti(&self) -> Option<std::rc::Rc<dyn crate::tti::Tti>> {
+        None
+    }
+
     /// What each operation costs in code bytes, for a decision made for
     /// size; by default the same prices.
     fn size_costs(&self) -> OperationCosts {
