@@ -275,6 +275,12 @@ def manifest(root: Path, configs: list[str] | None) -> list[dict]:
     return rows
 
 
+def relabelled(rows: list[dict], name: str, borrowed: list[str] | None) -> list[dict]:
+    """The manifest with the runs of the passes in `borrowed` read as runs of `name`: a pass the replay set has no rows for (bdce) is judged on the inputs of the passes that run
+    beside it. The inputs are real bodies; only the label changes."""
+    return [{**r, "pass": name} if borrowed and r["pass"] in borrowed else r for r in rows]
+
+
 def pairs(rows: list[dict], name: str, root: Path) -> list[tuple[dict, Path]]:
     """(the row of every run of pass `name`, the file llrm's answer is in): the next run's input of the same function. The last run of a function
     has no answer here and is left out."""
@@ -427,6 +433,7 @@ def main() -> int:
     run.add_argument("--inputs", type=Path, default=INPUTS)
     run.add_argument("--config", nargs="*")
     run.add_argument("--limit", type=int, default=0)
+    run.add_argument("--inputs-of", nargs="+", metavar="PASS", help="the manifest has no rows of PASS: take the inputs of these passes (fold, algebraic ...) as PASS's inputs")
     run.add_argument("--json", type=Path)
     run.add_argument("--allow-env", nargs="*", default=[], metavar="NAME", help="the LLRM_CHECK_*/LLRM_EXP_* switch under test; any other in the environment is refused")
     run.add_argument("--llrm-pass", type=Path, help="llrm-pass (src/bin/llrm-pass.rs): llrm's answer is the pass run alone on the input, not the next input")
@@ -459,7 +466,7 @@ def main() -> int:
         print(json.dumps(result, indent=1))
         return 0
     root = args.inputs if args.command == "run" else Path("/")
-    todo = pairs(manifest(root, args.config), args.pass_name, root) if args.command == "run" else [x for d in args.directory for x in dump_pairs(d, args.pass_name)]
+    todo = pairs(relabelled(manifest(root, args.config), args.pass_name, args.inputs_of), args.pass_name, root) if args.command == "run" else [x for d in args.directory for x in dump_pairs(d, args.pass_name)]
     if args.limit:
         todo = todo[: args.limit]
     report = analyse(todo, root, args.pass_name, replay=args.llrm_pass)
