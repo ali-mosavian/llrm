@@ -3108,7 +3108,7 @@ impl LazyValueInfoImpl {
         let Some(result_id) = function.instruction(i).result else { return };
         let value = Operand::Value(result_id);
         let parent_bb = function.parent(i).expect("a placed instruction");
-        let mut blocks_containing_lvi: HashSet<BlockId> = HashSet::default();
+        let mut blocks_containing_lvi = crate::dense::IdSet::<BlockId>::new();
         // We can generate (solve) LVI values only for blocks that are dominated
         // by the I's parent. However, to avoid generating LVI for all
         // dominating blocks, that contain redundant/uninteresting
