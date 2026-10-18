@@ -45,6 +45,8 @@
 //! the operands of the instruction it simplifies, as LLVM's
 //! `InstructionSimplify` does (`(X <<nuw Y) >> Y` is `X`): each is an operand,
 //! so it ran wherever the user does, and the answer replaces that user only.
+//! `constantfolding` reads the flags of the GEP it folds to flag the constant
+//! that replaces that GEP, in its place and for its users only.
 //! `ranges`, `guards` and `consts` read no flag. Value tracking
 //! (`valuetracking/`: `context`, `guarantee`, `known`, `nonzero`, `power2`,
 //! `range`, and the matchers in `pattern`) reads a promise of the instruction
@@ -210,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 19] = [
+        const CHECKED: [&str; 32] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -227,15 +229,59 @@ mod tests {
             "pattern.rs",
             "power2.rs",
             "range.rs",
+            // ConstantFolding.cpp reads a GEP's `inbounds`, `nusw` and `nuw`
+            // to flag the constant that replaces it.
+            "constantfolding.rs",
             // InlineCost.cpp reads a GEP's `inbounds` where LLVM does
             // (`stripAndAccumulateInBoundsConstantOffsets`,
             // `visitGetElementPtr`).
             "inlinecost.rs",
+            // ScalarEvolution.cpp reads them in `createSCEV`
+            // and `MatchBinaryOp`
+            // (`getNoWrapFlagsFromUB`, `getNoWrapFlagsForGEP`); a pass that
+            // drops one forgets the value, as LLVM's do (`forgetValue`).
+            "create.rs",
+            "create_phi.rs",
+            "create_addrec.rs",
+            // ScalarEvolutionExpander.cpp's `InsertBinop` reuses a nearby
+            // binop only if its `nsw`/`nuw` equal the requested ones
+            // (`canGenerateIncompatiblePoison`).
+            "expand.rs",
+            // `getAddRecExprPHILiterally` sets `nuw`/`nsw` on the increment
+            // `IsIncrementNUW`/`NSW` prove.
+            "expand_iv.rs",
             // Local.cpp's `andIRFlags` and `dropPoisonGeneratingFlags`, and
             // GVN.cpp's `m_NUWTrunc` in `propagateEquality`, read them where
             // LLVM does.
             "local.rs",
             "pass.rs",
+            // SimplifyIndVar.cpp's `WidenIV` reads an add's/sub's/mul's
+            // `nsw`/`nuw` (`matchBinaryOp`, `getExtendedOperandRecurrence`,
+            // `widenWithVariantUse`) to extend its operands, and `copyIRFlags`
+            // gives the wide clone the narrow flags it proved.
+            "widen.rs",
+            // PHITransAddr.cpp's `translateSubExpr` reads an add's
+            // `nsw`/`nuw` for `simplifyAddInst`, and `insertTranslatedSubExpr`
+            // copies a GEP's no-wrap flags to the GEP it makes.
+            "phitrans.rs",
+            // LazyValueInfo.cpp's `binaryOp(BO)`, `Trunc->getNoWrapKind()`,
+            // `m_NUWMul` and `m_AddLike`, and `stripInBoundsOffsets`, read
+            // them where LLVM does.
+            "lazyvalueinfo.rs",
+            // ConstraintElimination.cpp reads nuw/inbounds/nsw where LLVM
+            // does (`decompose`, `getFlagsFor...`).
+            "constraintelim.rs",
+            // BasicAliasAnalysis.cpp's `DecomposeGEPExpression` reads a GEP's
+            // `inbounds` and `nuw` where LLVM does; `aliasGEP` takes NoAlias
+            // from them only as LLVM's rules do.
+            "basicaa.rs",
+            // SROA.cpp's use of `Value::stripInBoundsOffsets`: it walks a
+            // GEP only when it is `inbounds`, where LLVM does.
+            "sroa.rs",
+            // LoopUnroll.cpp's `simplifyLoopAfterUnroll` folds
+            // `(x + c1) + c2` and keeps `nuw`/`nsw` only if both adds had
+            // them, and `c1 + c2` did not overflow.
+            "loopunrollpass.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

@@ -50,6 +50,30 @@ pub enum LocationSize {
     Unknown,
 }
 
+impl LocationSize {
+    /// The bytes the location spans, where it says (`hasValue`): an upper bound
+    /// or a precise size.
+    pub fn value(self) -> Option<u64> {
+        match self {
+            Self::Precise(n) | Self::UpperBound(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    pub fn is_precise(self) -> bool {
+        matches!(self, Self::Precise(_))
+    }
+
+    /// Whether the access may start before its pointer.
+    pub fn may_be_before_pointer(self) -> bool {
+        matches!(self, Self::BeforeOrAfterPointer | Self::Unknown)
+    }
+
+    pub fn is_zero(self) -> bool {
+        self == Self::Precise(0)
+    }
+}
+
 /// Metadata an access carries that alias analysis reads (`AAMDNodes`).
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct AAInfo {
@@ -234,6 +258,119 @@ impl MemoryEffects {
 
     pub fn none() -> Self {
         Self { effects: [ModRefInfo::NoModRef; 4] }
+    }
+
+    /// `Attrs.getMemoryEffects()`: what `memory(...)` and the legacy
+    /// `readnone`/`readonly`/`writeonly` allow at each location, the
+    /// attributes' meet. A location `memory(...)` does not name takes its
+    /// default, `none` when the default is not stated.
+    pub fn of_attrs(attrs: &[llrm_mir::opcode::Attribute]) -> Self {
+        use llrm_mir::opcode::Attribute;
+        let access = |word: &str| match word {
+            "readwrite" => ModRefInfo::ModRef,
+            "read" => ModRefInfo::Ref,
+            "write" => ModRefInfo::Mod,
+            _ => ModRefInfo::NoModRef,
+        };
+        let mut result = Self::unknown();
+        for attr in attrs {
+            let stated = match attr {
+                Attribute::Memory(locations) => {
+                    let default = locations
+                        .iter()
+                        .find(|(name, _)| name.is_none())
+                        .map_or(ModRefInfo::NoModRef, |(_, word)| access(word));
+                    let named = |name: &str| {
+                        locations
+                            .iter()
+                            .find(|(one, _)| one.as_deref() == Some(name))
+                            .map_or(default, |(_, word)| access(word))
+                    };
+                    Self::none()
+                        .with(IRMemLocation::ArgMem, named("argmem"))
+                        .with(IRMemLocation::InaccessibleMem, named("inaccessiblemem"))
+                        .with(IRMemLocation::ErrnoMem, named("errnomem"))
+                        .with(IRMemLocation::Other, default)
+                }
+                Attribute::Flag(_) => {
+                    let through = llrm_mir::memory::through(std::slice::from_ref(attr));
+                    let info = match (through.reads, through.writes) {
+                        (true, true) => ModRefInfo::ModRef,
+                        (true, false) => ModRefInfo::Ref,
+                        (false, true) => ModRefInfo::Mod,
+                        (false, false) => ModRefInfo::NoModRef,
+                    };
+                    Self { effects: [info; 4] }
+                }
+                _ => continue,
+            };
+            result = result.intersect(stated);
+        }
+        result
+    }
+
+    /// `MemoryEffects::operator|`.
+    pub fn union(
+        self,
+        other: Self,
+    ) -> Self {
+        Self { effects: std::array::from_fn(|at| self.effects[at].union(other.effects[at])) }
+    }
+
+    /// `MemoryEffects::argMemOnly(MR)`.
+    pub fn arg_mem_only(info: ModRefInfo) -> Self {
+        Self::none().with(IRMemLocation::ArgMem, info)
+    }
+
+    /// `MemoryEffects::getWithoutLoc`.
+    pub fn without_loc(
+        self,
+        at: IRMemLocation,
+    ) -> Self {
+        self.with(at, ModRefInfo::NoModRef)
+    }
+
+    /// The same `info` at every location (`MemoryEffects(MR)`).
+    pub fn everywhere(info: ModRefInfo) -> Self {
+        Self { effects: [info; 4] }
+    }
+
+    /// The `memory(...)` attribute that states `self`, as LLVM prints it: the
+    /// default is `Other`'s, and a location is named when it differs.
+    pub fn attribute(self) -> llrm_mir::opcode::Attribute {
+        let word = |info: ModRefInfo| {
+            match info {
+                ModRefInfo::NoModRef => "none",
+                ModRefInfo::Ref => "read",
+                ModRefInfo::Mod => "write",
+                ModRefInfo::ModRef => "readwrite",
+            }
+            .to_owned()
+        };
+        let other = self.mod_ref(IRMemLocation::Other);
+        let named = [
+            (IRMemLocation::ArgMem, "argmem"),
+            (IRMemLocation::InaccessibleMem, "inaccessiblemem"),
+            (IRMemLocation::ErrnoMem, "errnomem"),
+        ]
+        .into_iter()
+        .filter(|&(at, _)| self.mod_ref(at) != other)
+        .map(|(at, name)| (Some(name.to_owned()), word(self.mod_ref(at))))
+        .collect::<Vec<_>>();
+        let mut locations = Vec::new();
+        if other != ModRefInfo::NoModRef || named.is_empty() {
+            locations.push((None, word(other)));
+        }
+        locations.extend(named);
+        llrm_mir::opcode::Attribute::Memory(locations)
+    }
+
+    /// `MemoryEffects::operator&`.
+    pub fn intersect(
+        self,
+        other: Self,
+    ) -> Self {
+        Self { effects: std::array::from_fn(|at| self.effects[at].intersect(other.effects[at])) }
     }
 
     pub fn mod_ref(

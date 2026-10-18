@@ -9,11 +9,6 @@
 //! - DEVIATE no `invariant.start`, `guard`, `sideeffect`, `pseudoprobe`, masked
 //!   or target memory intrinsics, memset forwarding, fences or atomics: MIR has
 //!   none (or `fill` makes them later). `llvm.assume` is handled.
-//! - DEVIATE `simplifyInstruction` is `simplify_instruction`, a stub with the
-//!   signature of fold-poc's `llrm_mir::simplify::simplify_instruction`
-//!   (InstructionSimplify.cpp): `algebraic::identity`, constants folded, a
-//!   select on a constant or with equal arms, `x cmp x`, `icmp ne (zext i1 x),
-//!   0`, `gep p, 0`, a phi of one value. It goes when theirs builds.
 //! - DEVIATE flags are intersected whenever a value is reused (`combineIRFlags`
 //!   does it only when poison-generating flags remain); a load's metadata not
 //!   shared by both loads is dropped (`combineMetadataForCSE` merges it).
@@ -21,13 +16,13 @@
 //!   only writes memory (`memory::of`, which counts every location including
 //!   `inaccessiblemem`) is numbered unless it is an `llvm.`/`llrm.` marker.
 //! - DEVIATE a GEP's constant offset is taken for byte GEPs only.
-//! - DEVIATE MemorySSA is the manager's, built once for the function as it was
-//!   and not updated (`MSSAUpdater`); an erased store stays a def in it, which
-//!   is only conservative. Erasures wait for the end of the walk so that what
-//!   it asks about still exists.
-//! - DEVIATE the clobber walk is `MemorySSA::clobbers` over the instruction's
-//!   `MemRef`: a set of nearest defs, each of which must dominate the earlier
-//!   access, where LLVM's walker answers one.
+//! - DEVIATE MemorySSA is the translated `Mssa`, built once for the function as
+//!   it was and not updated (`MSSAUpdater`); an erased store stays a def in it,
+//!   which is only conservative. Erasures wait for the end of the walk so that
+//!   what it asks about still exists.
+//! - the clobbering access is `llrm_analysis::mssa::view::Translated`'s: one
+//!   access, the `MemoryPhi` where the nearest clobbers diverge, as LLVM's
+//!   walker answers.
 //! - DEVIATE (call walker) the clobbering access of a call is its defining
 //!   access, not LLVM's call-vs-call query (the walker asks the modref of the
 //!   call against each def): any write between two calls blocks the CSE, which
@@ -71,17 +66,25 @@
 //!
 //! # Used by
 //! [`crate::pipeline`]'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`),
-//! behind `Options::llvm_order` (`LLRM_EXP_LLVM`), off by default.
+//! under `Options::llvm_order`, on by default (`LLRM_NO_LLVM_ORDER` turns it
+//! off).
 
+use std::rc::Rc;
+
+use llrm_analysis::manager::{MemorySsa, MssaGraph};
 use llrm_analysis::memory::Unit as View;
-use llrm_analysis::memoryssa::{self, Accesses, MemorySSA};
+use llrm_analysis::memoryssa::Accesses;
+use llrm_analysis::mssa::view::Translated;
+use llrm_analysis::mssa::{Mssa, shadow};
 use llrm_mir::context::Context;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::memory;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, PreservedAnalyses, Unit};
+use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::types::TypeId;
+use llrm_mir::valuetracking::FunctionAnalyses;
 use llrm_support::hash::HashMap;
 
 /// `EarlyCSEMssaOptCap`, `-earlycse-mssa-optimization-cap`.
@@ -218,12 +221,12 @@ pub trait MemorySsaView {
         &self,
         inst: InstId,
     ) -> Option<usize>;
-    /// The accesses `getClobberingMemoryAccess(inst)` answers: LLVM's walker
-    /// answers one, the manager's walk a set of nearest defs.
+    /// `getClobberingMemoryAccess(inst)`: the one access that clobbers, the
+    /// `MemoryPhi` where the nearest clobbers diverge.
     fn clobbering_access(
         &self,
         inst: InstId,
-    ) -> Vec<usize>;
+    ) -> Option<usize>;
     /// `inst`'s access's defining access.
     fn defining_access(
         &self,
@@ -235,43 +238,40 @@ pub trait MemorySsaView {
         ahead: usize,
         access: usize,
     ) -> bool;
-    /// `removeMemoryAccess(inst)`: the manager's graph is not updated.
+    /// `removeMemoryAccess(inst)`, before `inst` is erased from `function`.
     fn remove_memory_access(
         &mut self,
+        _function: &Function,
         _inst: InstId,
     ) {
     }
+    /// The graph as the removals left it, where the view holds one.
+    fn into_mssa(self: Box<Self>) -> Option<Mssa> {
+        None
+    }
 }
 
-/// The manager's MemorySSA (`llrm_analysis::memoryssa`) as that view.
-struct Manager<'a> {
-    mssa: MemorySSA<'a>,
-    accesses: &'a Accesses,
-}
-
-impl MemorySsaView for Manager<'_> {
+/// The translated MemorySSA (`llrm_analysis::mssa`) as that view.
+impl MemorySsaView for Translated<'_> {
     fn memory_access(
         &self,
         inst: InstId,
     ) -> Option<usize> {
-        self.mssa.sites.get(&inst).map(|access| access.id)
+        Translated::memory_access(self, inst).map(|access| access as usize)
     }
 
     fn clobbering_access(
         &self,
         inst: InstId,
-    ) -> Vec<usize> {
-        match self.accesses.references.get(&inst) {
-            Some(memory) => self.mssa.clobbers(inst, memory).into_iter().collect(),
-            None => self.defining_access(inst).into_iter().collect(),
-        }
+    ) -> Option<usize> {
+        Translated::clobbering_access(self, inst).map(|access| access as usize)
     }
 
     fn defining_access(
         &self,
         inst: InstId,
     ) -> Option<usize> {
-        self.mssa.sites.get(&inst).and_then(|access| access.defining)
+        Translated::defining_access(self, inst).map(|access| access as usize)
     }
 
     fn dominates(
@@ -279,163 +279,19 @@ impl MemorySsaView for Manager<'_> {
         ahead: usize,
         access: usize,
     ) -> bool {
-        self.mssa.dominates(ahead, access)
+        Translated::dominates(self, ahead as u32, access as u32)
     }
-}
 
-fn int_constant(
-    context: &Context,
-    operand: Operand,
-) -> Option<u128> {
-    let Operand::Constant(id) = operand else { return None };
-    match context.get(id).kind {
-        llrm_mir::context::ConstantKind::Int(bits) => Some(bits),
-        _ => None,
+    fn remove_memory_access(
+        &mut self,
+        function: &Function,
+        inst: InstId,
+    ) {
+        Translated::remove_memory_access(self, function, inst);
     }
-}
 
-fn int_width(
-    context: &Context,
-    ty: TypeId,
-) -> Option<u32> {
-    context.types.int_bits(ty)
-}
-
-fn definer(
-    function: &Function,
-    operand: Operand,
-) -> Option<InstId> {
-    let Operand::Value(value) = operand else { return None };
-    match function.value(value).def {
-        ValueDef::Instruction(inst) => Some(inst),
-        ValueDef::Argument(_) => None,
-    }
-}
-
-/// `simplifyInstruction`: the operand `inst` equals.
-///
-/// STUB, to be replaced by fold-poc's translation of InstructionSimplify.cpp
-/// (llrm-mir, beside constfold.rs) with this signature; until then the subset
-/// llrm has at hand, which a DEVIATE of the module comment names.
-fn simplify_instruction(
-    context: &mut Context,
-    function: &Function,
-    inst: InstId,
-) -> Option<Operand> {
-    if let Some(kept) = crate::algebraic::identity(context, function, inst) {
-        return Some(kept);
-    }
-    let op = function.instruction(inst).clone();
-    let width = int_width(&*context, op.ty);
-    let constants: Option<Vec<u128>> = op.operands.iter().map(|one| int_constant(&*context, *one)).collect();
-    match (&op.opcode, &op.operands[..]) {
-        (Opcode::Select, [cond, yes, no]) => {
-            if let Some(cond) = int_constant(&*context, *cond) {
-                return Some(if cond & 1 == 1 { *yes } else { *no });
-            }
-            if yes == no {
-                return Some(*yes);
-            }
-            None
-        }
-        (Opcode::Phi, operands) => {
-            let result = Operand::Value(op.result?);
-            let mut same = None;
-            for pair in operands.chunks(2) {
-                let value = pair[0];
-                if value == result {
-                    continue;
-                }
-                match same {
-                    None => same = Some(value),
-                    Some(one) if one == value => {}
-                    Some(_) => return None,
-                }
-            }
-            same
-        }
-        // `icmp ne (zext i1 x), 0` is `x` (simplifyICmpInst).
-        (Opcode::ICmp(IntPredicate::Ne), [wide, zero]) if int_constant(&*context, *zero) == Some(0) => {
-            let widened = function.instruction(definer(function, *wide)?);
-            let (Opcode::Cast(CastOp::ZExt), [narrow]) = (&widened.opcode, &widened.operands[..]) else {
-                return None;
-            };
-            let one_bit = function.operand_type(context, *narrow).and_then(|ty| int_width(&*context, ty)) == Some(1);
-            one_bit.then_some(*narrow)
-        }
-        // `gep p, 0` is `p` (simplifyGEPInst).
-        (Opcode::GetElementPtr { .. }, [base, indices @ ..]) => {
-            let same_type = function.operand_type(context, *base) == Some(op.ty);
-            (!indices.is_empty() && same_type && indices.iter().all(|one| int_constant(&*context, *one) == Some(0)))
-                .then_some(*base)
-        }
-        (Opcode::ICmp(predicate), [left, right]) if left == right => {
-            let holds = matches!(
-                predicate,
-                IntPredicate::Eq | IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle
-            );
-            Some(Operand::Constant(context.int(op.ty, i128::from(holds))))
-        }
-        (Opcode::Binary(binary), _) => {
-            let (constants, width) = (constants?, width?);
-            if width > 64 || constants.len() != 2 {
-                return None;
-            }
-            let mask = if width == 64 { u64::MAX as u128 } else { (1u128 << width) - 1 };
-            let (a, b) = (constants[0] & mask, constants[1] & mask);
-            let signed = |value: u128| ((value << (128 - width)) as i128) >> (128 - width);
-            let bits = match binary {
-                BinaryOp::Add => a.wrapping_add(b),
-                BinaryOp::Sub => a.wrapping_sub(b),
-                BinaryOp::Mul => a.wrapping_mul(b),
-                BinaryOp::And => a & b,
-                BinaryOp::Or => a | b,
-                BinaryOp::Xor => a ^ b,
-                BinaryOp::Shl if b < u128::from(width) => a << b,
-                BinaryOp::LShr if b < u128::from(width) => a >> b,
-                BinaryOp::AShr if b < u128::from(width) => (signed(a) >> b) as u128,
-                _ => return None,
-            };
-            Some(Operand::Constant(context.int(op.ty, (bits & mask) as i128)))
-        }
-        (Opcode::ICmp(predicate), _) => {
-            let constants = constants?;
-            let width = int_width(&*context, function.operand_type(context, op.operands[0])?)?;
-            if width > 64 || constants.len() != 2 {
-                return None;
-            }
-            let mask = (1u128 << width) - 1;
-            let (a, b) = (constants[0] & mask, constants[1] & mask);
-            let signed = |value: u128| ((value << (128 - width)) as i128) >> (128 - width);
-            let holds = match predicate {
-                IntPredicate::Eq => a == b,
-                IntPredicate::Ne => a != b,
-                IntPredicate::Ugt => a > b,
-                IntPredicate::Uge => a >= b,
-                IntPredicate::Ult => a < b,
-                IntPredicate::Ule => a <= b,
-                IntPredicate::Sgt => signed(a) > signed(b),
-                IntPredicate::Sge => signed(a) >= signed(b),
-                IntPredicate::Slt => signed(a) < signed(b),
-                IntPredicate::Sle => signed(a) <= signed(b),
-            };
-            Some(Operand::Constant(context.int(op.ty, i128::from(holds))))
-        }
-        (Opcode::Cast(cast), [source]) => {
-            let (bits, width) = (int_constant(&*context, *source)?, width?);
-            let from = int_width(&*context, function.operand_type(context, *source)?)?;
-            if width > 64 || from > 64 {
-                return None;
-            }
-            let value = match cast {
-                CastOp::Trunc => bits,
-                CastOp::ZExt => bits & ((1u128 << from) - 1),
-                CastOp::SExt => (((bits << (128 - from)) as i128) >> (128 - from)) as u128,
-                _ => return None,
-            };
-            Some(Operand::Constant(context.int(op.ty, (value & ((1u128 << width) - 1)) as i128)))
-        }
-        _ => None,
+    fn into_mssa(self: Box<Self>) -> Option<Mssa> {
+        Some(Translated::into_mssa(*self))
     }
 }
 
@@ -447,7 +303,9 @@ struct Walk<'a> {
     view: &'a View<'a>,
     mssa: Box<dyn MemorySsaView + 'a>,
     callees: &'a memory::Callees,
-    tree: &'a DominatorTree,
+    tree: &'a DomTree,
+    /// `SQ.DT` and `SQ.AC` of the function as it was.
+    analyses: &'a FunctionAnalyses,
     values: Scoped<SimpleKey, Operand>,
     loads: Scoped<Operand, LoadValue>,
     invariants: Scoped<(Operand, TypeId), u32>,
@@ -800,13 +658,13 @@ impl Walk<'_> {
         let (Some(earlier_access), Some(_)) = (self.mssa.memory_access(earlier), self.mssa.memory_access(later)) else {
             return true;
         };
-        let later_defs: Vec<usize> = if self.clobber_counter < MSSA_OPT_CAP {
+        let later_def = if self.clobber_counter < MSSA_OPT_CAP {
             self.clobber_counter += 1;
             self.mssa.clobbering_access(later)
         } else {
-            self.mssa.defining_access(later).into_iter().collect()
+            self.mssa.defining_access(later)
         };
-        later_defs.iter().all(|&def| self.mssa.dominates(def, earlier_access))
+        later_def.is_some_and(|def| self.mssa.dominates(def, earlier_access))
     }
 
     /// `EarlyCSE::getOrCreateResult` without target intrinsics: the load, or
@@ -1032,7 +890,7 @@ impl Walk<'_> {
         // The last non-volatile store seen, for as long as nothing reads
         // memory.
         let mut last_store: Option<InstId> = None;
-        for inst in self.function.block(block).instructions().to_vec() {
+        for inst in self.function.block(block).iter().collect::<Vec<_>>() {
             if self.function.is_erased(inst) {
                 continue;
             }
@@ -1056,7 +914,14 @@ impl Walk<'_> {
             }
             // If the instruction can be simplified, replace it with its
             // simpler value.
-            if let Some(value) = simplify_instruction(self.context, self.function, inst) {
+            if let Some(value) = simplify_instruction_in(
+                self.context,
+                self.view.globals,
+                self.view.layout,
+                Some(self.analyses),
+                self.function,
+                inst,
+            ) {
                 let result = self.function.instruction(inst).result;
                 if let Some(result) = result
                     && !self.function.users(result).is_empty()
@@ -1306,15 +1171,27 @@ impl FunctionPass for EarlyCse {
         // follow.
         let before = unit.function.fork();
         let frozen = unit.context.clone();
-        let view = View::within(&frozen, unit.layout, &before, &outer);
-        let mssa = memoryssa::built(&view, &accesses);
+        let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+        let view = View::within(&frozen, unit.layout, &before, &outer).with_shape(&shape);
+        let simplifier = FunctionAnalyses::of(&frozen, view.globals, view.metadata, view.layout, &before);
+        let shape = view.shape();
+        // The manager's graph of this body, cloned: the removals below update
+        // the clone, which is put back (`MemorySSAUpdater`, as EarlyCSE.cpp
+        // keeps MemorySSA through `PA.preserve<MemorySSAAnalysis>()`).
+        let held = analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function);
+        let (mssa, kept_accesses) = match &*held {
+            Ok(held) => (held.mssa.clone(), Some(Rc::clone(&held.accesses))),
+            Err(_) => (Mssa::build(&before, &shape.dominance, &shadow::effect_of(&accesses, &before)), None),
+        };
+        let translated = Translated::new(&view, &accesses, mssa);
         let mut walk = Walk {
             context: unit.context,
             function: unit.function,
             view: &view,
-            mssa: Box::new(Manager { mssa, accesses: &accesses }),
+            mssa: Box::new(translated),
             callees: outer.callees(),
             tree: &tree,
+            analyses: &simplifier,
             values: Scoped::new(),
             loads: Scoped::new(),
             invariants: Scoped::new(),
@@ -1329,10 +1206,19 @@ impl FunctionPass for EarlyCse {
         let function = walk.function;
         for inst in gone.into_iter().rev() {
             if !function.is_erased(inst) {
+                walk.mssa.remove_memory_access(function, inst);
                 function.erase(inst).unwrap_or_else(|error| panic!("earlycse: {error}"));
             }
         }
-        if changed { PreservedAnalyses::none().preserve::<Dominators>() } else { PreservedAnalyses::all() }
+        if !changed {
+            return PreservedAnalyses::all();
+        }
+        let mut preserved = PreservedAnalyses::none().preserve::<Dominators>();
+        if let (Some(updated), Some(accesses)) = (walk.mssa.into_mssa(), kept_accesses) {
+            analyses.replace::<MemorySsa>(&*function, Ok(Rc::new(MssaGraph { mssa: updated, accesses })));
+            preserved = preserved.preserve_updated::<MemorySsa>();
+        }
+        preserved
     }
 }
 

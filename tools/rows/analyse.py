@@ -14,6 +14,10 @@ flat=lambda P:{f"{p}/{v}":r for p,vs in P.items() for v,r in vs.items()}
 line,bad=rowcheck.census({'base':flat(base),'main':flat(main)})
 # Printed first; a failed or missing row stops the table unless --allow-failed.
 head=rowcheck.require(line,bad,'--allow-failed' in sys.argv)+[rowcheck.compiler_premise(W+n) for n in ('base','main')]
+# --allow-failed prints the failed rows; their programs stay out of every table and geomean (a wrong-output row's counters are the wrong program's).
+for one in bad:
+    if 'failed in' in one:
+        base.pop(one.split('/')[0],None); main.pop(one.split('/')[0],None)
 LV=('O1','O2','O3','Os'); L=lambda l:'llrm' if l=='O2' else 'llrm'+l
 def ref(P,p,l,k): return max(1,min(P[p]['gcc'+l][k],P[p]['clang'+l][k]))
 def gm(xs): return math.exp(sum(math.log(x) for x in xs)/len(xs))

@@ -102,7 +102,7 @@ fn test_exact_nested_recurrence_rewinds_before_reloading_its_start() {
     let function = f(&mut module);
     let inner =
         function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some("b3")).unwrap();
-    let phi = function.block(inner).instructions()[0];
+    let phi = function.block(inner).first().expect("a block with an instruction");
     assert!(
         !function
             .instruction(phi)
@@ -452,7 +452,8 @@ end:
     let before = llrm_analysis::ranges::loops_solved();
     manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
     // The pass that asks, and the one indvars's evaluation of the loop leaves
-    // the body needing; by hand it was a third.
+    // the body needing; by hand it was a third. (`simplifyAndExtend`, opt-in,
+    // widens first and the changed body is solved a third time.)
     assert_eq!(
         llrm_analysis::ranges::loops_solved() - before,
         2,
@@ -569,9 +570,11 @@ b4:
     assert!(text.contains("ret i32 32") && !text.contains("%last"), "{text}");
 }
 
-/// An exit whose count is not a number keeps its value.
+/// An exit whose count is not a number is written from the count, as
+/// `rewriteLoopExitValues` writes it: the loop runs `smax(n, 1)` times, two
+/// instructions, under the budget.
 #[test]
-fn test_an_exit_phi_of_a_loop_with_an_unknown_count_keeps_its_value() {
+fn test_an_exit_phi_of_a_loop_with_an_unknown_count_is_written_from_the_count() {
     let text = with_exit_values(
         "define i32 @f(i32 %n) {
 b0:
@@ -592,7 +595,7 @@ b4:
 }
 ",
     );
-    assert!(text.contains("phi i32 [ %next, %b2 ]"), "{text}");
+    assert!(text.contains("llvm.smax.i32(i32 %n, i32 1)") && text.contains("ret i32 %0"), "{text}");
 }
 
 /// bench/sieve: `if (i <= 31)` on the narrow counter of a widened loop read
@@ -671,9 +674,8 @@ fn header_phis(module: &mut Module) -> usize {
     let [one] = &loops::loops(&cfg::graph(function), function.entry().map(cfg::id))[..] else { panic!("one loop") };
     function
         .block(cfg::block(one.header))
-        .instructions()
         .iter()
-        .filter(|&&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+        .filter(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
         .count()
 }
 
@@ -784,4 +786,36 @@ fn test_a_widening_settles_again_only_the_values_it_reached() {
     assert!(super::widened(context, &layout, function, &outer), "the counters are widened");
     let work = llrm_analysis::consts::derived_work() - before;
     assert!(work <= 3 * size, "{work} values settled for {loops} widenings of a body of {size} instructions");
+}
+
+/// A rotated loop leaves from its latch. The step that took the exit values
+/// before asked only the header for its exit (`_exit`), so it left a rotated
+/// loop's sum computed by the loop; `rewriteLoopExitValues` asks every exit.
+#[test]
+fn test_a_rotated_loops_exit_value_is_rewritten_from_its_latch() {
+    let text = with_exit_values(
+        "define i16 @f(i16 %n) {
+entry:
+  %any = icmp ne i16 %n, 0
+  br i1 %any, label %pre, label %done
+pre:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %pre ], [ %inc, %loop ]
+  %s = phi i16 [ 0, %pre ], [ %s2, %loop ]
+  %s2 = add i16 %s, 2
+  %inc = add i16 %i, 1
+  %c = icmp ne i16 %inc, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  %out = phi i16 [ %s2, %loop ]
+  br label %done
+done:
+  %r = phi i16 [ 0, %entry ], [ %out, %exit ]
+  ret i16 %r
+}
+",
+    );
+    assert!(text.contains("shl i16 %n, 1") || text.contains("mul i16 %n, 2"), "{text}");
+    assert!(!text.contains("%s2 = add"), "the loop's sum is dead: {text}");
 }

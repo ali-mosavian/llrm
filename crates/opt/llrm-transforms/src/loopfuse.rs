@@ -368,7 +368,7 @@ impl Adjacent<'_> {
         expected.sort();
         if guards != expected
             || !function.successors(first_guard).contains(&guard)
-            || between.iter().any(|&at| function.block(at).instructions().len() != 1)
+            || between.iter().any(|&at| function.block(at).len() != 1)
         {
             return None;
         }
@@ -505,22 +505,14 @@ impl<'a> View<'a> {
         let function = self.function;
         let read_outside = |one: &Canonical, inst: InstId| loopshape::read_outside(function, one, inst);
         let all = |one: &Canonical| {
-            one.loop_
-                .body
-                .iter()
-                .flat_map(|&at| function.block(cfg::block(at)).instructions().iter().copied())
-                .collect::<Vec<_>>()
+            one.loop_.body.iter().flat_map(|&at| function.block(cfg::block(at)).iter()).collect::<Vec<_>>()
         };
         if all(first).into_iter().any(|inst| read_outside(first, inst)) {
             return None;
         }
         if pretested {
-            let header_work = function
-                .block(second.header)
-                .instructions()
-                .iter()
-                .copied()
-                .filter(|&inst| function.instruction(inst).opcode != Opcode::Phi);
+            let header_work =
+                function.block(second.header).iter().filter(|&inst| function.instruction(inst).opcode != Opcode::Phi);
             if header_work.into_iter().any(|inst| read_outside(second, inst)) {
                 return None;
             }
@@ -554,7 +546,7 @@ impl<'a> View<'a> {
         };
         let mut listed = Vec::new();
         for &block in &blocks {
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 let op = function.instruction(inst);
                 if op.opcode == Opcode::Phi {
                     return None;
@@ -576,7 +568,7 @@ impl<'a> View<'a> {
                     made.contains(&def)
                         || function
                             .parent(def)
-                            .is_some_and(|block| self.shape.dominance.dominates(cfg::id(block), before))
+                            .is_some_and(|block| self.shape.dominance.dominates(self.function, cfg::id(block), before))
                 }
             },
             _ => true,
@@ -610,7 +602,7 @@ impl<'a> View<'a> {
                         .map(|(_, from)| from)?,
                     _ => function.parent(used.user)?,
                 };
-                if !made.contains(&used.user) && !self.shape.dominance.dominates(before, cfg::id(from)) {
+                if !made.contains(&used.user) && !self.shape.dominance.dominates(self.function, before, cfg::id(from)) {
                     return None;
                 }
             }
@@ -669,13 +661,7 @@ fn phis_of(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-        .collect()
+    function.block(block).iter().take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
 }
 
 /// The non-phi, non-terminator instructions of `block`.
@@ -685,9 +671,7 @@ fn work(
 ) -> Vec<InstId> {
     function
         .block(block)
-        .instructions()
         .iter()
-        .copied()
         .filter(|&inst| {
             let opcode = &function.instruction(inst).opcode;
             *opcode != Opcode::Phi && !opcode.is_terminator()
@@ -698,7 +682,7 @@ fn work(
 /// `fusion` made in `function`: the second loop's phis and body run in the
 /// first loop's trips.
 fn fused(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     fusion: &Fusion,
 ) -> Result<(), String> {
@@ -709,7 +693,7 @@ fn fused(
     }
     // The first loop's phis come back round from the second's latch, and the
     // second's are the fused loop's too.
-    let top = *function.block(first.header).instructions().first().ok_or("a header")?;
+    let top = function.block(first.header).first().ok_or("a header")?;
     for phi in phis_of(function, first.header) {
         let moved = arms(function, phi)
             .into_iter()
@@ -738,9 +722,7 @@ fn fused(
         // first's.
         let ahead = function
             .block(body)
-            .instructions()
             .iter()
-            .copied()
             .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
             .ok_or("a terminated body")?;
         for inst in work(function, second.header) {

@@ -70,7 +70,9 @@ default-run = "llrm-qb"
 llrm-alloc = { workspace = true }
 llrm-core = { workspace = true }
 llrm-mir = { workspace = true }
+llrm-analysis = { workspace = true }
 llrm-transforms = { workspace = true }
+llrm-x86 = { workspace = true }
 llrm-bcdriver = { workspace = true }
 llrm-nib = { workspace = true }
 llrm-qb = { workspace = true }
@@ -90,7 +92,6 @@ system-alloc = []
 
 [dev-dependencies]
 llrm-target = { workspace = true }
-llrm-x86 = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
 llrm-driver = { workspace = true }

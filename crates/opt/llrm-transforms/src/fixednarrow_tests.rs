@@ -133,3 +133,29 @@ fn a_doubling_that_may_wrap_is_not_taken_out() {
     let module = narrowed(SHIFTED);
     assert!(body(&module, "wrapped").contains("smul.fix"));
 }
+
+/// A product read by the next product: both narrowed, the second one's operand
+/// the first's new shift. The operands were taken before any rewrite, so the
+/// second `mul` read the first product's erased result (examples/mandel at
+/// -O2: "mul uses the result of an erased instruction").
+#[test]
+fn a_product_of_a_product_reads_the_first_ones_replacement() {
+    let text = "declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)
+
+define i32 @chain(i32 range(i32 -100, 101) %a, i32 range(i32 -100, 101) %b) {
+b0:
+  %p = call i32 @llvm.smul.fix.i32(i32 %a, i32 %b, i32 8)
+  %q = call i32 @llvm.smul.fix.i32(i32 %p, i32 %b, i32 8)
+  ret i32 %q
+}
+";
+    let module = narrowed(text);
+    let chain = body(&module, "chain");
+    assert!(!chain.contains("smul.fix"), "{chain}");
+    assert!(llrm_mir::verify::verify(&module).is_empty(), "{:?}\n{chain}", llrm_mir::verify::verify(&module));
+    for (a, b) in [(100_i64, 100_i64), (-100, 77), (13, -5)] {
+        let args = [a, b].map(|n| Val::Int { bits: n as u128 & 0xFFFF_FFFF, width: 32 }).to_vec();
+        let Ok(Val::Int { bits, .. }) = run(&module, "chain", args, 1000) else { panic!() };
+        assert_eq!(bits as u32 as i32 as i64, ((((a * b) >> 8) * b) >> 8), "{a} {b}");
+    }
+}

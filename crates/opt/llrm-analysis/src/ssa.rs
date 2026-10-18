@@ -332,7 +332,7 @@ impl SsaUpdater {
     /// The value at the end of `block`.
     pub fn value_at_end_of_block(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         function: &mut Function,
         block: BlockId,
     ) -> Operand {
@@ -345,7 +345,7 @@ impl SsaUpdater {
     /// The value on entry to `block`, before any definition in it.
     pub fn value_in_middle_of_block(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         function: &mut Function,
         block: BlockId,
     ) -> Operand {
@@ -376,7 +376,7 @@ impl SsaUpdater {
             return value;
         }
         let phi = function.create_instruction(Opcode::Phi, self.ty, Vec::new(), Flags::default(), self.name.as_deref());
-        let first = function.block(block).instructions().first().copied();
+        let first = function.block(block).first();
         function.insert(phi, first.map_or(Position::End(block), Position::Before)).expect("a placed block");
         let result = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
         self.entered.insert(block, result);
@@ -408,7 +408,7 @@ impl SsaUpdater {
     /// of the block it comes from.
     pub fn rewrite_use(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         function: &mut Function,
         one: Use,
     ) {
@@ -432,7 +432,7 @@ impl SsaUpdater {
 
     fn poison(
         &self,
-        context: &mut Context,
+        context: &Context,
     ) -> Operand {
         Operand::Constant(context.constant(Constant { ty: self.ty, kind: ConstantKind::Poison }))
     }
@@ -696,7 +696,7 @@ b1:
 
     #[test]
     fn a_value_substituted_by_a_constant_reads_the_constant() {
-        let mut module = parsed(
+        let module = parsed(
             "define i16 @f(i16 %x) {
 b0:
   %y = add i16 %x, %x

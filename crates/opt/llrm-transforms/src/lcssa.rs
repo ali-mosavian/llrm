@@ -132,13 +132,7 @@ pub(crate) fn operations(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .filter(|&one| function.instruction(one).opcode != Opcode::Phi)
-        .collect()
+    function.block(block).iter().filter(|&one| function.instruction(one).opcode != Opcode::Phi).collect()
 }
 
 pub(crate) use llrm_analysis::occurrence::{arms, from_arms};
@@ -151,7 +145,7 @@ pub(crate) fn definitions(
     let mut defined = BTreeMap::new();
     for &at in blocks {
         let block = cfg::block(at);
-        for &inst in function.block(block).instructions() {
+        for inst in function.block(block).iter() {
             if let Some(value) = function.instruction(inst).result {
                 defined.insert(value, cfg::id(block));
             }
@@ -262,8 +256,8 @@ pub fn _closed_loop(
         .iter()
         .filter(|(value, sites)| {
             !sites.is_empty()
-                && sites.iter().all(|&site| dominance.dominates(exit_at, site))
-                && sources.iter().all(|&source| dominance.dominates(defined[*value], source))
+                && sites.iter().all(|&site| dominance.dominates(function, exit_at, site))
+                && sources.iter().all(|&source| dominance.dominates(function, defined[*value], source))
         })
         .map(|(value, _)| *value)
         .collect::<Vec<_>>();
@@ -295,10 +289,10 @@ pub fn _closed_loop(
                 home != exit_at
                     && matches!(
                         user.operands[one.index as usize + 1],
-                        Operand::Block(from) if dominance.dominates(exit_at, cfg::id(from))
+                        Operand::Block(from) if dominance.dominates(function, exit_at, cfg::id(from))
                     )
             } else {
-                dominance.dominates(exit_at, home)
+                dominance.dominates(function, exit_at, home)
             };
             if reads_it {
                 rewrites.push((one.user, one.index as usize, replacement));

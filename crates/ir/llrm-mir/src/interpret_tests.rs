@@ -22,7 +22,7 @@ fn int(
 #[test]
 fn the_datalayout_places_fields_and_far_pointers_as_stated() {
     let layout = DataLayout::parse(LAYOUT).expect("parses");
-    let mut types = Types::default();
+    let types = Types::default();
     let (i16, i32) = (types.int(16), types.int(32));
     let pair = types.intern(Type::Struct { fields: vec![i16, i32], packed: false });
     assert_eq!(layout.struct_layout(&types, pair), (6, vec![0, 2]), "i32 aligned to 2 bytes");
@@ -400,4 +400,11 @@ fn a_value_outside_its_stated_range_is_reported() {
     // Unchecked, the promise is not looked at.
     let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n{parameter}")).unwrap();
     assert_eq!(crate::interpret::run(&module, "g", vec![small(5)], 100), Ok(small(5)));
+}
+
+/// An `undef` operand reads as some value: the interpreter picks zero, so
+/// `undef + 5` is 5 and not poison.
+#[test]
+fn undef_reads_as_a_value_not_poison() {
+    assert_eq!(result("define i16 @f() {\nentry:\n  %a = add i16 undef, 5\n  ret i16 %a\n}\n"), int(5, 16));
 }

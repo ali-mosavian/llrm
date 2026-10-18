@@ -23,7 +23,7 @@
 //! of what the 16-bit target's 32-bit addresses need.
 //!
 //! ```text
-//!  thrash -> frame copies -> copyprop -> extensions -> copysink
+//!  frame copies -> machinecp -> extensions -> copysink
 //!    -> spillforward -> postrasink -> storecombine -> pushed constants
 //!    -> pushes, constants, commuted, transferred, high extracts, restored
 //!       copies, shuttles, overwritten, fused, fused calls, far loads
@@ -128,8 +128,8 @@ pub use crate::backend::lanes::{Lane, Lanes};
 use crate::backend::needs::{self, gated};
 use crate::backend::peep::{self, walk::Facts};
 use crate::backend::{
-    affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores,
-    spillforward, storecombine,
+    affine, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores, spillforward,
+    storecombine,
 };
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
@@ -315,9 +315,9 @@ impl Peephole {
         // everything below to reason about, and it is the only pass here
         // that can remove a copy the coalescer refused on colourability.
         let mut seen = needs::Contents::default();
-        let body = gated(&mut seen, needs::COPY, phielim::unsplit(&body), |body| Ok(regthrash::thrashed(body)))?;
+        let body = phielim::unsplit(&body);
         let body = frame_copies(&body, &self.cpu, &self.classes)?;
-        let body = gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?;
+        let body = gated(&mut seen, needs::COPY, body, |body| Ok(crate::backend::machinecp::propagated(&body)))?;
         let body = extensions(self.rules, &body);
         let body = copysink::sunk(&body);
         let body = spillforward::forwarded(&body);
@@ -362,7 +362,7 @@ impl Peephole {
         let body = if self.rules.zero_extensions.is_some() {
             let body =
                 zero_extensions(self.rules, &widened_moves(self.rules, &crate::backend::upperzero::hoisted(&body)));
-            gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?
+            gated(&mut seen, needs::COPY, body, |body| Ok(crate::backend::machinecp::propagated(&body)))?
         } else {
             body
         };

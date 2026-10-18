@@ -181,7 +181,7 @@ b4:
     assert!(asked >= 8, "premise: {asked} answers");
     let shape = unit.shape();
     let reached: llrm_mir::dense::IdSet<i64> = [at("b1")].into_iter().collect();
-    let after = held.keeping(|block| !crate::manager::dominated_by(&shape, &reached, block));
+    let after = held.keeping(|block| !crate::manager::dominated_by(&shape, unit.function, &reached, block));
     // b1, b2 and b3 are b1's or below it; b4 is not.
     assert!(after.answers() < asked, "the answers below the edit stand");
     assert!(after.answers() >= 2, "b4's answers stand: {} of {asked}", after.answers());

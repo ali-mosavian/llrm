@@ -105,11 +105,11 @@ fn test_clones_read_their_own_values() {
     let originals = before.functions().next().unwrap().2.layout().to_vec();
     let defined = originals[1..6]
         .iter()
-        .flat_map(|&block| function.block(block).instructions().to_vec())
+        .flat_map(|&block| function.block(block).iter().collect::<Vec<_>>())
         .filter_map(|inst| function.instruction(inst).result)
         .collect::<BTreeSet<_>>();
     for &block in function.layout().iter().filter(|block| !originals.contains(block)) {
-        for &inst in function.block(block).instructions() {
+        for inst in function.block(block).iter() {
             assert!(
                 !function
                     .instruction(inst)

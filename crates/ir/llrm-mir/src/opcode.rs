@@ -311,6 +311,13 @@ impl Flags {
         self.0 |= other.0;
     }
 
+    pub fn remove(
+        &mut self,
+        other: Flags,
+    ) {
+        self.0 &= !other.0;
+    }
+
     pub fn is_empty(self) -> bool {
         self.0 == 0
     }
@@ -381,7 +388,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 43] = [
+pub const FLAG_ATTRIBUTES: [&str; 44] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -411,6 +418,7 @@ pub const FLAG_ATTRIBUTES: [&str; 43] = [
     "nosync",
     "noundef",
     "nounwind",
+    "null_pointer_is_valid",
     "optnone",
     "optsize",
     "readnone",

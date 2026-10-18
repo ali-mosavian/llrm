@@ -252,7 +252,7 @@ fn insertable(
     if !branch || (function.successors(parent) != [join] && !edges::conditional(function, parent, join)) {
         return false;
     }
-    if shape.dominance.dominates(to, from)
+    if shape.dominance.dominates(unit.function, to, from)
         || shape.loops.iter().any(|one| one.body.contains(&from) != one.body.contains(&to))
     {
         return false;
@@ -268,7 +268,7 @@ fn insertable(
         Operand::Value(value) => match function.value(value).def {
             ValueDef::Argument(_) => true,
             ValueDef::Instruction(def) => {
-                function.parent(def).is_some_and(|block| shape.dominance.dominates(cfg::id(block), from))
+                function.parent(def).is_some_and(|block| shape.dominance.dominates(unit.function, cfg::id(block), from))
             }
         },
         Operand::Constant(_) => true,
@@ -296,12 +296,7 @@ fn planned(
         .layout()
         .iter()
         .flat_map(|&block| {
-            function
-                .block(block)
-                .instructions()
-                .iter()
-                .enumerate()
-                .map(move |(index, &inst)| (inst, (cfg::id(block), index)))
+            function.block(block).iter().enumerate().map(move |(index, inst)| (inst, (cfg::id(block), index)))
         })
         .collect();
     let providers: Vec<(InstId, MemRef, Operand)> = memory
@@ -313,7 +308,7 @@ fn planned(
     // those and not with all.
     let cfg::Shape { dominance, loops: natural, .. } = unit.shape().into_owned();
     let nearest = llrm_analysis::nearest::Nearest::of(
-        dominance.tree(),
+        dominance.tree(unit.function),
         providers
             .iter()
             .enumerate()
@@ -333,7 +328,7 @@ fn planned(
             continue;
         }
         let join = cfg::block(block.at);
-        for (index, &load) in function.block(join).instructions().iter().enumerate() {
+        for (index, load) in function.block(join).iter().enumerate() {
             let Some((reference, result)) = loaded_into(unit, accesses, load) else {
                 continue;
             };
@@ -349,8 +344,8 @@ fn planned(
                 let accepts = |(source, cell, value): &&(InstId, MemRef, Operand)| {
                     let (at, _) = places[source];
                     at != block.at
-                        && shape.dominance.dominates(at, parent)
-                        && !shape.dominance.dominates(at, block.at)
+                        && shape.dominance.dominates(unit.function, at, parent)
+                        && !shape.dominance.dominates(unit.function, at, block.at)
                         && unit.operand_type(*value) == Some(ty)
                         && same_bytes(unit, cell, &translated)
                         && shape.loops.iter().all(|one| !one.body.contains(&at) || one.body.contains(&block.at))
@@ -378,12 +373,14 @@ fn planned(
                 // The deepest source, the latest in its block; the first of
                 // equals: the blocks that dominate `parent` from the nearest,
                 // and in the first with a source, the latest.
-                let best = if shape.dominance.reachable(parent) {
+                let best = if shape.dominance.reachable(unit.function, parent) {
                     let mut best: Option<usize> = None;
                     let mut block = None;
-                    for (enter, at) in
-                        nearest.dominating(shape.dominance.tree(), &keys.iter().collect::<Vec<_>>(), cfg::block(parent))
-                    {
+                    for (enter, at) in nearest.dominating(
+                        shape.dominance.tree(unit.function),
+                        &keys.iter().collect::<Vec<_>>(),
+                        cfg::block(parent),
+                    ) {
                         if block.is_some_and(|had| had != enter) {
                             break;
                         }
@@ -464,7 +461,7 @@ fn applied(
         let result = function.instruction(load).result.expect("a load's value");
         let (ty, name) = (function.value(result).ty, function.value(result).name.clone());
         let phi = function.create_instruction(Opcode::Phi, ty, arms, Flags::default(), name.as_deref());
-        function.insert(phi, Position::Before(function.block(join).instructions()[0]))?;
+        function.insert(phi, Position::Before(function.block(join).first().expect("a block with an instruction")))?;
         let value = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
         function.replace_all_uses_with(result, value);
         function.erase(load)?;

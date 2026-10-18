@@ -85,7 +85,6 @@ fn unnamed_values_count_the_entry_block() {
 
 #[test]
 fn constructs_outside_the_subset_are_refused() {
-    assert_eq!(refusal("define i16 @f() {\n  ret i16 undef\n}\n"), "line 2: `undef` is outside MIR's subset of LLVM");
     assert_eq!(refusal("@x = global fp128 zeroinitializer\n"), "line 1: `fp128` is outside MIR's subset of LLVM");
     assert_eq!(refusal("target triple = \"i386\"\n"), "line 1: `triple` is outside MIR's subset of LLVM");
 }
@@ -163,6 +162,105 @@ fn an_intrinsic_declaration_takes_llvms_attributes() {
         print::module(&module),
         "declare i16 @llvm.smax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n"
     );
+}
+
+/// `Intrinsics.td` gives the copies and fills `nosync`; without it a pass
+/// reads each as a possible synchronisation point.
+#[test]
+fn the_copies_and_fills_are_nosync() {
+    for declaration in [
+        "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)",
+        "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)",
+        "declare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)",
+        "declare void @llvm.experimental.memset.pattern.p0.i16.i16(ptr, i16, i16, i1)",
+    ] {
+        let text = print::module(&parse::module(&format!("{declaration}\n")).expect("a module"));
+        assert!(text.contains(" nosync "), "{text}");
+    }
+}
+
+/// `memcpy`'s two pointers are `noalias` in `Intrinsics.td`: the copy does not
+/// overlap, which `memmove` does not say.
+#[test]
+fn memcpy_pointers_are_noalias_and_memmove_pointers_are_not() {
+    let text = |name: &str| {
+        print::module(&parse::module(&format!("declare void @llvm.{name}.p0.p0.i16(ptr, ptr, i16, i1)\n")).unwrap())
+    };
+    assert!(text("memcpy").starts_with(
+        "declare void @llvm.memcpy.p0.p0.i16(ptr noalias nocapture writeonly, ptr noalias nocapture readonly,"
+    ));
+    assert!(!text("memmove").contains("noalias"));
+}
+
+/// An intrinsic MIR does not enumerate got no attributes, so every pass read
+/// its call as unknown: `ctpop` as able to write memory and not return.
+#[test]
+fn a_declaration_takes_the_attributes_intrinsics_td_gives_its_intrinsic() {
+    let print = |text: &str| print::module(&parse::module(text).unwrap_or_else(|error| panic!("{error}")));
+    assert_eq!(
+        print("declare i16 @llvm.ctpop.i16(i16)\n"),
+        "declare i16 @llvm.ctpop.i16(i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n"
+    );
+    // Parameter attributes.
+    assert_eq!(
+        print("declare i16 @llvm.ctlz.i16(i16, i1)\n"),
+        "declare i16 @llvm.ctlz.i16(i16, i1 immarg) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n"
+    );
+    // Memory the table does not state, and a target's own, by its whole name.
+    assert_eq!(
+        print("declare void @llvm.va_start.p0(ptr)\n"),
+        "declare void @llvm.va_start.p0(ptr) nocallback nofree nosync nounwind willreturn\n"
+    );
+    assert_eq!(
+        print("declare i64 @llvm.x86.sse42.crc32.64.64(i64, i64)\n"),
+        "declare i64 @llvm.x86.sse42.crc32.64.64(i64, i64) nocallback nofree nosync nounwind willreturn memory(none)\n"
+    );
+    // A return range, at the declared width.
+    assert_eq!(
+        print("declare i8 @llvm.ucmp.i8.i16(i16, i16)\n"),
+        "declare range(i8 -1, 2) i8 @llvm.ucmp.i8.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n"
+    );
+    // A name that only starts like one is no intrinsic's.
+    assert_eq!(print("declare i16 @llvm.ctpopx(i16)\n"), "declare i16 @llvm.ctpopx(i16)\n");
+    // A type suffix on a name that is not overloaded is not its intrinsic.
+    assert_eq!(
+        print("declare i64 @llvm.x86.sse42.crc32.64.64.i64(i64, i64)\n"),
+        "declare i64 @llvm.x86.sse42.crc32.64.64.i64(i64, i64)\n"
+    );
+}
+
+/// A generated attribute MIR cannot parse back would make a printed module
+/// unreadable; every one is a word the parser knows, and every memory
+/// location a name it reads.
+#[test]
+fn every_generated_attribute_is_one_mir_reads() {
+    use crate::intrinsic_attrs::{Attr, NAMES, SETS};
+    let known = |word: &str| crate::opcode::FLAG_ATTRIBUTES.contains(&word);
+    let mut memory = std::collections::BTreeSet::new();
+    for &(name, set, _) in NAMES.iter() {
+        let set = &SETS[set as usize];
+        assert!(set.function.iter().all(|one| known(one)), "{name}: {:?}", set.function);
+        for (_, attrs) in set.arguments {
+            for attr in attrs.iter() {
+                match attr {
+                    Attr::Flag(word) => assert!(known(word), "{name}: {word}"),
+                    Attr::Int(word, _) => assert!(crate::opcode::INT_ATTRIBUTES.contains(word), "{name}: {word}"),
+                    Attr::Range(..) => {}
+                }
+            }
+        }
+        let parts: Vec<String> = set
+            .memory
+            .iter()
+            .map(|(location, access)| location.map_or(access.to_string(), |one| format!("{one}: {access}")))
+            .collect();
+        memory.insert(parts.join(", "));
+    }
+    memory.remove("");
+    for effects in &memory {
+        let text = format!("declare void @f() memory({effects})\n");
+        assert!(parse::module(&text).is_ok(), "{text}");
+    }
 }
 
 /// Inline assembly's registers are in its callee's name; the declaration
@@ -381,7 +479,7 @@ d:
     let counted = |name: &str| {
         let (_, _, function) =
             module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).expect("a function");
-        let loops = crate::loopinfo::LoopInfo::analyze(function, || crate::dominators::DominatorTree::new(function));
+        let loops = crate::loopinfo::LoopInfo::analyze(function, || crate::domtree::DomTree::of(function));
         let evolution = crate::scalarevolution::Evolution::new(&module.context, function, &loops);
         let header = loops.get_loops_in_preorder()[0].get_header();
         evolution.counted(&module.context, function, &loops, header)
@@ -452,6 +550,18 @@ fn nearcode_is_a_function_attribute_that_round_trips() {
     assert!(crate::opcode::FLAG_ATTRIBUTES.contains(&crate::callgraph::NEAR_CODE));
 }
 
+/// `null_pointer_is_valid` is the attribute `null_pointer_is_defined` reads;
+/// the parser refused it ("expected `}`, found `null_pointer_is_valid`"), so a
+/// function carrying it could not be read and no pointer fact could depend on
+/// it.
+#[test]
+fn null_pointer_is_valid_is_a_function_attribute_that_round_trips() {
+    let text = format!("{DATALAYOUT}\ndefine i16 @f(i16 %a) null_pointer_is_valid {{\nb0:\n  ret i16 %a\n}}\n");
+    let once = round(&text);
+    assert!(once.contains("null_pointer_is_valid"), "{once}");
+    assert_eq!(round(&once), once);
+}
+
 /// Each use asked `instruction_dominates` of its definition, which scanned the
 /// block for both: the verifier was 12% of compiling 800 BASIC statements
 /// (#560). The positions are made once.
@@ -460,9 +570,9 @@ fn test_verifying_a_block_does_not_scan_it_for_each_use() {
     let chain: String = (1..300).map(|at| format!("  %v{at} = add i16 %v{}, 1\n", at - 1)).collect();
     let text = format!("{DATALAYOUT}define i16 @f(i16 %v0) {{\nentry:\n{chain}  ret i16 %v299\n}}\n");
     let module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
-    let before = crate::dominators::scans();
+    let before = crate::domtree::scans();
     assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
-    assert_eq!(crate::dominators::scans() - before, 0, "a use scanned its block");
+    assert_eq!(crate::domtree::scans() - before, 0, "a use scanned its block");
 }
 
 /// A use before its definition in one block is still refused, by position.
@@ -697,6 +807,84 @@ fn no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id() {
     assert!(over.is_empty(), "use llrm_mir::dense::{{IdMap, IdSet}} for ids: {over:?}");
 }
 
+/// Reads of a value's use list that treat it as a slice: `users(..)` followed
+/// by `.len()`, `.to_vec()` or `.contains(`. LLVM has no O(1) count, no copy
+/// and no search of a use list; `Users` has them only until the readers go.
+fn slice_user_counts(sources: &[(String, String)]) -> std::collections::BTreeMap<String, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for (name, text) in sources {
+        let mut found = 0;
+        for (at, _) in text.match_indices(".users(") {
+            let mut depth = 0;
+            let mut end = None;
+            for (i, c) in text[at + ".users".len()..].char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(at + ".users".len() + i + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let rest = end.map_or("", |end| text[end..].trim_start());
+            found += [".len()", ".to_vec()", ".contains("].iter().filter(|one| rest.starts_with(**one)).count();
+        }
+        if found > 0 {
+            counts.insert(name.clone(), found);
+        }
+    }
+    counts
+}
+
+#[test]
+fn no_file_gains_a_slice_read_of_a_use_list() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let ceilings: std::collections::BTreeMap<&str, usize> = include_str!("../slice-users.txt")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(file, count)| (file, count.parse().expect("a count")))
+        .collect();
+    let mut sources = Vec::new();
+    let mut stack = vec![root.join("crates")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("a directory reads").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let name = path.strip_prefix(&root).expect("under the root").to_string_lossy().into_owned();
+            if name.ends_with(".rs")
+                && !name.ends_with("_tests.rs")
+                && !name.ends_with("/tests.rs")
+                && !name.contains("/tests/")
+            {
+                sources.push((name, std::fs::read_to_string(&path).expect("a source reads")));
+            }
+        }
+    }
+    let over: Vec<String> = slice_user_counts(&sources)
+        .into_iter()
+        .filter(|(name, found)| *found > ceilings.get(name.as_str()).copied().unwrap_or(0))
+        .map(|(name, found)| format!("{name}: {found} > {}", ceilings.get(name.as_str()).copied().unwrap_or(0)))
+        .collect();
+    assert!(over.is_empty(), "walk the use list (`users(v).iter()`, `.only()`, `is_empty()`) instead: {over:?}");
+}
+
+/// A scan that finds nothing in a tree full of such reads is the broken
+/// instrument: the three shapes count, an iteration and a nested call do not.
+#[test]
+fn a_slice_read_of_a_use_list_is_counted_and_a_walk_is_not() {
+    let source = |text: &str| vec![("a.rs".to_owned(), text.to_owned())];
+    let text = "f.users(v).len(); f.users(g(v)).to_vec(); f.users(v)\n    .contains(&u); f.users(v).iter(); f.users(v).only();";
+    assert_eq!(slice_user_counts(&source(text)).get("a.rs"), Some(&3));
+}
+
 /// `pub type Intervals = IndexMap<ValueId, Interval>` once let two files hold
 /// keyed maps the text scan could not see; each use of the alias is one.
 #[test]
@@ -743,12 +931,12 @@ fn nested(depth: usize) -> String {
 /// innermost loops.
 #[test]
 fn a_nest_of_loops_is_found_in_the_blocks_and_not_the_blocks_times_the_depth() {
-    use crate::dominators::DominatorTree;
+    use crate::domtree::DomTree;
     use crate::loopinfo::LoopInfo;
     let depth = 12;
     let module = parse::module(&nested(depth)).expect("a module");
     let function = module.functions().next().expect("@f").2;
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let loops = info.get_loops_in_preorder();
     assert_eq!(loops.len(), depth);
     for (at, one) in loops.iter().enumerate() {
@@ -774,13 +962,13 @@ fn a_nest_of_loops_is_found_in_the_blocks_and_not_the_blocks_times_the_depth() {
 /// grow with the blocks, not with their depth.
 #[test]
 fn the_loops_of_a_function_are_found_in_time_that_grows_with_its_blocks() {
-    use crate::dominators::DominatorTree;
+    use crate::domtree::DomTree;
     use crate::loopinfo::{LoopInfo, visits};
     let visited = |depth: usize| {
         let module = parse::module(&nested(depth)).expect("a module");
         let function = module.functions().next().expect("@f").2;
         let before = visits();
-        LoopInfo::analyze(function, || DominatorTree::new(function));
+        LoopInfo::analyze(function, || DomTree::of(function));
         visits() - before
     };
     let (small, large) = (visited(40), visited(80));
@@ -888,4 +1076,14 @@ fn a_body_is_told_apart_by_a_digest_that_agrees_with_its_text_and_prints_nothing
     let before = counted::made();
     let _ = print::body(&module.context, function);
     assert!(counted::made() - before > 300, "premise: printing allocates a string a line");
+}
+
+/// `undef` was a word MIR did not read: a function returning it was refused.
+/// It prints as `undef`, apart from `poison`.
+#[test]
+fn undef_is_a_constant_that_round_trips_apart_from_poison() {
+    let text = format!("{DATALAYOUT}\ndefine i16 @f() {{\nentry:\n  ret i16 undef\n}}\n");
+    let once = round(&text);
+    assert!(once.contains("ret i16 undef"), "{once}");
+    assert_eq!(round(&once), once);
 }

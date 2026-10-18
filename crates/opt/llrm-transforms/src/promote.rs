@@ -126,6 +126,7 @@ use llrm_analysis::manager::Held;
 use llrm_analysis::memory::{Identity, MemRef, ObjectRef, Provenance, Slice, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, regions, ssa};
+use llrm_mir::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::footprint::Footprint;
@@ -133,7 +134,6 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_mir::types::TypeId;
-use llrm_mir::{Constant, ConstantKind, Context};
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
 
@@ -467,7 +467,7 @@ pub fn emptied_slots(function: &mut Function) -> bool {
 /// `function` promoted, or with `aggregate_only` only its aggregates'
 /// leaves; `outer` is its module and target. Whether it changed.
 pub fn promoted(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -478,7 +478,7 @@ pub fn promoted(
 
 /// `promoted`, `analyses` holding what is known of `function`.
 fn _promoted(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
@@ -691,7 +691,11 @@ fn _available(
     let Some(entry) = function.entry().map(cfg::id) else { return HashSet::default() };
     let graph = cfg::graph(function);
     let dominance = cfg::Dominance::of(function);
-    let reachable = graph.iter().map(|block| block.at).filter(|&at| dominance.reachable(at)).collect::<BTreeSet<_>>();
+    let reachable = graph
+        .iter()
+        .map(|block| block.at)
+        .filter(|&at| dominance.reachable(unit.function, at))
+        .collect::<BTreeSet<_>>();
     let predecessors = loops::predecessors(&graph);
     let refs = cells
         .iter()
@@ -969,7 +973,7 @@ fn live_in(
 /// `function` with each planned load its cell's stored value: phis where
 /// the stores' dominance frontiers put them, named down the dominator tree.
 fn rewrite(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     plan: &Plan,
 ) {
@@ -983,10 +987,15 @@ fn rewrite(
         .filter(|one| one.opcode == Opcode::Phi)
         .filter_map(|one| one.result)
         .collect::<llrm_mir::dense::IdSet<ValueId>>();
+    // The entry value of a cell is `UndefValue` of its type.
     let poison = plan
         .types
         .iter()
-        .map(|&ty| Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison })))
+        .map(|&ty| {
+            Operand::Constant(
+                context.constant(llrm_mir::context::Constant { ty, kind: llrm_mir::context::ConstantKind::Undef }),
+            )
+        })
         .collect::<Vec<_>>();
 
     // Where each cell is live on entering a block: LLVM's PromoteMemToReg

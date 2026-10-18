@@ -34,10 +34,11 @@
 //! debug-value use list to salvage into, and `salvageKnowledge` reads
 //! operand bundles, which MIR has none of.
 
+use llrm_analysis::memdep::MemoryDependenceResults;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
@@ -47,6 +48,8 @@ use llrm_support::hash::HashSet;
 
 use super::table::{Env, ExprOp, LeaderMap, ValueTable};
 use crate::local;
+
+mod loads;
 
 /// DEVIATE 17 (temporary): what a taken compare says of its operands (`A == B`
 /// replaces `A` by `B`; `A >= B` makes `A < B` false) is not propagated. A
@@ -75,9 +78,11 @@ pub struct GvnPass<'a> {
     layout: &'a DataLayout,
     function: &'a mut Function,
     outer: &'a Outer,
-    dt: std::borrow::Cow<'a, DominatorTree>,
+    dt: std::borrow::Cow<'a, DomTree>,
     vn: ValueTable,
     leader_table: LeaderMap,
+    /// `MD`: the memory dependence cache, kept in step with the edits.
+    md: MemoryDependenceResults,
     dead_blocks: IdSet<BlockId>,
     /// A block was merged or an edge split.
     cfg_changed: bool,
@@ -100,11 +105,10 @@ pub fn run_impl_cfg(
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
-    dominators: Option<&DominatorTree>,
+    dominators: Option<&DomTree>,
 ) -> (bool, bool) {
     let tables = TABLES.with(|pool| pool.take()).unwrap_or_else(|| (ValueTable::new(), LeaderMap::default()));
-    let dt =
-        dominators.map_or_else(|| std::borrow::Cow::Owned(DominatorTree::new(function)), std::borrow::Cow::Borrowed);
+    let dt = dominators.map_or_else(|| std::borrow::Cow::Owned(DomTree::of(function)), std::borrow::Cow::Borrowed);
     let mut pass = GvnPass {
         context,
         layout,
@@ -113,6 +117,7 @@ pub fn run_impl_cfg(
         dt,
         vn: tables.0,
         leader_table: tables.1,
+        md: MemoryDependenceResults::default(),
         dead_blocks: IdSet::new(),
         cfg_changed: false,
     };
@@ -140,7 +145,7 @@ impl GvnPass<'_> {
     }
 
     fn refresh_dominators(&mut self) {
-        self.dt = std::borrow::Cow::Owned(DominatorTree::new(self.function));
+        self.dt = std::borrow::Cow::Owned(DomTree::of(self.function));
     }
 
     /// `runImpl`
@@ -235,6 +240,9 @@ impl GvnPass<'_> {
             self.vn.erase(Operand::Value(result), is_phi);
             self.vn.verify_removed(Operand::Value(result));
         }
+        // `MD->removeInstruction(I)`, while it is still in its block.
+        let unit = llrm_analysis::memory::Unit::within(&*self.context, self.layout, &*self.function, self.outer);
+        self.md.remove_instruction(&unit, inst);
         self.function.erase(inst).expect("an instruction nothing uses");
     }
 
@@ -750,7 +758,7 @@ impl GvnPass<'_> {
         ) {
             None
         } else {
-            llrm_mir::simplify::simplify_instruction(self.context, self.function, inst)
+            llrm_mir::simplify::simplify_instruction(self.context, self.layout, self.function, inst)
         };
         if let Some(simplified) = simplified {
             let mut changed = false;
@@ -776,20 +784,22 @@ impl GvnPass<'_> {
             }
         }
 
-        let instruction = self.function.instruction(inst);
         let parent = self.function.parent(inst).expect("a placed instruction");
 
         if self.is_assume(inst) {
             return self.process_assume_intrinsic(inst);
         }
 
-        if matches!(instruction.opcode, Opcode::Load { .. }) {
-            // Stage 4 calls `processLoad` here.
-            let value = Operand::Value(instruction.result.expect("a load has a value"));
+        if matches!(self.function.instruction(inst).opcode, Opcode::Load { .. }) {
+            if self.process_load(inst) {
+                return true;
+            }
+            let value = Operand::Value(self.function.instruction(inst).result.expect("a load has a value"));
             let num = self.lookup_or_add(value);
             self.leader_table.insert(num, value, parent);
             return false;
         }
+        let instruction = self.function.instruction(inst);
 
         // For conditional branches, we can perform simple conditional
         // propagation on the condition value itself.

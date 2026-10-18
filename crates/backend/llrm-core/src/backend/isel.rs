@@ -1663,7 +1663,7 @@ impl Selector<'_, '_, '_> {
         let kept = self.callee_facts.stack_alignment(self.arch, name);
         let mut align_of = IndexMap::<usize, i64>::default();
         for &block in layout {
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
                     let align = natural_align(&self.module.context.types, &self.layout, allocated)
@@ -1705,7 +1705,7 @@ impl Selector<'_, '_, '_> {
         }
         for &block in layout {
             block_at.insert(block, at);
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 self.ats.insert(inst, at);
                 at += 1;
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
@@ -1913,7 +1913,7 @@ impl Selector<'_, '_, '_> {
             );
         }
         for &block in layout {
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 self.fuse(block, inst);
                 self.covered_by_pattern(inst, &block_at, convention);
                 self.narrowed(inst);
@@ -1952,7 +1952,7 @@ impl Selector<'_, '_, '_> {
             let blocks = made.entry(block).or_default();
             let mut insns = if block == entry { std::mem::take(&mut prologue) } else { Vec::new() };
             let mut phis = Vec::new();
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 let instruction = function.instruction(inst);
                 if instruction.opcode == Opcode::Phi && (self.is_far(instruction.ty) || self.is_wide(instruction.ty)) {
                     let result = instruction.result.expect("a phi's value");
@@ -2191,7 +2191,7 @@ impl Selector<'_, '_, '_> {
             _ => return,
         }
         let result = instruction.result.expect("a comparison's value");
-        if let [only] = function.users(result)
+        if let Some(only) = function.users(result).only()
             && function.terminator(block) == Some(only.user)
             && function.instruction(only.user).opcode == Opcode::Br
         {
@@ -2236,7 +2236,7 @@ impl Selector<'_, '_, '_> {
                 && one.index == 0
                 && self.constant(reading.operands[1], 4) == Some(16);
             let Some(shifted) = reading.result.filter(|_| high) else { return };
-            let [only] = function.users(shifted) else { return };
+            let Some(only) = function.users(shifted).only() else { return };
             let Some(result) = word(only.user) else { return };
             halves.push((2, result));
             readers.extend([one.user, only.user]);
@@ -2265,18 +2265,16 @@ impl Selector<'_, '_, '_> {
         if self.consumed.contains(&inst) || !matches!(self.types().int_bits(instruction.ty), Some(16 | 32 | 64)) {
             return;
         }
-        let Some(block) = function.parent(inst) else { return };
-        let later = function.block(block).instructions().iter().skip_while(|&&one| one != inst).skip(1);
-        let found = later
-            .copied()
-            .find(
-                |&one| {
-                    let other = function.instruction(one);
-                    other.opcode == Opcode::Binary(partner)
-                        && other.operands == instruction.operands
-                        && !self.consumed.contains(&one)
-                },
-            );
+        if function.parent(inst).is_none() {
+            return;
+        }
+        let mut later = std::iter::successors(function.next_in_block(inst), |&one| function.next_in_block(one));
+        let found = later.find(|&one| {
+            let other = function.instruction(one);
+            other.opcode == Opcode::Binary(partner)
+                && other.operands == instruction.operands
+                && !self.consumed.contains(&one)
+        });
         if let Some(one) = found {
             self.paired.insert(inst, function.instruction(one).result.expect("a result"));
             self.consumed.insert(one);
@@ -2291,7 +2289,7 @@ impl Selector<'_, '_, '_> {
     ) -> bool {
         let function = self.function;
         let ValueDef::Instruction(definition) = function.value(value).def else { return false };
-        matches!(function.users(value), [only] if only.user == user)
+        function.users(value).only().is_some_and(|only| only.user == user)
             && function.parent(definition) == function.parent(user)
     }
 
@@ -2303,17 +2301,10 @@ impl Selector<'_, '_, '_> {
         to: InstId,
     ) -> bool {
         let function = self.function;
-        let Some(block) = function.parent(from) else { return false };
-        let instructions = function.block(block).instructions();
-        let (Some(start), Some(end)) =
-            (instructions.iter().position(|&one| one == from), instructions.iter().position(|&one| one == to))
-        else {
-            return false;
-        };
-        start < end
-            && instructions[start + 1..end]
-                .iter()
-                .all(|&one| !llrm_mir::memory::of(&self.module.context, &self.callees, function, one).writes)
+        function.comes_before(from, to)
+            && std::iter::successors(function.next_in_block(from), |&one| function.next_in_block(one))
+                .take_while(|&one| one != to)
+                .all(|one| !llrm_mir::memory::of(&self.module.context, &self.callees, function, one).writes)
     }
 
     /// Whether `inst` is a call of `llvm.lifetime.start` or `.end`.
@@ -2349,7 +2340,7 @@ impl Selector<'_, '_, '_> {
         let function = self.function;
         let positions: IndexMap<InstId, i64> = layout
             .iter()
-            .flat_map(|&block| function.block(block).instructions().iter().copied())
+            .flat_map(|&block| function.block(block).iter())
             .enumerate()
             .map(|(at, inst)| (inst, at as i64))
             .collect();
@@ -2424,7 +2415,7 @@ impl Selector<'_, '_, '_> {
         block: BlockId,
     ) -> Result<(), Unselected> {
         let function = self.function;
-        for &inst in function.block(block).instructions() {
+        for inst in function.block(block).iter() {
             let instruction = function.instruction(inst);
             if instruction.opcode != Opcode::Phi {
                 break;
@@ -2610,7 +2601,7 @@ impl Selector<'_, '_, '_> {
         let mut out = BTreeSet::new();
         let Some(&entry) = function.layout().first() else { return out };
         let order: IndexMap<InstId, usize> =
-            function.block(entry).instructions().iter().enumerate().map(|(index, &inst)| (inst, index)).collect();
+            function.block(entry).iter().enumerate().map(|(index, inst)| (inst, index)).collect();
         for (&inst, &index) in &order {
             let Some(local) = self.zero_write(inst) else { continue };
             if function.users(local).iter().all(|one| {
@@ -2676,8 +2667,9 @@ impl Selector<'_, '_, '_> {
         let block = function.parent(inst)?;
         let only_in_block = |value: ValueId, reader: InstId| -> Option<InstId> {
             let ValueDef::Instruction(def) = function.value(value).def else { return None };
-            (function.parent(def) == Some(block) && matches!(function.users(value)[..], [only] if only.user == reader))
-                .then_some(def)
+            (function.parent(def) == Some(block)
+                && function.users(value).only().is_some_and(|only| only.user == reader))
+            .then_some(def)
         };
         let join = only_in_block(condition, inst)?;
         let conjunction = match function.instruction(join).opcode {
@@ -2929,7 +2921,8 @@ impl Selector<'_, '_, '_> {
         let Operand::Constant(id) = operand else { return None };
         let bits = match self.module.context.get(id).kind {
             ConstantKind::Int(bits) => bits,
-            ConstantKind::Null | ConstantKind::Zero => 0,
+            // Poison is any value: zero.
+            ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison => 0,
             _ => return None,
         };
         let shift = 128 - 8 * width;
@@ -3284,7 +3277,7 @@ impl Selector<'_, '_, '_> {
                 Some(&pair) => pair,
                 None => {
                     let (base, selector) = (self.fresh_held(2), self.fresh_held(2));
-                    let at = self.ats[&self.function.block(block).instructions()[0]];
+                    let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
                     let symbol = |space, index| {
                         Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })
                     };
@@ -4277,8 +4270,11 @@ impl Selector<'_, '_, '_> {
         let at = self.ats[&inst];
         let ty = instruction.ty;
         let width = self.width(ty)?;
+        if width == 1 {
+            return self.divide_byte(op, inst, out);
+        }
         if !matches!(width, 2 | 4) {
-            return refuse("a byte division");
+            return refuse("a wide division");
         }
         let dividend = self.held(instruction.operands[0], ty, at, out)?;
         let signed = matches!(op, BinaryOp::SDiv | BinaryOp::SRem);
@@ -4348,6 +4344,63 @@ impl Selector<'_, '_, '_> {
             vec![Loc::Held(high), Loc::Held(dividend), Loc::Held(divisor)],
         );
         out.push(insn(at, what));
+        Ok(())
+    }
+
+    /// A byte division, by the operand size's own of both operands extended
+    /// (as x86 selects `div r/m8` for LLVM: a byte quotient overflows only
+    /// where the word's is truncated, which LLVM leaves poison).
+    fn divide_byte(
+        &mut self,
+        op: BinaryOp,
+        inst: InstId,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(inst);
+        let (at, ty) = (self.ats[&inst], instruction.ty);
+        let wide = self.cpu.operand_bytes as u32;
+        let signed = matches!(op, BinaryOp::SDiv | BinaryOp::SRem);
+        let extend = if signed { "movsx" } else { "movzx" };
+        let mut widened = |this: &mut Self, operand: Operand| -> Result<Held, Unselected> {
+            let byte = this.held(operand, ty, at, out)?;
+            let into = this.fresh_held(wide);
+            out.push(insn(at, semantics(Operation::Extend, extend, vec![Loc::Held(into)], vec![Loc::Held(byte)])));
+            Ok(into)
+        };
+        let dividend = widened(self, instruction.operands[0])?;
+        let divisor = widened(self, instruction.operands[1])?;
+        let (quotient, remainder, high) = (self.fresh_held(wide), self.fresh_held(wide), self.fresh_held(wide));
+        out.push(insn(
+            at,
+            if signed {
+                let sign = if wide == 2 { "cwd" } else { "cdq" };
+                semantics(Operation::Extend, sign, vec![Loc::Held(high)], vec![Loc::Held(dividend)])
+            } else {
+                let zero = Loc::Imm(Imm { value: 0, width: wide, address: None });
+                semantics(Operation::Move, "mov", vec![Loc::Held(high)], vec![zero])
+            },
+        ));
+        out.push(insn(
+            at,
+            semantics(
+                Operation::Divide,
+                if signed { "idiv" } else { "div" },
+                vec![Loc::Held(quotient), Loc::Held(remainder)],
+                vec![Loc::Held(high), Loc::Held(dividend), Loc::Held(divisor)],
+            ),
+        ));
+        let own = self.value(instruction.result.expect("a result"));
+        let quotient_of = matches!(op, BinaryOp::SDiv | BinaryOp::UDiv);
+        let keep = |value: u32, from: Held, out: &mut Vec<Arc<Insn>>| {
+            let low = Held { width: 1, ..from };
+            let into = Held { value, width: 1 };
+            out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Held(low)])));
+        };
+        keep(own, if quotient_of { quotient } else { remainder }, out);
+        if let Some(&partner) = self.paired.get(&inst) {
+            let partner = self.value(partner);
+            keep(partner, if quotient_of { remainder } else { quotient }, out);
+        }
         Ok(())
     }
 
@@ -6686,10 +6739,8 @@ impl Selector<'_, '_, '_> {
         let function = self.function;
         let ValueDef::Instruction(call) = function.value(value).def else { return false };
         let Some(block) = function.parent(call) else { return false };
-        let instructions = function.block(block).instructions();
-        let Some(at) = instructions.iter().position(|&one| one == call) else { return false };
-        instructions.get(at + 1) == Some(&inst)
-            && (!self.fused.contains(&inst) || instructions.get(at + 2) == function.terminator(block).as_ref())
+        function.next_in_block(call) == Some(inst)
+            && (!self.fused.contains(&inst) || function.next_in_block(inst) == function.terminator(block))
     }
 
     /// A port read or written: `in` or `out`, a port below 256 immediate,
@@ -6769,7 +6820,7 @@ impl Selector<'_, '_, '_> {
         // Poison is any value: +0.0.
         let bits = match self.module.context.get(id).kind {
             ConstantKind::Float(bits) => bits,
-            ConstantKind::Poison => 0,
+            ConstantKind::Poison | ConstantKind::Undef => 0,
             _ => return refuse("a float constant of no bits"),
         };
         let size = self.size(self.module.context.get(id).ty)?;

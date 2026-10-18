@@ -99,6 +99,7 @@ pub fn body(
 /// cycle, and a printed body (formatted a line at a time, then held and
 /// compared) was 1.4% of a d_faces compile.
 pub fn fingerprint(function: &Function) -> u128 {
+    crate::counts::bump(crate::counts::Event::Fingerprints);
     use std::hash::{Hash, Hasher};
 
     /// Two multiply-and-rotate hashes (rustc's Fx) with different salts and
@@ -370,6 +371,16 @@ struct Slots {
     blocks: HashMap<BlockId, String>,
 }
 
+/// The label each parameter and result is written with, `%` left off: its
+/// name, else its slot.
+pub fn value_labels(function: &Function) -> crate::dense::IdMap<ValueId, String> {
+    let mut labels = crate::dense::IdMap::new();
+    for (value, label) in Slots::new(function).values {
+        labels.insert(value, label);
+    }
+    labels
+}
+
 /// The label each placed block is written with, `%` left off: its name, else
 /// its slot.
 pub fn block_labels(function: &Function) -> crate::dense::IdMap<BlockId, String> {
@@ -459,6 +470,9 @@ impl Printer<'_> {
         let mut words: Vec<String> =
             [linkage, Self::unnamed_addr(global.unnamed_addr)].into_iter().flatten().map(str::to_owned).collect();
         words.extend(Self::address_space(global.address_space));
+        if variable.externally_initialized {
+            words.push("externally_initialized".to_owned());
+        }
         words.push((if variable.constant { "constant" } else { "global" }).to_owned());
         words.push(self.ty(variable.ty));
         words.extend(variable.initializer.map(|one| self.constant(one)));
@@ -771,6 +785,7 @@ impl Printer<'_> {
             },
             ConstantKind::Null => "null".to_owned(),
             ConstantKind::Poison => "poison".to_owned(),
+            ConstantKind::Undef => "undef".to_owned(),
             ConstantKind::Zero => "zeroinitializer".to_owned(),
             ConstantKind::Bytes(bytes) => format!("c{}", string(bytes)),
             ConstantKind::Global(global) => {

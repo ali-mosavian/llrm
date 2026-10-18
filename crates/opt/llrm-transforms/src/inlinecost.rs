@@ -76,6 +76,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CallInfo, CastOp, FloatPredicate, IntPredicate, Opcode};
+use llrm_mir::tti::{CastKind, CostKind, Ty};
 use llrm_mir::types::{FloatKind, Type};
 use llrm_support::hash::HashMap;
 
@@ -204,6 +205,8 @@ pub struct Site<'a> {
     pub caller_size: CallerSize,
     /// The site's block frequency over the caller's entry block's (D1).
     pub relative_frequency: Option<f64>,
+    /// The target's LLVM cost model (`Machine::tti`); none: the generic rules.
+    pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
 
 /// `InlineCost` (InlineCost.h:120-190).
@@ -282,7 +285,7 @@ pub fn inline_viable(
 ) -> Result<(), String> {
     let returns_twice = has_flag(&callee.attrs, "returns_twice");
     for &block in callee.layout() {
-        for &inst in callee.block(block).instructions() {
+        for inst in callee.block(block).iter() {
             let opcode = &callee.instruction(inst).opcode;
             if !matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
                 continue;
@@ -579,9 +582,16 @@ impl<'a> Analyzer<'a> {
             return !global_base;
         }
         let (offset, variable) = self.site.layout.collect_offset(&self.context.types, *source, &indices);
+        // The target's `isLegalAddressingMode` (the base is a register unless
+        // it is a global), else the generic one: no global, no offset,
+        // scale 0 or 1.
+        let legal = |scale: i64| match self.site.tti {
+            Some(tti) => tti.is_legal_addressing_mode(global_base, offset as i64, !global_base, scale),
+            None => !global_base && offset == 0 && scale <= 1,
+        };
         match variable[..] {
-            [] => !global_base && offset == 0,
-            [(_, scale)] => !global_base && offset == 0 && scale == 1,
+            [] => legal(0),
+            [(_, scale)] => legal(scale as i64),
             _ => false,
         }
     }
@@ -759,6 +769,33 @@ impl<'a> Analyzer<'a> {
         match &operation.opcode {
             Opcode::Freeze | Opcode::ExtractValue(_) => true,
             Opcode::GetElementPtr { .. } => self.gep_free(inst),
+            Opcode::Cast(op) if self.site.tti.is_some() => {
+                // The target's own price: free when it says 0 under
+                // `TCK_SizeAndLatency` (a type it does not model is not free).
+                let from = self.operand_type(operation.operands[0]);
+                let kind = match op {
+                    CastOp::Trunc => Some(CastKind::Trunc),
+                    CastOp::ZExt => Some(CastKind::ZExt),
+                    CastOp::SExt => Some(CastKind::SExt),
+                    CastOp::FPTrunc => Some(CastKind::FPTrunc),
+                    CastOp::FPExt => Some(CastKind::FPExt),
+                    CastOp::FPToUI => Some(CastKind::FPToUI),
+                    CastOp::FPToSI => Some(CastKind::FPToSI),
+                    CastOp::UIToFP => Some(CastKind::UIToFP),
+                    CastOp::SIToFP => Some(CastKind::SIToFP),
+                    CastOp::PtrToInt => Some(CastKind::PtrToInt),
+                    CastOp::IntToPtr => Some(CastKind::IntToPtr),
+                    CastOp::BitCast => Some(CastKind::BitCast),
+                    CastOp::FPRound | CastOp::AddrSpaceCast => None,
+                };
+                match (self.site.tti, kind, from.and_then(|ty| Ty::of(types, ty)), Ty::of(types, operation.ty)) {
+                    (Some(tti), Some(kind), Some(src), Some(dst)) => {
+                        let cost = tti.cast_cost(kind, dst, src, CostKind::SizeAndLatency);
+                        cost.valid && cost.value == 0
+                    }
+                    _ => false,
+                }
+            }
             Opcode::Cast(op) => {
                 let from = self.operand_type(operation.operands[0]);
                 let (source, target) = (
@@ -1528,7 +1565,7 @@ impl<'a> Analyzer<'a> {
         &mut self,
         block: BlockId,
     ) -> Result<(), String> {
-        for &inst in self.callee.block(block).instructions() {
+        for inst in self.callee.block(block).iter() {
             // D5: no ephemeral values; a debug intrinsic costs nothing and is
             // not counted (:2750).
             if let Some(target) = llrm_mir::memory::callee(self.context, self.callee, inst)
@@ -1740,7 +1777,7 @@ impl<'a> Analyzer<'a> {
             }
             let block = worklist[at];
             at += 1;
-            if self.callee.block(block).instructions().is_empty() {
+            if self.callee.block(block).is_empty() {
                 continue;
             }
             // onBlockStart: CostAtBBStart unused without cost-benefit (D4).
@@ -2091,13 +2128,12 @@ pub fn shadow(
             .any(
                 |&block| caller
                     .block(block)
-                    .instructions()
                     .iter()
-                    .any(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(caller_id)),
+                    .any(|inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(caller_id)),
             );
         let mut ordinal: HashMap<GlobalId, usize> = HashMap::default();
         for &block in caller.layout() {
-            for &inst in caller.block(block).instructions() {
+            for inst in caller.block(block).iter() {
                 let Some(callee_id) = llrm_mir::memory::callee(&module.context, caller, inst) else { continue };
                 let callee_global = module.global(callee_id);
                 let GlobalKind::Function(callee) = &callee_global.kind else { continue };
@@ -2125,6 +2161,9 @@ pub fn shadow(
                         .zip(entry_frequency)
                         .filter(|(_, entry)| *entry > 0)
                         .map(|(site, entry)| site as f64 / entry as f64),
+                    // The shadow is the oracle's: opt without a triple prices
+                    // generically.
+                    tti: None,
                 };
                 let leaf = !callee
                     .layout()
@@ -2132,10 +2171,9 @@ pub fn shadow(
                     .any(
                         |&block| callee
                             .block(block)
-                            .instructions()
                             .iter()
                             .any(
-                                |&one| llrm_mir::memory::callee(&module.context, callee, one).is_some_and(|inner| {
+                                |one| llrm_mir::memory::callee(&module.context, callee, one).is_some_and(|inner| {
                                     matches!(
                                         &module.global(inner).kind,
                                         GlobalKind::Function(body) if !body.layout().is_empty()
@@ -2319,6 +2357,7 @@ pub fn sites(
     params: InlineParams,
     size: CallerSize,
     always_only: bool,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
 ) -> llrm_support::hash::SparseIdMap<InstId, crate::inline::Candidate> {
     let mut out = llrm_support::hash::SparseIdMap::default();
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
@@ -2353,6 +2392,7 @@ pub fn sites(
                 .zip(entry_frequency)
                 .filter(|(_, entry)| *entry > 0)
                 .map(|(here, entry)| here as f64 / entry as f64),
+            tti,
         };
         // `-fno-inline-functions`: clang's pipeline is the always-inliner
         // alone.
