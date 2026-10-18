@@ -111,6 +111,8 @@ pub mod globaldce;
 mod globaldce_tests;
 pub mod globalopt;
 pub mod gvn;
+#[cfg(test)]
+mod gvn_scalar_tests;
 pub mod hoist;
 pub mod homes;
 pub mod indvars;
@@ -162,6 +164,7 @@ pub mod profit;
 pub mod promote;
 pub mod rotate;
 pub mod settled;
+pub mod simplifycfg;
 pub mod sink;
 pub mod spares;
 pub mod spill;

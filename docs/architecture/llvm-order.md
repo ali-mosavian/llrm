@@ -1,3 +1,7 @@
+---
+architecture-index: LLVM pass order evidence
+architecture-order: 500
+---
 # LLVM's pass order: rows, traced causes and turn-on conditions
 
 Evidence for PR #2164 (`Options::llvm_order`, `LLRM_EXP_LLVM`, off by default). References: rows/main24d (clang 24.0.0git d1106deb71cc, gcc 13.4.0).
