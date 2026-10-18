@@ -30,7 +30,13 @@ fn cell(
     let global = module
         .add_variable(
             name,
-            GlobalVariable { ty, constant: false, initializer: Some(initializer), align: None },
+            GlobalVariable {
+                externally_initialized: false,
+                ty,
+                constant: false,
+                initializer: Some(initializer),
+                align: None,
+            },
             Linkage::Internal,
         )
         .expect("free");
@@ -48,7 +54,13 @@ fn stub_runtime(module: &mut Module) {
     let printed = module
         .add_variable(
             "printed",
-            GlobalVariable { ty: row, constant: false, initializer: Some(zero), align: None },
+            GlobalVariable {
+                externally_initialized: false,
+                ty: row,
+                constant: false,
+                initializer: Some(zero),
+                align: None,
+            },
             Linkage::Internal,
         )
         .expect("free");

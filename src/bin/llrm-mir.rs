@@ -25,6 +25,18 @@ fn main() -> ExitCode {
     if ivs {
         arguments.remove(0);
     }
+    let scev = arguments.first().is_some_and(|one| one == "--scev");
+    if scev {
+        arguments.remove(0);
+    }
+    let values = arguments.first().is_some_and(|one| one == "--scev-values");
+    if values {
+        arguments.remove(0);
+    }
+    let counts = arguments.first().is_some_and(|one| one == "--scev-counts");
+    if counts {
+        arguments.remove(0);
+    }
     let loops = arguments.first().is_some_and(|one| one == "--loops");
     if loops {
         arguments.remove(0);
@@ -78,12 +90,24 @@ fn main() -> ExitCode {
                 problems.iter().for_each(|one| eprintln!("{path}: {one}"));
                 return ExitCode::FAILURE;
             }
+            if scev {
+                print!("{}", scalar_evolution(&module));
+                return ExitCode::SUCCESS;
+            }
+            if values {
+                print!("{}", llrm_analysis::scev::values::print_module_values(&module));
+                return ExitCode::SUCCESS;
+            }
             if let Some((header, count)) = unroll {
                 if let Err(error) = unrolled_loop(&mut module, &header, count, &exits) {
                     eprintln!("{path}: {error}");
                     return ExitCode::FAILURE;
                 }
                 print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
+            }
+            if counts {
+                print!("{}", llrm_analysis::scev::values::print_module_counts(&module));
                 return ExitCode::SUCCESS;
             }
             if loops {
@@ -118,6 +142,40 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The expressions on stdin, one per line, in the language of
+/// `tools/scev/oracle.cpp`, evaluated by the first function with a body.
+fn scalar_evolution(module: &llrm_mir::module::Module) -> String {
+    use std::io::BufRead;
+    let (_, _, function) =
+        module.functions().find(|(_, _, function)| !function.layout().is_empty()).expect("a function");
+    let layout = module
+        .datalayout
+        .as_deref()
+        .and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok())
+        .unwrap_or_default();
+    let tree = llrm_mir::domtree::DomTree::of(function);
+    let loops = llrm_mir::loopinfo::LoopInfo::analyze(function, || &tree);
+    let assumptions = llrm_mir::valuetracking::AssumptionCache::new(module, function);
+    let cx = llrm_analysis::scev::Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let labels = llrm_analysis::scev::print::Labels::of(function);
+    let mut scalar_evolution = llrm_analysis::scev::ScalarEvolution::new();
+    let mut out = String::new();
+    for line in std::io::stdin().lock().lines() {
+        out += &scalar_evolution.eval_line(&cx, &labels, &line.expect("a line"));
+        out.push('\n');
+    }
+    out
 }
 
 /// `function<TAB>loop<TAB>count` per innermost loop, loops in LoopInfo's order.

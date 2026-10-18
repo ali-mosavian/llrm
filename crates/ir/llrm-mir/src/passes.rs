@@ -237,8 +237,13 @@ impl Declared {
         let id = GlobalId(self.next);
         self.next += 1;
         self.names().insert(name.clone(), id);
-        let variable =
-            crate::module::GlobalVariable { ty, constant: true, initializer: Some(initializer), align: None };
+        let variable = crate::module::GlobalVariable {
+            externally_initialized: false,
+            ty,
+            constant: true,
+            initializer: Some(initializer),
+            align: None,
+        };
         self.pending.push(Pending::Table(name, variable));
         id
     }
@@ -620,6 +625,10 @@ impl Analysis for Dominators {
     const NAME: &'static str = "dominators";
     const INCREMENTAL: bool = true;
 
+    fn preserved(preserved: &PreservedAnalyses) -> bool {
+        preserved.kept::<Self>() || preserved.cfg_preserved()
+    }
+
     /// The blocks the changed edges reach are worked out again; nothing else
     /// can move.
     fn update(
@@ -667,6 +676,11 @@ impl Analysis for Loops {
     type Result = crate::loopinfo::LoopInfo;
     const READS_OUTER: bool = false;
     const NAME: &'static str = "loops";
+
+    fn preserved(preserved: &PreservedAnalyses) -> bool {
+        preserved.kept::<Self>() || preserved.cfg_preserved()
+    }
+
     fn run(
         context: &Context,
         layout: &DataLayout,
@@ -701,12 +715,14 @@ impl Analysis for ScalarEvolution {
 #[derive(Clone, Debug, Default)]
 pub struct PreservedAnalyses {
     all: bool,
+    /// LLVM's `preserveSet<CFGAnalyses>`: the pass left the CFG as it was.
+    cfg: bool,
     kept: HashSet<TypeId>,
 }
 
 impl PreservedAnalyses {
     pub fn all() -> Self {
-        Self { all: true, kept: HashSet::default() }
+        Self { all: true, cfg: false, kept: HashSet::default() }
     }
 
     pub fn none() -> Self {
@@ -721,6 +737,18 @@ impl PreservedAnalyses {
     pub fn preserve_module<M: ModuleAnalysis>(mut self) -> Self {
         self.kept.insert(TypeId::of::<M>());
         self
+    }
+
+    /// `preserveSet<CFGAnalyses>`: the pass changed no block or edge, so the
+    /// analyses that read only the CFG (dominators, loops) stand.
+    pub fn preserve_cfg(mut self) -> Self {
+        self.cfg = true;
+        self
+    }
+
+    /// `PreservedAnalyses::allAnalysesInSet<CFGAnalyses>`.
+    pub fn cfg_preserved(&self) -> bool {
+        self.all || self.cfg
     }
 
     /// Whether the pass changed nothing: LLVM's `areAllPreserved`.
@@ -1218,6 +1246,18 @@ impl Analyses {
     /// The proxy, not noted as a read: for the manager's own use.
     pub fn outer_unread(&self) -> &Rc<Outer> {
         &self.outer
+    }
+
+    /// `A`'s result, if computed, and the point in the function's history it
+    /// was true at: the cached one, or one kept past an invalidation for
+    /// `update` to bring up to date. What a pass that edits and rarely asks
+    /// holds (the updates queue in the change log), for LLVM's lazy
+    /// `DomTreeUpdater`.
+    pub fn held<A: Analysis>(&self) -> Option<(Rc<A::Result>, crate::module::Mark)> {
+        let key = TypeId::of::<A>();
+        let entry = self.cache.get(&key).or_else(|| self.kept.get(&key))?;
+        let entry = entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+        Some((Rc::clone(&entry.result), entry.mark))
     }
 
     /// `A`'s result, if computed: LLVM's `getCachedResult`.

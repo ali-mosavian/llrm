@@ -167,15 +167,14 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("pressuresink@5", Backend, "machine-sink", Old, "lir-cleanup-poc"),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
     entry("floatassign@7", Backend, "x87 stack slots (regalloc, target)", Old, "regalloc-core-poc"),
-    entry("floatalloc@8", Backend, "x86-fp-stackifier (X86FloatingPoint.cpp)", Old, "backend-slopes"),
+    entry("floatalloc@8", Backend, "x86-fp-stackifier (X86FloatingPoint.cpp)", Translated, ""),
     entry("twoaddr@9", Backend, "two-address-instruction", Old, "lir-cleanup-poc"),
     entry("coalesce@10", Backend, "register-coalescer", Old, "lir-cleanup-poc"),
-    entry(
+    partial(
         "allocate@11",
         Backend,
         "greedy, spill-code-placement, virtregrewriter, stack-slot-coloring",
-        Old,
-        "regalloc-core-poc",
+        "greedy by default under LLVM's order (#2312); criterion: LLRM_CHECK_LIVEINTERVALS and LLRM_GREEDY_CHECK pass; exit: SplitKit translated and rows at or below the old allocator per row",
     ),
     entry("parcopy@12", Backend, "phi-node-elimination copies, virtregrewriter", Old, ""),
     entry("prologue@13", Backend, "prologepilog", Old, ""),
@@ -211,22 +210,30 @@ pub struct AnalysisEntry {
 
 /// The analyses with a translation or a stand-in the registry follows. The
 /// result of `mssa` is handed out mutable (the walker lives inside it).
-pub const ANALYSES: &[AnalysisEntry] = &[AnalysisEntry {
-    key: "mssa",
-    llvm: "MemorySSAAnalysis",
-    kind: Translated,
-    off: true,
-    deps: &["aa"],
-    oracle: "shadow_mssa equality on dumped pass inputs",
-}];
+pub const ANALYSES: &[AnalysisEntry] = &[
+    AnalysisEntry {
+        key: "loops",
+        llvm: "LoopAnalysis",
+        kind: Translated,
+        off: false,
+        deps: &["dominators"],
+        oracle: "tools/loops_oracle.py: print<loops> of opt at the pin",
+    },
+    AnalysisEntry {
+        key: "mssa",
+        llvm: "MemorySSAAnalysis",
+        kind: Translated,
+        off: true,
+        deps: &["aa"],
+        oracle: "shadow_mssa equality on dumped pass inputs",
+    },
+];
 
 /// Vocabulary the manager does not have yet. `PreservedAnalyses` keeps an
 /// analysis or drops it; LLVM's passes that keep MemorySSA do so by updating it
 /// (`MemorySSAUpdater`), which the manager cannot tell from "unchanged".
-pub const TODO: &[&str] = &[
-    "preserved, kept updated by the pass (MemorySSAUpdater): not a PreservedAnalyses variant yet",
-    "LoopInfo is invalidated by CFG changes only (CFGAnalyses): the manager keys by (analysis, function) already but has no CFG-preserved set",
-];
+pub const TODO: &[&str] =
+    &["preserved, kept updated by the pass (MemorySSAUpdater): not a PreservedAnalyses variant yet"];
 
 /// `built`, the slot names a list of `phase` runs, against the registry: the
 /// first Translated slot of the phase that it lacks, or slot it has that the

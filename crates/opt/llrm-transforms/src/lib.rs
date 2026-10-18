@@ -93,6 +93,9 @@ mod constraintelim_tests;
 #[cfg(test)]
 mod corpus_tests;
 pub mod counting;
+pub mod cvp;
+#[cfg(test)]
+mod cvp_tests;
 pub mod dead;
 pub mod deadargs;
 #[cfg(test)]
@@ -139,6 +142,7 @@ pub mod loopclone;
 pub mod loopdistribute;
 pub mod loopexit;
 pub mod loopfuse;
+pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;
 pub mod loopmotion;
