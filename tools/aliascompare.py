@@ -50,9 +50,12 @@ def entry(name: str, kind: str) -> tuple[str, int | None]:
     return name.replace('"', ""), SIZES.get(kind)
 
 
-def llvm_answers(dt, text: str) -> dict[Key, str]:
+AA_PIPELINES = {"default": "tbaa,scoped-noalias-aa,basic-aa", "basic": "basic-aa"}
+
+
+def llvm_answers(dt, text: str, aa: str = "default") -> dict[Key, str]:
     done = subprocess.run(
-        [str(dt.LLVM_BIN / "opt"), "-passes=aa-eval", "-print-all-alias-modref-info", "-disable-output", "-"],
+        [str(dt.LLVM_BIN / "opt"), f"-aa-pipeline={AA_PIPELINES[aa]}", "-passes=aa-eval", "-print-all-alias-modref-info", "-disable-output", "-"],
         input=dt.normalise(text),
         capture_output=True,
         text=True,
@@ -93,16 +96,23 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("files", nargs="+", type=Path)
     parser.add_argument("--llrm-mir", default=str(ROOT / "target/release/llrm-mir"))
+    parser.add_argument(
+        "--basic",
+        action="store_true",
+        help="LLVM's BasicAA alone against llrm's answers without type tags (LLRM_ALIASES_NO_TBAA); by default LLVM's default pipeline (TBAA, scoped noalias, BasicAA) against llrm's whole",
+    )
     args = parser.parse_args()
     dt = difftest()
     version = subprocess.run([str(dt.LLVM_BIN / "opt"), "--version"], capture_output=True, text=True).stdout.split("\n")[1].strip()
-    print(f"opt: {dt.LLVM_BIN / 'opt'} ({version})")
+    print(f"opt: {dt.LLVM_BIN / 'opt'} ({version}) -aa-pipeline={AA_PIPELINES['basic' if args.basic else 'default']}")
+    if args.basic:
+        os.environ["LLRM_ALIASES_NO_TBAA"] = "1"
     table: collections.Counter[tuple[str, str]] = collections.Counter()
     unmatched = 0
     theirs_only = 0
     for path in args.files:
         text = path.read_text()
-        ours, theirs = llrm_answers(args.llrm_mir, path), llvm_answers(dt, text)
+        ours, theirs = llrm_answers(args.llrm_mir, path), llvm_answers(dt, text, "basic" if args.basic else "default")
         if not ours and not theirs:
             continue  # no two pointers to compare
         if not ours or not theirs:
