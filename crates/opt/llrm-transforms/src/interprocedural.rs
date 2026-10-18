@@ -1849,23 +1849,34 @@ pub fn stamped(
         let mut copy = module.clone();
         for global in &mut copy.globals {
             if let GlobalKind::Function(function) = &mut global.kind {
-                function
-                    .attrs
-                    .retain(
-                        |one| match one {
-                            Attribute::Memory(_) => false,
-                            other => {
-                                !matches!(
-                                    Fact::of_attribute(other),
-                                    Some(Fact::ReadNone | Fact::ReadOnly | Fact::WriteOnly)
-                                )
-                            }
-                        },
-                    );
+                let derived = |one: &Attribute| match one {
+                    Attribute::Memory(_) => true,
+                    other => matches!(
+                        Fact::of_attribute(other),
+                        Some(
+                            Fact::ReadNone
+                                | Fact::ReadOnly
+                                | Fact::WriteOnly
+                                | Fact::NoRecurse
+                                | Fact::NoUnwind
+                                | Fact::WillReturn
+                                | Fact::NoReturn
+                        )
+                    ),
+                };
+                function.attrs.retain(|one| !derived(one));
+                for attrs in &mut function.parameter_attrs {
+                    attrs.retain(|one| {
+                        !matches!(
+                            Fact::of_attribute(one),
+                            Some(Fact::NoCapture | Fact::ReadNone | Fact::ReadOnly | Fact::WriteOnly)
+                        )
+                    });
+                }
             }
         }
         for (members, _) in graph.bottom_up_components() {
-            functionattrs::stamp_memory(&mut copy, &members);
+            functionattrs::post_order(&mut copy, &members);
         }
         copy
     });
@@ -1979,13 +1990,12 @@ pub fn stamped(
                 Type::Pointer(_)
             ))
             .collect::<Vec<_>>();
-        let shadow =
-            shadow.as_ref().map(|one| MemoryEffects::of_attrs(&one.global(id).function().expect("a procedure").attrs));
+        let shadow = shadow.as_ref().map(|one| one.global(id).function().expect("a procedure").clone());
         let shown = module.global(id).name.clone().unwrap_or_default();
         let function = function_mut(module, id).1;
         let before = (function.attrs.clone(), function.parameter_attrs.clone());
         _narrowed(&mut function.attrs, summary, hidden);
-        if let Some(expected) = shadow {
+        if let Some(expected) = shadow.as_ref().map(|one| MemoryEffects::of_attrs(&one.attrs)) {
             compared += 1;
             let stated = MemoryEffects::of_attrs(&function.attrs);
             if stated != expected {
@@ -2029,6 +2039,21 @@ pub fn stamped(
             }
             if !initialized[index].is_empty() && !attrs.iter().any(|one| matches!(one, Attribute::Initializes(_))) {
                 attrs.push(Attribute::Initializes(initialized[index].clone()));
+            }
+        }
+        if let Some(expected) = &shadow {
+            for (index, attrs) in function.parameter_attrs.iter().enumerate().filter(|(index, _)| pointers[*index]) {
+                let kind = |attrs: &[Attribute]| {
+                    let facts = Facts::of(attrs);
+                    (facts.no_capture(), facts.read_only(), facts.write_only(), facts.read_none())
+                };
+                if kind(attrs) != kind(&expected.parameter_attrs[index]) {
+                    eprintln!(
+                        "shadow-args disagree @{shown} p{index}: stamp {:?} post_order {:?}",
+                        kind(attrs),
+                        kind(&expected.parameter_attrs[index])
+                    );
+                }
             }
         }
         if before != (function.attrs.clone(), function.parameter_attrs.clone()) {
