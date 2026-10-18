@@ -11,9 +11,8 @@
 //! in the `AAQueryInfo` of its batch and dropped with it, never shared between
 //! two versions of a body.
 
-use std::collections::HashMap;
-
 use llrm_mir::module::{InstId, MetadataId, Operand};
+use llrm_support::hash::HashMap;
 
 /// How much of memory an access touches (`LocationSize`).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -275,9 +274,9 @@ impl Default for AAQueryInfo {
         Self {
             may_be_cross_iteration: false,
             use_dominator_tree: true,
-            locations: HashMap::new(),
-            answers: HashMap::new(),
-            captured: HashMap::new(),
+            locations: HashMap::default(),
+            answers: HashMap::default(),
+            captured: HashMap::default(),
         }
     }
 }
