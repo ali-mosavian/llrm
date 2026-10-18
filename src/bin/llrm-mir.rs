@@ -168,7 +168,15 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
                 // reference is the one the consumers of the facts compare.
                 let cell = |value: ValueId| {
                     let mut cell = llrm_analysis::memory::MemRef::at(&unit, Operand::Value(value), 1 << 20);
-                    cell.provenance = facts.values.get(&value).cloned();
+                    // Every byte of each object, not the bytes the slice names.
+                    cell.provenance = facts.values.get(&value).map(|provenance| {
+                        let slices = provenance
+                            .slices
+                            .iter()
+                            .filter_map(|one| llrm_analysis::memory::Slice::every_byte(one.object))
+                            .collect();
+                        llrm_analysis::memory::Provenance { slices, restrict: provenance.restrict.clone() }
+                    });
                     cell
                 };
                 let answer = match llrm_analysis::regions::overlapping(&cell(one), &cell(other), None, None, None) {
