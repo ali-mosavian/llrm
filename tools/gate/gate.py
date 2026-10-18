@@ -430,7 +430,9 @@ WARNINGS_AS_ERRORS = f"RUSTFLAGS='{WARNING_FLAGS}'"
 # "No such file or directory: .../release/llrm-c" in torture. One set of flags, one build, one binary.
 # RUSTC_BOOTSTRAP too, for the lib step's `--shuffle`: libtest reads it when the tests run, but cargo takes it for an input of every
 # crate it builds, so set on the lib step alone it rebuilt the whole workspace there (1,088 CPU-s) and again in the next cargo step.
-STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1"}
+# CARGO_INCREMENTAL=0 as CI builds: profile.release is incremental (256 units), and the same commit counts 10.3 -> 33.3 Minstr in lir pressuresink
+# there, 11.3 -> 37.6 built as CI does, 11.9 -> 40.7 under dist: test_budgets (budgets recorded in CI's build) read a debt as paid locally (#2240).
+STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1", "CARGO_INCREMENTAL": "0"}
 BUILD = (
     f"{WARNINGS_AS_ERRORS} cargo check --workspace --all-targets -q && "
     f"{WARNINGS_AS_ERRORS} cargo check --release --workspace --all-targets -q && "
