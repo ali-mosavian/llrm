@@ -54,8 +54,16 @@ flowchart TB
 | [`Use`/`Value::use_list`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Use.h#L42) | operands in `Vec<Operand>`; users found by scans or per-pass maps | intrusive use lists; `replaceAllUsesWith` is O(uses). MIRROR |
 | [`ValueHandle`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/ValueHandle.h#L1) (`WeakTrackingVH`, `AssertingVH`) | none | handles for caches that survive erasure (AssumptionCache, SCEV, MemorySSA). MIRROR |
 | [`User` co-allocated operands](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/User.cpp#L137) | `Vec<Operand>` per instruction | DEVIATE D5 |
+| [`LLVMContext` uniquing tables](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/LLVMContextImpl.h) (`IntConstants`, `FPConstants`, types): `ConstantInt::get(Ctx, ..)` interns through the context's own tables, whoever holds it | `Context::constant`/`int` and `Types::intern` take `&mut self`: 273 functions take `&mut Context`, so a read-only analysis cannot ask for a constant | append-only arena, stable ids, constants never freed; interning through `&self`; no `RefCell` borrow held across a call. Stages below. MIRROR |
 
-Box names for PRs: `IR/ilist`, `IR/uselist`, `IR/handles`.
+Box names for PRs: `IR/ilist`, `IR/uselist`, `IR/handles`, `IR/context-intern`.
+
+`IR/context-intern` stages (owner domtree-port; coordinate with simplify-combine-wiring-2128):
+1. Price: d_faces compile (method M) and the SCEV and LVI hot paths, before.
+2. `Arena<T>`: chunked, append-only, one audited `unsafe` for a `&T` that outlives the table's borrow. `Context::constant`, `int` and `Types::intern` move to `&self`; the hash table's `RefCell` is borrowed for one lookup or insert, never across a call. Existing `&mut` callers compile unchanged. `renumber_globals` and named-struct definition stay `&mut` (module construction).
+3. `&mut Context` to `&Context`, compiler-guided, one crate per PR (mir, analysis, transforms by file family, core, x86-bc). A scan finds 273 such functions, 35 of which only intern or read directly.
+4. Delete the 'not yet interned' workarounds: gvn-ci-2160-2172's DEVIATE for #2500 (PHITransAddr counts a constant not yet interned as unavailable). A grep of the head finds no other; stage 3's errors list any `Option`-returning 'constant if present' helper, recorded here.
+5. Price again, same cases; it ships only if the d_faces compile and the SCEV/LVI paths are within noise.
 
 ## 2. Pass and analysis managers
 

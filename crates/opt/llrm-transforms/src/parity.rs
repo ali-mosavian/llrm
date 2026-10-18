@@ -51,6 +51,8 @@ pub enum Phase {
     Cleanup,
     /// `buildFunctionSimplificationPipeline` (l.630-837), once for a function.
     Simplify,
+    /// The end of `buildModuleOptimizationPipeline`'s function list (l.1662).
+    Late,
     /// The module pipeline: the inliner, the CGSCC members, the IPO passes.
     Module,
     /// llc's machine pipeline.
@@ -93,7 +95,7 @@ const fn partial(
     Entry { slot, phase, llvm, kind: Partial, replaced_by: "", note }
 }
 
-use Phase::{Backend, Cleanup, Early, Simplify};
+use Phase::{Backend, Cleanup, Early, Late, Simplify};
 use SlotKind::{Missing, Old, Partial, Translated};
 
 /// Every slot of the -O2 function pipeline in `llvm_order` (-O1 builds a
@@ -132,7 +134,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("dead@768", Simplify, "instcombine", Old, "instcombine-port"),
     entry("loopsimplify@772", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@772", Simplify, "lcssa", Old, "lcssa-port"),
-    entry("loopidioms@737", Simplify, "loop-idiom", Old, "loop-idiom-port"),
+    entry("loopidiom@737", Simplify, "loop-idiom", Translated, ""),
+    entry("loopidioms@737", Simplify, "loop-idiom", Old, "loop-idiom-port (the pricing, noncountable half)"),
     entry("indvars@738", Simplify, "indvars", Old, "scev-port"),
     entry("unroll@753", Simplify, "loop-unroll-full", Old, "loop-passes-port"),
     entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
@@ -143,12 +146,11 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
     entry("memcpyopt@818", Simplify, "memcpyopt", Old, "backend-slopes"),
-    entry(
+    partial(
         "merge@818",
         Simplify,
         "memcpyopt (tryMergingIntoMemset), MergeConsecutiveStores (backend)",
-        Old,
-        "backend-slopes",
+        "criterion: the memsets are MemCpyOpt's (memcpyoptimizer.rs, checked against opt by tools/llvmport/mccompare.py); exit: the wider constant stores of loopidioms::Merge go with the backend MergeConsecutiveStores (lir-cleanup-port)",
     ),
     entry("dse@820", Simplify, "dse", Old, "backend-slopes (after memcpyopt)"),
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
@@ -160,6 +162,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("fold@837", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@837", Simplify, "instcombine", Old, "instcombine-port"),
     entry("constraint-elimination", Simplify, "constraint-elimination", Missing, ""),
+    entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Old, "loop-passes-port"),
@@ -431,10 +434,11 @@ pub(crate) fn tally(registry: &[Entry]) -> Tally {
     count(registry.iter().map(|one| one.kind))
 }
 
-const PHASES: [(Phase, &str); 5] = [
+const PHASES: [(Phase, &str); 6] = [
     (Phase::Early, "early"),
     (Phase::Cleanup, "cleanup"),
     (Phase::Simplify, "simplify"),
+    (Phase::Late, "late"),
     (Phase::Module, "module"),
     (Phase::Backend, "backend"),
 ];

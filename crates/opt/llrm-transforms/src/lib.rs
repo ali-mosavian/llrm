@@ -130,6 +130,7 @@ pub mod inline;
 pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;
+pub mod instsimplify;
 pub mod interprocedural;
 pub mod ipacp;
 pub mod jumpthread;
@@ -158,6 +159,7 @@ pub mod loopversion;
 pub mod lsr;
 pub mod mem2reg;
 pub mod memcpyopt;
+pub mod memcpyoptimizer;
 pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
@@ -189,6 +191,7 @@ pub mod tailrec;
 pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
+pub mod twoentryphi;
 pub mod unroll;
 pub mod widen;
 pub mod unroll_jam;

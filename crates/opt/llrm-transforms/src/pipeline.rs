@@ -482,7 +482,7 @@ impl Options {
             "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
-            "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
+            "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
             "tailrec" => self.sibcalls,
             "ipa-ranges" => self.ipa_ranges,
             _ => true,
@@ -539,7 +539,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Strict floating recurrences must retain their original iteration
         // order; LICM may move invariant preparation out afterwards.
         Box::new(floatloop::FloatLoop),
-        Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true }),
+        hoisting(applied),
         Box::new(loopmotion::LoopMotion),
         // The loop's exit tests that nothing in it changes are made once, with
         // the loop's entry.
@@ -566,6 +566,17 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(memcpyopt::MemCpyOpt { size: applied.options.prefers_size() }),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
+}
+
+/// The pass that moves loop invariants: `hoist`, or with `LLRM_EXP_LICM=1` the
+/// translation of LLVM's LICM (`licm`), which also sinks and promotes. An
+/// experiment: not part of the pipeline.
+fn hoisting(applied: &Applied) -> Box<dyn FunctionPass> {
+    if llrm_support::env_flag!("LLRM_EXP_LICM") {
+        Box::new(crate::licm::Licm { apply: true })
+    } else {
+        Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true })
+    }
 }
 
 /// Translations that have not joined the pipeline yet: `llrm-pass` and
@@ -726,6 +737,9 @@ pub(crate) fn llvm_order(
             decide("decide@1244"),
             phiopt("phiopt@1244"),
         ],
+        // InstSimplifyPass, PassBuilderPipelines.cpp#L1662: the last function
+        // pass of `OptimizePM`, after LoopSink.
+        Phase::Late => vec![slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify))],
         Phase::Simplify => {
             let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
             list.extend([
@@ -773,6 +787,7 @@ pub(crate) fn llvm_order(
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             list.extend([
+                slot("loopidiom@737", Box::new(crate::loopidiom::pass::LoopIdiom::new())),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot(
                     "indvars@738",
@@ -857,6 +872,9 @@ pub(crate) fn function_stages(applied: &Applied) -> Vec<Fixed> {
             Fixed::linear(applied, Phase::Early),
             Fixed::linear(applied, Phase::Cleanup),
             Fixed::linear(applied, Phase::Simplify),
+            // DEVIATE: LLVM runs it after the interprocedural passes; here it
+            // closes the function stages, before `ipa-range`.
+            Fixed::linear(applied, Phase::Late),
         ]
     } else {
         vec![Fixed::new(applied)]
@@ -1015,7 +1033,7 @@ pub fn recorded(
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if !guarded && applied.options.wanted("hoist") {
-        manager.add(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true });
+        manager.add_boxed(hoisting(applied));
     }
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {
@@ -1083,7 +1101,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
-        passes.push(Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true }));
+        passes.push(hoisting(applied));
     }
     passes
 }
