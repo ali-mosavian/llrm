@@ -21,9 +21,8 @@
 //! # Used by
 //! `liverangecalc`, `liveintervals`.
 
-use std::collections::HashMap;
-
 use crate::model::lir::LirBody;
+use crate::support::hash::HashMap;
 
 /// Blocks by number, with their edges.
 #[derive(Clone, Debug, Default)]

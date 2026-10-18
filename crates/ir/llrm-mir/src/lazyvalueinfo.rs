@@ -52,11 +52,7 @@
 //! 9. `PerPredRanges` (the hidden `-lvi-per-pred-ranges` option, off by
 //!    default) and its predecessor maps (lines 63, 143-260, 792-837,
 //!    1100-1165): #2341.
-//! 10. `ConstantFoldCompareInstOperands` of two non-integer constants folds
-//!     null against null, identical constants, `X u>= null` and `X u< null`,
-//!     and a global against null; constant expressions are not folded. The
-//!     answer is then `None`, never a wrong `Some`. Exit: call
-//!     `constantfolding.rs` (#2257) once it lands (#2252).
+//! 10. (closed: `ConstantFoldCompareInstOperands` is `constantfolding.rs`.)
 //! 11. LLVM folds a constant expression when it makes one (`ptrtoint (ptr
 //!     inttoptr (i32 20 to ptr) to i32)` is `i32 20`); MIR keeps the
 //!     expression, which the lattice then holds as a non-integer constant
@@ -2738,7 +2734,7 @@ impl LazyValueInfo {
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LazyValueInfo.cpp#L2080>
     fn get_predicate_result(
-        env: &Env,
+        env: &mut Env,
         pred: IntPredicate,
         c: ConstantId,
         val: &Lattice,
@@ -2966,10 +2962,10 @@ impl LazyValueInfo {
             }
 
             let r = self.get_or_create_impl(env).get_value_in_block(env, rhs, bb, Some(cxt_i));
-            let fold = |pred: IntPredicate, a: &LatticeConstant, b: &LatticeConstant| {
+            let mut fold = |pred: IntPredicate, a: &LatticeConstant, b: &LatticeConstant| {
                 constant_fold_compare_inst_operands(env, pred, a, b)
             };
-            return l.get_compare(pred, &r, &fold);
+            return l.get_compare(pred, &r, &mut fold);
         }
         None
     }
@@ -3239,69 +3235,29 @@ fn value_text(
     }
 }
 
-/// `ConstantFoldCompareInstOperands(Pred, C1, C2, DL)` of two constants that
-/// are not integers (DEVIATE 10): true, false, or unfolded.
+/// `ConstantFoldCompareInstOperands(Pred, C1, C2, DL)`: true, false, or
+/// unfolded.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L1332>
 fn constant_fold_compare_inst_operands(
-    env: &Env,
+    env: &mut Env,
     pred: IntPredicate,
     c1: &LatticeConstant,
     c2: &LatticeConstant,
 ) -> Option<bool> {
-    let true_when_equal = matches!(
-        pred,
-        IntPredicate::Eq | IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle
-    );
-    if let (LatticeConstant::Int { bits: a, width }, LatticeConstant::Int { bits: b, .. }) = (c1, c2) {
-        let (sa, sb) = (apint::signed(*a, *width), apint::signed(*b, *width));
-        return Some(match pred {
-            IntPredicate::Eq => a == b,
-            IntPredicate::Ne => a != b,
-            IntPredicate::Ugt => a > b,
-            IntPredicate::Uge => a >= b,
-            IntPredicate::Ult => a < b,
-            IntPredicate::Ule => a <= b,
-            IntPredicate::Sgt => sa > sb,
-            IntPredicate::Sge => sa >= sb,
-            IntPredicate::Slt => sa < sb,
-            IntPredicate::Sle => sa <= sb,
-        });
-    }
-    if *c1 == LatticeConstant::Undef || *c2 == LatticeConstant::Undef {
-        return None;
-    }
-    if c2.is_null_value() {
-        // C1 >= 0 --> true
-        if pred == IntPredicate::Uge {
-            return Some(true);
+    let mut make = |c: &LatticeConstant| match c {
+        LatticeConstant::Undef => None,
+        LatticeConstant::Int { width, bits } => {
+            let ty = env.context.types.int(*width);
+            Some(env.context.constant(Constant { ty, kind: ConstantKind::Int(*bits) }))
         }
-        // C1 < 0 --> false
-        if pred == IntPredicate::Ult {
-            return Some(false);
-        }
-    }
-    // evaluateICmpRelation: identical constants are equal.
-    if c1 == c2 {
-        return Some(true_when_equal);
-    }
-    // A global is not null (a non-weak global in address space 0).
-    let non_weak_global = |c: &LatticeConstant| match c {
-        LatticeConstant::Other { ty, kind: ConstantKind::Global(global) } => {
-            let space0 = matches!(env.context.types.get(*ty), Type::Pointer(0));
-            space0
-                && env.globals.get(global.0 as usize).is_some_and(|g| {
-                    g.linkage != crate::module::Linkage::ExternWeak && !null_pointer_is_defined(Some(env.function), 0)
-                })
-        }
-        _ => false,
+        LatticeConstant::Other { ty, kind } => Some(env.context.constant(Constant { ty: *ty, kind: kind.clone() })),
     };
-    if c2.is_null_value() && non_weak_global(c1) {
-        return match pred {
-            IntPredicate::Eq | IntPredicate::Ule | IntPredicate::Ult => Some(false),
-            IntPredicate::Ne | IntPredicate::Ugt | IntPredicate::Uge => Some(true),
-            _ => None,
-        };
+    let (a, b) = (make(c1)?, make(c2)?);
+    let folded =
+        crate::constantfolding::constant_fold_compare_inst_operands(env.context, env.globals, env.layout, pred, a, b)?;
+    match env.context.get(folded).kind {
+        ConstantKind::Int(bits) => Some(bits & 1 == 1),
+        _ => None,
     }
-    None
 }

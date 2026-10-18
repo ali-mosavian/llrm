@@ -28,7 +28,6 @@
 //! # Used by
 //! The allocator's shadow core.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -37,6 +36,7 @@ use super::liverange::LiveInterval;
 use super::liverangecalc::{Ctx, LiveIntervalCalc, Operand};
 use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
 use crate::model::lir::{Insn, LirBody};
+use crate::support::hash::HashMap;
 
 /// `LiveIntervals` (LiveIntervals.h).
 pub struct LiveIntervals {
@@ -66,10 +66,10 @@ impl LiveIntervals {
             cfg,
             dom,
             blocks: Vec::with_capacity(body.blocks.len()),
-            operands: HashMap::new(),
-            insns: HashMap::new(),
+            operands: HashMap::default(),
+            insns: HashMap::default(),
             inputs: body.inputs.clone(),
-            intervals: HashMap::new(),
+            intervals: HashMap::default(),
             calc: LiveIntervalCalc::new(),
             next_vreg: 0,
         };

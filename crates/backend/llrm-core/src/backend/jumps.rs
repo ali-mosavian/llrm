@@ -1307,14 +1307,18 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
     body.with_blocks(blocks)
 }
 
-/// An inserted anchor: no bytes, no machine effect, only a virtual definition.
-/// A named `Nothing` (the stackifier's `sahf`) emits code.
+/// An inserted anchor: no bytes and no machine effect, only a virtual
+/// definition. What emits code or writes a register (the stackifier's `sahf`,
+/// a pseudo that clobbers the flags) is an instruction.
 fn _inert(one: &Insn) -> bool {
-    one.what
-        .as_ref()
-        .is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty))
+    one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing)
         && one.inserted()
         && one.spread.is_empty()
+        && !one.emits()
+        && one.clobbers.is_empty()
+        && one.clobbers_high.is_empty()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
 }
 
 /// The blocks that name each value, and the edges between blocks, which a hoist
@@ -1613,7 +1617,7 @@ pub fn _fold_converged(block: LirBlock) -> LirBlock {
 /// fixups, or line anchors rather than merely choosing a machine layout.
 pub fn duplicated_returns(
     body: LirBody,
-    return_overhead: i64,
+    return_overhead: &dyn Fn() -> i64,
 ) -> LirBody {
     let mut body = body;
     loop {
@@ -1625,15 +1629,10 @@ pub fn duplicated_returns(
             // Parent order reaches only sums and a map keyed by `at`.
             let parents: Vec<&Block> =
                 predecessors.get(&tail.at).into_iter().flatten().filter_map(|at| by_at.get(at).copied()).collect();
-            let tail_size = _duplicable_return_size(body.bits, tail, return_overhead);
-            if tail.at == body.entry
-                || tail_size.is_none()
-                || parents.len() < 2
-                || parents.iter().any(|parent| parent.succ != [tail.at])
-            {
+            if tail.at == body.entry || parents.len() < 2 || parents.iter().any(|parent| parent.succ != [tail.at]) {
                 continue;
             }
-            let tail_size = tail_size.expect("checked above");
+            let Some(tail_bytes) = _duplicable_return_size(body.bits, tail) else { continue };
             let prepared: Vec<Option<(&LirBlock, i64)>> =
                 parents.iter().map(|parent| _return_parent(body.bits, parent, tail.at)).collect();
             if prepared.iter().any(Option::is_none) {
@@ -1641,7 +1640,11 @@ pub fn duplicated_returns(
             }
             let copies: Vec<(&LirBlock, i64)> = prepared.into_iter().flatten().collect();
             let saved: i64 = copies.iter().map(|(_parent, jump_size)| jump_size).sum();
-            if saved == 0 || parents.len() as i64 * tail_size > tail_size + saved {
+            if saved == 0 {
+                continue;
+            }
+            let tail_size = return_overhead() + tail_bytes;
+            if parents.len() as i64 * tail_size > tail_size + saved {
                 continue;
             }
 
@@ -1681,11 +1684,11 @@ fn _arm_bytes(
         .sum()
 }
 
-/// Selected bytes in a source-unowned terminal return block.
+/// Selected bytes in a source-unowned terminal return block, without the frame
+/// teardown the emitter adds.
 pub fn _duplicable_return_size(
     bits: u32,
     block: &LirBlock,
-    return_overhead: i64,
 ) -> Option<i64> {
     let real = _real(block);
     if !block.phis.is_empty()
@@ -1721,7 +1724,7 @@ pub fn _duplicable_return_size(
     if emitted.iter().any(Option::is_none) {
         return None;
     }
-    Some(return_overhead + emitted.iter().flatten().map(|one| one.code.len() as i64).sum::<i64>())
+    Some(emitted.iter().flatten().map(|one| one.code.len() as i64).sum::<i64>())
 }
 
 /// A dedicated edge to target and the shortest jump bytes it can save.

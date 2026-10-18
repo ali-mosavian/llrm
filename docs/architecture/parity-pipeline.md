@@ -34,11 +34,11 @@ Each old analysis keeps a zero-callers counter (`LLRM_DEBUG=analyses`): when no 
 
 ## Run counts per level
 
-The run count per slot must match LLVM's. Today `loopsimplify`/`lcssa` run 3 times per body at every level against LLVM's 1 to 1.5 per function (d_faces -O2: 36 and 11 bodies vs 16). The fix is a row of this page.
+The run count per slot must match LLVM's. `parity::RUNS_PER_BODY` states it and `check_run_counts` checks a compile's `LLRM_DEBUG=runs` lines: `gvn@787` once per body. On d_faces -O2 under the order `gvn` runs 12 times over 11 functions (clang 11): the twelfth is the one body the interprocedural stage (`ipa-range`, after the function pipeline here, `ipsccp` before it in LLVM) sends back through the Simplify list. The old rounds ran it 35 times. At -O1 the order still runs `gvn` (11 times); clang's -O1 has none, a levels row. `loopsimplify`/`lcssa` run at three unconditional slots per body (x_hanoi2: ours 9/9/15/9 at -O1/-O2/-O3/-Os against LLVM's 4/10/10/10): stated in `parity::RUN_COUNTS_OPEN`, not yet checked.
 
 ## Scoreboard
 
-Under the parity switch `LLRM_DEBUG=time` prints instructions per slot, and the rows report the per-slot totals next to LLVM's (`-time-passes`-equivalent). Not built yet.
+What exists: `LLRM_DEBUG=runs` prints each step's own work with the body's `in=`/`out=` instruction counts and the function name, and `LLRM_DEBUG=counts` prints `callers <analysis> J joined O old`: how many times a joined (Translated) slot and an old one made the manager compute each analysis; an analysis with no old caller can be deleted. A per-slot instruction table is built by hand from the runs lines; there is no automatic table yet.
 
 ## Road to parity
 
