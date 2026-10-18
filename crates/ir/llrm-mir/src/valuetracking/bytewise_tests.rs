@@ -2,7 +2,7 @@
 //! `tests/vt/bytewise/*.ll` (`expected` is `tools/llvmport/vtdump.sh bw,uo` on
 //! the file).
 
-use std::collections::HashMap;
+use crate::hash::HashMap;
 
 use super::bytewise::{Byte, is_bytewise_value};
 use super::query::Query;
