@@ -13,6 +13,9 @@ pub mod codemetrics;
 pub mod constantfolding;
 pub mod constantfolding_dump;
 pub mod constantfprange;
+pub mod arena;
+#[cfg(test)]
+mod arena_tests;
 pub mod constantrange;
 pub mod constfold;
 pub mod constraintsystem;

@@ -474,6 +474,7 @@ impl Function {
     }
 
     /// An operand's type; a block has none.
+    #[inline]
     pub fn operand_type(
         &self,
         context: &Context,

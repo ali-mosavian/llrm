@@ -65,6 +65,8 @@ Box names for PRs: `IR/ilist`, `IR/uselist`, `IR/handles`, `IR/context-intern`.
 4. Delete the 'not yet interned' workarounds: gvn-ci-2160-2172's DEVIATE for #2500 (PHITransAddr counts a constant not yet interned as unavailable). A grep of the head finds no other; stage 3's errors list any `Option`-returning 'constant if present' helper, recorded here.
 5. Price again, same cases; it ships only if the d_faces compile and the SCEV/LVI paths are within noise.
 
+COST DEBT C1 (stage 2, [#2527](https://github.com/ali-mosavian/llrm/pull/2527)): `&self` interning costs +0.9 to +1.1% instructions:u on the dist build (fat LTO, one CGU), `llrm-c -O2` at the base `3b8d044e2`, min of 3: vid.c 370.9 M to 374.8 M, menu.c 1,357.5 M to 1,372.2 M, d_faces.c 2,350.4 M to 2,371.5 M, d_faces -m32 flat 1,666.8 M to 1,683.1 M; objects byte-identical in size. Instructions only; cycles not claimed. Exit: stage 3 removes the context clones, stage 5 prices the clawback; the debt closes when the dist price is within 0.3%.
+
 ## 2. Pass and analysis managers
 
 LLVM runs four managers over one tree: Module, CGSCC, Function, Loop. An outer manager holds the inner's results through a proxy (`FunctionAnalysisManagerModuleProxy`, `FunctionAnalysisManagerCGSCCProxy`, `LoopAnalysisManagerFunctionProxy`, and the outer-to-inner `*OuterAnalysisManager*Proxy`). A pass returns `PreservedAnalyses`; the manager invalidates what it did not keep. A loop pass reads `LoopStandardAnalysisResults` (AA, AC, DT, LI, MSSA, SE, TLI, TTI, BFI, BPI) and never asks the function manager directly.

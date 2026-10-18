@@ -232,3 +232,75 @@ b6:
 ");
     assert_eq!(after.matches("load").count(), 1, "{after}");
 }
+
+/// Asks for the manager's MemorySSA and says nothing else; `forgets` returns
+/// `none()`, as a pass that edited without naming what it kept.
+struct AsksMssa {
+    forgets: bool,
+}
+
+impl llrm_mir::passes::FunctionPass for AsksMssa {
+    fn name(&self) -> &'static str {
+        "asks-mssa"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_analysis::manager::MemorySsa>(unit.context, unit.layout, unit.function);
+        if self.forgets {
+            llrm_mir::passes::PreservedAnalyses::none()
+        } else {
+            llrm_mir::passes::PreservedAnalyses::all()
+        }
+    }
+}
+
+const ONE_LOAD_TWICE: &str = "define i32 @f(ptr %p) {
+b0:
+  %a = load i32, ptr %p
+  %b = load i32, ptr %p
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+";
+
+fn mssa_misses_over(passes: Vec<Box<dyn llrm_mir::passes::FunctionPass>>) -> (u64, u64) {
+    let mut module = parsed(&format!("{DOS}{ONE_LOAD_TWICE}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.verify_invalidation = true;
+    for pass in passes {
+        manager.add_boxed(pass);
+    }
+    let before = llrm_mir::counts::analysed("mssa");
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    let after = llrm_mir::counts::analysed("mssa");
+    (after.0 - before.0, after.1 - before.1)
+}
+
+/// EarlyCSE removes the second load through `MemorySSAUpdater` and says it kept
+/// MemorySSA (EarlyCSE.cpp `PA.preserve<MemorySSAAnalysis>()`): the graph a
+/// pass asks for after it is the one it updated, not a new one. The manager
+/// checks it against a fresh build (`verify_invalidation`). Before, EarlyCSE
+/// built its own graph per body and the manager's was dropped with its change:
+/// the pass after it computed MemorySSA again (2 computations, not 1).
+#[test]
+fn test_the_memory_graph_early_cse_updated_is_the_one_the_next_pass_gets() {
+    let (hits, misses) = mssa_misses_over(vec![
+        Box::new(AsksMssa { forgets: false }),
+        Box::new(EarlyCse),
+        Box::new(AsksMssa { forgets: false }),
+    ]);
+    assert_eq!(misses, 1, "MemorySSA was computed again after EarlyCSE updated it");
+    assert!(hits >= 2, "EarlyCSE and the pass after it read the one graph: {hits} hits");
+}
+
+/// A pass that edits and keeps nothing still drops it: the graph after is new.
+#[test]
+fn test_the_memory_graph_is_computed_again_after_a_pass_that_keeps_nothing() {
+    let (_, misses) =
+        mssa_misses_over(vec![Box::new(AsksMssa { forgets: true }), Box::new(AsksMssa { forgets: false })]);
+    assert_eq!(misses, 2, "a pass that named nothing kept MemorySSA");
+}
