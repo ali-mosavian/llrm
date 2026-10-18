@@ -114,12 +114,12 @@ fn induction_variables(module: &llrm_mir::module::Module) -> String {
     out
 }
 
-/// `function<TAB>answer<TAB>%a<TAB>%b` per pair of the pointer values that
+/// `function<TAB>answer<TAB>%a<TAB>bytes<TAB>%b<TAB>bytes` per pair of the pointer values that
 /// load, store and call operands name (a value, in order of first use), by what
 /// the points-to facts of the body say: `NoAlias` where no object they point
 /// into is shared (offsets and widths not read, as aa-eval asks without a size), `MustAlias` for one value, else `MayAlias`.
 fn aliases(module: &llrm_mir::module::Module) -> String {
-    use llrm_analysis::memory::{MemRef, Provenance, Slice, Unit};
+    use llrm_analysis::memory::{MemRef, Unit};
     use llrm_mir::context::ConstantKind;
     use llrm_mir::module::Operand;
     use llrm_mir::opcode::Opcode;
@@ -154,57 +154,37 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
                 Operand::Block(_) => None,
             }
         };
-        let mut pointers: Vec<Operand> = Vec::new();
-        let note = |operand: Operand, pointers: &mut Vec<Operand>| {
-            if label(operand).is_some()
-                && function.operand_type(&module.context, operand).is_some_and(|ty| {
-                    matches!(module.context.types.get(ty), llrm_mir::types::Type::Pointer(_))
-                })
-                && !pointers.contains(&operand)
-            {
-                pointers.push(operand);
-            }
-        };
+        // aa-eval's pointers: the pointer operand of each load and store, with
+        // the size of what is accessed; one entry for each pointer and size.
+        let mut entries: Vec<(String, u32, MemRef)> = Vec::new();
         for (_, inst) in function.walk() {
             let op = function.instruction(inst);
-            match &op.opcode {
-                Opcode::Load { .. } => note(op.operands[0], &mut pointers),
-                Opcode::Store { .. } => note(op.operands[1], &mut pointers),
-                Opcode::Call(_) | Opcode::Invoke(_) => {
-                    for &operand in &op.operands {
-                        note(operand, &mut pointers);
-                    }
-                }
-                _ => {}
-            }
-        }
-        // aa-eval asks with no size (`beforeOrAfterPointer`): a width no offset
-        // gets past, so only the objects separate two pointers. The reference is
-        // the one the consumers of the facts compare, every byte of each object.
-        let cell = |operand: Operand| {
-            let mut cell = MemRef::at(&unit, operand, 1 << 20);
-            let provenance = match operand {
-                Operand::Value(value) => facts.values.get(&value).cloned(),
-                _ => llrm_analysis::memory::object_of(&unit, operand)
-                    .and_then(|object| Provenance::one_with_slice(object, 0, 1, 1, 1, Default::default()).ok()),
+            let pointer = match &op.opcode {
+                Opcode::Load { .. } => op.operands[0],
+                Opcode::Store { .. } => op.operands[1],
+                _ => continue,
             };
-            cell.provenance = provenance.map(|provenance| Provenance {
-                slices: provenance.slices.iter().filter_map(|one| Slice::every_byte(one.object)).collect(),
-                restrict: provenance.restrict.clone(),
-            });
-            cell
-        };
-        for (at, &one) in pointers.iter().enumerate() {
-            for &other in &pointers[at + 1..] {
-                let answer = match llrm_analysis::regions::overlapping(&cell(one), &cell(other), None, None, None) {
+            let (Some(text), Some(mut reference)) = (label(pointer), MemRef::of(&unit, inst)) else { continue };
+            if entries.iter().any(|(had, width, _)| *had == text && *width == reference.width) {
+                continue;
+            }
+            // The bytes this access reaches, as the consumers of the facts read them.
+            reference.provenance = facts.reference(&unit, &reference).or(reference.provenance.take());
+            entries.push((text, reference.width, reference));
+        }
+        for (at, one) in entries.iter().enumerate() {
+            for other in &entries[at + 1..] {
+                let answer = match llrm_analysis::regions::overlapping(&one.2, &other.2, None, None, None) {
                     Ok(false) => "NoAlias",
                     _ => "MayAlias",
                 };
                 out += &format!(
-                    "{}\t{answer}\t{}\t{}\n",
+                    "{}\t{answer}\t{}\t{}\t{}\t{}\n",
                     global.name.as_deref().unwrap_or("?"),
-                    label(one).expect("a label"),
-                    label(other).expect("a label")
+                    one.0,
+                    one.1,
+                    other.0,
+                    other.1
                 );
             }
         }

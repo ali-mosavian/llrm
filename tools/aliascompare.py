@@ -38,33 +38,55 @@ def difftest():
 
 PAIR = re.compile(r"^\s+(NoAlias|MayAlias|PartialAlias|MustAlias):\s+(.*)$")
 NAME = re.compile(r'[%@](?:"[^"]*"|[\w.$-]+)')
+OPERAND = re.compile(r'(\S+)\*\s+([%@](?:"[^"]*"|[\w.$-]+))')
 FUNCTION = re.compile(r"^Function: ([^:]+):")
+SIZES = {"i1": 1, "i8": 1, "i16": 2, "i32": 4, "i64": 8, "float": 4, "double": 8}
+
+Key = tuple[str, frozenset[tuple[str, int | None]]]
 
 
-def llvm_answers(dt, text: str) -> dict[tuple[str, frozenset[str]], str]:
+def entry(name: str, kind: str) -> tuple[str, int | None]:
+    """A pointer and the bytes aa-eval accesses through it, from the type it prints (none where it prints one llrm sizes by its datalayout)."""
+    return name.replace('"', ""), SIZES.get(kind)
+
+
+def llvm_answers(dt, text: str) -> dict[Key, str]:
     done = subprocess.run(
         [str(dt.LLVM_BIN / "opt"), "-passes=aa-eval", "-print-all-alias-modref-info", "-disable-output", "-"],
         input=dt.normalise(text),
         capture_output=True,
         text=True,
     )
-    found: dict[tuple[str, frozenset[str]], str] = {}
+    found: dict[Key, str] = {}
     current = ""
     for line in done.stderr.splitlines():
         if (head := FUNCTION.match(line)) is not None:
             current = head[1].strip('"')
-        elif (pair := PAIR.match(line)) is not None and len(names := NAME.findall(pair[2])) == 2:
-            found[(current, frozenset(name.replace('"', "") for name in names))] = pair[1]
+        elif (pair := PAIR.match(line)) is not None and len(operands := OPERAND.findall(pair[2])) == 2:
+            found[(current, frozenset(entry(name, kind) for kind, name in operands))] = pair[1]
     return found
 
 
-def llrm_answers(binary: str, path: Path) -> dict[tuple[str, frozenset[str]], str]:
+def llrm_answers(binary: str, path: Path) -> dict[Key, str]:
     done = subprocess.run([binary, "--aliases", str(path)], capture_output=True, text=True)
     found = {}
     for line in done.stdout.splitlines():
-        function, answer, first, second = line.split("\t")
-        found[(function, frozenset((first, second)))] = answer
+        function, answer, first, first_bytes, second, second_bytes = line.split("\t")
+        found[(function, frozenset(((first.replace('"', ""), int(first_bytes)), (second.replace('"', ""), int(second_bytes)))))] = answer
     return found
+
+
+def theirs_for(theirs: dict[Key, str], key: Key) -> str | None:
+    """LLVM's answer for one of llrm's entries: the same pointers and sizes, a size llrm cannot read from the type standing for any."""
+    function, pair = key
+    if (found := theirs.get(key)) is not None:
+        return found
+    (a, a_bytes), (b, b_bytes) = sorted(pair, key=str)
+    for one in (a_bytes, None):
+        for two in (b_bytes, None):
+            if (found := theirs.get((function, frozenset(((a, one), (b, two)))))) is not None:
+                return found
+    return None
 
 
 def main() -> int:
@@ -77,6 +99,7 @@ def main() -> int:
     print(f"opt: {dt.LLVM_BIN / 'opt'} ({version})")
     table: collections.Counter[tuple[str, str]] = collections.Counter()
     unmatched = 0
+    theirs_only = 0
     for path in args.files:
         text = path.read_text()
         ours, theirs = llrm_answers(args.llrm_mir, path), llvm_answers(dt, text)
@@ -85,16 +108,20 @@ def main() -> int:
         if not ours or not theirs:
             print(f"FAILED ROW (no answers from {'llrm' if not ours else 'opt'}): {path}")
             continue
+        matched = 0
         for key, answer in ours.items():
-            if key in theirs:
-                table[(answer, theirs[key])] += 1
+            if (found := theirs_for(theirs, key)) is not None:
+                table[(answer, found)] += 1
+                matched += 1
             else:
                 unmatched += 1
+        theirs_only += max(0, len(theirs) - matched)
     print("ours -> LLVM: pairs")
     for (ours, theirs), count in sorted(table.items()):
         flag = "  <- candidate miscompile" if ours == "NoAlias" and theirs != "NoAlias" else ""
         print(f"  {ours:9} {theirs:12} {count:8}{flag}")
     print(f"pairs llrm printed that aa-eval did not: {unmatched}")
+    print(f"pairs aa-eval printed that llrm did not: {theirs_only}")
     return 0
 
 

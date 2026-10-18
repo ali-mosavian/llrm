@@ -22,6 +22,8 @@ def test_an_aa_eval_pair_line_is_read_with_its_function_and_both_names():
         pair = aliascompare.PAIR.match(line)
         assert pair and pair[1] == kind, line
         assert aliascompare.NAME.findall(pair[2]) == names, line
+    assert aliascompare.OPERAND.findall("ptr* %1, i16* %3") == [("ptr", "%1"), ("i16", "%3")]
+    assert aliascompare.entry('%"b c"', "i32") == ("%b c", 4)
     assert aliascompare.FUNCTION.match("Function: pipeline.body: 13 pointers, 0 call sites")[1] == "pipeline.body"
 
 
