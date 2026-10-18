@@ -1,3 +1,7 @@
+---
+architecture-index: TargetTransformInfo: one translation, many readers
+architecture-order: 460
+---
 # TargetTransformInfo: one translation, many readers
 
 TL;DR: translate `TargetTransformInfo` with `BasicTTIImpl` (the generic profile `opt` uses without a triple)

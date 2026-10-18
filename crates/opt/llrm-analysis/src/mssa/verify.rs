@@ -175,7 +175,9 @@ impl Mssa {
         def: AccessId,
         message: &str,
     ) -> Result<(), String> {
-        for &user in self.access(def).users.iter().chain(&self.access(def).phi_users) {
+        for &user in
+            self.access(def).users.iter().chain(&self.access(def).phi_users).chain(&self.access(def).optimized_users)
+        {
             let user_access = self.access(user);
             if user_access.kind == Kind::Phi {
                 for (at, &(_, value)) in user_access.incoming.iter().enumerate() {
@@ -200,7 +202,13 @@ impl Mssa {
             // The live on entry use may cause us to get a null def here.
             None if self.is_live_on_entry_def(user) => Ok(()),
             None => Err("Null def but use not point to live on entry def".to_owned()),
-            Some(def) if self.access(def).users.contains(&user) || self.access(def).phi_users.contains(&user) => Ok(()),
+            Some(def)
+                if self.access(def).users.contains(&user)
+                    || self.access(def).phi_users.contains(&user)
+                    || self.access(def).optimized_users.contains(&user) =>
+            {
+                Ok(())
+            }
             Some(_) => Err("Did not find use in def's use list".to_owned()),
         }
     }

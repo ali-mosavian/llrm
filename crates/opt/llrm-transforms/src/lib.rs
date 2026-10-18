@@ -99,6 +99,7 @@ pub mod deadargs;
 mod deadargs_tests;
 pub mod decide;
 pub mod dse;
+pub mod earlycse;
 pub mod edges;
 pub mod exitfold;
 pub mod exitsink;
