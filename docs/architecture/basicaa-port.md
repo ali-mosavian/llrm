@@ -61,6 +61,7 @@ How the column was found right: two earlier readings of the same inputs gave 22,
 3. No `invariant.group`, fences or atomics (MIR has none).
 4. The capture oracle trusts a callee another module defines when one module is compiled alone; the module report counts them.
 5. The first implementation answers from the existing provenance and `MemRef` where LLVM walks `GEP` chains; each place is replaced by the translated walk at S2 and listed in that PR.
+6. `CaptureTracking` stops at 100 uses of an object (`getDefaultMaxUsesToExploreForCaptureTracking`) and answers captured. Seen: a slot with about 200 loads in `loop400` (replay input 01/0011-in-hoist) is NoAlias against a loaded pointer for llrm and MayAlias for LLVM; the mirror takes the cap (precision lost, rows to be counted), a deviation takes none. Decided at S1 by the rows.
 
 ## 6. Open
 
