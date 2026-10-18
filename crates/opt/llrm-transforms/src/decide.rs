@@ -76,8 +76,16 @@
 //! at -O0. `jumpthread` is the separate pass that threads a state variable's
 //! edges.
 //!
+//! # ScalarEvolution
+//! A branch the other engines leave is asked of ScalarEvolution
+//! (`isKnownPredicateAt` at the branch, then its inverse), then of the `guards`
+//! engine for what it cannot prove (the partition index: not an add
+//! recurrence). `LLRM_NO_SCEV_DECIDE` asks the `guards` engine alone.
+//!
 //! # Needs
-//! `consts`, `constant_cycles`, `ranges`, `guards`, `induction`, points-to
+//! `consts`, `constant_cycles`, LazyValueInfo (a branch the dominating
+//! branches, assumes and `!range`s settle), `ranges` (the counted loops' facts,
+//! until indvars decides them as LLVM does), `guards`, `induction`, points-to
 //! (`pointers`), the CFG shape.
 //!
 //! # Keeps
@@ -106,23 +114,24 @@ use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::footprint::Footprint;
+use llrm_mir::lazyvalueinfo::{Env, LazyValueInfo};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
+use llrm_mir::valuelattice::LatticeConstant;
+use llrm_mir::valuetracking::AssumptionCache;
 use llrm_support::hash::IndexMap;
 
 use crate::edges;
 use crate::transform;
 
-/// `LLRM_EXP_SCEV_DECIDE`, read once: `decide` asks ScalarEvolution
-/// (`isKnownPredicateAt`) what the guards over a branch prove, not the old
-/// guard engine. Off by default: it decides more of some loops and keeps the
-/// `count == 0` check at the exit of `rectwo`'s nested counted loops (-O2, -O3
-/// clocks +10%). The pinned `opt` drops that check in `correlated-propagation`
-/// (LazyValueInfo), `instcombine` and `sccp`, not in ScalarEvolution's users
-/// (see `COUNT_NOT_ZERO_AT_THE_EXIT` in the tests).
+/// Read once: `decide` asks ScalarEvolution (`isKnownPredicateAt`) what the
+/// guards over a branch prove, then the old guard engine for what it cannot
+/// (the partition index, `PARTITION_CHECK`: not an add recurrence, so LLVM
+/// drops it only in the loop passes). `LLRM_NO_SCEV_DECIDE` asks the old
+/// engine alone.
 fn scev_enabled() -> bool {
-    llrm_support::env_flag!("LLRM_EXP_SCEV_DECIDE")
+    !llrm_support::env_flag!("LLRM_NO_SCEV_DECIDE")
 }
 
 /// `decided`, then its chains merged, as the old Decide.
@@ -193,8 +202,9 @@ fn _decided(
     let held =
         Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
     let outer = std::rc::Rc::clone(analyses.outer());
+    let settled = _settled(context, layout, function, &outer);
     let scev = LazyScevView::new(analyses);
-    let decisions = _decisions(&held.unit(context, layout, function, &outer), &registers, &scev, use_scev)?;
+    let decisions = _decisions(&held.unit(context, layout, function, &outer), &registers, &settled, &scev, use_scev)?;
     if decisions.is_empty() {
         return Ok(threaded);
     }
@@ -211,6 +221,7 @@ fn _decided(
 fn _decisions(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
+    settled: &llrm_mir::dense::IdMap<BlockId, bool>,
     scev: &LazyScevView,
     use_scev: bool,
 ) -> Result<Vec<(BlockId, BlockId)>, String> {
@@ -272,6 +283,9 @@ fn _decisions(
         };
         let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
         if answer.is_none() {
+            answer = settled.get(&block).copied();
+        }
+        if answer.is_none() {
             let scope = scoped.scope(unit, cfg::id(block));
             let mut possible = Vec::new();
             for target in function.successors(block) {
@@ -284,11 +298,54 @@ fn _decisions(
             }
         }
         if answer.is_none() {
-            answer = if use_scev { _implied_by_scev(unit, scev, last) } else { _implied_by_guards(unit, block, last) };
+            answer = if use_scev {
+                _implied_by_scev(unit, scev, last).or_else(|| _implied_by_guards(unit, block, last))
+            } else {
+                _implied_by_guards(unit, block, last)
+            };
         }
         out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
     }
     Ok(out)
+}
+
+/// The conditional branches LazyValueInfo settles: the compare a branch is on
+/// holds or fails at it, from the branches that dominate it, the assumes and
+/// the `!range`s, as `JumpThreading`'s `processBranchOnCompare` asks
+/// (`getPredicateAt(Pred, LHS, RHS, Terminator)`); a condition that is no
+/// compare is asked as a constant (`getConstant`).
+fn _settled(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &Function,
+    outer: &Outer,
+) -> llrm_mir::dense::IdMap<BlockId, bool> {
+    let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+    let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
+    let mut lvi = LazyValueInfo::new();
+    let mut settled = llrm_mir::dense::IdMap::default();
+    for &block in function.layout() {
+        let Some(last) = function.terminator(block) else { continue };
+        let branch = function.instruction(last);
+        if branch.opcode != Opcode::Br || branch.operands.len() != 3 {
+            continue;
+        }
+        let answer = match transform::_comparison(function, block, last) {
+            Some(compare) => {
+                let compare = function.instruction(compare);
+                let Opcode::ICmp(predicate) = compare.opcode else { continue };
+                lvi.get_predicate_at_values(&mut env, predicate, compare.operands[0], compare.operands[1], last, true)
+            }
+            None => match lvi.get_constant(&mut env, branch.operands[0], last) {
+                Some(LatticeConstant::Int { bits, .. }) => Some(bits & 1 == 1),
+                _ => None,
+            },
+        };
+        if let Some(answer) = answer {
+            settled.insert(block, answer);
+        }
+    }
+    settled
 }
 
 /// Whether the compare `last` branches on holds or fails there, by what the
