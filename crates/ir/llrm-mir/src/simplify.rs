@@ -36,7 +36,7 @@
 //! 6. `simplifySelectWithICmpCond`, `simplifySelectBitTest`/`WithBitTest`,
 //!    `simplifySelectWithEquivalence`, `simplifyCmpSelOfMaxMin`,
 //!    `simplifyICmpWithDominatingAssume`: #2249.
-//! 7. `extractvalue`, `insertvalue`, `freeze`: #2250.
+//! 7. `extractvalue`, `insertvalue`: #2250.
 //! 8. GEP and cast constant expressions, wrap-flag poison folds in
 //!    `constfold.rs`: #2252.
 //!
@@ -2767,6 +2767,19 @@ fn simplify_phi(
     Some(common)
 }
 
+/// `simplifyFreezeInst`
+/// ([:7690](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/InstructionSimplify.cpp#L7690)).
+fn simplify_freeze(
+    q: &mut Query,
+    op0: Operand,
+) -> Option<Operand> {
+    // Use a utility function defined in ValueTracking.
+    if guarantee::is_guaranteed_not_to_be_undef_or_poison(&q.tracking(), op0, 0) {
+        return Some(op0);
+    }
+    None
+}
+
 /// `simplifyCastInst`
 /// ([:5672](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L5672)).
 fn simplify_cast(
@@ -3975,6 +3988,7 @@ fn simplify_instruction_with_operands(
         }
         Opcode::Cast(op) => simplify_cast(q, *op, operands[0], instruction.ty, max_recurse),
         Opcode::Phi => simplify_phi(q, inst),
+        Opcode::Freeze => simplify_freeze(q, operands[0]),
         Opcode::GetElementPtr { .. } => simplify_gep(q, operands[0], &operands[1..]),
         _ => None,
     }

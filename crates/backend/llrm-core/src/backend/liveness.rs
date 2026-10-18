@@ -113,6 +113,30 @@ impl Effect {
         self.moved.iter().fold(self.reads, |reads, (_, source)| reads.or(&Lanes::from([*source])))
     }
 
+    /// This effect with the upper halves a call only may clobber
+    /// (`clobbers_high`) left as they were: a callee that keeps them is not
+    /// a write of theirs, so a read after the call still reads the value
+    /// before it.
+    pub fn keeping_high(
+        &self,
+        regs: Regs,
+        one: &Insn,
+    ) -> Effect {
+        let mut kept = self.clone();
+        let mut certain: Lanes = one.clobbers.iter().flat_map(|register| _lanes(regs, *register)).collect();
+        certain.extend(
+            one.delivers.iter().flat_map(|(held, register)| _lanes(regs, regs.named(*register, i64::from(held.width)))),
+        );
+        for register in &one.clobbers_high {
+            for lane in _lanes(regs, *register).into_iter().filter(|lane| lane.1 >= 2) {
+                if !certain.contains(&lane) {
+                    kept.writes = kept.writes.minus(&Lanes::from([lane]));
+                }
+            }
+        }
+        kept
+    }
+
     /// The lanes live before it, given those live after.
     pub fn live_before(
         &self,

@@ -102,7 +102,7 @@ pub fn instsimplify(
                 continue;
             }
             let mut dead = Vec::new();
-            for inst in function.block(block).instructions().to_vec() {
+            for inst in function.block(block).iter().collect::<Vec<_>>() {
                 // The first sweep has nothing in `to_simplify` and tries every
                 // instruction; later ones only those in it.
                 if !to_simplify.is_empty() && !to_simplify.contains(&inst) {

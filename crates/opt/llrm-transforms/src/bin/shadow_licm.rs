@@ -16,7 +16,7 @@ fn main() {
     }
     let mut manager = PassManager::default();
     (manager.verify_each, manager.verify_invalidation) = (true, true);
-    manager.add(Licm { apply: std::env::var_os("LICM_APPLY").is_some() });
+    manager.add(Licm { apply: std::env::var_os("LICM_APPLY").is_some(), speculate: true });
     manager.run_module(&mut module, Rc::new(llrm_mir::target::Neutral)).expect("licm decides");
     if let Some(path) = std::env::var_os("OUT") {
         std::fs::write(path, llrm_mir::print::module(&module)).expect("a writable OUT");

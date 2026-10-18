@@ -768,7 +768,7 @@ impl ValueTable {
 
 /// `CmpInst::makeCmpResultType`: `i1`.
 fn cmp_result_type(
-    context: &mut Context,
+    context: &Context,
     operand: TypeId,
 ) -> TypeId {
     let bit = context.types.int(1);

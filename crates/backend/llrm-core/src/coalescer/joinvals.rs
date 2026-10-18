@@ -142,7 +142,7 @@ impl<'a> JoinVals<'a> {
         let mut track_reg = self.sides[me].reg;
         while !vni.is_phi_def() {
             let def = vni.def();
-            let key = self.lis.indexes.get_instruction_from_index(&def).expect("No defining instruction");
+            let key = self.lis.defining_instr(&def, track_reg);
             let Some((_, src)) = full_copy(self.lis.instr(key)) else { return (Some(vni), track_reg) };
             let li = self.lis.interval_rc(src.value);
             // No subrange involved.
@@ -201,7 +201,7 @@ impl<'a> JoinVals<'a> {
             // Conservatively assume that all lanes in a PHI are valid.
             None
         } else {
-            let key = self.lis.indexes.get_instruction_from_index(&vni.def()).expect("a defining instruction");
+            let key = self.lis.defining_instr(&vni.def(), self.sides[me].reg);
             Some(Rc::new(self.lis.instr(key).clone()))
         };
         // Find the value in Other that overlaps VNI->def, if any.
@@ -429,7 +429,7 @@ impl<'a> JoinVals<'a> {
             if self.sides[me].vals[i].resolution != Resolution::Erase {
                 continue;
             }
-            let key = self.lis.indexes.get_instruction_from_index(&def).expect("No instruction to erase");
+            let key = self.lis.defining_instr(&def, self.sides[me].reg);
             if let Some((_, src)) = full_copy(self.lis.instr(key)) {
                 if src.value != self.cp.src_reg() && src.value != self.cp.dst_reg() {
                     shrink_regs.push(src.value);

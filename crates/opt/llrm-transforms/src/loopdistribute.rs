@@ -368,8 +368,8 @@ fn stores(
         .loop_
         .body
         .iter()
-        .flat_map(|&at| function.block(cfg::block(at)).instructions())
-        .filter(|&&inst| matches!(
+        .flat_map(|&at| function.block(cfg::block(at)).iter())
+        .filter(|&inst| matches!(
             function.instruction(inst).opcode,
             Opcode::Store { volatile: false, .. }
         ))
@@ -408,13 +408,13 @@ impl View<'_> {
             return refused("a header that runs once more than the body touches memory");
         }
         let defined =
-            shape.loop_.body.iter().flat_map(|&at| function.block(cfg::block(at)).instructions().iter().copied());
+            shape.loop_.body.iter().flat_map(|&at| function.block(cfg::block(at)).iter());
         if defined.into_iter().any(|inst| loopshape::read_outside(function, &shape, inst)) {
             return refused("a value of the loop is read outside it");
         }
         let mut position = IdMap::new();
         for (at, inst) in
-            order.iter().flat_map(|&block| function.block(block).instructions().iter().copied()).enumerate()
+            order.iter().flat_map(|&block| function.block(block).iter()).enumerate()
         {
             position.insert(inst, at);
         }

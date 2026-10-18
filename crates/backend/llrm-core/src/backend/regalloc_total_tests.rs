@@ -55,8 +55,18 @@ fn test_a_parallel_copy_cycle_through_a_frame_slot_is_scheduled() {
     // program, with or without the spiller, so this guards ParallelCopy for
     // an allocator run on its own; what production does reach is a register
     // cycle with no spare register.
-    let (body, mut phases) =
-        crate::backend::phielim::with_old_lowering(|| before_regalloc_unspilled("conc7_far.ll", CONC7, "Core"));
+    let (body, mut phases) = crate::backend::phielim::with_old_lowering(|| {
+        // Without the coalescer too: the premise is the copies' number, and
+        // a coalescer that joins more leaves fewer.
+        crate::backend::regalloc_input::before_phase_skipping(
+            crate::backend::regalloc_input::Calls::C,
+            "conc7_far.ll",
+            CONC7,
+            "Core",
+            "RegAlloc",
+            &["SsaSpill", "Coalescer"],
+        )
+    });
     let longest = longest_copy(&body);
     assert!(longest >= 8, "premise: a loop-carried parallel copy of {longest} moves, more than the registers hold");
     let allocated = phases.remove(0).transform(body).expect("allocates");
