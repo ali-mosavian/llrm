@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/basicaa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/basicaa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/basicaa.rs sha256:926672a5722689045edb5559ca2ba178267616fca3ef022bd98897eeb1d0945a -->
+<!-- src: crates/opt/llrm-analysis/src/basicaa.rs sha256:8f808336d05ea7fa411858c00506b724dad3b112a398f1ed9ad6412c93e98f5a -->
 
 # basicaa
 
@@ -19,8 +19,8 @@ constant-difference rules, nuw, and the GCD test. Not yet (deviations in the
 plan page): `GetLinearExpression` through casts, `analyzeVariableOffsets`'
 ranges, `aliasPHI`, `aliasSelect`, and the mod/ref queries
 other than `getModRefInfoMask` and `getModRefInfo(Call, Loc)` (they answer
-the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo` read the
-attributes.
+the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo`
+read the attributes.
 
 ## Example
 Two allocas never alias, and a call cannot touch an alloca nobody holds a

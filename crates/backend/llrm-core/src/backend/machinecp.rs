@@ -526,6 +526,29 @@ impl Machine {
         out
     }
 
+    /// `after` is `before` with every use of the lanes `from` renamed `to`, on
+    /// both sides, and nothing else: it selects, and its reads and writes are
+    /// the old ones with `from` swapped for `to`, which `before` did not touch.
+    fn same_renamed(
+        &self,
+        before: &Semantics,
+        after: &Semantics,
+        (from, to): (&Lanes, &Lanes),
+    ) -> bool {
+        let Some(old) = _register_effects_of_what(self.regs, self.bits, before, true, false) else {
+            return false;
+        };
+        if select::priced_in(self.bits, after, 0, None, false, false, None).is_none() {
+            return false;
+        }
+        let Some(new) = _register_effects_of_what(self.regs, self.bits, after, true, false) else {
+            return false;
+        };
+        let swap =
+            |lanes: &Lanes| -> Lanes { lanes.iter().filter(|lane| !from.contains(lane)).chain(to.iter()).collect() };
+        to.is_disjoint(&old.0) && to.is_disjoint(&old.1) && new.0 == swap(&old.0) && new.1 == swap(&old.1)
+    }
+
     /// `after` is `before` with the lanes `from` named `to` and nothing else:
     /// it selects, writes what `before` wrote and reads what it read, the one
     /// side swapped. `write` says which side `from` was on.
@@ -568,6 +591,13 @@ struct Walk<'a> {
     maybe_dead: Vec<usize>,
     dead: Vec<bool>,
     changed: bool,
+    /// Per unit, the last instruction that wrote it and the last that read it
+    /// (`usize::MAX` for one that did either to everything).
+    writer: [Option<usize>; UNITS],
+    reader: [Option<usize>; UNITS],
+    /// Per instruction, the available copy `D = R` it found when it wrote `R`
+    /// and read it (a two-address producer).
+    twin: Vec<Option<usize>>,
 }
 
 impl<'a> Walk<'a> {
@@ -579,7 +609,20 @@ impl<'a> Walk<'a> {
         let effects = insns.iter().map(|one| liveness::effect(machine.regs, machine.bits, one)).collect();
         let copies = insns.iter().map(|one| machine.copy_of(one)).collect();
         let dead = vec![false; insns.len()];
-        Self { machine, insns, effects, copies, tracker: Tracker::new(), maybe_dead: Vec::new(), dead, changed: false }
+        let twin = vec![None; insns.len()];
+        Self {
+            machine,
+            insns,
+            effects,
+            copies,
+            tracker: Tracker::new(),
+            maybe_dead: Vec::new(),
+            dead,
+            changed: false,
+            writer: [None; UNITS],
+            reader: [None; UNITS],
+            twin,
+        }
     }
 
     /// `at` replaced by `one`, its effect and copy worked out again.
@@ -712,8 +755,12 @@ impl<'a> Walk<'a> {
         live_out: &Lanes,
     ) {
         let machine = self.machine;
+        let live_after = self.live_after(live_out);
         for at in 0..self.insns.len() {
             if self.copies[at].is_some() && (self.erase_if_redundant(at, false) || self.erase_if_redundant(at, true)) {
+                continue;
+            }
+            if self.copies[at].is_some() && self.fold_tied(at, &live_after[at]) {
                 continue;
             }
             self.forward_uses(at);
@@ -728,9 +775,18 @@ impl<'a> Walk<'a> {
                         self.dead[copy] = false;
                     }
                     self.tracker.clear();
+                    self.writer = [Some(usize::MAX); UNITS];
+                    self.reader = [Some(usize::MAX); UNITS];
                 }
                 Some(effect) => {
                     let (reads, writes) = (machine.mask(&effect.all_reads()), machine.mask(&effect.writes));
+                    self.note_tied(at, reads);
+                    for unit in units_of(reads) {
+                        self.reader[unit] = Some(at);
+                    }
+                    for unit in units_of(writes) {
+                        self.writer[unit] = Some(at);
+                    }
                     self.read(reads);
                     self.tracker.clobber(writes, &self.copies);
                     if let Some(copy) = self.copies[at].clone() {
@@ -752,6 +808,124 @@ impl<'a> Walk<'a> {
             }
         }
         self.tracker.clear();
+    }
+
+    /// What is live after each instruction, given what is live out.
+    fn live_after(
+        &self,
+        live_out: &Lanes,
+    ) -> Vec<Lanes> {
+        let mut live = *live_out;
+        let mut out = vec![live; self.insns.len()];
+        for at in (0..self.insns.len()).rev() {
+            out[at] = live;
+            live = self.live_before(at, &live);
+        }
+        out
+    }
+
+    /// A two-address producer of `R` while a copy `D = R` is available: `D`
+    /// holds `R`'s value, so the producer could work on `D` instead.
+    fn note_tied(
+        &mut self,
+        at: usize,
+        reads: Mask,
+    ) {
+        if !self.tracker.any {
+            return;
+        }
+        let machine = self.machine;
+        let Some(what) = &self.insns[at].what else {
+            return;
+        };
+        for (place, register, _) in machine.registers(what) {
+            let Place::Dest(_) = place else { continue };
+            let Some(mask) = machine.register_mask(register) else { continue };
+            if mask & reads == 0 {
+                continue;
+            }
+            if let Some(copy) = self.tracker.copy_def_via(mask.trailing_zeros() as usize, &self.copies) {
+                if self.copies[copy].as_ref().is_some_and(|rec| rec.src == mask) {
+                    self.twin[at] = Some(copy);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// `R = op R; D = R` where `D = R` held before the op and `R` dies at the
+    /// second copy: the op works on `D` and the copy goes. (`propagateDefs`
+    /// declines a tied definition; the copy before it is what lets this one.)
+    fn fold_tied(
+        &mut self,
+        k: usize,
+        live_after: &Lanes,
+    ) -> bool {
+        let machine = self.machine;
+        let copy = self.copies[k].clone().expect("a copy");
+        let Some(&Some(j)) = self.writer.get(copy.src.trailing_zeros() as usize) else {
+            return false;
+        };
+        if j == usize::MAX
+            || units_of(copy.src).any(|unit| self.writer[unit] != Some(j))
+            || self.reader.iter().enumerate().any(|(unit, reader)| {
+                // Nothing reads the source after the op but this copy, and
+                // nothing reads the destination between the op and the copy.
+                let after = reader.is_some_and(|reader| reader > j);
+                (copy.src >> unit & 1 == 1 || copy.dst >> unit & 1 == 1) && after
+            })
+        {
+            return false;
+        }
+        let Some(prior) = self.twin[j] else {
+            return false;
+        };
+        let held = self.copies[prior].as_ref().is_some_and(|rec| rec.repeats(&copy) && copy.repeats(rec));
+        if !held || units_of(copy.dst).any(|unit| self.writer[unit] != Some(prior)) {
+            return false;
+        }
+        if !machine.lanes_of(copy.src).iter().all(|lane| !live_after.contains(lane)) {
+            return false;
+        }
+        let (Some(from), Some(to)) = (machine.register_for_mask(copy.src), machine.register_for_mask(copy.dst)) else {
+            return false;
+        };
+        let one = Arc::clone(&self.insns[j]);
+        let Some(what) = &one.what else {
+            return false;
+        };
+        if !one.clobbers.is_empty()
+            || !one.clobbers_high.is_empty()
+            || !one.requires.is_empty()
+            || !one.delivers.is_empty()
+            || !one.spread.is_empty()
+            || one.group.is_some()
+            || one.symbol == Some(true)
+        {
+            return false;
+        }
+        let mut proposed = what.clone();
+        for (place, register, _) in machine.registers(what) {
+            if register == from {
+                proposed = machine.renamed(&proposed, place, to);
+            }
+        }
+        if !machine.same_renamed(what, &proposed, (&machine.lanes_of(copy.src), &machine.lanes_of(copy.dst))) {
+            return false;
+        }
+        // The destination is read by the op now, so its earlier copy is not
+        // dead.
+        self.read(copy.dst);
+        self.put(j, Arc::new(Insn { what: Some(proposed), ..(*one).clone() }));
+        self.remove(k);
+        self.tracker.clobber(copy.dst, &self.copies);
+        for unit in units_of(copy.dst) {
+            self.writer[unit] = Some(j);
+        }
+        for unit in units_of(copy.src) {
+            self.writer[unit] = Some(usize::MAX);
+        }
+        true
     }
 
     /// `propagateDefs`: the producer of a copy's source writes the destination.

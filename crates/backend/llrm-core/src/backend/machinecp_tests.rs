@@ -255,3 +255,24 @@ fn test_a_copy_into_a_segment_register_is_kept() {
     let got = propagated(&body(vec![mov(0, rl(RegId::ES, 2), rl(RegId::BX, 2))], &[RegId::ES]));
     assert_eq!(lines(&got), ["mov ES,BX"]);
 }
+
+/// `bx` is shifted in place and then copied to `ax`, which held `bx` already:
+/// the shift works on `ax` and the copy goes. (`propagateDefs` declines a
+/// tied definition; the pinned output of the fixed-point test was this form.)
+#[test]
+fn test_a_tied_producer_works_on_the_register_that_already_holds_its_value() {
+    let shift = |at| {
+        Arc::new(Insn::new(
+            at,
+            Some((at, at)),
+            Some(semantics(Operation::Binary, "shl", vec![rl(RegId::BX, 2)], vec![rl(RegId::BX, 2), imm(3, 1)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let got = propagated(&body(
+        vec![mov(0, rl(RegId::AX, 2), rl(RegId::BX, 2)), shift(1), mov(2, rl(RegId::AX, 2), rl(RegId::BX, 2))],
+        &[RegId::BX],
+    ));
+    assert_eq!(lines(&got), ["mov AX,BX", "shl AX,AX,imm", "-"]);
+}
