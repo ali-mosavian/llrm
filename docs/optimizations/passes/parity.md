@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/parity.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/parity.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/parity.rs sha256:48c5e53064c4178ac5bdd62c3646a50cd449674bcb82489187153098279a8288 -->
+<!-- src: crates/opt/llrm-transforms/src/parity.rs sha256:ffcf34c7cd583de2490cd5aa93b60da55dfc29393967df15fe5cdee1c7d616da -->
 
 # parity
 
@@ -22,6 +22,10 @@ old caller can be deleted.
 A translation joins when its oracle passes (output identical to `opt` at the
 pin), not when it is on by default; see
 the parity pipeline plan page (PR 2288).
+
+## Example
+`parity::check_phase(Phase::Simplify, &built)` is `Ok` when every Translated
+Simplify slot is in `built` and every name in `built` has an entry.
 
 ## Used by
 `pipeline` (`Fixed::linear`), the registry tests.

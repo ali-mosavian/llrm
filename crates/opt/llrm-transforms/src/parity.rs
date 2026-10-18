@@ -18,6 +18,10 @@
 //! pin), not when it is on by default; see
 //! the parity pipeline plan page (PR 2288).
 //!
+//! # Example
+//! `parity::check_phase(Phase::Simplify, &built)` is `Ok` when every Translated
+//! Simplify slot is in `built` and every name in `built` has an entry.
+//!
 //! # Used by
 //! `pipeline` (`Fixed::linear`), the registry tests.
 
