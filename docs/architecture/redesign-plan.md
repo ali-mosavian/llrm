@@ -1207,6 +1207,10 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 9. `LoopStrengthReduce.cpp` is translated at the pin. Owner loop-products-slope (was loopidiom-lp0 and indvars-decide-poc). It starts after scev-port S3 to S5 (it needs `SCEVExpander` and AddRec). Oracle: LLVM's LSR output. The llrm `lsr` pass and the interim loop-products and pressure slope fix are deleted when it becomes default.
 10. [#2260] `lir loopslots` is REPLACED by RAGreedy region splitting (SplitKit). Exit: deleted with the old pass when greedy is default. The acceptance axis (its own slope within the limit at 2N) is on regalloc-core-poc.
 
+**Decisions of 2026-10-18, third batch (oversight).**
+1. `BranchProbabilityInfo.cpp` and `BlockFrequencyInfo` / `BlockFrequencyInfoImpl` are translated at the pin `d1106deb71cc`: heuristics plus trip counts from SCEV (`BackedgeTakenInfo`), no loop simulation. Owner cgscc-poc (the inliner and hot/cold consumer, a TTI neighbour). Order: after scev-port S5 (BTC). The llrm `branchprob` `counted` simulation and `Frequencies` are deleted when it becomes default.
+2. The exit of the `analysis counted` row ([#2260], x5.43 nest, unplaced until now) is that translation plus `BackedgeTakenInfo` (and the LSR translation's `BackedgeCounts`): the cone dependence comes from `branchprob` simulating loops.
+
 **Method M (every exit measurement).**
 
 1. **Binaries.** The base is the PR's first parent (`git rev-parse <head>^1`), never main of another day and never the merge-base after main moved. Build both with `cargo build --release --bins` in separate worktrees on the perf host. Check each binary's mtime is after its commit, and record both SHAs in the PR.
