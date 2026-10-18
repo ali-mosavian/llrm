@@ -174,6 +174,40 @@ fn test_gvn_numbers_then_joins() {
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS));
 }
 
+/// The premise of `simplifycfg`'s trivial-phi cleanup (D5): gvn forwards the
+/// cell a loop stores its phi to, and leaves `phi [%p, entry], [%self, latch]`.
+/// LLVM's GVN builds its phis with SSAUpdater, which never leaves one; the
+/// cleanup stays until gvn does the same (#2186).
+#[test]
+fn test_forwarding_a_loops_cell_to_its_phi_leaves_a_phi_of_itself() {
+    let text = "@g = global ptr null
+
+define i16 @f(ptr %p, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %q = phi ptr [ %p, %b0 ], [ %r, %b1 ]
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  store ptr %q, ptr @g
+  %r = load ptr, ptr @g
+  %j = add i16 %i, 1
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %j
+}
+";
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(Gvn::default());
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("%q = phi ptr [ %p, %b0 ], [ %q, %b1 ]"), "{after}");
+}
+
 /// Under the pass manager a load through a global is served across a
 /// call to a `readonly` callee. The pass once saw no globals, so it took
 /// the callee for one that may write and loaded @g again.
