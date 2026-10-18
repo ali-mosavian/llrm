@@ -3071,11 +3071,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             llrm_mir::module::ValueDef::Instruction(def) => {
                 let defined = self.function().parent(def).expect("a placed definition");
                 defined == block
-                    || llrm_analysis::cfg::Dominance::of(self.function()).dominates(
-                        self.function(),
-                        llrm_analysis::cfg::id(defined),
-                        llrm_analysis::cfg::id(block),
-                    )
+                    || llrm_analysis::cfg::Dominance::of(self.function())
+                        .dominates(self.function(), llrm_analysis::cfg::id(defined), llrm_analysis::cfg::id(block))
             }
             _ => true,
         }
@@ -3097,7 +3094,10 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             return None;
         }
         let block = function.parent(phi).expect("a placed phi");
-        let first = function.block(block).iter().find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        let first = function
+            .block(block)
+            .iter()
+            .find(|&one| function.instruction(one).opcode != Opcode::Phi);
         if first != Some(store) {
             return None;
         }
