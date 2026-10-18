@@ -6,6 +6,7 @@
 //! `ValuesAtScopes`, `BECountUsers`, the wrap-via-induction sets) are
 //! cleared here when they land with their stage.
 
+use llrm_mir::dense::IdSet;
 use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, InstId, Operand};
 
@@ -126,7 +127,7 @@ impl ScalarEvolution {
         &mut self,
         cx: &Cx,
         mut worklist: Vec<InstId>,
-        visited: &mut HashSet<InstId>,
+        visited: &mut IdSet<InstId>,
         to_forget: &mut Vec<Scev>,
     ) {
         while let Some(i) = worklist.pop() {
@@ -157,7 +158,7 @@ impl ScalarEvolution {
         let Operand::Value(value) = v else { return };
         let llrm_mir::module::ValueDef::Instruction(i) = cx.function.value(value).def else { return };
         // Drop information about expressions based on loop-header PHIs.
-        let mut visited: HashSet<InstId> = HashSet::default();
+        let mut visited: IdSet<InstId> = IdSet::new();
         visited.insert(i);
         let mut to_forget = Vec::new();
         self.visit_and_clear_users(cx, vec![i], &mut visited, &mut to_forget);

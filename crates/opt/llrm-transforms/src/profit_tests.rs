@@ -494,7 +494,7 @@ fn a_loop_the_header_leaves_is_weighted_by_its_latch_runs_by_both_engines() {
             &layout,
             function(&module),
         ));
-        proven_trips_using(&unit, &llrm_analysis::consts::known(&unit), scev)
+        proven_trips_using(&unit, scev)
     };
     let pretested = "define void @f(i16 %n) {\nb0:\n  br label %head\nhead:\n  %i = phi i16 [ 0, %b0 ], [ %next, %body ]\n  \
                      %more = icmp slt i16 %i, 12\n  br i1 %more, label %body, label %out\nbody:\n  %next = add nsw i16 %i, 3\n  \
