@@ -15,7 +15,14 @@ fn decide(module: &mut Module) -> bool {
     decided(context, &layout, function, &outer).expect("decides")
 }
 
-/// @f decided by ScalarEvolution (`LLRM_EXP_SCEV_DECIDE`).
+/// @f decided by the old guard engine alone (`LLRM_NO_SCEV_DECIDE`).
+fn decide_by_guards(module: &mut Module) -> bool {
+    let (layout, outer) = (layout(module), Outer::of(module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    decided_using(context, &layout, function, &outer, false).expect("decides")
+}
+
+/// @f decided by ScalarEvolution, then the guard engine (the default).
 fn decide_by_scev(module: &mut Module) -> bool {
     let (layout, outer) = (layout(module), Outer::of(module, None));
     let (context, function) = module.function_mut("f").expect("@f");
@@ -605,29 +612,28 @@ fn test_an_index_that_follows_the_counter_is_below_the_length_the_loop_was_check
     assert_eq!(results(&module, INPUTS), before);
 }
 
-/// With `LLRM_EXP_SCEV_DECIDE`, ScalarEvolution does not bound that index by
-/// the guards: it is not an add recurrence (the counter steps it in one arm
-/// only), as at the pin, where `opt` keeps this check through `simplifycfg`,
-/// `jump-threading` and `correlated-propagation` and drops it after
-/// `loop-rotate`, `indvars` and `simplifycfg`.
+/// ScalarEvolution does not bound that index by the guards: it is not an add
+/// recurrence (the counter steps it in one arm only), as at the pin, where
+/// `opt` keeps this check through `simplifycfg`, `jump-threading` and
+/// `correlated-propagation` and drops it after `loop-rotate`, `indvars` and
+/// `simplifycfg`. The guard engine behind it decides it, so switching to
+/// ScalarEvolution loses nothing.
 #[test]
-fn test_an_index_that_follows_the_counter_is_left_to_the_loop_passes_by_scev() {
+fn test_an_index_that_follows_the_counter_is_still_decided_with_scev_on() {
     let mut module = parsed(&format!("{DOS}{PARTITION_CHECK}"));
     let before = results(&module, INPUTS);
-    decide_by_scev(&mut module);
-    assert!(printed(&module).contains("br i1 %i_ok"), "{}", printed(&module));
+    assert!(decide_by_scev(&mut module));
+    assert!(!printed(&module).contains("br i1 %i_ok"), "{}", printed(&module));
     assert_eq!(results(&module, INPUTS), before);
 }
 
 /// The loop-exit check of a counted loop (`rectwo`'s `_paths`, seven deep:
-/// -O2 and -O3 +10% clocks with ScalarEvolution on). `%k` is the loop's count,
+/// -O2 and -O3 +10% clocks with ScalarEvolution on before LazyValueInfo
+/// settled branches). `%k` is the loop's count,
 /// the loop is entered only with `%n != 0`, and it continues only with
 /// `%k - 1 != 0`, so `%k` is not zero where the loop is left from its header.
-/// The old engine decides it. The pinned `opt` drops it in
-/// `correlated-propagation` (LazyValueInfo), `instcombine` and `sccp`, and
-/// keeps it through `simplifycfg`, `loop-simplifycfg`, `simple-loop-unswitch`
-/// and `indvars`; ScalarEvolution has no fact about `%k` there, so the check
-/// stays.
+/// The old engine decides it, and so does LazyValueInfo (the pinned `opt` drops
+/// it in `correlated-propagation`); ScalarEvolution has no fact about `%k`.
 const COUNT_NOT_ZERO_AT_THE_EXIT: &str = "define i16 @f(i16 %inv, i16 %n) {
 entry:
   %z0 = icmp eq i16 %n, 0
@@ -661,16 +667,16 @@ fn test_a_count_checked_nonzero_before_its_loop_is_nonzero_at_the_loops_exit_by_
     let mut module = parsed(&format!("{DOS}{COUNT_NOT_ZERO_AT_THE_EXIT}"));
     let before = results(&module, &[&[1, 3], &[0, 3], &[1, 0], &[0, 0]]);
     assert!(printed(&module).contains("br i1 %z,"), "premise: the check is in the body");
-    assert!(decide(&mut module));
+    assert!(decide_by_guards(&mut module));
     assert!(!printed(&module).contains("br i1 %z,"), "{}", printed(&module));
     assert_eq!(results(&module, &[&[1, 3], &[0, 3], &[1, 0], &[0, 0]]), before);
 }
 
 #[test]
-fn test_scev_keeps_the_count_check_at_the_loops_exit() {
+fn test_scev_on_still_decides_the_count_check_at_the_loops_exit() {
     let mut module = parsed(&format!("{DOS}{COUNT_NOT_ZERO_AT_THE_EXIT}"));
-    decide_by_scev(&mut module);
-    assert!(printed(&module).contains("br i1 %z,"), "{}", printed(&module));
+    assert!(decide_by_scev(&mut module));
+    assert!(!printed(&module).contains("br i1 %z,"), "{}", printed(&module));
 }
 
 /// A condition a dominating branch implies is decided by either engine:
@@ -857,4 +863,78 @@ b25:
     managed(&mut module, Decide);
     assert!(!decide(&mut module), "a run left a decision for the next:\n{}", printed(&module));
     assert!(!printed(&module).contains("phi i1 ["), "the branch on the phi was threaded:\n{}", printed(&module));
+}
+
+/// A branch on `x u< 20` after `llvm.assume(x u< 10)` is always taken: the
+/// assume is LazyValueInfo's to read (`getPredicateAt`), not `ranges`'. It
+/// stayed a branch.
+#[test]
+fn a_branch_an_assume_settles_is_decided() {
+    let mut module = parsed(
+        "declare void @llvm.assume(i1)
+
+define i16 @f(i16 %x) {
+b0:
+  %a = icmp ult i16 %x, 10
+  call void @llvm.assume(i1 %a)
+  %c = icmp ult i16 %x, 20
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i16 1
+
+b2:
+  ret i16 2
+}
+",
+    );
+    decide(&mut module);
+    assert!(!has(&module, "b2"), "{}", printed(&module));
+}
+
+/// `rectwo`'s count check at a counted loop's exit (reduced by scev-port,
+/// `COUNT_NOT_ZERO_AT_THE_EXIT` of `alim/feat/scev-decide`): the loop is
+/// entered with `%n != 0` and continues with `%k - 1 != 0`, so the header phi
+/// `%k` is not zero where the loop is left from its header. The old engine
+/// decides it; LazyValueInfo must too (the phi's edge values, CVP's way), or
+/// `rectwo` loses the fold.
+#[test]
+fn test_lazy_value_info_settles_the_count_check_at_a_loops_exit() {
+    let mut module = parsed(&format!(
+        "{DOS}define i16 @f(i16 %inv, i16 %n) {{
+entry:
+  %z0 = icmp eq i16 %n, 0
+  br i1 %z0, label %zero, label %pre
+pre:
+  br label %h
+h:
+  %c = phi i16 [ 0, %pre ], [ %c2, %l ]
+  %k = phi i16 [ %n, %pre ], [ %dec, %l ]
+  %t = icmp eq i16 %inv, 1
+  br i1 %t, label %l, label %x
+l:
+  %dec = sub nsw i16 %k, 1
+  %c2 = add i16 %c, 1
+  %d = icmp eq i16 %dec, 0
+  br i1 %d, label %out, label %h
+x:
+  %z = icmp eq i16 %k, 0
+  br i1 %z, label %zero, label %nz
+out:
+  ret i16 %c2
+nz:
+  ret i16 7
+zero:
+  ret i16 0
+}}
+"
+    ));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let settled = super::_settled(context, &layout, function, &outer);
+    let at = |name: &str| {
+        function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some(name)).expect("block")
+    };
+    assert_eq!(settled.get(&at("x")), Some(&false), "the check at the exit is settled");
+    assert_eq!(settled.get(&at("h")), None, "an unknown condition is not");
 }

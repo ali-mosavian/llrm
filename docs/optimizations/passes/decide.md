@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/decide.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/decide.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:4f4668ef683ed315060b3e5b2177fabd7d4dbeadec183200bf671e1a52be1eb4 -->
+<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:6a412e7491068d40754047ae4f293a6970408878b79c0fa31caed225ba2ebd79 -->
 
 # decide
 
@@ -82,18 +82,15 @@ at -O0. `jumpthread` is the separate pass that threads a state variable's
 edges.
 
 ## ScalarEvolution
-With `LLRM_EXP_SCEV_DECIDE` set, a branch the other engines leave is asked of
-ScalarEvolution (`isKnownPredicateAt` at the branch, then its inverse) in place
-of the `guards` engine; off by default. It moves 60 of 1,590 objects, and the
-nested counted loops of `rectwo` are 10% slower at -O2 and -O3: the old engine
-proves a loop's count nonzero where the loop is left from its header, and
-ScalarEvolution has no fact about it. On the reduced loop the pinned `opt` drops
-the check in `correlated-propagation` (LazyValueInfo), `instcombine` and `sccp`,
-and keeps it through `simplifycfg`, `loop-simplifycfg`, `simple-loop-unswitch`
-and `indvars`. It stays off until a LazyValueInfo-based slot joins.
+A branch the other engines leave is asked of ScalarEvolution
+(`isKnownPredicateAt` at the branch, then its inverse), then of the `guards`
+engine for what it cannot prove (the partition index: not an add
+recurrence). `LLRM_NO_SCEV_DECIDE` asks the `guards` engine alone.
 
 ## Needs
-`consts`, `constant_cycles`, `ranges`, `guards`, `induction`, points-to
+`consts`, `constant_cycles`, LazyValueInfo (a branch the dominating
+branches, assumes and `!range`s settle), `ranges` (the counted loops' facts,
+until indvars decides them as LLVM does), `guards`, `induction`, points-to
 (`pointers`), the CFG shape.
 
 ## Keeps
