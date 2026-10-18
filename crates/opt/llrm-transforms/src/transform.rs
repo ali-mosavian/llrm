@@ -139,8 +139,8 @@ pub fn _comparison(
         .filter(|&one| matches!(function.instruction(one).opcode, Opcode::ICmp(_)))
 }
 
-/// Blocks `_trivial_phis` looked at on this thread, for a test that a pass
-/// calling it does not call it once per change.
+// Blocks `_trivial_phis` looked at on this thread, for a test that a pass
+// calling it does not call it once per change.
 #[cfg(test)]
 thread_local! {
     pub(crate) static BLOCKS_VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
