@@ -1,3 +1,7 @@
+---
+architecture-index: DominatorTree as a translation of LLVM's
+architecture-order: 270
+---
 # DominatorTree as a translation of LLVM's: the plan
 
 TL;DR: `GenericDomTree.h`, `GenericDomTreeConstruction.h` (Semi-NCA, `insertEdge`/`deleteEdge`/`applyUpdates`, `PostDominatorTree`), `CFGDiff.h` and `CFGUpdate.h` at `d1106deb71cc` are translated in `crates/ir/llrm-mir/src/domtree.rs` (D1, landed). The old dominator code is deleted as its readers move (D2 to D5). Issue [#2260](https://github.com/ali-mosavian/llrm/issues/2260) rows: `branches analysis dominators` x3.27, `unrolled analysis dominators` x2.48 and `cases dominated-edges` x2.42.

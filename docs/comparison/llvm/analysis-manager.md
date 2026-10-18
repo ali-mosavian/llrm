@@ -1,3 +1,7 @@
+---
+architecture-index: LLVM's analysis manager against llrm's `Analyses`
+architecture-order: 330
+---
 # LLVM's analysis manager against llrm's `Analyses`
 
 TL;DR: dropping analyses costs the same in both (2.6 M instructions against 2.9 M on d_faces `-O2`); what differs is the price of getting one back: llrm rebuilds whole-function maps 66 to 202 times over 11 functions at 0.1 to 1.1 M each, LLVM's DominatorTree is built 55 times for 0.5 M in all.

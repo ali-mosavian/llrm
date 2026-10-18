@@ -1,3 +1,7 @@
+---
+architecture-index: front-end aggregates
+architecture-order: 230
+---
 # Front-end aggregates: the plan
 
 This page rests on an instruction count of the first dump of `d_faces`; no rows were run.
