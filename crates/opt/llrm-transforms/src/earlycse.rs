@@ -890,7 +890,7 @@ impl Walk<'_> {
         // The last non-volatile store seen, for as long as nothing reads
         // memory.
         let mut last_store: Option<InstId> = None;
-        for inst in self.function.block(block).instructions().to_vec() {
+        for inst in self.function.block(block).iter().collect::<Vec<_>>() {
             if self.function.is_erased(inst) {
                 continue;
             }

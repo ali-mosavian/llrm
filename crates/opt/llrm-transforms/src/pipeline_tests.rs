@@ -2222,3 +2222,19 @@ fn test_the_rotate_slot_is_on_by_default_and_off_where_unroll_jam_is() {
     assert!(!pipeline::Options::speed().rotating());
     assert!(!pipeline::Options::aggressive().rotating());
 }
+
+/// `llrm-pass --order` could not name a slot of LLVM's order: the oracle ran
+/// only the old pass names, so the translated SROA, promote and EarlyCSE slots
+/// were never compared with `opt`. A slot is selectable when the level builds
+/// it; `gvn@787` is not built at -O1.
+#[test]
+fn test_a_slot_of_the_order_can_be_run_alone_when_the_level_builds_it() {
+    let o2 = Applied::default();
+    for slot in ["sroa@1179", "promote@1241", "earlycse@649", "unroll@753", "instsimplify@1662", "memcpyopt@818"] {
+        assert!(pipeline::slot_built(&o2, slot), "{slot}");
+    }
+    assert!(!pipeline::slot_built(&o2, "sroa@1"), "no such slot");
+    assert!(!pipeline::slot_built(&o2, "gvn"), "a pass name is no slot");
+    let o1 = Applied { options: pipeline::Options { pre: false, ..Default::default() }, ..Applied::default() };
+    assert!(!pipeline::slot_built(&o1, "gvn@787"), "-O1 has no GVN");
+}

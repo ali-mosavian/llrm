@@ -197,13 +197,10 @@ impl ScalarEvolution {
             // If we have a PHI node like phi(X, undef, X), where X is defined
             // by some instruction, we cannot return X as the result of the PHI
             // node unless it dominates the PHI block.
+            // `valueDominatesPHI`: an instruction of the PHI's own block
+            // dominates it only when it comes first.
             return match self.defining_inst(cx, common_value) {
-                Some(def) => {
-                    let (Some(def_block), Some(pn_block)) = (cx.function.parent(def), cx.function.parent(pn)) else {
-                        return None;
-                    };
-                    cx.tree.dominates(def_block, pn_block).then_some(common_value)
-                }
+                Some(def) => cx.tree.instruction_dominates(cx.function, def, pn).then_some(common_value),
                 None => Some(common_value),
             };
         }

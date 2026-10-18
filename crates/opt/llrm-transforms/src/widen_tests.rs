@@ -96,3 +96,39 @@ fn test_a_counter_is_not_widened_past_the_pointer_width_without_a_cost_model() {
     let after = printed(&module);
     assert!(!after.contains("phi i32"), "{after}");
 }
+
+/// A user of the counter with no value (a `store` of it) is a use to truncate
+/// for. `widen_iv_use` asked every user for its value first: `bench/bintree`
+/// at -O2 -m32 panicked 'an instruction with a value' (#2531).
+#[test]
+fn test_a_counter_a_store_reads_is_widened_and_the_store_reads_a_truncation() {
+    let text = "target datalayout = \"e-p:32:32-n8:16:32\"
+
+@g = global i16 0
+
+define i32 @f(i16 %n) {
+b0:
+  %buf = alloca [64 x i8]
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  store i16 %i, ptr @g
+  %w = sext i16 %i to i32
+  %p = getelementptr inbounds i8, ptr %buf, i32 %w
+  store i8 1, ptr %p
+  %next = add nsw i16 %i, 1
+  br label %b1
+
+b3:
+  ret i32 0
+}
+";
+    let after = widened(text);
+    assert!(after.contains("phi i32"), "{after}");
+    assert!(after.contains("= trunc nuw nsw i32"), "{after}");
+}

@@ -470,9 +470,7 @@ fn _leaving(
      -> Option<Vec<(InstId, Operand)>> {
         function
             .block(to)
-            .instructions()
             .iter()
-            .copied()
             .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
             .map(|phi| Some((phi, map(arriving(phi, through)?)?)))
             .collect()
@@ -631,11 +629,8 @@ fn _predicated(
     let mut chosen = Vec::new();
     for exit in exits {
         let condition = function.instruction(exit.branch).operands.first().copied();
-        let phis = function
-            .block(cfg::block(exit.exit))
-            .instructions()
-            .iter()
-            .any(|&inst| function.instruction(inst).opcode == Opcode::Phi);
+        let phis =
+            function.block(cfg::block(exit.exit)).iter().any(|inst| function.instruction(inst).opcode == Opcode::Phi);
         let Some(count) = exit.taken.clone().filter(|count| count.iter().all(|one| one.width == width)) else { break };
         if !innermost(exit.block) || matches!(condition, Some(Operand::Constant(_))) || phis {
             break;
@@ -648,7 +643,7 @@ fn _predicated(
     // Only plain stores, and only where every chosen exit crashes quietly.
     let mut stores = false;
     for &at in &loop_.body {
-        for &inst in function.block(cfg::block(at)).instructions() {
+        for inst in function.block(cfg::block(at)).iter() {
             let op = function.instruction(inst);
             let effects = llrm_mir::memory::of(unit.context, outer.callees(), function, inst);
             match op.opcode {
@@ -682,7 +677,7 @@ fn _values_out(
     loop_
         .body
         .iter()
-        .flat_map(|&at| function.block(cfg::block(at)).instructions().iter().copied())
+        .flat_map(|&at| function.block(cfg::block(at)).iter())
         .filter_map(|inst| function.instruction(inst).result)
         .any(|value| {
             function
@@ -780,11 +775,7 @@ fn _early(
         unit.shape().loops.iter().filter(|one| one.body.contains(&at)).all(|one| one.body.len() >= loop_.body.len())
     };
     if !innermost(exit.block)
-        || function
-            .block(cfg::block(exit.exit))
-            .instructions()
-            .iter()
-            .any(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+        || function.block(cfg::block(exit.exit)).iter().any(|inst| function.instruction(inst).opcode == Opcode::Phi)
         || _values_out(function, loop_)
     {
         return false;
