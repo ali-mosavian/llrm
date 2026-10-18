@@ -264,6 +264,14 @@ impl LiveIntervals {
         Rc::clone(&self.intervals[&reg])
     }
 
+    /// `getInterval` of a register whose interval is held (`const`).
+    pub fn get_interval(
+        &self,
+        reg: u32,
+    ) -> &LiveInterval {
+        &self.intervals[&reg]
+    }
+
     /// How many intervals are held.
     pub fn interval_count(&self) -> usize {
         self.intervals.len()

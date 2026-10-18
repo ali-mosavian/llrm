@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifycfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifycfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:70483c4f20014b3920eddc4e6063d1d9f1714ddbefe31f3ecc78bfc3cec715ff -->
+<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:dcec2eecc7ad7885abf5fa01a1b6c150129f0b01274ef01ed2e8a77af9444d29 -->
 
 # simplifycfg
 
@@ -84,6 +84,7 @@ the defaults). `MIRROR` unless a line below says `DEVIATE`.
 | [`SimplifyCFGOpt::simplifyOnce`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9303) | `block_simplified` | partly: the steps up to `simplifyUncondBranch`'s first half; the rest is not ported yet (D2) |
 | [`simplifyUncondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8800) | `jump_simplified` | the empty-block half; D2 |
 | [`TryToSimplifyUncondBranchFromEmptyBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L1147) | `empty_block_removed` | MIRROR; D6 |
+| [`SimplifyCFGOptions::NeedCanonicalLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/SimplifyCFGOptions.h#L29), read at [`simplifyUncondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8812) | `Options::need_canonical_loop` | MIRROR: true by default and at the early slot, cleared at the one after vectorization ([`PassBuilderPipelines.cpp#L1443`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L1443)); D7 |
 | [`FindFunctionBackedges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L236) | `loop_headers` | MIRROR |
 | [`removeUnreachableBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2912) and `markAliveBlocks` | `unreachable_removed` | the terminator folding and the deletion; D3 |
 | [`ConstantFoldTerminator`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L133) | `terminator_folded` | MIRROR; D4 |
@@ -143,12 +144,14 @@ the defaults). `MIRROR` unless a line below says `DEVIATE`.
   `undef` is `poison`, the MIR's one. `decide`'s `_threaded` is not removed
   yet: it also bypasses jumps in the loop-simplify shapes this keeps; its
   removal needs the corpus run. Exit: the CI-gate phase PR removes it.
-- D7. Rounds repeat until nothing changes and `loopsimplify` runs in them;
-  LLVM's passes run once. A jump alone in a block that holds a loop's simple
-  form up (its preheader, its one latch, a dedicated exit:
-  `decide::loop_form_blocks`) is kept, or the two undid each other each
-  round ("cycle after 3 rounds" on the `deedlines` demo). Exit: the
-  LLVM-order pipeline (`LLRM_EXP_LLVM`) is the default.
+- D7. `needCanonicalLoops` (the table row) keeps only the jump block that
+  would send two or more edges to a loop header, or leave one. Here a jump
+  alone in a block that holds a loop's simple form up (its preheader, its
+  one latch, a dedicated exit: `decide::loop_form_blocks`) is also kept
+  while the option is on, because rounds repeat until nothing changes and
+  `loopsimplify` runs in them: LLVM's passes run once, and without this the
+  two undid each other each round ("cycle after 3 rounds" on the `deedlines`
+  demo). Exit: the LLVM-order pipeline (`LLRM_EXP_LLVM`) is the default.
 
 ## Runs
 Once per round of the function fixed point, before `decide`: the branches
