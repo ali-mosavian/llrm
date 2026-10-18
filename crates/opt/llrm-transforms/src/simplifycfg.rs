@@ -79,6 +79,7 @@
 //! | [`SimplifyCFGOpt::simplifyOnce`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9303) | `block_simplified` | partly: the steps up to `simplifyUncondBranch`'s first half; the rest is not ported yet (D2) |
 //! | [`simplifyUncondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8800) | `jump_simplified` | the empty-block half; D2 |
 //! | [`TryToSimplifyUncondBranchFromEmptyBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L1147) | `empty_block_removed` | MIRROR; D6 |
+//! | [`SimplifyCFGOptions::NeedCanonicalLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/SimplifyCFGOptions.h#L29), read at [`simplifyUncondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8812) | `Options::need_canonical_loop` | MIRROR: true by default and at the early slot, cleared at the one after vectorization ([`PassBuilderPipelines.cpp#L1443`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L1443)); D7 |
 //! | [`FindFunctionBackedges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L236) | `loop_headers` | MIRROR |
 //! | [`removeUnreachableBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2912) and `markAliveBlocks` | `unreachable_removed` | the terminator folding and the deletion; D3 |
 //! | [`ConstantFoldTerminator`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L133) | `terminator_folded` | MIRROR; D4 |
@@ -137,7 +138,15 @@
 //!   the removed jump is any `llvm.loop` (the MIR has no debug-loc-only ones);
 //!   `undef` is `poison`, the MIR's one. `decide`'s `_threaded` is not removed
 //!   yet: it also bypasses jumps in the loop-simplify shapes this keeps; its
-//!   removal needs the corpus run.
+//!   removal needs the corpus run. Exit: the CI-gate phase PR removes it.
+//! - D7. `needCanonicalLoops` (the table row) keeps only the jump block that
+//!   would send two or more edges to a loop header, or leave one. Here a jump
+//!   alone in a block that holds a loop's simple form up (its preheader, its
+//!   one latch, a dedicated exit: `decide::loop_form_blocks`) is also kept
+//!   while the option is on, because rounds repeat until nothing changes and
+//!   `loopsimplify` runs in them: LLVM's passes run once, and without this the
+//!   two undid each other each round ("cycle after 3 rounds" on the `deedlines`
+//!   demo). Exit: the LLVM-order pipeline (`LLRM_EXP_LLVM`) is the default.
 //!
 //! # Runs
 //! Once per round of the function fixed point, before `decide`: the branches
@@ -200,23 +209,47 @@ impl FunctionPass for SimplifyCfg {
     }
 }
 
-/// `function` simplified: LLVM's `simplifyFunctionCFGImpl`. Whether anything
-/// changed.
+/// The options of one slot: LLVM's `SimplifyCFGOptions`, as far as ported.
+#[derive(Clone, Copy, Debug)]
+pub struct Options {
+    /// `needCanonicalLoops`: true by default and at the early slot, false at
+    /// the one after vectorization.
+    pub need_canonical_loop: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options { need_canonical_loop: true }
+    }
+}
+
+/// `function` simplified with the early slot's options: LLVM's
+/// `simplifyFunctionCFGImpl`. Whether anything changed.
 pub fn simplified(
+    context: &mut Context,
+    callees: &Callees,
+    function: &mut Function,
+) -> bool {
+    simplified_with(&Options::default(), context, callees, function)
+}
+
+/// `simplified` under `options`.
+pub fn simplified_with(
+    options: &Options,
     context: &mut Context,
     callees: &Callees,
     function: &mut Function,
 ) -> bool {
     let mut folded = false;
     let ever = unreachable_removed(context, callees, function, &mut folded)
-        | iteratively_simplified(context, callees, function, &mut folded);
+        | iteratively_simplified(options, context, callees, function, &mut folded);
     // `iterativelySimplifyCFG` can make a loop dead; the removal and the
     // visits then alternate until neither does anything.
     if !ever {
         return false;
     }
     if unreachable_removed(context, callees, function, &mut folded) {
-        while iteratively_simplified(context, callees, function, &mut folded)
+        while iteratively_simplified(options, context, callees, function, &mut folded)
             | unreachable_removed(context, callees, function, &mut folded)
         {}
     }
@@ -230,6 +263,7 @@ pub fn simplified(
 /// Every block visited, in layout order, until a round changes none:
 /// `iterativelySimplifyCFG`.
 fn iteratively_simplified(
+    options: &Options,
     context: &mut Context,
     callees: &Callees,
     function: &mut Function,
@@ -237,10 +271,18 @@ fn iteratively_simplified(
 ) -> bool {
     let (mut changed, mut local) = (false, true);
     let headers = loop_headers(function);
+    // D7: with the option, a function with a loop only.
+    let form = if headers.is_empty() || !options.need_canonical_loop {
+        Default::default()
+    } else {
+        crate::decide::loop_form_blocks(function)
+    };
+    let headers = if options.need_canonical_loop { headers } else { Default::default() };
     while local {
         local = false;
         for block in function.layout().to_vec() {
-            if function.is_placed(block) && block_simplified(context, callees, function, block, folded, &headers) {
+            if function.is_placed(block) && block_simplified(context, callees, function, block, folded, &headers, &form)
+            {
                 local = true;
             }
         }
@@ -258,6 +300,7 @@ fn block_simplified(
     block: BlockId,
     folded: &mut bool,
     headers: &IdSet<BlockId>,
+    form: &std::collections::BTreeSet<i64>,
 ) -> bool {
     // No predecessor but not the entry, or only itself: unreachable.
     let predecessors = function.predecessors(block);
@@ -269,7 +312,10 @@ fn block_simplified(
     *folded |= changed;
     changed |= transform::duplicate_phis_in(function, block).expect("a phi nothing reads is erased");
     changed |= cfg::merged_into_predecessor(function, block);
-    changed | (function.is_placed(block) && jump_simplified(context, function, block, headers))
+    changed
+        | (function.is_placed(block)
+            && !form.contains(&llrm_analysis::cfg::id(block))
+            && jump_simplified(context, function, block, headers))
 }
 
 /// The back edges' targets, by one walk from the entry: LLVM's

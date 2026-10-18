@@ -2050,3 +2050,55 @@ fn test_the_llvm_order_hashes_no_body_for_a_cycle_history_it_never_reads() {
         );
     assert!(kept.is_some(), "the rounds keep the history they compare");
 }
+
+/// `loopsimplify` gives a loop a dedicated exit, a jump alone in a block, and
+/// `simplifycfg` took it out again: round after round the body came back to
+/// the same state, and the `deedlines` demo failed with "cycle after 3 rounds".
+#[test]
+fn simplifycfg_and_loopsimplify_reach_a_fixed_point_on_a_loop_with_a_shared_exit() {
+    let mut module = llrm_analysis::testing::parsed(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b1 ]
+  %n = add i16 %i, 1
+  %t = icmp ult i16 %n, %x
+  br i1 %t, label %b1, label %b2
+
+b2:
+  %r = phi i16 [ 0, %b0 ], [ %n, %b1 ]
+  ret i16 %r
+}
+",
+    );
+    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
+    fixed.only = false;
+    fixed.passes = vec![Box::new(crate::simplifycfg::SimplifyCfg), Box::new(crate::loopsimplify::LoopSimplify)];
+    crate::testing::managed(&mut module, fixed);
+}
+/// x_life -Os under the LLVM order: the spill forecast kept the inner loop's
+/// invariant address math (`mul`, `getelementptr`) in the loop, 16 ops where
+/// the old rounds left 11, so `unroll` refused the full unroll and the
+/// program ran 1.94x the instructions (clocks 0.807 to 1.448 of min(gcc,
+/// clang)). The order's LICM slot prices no registers, as LLVM's: run alone on
+/// two inner loops that six registers cannot hold, it moves all six loads.
+#[test]
+fn test_the_llvm_order_hoists_invariants_the_spill_forecast_would_keep() {
+    let applied =
+        Applied { options: pipeline::Options { llvm_order: true, ..pipeline::Options::size() }, ..Applied::default() };
+    let mut module = crate::testing::parsed(&crate::hoist::tests::two_inner_loops());
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.require::<llrm_analysis::manager::Summaries>();
+    let slots = pipeline::llvm_order(&applied, crate::parity::Phase::Simplify);
+    let slot = slots.into_iter().find(|one| one.name() == "hoist@730").expect("the speculating LICM slot");
+    manager.add_boxed(slot);
+    manager
+        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap();
+    let printed = crate::testing::printed(&module);
+    let f = &printed[printed.find("define i16 @f(").expect("f")..];
+    let b0 = f[f.find("\nb0:\n").unwrap() + 5..].lines().take_while(|line| line.starts_with("  ")).collect::<Vec<_>>();
+    assert_eq!(b0.iter().filter(|line| line.contains("load")).count(), 6, "{printed}");
+}

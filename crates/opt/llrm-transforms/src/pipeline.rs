@@ -237,6 +237,10 @@ pub struct Options {
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); `LLRM_EXP_MEM2REG` sets it, off by default.
     pub mem2reg: bool,
+    /// Under `llvm_order` the SROA slots run the translated unit (`SROA.cpp`,
+    /// [`crate::sroa`], with [`crate::mem2reg`]); `LLRM_EXP_SROA` sets it, off
+    /// by default.
+    pub sroa: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -304,6 +308,7 @@ impl Default for Options {
             unroll_jam: false,
             interchange: false,
             mem2reg: experiment_mem2reg(),
+            sroa: llrm_support::env_flag!("LLRM_EXP_SROA"),
             copy_headers: true,
             for_size: false,
             expensive: true,
@@ -533,7 +538,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Strict floating recurrences must retain their original iteration
         // order; LICM may move invariant preparation out afterwards.
         Box::new(floatloop::FloatLoop),
-        Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true }),
+        Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true }),
         Box::new(loopmotion::LoopMotion),
         // The loop's exit tests that nothing in it changes are made once, with
         // the loop's entry.
@@ -615,6 +620,10 @@ impl FunctionPass for Together {
         self.name
     }
 
+    fn parts(&self) -> Vec<&'static str> {
+        self.parts.iter().flat_map(|part| part.parts()).collect()
+    }
+
     fn adds_memory_operations(&self) -> bool {
         self.parts.iter().any(|part| part.adds_memory_operations())
     }
@@ -668,14 +677,17 @@ pub(crate) fn llvm_order(
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
+    let translated = applied.options.sroa;
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
-        Box::new(Together {
-            name,
-            parts: vec![Box::new(promote::Sroa), Box::new(promote::Promote), Box::new(promote::DeadSlots)],
-        })
+        let parts: Vec<Box<dyn FunctionPass>> = if translated {
+            vec![Box::new(crate::sroa::Sroa), Box::new(crate::mem2reg::Mem2Reg), Box::new(promote::DeadSlots)]
+        } else {
+            vec![Box::new(promote::Sroa), Box::new(promote::Promote), Box::new(promote::DeadSlots)]
+        };
+        Box::new(Together { name, parts })
     };
     let earlycse = |name| slot(name, Box::new(crate::earlycse::EarlyCse));
-    let hoist = |name, speculate| slot(name, Box::new(hoist::Hoist { size, speculate }));
+    let hoist = |name, speculate| slot(name, Box::new(hoist::Hoist { size, speculate, priced: false }));
     let loopmotion = |name| slot(name, Box::new(loopmotion::LoopMotion));
     let canonical = |a: &'static str, b: &'static str| {
         [slot(a, Box::new(loopsimplify::LoopSimplify)), slot(b, Box::new(lcssa::LoopClosedSSA))]
@@ -981,7 +993,7 @@ pub fn recorded(
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if !guarded && applied.options.wanted("hoist") {
-        manager.add(hoist::Hoist { size: applied.options.prefers_size(), speculate: true });
+        manager.add(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true });
     }
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {
@@ -1049,7 +1061,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
-        passes.push(Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true }));
+        passes.push(Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true }));
     }
     passes
 }
@@ -1200,7 +1212,7 @@ impl Fixed {
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
         let level = if applied.options.pre { crate::parity::Level::O2 } else { crate::parity::Level::O1 };
-        let checked = crate::parity::check_phase_at(phase, &built, level);
+        let checked = crate::parity::check_phase_with(phase, &built, level, applied.options.sroa);
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
         if !matches!(phase, Phase::Simplify) {

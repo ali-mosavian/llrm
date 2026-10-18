@@ -34,7 +34,6 @@ use super::inlinespiller::{InlineSpiller, Tables};
 use super::matrix::{LiveRegMatrix, PhysInterference};
 use super::spill::SimpleSpiller;
 use super::virtregmap::RegisterInfo;
-use crate::analysis::frequency::Frequency;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::frame::Frame;
 use crate::liveness::calcspillweights::SpillWeightEnv;
@@ -248,6 +247,35 @@ impl PhysInterference for CallMasks {
     ) -> bool {
         false
     }
+
+    fn reg_mask_range(
+        &self,
+        start: SlotIndex,
+        stop: SlotIndex,
+    ) -> std::ops::Range<usize> {
+        self.calls.partition_point(|(slot, ..)| *slot < start)..self.calls.partition_point(|(slot, ..)| *slot < stop)
+    }
+
+    fn reg_mask_slot(
+        &self,
+        i: usize,
+    ) -> SlotIndex {
+        self.calls[i].0
+    }
+
+    /// DEVIATE D-IC2: a call's registers are the roots it destroys plus the
+    /// high halves a wide value loses; the cache asks per register, not per
+    /// value, so both count. The fact: `reg_mask_clobbered` decides the high
+    /// halves by the width of the value asked, which a register has none of.
+    fn reg_mask_clobbers(
+        &self,
+        i: usize,
+        phys: RegId,
+    ) -> bool {
+        let root = crate::model::ir::root(phys);
+        let (_, destroyed, high, _) = &self.calls[i];
+        destroyed.contains(&root) || high.contains(&root)
+    }
 }
 
 /// What `decide` decided: the register of each value that has one, and the
@@ -312,12 +340,9 @@ pub fn decide_with(
     }
     let lis = LiveIntervals::new(body);
     // The environment: orders, frequencies, loop exits.
-    let busy = Frequency::of(body);
-    // `MachineBlockFrequencyInfo` keeps a frequency in 64 bits and saturates:
-    // a deep loop nest reaches the top, never infinity, which the spill weights
-    // read as a range that cannot be spilled.
+    let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq: Vec<f32> =
-        body.blocks.iter().map(|block| (busy.block(block.at) as f64).min(u64::MAX as f64) as f32).collect();
+        (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let exiting: Vec<bool> = body
         .blocks
@@ -454,6 +479,36 @@ mod tests {
     use crate::liveness::liverange::Segment;
     use crate::liveness::slotindex::SlotIndexes;
     use crate::model::lir::{Block, LirBlock};
+
+    /// Greedy's spill weights read `MachineBlockFrequencyInfo`
+    /// (`liveness::blockfrequency`), not the old `analysis::frequency`,
+    /// which saturated an f32 at u64::MAX (D-H, #2276).
+    #[test]
+    fn test_greedy_asks_no_old_frequency() {
+        let insns: Vec<Arc<Insn>> = vec![
+            Arc::new(Insn::new(0, None, None, vec![1], vec![])),
+            Arc::new(Insn::new(1, None, None, vec![], vec![1])),
+        ];
+        let body = LirBody::new(
+            "shadow",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let order = |_: u32| vec![RegId::EAX, RegId::EBX];
+        let inputs = ShadowInputs {
+            body: &body,
+            registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+            order: &order,
+            pins: &IndexMap::default(),
+            unspillable: &BTreeSet::new(),
+            data: None,
+        };
+        let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
+        assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
+        assert_eq!(crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get) - before, 0);
+    }
 
     fn widths(pairs: &[(u32, u32)]) -> Rc<Tables> {
         let tables = Tables::default();

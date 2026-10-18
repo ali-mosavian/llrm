@@ -214,8 +214,8 @@ b2:
     check(text, text, &[&[1], &[2]]);
 }
 
-/// The jump that closes a loop keeps its `!llvm.loop`, on the branch that
-/// now closes it.
+/// The jump that closes a loop keeps its `!llvm.loop` (it is the loop's one
+/// latch, so it stays).
 #[test]
 fn test_the_new_jump_keeps_the_loop_metadata() {
     let mut module = parsed(
@@ -240,7 +240,7 @@ b3:
 ",
     );
     assert!(simplify(&mut module));
-    assert!(printed(&module).contains("br i1 %c, label %b1, label %b3, !llvm.loop"), "{}", printed(&module));
+    assert!(printed(&module).contains("br label %b1, !llvm.loop"), "{}", printed(&module));
 }
 
 /// `decide` took out `phi [%x, entry], [%self, latch]` (gvn leaves them) when
@@ -457,4 +457,43 @@ b5:
 }
 ";
     check(text, text, &[&[0], &[7]]);
+}
+
+/// With `needCanonicalLoops` off (the slot after vectorization) the block that
+/// joins a loop's two ways back is bypassed like any other; with it on
+/// (`Options::default`, the early slot) it stays.
+#[test]
+fn test_the_option_that_clears_needcanonicalloops_lets_the_latch_go() {
+    let text = "define i16 @f(i16 %x) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %m, %b4 ]
+  %t = icmp ult i16 %i, %x
+  br i1 %t, label %b2, label %b5
+
+b2:
+  %a = add i16 %i, 1
+  %d = icmp ult i16 %a, 5
+  br i1 %d, label %b3, label %b4
+
+b3:
+  %b = add i16 %i, 2
+  br label %b4
+
+b4:
+  %m = phi i16 [ %a, %b2 ], [ %b, %b3 ]
+  br label %b1
+
+b5:
+  ret i16 %i
+}
+";
+    let mut module = parsed(text);
+    let outer = Outer::of(&mut module, None);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let options = super::Options { need_canonical_loop: false };
+    assert!(super::simplified_with(&options, context, outer.callees(), function));
+    assert!(!printed(&module).contains("b4:"), "{}", printed(&module));
 }
