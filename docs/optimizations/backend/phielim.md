@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/phielim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/phielim.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/phielim.rs sha256:acceb45ac4d94c3d61b0cd55ebd8a653ebcc9817205f6ce2b0c9158941c740a0 -->
+<!-- src: crates/backend/llrm-core/src/backend/phielim.rs sha256:791d80558fdaeabd0d52abf597b2521ea9b3b5454bf61c62900e2ea760a77c9b -->
 
 # phielim
 
@@ -77,7 +77,8 @@ in a namespace of its own per body entry.
 LLVM's `PHIElimination` ([`crate::phielimination`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/phielimination.rs)) first, and this pass the
 rest. Off by default: it leaves a cycle of loop-carried values to be broken
 by copies through a register, where the parallel copy here breaks it with an
-`xchg`, and the i64 Fibonacci loop (`test_an_i64_is_a_dword_pair_through_phis_calls_and_returns`)
+`xchg`, and the i64 Fibonacci loop
+(`test_an_i64_is_a_dword_pair_through_phis_calls_and_returns`)
 spills a dword with it.
 
 `unsplit` undoes a split whose copies coalescing removed: a block of only a
