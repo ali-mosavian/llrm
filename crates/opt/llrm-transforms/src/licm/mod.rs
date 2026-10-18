@@ -9,7 +9,7 @@
 
 mod apply;
 mod calls;
-mod hoist;
+pub(crate) mod hoist;
 mod promote;
 mod safety;
 mod sink;
