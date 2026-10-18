@@ -28,10 +28,7 @@
 //!   none, as does the `(sub 0, V)` arm of `ConstantFoldCastOperand` (L1658);
 //! - target intrinsics (AMDGCN, ARM, AArch64, Wasm, NVVM, x86) and
 //!   `is_constant` of a vector;
-//! - `externally_initialized` and `ni:` (non-integral address spaces): the
-//!   parser drops the first and `DataLayout` the second, so a load of such a
-//!   global and a GEP or `inttoptr` in such a space fold where LLVM keeps them
-//!   (the only places llrm claims more than LLVM).
+//! - `HasExternalState` pointers (the `pe` datalayout flag) are not parsed.
 //!
 //! Gaps of [`constfold`](crate::constfold) the oracle shows, not filled here
 //! (except the two marked): a pointer compare of globals or `null`;
@@ -283,6 +280,15 @@ fn expr(
         ConstantKind::Expr(expr) => Some(expr.clone()),
         _ => None,
     }
+}
+
+/// `DL.isNonIntegralPointerType(Ty)`: a pointer in a non-integral space.
+fn non_integral(
+    context: &Context,
+    layout: &DataLayout,
+    ty: TypeId,
+) -> bool {
+    pointer_space(context, ty).is_some_and(|space| layout.is_non_integral_address_space(space))
 }
 
 fn pointer_space(
@@ -756,7 +762,7 @@ fn definitive_constant_initializer(
             global.linkage,
             Linkage::Weak | Linkage::LinkOnce | Linkage::Common | Linkage::ExternWeak
         );
-    (variable.constant && !interposable).then_some(())?;
+    (variable.constant && !interposable && !variable.externally_initialized).then_some(())?;
     Some((id, variable.initializer?))
 }
 
@@ -929,7 +935,7 @@ pub fn constant_fold_load_through_bitcast(
         if let Some(folded) = constant_fold_load_from_uniform_value(context, layout, c, dest) {
             return Some(folded);
         }
-        if src_size == dest_size {
+        if src_size == dest_size && non_integral(context, layout, src) == non_integral(context, layout, dest) {
             let cast = match (context.types.get(src), context.types.get(dest)) {
                 (Type::Int(_), Type::Pointer(_)) => CastOp::IntToPtr,
                 (Type::Pointer(_), Type::Int(_)) => CastOp::PtrToInt,
@@ -1136,6 +1142,9 @@ fn fold_reinterpret_load_from_const(
             if is_null_value(context, result) {
                 return Some(null_value(context, load_ty));
             }
+            if is_ptr.is_some_and(|space| layout.is_non_integral_address_space(space)) {
+                return None;
+            }
             result = constant_expr_get_cast(context, CastOp::IntToPtr, result, load_ty)?;
         }
         return Some(result);
@@ -1189,7 +1198,7 @@ pub fn read_byte_array_from_global(
             value.linkage,
             Linkage::Weak | Linkage::LinkOnce | Linkage::Common | Linkage::ExternWeak
         );
-    if !variable.constant || interposable {
+    if !variable.constant || interposable || variable.externally_initialized {
         return None;
     }
     let init_size = alloc_size(context, env.layout, ty_of(context, initializer));
@@ -1536,7 +1545,9 @@ fn symbolically_evaluate_gep(
     {
         base_int_val = base & mask(pointer_width);
     }
-    if is_null_value(context, ptr) || base_int_val != 0 {
+    if (is_null_value(context, ptr) || base_int_val != 0)
+        && !pointer_space(context, ty_of(context, ptr)).is_some_and(|space| layout.must_not_introduce_int_to_ptr(space))
+    {
         let low = (base_int_val & wrap).wrapping_add(offset) & wrap;
         let base_int_val = (base_int_val & !wrap) | low;
         let c = int(context, pointer_width, base_int_val);

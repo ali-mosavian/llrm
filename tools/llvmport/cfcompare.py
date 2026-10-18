@@ -6,7 +6,7 @@
 
 PATH is a .ll file or a directory (every `.ll` under it, or with --flat only its own); the totals are per PATH. A file either side cannot read is
 skipped and counted. LLVM's side is `constfold_dump.sh`, llrm's the `cfdump` example of llrm-mir (CARGO_TARGET_DIR is
-honoured). Each differing line is one of: NI (in a file whose datalayout has `ni:`, which `DataLayout` ignores), MORE (llrm folds, LLVM does not), DIFF (both fold, to different constants), or a
+honoured). Each differing line is one of: MORE (llrm folds, LLVM does not), DIFF (both fold, to different constants), or a
 LESS class (LLVM folds, llrm does not), named by opcode and the kind of constant LLVM made. A difference only in the
 `nusw`/`nuw` flags of a constant GEP is class `gep-flags` (MIR keeps `inbounds` only). Exit 1 on a MORE or a DIFF.
 """
@@ -105,7 +105,6 @@ def main():
         counts = Counter()
         for original in files:
             file = normalized(original, scratch)
-            non_integral = re.search(r'target datalayout = "[^"]*\bni:', Path(original).read_text(errors="replace"))
             code, theirs, _ = run([str(ROOT / "tools/llvmport/constfold_dump.sh"), file])
             if code:
                 skipped += 1
@@ -137,8 +136,6 @@ def main():
                     label = "LESS gep-flags"
                 else:
                     label = f"DIFF {opcode}"
-                if non_integral and label.split(" ")[0] in ("MORE", "DIFF"):
-                    label = "NI " + label  # DataLayout ignores `ni:` (non-integral address spaces)
                 counts[label.split(" ")[0]] += 1
                 classes[(path, label)] += 1
                 examples.setdefault((path, label), (original, a, b))
@@ -148,10 +145,10 @@ def main():
                         print(f"{original}\n  llrm: {a}\n  llvm: {b}")
         print(
             f"{path}: {total} compared, {equal} equal, {counts['LESS']} less, {counts['MORE']} more, "
-            f"{counts['DIFF']} diff, {counts['NI']} ni, {skipped} of {len(files)} files skipped"
+            f"{counts['DIFF']} diff, {skipped} of {len(files)} files skipped"
         )
     for (path, label), count in sorted(classes.items(), key=lambda kv: -kv[1]):
-        if label.startswith(("LESS", "NI")):
+        if label.startswith(("LESS",)):
             file, a, b = examples[(path, label)]
             print(f"  {count:5} {Path(path).name} {label}\n        e.g. {b}")
     return 1 if failed else 0

@@ -111,14 +111,14 @@ fn mir_has_no_ptrtoaddr_and_no_bytes() {
     assert!(rejects("define void @f(b8 %p) {\n  ret void\n}\n"));
 }
 
-/// The parser eats `externally_initialized`, so a load of such a constant
-/// folds where LLVM (`hasDefinitiveInitializer`) keeps it: the one place llrm
-/// claims more than LLVM, until `GlobalVariable` keeps the flag.
+/// The parser ate `externally_initialized`, so a load of such a constant folded
+/// to its initializer where LLVM (`hasDefinitiveInitializer`) keeps the load.
 #[test]
-fn the_parser_drops_externally_initialized() {
-    let text =
-        "@g = externally_initialized constant i32 5\ndefine void @f() {\n  %x = load i32, ptr @g\n  ret void\n}\n";
-    assert!(dump(text).expect("parses").contains("load i32 5"));
+fn a_load_of_an_externally_initialized_constant_is_kept() {
+    let text = "@g = externally_initialized constant i32 5\n@h = constant i32 6\ndefine void @f() {\n  %x = load i32, ptr @g\n  %y = load i32, ptr @h\n  ret void\n}\n";
+    let out = dump(text).expect("parses");
+    assert!(out.contains("f 0 load -"), "{out}");
+    assert!(out.contains("load i32 6"), "{out}");
 }
 
 #[test]
@@ -127,10 +127,13 @@ fn mir_has_no_lane_operations_and_no_half() {
     assert!(rejects("define half @f(half %a) {\n  ret half %a\n}\n"));
 }
 
-/// `DataLayout` does not read `ni:`, so a non-integral address space folds as
-/// an integral one: an `inttoptr` is made where LLVM keeps the `gep`.
+/// `DataLayout` ignored `ni:`, so a GEP of null in a non-integral address space
+/// folded to an `inttoptr`, which LLVM never introduces there. Space 0 still
+/// does.
 #[test]
-fn the_data_layout_ignores_non_integral_address_spaces() {
-    let text = "target datalayout = \"ni:4\"\ndefine void @f() {\n  %x = getelementptr i8, ptr addrspace(4) null, i64 50\n  ret void\n}\n";
-    assert!(dump(text).expect("parses").contains("inttoptr (i64 50)"));
+fn a_gep_in_a_non_integral_address_space_is_not_an_inttoptr() {
+    let text = "target datalayout = \"ni:4\"\ndefine void @f() {\n  %x = getelementptr i8, ptr addrspace(4) null, i64 50\n  %y = getelementptr i8, ptr null, i64 50\n  ret void\n}\n";
+    let out = dump(text).expect("parses");
+    assert!(!out.contains("addrspace(4) inttoptr"), "{out}");
+    assert!(out.contains("inttoptr (i64 50"), "{out}");
 }
