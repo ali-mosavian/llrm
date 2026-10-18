@@ -88,7 +88,7 @@ use std::rc::Rc;
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, Operand};
 use llrm_mir::opcode::Opcode;
@@ -273,19 +273,19 @@ impl Around for Loop {
 /// `Dominators` as the graph walks read it: over block ids, and nothing
 /// dominates a block the entry does not reach.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Dominance(Rc<DominatorTree>);
+pub struct Dominance(Rc<DomTree>);
 
 impl Dominance {
-    pub fn new(tree: Rc<DominatorTree>) -> Self {
+    pub fn new(tree: Rc<DomTree>) -> Self {
         Self(tree)
     }
 
     /// Of a body no manager holds.
     pub fn of(function: &Function) -> Self {
-        Self(Rc::new(DominatorTree::new(function)))
+        Self(Rc::new(DomTree::of(function)))
     }
 
-    pub fn tree(&self) -> &DominatorTree {
+    pub fn tree(&self) -> &DomTree {
         &self.0
     }
 
@@ -613,9 +613,7 @@ pub fn _unreachable(
             function.erase(inst).expect("its uses were replaced");
         }
     }
-    for &one in &dead {
-        function.erase_block(one).expect("an emptied block nothing names");
-    }
+    function.erase_blocks(&dead).expect("emptied blocks nothing names");
     changed || !dead.is_empty()
 }
 

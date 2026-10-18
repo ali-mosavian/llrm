@@ -136,7 +136,11 @@ impl CaseCluster {
         CaseCluster { low, high, target, probability, kind: Kind::Range }
     }
 
+<<<<<<< HEAD
     pub fn is_range(&self) -> bool {
+=======
+    fn is_range(&self) -> bool {
+>>>>>>> origin/feat/parity
         self.kind == Kind::Range
     }
 }

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchlower.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchlower.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:3e2be9539dbb0b3b774c5f67f0ad65164e1ea193eb642a8ac81d215ea87e6c2d -->
+<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:f3948232e4f621259761b7cf41ad424d22600ce2bf82c1e8bf5bfbf13bbcc385 -->
 
 # switchlower
 
@@ -41,34 +41,3 @@ move for each phi; the table's the range test and a load for each phi, a
 widening where its cells are narrower. Tuned for size the costs are bytes
 and the whole tree is set against the code and the data of the table.
 
-The deviations (probabilities, cases to the default) are in
-[`switchcg`](switchcg.md).
-
-## Runs
-As two passes: `switchconv` (gcc's `pass_convert_switch`, -O2 and up),
-which makes the lookup tables and so adds loads, and last of the function
-passes `switchlower` (`pass_lower_switch`), every level that optimizes,
-which adds no memory operation: the module analyses frozen at the end of the
-pipeline stand past it.
-
-## Example
-Before:
-
-```mir
-b0:
-  switch i32 %k, label %d [ i32 0, label %a
-                            i32 1, label %a
-                            i32 2, label %a
-                            i32 40, label %b ]
-```
-
-After, the first three one range, tested first as the likelier:
-
-```mir
-b0:
-  %t = icmp ule i32 %k, 2
-  br i1 %t, label %a, label %m
-m:
-  %u = icmp eq i32 %k, 40
-  br i1 %u, label %b, label %d
-```
