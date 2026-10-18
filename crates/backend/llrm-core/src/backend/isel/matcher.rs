@@ -635,7 +635,7 @@ impl Selector<'_, '_, '_> {
         // `IsDesirableToPromoteOp`: `MayFoldLoad`, `IsFoldableRMW`).
         let loaded = |operand: Operand| {
             let Operand::Value(value) = operand else { return false };
-            let sole = matches!(self.function.users(value), [only] if only.user == m.inst);
+            let sole = self.function.users(value).only().is_some_and(|only| only.user == m.inst);
             sole && match self.function.value(value).def {
                 ValueDef::Instruction(inst) => matches!(self.function.instruction(inst).opcode, Opcode::Load { .. }),
                 ValueDef::Argument(_) => self.in_cells.contains(&value),
@@ -646,10 +646,9 @@ impl Selector<'_, '_, '_> {
         let stored = instruction
             .result
             .is_some_and(
-                |result| matches!(
-                    self.function.users(result),
-                    [only] if matches!(self.function.instruction(only.user).opcode, Opcode::Store { .. })
-                ),
+                |result| self.function.users(result).only().is_some_and(|only| {
+                    matches!(self.function.instruction(only.user).opcode, Opcode::Store { .. })
+                }),
             );
         let foldable = instruction.operands.iter().any(|operand| loaded(*operand)) && (registers >= 2 || stored);
         // Nor where a compare reads the result: the word's flags serve it, and

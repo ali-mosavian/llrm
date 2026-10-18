@@ -210,12 +210,10 @@ pub fn merged_copies(
                         let result = op.result.expect("a load's value");
                         let width = unit.int_bits(Operand::Value(result)).filter(|bits| matches!(bits, 8 | 16 | 32));
                         let users = function.users(result);
-                        let single_store = users.len() == 1
-                            && matches!(
-                                function.instruction(users[0].user).opcode,
-                                Opcode::Store { volatile: false, .. }
-                            )
-                            && users[0].index == 0;
+                        let single_store = users.only().is_some_and(|only| {
+                            matches!(function.instruction(only.user).opcode, Opcode::Store { volatile: false, .. })
+                                && only.index == 0
+                        });
                         match (width, single_store, width.and_then(|bits| cell(&unit, op.operands[0], bits / 8))) {
                             (Some(_), true, Some((root, _))) => {
                                 reads.push(root);
