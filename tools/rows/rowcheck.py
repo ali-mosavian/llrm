@@ -8,6 +8,7 @@ failed rows are listed by name.
 from __future__ import annotations
 
 COUNTERS = ("ins", "mem", "clocks", "code")
+PINNED_CLANG = "d1106deb71cc"  # the reference clang (tools/llvmpin.py COMMIT): its objects' .comment names it
 
 
 def failed(row: dict, counters=COUNTERS, checked: bool = False) -> bool:
@@ -44,3 +45,24 @@ def require(line: str, bad: list[str], allow_failed: bool) -> list[str]:
     if bad and not allow_failed:
         raise SystemExit(lead + line + "\nrefusing a geomean or a worse-count over a table with failed or missing rows (--allow-failed prints it anyway):\n  " + "\n  ".join(bad))
     return ([lead.rstrip()] if bad else []) + [line] + [f"allowed: {one}" for one in bad]
+
+
+def clang_comment(path) -> str:
+    """The `.comment` section of a clang-built object (the compiler's version string), "" where there is none."""
+    import subprocess
+
+    done = subprocess.run(["readelf", "-p", ".comment", str(path)], capture_output=True, text=True)
+    return " ".join(line.split("]", 1)[-1].strip() for line in done.stdout.splitlines() if "]" in line)
+
+
+def compiler_premise(directory) -> str:
+    """The rows' reference column is clang's: every `*.clang*.o` under `directory` must name the pinned build in its `.comment`. SystemExit naming the
+    objects that do not (Ubuntu clang 20.1.8 built rows/main for days: its numbers were never a reference); a line saying what was checked."""
+    from pathlib import Path
+
+    objects = sorted(Path(directory).rglob("*.clang*.o"))
+    wrong = [(one.name, clang_comment(one)) for one in objects if PINNED_CLANG not in clang_comment(one)]
+    if wrong:
+        shown = "; ".join(f"{name}: {comment or 'no .comment'}" for name, comment in wrong[:5])
+        raise SystemExit(f"{len(wrong)} of {len(objects)} clang objects under {directory} were not built by the pinned clang ({PINNED_CLANG}): {shown}")
+    return f"clang objects {len(objects)}, all built by the pinned clang ({PINNED_CLANG})" if objects else f"no clang objects under {directory}: compiler premise unchecked"
