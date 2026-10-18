@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/basicaa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/basicaa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/basicaa.rs sha256:1fd55c4ac8f55e861f1e8efa9c96b5a90ed353481a6bdce09c8d5c07d2287b00 -->
+<!-- src: crates/opt/llrm-analysis/src/basicaa.rs sha256:762ccb668b1e4a801d8673fb0bc029f47504c72b83afed0934f1003fa5ff95d4 -->
 
 # basicaa
 
@@ -16,5 +16,6 @@ variable indices by value and scale), `subtractDecomposedGEPs` and
 `aliasGEP` as far as it needs no value ranges: the inbounds and
 constant-difference rules, nuw, and the GCD test. Not yet (deviations in the
 plan page): `GetLinearExpression` through casts, `analyzeVariableOffsets`'
-ranges, `aliasPHI`, `aliasSelect`, the mod/ref queries (they answer the top
-of the lattice).
+ranges, `aliasPHI`, `aliasSelect`, the location mod/ref queries (they answer
+the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo`
+read the attributes.
