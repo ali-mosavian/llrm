@@ -102,15 +102,19 @@ pub fn merged(function: &mut Function) -> bool {
     // target), not of a graph of the whole body made again after each merge. A
     // block that merged is asked again: its new successor may merge too.
     let mut gone = llrm_support::hash::HashSet::default();
+    let mut emptied = Vec::new();
     for first in function.layout().to_vec() {
         // Blocks go only as the target of a merge here, so the layout need not
         // be searched for `first` (N blocks, N^2: `switchlower` of 2048 cases).
         while !gone.contains(&first) {
-            let Some(second) = merged_into(function, first, entry) else { break };
+            let Some(second) = emptied_into(function, first, entry) else { break };
             gone.insert(second);
+            emptied.push(second);
             changed = true;
         }
     }
+    // Together: the layout is searched once, not once per block merged.
+    function.erase_blocks(&emptied).expect("emptied blocks nothing names");
     changed
 }
 

@@ -37,7 +37,7 @@
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
@@ -75,7 +75,7 @@ pub struct GvnPass<'a> {
     layout: &'a DataLayout,
     function: &'a mut Function,
     outer: &'a Outer,
-    dt: std::borrow::Cow<'a, DominatorTree>,
+    dt: std::borrow::Cow<'a, DomTree>,
     vn: ValueTable,
     leader_table: LeaderMap,
     dead_blocks: IdSet<BlockId>,
@@ -100,11 +100,10 @@ pub fn run_impl_cfg(
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
-    dominators: Option<&DominatorTree>,
+    dominators: Option<&DomTree>,
 ) -> (bool, bool) {
     let tables = TABLES.with(|pool| pool.take()).unwrap_or_else(|| (ValueTable::new(), LeaderMap::default()));
-    let dt =
-        dominators.map_or_else(|| std::borrow::Cow::Owned(DominatorTree::new(function)), std::borrow::Cow::Borrowed);
+    let dt = dominators.map_or_else(|| std::borrow::Cow::Owned(DomTree::of(function)), std::borrow::Cow::Borrowed);
     let mut pass = GvnPass {
         context,
         layout,
@@ -140,7 +139,7 @@ impl GvnPass<'_> {
     }
 
     fn refresh_dominators(&mut self) {
-        self.dt = std::borrow::Cow::Owned(DominatorTree::new(self.function));
+        self.dt = std::borrow::Cow::Owned(DomTree::of(self.function));
     }
 
     /// `runImpl`
