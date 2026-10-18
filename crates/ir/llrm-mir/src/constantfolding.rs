@@ -30,11 +30,8 @@
 //!   `is_constant` of a vector;
 //! - `HasExternalState` pointers (the `pe` datalayout flag) are not parsed.
 //!
-//! Gaps of [`constfold`](crate::constfold) the oracle shows, not filled here
-//! (except the two marked): a pointer compare of globals or `null`;
-//! `X * 0`, `0 << X`, `0 >> X`, `0 / X`, `X % 1` and `X | -1` of a constant
-//! that is not a number; the null rule of `ConstantFoldCastInstruction`
-//! (applied in [`constant_expr_get_cast`]) and its int-float bitcast (also).
+//! Gap of [`constfold`](crate::constfold) the oracle shows: a pointer compare
+//! of globals or `null` (#2247).
 //! `tools/llvmport/cfcompare.py` lists them against LLVM's answers.
 //!
 //! # Example
@@ -42,7 +39,7 @@
 //! `getelementptr inbounds ([2 x i32], ptr @g, i64 0, i64 1)` operand folds
 //! to `i32 2` ([`constant_fold_instruction`]).
 
-use crate::constfold;
+use crate::constfold::{self, is_null_value, null_value};
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, GlobalId, mask, signed};
 use crate::datalayout::DataLayout;
 use crate::hash::HashMap;
@@ -104,24 +101,6 @@ pub(crate) fn is_poison(
     }
 }
 
-/// `Constant::isNullValue`; LLVM makes an all-zero aggregate a
-/// `zeroinitializer`.
-pub(crate) fn is_null_value(
-    context: &Context,
-    c: ConstantId,
-) -> bool {
-    match &context.get(c).kind {
-        ConstantKind::Int(bits) => *bits == 0,
-        ConstantKind::Float(bits) => *bits == 0,
-        ConstantKind::Null | ConstantKind::Zero => true,
-        ConstantKind::Aggregate(members) => {
-            !is_poison(context, c) && members.iter().all(|&one| is_null_value(context, one))
-        }
-        ConstantKind::Bytes(bytes) => bytes.iter().all(|&one| one == 0),
-        _ => false,
-    }
-}
-
 /// `Constant::isAllOnesValue`.
 fn is_all_ones_value(
     context: &Context,
@@ -150,20 +129,6 @@ fn poison(
     ty: TypeId,
 ) -> ConstantId {
     context.constant(Constant { ty, kind: ConstantKind::Poison })
-}
-
-/// `Constant::getNullValue`.
-fn null_value(
-    context: &mut Context,
-    ty: TypeId,
-) -> ConstantId {
-    let kind = match context.types.get(ty) {
-        Type::Int(_) => ConstantKind::Int(0),
-        Type::Float(_) => ConstantKind::Float(0),
-        Type::Pointer(_) => ConstantKind::Null,
-        _ => ConstantKind::Zero,
-    };
-    context.constant(Constant { ty, kind })
 }
 
 /// `Constant::getAllOnesValue` of an integer or floating type.
@@ -424,9 +389,7 @@ fn cast_is_valid(
 /// `ConstantExpr::getCast`
 /// ([Constants.cpp:2362](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Constants.cpp#L2362)):
 /// `getFoldedCast`, the fold of `ConstantFoldCastInstruction` or the
-/// expression. `constfold::cast` lacks the bit moves between an integer and
-/// a float of the same width (`ConstantFoldCastInstruction`'s BitCast arm),
-/// done here for `float` and `double`.
+/// expression.
 pub fn constant_expr_get_cast(
     context: &mut Context,
     op: CastOp,
@@ -438,33 +401,6 @@ pub fn constant_expr_get_cast(
     }
     if let Some(folded) = constfold::cast(context, op, c, to) {
         return Some(folded);
-    }
-    if op == CastOp::BitCast {
-        let from = context.get(c).clone();
-        let kind = match (&from.kind, context.types.get(from.ty), context.types.get(to)) {
-            (ConstantKind::Int(bits), Type::Int(32), Type::Float(FloatKind::Float)) => {
-                Some(ConstantKind::Float(*bits as u64))
-            }
-            (ConstantKind::Int(bits), Type::Int(64), Type::Float(FloatKind::Double)) => {
-                Some(ConstantKind::Float(*bits as u64))
-            }
-            (ConstantKind::Float(bits), Type::Float(FloatKind::Float), Type::Int(32)) => {
-                Some(ConstantKind::Int(u128::from(*bits)))
-            }
-            (ConstantKind::Float(bits), Type::Float(FloatKind::Double), Type::Int(64)) => {
-                Some(ConstantKind::Int(u128::from(*bits)))
-            }
-            _ => None,
-        };
-        if let Some(kind) = kind {
-            return Some(context.constant(Constant { ty: to, kind }));
-        }
-    }
-    // `ConstantFoldCastInstruction` makes a null value a null of `to`
-    // (ConstantFold.cpp, before its switch); `constfold::cast` has that only
-    // for a number.
-    if is_null_value(context, c) && op != CastOp::AddrSpaceCast {
-        return Some(null_value(context, to));
     }
     if matches!(
         op,

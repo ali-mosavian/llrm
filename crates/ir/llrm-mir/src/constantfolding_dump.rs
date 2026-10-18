@@ -4,7 +4,8 @@
 //! constant as that driver writes it. `examples/cfdump.rs` prints it;
 //! `constantfolding_tests` compares it with LLVM's.
 
-use crate::constantfolding::{Env, constant_fold_instruction, is_null_value, is_poison};
+use crate::constantfolding::{Env, constant_fold_instruction, is_poison};
+use crate::constfold::is_null_value;
 use crate::datalayout::DataLayout;
 use crate::module::Operand;
 use crate::opcode::{CAST, Opcode, spelling};
