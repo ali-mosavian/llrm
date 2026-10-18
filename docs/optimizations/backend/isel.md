@@ -83,7 +83,7 @@ what is pushed, passed in registers and popped, `called`), `memcpy` and
 `memset` (by pieces or `rep`), float conversions and compares, far pointers
 as an offset and a selector (`fars`), address arithmetic folded into memory
 operands (`indexed`), `switch`, and branch conditions merged into one chain.
-Allocas get frame cells (`alloca_groups`, `Selected::extents`); a parameter
+Allocas get frame cells (`alloca_groups`, `Selected::extents`), each on its type's alignment up to the stack slot; a parameter
 arrives in a cell or in registers, delivered by an entry instruction.
 
 ### Wide integers

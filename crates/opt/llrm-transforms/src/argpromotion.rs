@@ -126,7 +126,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dominators::DominatorTree;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::Facts;
-use llrm_mir::loops::LoopInfo;
+use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::memory;
 use llrm_mir::module::{GlobalKind, InstId, MetadataId, Module, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
@@ -335,11 +335,11 @@ fn hoistable(
 ) -> bool {
     let Some(function) = module.global(caller).function() else { return false };
     let Some(block) = function.parent(inst) else { return false };
-    let loops = LoopInfo::new(function, &DominatorTree::new(function));
-    let Some(held) = loops.loop_of(block) else { return false };
+    let loops = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let Some(held) = loops.get_loop_for(block) else { return false };
     match function.instruction(inst).operands[parameter] {
         Operand::Value(value) => match function.value(value).def {
-            ValueDef::Instruction(def) => function.parent(def).is_none_or(|at| !held.blocks.contains(&at)),
+            ValueDef::Instruction(def) => function.parent(def).is_none_or(|at| !held.contains(at)),
             ValueDef::Argument(_) => true,
         },
         _ => true,

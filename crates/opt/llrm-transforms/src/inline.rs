@@ -547,7 +547,7 @@ fn frame(
 
 /// The stack a copy of `body` adds to a caller: its allocas, and a copy of each
 /// `byval` object it may write.
-fn grown(
+pub(crate) fn grown(
     context: &Context,
     layout: &DataLayout,
     body: &Function,
@@ -585,6 +585,7 @@ pub(crate) fn copyable(
     body: &Function,
 ) -> bool {
     !body.is_declaration()
+        && !llrm_mir::facts::opaque(body)
         && carries(body)
         && stated(body) != Some(Inlining::Never)
         && body.walk().any(|(_, inst)| body.instruction(inst).opcode == Opcode::Ret)
