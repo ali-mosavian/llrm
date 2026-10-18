@@ -95,7 +95,8 @@ def compare(before: str, after: str, pipeline: str = "inline", threshold: int | 
         band = "unknown" if size.get(callee) is None else "<=20" if size[callee] <= 20 else "<=60" if size[callee] <= 60 else ">60"
         for kind, count in (("agree", agree), ("llrm-only", llrm_only), ("llvm-only", llvm_only)):
             totals[(kind, band)] += count
-    return {"pipeline": pipeline, "threshold": threshold, "sites": sum(was.values()), "rows": rows, "by_class_and_size": {f"{k}|{b}": n for (k, b), n in sorted(totals.items())}}
+    llvm_inlined = sum(row["llvm_inlined"] for row in rows)
+    return {"pipeline": pipeline, "threshold": threshold, "sites": sum(was.values()), "llvm_inlined": llvm_inlined, "premise": difftest.premise(llvm_inlined, sum(was.values())).replace("functions", "sites").replace("changed", "inlined"), "rows": rows, "by_class_and_size": {f"{k}|{b}": n for (k, b), n in sorted(totals.items())}}
 
 
 def opt_header() -> str:
@@ -112,6 +113,7 @@ def table(report: dict, examples: int = 6) -> str:
         "",
         f"### inlining: llrm against `opt -passes={report['pipeline']}`" + (f" -inline-threshold={report['threshold']}" if report["threshold"] is not None else ""),
         "",
+        f"premise (LLVM inlined {report['llvm_inlined']} of {report['sites']} sites): {report['premise']}",
         f"sites {report['sites']}: agree {totals['agree']}, llrm-only {totals['llrm-only']}, llvm-only {totals['llvm-only']}",
         "",
         "| class | callee <=20 | <=60 | >60 |",

@@ -53,3 +53,12 @@ def test_the_stage_files_of_a_dump_are_the_second_pipeline_module_and_the_interp
         (tmp_path / name).write_text("")
     before, after = inlinediff.stage_files(tmp_path)
     assert (before.name, after.name) == ("05-pipeline.ll", "07-interprocedural.ll")
+
+
+@needs_opt
+def test_the_report_states_whether_llvm_both_inlined_and_declined():
+    report = inlinediff.compare(BEFORE, AFTER, "inline", threshold=5)
+    assert report["llvm_inlined"] == 1 and report["premise"] == "ok", "tiny inlined, mid refused: the reference said both"
+    assert "premise (LLVM inlined 1 of 2 sites): ok" in inlinediff.table(report)
+    alone = inlinediff.compare(BEFORE, AFTER, "inline")
+    assert alone["premise"].startswith("PREMISE FAILED: LLVM inlined all 2 sites"), alone["premise"]

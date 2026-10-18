@@ -207,3 +207,11 @@ def test_licm_counts_name_the_function_and_the_event_and_a_loopless_function_has
     """-stats prints nothing in the pinned opt (no LLVM_FORCE_ENABLE_STATS): the remarks are the counters licm's translation is judged by."""
     counts = difftest.licm_counts(HOIST)
     assert counts == {"f": {"Hoisted": 1}}, counts
+
+
+def test_a_comparison_whose_reference_never_acted_or_never_declined_fails_its_premise():
+    """memoryssa-port's lesson: an oracle that can give only one answer on the inputs proves nothing by agreeing."""
+    assert difftest.premise(0, 40).startswith("PREMISE FAILED: LLVM changed none of 40")
+    assert difftest.premise(40, 40).startswith("PREMISE FAILED: LLVM changed all 40")
+    assert difftest.premise(7, 40) == "ok"
+    assert difftest.premise(0, 1) == "ok", "one function cannot show both answers: not judged"

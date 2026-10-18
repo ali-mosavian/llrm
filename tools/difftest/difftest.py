@@ -314,6 +314,17 @@ def isolated(replay: Path, row: dict, source: Path) -> str:
     return done.stdout
 
 
+def premise(changed: int, functions: int) -> str:
+    """"ok", or why the comparison proves nothing: the reference must be able to give more than one answer on these inputs (LLVM changes some
+    function and leaves some alone). A reference that changed none, or all, of the functions said one thing; agreeing with it shows nothing about
+    llrm's pass, only that both did nothing (or both did something) here."""
+    if functions >= 2 and changed == 0:
+        return f"PREMISE FAILED: LLVM changed none of {functions} functions: the reference never acted, so agreement proves nothing"
+    if functions >= 2 and changed == functions:
+        return f"PREMISE FAILED: LLVM changed all {functions} functions: the reference never declined, so it was not shown to discriminate"
+    return "ok"
+
+
 def analyse(todo: list[tuple[dict, Path]], root: Path, name: str, jobs: int = 8, replay: Path | None = None) -> dict:
     """The report of pass `name` over `todo`. With `replay` (llrm-pass) llrm's answer is the pass run alone on the input; without, the next step's
     input, which is the pass's answer only if nothing but the pass ran between (the report counts, with `replay`, where the two differ)."""
@@ -335,6 +346,7 @@ def analyse(todo: list[tuple[dict, Path]], root: Path, name: str, jobs: int = 8,
     compared = [(r, c) for r, c, _ in done if "error" not in c]
     judged = [(r, fn, v) for r, c in compared for fn, v in c.items()]
     changed = [x for x in judged if not x[2]["unchanged_by_llrm"] or not x[2]["unchanged_by_llvm"]]
+    llvm_changed = sum(1 for _, _, v in judged if not v["unchanged_by_llvm"])
     llrm_only, llvm_only = collections.Counter(), collections.Counter()
     for _, _, v in changed:
         llrm_only.update(v["llrm_only"])
@@ -349,6 +361,8 @@ def analyse(todo: list[tuple[dict, Path]], root: Path, name: str, jobs: int = 8,
         "parse_failures": len(failures),
         "first_failures": [{"file": r["file"], "error": e} for r, e in failures[:5]],
         "functions": len(judged),
+        "llvm_changed": llvm_changed,
+        "premise": premise(llvm_changed, len(judged)),
         "acted_on": len(changed),
         "identical": sum(1 for _, _, v in changed if v["identical"]),
         "histogram_llrm_only": dict(llrm_only.most_common()),
@@ -365,7 +379,8 @@ def table(report: dict) -> str:
         f"llrm's answer: {report['answer']}"
         + (f"; the next input equals it on {report['proxy_equals_isolated']} of {report['inputs']}" if report["proxy_equals_isolated"] is not None else "")
         + f"; inputs {report['inputs']}; failed (LLVM or llrm) {report['parse_failures']}; functions compared {report['functions']}; "
-        f"where either side changed the function: {report['acted_on']}, identical {report['identical']}",
+        f"where either side changed the function: {report['acted_on']}, identical {report['identical']}; LLVM changed {report['llvm_changed']} of "
+        f"{report['functions']}; premise {report['premise']}",
         "",
         "| opcode | only in llrm's answer | only in LLVM's |",
         "|---|---|---|",
@@ -428,7 +443,7 @@ def main() -> int:
     print(table(report))
     if getattr(args, "json", None):
         args.json.write_text(json.dumps(report, indent=1))
-    return 0
+    return 0 if report["premise"] == "ok" else 3
 
 
 if __name__ == "__main__":
