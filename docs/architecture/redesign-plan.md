@@ -101,7 +101,7 @@ Main was `ef40f30a7` when this was read and is `c37be2a9c` as of this edit; PR s
 | front end (translate, hir to mir, data layout) | 49.4 | 44.8 | 1.1x | lex, parse, sema, IRGen | none (at parity) |
 | optimizer: ten passes (gvn, fold, algebraic, sroa, promote, hoist, loopmotion, jumpthread, dse, indvars, unroll, rotate) | 498.7 | 116.6, with the analyses they use | | InstCombine, GVN, SROA, LICM, JumpThreading, DSE, IndVars, LoopUnroll, LoopRotate | the translation tracks of the per-pass table |
 | optimizer: analyses | 535.5 | inside clang's pass rows | | nearest: through-memory ~ MemoryDependence 23.5 and MemorySSA ~6; pointer-values, points-to, globals-aa ~ BasicAA 19.5 and GlobalsAA 1.1; bounded, counted, demanded, float-facts ~ ValueTracking 12.5, LazyValueInfo 6.2, SCEV 5.6; call-effects ~ GlobalsModRef and FunctionAttrs (not separable); registers, pressure, exposed-frames, annotated, published, shape: none | memoryssa-port, basicaa-port, valuetracking-port; the "none" analyses below |
-| optimizer: lsr | 89.5 | 10.0 (LSRInstance, inside the 177.5) | 8.9x | LSRInstance | indvars-decide-poc |
+| optimizer: lsr | 89.5 | 10.0 (LSRInstance, inside the 177.5) | 8.9x | LSRInstance | loop-products-slope (the `LoopStrengthReduce.cpp` translation, see the decisions below) |
 | optimizer: all other mir passes (interprocedural 62.7, decide 62.0, stamp 39.6, lcssa 21.1, fill 17.1) | 254.7 | 50.9 | 5.0x | SimplifyCFG 8.4, CVP 6.7, EarlyCSE 5.7, IPSCCP 4.1; stamp and fill: none | decide: simplifycfg-port; stamp: llvm-order-poc says what it is for first; fill: loopidiom-port; lcssa: llvm-order-poc |
 | optimizer total | 1,378.4 | 177.5 | 7.8x | | |
 | isel | 49.5 | 54.2 | 0.9x | SelectionDAGISel 51.3, CodeGenPrepare 2.9 | none (at parity) |
@@ -135,8 +135,8 @@ Ratios derived by dividing by the pinned 415.5 M (the 5.2x above, and any later 
 
 | analysis | runs | own M (total M) | consumers (files that ask) | owner |
 |---|--:|--:|---|---|
-| annotated | 116 | 38.6 (171.6) | `consts`, `fill`, `floatfacts`, `memcpyopt`, `memoryssa`, `decide` | basicaa-port |
-| registers | 202 | 25.4 (46.9) | `alias`, `fill`, `induction`, `indvars`, `loopmotion`, `profit`, `ranges`, `spill`, `window`, `ports` | valuetracking-port |
+| annotated | 116 | 38.6 (171.6) | `consts`, `loopidioms`, `floatfacts`, `memcpyopt`, `memoryssa`, `decide` | basicaa-port |
+| registers | 202 | 25.4 (46.9) | `alias`, `loopidioms`, `induction`, `indvars`, `loopmotion`, `profit`, `ranges`, `spill`, `window`, `ports` | valuetracking-port |
 | pressure | 17 | 22.2 | `hoist`, `loopmotion`, `lsr` (the spill forecast) | memoryssa-port and indvars-decide-poc (LICM and lsr owners) |
 | exposed-frames | 282 | 20.0 | alias queries | basicaa-port |
 | shape | 160 | 4.2 (19.7) | `alias`, `avail`, `consts`, `exitfold`, `floatfacts`, `floatloop`, `guards`, `induction`, `indvars`, `jumpthread` | by consumer (open) |
@@ -282,6 +282,86 @@ From [#1994 part 1](https://github.com/ali-mosavian/llrm/issues/1994#issuecommen
 gvn: 26.3 K per instruction-run (llrm, 206 M over 7,839) against 28.6 K (LLVM, 49.4 M over 1,725): the same price, 4.5 times the volume. The big function reaches gvn with 2,844 instructions against LLVM's 1,385 (997 after its first SROA, EarlyCSE, InstCombine and SimplifyCFG round) because llrm cleans the memory form inside gvn and promote comes after it: 863 loads, 301 stores, 123 allocas and no phis, against 209, 90, 0 and 149. Memory form is about 840 of the 1,459 extra instructions, the sext, zext, trunc, mul and GEP representation about 714 (priced at 69.8 M, 2.7% of the compile, as a lower bound), and 245 values are dead.
 
 Back end (same sources): regalloc 338.0 M over 2,250 LIR instructions = 150 K per instruction against LLVM's 40.0 M over 1,594 = 25 K: 6.0x = body 1.41 x cost 4.3. isel is at parity (53.6 M against 52.4). Peephole 90.8 M against 12.6 (43.2 K against 7.9 K per instruction), jumps 57.2 against 5.9 (25.7 against 3.7), coalesce 44.3 against 10.1 (24.5 against 6.3), floatassign plus floatalloc 64.5 against 1.6 (#2097). The row mapping is by purpose, not identical work.
+
+### 2.5 Slot table: LLVM's pipeline at the pin against llrm
+
+Source: `opt -passes='default<O1>'`/`default<O2>` `-print-pipeline-passes` and `llc -O2 -mtriple=i386 -mcpu=i486 -debug-pass=Structure` of the pinned `24.0.0git d1106deb71cc`; llrm status from llrm's `pipeline()` and the order branch's `llvm_order` (parity-pipeline's slot list). -Os is the -O2 pipeline on optsize IR (the pin's `opt` rejects -Os). -O3 adds `callsite-splitting`, `argpromotion`, `chr`, non-trivial `simple-loop-unswitch`, `loop-unroll<O3>`. -O1 omits the slots marked O2.
+
+State: **translated** = the pass at the pin exists in llrm (a switch-gated or shadow translation counts, the default is noted); **old** = llrm's own pass or a stand-in does the job; **missing** = nothing runs; **n/a** = the target or the feature has no use. Gaps (no owner in the plan until oversight's assignment) are owned by kind: scalar cleanup by scalar-cleanup-port, loop passes by loop-passes-port, module and CGSCC by cgscc-poc, constraint-elimination by domtree-port, code generation by backend-slopes.
+
+| # | LLVM slot | levels | llrm today | state | owner |
+|--:|---|---|---|---|---|
+| 1 | simplifycfg (early) | O1 O2 | none on main; `decide`, `phiopt` stand in | old | simplifycfg-port |
+| 2 | sroa<modify-cfg> (early, and 3 more in the function pipeline) | all | `sroa` (order branch: gated by `LLRM_EXP_LLVM`, [#2164], [#2130]) | translated, off | llvm-order-poc |
+| 3 | early-cse (twice, the second with MemorySSA) | all | `gvn::EarlyCse` shadow (54 of 58 identical to `opt`), `LLRM_EXP_EARLYCSE` | translated, off | llvm-order-poc |
+| 4 | ipsccp, called-value-propagation | all | `ipacp`, `ipa_ranges` | old | cgscc-poc |
+| 5 | globalopt (twice) | all | `GlobalOpt` | old | cgscc-poc |
+| 6 | mem2reg | all | `promote` (write-through) | translated, off (order branch) | llvm-order-poc |
+| 7 | instcombine (nine slots) | all | `fold`, `algebraic` | old | fold-poc |
+| 8 | simplifycfg (eight slots) | all | `decide`, `phiopt` | old | simplifycfg-port |
+| 9 | always-inline | all | the inline stage | old | cgscc-poc |
+| 10 | globals-aa, profile-summary | all | `globalsaa` | old | basicaa-port |
+| 11 | CGSCC: inline (bottom-up, devirt) | all | `interprocedural` stage D, callers first; `InlineCost` behind `LLRM_EXP_INLINEDECIDE` | old (cost translated, off) | cgscc-poc |
+| 12 | function-attrs, rpo-function-attrs, recompute-globalsaa | all | `Summaries` | old | cgscc-poc |
+| 13 | argpromotion | O3 | `argpromotion` | old | cgscc-poc |
+| 14 | speculative-execution | O2 | none (x86 no-op) | n/a | |
+| 15 | jump-threading (twice), dfa-jump-threading | O2 | `decide` (known conditions) | old; dfa missing | JumpThreading row (owner decided after LVI) |
+| 16 | correlated-propagation (twice), lazy-value-info | O2 | `decide`, `ranger.rs` | old | vt-constantfolding (LVI+CVP row) |
+| 17 | jump-table-to-switch | O2 | none | missing | scalar-cleanup-port |
+| 18 | aggressive-instcombine | O2 | none | missing | scalar-cleanup-port |
+| 19 | libcalls-shrinkwrap | all | none | n/a | |
+| 20 | tailcallelim (twice) | O2 (once O1) | `tailrec` | old | scalar-cleanup-port |
+| 21 | reassociate | all | `algebraic` | old | fold-poc |
+| 22 | constraint-elimination | O2 | none | missing | domtree-port |
+| 23 | loop-instsimplify, loop-simplifycfg | all | none | missing | loop-passes-port |
+| 24 | licm (four slots) | all | `hoist`, `loopmotion` | old | memoryssa-port (LICM) |
+| 25 | loop-rotate (in LPM1 and again after the CGSCC) | all | `rotate`, late only | old | loop-passes-port; order: llvm-order-poc ([#2194]) |
+| 26 | simple-loop-unswitch (trivial; O3 non-trivial), extra-simple-loop-unswitch-passes | all; extra: O2 | `trivialunswitch`, `unswitch` (-O3) | old; extra missing | loop-passes-port |
+| 27 | loop-simplify, lcssa (as needed by loop adaptors) | all | `loopsimplify`, `lcssa`, 9 runs | old | loop-passes-port; run count: llvm-order-poc |
+| 28 | loop-idiom | all | `fill` | old | loopidiom-port |
+| 29 | indvars | all | `indvars` | old | indvars-decide-poc |
+| 30 | loop-deletion (twice) | all | `dead` | old | loop-passes-port |
+| 31 | loop-unroll-full, loop-unroll<O1/O2/O3> (post pipeline) | all | `unroll`, `peel` | old | loop-passes-port; oracle `tools/unroll_oracle.py` |
+| 32 | vector-combine, mldst-motion | O2 | `merge` stands in for mldst | old | scalar-cleanup-port |
+| 33 | gvn | O2 | `gvn` (plan [#2155]) | old | gvn-port |
+| 34 | sccp, bdce | all | none (`fold` reads `consts`) | missing | scalar-cleanup-port |
+| 35 | adce | all | `dead` | old | scalar-cleanup-port |
+| 36 | memcpyopt | all | `memcpyopt`, last | old | scalar-cleanup-port |
+| 37 | dse | O2 | `dse` | old | memoryssa-port |
+| 38 | instsimplify | all | `fold` (InstSimplify translation in progress) | old | fold-poc |
+| 39 | deadargelim, globaldce, elim-avail-extern, constmerge | all | `deadargs`, `globaldce`, `availableexternally`; constmerge none | old; constmerge missing | cgscc-poc |
+| 40 | float2int, lower-constant-intrinsics | all | none | missing | scalar-cleanup-port |
+| 41 | loop-interchange, loop-distribute | O2 | `loopinterchange`, `loopdistribute` at -O3 only | old, wrong level | loop-passes-port |
+| 42 | infer-alignment, alignment-from-assumptions, loop-load-elim | all (loop-load-elim O2) | none | missing | scalar-cleanup-port |
+| 43 | loop-sink, div-rem-pairs, mergeicmps, expand-memcmp | O2 | LIR `sink`, `addresssink`, `window` stand in | old | scalar-cleanup-port |
+| 44 | loop-vectorize, slp-vectorizer, loop-distribute's vector side | O2 | none (i486 has no vectors) | n/a | |
+| 45 | openmp-opt, coro-*, memprof, ee-instrument, alloc-token, annotation passes | all | none | n/a | |
+| 46 | lower-expect, forceattrs, inferattrs | all | front end | old | scalar-cleanup-port |
+| 47 | callsite-splitting, chr | O3 | none | missing | scalar-cleanup-port |
+
+Code generation (`llc -O2`, i486; the same passes at -O1 less a few):
+
+| # | LLVM slot | llrm today | state | owner |
+|--:|---|---|---|---|
+| 48 | loop-reduce (IR LSR), iv-users | `lsr` | old | loop-products-slope (LSR row) |
+| 49 | scalar-evolution, loops, domtree, branch-prob, block-freq | `Loops` (LoopInfo translated, [#2195]), `branchprob`, `Frequencies` | LoopInfo translated; the rest old | scev-port, domtree-port, cgscc-poc (BPI/BFI row) |
+| 50 | consthoist, partially-inline-libcalls, codegenprepare | isel preparation | old | backend-slopes |
+| 51 | x86-isel (SelectionDAG), SwitchLoweringUtils | `isel`, `switchlower` | old (at parity in cost) | backend-slopes (SwitchLowering row) |
+| 52 | early-tailduplication, opt-phis, stack-coloring, localstackalloc | none | missing | backend-slopes |
+| 53 | early-ifcvt, machine-combiner, x86-cmov-conversion | none | missing | backend-slopes |
+| 54 | early-machinelicm, machine-cse, machine-sink, peephole-opt, dead-mi, lrshrink | `peephole`, `pressuresink`, LIR clean-up | old | lir-cleanup-poc |
+| 55 | phi-node-elimination, two-address | `phielim`, `twoaddr` | old | lir-cleanup-poc |
+| 56 | livevars, liveintervals, register-coalescer | `intervals`, `coalesce` | old | regalloc-core-poc (LiveIntervals), lir-cleanup-poc (coalesce) |
+| 57 | machine-scheduler | none | missing | lir-cleanup-poc (map) |
+| 58 | greedy, spill-code-placement, virtregrewriter, stack-slot-coloring | `greedy` (parked OFF), old `regalloc` | translated, off | regalloc-core-poc |
+| 59 | machine-cp, machinelicm, postra-machine-sink | LIR clean-up | old | lir-cleanup-poc |
+| 60 | x86-fp-stackifier | `floatassign`, `floatalloc` | old | lir-cleanup-poc |
+| 61 | shrink-wrap, prolog-epilog, machine-latecleanup | `shrink-wrap`, frame code | old | lir-cleanup-poc |
+| 62 | branch-folder, tailduplication, block-placement, post-RA scheduler | `jumps` | old | lir-cleanup-poc (jumps-tailmerge) |
+| 63 | execution-domain, break-false-deps, fixup-bw, fixup-leas | none | missing | lir-cleanup-poc (map) |
+| 64 | asm printer, MC object streamer | `assemble`, object write, omf | old | backend-slopes (emission, ranked last) |
+
+Count: of 64 slots, 4 are translated (2, 3, 6, 58), all off by default; 2 are partly translated (11: `InlineCost`; 49: LoopInfo); 4 are n/a; the other 54 are old or missing, every one with an owner (24 of them assigned by kind from the former gap list). The default pipeline runs none of the translated slots.
 
 ## 3. The plan
 
@@ -975,7 +1055,7 @@ Checklist: the shared list. Its own metric boxes:
   - idle reruns: 247 M (7.8%) ([compile-gap-series]).
 
   The combine alone is expected at about 0; the effect is the round drop, which is also the risk. Closed ideas, not to repeat: `gvn`, `dse` and `inferspace` ahead of `decide` (-4.4% at -O2, +5.4% at -O3, `x_hanoi2` crosses above 1.00); early scoped CSE (+8% to +11% with the alias-checked table, -3.1% to -3.4% kill-all but 4 cells worse, +1.6% to +1.9% once the stray exit phi is folded). Moves [synthesis] rows 5 and 9.
-- **(b) Early:** step 1 was built and measured before this plan (branch `notkept/combine-worklist`, `fba7c4051..fea9b27f0`): merging fold, algebraic, phiopt, dead and the branch fold of decide into one worklist pass at today's positions and rounds gave about 0 compile time, because the cost is analyses and idle reruns, not rewriting (no spec 8 entry yet; the owner re-measures and writes it). Treat step 1 as expected 0, not part of the -10%. The risky part is dropping repeat runs: round-1-only per pass changes output (`hoist` at least 20 objects, `fill` at least 20, `loopsimplify` 17, `promote` 6, `trivialunswitch` 2; all five together -3.0% at -O2 and -6.0% at -Os on `d_faces`), and the enabling relations are dense (`dead`, `gvn`, `dse`, `lcssa` and `fold` enable nearly everything); global `rounds=1` lost 25, 32 and 51 rows at -O1. So the early check is a per-pass ablation: run pass P in round 1 only, list the objects that change, name the enabling pass. Then:
+- **(b) Early:** step 1 was built and measured before this plan (branch `notkept/combine-worklist`, `fba7c4051..fea9b27f0`): merging fold, algebraic, phiopt, dead and the branch fold of decide into one worklist pass at today's positions and rounds gave about 0 compile time, because the cost is analyses and idle reruns, not rewriting (no spec 8 entry yet; the owner re-measures and writes it). Treat step 1 as expected 0, not part of the -10%. The risky part is dropping repeat runs: round-1-only per pass changes output (`hoist` at least 20 objects, `loopidioms` at least 20, `loopsimplify` 17, `promote` 6, `trivialunswitch` 2; all five together -3.0% at -O2 and -6.0% at -Os on `d_faces`), and the enabling relations are dense (`dead`, `gvn`, `dse`, `lcssa` and `fold` enable nearly everything); global `rounds=1` lost 25, 32 and 51 rows at -O1. So the early check is a per-pass ablation: run pass P in round 1 only, list the objects that change, name the enabling pass. Then:
   1. identical.py, which must be 0 differ;
   2. per-pass ablation table, one named enabler per repeat run that matters;
   3. vsgcc rows and bench cells against main.
@@ -1204,6 +1284,17 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 6. TTI: two cost systems are accepted as LLVM's split; the MIR passes migrate to read TTI and `OperationCosts` stays for LIR (the migration is owed in `tti-plan.md`).
 7. `noipa`: [#2196] is closed (merged via [#2140]); the parity kernels stay missing until executed; `matmul` is re-blessed, no waiver.
 8. The fold split is approved ([#2218]); `KnownFPClass` Stage A only, Stage B waits for a named reader. Front-end item 2 is parked ([#2221]). The perf cron is daily only ([#2191]).
+9. `LoopStrengthReduce.cpp` is translated at the pin. Owner loop-products-slope (was loopidiom-lp0 and indvars-decide-poc). It starts after scev-port S3 to S5 (it needs `SCEVExpander` and AddRec). Oracle: LLVM's LSR output. The llrm `lsr` pass and the interim loop-products and pressure slope fix are deleted when it becomes default.
+10. [#2260] `lir loopslots` is REPLACED by RAGreedy region splitting (SplitKit). Exit: deleted with the old pass when greedy is default. The acceptance axis (its own slope within the limit at 2N) is on regalloc-core-poc.
+
+**Decisions of 2026-10-18, third batch (oversight).**
+1. `BranchProbabilityInfo.cpp` and `BlockFrequencyInfo` / `BlockFrequencyInfoImpl` are translated at the pin `d1106deb71cc`: heuristics plus trip counts from SCEV (`BackedgeTakenInfo`), no loop simulation. Owner cgscc-poc (the inliner and hot/cold consumer, a TTI neighbour). Order: after scev-port S5 (BTC). The llrm `branchprob` `counted` simulation and `Frequencies` are deleted when it becomes default.
+2. The exit of the `analysis counted` row ([#2260], x5.43 nest, unplaced until now) is that translation plus `BackedgeTakenInfo` (and the LSR translation's `BackedgeCounts`): the cone dependence comes from `branchprob` simulating loops.
+3. `SwitchLoweringUtils` is translated at the pin, behind a switch. Oracle: its cluster, jump-table and bit-test decisions against the pinned `llc`. Every row is priced against min(gcc, pin) before any default change; where gcc's shape wins rows it stays as a numbered DEVIATE citing those rows. Owner backend-slopes, whose `mir switchlower` slope fix ([#2272]) lands first. Order: after the critical-path items (3.1 to 3.3, the allocator, GVN, LICM, SCEV). It is a code-shape trade, not a compile-time win.
+4. `LoopSimplify.cpp` and `LCSSA.cpp` (with the `LoopUtils` pieces they use) are translated at the pin `d1106deb71cc`. Owner loop-passes-port, ordered after the DomTree (domtree-port) and LoopInfo translations. llrm's `loopsimplify` and `lcssa` are deleted when it becomes default. Interim: backend-slopes' one-sweep needs-check fix, deleted with the old pass.
+5. Pipeline row, owner llvm-order-poc: LLVM's new pass manager runs LoopSimplify and LCSSA only where a loop-pass adaptor needs them (a handful of times at -O2); ours runs them 9 times. The run count must match the pinned pipeline's.
+6. `LazyValueInfo.cpp` and `CorrelatedValuePropagation.cpp` are translated at the pin `d1106deb71cc`. LLVM -O2 runs CVP, and JumpThreading reads LVI, so it is the real counterpart of `ranger.rs`'s uses there. Owner vt-constantfolding (valuetracking-port, which translated `ConstantRange` and `ValueTracking`), ordered after the DomTree stack lands (domtree-port). llrm's `ranger.rs` uses are deleted when it becomes default.
+7. `JumpThreading.cpp` is translated after it. JumpThreading is our worst ratio (26.33x in the per-pass table; 28.8x by oversight's reading). Owner decided when the LVI row lands.
 
 **Method M (every exit measurement).**
 
@@ -1220,6 +1311,10 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 9. **Input.** The `d_faces` source is a measurement input: record its tree and checksum in every figure, the same tree for every row of a table; keep the floor check (a count near 8 M is a failed compile). A dist binary embeds the path of its own `wccq`, so its target directory stays until it has been measured.
 10. **Floats.** x87 excess precision stays fast by default, like gcc; a float row against clang is measured with llrm at `-fexcess-precision=standard`, and each row records the flag.
 11. **Pushes.** Never rewrite a pushed commit of a PR that is open; kill only the processes a session started.
+
+**Translate first (user, 2026-10-18).** Before implementing anything, check whether LLVM has that pass or analysis at the pin `d1106deb71cc`; if it does, translate it, with the changes we need. Keep the result as close to O(n) as possible. The PR description names the LLVM source file and function translated (permalink), or states "LLVM has no such pass" and why. Any super-linear step needs a stated reason and a slope test. A fix to our own pass that has an LLVM counterpart is a translation row first.
+
+**Parity slot and join step (user, 2026-10-18).** Every port PR names its parity slot (section 2.5) and its join step. A translation is done when it has joined the parity pipeline with its oracle passing, not when it merges off. A PR that joins a translated slot outranks a new translation, and no new translation starts while one of the owner's is translated but not joined.
 
 **Pass rules shared by every step:**
 
@@ -1459,6 +1554,8 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2196]: https://github.com/ali-mosavian/llrm/pull/2196
 [#2218]: https://github.com/ali-mosavian/llrm/pull/2218
 [#2221]: https://github.com/ali-mosavian/llrm/pull/2221
+[#2260]: https://github.com/ali-mosavian/llrm/issues/2260
+[#2272]: https://github.com/ali-mosavian/llrm/pull/2272
 [#2173]: https://github.com/ali-mosavian/llrm/pull/2173
 [#2179]: https://github.com/ali-mosavian/llrm/pull/2179
 [#2151]: https://github.com/ali-mosavian/llrm/pull/2151

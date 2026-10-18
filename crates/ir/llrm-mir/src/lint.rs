@@ -267,12 +267,10 @@ fn is_fill_of(
             (Some(Intrinsic::MemSetPattern), Some(ty)) => u128::from(layout.alloc_size(&module.context.types, ty)),
             _ => 1,
         };
-    let length = match instruction.operands.get(2) {
-        Some(&Operand::Constant(id)) => match module.context.get(id).kind {
-            ConstantKind::Int(bits) => bits,
-            _ => return false,
-        },
-        _ => return false,
+    let Some(length) =
+        instruction.operands.get(2).and_then(|&length| crate::intrinsics::length(&module.context, length))
+    else {
+        return false;
     };
-    memset && at.index == 0 && length * cell >= u128::from(layout.alloc_size(&module.context.types, ty))
+    memset && at.index == 0 && u128::from(length) * cell >= u128::from(layout.alloc_size(&module.context.types, ty))
 }
