@@ -19,9 +19,9 @@
 //!
 //! The exits and their counts are ScalarEvolution's (`getExitCount`,
 //! `isLoopEntryGuardedByCond`: LLVM's `optimizeLoopExits`: zero, below the
-//! loop's symbolic maximum, a count an earlier exit has). `LLRM_NO_SCEV_EXITFOLD`
-//! restores `induction::exits`; the two differ on 2 of 1,590 corpus objects,
-//! both smaller.
+//! loop's symbolic maximum, a count an earlier exit has).
+//! `LLRM_NO_SCEV_EXITFOLD` restores `induction::exits`; the two differ on 2 of
+//! 1,590 corpus objects, both smaller.
 //!
 //! The branch is given the constant that decides it; `decide` then makes it a
 //! jump. Nothing else changes, so no effect or value between the exits matters.
