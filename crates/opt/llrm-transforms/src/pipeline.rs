@@ -981,7 +981,7 @@ pub fn recorded(
                     declared: &mut declared,
                 };
                 alone.run(&mut unit, &mut Analyses::new(std::rc::Rc::clone(&outer)));
-                function
+                (function, declared)
             })
         },
         proved: None,

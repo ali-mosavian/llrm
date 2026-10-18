@@ -616,15 +616,17 @@ pub fn size(
     function: GlobalId,
     costs: &OperationCosts,
 ) -> Option<i64> {
-    size_of(module, callees, module.global(function).function()?, costs)
+    size_of(module, callees, module.global(function).function()?, None, costs)
 }
 
 /// `size` of a body that need not be in the module: a copy specialised for
-/// the constants a site passes (`interprocedural::Specialisations`).
+/// the constants a site passes (`interprocedural::Specialisations`). Its calls
+/// may name functions it declared, which `declared` holds and the module not.
 pub fn size_of(
     module: &Module,
     callees: &Callees,
     body: &Function,
+    declared: Option<&Declared>,
     costs: &OperationCosts,
 ) -> Option<i64> {
     let calls: i64 = body
@@ -645,11 +647,11 @@ pub fn size_of(
         .filter(|point| {
             matches!(body.instruction(point.inst).opcode, Opcode::Call(_))
                 && !callee(&module.context, body, point.inst).is_some_and(|id| {
-                    module
-                        .global(id)
-                        .name
-                        .as_deref()
-                        .is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))
+                    let name = match module.globals.get(id.0 as usize) {
+                        Some(one) => one.name.as_deref(),
+                        None => declared.and_then(|declared| declared.pending_name(id)),
+                    };
+                    name.is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))
                 })
         })
         .map(|point| point.across.len() as i64)
