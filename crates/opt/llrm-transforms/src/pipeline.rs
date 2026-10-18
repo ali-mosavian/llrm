@@ -226,8 +226,8 @@ pub struct Options {
     /// too. LLVM's `LoopInterchange` is off in its pipelines.
     pub interchange: bool,
     /// The passes run in LLVM's order, once each (`Fixed::linear`:
-    /// [`llvm_order`]), not in the rounds; `LLRM_EXP_LLVM` sets it, off by
-    /// default.
+    /// [`llvm_order`]), not in the rounds; on by default, `LLRM_NO_LLVM_ORDER`
+    /// turns it off.
     pub llvm_order: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); `LLRM_EXP_MEM2REG` sets it, off by default.
@@ -266,7 +266,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             optimize: true,
-            llvm_order: experiment_llvm(),
+            llvm_order: llvm_order_default(),
             limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default(),
             lcssa: true,
@@ -627,10 +627,10 @@ impl FunctionPass for Together {
     }
 }
 
-/// `LLRM_EXP_LLVM`, read once: [`Options::llvm_order`] by default
-/// (PassBuilderPipelines.cpp at d1106deb71cc).
-fn experiment_llvm() -> bool {
-    llrm_support::env_flag!("LLRM_EXP_LLVM")
+/// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by
+/// default (PassBuilderPipelines.cpp at d1106deb71cc is the order otherwise).
+fn llvm_order_default() -> bool {
+    !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER")
 }
 
 /// The passes of `phase`, each once in the place LLVM runs it (the line is the
