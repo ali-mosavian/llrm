@@ -146,7 +146,58 @@ impl LIRTransform for Coalescer {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(joined(&body, Some(&self.pinned), &self.segments, &self.classes))
+        let after = joined(&body, Some(&self.pinned), &self.segments, &self.classes);
+        if llrm_support::env_flag!("LLRM_SHADOW_COALESCE") {
+            self.shadow(&body, &after);
+        }
+        Ok(after)
+    }
+}
+
+impl Coalescer {
+    /// The translated `RegisterCoalescer` on the same body, to compare what is
+    /// left (`LLRM_SHADOW_COALESCE`).
+    fn shadow(
+        &self,
+        body: &LirBody,
+        old: &LirBody,
+    ) {
+        if body.blocks.iter().any(|block| !block.phis.is_empty()) {
+            return;
+        }
+        let mut pins = body.pins.clone();
+        pins.extend(self.pinned.iter().map(|(value, register)| (*value, *register)));
+        let pins: IndexMap<u32, RegId> =
+            pins.into_iter().map(|(value, register)| (value, ir::root(register))).collect();
+        let where_of = regclass::classes(body, &BTreeSet::new(), &self.segments, &self.classes);
+        let everything: BTreeSet<RegId> = self.classes.available.iter().copied().collect();
+        let mut palettes: IndexMap<u32, BTreeSet<RegId>> = IndexMap::default();
+        for block in &body.blocks {
+            for one in block.insns.iter() {
+                for value in one.defines.iter().chain(&one.uses) {
+                    palettes
+                        .entry(*value)
+                        .or_insert_with(
+                            || target::order(where_of.get(value), &self.segments, &self.classes).into_iter().collect(),
+                        );
+                }
+            }
+        }
+        for (value, register) in &pins {
+            if !everything.contains(register) && !where_of.contains_key(value) {
+                palettes.insert(*value, BTreeSet::from([*register]));
+            }
+        }
+        let env = crate::coalescer::shadow::ShadowEnv { palettes, pins };
+        let depths = ranges::depths_shared(body);
+        let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
+        let report = crate::coalescer::shadow::run(body, &env, &depth);
+        let old_copies =
+            old.blocks.iter().flat_map(|block| block.insns.iter()).filter(|one| _copy(one).is_some()).count();
+        eprintln!(
+            "shadow-coalesce {}: copies {} old-left {} new-left {} joined {} deferred {}",
+            body.name, report.copies, old_copies, report.left, report.stats.joined, report.stats.left
+        );
     }
 }
 
