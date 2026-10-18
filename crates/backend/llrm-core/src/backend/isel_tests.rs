@@ -315,6 +315,38 @@ fn test_a_byte_division_and_a_freeze_are_selected() {
     }
 }
 
+/// indvars' `n * (n - 1) / 2` in i33 was refused ("a i33 value", #2497):
+/// promoted to i64 first, it is selected.
+#[test]
+fn test_an_odd_width_promoted_is_selected() {
+    let text = "define i32 @f(i32 %n) addrspace(1) {
+  %m = sub i32 %n, 1
+  %x = zext i32 %n to i33
+  %y = zext i32 %m to i33
+  %p = mul i33 %x, %y
+  %h = lshr i33 %p, 1
+  %t = trunc i33 %h to i32
+  ret i32 %t
+}
+";
+    assert_eq!(selected(text, "f").err(), Some(Unselected("a i33 value".to_owned())));
+    let mut module = parsed(text);
+    crate::backend::legalize::promoted(&mut module).unwrap();
+    let got = isel::selected(
+        &module,
+        "f",
+        &qb(),
+        &mut Pool::new(0),
+        crate::backend::cpu::profile("486").expect("a target"),
+        &crate::backend::target::BASIC,
+        isel::m16(),
+        &llrm_x86_m16::M16,
+        false,
+        0,
+    );
+    assert!(got.is_ok(), "{:?}", got.err());
+}
+
 /// A shift counts from cl: the count as a word printed `shl ax, cx`.
 #[test]
 fn test_division_and_variable_shifts() {
