@@ -1618,6 +1618,7 @@ pub fn greedy_rewritten(
             order: &|value| target::order(facts.confined.get(&value), segments, classes),
             pins,
             unspillable: &unspill,
+            data: Some(segments.data),
         };
         let Some(decided) = crate::greedy::shadow::decide(&inputs, true) else { break };
         if decided.report.stats.failed > 0 {
@@ -2096,6 +2097,7 @@ fn _allocated(
             order: &|value| target::order(facts.confined.get(&value), segments, classes),
             pins,
             unspillable: &unspillable,
+            data: Some(segments.data),
         };
         if let Some(report) = crate::greedy::shadow::run(&inputs) {
             eprintln!(
