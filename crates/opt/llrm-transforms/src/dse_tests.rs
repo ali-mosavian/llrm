@@ -609,6 +609,29 @@ fn test_a_body_with_no_store_asks_nothing() {
     assert!(asked.is_empty(), "{asked:?}");
 }
 
+/// A store at each of N offsets of one array (past the cells a body is indexed
+/// at), and a load at another between them: each access was found to reach
+/// every one of the N cells, N^2 in all. On a ladder of 1,600 such statements
+/// `dse` took 1,898 M instructions, 3.9x for every doubling.
+#[test]
+fn a_pointer_access_reaches_only_the_cells_its_span_covers() {
+    let n = 300;
+    let mut text = String::from("define void @f(ptr %p, i32 %v) {\nb0:\n");
+    for i in 0..n {
+        text += &format!("  %s{i} = getelementptr inbounds i8, ptr %p, i32 {}\n  store i32 %v, ptr %s{i}\n", 4 * i);
+        text += &format!(
+            "  %l{i} = getelementptr inbounds i8, ptr %p, i32 {}\n  %x{i} = load i32, ptr %l{i}\n",
+            4 * ((i * 7 + 3) % n)
+        );
+    }
+    text += "  ret void\n}\n";
+    llrm_analysis::avail::count_reached_cells();
+    let before = llrm_analysis::avail::reached_cells();
+    crate::testing::managed(&mut parsed(&text), Dse);
+    let reached = llrm_analysis::avail::reached_cells() - before;
+    assert!(reached <= 3 * n as usize, "{n} stores and {n} loads reached {reached} cells in all");
+}
+
 /// N stores to one address, each through a pointer of its own: each store was a
 /// cell, and each cell was compared with the other N-1 for what covers it, N^2
 /// pairs. On a ladder of 1,600 statements `dse` took 818 M instructions, 4.0x
@@ -625,4 +648,74 @@ fn the_stores_to_one_address_are_compared_as_one_cell() {
     crate::testing::managed(&mut parsed(&text), Dse);
     let asked = llrm_analysis::avail::related_pairs() - before;
     assert!(asked <= 4 * n as usize, "{n} stores to one address asked {asked} pairs of cells");
+}
+
+/// A store to each of N distinct frame objects: N cells of one bucket each. The
+/// index of bytes built for them cost `dse` 7% on the `cases` shape at N=128
+/// (259 cells), where an access reaches one bucket and the pick finds it at
+/// once; it is for an object or frame of many buckets.
+#[test]
+fn a_body_of_many_small_objects_builds_no_index_of_bytes() {
+    let n = 300;
+    let mut text = String::from("define void @f(i32 %v) {\nb0:\n");
+    for i in 0..n {
+        text += &format!("  %p{i} = alloca i32\n  store i32 %v, ptr %p{i}\n");
+    }
+    text += "  ret void\n}\n";
+    let before = llrm_analysis::avail::indexed_solves();
+    crate::testing::managed(&mut parsed(&text), Dse);
+    assert_eq!(llrm_analysis::avail::indexed_solves() - before, 0, "{n} one-bucket cells were indexed");
+}
+
+/// 128 stores at distinct offsets of one array: the index of bytes built for
+/// them (at 64 cells) cost `dse` 6.5% on the `fjoins` ladder at N=128 (gate run
+/// 39071827031: "fjoins O2 mir dse" 62.513 M against 58.676 M), where the pick
+/// of buckets is 2 words a set; the index is for an object of hundreds of
+/// cells.
+#[test]
+fn an_array_of_128_cells_builds_no_index_of_bytes() {
+    let n = 128;
+    let mut text = String::from("define void @f(ptr %p, i32 %v) {\nb0:\n");
+    for i in 0..n {
+        text += &format!("  %s{i} = getelementptr inbounds i8, ptr %p, i32 {}\n  store i32 %v, ptr %s{i}\n", 4 * i);
+    }
+    text += "  ret void\n}\n";
+    let before = llrm_analysis::avail::indexed_solves();
+    crate::testing::managed(&mut parsed(&text), Dse);
+    assert_eq!(llrm_analysis::avail::indexed_solves() - before, 0, "{n} cells of one object were indexed");
+}
+
+/// A slot's address joined with a pointer no fact follows, then read through
+/// the join, kept the slot's store out of the escaped set: DSE dropped the
+/// `store i16 5`, and `@f(-7)` read the slot unwritten (bench bintree bq32
+/// printed 2158 for 5736113).
+#[test]
+fn test_dse_keeps_a_store_read_through_a_join_with_an_unknown_pointer() {
+    let after = dropped(
+        "@buf = global i16 7
+
+@box = global ptr @buf
+
+define i16 @f(i16 %x) {
+b0:
+  %s = alloca i16
+  store i16 5, ptr %s
+  %q = load ptr, ptr @box
+  %c = icmp slt i16 %x, 0
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi ptr [ %s, %b1 ], [ %q, %b2 ]
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+",
+    );
+    assert!(after.contains("store i16 5, ptr %s"), "{after}");
 }

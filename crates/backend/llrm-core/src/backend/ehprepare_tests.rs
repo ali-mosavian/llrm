@@ -172,7 +172,7 @@ entry:
     let mut module = parsed(quiet);
     prepared(&mut module, llrm_x86_m16::layout().spaces.far).expect("prepared");
     let text = printed(&module);
-    assert!(!text.contains("call cc1000 addrspace(1) void @llrm.qb.onerror") && !text.contains("B$OEGA"), "{text}");
+    assert!(!text.contains("call cc 1000 addrspace(1) void @llrm.qb.onerror") && !text.contains("B$OEGA"), "{text}");
 }
 
 /// ON LOCAL ERROR: a SUB's own handler, which the runtime keeps in the SUB's

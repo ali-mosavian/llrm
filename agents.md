@@ -181,4 +181,7 @@ A hand-derived optimal listing for each suite program is the target. Done means 
 
   Give it the plan or diff and the files it is grounded in. Resume the same agent across rounds of one question.
   If Opus is unavailable, fall back to Fable. Opus reviews and unblocks; it does not write the diff.
+- **Before every push, run `tools/prepush.sh`.** It runs the gate's own cheap checks (format, generated docs, the source scans, a conflict-marker and whitespace check of the diff,
+  `no_local_paths`, `target_facts`, `docs_links`) and prints one verdict line first: about 15 s with a warm target, two minutes
+  cold. It is not the gate: no build, tests, benches, oracles or perf.
 - Report what was measured, not what was expected.

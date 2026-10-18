@@ -393,14 +393,12 @@ pub trait Analysis: 'static {
     }
 
     /// Whether a pass returning `preserved` left the result true: when it
-    /// names this analysis, or keeps the function and the result reads
-    /// nothing else. One derived from others asks after them, as LLVM's
-    /// `Result::invalidate` does.
+    /// names this analysis, or changed nothing.
     fn preserved(preserved: &PreservedAnalyses) -> bool
     where
         Self: Sized,
     {
-        preserved.kept::<Self>() || (!Self::READS_OUTER && preserved.function)
+        preserved.kept::<Self>()
     }
 }
 
@@ -654,7 +652,7 @@ impl Analysis for Dominators {
 pub struct Loops;
 
 impl Analysis for Loops {
-    type Result = crate::loops::LoopInfo;
+    type Result = crate::loopinfo::LoopInfo;
     const READS_OUTER: bool = false;
     const NAME: &'static str = "loops";
     fn run(
@@ -662,8 +660,8 @@ impl Analysis for Loops {
         layout: &DataLayout,
         function: &Function,
         analyses: &mut Analyses,
-    ) -> crate::loops::LoopInfo {
-        crate::loops::LoopInfo::new(function, &analyses.get::<Dominators>(context, layout, function))
+    ) -> crate::loopinfo::LoopInfo {
+        crate::loopinfo::LoopInfo::analyze(function, || analyses.get::<Dominators>(context, layout, function))
     }
 }
 
@@ -684,39 +682,23 @@ impl Analysis for ScalarEvolution {
     }
 }
 
-/// Which analyses a pass left true.
+/// Which analyses a pass left true. MIRROR: LLVM's `PreservedAnalyses`
+/// (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Analysis.h#L109):
+/// a pass that changed something names what it kept, and the manager drops the
+/// rest; `all` is a pass that changed nothing.
 #[derive(Clone, Debug, Default)]
 pub struct PreservedAnalyses {
     all: bool,
     kept: HashSet<TypeId>,
-    /// The function itself unchanged, whatever else did.
-    function: bool,
-    /// Analyses given up though the rest stand (`except`).
-    dropped: HashSet<TypeId>,
 }
 
 impl PreservedAnalyses {
     pub fn all() -> Self {
-        Self { all: true, kept: HashSet::default(), function: true, dropped: HashSet::default() }
+        Self { all: true, kept: HashSet::default() }
     }
 
     pub fn none() -> Self {
         Self::default()
-    }
-
-    /// What a change to the module leaves of a function it did not change:
-    /// every analysis reading only the function.
-    pub fn function() -> Self {
-        Self { function: true, ..Self::default() }
-    }
-
-    /// `self` without `A`: for a pass that changed what only a few analyses
-    /// read (hoist moved instructions, which the dominated edges of the
-    /// values moved follow), so that those go and the rest stand.
-    #[must_use]
-    pub fn except<A: Analysis>(mut self) -> Self {
-        self.dropped.insert(TypeId::of::<A>());
-        self
     }
 
     pub fn preserve<A: Analysis>(mut self) -> Self {
@@ -729,21 +711,9 @@ impl PreservedAnalyses {
         self
     }
 
-    /// `self`, or everything where `function` logged no change since `before`:
-    /// a pass that edited nothing left every analysis true, whatever it
-    /// says.
-    #[must_use]
-    pub fn unless_unchanged(
-        self,
-        function: &Function,
-        before: crate::module::Mark,
-    ) -> Self {
-        if function.changes_since(before).is_some_and(<[crate::module::Change]>::is_empty) { Self::all() } else { self }
-    }
-
     /// Whether the pass changed nothing: LLVM's `areAllPreserved`.
     pub fn are_all_preserved(&self) -> bool {
-        self.all && self.dropped.is_empty()
+        self.all
     }
 
     /// Whether `A` is kept, named or with everything.
@@ -917,6 +887,8 @@ trait Cached {
         preserved: &PreservedAnalyses,
     ) -> bool;
     fn incremental(&self) -> bool;
+    /// Whether the result reads facts of the outer manager.
+    fn reads_outer(&self) -> bool;
     /// `still_true`, as `covers` has it, for a result kept as sound.
     fn still_covered(
         &self,
@@ -927,15 +899,6 @@ trait Cached {
     ) -> bool;
     /// The function's history when the result was derived.
     fn mark(&self) -> crate::module::Mark;
-    /// Whether the result was derived from `function` as it stands, under the
-    /// outer facts this cache reads: a pass that edited and put back, or
-    /// asked after its last edit, leaves it true whatever it reports.
-    fn current(
-        &self,
-        function: &Function,
-        attributes: u64,
-        outer: &Rc<Outer>,
-    ) -> bool;
 }
 
 struct Entry<A: Analysis> {
@@ -946,8 +909,10 @@ struct Entry<A: Analysis> {
     mark: crate::module::Mark,
     /// Which parts of the module's facts it read (`read`).
     bits: u8,
-    /// The function's attributes when the result was derived.
-    stamp: u64,
+    /// It was derived while a result it read was older than the body: a pass
+    /// edited and then asked without invalidating. It is as true as what it
+    /// read, not as the body stands.
+    from_older: bool,
 }
 
 impl<A: Analysis> Cached for Entry<A> {
@@ -973,11 +938,15 @@ impl<A: Analysis> Cached for Entry<A> {
         &self,
         preserved: &PreservedAnalyses,
     ) -> bool {
-        !preserved.dropped.contains(&TypeId::of::<A>()) && A::preserved(preserved)
+        A::preserved(preserved)
     }
 
     fn incremental(&self) -> bool {
         A::INCREMENTAL || A::SKIPS || A::SOUND
+    }
+
+    fn reads_outer(&self) -> bool {
+        A::READS_OUTER
     }
 
     fn still_covered(
@@ -1003,15 +972,6 @@ impl<A: Analysis> Cached for Entry<A> {
     fn mark(&self) -> crate::module::Mark {
         self.mark
     }
-
-    fn current(
-        &self,
-        function: &Function,
-        attributes: u64,
-        outer: &Rc<Outer>,
-    ) -> bool {
-        self.mark == function.mark() && self.stamp == attributes && (!A::READS_OUTER || Rc::ptr_eq(&self.outer, outer))
-    }
 }
 
 /// One function's cached analyses, and what they may read of its module.
@@ -1024,6 +984,9 @@ pub struct Analyses {
     /// (`invalidate`): a result derived before and held is as true now as
     /// then.
     vouched: Option<crate::module::Mark>,
+    /// Something asked for since the last derivation began was older than the
+    /// body (`Entry::from_older`).
+    read_older: bool,
     /// Results kept past edits that only keep what they say true, not derived
     /// afresh: dropped at the next named point (`refresh_soft`).
     soft: HashSet<TypeId>,
@@ -1227,6 +1190,7 @@ impl Analyses {
             kept: HashMap::default(),
             evicted: HashMap::default(),
             vouched: None,
+            read_older: false,
             soft: HashSet::default(),
             tainted: false,
             attributes: None,
@@ -1261,14 +1225,6 @@ impl Analyses {
             .map(|entry| Rc::clone(&entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result))
     }
 
-    /// The stamp of `function`'s attributes, as of the last invalidation.
-    fn attributes_of(
-        &mut self,
-        function: &Function,
-    ) -> u64 {
-        *self.attributes.get_or_insert_with(|| function.attributes_stamp())
-    }
-
     /// `result` as `A`'s, for `function` as it stands: a caller that has worked
     /// out what the analysis would derive (a pass that knows what its own
     /// edit did to it) hands it on, and what is asked next of this cache is
@@ -1278,7 +1234,6 @@ impl Analyses {
         function: &Function,
         result: Rc<A::Result>,
     ) {
-        let stamp = self.attributes_of(function);
         self.cache.insert(
             TypeId::of::<A>(),
             Box::new(Entry::<A> {
@@ -1286,7 +1241,7 @@ impl Analyses {
                 outer: Rc::clone(&self.outer),
                 mark: function.mark(),
                 bits: if A::READS_OUTER { read::ALL } else { 0 },
-                stamp,
+                from_older: false,
             }),
         );
     }
@@ -1339,9 +1294,15 @@ impl Analyses {
                 read::note(entry.bits);
             }
             counted(A::NAME, true);
-            return Rc::clone(&entry.result);
+            let result = Rc::clone(&entry.result);
+            // Held from before an edit the pass made since it last invalidated.
+            if entry.from_older || (entry.mark != function.mark() && self.vouched != Some(function.mark())) {
+                self.read_older = true;
+            }
+            return result;
         }
         counted(A::NAME, false);
+        let outside_older = std::mem::replace(&mut self.read_older, false);
         let before_reads = read::swap(0);
         let had_kept = self.kept.contains_key(&key);
         let mut old_reads = 0;
@@ -1486,7 +1447,6 @@ impl Analyses {
             };
             record("fn", A::NAME, class);
         }
-        let stamp = self.attributes_of(function);
         self.cache.insert(
             key,
             Box::new(Entry::<A> {
@@ -1494,9 +1454,10 @@ impl Analyses {
                 outer: Rc::clone(&self.outer),
                 mark: function.mark(),
                 bits,
-                stamp,
+                from_older: self.read_older,
             }),
         );
+        self.read_older |= outside_older;
         result
     }
 
@@ -1553,31 +1514,34 @@ impl Analyses {
         self.vouched = Some(function.mark());
     }
 
-    /// Drops what `preserved` does not keep, except (`current`) a result
-    /// derived from `function` as it stands: an edit that was made and put
-    /// back, or made before the result was asked for, left it true. Not one
-    /// the pass names as given up.
+    /// Drops what `preserved` does not keep: a pass that changed the function
+    /// names what it left true (LLVM's `PreservedAnalyses`), and what it forgot
+    /// to name is computed again when asked.
     fn drop_unpreserved(
         &mut self,
         preserved: &PreservedAnalyses,
         current: Option<&Function>,
     ) {
-        let outer = Rc::clone(&self.outer);
-        let attributes = current.map(Function::attributes_stamp);
-        self.attributes = attributes;
-        let gone: Vec<TypeId> = self
-            .cache
-            .iter()
-            .filter(|(key, entry)| {
-                // A result a pass names as given up goes whatever the log says.
-                !entry.preserved(preserved)
-                    && (preserved.dropped.contains(*key)
-                        || !current
-                            .zip(attributes)
-                            .is_some_and(|(function, attributes)| entry.current(function, attributes, &outer)))
-            })
-            .map(|(key, _)| *key)
-            .collect();
+        self.attributes = current.map(Function::attributes_stamp);
+        let gone: Vec<TypeId> =
+            self.cache.iter().filter(|(_, entry)| !entry.preserved(preserved)).map(|(key, _)| *key).collect();
+        self.retire(gone);
+    }
+
+    /// Drops what reads facts of the outer manager, where that is not the one
+    /// the results were derived under: the results that read the function
+    /// alone stand.
+    fn drop_reading_outer(&mut self) {
+        self.attributes = None;
+        let gone: Vec<TypeId> =
+            self.cache.iter().filter(|(_, entry)| entry.reads_outer()).map(|(key, _)| *key).collect();
+        self.retire(gone);
+    }
+
+    fn retire(
+        &mut self,
+        gone: Vec<TypeId>,
+    ) {
         for key in gone {
             let entry = self.cache.remove(&key).expect("held");
             if entry.incremental() {
@@ -1652,6 +1616,17 @@ impl Analyses {
                 self.evicted.insert(key, entry);
             }
         }
+    }
+
+    /// The held results a fresh computation disagrees with, for a test of what
+    /// a pass leaves in the manager.
+    pub fn held_stale(
+        &self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Vec<&'static str> {
+        self.stale(context, layout, function)
     }
 
     /// The cached analyses a fresh computation disagrees with.
@@ -2013,7 +1988,7 @@ impl ModuleAnalyses {
     ) -> &mut Analyses {
         let cache = self.functions.entry(id).or_insert_with(|| Analyses::new(Rc::clone(outer)));
         if !Rc::ptr_eq(&cache.outer, outer) {
-            cache.drop_unpreserved(&PreservedAnalyses::function(), None);
+            cache.drop_reading_outer();
             cache.outer = Rc::clone(outer);
         }
         cache
@@ -2496,7 +2471,6 @@ impl PassManager {
                     })
                 });
                 drop(running);
-                let preserved = preserved.unless_unchanged(function, before);
                 kept.retain(|one| preserved.keeps(*one));
                 spanned("invalidate", || cache.invalidate(function, &preserved));
                 cache.check_kept(name, context, &layout, function);
@@ -2549,6 +2523,15 @@ pub fn check_stale(on: bool) {
     CHECK_STALE.with(|check| check.set(on));
 }
 
+static STALE_CHECKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// How many times `LLRM_CHECK_STALE` recomputed held analyses in this process:
+/// `LLRM_DEBUG=checks` reports it (llrm-mir cannot name llrm-support's
+/// counter), so a sweep sees whether the oracle ran at all.
+pub fn stale_checks_run() -> u32 {
+    STALE_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// `LLRM_CHECK_STALE`: the module analyses held past `pass`, which said it adds
 /// no memory operation, still cover what working them out afresh gives.
 fn checked_stale(
@@ -2563,6 +2546,7 @@ fn checked_stale(
     if frozen.is_empty() || !on {
         return;
     }
+    STALE_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     for kind in frozen {
         let Some((_, held)) = analyses.results.get(&kind.id) else { continue };
         let held = Rc::clone(held);

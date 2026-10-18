@@ -2265,7 +2265,7 @@ fn bounded_solved_under(
                 let mut every = known.clone();
                 narrow_by(&outer_edges, &mut every)?;
                 narrow_by(&chain, &mut every)?;
-                assert!(every.iter().eq(scoped.iter()), "the edges above a loop narrow `known` as they did before");
+                assert!(same_narrowing(&every, &scoped), "the edges above a loop narrow `known` as they did before");
             }
             // What the blocks above it assume.
             for condition in assumed.above(&shape, at) {
@@ -2403,6 +2403,22 @@ pub(crate) fn replayed<R>(body: impl FnOnce() -> R) -> R {
 
 fn replaying() -> bool {
     check_scopes() || llrm_support::env_flag!("LLRM_CHECK_REPLAY") || REPLAYING.with(std::cell::Cell::get)
+}
+
+/// Whether two states say the same: an interval of every value its width holds
+/// says nothing, so it is the entry being absent (narrowing the values the
+/// outer edges name gives none; narrowing the whole of `known` can leave one).
+fn same_narrowing(
+    every: &Intervals,
+    scoped: &Intervals,
+) -> bool {
+    let says =
+        |interval: &Interval| &interval.high - &interval.low + BigInt::from(1) < (BigInt::from(1) << interval.width);
+    let (one, other) = (
+        every.iter().filter(|(_, interval)| says(interval)).collect::<Vec<_>>(),
+        scoped.iter().filter(|(_, interval)| says(interval)).collect::<Vec<_>>(),
+    );
+    one.len() == other.len() && one.iter().all(|(value, interval)| scoped.get(value) == Some(*interval))
 }
 
 fn check_scopes() -> bool {

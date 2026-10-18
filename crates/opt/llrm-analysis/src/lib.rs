@@ -119,6 +119,7 @@ pub mod liveness;
 pub mod manager;
 pub mod memory;
 pub mod memoryssa;
+pub mod mssa;
 pub mod nearest;
 pub mod noreturn;
 pub mod num;
