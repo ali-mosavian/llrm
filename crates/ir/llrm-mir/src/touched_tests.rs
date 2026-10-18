@@ -324,3 +324,58 @@ fn the_edge_search_reads_the_log_once_not_once_for_each_terminator_touched() {
     assert!(small > 0, "premise: the edges were searched");
     assert!(big as f64 <= 2.3 * small as f64, "{small} -> {big} entries and operands read for 64 -> 128 terminators");
 }
+
+/// `reach_of` read every operand of every list an edit replaced, to name the
+/// values the edit touched, which it never reads (`cases(N)` at -O2: `analysis
+/// dominated-edges` read 2.42x a doubling, 85% of it here): a switch of N
+/// arms rewritten whole for each of N edits is N^2 operands, and doubling the
+/// arms now reads none.
+#[test]
+fn reach_does_not_read_the_operand_lists_an_edit_replaced() {
+    let scanned = |arms: usize| {
+        let mut text = String::from("define i32 @f(i32 %a) {\nentry:\n  switch i32 %a, label %d [\n");
+        for k in 0..arms {
+            text += &format!("    i32 {k}, label %b{k}\n");
+        }
+        text += "  ]\nd:\n  ret i32 0\n";
+        for k in 0..arms {
+            text += &format!("b{k}:\n  br label %d\n");
+        }
+        text += "}\n";
+        let mut module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+        let f = module.function_mut("f").expect("@f").1;
+        let (entry, d) = (f.entry().unwrap(), block(f, "d"));
+        let switch = f.terminator(entry).unwrap();
+        let mark = f.mark();
+        for k in 0..arms {
+            let mut operands = f.instruction(switch).operands.clone();
+            let arm = block(f, &format!("b{k}"));
+            let at = operands.iter().position(|one| *one == Operand::Block(arm)).unwrap();
+            operands[at] = Operand::Block(d);
+            f.set_operands(switch, operands);
+        }
+        let changes = f.changes_since(mark).expect("history").to_vec();
+        crate::touched::SCANNED.with(|scanned| scanned.set(0));
+        let reach = f.reach_of(&changes).expect("no parameters changed");
+        assert!(reach.rewired && reach.blocks.contains(&entry), "premise: the switch was seen rewritten");
+        crate::touched::SCANNED.with(std::cell::Cell::get)
+    };
+    let (small, big) = (scanned(64), scanned(128));
+    assert!(big as f64 <= 2.3 * (small.max(1)) as f64, "{small} -> {big} operands read for 64 -> 128 arms");
+    // The digest that names values still reads them: the counter is alive.
+    let mut text = String::from(
+        "define i32 @f(i32 %a) {\nentry:\n  switch i32 %a, label %d [\n    i32 0, label %b\n  ]\nd:\n  ret i32 0\nb:\n  ret i32 1\n}\n",
+    );
+    let mut module = parse::module(&text).unwrap();
+    text.clear();
+    let f = module.function_mut("f").expect("@f").1;
+    let (entry, d) = (f.entry().unwrap(), block(f, "d"));
+    let (switch, mark) = (f.terminator(entry).unwrap(), f.mark());
+    let mut operands = f.instruction(switch).operands.clone();
+    operands.truncate(2);
+    operands.push(Operand::Block(d));
+    f.set_operands(switch, operands);
+    crate::touched::SCANNED.with(|scanned| scanned.set(0));
+    f.touched_since(mark).expect("history");
+    assert!(crate::touched::SCANNED.with(std::cell::Cell::get) > 0, "premise: the full digest reads the lists");
+}
