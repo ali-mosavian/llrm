@@ -22,20 +22,20 @@
 //! 1. A variable is an `Operand`: a value or a constant (a global, `null`),
 //!    where LLVM's is a `Value *`.
 //! 2. A constant-expression GEP is not a `GEPOperator` here: only a `gep`
-//!    instruction is decomposed (`decomposeGEP`); a constant one is stripped
-//!    to its base or stays a variable.
+//!    instruction is decomposed (`decomposeGEP`); a constant one is stripped to
+//!    its base or stays a variable.
 //! 3. `DebugCounter`, `DumpReproducers` (`generateReproducer`), the
 //!    `LLVM_DEBUG` output and the debug-record rewrite of
 //!    `replaceCmpWithConstant` are not translated.
-//! 4. `takeName` has no counterpart: the `usub.sat` and overflow
-//!    replacements get fresh names.
+//! 4. `takeName` has no counterpart: the `usub.sat` and overflow replacements
+//!    get fresh names.
 //! 5. Induction facts (`addBoundsForHeaderInductions`, `addInfoForInductions`,
 //!    `getMonotonicityInfo`) are not translated: they need ScalarEvolution,
 //!    which scev-port owns. Exit: join them once it lands. Measured effect:
 //!    every file of the pass's tests that differs from the pinned `opt` is a
 //!    loop one (`tools/llvmport/cecompare.py`).
-//! 6. Memory-access facts (`getConstraintFromMemoryAccess`) are not
-//!    translated: they need `getBaseObjectSize`, which MIR lacks.
+//! 6. Memory-access facts (`getConstraintFromMemoryAccess`) are not translated:
+//!    they need `getBaseObjectSize`, which MIR lacks.
 //!
 //! # Example
 //! `if (x < 5) { if (x < 10) ... }`: the inner compare is decided true.
@@ -43,8 +43,8 @@
 //! # Used by
 //! Nothing yet: `difference` and `guards::Given::holds` move here.
 
-use llrm_mir::constraintsystem::{ConstraintSystem, Entry, Row};
 use llrm_mir::constantrange::ConstantRange;
+use llrm_mir::constraintsystem::{ConstraintSystem, Entry, Row};
 use llrm_mir::context::signed;
 use llrm_mir::hash::HashMap;
 use llrm_mir::module::Operand;
@@ -62,12 +62,18 @@ const MIN_SIGNED_CONSTRAINT_VALUE: i64 = i64::MIN;
 
 /// `CmpInst::isSigned`.
 pub fn is_signed(pred: IntPredicate) -> bool {
-    matches!(pred, IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle)
+    matches!(
+        pred,
+        IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+    )
 }
 
 /// `CmpInst::isUnsigned`.
 pub fn is_unsigned(pred: IntPredicate) -> bool {
-    matches!(pred, IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule)
+    matches!(
+        pred,
+        IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule
+    )
 }
 
 /// `CmpInst::isEquality`.
@@ -455,10 +461,14 @@ fn collect_offsets(
 ) -> Option<OffsetResult> {
     let (_, instruction) = q.instruction_of(gep)?;
     let Opcode::GetElementPtr { source } = instruction.opcode else { return None };
-    let space = q.type_of(instruction.operands[0]).and_then(|ty| match q.context().types.get(ty) {
-        llrm_mir::types::Type::Pointer(space) => Some(*space),
-        _ => None,
-    })?;
+    let space = q
+        .type_of(instruction.operands[0])
+        .and_then(
+            |ty| match q.context().types.get(ty) {
+                llrm_mir::types::Type::Pointer(space) => Some(*space),
+                _ => None,
+            },
+        )?;
     let bit_width = q.layout.offset_bits(space);
     let (mut constant, mut variable) = collect_offset(q, source, &instruction.operands, bit_width)?;
     let mut result = OffsetResult {
@@ -479,7 +489,10 @@ fn collect_offsets(
         // TODO in LLVM: Support cases with more than 1 variable offset.
         let can_collect_inner = inner_collected.is_some();
         let (constant2, variable2) = inner_collected.unwrap_or_default();
-        if !can_collect_inner || variable.len() > 1 || variable2.len() > 1 || (!variable.is_empty() && !variable2.is_empty())
+        if !can_collect_inner
+            || variable.len() > 1
+            || variable2.len() > 1
+            || (!variable.is_empty() && !variable2.is_empty())
         {
             // More than 1 variable index, use outer result.
             result.variable_offsets = variable;
@@ -496,7 +509,6 @@ fn collect_offsets(
     result.variable_offsets = variable;
     Some(result)
 }
-
 
 // ---- sides --------------------------------------------------------------
 
@@ -520,7 +532,10 @@ fn is_integer(
     match s {
         Side::Int(..) => true,
         Side::Value(v) => {
-            matches!(q.type_of(v).map(|ty| q.context().types.get(ty)), Some(llrm_mir::types::Type::Int(_)))
+            matches!(
+                q.type_of(v).map(|ty| q.context().types.get(ty)),
+                Some(llrm_mir::types::Type::Int(_))
+            )
         }
     }
 }
@@ -548,8 +563,13 @@ fn is_all_ones(
     q: &Query,
     s: Side,
 ) -> bool {
-    matches!(s, Side::Int(bits, width) if bits == llrm_mir::context::mask(width))
-        || matches!(s, Side::Value(v) if q.int_constant(v).is_some_and(|(bits, width)| bits == llrm_mir::context::mask(width)))
+    matches!(
+        s,
+        Side::Int(bits, width) if bits == llrm_mir::context::mask(width)
+    ) || matches!(
+        s,
+        Side::Value(v) if q.int_constant(v).is_some_and(|(bits, width)| bits == llrm_mir::context::mask(width))
+    )
 }
 
 /// `ConstantInt::get(Ty, value)` for the type of `like`.
@@ -674,7 +694,8 @@ fn is_known_no_wrap_op(
     // For a constant Op1, the ranges of Op0 for which the operation does not
     // wrap are known exactly; check if the systems imply one of them.
     let Some(c) = const_int(op1) else { return false };
-    let kind = if signed_wrap { llrm_mir::constantrange::NO_SIGNED_WRAP } else { llrm_mir::constantrange::NO_UNSIGNED_WRAP };
+    let kind =
+        if signed_wrap { llrm_mir::constantrange::NO_SIGNED_WRAP } else { llrm_mir::constantrange::NO_UNSIGNED_WRAP };
     let region = ConstantRange::make_exact_no_wrap_region(opcode, c.width, c.bits, kind);
     does_hold_in_range(info, q, op0, &region, signed_wrap)
 }
@@ -699,7 +720,15 @@ fn is_known_no_wrap(
         && let Some(llrm_mir::intrinsics::Intrinsic::WithOverflow { op: binary, .. }) = q.intrinsic(call_inst)
     {
         let args = &call.operands[..call.operands.len() - 1];
-        return is_known_no_wrap_op(binary, Side::of(q, args[0]), Side::of(q, args[1]), Flags::default(), info, q, signed_wrap);
+        return is_known_no_wrap_op(
+            binary,
+            Side::of(q, args[0]),
+            Side::of(q, args[1]),
+            Flags::default(),
+            info,
+            q,
+            signed_wrap,
+        );
     }
     if let Opcode::Cast(CastOp::Trunc) = instruction.opcode {
         if signed_wrap {
@@ -712,7 +741,10 @@ fn is_known_no_wrap(
                 && info.is_known_non_negative(q, Side::of(q, instruction.operands[0])));
     }
     let Opcode::Binary(opcode) = instruction.opcode else { return false };
-    if !matches!(opcode, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl) {
+    if !matches!(
+        opcode,
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl
+    ) {
         return false;
     }
     is_known_no_wrap_op(
@@ -916,8 +948,10 @@ impl ConstraintInfo {
             return Decomposition::variable(gep);
         }
 
-        let mut result =
-            Decomposition::with(offsets.constant_offset, vec![DecompEntry { coefficient: 1, variable: offsets.base_ptr }]);
+        let mut result = Decomposition::with(
+            offsets.constant_offset,
+            vec![DecompEntry { coefficient: 1, variable: offsets.base_ptr }],
+        );
         for (index, scale) in &offsets.variable_offsets {
             if !flags.contains(Flags::NUW) {
                 // Try to prove nuw from nusw and nneg. If the index cannot be
@@ -954,7 +988,10 @@ impl ConstraintInfo {
     ) -> Decomposition {
         let mut v = v;
         if is_pointer(q, v) && !is_signed {
-            if matches!(v, Side::Value(op) if matches!(q.instruction_of(op).map(|(_, i)| i.opcode.clone()), Some(Opcode::GetElementPtr { .. }))) {
+            if matches!(
+                v,
+                Side::Value(op) if matches!(q.instruction_of(op).map(|(_, i)| i.opcode.clone()), Some(Opcode::GetElementPtr { .. }))
+            ) {
                 return self.decompose_gep(q, v, is_signed);
             }
             if matches!(v, Side::Value(op) if pattern::zero(q, op)) {
@@ -1142,7 +1179,10 @@ impl ConstraintInfo {
             _ => {}
         }
 
-        if !matches!(pred, IntPredicate::Ule | IntPredicate::Ult | IntPredicate::Sle | IntPredicate::Slt) {
+        if !matches!(
+            pred,
+            IntPredicate::Ule | IntPredicate::Ult | IntPredicate::Sle | IntPredicate::Slt
+        ) {
             return ConstraintTy::default();
         }
 
@@ -1326,8 +1366,11 @@ impl ConstraintInfo {
             }
             // If the system implies `A >= B` then together with `A != B` we
             // get the strict `A > B`; symmetrically `A <= B` becomes `A < B`.
-            let (ge_pred, le_pred) =
-                if is_signed_system { (IntPredicate::Sge, IntPredicate::Sle) } else { (IntPredicate::Uge, IntPredicate::Ule) };
+            let (ge_pred, le_pred) = if is_signed_system {
+                (IntPredicate::Sge, IntPredicate::Sle)
+            } else {
+                (IntPredicate::Uge, IntPredicate::Ule)
+            };
             for non_strict in [ge_pred, le_pred] {
                 if !self.does_hold(q, non_strict, a, b) {
                     continue;
@@ -1388,7 +1431,12 @@ impl ConstraintInfo {
                 let index = self.value2index(false)[v];
                 let size = self.value2index(false).len();
                 self.cs_mut(false).add_row(&[Entry::new(0, 0), Entry::new(-1, index as u16)], size);
-                dfs_in_stack.push(StackEntry { num_in, num_out, is_signed: r.is_signed, values_to_release: Vec::new() });
+                dfs_in_stack.push(StackEntry {
+                    num_in,
+                    num_out,
+                    is_signed: r.is_signed,
+                    values_to_release: Vec::new(),
+                });
             }
         }
 
@@ -1459,7 +1507,10 @@ fn strip_pointer_casts_same_representation(
                 let Some((_, instruction)) = q.instruction_of(op) else { return Side::of(q, op) };
                 match instruction.opcode {
                     Opcode::GetElementPtr { .. } => {
-                        if !instruction.operands[1..].iter().all(|index| q.int_constant(*index).is_some_and(|(bits, _)| bits == 0)) {
+                        if !instruction.operands[1..]
+                            .iter()
+                            .all(|index| q.int_constant(*index).is_some_and(|(bits, _)| bits == 0))
+                        {
                             return Side::of(q, op);
                         }
                         instruction.operands[0]
@@ -1478,14 +1529,19 @@ fn strip_pointer_casts_same_representation(
                 }
             }
             Operand::Constant(id) => match &q.context().get(id).kind {
-                llrm_mir::context::ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr { operands, .. })
-                    if operands[1..].iter().all(|index| q.int_constant(Operand::Constant(*index)).is_some_and(|(bits, _)| bits == 0)) =>
+                llrm_mir::context::ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr {
+                    operands,
+                    ..
+                }) if operands[1..]
+                    .iter()
+                    .all(|index| q.int_constant(Operand::Constant(*index)).is_some_and(|(bits, _)| bits == 0)) =>
                 {
                     Operand::Constant(operands[0])
                 }
-                llrm_mir::context::ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::BitCast, value }) => {
-                    Operand::Constant(*value)
-                }
+                llrm_mir::context::ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast {
+                    op: CastOp::BitCast,
+                    value,
+                }) => Operand::Constant(*value),
                 _ => return Side::of(q, op),
             },
             Operand::Block(_) => return Side::of(q, op),
@@ -1510,7 +1566,9 @@ fn may_look_through(
     matches!(
         instruction.opcode,
         Opcode::GetElementPtr { .. }
-            | Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl | BinaryOp::Or | BinaryOp::Xor)
+            | Opcode::Binary(
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl | BinaryOp::Or | BinaryOp::Xor
+            )
             | Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
     )
 }
@@ -1596,7 +1654,12 @@ fn get_decomposition_link_row(
     }
     let mut new_variables = Vec::new();
     let decomposed = info.decompose(q, v, c.is_signed);
-    let row = get_row_for_less_equal(&Decomposition::variable(v), &decomposed, info.value2index(c.is_signed), &mut new_variables);
+    let row = get_row_for_less_equal(
+        &Decomposition::variable(v),
+        &decomposed,
+        info.value2index(c.is_signed),
+        &mut new_variables,
+    );
     if new_variables.is_empty() { row } else { Row::new() }
 }
 
@@ -1658,7 +1721,11 @@ pub fn check_condition(
     if is_unsigned(pred) && is_integer(q, a) {
         let mut new_variables = Vec::new();
         let sr = info.get_constraint(q, signed_predicate(pred), a, b, &mut new_variables, false);
-        if new_variables.is_empty() && !sr.is_empty() && info.is_known_non_negative(q, a) && info.is_known_non_negative(q, b) {
+        if new_variables.is_empty()
+            && !sr.is_empty()
+            && info.is_known_non_negative(q, a)
+            && info.is_known_non_negative(q, b)
+        {
             if let Some(implied) = try_with_constraint(info, &sr) {
                 return Some(implied);
             }
@@ -1690,7 +1757,9 @@ pub fn check_condition(
 
 use llrm_mir::domtree::DomTree;
 use llrm_mir::module::{BlockId, Function, InstId};
-use llrm_mir::valuetracking::guarantee::{is_guaranteed_not_to_be_poison, is_guaranteed_to_transfer_execution_to_successor};
+use llrm_mir::valuetracking::guarantee::{
+    is_guaranteed_not_to_be_poison, is_guaranteed_to_transfer_execution_to_successor,
+};
 use llrm_mir::valuetracking::pattern::{CmpPredicate, IntrinsicId};
 
 /// `ConditionTy`: a condition of the form `%op0 pred %op1`.
@@ -1940,7 +2009,10 @@ impl<'a> State<'a> {
             let id = pattern::call_intrinsic(q, inst);
             match id {
                 Some(IntrinsicId::Assume) => {
-                    let Some((pred, a, b)) = pattern::icmp_like(q, instruction.operands[0]) else { continue_after(&mut guaranteed_to_execute, q, inst); continue };
+                    let Some((pred, a, b)) = pattern::icmp_like(q, instruction.operands[0]) else {
+                        continue_after(&mut guaranteed_to_execute, q, inst);
+                        continue;
+                    };
                     let cond = ConditionTy { pred, op0: a, op1: b };
                     if guaranteed_to_execute {
                         // The assume is guaranteed to execute when BB is
@@ -2027,7 +2099,8 @@ impl<'a> State<'a> {
                 if !self.can_add_successor(q, bb, succ) {
                     continue;
                 }
-                let cond = ConditionTy { pred: CmpPredicate::new(IntPredicate::Eq), op0: cond, op1: Side::of(q, value) };
+                let cond =
+                    ConditionTy { pred: CmpPredicate::new(IntPredicate::Eq), op0: cond, op1: Side::of(q, value) };
                 self.push(succ, Entry2::ConditionFact { cond, does_hold: None });
             }
             return;
@@ -2170,7 +2243,8 @@ fn fact_before(
         let (inst_a, inst_b) = (context_inst_of(q, a), context_inst_of(q, b));
         let (block_a, block_b) = (q.function.parent(inst_a), q.function.parent(inst_b));
         return block_a == block_b
-            && positions.get(inst_a.0 as usize).copied().unwrap_or(0) < positions.get(inst_b.0 as usize).copied().unwrap_or(0);
+            && positions.get(inst_a.0 as usize).copied().unwrap_or(0)
+                < positions.get(inst_b.0 as usize).copied().unwrap_or(0);
     }
     a.num_in < b.num_in
 }
@@ -2205,11 +2279,8 @@ pub fn eliminate_constraints(
     let mut tree = DomTree::new();
     tree.recalculate(&*function);
     tree.update_dfs_numbers();
-    let function_args: Vec<Side> = function
-        .parameters()
-        .iter()
-        .map(|&value| Side::Value(Operand::Value(value)))
-        .collect();
+    let function_args: Vec<Side> =
+        function.parameters().iter().map(|&value| Side::Value(Operand::Value(value))).collect();
     let mut info = ConstraintInfo::new(&function_args);
     let positions = function.positions();
     let mut to_remove: Vec<InstId> = Vec::new();
@@ -2561,11 +2632,17 @@ fn process_check(
     } else if let Some((pred, a, b)) = pattern::icmp_like(q, Operand::Value(result)) {
         let simplified = check_and_replace_condition(q, tree, info, pred, a, b, inst, context_inst, cb, actions);
         if !simplified
-            && q.function.instruction(context_inst).result.is_some_and(|value| pattern::logical_op(q, Operand::Value(value)).is_some())
+            && q.function
+                .instruction(context_inst)
+                .result
+                .is_some_and(|value| pattern::logical_op(q, Operand::Value(value)).is_some())
         {
             check_or_and_op_implied_by_other(q, info, cb, context_inst, inst, dfs_in_stack, actions);
         }
-    } else if matches!(id, Some(IntrinsicId::Smax | IntrinsicId::Smin | IntrinsicId::Umax | IntrinsicId::Umin)) {
+    } else if matches!(
+        id,
+        Some(IntrinsicId::Smax | IntrinsicId::Smin | IntrinsicId::Umax | IntrinsicId::Umin)
+    ) {
         let pred = match id {
             Some(IntrinsicId::Smax) => IntPredicate::Sge,
             Some(IntrinsicId::Smin) => IntPredicate::Sle,
@@ -2670,7 +2747,7 @@ fn check_or_and_op_implied_by_other(
         return false;
     }
     let cmp_result = q.function.instruction(cmp_to_check).result.expect("a compare has a result");
-    let other_op_idx = usize::from(join.operands[0] == Operand::Value(cmp_result)) ;
+    let other_op_idx = usize::from(join.operands[0] == Operand::Value(cmp_result));
 
     // Don't try to simplify the first condition of a select by the second, as
     // this may make the select more poisonous than the original one.
@@ -2702,7 +2779,8 @@ fn check_or_and_op_implied_by_other(
         let (pred, a, b) = pattern::icmp_like(q, Operand::Value(cmp_result)).expect("expected icmp-like match");
         // Check if the second condition can be simplified now.
         if let Some(implied) = check_condition(q, pred.pred, a, b, info) {
-            let with = if is_or == implied { JoinWith::Bool(implied) } else { JoinWith::Operand(join.operands[other_op_idx]) };
+            let with =
+                if is_or == implied { JoinWith::Bool(implied) } else { JoinWith::Operand(join.operands[other_op_idx]) };
             actions.push(Action::Join { inst: join_op, with });
             result = true;
         }
@@ -2819,8 +2897,13 @@ fn replace_overflow_uses(
                     Some(operand) => operand,
                     None => {
                         let flags = if is_signed_op { Flags::NSW } else { Flags::NUW };
-                        let binary =
-                            function.create_instruction(Opcode::Binary(op), value_ty, vec![args[0], args[1]], flags, None);
+                        let binary = function.create_instruction(
+                            Opcode::Binary(op),
+                            value_ty,
+                            vec![args[0], args[1]],
+                            flags,
+                            None,
+                        );
                         function.insert(binary, Position::Before(inst)).expect("a placed instruction");
                         let operand = Operand::Value(function.instruction(binary).result.expect("a result"));
                         res = Some(operand);
@@ -2838,10 +2921,9 @@ fn replace_overflow_uses(
         function.replace_all_uses_with(user_result, replacement);
         changed = true;
         if function.users(user_result).is_empty() {
-            let poison = Operand::Constant(context.constant(Constant {
-                ty: function.instruction(inst).ty,
-                kind: ConstantKind::Poison,
-            }));
+            let poison = Operand::Constant(
+                context.constant(Constant { ty: function.instruction(inst).ty, kind: ConstantKind::Poison }),
+            );
             function.set_operand(used.user, 0, poison);
             to_remove.push(used.user);
             changed = true;
