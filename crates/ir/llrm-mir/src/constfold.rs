@@ -210,10 +210,11 @@ pub fn binary(
     Some(context.constant(Constant { ty, kind: ConstantKind::Int(folded & mask(width)) }))
 }
 
-/// The `HasScalarUndefOrScalableVectorUndef` switch of `ConstantFoldBinaryInstruction`
+/// The `HasScalarUndefOrScalableVectorUndef` switch of
+/// `ConstantFoldBinaryInstruction`
 /// ([ConstantFold.cpp:659](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantFold.cpp#L659)):
-/// each operation by what its undef operand may be chosen as. The `FSub`..`FRem`
-/// cases are DEVIATE: `binary` folds integers only.
+/// each operation by what its undef operand may be chosen as. The
+/// `FSub`..`FRem` cases are DEVIATE: `binary` folds integers only.
 fn binary_with_undef(
     context: &mut Context,
     op: BinaryOp,
@@ -300,7 +301,10 @@ pub fn cast(
     }
     if is_undef(context, c) {
         // zext, sext and [us]itofp of undef are 0: the result is bounded.
-        let bounded = matches!(op, CastOp::ZExt | CastOp::SExt | CastOp::UIToFP | CastOp::SIToFP);
+        let bounded = matches!(
+            op,
+            CastOp::ZExt | CastOp::SExt | CastOp::UIToFP | CastOp::SIToFP
+        );
         return Some(if bounded { null_value(context, to) } else { undef(context, to) });
     }
     if is_null_value(context, c) && op != CastOp::AddrSpaceCast {
@@ -547,12 +551,16 @@ pub fn compare_in(
         return Some(poison(context, i1));
     }
     if is_undef(context, c1) || is_undef(context, c2) {
-        // Equality, or both undef: undef; else the answer for the undef equal to X.
+        // Equality, or both undef: undef; else the answer for the undef equal
+        // to X.
         if matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) || c1 == c2 {
             return Some(undef(context, i1));
         }
         let true_when_equal =
-            matches!(predicate, IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle);
+            matches!(
+                predicate,
+                IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle
+            );
         return Some(context.constant(Constant { ty: i1, kind: ConstantKind::Int(u128::from(true_when_equal)) }));
     }
     // `X uge 0` is true and `X ult 0` false, whatever X is.
@@ -647,9 +655,9 @@ fn not_poison(
     match &constant.kind {
         ConstantKind::Poison | ConstantKind::Expr(_) => false,
         ConstantKind::Int(_) | ConstantKind::Float(_) | ConstantKind::Null | ConstantKind::Global(_) => true,
-        ConstantKind::Aggregate(members) if matches!(context.types.get(constant.ty), Type::Vector { .. }) => {
-            members.iter().all(|&one| !is_poison(context, one) && !matches!(context.get(one).kind, ConstantKind::Expr(_)))
-        }
+        ConstantKind::Aggregate(members) if matches!(context.types.get(constant.ty), Type::Vector { .. }) => members
+            .iter()
+            .all(|&one| !is_poison(context, one) && !matches!(context.get(one).kind, ConstantKind::Expr(_))),
         ConstantKind::Zero => matches!(context.types.get(constant.ty), Type::Vector { .. }),
         _ => false,
     }
@@ -757,8 +765,13 @@ mod undef_tests {
     #[test]
     fn a_binary_operation_on_undef_folds_as_the_pin_does() {
         let mut context = Context::new();
-        let (u, five, two, three, zero) =
-            (undef(&mut context), int(&mut context, 5), int(&mut context, 2), int(&mut context, 3), int(&mut context, 0));
+        let (u, five, two, three, zero) = (
+            undef(&mut context),
+            int(&mut context, 5),
+            int(&mut context, 2),
+            int(&mut context, 3),
+            int(&mut context, 0),
+        );
         let mut fold = |op, a, b| {
             let folded = binary(&mut context, op, a, b);
             kind(&context, folded)
