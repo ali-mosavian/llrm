@@ -20,13 +20,13 @@
 //! - DEVIATE a call's attributes are not intersected; calls that touch no
 //!   memory are numbered unless they are `llvm.`/`llrm.` markers.
 //! - DEVIATE a GEP's constant offset is taken for byte GEPs only.
-//! - DEVIATE MemorySSA is the manager's, built once for the function as it was
-//!   and not updated (`MSSAUpdater`); an erased store stays a def in it, which
-//!   is only conservative. Erasures wait for the end of the walk so that what
-//!   it asks about still exists.
-//! - DEVIATE the clobber walk is `MemorySSA::clobbers` over the instruction's
-//!   `MemRef`: a set of nearest defs, each of which must dominate the earlier
-//!   access, where LLVM's walker answers one.
+//! - DEVIATE MemorySSA is the translated `Mssa`, built once for the function as
+//!   it was and not updated (`MSSAUpdater`); an erased store stays a def in it,
+//!   which is only conservative. Erasures wait for the end of the walk so that
+//!   what it asks about still exists.
+//! - the clobbering access is `llrm_analysis::mssa::view::Translated`'s: one
+//!   access, the `MemoryPhi` where the nearest clobbers diverge, as LLVM's
+//!   walker answers.
 //!
 //! # How it works
 //! The dominator tree is walked depth first with a scope per node: the scoped

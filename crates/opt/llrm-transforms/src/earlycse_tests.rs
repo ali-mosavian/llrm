@@ -133,3 +133,35 @@ e:
 ");
     assert!(after.contains("ret i1 true"), "{after}");
 }
+
+/// A store in one arm of a diamond before a load, and no write between that
+/// load and one after the next join (x_hash's `keys[slot]`): LLVM's walker
+/// answers the one `MemoryPhi` for the later load, and it dominates the
+/// earlier load's access. The manager's walk answered a set of nearest defs
+/// ({live-on-entry, the store}); a def that did not dominate kept the second
+/// load, 524 B instead of 515.
+#[test]
+fn test_a_load_after_a_join_is_the_one_before_it_when_a_phi_is_the_clobber() {
+    let after = run("define i32 @f(ptr %p, i1 %c, i1 %d) {
+b0:
+  br i1 %c, label %b1, label %b2
+b1:
+  store i32 1, ptr %p
+  br label %b3
+b2:
+  br label %b3
+b3:
+  %x = load i32, ptr %p
+  br i1 %d, label %b4, label %b5
+b4:
+  br label %b6
+b5:
+  br label %b6
+b6:
+  %y = load i32, ptr %p
+  %r = add i32 %x, %y
+  ret i32 %r
+}
+");
+    assert_eq!(after.matches("load").count(), 1, "{after}");
+}
