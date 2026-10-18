@@ -36,12 +36,45 @@ import scaling_gate  # noqa: E402
 BUDGETS = tomllib.loads((HERE / "budgets.toml").read_text())
 DEFAULT = BUDGETS["default"]
 # Programs of one function, where a count of copies, selections or allocations is a count of work done per function.
+# A debt is paid only when its step is clearly under the limit: instruction counts move a few thousandths between commits, and a step at x2.30
+# against 2.3 read paid on one build and over on the next (lir twoaddr, lir coalesce).
+PAID_MARGIN = 0.97
 ONE_FUNCTION = ("straight", "mulconst", "branches", "live", "nest", "cells", "cases", "joins", "fjoins", "unrolled")
 PER_FUNCTION = ("function_clones", "function_forks", "machinings", "selections", "allocations")
 # The gate's N per axis, but `branches` larger: its steps are small at the gate's 32 (analysis bounded is 1 Minstr there), and #1771 made
 # `analysis bounded` quadratic in it (108 -> 982 Minstr from N=256 to 512) unseen by a size where the step is under the floor.
 SIZES = {**scaling_gate.SIZES, "branches": 256}
 AXES = tuple(SIZES)
+
+
+def still_rising(work_small: float, work_big: float) -> bool:
+    """Whether a debt's step still grows: not under the limit by the margin. x2.30 against 2.3 is still rising."""
+    return work_big > PAID_MARGIN * DEFAULT["steps"] * max(work_small, 1e-9)
+
+
+def read(work_big: float, total: float) -> bool:
+    """Whether the test reads a step: it has the share of the compile's work and the floor."""
+    return work_big >= DEFAULT["share"] * total and work_big >= DEFAULT["floor_minstr"]
+
+
+def near_read(work_big: float, total: float) -> bool:
+    """Within 10% under the share or the floor: a step that hovers there is read on one build and not on the next."""
+    return work_big >= 0.9 * DEFAULT["share"] * total and work_big >= 0.9 * DEFAULT["floor_minstr"]
+
+
+def test_a_debt_step_hovering_at_the_share_threshold_does_not_flip_the_result():
+    """lir pressuresink was 2.03% of the compile (limit 2%): it entered the test at one commit (blamed on #2195) and could leave it, 'paid' by dipping."""
+    total = 1850.0
+    for work_big in (0.0205 * total, 0.0199 * total, 0.0195 * total):
+        assert read(work_big, total) == (work_big >= 0.02 * total)
+        assert near_read(work_big, total), "within 10% under the share: still held to its debt"
+    assert not near_read(0.015 * total, total)
+
+
+def test_a_step_at_the_limit_is_not_paid_and_one_well_under_it_is():
+    """lir twoaddr read x2.30 (60.3 -> 138.8): paid on one build, over on the next, and its debt was deleted as paid (#2191) then needed again."""
+    assert still_rising(60.3, 138.8) and still_rising(60.3, 138.0)
+    assert not still_rising(60.3, 120.0)
 
 
 def run(source: str, axis: str, stage: str) -> str:
@@ -139,10 +172,12 @@ def test_no_step_grows_faster_than_the_program_does(axis):
     grown, rising = [], set()
     for name, value in big.items():
         work_small, work_big = max(small.get(name, 0.0) - empty.get(name, 0.0), 0.0), max(value - empty.get(name, 0.0), 0.0)
-        if work_big < DEFAULT["share"] * total or work_big < DEFAULT["floor_minstr"]:
+        if not read(work_big, total):
+            if near_read(work_big, total) and work_big > DEFAULT["steps"] * max(work_small, 1e-9):
+                rising.add(name)  # a debt's step that dips under the share is not paid by dipping
             continue
         ratio, debt = allowed("steps", axis, name, DEFAULT["steps"])
-        if work_big > DEFAULT["steps"] * max(work_small, 1e-9):
+        if still_rising(work_small, work_big):
             rising.add(name)
         if work_big > ratio * max(work_small, 1e-9):
             grown.append(f"{name} {work_small:.1f} -> {work_big:.1f} Minstr (limit {ratio} per doubling{debt})")
