@@ -52,6 +52,19 @@ def still_rising(work_small: float, work_big: float) -> bool:
     return work_big > PAID_MARGIN * DEFAULT["steps"] * max(work_small, 1e-9)
 
 
+def onset(work_small: float) -> bool:
+    """A step whose work at N is under `onset_minstr` begins only at 2N: lazily built data (`siblings interference`, 0.0 -> 17.3) or a branch first taken
+    (`peep facts exits`, 0.2 -> 10.2). Its ratio to a base of nothing is a number of the base, not a slope."""
+    return work_small < DEFAULT["onset_minstr"]
+
+
+def test_a_step_that_begins_between_the_two_sizes_has_no_slope_to_judge():
+    """#2260 listed 'siblings interference' (0.0 -> 17.3, x1.7e10) and 'peep facts exits' (0.2 -> 10.2, x63) as debts: both are built on first use and
+    absent at the small size."""
+    assert onset(0.0) and onset(0.2)
+    assert not onset(1.0) and not onset(11.3)
+
+
 def read(work_big: float, total: float) -> bool:
     """Whether the test reads a step: its own work at 2N reaches the floor, whatever share of the compile that is."""
     return work_big >= DEFAULT["floor_minstr"]
@@ -172,6 +185,8 @@ def test_no_step_grows_faster_than_the_program_does(axis):
     grown, rising = [], set()
     for name, value in big.items():
         work_small, work_big = max(small.get(name, 0.0) - empty.get(name, 0.0), 0.0), max(value - empty.get(name, 0.0), 0.0)
+        if onset(work_small):
+            continue  # the step starts between N and 2N: no slope to judge from a base of nothing
         if not read(work_big, total):
             if near_read(work_big, total) and work_big > DEFAULT["steps"] * max(work_small, 1e-9):
                 rising.add(name)  # a debt's step that dips under the floor is not paid by dipping

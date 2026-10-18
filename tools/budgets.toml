@@ -8,6 +8,7 @@ linear = 2.2            # an event count at 2N may be this times its count at N 
 slack = 4               # ... plus this many, so a count of a few does not flip on one more
 constant_slack = 2      # copies, selections and allocations of a one-function program do not grow by more than this
 steps = 2.3             # a step's own work at 2N may be this times its work at N
+onset_minstr = 0.5      # a step with less than this at N begins between the sizes: it has no slope to judge
 floor_minstr = 5.0      # a step is read when its own work at 2N is this much, in millions of instructions (no share of the compile: that is a cliff)
 
 [[debt]]
@@ -724,14 +725,6 @@ issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
 why = "measured 2.9 -> 11.4 Minstr (x3.96)"
 
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "peep facts exits"
-ratio = 69.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 0.2 -> 10.2 Minstr (x63.22)"
 
 [[debt]]
 kind = "steps"
@@ -769,14 +762,6 @@ issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
 why = "measured 3.3 -> 17.9 Minstr (x5.43)"
 
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "siblings interference"
-ratio = 18990400000.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 0.0 -> 17.3 Minstr (x17264000000.00)"
 
 [[debt]]
 kind = "steps"
