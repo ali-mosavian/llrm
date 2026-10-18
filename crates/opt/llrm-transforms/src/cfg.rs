@@ -201,7 +201,7 @@ pub(crate) fn emptied_into(
     for phi in phis {
         function.erase(phi).expect("a replaced phi");
     }
-    function.move_run(&function.block(second).instructions().to_vec(), source).expect("a placed block");
+    function.move_run(&function.block(second).iter().collect::<Vec<_>>(), source).expect("a placed block");
     function.replace_block_uses_with(second, source);
     Some(second)
 }
@@ -266,7 +266,7 @@ pub fn merge_block_into_predecessor(
 
     // Move all definitions in the successor to the predecessor...
     let end = function.terminator(bb).expect("a terminated block");
-    let moved = function.block(bb).instructions().iter().copied().filter(|&one| one != end).collect::<Vec<_>>();
+    let moved = function.block(bb).iter().filter(|&one| one != end).collect::<Vec<_>>();
     for inst in moved {
         function.move_to(inst, Position::Before(pti)).expect("a placed predecessor");
     }

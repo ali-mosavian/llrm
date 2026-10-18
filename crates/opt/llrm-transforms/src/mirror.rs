@@ -294,7 +294,7 @@ pub(crate) fn applied(
         let ValueDef::Instruction(original) = function.value(node).def else { continue };
         let block = function.parent(original).expect("a placed phi");
         let phi = function.create_instruction(Opcode::Phi, pointer, Vec::new(), Flags::default(), None);
-        let first = function.block(block).instructions()[0];
+        let first = function.block(block).first().expect("a block with an instruction");
         function.insert(phi, Position::Before(first)).expect("a block");
         mirror.push((node, function.instruction(phi).result.expect("a phi's value")));
         shells.push((phi, node));
