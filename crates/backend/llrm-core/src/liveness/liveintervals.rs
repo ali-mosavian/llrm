@@ -530,6 +530,18 @@ impl LiveIntervals {
         LirBody { inputs: self.inputs.clone(), ..body.with_blocks(blocks) }
     }
 
+    /// The instruction at `def` that defines `reg`: the one a value of `reg`
+    /// starts at. At a bundle's index (a parallel copy shares one) there are
+    /// several, and `getInstructionFromIndex` names the first.
+    pub fn defining_instr(
+        &self,
+        def: &SlotIndex,
+        reg: u32,
+    ) -> InstrKey {
+        let all = self.indexes.get_instructions_at(def);
+        all.iter().copied().find(|key| self.insns[key].defines.contains(&reg)).unwrap_or_else(|| all[0])
+    }
+
     /// Whether `reg` is a parameter, defined on entry to the function.
     pub fn is_input(
         &self,
@@ -775,7 +787,7 @@ impl LiveIntervals {
                 li.remove_segment_at(at, false);
             } else {
                 // This is a dead def.
-                let instr = self.indexes.get_instruction_from_index(&def).expect("No instruction defining live value");
+                let instr = self.defining_instr(&def, li.reg());
                 dead.push(instr);
             }
             may_have_split_components = true;

@@ -1987,7 +1987,7 @@ impl<'a> State<'a> {
         // True as long as the current instruction is guaranteed to execute.
         let mut guaranteed_to_execute = true;
         // Queue conditions and assumes.
-        for &inst in q.function.block(bb).instructions() {
+        for inst in q.function.block(bb).iter() {
             let instruction = q.function.instruction(inst);
             if let Some(result) = instruction.result
                 && pattern::icmp_like(q, Operand::Value(result)).is_some()
