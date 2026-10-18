@@ -1566,6 +1566,9 @@ fn program(
     }
 
     let mut callables: Vec<_> = signatures.values().map(|signature| signature.callable(&mut types)).collect();
+    // `@noipa`: the callables no interprocedural pass may use or change.
+    let no_ipa: Vec<u32> =
+        module.noipa.iter().filter_map(|name| signatures.get(name)).map(|signature| signature.id).collect();
     let mut builtin_ids = BTreeMap::new();
     let routines: Vec<_> = print_builtins(&mut types)
         .into_iter()
@@ -1678,6 +1681,9 @@ fn program(
         } else if routines::READ_ONLY.contains(&name) {
             stated.state(subject, llrm_mir::facts::Fact::Memory(llrm_mir::facts::Effect::Read));
         }
+    }
+    for id in no_ipa {
+        stated.state(llrm_core::hir::facts::Subject::Callable(i64::from(id)), llrm_mir::facts::Fact::NoIpa);
     }
     let debug = frontend.debug.then(|| debug::described(&functions, &types));
     let program = hir::Program {

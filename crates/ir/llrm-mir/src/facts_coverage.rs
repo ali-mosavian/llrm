@@ -77,6 +77,7 @@ const COVERAGE: &[(&str, Shown)] = &[
             "test_a_leaf_function_comes_out_of_the_compile_norecurse",
         ]),
     ),
+    ("noipa", By(&["a_noipa_routine_is_never_inlined", "a_noipa_routine_round_trips_through_text"])),
     (
         "mustprogress",
         By(&["the_stamp_takes_the_languages_word_that_a_loop_ends", "a_loop_with_no_exit_is_never_taken_to_end"]),
