@@ -18,7 +18,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-PINNED_BIN = Path.home() / "scratch/llvm-build/bin"
+PIN_DIR = os.environ.get("LLRM_PIN_DIR")  # /opt/llrm-pin on the CI runners: bin/ (clang opt llc), lib/clang, gcc/ (tools/ci/stage_pin.sh)
+PINNED_BIN = Path(PIN_DIR) / "bin" if PIN_DIR else Path.home() / "scratch/llvm-build/bin"
 COMMIT = "d1106deb71cc"
 
 
