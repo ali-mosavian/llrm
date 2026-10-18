@@ -21,6 +21,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import corpora  # noqa: E402
+
 KEYWORDS = [f"-D{k}=" for k in "far huge near pascal cdecl __far _far __near _near".split()]
 PASS_SYMBOL = re.compile(r"llvm::(\w+Pass)::run\(")
 LEGACY_SYMBOL = re.compile(r"^llvm::(\w+)::(?:runOnFunction|runOnLoop|runOnMachineFunction)\(")
@@ -93,11 +96,13 @@ def main() -> None:
     parser.add_argument("--levels", default="O1,O2,Os")
     parser.add_argument("--clang", default="clang", help="the clang to measure (the plan's reference is ~/scratch/llvm-build/bin/clang)")
     parser.add_argument("--budget", type=float, default=220.0, help="LLVM's instructions per IR instruction per run (plan 4.1)")
+    parser.add_argument("--allow-other-corpus", action="store_true", help="measure a d_faces tree whose hash is not the registered one (tools/corpora.py)")
     args = parser.parse_args()
     if args.source:
         source, extra = args.source, []
     else:
-        qc = Path(os.environ["QCPORT"]).expanduser()
+        qc = corpora.resolve("dfaces", None, args.allow_other_corpus)
+        corpora.announce("dfaces", qc)
         source = str(qc / "render/d_faces.c")
         extra = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(qc / d))]
     for level in args.levels.split(","):
