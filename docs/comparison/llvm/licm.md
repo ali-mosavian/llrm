@@ -1,3 +1,7 @@
+---
+architecture-index: LLVM's LICM against llrm's `hoist`
+architecture-order: 360
+---
 # LLVM's LICM against llrm's `hoist`
 
 TL;DR: LLVM hoists an instruction when its operands are invariant and it is safe, with no price; llrm prices every run it would move with the work saved and a whole-function spill forecast: `hoist` is 190.4 M (5.9%) of the d_faces `-O2` compile against LICM's 7.3 M (1.8%), and about 60 M of it is the forecast.

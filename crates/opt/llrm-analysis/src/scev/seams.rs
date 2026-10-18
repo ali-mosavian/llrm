@@ -4,7 +4,7 @@
 //! answer until its stage lands; the stack that lands S1 lands them with it.
 //! A seam never makes a fold unsound, only less eager than LLVM's.
 
-use super::expr::{Scev, flags};
+use super::expr::Scev;
 use super::{Cx, ScalarEvolution};
 
 impl ScalarEvolution {
@@ -44,24 +44,6 @@ impl ScalarEvolution {
         cx: &Cx,
     ) -> bool {
         !cx.assumptions.assumes.is_empty()
-    }
-
-    /// `proveNoUnsignedWrapViaInduction` (S5).
-    pub fn prove_no_unsigned_wrap_via_induction(
-        &mut self,
-        _cx: &Cx,
-        _ar: Scev,
-    ) -> u8 {
-        flags::NONE
-    }
-
-    /// `proveNoSignedWrapViaInduction` (S5).
-    pub fn prove_no_signed_wrap_via_induction(
-        &mut self,
-        _cx: &Cx,
-        _ar: Scev,
-    ) -> u8 {
-        flags::NONE
     }
 
     /// The type of an IR type id, for the folds that build integer types.

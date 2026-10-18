@@ -7,8 +7,7 @@
 //! # DEVIATE 1 (no predicated SCEV)
 //! `createAddRecFromPHIWithCasts` is not translated.
 
-use std::collections::HashMap;
-
+use llrm_mir::hash::HashMap;
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::guarantee::{self, Operator};
@@ -410,7 +409,7 @@ impl ScalarEvolution {
     ) -> Scev {
         let (mut seen_loop_variant_unknown, mut seen_other_loops) = (false, false);
         let result =
-            self.init_visit(cx, s, l, &mut seen_loop_variant_unknown, &mut seen_other_loops, &mut HashMap::new());
+            self.init_visit(cx, s, l, &mut seen_loop_variant_unknown, &mut seen_other_loops, &mut HashMap::default());
         if seen_loop_variant_unknown {
             return self.get_could_not_compute();
         }
@@ -466,7 +465,7 @@ impl ScalarEvolution {
         l: BlockId,
     ) -> Scev {
         let mut valid = true;
-        let result = self.shift_visit(cx, s, l, &mut valid, &mut HashMap::new());
+        let result = self.shift_visit(cx, s, l, &mut valid, &mut HashMap::default());
         if valid { result } else { self.get_could_not_compute() }
     }
 
@@ -532,7 +531,7 @@ impl ScalarEvolution {
                 _ => return s,
             }
         }
-        self.bcf_visit(cx, s, l, be_cond, is_pos_be_cond, &mut HashMap::new())
+        self.bcf_visit(cx, s, l, be_cond, is_pos_be_cond, &mut HashMap::default())
     }
 
     fn bcf_visit(

@@ -2,8 +2,7 @@
 //! run when another does: `getDefiningScopeBound`,
 //! `isGuaranteedToTransferExecutionTo` and `isSCEVExprNeverPoison`.
 
-use std::collections::HashSet;
-
+use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::guarantee;
@@ -44,7 +43,7 @@ impl ScalarEvolution {
     ) -> (InstId, bool) {
         let mut precise = true;
         // Do a bounded search of the def relation of the requested SCEVs.
-        let mut visited: HashSet<Scev> = HashSet::new();
+        let mut visited: HashSet<Scev> = HashSet::default();
         let mut worklist: Vec<Scev> = Vec::new();
         let mut push_op = |s: Scev, precise: &mut bool, worklist: &mut Vec<Scev>| {
             if !visited.insert(s) {

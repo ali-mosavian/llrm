@@ -13,6 +13,7 @@
 //! function for function, each naming its C++ original, and verified against
 //! LLVM's own constructors through `tools/scev/oracle.cpp`.
 
+pub mod analysis;
 pub mod ap;
 pub mod arith;
 pub mod backedge;
@@ -55,13 +56,13 @@ mod trip_tests;
 pub mod values;
 #[cfg(test)]
 mod values_tests;
-
-use std::collections::{HashMap, HashSet};
+pub mod wrap_proof;
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::dominators::DominatorTree;
+use llrm_mir::hash::{HashMap, HashSet};
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, GlobalValue, MetadataNode, Operand, ValueDef, ValueId};
 use llrm_mir::types::Type as MirType;
@@ -168,6 +169,9 @@ pub struct ScalarEvolution {
     pub(super) scev_users: HashMap<Scev, HashSet<Scev>>,
     /// `LoopUsers`: the add recurrences of each loop.
     pub(super) loop_users: IdMap<BlockId, Vec<Scev>>,
+    /// `UnsignedWrapViaInductionTried` and `SignedWrapViaInductionTried`.
+    pub(super) unsigned_wrap_via_induction_tried: HashSet<Scev>,
+    pub(super) signed_wrap_via_induction_tried: HashSet<Scev>,
     /// `ValuesAtScopes`: each expression's value in the scope of a loop (none:
     /// the function body); the second is empty while it is being computed.
     pub(super) values_at_scopes: HashMap<Scev, Vec<(Option<BlockId>, Option<Use>)>>,
@@ -194,21 +198,23 @@ impl ScalarEvolution {
     pub fn new() -> Self {
         let mut se = Self {
             nodes: Vec::new(),
-            unique: HashMap::new(),
-            fold_cache: HashMap::new(),
+            unique: HashMap::default(),
+            fold_cache: HashMap::default(),
             proving_split_predicate: false,
-            unsigned_ranges: HashMap::new(),
-            signed_ranges: HashMap::new(),
-            constant_multiple_cache: HashMap::new(),
-            loop_dispositions: HashMap::new(),
-            block_dispositions: HashMap::new(),
+            unsigned_ranges: HashMap::default(),
+            signed_ranges: HashMap::default(),
+            constant_multiple_cache: HashMap::default(),
+            loop_dispositions: HashMap::default(),
+            block_dispositions: HashMap::default(),
             value_expr_map: IdMap::new(),
-            expr_value_map: HashMap::new(),
-            scev_users: HashMap::new(),
+            expr_value_map: HashMap::default(),
+            scev_users: HashMap::default(),
             loop_users: IdMap::new(),
-            values_at_scopes: HashMap::new(),
-            values_at_scopes_users: HashMap::new(),
-            fold_cache_user: HashMap::new(),
+            unsigned_wrap_via_induction_tried: HashSet::default(),
+            signed_wrap_via_induction_tried: HashSet::default(),
+            values_at_scopes: HashMap::default(),
+            values_at_scopes_users: HashMap::default(),
+            fold_cache_user: HashMap::default(),
             could_not_compute: Scev(0),
             trips: trip::TripState::default(),
             guards: implied::GuardState::default(),
