@@ -2446,9 +2446,23 @@ fn _fills(
         .and_then(|one| one.function());
     let mut out = Vec::new();
     for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
-        let declared = declared
-            .and_then(|one| one.parameter_attrs.get(argument))
-            .map_or(&[][..], |attrs| llrm_mir::memory::initializes(attrs));
+        let parameter = declared.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], Vec::as_slice);
+        // A byval parameter is the callee's own copy: the caller's object is
+        // not written.
+        let by_value = |attrs: &[llrm_mir::opcode::Attribute]| {
+            attrs
+                .iter()
+                .any(
+                    |one| matches!(
+                        one,
+                        llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
+                    ),
+                )
+        };
+        if by_value(&info.argument_attrs[argument]) || by_value(parameter) {
+            continue;
+        }
+        let declared = llrm_mir::memory::initializes(parameter);
         for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument]).iter().chain(declared) {
             let Ok(width) = u32::try_from(high - low) else { continue };
             let mut one = MemRef::at(unit, operand, width);
