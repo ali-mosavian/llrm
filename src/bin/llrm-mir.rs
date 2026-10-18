@@ -82,13 +82,10 @@ fn main() -> ExitCode {
                 problems.iter().for_each(|one| eprintln!("{path}: {one}"));
                 return ExitCode::FAILURE;
             }
-<<<<<<< HEAD
-=======
             if scev {
                 print!("{}", scalar_evolution(&module));
                 return ExitCode::SUCCESS;
             }
->>>>>>> origin/feat/parity
             if let Some((header, count)) = unroll {
                 if let Err(error) = unrolled_loop(&mut module, &header, count, &exits) {
                     eprintln!("{path}: {error}");
