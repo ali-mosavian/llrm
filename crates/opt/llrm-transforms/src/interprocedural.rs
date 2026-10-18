@@ -161,6 +161,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_analysis::alias::{self, Procedure, Summary};
 use llrm_analysis::cfg::Shape;
 use llrm_analysis::effects;
+use llrm_analysis::functionattrs;
 use llrm_analysis::interprocedural as facts;
 use llrm_analysis::manager::{Callbacks, GlobalsAA, ProgramSummaries, Summaries};
 use llrm_analysis::memory::{Identity, MemoryKind, Slice, Unit};
@@ -1473,6 +1474,10 @@ pub fn optimized_with<E: From<String>>(
                 bases[at].insert(id, size);
             }
             for &id in made.added.iter().chain(&made.edited) {
+                llrm_mir::memory::unsplit(
+                    &mut function_mut(&mut program.modules[at], id).1.attrs,
+                    llrm_mir::memory::Moved::OutOfArguments,
+                );
                 edited(&mut modules[at], &[id]);
                 reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-cp.")?;
                 cloned_now = true;
@@ -1803,13 +1808,11 @@ fn published(
 ///   inaccessible memory. A stated one only narrows.
 /// - on each pointer parameter it keeps no copy of, `nocapture`, then
 ///   `readnone`, `readonly` or `writeonly`, and `initializes`.
-/// - `willreturn` where every path returns without looping and every call
-///   states it, or where the language promises each loop ends (`mustprogress`
-///   on the function, `llvm.loop.mustprogress` on each loop) of a function that
-///   does nothing observable;
-/// - `norecurse` where nothing can enter it again while it runs; `nounwind`
-///   where every call states it and no access can fault
-///   (`interprocedural::cannot_fault`).
+/// - `willreturn` as LLVM's `addWillReturn` (`functionattrs::infer`), or where
+///   a loop's trip count is proved, or the language promises each loop ends
+///   (`mustprogress` on the function, `llvm.loop.mustprogress` on each loop) of
+///   a function that does nothing observable;
+/// - `norecurse` and `nounwind` as `functionattrs::infer` has them.
 ///
 /// Any other attribute already stated stays. The bodies stamped; the
 /// caller drops `analyses` when there are any.
@@ -1829,11 +1832,14 @@ pub fn stamped(
     let mut changed = Vec::new();
     let graph = analyses.get::<CallGraphAnalysis>(module);
     let callees = llrm_mir::memory::callees(module);
-    let never_reentered = graph.cannot_reenter(module);
     let cycles: Vec<Vec<GlobalId>> =
         graph.bottom_up_components().into_iter().filter(|(_, cyclic)| *cyclic).map(|(members, _)| members).collect();
     let cycle: BTreeMap<GlobalId, usize> =
         cycles.iter().enumerate().flat_map(|(at, members)| members.iter().map(move |&member| (member, at))).collect();
+    // `llrm_analysis::functionattrs::infer` of each cycle, from the attributes
+    // as they stand when its first member is reached: LLVM stamps an SCC at
+    // once.
+    let mut inferred: BTreeMap<Vec<GlobalId>, BTreeMap<GlobalId, functionattrs::Inferred>> = BTreeMap::new();
     for id in graph.bottom_up() {
         let global = module.global(id);
         let exact = matches!(
@@ -1878,7 +1884,13 @@ pub fn stamped(
                     Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
                 ),
             );
-        let norecurse = never_reentered.contains(&id);
+        let members = cycle.get(&id).map_or_else(|| vec![id], |at| cycles[*at].clone());
+        let stamped = *inferred
+            .entry(members.clone())
+            .or_insert_with(|| functionattrs::infer(module, &declarations, &members).into_iter().collect())
+            .get(&id)
+            .unwrap_or(&functionattrs::Inferred::default());
+        let norecurse = stamped.no_recurse || Facts::of(&function.attrs).no_recurse();
         // The language's word that its loops end holds where nothing a loop
         // that never ended could be seen by.
         let unobserved = !volatile
@@ -1918,12 +1930,14 @@ pub fn stamped(
                     }),
                 )
         };
-        let returns = ((facts::returns_without_looping(function) || counted()) && states(Fact::WillReturn)) || promised;
-        let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, program.target.spaces(), function);
+        // DEVIATE F1: a loop whose trip count induction proves, or the
+        // language's word that it ends, returns too; LLVM's rule is a
+        // body without back edges.
+        let returns = stamped.will_return || (counted() && states(Fact::WillReturn)) || promised;
+        let nounwind = stamped.no_unwind;
         // A cycle of calls is stamped together, as LLVM's
         // PostOrderFunctionAttrs takes an SCC: each member does what
         // all of them do besides calling one another.
-        let members = cycle.get(&id).map_or_else(|| vec![id], |at| cycles[*at].clone());
         let hidden = members
             .iter()
             .fold(Effects::NONE, |all, &member| _either(all, hidden_by(module, member, &declarations, &graph)));
@@ -2054,10 +2068,17 @@ fn _narrowed(
         slices.iter().filter(|one| !local(one)).any(|one| (one.object.kind == MemoryKind::Parameter) == parameter)
     };
     let (stated_arguments, stated_other) = llrm_mir::memory::located(attrs);
-    let arguments =
-        _both(stated_arguments, Effects { reads: found(&summary.reads, true), writes: found(&summary.writes, true) });
+    // What the attribute allows anywhere bounds what is allowed at each
+    // location, but its split between them does not: the body may have been
+    // rewritten since (argument promotion takes `sc->faces` as a parameter, so
+    // a write that was `other` memory is now `argmem`), and a location the
+    // old split forbade would lose the write. LLVM meets the same split
+    // (FunctionAttrs.cpp:298, `ME & OldME`) but runs once per SCC, after
+    // ArgumentPromotion.
+    let stated = _either(_either(stated_arguments, stated_other), llrm_mir::memory::inaccessible(attrs));
+    let arguments = _both(stated, Effects { reads: found(&summary.reads, true), writes: found(&summary.writes, true) });
     let other = _both(
-        stated_other,
+        stated,
         Effects {
             reads: found(&summary.reads, false) || summary.unknown_read,
             writes: found(&summary.writes, false) || summary.unknown_write,
