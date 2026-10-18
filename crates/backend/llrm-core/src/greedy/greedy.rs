@@ -12,7 +12,8 @@
 //! allocation order (hints first), then evicting the interference of a register
 //! whose holders are all lighter than it (each eviction carries a cascade
 //! number so an eviction cycle cannot run forever), then waits a round
-//! (`RS_Split`) so smaller ranges are placed first, then splits (`regionsplit`), and at last spills; a spill product (`RS_Done`) that finds
+//! (`RS_Split`) so smaller ranges are placed first, then splits
+//! (`regionsplit`), and at last spills; a spill product (`RS_Done`) that finds
 //! no register recolors the ranges in its way. Stages only move forward.
 //!
 //! ```text

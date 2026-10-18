@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/mem2reg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/mem2reg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/mem2reg.rs sha256:27e1bc6afd13b495e91db6e1996f42297be71556efae080d0afced5520b3d18c -->
+<!-- src: crates/opt/llrm-transforms/src/mem2reg.rs sha256:6a9c3fe8895a710f8663bf2e36acfaa2f0d3295579431e28a1188bb357da7e60 -->
 
 # mem2reg
 
@@ -29,10 +29,6 @@ DEVIATE, each with its reason:
   MIR has none.
 - No `llvm.assume`, so no `convertMetadataToAssumes` (`noundef` metadata)
   and no droppable users; no `fake_use`. Lifetime markers are translated.
-- DEVIATE 1: MIR has no `undef`: a read of memory nothing wrote is the
-  zero of its type (null, `zeroinitializer`), a refinement of the pin's
-  `UndefValue` (PromoteMemoryToRegister.cpp#L914); poison would turn a
-  fresh bitfield's `and`/`or` into poison. Exit: a MIR `undef`.
 - `isGuaranteedNotToBePoison` is true of a constant that is not `poison`
   only (no `noundef` arguments).
 - The iterated dominance frontier is `Dominance::frontiers` iterated with

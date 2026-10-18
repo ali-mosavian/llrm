@@ -3,6 +3,9 @@
 //! the options of the level, on the neutral target) and writes the module back.
 //! What tools/difftest compares with LLVM's counterpart: llrm's answer to that
 //! input, not the input of the next step.
+//!
+//! `llrm-pass [-On] --order PASS@SLOT FILE` runs one slot of LLVM's order
+//! (`sroa@1179`) the same way, and says on stderr what stands in it.
 
 use std::process::ExitCode;
 use std::rc::Rc;
@@ -28,11 +31,26 @@ fn main() -> ExitCode {
         },
         None => llrm_core::driver::flags::Level::O2,
     };
+    let ordered = arguments.first().is_some_and(|one| one == "--order");
+    if ordered {
+        arguments.remove(0);
+    }
     let [pass, path] = arguments.as_slice() else {
-        eprintln!("usage: llrm-pass [-O1|-O2|-Os|...] PASS FILE");
+        eprintln!("usage: llrm-pass [-O1|-O2|-Os|...] [--order] PASS FILE");
         return ExitCode::from(2);
     };
-    if !llrm_transforms::pipeline::passes().contains(&pass.as_str()) {
+    if ordered {
+        let probe = Applied { options: level.options(), ..Applied::default() };
+        match llrm_transforms::parity::describe(pass) {
+            Some((phase, kind, llvm)) if llrm_transforms::pipeline::slot_built(&probe, pass) => {
+                eprintln!("llrm-pass: slot {pass} {phase:?} {kind:?} (LLVM: {llvm})");
+            }
+            _ => {
+                eprintln!("llrm-pass: no slot {pass} in the order at this level");
+                return ExitCode::from(2);
+            }
+        }
+    } else if !llrm_transforms::pipeline::passes().contains(&pass.as_str()) {
         eprintln!("llrm-pass: no pass named {pass}; the pipeline's: {}", llrm_transforms::pipeline::passes().join(" "));
         return ExitCode::from(2);
     }
