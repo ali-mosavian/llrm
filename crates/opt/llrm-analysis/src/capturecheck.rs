@@ -19,7 +19,6 @@ use crate::memory::{MemoryKind, Unit, is_lifetime_marker};
 pub enum Unproven {
     /// No body in the module.
     Undefined,
-    Recursive,
     TooDeep,
     /// The body captures it, or keeps it in a local.
     Captured,
@@ -85,13 +84,11 @@ impl<'a> Verify<'a> {
         let top = self.stack.borrow().is_empty();
         let found = (|| {
             let function = global.function().filter(|one| !one.is_declaration()).ok_or(Unproven::Undefined)?;
-            // The parameter is assumed uncaptured while its own body is read
-            // (LLVM's SCC step): a cycle that passes it on only is no capture.
+            // Each parameter on the stack is assumed uncaptured while its body
+            // is read (LLVM's SCC step): a cycle that passes them
+            // on only, in any order, is no capture.
             if self.stack.borrow().contains(&(callee, index)) {
                 return Ok(());
-            }
-            if self.stack.borrow().iter().any(|one| one.0 == callee) {
-                return Err(Unproven::Recursive);
             }
             if self.stack.borrow().len() as u32 >= self.depth {
                 return Err(Unproven::TooDeep);
@@ -100,13 +97,13 @@ impl<'a> Verify<'a> {
             self.stack.borrow_mut().push((callee, index));
             let unit = Unit::of(self.module, self.layout, function);
             let mut kept = Vec::new();
-            let captured = captured_by(&unit, root, &mut kept, Some(self));
+            let captured = captured_by(&unit, root, &mut kept, Some(self), false);
             self.stack.borrow_mut().pop();
             // Kept in a local slot of the callee: read back it is the pointer
             // again (followed), and it is captured if the slot
             // itself is.
             let slot_captured =
-                kept.iter().any(|holder| captured_by(&unit, *holder, &mut Vec::new(), Some(self)).is_some());
+                kept.iter().any(|holder| captured_by(&unit, *holder, &mut Vec::new(), Some(self), false).is_some());
             if captured.is_some() || slot_captured { Err(Unproven::Captured) } else { Ok(()) }
         })();
         if top {
@@ -206,6 +203,7 @@ fn captured_by(
     root: ValueId,
     held_in: &mut Vec<ValueId>,
     verify: Option<&Verify>,
+    joins: bool,
 ) -> Option<InstId> {
     let function = unit.function;
     let mut seen: IdSet<ValueId> = IdSet::new();
@@ -224,11 +222,17 @@ fn captured_by(
                 // none: the objects of its other arms are lost (a load through
                 // it reads them).
                 Opcode::Phi | Opcode::Select if at != 0 || matches!(op.opcode, Opcode::Phi) => {
-                    if op.operands.iter().enumerate().any(|(index, one)| {
-                        (matches!(op.opcode, Opcode::Phi) || index != 0)
-                            && index != at
-                            && unknown_arm(unit, *one, &seen)
-                    }) {
+                    // The facts lose a join with an arm no object is followed
+                    // through; a callee's parameter is
+                    // captured as LLVM counts it, which follows a
+                    // join and keeps nothing.
+                    if joins
+                        && op.operands.iter().enumerate().any(|(index, one)| {
+                            (matches!(op.opcode, Opcode::Phi) || index != 0)
+                                && index != at
+                                && unknown_arm(unit, *one, &seen)
+                        })
+                    {
                         return Some(used.user);
                     }
                     work.extend(op.result);
@@ -323,7 +327,7 @@ pub fn check_with(
         let op = function.instruction(inst);
         let (Opcode::Alloca { .. }, Some(value)) = (&op.opcode, op.result) else { continue };
         let mut held_in = Vec::new();
-        let by = captured_by(unit, value, &mut held_in, verify);
+        let by = captured_by(unit, value, &mut held_in, verify, true);
         direct.push((value, by, held_in));
     }
     // Held in a captured object is captured, to a fixed point.
