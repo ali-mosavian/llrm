@@ -368,6 +368,16 @@ impl FunctionAnalyses {
         Self { layout, dt: DomTree::of(function), assumptions: AssumptionCache::new(module, function) }
     }
 
+    /// The dominator tree (`SQ.DT`).
+    pub fn dominator_tree(&self) -> &DomTree {
+        &self.dt
+    }
+
+    /// The assumptions (`SQ.AC`).
+    pub fn assumption_cache(&self) -> &AssumptionCache {
+        &self.assumptions
+    }
+
     /// A query at `cxt` (`CxtI`), or at no instruction.
     pub fn query<'a>(
         &'a self,

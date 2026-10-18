@@ -5,7 +5,10 @@
 //! prints, per function and innermost loop, how many of the loop's header
 //! phis ScalarEvolution proves step by a nonzero amount: its induction
 //! variables, as tools/loops counts them. `llrm-mir --loops FILE` prints
-//! `print<loops>`'s text for each function.
+//! `print<loops>`'s text for each function. `llrm-mir --unroll N FILE`
+//! writes the module with every innermost loop that leaves from one
+//! conditional block unrolled completely with `N` copies
+//! (`tools/unroll_oracle.py` compares it with the pinned `opt`).
 
 use std::process::ExitCode;
 
@@ -26,6 +29,26 @@ fn main() -> ExitCode {
     if loops {
         arguments.remove(0);
     }
+    let mut exits = Vec::<(String, u32)>::new();
+    while let Some(at) = arguments.iter().position(|one| one == "--exit") {
+        let spec = arguments
+            .get(at + 1)
+            .and_then(|one| one.split_once('='))
+            .and_then(|(block, trips)| Some((block.to_owned(), trips.parse::<u32>().ok()?)));
+        arguments.drain(at..(at + 2).min(arguments.len()));
+        exits.extend(spec);
+    }
+    let unroll = {
+        let at = arguments.iter().position(|one| one == "--unroll");
+        at.and_then(|at| {
+            let spec = arguments
+                .get(at + 1)
+                .and_then(|one| one.split_once(':'))
+                .and_then(|(header, count)| Some((header.to_owned(), count.parse::<u32>().ok()?)));
+            arguments.drain(at..(at + 2).min(arguments.len()));
+            spec
+        })
+    };
     let mut option = |flag: &str| {
         let at = arguments.iter().position(|one| one == flag)?;
         let value = arguments.get(at + 1).cloned();
@@ -49,11 +72,19 @@ fn main() -> ExitCode {
         }
     };
     match llrm_mir::parse::module(&text) {
-        Ok(module) => {
+        Ok(mut module) => {
             let problems = llrm_mir::verify::verify(&module);
             if !problems.is_empty() {
                 problems.iter().for_each(|one| eprintln!("{path}: {one}"));
                 return ExitCode::FAILURE;
+            }
+            if let Some((header, count)) = unroll {
+                if let Err(error) = unrolled_loop(&mut module, &header, count, &exits) {
+                    eprintln!("{path}: {error}");
+                    return ExitCode::FAILURE;
+                }
+                print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
             }
             if loops {
                 print!("{}", llrm_mir::loopinfo::print_loops(&module));
@@ -108,4 +139,42 @@ fn induction_variables(module: &llrm_mir::module::Module) -> String {
         }
     }
     out
+}
+
+/// The loop headed by block `header` of the module's one function, unrolled
+/// completely with `count` copies.
+fn unrolled_loop(
+    module: &mut llrm_mir::module::Module,
+    header: &str,
+    count: u32,
+    exits: &[(String, u32)],
+) -> Result<(), String> {
+    use llrm_analysis::cfg;
+    let name = module
+        .functions()
+        .find(|(_, _, one)| !one.layout().is_empty())
+        .and_then(|(_, one, _)| one.name.clone())
+        .ok_or("no function")?;
+    let (_, function) = module.function_mut(&name).ok_or("no function")?;
+    llrm_transforms::lcssa::closed(function)?;
+    let named = |function: &llrm_mir::module::Function, label: &str| {
+        function
+            .layout()
+            .iter()
+            .copied()
+            .find(|&one| function.block(one).name.as_deref() == Some(label))
+            .ok_or(format!("no block {label}"))
+    };
+    let at = cfg::id(named(function, header)?);
+    let shape = cfg::Shape::of(function);
+    let loop_ = shape.loops.iter().find(|one| one.header == at).ok_or("no loop at that header")?;
+    let exits = exits
+        .iter()
+        .map(|(label, trip_count)| {
+            Ok(llrm_transforms::loopunroll::Exit { block: named(function, label)?, trip_count: *trip_count })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let options = llrm_transforms::loopunroll::Options { count, max_trip_count: count, max_or_zero: false, exits };
+    llrm_transforms::loopunroll::unroll_loop(function, loop_, &options)?;
+    Ok(())
 }

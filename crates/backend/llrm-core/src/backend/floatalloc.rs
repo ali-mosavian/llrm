@@ -213,7 +213,7 @@ const _ARITHMETIC: [&str; 4] = ["fadd", "fsub", "fmul", "fdiv"];
 // is `fsubr st(i),st(0)`.
 const _REVERSED: [(&str, &str); 4] = [("fadd", "fadd"), ("fmul", "fmul"), ("fsub", "fsubr"), ("fdiv", "fdivr")];
 
-fn _reversed(name: &str) -> &'static str {
+pub(super) fn _reversed(name: &str) -> &'static str {
     _REVERSED.iter().find(|(key, _)| *key == name).map(|(_, value)| *value).expect("_REVERSED[name]")
 }
 
@@ -1114,7 +1114,7 @@ fn _converted(
 /// block that reads fewer floating values than its bundle holds: the
 /// values it does not read are popped there, on the one edge that brings
 /// them, and its other entries no longer push fillers to match.
-fn _split_for_the_stack(
+pub(super) fn _split_for_the_stack(
     body: &LirBody,
     floating: &HashSet<u32>,
     (live_in, live_out): (&Live, &Live),
@@ -1176,7 +1176,7 @@ pub fn allocated<'a>(
 ) -> Result<LirBody, Raised> {
     let target = targets::profile(cpu).map_err(Raised::Value)?;
     let assigned = floatassign::assigned(body, frame.as_deref_mut(), pool, basic_semantics, target)?;
-    _truncating(&_converted(&assigned, &RegisterClasses::of(&llrm_x86_m16::M16))?, frame)
+    _truncating(&stackified(&assigned, &RegisterClasses::of(&llrm_x86_m16::M16))?, frame)
 }
 
 /// The control word an x87 instruction needs: the one place the fact lives.
@@ -1331,7 +1331,7 @@ fn _modes(body: &LirBody) -> Modes {
 /// The caller's control word and its truncating form are saved once, at
 /// entry: a callee leaves the control word as it found it, and nothing else
 /// in the body writes it. The switches are placed by `_modes`.
-fn _truncating(
+pub(super) fn _truncating(
     body: &LirBody,
     frame: Option<&mut Frame>,
 ) -> Result<LirBody, Raised> {
@@ -1494,6 +1494,19 @@ fn _exact(one: &Insn) -> bool {
     }
 }
 
+/// The stack form of `body`: `X86FloatingPoint`'s translation under
+/// `LLRM_EXP_FPS`, else this pass's own conversion.
+fn stackified(
+    body: &LirBody,
+    classes: &RegisterClasses,
+) -> Result<LirBody, Raised> {
+    if llrm_support::env_flag!("LLRM_EXP_FPS") {
+        crate::backend::fpstack::converted(body, classes)
+    } else {
+        _converted(body, classes)
+    }
+}
+
 /// Python holds the one mutable frame every machine phase shares.
 /// Pass two, reg-stack: `floatassign`'s flat registers in stack form.
 pub struct FloatAlloc {
@@ -1515,7 +1528,7 @@ impl LIRTransform for FloatAlloc {
         body: LirBody,
     ) -> Result<LirBody, String> {
         let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
-        _converted(&body, &self.classes)
+        stackified(&body, &self.classes)
             .and_then(|converted| _truncating(&converted, frame.as_deref_mut()))
             .map_err(|error| error.to_string())
     }
@@ -1523,4 +1536,4 @@ impl LIRTransform for FloatAlloc {
 
 #[cfg(test)]
 #[path = "floatalloc_tests.rs"]
-mod tests;
+pub(crate) mod tests;

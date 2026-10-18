@@ -71,7 +71,8 @@
 //!
 //! # Used by
 //! [`crate::pipeline`]'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`),
-//! behind `Options::llvm_order` (`LLRM_EXP_LLVM`), off by default.
+//! under `Options::llvm_order`, on by default (`LLRM_NO_LLVM_ORDER` turns it
+//! off).
 
 use llrm_analysis::memory::Unit as View;
 use llrm_analysis::memoryssa::{self, Accesses, MemorySSA};
