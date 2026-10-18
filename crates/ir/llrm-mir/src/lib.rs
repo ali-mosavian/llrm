@@ -28,6 +28,7 @@ pub mod forest;
 pub mod hash;
 pub mod inline;
 pub mod interpret;
+mod intrinsic_attrs;
 pub mod intrinsics;
 pub mod knownbits;
 pub mod lexer;
