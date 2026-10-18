@@ -72,11 +72,15 @@ pub fn enabled() -> bool {
     !llrm_support::env_flag!("LLRM_NO_SCEV_IVCMP")
 }
 
-/// `LLRM_NO_SCEV_WIDEN`, read once: `indvars` runs `simplifyAndExtend` (the IV
+/// `LLRM_SCEV_WIDEN`, read once: `indvars` runs `simplifyAndExtend` (the IV
 /// users simplified and the counters widened, as LLVM's IndVarSimplify), not
-/// `simplified` and `indvars::widened`.
+/// `simplified` and `indvars::widened`. Off by default until #2531 is fixed.
 pub fn widening_enabled() -> bool {
-    !llrm_support::env_flag!("LLRM_NO_SCEV_WIDEN")
+    #[cfg(test)]
+    if let Some(forced) = tests::FORCED.with(|one| one.get()) {
+        return forced;
+    }
+    llrm_support::env_flag!("LLRM_SCEV_WIDEN")
 }
 
 /// Every comparison with an induction variable that ScalarEvolution decides,
@@ -691,3 +695,9 @@ fn visit_iv_cast(
 #[cfg(test)]
 #[path = "simplifyindvar_tests.rs"]
 mod tests;
+
+/// Forces the switch in this thread (a test of the new path).
+#[cfg(test)]
+pub(crate) fn tests_forced(on: bool) {
+    tests::FORCED.with(|one| one.set(Some(on)));
+}

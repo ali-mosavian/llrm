@@ -102,7 +102,7 @@ fn test_exact_nested_recurrence_rewinds_before_reloading_its_start() {
     let function = f(&mut module);
     let inner =
         function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some("b3")).unwrap();
-    let phi = function.block(inner).instructions()[0];
+    let phi = function.block(inner).first().expect("a block with an instruction");
     assert!(
         !function
             .instruction(phi)
@@ -451,14 +451,13 @@ end:
     manager.add(super::IndVars { exit_values: false, unrolls: None });
     let before = llrm_analysis::ranges::loops_solved();
     manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
-    // The pass that asks, indvars's evaluation of the loop, and the body the
-    // widening (which runs first, as LLVM's `simplifyAndExtend` does) changed:
-    // widening itself asks ScalarEvolution, not the bounds. Before it ran
-    // first, the widening read the manager's bounds and the count was two.
+    // The pass that asks, and the one indvars's evaluation of the loop leaves
+    // the body needing; by hand it was a third. (`simplifyAndExtend`, opt-in,
+    // widens first and the changed body is solved a third time.)
     assert_eq!(
         llrm_analysis::ranges::loops_solved() - before,
-        3,
-        "the loop's bounds were worked out more than the manager's three times"
+        2,
+        "the loop's bounds were worked out more than the manager's twice"
     );
 }
 
@@ -675,9 +674,8 @@ fn header_phis(module: &mut Module) -> usize {
     let [one] = &loops::loops(&cfg::graph(function), function.entry().map(cfg::id))[..] else { panic!("one loop") };
     function
         .block(cfg::block(one.header))
-        .instructions()
         .iter()
-        .filter(|&&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+        .filter(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
         .count()
 }
 

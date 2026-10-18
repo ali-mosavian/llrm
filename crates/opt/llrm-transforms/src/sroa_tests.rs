@@ -364,3 +364,25 @@ b0:
     assert!(!after.contains("poison") && !after.contains("alloca"), "{after}");
     assert!(after.contains("undef"), "{after}");
 }
+
+/// Old: an offset was a signed number that did not wrap at the index width, so
+/// the byte 32798 of a 32,800-byte array, written `i16 -32738` (what 16 bits
+/// make of it), was "below the alloca": the store and its load were dead and
+/// the load read poison (c/wide_frame at -O2 printed 17, wanted 75). LLVM's
+/// offset is an `APInt` of the index width, compared as unsigned.
+#[test]
+fn test_an_offset_past_32k_written_as_a_negative_i16_is_inside_the_alloca() {
+    let after = sroa(
+        "define i16 @f() {
+b0:
+  %s = alloca [32800 x i8]
+  %p = getelementptr inbounds i8, ptr %s, i16 -32738
+  store i16 9, ptr %p
+  %x = load i16, ptr %p
+  ret i16 %x
+}
+",
+    );
+    assert!(!after.contains("poison"), "{after}");
+    assert!(after.contains("ret i16 9"), "{after}");
+}

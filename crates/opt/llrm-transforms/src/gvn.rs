@@ -212,7 +212,6 @@ impl FunctionPass for Gvn {
                     .with_registers(&registers)
                     .with_shape(&shape)
                     .with_counted(&counted),
-                &registers,
             )
         };
         match accesses.and_then(|accesses| {
@@ -514,7 +513,7 @@ fn _insertion(
     if function.instruction(cut).opcode != Opcode::Br || function.instruction(cut).operands.len() != 1 {
         return None;
     }
-    let cut_index = function.block(parent).instructions().iter().position(|&one| one == cut)? as i64;
+    let cut_index = function.block(parent).iter().position(|one| one == cut)? as i64;
     for operand in &op.operands {
         let Operand::Value(value) = operand else {
             continue;
@@ -566,7 +565,7 @@ pub fn joined(
     let mut definitions = IndexMap::<ValueId, (i64, i64)>::default();
     definitions.extend(function.parameters().iter().map(|&value| (value, (cfg::id(entry), -1))));
     for &block in function.layout() {
-        for (index, &inst) in function.block(block).instructions().iter().enumerate() {
+        for (index, inst) in function.block(block).iter().enumerate() {
             let op = function.instruction(inst);
             let Some(result) = op.result else {
                 continue;
@@ -588,7 +587,7 @@ pub fn joined(
         if block == entry || parents.len() < 2 {
             continue;
         }
-        for inst in function.block(block).instructions().to_vec() {
+        for inst in function.block(block).iter().collect::<Vec<_>>() {
             let op = function.instruction(inst).clone();
             if op.opcode == Opcode::Phi {
                 continue;

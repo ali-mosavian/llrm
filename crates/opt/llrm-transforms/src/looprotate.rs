@@ -330,7 +330,7 @@ fn should_speculate_instrs(
     let jump = function.terminator(latch).expect("a terminated latch");
     let mut seen_increment = false;
     let multi_exit_loop = lp.get_exiting_block(function).is_none();
-    for &inst in function.block(latch).instructions() {
+    for inst in function.block(latch).iter() {
         if inst == jump {
             break;
         }
@@ -426,7 +426,7 @@ fn rewrite_uses_of_cloned_instructions(
     value_map: &IdMap<ValueId, Operand>,
 ) {
     // Remove phi entries that are no longer live.
-    let header_instructions = run.function.block(orig_header).instructions().to_vec();
+    let header_instructions = run.function.block(orig_header).iter().collect::<Vec<_>>();
     for &inst in &header_instructions {
         if run.function.instruction(inst).opcode != Opcode::Phi {
             break;
@@ -439,8 +439,7 @@ fn rewrite_uses_of_cloned_instructions(
     // necessary.
     for &inst in &header_instructions {
         let Some(result) = run.function.instruction(inst).result else { continue };
-        // LLVM's use lists begin with the newest use; ours end with it.
-        let uses = run.function.users(result).iter().rev().copied().collect::<Vec<_>>();
+        let uses = run.function.users(result).iter().copied().collect::<Vec<_>>();
         // If there are no uses of the value there is nothing to rewrite.
         if uses.is_empty() {
             continue;
@@ -678,7 +677,7 @@ fn rotate_loop(
     // entry for each instruction. For phis, the value available in the old
     // preheader is just the incoming value from the old preheader.
     let mut value_map = IdMap::<ValueId, Operand>::new();
-    let header_instructions = run.function.block(orig_header).instructions().to_vec();
+    let header_instructions = run.function.block(orig_header).iter().collect::<Vec<_>>();
     let mut rest = 0;
     for &inst in &header_instructions {
         if run.function.instruction(inst).opcode != Opcode::Phi {
@@ -868,7 +867,7 @@ fn assume_calls(
     let function = &*run.function;
     lp.get_blocks()
         .iter()
-        .flat_map(|&block| function.block(block).instructions().iter().copied())
+        .flat_map(|&block| function.block(block).iter())
         .filter(|&inst| {
             llrm_mir::memory::callee(run.context, function, inst)
                 .is_some_and(|callee| run.globals[callee.0 as usize].name.as_deref() == Some("llvm.assume"))

@@ -3993,9 +3993,9 @@ fn test_dbg_lines_become_linnum() {
     let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {\n  %s = sub i16 %a, %b, !dbg !0\n  %t = add i16 %s, 3, !dbg !1\n  ret i16 %t, !dbg !1\n}\n!0 = !{i32 7}\n!1 = !{i32 8}\n";
     let module = parsed(text);
     let (_, _, function) = module.functions().next().expect("f");
-    let instructions = function.layout().iter().flat_map(|&block| function.block(block).instructions());
+    let instructions = function.layout().iter().flat_map(|&block| function.block(block).iter());
     let attached =
-        instructions.filter(|&&one| function.instruction(one).metadata.iter().any(|(kind, _)| kind == "dbg")).count();
+        instructions.filter(|&one| function.instruction(one).metadata.iter().any(|(kind, _)| kind == "dbg")).count();
     assert_eq!(attached, 3, "the fixture carries its lines");
     let mut assembled =
         assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC)
@@ -5533,4 +5533,18 @@ fn test_the_old_coalescer_is_not_reached_by_default() {
     let got = listing(text, "f");
     assert!(got.len() > 3, "premise: the function compiled: {got:?}");
     assert_eq!(crate::backend::coalesce::old_runs() - before, 0, "the old coalescer ran");
+}
+
+/// A far pointer that is poison (SROA's value for a read of an unwritten
+/// slot, which a returned struct's hidden pointer was) was refused: "an address
+/// of no global: Poison" (regparm3_matrix_22 at -O2). Poison is any value.
+#[test]
+fn test_a_poison_far_pointer_is_selected_as_any_value() {
+    let text = "define ptr addrspace(1) @f() addrspace(1) {
+b0:
+  ret ptr addrspace(1) poison
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line == "retf"), "{got:?}");
 }
