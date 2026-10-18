@@ -13,6 +13,7 @@ Two kinds:
   at most `steps` times its own work at N. Both less the empty file's.
 """
 import os
+import math
 import re
 import subprocess
 import sys
@@ -124,6 +125,63 @@ def parsed_steps(text: str) -> dict[str, float]:
     if not rows or any(unit != "Minstr" for _, unit, _ in rows):
         pytest.skip("no instruction counter on this host: the rows are CPU time")
     return {name: float(own) for own, _, name in rows}
+
+
+REGIME_JUMP = 1.0  # the exponent N -> 2N may exceed the one N/2 -> N by this much
+
+
+def exponent(small: float, big: float) -> float:
+    return math.log(big / small) / math.log(2)
+
+
+def regime_change(work_half: float, work_small: float, work_big: float) -> float:
+    """How much faster a step grows from N to 2N than from N/2 to N. A large number means something size-dependent switches on inside the window the
+    slope is read in (spilling starts, an analysis is rerun per loop): the ratio is then the switch, not a slope. A step that settles before N (the
+    exponent falls) is fine: that is the window being clear of the switch."""
+    return exponent(work_small, work_big) - exponent(work_half, work_small)
+
+
+def test_a_size_placed_across_a_regime_change_moves_the_exponent_up():
+    """nest at N=16 read analysis loop-products 0.36 (N=8), 0.97, 8.16 (N=32): k 1.4 then 3.1, the x8.4 of a switch (#2260). At N=32 it is 0.97, 8.16,
+    36.2: k 3.1 then 2.2, the switch behind it. A linear step does not move."""
+    assert regime_change(0.36, 0.97, 8.16) > REGIME_JUMP
+    assert regime_change(0.97, 8.16, 36.2) < 0
+    assert abs(regime_change(1.0, 2.0, 4.1)) < 0.2
+
+
+@cache
+def half_steps(axis: str) -> dict[str, float]:
+    """The steps of the compile at N/2: the premise's third point."""
+    return parsed_steps(run(source_of(axis, SIZES[axis] // 2), axis, "time"))
+
+
+@pytest.mark.parametrize("axis", AXES)
+def test_no_step_switches_on_between_the_two_sizes_of_an_axis(axis):
+    """The premise of the slope test: a step grows no faster from N to 2N than from N/2 to N (by more than REGIME_JUMP in the exponent). A regime
+    change inside the window fails here loudly, naming the step, instead of reading as a slope (a debt) or as paid; the fix is a larger N."""
+    _, _, small_text, big_text = measured(axis)
+    empty, half = empty_steps(axis), half_steps(axis)
+    small, big = parsed_steps(small_text), parsed_steps(big_text)
+    switched = {}
+    for name in big:
+        wb, ws, wh = (max(table.get(name, 0.0) - empty.get(name, 0.0), 0.0) for table in (big, small, half))
+        if wb < DEFAULT["floor_minstr"] or ws < 1.0 or wh < 0.3:
+            continue
+        if (jump := regime_change(wh, ws, wb)) > REGIME_JUMP:
+            switched[name] = round(jump, 2)
+    assert not switched, f"{axis} at N={SIZES[axis]}: exponent N -> 2N exceeds N/2 -> N by: {switched}: a regime change in the window; use a larger N"
+
+
+def test_the_nest_axis_straddles_the_loop_products_onset():
+    """The counter of the switch (not its cause): `analysis loop-products` misses are 1 up to N=18 and more from N=20 (1, 1, 4, 4, 3, 8, 9, 12 at N=16,
+    18, 20, 22, 24, 26, 28, 32; 26 at 64; `analysis pressure` equal at every N). N/2 must sit before the onset and N after it, or the slope read
+    from N to 2N is partly the switch."""
+    size = SIZES["nest"]
+    half = parsed_counts(run(source_of("nest", size // 2), "nest", "counts"))
+    small, big, _, _ = measured("nest")
+    assert half["analysis loop-products"] == 1 and half["analysis pressure"] == half["analysis loop-products"], half
+    assert small["analysis loop-products"] > 1 and big["analysis loop-products"] > small["analysis loop-products"], (small, big)
+    assert small["analysis pressure"] == small["analysis loop-products"] and big["analysis pressure"] == big["analysis loop-products"]
 
 
 @cache
