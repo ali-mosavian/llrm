@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifyindvar.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifyindvar.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifyindvar.rs sha256:3e8b06a4b2cc174748c9e66e5039f56d96937ec2eb9c40a7582f939c1bc2135b -->
+<!-- src: crates/opt/llrm-transforms/src/simplifyindvar.rs sha256:7607e743985b5ab8c49265f03ad60ec3230fd04331c19fb374d831fdb59c510b -->
 
 # simplifyindvar
 
@@ -44,7 +44,8 @@ From unit test `test_a_compare_the_trip_count_decides_is_a_constant` in
 `simplifyindvar_tests.rs`.
 
 ## Runs
-Step 0 of [`crate::indvars`](indvars.md), on by default; `LLRM_NO_SCEV_IVCMP` turns it off.
+Step 0 of [`crate::indvars`](indvars.md), on by default; `LLRM_NO_SCEV_IVCMP` turns it
+off.
 
 ## Needs
 `llrm_analysis::scev` (`ScevSession`): `evaluatePredicateAt`,
