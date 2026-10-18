@@ -451,8 +451,8 @@ fn is_known_non_null_from_dominating_condition(
     let Some(cxt_block) = q.block_of(cxt) else { return false };
 
     let mut explored = 0;
-    // LLVM walks the use list newest first; MIR's lists are oldest first.
-    for use_ in q.function.users(value).iter().rev() {
+    // LLVM walks the use list newest first, as `users` does.
+    for use_ in q.function.users(value) {
         if explored >= DOM_CONDITIONS_MAX_USES {
             break;
         }
