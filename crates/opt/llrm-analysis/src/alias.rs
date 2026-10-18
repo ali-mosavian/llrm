@@ -966,6 +966,14 @@ fn _borrowed(
     index: usize,
 ) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
+    // What these return is the operand's bytes, followed as a value: the call
+    // keeps nothing (`captures(ret: provenance)` in LLVM).
+    if matches!(
+        unit.intrinsic(at),
+        Some(llrm_mir::intrinsics::Intrinsic::Window | llrm_mir::intrinsics::Intrinsic::Restrict)
+    ) {
+        return true;
+    }
     let nocapture = |attrs: &[Attribute]| llrm_mir::facts::Facts::of(attrs).no_capture();
     let declared = llrm_mir::memory::callee(unit.context, unit.function, at)
         .and_then(|one| unit.globals.get(one.0 as usize))
@@ -2716,6 +2724,11 @@ fn _direct(
         }
         // The same bytes as its operand, said restrict: what it and what is
         // based on it reach is reached by nothing that is not.
+        // The window of a huge pointer: the same bytes, said by another
+        // pointer.
+        Opcode::Call(_) if unit.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::Window) => {
+            Ok(_operand(unit, op.operands[0], values))
+        }
         Opcode::Call(_) if unit.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::Restrict) => {
             let Some(source) = _operand(unit, op.operands[0], values) else { return Ok(None) };
             let restrict = source.restrict.union(&crate::memory::Sorted::from([Identity::Value(result.0)]));
