@@ -67,10 +67,14 @@ use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Block, Insn, LirBody};
 use crate::support::hash::IndexMap;
 
-/// The byte lanes of the general registers: seven roots of four bytes. The
-/// segment registers are not tracked: a string instruction reads `es`, which
-/// its effect does not say, so a dead-looking `mov es, ss` must stay.
-const UNITS: usize = 28;
+/// The byte lanes of the general registers (seven roots of four bytes), then
+/// of the six segment registers. A segment register is tracked as the source
+/// of a copy, never as its destination: a string instruction reads `es`, which
+/// its effect does not say, so a dead-looking `mov es, bx` must stay.
+const UNITS: usize = 40;
+
+/// The units of the general registers.
+const GENERAL: usize = 28;
 
 /// A set of units.
 type Mask = u64;
@@ -374,14 +378,16 @@ struct Machine {
 impl Machine {
     fn new(body: &LirBody) -> Self {
         let regs = body.regs();
-        let lanes: Vec<Lane> = llrm_x86::registers::ROOTS.into_iter().flat_map(|one| _lanes(regs, one)).collect();
+        let segments = [RegId::ES, RegId::CS, RegId::SS, RegId::DS, RegId::FS, RegId::GS];
+        let lanes: Vec<Lane> =
+            llrm_x86::registers::ROOTS.into_iter().chain(segments).flat_map(|one| _lanes(regs, one)).collect();
         assert_eq!(lanes.len(), UNITS, "the general registers' byte lanes");
         let mut places = vec![[u8::MAX; 4]; 512];
         for (unit, (register, byte)) in lanes.iter().enumerate() {
             places[register.index()][*byte as usize] = unit as u8;
         }
         let mut register_for = IndexMap::default();
-        for &register in regs.integer_registers().iter() {
+        for &register in regs.integer_registers().iter().chain(&segments) {
             let held: Vec<Lane> = _lanes(regs, register).into_iter().collect();
             if !held.is_empty() && !regs.is_stack(register) {
                 register_for.insert(held, register);
@@ -454,7 +460,7 @@ impl Machine {
             .map(|(dst, src)| Some((self.unit(dst)?, self.unit(src)?)))
             .collect::<Option<Vec<_>>>()?;
         let (dst, src) = pairs.iter().fold((0 as Mask, 0 as Mask), |(dst, src), (d, s)| (dst | 1 << d, src | 1 << s));
-        (dst & src == 0).then_some(Copy { pairs, dst, src })
+        (dst & src == 0 && dst >> GENERAL == 0).then_some(Copy { pairs, dst, src })
     }
 
     /// Every register `what` names, with where it sits: explicit operands and

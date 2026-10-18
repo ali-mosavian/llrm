@@ -237,3 +237,21 @@ fn test_a_copy_read_by_a_shift_is_not_dead() {
     let got = propagated(&body(vec![mov(0, rl(RegId::BX, 2), rl(RegId::AX, 2)), shift], &[RegId::BX]));
     assert_eq!(lines(&got)[0], "mov BX,AX");
 }
+
+/// `bx = ss` then `es = bx`: the segment register is read from `ss`.
+#[test]
+fn test_a_segment_register_is_loaded_from_the_source_of_the_copy() {
+    let got = propagated(&body(
+        vec![mov(0, rl(RegId::BX, 2), rl(RegId::SS, 2)), mov(1, rl(RegId::ES, 2), rl(RegId::BX, 2))],
+        &[RegId::BX],
+    ));
+    assert_eq!(lines(&got), ["-", "mov ES,SS"]);
+}
+
+/// A segment register that is only ever a copy's destination is not a copy to
+/// drop: `es` is read by string instructions that say nothing of it.
+#[test]
+fn test_a_copy_into_a_segment_register_is_kept() {
+    let got = propagated(&body(vec![mov(0, rl(RegId::ES, 2), rl(RegId::BX, 2))], &[RegId::ES]));
+    assert_eq!(lines(&got), ["mov ES,BX"]);
+}
