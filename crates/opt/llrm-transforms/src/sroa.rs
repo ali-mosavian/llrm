@@ -1221,9 +1221,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let allocas: Vec<InstId> = self
             .function()
             .block(entry)
-            .instructions()
             .iter()
-            .copied()
             .filter(|&inst| matches!(
                 self.function().instruction(inst).opcode,
                 Opcode::Alloca { .. }
@@ -2515,10 +2513,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         &self,
         inst: InstId,
     ) -> InstId {
-        let block = self.function().parent(inst).expect("a placed instruction");
-        let list = self.function().block(block).instructions();
-        let at = list.iter().position(|&one| one == inst).expect("in its block");
-        list[at + 1]
+        self.function().next_in_block(inst).expect("a terminator follows")
     }
 
     /// `AllocaSliceRewriter::rewriteIntegerStore`. SROA.cpp#L3639
@@ -2912,9 +2907,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             return self
                 .function()
                 .block(block)
-                .instructions()
                 .iter()
-                .copied()
                 .find(|&one| self.function().instruction(one).opcode != Opcode::Phi)
                 .expect("a block ends in a terminator");
         }
@@ -3030,13 +3023,12 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             }
             load_type = Some(ty);
             // Nothing between the phi and the load may store.
-            let list = function.block(block).instructions();
-            let from = list.iter().position(|&one| one == phi).expect("in its block");
-            let to = list.iter().position(|&one| one == load).expect("in its block");
-            if to < from {
+            if !function.comes_before(phi, load) {
                 return false;
             }
-            for &between in &list[from..to] {
+            let mut walk = Some(phi);
+            while let Some(between) = walk.filter(|&one| one != load) {
+                walk = function.next_in_block(between);
                 let writes = match function.instruction(between).opcode {
                     Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Resume => true,
                     Opcode::Load { volatile, .. } => volatile,
@@ -3104,9 +3096,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let block = function.parent(phi).expect("a placed phi");
         let first = function
             .block(block)
-            .instructions()
             .iter()
-            .copied()
             .find(|&one| function.instruction(one).opcode != Opcode::Phi);
         if first != Some(store) {
             return None;
