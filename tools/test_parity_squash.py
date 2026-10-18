@@ -91,3 +91,20 @@ def test_known_red_names_a_smoke_step_and_an_issue_and_goes_in_the_body_as_one_l
         except SystemExit:
             continue
         raise AssertionError(f"{bad!r} was accepted")
+
+
+def test_the_smoke_binaries_default_to_the_release_dir_when_all_three_are_there(tmp_path):
+    """backend-slopes could not run the tool without PARITY_BIN: unset, it finds the release dir, or says what to build."""
+    release = tmp_path / "release"
+    release.mkdir()
+    env = {"LLRM_BIN": str(release)}
+    try:
+        ps.smoke_bins(env)
+    except SystemExit as why:
+        assert "lacks llrm-c, llrm-qb, llrm-nib" in str(why)
+    else:
+        raise AssertionError("an empty release dir was accepted")
+    for name in ps.BINARIES:
+        (release / name).write_text("")
+    assert ps.smoke_bins(env) == str(release)
+    assert ps.smoke_bins({**env, "PARITY_BIN": "/x"}) == "/x"
