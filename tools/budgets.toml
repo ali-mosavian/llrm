@@ -565,15 +565,6 @@ why = "measured 8.6 -> 22.1 Minstr (x2.57)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "analysis counted"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.6 -> 6.3 Minstr (x2.43)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "analysis dominated-edges"
 ratio = 2.7
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
