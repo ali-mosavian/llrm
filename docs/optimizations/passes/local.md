@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/local.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/local.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:eb3f493f0aeff7d1d175b2c25d3555b50445fbdef3f6a31ce8ac91e5f76e3739 -->
+<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:7e9de207f2bcbe87ee888cd0bab5e5b26950c9bb8a9d816b41801f6262a457bb -->
 
 # local
 
@@ -14,6 +14,7 @@ and the parts of `Dominators.cpp`, `BasicBlockUtils.cpp`, `Loads.cpp`,
 function names the C++ function it translates, keeps its order of checks,
 and uses LLVM's name in snake case. Not called yet.
 
+## How it works
 MIR has no `Use` object: a use is `Use` (user and operand index), and a
 phi's value operand `i` comes in on the block operand `i + 1`. `RAUW` is
 `Function::replace_value`, which also points a debug record at the new
