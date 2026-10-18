@@ -274,8 +274,15 @@ impl LoopIdiomRecognize {
         // However, this would be unsafe to do if there is anything else in
         // the loop that may read or write to the aliased location. Check for
         // any overlap by generating the base pointer and checking the region.
-        let base_ptr =
-            expander.expand_code_for(run.env, run.context, run.function, run.se, start, Some(Ty::Ptr(dest_as)));
+        let base_ptr = expander.expand_code_for(
+            run.env,
+            run.context,
+            run.declared,
+            run.function,
+            run.se,
+            start,
+            Some(Ty::Ptr(dest_as)),
+        );
 
         // From here on out, conservatively report to the pass manager that
         // we've changed the IR, even if we later clean up these added
@@ -311,7 +318,7 @@ impl LoopIdiomRecognize {
         if pattern_value.is_some() && (self.has_memset_pattern || self.options.force_memset_pattern_intrinsic) {
             let trip_count_s = {
                 let cx = cx!(run);
-                run.se.get_trip_count_from_exit_count(&cx, args.be_count, int_idx_ty, header)
+                run.se.get_trip_count_from_exit_count(&cx, args.be_count, int_idx_ty, Some(header))
             };
             let safe = {
                 let cx = cx!(run);
@@ -321,8 +328,15 @@ impl LoopIdiomRecognize {
                 return (changed, false);
             }
             let Some(const_store_size) = run.se.match_apint(args.store_size_scev) else { return (changed, false) };
-            let trip_count =
-                expander.expand_code_for(run.env, run.context, run.function, run.se, trip_count_s, Some(int_idx_ty));
+            let trip_count = expander.expand_code_for(
+                run.env,
+                run.context,
+                run.declared,
+                run.function,
+                run.se,
+                trip_count_s,
+                Some(int_idx_ty),
+            );
             let pattern_bits = {
                 let ty = run.context.get(pattern_value.expect("a pattern")).ty;
                 run.env.layout.size_bits(&run.context.types, ty)
@@ -352,8 +366,15 @@ impl LoopIdiomRecognize {
             if !safe {
                 return (changed, false);
             }
-            memset_arg =
-                expander.expand_code_for(run.env, run.context, run.function, run.se, num_bytes_s, Some(int_idx_ty));
+            memset_arg = expander.expand_code_for(
+                run.env,
+                run.context,
+                run.declared,
+                run.function,
+                run.se,
+                num_bytes_s,
+                Some(int_idx_ty),
+            );
         }
 
         if let Some(splat) = splat_value {
@@ -544,8 +565,15 @@ impl LoopIdiomRecognize {
         // that may read or write the memory region we're storing to. This
         // includes the load that feeds the stores. Check for an alias by
         // generating the base address and checking everything.
-        let store_base_ptr =
-            expander.expand_code_for(run.env, run.context, run.function, run.se, str_start, Some(Ty::Ptr(str_as)));
+        let store_base_ptr = expander.expand_code_for(
+            run.env,
+            run.context,
+            run.declared,
+            run.function,
+            run.se,
+            str_start,
+            Some(Ty::Ptr(str_as)),
+        );
 
         // From here on out, conservatively report to the pass manager that
         // we've changed the IR, even if we later clean up these added
@@ -589,8 +617,15 @@ impl LoopIdiomRecognize {
 
         // For a memcpy, we have to make sure that the input array is not being
         // mutated by the loop.
-        let load_base_ptr =
-            expander.expand_code_for(run.env, run.context, run.function, run.se, ld_start, Some(Ty::Ptr(ld_as)));
+        let load_base_ptr = expander.expand_code_for(
+            run.env,
+            run.context,
+            run.declared,
+            run.function,
+            run.se,
+            ld_start,
+            Some(Ty::Ptr(ld_as)),
+        );
 
         // If the store is a memcpy instruction, we must check if it will write
         // to the load memory locations. So remove it from the ignored stores.
@@ -621,8 +656,15 @@ impl LoopIdiomRecognize {
             get_num_bytes(&cx, run.se, args.be_count, int_idx_ty, args.store_size_scev, run.cur_loop)
         };
 
-        let num_bytes =
-            expander.expand_code_for(run.env, run.context, run.function, run.se, num_bytes_s, Some(int_idx_ty));
+        let num_bytes = expander.expand_code_for(
+            run.env,
+            run.context,
+            run.declared,
+            run.function,
+            run.se,
+            num_bytes_s,
+            Some(int_idx_ty),
+        );
 
         build::create_mem_copy(
             run.context,

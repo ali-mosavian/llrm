@@ -1,8 +1,7 @@
 //! `getSequentialMinMaxExpr`: `umin_seq`, with the visitor that keeps only the
 //! first instance of an operand.
 
-use std::collections::HashSet;
-
+use llrm_mir::hash::HashSet;
 use llrm_mir::opcode::IntPredicate;
 
 use super::expr::{Kind, Scev, Type, Use};
@@ -30,7 +29,7 @@ impl Deduplicator {
         Self {
             root_kind,
             non_sequential_root_kind: equivalent_non_sequential_scev_type(root_kind),
-            seen_ops: HashSet::new(),
+            seen_ops: HashSet::default(),
         }
     }
 

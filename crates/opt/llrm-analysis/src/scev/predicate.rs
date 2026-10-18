@@ -3,10 +3,11 @@
 //! Reasoning` adds to the constant ranges. The implication engine
 //! (`isImpliedCond`, `applyLoopGuards`) and the loop guards are the rest of S5.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use llrm_mir::constantrange::ConstantRange;
 use llrm_mir::dense::IdSet;
+use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, Operand, ValueDef};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 
@@ -15,7 +16,7 @@ use super::expr::{Kind, Scev, Type, Use, flags};
 use super::{Cx, ScalarEvolution};
 
 /// `ICmpInst::isTrueWhenEqual`.
-fn is_true_when_equal(pred: IntPredicate) -> bool {
+pub(super) fn is_true_when_equal(pred: IntPredicate) -> bool {
     matches!(
         pred,
         IntPredicate::Eq | IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle
@@ -23,7 +24,7 @@ fn is_true_when_equal(pred: IntPredicate) -> bool {
 }
 
 /// `ICmpInst::isFalseWhenEqual`.
-fn is_false_when_equal(pred: IntPredicate) -> bool {
+pub(super) fn is_false_when_equal(pred: IntPredicate) -> bool {
     matches!(
         pred,
         IntPredicate::Ne | IntPredicate::Ugt | IntPredicate::Ult | IntPredicate::Sgt | IntPredicate::Slt
@@ -31,7 +32,7 @@ fn is_false_when_equal(pred: IntPredicate) -> bool {
 }
 
 /// `CmpInst::isSigned`.
-fn is_signed(pred: IntPredicate) -> bool {
+pub(super) fn is_signed(pred: IntPredicate) -> bool {
     matches!(
         pred,
         IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
@@ -39,7 +40,7 @@ fn is_signed(pred: IntPredicate) -> bool {
 }
 
 /// `CmpInst::isUnsigned`.
-fn is_unsigned(pred: IntPredicate) -> bool {
+pub(super) fn is_unsigned(pred: IntPredicate) -> bool {
     matches!(
         pred,
         IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule
@@ -47,12 +48,12 @@ fn is_unsigned(pred: IntPredicate) -> bool {
 }
 
 /// `ICmpInst::isEquality`.
-fn is_equality(pred: IntPredicate) -> bool {
+pub(super) fn is_equality(pred: IntPredicate) -> bool {
     matches!(pred, IntPredicate::Eq | IntPredicate::Ne)
 }
 
 /// `CmpInst::isRelational`.
-fn is_relational(pred: IntPredicate) -> bool {
+pub(super) fn is_relational(pred: IntPredicate) -> bool {
     !is_equality(pred)
 }
 
@@ -125,7 +126,7 @@ impl ScalarEvolution {
     }
 
     /// `MatchBinarySub`: `S` as `LHS - RHS`, with `RHS` the multiplied operand.
-    fn match_binary_sub(
+    pub(super) fn match_binary_sub(
         &self,
         s: Scev,
     ) -> Option<(Scev, Scev)> {
@@ -1033,7 +1034,7 @@ impl ScalarEvolution {
         s: Scev,
         loops_used: &mut IdSet<BlockId>,
     ) {
-        let mut visited = HashSet::new();
+        let mut visited = HashSet::default();
         let mut worklist = vec![s];
         visited.insert(s);
         while let Some(s) = worklist.pop() {
@@ -1049,30 +1050,6 @@ impl ScalarEvolution {
                 }
             }
         }
-    }
-
-    /// `isLoopEntryGuardedByCond(L, Pred, LHS, RHS)`. SEAM (S5).
-    pub fn is_loop_entry_guarded_by_cond_pred(
-        &mut self,
-        _cx: &Cx,
-        _l: BlockId,
-        _pred: IntPredicate,
-        _lhs: Scev,
-        _rhs: Scev,
-    ) -> bool {
-        false
-    }
-
-    /// `isLoopBackedgeGuardedByCond(L, Pred, LHS, RHS)`. SEAM (S5).
-    pub fn is_loop_backedge_guarded_by_cond_pred(
-        &mut self,
-        _cx: &Cx,
-        _l: BlockId,
-        _pred: IntPredicate,
-        _lhs: Scev,
-        _rhs: Scev,
-    ) -> bool {
-        false
     }
 
     /// `isKnownOnEveryIteration(Pred, AR, RHS)`. SEAM (S5).

@@ -4,7 +4,7 @@
 //! answer until its stage lands; the stack that lands S1 lands them with it.
 //! A seam never makes a fold unsound, only less eager than LLVM's.
 
-use super::expr::{Scev, flags};
+use super::expr::Scev;
 use super::{Cx, ScalarEvolution};
 
 impl ScalarEvolution {
@@ -38,44 +38,12 @@ impl ScalarEvolution {
         self.get_signed_range_min(cx, s).is_strictly_positive()
     }
 
-    /// `HasGuards`: the function calls `llvm.experimental.guard`.
-    pub fn has_guards(&self) -> bool {
-        false
-    }
-
     /// `!AC.assumptions().empty()`.
     pub fn has_assumptions(
         &self,
         cx: &Cx,
     ) -> bool {
         !cx.assumptions.assumes.is_empty()
-    }
-
-    /// `getSCEV(V)`. SEAM (S3): `createSCEV`; an unknown is a valid answer.
-    pub fn get_scev(
-        &mut self,
-        cx: &Cx,
-        v: llrm_mir::module::Operand,
-    ) -> Scev {
-        self.get_unknown(cx, v)
-    }
-
-    /// `proveNoUnsignedWrapViaInduction` (S5).
-    pub fn prove_no_unsigned_wrap_via_induction(
-        &mut self,
-        _cx: &Cx,
-        _ar: Scev,
-    ) -> u8 {
-        flags::NONE
-    }
-
-    /// `proveNoSignedWrapViaInduction` (S5).
-    pub fn prove_no_signed_wrap_via_induction(
-        &mut self,
-        _cx: &Cx,
-        _ar: Scev,
-    ) -> u8 {
-        flags::NONE
     }
 
     /// The type of an IR type id, for the folds that build integer types.
@@ -86,3 +54,5 @@ impl ScalarEvolution {
         super::expr::Ty::Int(bits)
     }
 }
+
+impl ScalarEvolution {}

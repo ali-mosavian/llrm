@@ -93,6 +93,9 @@ mod constraintelim_tests;
 #[cfg(test)]
 mod corpus_tests;
 pub mod counting;
+pub mod cvp;
+#[cfg(test)]
+mod cvp_tests;
 pub mod dead;
 pub mod deadargs;
 #[cfg(test)]
@@ -170,6 +173,7 @@ pub mod promote;
 pub mod rotate;
 pub mod settled;
 pub mod simplifycfg;
+pub mod simplifyindvar;
 pub mod sink;
 pub mod spares;
 pub mod spill;

@@ -11,6 +11,8 @@ pub struct PointerSpec {
     pub bits: u32,
     /// ABI alignment, in bytes.
     pub align: u64,
+    /// Preferred alignment, in bytes: the ABI one unless stated.
+    pub pref: u64,
     pub index_bits: u32,
     /// `HasUnstableRepresentation`: set by `ni:` ([`DataLayout::parse`]).
     pub unstable: bool,
@@ -23,9 +25,14 @@ pub struct DataLayout {
     /// Integer widths with their ABI alignment in bytes.
     ints: BTreeMap<u32, u64>,
     floats: BTreeMap<u32, u64>,
+    /// The preferred alignments of the integer and float widths, in bytes.
+    int_prefs: BTreeMap<u32, u64>,
+    float_prefs: BTreeMap<u32, u64>,
     /// The integer widths the target computes natively: `n`.
     legal: Vec<u32>,
     aggregate_align: u64,
+    /// The preferred alignment of an aggregate, in bytes: `a:0:64`.
+    aggregate_pref: u64,
     pub alloca_space: u32,
 }
 
@@ -34,11 +41,17 @@ impl Default for DataLayout {
     fn default() -> Self {
         Self {
             big_endian: false,
-            pointers: BTreeMap::from([(0, PointerSpec { bits: 64, align: 8, index_bits: 64, unstable: false })]),
+            pointers: BTreeMap::from([(
+                0,
+                PointerSpec { bits: 64, align: 8, pref: 8, index_bits: 64, unstable: false },
+            )]),
             ints: BTreeMap::from([(1, 1), (8, 1), (16, 2), (32, 4), (64, 4)]),
             floats: BTreeMap::from([(16, 2), (32, 4), (64, 8), (80, 2), (128, 16)]),
+            int_prefs: BTreeMap::from([(1, 1), (8, 1), (16, 2), (32, 4), (64, 8)]),
+            float_prefs: BTreeMap::from([(16, 2), (32, 4), (64, 8), (80, 2), (128, 16)]),
             legal: Vec::new(),
             aggregate_align: 1,
+            aggregate_pref: 8,
             alloca_space: 0,
         }
     }
@@ -91,6 +104,7 @@ impl DataLayout {
                             PointerSpec {
                                 bits: *size as u32,
                                 align: bytes(*abi),
+                                pref: bytes(rest.first().copied().unwrap_or(*abi)),
                                 index_bits: index as u32,
                                 unstable: false,
                             },
@@ -99,9 +113,18 @@ impl DataLayout {
                 "i" | "f" | "a" => {
                     let fields = numbers(rest)?;
                     match (head, fields.as_slice()) {
-                        ("i", [size, abi, ..]) => drop(layout.ints.insert(*size as u32, bytes(*abi))),
-                        ("f", [size, abi, ..]) => drop(layout.floats.insert(*size as u32, bytes(*abi))),
-                        ("a", [_, abi, ..]) | ("a", [abi]) => layout.aggregate_align = bytes(*abi).max(1),
+                        ("i", [size, abi, rest @ ..]) => {
+                            layout.ints.insert(*size as u32, bytes(*abi));
+                            layout.int_prefs.insert(*size as u32, bytes(rest.first().copied().unwrap_or(*abi)));
+                        }
+                        ("f", [size, abi, rest @ ..]) => {
+                            layout.floats.insert(*size as u32, bytes(*abi));
+                            layout.float_prefs.insert(*size as u32, bytes(rest.first().copied().unwrap_or(*abi)));
+                        }
+                        ("a", [_, abi, rest @ ..]) | ("a", [abi, rest @ ..]) if rest.len() <= 1 => {
+                            layout.aggregate_align = bytes(*abi).max(1);
+                            layout.aggregate_pref = bytes(rest.first().copied().unwrap_or(*abi)).max(1);
+                        }
                         _ => return Err(format!("`{spec}` in the datalayout")),
                     }
                 }
@@ -232,6 +255,79 @@ impl DataLayout {
         }
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/DataLayout.cpp#L871
+    /// `getPrefTypeAlign`: `getAlignment(Ty, abi_or_pref = false)`, in bytes.
+    pub fn pref_align(
+        &self,
+        types: &Types,
+        ty: TypeId,
+    ) -> u64 {
+        let wide = |specs: &BTreeMap<u32, u64>, bits: u32| {
+            specs.range(bits..).next().or_else(|| specs.iter().next_back()).map_or(1, |(_, align)| *align)
+        };
+        match types.get(ty) {
+            Type::Int(bits) => wide(&self.int_prefs, *bits),
+            Type::Float(kind) => self.float_prefs[&float_bits(*kind)],
+            Type::Pointer(space) => self.pointer(*space).pref,
+            Type::Array { element, .. } => self.pref_align(types, *element),
+            Type::Vector { .. } => self.store_size(types, ty).next_power_of_two(),
+            Type::Struct { .. } | Type::Named(_) => {
+                // The layout's alignment is the largest ABI one of the
+                // fields, and one for a packed struct.
+                let layout = self.align_of_struct_layout(types, ty);
+                layout.max(self.aggregate_pref)
+            }
+            Type::Void | Type::Label | Type::Metadata | Type::Token | Type::Function { .. } => 1,
+        }
+    }
+
+    /// The alignment a global variable is emitted at:
+    /// `DataLayout::getPreferredAlign(GV)`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/DataLayout.cpp#L1003-L1038>)
+    /// and `AsmPrinter::getGVAlignment`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L380-L405>):
+    /// the type's preferred alignment, raised to the stated one, and 16 for an
+    /// initialized global over 128 bits that states none. A stated alignment of
+    /// a global in a section is kept exactly.
+    pub fn global_align(
+        &self,
+        types: &Types,
+        ty: TypeId,
+        stated: Option<u64>,
+        in_section: bool,
+        initialized: bool,
+    ) -> u64 {
+        let mut align = self.pref_align(types, ty);
+        match stated {
+            Some(stated) if in_section => return stated,
+            Some(stated) if stated >= align => align = stated,
+            Some(stated) => align = stated.max(self.align(types, ty)),
+            None if initialized && align < 16 && self.size_bits(types, ty) > 128 => align = 16,
+            None => {}
+        }
+        match stated {
+            Some(stated) if stated > align => stated,
+            _ => align,
+        }
+    }
+
+    /// `StructLayout::getAlignment`: the largest ABI alignment of the fields
+    /// (one for a packed struct), at least the aggregate ABI alignment.
+    fn align_of_struct_layout(
+        &self,
+        types: &Types,
+        ty: TypeId,
+    ) -> u64 {
+        let packed = match types.get(ty) {
+            Type::Struct { packed, .. } => *packed,
+            Type::Named(name) => types.body(name).is_some_and(|body| body.packed),
+            _ => false,
+        };
+        let fields = types.fields(ty).unwrap_or_default();
+        let largest = if packed { 1 } else { fields.iter().map(|&one| self.align(types, one)).max().unwrap_or(1) };
+        largest.max(self.aggregate_align)
+    }
+
     /// The bits a value of `ty` holds.
     pub fn size_bits(
         &self,
@@ -348,5 +444,61 @@ mod tests {
         let layout = DataLayout::parse("e-p:16:16-p1:32:16:16:16-p3:32:16:16:32").unwrap();
         assert_eq!((layout.offset_bits(0), layout.offset_bits(1)), (16, 16));
         assert_eq!(layout.offset_bits(3), 16);
+    }
+
+    /// `getPrefTypeAlign`: LLVM's defaults prefer an aggregate 8-byte
+    /// aligned (`a:0:64`) and an `i64` 8 (`i64:32:64`), over their ABI 1 and
+    /// 4 here; a stated preferred alignment wins. `pointer_alignment` took the
+    /// ABI one for a global and lost the low 3 bits of its address.
+    #[test]
+    fn the_preferred_alignment_of_an_aggregate_is_8_unless_the_layout_says_otherwise() {
+        let mut module = crate::parse::module(
+            "@g = global <{ [2 x i8], i16 }> zeroinitializer\n@h = global i64 0\n@p = global ptr null\n",
+        )
+        .unwrap();
+        let types = &module.context.types;
+        let of = |name: &str| {
+            let variable = module.globals.iter().find(|one| one.name.as_deref() == Some(name)).unwrap();
+            let crate::module::GlobalKind::Variable(variable) = &variable.kind else { unreachable!("a variable") };
+            variable.ty
+        };
+        let layout = DataLayout::default();
+        assert_eq!((layout.align(types, of("g")), layout.pref_align(types, of("g"))), (1, 8));
+        assert_eq!((layout.align(types, of("h")), layout.pref_align(types, of("h"))), (4, 8));
+        assert_eq!(layout.pref_align(types, of("p")), layout.pointer(0).align);
+        let stated = DataLayout::parse("a:0:32-i64:32:128-p:64:64:128").unwrap();
+        assert_eq!(
+            (stated.pref_align(types, of("g")), stated.pref_align(types, of("h")), stated.pref_align(types, of("p"))),
+            (4, 16, 16)
+        );
+        module.globals.clear();
+    }
+
+    /// Globals with no stated alignment were emitted byte aligned (a dword a
+    /// loop reads misaligned across two cache lines on a 486). `getGVAlignment`
+    /// gives the type's preferred alignment, 16 over 128 bits, and keeps a
+    /// stated alignment of a global in a section.
+    #[test]
+    fn a_global_is_aligned_as_the_preferred_alignment_of_its_type() {
+        let module = crate::parse::module(
+            "@w = global i32 0\n@b = global i8 0\n@big = global [40 x i8] zeroinitializer\n@small = global [4 x i8] zeroinitializer\n",
+        )
+        .unwrap();
+        let types = &module.context.types;
+        let of = |name: &str| {
+            let variable = module.globals.iter().find(|one| one.name.as_deref() == Some(name)).unwrap();
+            let crate::module::GlobalKind::Variable(variable) = &variable.kind else { unreachable!("a variable") };
+            variable.ty
+        };
+        let layout = DataLayout::parse("i32:32-i8:8").unwrap();
+        let align =
+            |name, stated, section, initialized| layout.global_align(types, of(name), stated, section, initialized);
+        assert_eq!(align("w", None, false, true), 4);
+        assert_eq!(align("b", None, false, true), 1);
+        assert_eq!(align("big", None, false, true), 16, "over 128 bits and initialized");
+        assert_eq!(align("big", None, false, false), 1, "a declaration is not raised");
+        assert_eq!(align("small", Some(8), false, true), 8, "a stated alignment is kept");
+        assert_eq!(align("w", Some(1), false, true), 4, "raised to the type's ABI alignment");
+        assert_eq!(align("w", Some(1), true, true), 1, "kept exactly in a section");
     }
 }

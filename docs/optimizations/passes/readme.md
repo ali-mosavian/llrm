@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 83 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 85 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -18,6 +18,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | cfg | Control-flow cleanup: a block that jumps unconditionally to a block only it reaches takes that block's instructions (LLVM's SimplifyCFG `MergeBlockIntoPredecessor`). | A library function, called by `decide` after it decides branches and by | [cfg](cfg.md) |
 | constraintelim | `constraint-elimination`: conditions the dominating branches, assumes and memory accesses already decide become constants, by Fourier-Motzkin elimination on a system of linear constraints over the values compared. | Nothing yet: `difference` and `guards::Given::holds` move here. | [constraintelim](constraintelim.md) |
 | counting | What a counted-loop rewrite places before the loop: its seeds, skip test and exit values (LLVM's SCEVExpander, as IndVarSimplify and LoopRotate use it). | [`crate::loopidioms`](loopidioms.md), [`crate::loopexit`](loopexit.md), [`crate::window`](window.md) and | [counting](counting.md) |
+| cvp | Correlated value propagation: a value is replaced, narrowed or given a flag when the branches and ranges around it prove the fact, as LLVM's `correlated-propagation`. | Alone, through `llrm-pass cvp`; not in the pipeline. `tools/difftest` | [cvp](cvp.md) |
 | dead | Instructions nothing needs, removed: LLVM's ADCE and DCE. | Once per pass of the function fixed point, after `algebraic`, and again | [dead](dead.md) |
 | deadargs | Dead argument elimination (LLVM's DeadArgumentElimination): a parameter nothing reads goes, and with it the argument at every call. | In the interprocedural step, after the callers' arguments have been | [deadargs](deadargs.md) |
 | decide | Branches whose way is known, decided: LLVM's JumpThreading and SimplifyCFG on known conditions. | Once per pass of the function fixed point, after `fold` and `ports` and | [decide](decide.md) |
@@ -75,6 +76,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | rotate | Loop rotation: a loop proven to run at least once is entered at its body, not its test; a loop that is not proven is entered behind a copy of its test (gcc's `-ftree-ch`). | Twice in [`crate::pipeline`](pipeline.md), outside the per-body fixed point. `copy` runs | [rotate](rotate.md) |
 | settled | What each pass found nothing to do on, kept from one run of the pipeline over a body to the next: a body goes through its pipeline again only where something a pass read of it has changed. | `Settled` (the records, held by the module's `Context`) and `slice`. | [settled](settled.md) |
 | simplifycfg | A terminator on a constant becomes a jump, the blocks nothing reaches go, and what that leaves is merged: LLVM's `SimplifyCFGPass` and the `ConstantFoldTerminator`, `removeUnreachableBlocks` and `BasicBlock::removePredecessor` it is made of. | Once per round of the function fixed point, before `decide`: the branches | [simplifycfg](simplifycfg.md) |
+| simplifyindvar | SimplifyIndVar's comparison elimination: a comparison with an induction variable that ScalarEvolution proves true or false is that constant. | Step 0 of [`crate::indvars`](indvars.md), on by default; `LLRM_NO_SCEV_IVCMP` turns it | [simplifyindvar](simplifyindvar.md) |
 | sink | Work moved down to the one place that needs it, so the paths that skip that place no longer run it: gcc's `-ftree-sink` (`pass_sink_code`), LLVM's `Sink` and `MachineSink`. | Last of the function passes before `switchconv`, after `addresssink`; off | [sink](sink.md) |
 | spares | Keeps what the optimizer proved of a fixed-cell load for instruction selection: each write that leaves the load's bytes as they were, as `!llrm.spares` on the load, so the spiller can rematerialize the load past those writes. | Once, last in [`crate::pipeline`](pipeline.md) with `homes`, so the instruction ids it | [spares](spares.md) |
 | spill | The one spill model every pricing of register pressure shares: what values past the target's registers cost. | [`crate::profit`](profit.md) (`spill_forecast`, `weighted`) prices every motion with | [spill](spill.md) |

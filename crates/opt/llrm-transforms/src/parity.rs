@@ -108,6 +108,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("phiopt@1244", Cleanup, "simplifycfg", Old, "simplifycfg-port"),
     entry("sroa@646", Simplify, "sroa", Old, "sroa.rs"),
     entry("earlycse@649", Simplify, "early-cse<memssa>", Translated, ""),
+    entry("cvp@669", Simplify, "correlated-propagation", Translated, ""),
     entry("decide@675", Simplify, "simplifycfg, jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("phiopt@675", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("fold@677", Simplify, "instcombine", Old, "instcombine-port"),
@@ -138,6 +139,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@801", Simplify, "adce", Old, "adce-port"),
     entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
+    entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
     entry("memcpyopt@818", Simplify, "memcpyopt", Old, "memcpyopt-port"),
     entry("merge@818", Simplify, "mldst-motion", Old, ""),
     entry("dse@820", Simplify, "dse", Old, "dse-port"),
@@ -170,12 +172,11 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("floatalloc@8", Backend, "x86-fp-stackifier (X86FloatingPoint.cpp)", Translated, ""),
     entry("twoaddr@9", Backend, "two-address-instruction", Old, "lir-cleanup-poc"),
     entry("coalesce@10", Backend, "register-coalescer", Old, "lir-cleanup-poc"),
-    entry(
+    partial(
         "allocate@11",
         Backend,
         "greedy, spill-code-placement, virtregrewriter, stack-slot-coloring",
-        Old,
-        "regalloc-core-poc",
+        "greedy by default under LLVM's order (#2312); criterion: LLRM_CHECK_LIVEINTERVALS and LLRM_GREEDY_CHECK pass; exit: SplitKit translated and rows at or below the old allocator per row",
     ),
     entry("parcopy@12", Backend, "phi-node-elimination copies, virtregrewriter", Old, ""),
     entry("prologue@13", Backend, "prologepilog", Old, ""),
@@ -211,22 +212,97 @@ pub struct AnalysisEntry {
 
 /// The analyses with a translation or a stand-in the registry follows. The
 /// result of `mssa` is handed out mutable (the walker lives inside it).
-pub const ANALYSES: &[AnalysisEntry] = &[AnalysisEntry {
-    key: "mssa",
-    llvm: "MemorySSAAnalysis",
-    kind: Translated,
-    off: true,
-    deps: &["aa"],
-    oracle: "shadow_mssa equality on dumped pass inputs",
-}];
+pub const ANALYSES: &[AnalysisEntry] = &[
+    AnalysisEntry {
+        key: "loops",
+        llvm: "LoopAnalysis",
+        kind: Translated,
+        off: false,
+        deps: &["dominators"],
+        oracle: "tools/loops_oracle.py: print<loops> of opt at the pin",
+    },
+    AnalysisEntry {
+        key: "mssa",
+        llvm: "MemorySSAAnalysis",
+        kind: Translated,
+        off: true,
+        deps: &["aa"],
+        oracle: "shadow_mssa equality on dumped pass inputs",
+    },
+];
 
 /// Vocabulary the manager does not have yet. `PreservedAnalyses` keeps an
 /// analysis or drops it; LLVM's passes that keep MemorySSA do so by updating it
 /// (`MemorySSAUpdater`), which the manager cannot tell from "unchanged".
-pub const TODO: &[&str] = &[
-    "preserved, kept updated by the pass (MemorySSAUpdater): not a PreservedAnalyses variant yet",
-    "LoopInfo is invalidated by CFG changes only (CFGAnalyses): the manager keys by (analysis, function) already but has no CFG-preserved set",
+pub const TODO: &[&str] =
+    &["preserved, kept updated by the pass (MemorySSAUpdater): not a PreservedAnalyses variant yet"];
+
+/// How many times LLVM runs a slot's pass over one body in one visit of the
+/// function (`PassBuilderPipelines.cpp`: the function simplification pipeline
+/// runs once per function, so `gvn` once; llvm-difftest counted 11 on d_faces
+/// -O2 for its 11 functions). The slot name is as in `llvm_order`.
+pub const RUNS_PER_BODY: &[(&str, [usize; 4])] = &[("gvn@787", [0, 1, 1, 1])];
+
+/// The level a list is built for: the pin's `default<O1>`, `default<O2>`,
+/// `default<O3>`; -Os is the -O2 list on optsize IR (`opt` rejects `-Os`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Level {
+    O1,
+    O2,
+    O3,
+    Os,
+}
+
+impl Level {
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// Registry slots the pin's `default<O1>` does not have (no GVN at -O1:
+/// `buildO1FunctionSimplificationPipeline`), so a Translated one is not
+/// required in a -O1 list.
+pub const ABSENT_AT_O1: &[&str] = &["gvn@787"];
+
+/// Run counts LLVM does not match yet, stated and not checked:
+/// `loopsimplify`/`lcssa` run at three unconditional slots per body at every
+/// level (x_hanoi2: ours 9/9/15/9 at -O1/-O2/-O3/-Os against LLVM's
+/// 4/10/10/10).
+pub const RUN_COUNTS_OPEN: &[&str] = &[
+    "loopsimplify@764,772,823 and lcssa: one pair per loop-pass adaptor",
+    "-O3 reruns a body's whole list after `ipa-cp.` and `ipa-deadargs.` (d_faces: _d_draw_faces runs the 52 steps three times, 17 gvn runs over 12 bodies against -O2's 12): LLVM runs IPSCCP and deadargelim before the function pipelines, so a body is not run twice (cgscc-poc's single pass-list run per SCC visit)",
 ];
+
+/// `name` without the slot it stands in (`gvn@787` is `gvn`); the rounds name
+/// their passes without a slot.
+fn base_of(name: &str) -> &str {
+    name.split_once('@').map_or(name, |split| split.0)
+}
+
+/// `lines`, the `LLRM_DEBUG=runs` lines of a compile of `bodies` functions,
+/// against [`RUNS_PER_BODY`]: a slot that ran over more bodies' worth of
+/// steps than its allowance is the error. Linear in the lines.
+pub fn check_run_counts(
+    lines: &[String],
+    bodies: usize,
+    level: Level,
+) -> Result<(), String> {
+    for (slot, per_level) in RUNS_PER_BODY {
+        let per_body = &per_level[level.index()];
+        let ran = lines
+            .iter()
+            .filter(|line| line.starts_with("step "))
+            .filter_map(|line| line.split_whitespace().nth(1))
+            .filter(|name| base_of(name.split_once('-').map_or(*name, |split| split.1)) == base_of(slot))
+            .count();
+        if ran > *per_body * bodies {
+            return Err(format!(
+                "{slot} ran {ran} times over {bodies} bodies at {level:?}, LLVM runs it {per_body} per body"
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// `built`, the slot names a list of `phase` runs, against the registry: the
 /// first Translated slot of the phase that it lacks, or slot it has that the
@@ -236,7 +312,20 @@ pub(crate) fn check(
     phase: Phase,
     built: &[&str],
 ) -> Result<(), String> {
-    for one in registry.iter().filter(|one| one.phase == phase && matches!(one.kind, Translated | Partial)) {
+    check_without(registry, phase, built, &[])
+}
+
+/// [`check`] where the slots in `absent` are not LLVM's at this level.
+fn check_without(
+    registry: &[Entry],
+    phase: Phase,
+    built: &[&str],
+    absent: &[&str],
+) -> Result<(), String> {
+    for one in registry
+        .iter()
+        .filter(|one| one.phase == phase && matches!(one.kind, Translated | Partial) && !absent.contains(&one.slot))
+    {
         if !built.contains(&one.slot) {
             return Err(format!("slot {} is Translated ({}) and not run in {phase:?}", one.slot, one.llvm));
         }
@@ -264,7 +353,18 @@ pub fn check_phase(
     phase: Phase,
     built: &[&str],
 ) -> Result<(), String> {
-    check(REGISTRY, phase, built)?;
+    check_phase_at(phase, built, Level::O2)
+}
+
+/// [`check_phase`] for the list of `level`: the slots the pin's list of that
+/// level lacks are not required.
+pub fn check_phase_at(
+    phase: Phase,
+    built: &[&str],
+    level: Level,
+) -> Result<(), String> {
+    let absent = if level == Level::O1 { ABSENT_AT_O1 } else { &[] };
+    check_without(REGISTRY, phase, built, absent)?;
     llrm_mir::counts::joined(joined_slots(REGISTRY, built));
     Ok(())
 }

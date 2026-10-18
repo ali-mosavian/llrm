@@ -1421,6 +1421,20 @@ struct SemiNca<'a, G: DomGraph, const POST: bool> {
 type NodeOrderMap = IdMap<BlockId, u32>;
 
 thread_local! {
+    static WORK: Cell<u64> = const { Cell::new(0) };
+}
+
+fn counted() {
+    WORK.with(|work| work.set(work.get() + 1));
+}
+
+/// Blocks visited and ancestors climbed by the constructions on this thread:
+/// the work a test counts, as the wall clock moves with the host's load.
+pub fn work() -> u64 {
+    WORK.with(Cell::get)
+}
+
+thread_local! {
     /// The records of the last `SemiNca` to go, all clear: LLVM's `NodeInfos`
     /// is allocated and zeroed for every block of the function by each
     /// construction, and an update of one edge makes several. DEVIATE 10.
@@ -1609,6 +1623,7 @@ impl<'a, G: DomGraph, const POST: bool> SemiNca<'a, G, POST> {
             if already {
                 continue;
             }
+            counted();
             let num = last_num;
             last_num += 1;
             let bb_info = self.info(Some(bb));
@@ -1655,6 +1670,7 @@ impl<'a, G: DomGraph, const POST: bool> SemiNca<'a, G, POST> {
         // stack.
         debug_assert!(stack.is_empty());
         loop {
+            counted();
             stack.push(v_info);
             v_info = num_to_info[self.node_infos[v_info].parent as usize];
             if self.node_infos[v_info].parent < last_linked {
@@ -1724,6 +1740,7 @@ impl<'a, G: DomGraph, const POST: bool> SemiNca<'a, G, POST> {
             let semi = self.node_infos[w].semi;
             let mut w_idom = self.node_infos[w].idom;
             while w_idom > semi {
+                counted();
                 w_idom = self.node_infos[num_to_info[w_idom as usize]].idom;
             }
             self.node_infos[w].idom = w_idom;
@@ -2824,13 +2841,24 @@ impl DomTree {
         function: &Function,
         changes: &[Change],
     ) -> bool {
-        let Some(entry) = function.entry() else { return false };
-        if self.roots.first() != Some(&entry) {
-            return false;
-        }
-        let Some(updates) = edge_updates(function, changes) else { return false };
+        let Some(updates) = self.updates_for(function, changes) else { return false };
         self.apply_updates(function, &updates);
         true
+    }
+
+    /// The edge updates `changes` make to the CFG this tree is of, for
+    /// `applyUpdates` or a `DomTreeUpdater`. None where the changes did
+    /// something else to the graph (another entry, an operand out of range).
+    pub fn updates_for(
+        &self,
+        function: &Function,
+        changes: &[Change],
+    ) -> Option<Vec<Update>> {
+        let entry = function.entry()?;
+        if self.roots.first() != Some(&entry) {
+            return None;
+        }
+        edge_updates(function, changes)
     }
 }
 

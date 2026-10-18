@@ -76,8 +76,9 @@ fn tools() -> Vec<Tool> {
 }
 
 /// Binaries that name no target, and why.
-const EXEMPT: [(&str, &str); 2] = [
+const EXEMPT: [(&str, &str); 3] = [
     ("llrm-mir", "reads MIR, which states its own datalayout"),
+    ("llrm-pass", "runs one pass on MIR text, which states its own datalayout"),
     ("nib-lsp", "takes the target in `initialize` (`mode`), tested with the server"),
 ];
 
