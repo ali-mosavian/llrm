@@ -5,7 +5,7 @@
 
 A binary older than its head's commit is a stale build (a build that failed leaves the last one): it aborts, unless --stale-ok.
 
-The corpus is this tool's own: the vsgcc programs (programs.py, wrapped as vsgcc compiles them) and, from QCPORT and QCPORT_INC, QCport's
+The corpus is this tool's own: the vsgcc programs (programs.py, wrapped as vsgcc compiles them) and, from the registered `qcport` and `qcport-inc` trees (tools/corpora.py), QCport's
 modules. It fails rather than skips: a corpus smaller than the known one (66 programs, 65 modules) is an error, and so is QCPORT unset
 without `--programs-only` (an earlier identity check borrowed compile-cost.py's list, which drops QCport when the variables are unset,
 and said 'identical' of 66 files instead of 131). NEW runs with the LLRM_CHECK_* modes of the caches it keeps on, which assert that what
@@ -160,13 +160,14 @@ def main() -> int:
         why = stale(args.old, args.old_head, "OLD") or stale(args.new, args.new_head, "NEW")
         if why:
             sys.exit(f"identical: {why}; rebuild it, or say --old-head/--new-head, or --stale-ok")
-    qcport, headers = os.environ.get("QCPORT"), os.environ.get("QCPORT_INC")
-    if qcport and not args.programs_only:
-        qcport = str(corpora.resolve("qcport", qcport, args.allow_other_corpus))
-        print(corpora.header("qcport", qcport))
+    qcport = headers = None
+    if not args.programs_only:
+        qcport, headers = corpora.resolve("qcport", None, args.allow_other_corpus), corpora.resolve("qcport-inc", None, args.allow_other_corpus)
+        corpora.announce("qcport", qcport)
+        corpora.announce("qcport-inc", headers)
     with tempfile.TemporaryDirectory(dir=os.environ.get("CARGO_TARGET_DIR")) as tmp:
         work = Path(tmp)
-        files = corpus(work, Path(qcport).expanduser() if qcport else None, Path(headers).expanduser() if headers else None, args.programs_only)
+        files = corpus(work, qcport, headers, args.programs_only)
         levels = args.levels.split(",")
         jobs = [
             (name, level, "llrm-c", [*([level] if level else []), *flags, str(source), "-o", "OBJ"])

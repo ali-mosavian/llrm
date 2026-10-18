@@ -102,8 +102,8 @@ def main() -> None:
     parser.add_argument("--allow-other-corpus", action="store_true", help="measure a source tree whose hash is not the registered one (tools/corpora.py)")
     args = parser.parse_args()
     args.llrm = args.llrm or dist_build()
-    qc = corpora.resolve("dfaces", os.environ.get("DFACES_SRC") or os.environ.get("QCPORT"), args.allow_other_corpus)
-    print(corpora.header("dfaces", qc))
+    qc = corpora.resolve("dfaces", None, args.allow_other_corpus)
+    corpora.announce("dfaces", qc)
     includes = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(qc / d))]
     inputs = {"d_faces": (str(qc / "render/d_faces.c"), KEYWORDS + includes)}
     for name in filter(None, args.programs.split(",")):

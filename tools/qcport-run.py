@@ -33,6 +33,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "dosbatch"))
 
 import dosbatch  # noqa: E402
+import corpora  # noqa: E402
 import llrmbin  # noqa: E402
 os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
 
@@ -134,7 +135,8 @@ def run(directory: Path, qcport: Path, stall: float, cap: float, tick: float = 1
 
 
 def main() -> int:
-    qcport, include, borland = required("QCPORT"), required("QCPORT_INC"), required("QCPORT_BORLAND")
+    qcport, include, borland = corpora.resolve("qcport"), corpora.resolve("qcport-inc"), required("QCPORT_BORLAND")
+    corpora.announce("qcport", qcport)
     compiler = Path(sys.argv[1]) if len(sys.argv) > 1 else llrmbin.bin_dir() / "llrm-c"
     linker = os.environ.get("JWLINK", "jwlink")
     cap, stall = float(os.environ.get("QCPORT_RUN_SECONDS", "900")), float(os.environ.get("QCPORT_STALL_SECONDS", "90"))

@@ -16,7 +16,7 @@ lose cycles; per-step cycles are not measurable.
 llrm's counts are exact and repeat to the instruction; gcc's and clang's shares are times, summed over three runs, and move by
 about 15% on a small category between runs, so read their columns as a target, not a measurement of the last digit.
 
-The source is QCport's, read from $QCPORT (the directory that holds render/d_faces.c).
+The source is the registered `dfaces` tree (tools/corpora.py; the directory that holds render/d_faces.c).
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import corpora  # noqa: E402
 import llrmbin  # noqa: E402
 
-QCPORT = Path(os.environ.get("QCPORT", Path.home() / "scratch/qbq-llrm/src"))
+QCPORT = Path.home() / "scratch/qbq-llrm/src"  # replaced by corpora.resolve("dfaces") in main()
 KEYWORDS = "-Dfar= -Dhuge= -Dnear= -Dpascal= -Dcdecl= -D__far= -D_far= -D__near= -D_near=".split()
 INCLUDES = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(QCPORT / d))]
 FOREIGN = [*KEYWORDS, "-m32", "-march=i486", "-fno-pic", "-fno-stack-protector", "-fcf-protection=none", "-w", *INCLUDES]
@@ -338,9 +338,9 @@ def main() -> int:
     parser.add_argument("--allow-other-corpus", action="store_true", help="read a d_faces tree whose hash is not the registered one (tools/corpora.py)")
     args = parser.parse_args()
     global QCPORT, INCLUDES
-    QCPORT = corpora.resolve("dfaces", os.environ.get("DFACES_SRC") or os.environ.get("QCPORT"), args.allow_other_corpus)
+    QCPORT = corpora.resolve("dfaces", None, args.allow_other_corpus)
     INCLUDES = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(QCPORT / d))]
-    print(corpora.header("dfaces", QCPORT))
+    corpora.announce("dfaces", QCPORT)
     result = build_map(args)
     old = json.loads(args.diff.read_text()) if args.diff else None
     print(show(result, old))

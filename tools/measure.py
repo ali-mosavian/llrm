@@ -95,6 +95,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(VSGCC))
 
 import benchlist  # noqa: E402
+import corpora  # noqa: E402
 import llrmbin  # noqa: E402
 import scaling_gate  # noqa: E402
 import levels_time  # noqa: E402
@@ -133,8 +134,8 @@ def method() -> str:
     another method is not comparable and is made again."""
     files = [HERE / "compile-cost.py", *(VSGCC / name for name in ("scaling_gate.py", "scaling.py", "levels_time.py", "programs.py", "wrap.py"))]
     files += benchlist.sources(".c", ROOT / "bench", parity=False) + sorted((VSGCC / "kernels").glob("*/*.c"))
-    if qcport := os.environ.get("QCPORT"):
-        files += sorted(Path(qcport).expanduser().glob("*/*.c"))
+    if qcport := corpora.optional("qcport"):
+        files += sorted(qcport.glob("*/*.c"))
     digest = hashlib.sha256()
     for one in files:
         digest.update(str(one.name).encode() + b"\0" + one.read_bytes())

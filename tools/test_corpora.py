@@ -69,3 +69,34 @@ def test_the_hash_ignores_other_files_and_depends_on_paths_and_contents(tmp_path
     assert corpora.tree_hash(tmp_path) == first
     (tmp_path / "y.h").write_text("b")
     assert corpora.tree_hash(tmp_path) != first
+
+
+def test_no_tool_reads_a_corpus_variable_outside_the_registry():
+    """`QCPORT` named QCport's src for one tool and the d_faces tree for another, and abmeasure's d_faces row compiled nothing. A tool asks
+    corpora.py; only the gate (which sets the environment of its steps) and the tests name the variables."""
+    import re
+    root = Path(__file__).parent
+    reads = re.compile(r"environ(?:\.get)?[\[(]\s*[\"'](?:QCPORT|QCPORT_INC|QCPORT_SRC|DFACES_SRC)[\"']|\$\{?(?:QCPORT|QCPORT_INC|QCPORT_SRC|DFACES_SRC)\b")
+    offenders = []
+    for path in sorted([*root.rglob("*.py"), *root.rglob("*.sh")]):
+        rel = path.relative_to(root).as_posix()
+        if rel == "corpora.py" or rel.startswith("gate/") or "test_" in rel or "/." in rel or ".venv" in rel:
+            continue
+        for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+            if reads.search(line):
+                offenders.append(f"{rel}:{number}: {line.strip()[:100]}")
+    assert not offenders, "\n".join(offenders)
+
+
+def test_qcports_src_in_the_old_variable_does_not_become_the_d_faces_tree(trees, monkeypatch):
+    """abmeasure took $QCPORT (QCport's src) as the d_faces tree. With DFACES_SRC unset the registered default is used; $QCPORT is honoured for
+    d_faces only when it is the d_faces tree."""
+    monkeypatch.setenv("QCPORT", str(trees["qcport"]))
+    assert corpora.resolve("dfaces") == trees["dfaces"]
+    monkeypatch.setenv("QCPORT", str(trees["dfaces"]))
+    assert corpora.resolve("dfaces") == trees["dfaces"]
+
+
+def test_an_optional_corpus_is_none_when_neither_its_variable_nor_its_default_exists(trees, monkeypatch, tmp_path):
+    monkeypatch.setitem(corpora.REGISTRY, "qcport", corpora.Corpus("QCPORT", str(tmp_path / "nowhere"), "q", "000000000000"))
+    assert corpora.optional("qcport") is None

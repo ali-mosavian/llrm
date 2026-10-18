@@ -1,6 +1,6 @@
 """Per allocation and per function: what the trials and the second route bought (docs/optimizations/single-allocation-decisions.md).
 
-    tools/routetable.py [-O1,-O2,-Os]      writes /tmp/routetable.json; needs QCPORT and QCPORT_INC, as tools/identical.py
+    tools/routetable.py [-O1,-O2,-Os]      writes /tmp/routetable.json; reads the registered `qcport` and `qcport-inc` trees, as tools/identical.py
 """
 import json
 import os
@@ -13,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
+import corpora  # noqa: E402
 
 BASE = re.compile(r"\[regalloc\] (\S+): (\d+) insns, (\d+) spilled, cost ([\d.e+-]+), (\d+) forced")
 TRIAL = re.compile(r"\[regalloc\]   trial (\w+) \(splitting (\w+)\): (\d+) spilled, cost ([\d.e+-]+), (\d+) forced")
@@ -72,7 +73,7 @@ def main():
 
     levels = sys.argv[1].split(",") if len(sys.argv) > 1 else ["-O1", "-O2", "-Os"]
     work = Path(tempfile.mkdtemp(prefix="routetable-"))
-    corpus = identical.corpus(work, Path(os.environ["QCPORT"]), Path(os.environ["QCPORT_INC"]))
+    corpus = identical.corpus(work, corpora.resolve("qcport"), corpora.resolve("qcport-inc"))
     jobs = [(name, source, flags, level) for name, (source, flags) in corpus.items() for level in levels]
     rows = []
     with ThreadPoolExecutor(8) as pool:

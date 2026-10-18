@@ -1,8 +1,10 @@
 """QCport modules' emitted bytes (OMF LEDATA) at each level for BASE_LLRM and MAIN_LLRM."""
 import subprocess,sys,os,json
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import corpora
 from concurrent.futures import ThreadPoolExecutor
-Q=Path(os.environ.get('QCPORT_SRC',os.path.expanduser('~/scratch/qcport/src'))); INC=os.environ.get('QCPORT_INC',os.path.expanduser('~/scratch/qctc/inc'))
+Q=corpora.resolve('qcport'); INC=str(corpora.resolve('qcport-inc'))
 MODS=("host","render","model","game","sound","ui")
 inc=[f for d in (*MODS,"qgl") for f in ("-I",str(Q/d))]+["-I",INC]
 bins={'base':os.environ['BASE_LLRM'],'main':os.environ['MAIN_LLRM']}

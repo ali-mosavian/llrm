@@ -44,9 +44,9 @@ nib)
 c)
     ls bench/*/*.c tests/run/c/*.c | sed 's|$| -O2|' ;;
 qcport)
-    : "${QCPORT:?QCPORT names the QCport src directory}" "${QCPORT_INC:?QCPORT_INC names its Borland include directory}"
-    includes=""; for d in host render model game sound ui qgl; do includes="$includes -I $QCPORT/$d"; done
-    for level in -O2 -Os; do for src in "$QCPORT"/{host,render,model,game,sound,ui}/*.c; do echo "$src $level $includes -I $QCPORT_INC"; done; done ;;
+    QCSRC="$(python3 "$(dirname "$0")/corpora.py" path qcport)"; QCINC="$(python3 "$(dirname "$0")/corpora.py" path qcport-inc)"  # the registered trees (tools/corpora.py)
+    includes=""; for d in host render model game sound ui qgl; do includes="$includes -I $QCSRC/$d"; done
+    for level in -O2 -Os; do for src in "$QCSRC"/{host,render,model,game,sound,ui}/*.c; do echo "$src $level $includes -I $QCINC"; done; done ;;
 *) echo "identity.sh: unknown kind $kind" >&2; exit 2 ;;
 esac | xargs -P 8 -L1 bash -c 'one $0 "$@"' | sort > "$out/results"
 cut -d' ' -f1 "$out/results" | uniq -c

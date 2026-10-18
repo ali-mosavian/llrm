@@ -135,8 +135,8 @@ def main() -> int:
     envguard.require_clean("abmeasure", allow=args.allow_env)
     dfaces = None
     if "d_faces" in args.programs:
-        dfaces = str(corpora.resolve("dfaces", os.environ.get("DFACES_SRC") or os.environ.get("QCPORT"), args.allow_other_corpus))
-        print(corpora.header("dfaces", dfaces))
+        dfaces = str(corpora.resolve("dfaces", None, args.allow_other_corpus))
+        corpora.announce("dfaces", dfaces)
     a, b = build(args.parent, profile=args.profile) / "llrm-c", build(args.head, profile=args.profile) / "llrm-c"
     work = CACHE / "work"
     work.mkdir(parents=True, exist_ok=True)

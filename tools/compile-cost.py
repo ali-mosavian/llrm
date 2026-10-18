@@ -30,6 +30,7 @@ MODULES = ("host", "render", "model", "game", "sound", "ui")
 
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(VSGCC))
+import corpora  # noqa: E402
 import levels_time  # noqa: E402
 import llrmbin  # noqa: E402
 import programs  # noqa: E402
@@ -60,9 +61,8 @@ def files(work: Path) -> dict[str, tuple[Path, list[str]]]:
         wrapped = work / f"{name}.c"
         wrapped.write_text(wrap.wrapped(name, source.read_text()))
         found[name] = (wrapped, programs.LLRM_FLAGS)
-    if (qcport := os.environ.get("QCPORT")) and (headers := os.environ.get("QCPORT_INC")):
-        base = Path(qcport).expanduser()
-        include = [flag for d in (*MODULES, "qgl") for flag in ("-I", str(base / d))] + ["-I", str(Path(headers).expanduser())]
+    if (base := corpora.optional("qcport")) and (headers := corpora.optional("qcport-inc")):
+        include = [flag for d in (*MODULES, "qgl") for flag in ("-I", str(base / d))] + ["-I", str(headers)]
         for d in MODULES:
             for source in sorted((base / d).glob("*.c")):
                 found[f"qcport/{source.stem}"] = (source, include)

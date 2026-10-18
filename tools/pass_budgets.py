@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Instructions per IR instruction per pass run, the table plan step 4.1 judges the passes by.
 
-    QCPORT=<qb-quake src> tools/pass_budgets.py [--llrm llrm-c] [--levels O1,O2,Os] [--budget 300] [source.c]
+    tools/pass_budgets.py [--llrm llrm-c] [--levels O1,O2,Os] [--budget 300] [source.c]
 
 One compile of d_faces (or `source.c`) per level with `LLRM_DEBUG=counts,time`. A pass's cost is its `mir NAME` row's total
 instructions (the analyses it made the manager compute are inside it, as `counts` charges them); its size is the sum of the
@@ -16,6 +16,9 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import corpora  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 # Steps that run other passes; their total is the passes' too.
@@ -52,15 +55,17 @@ def table(passes: list[dict], budget: float) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("source", nargs="?", help="a C file; by default d_faces of $QCPORT")
+    parser.add_argument("source", nargs="?", help="a C file; by default d_faces of the registered `dfaces` tree")
     parser.add_argument("--llrm", default=str(ROOT / "target/release/llrm-c"))
     parser.add_argument("--levels", default="O1,O2,Os")
     parser.add_argument("--budget", type=float, default=300.0, help="instructions per IR instruction per run (plan step 4.1)")
+    parser.add_argument("--allow-other-corpus", action="store_true", help="measure a d_faces tree whose hash is not the registered one (tools/corpora.py)")
     args = parser.parse_args()
     if args.source:
         source, extra = args.source, []
     else:
-        qc = Path(os.environ["QCPORT"]).expanduser()
+        qc = corpora.resolve("dfaces", None, args.allow_other_corpus)
+        corpora.announce("dfaces", qc)
         source = str(qc / "render/d_faces.c")
         extra = KEYWORDS + [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(qc / d))]
     for level in args.levels.split(","):

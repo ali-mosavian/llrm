@@ -28,6 +28,9 @@ import subprocess
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import corpora  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 MAX_COMMITS = 50
@@ -185,7 +188,7 @@ def main() -> int:
     for name in ("profile_dir", "out", "siblings", "binary"):  # the builds run in the repository: a relative path is read from there
         if getattr(args, name, None):
             setattr(args, name, getattr(args, name).resolve())
-    qcport = Path(os.environ["QCPORT"]) if os.environ.get("QCPORT") else None
+    qcport = corpora.optional("qcport")
     exclude = frozenset(args.exclude)
     if args.command == "stale":
         return stale(args.profile_dir)
