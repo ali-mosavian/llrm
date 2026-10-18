@@ -143,6 +143,9 @@ use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
 use llrm_support::hash::IndexMap;
 
+pub mod pass;
+pub mod table;
+
 use crate::lcssa::{arms, from_arms, place_phi};
 use crate::profit::{self, OperationCosts};
 use crate::{edges, loadjoins, transform};
@@ -172,6 +175,9 @@ impl FunctionPass for Gvn {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        // The scalar pass first: it may merge blocks and split edges, and what
+        // the rest reads is read of the body it leaves.
+        let scalar = pass::run_impl(unit.context, unit.layout, unit.function, analyses.outer());
         let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
         let pointers = analyses.get::<PointerValues>(unit.context, unit.layout, unit.function);
         // Only `loadjoins` changes the CFG, and only by splitting an edge.
@@ -193,7 +199,7 @@ impl FunctionPass for Gvn {
             )
         };
         match accesses.and_then(|accesses| {
-            optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape, self.pre)
+            optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape, self.pre, scalar)
         }) {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
@@ -258,17 +264,8 @@ pub fn optimized(
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &cfg::Shape,
     pre: bool,
+    equal: bool,
 ) -> Result<bool, String> {
-    let equal = propagated(unit);
-    // What is known of the body the manager saw, unless propagating a branch's
-    // condition changed it.
-    let fresh;
-    let registers = if equal {
-        fresh = llrm_analysis::consts::known(&memory::Unit::within(unit.context, unit.layout, unit.function, outer));
-        &fresh
-    } else {
-        registers
-    };
     let (numbered, subexpressed) =
         // Without `pre` this is -O1's FRE: gcc's has no profit pricing, so a
         // load is served wherever it is redundant and nothing is numbered
@@ -297,56 +294,6 @@ pub fn optimized(
         shape,
     )?;
     Ok(equal || numbered || combined || loaded)
-}
-
-/// LLVM GVN's `propagateEquality`, for a branch's condition: in what the
-/// edge to a successor dominates, the condition is that edge's constant.
-/// Whether any use changed.
-fn propagated(unit: &mut Unit) -> bool {
-    let shape = cfg::Shape::of(unit.function);
-    let mut found = Vec::new();
-    for &block in unit.function.layout() {
-        let Some(last) = unit.function.terminator(block) else { continue };
-        let branch = unit.function.instruction(last);
-        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
-            continue;
-        };
-        if branch.opcode != Opcode::Br || taken == other {
-            continue;
-        }
-        for (target, holds) in [(taken, 1), (other, 0)] {
-            // The edge dominates what its target does only when it is the one
-            // way in, and not back into the branch's own block.
-            if target == block || unit.function.predecessors(target) != [block] {
-                continue;
-            }
-            for one in unit.function.users(condition) {
-                let user = unit.function.instruction(one.user);
-                let at = match user.opcode {
-                    Opcode::Phi => match user.operands[one.index as usize + 1] {
-                        Operand::Block(from) => from,
-                        _ => continue,
-                    },
-                    _ => match unit.function.parent(one.user) {
-                        Some(at) => at,
-                        None => continue,
-                    },
-                };
-                if shape.dominance.dominates(cfg::id(target), cfg::id(at)) {
-                    found.push((*one, condition, holds));
-                }
-            }
-        }
-    }
-    for &(one, condition, holds) in &found {
-        let ty = unit.function.value(condition).ty;
-        let constant = unit.context.int(ty, holds);
-        unit.function.set_operand(one.user, one.index as usize, Operand::Constant(constant));
-    }
-    // The branch's own edge: a phi in an arm that takes the condition from the
-    // branch's block.
-    let on_edges = crate::edges::conditions_decided(unit.context, unit.function);
-    !found.is_empty() || on_edges
 }
 
 thread_local! {
