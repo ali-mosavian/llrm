@@ -67,7 +67,7 @@ Instructions
 | Memory | `alloca`, `load`, `store` (both with `volatile`), `getelementptr` |
 | Other | `icmp`, `fcmp`, `phi`, `select`, `freeze`, `call`, `landingpad` |
 
-There are no atomics, `indirectbr` or `undef`; the parser refuses them. Flags
+There are no atomics or `indirectbr`; the parser refuses them. `undef` is an `UndefValue` constant as at the pin, apart from `poison`. Flags
 (`nsw`, `nuw`, `exact`, `inbounds`, fast-math) and attributes, including
 `memory(...)`, `noalias`, `nocapture` and `initializes`, are LLVM's.
 Intrinsics are one table
@@ -77,6 +77,10 @@ the overflow, min/max, `fmuladd`, math, `memcpy`/`memmove`/`memset`, `assume`,
 (port I/O, huge-pointer difference and window, inline code and assembly).
 The table gives each its signature and attributes; the parser sets them as
 LLVM does, the verifier checks them, the interpreter runs them.
+The attributes of the `llvm.*` intrinsics come from `Intrinsics.td`:
+`intrinsic_attrs.rs`, which `tools/intrinsics/gen.py` writes, holds the ones MIR
+enumerates and the ones ValueTracking reads by name. Its header lists the four
+attributes MIR has no word for and which intrinsics they would have been on.
 
 Beyond instructions, `llrm-mir` holds LLVM's analyses in the form passes
 need them: dominators, loops, scalar evolution, value tracking, TBAA, the
@@ -90,7 +94,7 @@ The complete list; everything else is LLVM's.
    read `llrm_mir::target::Machine` (costs, register counts, address-space
    roles). `target datalayout` is kept because it states the program's memory
    layout; there is no `target triple`.
-2. **A subset.** No `undef`, no constant expressions outside global
+2. **A subset.** No constant expressions outside global
    initializers, nothing without a producer. The subset grows when a producer
    needs more, never by an llrm construct.
 3. **Rust, not C++.** LLVM's object model (module, functions, blocks,

@@ -27,13 +27,7 @@ fn phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
-        .collect()
+    function.block(block).iter().take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
 }
 
 /// `call`, a call to `callee`, replaced by a copy of its body, which
@@ -85,12 +79,14 @@ pub fn splice_before(
         blocks.insert(one, copy);
         last = copy;
     }
-    let first = anchor.unwrap_or_else(|| function.block(function.entry().expect("a defined caller")).instructions()[0]);
+    let first = anchor.unwrap_or_else(|| {
+        function.block(function.entry().expect("a defined caller")).first().expect("a block with an instruction")
+    });
     let entry = callee.entry().expect("a defined callee");
     let mut made = Vec::new();
     let mut returns = Vec::new();
     for &one in callee.layout() {
-        for &inst in callee.block(one).instructions() {
+        for inst in callee.block(one).iter() {
             let instruction = callee.instruction(inst);
             if instruction.opcode == Opcode::Ret {
                 returns.push((instruction.operands.first().copied(), blocks[&one]));
@@ -144,7 +140,7 @@ pub fn splice_before(
                 let ty = function.value(result).ty;
                 let operands = returned.iter().flat_map(|&(value, from)| [value, Operand::Block(from)]).collect();
                 let phi = function.create_instruction(Opcode::Phi, ty, operands, Flags::default(), None);
-                let head = function.block(rest).instructions()[0];
+                let head = function.block(rest).first().expect("a block with an instruction");
                 function.insert(phi, Position::Before(head)).expect("a placed block");
                 Operand::Value(function.instruction(phi).result.expect("a phi's value"))
             }

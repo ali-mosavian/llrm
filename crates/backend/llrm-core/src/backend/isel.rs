@@ -2929,7 +2929,8 @@ impl Selector<'_, '_, '_> {
         let Operand::Constant(id) = operand else { return None };
         let bits = match self.module.context.get(id).kind {
             ConstantKind::Int(bits) => bits,
-            ConstantKind::Null | ConstantKind::Zero => 0,
+            // Poison is any value: zero.
+            ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison => 0,
             _ => return None,
         };
         let shift = 128 - 8 * width;
@@ -4277,8 +4278,11 @@ impl Selector<'_, '_, '_> {
         let at = self.ats[&inst];
         let ty = instruction.ty;
         let width = self.width(ty)?;
+        if width == 1 {
+            return self.divide_byte(op, inst, out);
+        }
         if !matches!(width, 2 | 4) {
-            return refuse("a byte division");
+            return refuse("a wide division");
         }
         let dividend = self.held(instruction.operands[0], ty, at, out)?;
         let signed = matches!(op, BinaryOp::SDiv | BinaryOp::SRem);
@@ -4348,6 +4352,63 @@ impl Selector<'_, '_, '_> {
             vec![Loc::Held(high), Loc::Held(dividend), Loc::Held(divisor)],
         );
         out.push(insn(at, what));
+        Ok(())
+    }
+
+    /// A byte division, by the operand size's own of both operands extended
+    /// (as x86 selects `div r/m8` for LLVM: a byte quotient overflows only
+    /// where the word's is truncated, which LLVM leaves poison).
+    fn divide_byte(
+        &mut self,
+        op: BinaryOp,
+        inst: InstId,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(inst);
+        let (at, ty) = (self.ats[&inst], instruction.ty);
+        let wide = self.cpu.operand_bytes as u32;
+        let signed = matches!(op, BinaryOp::SDiv | BinaryOp::SRem);
+        let extend = if signed { "movsx" } else { "movzx" };
+        let mut widened = |this: &mut Self, operand: Operand| -> Result<Held, Unselected> {
+            let byte = this.held(operand, ty, at, out)?;
+            let into = this.fresh_held(wide);
+            out.push(insn(at, semantics(Operation::Extend, extend, vec![Loc::Held(into)], vec![Loc::Held(byte)])));
+            Ok(into)
+        };
+        let dividend = widened(self, instruction.operands[0])?;
+        let divisor = widened(self, instruction.operands[1])?;
+        let (quotient, remainder, high) = (self.fresh_held(wide), self.fresh_held(wide), self.fresh_held(wide));
+        out.push(insn(
+            at,
+            if signed {
+                let sign = if wide == 2 { "cwd" } else { "cdq" };
+                semantics(Operation::Extend, sign, vec![Loc::Held(high)], vec![Loc::Held(dividend)])
+            } else {
+                let zero = Loc::Imm(Imm { value: 0, width: wide, address: None });
+                semantics(Operation::Move, "mov", vec![Loc::Held(high)], vec![zero])
+            },
+        ));
+        out.push(insn(
+            at,
+            semantics(
+                Operation::Divide,
+                if signed { "idiv" } else { "div" },
+                vec![Loc::Held(quotient), Loc::Held(remainder)],
+                vec![Loc::Held(high), Loc::Held(dividend), Loc::Held(divisor)],
+            ),
+        ));
+        let own = self.value(instruction.result.expect("a result"));
+        let quotient_of = matches!(op, BinaryOp::SDiv | BinaryOp::UDiv);
+        let keep = |value: u32, from: Held, out: &mut Vec<Arc<Insn>>| {
+            let low = Held { width: 1, ..from };
+            let into = Held { value, width: 1 };
+            out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Held(low)])));
+        };
+        keep(own, if quotient_of { quotient } else { remainder }, out);
+        if let Some(&partner) = self.paired.get(&inst) {
+            let partner = self.value(partner);
+            keep(partner, if quotient_of { remainder } else { quotient }, out);
+        }
         Ok(())
     }
 
@@ -6769,7 +6830,7 @@ impl Selector<'_, '_, '_> {
         // Poison is any value: +0.0.
         let bits = match self.module.context.get(id).kind {
             ConstantKind::Float(bits) => bits,
-            ConstantKind::Poison => 0,
+            ConstantKind::Poison | ConstantKind::Undef => 0,
             _ => return refuse("a float constant of no bits"),
         };
         let size = self.size(self.module.context.get(id).ty)?;

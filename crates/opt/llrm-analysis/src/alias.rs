@@ -852,7 +852,7 @@ impl CallFacts {
                     Operand::Constant(id)
                         if matches!(
                             unit.context.get(id).kind,
-                            ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison
+                            ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison | ConstantKind::Undef
                         ) =>
                     {
                         Actual::Absent
@@ -973,7 +973,7 @@ pub(crate) fn only_reads(
         && !allowed.other.writes
 }
 
-fn _borrowed(
+pub(crate) fn borrowed(
     unit: &Unit,
     at: InstId,
     index: usize,
@@ -2616,7 +2616,7 @@ pub fn initialized(
         }
     };
     let transfer = |at: i64, mut state: State| -> State {
-        for &inst in function.block(cfg::block(at)).instructions().iter().rev() {
+        for inst in function.block(cfg::block(at)).iter().rev() {
             let op = function.instruction(inst);
             if let Some(effect) = effects.get(&inst) {
                 for one in
@@ -2662,8 +2662,7 @@ pub fn initialized(
     };
     let graph = cfg::graph(function);
     let exit = |at: i64| -> State {
-        match function.instruction(*function.block(cfg::block(at)).instructions().last().expect("a block ends")).opcode
-        {
+        match function.instruction(function.block(cfg::block(at)).last().expect("a block ends")).opcode {
             Opcode::Ret => vec![Some(Vec::new()); count],
             _ => vec![None; count],
         }
@@ -2939,13 +2938,13 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
     let back_edges = graph
         .iter()
         .flat_map(|block| block.succ.iter().map(move |successor| (block.at, *successor)))
-        .filter(|(at, successor)| dominance.dominates(*successor, *at))
+        .filter(|(at, successor)| dominance.dominates(unit.function, *successor, *at))
         .collect::<BTreeSet<_>>();
     // The instructions that can give a pointer a fact, in program order, and
     // the ones that read each value they read.
     let mut order: Vec<InstId> = Vec::new();
     for block in &graph {
-        for &inst in function.block(cfg::block(block.at)).instructions() {
+        for inst in function.block(cfg::block(block.at)).iter() {
             let op = function.instruction(inst);
             let pointer_result = op.result.is_some_and(|result| pointer_values.contains(&result));
             let pointer_store = matches!(op.opcode, Opcode::Store { .. }) && is_pointer(unit, op.operands[0]);
@@ -2971,7 +2970,7 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
         let place: llrm_mir::dense::IdMap<InstId, usize> = function
             .layout()
             .iter()
-            .flat_map(|&block| function.block(block).instructions().iter().enumerate().map(|(at, &inst)| (inst, at)))
+            .flat_map(|&block| function.block(block).iter().enumerate().map(|(at, inst)| (inst, at)))
             .collect();
         pointer_loads
             .iter()
@@ -3182,7 +3181,11 @@ pub fn points_to(
         }
         None => std::borrow::Cow::Owned(point_values(unit)?),
     };
-    escapes(unit, &solved, arguments, captures)
+    let found = escapes(unit, &solved, arguments, captures)?;
+    if llrm_support::env_flag!("LLRM_CHECK_CAPTURES") {
+        crate::capturecheck::check(unit, &found);
+    }
+    Ok(found)
 }
 
 /// What `points_to` adds to the value solve: what escapes, and when.
@@ -3322,7 +3325,7 @@ fn escapes(
                     let actual = _resolved_actuals(arguments.get(&inst).map_or(&[][..], Vec::as_slice), &values);
                     let kept = |index: usize| -> Result<bool, String> {
                         match captures.and_then(|captures| captures.get(&inst)).and_then(Option::as_ref) {
-                            None => Ok(!_borrowed(unit, inst, index)),
+                            None => Ok(!borrowed(unit, inst, index)),
                             Some(selected) => Ok(selected
                                 .iter()
                                 .map(_index)
@@ -3349,7 +3352,7 @@ fn escapes(
                     // The callee's own address is no argument.
                     let count = op.operands.len() - if matches!(op.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
                     let kept = (0..count)
-                        .filter(|&index| !_borrowed(unit, inst, index))
+                        .filter(|&index| !borrowed(unit, inst, index))
                         .map(|index| op.operands[index])
                         .collect::<Vec<_>>();
                     newly.extend(provenances(&kept, &values));

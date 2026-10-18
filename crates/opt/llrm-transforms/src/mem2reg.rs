@@ -24,7 +24,6 @@
 //!   MIR has none.
 //! - No `llvm.assume`, so no `convertMetadataToAssumes` (`noundef` metadata)
 //!   and no droppable users; no `fake_use`. Lifetime markers are translated.
-//! - MIR has `poison` and no `undef`: `UndefValue` is `poison`.
 //! - `isGuaranteedNotToBePoison` is true of a constant that is not `poison`
 //!   only (no `noundef` arguments).
 //! - The iterated dominance frontier is `Dominance::frontiers` iterated with
@@ -75,7 +74,7 @@
 //!
 //! # Used by
 //! [`crate::pipeline`]: the round's `Promote` is swapped for `Mem2Reg` when
-//! `Options::mem2reg` (`LLRM_EXP_MEM2REG`) is set; off by default.
+//! `Options::mem2reg` is set (on by default; `LLRM_NO_MEM2REG` turns it off).
 
 use llrm_analysis::cfg;
 use llrm_mir::datalayout::DataLayout;
@@ -285,7 +284,7 @@ fn remove_intrinsic_users(
         if let Some(ty) = promoted_type
             && memory::lifetime(context, callees, function, user).is_some()
         {
-            let value = poison(context, ty);
+            let value = uninitialized(context, ty);
             let store = function.create_instruction(
                 Opcode::Store { align, volatile: false },
                 void,
@@ -412,6 +411,14 @@ fn poison(
     Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison }))
 }
 
+/// `UndefValue::get(ty)`.
+fn uninitialized(
+    context: &mut Context,
+    ty: TypeId,
+) -> Operand {
+    Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Undef }))
+}
+
 /// `isGuaranteedNotToBePoison` as far as MIR can say: a constant that is not
 /// poison. PromoteMemoryToRegister.cpp#L599
 fn is_guaranteed_not_poison(
@@ -506,7 +513,7 @@ fn rewrite_single_store_alloca(
                     info.using_blocks.push(store_block);
                     continue;
                 }
-            } else if !dominance.dominates(cfg::id(store_block), cfg::id(load_block)) {
+            } else if !dominance.dominates(function, cfg::id(store_block), cfg::id(load_block)) {
                 info.using_blocks.push(load_block);
                 continue;
             }
@@ -579,7 +586,7 @@ fn promote_single_block_alloca(
         let at = stores.partition_point(|&(index, _)| index < load_index);
         let value = if at == 0 {
             if stores.is_empty() {
-                poison(context, function.instruction(user).ty)
+                uninitialized(context, function.instruction(user).ty)
             } else {
                 // No store before this load: it may be affected by the stores
                 // after it.
@@ -794,12 +801,12 @@ impl<'a> PromoteMem2Reg<'a> {
         }
         lbi.numbers.clear();
 
-        // The incoming value of every alloca on entry is poison, for a load
-        // before any store.
+        // The incoming value of every alloca on entry is undef, for a load before
+        // any store.
         let values: Vec<Operand> = (0..self.allocas.len())
             .map(|at| {
                 let ty = self.alloca_value_types[at].expect("an accessed alloca has a type");
-                poison(self.context, ty)
+                uninitialized(self.context, ty)
             })
             .collect();
         self.incoming_vals = VectorWithUndo { values, undo: Vec::new() };
@@ -1151,7 +1158,7 @@ fn simplify_phi(
         Operand::Value(id) => match function.value(id).def {
             llrm_mir::module::ValueDef::Instruction(def) => {
                 let defined = function.parent(def)?;
-                defined != at && dominance.dominates(cfg::id(defined), cfg::id(at))
+                defined != at && dominance.dominates(function, cfg::id(defined), cfg::id(at))
             }
             _ => true,
         },
@@ -1161,7 +1168,7 @@ fn simplify_phi(
 }
 
 /// `PromoteMemToReg`: `allocas` promoted. PromoteMemoryToRegister.cpp#L1264
-fn promote_mem_to_reg(
+pub(crate) fn promote_mem_to_reg(
     context: &mut Context,
     layout: &DataLayout,
     callees: &Callees,

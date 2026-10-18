@@ -32,6 +32,10 @@
 //! every block once. The moved function's liveness is the kept one's with the
 //! values the run moved solved again (`profit::spill_forecast_after`;
 //! `LLRM_CHECK_VIEW` holds it to the forecast of the function on its own).
+//! The LLVM order's slots do not price registers (`Hoist::priced` off): LLVM's
+//! LICM has no such model, and a spilled invariant is left to rematerialisation
+//! (x_life -Os ran 1.94x the instructions with the forecast keeping its address
+//! math in the loop).
 //!
 //! A hoisted load is priced by what it saves each trip. A floating load its one
 //! reader takes from memory (x87 `fmul m32`) is not an instruction of the loop
@@ -92,9 +96,11 @@
 //! `hoist_tests.rs`.
 //!
 //! # Runs
-//! Early, after `floatloop` and before `loopmotion`; and again after
-//! `jumpthread`, at the end of the loop passes, when a loop entered at its
-//! body runs it at least once and what it loads unchanged may leave. On from
+//! In `llvm_order`, first without speculation (only what the loop certainly
+//! runs moves), then after `rotate`'s guard with it. Otherwise early, after
+//! `floatloop` and before `loopmotion`; and again after `jumpthread`, at the
+//! end of the loop passes, when a loop entered at its body runs it at least
+//! once and what it loads unchanged may leave. On from
 //! -O1; `-fno-move-loop-invariants` turns it and `loopmotion` off.
 //!
 //! # Needs
@@ -141,8 +147,18 @@ fn kept_when_a_value_moves() -> PreservedAnalyses {
 use crate::profit::{self, OperationCosts};
 
 /// `size`: price a run in bytes, every block once (-Os), not in executed work.
+/// `speculate`: LICM's `AllowSpeculation` (`licm<allowspeculation>`): an
+/// instruction that is not certain to run in the loop may still go to the
+/// preheader when it cannot fault. Without it (`licm<no-allowspeculation>`,
+/// LPM1's first run, before `loop-rotate`) only what the loop certainly runs
+/// goes.
 pub struct Hoist {
     pub size: bool,
+    pub speculate: bool,
+    /// Price the registers a motion lengthens (the spill forecast). LLVM's LICM
+    /// has no such model; the LLVM order runs it off and leaves a spilled
+    /// invariant to the allocator's rematerialisation.
+    pub priced: bool,
 }
 
 impl FunctionPass for Hoist {
@@ -160,7 +176,7 @@ impl FunctionPass for Hoist {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         // Blocks and edges are as they were.
-        if hoisted(unit, analyses, self.size) {
+        if hoisted_with(unit, analyses, self.size, self.speculate, self.priced) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()
@@ -177,6 +193,18 @@ pub fn hoisted(
     unit: &mut passes::Unit,
     analyses: &mut Analyses,
     size: bool,
+) -> bool {
+    hoisted_with(unit, analyses, size, true, true)
+}
+
+/// [`hoisted`] with LICM's `AllowSpeculation` as `speculate`, and the spill
+/// forecast of the registers a motion holds priced only when `priced`.
+pub fn hoisted_with(
+    unit: &mut passes::Unit,
+    analyses: &mut Analyses,
+    size: bool,
+    speculate: bool,
+    priced: bool,
 ) -> bool {
     let graph = cfg::graph(unit.function);
     let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
@@ -204,7 +232,7 @@ pub fn hoisted(
     // The registers are priced where the function is in SSA; before that, with
     // scalar slots still in memory, only what a held value costs to release
     // is.
-    let pressure = room.priced() && !_slots_remain(unit);
+    let pressure = priced && room.priced() && !_slots_remain(unit);
     let frequency = (pressure || room.priced() && costs.float_release > 0)
         .then(|| _frequency(unit, analyses, &outer, size))
         .flatten();
@@ -236,7 +264,8 @@ pub fn hoisted(
         if !seeded && !check {
             continue;
         }
-        let run = _invariant_run(unit, &outer, one, into, &accesses, &terminal, &registers, &shape, &mut bounds);
+        let run =
+            _invariant_run(unit, &outer, one, into, &accesses, &terminal, &registers, &shape, speculate, &mut bounds);
         assert!(seeded || run.is_empty(), "LLRM_CHECK_HOISTSKIP: a loop with no seed has a run of {}", run.len());
         if _crossed_values(unit.function, &run).is_empty() {
             continue;
@@ -689,6 +718,7 @@ pub fn _invariant_run(
     terminal: &BTreeSet<InstId>,
     registers: &llrm_support::hash::IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &llrm_analysis::cfg::Shape,
+    speculate: bool,
     bounds: &mut dyn FnMut() -> std::rc::Rc<Result<ranges::Bounds, String>>,
 ) -> Vec<InstId> {
     let function = &*unit.function;
@@ -732,12 +762,28 @@ pub fn _invariant_run(
                         Operand::Block(_) => false,
                     },
                 );
-            if !ready
-                || (_may_fault(unit, outer, inst)
-                    && !certain
-                        .get_or_insert_with(|| _guaranteed(unit, outer, loop_, into, terminal, registers, shape))
-                        .contains(&inst)
-                    && !_bounded_inside(unit, outer, inst, into, loop_.header, &mut bounded, bounds, registers, shape))
+            if !ready {
+                continue;
+            }
+            // `isSafeToExecuteUnconditionally`
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/LICM.cpp#L1507:
+            // with
+            // `AllowSpeculation` an instruction that cannot fault moves
+            // wherever it is; without it, or when it may fault, only one the
+            // loop certainly runs (`isGuaranteedToExecute`), or a load in
+            // bounds on the edge in (speculating).
+            let in_loop_for_sure = |certain: &mut Option<_>| {
+                certain
+                    .get_or_insert_with(|| _guaranteed(unit, outer, loop_, into, terminal, registers, shape))
+                    .contains(&inst)
+            };
+            if !speculate {
+                if !in_loop_for_sure(&mut certain) {
+                    continue;
+                }
+            } else if _may_fault(unit, outer, inst)
+                && !in_loop_for_sure(&mut certain)
+                && !_bounded_inside(unit, outer, inst, into, loop_.header, &mut bounded, bounds, registers, shape)
             {
                 continue;
             }
@@ -937,7 +983,7 @@ pub fn _crossed_values(
 
 #[cfg(test)]
 #[path = "hoist_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 /// Whether some instruction of `loop_` could start a run: one of the kinds
 /// `_movable` accepts whose operands are all constants or defined outside the

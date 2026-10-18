@@ -1155,7 +1155,7 @@ pub fn edges_solved(
         let parents = function.predecessors(block);
         let sole = (parents.len() == 1).then(|| cfg::id(parents[0]));
         let from_parent = sole.is_some_and(|parent| known.contains_key(&parent) && once(parent, at));
-        let source = if from_parent { sole } else { shape.dominance.immediate(at) };
+        let source = if from_parent { sole } else { shape.dominance.immediate(unit.function, at) };
         if let Some((states, reached)) = before {
             let stale = reached.contains(&block)
                 || (from_parent && sole.is_some_and(|parent| reached.contains(&cfg::block(parent))))
@@ -1185,12 +1185,12 @@ pub fn edges_solved(
                 }
             }
             _ => {
-                let up = shape.dominance.immediate(at);
+                let up = shape.dominance.immediate(unit.function, at);
                 up.and_then(|up| made.get(&up)).hash(&mut made_of);
                 up.and_then(|up| known.get(&up)).map(|up| (**up).clone()).unwrap_or(seeded)
             }
         };
-        for &inst in function.block(block).instructions() {
+        for inst in function.block(block).iter() {
             let (Some(interval), Some(result)) =
                 (_computed(unit, inst, &scoped, facts), function.instruction(inst).result)
             else {
@@ -1475,7 +1475,7 @@ pub fn loops_reached(
     let starts = |one: &loops::Loop| -> Vec<i64> {
         shape
             .dominance
-            .immediate(one.header)
+            .immediate(function, one.header)
             .into_iter()
             .chain(entering.get(&one.header).into_iter().flatten().copied().filter(|at| !one.body.contains(at)))
             .collect()
@@ -1485,7 +1485,7 @@ pub fn loops_reached(
         .iter()
         .filter(|one| {
             one.body.iter().any(|at| reached.contains(at))
-                || judged.iter().any(|above| shape.dominance.dominates(*above, one.header))
+                || judged.iter().any(|above| shape.dominance.dominates(function, *above, one.header))
                 || starts(one).iter().any(moved)
         })
         .map(|one| one.header)
@@ -1542,10 +1542,7 @@ fn capped_from(
 ) -> Option<usize> {
     let work: usize = nest
         .iter()
-        .map(|one| {
-            one.body.len()
-                * one.body.iter().map(|&at| function.block(cfg::block(at)).instructions().len()).sum::<usize>()
-        })
+        .map(|one| one.body.len() * one.body.iter().map(|&at| function.block(cfg::block(at)).len()).sum::<usize>())
         .sum();
     (work > CAP_WORK).then_some(CAP_DEPTH)
 }
@@ -1847,7 +1844,7 @@ fn bounded_solved_under(
         // LazyValueInfo of one value at a point (`getValueAt`), not of every
         // value above it. A loop that took them all made its blocks' maps as
         // large as the body above it, quadratic in the branches before it.
-        let header_above = shape.dominance.immediate(loop_.header);
+        let header_above = shape.dominance.immediate(unit.function, loop_.header);
         for &inst in in_layout.iter().flat_map(|&block| function.block(block).instructions().iter()) {
             for operand in &function.instruction(inst).operands {
                 if let Operand::Value(value) = *operand
@@ -1862,7 +1859,7 @@ fn bounded_solved_under(
         let operations = in_layout
             .iter()
             .filter(|&&block| inside.contains(&cfg::id(block)) || cfg::id(block) == loop_.header)
-            .flat_map(|&block| function.block(block).instructions().iter().copied())
+            .flat_map(|&block| function.block(block).iter())
             .filter(|&inst| function.instruction(inst).opcode != Opcode::Phi)
             .collect::<Vec<_>>();
         if check_scopes() {
@@ -2015,7 +2012,7 @@ fn bounded_solved_under(
                     let mut above = Some(member);
                     while let Some(one) = above.filter(|one| loop_.body.contains(one)) {
                         *counts.entry(one).or_default() += 1;
-                        above = shape.dominance.immediate(one);
+                        above = shape.dominance.immediate(unit.function, one);
                     }
                 }
                 counts
@@ -2044,10 +2041,10 @@ fn bounded_solved_under(
         let outer_chain = || -> Rc<Vec<(usize, usize, i64)>> {
             Rc::clone(above_header.borrow_mut().get_or_insert_with(|| {
                 let mut found = Vec::new();
-                let mut above = shape.dominance.immediate(loop_.header);
+                let mut above = shape.dominance.immediate(unit.function, loop_.header);
                 while let Some(one) = above {
                     edges_into(one, &mut found);
-                    above = shape.dominance.immediate(one);
+                    above = shape.dominance.immediate(unit.function, one);
                 }
                 found.sort_unstable();
                 Rc::new(found)
@@ -2065,7 +2062,7 @@ fn bounded_solved_under(
             let mut above = Some(at);
             while let Some(one) = above.filter(|one| loop_.body.contains(one)) {
                 edges_into(one, &mut chain);
-                above = shape.dominance.immediate(one);
+                above = shape.dominance.immediate(unit.function, one);
             }
             chain.sort_unstable();
             let outer_edges = outer_chain();
@@ -2083,7 +2080,7 @@ fn bounded_solved_under(
                 let mut above = Some(at);
                 while let Some(one) = above {
                     edges_into(one, &mut every);
-                    above = shape.dominance.immediate(one);
+                    above = shape.dominance.immediate(unit.function, one);
                 }
                 every.sort_unstable();
                 let outer = every.iter().take_while(|(from, _, _)| !loop_.body.contains(&graph[*from].at)).count();
@@ -2189,7 +2186,7 @@ fn bounded_solved_under(
                 if rest.is_empty()
                     && kept > 0
                     && 2 * operations.len() > scoped.len()
-                    && assumed.above(&shape, at).is_empty()
+                    && assumed.above(&shape, unit.function, at).is_empty()
                 {
                     let mut path = Vec::new();
                     let mut at_node = Some(node);
@@ -2268,7 +2265,7 @@ fn bounded_solved_under(
                 assert!(same_narrowing(&every, &scoped), "the edges above a loop narrow `known` as they did before");
             }
             // What the blocks above it assume.
-            for condition in assumed.above(&shape, at) {
+            for condition in assumed.above(&shape, unit.function, at) {
                 if let Some(delta) = narrowed_delta(unit, condition, true, &scoped, facts) {
                     scoped.extend(delta);
                 }
@@ -2287,7 +2284,7 @@ fn bounded_solved_under(
         // What the edges above the loop say of a value made outside it, read
         // where the loop's dominator ends: asked of the values the box search
         // reads, not worked out for the whole chain of guards.
-        let dominator = shape.dominance.immediate(loop_.header);
+        let dominator = shape.dominance.immediate(unit.function, loop_.header);
         let above = |value: ValueId| -> Option<Interval> {
             let outside = match function.value(value).def {
                 ValueDef::Instruction(inst) => {
@@ -2443,13 +2440,13 @@ fn box_candidates(
     const SIZE: usize = 512;
     let function = unit.function;
     let header = cfg::block(loop_.header);
-    let size: usize = loop_.body.iter().map(|&at| function.block(cfg::block(at)).instructions().len()).sum();
+    let size: usize = loop_.body.iter().map(|&at| function.block(cfg::block(at)).len()).sum();
     if size > SIZE {
         return Vec::new();
     }
     // (phi, width, the entries' hull, the (latch, value) pairs coming round)
     let mut candidates = Vec::new();
-    for &inst in function.block(header).instructions() {
+    for inst in function.block(header).iter() {
         let op = function.instruction(inst);
         let (Opcode::Phi, Some(phi)) = (&op.opcode, op.result) else { continue };
         let Some(width) = unit.int_bits(Operand::Value(phi)).filter(|&width| width > 1) else { continue };

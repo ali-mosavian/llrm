@@ -8,13 +8,13 @@
 //! One run is these steps, each followed by a refresh of what is known where it
 //! changed the body.
 //!
+//! 0. `exitvalues::rewritten`: a value read after a loop becomes an expression
+//!    of the loop's count where the loop is left (`rewriteLoopExitValues`,
+//!    ScalarEvolution's exit values, from every exit of the loop, a rotated
+//!    loop's latch included); `LLRM_NO_SCEV_EXITVALUES` turns it off.
 //! 1. `loopexit::evaluated`: values after a counted loop computed from its
 //!    trips.
 //! 2. `exitfold::folded`: exits their counts decide are folded.
-//! 3. `exit_values` (only with `exit_values: true`): a counted exit's phi
-//!    values that are affine in the counters, with constant starts and steps,
-//!    become numbers. A counter stepped and then tested (`i + 1 < 32`) leaves
-//!    as 32, so the exit no longer keeps the old counter alive past its step.
 //! 4. `exitsink::sunk`: final updates only exit phis read move to the exits.
 //! 5. `widened`: a counter read through `zext` (or, where it is signed and
 //!    tested by `slt`, `sext`) to the address's index width, where `induction`
@@ -140,7 +140,7 @@ use std::collections::BTreeSet;
 use llrm_analysis::cfg::Around;
 use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::graph::loops::Loop;
-use llrm_analysis::induction::{self, Affine, AffineOperand};
+use llrm_analysis::induction::{self, AffineOperand};
 use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
@@ -163,9 +163,8 @@ use crate::profit::OperationCosts;
 /// round the loop outside (`rewound`). Which counters the loop keeps is
 /// `lsr`'s.
 pub struct IndVars {
-    /// Rewrite a counted exit's affine values as numbers. Off before the
-    /// header copy: a number is a `mov` where the counter's register already
-    /// holds it.
+    /// Off before the header copy: a signed counter of a loop `unrolls` takes
+    /// is left for it until this run.
     pub exit_values: bool,
     /// The trips up to which `unroll` takes a loop whole (its
     /// `max_unroll_iterations`, 0 for any number), none where it is off: a
@@ -214,6 +213,27 @@ impl FunctionPass for IndVars {
             analyses.invalidate(function, &kept);
             analyses.get::<llrm_analysis::manager::Registers>(context, layout, function)
         });
+        let extending = crate::simplifyindvar::widening_enabled();
+        let compared = if extending {
+            crate::simplifyindvar::simplified_and_extended(
+                unit.context,
+                unit.layout,
+                unit.function,
+                unit.declared,
+                &outer,
+            )
+        } else {
+            crate::simplifyindvar::enabled()
+                && crate::simplifyindvar::simplified(unit.context, unit.layout, unit.function, &outer)
+        };
+        if compared {
+            standing.changed();
+        }
+        let rewrote = crate::exitvalues::enabled()
+            && crate::exitvalues::rewritten(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if rewrote {
+            standing.changed();
+        }
         let evaluated =
             crate::loopexit::evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing)
                 .unwrap_or_else(|error| panic!("indvars: {error}"));
@@ -224,23 +244,20 @@ impl FunctionPass for IndVars {
         if folded {
             standing.reshaped();
         }
-        let valued = self.exit_values && exit_values(unit.context, unit.layout, unit.function, &outer, &mut standing);
-        if valued {
-            standing.reshaped();
-        }
         let shape = standing.shape(unit.function);
         let sunk = crate::exitsink::sunk(unit.function, &shape);
         if sunk {
             standing.changed();
         }
-        let widened = widened_with(
-            unit.context,
-            unit.layout,
-            unit.function,
-            &outer,
-            &mut standing,
-            if self.exit_values { None } else { self.unrolls },
-        );
+        let widened = !extending
+            && widened_with(
+                unit.context,
+                unit.layout,
+                unit.function,
+                &outer,
+                &mut standing,
+                if self.exit_values { None } else { self.unrolls },
+            );
         let merged = congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
         let rewound = rewound_with(
             unit.context,
@@ -251,11 +268,11 @@ impl FunctionPass for IndVars {
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
-        let dead = (sunk || rewound || widened || valued || merged)
+        let dead = (compared || rewrote || sunk || rewound || widened || merged)
             && dead::dead(unit.context, outer.callees(), unit.function);
-        if evaluated || folded || valued {
+        if evaluated || folded {
             PreservedAnalyses::none()
-        } else if sunk || rewound || widened || merged || dead {
+        } else if compared || rewrote || sunk || rewound || widened || merged || dead {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
         } else {
@@ -336,114 +353,6 @@ fn alike_phis(function: &Function) -> bool {
     })
 }
 
-/// A counted exit's phi values that are affine in the loop's counters, the
-/// counters' starts and steps constant, are numbers there: LLVM's
-/// `rewriteLoopExitValues`, the SCEV of the value at the exit's count. A
-/// counter stepped and then tested (`i + 1 < 32`) leaves with 32, so what the
-/// exit reads is no longer the counter kept alive past its step.
-fn exit_values(
-    context: &mut Context,
-    layout: &DataLayout,
-    function: &mut Function,
-    outer: &passes::Outer,
-    standing: &mut llrm_analysis::memory::Standing,
-) -> bool {
-    let mut changed = false;
-    let shape = standing.shape(function);
-    let mut found = Vec::new();
-    {
-        let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer).with_shape(&shape);
-        let facts = standing.of(&unit);
-        let unit = unit.with_registers(facts);
-        let facts = unit.registers();
-        for loop_ in shape.loops.iter() {
-            let counters = induction::basics(&unit, loop_);
-            if counters.is_empty() {
-                continue;
-            }
-            let headers = counters.keys().copied().collect::<BTreeSet<_>>();
-            for count in induction::exits(&unit, loop_, Some(&facts), false) {
-                let Some(taken) = count.taken.as_ref().filter(|taken| taken.iter().all(|one| one.terms.is_empty()))
-                else {
-                    continue;
-                };
-                let Some(trips) = taken.iter().map(|one| one.constant.clone()).min() else { continue };
-                let (from, exit) = (cfg::block(count.block), cfg::block(count.exit));
-                for phi in _phis(function, exit) {
-                    let Some(Operand::Value(value)) = _from(function, phi, from) else { continue };
-                    let Some(width) = unit.int_bits(Operand::Value(value)) else { continue };
-                    let Some(terms) = induction::linear(
-                        &unit,
-                        &AffineOperand::Value(value, width),
-                        &headers,
-                        width,
-                        false,
-                        &BTreeSet::new(),
-                        &mut IndexMap::default(),
-                    ) else {
-                        continue;
-                    };
-                    let mut total = BigInt::zero();
-                    let mut complete = true;
-                    for (term, coefficient) in &terms {
-                        let number = match term {
-                            AffineOperand::Const(constant) => constant.n.clone(),
-                            AffineOperand::Value(counter, _) => match counters.get(counter) {
-                                Some(Affine {
-                                    start: AffineOperand::Const(start),
-                                    step: AffineOperand::Const(step),
-                                    ..
-                                }) => &start.n + &step.n * &trips,
-                                _ => {
-                                    complete = false;
-                                    break;
-                                }
-                            },
-                        };
-                        total += coefficient * number;
-                    }
-                    if complete {
-                        let at = function
-                            .instruction(phi)
-                            .operands
-                            .chunks(2)
-                            .position(|pair| pair[1] == Operand::Block(from));
-                        found.push((phi, at, total, width));
-                    }
-                }
-            }
-        }
-    }
-    for (phi, at, total, width) in found {
-        let Some(at) = at else { continue };
-        let constant = counting::constant(context, &total, width);
-        if function.instruction(phi).operands.len() == 2 {
-            // An exit phi of one arm is its number wherever it is read.
-            let result = function.instruction(phi).result.expect("a phi's value");
-            function.replace_all_uses_with(result, constant);
-            function.set_operands(phi, Vec::new());
-            function.erase(phi).expect("a phi nothing reads");
-        } else {
-            function.set_operand(phi, 2 * at, constant);
-        }
-        changed = true;
-    }
-    changed
-}
-
-fn _phis(
-    function: &Function,
-    block: BlockId,
-) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-        .collect()
-}
-
 /// The instruction defining `value`.
 fn _defining(
     function: &Function,
@@ -486,64 +395,6 @@ fn _preheader(
         return None;
     };
     (function.successors(preheader) == [header]).then_some(preheader)
-}
-
-/// The header's one successor outside the loop, reached from nowhere else.
-fn _exit(
-    function: &Function,
-    loop_: &Loop,
-) -> Option<BlockId> {
-    let header = cfg::block(loop_.header);
-    let [exit] = function
-        .successors(header)
-        .into_iter()
-        .filter(|block| !loop_.body.contains(&cfg::id(*block)))
-        .collect::<Vec<_>>()[..]
-    else {
-        return None;
-    };
-    (function.predecessors(exit) == [header]).then_some(exit)
-}
-
-/// The continuing test of `branch` as an `icmp` of `left` and `right`: `ne`
-/// where its true arm stays in the loop, `eq` where it leaves.
-fn _test(
-    context: &mut Context,
-    function: &mut Function,
-    loop_: &Loop,
-    branch: InstId,
-    left: Operand,
-    right: Operand,
-) -> Result<InstId, String> {
-    let stays = matches!(
-        function.instruction(branch).operands[1],
-        Operand::Block(target) if loop_.body.contains(&cfg::id(target))
-    );
-    let bit = context.types.int(1);
-    let predicate = if stays { IntPredicate::Ne } else { IntPredicate::Eq };
-    let test = function.create_instruction(Opcode::ICmp(predicate), bit, vec![left, right], Flags::default(), None);
-    function.insert(test, Position::Before(branch))?;
-    Ok(test)
-}
-
-/// `compare`, which only `branch` reads, replaced by `test`.
-fn _retest(
-    function: &mut Function,
-    branch: InstId,
-    compare: InstId,
-    test: InstId,
-) -> Result<(), String> {
-    function.set_operand(branch, 0, Operand::Value(function.instruction(test).result.expect("a bit")));
-    function.erase(compare)
-}
-
-/// Whether only `branch` reads `compare`.
-fn _only_branch_reads(
-    function: &Function,
-    compare: InstId,
-    branch: InstId,
-) -> bool {
-    function.instruction(compare).result.is_some_and(|value| function.users(value).iter().all(|one| one.user == branch))
 }
 
 // ---------------------------------------------------------------- simplified
@@ -699,7 +550,10 @@ fn _rewinding(
         };
         let sources = exiting.iter().map(|(source, _)| *source).collect::<BTreeSet<_>>();
         let exit_preds = function.predecessors(cfg::block(exit)).into_iter().map(cfg::id).collect::<BTreeSet<_>>();
-        if !parent.body.contains(&exit) || exit_preds != sources || !dominance.dominates(exit, *parent_latch) {
+        if !parent.body.contains(&exit)
+            || exit_preds != sources
+            || !dominance.dominates(unit.function, exit, *parent_latch)
+        {
             continue;
         }
         let Some(count) = induction::trip_count(unit, inner, facts) else { continue };
@@ -729,7 +583,7 @@ fn _rewinding(
             // already `start + count * step`; a post-tested one from its
             // latch, where the update is.
             let updated = _block_of(function, stepping);
-            let exit_value = if sources.iter().all(|&source| dominance.dominates(updated, source)) {
+            let exit_value = if sources.iter().all(|&source| dominance.dominates(unit.function, updated, source)) {
                 Operand::Value(update)
             } else if sources == BTreeSet::from([inner.header]) {
                 Operand::Value(counter.value)

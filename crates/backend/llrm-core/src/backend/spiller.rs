@@ -271,6 +271,12 @@ fn planned_with(
     Ok(Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow })
 }
 
+// `spilled_from` asked, for a test that greedy's spills write no plan of it.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PLANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `spilled`, numbering the values it makes from `floor` at least: an
 /// allocation in progress still knows values the body no longer names.
 pub fn spilled_from(
@@ -280,6 +286,8 @@ pub fn spilled_from(
     floor: u32,
     classes: &RegisterClasses,
 ) -> Result<(LirBody, BTreeSet<u32>), Error> {
+    #[cfg(test)]
+    PLANS.with(|one| one.set(one.get() + 1));
     if values.is_empty() {
         return Ok((body.clone(), BTreeSet::new()));
     }
@@ -294,6 +302,49 @@ pub fn spilled_from(
     let plan = planned(body, values, frame)?;
     let (body, made, merged) = materialized(body, &plan, frame, floor, classes, &BTreeSet::new())?;
     Ok((body, made.union(&merged).copied().collect()))
+}
+
+thread_local! {
+    /// The instructions `materialized` made of the ones it was given, when a
+    /// caller asks to know them (`recording_cores`).
+    static CORES: std::cell::RefCell<Option<Vec<u64>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn core_made(one: &Insn) {
+    CORES.with(|cores| {
+        if let Some(list) = cores.borrow_mut().as_mut() {
+            list.push(one.id());
+        }
+    });
+}
+
+/// `work`, and the ids of the instructions it wrote in place of the ones it
+/// was given, as opposed to the reloads, stores and loads it put beside them
+/// (a spiller that edits a function it keeps needs to tell them apart).
+pub fn recording_cores<R>(work: impl FnOnce() -> R) -> (R, Vec<u64>) {
+    CORES.with(|cores| *cores.borrow_mut() = Some(Vec::new()));
+    let result = work();
+    let ids = CORES.with(|cores| cores.borrow_mut().take()).unwrap_or_default();
+    (result, ids)
+}
+
+/// The values of `body` the spiller makes again where they are read rather
+/// than storing them: literals, frame and symbol addresses, and loads of a cell
+/// nothing writes while the value lives. What `TargetInstrInfo::
+/// isTriviallyReMaterializable` answers for the translated allocator.
+pub fn remade_values(body: &LirBody) -> BTreeSet<u32> {
+    postings::following(body, |postings| {
+        let values: BTreeSet<u32> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .flat_map(|one| one.defines.iter().copied())
+            .collect();
+        let mut out: BTreeSet<u32> = _literals_by(body, &values, false, postings).keys().copied().collect();
+        out.extend(_addresses_by(body, &values, postings).keys().copied());
+        out.extend(_stable_loads_by(body, &values, &IndexMap::default(), postings).keys().copied());
+        out
+    })
 }
 
 /// `spilled_from`, with `plain` kept out of the merging of updates into one
@@ -552,6 +603,7 @@ pub fn materialized(
                 None => _tied(body.bits, &one, &stored, frame, classes)?,
             };
             if let Some(direct) = direct {
+                core_made(&direct);
                 insns.push(direct);
                 continue;
             }
@@ -564,6 +616,7 @@ pub fn materialized(
                 insns.extend(reloads);
                 insns.push(if renamed.is_empty() { read } else { _renamed(&read, &renamed) });
                 if let Some(direct) = _tied(body.bits, &one, &stored, frame, classes)? {
+                    core_made(&direct);
                     insns.push(direct);
                     continue;
                 }
@@ -584,6 +637,7 @@ pub fn materialized(
             }
             insns.extend(before);
             let rewritten = if rename.is_empty() { Arc::clone(&one) } else { _renamed(&one, &rename) };
+            core_made(&rewritten);
             insns.push(Arc::clone(&rewritten));
             if one.defines.iter().any(|value| frame_loads.contains_key(value)) {
                 marked.insert(block_index);
@@ -1905,6 +1959,8 @@ fn homes_by_sparse_body(
             succ: block.succ.clone(),
             phis: block.phis.clone(),
             cold: block.cold,
+            align: block.align,
+            max_skip: block.max_skip,
         })
         .collect();
     let mut sparse_insns: Vec<Vec<Arc<Insn>>> = vec![Vec::new(); body.blocks.len()];
@@ -4838,7 +4894,7 @@ pub fn _renamed(
 
 /// One move of a parallel copy, with its spilled end read or written where it
 /// lives.
-fn _in_place(
+pub(crate) fn _in_place(
     one: &Insn,
     values: &BTreeSet<u32>,
     frame: &mut Frame,
@@ -4995,7 +5051,7 @@ fn _tied(
 }
 
 /// Whether this form exists, asked of the one place that knows.
-fn _encodable(
+pub(crate) fn _encodable(
     bits: u32,
     what: &Semantics,
     classes: &RegisterClasses,

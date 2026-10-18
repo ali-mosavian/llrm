@@ -30,8 +30,8 @@ pub fn module(text: &str) -> Parsed<Module> {
 }
 
 /// Constructs llrm has no producer for, named so the refusal says why.
-const OUTSIDE_SUBSET: [&str; 9] =
-    ["undef", "fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
+const OUTSIDE_SUBSET: [&str; 8] =
+    ["fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
 
 struct Parser {
     tokens: Vec<(Token, usize)>,
@@ -272,6 +272,7 @@ impl Parser {
                                     unnamed_addr: UnnamedAddr::None,
                                     address_space: 0,
                                     kind: GlobalKind::Variable(GlobalVariable {
+                                        externally_initialized: false,
                                         ty: void,
                                         constant: false,
                                         initializer: None,
@@ -472,7 +473,7 @@ impl Parser {
         let linkage = self.linkage();
         let unnamed_addr = self.unnamed_addr();
         let address_space = self.address_space()?;
-        self.eat_word("externally_initialized");
+        let externally_initialized = self.eat_word("externally_initialized");
         let constant = match self.word()?.as_str() {
             "global" => false,
             "constant" => true,
@@ -499,7 +500,7 @@ impl Parser {
             linkage,
             unnamed_addr,
             address_space,
-            kind: GlobalKind::Variable(GlobalVariable { ty, constant, initializer, align }),
+            kind: GlobalKind::Variable(GlobalVariable { externally_initialized, ty, constant, initializer, align }),
         };
         self.defined_globals.insert(id);
         Ok(())
@@ -513,7 +514,7 @@ impl Parser {
             }
             Token::Punct('[' | '{' | '<') => true,
             Token::Word(word) => {
-                ["true", "false", "null", "poison", "zeroinitializer", "getelementptr"].contains(&word.as_str())
+                ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr"].contains(&word.as_str())
                     || spelled(&CAST, word).is_some()
             }
             _ => false,
@@ -587,7 +588,7 @@ impl Parser {
         }
         local.function.ty = self.module.context.types.intern(Type::Function { returns, parameters, variadic });
         if let Some(name) = &self.module.globals[id.0 as usize].name {
-            intrinsics::declare(&mut local.function, name);
+            intrinsics::declare(&mut local.function, &self.module.context.types, name);
         }
         if define {
             self.body(&mut local)?;
@@ -871,6 +872,7 @@ impl Parser {
                 ConstantKind::Null
             }
             Token::Word(word) if word == "poison" => ConstantKind::Poison,
+            Token::Word(word) if word == "undef" => ConstantKind::Undef,
             Token::Word(word) if word == "zeroinitializer" => ConstantKind::Zero,
             Token::Global(name) => return self.global_ref(&name, ty, line),
             Token::Bytes(bytes) => {

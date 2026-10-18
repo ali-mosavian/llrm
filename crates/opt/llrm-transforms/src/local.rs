@@ -84,7 +84,7 @@ use llrm_analysis::effects::{self, Declarations};
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::Fact;
 use llrm_mir::intrinsics::Intrinsic;
@@ -210,7 +210,7 @@ fn comes_before(
 /// whether `block` dominates the use, a phi's at the end of its incoming
 /// block.
 pub fn dominates_block_use(
-    tree: &DominatorTree,
+    tree: &DomTree,
     function: &Function,
     block: BlockId,
     at: Use,
@@ -230,7 +230,7 @@ pub fn dominates_block_use(
 /// ([Dominators.cpp:162](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L162)):
 /// whether the edge dominates `use_block`.
 pub fn dominates_edge_block(
-    tree: &DominatorTree,
+    tree: &DomTree,
     function: &Function,
     edge: BasicBlockEdge,
     use_block: BlockId,
@@ -270,7 +270,7 @@ pub fn dominates_edge_block(
 /// whether the edge dominates the use, a phi's at the end of its incoming
 /// block.
 pub fn dominates_edge_use(
-    tree: &DominatorTree,
+    tree: &DomTree,
     function: &Function,
     edge: BasicBlockEdge,
     at: Use,
@@ -291,7 +291,7 @@ pub fn dominates_edge_use(
 /// for an instruction: whether `def` dominates the use, a phi's at the end of
 /// its incoming block.
 pub fn dominates_instruction_use(
-    tree: &DominatorTree,
+    tree: &DomTree,
     function: &Function,
     def: InstId,
     at: Use,
@@ -362,7 +362,7 @@ pub fn replace_dominated_uses_with_edge(
     function: &mut Function,
     from: ValueId,
     to: Operand,
-    tree: &DominatorTree,
+    tree: &DomTree,
     root: BasicBlockEdge,
 ) -> usize {
     let dominates = |function: &Function, at: Use| dominates_edge_use(tree, function, root, at);
@@ -378,7 +378,7 @@ pub fn replace_dominated_uses_with_block(
     function: &mut Function,
     from: ValueId,
     to: Operand,
-    tree: &DominatorTree,
+    tree: &DomTree,
     block: BlockId,
 ) -> usize {
     let dominates = |function: &Function, at: Use| dominates_block_use(tree, function, block, at);
@@ -394,7 +394,7 @@ pub fn replace_dominated_uses_with_instruction(
     function: &mut Function,
     from: ValueId,
     to: Operand,
-    tree: &DominatorTree,
+    tree: &DomTree,
     root: InstId,
 ) -> usize {
     let dominates = |function: &Function, at: Use| dominates_instruction_use(tree, function, root, at);
@@ -409,7 +409,7 @@ pub fn replace_dominated_uses_with_if_edge(
     function: &mut Function,
     from: ValueId,
     to: Operand,
-    tree: &DominatorTree,
+    tree: &DomTree,
     root: BasicBlockEdge,
     should_replace: impl Fn(&Function, Use, Operand) -> bool,
 ) -> usize {
@@ -426,7 +426,7 @@ pub fn replace_dominated_uses_with_if_block(
     function: &mut Function,
     from: ValueId,
     to: Operand,
-    tree: &DominatorTree,
+    tree: &DomTree,
     block: BlockId,
     should_replace: impl Fn(&Function, Use, Operand) -> bool,
 ) -> usize {
@@ -444,7 +444,7 @@ pub fn replace_dominated_uses_with_if_instruction(
     function: &mut Function,
     from: ValueId,
     to: Operand,
-    tree: &DominatorTree,
+    tree: &DomTree,
     root: InstId,
     should_replace: impl Fn(&Function, Use, Operand) -> bool,
 ) -> usize {
@@ -490,7 +490,7 @@ fn may_throw(
 
 /// `Instruction::mayHaveSideEffects`
 /// ([Instruction.cpp:1358](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L1358)).
-fn may_have_side_effects(
+pub(crate) fn may_have_side_effects(
     context: &Context,
     callees: &Callees,
     declarations: &Declarations,

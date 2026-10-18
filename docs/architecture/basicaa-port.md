@@ -115,6 +115,7 @@ The 4,472 / 16,914 / 9,418 cells of the tables (tags on, BasicAA alone memops, B
 4. The capture oracle trusts a callee another module defines when one module is compiled alone; the module report counts them.
 5. The first implementation answers from the existing provenance and `MemRef` where LLVM walks `GEP` chains; each place is replaced by the translated walk at S2 and listed in that PR.
 6. `CaptureTracking` stops at 150 uses of an object (`getDefaultMaxUsesToExploreForCaptureTracking`) and answers captured. Seen: a slot with about 200 loads in `loop400` (replay input 01/0011-in-hoist) is NoAlias against a loaded pointer for llrm and MayAlias for LLVM; the mirror takes the cap (precision lost, rows to be counted), a deviation takes none. Verified with the pinned opt (24.0.0git d1106deb71cc): a slot with 148 loads is NoAlias against a gep of a pointer loaded from it, with 149 it is MayAlias (the slot has two more uses). Default: mirror the cap (LLVM's limits at its defaults); an uncapped answer stays only as a numbered deviation if a row needs it, with its compile cost; the d_faces and mem-ladder compile numbers with and without the cap come with S1.
+7. `getModRefInfo(Call1, Call2)` is BasicAA's guard-intrinsic case only; MIR has no `experimental.guard`, so it answers ModRef (B2). The effects-based call-vs-call form is `AAResults`'.
 
 ## 6. Open
 

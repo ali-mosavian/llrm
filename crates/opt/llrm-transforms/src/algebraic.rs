@@ -122,11 +122,14 @@ use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, induction, ranges};
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask, signed};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::lazyvalueinfo::{Env, LazyValueInfo};
+use llrm_mir::module::{Function, InstId, Operand, Use, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
+use llrm_mir::valuetracking::{AssumptionCache, Query, known};
 use llrm_support::hash::IndexMap;
 
 use crate::counting;
@@ -136,6 +139,9 @@ use crate::counting;
 #[derive(Default)]
 pub struct Algebraic {
     pub size: bool,
+    /// The LLVM order's pass: where LLVM's InstCombine has no condition llrm's
+    /// stand-in rule adds, the rule has none (`_scaled_chain`).
+    pub llvm: bool,
 }
 
 impl FunctionPass for Algebraic {
@@ -153,7 +159,7 @@ impl FunctionPass for Algebraic {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         // Blocks and edges are as they were.
-        if simplified(unit.context, unit.layout, unit.function, analyses, self.size) {
+        if simplified_in(unit.context, unit.layout, unit.function, analyses, self.size, self.llvm) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()
@@ -210,6 +216,18 @@ pub fn simplified(
     analyses: &mut Analyses,
     size: bool,
 ) -> bool {
+    simplified_in(context, layout, function, analyses, size, false)
+}
+
+/// [`simplified`], for the LLVM order's pass when `llvm`.
+pub fn simplified_in(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &mut Analyses,
+    size: bool,
+    llvm: bool,
+) -> bool {
     // A number proved before stays proved: every rewrite keeps each
     // surviving value's meaning, and none divides by a value.
     let divided_by_values = function
@@ -237,7 +255,7 @@ pub fn simplified(
         let recurrences = _recurrences(context, layout, function, &outer, analyses, changed || round);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
-                round |= _rewritten(context, layout, function, &recurrences, inst, size);
+                round |= _rewritten(context, layout, function, &recurrences, inst, size, llvm);
             }
         }
         round |= _reassociated_recurrences(function);
@@ -266,6 +284,7 @@ fn _rewritten(
     recurrences: &BTreeSet<ValueId>,
     inst: InstId,
     size: bool,
+    llvm: bool,
 ) -> bool {
     _mask_scaled(context, function, recurrences, inst)
         || _constant_address(context, function, inst)
@@ -284,7 +303,7 @@ fn _rewritten(
         || _negated_difference(context, function, inst)
         || _difference_from_sum(context, function, inst)
         || _shift_chain(context, function, inst)
-        || _scaled_chain(context, function, inst)
+        || _scaled_chain(context, function, inst, llvm)
         || _offset_chain(context, function, inst)
         || _bitwise_chain(context, function, inst)
         || _identity(context, function, inst)
@@ -612,7 +631,7 @@ fn _narrowed_binary(
     if !alone && !(free(&a, left) && free(&b, right)) {
         return false;
     }
-    let mut cut = |function: &mut Function, known: Option<Operand>, operand: Operand| match (known, operand) {
+    let cut = |function: &mut Function, known: Option<Operand>, operand: Operand| match (known, operand) {
         (Some(from), _) => from,
         (None, Operand::Constant(_)) => {
             _integer(context, operand).map_or(operand, |bits| Operand::Constant(context.int(narrow, bits as i128)))
@@ -1464,19 +1483,28 @@ fn _shift_chain(
     true
 }
 
-/// Two single-use scales are one `mul` at an unchanged modular width.
+/// Two single-use scales are one `mul` at an unchanged modular width. Under the
+/// LLVM order two `mul`s by constants are one whatever else reads the first, as
+/// `SimplifyAssociativeOrCommutative` has no single-use condition: `I` becomes
+/// `A op (B op C)` and the inner one stays for its other readers. MIRROR of
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L524
+/// for `mul`; DEVIATE: a `shl` in the chain keeps the guard (LLVM folds those
+/// in `visitMul` / `visitShl`, not here), and the flags are dropped (LLVM keeps
+/// `nuw`/`nsw` when both have them).
 fn _scaled_chain(
     context: &mut Context,
     function: &mut Function,
     inst: InstId,
+    llvm: bool,
 ) -> bool {
     let Some(last) = _scale(context, function, inst) else { return false };
-    if !_single_use(function, last.source) {
-        return false;
-    }
     let Some(first) = _definition(function, last.source).and_then(|made| _scale(context, function, made)) else {
         return false;
     };
+    let both_mul = last.op == BinaryOp::Mul && first.op == BinaryOp::Mul;
+    if !(llvm && both_mul) && !_single_use(function, last.source) {
+        return false;
+    }
     let width = _width(context, function, inst).expect("an integer");
     let factor = _constant(context, function, inst, first.factor.wrapping_mul(last.factor) & mask(width));
     _replace(function, inst, Opcode::Binary(BinaryOp::Mul), vec![first.source, factor]);
@@ -1885,6 +1913,36 @@ fn _redundant_masks(
         analyses
             .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
+    // CVP's `processAnd`: LazyValueInfo's range at the use first.
+    let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+    let tree = DomTree::of(function);
+    let mut lvi = LazyValueInfo::new();
+    let mut settled: Vec<(InstId, Operand)> = Vec::new();
+    let mut candidates = candidates;
+    candidates.retain(|&(_, inst, value, mask, width)| {
+        let Some(index) = function.instruction(inst).operands.iter().position(|one| *one == value) else { return true };
+        let range = {
+            let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
+            lvi.get_constant_range_at_use(&mut env, Use { user: inst, index: index as u32 }, false)
+        };
+        let top = range.get_unsigned_max();
+        let reach = if top == 0 { 0 } else { u128::MAX >> (top.leading_zeros()) };
+        let all = if width == 128 { u128::MAX } else { (1u128 << width) - 1 };
+        let query = Query {
+            globals: &outer.globals,
+            metadata: &outer.metadata,
+            dt: Some(&tree),
+            assumptions: Some(&assumptions),
+            cxt: Some(inst),
+            ..Query::bare(context, function, layout)
+        };
+        let possible = reach & !known::compute_known_bits(&query, value, 0).zero & all;
+        if possible & !mask == 0 {
+            settled.push((inst, value));
+            return false;
+        }
+        true
+    });
     let held = Ranges::of(context, layout, function, analyses, true);
     let unit = held.unit(context, layout, function, outer);
     let made: Vec<(InstId, Operand)> = candidates
@@ -1900,6 +1958,7 @@ fn _redundant_masks(
             let possible = reach & !llrm_mir::valuetracking::known_zero(context, function, value) & all;
             (possible & !mask == 0).then_some((inst, value))
         })
+        .chain(settled)
         .collect();
     for &(inst, value) in &made {
         if !function.is_erased(inst) {
@@ -2043,11 +2102,22 @@ fn _unsigned_divisions(
         analyses
             .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
+    // CVP's `processSDivOrSRem`: LazyValueInfo's range of the dividend first.
+    let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+    let mut lvi = LazyValueInfo::new();
+    let non_negative: Vec<bool> = candidates
+        .iter()
+        .map(|&(_, inst, _)| {
+            let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
+            lvi.get_constant_range_at_use(&mut env, Use { user: inst, index: 0 }, false).is_all_non_negative()
+        })
+        .collect();
     let held = Ranges::of(context, layout, function, analyses, true);
     let unit = held.unit(context, layout, function, outer);
     let made: Vec<(InstId, BinaryOp)> = candidates
         .into_iter()
-        .filter_map(|(block, inst, width)| {
+        .zip(non_negative)
+        .filter_map(|((block, inst, width), non_negative)| {
             let operands = &function.instruction(inst).operands;
             let fact = consts::_operand(&unit, operands[1], facts, None)?;
             let divisor = BigInt::from(consts::masked(&fact.n, width));
@@ -2063,11 +2133,12 @@ fn _unsigned_divisions(
                 && divisor > BigInt::from(1u8)
                 && divisor < BigInt::from(1u8) << (width - 1)
                 && (power || !size);
-            let proved = ranges::operand_at(&unit, operands[0], cfg::id(block))
-                .ok()
-                .flatten()
-                .filter(|interval| interval.width == width)
-                .is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
+            let proved = non_negative
+                || ranges::operand_at(&unit, operands[0], cfg::id(block))
+                    .ok()
+                    .flatten()
+                    .filter(|interval| interval.width == width)
+                    .is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
                 || llrm_mir::valuetracking::known_zero(context, function, operands[0]) >> (width - 1) & 1 == 1;
             let op = if function.instruction(inst).opcode == Opcode::Binary(BinaryOp::SDiv) {
                 BinaryOp::UDiv

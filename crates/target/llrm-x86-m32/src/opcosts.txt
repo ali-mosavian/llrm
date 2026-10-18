@@ -44,9 +44,6 @@ direction = 2*alu_rr
 # clocks move. Change it by measuring the same two columns again.
 unroll_budget = 150
 
-# `test r, imm`: the `and` and the compare against zero are one instruction.
-mask_test = alu_rr
-
 # What each operation comes to in code bytes, by the convention x86-m16's table states: the instruction's bytes,
 # twice where an operation becomes more than the instruction; a call, return, branch and stack operation is the
 # instruction itself. Flat code has no operand-size prefix on a dword and no segment override.

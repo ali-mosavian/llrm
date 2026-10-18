@@ -19,13 +19,11 @@
 //!    with a measured trip count is kept), a jump to the next block is dropped,
 //!    `jcc L; jmp M` where `L` is next becomes `j!cc M`, and a `jcc` over a
 //!    block that only jumps is inverted. Unreachable blocks go.
-//! 4. `merged` joins blocks with the same physical tail (`_tail_key`: the same
-//!    instructions, registers and successors) and renames the values of the
-//!    copy to the kept block's; `machinedce::eliminated` then removes what the
-//!    merge made dead (a compare nothing selects on). Both repeat until nothing
-//!    changes, and the merged body is threaded again. `preferred` takes it only
-//!    if static work falls and the executed work (`_work`, blocks by frequency)
-//!    does not rise.
+//! 4. `tailmerge::merged` (LLVM's `BranchFolder::TailMergeBlocks`) gives the
+//!    blocks that share the last instructions one copy of them, splitting a
+//!    block where no one holds only the tail; `machinedce::eliminated` then
+//!    removes what the merge made dead (a compare nothing selects on), and the
+//!    body is threaded again. Both repeat until nothing merges.
 //!
 //! Then, unless sized for code size, `duplicated_tails` replaces a `jmp` to a
 //! short tail (at most `TAIL_DUPLICATION` plain instructions besides its
@@ -103,11 +101,12 @@
 //! LLVM `BranchFolding` and `MachineBlockPlacement`; gcc `cleanup_cfg`,
 //! `bb-reorder` and `copy_bb_p`.
 
+mod tailmerge;
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_analysis::branchprob;
-use llrm_lir::registers::RegId;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::frequency::Frequency;
@@ -182,33 +181,39 @@ impl ControlFlow<'_> {
     }
 }
 
-/// Choose the cheapest common-tail fixed point without adding hot work.
+/// The blocks placed, their tails merged, copied and rotated, and the jumps
+/// the order makes redundant dropped.
 pub fn optimized(
     body: &LirBody,
     cpu: &cpu::Profile,
 ) -> Result<LirBody, masm::Unprintable> {
     let size = cpu.size;
     let price = Branches::of(cpu);
-    let mut candidate = _placed(&_hoisted(body), size)?;
-    let baseline = threaded(&candidate);
-    let settled = candidate.clone();
-    // Merging one physical tail may make the condition selecting between its
-    // former copies dead; deleting that compare can in turn make predecessor
-    // tails identical.  Settle those two machine facts before final threading
-    // chooses fall-throughs.  Source-owned tails are refused by `_tail_key`.
-    for _round in 0..std::cmp::max(1, candidate.blocks.len() + candidate.insns().len()) {
-        let before = candidate.clone();
-        candidate = machinedce::eliminated(merged(&candidate)?);
-        // Python `candidate is before`: both passes return their input itself
-        // exactly when they change nothing.
-        if candidate == before {
-            break;
-        }
+    let mut placed = threaded(&_placed(&_hoisted(body), size)?);
+    // Tail duplication before the merge, as LLVM places with it: after, the
+    // merge would give back what the copy gained.
+    if !size {
+        placed = threaded(&duplicated_tails(&placed));
     }
-    // Merging nothing leaves the candidate the baseline was threaded from.
-    let again = if candidate == settled { baseline.clone() } else { threaded(&candidate) };
-    let placed = preferred(&baseline, &again).clone();
-    Ok(inverted(&if size { placed } else { rotated(&duplicated(&duplicated_tails(&placed), true), &price)? }))
+    // Tail duplication before the merge, as LLVM places with it: after, the
+    // merge would give back what the copy gained.
+    // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
+    // the branches optimised (`threaded`), until neither changes anything. A
+    // merge can leave a compare nothing selects on; LLVM leaves it (T6).
+    for _round in 0..std::cmp::max(1, placed.blocks.len() + placed.insns().len()) {
+        let explicit = placed.with_blocks(_explicit(&placed)?);
+        let Some(merged) = tailmerge::merged(&explicit, size)? else {
+            break;
+        };
+        placed = machinedce::eliminated(threaded(&merged));
+    }
+    let done = inverted(&if size { placed } else { rotated(&duplicated(&placed, true), &price)? });
+    // Every block leaves by a way the printer can read.
+    #[cfg(test)]
+    for block in &done.blocks {
+        masm::_falls_to(block, &done.name).expect("a block with no instruction choosing its way out");
+    }
+    Ok(done)
 }
 
 /// A conditional branch taken to the block laid out next, followed by a jump:
@@ -1190,7 +1195,8 @@ pub fn threaded(body: &LirBody) -> LirBody {
         }
     }
     body.facts.0.bump_by("jump-visits", visits);
-    body
+    // Threading can leave a branch whose two ways went to one block.
+    _converged(&body)
 }
 
 /// An edge block's anchors moved up before the branch into it, where the other
@@ -1307,9 +1313,18 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
     body.with_blocks(blocks)
 }
 
-/// An inserted anchor: no bytes, no machine effect, only a virtual definition.
+/// An inserted anchor: no bytes and no machine effect, only a virtual
+/// definition. What emits code or writes a register (the stackifier's `sahf`,
+/// a pseudo that clobbers the flags) is an instruction.
 fn _inert(one: &Insn) -> bool {
-    one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing) && one.inserted() && one.spread.is_empty()
+    one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing)
+        && one.inserted()
+        && one.spread.is_empty()
+        && !one.emits()
+        && one.clobbers.is_empty()
+        && one.clobbers_high.is_empty()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
 }
 
 /// The blocks that name each value, and the edges between blocks, which a hoist
@@ -1471,78 +1486,6 @@ fn _live_values(blocks: &[Block]) -> IndexMap<i64, BTreeSet<u32>> {
     .output
 }
 
-/// Python's `_tail_key` tuple.
-pub type TailKey = (Vec<(Semantics, BTreeSet<RegId>, BTreeSet<RegId>, Vec<RegId>, Vec<RegId>, bool)>, Vec<i64>);
-
-/// Merge physically identical allocated tails after fallthroughs are explicit.
-pub fn merged(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
-    // Removing a duplicate block is sound only when every incoming edge is an
-    // instruction that can be retargeted. `placed` establishes exactly that
-    // form. Decline a body presented at an earlier pipeline boundary.
-    for block in &body.blocks {
-        if masm::_falls_to(block, &body.name)?.is_some() {
-            return Ok(body.clone());
-        }
-    }
-    let mut body = body.clone();
-    loop {
-        let mut groups: IndexMap<TailKey, Vec<&Block>> = IndexMap::default();
-        for block in &body.blocks {
-            if let Some(key) = _tail_key(block) {
-                groups.entry(key).or_default().push(block);
-            }
-        }
-        let mut redirect: IndexMap<i64, i64> = IndexMap::default();
-        // A copy's values are the kept block's, the same registers by name.
-        let mut rename: IndexMap<u32, u32> = IndexMap::default();
-        for copies in groups.values() {
-            if copies.len() < 2 {
-                continue;
-            }
-            let canonical = copies.iter().find(|block| block.at == body.entry).unwrap_or(&copies[0]);
-            for copy in copies.iter().filter(|block| !std::ptr::eq(**block, *canonical)) {
-                redirect.insert(copy.at, canonical.at);
-                // An anchor left by an identity copy defines what it reads.
-                let identities =
-                    copy.insns.iter().filter(|one| _inert(one)).flat_map(|one| one.defines.iter().zip(&one.uses));
-                let mut pairs: Vec<(u32, u32)> = identities.map(|(from, to)| (*from, *to)).collect();
-                for (one, kept) in _real(copy).iter().zip(_real(canonical)) {
-                    pairs.extend(
-                        one.defines
-                            .iter()
-                            .zip(&kept.defines)
-                            .chain(one.uses.iter().zip(&kept.uses))
-                            .map(|(from, to)| (*from, *to)),
-                    );
-                }
-                for (from, to) in pairs.into_iter().filter(|(from, to)| from != to) {
-                    let (from, to) = (_root(&rename, from), _root(&rename, to));
-                    if from != to {
-                        rename.insert(from, to);
-                    }
-                }
-            }
-        }
-        if redirect.is_empty() {
-            return Ok(body);
-        }
-        if !rename.is_empty() {
-            let rename: IndexMap<u32, u32> = rename.keys().map(|one| (*one, _root(&rename, *one))).collect();
-            body = body.with_blocks(
-                body.blocks
-                    .iter()
-                    .map(|block| {
-                        block.with_insns(
-                            block.insns.iter().map(|one| crate::backend::spiller::_renamed(one, &rename)).collect(),
-                        )
-                    })
-                    .collect(),
-            );
-        }
-        body = _redirected(&body, &redirect);
-    }
-}
-
 /// The value `one` is renamed to, through every rename after it.
 fn _root(
     rename: &IndexMap<u32, u32>,
@@ -1552,42 +1495,6 @@ fn _root(
         one = *next;
     }
     one
-}
-
-/// The complete physical form of a fresh, mergeable block.
-pub fn _tail_key(block: &LirBlock) -> Option<TailKey> {
-    if !block.phis.is_empty() {
-        return None;
-    }
-    let mut shaped = Vec::new();
-    for one in _real(block) {
-        let Some(what) = &one.what else {
-            return None;
-        };
-        if !one.inserted()
-            || matches!(
-                what.op,
-                Operation::Barrier | Operation::Call | Operation::Data
-            )
-            || one.symbol == Some(true)
-            || one.group.is_some()
-        {
-            return None;
-        }
-        shaped.push((
-            what.clone(),
-            one.clobbers.clone(),
-            one.clobbers_high.clone(),
-            one.requires.iter().map(|(_value, register)| *register).collect(),
-            one.delivers.iter().map(|(_value, register)| *register).collect(),
-            one.frame_adjust,
-        ));
-    }
-    if shaped.is_empty() {
-        return None;
-    }
-    let successors: BTreeSet<i64> = block.succ.iter().copied().collect();
-    Some((shaped, successors.into_iter().collect()))
 }
 
 /// Redirect every explicit edge, remove duplicate blocks, and fold diamonds.
@@ -1638,11 +1545,37 @@ pub fn _redirected(
     LirBody { entry, ..body.with_blocks(blocks) }
 }
 
+/// Every conditional whose two CFG edges became one is an unconditional edge
+/// (`OptimizeBlock` removing a branch whose two ways are one block).
+fn _converged(body: &LirBody) -> LirBody {
+    let mut changed = false;
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            if block.succ.is_empty() || block.succ.iter().any(|to| *to != block.succ[0]) {
+                return block.clone();
+            }
+            let folded = _fold_converged((**block).clone());
+            if folded.insns.same_insns(&block.insns) && folded.succ.len() == block.succ.len() {
+                block.clone()
+            } else {
+                changed = true;
+                folded.into()
+            }
+        })
+        .collect();
+    if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
 /// A conditional whose two CFG edges became one is an unconditional edge.
 pub fn _fold_converged(block: LirBlock) -> LirBlock {
-    if block.succ.len() != 1 {
+    // The edges are a set: `jae L; jmp L` has the one successor, listed twice
+    // or once.
+    if block.succ.is_empty() || block.succ.iter().any(|to| *to != block.succ[0]) {
         return block;
     }
+    let block = if block.succ.len() == 1 { block } else { LirBlock { succ: vec![block.succ[0]].into(), ..block } };
     let destination = block.succ[0];
     let real = _real(&block);
     let last = real.last();
@@ -1682,23 +1615,6 @@ pub fn _fold_converged(block: LirBlock) -> LirBlock {
     block
 }
 
-/// Static and profile-free dynamic machine-instruction counts.
-pub fn _work(body: &LirBody) -> (i64, f64) {
-    let busy = Frequency::of(body);
-    let counts: IndexMap<i64, i64> = body.blocks.iter().map(|block| (block.at, _real(block).len() as i64)).collect();
-    (counts.values().sum(), counts.iter().map(|(at, count)| *count as f64 * busy.block(*at)).sum())
-}
-
-/// Take tail sharing only when size falls without adding executed work.
-pub fn preferred<'a>(
-    before: &'a LirBody,
-    after: &'a LirBody,
-) -> &'a LirBody {
-    let (before_static, before_dynamic) = _work(before);
-    let (after_static, after_dynamic) = _work(after);
-    if after_static < before_static && after_dynamic <= before_dynamic { after } else { before }
-}
-
 /// Duplicate a terminal tail when doing so costs no bytes and removes a jump.
 ///
 /// Frame teardown is emitted around RETURN rather than represented in LIR, so
@@ -1707,7 +1623,7 @@ pub fn preferred<'a>(
 /// fixups, or line anchors rather than merely choosing a machine layout.
 pub fn duplicated_returns(
     body: LirBody,
-    return_overhead: i64,
+    return_overhead: &dyn Fn() -> i64,
 ) -> LirBody {
     let mut body = body;
     loop {
@@ -1719,15 +1635,10 @@ pub fn duplicated_returns(
             // Parent order reaches only sums and a map keyed by `at`.
             let parents: Vec<&Block> =
                 predecessors.get(&tail.at).into_iter().flatten().filter_map(|at| by_at.get(at).copied()).collect();
-            let tail_size = _duplicable_return_size(body.bits, tail, return_overhead);
-            if tail.at == body.entry
-                || tail_size.is_none()
-                || parents.len() < 2
-                || parents.iter().any(|parent| parent.succ != [tail.at])
-            {
+            if tail.at == body.entry || parents.len() < 2 || parents.iter().any(|parent| parent.succ != [tail.at]) {
                 continue;
             }
-            let tail_size = tail_size.expect("checked above");
+            let Some(tail_bytes) = _duplicable_return_size(body.bits, tail) else { continue };
             let prepared: Vec<Option<(&LirBlock, i64)>> =
                 parents.iter().map(|parent| _return_parent(body.bits, parent, tail.at)).collect();
             if prepared.iter().any(Option::is_none) {
@@ -1735,7 +1646,11 @@ pub fn duplicated_returns(
             }
             let copies: Vec<(&LirBlock, i64)> = prepared.into_iter().flatten().collect();
             let saved: i64 = copies.iter().map(|(_parent, jump_size)| jump_size).sum();
-            if saved == 0 || parents.len() as i64 * tail_size > tail_size + saved {
+            if saved == 0 {
+                continue;
+            }
+            let tail_size = return_overhead() + tail_bytes;
+            if parents.len() as i64 * tail_size > tail_size + saved {
                 continue;
             }
 
@@ -1775,11 +1690,11 @@ fn _arm_bytes(
         .sum()
 }
 
-/// Selected bytes in a source-unowned terminal return block.
+/// Selected bytes in a source-unowned terminal return block, without the frame
+/// teardown the emitter adds.
 pub fn _duplicable_return_size(
     bits: u32,
     block: &LirBlock,
-    return_overhead: i64,
 ) -> Option<i64> {
     let real = _real(block);
     if !block.phis.is_empty()
@@ -1815,7 +1730,7 @@ pub fn _duplicable_return_size(
     if emitted.iter().any(Option::is_none) {
         return None;
     }
-    Some(return_overhead + emitted.iter().flatten().map(|one| one.code.len() as i64).sum::<i64>())
+    Some(emitted.iter().flatten().map(|one| one.code.len() as i64).sum::<i64>())
 }
 
 /// A dedicated edge to target and the shortest jump bytes it can save.
@@ -1963,7 +1878,30 @@ pub fn _step(
             }
             return Some(at.get(&here).unwrap_or(0));
         }
-        if last_what.op == Operation::Jump && target == after {
+        // A branch before the final jump goes through a block that only jumps
+        // as well (BranchFolding's `OptimizeBlock`, the true branch of a
+        // `Bcc T; B F` pair).
+        if let Some(branch) = before.as_ref().filter(|one| {
+            one.what
+                .as_ref()
+                .is_some_and(|what| what.op == Operation::Branch && !what.indirect && what.target.is_some())
+        }) {
+            let old = branch.what.as_ref().and_then(|what| what.target).expect("checked");
+            let onward = _through(&blocks, at, Some(old), protected).expect("a passage names its target");
+            if onward != old {
+                body.odds.rerouted(block.at, &block.succ, old, &[(onward, 1.0)]);
+                let retargeted = _retargeted(&block, branch, onward);
+                at.moved(&block.succ, &retargeted.succ);
+                blocks[index] = retargeted.into();
+                body.blocks = blocks;
+                _stranded(body, at, &[old]);
+                return Some(at.get(&here).unwrap_or(0));
+            }
+        }
+        // A block with a branch before the last two keeps its jump: without it,
+        // three ways out and nothing choosing among them.
+        let choosable = block.succ.len() <= 2;
+        if last_what.op == Operation::Jump && target == after && choosable {
             // A fall-through needs no machine jump.  A decoded jump may still
             // own source bytes, though; retain those as an inert anchor so
             // fresh layout can account for the replaced range.  A frontend-
@@ -1985,6 +1923,7 @@ pub fn _step(
             return Some(at.get(&here).unwrap_or(0));
         }
         if last_what.op == Operation::Jump
+            && choosable
             && before.as_ref().is_some_and(|one| one.what.as_ref().expect(NO_OP).op == Operation::Branch)
         {
             let branch = before.as_ref().expect("checked");
