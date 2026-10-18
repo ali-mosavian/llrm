@@ -1600,7 +1600,7 @@ impl FunctionPass for Fixed {
 /// The instructions in the function's layout: erased ones stay in the arena
 /// and are not counted.
 fn placed_instructions(function: &llrm_mir::module::Function) -> usize {
-    function.layout().iter().map(|&block| function.block(block).instructions().len()).sum()
+    function.layout().iter().map(|&block| function.block(block).len()).sum()
 }
 
 thread_local! {

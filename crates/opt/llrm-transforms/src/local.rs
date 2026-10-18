@@ -725,7 +725,7 @@ pub fn eliminate_duplicate_phi_nodes_and_erase(
 /// ([BasicBlockUtils.cpp:195](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L195)):
 /// each phi of `bb` is its first incoming value, or poison if that is itself.
 pub fn fold_single_entry_phi_nodes(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     bb: BlockId,
 ) -> bool {
@@ -752,7 +752,7 @@ pub fn fold_single_entry_phi_nodes(
 /// a conditional branch to `bb` and another block, and then branches to where
 /// `bb` jumped. Whether it merged. DEVIATE 15, 16.
 pub fn merge_block_into_predecessor(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     bb: BlockId,
     predecessor_with_two_successors: bool,

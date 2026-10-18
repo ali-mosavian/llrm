@@ -346,9 +346,7 @@ pub fn sunk(
             let Some(candidate) = place else { continue };
             let first = trial
                 .block(candidate)
-                .instructions()
                 .iter()
-                .copied()
                 .find(|&one| trial.instruction(one).opcode != Opcode::Phi)
                 .expect("a terminated block");
             llrm_support::debug!(
