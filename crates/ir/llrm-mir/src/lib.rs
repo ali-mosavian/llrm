@@ -26,6 +26,7 @@ mod facts_rewrite;
 pub mod footprint;
 pub mod forest;
 pub mod hash;
+pub mod idf;
 pub mod inline;
 pub mod interpret;
 pub mod intrinsics;
