@@ -84,6 +84,11 @@ why = "builds and runs QCport against the all-Borland build: 100 s"
 owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**"]
 
 [[heavy]]
+step = "oracle-qcport"
+why = "QCport's modules under every LLRM_CHECK_* oracle, then built and run against the Borland build: the C corpus the oracle sweep lacks"
+owners = ["tools/oracle_qcport.py", "tools/oracle_sweep.py", "tools/oracle_expected.toml", "tools/qcport*", "tools/qcport/**", "crates/frontends/llrm-c/**", "crates/backend/**", "crates/opt/**"]
+
+[[heavy]]
 step = "rfmt-post"
 why = "the formatter's own tests (cold build of its parser dependency: 40 s)"
 owners = ["tools/rfmt-post/**", "tools/fmt.sh", "rustfmt.toml"]
@@ -205,7 +210,7 @@ perf = ["pytest-perf", "oracle-premise"]  # steps that read hardware counters: t
 oracle = ["oracle-sweep"]  # CI runs it as `oracle-1` .. `oracle-N` ([oracle] shards): every LLRM_CHECK_* oracle over a slice of the BASIC and Nib programs
 tools = ["torture"]
 bench = ["bench"]  # CI runs it as `bench-1` .. `bench-N` ([bench] shards): one slice of the benchmarks each, judged together by bench.py --merge
-reference = ["turbo", "cv4", "qcport"]
+reference = ["turbo", "cv4", "qcport", "oracle-qcport"]
 dos = ["dos-slow"]
 cost = ["measure"]
 
@@ -259,6 +264,7 @@ group_env = { reference = { QCPORT = "rm-quake/src" }, cost = { QCPORT = "rm-qua
 turbo = ["turbo"]
 cv4 = ["codeview"]
 qcport = ["qcport"]
+oracle-qcport = ["qcport"]
 dos-slow = ["qb45", "qb45demos"]
 pytest-perf = ["perf"]
 oracle-premise = ["perf"]

@@ -216,7 +216,7 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
     env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
     out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
     got = __import__("json").loads(out)
-    assert set(got["skipped"]) - {"measure", "pytest-perf", "oracle-premise"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
+    assert set(got["skipped"]) - {"measure", "pytest-perf", "oracle-premise"} == {"turbo", "cv4", "qcport", "oracle-qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
     assert "run" in got["groups"]["run"]
 
 
@@ -1363,7 +1363,7 @@ def test_a_group_of_tree_only_checks_has_no_build_and_a_group_that_runs_binaries
 def test_the_bench_shards_and_regroupings_keep_the_job_count_down():
     """The account runs 20 hosted jobs at once; each job costs 70-140 s of set-up. A group under ~2 minutes of work is not its own job."""
     cfg = gate.load()
-    assert cfg["bench"]["shards"] == 3 and "identity" in cfg["groups"]["unit"] and cfg["groups"]["reference"] == ["turbo", "cv4", "qcport"]
+    assert cfg["bench"]["shards"] == 3 and "identity" in cfg["groups"]["unit"] and cfg["groups"]["reference"] == ["turbo", "cv4", "qcport", "oracle-qcport"]
 
 
 def test_the_draft_verdict_comes_from_the_api_at_plan_time_and_is_checked_again_at_the_end():
