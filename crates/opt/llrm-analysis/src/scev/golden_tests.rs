@@ -59,7 +59,7 @@ fn test_every_golden_case_prints_as_the_pinned_llvm_does() {
 #[test]
 fn test_the_golden_cases_hold_many_answers_and_the_shapes_of_the_folds() {
     let cases = run_file(GOLDEN);
-    let answers: std::collections::HashSet<&str> = cases.iter().map(|(_, want, _)| want.as_str()).collect();
+    let answers: llrm_support::hash::HashSet<&str> = cases.iter().map(|(_, want, _)| want.as_str()).collect();
     assert!(answers.len() > 100, "{} distinct answers", answers.len());
     for shape in ["<nuw><nsw>", "umin_seq", "{", ",+,", "/u", "zext", "sext", "trunc", "<u nuw>", "smax", "umin"] {
         assert!(cases.iter().any(|(_, want, _)| want.contains(shape)), "no case prints {shape}");

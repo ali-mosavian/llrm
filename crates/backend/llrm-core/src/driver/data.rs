@@ -48,7 +48,8 @@ impl Placed {
 
     /// `built`'s data laid out: the default segment first, then each placed
     /// one; the compiler's constants in `constants`, else the default. Each
-    /// variable aligned as stated, public where external; each declared one
+    /// variable aligned as `AsmPrinter::getGVAlignment` says
+    /// (`global_alignment`), public where external; each declared one
     /// an extern, near where it is in `data_space`.
     pub fn lay_out(
         &self,
@@ -94,8 +95,12 @@ impl Placed {
         for (segment, names) in &self.segments {
             segments.push((segment.clone(), names.iter().filter_map(|name| module.named(name)).collect()));
         }
+        let layout = module.datalayout.as_deref().and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok());
         let mut bss: Vec<(String, Vec<GlobalId>)> = Vec::new();
-        for (segment, members) in segments {
+        for (number, (segment, members)) in segments.into_iter().enumerate() {
+            // Segment 0 is the default; the others a frontend named, which
+            // LLVM would call a section: a stated alignment is kept exactly.
+            let placed_here = number != 0;
             // What the image need not store (`stored_zero`): an object of zeros
             // in far data, where the start-up zeroes far
             // uninitialised data, in a segment of its own beside its segment.
@@ -110,8 +115,8 @@ impl Placed {
             let mut items = Vec::new();
             for global in members {
                 let GlobalKind::Variable(variable) = &module.global(global).kind else { continue };
-                if let Some(to) = variable.align {
-                    items.push(masm::Datum::Align(masm::Align { to: to as i64 }));
+                if let Some(to) = global_alignment(module, layout.as_ref(), variable, placed_here) {
+                    items.push(masm::Datum::Align(masm::Align { to }));
                 }
                 for datum in globals::datums(module, global, &built.names)? {
                     items.push(match datum {
@@ -144,9 +149,9 @@ impl Placed {
             let mut items = Vec::new();
             for global in objects {
                 if let GlobalKind::Variable(variable) = &module.global(global).kind
-                    && let Some(to) = variable.align
+                    && let Some(to) = global_alignment(module, layout.as_ref(), variable, true)
                 {
-                    items.push(masm::Datum::Align(masm::Align { to: to as i64 }));
+                    items.push(masm::Datum::Align(masm::Align { to }));
                 }
                 let size = globals::datums(module, global, &built.names)?
                     .iter()
@@ -195,6 +200,28 @@ impl Placed {
         built.private.extend(self.private.iter().cloned());
         Ok(())
     }
+}
+
+/// The alignment a variable is emitted at: `AsmPrinter::getGVAlignment` on the
+/// module's data layout, none where that is a byte. DEVIATE E1: MIR has no
+/// section attribute; a global the frontend placed in a named segment counts
+/// as one in a section (`in_section`).
+fn global_alignment(
+    module: &Module,
+    layout: Option<&llrm_mir::datalayout::DataLayout>,
+    variable: &llrm_mir::module::GlobalVariable,
+    in_section: bool,
+) -> Option<i64> {
+    // A module with no data layout states its own alignments only.
+    let Some(layout) = layout else { return variable.align.map(|to| to as i64) };
+    let to = layout.global_align(
+        &module.context.types,
+        variable.ty,
+        variable.align,
+        in_section,
+        variable.initializer.is_some(),
+    );
+    (to > 1).then_some(to as i64)
 }
 
 /// What one segment can hold: a 16-bit offset's range.
@@ -312,6 +339,31 @@ mod tests {
     use masm::{Datum, Fill, Label, Pointer};
 
     use super::*;
+
+    /// A global that stated no alignment was byte aligned however wide its
+    /// type: a dword read across two cache lines. `getGVAlignment` gives the
+    /// type's preferred alignment (here `i32:32`), 16 for an initialized
+    /// global over 128 bits, and a module with no layout keeps what it stated.
+    #[test]
+    fn test_a_global_is_aligned_as_getgvalignment_says() {
+        let text = |layout: &str| {
+            format!(
+                "{layout}@w = global i32 5\n@big = global [40 x i8] zeroinitializer\n@b = global i8 1\n@s = global i8 1, align 2\n"
+            )
+        };
+        let aligned = |layout: &str| {
+            let module = llrm_mir::parse::module(&text(layout)).unwrap();
+            let layout =
+                module.datalayout.as_deref().and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok());
+            ["w", "big", "b", "s"].map(|name| {
+                let id = module.named(name).unwrap();
+                let GlobalKind::Variable(variable) = &module.global(id).kind else { unreachable!("a variable") };
+                global_alignment(&module, layout.as_ref(), variable, false)
+            })
+        };
+        assert_eq!(aligned("target datalayout = \"e-i32:32-i8:8\"\n"), [Some(4), Some(16), None, Some(2)]);
+        assert_eq!(aligned(""), [None, None, None, Some(2)], "no layout: only what is stated");
+    }
 
     fn size(part: &[Datum]) -> usize {
         part.iter()

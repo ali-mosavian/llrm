@@ -19,9 +19,9 @@
 //!
 //! The exits and their counts are ScalarEvolution's (`getExitCount`,
 //! `isLoopEntryGuardedByCond`: LLVM's `optimizeLoopExits`: zero, below the
-//! loop's symbolic maximum, a count an earlier exit has). `LLRM_NO_SCEV_EXITFOLD`
-//! restores `induction::exits`; the two differ on 2 of 1,590 corpus objects,
-//! both smaller.
+//! loop's symbolic maximum, a count an earlier exit has).
+//! `LLRM_NO_SCEV_EXITFOLD` restores `induction::exits`; the two differ on 2 of
+//! 1,590 corpus objects, both smaller.
 //!
 //! The branch is given the constant that decides it; `decide` then makes it a
 //! jump. Nothing else changes, so no effect or value between the exits matters.
@@ -946,7 +946,7 @@ fn _decided_by_scev(
         if scev.is_could_not_compute(max_be_count) {
             return decided;
         }
-        let mut dominating_exact_exit_counts = std::collections::HashSet::new();
+        let mut dominating_exact_exit_counts = llrm_support::hash::HashSet::default();
         for exit in exits {
             let condition = function.instruction(exit.branch).operands.first().copied();
             if !innermost(exit.block) || matches!(condition, Some(Operand::Constant(_))) {

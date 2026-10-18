@@ -3,6 +3,7 @@
 //! docs/architecture/basicaa-port.md). Per query: nothing is solved for the
 //! whole function, and what one query learns lives in its `AAQueryInfo`.
 //!
+//! # How it works
 //! Translated: `aliasCheck` (empty locations, casts stripped, the same value,
 //! the underlying objects, identified objects, arguments against function-local
 //! objects, an escape source against a non-captured local object, an access
@@ -11,8 +12,23 @@
 //! `aliasGEP` as far as it needs no value ranges: the inbounds and
 //! constant-difference rules, nuw, and the GCD test. Not yet (deviations in the
 //! plan page): `GetLinearExpression` through casts, `analyzeVariableOffsets`'
-//! ranges, `aliasPHI`, `aliasSelect`, the mod/ref queries (they answer the top
-//! of the lattice).
+//! ranges, `aliasPHI`, `aliasSelect`, and the mod/ref queries
+//! other than `getModRefInfoMask` and `getModRefInfo(Call, Loc)` (they answer
+//! the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo` read the
+//! attributes.
+//!
+//! # Example
+//! Two allocas never alias, and a call cannot touch an alloca nobody holds a
+//! pointer to:
+//!
+//! ```text
+//! %a = alloca i32
+//! %b = alloca i32        ; alias(%a, %b) = NoAlias
+//! call void @g()         ; getModRefInfo(call, %a) = NoModRef
+//! ```
+//!
+//! # Provides
+//! [`BasicAA`], an [`crate::aa::AAResults`]. No client reads it yet.
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
@@ -493,6 +509,104 @@ impl<'a> BasicAA<'a> {
     }
 }
 
+impl BasicAA<'_> {
+    /// `getModRefInfo(Call, Loc)`: what the call does to the location, from
+    /// the call's memory effects and, for what it reaches only through
+    /// arguments, from which arguments may alias the location.
+    fn call_mod_ref(
+        &mut self,
+        call: llrm_mir::module::InstId,
+        loc: &MemoryLocation,
+        aaqi: &mut AAQueryInfo,
+    ) -> ModRefInfo {
+        use crate::aa::IRMemLocation::{ArgMem, ErrnoMem, InaccessibleMem, Other};
+        let op = self.unit.function.instruction(call);
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { return ModRefInfo::ModRef };
+        let object = self.underlying(loc.ptr);
+        let local_slot = self.defining(object).is_some_and(|one| matches!(one.opcode, Opcode::Alloca { .. }));
+        // A tail call cannot reach this frame's slots, but may take one by
+        // value.
+        let by_value = |attrs: &[llrm_mir::opcode::Attribute]| {
+            attrs
+                .iter()
+                .any(
+                    |one| matches!(
+                        one,
+                        llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
+                    ),
+                )
+        };
+        if local_slot
+            && info.tail == llrm_mir::opcode::Tail::Tail
+            && !(by_value(&info.attrs)
+                || by_value(&info.return_attrs)
+                || info.argument_attrs.iter().any(|one| by_value(one)))
+        {
+            return ModRefInfo::NoModRef;
+        }
+        let effects = self.get_memory_effects(call, aaqi).with(InaccessibleMem, ModRefInfo::NoModRef);
+        if effects.does_not_access_memory() {
+            return ModRefInfo::NoModRef;
+        }
+        let mut arg = effects.mod_ref(ArgMem);
+        let errno = effects.mod_ref(ErrnoMem);
+        let mut other = effects.mod_ref(Other);
+        // What does not escape is reached through arguments only.
+        let callee =
+            llrm_mir::memory::callee(self.unit.context, self.unit.function, call).and_then(|one| {
+                match &self.unit.globals.get(one.0 as usize)?.kind {
+                    GlobalKind::Function(function) => Some(function),
+                    GlobalKind::Variable(_) => None,
+                }
+            });
+        let returns_twice = llrm_mir::memory::has(&info.attrs, "returns_twice")
+            || callee.is_some_and(|one| llrm_mir::memory::has(&one.attrs, "returns_twice"));
+        let is_call_itself = matches!(object, Operand::Value(value) if op.result == Some(value));
+        if other != ModRefInfo::NoModRef
+            && matches!(object, Operand::Value(_))
+            && !is_call_itself
+            && (local_slot || !returns_twice)
+            && self.not_captured(object, aaqi)
+        {
+            other = ModRefInfo::NoModRef;
+        }
+        if arg.union(other) != other {
+            let mut narrowed = ModRefInfo::NoModRef;
+            let arguments = op.operands.len().saturating_sub(1);
+            for at in 0..arguments {
+                if self.unit.space(op.operands[at]).is_none() {
+                    continue;
+                }
+                let at = at as u32;
+                let Some(place) = MemoryLocation::get_for_argument(self.unit, call, at) else { continue };
+                if self.alias_check(&place, loc, aaqi) != AliasResult::NoAlias {
+                    narrowed = narrowed.union(arg.intersect(self.get_arg_mod_ref_info(call, at)));
+                }
+                if narrowed == arg {
+                    break;
+                }
+            }
+            arg = narrowed;
+        }
+        let mut result = arg.union(other);
+        // aliasErrno without the target's int size: only a local slot or an
+        // access wider than an int (32 bits) is told apart.
+        if errno.union(result) != result {
+            let apart = self.identified_local(object) || loc.size.value().is_some_and(|bytes| bytes * 8 > 32);
+            if !apart {
+                result = result.union(errno);
+            }
+        }
+        if result != ModRefInfo::ModRef {
+            return result;
+        }
+        let invariant_start = llrm_mir::memory::callee(self.unit.context, self.unit.function, call)
+            .and_then(|one| self.unit.globals.get(one.0 as usize)?.name.as_deref())
+            .is_some_and(|name| name.starts_with("llvm.invariant.start"));
+        if invariant_start { ModRefInfo::Ref } else { ModRefInfo::ModRef }
+    }
+}
+
 fn gcd(
     a: i128,
     b: i128,
@@ -511,38 +625,143 @@ impl AAResults for BasicAA<'_> {
         self.alias_check(a, b, aaqi)
     }
 
+    /// `getModRefInfoMask`: a location in a constant global or a
+    /// `noalias readonly` argument is never written; one in no object this
+    /// walk (through selects and phis of up to eight arms) names is
+    /// anything.
     fn get_mod_ref_info_mask(
         &mut self,
-        _: &MemoryLocation,
+        loc: &MemoryLocation,
         _: &mut AAQueryInfo,
-        _: bool,
+        ignore_locals: bool,
     ) -> ModRefInfo {
-        ModRefInfo::ModRef
+        let mut max_lookup = 8;
+        let mut worklist = vec![loc.ptr];
+        let mut visited: Vec<Operand> = Vec::new();
+        let mut result = ModRefInfo::NoModRef;
+        // `do { ... } while (!Worklist.empty() && --MaxLookup)`: a `continue`
+        // of the C++ still counts a step.
+        loop {
+            let next = worklist.pop().expect("a non-empty worklist");
+            'step: {
+                let object = self.underlying(next);
+                if visited.contains(&object) {
+                    break 'step;
+                }
+                visited.push(object);
+                let defining = self.defining(object);
+                if ignore_locals && defining.is_some_and(|one| matches!(one.opcode, Opcode::Alloca { .. })) {
+                    break 'step;
+                }
+                if let Some(attrs) = self.argument_attrs(object) {
+                    let facts = llrm_mir::facts::Facts::of(attrs);
+                    if facts.no_alias() && facts.read_only() {
+                        result = result.union(ModRefInfo::Ref);
+                        break 'step;
+                    }
+                }
+                if let Operand::Constant(id) = object {
+                    if let ConstantKind::Global(global) = self.unit.context.get(id).kind {
+                        match self.unit.globals.get(global.0 as usize).map(|one| &one.kind) {
+                            Some(GlobalKind::Variable(variable)) if variable.constant => break 'step,
+                            _ => return ModRefInfo::ModRef,
+                        }
+                    }
+                }
+                match defining.map(|one| (&one.opcode, &one.operands)) {
+                    Some((Opcode::Select, operands)) => worklist.extend([operands[1], operands[2]]),
+                    Some((Opcode::Phi, operands)) => {
+                        if operands.len() / 2 > 8 {
+                            return ModRefInfo::ModRef;
+                        }
+                        worklist.extend(operands.iter().step_by(2).copied());
+                    }
+                    _ => return ModRefInfo::ModRef,
+                }
+            }
+            max_lookup -= 1;
+            if worklist.is_empty() || max_lookup == 0 {
+                break;
+            }
+        }
+        if worklist.is_empty() { result } else { ModRefInfo::ModRef }
     }
 
+    /// `BasicAAResult::getArgModRefInfo` (BasicAliasAnalysis.cpp:897,
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L897>):
+    /// the call site's attributes on the argument, else the callee's on the
+    /// parameter (`CallBase::paramHasAttr`).
     fn get_arg_mod_ref_info(
         &mut self,
-        _: llrm_mir::module::InstId,
-        _: u32,
+        call: llrm_mir::module::InstId,
+        arg: u32,
     ) -> ModRefInfo {
-        ModRefInfo::ModRef
+        let function = self.unit.function;
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
+            return ModRefInfo::ModRef;
+        };
+        let callee = llrm_mir::memory::callee(self.unit.context, function, call)
+            .and_then(|one| self.unit.globals.get(one.0 as usize))
+            .and_then(|one| one.function());
+        let stated = |fact: fn(&llrm_mir::facts::Facts) -> bool| {
+            let site =
+                info.argument_attrs.get(arg as usize).is_some_and(|attrs| fact(&llrm_mir::facts::Facts::of(attrs)));
+            site || callee
+                .and_then(|one| one.parameter_attrs.get(arg as usize))
+                .is_some_and(|attrs| fact(&llrm_mir::facts::Facts::of(attrs)))
+        };
+        if stated(llrm_mir::facts::Facts::read_none) {
+            ModRefInfo::NoModRef
+        } else if stated(llrm_mir::facts::Facts::write_only) {
+            ModRefInfo::Mod
+        } else if stated(llrm_mir::facts::Facts::read_only) {
+            ModRefInfo::Ref
+        } else {
+            ModRefInfo::ModRef
+        }
     }
 
+    /// `BasicAAResult::getMemoryEffects(Call)` (BasicAliasAnalysis.cpp:860,
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L860>):
+    /// the call site's `memory(...)` met with the direct callee's.
+    ///
+    /// DEVIATE B1: no `hasReadingOperandBundles`/`hasClobberingOperandBundles`/
+    /// `isVolatile` terms. MIR has no operand bundles (#2203) and no volatile
+    /// call; `CallInfo` carries neither, so there is nothing to read.
+    /// DEVIATE B2: no `experimental_guard`/`experimental_deoptimize` case; MIR
+    /// has neither intrinsic.
     fn get_memory_effects(
         &mut self,
-        _: llrm_mir::module::InstId,
+        call: llrm_mir::module::InstId,
         _: &mut AAQueryInfo,
     ) -> MemoryEffects {
-        MemoryEffects::unknown()
+        let function = self.unit.function;
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
+            return MemoryEffects::unknown();
+        };
+        let site = MemoryEffects::of_attrs(&info.attrs);
+        let callee = llrm_mir::memory::callee(self.unit.context, function, call)
+            .and_then(|one| self.unit.globals.get(one.0 as usize))
+            .and_then(|one| one.function());
+        callee.map_or(site, |one| site.intersect(MemoryEffects::of_attrs(&one.attrs)))
     }
 
+    /// A call against a location is `getModRefInfo(Call, Loc)`; every other
+    /// instruction is not answered yet.
     fn get_mod_ref_info(
         &mut self,
-        _: llrm_mir::module::InstId,
-        _: Option<&MemoryLocation>,
-        _: &mut AAQueryInfo,
+        inst: llrm_mir::module::InstId,
+        loc: Option<&MemoryLocation>,
+        aaqi: &mut AAQueryInfo,
     ) -> ModRefInfo {
-        ModRefInfo::ModRef
+        let is_call = matches!(
+            self.unit.function.instruction(inst).opcode,
+            Opcode::Call(_) | Opcode::Invoke(_)
+        );
+        match loc {
+            Some(loc) if is_call => self.call_mod_ref(inst, loc, aaqi),
+            _ => ModRefInfo::ModRef,
+        }
     }
 
     fn get_mod_ref_info_call(
@@ -567,6 +786,7 @@ impl AAResults for BasicAA<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aa::IRMemLocation;
     use crate::testing::{layout, parsed, value};
 
     const M32: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
@@ -637,11 +857,160 @@ mod tests {
         assert_eq!(answer(&body(149), "a", "slot", 4), AliasResult::MayAlias);
     }
 
+    /// The call `%c` of `@f` in `body`: its effects and its argument 0's.
+    fn call_effects(body: &str) -> (MemoryEffects, ModRefInfo) {
+        let module = parsed(&format!("{M32}{body}"));
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let call = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_)))
+            .expect("a call");
+        let mut aa = BasicAA::new(&unit);
+        (aa.get_memory_effects(call, &mut AAQueryInfo::default()), aa.get_arg_mod_ref_info(call, 0))
+    }
+
+    /// `getMemoryEffects(Call)` met the site's `memory(...)` with the callee's.
+    /// The stub answered `unknown` for every call: `memory(argmem: read)` was
+    /// `ModRef` everywhere, and `FunctionAttrs` could infer nothing.
+    #[test]
+    fn a_calls_effects_are_the_meet_of_its_site_and_its_callee() {
+        use IRMemLocation::{ArgMem, Other};
+        let (declared, _) = call_effects(
+            "declare void @g(ptr) memory(argmem: read)\ndefine void @f(ptr %p) {\nentry:\n  call void @g(ptr %p)\n  ret void\n}\n",
+        );
+        assert_eq!(declared.mod_ref(ArgMem), ModRefInfo::Ref);
+        assert_eq!(declared.mod_ref(Other), ModRefInfo::NoModRef);
+        let (met, _) = call_effects(
+            "declare void @g(ptr) memory(argmem: readwrite)\ndefine void @f(ptr %p) {\nentry:\n  call void @g(ptr %p) memory(argmem: write)\n  ret void\n}\n",
+        );
+        assert_eq!(met.mod_ref(ArgMem), ModRefInfo::Mod);
+        let (none, _) =
+            call_effects("declare void @g()\ndefine void @f() {\nentry:\n  call void @g()\n  ret void\n}\n");
+        assert_eq!(none, MemoryEffects::unknown());
+        let (readnone, _) =
+            call_effects("declare void @g() readnone\ndefine void @f() {\nentry:\n  call void @g()\n  ret void\n}\n");
+        assert!(readnone.does_not_access_memory());
+    }
+
+    /// `getArgModRefInfo`: `readnone`, `writeonly`, `readonly` on the site's
+    /// argument or the callee's parameter, in that order.
+    #[test]
+    fn an_argument_is_what_its_attributes_leave_open() {
+        let arg = |callee: &str, site: &str| {
+            call_effects(&format!(
+                "declare void @g(ptr {callee})\ndefine void @f(ptr %p) {{\nentry:\n  call void @g(ptr {site} %p)\n  ret void\n}}\n"
+            ))
+            .1
+        };
+        assert_eq!(arg("", ""), ModRefInfo::ModRef);
+        assert_eq!(arg("readonly", ""), ModRefInfo::Ref);
+        assert_eq!(arg("", "writeonly"), ModRefInfo::Mod);
+        assert_eq!(arg("readonly", "readnone"), ModRefInfo::NoModRef);
+    }
+
     /// Distinct allocas are distinct objects.
     #[test]
     fn two_allocas_are_no_alias_and_one_pointer_is_must_alias() {
         let body = "define i32 @f() {\nentry:\n  %a = alloca i32\n  %b = alloca i32\n  ret i32 0\n}\n";
         assert_eq!(answer(body, "a", "b", 4), AliasResult::NoAlias);
         assert_eq!(answer(body, "a", "a", 4), AliasResult::MustAlias);
+    }
+
+    /// `getModRefInfoMask` of `%a` in `@f`.
+    fn mask(
+        body: &str,
+        ignore_locals: bool,
+    ) -> ModRefInfo {
+        let module = parsed(&format!("{M32}{body}"));
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let location = MemoryLocation::new(Operand::Value(value(function, "a")), LocationSize::Precise(4));
+        BasicAA::new(&unit).get_mod_ref_info_mask(&location, &mut AAQueryInfo::default(), ignore_locals)
+    }
+
+    /// A pointer into a constant global is never written, one into a mutable
+    /// global may be, a `noalias readonly` argument is read only (the
+    /// mask answered ModRef for all of them before).
+    #[test]
+    fn the_mask_of_a_constant_global_is_none_and_of_a_mutable_one_is_everything() {
+        let body = |kind: &str| {
+            format!(
+                "@g = internal {kind} [8 x i8] zeroinitializer\ndefine void @f() {{\nentry:\n  %a = getelementptr i8, ptr @g, i32 4\n  ret void\n}}\n"
+            )
+        };
+        assert_eq!(mask(&body("constant"), false), ModRefInfo::NoModRef);
+        assert_eq!(mask(&body("global"), false), ModRefInfo::ModRef);
+        let argument = "define void @f(ptr noalias readonly %a) {\nentry:\n  ret void\n}\n";
+        assert_eq!(mask(argument, false), ModRefInfo::Ref);
+    }
+
+    /// An alloca is skipped when locals are ignored and anything else when
+    /// not: a select of a constant global and an alloca is NoModRef only with
+    /// locals ignored.
+    #[test]
+    fn the_mask_skips_allocas_only_when_asked_and_follows_a_select() {
+        let body = "@g = internal constant i32 0\ndefine void @f(i1 %c) {\nentry:\n  %l = alloca i32\n  %a = select i1 %c, ptr @g, ptr %l\n  ret void\n}\n";
+        assert_eq!(mask(body, true), ModRefInfo::NoModRef);
+        assert_eq!(mask(body, false), ModRefInfo::ModRef);
+    }
+
+    /// What the call in `@f` does to `%a`, the one call in the body.
+    fn call_on(body: &str) -> ModRefInfo {
+        let module = parsed(&format!("{M32}{body}"));
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let call = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|inst| matches!(function.instruction(*inst).opcode, Opcode::Call(_)))
+            .expect("a call");
+        let location = MemoryLocation::new(Operand::Value(value(function, "a")), LocationSize::Precise(4));
+        BasicAA::new(&unit).get_mod_ref_info(call, Some(&location), &mut AAQueryInfo::default())
+    }
+
+    /// A call touches a local slot nobody holds a pointer to only if the slot
+    /// is passed; the call answered ModRef for both (the mod/ref methods
+    /// were placeholders).
+    #[test]
+    fn a_call_cannot_touch_a_slot_that_never_escapes_unless_it_is_passed() {
+        let body = |pass: &str| {
+            format!(
+                "declare void @h(ptr)\ndeclare void @g()\ndefine void @f() {{\nentry:\n  %a = alloca i32\n  call void {pass}\n  ret void\n}}\n"
+            )
+        };
+        assert_eq!(call_on(&body("@g()")), ModRefInfo::NoModRef);
+        assert_eq!(call_on(&body("@h(ptr %a)")), ModRefInfo::ModRef);
+    }
+
+    /// A `tail` call cannot reach the caller's slots, unless it takes one
+    /// `byval`.
+    #[test]
+    fn a_tail_call_cannot_touch_a_slot_of_the_frame_unless_it_takes_one_by_value() {
+        let body = |arg: &str| {
+            format!(
+                "declare void @h(ptr)\ndefine void @f() {{\nentry:\n  %a = alloca i32\n  tail call void @h(ptr {arg} %a)\n  ret void\n}}\n"
+            )
+        };
+        assert_eq!(call_on(&body("")), ModRefInfo::NoModRef);
+        assert_eq!(call_on(&body("byval(i32)")), ModRefInfo::ModRef);
+    }
+
+    /// A call that only reads through its argument reads the slot it is
+    /// given, and touches no other (`getModRefInfo(Call, Loc)`'s argument
+    /// refinement); with the effects unknown it was ModRef for both.
+    #[test]
+    fn a_call_that_reads_through_its_argument_only_reads_what_it_is_given() {
+        let body = |pass: &str| {
+            format!(
+                "declare void @r(ptr) memory(argmem: read) nounwind\n@g = external global i32\ndefine void @f(ptr %q) {{\nentry:\n  %a = alloca i32\n  store ptr %a, ptr @g\n  call void @r(ptr {pass})\n  ret void\n}}\n"
+            )
+        };
+        assert_eq!(call_on(&body("%a")), ModRefInfo::Ref);
+        assert_eq!(call_on(&body("%q")), ModRefInfo::NoModRef);
     }
 }
