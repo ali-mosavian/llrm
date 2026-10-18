@@ -14,9 +14,8 @@ const CHUNK: usize = 1 << 10;
 /// pushed. Nothing here calls out: `push` and `get` touch the chunk list for
 /// the length of one statement each.
 pub struct Arena<T> {
-    // Behind a pointer, so that a `&Arena` (and the `&Context` holding it) is
-    // still read-only to the optimizer: an interior-mutable field inline would
-    // make every reference to the context assume it can change.
+    // Behind a pointer, so that a `&Arena` (and the `&Context` holding it) is still read-only to the optimizer:
+    // an interior-mutable field inline would make every reference to the context assume it can change.
     held: Box<Held<T>>,
 }
 
@@ -60,10 +59,9 @@ impl<T> Arena<T> {
     ) -> &T {
         assert!(index < self.held.len.get(), "entry {index} of {}", self.held.len.get());
         let (chunk, offset) = locate(index);
-        // SAFETY: entries below `len` are initialized, their chunk is listed
-        // (the list holds one chunk per `CHUNK` entries pushed) and
-        // never moved or freed while `self` lives. The list is read for this
-        // one expression, and no reference into it escapes.
+        // SAFETY: entries below `len` are initialized, their chunk is listed (the list holds one chunk per `CHUNK`
+        // entries pushed) and never moved or freed while `self` lives. The list is read for this one expression, and
+        // no reference into it escapes.
         unsafe {
             let list = &*self.held.chunks.get();
             let base = *list.get_unchecked(chunk);
@@ -79,9 +77,8 @@ impl<T> Arena<T> {
     ) -> usize {
         let index = self.held.len.get();
         let (chunk, offset) = locate(index);
-        // SAFETY: slot `offset` of `chunk` is allocated (a fresh chunk when
-        // `offset` is 0) and not yet initialized; `len` grows only
-        // after the write, and no `&T` ever points at an unwritten slot.
+        // SAFETY: slot `offset` of `chunk` is allocated (a fresh chunk when `offset` is 0) and not yet initialized;
+        // `len` grows only after the write, and no `&T` ever points at an unwritten slot.
         unsafe {
             let chunks = &mut *self.held.chunks.get();
             if offset == 0 {
@@ -106,8 +103,7 @@ impl<T> Arena<T> {
         let chunks = self.held.chunks.get_mut().clone();
         (0..self.held.len.get()).map(move |at| {
             let (chunk, offset) = locate(at);
-            // SAFETY: `&mut self` is held for the iterator's life; each index
-            // is visited once.
+            // SAFETY: `&mut self` is held for the iterator's life; each index is visited once.
             unsafe { &mut *chunks[chunk].as_ptr().add(offset) }
         })
     }
@@ -128,8 +124,7 @@ impl<T> Drop for Arena<T> {
         let len = self.held.len.get();
         for (chunk, base) in self.held.chunks.get_mut().iter().enumerate() {
             let held = len.saturating_sub(chunk * CHUNK).min(CHUNK);
-            // SAFETY: the first `held` entries of the chunk are initialized,
-            // and the chunk was allocated with this layout.
+            // SAFETY: the first `held` entries of the chunk are initialized, and the chunk was allocated with this layout.
             unsafe {
                 std::ptr::drop_in_place(std::ptr::slice_from_raw_parts_mut(base.as_ptr(), held));
                 alloc::dealloc(base.as_ptr().cast(), layout::<T>());

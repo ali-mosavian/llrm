@@ -339,9 +339,8 @@ b0:
   ret i16 %r
 }
 ";
-    use llrm_mir::program::Program;
-
     use crate::pipeline::{self, Applied};
+    use llrm_mir::program::Program;
     let mut module = module(text);
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
         pipeline::applied(program, &Applied::default())
@@ -350,8 +349,5 @@ b0:
     .expect("the pipeline runs");
     let printed = crate::testing::printed(&module);
     assert!(!printed.contains("poison") && !printed.contains("alloca"), "{printed}");
-    assert_eq!(
-        crate::testing::results(&module, &[&[]]),
-        vec![llrm_mir::interpret::Val::Int { bits: 0xffeb, width: 16 }]
-    );
+    assert_eq!(crate::testing::results(&module, &[&[]]), vec![llrm_mir::interpret::Val::Int { bits: 0xffeb, width: 16 }]);
 }
