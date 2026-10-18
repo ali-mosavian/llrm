@@ -218,7 +218,7 @@ impl LoopIdiomRecognize {
         // Try to find consecutive stores that can be transformed into memsets.
         let mut heads: Vec<InstId> = Vec::new();
         let mut tails: Vec<InstId> = Vec::new();
-        let mut consecutive_chain: std::collections::HashMap<InstId, InstId> = Default::default();
+        let mut consecutive_chain = llrm_mir::dense::IdMap::<InstId, InstId>::new();
 
         let layout = run.env.layout;
         let store_size_of = |run: &Run, store: InstId| {
