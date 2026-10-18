@@ -183,14 +183,24 @@ impl FunctionPass for Gvn {
         // The scalar pass first: it may merge blocks and split edges, and what
         // the rest reads is read of the body it leaves.
         let blocks = unit.function.layout().len();
-        let scalar = pass::run_impl(unit.context, unit.layout, unit.function, analyses.outer());
+        let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+        let (scalar, cfg_changed) = pass::run_impl_cfg(
+            unit.context,
+            unit.layout,
+            unit.function,
+            analyses.outer(),
+            Some(shape.dominance.tree()),
+        );
+        drop(shape);
         // Edits to operands leave what the manager holds of the body whole but
         // for its registers; a changed CFG leaves none of it.
-        let cfg_changed = unit.function.layout().len() != blocks;
         if cfg_changed {
             analyses.invalidate(unit.function, &PreservedAnalyses::none());
         } else if scalar {
-            analyses.invalidate(unit.function, &PreservedAnalyses::all().except::<Registers>());
+            analyses.invalidate(
+                unit.function,
+                &PreservedAnalyses::all().except::<Registers>().except::<llrm_analysis::manager::Counted>(),
+            );
         }
         let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
         let pointers = analyses.get::<PointerValues>(unit.context, unit.layout, unit.function);
@@ -215,9 +225,13 @@ impl FunctionPass for Gvn {
         match accesses.and_then(|accesses| {
             optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape, self.pre, scalar)
         }) {
-            Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
-            Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
-            Ok(false) => PreservedAnalyses::all(),
+            Ok((true, numbering_changed_cfg))
+                if cfg_changed || numbering_changed_cfg || unit.function.layout().len() != blocks =>
+            {
+                PreservedAnalyses::none()
+            }
+            Ok((true, _)) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
+            Ok((false, _)) => PreservedAnalyses::all(),
             Err(error) => panic!("gvn: {error}"),
         }
     }
@@ -279,12 +293,17 @@ pub fn optimized(
     shape: &cfg::Shape,
     pre: bool,
     equal: bool,
-) -> Result<bool, String> {
-    let (numbered, subexpressed) =
+) -> Result<(bool, bool), String> {
+    let (numbered, subexpressed, cfg_numbered) =
         // Without `pre` this is -O1's FRE: gcc's has no profit pricing, so a
         // load is served wherever it is redundant and nothing is numbered
         // twice.
         _numbered(unit, outer, accesses, &profit::costs(outer), if pre { profit::registers(outer) } else { crate::spill::Room::default() }, trips, registers, shape)?;
+    // Numbering merged a block or split an edge: the shape and the accesses
+    // are of the body before, and PRE is the next round's, over fresh ones.
+    if cfg_numbered {
+        return Ok((true, true));
+    }
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, pre && !subexpressed)?;
@@ -307,7 +326,7 @@ pub fn optimized(
         pre && !combined,
         shape,
     )?;
-    Ok(equal || numbered || combined || loaded)
+    Ok((equal || numbered || combined || loaded, false))
 }
 
 thread_local! {
@@ -333,7 +352,7 @@ fn _numbered(
     trips: &IndexMap<i64, i64>,
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &cfg::Shape,
-) -> Result<(bool, bool), String> {
+) -> Result<(bool, bool, bool), String> {
     // The walk over the function as it comes in: the same for both runs below,
     // each of which changes a copy.
     let forwarding = transform::Forwarding::default();
@@ -343,7 +362,7 @@ fn _numbered(
     let numbered = |context: &mut llrm_mir::context::Context,
                     function: &Function,
                     avoid_store_crossing: bool|
-     -> Result<(Function, (bool, bool)), String> {
+     -> Result<(Function, (bool, bool, bool)), String> {
         NUMBERINGS.with(|runs| runs.set(runs.get() + 1));
         let mut function = function.fork();
         let forwarded = transform::forwarded(
@@ -362,11 +381,15 @@ fn _numbered(
             transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()), &crossed)?;
         // The scalar numbering, over the loads merged above: two expressions
         // of one cell's loads are one, and each numbering is priced with that.
-        let scalar = pass::run_impl(context, unit.layout, &mut function, outer);
+        let (scalar, cfg) = if forwarded || subexpressed {
+            pass::run_impl_cfg(context, unit.layout, &mut function, outer, Some(shape.dominance.tree()))
+        } else {
+            (false, false)
+        };
         // Equal calls that touch nothing are one, after the arithmetic that
         // makes their arguments equal.
         let called = transform::equal_calls(&mut function, &silent(context, outer))?;
-        Ok((function, (forwarded || subexpressed || called || scalar, subexpressed || called || scalar)))
+        Ok((function, (forwarded || subexpressed || called || scalar, subexpressed || called || scalar, cfg)))
     };
     let crossing = numbered(unit.context, unit.function, false)?;
     // What `one` costs: its work, and the spills it forecasts. The work alone

@@ -185,13 +185,68 @@ fn commutative(
     )
 }
 
+/// `ValueNumbering`, a `DenseMap<Value *, uint32_t>`: instruction and argument
+/// values are dense ids, so they index a vector (0 is none); constants and
+/// blocks are a map.
+#[derive(Debug, Default)]
+struct Numbering {
+    values: Vec<u32>,
+    others: HashMap<Operand, u32>,
+}
+
+impl Numbering {
+    fn get(
+        &self,
+        value: &Operand,
+    ) -> Option<u32> {
+        match value {
+            Operand::Value(id) => self.values.get(id.0 as usize).copied().filter(|&one| one != 0),
+            other => self.others.get(other).copied(),
+        }
+    }
+
+    fn insert(
+        &mut self,
+        value: Operand,
+        number: u32,
+    ) {
+        match value {
+            Operand::Value(id) => {
+                if self.values.len() <= id.0 as usize {
+                    self.values.resize(id.0 as usize + 1 + self.values.len() / 2, 0);
+                }
+                self.values[id.0 as usize] = number;
+            }
+            other => {
+                self.others.insert(other, number);
+            }
+        }
+    }
+
+    fn remove(
+        &mut self,
+        value: &Operand,
+    ) -> Option<u32> {
+        match value {
+            Operand::Value(id) => self.values.get_mut(id.0 as usize).and_then(|one| {
+                let found = std::mem::take(one);
+                (found != 0).then_some(found)
+            }),
+            other => self.others.remove(other),
+        }
+    }
+}
+
 /// `GVNPass::ValueTable`
 /// ([GVN.h:156](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Scalar/GVN.h#L156)).
 #[derive(Debug, Default)]
 pub struct ValueTable {
-    value_numbering: HashMap<Operand, u32>,
+    value_numbering: Numbering,
     expression_numbering: HashMap<Expression, u32>,
     next_expr_number: u32,
+    /// Whether `expressions` are kept for `phi_translate`, which scalar PRE
+    /// (a later stage) is the only user of.
+    pub translating: bool,
     expressions: Vec<Expression>,
     expr_idx: Vec<u32>,
     /// Value number to the phi that has it.
@@ -351,7 +406,9 @@ impl ValueTable {
         phi: bool,
         inst: Option<InstId>,
     ) {
-        self.value_numbering.entry(value).or_insert(number);
+        if self.value_numbering.get(&value).is_none() {
+            self.value_numbering.insert(value, number);
+        }
         if let (true, Some(inst)) = (phi, inst) {
             self.numbering_phi.insert(number, inst);
         }
@@ -391,7 +448,7 @@ impl ValueTable {
         &self,
         value: Operand,
     ) -> bool {
-        self.value_numbering.contains_key(&value)
+        self.value_numbering.get(&value).is_some()
     }
 
     /// `lookupOrAdd`
@@ -401,7 +458,7 @@ impl ValueTable {
         env: &mut Env,
         value: Operand,
     ) -> u32 {
-        if let Some(&number) = self.value_numbering.get(&value) {
+        if let Some(number) = self.value_numbering.get(&value) {
             return number;
         }
         let inst = match value {
@@ -421,8 +478,8 @@ impl ValueTable {
                 return number;
             }
         };
-        let opcode = env.function.instruction(inst).opcode.clone();
-        let exp = match &opcode {
+        let function = env.function;
+        let exp = match &function.instruction(inst).opcode {
             Opcode::Call(_) => return self.lookup_or_add_call(env, inst),
             Opcode::FNeg => self.create_expr(env, inst, ExprOp::FNeg),
             Opcode::Binary(op) => self.create_expr(env, inst, ExprOp::Binary(*op)),
@@ -467,7 +524,7 @@ impl ValueTable {
         value: Operand,
         verify: bool,
     ) -> u32 {
-        let found = self.value_numbering.get(&value).copied();
+        let found = self.value_numbering.get(&value);
         if verify {
             return found.expect("Value not numbered?");
         }
@@ -513,7 +570,7 @@ impl ValueTable {
         &self,
         value: Operand,
     ) {
-        assert!(!self.value_numbering.contains_key(&value), "Inst still occurs in value numbering map!");
+        assert!(!self.value_numbering.get(&value).is_some(), "Inst still occurs in value numbering map!");
     }
 
     /// `assignExpNewValueNum`
@@ -527,14 +584,18 @@ impl ValueTable {
             return (number, false);
         }
         let number = self.next_value_number;
-        self.expression_numbering.insert(exp.clone(), number);
-        self.expressions.push(exp);
-        if self.expr_idx.len() < number as usize + 1 {
-            self.expr_idx.resize(number as usize * 2 + 1, 0);
-        }
         self.next_value_number += 1;
-        self.expr_idx[number as usize] = self.next_expr_number;
-        self.next_expr_number += 1;
+        if self.translating {
+            self.expression_numbering.insert(exp.clone(), number);
+            self.expressions.push(exp);
+            if self.expr_idx.len() < number as usize + 1 {
+                self.expr_idx.resize(number as usize * 2 + 1, 0);
+            }
+            self.expr_idx[number as usize] = self.next_expr_number;
+            self.next_expr_number += 1;
+        } else {
+            self.expression_numbering.insert(exp, number);
+        }
         (number, true)
     }
 

@@ -67,10 +67,12 @@ pub struct GvnPass<'a> {
     layout: &'a DataLayout,
     function: &'a mut Function,
     outer: &'a Outer,
-    dt: DominatorTree,
+    dt: std::borrow::Cow<'a, DominatorTree>,
     vn: ValueTable,
     leader_table: LeaderMap,
     dead_blocks: IndexMap<BlockId, ()>,
+    /// A block was merged or an edge split.
+    cfg_changed: bool,
 }
 
 /// `runImpl`'s scalar part. Whether anything changed.
@@ -80,7 +82,20 @@ pub fn run_impl(
     function: &mut Function,
     outer: &Outer,
 ) -> bool {
-    let dt = DominatorTree::new(function);
+    run_impl_cfg(context, layout, function, outer, None).0
+}
+
+/// `run_impl`, and whether it changed the CFG: merged a block or split an edge.
+/// `dominators` are those of `function` when the caller has them.
+pub fn run_impl_cfg(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    dominators: Option<&DominatorTree>,
+) -> (bool, bool) {
+    let dt =
+        dominators.map_or_else(|| std::borrow::Cow::Owned(DominatorTree::new(function)), std::borrow::Cow::Borrowed);
     let mut pass = GvnPass {
         context,
         layout,
@@ -90,10 +105,11 @@ pub fn run_impl(
         vn: ValueTable::new(),
         leader_table: LeaderMap::default(),
         dead_blocks: IndexMap::default(),
+        cfg_changed: false,
     };
     let mark = pass.function.mark();
     let computed = pass.run_impl();
-    pass.function.changes_since(mark).map_or(computed, |changes| !changes.is_empty())
+    (pass.function.changes_since(mark).map_or(computed, |changes| !changes.is_empty()), pass.cfg_changed)
 }
 
 impl GvnPass<'_> {
@@ -114,7 +130,7 @@ impl GvnPass<'_> {
     }
 
     fn refresh_dominators(&mut self) {
-        self.dt = DominatorTree::new(self.function);
+        self.dt = std::borrow::Cow::Owned(DominatorTree::new(self.function));
     }
 
     /// `runImpl`
@@ -124,10 +140,12 @@ impl GvnPass<'_> {
         // Merge unconditional branches, allowing PRE to catch more
         // optimization opportunities.
         for block in self.function.layout().to_vec() {
-            if !self.function.layout().contains(&block) {
+            if !self.function.is_placed(block) {
                 continue;
             }
-            changed |= local::merge_block_into_predecessor(self.context, self.function, block, false);
+            let merged = local::merge_block_into_predecessor(self.context, self.function, block, false);
+            self.cfg_changed |= merged;
+            changed |= merged;
         }
         if changed {
             self.refresh_dominators();
@@ -709,11 +727,12 @@ impl GvnPass<'_> {
         // DEVIATE 15: no phi is simplified (issue 2186); DEVIATE 18: no GEP
         // either, whose offset-zero form the BASIC runtime and the `bq32` bench
         // cells ran worse without.
-        let simplified = if matches!(
+        // `simplifyInstruction` has no arm of MIR's for the other kinds, and
+        // building its operands costs.
+        let simplified = if !matches!(
             self.function.instruction(inst).opcode,
-            Opcode::Phi | Opcode::GetElementPtr { .. }
-        )
-        {
+            Opcode::Binary(_) | Opcode::ICmp(_) | Opcode::Select | Opcode::Cast(_)
+        ) {
             None
         } else {
             llrm_mir::simplify::simplify_instruction(self.context, self.function, inst)
@@ -943,6 +962,7 @@ impl GvnPass<'_> {
         succ: BlockId,
     ) -> Option<BlockId> {
         let block = crate::edges::split_critical_edge(self.function, pred, succ)?;
+        self.cfg_changed = true;
         self.refresh_dominators();
         Some(block)
     }
