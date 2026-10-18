@@ -360,8 +360,9 @@ Code generation (`llc -O2`, i486; the same passes at -O1 less a few):
 | 62 | branch-folder, tailduplication, block-placement, post-RA scheduler | `jumps` | old | lir-cleanup-poc (jumps-tailmerge) |
 | 63 | execution-domain, break-false-deps, fixup-bw, fixup-leas | none | missing | lir-cleanup-poc (map) |
 | 64 | asm printer, MC object streamer | `assemble`, object write, omf | old | GAP (emission, ranked last) |
+| 65 | `X86FrameLowering::hasFP` (frame-pointer decision) | `without_frame_register`; interim [#2274] (framefree block lookup slope fix) | old | backend-slopes (the translation replaces `without_frame_register`) |
 
-Count: of 64 slots, 4 are translated (2, 3, 6, 58), all off by default; 2 are partly translated (11: `InlineCost`; 49: LoopInfo); 4 are n/a; 24 are named GAPs with no owner in the plan; the other 30 are old or missing with an owner. The default pipeline runs none of the translated slots.
+Count: of 65 slots, 4 are translated (2, 3, 6, 58), all off by default; 2 are partly translated (11: `InlineCost`; 49: LoopInfo); 4 are n/a; 24 are named GAPs with no owner in the plan; the other 30 are old or missing with an owner. The default pipeline runs none of the translated slots.
 
 ## 3. The plan
 
@@ -1551,6 +1552,7 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2218]: https://github.com/ali-mosavian/llrm/pull/2218
 [#2221]: https://github.com/ali-mosavian/llrm/pull/2221
 [#2260]: https://github.com/ali-mosavian/llrm/issues/2260
+[#2274]: https://github.com/ali-mosavian/llrm/pull/2274
 [#2272]: https://github.com/ali-mosavian/llrm/pull/2272
 [#2173]: https://github.com/ali-mosavian/llrm/pull/2173
 [#2179]: https://github.com/ali-mosavian/llrm/pull/2179
