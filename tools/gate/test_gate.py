@@ -207,7 +207,7 @@ def test_a_tool_that_is_present_is_not_missing(tmp_path):
 
 def test_ci_groups_hold_only_the_steps_that_can_run_here():
     p = gate.plan(["crates/ir/llrm-mir/src/lib.rs"])
-    skipped = {"turbo": "x", "cv4": "x", "qcport": "x"}
+    skipped = {"turbo": "x", "cv4": "x", "qcport": "x", "oracle-qcport": "x"}
     groups = gate.groups_of(p, skipped)
     assert "reference" not in groups and "turbo" not in sum(groups.values(), [])
 
