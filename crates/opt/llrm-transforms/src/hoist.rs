@@ -128,7 +128,7 @@ use llrm_mir::types::Type;
 /// made of them, so those are let go (`LLRM_CHECK_REPLAY`,
 /// `LLRM_CHECK_UNREPORTED`).
 fn kept_when_a_value_moves() -> PreservedAnalyses {
-    use llrm_analysis::manager::{Annotated, AssumptionCache, Counted, ExposedFrames, Registers};
+    use llrm_analysis::manager::{Annotated, AssumptionCache, ExposedFrames, Registers};
     PreservedAnalyses::none()
         .preserve::<ExposedFrames>()
         .preserve::<Annotated>()
@@ -136,7 +136,6 @@ fn kept_when_a_value_moves() -> PreservedAnalyses {
         .preserve::<Loops>()
         .preserve::<Registers>()
         .preserve::<AssumptionCache>()
-        .preserve::<Counted>()
 }
 
 use crate::profit::{self, OperationCosts};
@@ -222,9 +221,10 @@ pub fn hoisted(
     for one in found {
         let Some(into) = _preheader(&graph, one) else { continue };
         // The intervals of the loops, asked once a loop has been moved out of:
-        // the edges they stand on follow where a value is defined, so
-        // those and what is made of them are let go first and the rest
-        // stands (`LLRM_CHECK_REPLAY`, `LLRM_CHECK_UNREPORTED`).
+        // the edges they stand on follow where a value is defined, and a
+        // bound moved out of a loop makes it counted, so those and what is
+        // made of them are let go first and the rest stands
+        // (`LLRM_CHECK_REPLAY`, `LLRM_CHECK_UNREPORTED`).
         let mut bounds = || {
             if moved && !asked_after_moving {
                 analyses.invalidate(unit.function, &kept_when_a_value_moves());
