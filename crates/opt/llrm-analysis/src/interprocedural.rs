@@ -291,19 +291,24 @@ pub fn specialize_parameters(
     constants: &[Option<ConstantId>],
 ) -> bool {
     let mut changed = false;
+    let mut pointer = false;
     for (parameter, constant) in function.parameters().to_vec().into_iter().zip(constants) {
         if let Some(constant) = *constant
             && context.get(constant).ty == function.value(parameter).ty
             && !function.users(parameter).is_empty()
         {
+            pointer |= matches!(
+                context.types.get(function.value(parameter).ty),
+                llrm_mir::Type::Pointer(_)
+            );
             function.replace_all_uses_with(parameter, Operand::Constant(constant));
             changed = true;
         }
     }
-    if changed {
+    if pointer {
         // A pointer parameter now a constant address: its accesses are no
         // longer argument memory.
-        llrm_mir::memory::unsplit(&mut function.attrs);
+        llrm_mir::memory::unsplit(&mut function.attrs, llrm_mir::memory::Moved::OutOfArguments);
     }
     changed
 }

@@ -314,17 +314,38 @@ pub fn located(attrs: &[Attribute]) -> (Effects, Effects) {
     (at(attrs, Some("argmem")), at(attrs, None))
 }
 
-/// `attrs`' `memory(...)` with argument memory and every other location
-/// allowed what either was. A rewrite that changes which memory the
-/// parameters reach (a loaded pointer taken as a parameter, a parameter
-/// replaced by a constant address) moves accesses from one location to the
-/// other, so the split it stated no longer holds.
-pub fn unsplit(attrs: &mut Vec<Attribute>) {
+/// Where a rewrite moved a function's accesses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Moved {
+    /// Memory reached through a loaded pointer is now reached through a
+    /// parameter (argument promotion).
+    IntoArguments,
+    /// Memory reached through a parameter is now reached otherwise (a
+    /// parameter replaced by a constant address, a far pointer by an offset).
+    OutOfArguments,
+}
+
+/// `attrs`' `memory(...)` after a rewrite that moved accesses between argument
+/// memory and every other location: the destination is allowed what the source
+/// was, since the split the attribute stated no longer says where the body
+/// reads and writes.
+pub fn unsplit(
+    attrs: &mut Vec<Attribute>,
+    moved: Moved,
+) {
     let (arguments, other) = located(attrs);
-    if arguments == other || !attrs.iter().any(|one| matches!(one, Attribute::Memory(_))) {
+    if !attrs.iter().any(|one| matches!(one, Attribute::Memory(_))) {
         return;
     }
-    let both = Effects { reads: arguments.reads || other.reads, writes: arguments.writes || other.writes };
+    let join = |one: Effects, two: Effects| Effects { reads: one.reads || two.reads, writes: one.writes || two.writes };
+    let (arguments, other) = match moved {
+        Moved::IntoArguments => (join(arguments, other), other),
+        Moved::OutOfArguments => (arguments, join(arguments, other)),
+    };
+    let (kept_arguments, kept_other) = located(attrs);
+    if (arguments, other) == (kept_arguments, kept_other) {
+        return;
+    }
     let access = |one: Effects| {
         match (one.reads, one.writes) {
             (true, true) => "readwrite",
@@ -334,9 +355,12 @@ pub fn unsplit(attrs: &mut Vec<Attribute>) {
         }
         .to_owned()
     };
-    let mut locations = vec![(None, access(both))];
     let hidden = inaccessible(attrs);
-    if hidden != both {
+    let mut locations = vec![(None, access(other))];
+    if arguments != other {
+        locations.push((Some("argmem".to_owned()), access(arguments)));
+    }
+    if hidden != other {
         locations.push((Some("inaccessiblemem".to_owned()), access(hidden)));
     }
     attrs.retain(|one| !matches!(one, Attribute::Memory(_)));
