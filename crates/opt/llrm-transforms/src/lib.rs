@@ -87,9 +87,15 @@ mod calleepop_tests;
 pub mod candidate;
 pub mod canonical;
 pub mod cfg;
+pub mod constraintelim;
+#[cfg(test)]
+mod constraintelim_tests;
 #[cfg(test)]
 mod corpus_tests;
 pub mod counting;
+pub mod cvp;
+#[cfg(test)]
+mod cvp_tests;
 pub mod dead;
 pub mod deadargs;
 #[cfg(test)]
@@ -111,6 +117,8 @@ pub mod globaldce;
 mod globaldce_tests;
 pub mod globalopt;
 pub mod gvn;
+#[cfg(test)]
+mod gvn_scalar_tests;
 pub mod hoist;
 pub mod homes;
 pub mod indvars;
@@ -134,6 +142,7 @@ pub mod loopclone;
 pub mod loopdistribute;
 pub mod loopexit;
 pub mod loopfuse;
+pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;
 pub mod loopmotion;
@@ -141,6 +150,7 @@ pub mod loopnest;
 pub mod loopshape;
 pub mod loopsimplify;
 pub mod loopsplit;
+pub mod loopunroll;
 pub mod loopversion;
 pub mod lsr;
 pub mod mem2reg;
@@ -149,6 +159,9 @@ pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
+pub mod parity;
+#[cfg(test)]
+mod parity_tests;
 pub mod peel;
 pub mod phiopt;
 pub mod pipeline;
@@ -159,11 +172,13 @@ pub mod profit;
 pub mod promote;
 pub mod rotate;
 pub mod settled;
+pub mod simplifycfg;
 pub mod simplifyindvar;
 pub mod sink;
 pub mod spares;
 pub mod spill;
 pub mod splitcopy;
+pub mod switchcg;
 pub mod switchlower;
 pub mod tailrec;
 #[cfg(test)]
@@ -175,6 +190,9 @@ pub mod unroll_jam;
 pub mod unswitch;
 pub mod versionalias;
 pub mod versionstride;
+pub mod vncoercion;
+#[cfg(test)]
+mod vncoercion_tests;
 pub mod window;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called

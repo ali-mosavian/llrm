@@ -495,7 +495,7 @@ fn _constant_exits(
     let dominance = cfg::Dominance::of(function);
     let following = graph
         .iter()
-        .filter(|block| dominance.dominates(cfg::id(exit), block.at))
+        .filter(|block| dominance.dominates(function, cfg::id(exit), block.at))
         .map(|block| cfg::block(block.at))
         .collect::<BTreeSet<_>>();
     let aliases = _aliases(function, exit, loop_);

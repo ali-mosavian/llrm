@@ -62,7 +62,7 @@ pub mod wrap_proof;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::hash::{HashMap, HashSet};
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, GlobalValue, MetadataNode, Operand, ValueDef, ValueId};
@@ -84,7 +84,7 @@ pub struct Cx<'a> {
     pub function: &'a Function,
     pub layout: &'a DataLayout,
     pub loops: &'a LoopInfo,
-    pub tree: &'a DominatorTree,
+    pub tree: &'a DomTree,
     /// `AC`: the `llvm.assume` calls of the function.
     pub assumptions: &'a AssumptionCache,
 }

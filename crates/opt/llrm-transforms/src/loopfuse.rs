@@ -576,7 +576,7 @@ impl<'a> View<'a> {
                     made.contains(&def)
                         || function
                             .parent(def)
-                            .is_some_and(|block| self.shape.dominance.dominates(cfg::id(block), before))
+                            .is_some_and(|block| self.shape.dominance.dominates(self.function, cfg::id(block), before))
                 }
             },
             _ => true,
@@ -610,7 +610,7 @@ impl<'a> View<'a> {
                         .map(|(_, from)| from)?,
                     _ => function.parent(used.user)?,
                 };
-                if !made.contains(&used.user) && !self.shape.dominance.dominates(before, cfg::id(from)) {
+                if !made.contains(&used.user) && !self.shape.dominance.dominates(self.function, before, cfg::id(from)) {
                     return None;
                 }
             }

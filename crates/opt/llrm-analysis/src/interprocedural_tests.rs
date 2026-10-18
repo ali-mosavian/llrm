@@ -510,3 +510,48 @@ fn test_noreturn_follows_a_long_chain_to_where_it_ends() {
     let returns = parsed(&chain("ret void"));
     assert_eq!(noreturn_procedures(&returns, &returns.declarations(), &all(&returns)), BTreeSet::new());
 }
+
+/// A pointer parameter replaced by the address of a global: what the body
+/// wrote through it as `argmem` it now writes to a global, so `memory(argmem:
+/// write)` no longer says where.
+#[test]
+fn a_pointer_parameter_made_a_constant_address_unsplits_the_memory_attribute() {
+    let mut module = parsed(
+        "@g = global i16 0
+
+define internal void @set(ptr %p) memory(argmem: write) {
+b:
+  store i16 1, ptr %p
+  ret void
+}
+",
+    );
+    let global = module.named("g").unwrap();
+    let constant = module.reference(global);
+    let (context, function) = module.function_mut("set").unwrap();
+    assert!(specialize_parameters(context, function, &[Some(constant)]));
+    let attrs = &function.attrs;
+    assert!(llrm_mir::memory::located(attrs).1.writes, "{attrs:?}");
+}
+
+/// An integer parameter made a constant moves no access between argument
+/// memory and the rest: unsplitting the attribute anyway changed it, the next
+/// stamp narrowed it back and re-ran the body's pipeline (three more runs and
+/// 3.4% more instructions on QCport's `console` at -Os).
+#[test]
+fn an_integer_parameter_made_a_constant_leaves_the_memory_attribute_alone() {
+    let mut module = parsed(
+        "define internal void @set(ptr %p, i16 %n) memory(argmem: write) {
+b:
+  store i16 %n, ptr %p
+  ret void
+}
+",
+    );
+    let (context, function) = module.function_mut("set").unwrap();
+    let ty = function.value(function.parameters()[1]).ty;
+    let constant = context.constant(llrm_mir::Constant { ty, kind: llrm_mir::ConstantKind::Int(7) });
+    let before = function.attrs.clone();
+    assert!(specialize_parameters(context, function, &[None, Some(constant)]));
+    assert_eq!(function.attrs, before);
+}

@@ -304,7 +304,8 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         &self,
         at: i64,
     ) -> bool {
-        self.unit.function.entry().map(cfg::id) == Some(at) || self.shape().dominance.immediate(at).is_some()
+        self.unit.function.entry().map(cfg::id) == Some(at)
+            || self.shape().dominance.immediate(self.unit.function, at).is_some()
     }
 
     fn worked(
@@ -353,7 +354,7 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         };
         // Nothing above a definition holds the value, and a block the
         // definition does not dominate has not seen it.
-        if made_in.is_some_and(|def| def == at || !self.shape().dominance.dominates(def, at)) {
+        if made_in.is_some_and(|def| def == at || !self.shape().dominance.dominates(self.unit.function, def, at)) {
             return None;
         }
         let mut passed = Vec::new();
@@ -391,7 +392,7 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
                     }
                     parent
                 }
-                None => match self.shape().dominance.immediate(here) {
+                None => match self.shape().dominance.immediate(self.unit.function, here) {
                     Some(up) => up,
                     None if self.unit.function.entry().map(cfg::id) == Some(here)
                         && self.unit.function.parameters().contains(&value) =>
@@ -796,7 +797,8 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
                     }
                 }
             }
-            above = self.ctx.shape.dominance.immediate(one).filter(|up| self.ctx.body.contains(up));
+            above =
+                self.ctx.shape.dominance.immediate(self.ctx.unit.function, one).filter(|up| self.ctx.body.contains(up));
         }
         found.sort_unstable();
         found
@@ -837,7 +839,7 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
                 }
             }
         }
-        for condition in ctx.assumed.above(ctx.shape, at) {
+        for condition in ctx.assumed.above(ctx.shape, ctx.unit.function, at) {
             if let Some(delta) =
                 ranges::narrowed_delta(ctx.unit, condition, true, &Layered { view: self, deltas: &deltas }, ctx.facts)
             {

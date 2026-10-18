@@ -47,7 +47,7 @@ fn folded(
 }
 
 /// `folded`, the exits their counts decide found by ScalarEvolution
-/// (`LLRM_EXP_SCEV_EXITFOLD`).
+/// (the default; `LLRM_NO_SCEV_EXITFOLD` turns it off).
 fn folded_by_scev(
     text: &str,
     inputs: &[&[i128]],

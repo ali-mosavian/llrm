@@ -39,7 +39,7 @@
 //! `simplifyindvar_tests.rs`.
 //!
 //! # Runs
-//! Step 0 of [`crate::indvars`], with `LLRM_EXP_SCEV_IVCMP`; off by default.
+//! Step 0 of [`crate::indvars`], on by default; `LLRM_NO_SCEV_IVCMP` turns it off.
 //!
 //! # Needs
 //! `llrm_analysis::scev` (`ScevSession`): `evaluatePredicateAt`,
@@ -65,9 +65,9 @@ use llrm_mir::passes::Outer;
 
 use crate::counting;
 
-/// `LLRM_EXP_SCEV_IVCMP`, read once.
+/// Read once; `LLRM_NO_SCEV_IVCMP` turns the step off.
 pub fn enabled() -> bool {
-    llrm_support::env_flag!("LLRM_EXP_SCEV_IVCMP")
+    !llrm_support::env_flag!("LLRM_NO_SCEV_IVCMP")
 }
 
 /// Every comparison with an induction variable that ScalarEvolution decides,

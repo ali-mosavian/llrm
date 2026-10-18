@@ -2,7 +2,7 @@
 //! not yet make them from the IR: what each node expands to, printed.
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::Operand;
 use llrm_mir::opcode::Opcode;
@@ -27,7 +27,7 @@ fn expanded(build: impl FnOnce(&mut ScalarEvolution, &Cx, &[Operand]) -> Scev) -
     let mut function = original.clone();
     let mut context = module.context.clone();
     let layout = DataLayout::default();
-    let tree = DominatorTree::new(&function);
+    let tree = DomTree::of(&function);
     let loops = LoopInfo::analyze(&function, || &tree);
     let assumptions = AssumptionCache::new(&module, &function);
     let env = Env {
@@ -149,4 +149,21 @@ fn test_an_equal_binop_just_before_the_insert_point_is_reused() {
         se.get_add_expr(cx, vec![sum, sum], Flags::default(), 0).scev
     });
     assert_eq!(lines(&text).len(), 2, "{text}");
+}
+
+/// `isSafeToExpand` was `todo!`: a udiv by an unknown divisor may divide by
+/// zero, so it is not safe; by a nonzero constant it is.
+#[test]
+fn test_a_udiv_is_safe_to_expand_only_by_a_divisor_known_nonzero() {
+    let mut safe = Vec::new();
+    for divisor_is_constant in [false, true] {
+        expanded(|se, cx, args| {
+            let a = unknown(se, cx, args[0]);
+            let d = if divisor_is_constant { constant(se, 32, 3) } else { unknown(se, cx, args[1]) };
+            let s = se.get_udiv_expr(cx, a, d);
+            safe.push(Expander::new("t").is_safe_to_expand(cx, se, s));
+            s
+        });
+    }
+    assert_eq!(safe, [false, true]);
 }

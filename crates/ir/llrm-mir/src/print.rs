@@ -92,6 +92,13 @@ pub fn body(
     Printer { context, globals: Vec::new() }.blocks(function, &Slots::new(function))
 }
 
+/// The name each value of `function` prints under (`%name` or its number), as
+/// `body` prints it: a report that is compared with another tool's reading of
+/// the same text names values alike.
+pub fn value_names(function: &Function) -> HashMap<ValueId, String> {
+    Slots::new(function).values
+}
+
 /// A 128-bit digest (not a cryptographic one) of what `body` prints, without
 /// printing it: the same for two bodies that print alike (up to value and block
 /// numbering), and, but for a collision of 2^-128, different for two that do
@@ -469,6 +476,9 @@ impl Printer<'_> {
         let mut words: Vec<String> =
             [linkage, Self::unnamed_addr(global.unnamed_addr)].into_iter().flatten().map(str::to_owned).collect();
         words.extend(Self::address_space(global.address_space));
+        if variable.externally_initialized {
+            words.push("externally_initialized".to_owned());
+        }
         words.push((if variable.constant { "constant" } else { "global" }).to_owned());
         words.push(self.ty(variable.ty));
         words.extend(variable.initializer.map(|one| self.constant(one)));
