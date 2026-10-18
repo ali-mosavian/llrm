@@ -6,11 +6,12 @@
 //! merging).
 //!
 //! # How it works
-//! `Fill` rewrites one loop at a time, then looks again, with two shapes of
-//! loop: tested before its trips, or tested after them (a loop entered behind a
-//! copy of its test, `-ftree-ch`). The loop has one latch, a straight-line
-//! body, and a trip count `induction::counted` proves; what it does besides
-//! arithmetic is stores, loads and memsets that follow one of these forms:
+//! `LoopIdioms` rewrites one loop at a time, then looks again, with two shapes
+//! of loop: tested before its trips, or tested after them (a loop entered
+//! behind a copy of its test, `-ftree-ch`). The loop has one latch, a
+//! straight-line body, and a trip count `induction::counted` proves; what it
+//! does besides arithmetic is stores, loads and memsets that follow one of
+//! these forms:
 //!
 //! - A fill: a store, or a memset, of a loop-invariant value that is one byte
 //!   repeated, through an address `induction` derives as a GEP off an invariant
@@ -109,12 +110,12 @@
 //! the counter leaves with its exit value 10.
 //!
 //! From unit test `a_counted_word_loop_is_one_memset_of_its_bytes` in
-//! `fill_tests.rs` (first case; the printed text was taken from a run).
+//! `loopidioms_tests.rs` (first case; the printed text was taken from a run).
 //!
 //! # Runs
-//! Last in the function fixed point: `Fill`, then `Merge`, after `unroll` and
-//! `peel`. On with `-ftree-loop-distribute-patterns`; off at -O0 and -Og, on
-//! from -O1. `size` is set at -Os and -Oz.
+//! Last in the function fixed point: `LoopIdioms`, then `Merge`, after `unroll`
+//! and `peel`. On with `-ftree-loop-distribute-patterns`; off at -O0 and -Og,
+//! on from -O1. `size` is set at -Os and -Oz.
 //!
 //! # Needs
 //! `induction` (`counted`, `trips`, `recurrences`, `derived` addresses),
@@ -153,13 +154,13 @@ use crate::lcssa::{arms, from_arms, operations};
 use crate::profit::{self, OperationCosts};
 
 /// `size`: priced in code bytes, as under `-Os`.
-pub struct Fill {
+pub struct LoopIdioms {
     pub size: bool,
 }
 
-impl FunctionPass for Fill {
+impl FunctionPass for LoopIdioms {
     fn name(&self) -> &'static str {
-        "fill"
+        "loopidioms"
     }
 
     fn run(
@@ -1455,9 +1456,9 @@ fn _chain_after(
 }
 
 /// Whether `stores`, all the stores some loop `loop_` would make were it split
-/// to give them a loop of their own, are what `fill` takes for the whole of a
-/// loop: each a fill of a value the loop does not change, or the one store of
-/// a copy. What loop distribution asks of a part before it parts it.
+/// to give them a loop of their own, are what `loopidioms` takes for the whole
+/// of a loop: each a fill of a value the loop does not change, or the one store
+/// of a copy. What loop distribution asks of a part before it parts it.
 pub fn takes(
     unit: &Unit,
     callees: &Callees,
@@ -1600,5 +1601,5 @@ fn _stepped(
 }
 
 #[cfg(test)]
-#[path = "fill_tests.rs"]
+#[path = "loopidioms_tests.rs"]
 mod tests;
