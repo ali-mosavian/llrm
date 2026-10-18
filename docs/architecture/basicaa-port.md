@@ -24,19 +24,21 @@
 2. **LLVM's answers** (not run): `opt -passes=aa-eval -print-all-alias-modref-info` with the pinned `~/scratch/llvm-build/bin/opt` (24.0.0git `d1106deb71cc`), on llvm-difftest's replay of the dumped pass inputs, pair by pair, every difference classified against today's. The first table of this page is the count of NoAlias-vs-MayAlias, MayAlias-vs-NoAlias and MustAlias differences; wherever today says NoAlias and BasicAA says MayAlias is a candidate miscompile and goes to a program test and a fix PR ahead of the perf work.
 3. **Walker equality** (memoryssa-port): `check_clobber_sanity` on every load and store of 167 `d_faces` bodies must hold with the new AA.
 
-### First table (oracle 2, `tools/aliascompare.py` of #2176)
+### First table (oracle 2, `tools/aliascompare.py --basic` of #2176)
 
-`opt` 24.0.0git `d1106deb71cc` (`~/scratch/llvm-build/bin/opt`; inputs made by `mkinputs.sh` at main `7ac662405`, `-fno-inline-functions`), `-passes=aa-eval -print-all-alias-modref-info`; llrm side: `llrm-mir --aliases`, the answer `regions::overlapping` gives two pointers with every byte of their objects (aa-eval asks without a size). Inputs: the hoist, gvn and dse pass inputs of the replay set (`~/scratch/replay/inputs`) of `d_faces` -O1 (66), -O2 (104) and -Os (104): 274 dumps, 166 with two or more pointers. Failed rows: 0.
+`opt` 24.0.0git `d1106deb71cc` (`~/scratch/llvm-build/bin/opt`), `-aa-pipeline=basic-aa -passes=aa-eval -print-all-alias-modref-info`. Inputs: the hoist, gvn and dse pass inputs of the replay set (`~/scratch/replay/inputs`, made by `mkinputs.sh` at main `7ac662405`, `-fno-inline-functions`) of `d_faces` -O1 (66), -O2 (104) and -Os (104): 274 dumps. Both sides list what aa-eval lists: the pointer operand of each load and store with the size of the access, one entry for each pair of pointer and size; llrm's answer is `regions::overlapping` of the two accesses with their provenance, as the consumers ask it, without the type tags (aa-eval's pointer pairs carry none, so TBAA cannot show in them). Failed rows: 0. Pairs one side printed that the other did not: 0.
 
-| ours | LLVM | pairs |
+| ours | LLVM BasicAA | pairs |
 |---|---|---|
-| NoAlias | NoAlias | 643,275 |
-| MayAlias | MayAlias | 629,409 |
-| MayAlias | NoAlias | 18,976 (precision LLVM has) |
+| NoAlias | NoAlias | 677,473 |
+| MayAlias | MayAlias | 612,017 |
+| MayAlias | NoAlias | 11,470 (precision LLVM has) |
 | MayAlias | MustAlias | 323 |
-| NoAlias | MayAlias | 0 (the candidate-miscompile column) |
+| NoAlias | MayAlias | 22,815 |
 
-Pairs llrm printed that aa-eval did not: 79,186 (not compared). Two earlier readings of the same inputs gave 22,815 and 282,728 NoAlias-against-MayAlias pairs; both were my instrument (a one-byte width where aa-eval has none, and raw object sets where consumers treat parameters as possibly aliasing), found by reading the pairs: every one was two pointers loaded from one cell or derived from one parameter. The method is part of the table: the column is only as good as the width and object rule of `aliases()`.
+The 22,815 are the candidate-miscompile column. Every one is a pair of pointers loaded from the same slot (or a gep of one) whose accessed bytes do not overlap (`gep(%p, 0)` against `gep(%p, 4)` where both `%p` are loads of one slot): llrm knows the two loads hold one pointer, BasicAA on this pre-GVN input does not. 0 of them is a pair of identified objects or of parameters. Not checked: that no store to the slot lies between the two loads (the provenance solve is flow-sensitive, so one would show as another object). The 323 and the 11,470 are not yet grouped by cause.
+
+How the column was found right: two earlier readings of the same inputs gave 22,815 and 282,728 NoAlias-against-MayAlias pairs because of my instrument (a one-byte width, then raw object sets that treat parameters as possibly aliasing), and a third (393,184) compared llrm's answers with the type tags against a pipeline that cannot see them. Each was found by reading the pairs. With the type tags on and LLVM's default pipeline the table is not comparable: aa-eval's pair queries carry no TBAA tag.
 
 ## 4. Stages and gates
 
