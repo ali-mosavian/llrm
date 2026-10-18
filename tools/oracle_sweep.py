@@ -146,7 +146,7 @@ def main() -> int:
         print("never exercised: " + ", ".join(unexercised) + " (a sweep where an oracle did not run proves nothing about it)")
         return 2
     if args.premise_only:
-        print("every oracle ran")
+        print(f"every oracle ran\nwall {time.perf_counter() - started:.0f} s (premise)")
         return 0
     jobs = [(t, p, l, m) for t, p in found for l in args.levels.split(",") for m in args.machines.split(",")]
     with ThreadPoolExecutor(args.jobs) as pool:
