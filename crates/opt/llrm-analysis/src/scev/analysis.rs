@@ -158,3 +158,48 @@ impl<'a> LazyScevView<'a> {
         view.ask(context, layout, function, query)
     }
 }
+
+/// One function's expressions and the context to read them in, for a pass
+/// that has no analysis manager (`exitfold`): made once, asked many times,
+/// valid while the function is not changed.
+pub struct ScevSession {
+    tree: DominatorTree,
+    loops: LoopInfo,
+    assumptions: AssumptionCache,
+    scev: ScalarEvolution,
+}
+
+impl ScevSession {
+    pub fn of(
+        context: &llrm_mir::context::Context,
+        function: &Function,
+        outer: &llrm_mir::passes::Outer,
+    ) -> Self {
+        let tree = DominatorTree::new(function);
+        let loops = LoopInfo::analyze(function, || &tree);
+        let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+        Self { tree, loops, assumptions, scev: ScalarEvolution::new() }
+    }
+
+    /// Runs `query` with the expressions and the context they are read in.
+    pub fn ask<R>(
+        &mut self,
+        context: &llrm_mir::context::Context,
+        layout: &DataLayout,
+        function: &Function,
+        outer: &llrm_mir::passes::Outer,
+        query: impl FnOnce(&mut ScalarEvolution, &Cx) -> R,
+    ) -> R {
+        let cx = Cx {
+            context,
+            globals: &outer.globals,
+            metadata: &outer.metadata,
+            function,
+            layout,
+            loops: &self.loops,
+            tree: &self.tree,
+            assumptions: &self.assumptions,
+        };
+        query(&mut self.scev, &cx)
+    }
+}
