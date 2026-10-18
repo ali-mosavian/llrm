@@ -63,7 +63,9 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
     let report = parity::report();
     assert!(report.contains("gvn@787 (gvn) -> gvn-port") && report.contains("shadow_mssa"), "{report}");
     assert!(parity::TODO.iter().any(|one| one.contains("kept updated by the pass")));
-    assert!(parity::TODO.iter().any(|one| one.contains("CFGAnalyses")));
+    assert!(parity::TODO.iter().all(|one| !one.contains("CFGAnalyses")), "the CFG set exists now");
+    let loops = parity::ANALYSES.iter().find(|one| one.key == "loops").expect("loops is registered");
+    assert_eq!((loops.llvm, loops.kind, loops.off), ("LoopAnalysis", SlotKind::Translated, false));
 }
 
 /// A Translated machine slot that `flow::machine_with` does not run passed
