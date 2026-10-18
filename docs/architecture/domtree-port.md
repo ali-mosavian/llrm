@@ -24,7 +24,7 @@ Rule for the code: each Rust function is a translation of the C++ function named
 
 Own `analysis dominators` Minstr at N, 2N (and 4N for `branches`), release, `perf` counts, `tools/budgets.toml` sizes (`branches` 256, `unrolled` 8; limit x2.3):
 
-| axis | main | D2 (#2271) | D2b (lazy, #2281) |
+| axis | main | D2 (#2271) | D2b (lazy, #2282) |
 |---|---|---|---|
 | branches | 25.5 -> 83.4, x3.27 | 25.6 -> 89.6 -> 332.4, x3.49, x3.71 | 6.6 -> 13.0 -> 26.0, x1.99, x2.00 |
 | unrolled | 2.3 -> 5.7, x2.47 | 2.3 -> 5.2, x2.27 | 1.3 -> 2.6, x1.99 |
