@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/hoist.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/hoist.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/hoist.rs sha256:88d2b71b0f134a0d644b0cc7ad46f0d98649ba15e208d74aa585fd00cb0d5671 -->
+<!-- src: crates/opt/llrm-transforms/src/hoist.rs sha256:be7ec02091976ff5c91b93a107621cb34944b113985ae1c46d49098c7073b083 -->
 
 # hoist
 
@@ -97,9 +97,11 @@ From unit test `test_invariant_arithmetic_leaves_its_loop_in_order` in
 `hoist_tests.rs`.
 
 ## Runs
-Early, after `floatloop` and before `loopmotion`; and again after
-`jumpthread`, at the end of the loop passes, when a loop entered at its
-body runs it at least once and what it loads unchanged may leave. On from
+In `llvm_order`, first without speculation (only what the loop certainly
+runs moves), then after `rotate`'s guard with it. Otherwise early, after
+`floatloop` and before `loopmotion`; and again after `jumpthread`, at the
+end of the loop passes, when a loop entered at its body runs it at least
+once and what it loads unchanged may leave. On from
 -O1; `-fno-move-loop-invariants` turns it and `loopmotion` off.
 
 ## Needs

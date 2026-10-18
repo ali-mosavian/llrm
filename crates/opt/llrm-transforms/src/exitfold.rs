@@ -852,7 +852,7 @@ fn _hoisted(
             continue;
         }
         'candidate: {
-            if !shape.dominance.dominates(exit.block, latch) {
+            if !shape.dominance.dominates(unit.function, exit.block, latch) {
                 break 'candidate;
             }
             let Some((counter, right, predicate)) = _tested(unit, exit, &counters, &still) else { break 'candidate };

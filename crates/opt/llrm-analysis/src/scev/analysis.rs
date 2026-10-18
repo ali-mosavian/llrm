@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::Function;
 use llrm_mir::passes::{Analyses, Analysis, Dominators, Loops};
@@ -90,7 +90,7 @@ pub struct ScevView {
     outer: Rc<llrm_mir::passes::Outer>,
     scevs: Rc<ScevCache>,
     loops: Rc<LoopInfo>,
-    tree: Rc<DominatorTree>,
+    tree: Rc<DomTree>,
     assumptions: Rc<AssumptionCache>,
 }
 
@@ -130,76 +130,5 @@ impl ScevView {
             assumptions: &self.assumptions,
         };
         query(&mut self.scevs.0.borrow_mut(), &cx)
-    }
-}
-
-/// A [`ScevView`] made at the first query: a pass that rarely asks pays for
-/// the loops and dominator tree it would otherwise ask the manager for at
-/// the start.
-pub struct LazyScevView<'a> {
-    analyses: std::cell::RefCell<&'a mut Analyses>,
-    view: std::cell::OnceCell<ScevView>,
-}
-
-impl<'a> LazyScevView<'a> {
-    pub fn new(analyses: &'a mut Analyses) -> Self {
-        Self { analyses: std::cell::RefCell::new(analyses), view: std::cell::OnceCell::new() }
-    }
-
-    /// [`ScevView::ask`], the view made on the first call.
-    pub fn ask<R>(
-        &self,
-        context: &llrm_mir::context::Context,
-        layout: &DataLayout,
-        function: &Function,
-        query: impl FnOnce(&mut ScalarEvolution, &Cx) -> R,
-    ) -> R {
-        let view = self.view.get_or_init(|| ScevView::of(context, layout, function, &mut self.analyses.borrow_mut()));
-        view.ask(context, layout, function, query)
-    }
-}
-
-/// One function's expressions and the context to read them in, for a pass
-/// that has no analysis manager (`exitfold`): made once, asked many times,
-/// valid while the function is not changed.
-pub struct ScevSession {
-    tree: DominatorTree,
-    loops: LoopInfo,
-    assumptions: AssumptionCache,
-    scev: ScalarEvolution,
-}
-
-impl ScevSession {
-    pub fn of(
-        context: &llrm_mir::context::Context,
-        function: &Function,
-        outer: &llrm_mir::passes::Outer,
-    ) -> Self {
-        let tree = DominatorTree::new(function);
-        let loops = LoopInfo::analyze(function, || &tree);
-        let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
-        Self { tree, loops, assumptions, scev: ScalarEvolution::new() }
-    }
-
-    /// Runs `query` with the expressions and the context they are read in.
-    pub fn ask<R>(
-        &mut self,
-        context: &llrm_mir::context::Context,
-        layout: &DataLayout,
-        function: &Function,
-        outer: &llrm_mir::passes::Outer,
-        query: impl FnOnce(&mut ScalarEvolution, &Cx) -> R,
-    ) -> R {
-        let cx = Cx {
-            context,
-            globals: &outer.globals,
-            metadata: &outer.metadata,
-            function,
-            layout,
-            loops: &self.loops,
-            tree: &self.tree,
-            assumptions: &self.assumptions,
-        };
-        query(&mut self.scev, &cx)
     }
 }

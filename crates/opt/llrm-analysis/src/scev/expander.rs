@@ -10,7 +10,7 @@
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Operand};
 use llrm_mir::passes::Declared;
@@ -27,7 +27,7 @@ pub struct Env<'a> {
     pub metadata: &'a [MetadataNode],
     pub layout: &'a DataLayout,
     pub loops: &'a LoopInfo,
-    pub tree: &'a DominatorTree,
+    pub tree: &'a DomTree,
     pub assumptions: &'a AssumptionCache,
 }
 
@@ -94,15 +94,75 @@ impl Expander {
         self.insert_point = None;
     }
 
-    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/ScalarEvolutionExpander.h#L313
-    /// `isSafeToExpand`.
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L2412
+    /// `isSafeToExpand(S, SE, CanonicalMode = true)`: no divisor that may be
+    /// zero, and every add recurrence has a preheader to insert into (or is
+    /// affine, in canonical mode).
     pub fn is_safe_to_expand(
         &self,
-        _cx: &Cx,
-        _se: &mut ScalarEvolution,
-        _s: Scev,
+        cx: &Cx,
+        se: &mut ScalarEvolution,
+        s: Scev,
     ) -> bool {
-        todo!("S6")
+        use super::expr::Kind;
+        let mut seen = std::collections::HashSet::new();
+        let mut work = vec![s];
+        while let Some(s) = work.pop() {
+            if !seen.insert(s) {
+                continue;
+            }
+            match se.node(s).kind.clone() {
+                Kind::UDiv(l, r) => {
+                    if !se.is_known_non_zero(cx, r.scev) {
+                        return false;
+                    }
+                    work.extend([l.scev, r.scev]);
+                }
+                Kind::AddRec(ops, header) => {
+                    let preheader = cx.loops.get_loop_for(header).and_then(|l| l.get_loop_preheader(cx.function));
+                    if preheader.is_none() && ops.len() != 2 {
+                        return false;
+                    }
+                    work.extend(ops.iter().map(|op| op.scev));
+                }
+                Kind::Constant(_) | Kind::Unknown(_) | Kind::CouldNotCompute => {}
+                _ => work.extend(se.operands(s).iter().map(|op| op.scev)),
+            }
+        }
+        true
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L2428
+    /// `isSafeToExpandAt(S, InsertionPoint, SE)`: safe, and its value is
+    /// available at the insertion point.
+    pub fn is_safe_to_expand_at(
+        &self,
+        cx: &Cx,
+        se: &mut ScalarEvolution,
+        s: Scev,
+        insertion_point: InstId,
+    ) -> bool {
+        if !self.is_safe_to_expand(cx, se, s) {
+            return false;
+        }
+        let Some(block) = cx.function.parent(insertion_point) else { return false };
+        if se.properly_dominates(cx, s, block) {
+            return true;
+        }
+        if se.dominates_block(cx, s, block) {
+            if cx.function.terminator(block) == Some(insertion_point) {
+                return true;
+            }
+            if let super::expr::Kind::Unknown(llrm_mir::module::Operand::Value(v)) = se.node(s).kind {
+                if matches!(
+                    cx.function.value(v).def,
+                    llrm_mir::module::ValueDef::Instruction(i) if i == insertion_point
+                ) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/ScalarEvolutionExpander.h#L335

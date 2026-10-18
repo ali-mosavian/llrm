@@ -1098,10 +1098,12 @@ pub fn pointer_alignment(
                     if !strong {
                         return align;
                     }
-                    // `getPreferredAlign`: the type's preferred alignment, and
-                    // 16 for a large global.
-                    let pref = q.layout.pref_align(types, variable.ty);
-                    if pref < 16 && q.layout.size_bits(types, variable.ty) > 128 { 16 } else { pref }
+                    // `getPreferredAlign` places a global at the type's
+                    // preferred alignment. llrm's backend aligns a global only
+                    // as stated (`variable.align`, data.rs), so the ABI one is
+                    // all a pointer to it can be taken to have; the 16 of a
+                    // large global is the old rule, kept.
+                    if align < 16 && q.layout.size_bits(types, variable.ty) > 128 { 16 } else { align }
                 }
                 _ => 1,
             },

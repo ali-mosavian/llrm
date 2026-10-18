@@ -77,6 +77,10 @@ the overflow, min/max, `fmuladd`, math, `memcpy`/`memmove`/`memset`, `assume`,
 (port I/O, huge-pointer difference and window, inline code and assembly).
 The table gives each its signature and attributes; the parser sets them as
 LLVM does, the verifier checks them, the interpreter runs them.
+The attributes of the `llvm.*` intrinsics come from `Intrinsics.td`:
+`intrinsic_attrs.rs`, which `tools/intrinsics/gen.py` writes, holds the ones MIR
+enumerates and the ones ValueTracking reads by name. Its header lists the four
+attributes MIR has no word for and which intrinsics they would have been on.
 
 Beyond instructions, `llrm-mir` holds LLVM's analyses in the form passes
 need them: dominators, loops, scalar evolution, value tracking, TBAA, the

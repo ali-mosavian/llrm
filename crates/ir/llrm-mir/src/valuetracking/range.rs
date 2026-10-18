@@ -40,7 +40,7 @@ use super::signbits::compute_num_sign_bits;
 use crate::apint;
 use crate::constantrange::{ConstantRange, OverflowResult as RangeOverflow, PreferredRangeType};
 use crate::context::{ConstantKind, mask};
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::knownbits::KnownBits;
 use crate::module::{BlockId, Function, GlobalKind, InstId, Instruction, MetadataOperand, Operand, Use, ValueDef};
 use crate::opcode::{Attribute, BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
@@ -272,7 +272,7 @@ pub fn compute_overflow_for_signed_sub(
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L162>
 fn edge_dominates_block(
     function: &Function,
-    dt: &DominatorTree,
+    dt: &DomTree,
     start: BlockId,
     end: BlockId,
     use_block: BlockId,
@@ -306,7 +306,7 @@ fn edge_dominates_block(
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L213>
 pub fn edge_dominates_use(
     function: &Function,
-    dt: &DominatorTree,
+    dt: &DomTree,
     start: BlockId,
     end: BlockId,
     used: &Use,
@@ -328,7 +328,7 @@ pub fn edge_dominates_use(
 pub fn is_overflow_intrinsic_no_wrap(
     q: &Query,
     wo: InstId,
-    dt: &DominatorTree,
+    dt: &DomTree,
 ) -> bool {
     let function = q.function;
     let Some(wo_result) = function.instruction(wo).result else { return true };

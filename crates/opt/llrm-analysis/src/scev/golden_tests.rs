@@ -2,7 +2,7 @@
 //! (`tools/scev/oracle.cpp`, `tools/scev/golden.py` writes the file), and the
 //! text each printed. The folds here must print the same.
 
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::valuetracking::AssumptionCache;
 
@@ -20,7 +20,7 @@ fn run_file(file: &str) -> Vec<(String, String, String)> {
     let (_, _, function) =
         module.functions().find(|(_, _, function)| !function.layout().is_empty()).expect("a function");
     let layout = llrm_mir::datalayout::DataLayout::default();
-    let tree = DominatorTree::new(function);
+    let tree = DomTree::of(function);
     let loops = LoopInfo::analyze(function, || &tree);
     let assumptions = AssumptionCache::new(&module, function);
     let cx = Cx {
