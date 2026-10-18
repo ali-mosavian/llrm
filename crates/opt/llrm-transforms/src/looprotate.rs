@@ -439,8 +439,7 @@ fn rewrite_uses_of_cloned_instructions(
     // necessary.
     for &inst in &header_instructions {
         let Some(result) = run.function.instruction(inst).result else { continue };
-        // LLVM's use lists begin with the newest use; ours end with it.
-        let uses = run.function.users(result).iter().rev().copied().collect::<Vec<_>>();
+        let uses = run.function.users(result).to_vec();
         // If there are no uses of the value there is nothing to rewrite.
         if uses.is_empty() {
             continue;
