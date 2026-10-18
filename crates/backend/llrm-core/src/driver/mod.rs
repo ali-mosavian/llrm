@@ -304,7 +304,7 @@ pub fn emitted(
             })
         };
         let instructions: usize = bodies()
-            .map(|one| one.layout().iter().map(|&block| one.block(block).instructions().len()).sum::<usize>())
+            .map(|one| one.layout().iter().map(|&block| one.block(block).len()).sum::<usize>())
             .sum();
         llrm_support::debug!("mir", "functions {} instructions {}", bodies().count(), instructions);
     }
