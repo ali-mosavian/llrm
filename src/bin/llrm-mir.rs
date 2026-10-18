@@ -4,16 +4,12 @@
 //! N instructions instead, and prints what it returns. `llrm-mir --ivs FILE`
 //! prints, per function and innermost loop, how many of the loop's header
 //! phis ScalarEvolution proves step by a nonzero amount: its induction
-<<<<<<< HEAD
 //! variables, as tools/loops counts them. `llrm-mir --aliases FILE` prints, per
 //! function, the answer today's points-to facts give for every pair of pointer
 //! operands of its loads, stores and calls, one `NoAlias|MayAlias|MustAlias
 //! %a %b` line a pair, in the order `opt -passes=aa-eval` lists them, for
 //! tools/aliascompare.py.
-=======
-//! variables, as tools/loops counts them. `llrm-mir --loops FILE` prints
-//! `print<loops>`'s text for each function.
->>>>>>> origin/main
+//! `llrm-mir --loops FILE` prints `print<loops>`'s text for each function.
 
 use std::process::ExitCode;
 
@@ -30,7 +26,6 @@ fn main() -> ExitCode {
     if ivs {
         arguments.remove(0);
     }
-<<<<<<< HEAD
     let aliases_wanted = arguments.first().is_some_and(|one| one == "--aliases");
     if aliases_wanted {
         arguments.remove(0);
@@ -41,10 +36,10 @@ fn main() -> ExitCode {
     }
     let calls_wanted = arguments.first().is_some_and(|one| one == "--calls");
     if calls_wanted {
-=======
+        arguments.remove(0);
+    }
     let loops = arguments.first().is_some_and(|one| one == "--loops");
     if loops {
->>>>>>> origin/main
         arguments.remove(0);
     }
     let mut option = |flag: &str| {
@@ -71,8 +66,9 @@ fn main() -> ExitCode {
     };
     match llrm_mir::parse::module(&text) {
         Ok(module) => {
-            // A pass input is a module of one function body and the declarations it
-            // names, which the verifier does not take for a whole module.
+            // A pass input is a module of one function body and the
+            // declarations it names, which the verifier does not
+            // take for a whole module.
             if aliases_wanted {
                 print!("{}", aliases(&module));
                 return ExitCode::SUCCESS;
@@ -146,10 +142,11 @@ fn induction_variables(module: &llrm_mir::module::Module) -> String {
     out
 }
 
-/// `function<TAB>answer<TAB>%a<TAB>bytes<TAB>%b<TAB>bytes` per pair of the pointer values that
-/// load, store and call operands name (a value, in order of first use), by what
-/// the points-to facts of the body say: `NoAlias` where no object they point
-/// into is shared (offsets and widths not read, as aa-eval asks without a size), `MustAlias` for one value, else `MayAlias`.
+/// `function<TAB>answer<TAB>%a<TAB>bytes<TAB>%b<TAB>bytes` per pair of the
+/// pointer values that load, store and call operands name (a value, in order of
+/// first use), by what the points-to facts of the body say: `NoAlias` where no
+/// object they point into is shared (offsets and widths not read, as aa-eval
+/// asks without a size), `MustAlias` for one value, else `MayAlias`.
 fn aliases(module: &llrm_mir::module::Module) -> String {
     use llrm_analysis::memory::{MemRef, Unit};
     use llrm_mir::context::ConstantKind;
@@ -158,9 +155,10 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
     let layout = module
         .datalayout
         .as_deref()
-        .map_or_else(llrm_mir::datalayout::DataLayout::default, |text| {
-            llrm_mir::datalayout::DataLayout::parse(text).expect("a datalayout")
-        });
+        .map_or_else(
+            llrm_mir::datalayout::DataLayout::default,
+            |text| llrm_mir::datalayout::DataLayout::parse(text).expect("a datalayout"),
+        );
     let mut out = String::new();
     for (_, global, function) in module.functions() {
         if function.layout().is_empty() {
@@ -172,15 +170,16 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
         let unit = plain.with_registers(&known).with_shape(&shape);
         let Ok(facts) = llrm_analysis::alias::points_to(&unit, None, None) else { continue };
         let names = llrm_mir::print::value_names(function);
-        // A pointer value or a global's address, as aa-eval counts them; what the
-        // text calls it.
+        // A pointer value or a global's address, as aa-eval counts them; what
+        // the text calls it.
         let label = |operand: Operand| -> Option<String> {
             match operand {
                 Operand::Value(value) => Some(format!("%{}", names.get(&value)?)),
                 Operand::Constant(id) => match module.context.get(id).kind {
-                    ConstantKind::Global(at) => {
-                        Some(format!("@{}", llrm_mir::print::quoted(module.globals.get(at.0 as usize)?.name.as_deref()?)))
-                    }
+                    ConstantKind::Global(at) => Some(format!(
+                        "@{}",
+                        llrm_mir::print::quoted(module.globals.get(at.0 as usize)?.name.as_deref()?)
+                    )),
                     _ => None,
                 },
                 Operand::Block(_) => None,
@@ -200,9 +199,11 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
             if entries.iter().any(|(had, width, _)| *had == text && *width == reference.width) {
                 continue;
             }
-            // The bytes this access reaches, as the consumers of the facts read them.
+            // The bytes this access reaches, as the consumers of the facts read
+            // them.
             reference.provenance = facts.reference(&unit, &reference).or(reference.provenance.take());
-            // Without the type tags: what BasicAA alone could know (`LLRM_ALIASES_NO_TBAA=1`).
+            // Without the type tags: what BasicAA alone could know
+            // (`LLRM_ALIASES_NO_TBAA=1`).
             if std::env::var_os("LLRM_ALIASES_NO_TBAA").is_some() {
                 reference.typed = None;
             }
@@ -228,18 +229,20 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
     out
 }
 
-/// `function<TAB>answer` per pair `aa-eval -evaluate-aa-metadata` lists of the loads
-/// and stores of a function, in its order: the answer `regions::overlapping` gives the two
-/// accesses, with the type tags unless `LLRM_ALIASES_NO_TBAA` is set.
+/// `function<TAB>answer` per pair `aa-eval -evaluate-aa-metadata` lists of the
+/// loads and stores of a function, in its order: the answer
+/// `regions::overlapping` gives the two accesses, with the type tags unless
+/// `LLRM_ALIASES_NO_TBAA` is set.
 fn memops(module: &llrm_mir::module::Module) -> String {
     use llrm_analysis::memory::{MemRef, Unit};
     use llrm_mir::opcode::Opcode;
     let layout = module
         .datalayout
         .as_deref()
-        .map_or_else(llrm_mir::datalayout::DataLayout::default, |text| {
-            llrm_mir::datalayout::DataLayout::parse(text).expect("a datalayout")
-        });
+        .map_or_else(
+            llrm_mir::datalayout::DataLayout::default,
+            |text| llrm_mir::datalayout::DataLayout::parse(text).expect("a datalayout"),
+        );
     let mut out = String::new();
     for (_, global, function) in module.functions() {
         if function.layout().is_empty() {
@@ -268,9 +271,10 @@ fn memops(module: &llrm_mir::module::Module) -> String {
             }
             accesses.push((store, Some(reference)));
         }
-        // aa-eval's order: each load against each store, then each store against
-        // the stores before it; one line a pair, `?` where an access has no
-        // reference, so that the n-th line is the n-th pair it lists.
+        // aa-eval's order: each load against each store, then each store
+        // against the stores before it; one line a pair, `?` where an
+        // access has no reference, so that the n-th line is the n-th
+        // pair it lists.
         let answer = |one: &Option<MemRef>, other: &Option<MemRef>| match (one, other) {
             (Some(one), Some(other)) => match llrm_analysis::regions::overlapping(one, other, None, None, None) {
                 Ok(false) => "NoAlias",
@@ -295,11 +299,11 @@ fn memops(module: &llrm_mir::module::Module) -> String {
     out
 }
 
-/// `function<TAB>answer` per mod/ref pair `aa-eval` lists, in its order: each call
-/// against each pointer (the pointer operands of the loads and stores, one per
-/// pointer and size), then each call against every other call. The answer is what
-/// the call's `CallEffects` say of the other access: `Mod` where the call may
-/// write what it touches, `Ref` where it may read it.
+/// `function<TAB>answer` per mod/ref pair `aa-eval` lists, in its order: each
+/// call against each pointer (the pointer operands of the loads and stores, one
+/// per pointer and size), then each call against every other call. The answer
+/// is what the call's `CallEffects` say of the other access: `Mod` where the
+/// call may write what it touches, `Ref` where it may read it.
 fn calls(module: &llrm_mir::module::Module) -> String {
     use llrm_analysis::manager::CallEffects;
     use llrm_analysis::memory::{MemRef, Unit};
@@ -308,9 +312,10 @@ fn calls(module: &llrm_mir::module::Module) -> String {
     let layout = module
         .datalayout
         .as_deref()
-        .map_or_else(llrm_mir::datalayout::DataLayout::default, |text| {
-            llrm_mir::datalayout::DataLayout::parse(text).expect("a datalayout")
-        });
+        .map_or_else(
+            llrm_mir::datalayout::DataLayout::default,
+            |text| llrm_mir::datalayout::DataLayout::parse(text).expect("a datalayout"),
+        );
     let mut module = module.clone();
     let mut analyses = Analyses::new(std::rc::Rc::new(Outer::of(&module, None)));
     let names: Vec<String> = module.functions().map(|(_, global, _)| global.name.clone().unwrap_or_default()).collect();
@@ -324,7 +329,9 @@ fn calls(module: &llrm_mir::module::Module) -> String {
             analyses.get::<CallEffects>(context, &layout, function)
         };
         let Ok(effects) = &*effects else { continue };
-        let Some((_, _, function)) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name.as_str())) else {
+        let Some((_, _, function)) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name.as_str()))
+        else {
             continue;
         };
         let plain = Unit::of(&module, &layout, function);
@@ -337,7 +344,8 @@ fn calls(module: &llrm_mir::module::Module) -> String {
             reference.provenance = facts.reference(&unit, &reference).or(reference.provenance.take());
             Some(reference)
         };
-        // aa-eval's pointers: one entry for each pointer and size, in the order of first use.
+        // aa-eval's pointers: one entry for each pointer and size, in the order
+        // of first use.
         let mut entries: Vec<(llrm_mir::module::Operand, u32, Option<MemRef>)> = Vec::new();
         let mut call_sites = Vec::new();
         for (_, inst) in function.walk() {
@@ -360,7 +368,11 @@ fn calls(module: &llrm_mir::module::Module) -> String {
         }
         let touches = |inst| effects.get(&inst);
         let overlaps = |list: &[MemRef], other: &MemRef| {
-            list.iter().any(|one| !matches!(llrm_analysis::regions::overlapping(one, other, None, None, None), Ok(false)))
+            list.iter()
+                .any(|one| !matches!(
+                    llrm_analysis::regions::overlapping(one, other, None, None, None),
+                    Ok(false)
+                ))
         };
         let answer = |writes: bool, reads: bool| match (writes, reads) {
             (false, false) => "NoModRef",
@@ -373,7 +385,8 @@ fn calls(module: &llrm_mir::module::Module) -> String {
             for (_, _, other) in &entries {
                 let (writes, reads) = match (touches(call), other) {
                     (Some(effect), Some(other)) => (
-                        overlaps(&effect.stores, other) || effect.fills.iter().any(|fill| overlaps(std::slice::from_ref(fill), other)),
+                        overlaps(&effect.stores, other)
+                            || effect.fills.iter().any(|fill| overlaps(std::slice::from_ref(fill), other)),
                         overlaps(&effect.loads, other),
                     ),
                     _ => {
@@ -394,10 +407,15 @@ fn calls(module: &llrm_mir::module::Module) -> String {
                     continue;
                 };
                 let set = |effect: &llrm_analysis::alias::Effect, writes: bool| -> Vec<MemRef> {
-                    if writes { effect.stores.iter().cloned().chain(effect.fills.iter().cloned()).collect() } else { effect.loads.to_vec() }
+                    if writes {
+                        effect.stores.iter().cloned().chain(effect.fills.iter().cloned()).collect()
+                    } else {
+                        effect.loads.to_vec()
+                    }
                 };
-                // What `call` does to the memory `other` touches: Mod if it may write
-                // what the other reads or writes, Ref if it may read what the other writes.
+                // What `call` does to the memory `other` touches: Mod if it may
+                // write what the other reads or writes, Ref if
+                // it may read what the other writes.
                 let touched: Vec<MemRef> = set(two, true).into_iter().chain(set(two, false)).collect();
                 let writes = set(one, true).iter().any(|mine| overlaps(&touched, mine));
                 let reads = set(one, false).iter().any(|mine| overlaps(&set(two, true), mine));
