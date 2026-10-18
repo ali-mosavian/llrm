@@ -3,8 +3,8 @@
 
     candidate_ok.py HEAD MAIN LINE      exit 0 if valid, 1 with the reason on stdout
 
-A merge needs the candidate run, the one that also ran bench, cost and perf (docs/working/ci.md): `GATE <tier> CANDIDATE PASS at <head12> on <main12>`.
-A cheap run's `GATE <tier> PASS at <head12> on <main12> (cheap: no perf)` never lets a merge. Valid only if the run tested the pull request's head as it is
+A merge needs the candidate run, the full gate that runs only for the pull request labelled merge-candidate (docs/working/ci.md): `GATE <tier> CANDIDATE PASS at <head12> on <main12>`.
+Any other line (a push to main's `PASS at`, a FAIL, a STALE) never lets a merge. Valid only if the run tested the pull request's head as it is
 now (a push after the label made the run stale), and main as it is now, or main moved by commits that touch only [inert] paths (tiers.toml).
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ def check(line: str, head: str, main: str, changed: list[str], inert: list[str])
     """(valid, why). `changed`: the files of the commits from the run's main to main now."""
     found = CANDIDATE.search(line)
     if not found:
-        return False, "not a candidate PASS line (a cheap PASS, a FAIL or a STALE line never lets a merge)"
+        return False, "not a candidate PASS line (a main push's PASS, a FAIL or a STALE line never lets a merge)"
     tested_head, tested_main = found.groups()
     if tested_head != head[:12]:
         return False, f"the run tested {tested_head}, the head is {head[:12]} now: a push after the label; re-run"

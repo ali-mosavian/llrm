@@ -30,7 +30,7 @@ on:
     # A draft runs plan and static only (minutes); marking it ready starts the full gate.
     # Parity work targets the integration branch feat/parity and a stack targets its parent's branch: only a pull request into main runs the gate.
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    types: [labeled]
   push:
     branches: [main]
   workflow_dispatch:
@@ -46,11 +46,11 @@ env:
   GATE_ALLOW_MISSING: perf
 
 jobs:
-  # A pull request runs the cheap tier (no bench, cost or perf) on every push. The merge loop labels ONE pull request `merge-candidate`; that run, and each
-  # later push while the label stays, also runs bench, cost and perf, and its verdict line is `GATE <tier> CANDIDATE PASS at <head12> on <main12>`
-  # (tools/ci/candidate_ok.py judges it). Any other label starts no run. docs/working/ci.md.
+  # The gate runs in CI and only to merge into main: a push runs nothing, a pull request runs nothing until the merge loop labels ONE of them
+  # `merge-candidate` (any other label starts nothing; a push after the label needs the label put on again), and that run is the FULL gate. Its verdict line,
+  # `GATE <tier> CANDIDATE PASS at <head12> on <main12>`, names the head that merges (tools/ci/candidate_ok.py judges it). docs/working/ci.md.
   plan:
-    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'merge-candidate' }}
+    if: ${{ github.event_name != 'pull_request' || github.event.label.name == 'merge-candidate' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -68,7 +68,6 @@ jobs:
       any: ${{ steps.plan.outputs.any }}
       private: ${{ steps.plan.outputs.private }}
       tier: ${{ steps.plan.outputs.tier }}
-      candidate: ${{ steps.plan.outputs.candidate }}
       runner_build: ${{ steps.runners.outputs.build }}
       runner_groups: ${{ steps.runners.outputs.groups }}
       runner_summary: ${{ steps.runners.outputs.summary }}
@@ -98,11 +97,7 @@ jobs:
           now=$(python3 tools/ci/pr_state.py "$GITHUB_REPOSITORY" "$PR" "$PAYLOAD")
           echo "draft=$now" >> "$GITHUB_OUTPUT"
       - id: plan
-        env:
-          # A push to main and a manual run keep every group (main records the bench counts); a pull request is a candidate only with the label.
-          CANDIDATE: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'merge-candidate') }}
         run: |
-          echo "candidate=$CANDIDATE" >> "$GITHUB_OUTPUT"
           # A pull request is checked out as its merge with the base: the first parent is the base's tip.
           if [ "${{ github.event_name }}" = pull_request ]; then base=HEAD^1; elif [ "${{ github.ref }}" = refs/heads/main ]; then base=${{ github.event.before }}; else base=origin/main; fi
           # The planner is a hosted VM with no perf counters; the perf jobs run where there are some, and each job checks for itself.
@@ -110,7 +105,7 @@ jobs:
           json=$(python3 tools/gate/gate.py plan --json --base "$base")
           echo "$json"
           echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "groups=$(echo "$json" | python3 -c 'import json,sys; import os; print(json.dumps(sorted(g for g in json.load(sys.stdin)["groups"] if g != "static" and (os.environ["CANDIDATE"] == "true" or g not in ("bench", "cost", "perf")))))')" >> "$GITHUB_OUTPUT"
+          echo "groups=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(sorted(g for g in json.load(sys.stdin)["groups"] if g != "static")))')" >> "$GITHUB_OUTPUT"
           echo "static=$(echo "$json" | python3 -c 'import json,sys; print(str("static" in json.load(sys.stdin)["groups"]).lower())')" >> "$GITHUB_OUTPUT"
           echo "private=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["private"]))')" >> "$GITHUB_OUTPUT"
           echo "any=$(echo "$json" | python3 -c 'import json,sys; print(str(bool(json.load(sys.stdin)["steps"])).lower())')" >> "$GITHUB_OUTPUT"
@@ -340,7 +335,7 @@ jobs:
 
   ci:
     needs: [plan, static, build, gate, bench-merge, setup-check]
-    if: ${{ always() && (github.event.action != 'labeled' || github.event.label.name == 'merge-candidate') }}
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.label.name == 'merge-candidate') }}
     runs-on: ${{ fromJSON(needs.plan.outputs.runner_small || '"ubuntu-24.04"') }}
     env:
       GH_TOKEN: ${{ github.token }}
@@ -376,9 +371,9 @@ jobs:
           fi
           if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.setup-check.result }}" != failure ] && [ "${{ needs.static.result }}" != failure ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.bench-merge.result }}" != failure ] && [ "${{ needs.bench-merge.result }}" != cancelled ]; then
             line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}$on"
-            # A pull request's verdict names what ran: only the candidate run (label merge-candidate) also ran bench, cost and perf.
+            # A pull request's run is the merge candidate's, the full gate: its line says so.
             if [ "${{ github.event_name }}" = pull_request ]; then
-              if [ "${{ needs.plan.outputs.candidate }}" = true ]; then line="GATE ${{ needs.plan.outputs.tier }} CANDIDATE PASS at ${head:0:12}$on"; else line="$line (cheap: no perf)"; fi
+              line="GATE ${{ needs.plan.outputs.tier }} CANDIDATE PASS at ${head:0:12}$on"
             fi
           else
             line="GATE ${{ needs.plan.outputs.tier }} FAIL at ${head:0:12}: plan=${{ needs.plan.result }} static=${{ needs.static.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} bench-merge=${{ needs.bench-merge.result }}"

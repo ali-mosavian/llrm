@@ -7,19 +7,21 @@ A green CI run means what `gate.py run` passing locally means: the same planner,
 1. CI asks `gate.py plan --json` for its jobs. It lists no step itself. A test builds the plan of a diff both ways (what `gate.py run` would run, what the workflow's jobs run) and compares them.
 2. `GATE_ALLOW_MISSING` is gone from the workflow. A capability missing on a runner is a failure, not a skip.
 3. The run's last job prints `GATE <tier> PASS at <head sha>`, or `FAIL: <groups>`, the line `gate.py run` prints.
-4. Per pull request CI tests that PR merged with main as it is then. Batch interactions are the periodic full gate on main's job and the merger's premerge against current main.
+4. Per merge candidate CI tests that PR merged with main as it is then. Batch interactions are the periodic full gate on main's job and the merger's premerge against current main.
 
 ## The merge candidate
 
-Every push of a pull request runs the cheap tier: static, build, unit, tools, run, integration, python, oracle and reference. Bench, cost and perf run once, for the **merge candidate**: the merge loop (`cimerge.sh`) puts the label `merge-candidate` on one pull request at a time, the head of the merge order, and takes it off when the pull request merges or loses its place. While the label stays, each push runs the candidate tier again. Any other label starts no run. A push to main keeps every group (main records the bench counts).
+The gate runs in CI, and only to merge into main. A push runs nothing; a pull request into `feat/parity` runs nothing; a pull request into main runs nothing until the merge loop (`cimerge.sh`) puts the label `merge-candidate` on it, one pull request at a time, the head of the merge order. Any other label starts nothing. That run is the full gate. The label comes off when the pull request merges or loses its place; a push after the label makes the run stale, and the label is put on again for a new run. A push to main keeps the full gate (main records the bench counts).
 
-The `ci` job's line says which tier ran: `GATE <tier> PASS at <head12> on <main12> (cheap: no perf)` or `GATE <tier> CANDIDATE PASS at <head12> on <main12>`; `<main12>` is the main the run tested (the merge commit's first parent). Only the second lets a merge, and only if `tools/ci/candidate_ok.py <head> <main> <line>` exits 0:
+The `ci` job's line for a pull request is `GATE <tier> CANDIDATE PASS at <head12> on <main12>`; `<main12>` is the main the run tested (the merge commit's first parent). It lets a merge only if `tools/ci/candidate_ok.py <head> <main> <line>` exits 0:
 
-- the line is a candidate PASS (a cheap PASS, FAIL or STALE line never merges);
-- `<head12>` is the pull request's head now (a push after the label made the run stale; re-run);
+- the line is a candidate PASS (a main push's PASS, a FAIL or a STALE line never merges);
+- `<head12>` is the pull request's head now;
 - `<main12>` is main now, or every commit since touches only `[inert]` paths (`tiers.toml`: docs, Markdown, editors, `.github`).
 
-The loop cancels a candidate run in flight when main moves by a non-inert commit, so the runner does not spend 55 minutes on a stale main. `tools/ci/test_candidate_ok.py` holds the cases: cheap pass only, another head, moved main, docs-only move.
+The loop cancels a candidate run in flight when main moves by a non-inert commit, so the runner does not spend 55 minutes on a stale main. `tools/ci/test_candidate_ok.py` holds the cases: not a candidate line, another head, moved main, docs-only move.
+
+**No gate runs anywhere else.** Sessions and loops do not run `gate.py`, a full premerge check, the ratchets, `identical.py`, rows, bench or the oracles on tinytim or any host of theirs; those run only in this gate. Before a merge to `feat/parity` a loop builds once per batch and runs the unit tests and a few fast run tests of the touched crates, 10 s of CPU in all (`tools/parity_smoke.py`).
 
 ## Runners
 

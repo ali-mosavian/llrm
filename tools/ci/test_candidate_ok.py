@@ -18,9 +18,9 @@ def test_a_candidate_pass_of_the_head_on_the_current_main_lets_a_merge():
     assert ok(CAND)
 
 
-def test_a_pr_with_only_a_cheap_pass_cannot_merge():
-    """The cheap tier runs no bench, cost or perf: a merge on it would land a perf regression unjudged."""
-    assert not ok(f"GATE full PASS at {HEAD[:12]} on {MAIN[:12]} (cheap: no perf)")
+def test_a_line_that_is_not_a_candidate_pass_cannot_merge():
+    """A main push's PASS names no pull request's head; a FAIL names none that merges."""
+    assert not ok(f"GATE full PASS at {HEAD[:12]} on {MAIN[:12]}")
     assert not ok(f"GATE full FAIL at {HEAD[:12]}: plan=success gate=failure")
 
 
