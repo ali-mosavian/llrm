@@ -98,18 +98,35 @@ first run, with the erased-block check going through `block()`, was 77% in
 `attach`), so stage A's reader migration is part of the cost, not optional;
 and `Block::instructions()` cannot stay a slice once the list is the truth.
 
-## The remaining diamond term: use lists
+## Stage C: use lists as LLVM's
 With the block list free, diamond's rest was still x3.0 per doubling. Callgrind
 (own cost, 400 to 800 instructions, POC build): `Function::erase` x3.82
 (3.2 M to 12.1 M); the rest of the profile is x1.5 to x2.1. Cause:
 `remove_use` is `uses.retain(..)`, O(uses of the operand): a value or block
-with n users costs O(n) per erase, where LLVM's `Use` is an intrusive list node
-removed in O(1). Bound: replacing the `retain` by a swap-remove took diamond to
-x2.05, mem x2.3, loop x2.3 (instructions, whole run). This is stage C: use
-lists with O(1) removal (an arena list per value, same shape as the block
-list; `users()` can stay a slice only if its order is kept, so a swap-remove
-changes the order passes see and needs the identical.py corpus). It lies in
-llrm-mir, not in SROA.
+with n users costs O(n) per erase. A swap-remove bounds the gain (diamond
+x2.05, mem x2.3, loop x2.3, whole-run instructions) but is not the fix: it
+makes `users()` order an accident of removal history, and that order decides
+what passes do and whether an oracle agrees with `opt`.
+
+The fix mirrors LLVM's `Use` list: an intrusive doubly linked list per value
+(`Value::addUse` adds at the head, `Use::removeFromList` unlinks through the
+use's own links), so removal is O(1) and `users()` iterates in LLVM's order
+(the newest use first; today's order is oldest first, appended). Storage: a
+use node per operand slot (arena, indexed by instruction and operand index),
+prev/next as indices, a head per value and per block. The same shape as the
+block list. A DEVIATE only if MIR's use storage cannot take it (to be stated
+with the fact).
+
+Readers: 185 calls of `users(` (llrm-transforms 111, llrm-mir 28, llrm-core 24,
+llrm-analysis 18, llrm-x86-bc 4) and 34 mentions of `block_users(`,
+`uses_of(` and `value_uses`; only 4 pick an element by position
+(`first`/`[..]`), the rest iterate, and the iteration order is what changes.
+Order-sensitive are the loops whose effect depends on the order: `replace_value`
+and `replace_all_uses_with` (the change log's order), GVN/EarlyCSE/SROA/
+mem2reg walks of an alloca's or a value's users, phi construction, `isel`'s
+use-based selection. The gate: identical.py over the full corpus. Output
+changes where the order now matches LLVM's are expected and are reported as
+rows (the rows line first, the worse count per row); any row worse blocks.
 
 ## Scoreboard and migration
 Uses of `Block::instructions()` (main): `git grep -n -E '\.instructions\(\)|(block\([^)]*\)|blocks\[[^]]*\])\.instructions([^(]|$)' -- crates | wc -l`
