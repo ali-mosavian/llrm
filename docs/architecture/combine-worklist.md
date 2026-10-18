@@ -1,3 +1,7 @@
+---
+architecture-index: one combine pass with a worklist
+architecture-order: 440
+---
 # One combine pass with a worklist (plan step 3.2)
 
 TL;DR: `fold`, `algebraic`, `phiopt`, `dead` and `decide`'s branch folding become one pass that visits each instruction once and queues the users and operands of every change, as LLVM's InstCombine does. The rewriting is not what costs: on d_faces -O2 `fold` and `algebraic` spend 330 M against InstCombine's 39.5 M, 290 M of it on function-wide facts that 94% of the edits do not need. A register-only worklist plus a six-instruction load scan makes 78.8% of `fold`'s number edits at a tenth of the cost, and the other 21% are loads of stack slots that `promote` removes if it runs first. So the order is: promote before fold, then the worklist.

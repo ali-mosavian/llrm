@@ -73,6 +73,16 @@ pub fn in_function<T>(
     out.expect("the observer ran the step")
 }
 
+thread_local! {
+    static RUNNING_FUNCTION: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// The name of the function a function pass is running over, for the debug
+/// lines (`LLRM_DEBUG=runs`).
+pub fn running_function() -> String {
+    RUNNING_FUNCTION.with(|name| name.borrow().clone())
+}
+
 pub(crate) fn counted(
     what: &'static str,
     hit: bool,
@@ -2419,6 +2429,11 @@ impl PassManager {
                 if function.is_declaration() || !bisected(name, global.name.as_deref().unwrap_or_default()) {
                     continue;
                 }
+                RUNNING_FUNCTION.with(|running| {
+                    let mut running = running.borrow_mut();
+                    running.clear();
+                    running.push_str(global.name.as_deref().unwrap_or_default());
+                });
                 let cache = analyses.manager(id, &outer);
                 let before = function.mark();
                 let running = crate::counts::pass_run_over(name, function);

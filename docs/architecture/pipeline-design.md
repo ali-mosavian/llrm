@@ -1,3 +1,7 @@
+---
+architecture-index: optimizer pipeline design
+architecture-order: 100
+---
 # The optimizer pipeline: what it costs and a structure that costs less
 
 A design note, with the measurements it rests on. Nothing here is built yet.
@@ -108,7 +112,7 @@ Allocator and LIR steps, the larger part:
 
 1. **A fixed order, run twice.** Round 1 is the pipeline in order. Round 2 runs a pass only on what round 1's edits reached. Nothing after round 2. LLVM's pipeline and gcc's `passes.def` are fixed sequences; the second round stands where InstCombine/SimplifyCFG are repeated after GVN and LICM.
 2. **A worklist per pass in round 2.** An edit log already exists (`Function::changes_since`, `footprint::of`); a pass in round 2 takes the changed blocks and the loops containing them, not the function (LLVM's InstCombine worklist, LoopPassManager's loop queue, gcc's `TODO_cleanup_cfg` flags). A rerun costs O(changed), not O(N).
-3. **A necessary condition before a pass's analyses.** `indvars` changed nothing in 35 runs, `sroa` in 11, `unroll` and `fill` in 25, `floatloop` in 35 (gated in #1708): 102 + 71 + 41 + 233 M. Each asks whether its shape exists before it asks the analyses (LLVM passes bail out early on inputs they cannot change).
+3. **A necessary condition before a pass's analyses.** `indvars` changed nothing in 35 runs, `sroa` in 11, `unroll` and `loopidioms` in 25, `floatloop` in 35 (gated in #1708): 102 + 71 + 41 + 233 M. Each asks whether its shape exists before it asks the analyses (LLVM passes bail out early on inputs they cannot change).
 4. **Analyses maintained or lazy, not recomputed whole.** `points_to` (7.3% of the compile), memory SSA `Accesses` (5.6%) and `Annotated` (5.3%) are recomputed after a change. [Points-to across edits](points-to-lifetime.md) is the maintained form; LLVM updates MemorySSA with `MemorySSAUpdater` and preserves AA across passes.
 5. **Budgets above O(N log N).** A pass whose slope is above 1.15 on an axis takes a limit in the style of LLVM's `MemorySSAScanLimit` / gcc's `--param`: #1486 and #1487 did it for loads reached by more than 100 writes. `lsr`, `dse` on unrolled, `counted` and `loop-products` are the candidates in the table above.
 6. **No whole-body text per round.** The cycle check renders the function to a string every round; with two rounds it is not needed.
