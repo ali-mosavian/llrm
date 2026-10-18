@@ -68,6 +68,7 @@ fn show(
         ConstantKind::Null if context.types.int_bits(constant.ty).is_some() => format!("{t} 0"),
         ConstantKind::Null => format!("{t} null"),
         ConstantKind::Poison => format!("{t} poison"),
+        ConstantKind::Undef => format!("{t} undef"),
         ConstantKind::Zero if context.types.int_bits(constant.ty).is_some() => format!("{t} 0"),
         ConstantKind::Zero if matches!(context.types.get(constant.ty), Type::Float(_)) => format!("{t} 0x0"),
         ConstantKind::Zero if matches!(context.types.get(constant.ty), Type::Pointer(_)) => format!("{t} null"),

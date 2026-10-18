@@ -852,7 +852,7 @@ impl CallFacts {
                     Operand::Constant(id)
                         if matches!(
                             unit.context.get(id).kind,
-                            ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison
+                            ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison | ConstantKind::Undef
                         ) =>
                     {
                         Actual::Absent
