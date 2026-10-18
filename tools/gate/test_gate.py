@@ -1228,7 +1228,7 @@ def test_the_checks_that_build_nothing_run_alone_before_the_build():
 def test_a_draft_runs_plan_and_static_only_and_is_never_reported_as_a_pass():
     """Forty drafts running the full gate would swamp the runners: ready_for_review starts it, the merge loop reads only `PASS at`."""
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
-    assert "types: [opened, synchronize, reopened, ready_for_review]" in workflow
+    assert "types: [opened, synchronize, reopened, ready_for_review, labeled]" in workflow
     assert "needs.plan.outputs.draft != 'true' && needs.plan.outputs.any" in workflow
     assert "DRAFT at ${head:0:12}" in workflow
 
