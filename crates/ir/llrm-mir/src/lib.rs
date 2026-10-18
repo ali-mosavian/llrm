@@ -3,6 +3,7 @@
 //! held in arenas addressed by id.
 
 pub mod alias;
+pub mod apfloat;
 pub mod apint;
 pub mod blocklist;
 pub mod build;
@@ -62,6 +63,8 @@ pub use module::{
 pub use opcode::{Attribute, BinaryOp, CallInfo, CastOp, Clause, Flags, FloatPredicate, IntPredicate, Opcode, Tail};
 pub use types::{FloatKind, Type, TypeId, Types};
 
+#[cfg(test)]
+mod apfloat_tests;
 #[cfg(test)]
 mod build_tests;
 #[cfg(test)]
