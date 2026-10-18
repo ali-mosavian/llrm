@@ -208,12 +208,26 @@ impl LIRTransform for PhiElimination {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        if llrm_support::env_flag!("LLRM_PHIELIM_LLVM") {
+        if !OLD_LOWERING.with(std::cell::Cell::get) && !llrm_support::env_flag!("LLRM_NO_PHIELIM_LLVM") {
             let lowered = crate::phielimination::lowered(&body)?;
             return eliminated_priced(&lowered, self.prices);
         }
         eliminated_priced(&body, self.prices)
     }
+}
+
+thread_local! {
+    static OLD_LOWERING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `work` with every phi lowered by this pass's own parallel copies, on this
+/// thread: for a test of what takes parallel copies (the allocator's and
+/// `parcopy`'s) and needs some.
+pub fn with_old_lowering<R>(work: impl FnOnce() -> R) -> R {
+    let before = OLD_LOWERING.with(|flag| flag.replace(true));
+    let out = work();
+    OLD_LOWERING.with(|flag| flag.set(before));
+    out
 }
 
 /// What `_split_edges` places on one edge: phi `(result, value)` pairs, or

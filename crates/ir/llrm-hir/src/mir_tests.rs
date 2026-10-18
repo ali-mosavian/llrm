@@ -1383,6 +1383,29 @@ fn inbounds_is_a_fact_of_an_operand() {
     assert_eq!(text.matches("getelementptr i8, ptr %0, i16 2").count(), 1, "{text}");
 }
 
+/// A third operand of `ptr_offset` is the size of the element its index
+/// counts: a step of `i` elements, not of `i` bytes.
+#[test]
+fn a_ptr_offset_with_an_element_size_steps_elements() {
+    use crate::model::{Constant, Number};
+    let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 1 }, Value { id: 3, r#type: 3 }];
+    let size = |bytes| Operand::Constant(Constant { r#type: 1, value: Number::Int(bytes) });
+    let steps = vec![
+        Instruction::new(1, Op::PtrOffset, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2), size(2)]),
+        Instruction::new(2, Op::PtrOffset, vec![3], vec![Operand::value_ref(3), Operand::value_ref(2), size(12)]),
+    ];
+    let block = Block::new(1, steps, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
+    let mut function = Function::new(1, "f", 1, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1, 2];
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(3, "near", TypeKind::Pointer, 2));
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("getelementptr i16, ptr %0, i16 %1"), "{text}");
+    assert!(text.contains("getelementptr [12 x i8], ptr"), "{text}");
+}
+
 /// A program that calls `B$NEAR`, a routine of one `Callable`, with the
 /// facts `stated` of it.
 fn calling(stated: Vec<(crate::facts::Subject, llrm_mir::facts::Fact)>) -> String {

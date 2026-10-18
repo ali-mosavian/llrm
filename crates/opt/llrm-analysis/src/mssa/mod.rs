@@ -92,6 +92,7 @@ pub struct BlockAccesses {
 }
 
 /// [`MemorySSA`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/MemorySSA.h#L702).
+#[derive(Clone)]
 pub struct Mssa {
     pub(crate) accesses: Vec<MemoryAccess>,
     /// `PerBlockAccesses` and `PerBlockDefs`.

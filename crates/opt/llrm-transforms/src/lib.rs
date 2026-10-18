@@ -161,6 +161,7 @@ pub mod lsr;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
+pub mod mergestores;
 pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
@@ -182,6 +183,7 @@ pub mod simplifycfg;
 pub mod simplifyindvar;
 pub mod sink;
 pub mod spares;
+pub mod speculate;
 pub mod spill;
 pub mod splitcopy;
 pub mod sroa;
