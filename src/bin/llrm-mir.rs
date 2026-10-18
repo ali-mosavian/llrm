@@ -257,7 +257,7 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
         let shape = llrm_analysis::cfg::Shape::of(function);
         let unit = plain.with_registers(&known).with_shape(&shape);
         let Ok(facts) = llrm_analysis::alias::points_to(&unit, None, None) else { continue };
-        let names = llrm_mir::print::value_names(function);
+        let names = llrm_mir::print::value_labels(function);
         // A pointer value or a global's address, as aa-eval counts them; what
         // the text calls it.
         let label = |operand: Operand| -> Option<String> {
