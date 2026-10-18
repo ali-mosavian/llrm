@@ -23,6 +23,10 @@ fn listing(level: &str) -> String {
 #[test]
 fn o0_runs_no_peephole_and_o1_does() {
     let (none, some) = (listing("-O0"), listing("-O1"));
-    assert!(none.contains("cmp eax, 0") && !none.contains("test eax, eax"), "{none}");
+    // The compare against zero stays a `cmp` (whatever it reads: the branch
+    // tests the comparison's own `i1`, so the load is its memory operand).
+    let compares_to_zero =
+        |text: &str| text.lines().any(|line| line.trim().starts_with("cmp ") && line.trim().ends_with(", 0"));
+    assert!(compares_to_zero(&none) && !none.contains("test eax, eax"), "{none}");
     assert!(some.contains("test eax, eax"), "{some}");
 }
