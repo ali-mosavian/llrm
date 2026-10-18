@@ -32,7 +32,7 @@ fn replacing_every_use_lets_the_definition_go() {
     let f = function(&mut module);
     let (x, value) = named(f, "x");
     let (y, _) = named(f, "y");
-    assert_eq!(f.users(value), [Use { user: y, index: 0 }]);
+    assert_eq!(f.users(value).to_vec(), [Use { user: y, index: 0 }]);
     assert_eq!(f.erase(x), Err(format!("instruction {}'s result still has 1 users", x.0)));
     let a = f.parameters()[0];
     f.replace_all_uses_with(value, Operand::Value(a));
@@ -422,10 +422,11 @@ fn erasing_many_instructions_scans_their_block_once_not_once_each() {
 }
 
 /// Each use an erased instruction made was looked for in its operand's list of
-/// uses: 200 adds of one parameter that go were 200 scans of up to 400 uses,
-/// and `mir gvn` on `straight` spent a third of its time there at N=16384.
+/// uses: 200 adds of one parameter that go were 200 scans of up to 400 uses
+/// (`Function::erase` x3.8 a doubling on the diamond ladder). A use unlinks
+/// through its own links, so no entry of a value's list is read.
 #[test]
-fn erasing_many_users_of_one_value_filters_its_uses_once() {
+fn erasing_users_of_one_value_reads_none_of_its_other_uses() {
     let erase = |batch: bool| {
         let mut module = module(&adds(400));
         let f = function(&mut module);
@@ -442,8 +443,23 @@ fn erasing_many_users_of_one_value_filters_its_uses_once() {
     let (one_by_one, many_scans) = erase(false);
     let (together, few_scans) = erase(true);
     assert_eq!(together, one_by_one);
-    assert!(few_scans <= 2 * 401, "{few_scans} uses scanned erasing 200 of 400 users of one value");
-    assert!(many_scans > few_scans * 10, "the one-by-one scans no longer show the cost: {many_scans}");
+    assert_eq!((many_scans, few_scans), (0, 0), "list entries read erasing 200 of 400 users of one value");
+}
+
+/// LLVM's `Value::addUse` puts the new use at the head: `users()` runs newest
+/// first, where it ran oldest first, and `replace_all_uses_with` follows it.
+#[test]
+fn users_run_newest_first() {
+    let mut module = module(
+        "define i16 @f(i16 %a) {\nentry:\n  %p = add i16 %a, 1\n  %q = add i16 %a, 2\n  %r = add i16 %a, 3\n  ret i16 %r\n}\n",
+    );
+    let f = function(&mut module);
+    let (p, _) = named(f, "p");
+    let (q, _) = named(f, "q");
+    let (r, _) = named(f, "r");
+    let a = f.parameters()[0];
+    let users: Vec<InstId> = f.users(a).iter().map(|one| one.user).collect();
+    assert_eq!(users, [r, q, p], "the parameter's users, newest first");
 }
 
 #[test]
