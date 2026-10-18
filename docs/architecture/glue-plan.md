@@ -1,3 +1,7 @@
+---
+architecture-index: the glue between bodies as LLVM's mechanisms
+architecture-order: 470
+---
 # The glue between bodies: Stamp, Summaries and the interprocedural stage as LLVM's mechanisms
 
 TL;DR: the code that carries what one body proves to the others (`Stamp` 108 M on d_faces -O2, `Summaries`, `Interprocedural`'s nine stages) is replaced by LLVM's own mechanism at `d1106deb71cc` or deleted; the order is stamp first, then the CGSCC walk, then one stage at a time. Owner: cgscc-poc. Nothing here is built yet.

@@ -493,6 +493,12 @@ def two_n(key: str) -> str:
     return f"2N={2 * n}" if n else "2N"
 
 
+def reading() -> str:
+    """What a step's number is: its own Minstr (not the total with the analyses it made the manager compute), on this build profile. A direct
+    reading of the inclusive total, or of a release build, differs by ~4% each (#2318: x1.583 own/dist against x1.41 total/release)."""
+    return f"own, {PROFILE}"
+
+
 def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], general: dict) -> tuple[list[str], list[str]]:
     """Per axis and level: the second difference may not rise by more than `excess` of the base's cost at 2N, nor the cost at 2N by `worst`.
     A rise of the second difference stands only if the cost at 2N did not fall (by more than `fall` of the base's): the claim is that no
@@ -524,8 +530,8 @@ def step_rises(
         rise = max(tol["step_rise"], tol["pass_slack"])  # a row accepted at a higher pass_slack is accepted at that for this too
         if key in base and big > base[key][2] * rise and big - base[key][2] >= tol["step_floor"]:
             # whatever its share of the compile: a step that was 907 Minstr at 2N and is 13,840 was 0.4% of a compile and is not now
-            lines.append(f"{key}: {two_n(key)} x{big / base[key][2]:.3f} (+{big - base[key][2]:.1f} Minstr, {half}/{small}/{big} against {'/'.join(map(str, base[key][:3]))})")
-            bad.append(f"{key}: cost at {two_n(key)} x{big / base[key][2]:.3f} (> {rise}, +{big - base[key][2]:.1f} Minstr), whatever its share of the compile{risen_elsewhere(key, base, now)}")
+            lines.append(f"{key}: {two_n(key)} ({reading()}) x{big / base[key][2]:.3f} (+{big - base[key][2]:.1f} Minstr, {half}/{small}/{big} against {'/'.join(map(str, base[key][:3]))})")
+            bad.append(f"{key}: cost at {two_n(key)} ({reading()}) x{big / base[key][2]:.3f} (> {rise}, +{big - base[key][2]:.1f} Minstr), whatever its share of the compile{risen_elsewhere(key, base, now)}")
             continue
         if big < tol["high"] * whole:
             continue
@@ -535,8 +541,8 @@ def step_rises(
         more = grown(half, small, big) - (superlinear(was_half, was_small, was_big) if key in base else 0.0)
         if more > tol["step_excess"] * whole or (key in base and big > was_big * tol["pass_slack"]):
             shown = f"{half}/{small}/{big} against {was_half}/{was_small}/{was_big}"
-            lines.append(f"{key}: second difference {second(half, small, big):.1f} Minstr (base {second(was_half, was_small, was_big) if key in base else 0.0:.1f}), {two_n(key)} x{big / was_big:.3f} ({shown})")
-            bad.append(f"{key}: superlinear work {second(half, small, big):.1f} Minstr rose by {more / whole:.4f} of the compile (> {tol['step_excess']}), or {two_n(key)} x{big / was_big:.3f} ({shown}){risen_elsewhere(key, base, now)}")
+            lines.append(f"{key}: second difference {second(half, small, big):.1f} Minstr (base {second(was_half, was_small, was_big) if key in base else 0.0:.1f}), {two_n(key)} ({reading()}) x{big / was_big:.3f} ({shown})")
+            bad.append(f"{key}: superlinear work {second(half, small, big):.1f} Minstr rose by {more / whole:.4f} of the compile (> {tol['step_excess']}), or {two_n(key)} ({reading()}) x{big / was_big:.3f} ({shown}){risen_elsewhere(key, base, now)}")
     return lines, bad
 
 
