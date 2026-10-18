@@ -37,7 +37,7 @@
 //! # Used by
 //! the shadow comparison in `backend::allocate`.
 
-use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap};
 use std::rc::Rc;
 
 use llrm_lir::registers::RegId;
@@ -48,6 +48,7 @@ use crate::liveness::calcspillweights::{Hint, SpillWeightEnv, VirtRegAuxInfo};
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::liverange::LiveInterval;
 use crate::liveness::slotindex::SlotIndex;
+use crate::support::hash::{HashMap, HashSet};
 
 /// `-lcr-max-depth` (RegAllocGreedy.cpp#L95).
 pub const LAST_CHANCE_RECOLORING_MAX_DEPTH: u32 = 5;
@@ -83,7 +84,7 @@ pub struct ExtraRegInfo {
 
 impl Default for ExtraRegInfo {
     fn default() -> Self {
-        Self { info: HashMap::new(), next_cascade: 1 }
+        Self { info: HashMap::default(), next_cascade: 1 }
     }
 }
 
@@ -387,10 +388,10 @@ impl<'a> RAGreedy<'a> {
             lis,
             matrix,
             env,
-            original: HashMap::new(),
+            original: HashMap::default(),
             hints: BTreeMap::new(),
             extra: ExtraRegInfo::default(),
-            pinned: HashSet::new(),
+            pinned: HashSet::default(),
             queue: BinaryHeap::new(),
             spiller,
             stats: Stats::default(),
@@ -854,7 +855,7 @@ impl<'a> RAGreedy<'a> {
         virt: &Rc<LiveInterval>,
         new_vregs: &mut Vec<u32>,
     ) -> Select {
-        let mut fixed: HashSet<u32> = HashSet::new();
+        let mut fixed: HashSet<u32> = HashSet::default();
         let mut recolor_stack: RecolorStack = Vec::new();
         self.select_or_split_impl(virt, new_vregs, &mut fixed, &mut recolor_stack, 0)
     }

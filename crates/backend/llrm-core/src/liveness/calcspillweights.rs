@@ -31,13 +31,14 @@
 //! # Used by
 //! The allocator's shadow core.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 
 use llrm_lir::registers::RegId;
 
 use super::liveintervals::LiveIntervals;
 use super::liverange::LiveInterval;
 use super::slotindex::{InstrKey, SlotIndex};
+use crate::support::hash::{HashMap, HashSet};
 
 /// `normalizeSpillWeight` (CalcSpillWeights.h#L35): the weight of
 /// `use_def_freq` over an interval of `size`.
@@ -198,7 +199,7 @@ impl<'a> VirtRegAuxInfo<'a> {
     ) -> bool {
         let reg = li.reg();
         let original = self.original_of(reg);
-        let mut vni_defs: HashMap<u32, InstrKey> = HashMap::new();
+        let mut vni_defs: HashMap<u32, InstrKey> = HashMap::default();
         for vni in &li.valnos {
             let mut vni = vni.clone();
             let orig_vni = vni.clone();
@@ -293,7 +294,7 @@ impl<'a> VirtRegAuxInfo<'a> {
     ) -> f32 {
         let mut total_weight = 0.0f32;
         let mut num_instr = 0u32; // Number of instructions using LI
-        let mut visited: HashSet<InstrKey> = HashSet::new();
+        let mut visited: HashSet<InstrKey> = HashSet::default();
         // Don't recompute spill weight for an unspillable register.
         if li.is_spillable() {
             // li comes from a split of OrigInt. If OrigInt was marked
@@ -307,7 +308,7 @@ impl<'a> VirtRegAuxInfo<'a> {
         let is_spillable = li.is_spillable();
         let mut is_exiting = false;
         let mut mbb: Option<usize> = None;
-        let mut hint: HashMap<Hint, f32> = HashMap::new();
+        let mut hint: HashMap<Hint, f32> = HashMap::default();
         let mut hint_order: Vec<Hint> = Vec::new();
         // The instructions that name the register, once each, in body order.
         let operands: Vec<_> = lis.operands(li.reg()).to_vec();
@@ -513,7 +514,7 @@ mod tests {
         let body = body(vec![vec![insn(vec![1], vec![])], vec![insn(vec![], vec![1]), insn(vec![], vec![1])]]);
         let mut lis = LiveIntervals::new(&body);
         let env = Env { freq: vec![1.0, 4.0] };
-        let original = HashMap::new();
+        let original = HashMap::default();
         let mut aux = VirtRegAuxInfo::new(&env, &original);
         aux.calculate_spill_weights_and_hints(&mut lis);
         let li = lis.interval(1).clone();
@@ -528,7 +529,7 @@ mod tests {
         let body = body(vec![vec![insn(vec![1], vec![]), insn(vec![], vec![1])], vec![]]);
         let mut lis = LiveIntervals::new(&body);
         let env = Env { freq: vec![1.0, 1.0] };
-        let original = HashMap::new();
+        let original = HashMap::default();
         let mut aux = VirtRegAuxInfo::new(&env, &original);
         aux.calculate_spill_weights_and_hints(&mut lis);
         assert!(!lis.interval(1).is_spillable());
@@ -550,7 +551,7 @@ mod tests {
         ]);
         let mut lis = LiveIntervals::new(&body);
         let env = Env { freq: vec![1.0, 1.0] };
-        let original = HashMap::new();
+        let original = HashMap::default();
         let mut aux = VirtRegAuxInfo::new(&env, &original);
         aux.calculate_spill_weights_and_hints(&mut lis);
         assert_eq!(aux.hints[&1], vec![Hint::Virt(2)]);
