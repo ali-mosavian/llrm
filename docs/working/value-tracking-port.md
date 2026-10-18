@@ -21,7 +21,7 @@ The evidence behind the ValueTracking, KnownBits and ConstantRange translation f
 | cru, crs | 2021/1 | 5531/0 | 34402/1 | 852/0 | 944/1 |
 | gp | 2052/31 | 5738/4 | 37142/229 | 941/4 | 1018/1 |
 
-Causes of the differences, by size: (1) `llvm.*` declarations MIR has not given LLVM's attributes (#2142); (2) LLVM's parse-time upgrades (`x86.bmi.pext/pdep`); (3) no preferred alignment in `DataLayout`; (4) float-to-int bitcast needs `computeKnownFPClass`.
+Causes of the differences, by size: (1) `llvm.*` declarations MIR has not given LLVM's attributes (#2142); (2) LLVM's parse-time upgrades (`x86.bmi.pext/pdep`); (3) (closed: `DataLayout::pref_align`); (4) float-to-int bitcast needs `computeKnownFPClass`.
 
 **Not covered:** 1,137 of 2,473 test files do not parse in MIR: `undef` 169, `target triple` 126 (strippable), vectors (`shufflevector`/`insertelement`/`extractelement`) ~124, `vscale` 67, integers wider than 128 bits 40, attributes MIR lacks (`null_pointer_is_valid`, `strictfp`, `nofpclass`, `dso_local`, ...) ~100, `half`/`fpN` 33, functions declared nowhere 112. Vector and `undef` code paths are untested against LLVM here.
 

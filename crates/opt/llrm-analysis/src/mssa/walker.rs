@@ -472,7 +472,11 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
                 // Because we know the chain end is as 'high' as we can go,
                 // block dominance is sufficient.
                 for tp in &terminated_paths {
-                    if self.mssa.dominance.dominates_resolved(cfg::id(chain_bb), cfg::id(self.mssa.access(tp.clobber).block)) {
+                    if self
+                        .mssa
+                        .dominance
+                        .dominates_resolved(cfg::id(chain_bb), cfg::id(self.mssa.access(tp.clobber).block))
+                    {
                         clobbers.push(*tp);
                     }
                 }

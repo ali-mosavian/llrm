@@ -9,6 +9,33 @@ use super::expr::{Kind, Scev, Type};
 use super::{Cx, ScalarEvolution};
 
 impl ScalarEvolution {
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ScalarEvolutionExpressions.h#L354
+    /// `SCEVAddRecExpr::isAffine`: `{start,+,step}`.
+    pub fn is_affine(
+        &self,
+        ar: Scev,
+    ) -> bool {
+        self.operands(ar).len() == 2
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ScalarEvolutionExpressions.h#L363
+    /// `SCEVAddRecExpr::isQuadratic`: `{a,+,b,+,c}`.
+    pub fn is_quadratic(
+        &self,
+        ar: Scev,
+    ) -> bool {
+        self.operands(ar).len() == 3
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ScalarEvolutionExpressions.h#L221
+    /// `SCEVNAryExpr::hasNoSelfWrap`.
+    pub fn has_no_self_wrap(
+        &self,
+        ar: Scev,
+    ) -> bool {
+        self.get_no_wrap_flags(ar, super::expr::flags::NW) != 0
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L440
     /// `SCEV::isNonConstantNegative`: a product whose constant factor is
     /// negative, such as `-42 * %v`.

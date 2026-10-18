@@ -163,7 +163,7 @@ impl ScalarEvolution {
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L1214
     /// `getSignedOverflowLimitForStep`: the predicate and limit, or none.
-    fn get_signed_overflow_limit_for_step(
+    pub(super) fn get_signed_overflow_limit_for_step(
         &mut self,
         cx: &Cx,
         step: Scev,
@@ -185,7 +185,7 @@ impl ScalarEvolution {
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L1234
     /// `getUnsignedOverflowLimitForStep`.
-    fn get_unsigned_overflow_limit_for_step(
+    pub(super) fn get_unsigned_overflow_limit_for_step(
         &mut self,
         cx: &Cx,
         step: Scev,
@@ -431,6 +431,25 @@ impl ScalarEvolution {
         Ap::zero(bit_width)
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L1509
+    /// `insertFoldCacheEntry`.
+    fn insert_fold_cache_entry(
+        &mut self,
+        id: (Type, Use, Ty),
+        s: Scev,
+    ) {
+        if let Some(previous) = self.fold_cache.insert(id, s) {
+            // Remove FoldCacheUser entry for ID when replacing an existing
+            // FoldCache entry.
+            let user_ids = self.fold_cache_user.entry(previous).or_default();
+            debug_assert!(user_ids.iter().filter(|one| **one == id).count() == 1, "unexpected duplicates in UserIDs");
+            if let Some(at) = user_ids.iter().position(|one| *one == id) {
+                user_ids.swap_remove(at);
+            }
+        }
+        self.fold_cache_user.entry(s).or_default().push(id);
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L1531
     /// `ScalarEvolution::getZeroExtendExpr`.
     pub fn get_zero_extend_expr(
@@ -454,7 +473,7 @@ impl ScalarEvolution {
 
         let s = self.get_zero_extend_expr_impl(cx, op, ty, depth);
         if !matches!(self.node(s).kind, Kind::ZeroExtend(_)) {
-            self.fold_cache.insert(id, s);
+            self.insert_fold_cache_entry(id, s);
         }
         s
     }
@@ -879,7 +898,7 @@ impl ScalarEvolution {
 
         let s = self.get_sign_extend_expr_impl(cx, op, ty, depth);
         if !matches!(self.node(s).kind, Kind::SignExtend(_)) {
-            self.fold_cache.insert(id, s);
+            self.insert_fold_cache_entry(id, s);
         }
         s
     }
