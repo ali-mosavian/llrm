@@ -315,9 +315,14 @@ impl Peephole {
         // everything below to reason about, and it is the only pass here
         // that can remove a copy the coalescer refused on colourability.
         let mut seen = needs::Contents::default();
-        let body = gated(&mut seen, needs::COPY, phielim::unsplit(&body), |body| Ok(regthrash::thrashed(body)))?;
+        let machine_cp = llrm_support::env_flag!("LLRM_EXP_MCP");
+        let body = gated(&mut seen, needs::COPY, phielim::unsplit(&body), |body| {
+            Ok(if machine_cp { body } else { regthrash::thrashed(body) })
+        })?;
         let body = frame_copies(&body, &self.cpu, &self.classes)?;
-        let body = gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?;
+        let body = gated(&mut seen, needs::COPY, body, |body| {
+            Ok(if machine_cp { crate::backend::machinecp::propagated(&body) } else { copyprop::forwarded(&body) })
+        })?;
         let body = extensions(self.rules, &body);
         let body = copysink::sunk(&body);
         let body = spillforward::forwarded(&body);
@@ -362,7 +367,9 @@ impl Peephole {
         let body = if self.rules.zero_extensions.is_some() {
             let body =
                 zero_extensions(self.rules, &widened_moves(self.rules, &crate::backend::upperzero::hoisted(&body)));
-            gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?
+            gated(&mut seen, needs::COPY, body, |body| {
+                Ok(if machine_cp { crate::backend::machinecp::propagated(&body) } else { copyprop::forwarded(&body) })
+            })?
         } else {
             body
         };

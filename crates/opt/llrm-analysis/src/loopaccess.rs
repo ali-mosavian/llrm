@@ -149,7 +149,7 @@ pub fn is_consecutive_access(
 
 #[cfg(test)]
 mod tests {
-    use llrm_mir::dominators::DominatorTree;
+    use llrm_mir::domtree::DomTree;
     use llrm_mir::loopinfo::LoopInfo;
     use llrm_mir::module::InstId;
     use llrm_mir::opcode::Opcode;
@@ -167,7 +167,7 @@ mod tests {
         let module = llrm_mir::parse::module(&text).expect("a module");
         let (_, _, function) = module.functions().next().expect("a function");
         let layout = llrm_mir::datalayout::DataLayout::default();
-        let tree = DominatorTree::new(function);
+        let tree = DomTree::of(function);
         let loops = LoopInfo::analyze(function, || &tree);
         let assumptions = AssumptionCache::new(&module, function);
         let cx = Cx {

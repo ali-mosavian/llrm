@@ -102,7 +102,7 @@ impl CmpPredicate {
 
 /// An operand of a comparison `m_ICmpLike` matched: a value, or the integer
 /// zero it makes up for `trunc nuw x to i1`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Side {
     Value(Operand),
     Int(u128, u32),

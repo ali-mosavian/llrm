@@ -1,7 +1,9 @@
 //! The interface of alias analysis, as LLVM's `AAResults` and `BatchAAResults`
 //! (llvm/Analysis/AliasAnalysis.h at d1106deb71cc): the queries a client asks
-//! (MemorySSA, MemDep, LICM, GVN, DSE), not an implementation. Names are
-//! LLVM's in snake case; the primary queries are `alias`,
+//! (MemorySSA, MemDep, LICM, GVN, DSE), not an implementation.
+//!
+//! # How it works
+//! Names are LLVM's in snake case; the primary queries are `alias`,
 //! `get_mod_ref_info_mask`, `get_memory_effects`, `get_arg_mod_ref_info` and
 //! the `get_mod_ref_info*` forms; every other query is a provided method over
 //! those, as in LLVM.
@@ -10,10 +12,29 @@
 //! from the uses and definitions it reaches, and what one query learns is kept
 //! in the `AAQueryInfo` of its batch and dropped with it, never shared between
 //! two versions of a body.
-
-use std::collections::HashMap;
+//!
+//! # Example
+//! A client asks whether a load and a store may touch the same bytes:
+//!
+//! ```text
+//! let mut batch = AAQueryInfo::default();
+//! let load = MemoryLocation::get(&unit, load_inst)?;
+//! let store = MemoryLocation::get(&unit, store_inst)?;
+//! if aa.alias(&load, &store, &mut batch, None) == AliasResult::NoAlias { /* independent */ }
+//! ```
+//!
+//! # Provides
+//! `LocationSize`, `AAInfo`, `MemoryLocation`, `AliasResult`, `ModRefInfo`,
+//! `IRMemLocation`, `MemoryEffects`, `AAQueryInfo`, the `AAResults` trait and
+//! `BatchAAResults`. Implemented by [`crate::basicaa`] (S1); no client reads
+//! it yet.
+//!
+//! # See also
+//! LLVM `AliasAnalysis.h`, `MemoryLocation.h`;
+//! docs/architecture/basicaa-port.md.
 
 use llrm_mir::module::{InstId, MetadataId, Operand};
+use llrm_support::hash::HashMap;
 
 /// How much of memory an access touches (`LocationSize`).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -275,9 +296,9 @@ impl Default for AAQueryInfo {
         Self {
             may_be_cross_iteration: false,
             use_dominator_tree: true,
-            locations: HashMap::new(),
-            answers: HashMap::new(),
-            captured: HashMap::new(),
+            locations: HashMap::default(),
+            answers: HashMap::default(),
+            captured: HashMap::default(),
         }
     }
 }

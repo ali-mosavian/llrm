@@ -114,8 +114,32 @@ pub fn merged(function: &mut Function) -> bool {
     changed
 }
 
+/// Whether `block` was merged into its predecessor: LLVM's
+/// `MergeBlockIntoPredecessor(BB)`, the one predecessor jumping only to it.
+pub fn merged_into_predecessor(
+    function: &mut Function,
+    block: llrm_mir::module::BlockId,
+) -> bool {
+    let Some(entry) = function.entry() else { return false };
+    let predecessors = function.predecessors(block);
+    let [first] = predecessors[..] else { return false };
+    merged_into(function, first, entry) == Some(block)
+}
+
 /// Whether `first` took the block it jumps to, if it alone reaches it.
-fn merged_into(
+pub(crate) fn merged_into(
+    function: &mut Function,
+    first: llrm_mir::module::BlockId,
+    entry: llrm_mir::module::BlockId,
+) -> Option<llrm_mir::module::BlockId> {
+    let second = emptied_into(function, first, entry)?;
+    function.erase_block(second).expect("an emptied block nothing names");
+    Some(second)
+}
+
+/// `merged_into` that leaves the emptied block placed, for the caller to
+/// `erase_blocks` together with the others.
+pub(crate) fn emptied_into(
     function: &mut Function,
     first: llrm_mir::module::BlockId,
     entry: llrm_mir::module::BlockId,
@@ -172,7 +196,6 @@ fn merged_into(
     }
     function.move_run(&function.block(second).instructions().to_vec(), source).expect("a placed block");
     function.replace_block_uses_with(second, source);
-    function.erase_block(second).expect("an emptied block nothing names");
     Some(second)
 }
 

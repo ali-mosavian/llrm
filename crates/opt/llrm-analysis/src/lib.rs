@@ -108,6 +108,7 @@ pub mod effects;
 pub mod floatbounds;
 pub mod floatfacts;
 pub mod frameescape;
+pub mod functionattrs;
 #[cfg(any(test, feature = "testing"))]
 pub mod generated;
 pub mod globalsaa;

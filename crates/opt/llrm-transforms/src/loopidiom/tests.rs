@@ -5,7 +5,7 @@
 
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, InstId, Module, Operand};
 use llrm_mir::opcode::Opcode;
@@ -24,7 +24,7 @@ fn kinds(
     let module: Module = llrm_mir::parse::module(text).expect("a module");
     let (_, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("a function");
     let layout = DataLayout::default();
-    let tree = DominatorTree::new(function);
+    let tree = DomTree::of(function);
     let loops = LoopInfo::analyze(function, || &tree);
     let assumptions = AssumptionCache::new(&module, function);
     let cx = Cx {
@@ -103,7 +103,7 @@ define void @f(ptr %p, i32 %x) {
     .expect("a module");
     let (_, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("a function");
     let layout = DataLayout::default();
-    let tree = DominatorTree::new(function);
+    let tree = DomTree::of(function);
     let loops = LoopInfo::analyze(function, || &tree);
     let assumptions = AssumptionCache::new(&module, function);
     let cx = Cx {
@@ -133,7 +133,7 @@ fn same_byte(text: &str) -> Vec<bool> {
     let module = llrm_mir::parse::module(text).expect("a module");
     let (_, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("a function");
     let layout = DataLayout::default();
-    let tree = DominatorTree::new(function);
+    let tree = DomTree::of(function);
     let loops = LoopInfo::analyze(function, || &tree);
     let assumptions = AssumptionCache::new(&module, function);
     let cx = Cx {
@@ -222,7 +222,7 @@ fn run_on_loop(
     let mut function = original.clone();
     let mut context = module.context.clone();
     let layout = DataLayout::default();
-    let tree = DominatorTree::new(&function);
+    let tree = DomTree::of(&function);
     let loops = LoopInfo::analyze(&function, || &tree);
     let assumptions = AssumptionCache::new(&module, &function);
     let env = Env {
