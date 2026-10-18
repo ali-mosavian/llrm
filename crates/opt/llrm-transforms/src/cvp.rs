@@ -1994,7 +1994,7 @@ impl State<'_, '_> {
         let mut next = Some(entry);
         while let Some(bb) = next.take() {
             let mut bb_changed = false;
-            for ii in self.unit.function.block(bb).instructions().to_vec() {
+            for ii in self.unit.function.block(bb).iter().collect::<Vec<_>>() {
                 if self.unit.function.is_erased(ii) {
                     continue;
                 }
@@ -2397,10 +2397,9 @@ impl State<'_, '_> {
         let function = &*self.unit.function;
         function
             .block(self.default_dest(switch))
-            .instructions()
             .iter()
-            .find(|&&inst| function.instruction(inst).opcode != Opcode::Phi)
-            .is_some_and(|&inst| function.instruction(inst).opcode == Opcode::Unreachable)
+            .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
+            .is_some_and(|inst| function.instruction(inst).opcode == Opcode::Unreachable)
     }
 
     /// `SwitchInst::removeCase`: the last case takes the removed one's place.
@@ -2635,9 +2634,7 @@ impl State<'_, '_> {
         let function = &*self.unit.function;
         let phis: Vec<InstId> = function
             .block(block)
-            .instructions()
             .iter()
-            .copied()
             .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
             .collect();
         // Return early if there are no PHI nodes to update.
