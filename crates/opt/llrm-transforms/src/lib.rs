@@ -121,6 +121,7 @@ pub mod inline;
 pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;
+pub mod instsimplify;
 pub mod interprocedural;
 pub mod ipacp;
 pub mod jumpthread;

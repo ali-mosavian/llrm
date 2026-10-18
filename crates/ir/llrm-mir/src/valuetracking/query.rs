@@ -254,7 +254,13 @@ impl AssumptionCache {
         function: &Function,
     ) -> Self {
         let layout = DataLayout::default();
-        let query = Query::new(module, function, &layout);
+        Self::of(&Query::new(module, function, &layout))
+    }
+
+    /// The same for a caller that has the module's parts, not a `Module`
+    /// (a pass holds its globals and metadata, not the module).
+    pub fn of(query: &Query) -> Self {
+        let function = query.function;
         let assumes: Vec<InstId> = function
             .walk()
             .filter(|(_, inst)| query.intrinsic(*inst) == Some(Intrinsic::Assume))
@@ -262,7 +268,7 @@ impl AssumptionCache {
             .collect();
         let mut cache = Self { assumes, affected: HashMap::default() };
         for assume in cache.assumes.clone() {
-            cache.update_affected_values(&query, assume);
+            cache.update_affected_values(query, assume);
         }
         cache
     }
@@ -366,6 +372,18 @@ impl FunctionAnalyses {
     ) -> Self {
         let layout = module.datalayout.as_deref().and_then(|text| DataLayout::parse(text).ok()).unwrap_or_default();
         Self { layout, dt: DominatorTree::new(function), assumptions: AssumptionCache::new(module, function) }
+    }
+
+    /// The same from a module's parts: its globals name `llvm.assume`.
+    pub fn of(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Self {
+        let query = Query { globals, metadata, ..Query::bare(context, function, layout) };
+        Self { layout: layout.clone(), dt: DominatorTree::new(function), assumptions: AssumptionCache::of(&query) }
     }
 
     /// The dominator tree (`SQ.DT`).
