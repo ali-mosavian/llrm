@@ -7,6 +7,7 @@
 //! `docs/architecture/licm-port.md`; the MemorySSA it asks is
 //! `llrm_analysis::mssa`.
 
+mod apply;
 mod calls;
 mod hoist;
 mod promote;
@@ -23,7 +24,7 @@ use llrm_analysis::mssa::Mssa;
 use llrm_analysis::mssa::alias::AliasQuery;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
+use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
 pub use safety::LoopSafety;
 
 /// `SetLicmMssaOptCap`: how many clobbering-access walks a loop may ask before
@@ -99,6 +100,9 @@ impl Flags {
 pub struct State {
     pub moved: std::cell::RefCell<IdMap<InstId, BlockId>>,
     pub gone: std::cell::RefCell<llrm_mir::dense::IdSet<InstId>>,
+    /// Those of `gone` that were sunk, not erased: a clone of each stands in an
+    /// exit block, so what it reads has a user outside the loop.
+    pub sunk: std::cell::RefCell<llrm_mir::dense::IdSet<InstId>>,
 }
 
 /// One loop, as `hoistRegion` sees it: its blocks, the loops in it, and where
@@ -110,6 +114,10 @@ pub struct LoopCtx<'a> {
     /// Each block's innermost loop, an index in `shape.loops`.
     pub innermost: &'a IdMap<BlockId, usize>,
     pub state: &'a State,
+    /// Only sink through exit phis that read nothing else
+    /// (`isTriviallyReplaceablePHI`): the pass that moves instructions does
+    /// not split exit blocks.
+    pub strict_sink: bool,
 }
 
 impl LoopCtx<'_> {
@@ -194,6 +202,29 @@ pub struct Decisions {
     /// `NumMovedLoads` and `NumMovedCalls`.
     pub moved_loads: usize,
     pub moved_calls: usize,
+    /// The memory graph made again after a loop changed: how many times in a
+    /// function (the most, over the functions run), and the instructions of the
+    /// function each time, added up.
+    pub rebuilds: usize,
+    pub max_rebuilds: usize,
+    pub rebuilt_instructions: usize,
+}
+
+fn found_changed(found: &Decisions) -> bool {
+    !found.hoisted.is_empty() || !found.sunk.is_empty() || !found.erased.is_empty()
+}
+
+/// Each block's innermost loop, an index in `shape.loops`.
+fn innermost_loops(shape: &Shape) -> IdMap<BlockId, usize> {
+    let mut innermost: IdMap<BlockId, usize> = IdMap::new();
+    // `shape.loops` is innermost first where loops nest: claim from the
+    // outermost in, so the last to claim a block is its innermost.
+    for (at, one) in shape.loops.iter().enumerate().rev() {
+        for &block in &one.body {
+            innermost.insert(cfg::block(block), at);
+        }
+    }
+    innermost
 }
 
 /// [`LoopInvariantCodeMotion::runOnLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L410)
@@ -214,21 +245,21 @@ pub fn decide(
         .with_shape(&shape);
     let (mut mssa, accesses) = llrm_analysis::mssa::shadow::translated(&memory);
     let aa = AliasQuery::new(&memory, &accesses);
-    let mut innermost: IdMap<BlockId, usize> = IdMap::new();
-    // `shape.loops` is innermost first where loops nest: claim from the
-    // outermost in, so the last to claim a block is its innermost.
-    for (at, one) in shape.loops.iter().enumerate().rev() {
-        for &block in &one.body {
-            innermost.insert(cfg::block(block), at);
-        }
-    }
+    let innermost = innermost_loops(&shape);
     let state = State::default();
     let exposed: llrm_mir::dense::IdSet<llrm_mir::module::ValueId> =
         llrm_analysis::memory::exposed_frames(&memory).into_iter().collect();
     for (at, one) in shape.loops.iter().enumerate() {
         let _ = at;
-        let ctx = LoopCtx { function: unit.function, shape: &shape, loop_: one, innermost: &innermost, state: &state };
-        let found = run_on_loop(unit, &outer, &ctx, &mut mssa, &aa, &accesses, &exposed);
+        let ctx = LoopCtx {
+            function: unit.function,
+            shape: &shape,
+            loop_: one,
+            innermost: &innermost,
+            state: &state,
+            strict_sink: false,
+        };
+        let found = run_on_loop(unit, &outer, &ctx, &mut mssa, &aa, &accesses, &exposed, true);
         let (sunk, hoisted) = (found.sunk, found.hoisted);
         let header = cfg::block(one.header);
         decisions.promotion_candidates += found.candidates;
@@ -267,6 +298,82 @@ pub fn decide(
     decisions
 }
 
+/// `runOnLoop` over every loop, inner loops first, the edits made as they are
+/// decided. The memory graph is made again before the next loop whenever a
+/// loop changed, which `MemorySSAUpdater` will replace (stage 3).
+pub fn run(
+    unit: &mut passes::Unit,
+    analyses: &mut Analyses,
+) -> Decisions {
+    let shape = analyses.get::<Shape>(unit.context, unit.layout, unit.function);
+    let mut decisions = Decisions::default();
+    if shape.loops.is_empty() {
+        return decisions;
+    }
+    let outer = std::rc::Rc::clone(analyses.outer());
+    let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
+    let innermost = innermost_loops(&shape);
+    let no_exposed = llrm_mir::dense::IdSet::new();
+    // Exposure of an alloca does not change as instructions move between
+    // blocks: found once, for the alias answers.
+    let exposed = {
+        let memory = llrm_analysis::memory::Unit::within(unit.context, unit.layout, unit.function, &outer)
+            .with_registers(&registers)
+            .with_shape(&shape);
+        std::rc::Rc::new(llrm_analysis::memory::exposed_frames(&memory).into_iter().collect())
+    };
+    let mut graph: Option<(Mssa, Accesses)> = None;
+    for one in shape.loops.iter() {
+        let header = cfg::block(one.header);
+        let (found, preheader) = {
+            let view: &passes::Unit = &*unit;
+            let memory = llrm_analysis::memory::Unit::within(view.context, view.layout, view.function, &outer)
+                .with_registers(&registers)
+                .with_shape(&shape);
+            if graph.is_none() {
+                graph = Some(llrm_analysis::mssa::shadow::translated(&memory));
+                decisions.rebuilds += 1;
+                decisions.rebuilt_instructions += view.function.walk().count();
+            }
+            let (mssa, accesses) = graph.as_mut().expect("a graph");
+            let aa = AliasQuery::new(&memory, accesses).with_exposed(std::rc::Rc::clone(&exposed));
+            // The function stands as the earlier loops left it: nothing is
+            // simulated.
+            let state = State::default();
+            let ctx = LoopCtx {
+                function: view.function,
+                shape: &shape,
+                loop_: one,
+                innermost: &innermost,
+                state: &state,
+                strict_sink: true,
+            };
+            let found = run_on_loop(view, &outer, &ctx, mssa, &aa, accesses, &no_exposed, false);
+            let preheader = {
+                use llrm_analysis::cfg::Around;
+                one.preheader(view.function).map(cfg::block)
+            };
+            (found, preheader)
+        };
+        let function = &mut *unit.function;
+        let changed = apply::apply_loop(function, one, preheader, &found.sunk, &found.hoisted)
+            .unwrap_or_else(|why| panic!("licm: {why}"));
+        for &(inst, how) in &found.sunk {
+            match how {
+                sink::Sinking::Erased => decisions.erased.push(Hoisted { function: unit.id, header, inst }),
+                sink::Sinking::Sunk => decisions.sunk.push(Hoisted { function: unit.id, header, inst }),
+            }
+        }
+        for &(inst, _) in &found.hoisted {
+            decisions.hoisted.push(Hoisted { function: unit.id, header, inst });
+        }
+        if changed {
+            graph = None;
+        }
+    }
+    decisions
+}
+
 /// What `runOnLoop` decided for one loop.
 struct LoopDecisions {
     sunk: Vec<(InstId, sink::Sinking)>,
@@ -285,6 +392,7 @@ fn run_on_loop(
     aa: &AliasQuery,
     accesses: &Accesses,
     exposed: &llrm_mir::dense::IdSet<llrm_mir::module::ValueId>,
+    promote: bool,
 ) -> LoopDecisions {
     use llrm_analysis::cfg::Around;
     let preheader = ctx.loop_.preheader(unit.function).map(cfg::block);
@@ -311,7 +419,8 @@ fn run_on_loop(
     // memory references to scalars that we can.
     let mut candidates = 0;
     let mut promoted = Vec::new();
-    if let Some(preheader) = preheader
+    if promote
+        && let Some(preheader) = preheader
         && dedicated
         && !flags.too_many_memory_accesses()
     {
@@ -355,9 +464,13 @@ fn has_dedicated_exits(ctx: &LoopCtx) -> bool {
     })
 }
 
-/// The hoisting decisions as a pass that moves nothing: it counts what it
-/// would hoist.
-pub struct Licm;
+/// LICM. With `apply` false it moves nothing and counts what it would
+/// (`DECIDED`); with it true it hoists, sinks and erases, rebuilding the memory
+/// graph after each loop it changed until `MemorySSAUpdater` lands. Promotion
+/// is decided in either, not yet applied.
+pub struct Licm {
+    pub apply: bool,
+}
 
 thread_local! {
     /// What the last runs decided, for the shadow driver.
@@ -378,7 +491,8 @@ impl FunctionPass for Licm {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let found = decide(unit, analyses);
+        let found = if self.apply { run(unit, analyses) } else { decide(unit, analyses) };
+        let changed = found_changed(&found);
         DECIDED.with(|all| {
             let mut all = all.borrow_mut();
             all.hoisted.extend(found.hoisted);
@@ -388,7 +502,15 @@ impl FunctionPass for Licm {
             all.promoted.extend(found.promoted);
             all.moved_loads += found.moved_loads;
             all.moved_calls += found.moved_calls;
+            all.rebuilds += found.rebuilds;
+            all.rebuilt_instructions += found.rebuilt_instructions;
+            all.max_rebuilds = all.max_rebuilds.max(found.rebuilds);
         });
-        PreservedAnalyses::all()
+        if self.apply && changed {
+            // Instructions move between blocks; blocks and edges stand.
+            PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+        } else {
+            PreservedAnalyses::all()
+        }
     }
 }
