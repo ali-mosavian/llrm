@@ -30,6 +30,55 @@ fn main() {
                 let (built, _) = shadow::translated(&unit);
                 memory_ops += built.len();
             }
+            "walk" => match shadow::walk(&unit) {
+                Ok(report) => {
+                    memory_ops += report.queries;
+                    println!(
+                        "WALK {} {} {} {} {} {} {}",
+                        report.queries,
+                        report.steps,
+                        report.asked,
+                        report.worked,
+                        report.in_today,
+                        report.phi,
+                        report.elsewhere
+                    );
+                }
+                Err(why) => {
+                    differ += 1;
+                    eprintln!("DIFFER {why}");
+                }
+            },
+            "newwalk" => {
+                let accesses = Accesses::plain(&unit, &Default::default());
+                let shape = unit.shape();
+                let mut built = llrm_analysis::mssa::Mssa::build(
+                    function,
+                    &shape.dominance,
+                    &shadow::effect_of(&accesses, unit.function),
+                );
+                let aa = llrm_analysis::mssa::alias::AliasQuery::new(&unit, &accesses);
+                for (_, inst) in function.walk() {
+                    if let Some(access) = built.get_memory_access(inst) {
+                        if aa.location_of(inst).is_some() {
+                            let _ = built.get_clobbering_memory_access(&aa, access);
+                            memory_ops += 1;
+                        }
+                    }
+                }
+            }
+            "oldwalk" => {
+                let accesses = Accesses::plain(&unit, &Default::default());
+                let old = memoryssa::built(&unit, &accesses);
+                for (_, inst) in function.walk() {
+                    if old.sites.contains_key(&inst) {
+                        if let Some(reference) = accesses.references.get(&inst) {
+                            let _ = old.clobbers(inst, reference);
+                            memory_ops += 1;
+                        }
+                    }
+                }
+            }
             "facts" => {
                 let accesses = Accesses::plain(&unit, &Default::default());
                 let _ = unit.shape();

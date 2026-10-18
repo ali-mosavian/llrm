@@ -86,6 +86,21 @@ thread_local! {
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
+    /// The slots built with a translation (the parity registry's `Translated`).
+    static JOINED: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Tells the counts which pass names are translated slots, so that `callers`
+/// lines split the asks of an analysis between joined and old passes.
+pub fn joined(slots: impl IntoIterator<Item = &'static str>) {
+    JOINED.with(|joined| {
+        let mut joined = joined.borrow_mut();
+        for slot in slots {
+            if !joined.iter().any(|one| *one == slot) {
+                joined.push(slot);
+            }
+        }
+    });
 }
 
 /// Puts the pass `name` running over a function of `instructions` instructions:
@@ -208,6 +223,32 @@ pub fn analysed(name: &str) -> (u64, u64) {
     })
 }
 
+/// `callers <analysis> <n> joined <m> old`: the computations of each analysis
+/// charged to translated slots and to the others (a pass outside the pipeline's
+/// slots counts as old). An analysis with no old caller is deletable once the
+/// old slots are gone. Empty unless a slot joined.
+pub fn callers() -> Vec<String> {
+    if JOINED.with(|joined| joined.borrow().is_empty()) {
+        return Vec::new();
+    }
+    let mut by_analysis: std::collections::BTreeMap<&str, (u64, u64)> = std::collections::BTreeMap::new();
+    ASKS.with(|rows| {
+        for (pass, analysis, misses) in rows.borrow().iter() {
+            let is_joined = JOINED.with(|joined| joined.borrow().iter().any(|one| one == pass));
+            let row = by_analysis.entry(analysis).or_default();
+            if is_joined {
+                row.0 += misses;
+            } else {
+                row.1 += misses;
+            }
+        }
+    });
+    by_analysis
+        .iter()
+        .map(|(name, (joined, old))| format!("[counts] callers {name} {joined} joined {old} old"))
+        .collect()
+}
+
 /// The counts as `LLRM_DEBUG=counts` prints them.
 pub fn lines() -> Vec<String> {
     let mut out: Vec<String> = NAMES
@@ -237,6 +278,7 @@ pub fn lines() -> Vec<String> {
             format!("[counts] ask {} {analysis} {misses} misses", if pass.is_empty() { "-" } else { pass })
         }));
     });
+    out.extend(callers());
     ANALYSES.with(|rows| {
         let mut by_name: std::collections::BTreeMap<&str, (u64, u64)> = std::collections::BTreeMap::new();
         for (name, hits, misses) in rows.borrow().iter() {
@@ -291,5 +333,23 @@ mod tests {
         assert!(text.contains(&"[counts] ask probe-inner probe-analysis 1 misses".to_owned()));
         assert!(text.contains(&"[counts] ask probe-outer probe-analysis 1 misses".to_owned()));
         assert!(text.contains(&"[counts] ask - probe-analysis 1 misses".to_owned()), "outside a pass: {text:?}");
+    }
+
+    /// The asks of an analysis were not told apart by whether the slot is a
+    /// translation, so which old analysis had no old caller left was unknown.
+    #[test]
+    fn test_callers_split_an_analysis_between_joined_and_old_slots() {
+        per_pass();
+        super::joined(["probe-joined"]);
+        {
+            let _one = pass_run("probe-joined", 1);
+            analysis("probe-split", false);
+        }
+        {
+            let _two = pass_run("probe-old", 1);
+            analysis("probe-split", false);
+            analysis("probe-split", false);
+        }
+        assert!(super::callers().contains(&"[counts] callers probe-split 1 joined 2 old".to_owned()));
     }
 }
