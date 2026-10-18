@@ -153,9 +153,9 @@ b0:
 #[test]
 fn a_private_function_takes_the_targets_private_convention_under_any_abi() {
     let after = run_private(&format!("{SYSV_CALLEE}{SYSV_CALLER}"));
-    assert!(after.contains("define internal watcallcc i16 @work"), "{after}");
-    assert!(after.contains("call watcallcc i16 @work"), "{after}");
-    assert!(after.contains("define sysvcc i16 @f"), "{after}");
+    assert!(after.contains("define internal cc 1002 i16 @work"), "{after}");
+    assert!(after.contains("call cc 1002 i16 @work"), "{after}");
+    assert!(after.contains("define cc 1003 i16 @f"), "{after}");
 }
 
 /// What a caller outside the module's sight, an indirect call, a call in
@@ -164,23 +164,23 @@ fn a_private_function_takes_the_targets_private_convention_under_any_abi() {
 #[test]
 fn what_something_else_may_reach_keeps_its_convention() {
     let external = run_private(&format!("{}{SYSV_CALLER}", SYSV_CALLEE.replace("internal ", "")));
-    assert!(!external.contains("watcallcc"), "{external}");
+    assert!(!external.contains("cc 1002"), "{external}");
     let taken = run_private(&format!("@table = global ptr @work\n{SYSV_CALLEE}{SYSV_CALLER}"));
-    assert!(!taken.contains("watcallcc"), "{taken}");
+    assert!(!taken.contains("cc 1002"), "{taken}");
     let passed = run_private(&format!(
         "declare void @take(ptr)\n{SYSV_CALLEE}{SYSV_CALLER}define void @g() {{\nb0:\n  call void @take(ptr @work)\n  ret void\n}}\n"
     ));
-    assert!(!passed.contains("watcallcc"), "{passed}");
+    assert!(!passed.contains("cc 1002"), "{passed}");
     let mixed = run_private(&format!("{SYSV_CALLEE}{}", SYSV_CALLER.replace("call sysvcc", "call")));
-    assert!(!mixed.contains("watcallcc"), "{mixed}");
+    assert!(!mixed.contains("cc 1002"), "{mixed}");
     let variadic = run_private(
         "define internal sysvcc i16 @work(i16 %a, ...) {\nb0:\n  ret i16 %a\n}\ndefine sysvcc i16 @f(i16 %x) {\nb0:\n  %p = call sysvcc i16 (i16, ...) @work(i16 %x, i16 2)\n  ret i16 %p\n}\n",
     );
-    assert!(!variadic.contains("watcallcc"), "{variadic}");
+    assert!(!variadic.contains("cc 1002"), "{variadic}");
     let handler = run_private(
         "define internal x86_intrcc void @isr() {\nb0:\n  ret void\n}\ndefine sysvcc void @f() {\nb0:\n  call x86_intrcc void @isr()\n  ret void\n}\n",
     );
-    assert!(!handler.contains("watcallcc"), "{handler}");
+    assert!(!handler.contains("cc 1002"), "{handler}");
 }
 
 /// A function that calls itself is private too: its own calls are among the
@@ -206,6 +206,6 @@ b0:
 }
 ",
     );
-    assert_eq!(after.matches("call watcallcc i16 @down").count(), 2, "{after}");
-    assert!(after.contains("define internal watcallcc i16 @down"), "{after}");
+    assert_eq!(after.matches("call cc 1002 i16 @down").count(), 2, "{after}");
+    assert!(after.contains("define internal cc 1002 i16 @down"), "{after}");
 }

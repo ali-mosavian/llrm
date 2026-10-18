@@ -883,6 +883,7 @@ fn billed_asking_for_costly(trips: u64) -> (super::Run, u64) {
         version: 0,
         promotes: true,
         dump: None,
+        inputs: false,
         rounds: 0,
         steps: 0,
         skipped: 0,
@@ -1405,4 +1406,64 @@ x:
     };
     assert!(looped(pipeline::Options::speed()), "-O3 keeps 40 trips rolled");
     assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
+}
+
+/// `LLRM_DUMP_INPUTS` for the POCs of single passes: a pass that finds nothing
+/// to do left no dump, so its input was nowhere to be had. A run that changes
+/// nothing now leaves its input and a manifest line.
+#[test]
+fn test_a_run_that_changes_nothing_leaves_its_input_and_a_manifest_line() {
+    use llrm_mir::module::{GlobalKind, Module};
+    use llrm_mir::passes::{Analyses, Declared, Outer, Unit};
+    let directory = std::env::temp_dir().join(format!("llrm-inputs-{}", std::process::id()));
+    let mut module: Module = crate::testing::parsed("define i16 @f() {\nb:\n  ret i16 0\n}\n");
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let mut analyses = Analyses::new(std::rc::Rc::new(Outer::of(&module, None)));
+    let mut declared = Declared::of(&module);
+    let Module { context, globals, metadata, .. } = &mut module;
+    let GlobalKind::Function(function) = &mut globals[0].kind else { panic!("a function") };
+    let mut unit = Unit { context, layout: &layout, function, id: None, metadata, declared: &mut declared };
+    let mut run = super::Run {
+        version: 0,
+        promotes: true,
+        inputs: true,
+        dump: Some(directory.clone()),
+        rounds: 0,
+        steps: 0,
+        skipped: 0,
+        fixed: 0,
+        billing: false,
+        idle: 0,
+        useful: 0,
+        idle_with_analyses: 0,
+        useful_with_analyses: 0,
+        classified: unit.function.mark(),
+        stretches: Vec::new(),
+        unreached: 0,
+        slice: None,
+        persisted: 0,
+        records: unit.context.extension::<crate::settled::Settled>(),
+        rerun: false,
+        idle_at: Vec::new(),
+    };
+    assert!(!run.step(&mut Idle, "idle", &mut unit, &mut analyses));
+    let manifest = std::fs::read_to_string(directory.join("manifest.txt")).expect("a manifest");
+    let _ = std::fs::remove_dir_all(&directory);
+    assert_eq!(manifest, "idle 1 0001-in-idle.ll 1\n");
+}
+
+struct Idle;
+
+impl llrm_mir::passes::FunctionPass for Idle {
+    fn name(&self) -> &'static str {
+        "idle"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
 }

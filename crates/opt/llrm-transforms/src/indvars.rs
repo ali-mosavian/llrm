@@ -811,8 +811,12 @@ pub fn widened_with(
                 _find(&unit.with_registers(facts), &loop_, unrolls)
             };
             if let Some(found) = found {
+                let mark = function.mark();
                 _widen(context, function, &found);
-                standing.changed();
+                match function.changes_since(mark) {
+                    Some(changes) => standing.edited(function, changes),
+                    None => standing.changed(),
+                }
                 changed = true;
                 continue 'again;
             }
