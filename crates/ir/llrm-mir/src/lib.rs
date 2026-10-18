@@ -48,6 +48,7 @@ pub mod target;
 pub mod tbaa;
 pub mod touched;
 pub mod types;
+pub mod valuelattice;
 pub mod valuetracking;
 pub mod verify;
 
