@@ -2676,8 +2676,9 @@ impl Selector<'_, '_, '_> {
         let block = function.parent(inst)?;
         let only_in_block = |value: ValueId, reader: InstId| -> Option<InstId> {
             let ValueDef::Instruction(def) = function.value(value).def else { return None };
-            (function.parent(def) == Some(block) && function.users(value).only().is_some_and(|only| only.user == reader))
-                .then_some(def)
+            (function.parent(def) == Some(block)
+                && function.users(value).only().is_some_and(|only| only.user == reader))
+            .then_some(def)
         };
         let join = only_in_block(condition, inst)?;
         let conjunction = match function.instruction(join).opcode {

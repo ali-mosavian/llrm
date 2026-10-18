@@ -646,11 +646,13 @@ impl Selector<'_, '_, '_> {
         let stored = instruction
             .result
             .is_some_and(
-                |result| self
-                    .function
+                |result| self.function
                     .users(result)
                     .only()
-                    .is_some_and(|only| matches!(self.function.instruction(only.user).opcode, Opcode::Store { .. })),
+                    .is_some_and(|only| matches!(
+                        self.function.instruction(only.user).opcode,
+                        Opcode::Store { .. }
+                    )),
             );
         let foldable = instruction.operands.iter().any(|operand| loaded(*operand)) && (registers >= 2 || stored);
         // Nor where a compare reads the result: the word's flags serve it, and
