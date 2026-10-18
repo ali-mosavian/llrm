@@ -48,7 +48,5 @@ One analysis owns dominance: the `Dominators` analysis in `llrm-mir`. Every read
 |---|---|---|
 | D1 (#2268) | `DomTreeBase`, oracle | |
 | D2 (with D1, one step), D2b | `Dominators` result is `DomTree`; `Analysis::update` turns the change log into `Update`s for `applyUpdates`; readers in `llrm-mir` (`loopinfo`, `verify`, `valuetracking/*`, `scalarevolution`, `simplify`) and `cfg::Dominance` | `llrm-mir/src/dominators.rs`. Acceptance: `branches` and `unrolled` `analysis dominators` own slope within the limit at 2N |
-| D3 | `graph::loops::{dominators, immediate_dominators, frontiers}` readers in `llrm-analysis` and `llrm-transforms` (`promote`, `mem2reg`, `gvn`, `sink`, `hoist`, ...) | the CFG-generic walks |
-| D4 | LIR back end: `llrm-core` `analysis::loops`, `shrinkwrap`, `ssarepair`, `phiconst` | `llrm_core::analysis::loops::{dominators, immediate_dominators}` |
-| D5 | `llrm-hir` `dominance.rs`, `llrm-support` `graph::dominance` | |
+| D3-D5 (#2285) | the walks over blocks named by address: `llrm-analysis` `graph::loops`, the LIR back end (`analysis::loops`, `shrinkwrap`, `ssarepair`, `phiconst`, `copysink`), `llrm-hir` `dominance::check`: one `AddressDominance` over `DomTree` | `llrm-support` `graph::{Dominance, dominance, dominators, dominance_work, Dominates}` (the second copy of Cooper-Harvey-Kennedy) |
 | D6 | `analysis dominated-edges` verdict | |
