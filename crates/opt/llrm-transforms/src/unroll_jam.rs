@@ -21,8 +21,9 @@
 //! `unroll-jam-max-unroll`) and `min_percent` (1, `unroll-jam-min-percent`),
 //! which bounds N by the dependence distances and refuses a nest where fewer
 //! than `min_percent` percent of the accesses go away. The outer loop needs an
-//! exact trip count; N is the largest factor from 2 up to the bound that
-//! divides it.
+//! exact trip count (ScalarEvolution's `getSmallConstantTripCount`;
+//! `LLRM_NO_SCEV_TRIPS` asks `induction::trip_count`); N is the largest factor
+//! from 2 up to the bound that divides it.
 //!
 //! The outer loop is unrolled by `loopclone::chained` into N bodies. In each
 //! copy the work between the loops moves ahead of the first inner loop, the
