@@ -2631,6 +2631,30 @@ mod tests {
         llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect()
     }
 
+    /// `j.a = 200` on a field that fills its byte was a read-modify-write of an
+    /// unwritten byte: `load; and 0; or; store`. SROA reads an unwritten
+    /// slot as poison, `and poison, 0` is poison, and bitfield_long_long
+    /// printed 0 at -O2. A field filling its container is stored, as clang does.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_m32_a_field_filling_its_container_is_stored_not_merged() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("bf.c");
+        std::fs::write(
+            &source,
+            "struct s { unsigned long long a:8, b:32; };\n\
+             int __cdecl f(void) { struct s j; j.a = 200; j.b = 7; j.b += 5; return j.a * 1000 + j.b; }\n",
+        )
+        .unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
+            .expect("wccq records bf.c");
+        let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
+        let built = super::selected(&text, "bf", None, &super::parse_args(&argv).unwrap().codegen).unwrap();
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        assert!(asm.contains("mov eax, 200012"), "{asm}");
+    }
+
     /// `int add(int, int)` as flat 32-bit code: cdecl32's arguments at [esp+4]
     /// and [esp+8] (EBP is no frame where nothing needs one), the result in
     /// EAX. It listed `bp`, `[bp+4]` and a DX:AX result, and never reached
