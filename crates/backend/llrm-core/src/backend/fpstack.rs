@@ -56,8 +56,8 @@
 //! asserts).
 //!
 //! # Runs
-//! In place of `floatalloc`'s conversion when `LLRM_EXP_FPS` is set, after
-//! `floatassign`, once per function with floating values. Off by default.
+//! As the body of `floatalloc` (slot `floatalloc@8`), after `floatassign`, once
+//! per function with floating values.
 //!
 //! # Example
 //! `a * b` where `a` is read again afterwards. Before:
