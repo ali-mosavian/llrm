@@ -2007,3 +2007,46 @@ fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() 
     let made = llrm_mir::counts::analysed("globals-aa").1 - before;
     assert!(made <= 6, "{name}: globals-aa made {made} times, 8 before it was held past the function stages");
 }
+
+/// The fixed point hashed the body before it ran even when its list runs once
+/// (LLVM's order): a hash per body per stage that nothing read, 1.1 M
+/// instructions on d_faces -O2.
+#[test]
+fn test_the_llvm_order_hashes_no_body_for_a_cycle_history_it_never_reads() {
+    let mut files = corpus_files();
+    files.sort_by_key(|(_, path)| std::cmp::Reverse(std::fs::metadata(path).map(|one| one.len()).unwrap_or(0)));
+    let run = |name: &str, path: &std::path::Path, applied: &Applied| {
+        let mut module = parse_corpus_entry(name, path);
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::Fingerprints);
+        let done =
+            Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+                pipeline::applied(program, applied)
+            })
+            .and_then(|done| done);
+        done.map(|()| llrm_mir::counts::get(llrm_mir::counts::Event::Fingerprints) - before)
+    };
+    let order = Applied::default();
+    assert!(order.options.llvm_order, "the order is the default");
+    let (name, path) = files.first().expect("a corpus module");
+    assert_eq!(
+        run(name, path, &order).unwrap_or_else(|error| panic!("{name}: {error}")),
+        0,
+        "{name}: the order hashed bodies it never compares"
+    );
+    let mut rounds = Applied::default();
+    rounds.options.llvm_order = false;
+    // The rounds panic on a body that oscillates (a separate, older fault in
+    // some corpus entries): the smallest entry that converges shows the
+    // history.
+    let kept = files
+        .iter()
+        .rev()
+        .find_map(
+            |(name, path)| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run(name, path, &rounds).ok().filter(|hashed| *hashed > 0)
+            }))
+            .ok()
+            .flatten(),
+        );
+    assert!(kept.is_some(), "the rounds keep the history they compare");
+}

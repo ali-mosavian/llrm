@@ -100,7 +100,7 @@ fn joined(
 fn test_neighbours_with_one_target_are_one_range_test() {
     let after = lowered(&returns("i32", &[(0, 1), (1, 1), (2, 1), (40, 2)]), -3..45, false);
     assert!(!after.contains("switch"), "{after}");
-    assert!(after.contains("icmp ugt i32 %x, 2") && !after.contains("icmp eq i32 %x, 1"), "{after}");
+    assert!(after.contains("icmp ule i32 %x, 2") && !after.contains("icmp eq i32 %x, 1"), "{after}");
 }
 
 /// Selectors compared signed: -1, 0 and 1 are three neighbours, not 0, 1 and
@@ -109,7 +109,7 @@ fn test_neighbours_with_one_target_are_one_range_test() {
 fn test_negative_neighbours_are_one_range_by_the_signed_order() {
     let after = lowered(&returns("i32", &[(-1, 1), (0, 1), (1, 1), (50, 2)]), -3..60, false);
     assert!(!after.contains("switch"), "{after}");
-    assert!(after.contains("icmp sgt") || after.contains("icmp sge"), "{after}");
+    assert!(after.contains("sub i32 %x, -1") && after.contains("icmp ule i32 %0, 2"), "{after}");
 }
 
 /// gcc's `bit_test_cluster`: 5 cases of 2 targets in a word are `1 << x`
@@ -301,11 +301,15 @@ fn test_no_jump_table_where_the_target_has_none() {
     assert!(!after.contains("switch"), "{after}");
 }
 
-/// Fewer cases than the target's threshold stay a tree.
+/// LLVM's `getMinimumJumpTableEntries` on x86 is 4: four dense cases are a
+/// table, three stay a tree.
 #[test]
-fn test_four_cases_are_no_jump_table() {
-    let cases: Vec<(i128, u32)> = (0..4).map(|at| (at + 10, at as u32 + 1)).collect();
-    let after = lowered_by(&returns("i32", &cases), -3..30, true, 5);
+fn test_four_cases_are_a_jump_table_and_three_are_not() {
+    let four: Vec<(i128, u32)> = (0..4).map(|at| (at + 10, at as u32 + 1)).collect();
+    let after = lowered_by(&returns("i32", &four), -3..30, true, 5);
+    assert!(after.contains("switch table"), "{after}");
+    let three: Vec<(i128, u32)> = (0..3).map(|at| (at + 10, at as u32 + 1)).collect();
+    let after = lowered_by(&returns("i32", &three), -3..30, true, 5);
     assert!(!after.contains("switch"), "{after}");
 }
 
@@ -407,21 +411,21 @@ fn test_the_least_density_is_a_tenth_and_two_fifths_tuned_for_size() {
     assert!(!size.contains("load"), "{size}");
 }
 
-/// The `cases` scaling row (512 dense labels, each its own block): every block
-/// the lowering merged or dropped was taken out of the layout by a search of
-/// it, 28% of `mir switchlower` at x4.0 per doubling (#2260); and the
-/// jump-table partition search was tried over all 131K pairs of its clusters.
+/// `lowerWorkItem`: two values to one target one bit apart are one compare,
+/// `(x | 2) == 6`, not two.
 #[test]
-fn test_lowering_a_dense_switch_searches_the_layout_once_not_per_block() {
-    let cases: Vec<(i128, u32)> = (0..512).map(|at| (at, at as u32 * 3 + 1)).collect();
-    let text = returns("i32", &cases);
-    let (before, tried) = (llrm_mir::edit::layout_scanned(), super::TRIED.with(std::cell::Cell::get));
-    let after = lowered_by(&text, [-1, 0, 255, 511, 512], false, 5);
-    let scanned = llrm_mir::edit::layout_scanned() - before;
-    assert!(after.contains("switch table"), "{after}");
-    assert!(scanned < 64 * 1024, "{scanned} layout entries searched for 512 cases");
-    // The partition search of 512 clusters is 131K tries; a run dense as a
-    // whole is one table without it.
-    let tried = super::TRIED.with(std::cell::Cell::get) - tried;
-    assert!(tried < 512, "{tried} partitions tried for a run dense as a whole");
+fn test_two_values_one_bit_apart_are_one_compare() {
+    let after = lowered(&returns("i32", &[(4, 1), (6, 1)]), -2..10, false);
+    assert!(after.contains("or i32 %x, 2") && after.contains("icmp eq i32 %0, 6"), "{after}");
+}
+
+/// `peelDominantCaseCluster`: a range holding two cases in three is tested
+/// first, ahead of the tree of the rest.
+#[test]
+fn test_a_dominant_range_is_tested_first() {
+    let mut cases: Vec<(i128, u32)> = (0..10).map(|at| (at, 1)).collect();
+    cases.extend([(100, 2), (200, 3), (300, 4)]);
+    let after = lowered(&returns("i32", &cases), (-2..12).chain([100, 150, 200, 300, 301]), false);
+    let first = after.lines().find(|line| line.contains("icmp")).unwrap();
+    assert!(first.contains("icmp ule i32 %x, 9"), "{after}");
 }
