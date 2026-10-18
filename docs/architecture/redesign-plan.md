@@ -8,6 +8,8 @@
 
 ## Status
 
+Merged since the scoreboard of section 2.0 (main `5eea0777a`; `d_faces` not re-taken since `cb2a78038`, so the scoreboard stands as measured): LoopInfo translated ([#2195]), InlineCost behind `LLRM_EXP_INLINEDECIDE` ([#2140]), the GVN and MemDep plan ([#2155]), poison float and address ([#2135]), two spiller fixes ([#2223]), call-effects renamed to a chain ([#2093]), `@noipa` on the Nib kernels ([#2210]), the pinned-clang row check (commit `5c49634a4`), three paid budget debts deleted. Open PRs are capped at 10 (oversight): green and correctness or instrument fixes stay in flight; red or stacked ones go to draft until green on main, order #2163, #2127, #2159, then #2164, #2172, #2160, #2137, #2156.
+
 As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions renamed as of 2026-10-17: the owner names in the tables below are the old ones. pass-list-parity and inline-storage-combine are now fold-poc; attrs-budgets, trace-recorder and sroa-promote-poc are llvm-order-poc (early FPM order and LLVM run counts, one experiment); ssa-spill-m16 and regalloc-quadratics are regalloc-core-poc; hoist-bounded and walker-caps are dse-poc (the MemorySSA and alias layer after); greedy-port, lsr-gvn-split and body-size-table are indvars-decide-poc; edit-rollback and edit-contract-replay are lir-cleanup-poc; objectref-identity and identity-s0-done are now cgscc-poc (the CGSCC inliner translation: bottom-up walk with simplify-before-inline, then `InlineCost.cpp`); the simplifycfg-poc name is retired, and SimplifyCFG keeps an owner (indvars-decide-poc, for the known-condition part) and a slot (LLVM runs it about 8 times). dse-poc is now memoryssa-port (`MemorySSA.cpp` and `MemorySSAUpdater.cpp` translated, #2108 and #2116; the LICM and DSE translations plug into it). fold-poc owns the single `InstructionSimplify` translation, used by the worklist and by EarlyCSE, and writes the `ValueTracking` API stub first. align-pad is now valuetracking-port (the translation of `ValueTracking.cpp`, `KnownBits` and `ConstantRange` at `d1106deb71cc`). llvm-order-poc: the EarlyCSE translation is done in shadow (54 of 58 identical to `opt`), `SROA.cpp` and `PromoteMemoryToRegister.cpp` next. gate-dist-build is now llvm-difftest (builds `tools/difftest`, the per-pass differential against LLVM `opt`; llvm-order-poc classifies; the EarlyCSE and GVN tables first). keep-analyses and facts-per-query are now basicaa-port (the translation of `BasicAliasAnalysis`, `CaptureTracking`, `AliasAnalysis` and `MemoryLocation` at `d1106deb71cc` as memoryssa-port's `AliasQuery`; the `Pointers` tower and its join rules are deleted when the clients move; first [#2125] and the main-order soundness search); identical-corpus is now simplifycfg-port (the `SimplifyCFG.cpp` translation, `ConstantFoldTerminator` and the early-FPM options first); scev-port ([#2150], `scev-port.md`): (1) LoopInfo first, which owns `Loops` and whose consumers are told first; (2) the SCEV tree translated on `ConstantRange`; (3) the Expander on the shared X86 TTI, which cgscc-poc owns; fill goes to LoopIdiom, owner loopidiom-port (renamed from loadpre-idioms); lcssa and stamp go to llvm-order-poc (stamp: it says what it is for first); emission is unowned and ranked last; the LIR clean-up (266 M gap) is lir-cleanup-poc, who writes a translation map. gvn-port ([#2155]: `GVN.cpp` and `MemoryDependenceAnalysis`) takes the gvn row's open owner; fold-poc also owns `ConstantFolding.cpp`; `AliasQuery` mirrors `AAResults` at the pin; the order stack lands OFF by default, with its conditions in its PR (oversight, 2026-10-18). Unchanged: plan-upkeep-rows.
 
 Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when the queue is quiet). The rows at that SHA are the "never worse" baseline for every redesign PR: a per-row regression check, the worst row beside the geomean.
@@ -99,7 +101,7 @@ Main was `ef40f30a7` when this was read and is `c37be2a9c` as of this edit; PR s
 | front end (translate, hir to mir, data layout) | 49.4 | 44.8 | 1.1x | lex, parse, sema, IRGen | none (at parity) |
 | optimizer: ten passes (gvn, fold, algebraic, sroa, promote, hoist, loopmotion, jumpthread, dse, indvars, unroll, rotate) | 498.7 | 116.6, with the analyses they use | | InstCombine, GVN, SROA, LICM, JumpThreading, DSE, IndVars, LoopUnroll, LoopRotate | the translation tracks of the per-pass table |
 | optimizer: analyses | 535.5 | inside clang's pass rows | | nearest: through-memory ~ MemoryDependence 23.5 and MemorySSA ~6; pointer-values, points-to, globals-aa ~ BasicAA 19.5 and GlobalsAA 1.1; bounded, counted, demanded, float-facts ~ ValueTracking 12.5, LazyValueInfo 6.2, SCEV 5.6; call-effects ~ GlobalsModRef and FunctionAttrs (not separable); registers, pressure, exposed-frames, annotated, published, shape: none | memoryssa-port, basicaa-port, valuetracking-port; the "none" analyses below |
-| optimizer: lsr | 89.5 | 10.0 (LSRInstance, inside the 177.5) | 8.9x | LSRInstance | indvars-decide-poc |
+| optimizer: lsr | 89.5 | 10.0 (LSRInstance, inside the 177.5) | 8.9x | LSRInstance | loop-products-slope (the `LoopStrengthReduce.cpp` translation, see the decisions below) |
 | optimizer: all other mir passes (interprocedural 62.7, decide 62.0, stamp 39.6, lcssa 21.1, fill 17.1) | 254.7 | 50.9 | 5.0x | SimplifyCFG 8.4, CVP 6.7, EarlyCSE 5.7, IPSCCP 4.1; stamp and fill: none | decide: simplifycfg-port; stamp: llvm-order-poc says what it is for first; fill: loopidiom-port; lcssa: llvm-order-poc |
 | optimizer total | 1,378.4 | 177.5 | 7.8x | | |
 | isel | 49.5 | 54.2 | 0.9x | SelectionDAGISel 51.3, CodeGenPrepare 2.9 | none (at parity) |
@@ -1202,6 +1204,15 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 6. TTI: two cost systems are accepted as LLVM's split; the MIR passes migrate to read TTI and `OperationCosts` stays for LIR (the migration is owed in `tti-plan.md`).
 7. `noipa`: [#2196] is closed (merged via [#2140]); the parity kernels stay missing until executed; `matmul` is re-blessed, no waiver.
 8. The fold split is approved ([#2218]); `KnownFPClass` Stage A only, Stage B waits for a named reader. Front-end item 2 is parked ([#2221]). The perf cron is daily only ([#2191]).
+9. `LoopStrengthReduce.cpp` is translated at the pin. Owner loop-products-slope (was loopidiom-lp0 and indvars-decide-poc). It starts after scev-port S3 to S5 (it needs `SCEVExpander` and AddRec). Oracle: LLVM's LSR output. The llrm `lsr` pass and the interim loop-products and pressure slope fix are deleted when it becomes default.
+10. [#2260] `lir loopslots` is REPLACED by RAGreedy region splitting (SplitKit). Exit: deleted with the old pass when greedy is default. The acceptance axis (its own slope within the limit at 2N) is on regalloc-core-poc.
+
+**Decisions of 2026-10-18, third batch (oversight).**
+1. `BranchProbabilityInfo.cpp` and `BlockFrequencyInfo` / `BlockFrequencyInfoImpl` are translated at the pin `d1106deb71cc`: heuristics plus trip counts from SCEV (`BackedgeTakenInfo`), no loop simulation. Owner cgscc-poc (the inliner and hot/cold consumer, a TTI neighbour). Order: after scev-port S5 (BTC). The llrm `branchprob` `counted` simulation and `Frequencies` are deleted when it becomes default.
+2. The exit of the `analysis counted` row ([#2260], x5.43 nest, unplaced until now) is that translation plus `BackedgeTakenInfo` (and the LSR translation's `BackedgeCounts`): the cone dependence comes from `branchprob` simulating loops.
+3. `SwitchLoweringUtils` is translated at the pin, behind a switch. Oracle: its cluster, jump-table and bit-test decisions against the pinned `llc`. Every row is priced against min(gcc, pin) before any default change; where gcc's shape wins rows it stays as a numbered DEVIATE citing those rows. Owner backend-slopes, whose `mir switchlower` slope fix ([#2272]) lands first. Order: after the critical-path items (3.1 to 3.3, the allocator, GVN, LICM, SCEV). It is a code-shape trade, not a compile-time win.
+4. `LoopSimplify.cpp` and `LCSSA.cpp` (with the `LoopUtils` pieces they use) are translated at the pin `d1106deb71cc`. Owner loop-passes-port, ordered after the DomTree (domtree-port) and LoopInfo translations. llrm's `loopsimplify` and `lcssa` are deleted when it becomes default. Interim: backend-slopes' one-sweep needs-check fix, deleted with the old pass.
+5. Pipeline row, owner llvm-order-poc: LLVM's new pass manager runs LoopSimplify and LCSSA only where a loop-pass adaptor needs them (a handful of times at -O2); ours runs them 9 times. The run count must match the pinned pipeline's.
 
 **Method M (every exit measurement).**
 
@@ -1443,6 +1454,12 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2132]: https://github.com/ali-mosavian/llrm/pull/2132
 [#2145]: https://github.com/ali-mosavian/llrm/pull/2145
 [#2150]: https://github.com/ali-mosavian/llrm/pull/2150
+[#2210]: https://github.com/ali-mosavian/llrm/pull/2210
+[#2093]: https://github.com/ali-mosavian/llrm/pull/2093
+[#2223]: https://github.com/ali-mosavian/llrm/pull/2223
+[#2135]: https://github.com/ali-mosavian/llrm/pull/2135
+[#2155]: https://github.com/ali-mosavian/llrm/pull/2155
+[#2195]: https://github.com/ali-mosavian/llrm/pull/2195
 [#2140]: https://github.com/ali-mosavian/llrm/pull/2140
 [#2186]: https://github.com/ali-mosavian/llrm/pull/2186
 [#2191]: https://github.com/ali-mosavian/llrm/pull/2191
@@ -1451,6 +1468,8 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2196]: https://github.com/ali-mosavian/llrm/pull/2196
 [#2218]: https://github.com/ali-mosavian/llrm/pull/2218
 [#2221]: https://github.com/ali-mosavian/llrm/pull/2221
+[#2260]: https://github.com/ali-mosavian/llrm/issues/2260
+[#2272]: https://github.com/ali-mosavian/llrm/pull/2272
 [#2173]: https://github.com/ali-mosavian/llrm/pull/2173
 [#2179]: https://github.com/ali-mosavian/llrm/pull/2179
 [#2151]: https://github.com/ali-mosavian/llrm/pull/2151

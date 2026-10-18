@@ -8,6 +8,60 @@ use crate::module::{Function, GlobalKind, GlobalValue, Module, Operand, ValueDef
 use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use crate::types::TypeId;
 
+#[cfg(test)]
+mod boundary_tests;
+pub mod context;
+#[cfg(test)]
+mod context_tests;
+pub mod guarantee;
+#[cfg(test)]
+mod guarantee_tests;
+pub mod known;
+pub mod nonzero;
+pub mod pattern;
+pub mod power2;
+mod query;
+pub mod range;
+pub mod signbits;
+#[cfg(test)]
+mod signbits_tests;
+
+#[cfg(test)]
+mod nonzero_tests;
+#[cfg(test)]
+mod power2_tests;
+
+pub use query::{AssumptionCache, CondContext, DomConditionCache, FunctionAnalyses, Query};
+
+#[cfg(test)]
+mod range_tests;
+
+#[cfg(test)]
+mod known_tests;
+
+/// One column of `examples/vtdump.rs`: ` name=answer`.
+pub fn column(
+    query: &Query,
+    value: Operand,
+    name: &str,
+) -> String {
+    match name {
+        "kb" => known::column(query, value),
+        "nn" => known::column_non_negative(query, value),
+        "ng" => known::column_negative(query, value),
+        "sb" => signbits::column(query, value),
+        "nz" => nonzero::column(query, value),
+        "p2" => power2::column(query, value, false),
+        "p2z" => power2::column(query, value, true),
+        "cru" => range::column(query, value, false),
+        "crs" => range::column(query, value, true),
+        "gp" => guarantee::column(query, value),
+        "pat" => range::pattern_column(query, value),
+        "ov" => range::overflow_column(query, value),
+        other => format!(" {other}=?"),
+    }
+}
+
 /// Where each bit of a shift's or width change's result comes from: result bit
 /// `i` is operand bit `i + offset`, and a result bit with no such operand bit
 /// is a copy of the sign (`Fill::Sign`) or zero. One table, read forward by
