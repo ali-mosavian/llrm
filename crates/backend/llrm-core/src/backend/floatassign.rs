@@ -670,7 +670,7 @@ fn _stacked(
 
 /// Where a value is read back from: its own spill cell, or the load it is
 /// equivalent to, GCC's REG_EQUIV memory.
-fn _spill_home(
+pub(crate) fn _spill_home(
     value: u32,
     cell: Mem,
 ) -> Arc<Insn> {
@@ -704,7 +704,7 @@ fn _restored(
 }
 
 /// `value` written to its spill cell at `at`.
-fn _stored(
+pub(crate) fn _stored(
     value: u32,
     cell: &Mem,
     at: i64,
@@ -2097,6 +2097,64 @@ pub fn assigned(
             .iter()
             .position(|one| plan.roots.get(&one.at).is_some_and(|roots| roots.contains(&victim)))
             .map_or(crowded_at, |touching| touching.min(crowded_at));
+    }
+}
+
+/// The legalization half of `assigned`, which greedy's RFP allocation
+/// (`LLRM_GREEDY_RFP`) leaves to run before it: an integer `fild` reads goes
+/// through a cell, a float-to-integer store lands in one, and later loads of a
+/// cell nothing wrote since are the first load's value. LLVM lowers the first
+/// two in instruction selection.
+pub fn prepared(
+    body: &LirBody,
+    mut frame: Option<&mut Frame>,
+    pool: Option<&mut Pool>,
+    basic_semantics: bool,
+) -> Result<LirBody, Raised> {
+    if _floating_values(body).is_empty()
+        && !body.insns().iter().any(|one| {
+            one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::FloatLoad | Operation::FloatStore))
+        })
+    {
+        return Ok(body.clone());
+    }
+    let loaded = _integer_loads(body, frame.as_deref_mut(), pool)?;
+    let body = _integer_stores(&loaded, frame.as_deref_mut(), basic_semantics)?;
+    let floating = _floating_values(&body);
+    if floating.is_empty() {
+        return Ok(body);
+    }
+    let (live_in, live_out) = live(&body);
+    if live_in[&body.entry].iter().any(|value| floating.contains(&value)) {
+        return Err(unlowered("floating stack input is unavailable"));
+    }
+    Ok(_aliased_by(&body, &live_out).0)
+}
+
+/// `prepared` as a machine phase: floatassign's slot under `LLRM_GREEDY_RFP`.
+pub struct FloatPrep {
+    pub frame: Option<Rc<RefCell<Frame>>>,
+    pub pool: Option<Rc<RefCell<Pool>>>,
+    pub basic_semantics: bool,
+}
+
+impl LIRTransform for FloatPrep {
+    fn class_name(&self) -> &'static str {
+        "FloatPrep"
+    }
+
+    fn name(&self) -> &str {
+        "floatprep"
+    }
+
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
+        let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
+        let mut pool = self.pool.as_ref().map(|pool| pool.borrow_mut());
+        prepared(&body, frame.as_deref_mut(), pool.as_deref_mut(), self.basic_semantics)
+            .map_err(|error| error.to_string())
     }
 }
 

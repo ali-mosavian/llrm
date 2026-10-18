@@ -480,8 +480,19 @@ pub fn decide_with_split(
         })
         .collect();
     let tables = Rc::new(Tables::default());
+    // Under `LLRM_GREEDY_RFP` the x87 values take FP0..FP6 (LLVM's RFP
+    // classes); a stack position an instruction names is the stackifier's.
+    let floats = if crate::backend::allocate::rfp_on() {
+        crate::backend::floatassign::_floating_values(body)
+    } else {
+        Default::default()
+    };
     for reg in lis.virt_regs() {
-        let mut order: Vec<RegId> = (inputs.order)(reg).into_iter().map(crate::model::ir::root).collect();
+        let mut order: Vec<RegId> = if floats.contains(&reg) {
+            crate::backend::allocate::RFP.to_vec()
+        } else {
+            (inputs.order)(reg).into_iter().map(crate::model::ir::root).collect()
+        };
         order.dedup();
         tables.orders.borrow_mut().insert(reg, order);
     }
@@ -489,7 +500,12 @@ pub fn decide_with_split(
         tables.widths.borrow_mut().insert(value, width);
     }
     tables.remat.borrow_mut().extend(crate::backend::spiller::remade_values(body));
-    let pins = inputs.pins.iter().map(|(&reg, &phys)| (reg, crate::model::ir::root(phys))).collect();
+    let pins = inputs
+        .pins
+        .iter()
+        .filter(|(reg, _)| !floats.contains(reg))
+        .map(|(&reg, &phys)| (reg, crate::model::ir::root(phys)))
+        .collect();
     let env = BodyEnv { orders: Rc::clone(&tables), pins, freq, exiting };
     // The calls.
     let mut calls = Vec::new();
@@ -501,12 +517,20 @@ pub fn decide_with_split(
                 .map(crate::model::ir::root)
                 .into_iter()
                 .collect();
-            if !one.clobbers.is_empty() || !one.clobbers_high.is_empty() || !read.is_empty() {
+            // The stack is empty at a call and wherever an instruction names a
+            // position (`X86FloatingPoint`): FP0..FP6 are lost there.
+            let empties = !floats.is_empty()
+                && (one.call.is_some() || one.clobbers.iter().any(|r| inputs.registers.positional(*r)));
+            if !one.clobbers.is_empty() || !one.clobbers_high.is_empty() || !read.is_empty() || empties {
                 let slot = lis.indexes.get_instruction_index(one.id()).get_reg_slot(false);
                 let roots = |list: &BTreeSet<RegId>| -> Vec<RegId> {
                     list.iter().map(|r| crate::model::ir::root(*r)).collect::<BTreeSet<_>>().into_iter().collect()
                 };
-                calls.push((slot, roots(&one.clobbers), roots(&one.clobbers_high), read));
+                let mut destroyed = roots(&one.clobbers);
+                if empties {
+                    destroyed.extend(crate::backend::allocate::RFP);
+                }
+                calls.push((slot, destroyed, roots(&one.clobbers_high), read));
             }
         }
     }
@@ -546,7 +570,7 @@ pub fn decide_with_split(
     // one-register class), and it competes like any other range: it can be
     // evicted or spilled.
     for (&reg, &phys) in inputs.pins {
-        if !greedy.lis.reg_nodbg_empty(reg) {
+        if !greedy.lis.reg_nodbg_empty(reg) && !floats.contains(&reg) {
             tables.orders.borrow_mut().insert(reg, vec![crate::model::ir::root(phys)]);
             greedy.pinned.insert(reg);
         }
@@ -609,6 +633,60 @@ mod tests {
     use crate::liveness::liverange::Segment;
     use crate::liveness::slotindex::SlotIndexes;
     use crate::model::lir::{Block, LirBlock};
+
+    /// Under `LLRM_GREEDY_RFP` an x87 value takes one of FP0..FP6 or is
+    /// spilled: nine live at once over seven registers, two at least go to
+    /// memory. A value that lived in an x87 register over an instruction that
+    /// names a stack position (the stack must be empty there) would be lost.
+    #[test]
+    fn test_x87_values_take_fp0_to_fp6_and_the_rest_spill() {
+        use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
+        let _rfp = crate::backend::allocate::RfpOn::set();
+        let float = |value: u32| Loc::Held(Held { value, width: 10 });
+        let cell = |disp: i64| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8));
+        let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
+            name: Some(name.to_owned()),
+            dests,
+            sources,
+            ..Semantics::new(op)
+        };
+        let mut insns: Vec<Arc<Insn>> = (1..=9)
+            .map(|v| {
+                let load = what(Operation::FloatLoad, "fld", vec![float(v)], vec![cell(-8 * i64::from(v))]);
+                Arc::new(Insn::new(i64::from(v), None, Some(load), vec![v], vec![]))
+            })
+            .collect();
+        let mut empties = Insn::new(20, None, None, vec![], vec![]);
+        empties.clobbers = [RegId::ST0].into_iter().collect();
+        insns.push(Arc::new(empties));
+        for v in 1..=9 {
+            let store = what(Operation::FloatStore, "fstp", vec![cell(-100 - 8 * i64::from(v))], vec![float(v)]);
+            insns.push(Arc::new(Insn::new(30 + i64::from(v), None, Some(store), vec![], vec![v])));
+        }
+        let body = LirBody::new(
+            "x87",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let order = |_: u32| vec![RegId::EAX];
+        let inputs = ShadowInputs {
+            body: &body,
+            registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+            order: &order,
+            pins: &IndexMap::default(),
+            unspillable: &BTreeSet::new(),
+            data: None,
+        };
+        let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
+        let rfp = crate::backend::allocate::RFP;
+        assert!(decided.placed.iter().all(|(_, reg)| rfp.contains(reg)), "{:?}", decided.placed);
+        // All nine live across the empty-stack point: none keeps a register
+        // (the registers placed are the reloads' and the stores' short ranges).
+        assert!(decided.placed.iter().all(|(value, _)| *value > 9), "{:?}", decided.placed);
+        assert_eq!(decided.report.stats.spilled_ranges, 9, "{:?}", decided.report.stats);
+    }
 
     /// Greedy's spill weights read `MachineBlockFrequencyInfo`
     /// (`liveness::blockfrequency`), not the old `analysis::frequency`,
