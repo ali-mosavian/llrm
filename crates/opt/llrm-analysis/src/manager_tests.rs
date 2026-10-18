@@ -12,7 +12,8 @@ use llrm_mir::target::{Machine, Neutral};
 use llrm_support::hash::IndexMap;
 
 use super::{
-    Annotated, CallEffects, DominatedEdges, GlobalsAA, Pointers, Registers, Summaries, TableLoads, ThroughMemory,
+    Annotated, CallEffects, DominatedEdges, GlobalsAA, MemorySsa, Pointers, Registers, Summaries, TableLoads,
+    ThroughMemory,
 };
 use crate::alias::{self, Procedure};
 use crate::cfg::Shape;
@@ -1536,4 +1537,33 @@ fn a_gep_that_differs_in_inbounds_is_not_read_alike_and_an_equal_one_is() {
     let (plain, bounded, again) = (value(f, "plain"), value(f, "bounded"), value(f, "again"));
     assert!(!super::decomposes_alike(f, plain, bounded), "an inbounds gep was read like a plain one");
     assert!(super::decomposes_alike(f, plain, again), "two equal geps were read apart");
+}
+
+/// The graph of a body is made once per body state and shared: the asks of
+/// EarlyCSE and LICM in a row made it again each (the manager had no MemorySSA
+/// analysis), and an edit that drops the analyses has it made again.
+#[test]
+fn test_the_memory_graph_is_made_once_per_body_state() {
+    let mut module = parsed(&format!("{DOS}{TWO}"));
+    let graphs = Rc::new(RefCell::new(Vec::new()));
+    let ask_graph = |graphs: &Rc<RefCell<Vec<_>>>| {
+        let graphs = Rc::clone(graphs);
+        step(
+            move |unit, analyses| {
+                let graph = analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function);
+                graphs.borrow_mut().push((graph, ()));
+            },
+            PreservedAnalyses::all(),
+        )
+    };
+    let mut passes = PassManager::default();
+    passes.add(ask_graph(&graphs));
+    passes.add(ask_graph(&graphs));
+    passes.add(redirect(PreservedAnalyses::none()));
+    passes.add(ask_graph(&graphs));
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    let graphs = graphs.take();
+    let graph = |at: usize| &graphs[at].0;
+    assert!(Rc::ptr_eq(graph(0), graph(1)), "two asks of one body state made two graphs");
+    assert!(!Rc::ptr_eq(graph(1), graph(2)), "an edit left the old graph");
 }

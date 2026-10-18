@@ -211,7 +211,7 @@ pub struct Decisions {
 }
 
 fn found_changed(found: &Decisions) -> bool {
-    !found.hoisted.is_empty() || !found.sunk.is_empty() || !found.erased.is_empty()
+    !found.hoisted.is_empty() || !found.sunk.is_empty() || !found.erased.is_empty() || !found.promoted.is_empty()
 }
 
 /// Each block's innermost loop, an index in `shape.loops`.
@@ -341,7 +341,14 @@ pub fn run(
             .with_shape(&shape);
         std::rc::Rc::new(llrm_analysis::memory::exposed_frames(&memory).into_iter().collect())
     };
-    let mut graph: Option<(Mssa, std::rc::Rc<Accesses>)> = None;
+    let calls = llrm_analysis::manager::writes(unit.context, unit.layout, unit.function, analyses);
+    // The manager's graph of this body state, cloned: the edits below update
+    // the clone, and the manager drops its own with the pass's change.
+    let mut graph: Option<(Mssa, std::rc::Rc<Accesses>)> =
+        match &*analyses.get::<llrm_analysis::manager::MemorySsa>(unit.context, unit.layout, unit.function) {
+            Ok(held) => Some((held.mssa.clone(), std::rc::Rc::clone(&held.accesses))),
+            Err(_) => None,
+        };
     // One look at the function as it stands: the loop's context, the graph
     // (made again if the last edit left it stale), and what `body` decides.
     macro_rules! looking {
@@ -351,7 +358,7 @@ pub fn run(
                 .with_registers(&registers)
                 .with_shape(&shape);
             if graph.is_none() {
-                let (built, made) = llrm_analysis::mssa::shadow::translated(&memory);
+                let (built, made) = llrm_analysis::mssa::shadow::translated_with(&memory, &calls);
                 graph = Some((built, std::rc::Rc::new(made)));
                 decisions.rebuilds += 1;
                 decisions.rebuilt_instructions += $view.function.walk().count();
