@@ -372,3 +372,17 @@ b0:
     assert!(Rc::ptr_eq(&before.1, &memo.per[&h].1), "an unedited body's contribution was worked out again");
     assert!(!Rc::ptr_eq(&before.0, &memo.per[&f].1), "an edited body's contribution was kept");
 }
+
+/// A private global's address given to `llrm.ia16.window` came back as a
+/// pointer no fact follows, and the call counted as keeping the address: the
+/// global was forgotten at a fresh run but held by the analysis frozen before
+/// `window` ran (`LLRM_CHECK_STALE` stopped `window` on far_near.nib and
+/// huge.nib). The window is the same bytes, and keeps none: @g stays private,
+/// and a store through the window is still a store to @g.
+#[test]
+fn the_window_of_a_private_global_keeps_it_private_and_is_it() {
+    let globals = format!("{PRIVATE}declare ptr @llrm.ia16.window.p0.p0(ptr)\n");
+    let window = "%w = call ptr @llrm.ia16.window.p0.p0(ptr @g)";
+    assert_eq!(kept(&globals, &format!("{window}\n  call void @outside(ptr null)")), seven());
+    assert_ne!(kept(&globals, &format!("{window}\n  store i16 9, ptr %w\n  call void @outside(ptr null)")), seven());
+}

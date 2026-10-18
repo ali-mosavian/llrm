@@ -56,7 +56,7 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::backend::allocate::live;
+use crate::backend::allocate::{LiveAt, live_rows};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::regclass;
 use crate::backend::storedhomes::may_write;
@@ -140,7 +140,9 @@ pub fn sunk(
     let class_of = |value: u32, wide: bool| {
         if wide { Class::Stack } else { confined.get(&value).map_or(Class::Any, |set| Class::Within(set.clone())) }
     };
-    let (_, live_out) = live(body);
+    // Rows of bits, asked by membership: a set of values for every block is
+    // blocks times values, and the walk asks for a few.
+    let live_out = live_rows(body);
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
     let mut defined: IndexMap<u32, usize> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
@@ -165,7 +167,7 @@ pub fn sunk(
             // From the last: a load moved down lands past the positions already
             // looked at, so each is looked at once.
             for position in (0..insns.len()).rev() {
-                let Some(target) = _reader(&insns, position, body, &live_out[&block.at], &defined, &class_of, &stack)
+                let Some(target) = _reader(&insns, position, body, block.at, &live_out, &defined, &class_of, &stack)
                 else {
                     continue;
                 };
@@ -189,14 +191,15 @@ fn _reader(
     insns: &[Arc<Insn>],
     at: usize,
     body: &LirBody,
-    live_out: &llrm_mir::dense::IdSet<u32>,
+    block: i64,
+    live: &impl LiveAt,
     defined: &IndexMap<u32, usize>,
     class_of: &dyn Fn(u32, bool) -> Class,
     stack: &dyn Fn(u32) -> bool,
 ) -> Option<usize> {
     let regs = body.regs();
     let (value, cell) = plain_load(&insns[at])?;
-    if defined.get(&value) != Some(&1) || live_out.contains(&value) {
+    if defined.get(&value) != Some(&1) || live.live_out(block, value) {
         return None;
     }
     let mut readers = insns.iter().enumerate().skip(at + 1).filter(|(_, one)| one.uses.contains(&value));
@@ -229,7 +232,9 @@ fn _reader(
     let dying: Vec<u32> = addresses
         .iter()
         .copied()
-        .filter(|operand| !live_out.contains(operand) && !insns[reader..].iter().any(|one| one.uses.contains(operand)))
+        .filter(|operand| {
+            !live.live_out(block, *operand) && !insns[reader..].iter().any(|one| one.uses.contains(operand))
+        })
         .collect();
     let mut sets: Vec<Class> = vec![Class::Any, Class::Stack];
     for value in dying.iter().copied().chain([value]) {

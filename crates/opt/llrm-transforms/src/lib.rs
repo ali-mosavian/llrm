@@ -118,6 +118,9 @@ pub mod inferspace;
 #[cfg(test)]
 mod inferspace_tests;
 pub mod inline;
+pub mod inlinecost;
+#[cfg(test)]
+mod inlinecost_tests;
 pub mod interprocedural;
 pub mod ipacp;
 pub mod jumpthread;
@@ -136,6 +139,7 @@ pub mod loopsimplify;
 pub mod loopsplit;
 pub mod loopversion;
 pub mod lsr;
+pub mod mem2reg;
 pub mod memcpyopt;
 pub mod mirror;
 pub mod narrowspace;

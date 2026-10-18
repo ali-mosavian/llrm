@@ -1,5 +1,7 @@
 """Rows series: llrm at a base commit against llrm at another, per level, against min(gcc, clang). ROWS_WORK holds base/ and main/ (run.sh), df-*.json, qcport.json."""
-import json,math,os
+import json,math,os,sys
+sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))
+import rowcheck
 W=os.environ.get('ROWS_WORK',os.path.expanduser('~/scratch/rows'))+'/'
 def load(n):
     P={}
@@ -8,10 +10,14 @@ def load(n):
             r=json.loads(l); P.setdefault(r['prog'],{})[r['variant']]=r
     return P
 base,main=load('base'),load('main')
+flat=lambda P:{f"{p}/{v}":r for p,vs in P.items() for v,r in vs.items()}
+line,bad=rowcheck.census({'base':flat(base),'main':flat(main)})
+# Printed first; a failed or missing row stops the table unless --allow-failed.
+head=rowcheck.require(line,bad,'--allow-failed' in sys.argv)+[rowcheck.compiler_premise(W+n) for n in ('base','main')]
 LV=('O1','O2','O3','Os'); L=lambda l:'llrm' if l=='O2' else 'llrm'+l
 def ref(P,p,l,k): return max(1,min(P[p]['gcc'+l][k],P[p]['clang'+l][k]))
 def gm(xs): return math.exp(sum(math.log(x) for x in xs)/len(xs))
-out=[]
+out=list(head)
 for k,name in (('clocks','clocks'),('code','code bytes')):
     out.append(f"\n{name}: llrm / min(gcc, clang) per row, 71 programs\n")
     out.append("| level | geomean base | geomean main | worst base | worst main | rows >1.00 base | main |")

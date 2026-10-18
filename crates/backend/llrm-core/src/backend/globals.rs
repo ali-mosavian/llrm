@@ -325,7 +325,8 @@ pub fn absolute(
 ) -> Option<i64> {
     let context = &module.context;
     match &context.get(id).kind {
-        ConstantKind::Null | ConstantKind::Zero => Some(0),
+        // Poison is any address: null.
+        ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison => Some(0),
         ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => match context.get(*value).kind {
             ConstantKind::Int(bits) => {
                 Some(llrm_mir::context::signed(bits, context.types.int_bits(context.get(*value).ty)?) as i64)

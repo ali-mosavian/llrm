@@ -161,12 +161,13 @@ fn _decided(
     if threaded {
         analyses.invalidate(function, &PreservedAnalyses::none());
     }
-    let held = Held::of(context, layout, function, analyses, true).with_bounded(context, layout, function, analyses);
     // What the values say, as LLVM's SimplifyCFG decides a branch: a number
     // memory gave is `fold`'s to put in the condition first. Solving memory
     // here decided none of 574 branches at d_faces -O2 and was a quarter of
     // the pass.
     let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
+    let held =
+        Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
     let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), &registers)?;
     if decisions.is_empty() {
         return Ok(threaded);
