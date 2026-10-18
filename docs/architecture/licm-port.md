@@ -1,3 +1,7 @@
+---
+architecture-index: LICM as a translation of LLVM's
+architecture-order: 220
+---
 # LICM as a translation of LLVM's: the plan
 
 TL;DR: `LICM.cpp` (2,897 lines at `d1106deb71cc`) is translated whole, including `promoteLoopAccessesToScalars`, on the translated MemorySSA ([plan](memoryssa-port.md), stage 1 [#2116](https://github.com/ali-mosavian/llrm/pull/2116)); it replaces `hoist.rs` and `loopmotion.rs` and gives the loop-carried global cells back to registers, which real `SROA` and `mem2reg` do not promote and the old leaf `Sroa` plus write-through `Promote` did. Without it three -O3 rows lose (`x_nbody_f`, `fpbench`, `nbody_single`: executed instructions up to 1.19x). Shadow first: decisions only, on the dumped pass inputs, against `opt -passes=licm` counts.
