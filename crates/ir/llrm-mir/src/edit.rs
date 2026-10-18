@@ -896,6 +896,21 @@ impl Function {
         self.instructions[inst.0 as usize].metadata.push((kind.to_owned(), node));
     }
 
+    /// `Instruction::setMetadata`: `inst` has `node` as its metadata of `kind`
+    /// alone, or none of that kind where `node` is `None`.
+    pub fn set_metadata(
+        &mut self,
+        inst: InstId,
+        kind: &str,
+        node: Option<MetadataId>,
+    ) {
+        let metadata = &mut self.instructions[inst.0 as usize].metadata;
+        metadata.retain(|(one, _)| one != kind);
+        if let Some(node) = node {
+            metadata.push((kind.to_owned(), node));
+        }
+    }
+
     /// Every metadata node the function names (on an instruction, or in a debug
     /// record) is the one `map` says it is: nodes made last are numbered
     /// last, and the code that named them before they were made named them by a

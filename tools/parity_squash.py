@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """The one way to squash a pull request into feat/parity: a bare `gh pr merge` merged stale heads that reverted other PRs' work (#2329 reverted decide's LVI step).
 
-    tools/parity_squash.py merge PR      refuse, or run the fast set on this checkout's head (it must be the PR's) and `gh pr merge --squash`
+    [PARITY_BIN=DIR] tools/parity_squash.py merge PR [--known-red STEP=ISSUE]...   refuse, or run the fast set on this checkout's head (it must be the PR's) and `gh pr merge --squash`
     tools/parity_squash.py audit [SINCE] every squash on origin/feat/parity since SINCE (default 96468410e): what it deleted outside its own PR's files
 
 Refused unless: the PR head contains the current origin/feat/parity; the squash diff deletes no test function (`#[test] fn`, `def test_`) and no more than
 LIMIT lines in files its own non-merge commits did not touch, or the description has a `Reverts:` line; parity_smoke passes on that exact head.
+PARITY_BIN names the directory of the built release llrm-c, llrm-qb and llrm-nib (parity_smoke needs them); unset, it is the repo target dir's release
+(LLRM_BIN / CARGO_TARGET_DIR as tools/llrmbin.py reads them) when all three are there.
+`--known-red sc=2438` skips ONLY that smoke step (named, with its issue), still runs every other check, and puts one line in the squash's body:
+`Known red: sc (#2438)`.
 """
 from __future__ import annotations
 
@@ -83,7 +87,43 @@ def audit(since: str, cwd: Path = ROOT) -> list[tuple[str, str, str]]:
     return rows
 
 
-def merge(number: str) -> int:
+BINARIES = ("llrm-c", "llrm-qb", "llrm-nib")
+
+
+def smoke_bins(env: dict | None = None) -> str:
+    """PARITY_BIN, else the release dir llrmbin finds when the three binaries are in it; else SystemExit saying what to build."""
+    env = os.environ if env is None else env
+    if env.get("PARITY_BIN"):
+        return env["PARITY_BIN"]
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import llrmbin  # noqa: PLC0415
+
+    found = llrmbin.bin_dir(env)
+    if all((found / name).is_file() for name in BINARIES):
+        return str(found)
+    raise SystemExit(f"PARITY_BIN is unset and {found} lacks {', '.join(n for n in BINARIES if not (found / n).is_file())}: `cargo build --release --bin llrm-c --bin llrm-qb --bin llrm-nib`, or set PARITY_BIN to a directory that has them")
+
+
+SMOKE_STEPS = ("programs", "sc", "d_faces", "run")
+
+
+def parse_known_red(args: list[str]) -> dict[str, str]:
+    """`STEP=ISSUE` pairs -> {step: '#ISSUE'}; a step parity_smoke does not have, or no issue, is refused."""
+    out = {}
+    for arg in args:
+        step, _, issue = arg.partition("=")
+        if step not in SMOKE_STEPS or not issue.lstrip("#").isdigit():
+            raise SystemExit(f"--known-red {arg!r}: want STEP=ISSUE with STEP one of {', '.join(SMOKE_STEPS)} and ISSUE a number")
+        out[step] = "#" + issue.lstrip("#")
+    return out
+
+
+def known_red_line(known: dict[str, str]) -> str:
+    return "Known red: " + ", ".join(f"{step} ({issue})" for step, issue in known.items()) if known else ""
+
+
+def merge(number: str, known: dict[str, str] | None = None) -> int:
+    known = known or {}
     info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
     if info["baseRefName"] != "feat/parity":
         raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
@@ -94,21 +134,20 @@ def merge(number: str) -> int:
     if why := refusals(info["headRefOid"], info["body"] or ""):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
-    bins = os.environ.get("PARITY_BIN")
-    if not bins:
-        raise SystemExit("PARITY_BIN names the directory of the built release llrm-c, llrm-qb, llrm-nib (parity_smoke needs them)")
-    smoke = subprocess.run(["uv", "run", "-q", "--project", "tools", "python", "tools/parity_smoke.py", "--bin", bins, "--base", BASE], cwd=ROOT, capture_output=True, text=True)
+    bins = smoke_bins()
+    smoke = subprocess.run(["uv", "run", "-q", "--project", "tools", "python", "tools/parity_smoke.py", "--bin", bins, "--base", BASE, *[a for step in known for a in ("--skip", step)]], cwd=ROOT, capture_output=True, text=True)
     last = (smoke.stdout.strip().splitlines() or [""])[-1]
     print(last)
     if smoke.returncode:
         print("REFUSED: the fast set fails on this head")
         return 1
-    return subprocess.run(["gh", "pr", "merge", number, "--squash", "--subject", info["title"], "--body", ""]).returncode
+    return subprocess.run(["gh", "pr", "merge", number, "--squash", "--subject", info["title"], "--body", known_red_line(known)]).returncode
 
 
 def main() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "merge":
-        return merge(sys.argv[2])
+        rest = sys.argv[3:]
+        return merge(sys.argv[2], parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))
     if len(sys.argv) >= 2 and sys.argv[1] == "audit":
         since = sys.argv[2] if len(sys.argv) > 2 else "96468410e"
         rows = audit(since)

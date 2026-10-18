@@ -161,17 +161,15 @@
 //! # See also
 //! [`crate::cfg`], [`crate::decide`].
 
-use std::collections::BTreeSet;
-
 use llrm_analysis::occurrence::arms;
 use llrm_mir::context::{Constant, ConstantKind, Context};
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::footprint::Footprint;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
-use llrm_support::hash::{HashMap, HashSet};
 
 use crate::{cfg, dead, edges, transform};
 
@@ -259,7 +257,7 @@ fn block_simplified(
     function: &mut Function,
     block: BlockId,
     folded: &mut bool,
-    headers: &HashSet<BlockId>,
+    headers: &IdSet<BlockId>,
 ) -> bool {
     // No predecessor but not the entry, or only itself: unreachable.
     let predecessors = function.predecessors(block);
@@ -276,11 +274,11 @@ fn block_simplified(
 
 /// The back edges' targets, by one walk from the entry: LLVM's
 /// `FindFunctionBackedges`, whose targets are `LoopHeaders`.
-fn loop_headers(function: &Function) -> HashSet<BlockId> {
-    let mut headers = HashSet::default();
+fn loop_headers(function: &Function) -> IdSet<BlockId> {
+    let mut headers = IdSet::new();
     let Some(entry) = function.entry() else { return headers };
     // 0 unseen, 1 on the walk's path, 2 done.
-    let mut state: HashMap<BlockId, u8> = HashMap::default();
+    let mut state: IdMap<BlockId, u8> = IdMap::new();
     state.insert(entry, 1);
     let mut path = vec![(entry, function.successors(entry).into_iter().collect::<Vec<_>>(), 0usize)];
     while let Some((block, successors, next)) = path.last_mut() {
@@ -311,7 +309,7 @@ fn jump_simplified(
     context: &mut Context,
     function: &mut Function,
     block: BlockId,
-    loop_headers: &HashSet<BlockId>,
+    loop_headers: &IdSet<BlockId>,
 ) -> bool {
     let Some(last) = function.terminator(block) else { return false };
     let (Opcode::Br, &[Operand::Block(successor)]) =
@@ -387,7 +385,7 @@ fn empty_block_removed(
         return false;
     }
     let sources = edge_sources(function, block);
-    let predecessors: BTreeSet<BlockId> = sources.iter().copied().collect();
+    let predecessors: IdSet<BlockId> = sources.iter().copied().collect();
     let killable = predecessors_propagate(context, function, block, successor, &predecessors);
     let mut common = None;
     let mergeable = killable || redirectable(function, block, successor, &predecessors, &mut common);
@@ -412,7 +410,7 @@ fn empty_block_removed(
     let loop_node =
         function.instruction(last).metadata.iter().find(|(kind, _)| kind == "llvm.loop").map(|&(_, node)| node);
     if loop_node.is_some()
-        && predecessors.iter().any(|&one| {
+        && predecessors.iter().any(|one| {
             function
                 .terminator(one)
                 .is_some_and(|term| function.instruction(term).metadata.iter().any(|(kind, _)| kind == "llvm.loop"))
@@ -442,7 +440,7 @@ fn empty_block_removed(
             function.erase(phi).expect("no use of an emptied phi is left");
         }
         if let Some(node) = loop_node {
-            for &one in &predecessors {
+            for one in predecessors.iter() {
                 let term = function.terminator(one).expect("a predecessor's terminator");
                 function.annotate(term, "llvm.loop", node);
             }
@@ -476,7 +474,7 @@ fn predecessors_propagate(
     function: &Function,
     block: BlockId,
     successor: BlockId,
-    predecessors: &BTreeSet<BlockId>,
+    predecessors: &IdSet<BlockId>,
 ) -> bool {
     if function.predecessors(successor).len() == 1 {
         return true;
@@ -509,7 +507,7 @@ fn redirectable(
     function: &Function,
     block: BlockId,
     successor: BlockId,
-    predecessors: &BTreeSet<BlockId>,
+    predecessors: &IdSet<BlockId>,
     common: &mut Option<BlockId>,
 ) -> bool {
     if edges::phis(function, block).is_empty()
@@ -563,7 +561,7 @@ fn values_redirected(
     let at = operands.chunks(2).position(|pair| pair[1] == Operand::Block(block)).expect("the entry");
     operands.drain(2 * at..2 * at + 2);
 
-    let mut known: HashMap<BlockId, Option<Operand>> = sources.iter().map(|&one| (one, None)).collect();
+    let mut known: IdMap<BlockId, Option<Operand>> = sources.iter().map(|&one| (one, None)).collect();
     for pair in operands.chunks(2) {
         if let (value, Operand::Block(from)) = (pair[0], pair[1])
             && !is_poison(context, value)
@@ -624,7 +622,7 @@ pub fn unreachable_removed(
     folded: &mut bool,
 ) -> bool {
     let Some(entry) = function.entry() else { return false };
-    let mut reached = llrm_support::hash::HashSet::default();
+    let mut reached = IdSet::new();
     reached.insert(entry);
     let (mut pending, mut changed) = (vec![entry], false);
     while let Some(block) = pending.pop() {

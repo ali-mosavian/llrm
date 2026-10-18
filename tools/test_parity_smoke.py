@@ -103,3 +103,11 @@ def test_the_smoke_names_no_target_so_the_prepush_facts_check_stays_green():
     import re
 
     assert not re.search(r"llrm-x86-m\d+|x86_m\d+", Path(ps.__file__).read_text())
+
+
+def test_a_known_red_step_is_the_only_one_skipped():
+    """scev-port's scope.rs:227 panic made `sc` red for every landing; the flag skips that step and no other (#2438)."""
+    ran = []
+    steps = [(name, lambda _b, name=name: (ran.append(name), ("ok", name))[1], 1.0) for name in ("programs", "sc", "d_faces")]
+    ok, line = ps.run_steps(steps, Path("."), clock=lambda: 0.0, known_red=frozenset({"sc"}))
+    assert ran == ["programs", "d_faces"] and ok and "sc skipped" in line and "sc: known red, not run" in line
