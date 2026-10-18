@@ -651,6 +651,24 @@ impl<'a> Loop<'a> {
         function.parent(inst).is_some_and(|block| self.contains(block))
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopInfo.cpp#L67
+    /// `isLoopInvariant(const Value *)`: an instruction outside the loop, or
+    /// anything that is not an instruction.
+    pub fn is_loop_invariant(
+        &self,
+        function: &Function,
+        value: crate::module::Operand,
+    ) -> bool {
+        use crate::module::{Operand, ValueDef};
+        match value {
+            Operand::Value(value) => match function.value(value).def {
+                ValueDef::Instruction(inst) => !self.contains_instruction(function, inst),
+                ValueDef::Argument(_) => true,
+            },
+            _ => true,
+        }
+    }
+
     /// `isLoopExiting`.
     pub fn is_loop_exiting(
         &self,
