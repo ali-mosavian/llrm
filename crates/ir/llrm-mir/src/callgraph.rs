@@ -439,6 +439,7 @@ pub fn direct_only(module: &Module) -> BTreeSet<GlobalId> {
             !function.is_declaration()
                 && matches!(global.linkage, Linkage::Internal | Linkage::Private)
                 && function.calling_convention != crate::opcode::X86_INTR
+                && !crate::facts::opaque(function)
                 && !named.contains(id)
         })
         .map(|(id, _, _)| id)

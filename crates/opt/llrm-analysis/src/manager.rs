@@ -116,6 +116,25 @@
 //! in
 //! `manager_tests.rs`.
 //!
+//! # Order check
+//! A result a pass reads is a function of the body, not of when something first
+//! asked for it (#1909: a `ThroughMemory` asked early and kept past sound edits
+//! made `fold` weaker, 18 KB of asm against 34 KB). `LLRM_CHECK_ORDER=SEED`
+//! asks some analyses early at each body pass's entry, which ones by the seed,
+//! and the object must be the lazy compile's. `tests/analysis_order.rs` runs it
+//! on matmul. The wide sweep is a command, not a gate; run it before a release
+//! and when an analysis starts to be kept:
+//!
+//! ```text
+//! for s in 1 2 3 4 5 6 7 8; do
+//!   LLRM_CHECK_ORDER=$s tools/identical.py target/release/llrm-c target/release/llrm-c
+//! done
+//! ```
+//!
+//! `tools/identical.py` keeps a `LLRM_CHECK_*` value already set; the bench
+//! BASIC and Nib programs under the harness flags are compiled the same way
+//! with and without the seed.
+//!
 //! # Provides
 //! The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
 //! `CallEffects`, `Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
@@ -554,7 +573,10 @@ struct Slots {
 
 /// `module`'s defined functions, each with its id.
 fn bodies(module: &Module) -> impl Iterator<Item = (GlobalId, &Function)> {
-    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, function)| (id, function))
+    module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration() && !llrm_mir::facts::opaque(function))
+        .map(|(id, _, function)| (id, function))
 }
 
 /// What a body gives `Summaries` that is of the body, the declarations and (for
@@ -1065,7 +1087,7 @@ impl Analysis for ExposedFrames {
     const SKIPS: bool = true;
     const INCREMENTAL: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: allocas_only, flows: Some(stops_at) })
+        Some(Depends { models: models_scalars, keyed: allocas_only, flows: Some(stops_at), edges: false })
     }
     fn run(
         context: &Context,
@@ -1140,7 +1162,7 @@ impl Analysis for PointerValues {
     const NAME: &'static str = "pointer-values";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
+        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at), edges: false })
     }
     fn run(
         context: &Context,
@@ -1161,7 +1183,7 @@ impl Analysis for Pointers {
     const NAME: &'static str = "points-to";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
+        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at), edges: true })
     }
     fn run(
         context: &Context,
@@ -1247,14 +1269,14 @@ impl Analysis for CallEffects {
         function: &Function,
     ) -> bool {
         match (old, fresh) {
-            (Ok(old), Ok(fresh)) => {
-                old.iter().all(|(inst, effect)| function.is_erased(*inst) || fresh.get(inst) == Some(effect))
-            }
+            (Ok(old), Ok(fresh)) => old.iter().all(|(inst, effect)| {
+                function.is_erased(*inst) || fresh.get(inst).is_some_and(|found| effect.covers(found))
+            }),
             (old, fresh) => old == fresh,
         }
     }
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
     }
     /// Each effect with the values it names followed through the substitution:
     /// the same bytes by the value that replaced one found equal.
@@ -1639,7 +1661,7 @@ impl Analysis for Writes {
     const NAME: &'static str = "writes";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
     }
     fn run(
         context: &Context,
@@ -2094,6 +2116,24 @@ impl Held {
         }
     }
 
+    /// `of` without the memory annotations and points-to (`PointerValues`,
+    /// `Annotated`): the loop facts and what is known without memory, for a
+    /// pass that decides from the values.
+    pub fn of_without_memory(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self {
+        Self {
+            values: None,
+            annotated: None,
+            counted: Some(analyses.get::<Counted>(context, layout, function)),
+            followers: Some(analyses.get::<Followers>(context, layout, function)),
+            ..Self::of(context, layout, function, analyses, false)
+        }
+    }
+
     /// Also what the counted loops bound: for a pass that asks it, so that it
     /// is the manager's, kept and brought up to date, and not a solve of
     /// the pass's own.
@@ -2143,3 +2183,78 @@ impl Held {
 #[cfg(test)]
 #[path = "manager_tests.rs"]
 mod tests;
+
+/// `LLRM_CHECK_ORDER`: some function analyses asked of `function`, each when
+/// a hash of `mix` and its number falls on one in eight. A result a pass reads
+/// must be a function of the body, not of when something first asked; asked
+/// early and left to be kept past the edits after it, an analysis shows it.
+pub fn ask_some(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    analyses: &mut Analyses,
+    mix: u64,
+) {
+    let mut number = 0u64;
+    let mut chosen = || {
+        number += 1;
+        (mix.wrapping_add(number).wrapping_mul(0xD6E8_FEB8_6659_FD93) >> 40) % 8 == 0
+    };
+    if chosen() {
+        analyses.get::<Shape>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<ExposedFrames>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<PointerValues>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Pointers>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Annotated>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<CallEffects>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Writes>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Registers>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<DemandedBits>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<AssumptionCache>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Followers>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Counted>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<PlainAccesses>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<ThroughMemory>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<FloatFacts>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<DominatedEdges>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Bounded>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<TableLoads>(context, layout, function);
+    }
+    if chosen() {
+        let _ = memoryssa::Accesses::managed(context, layout, function, analyses);
+    }
+}

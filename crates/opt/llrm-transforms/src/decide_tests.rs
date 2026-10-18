@@ -354,6 +354,25 @@ fn decide_solves_no_memory() {
     assert!(analyses.cached::<llrm_analysis::manager::ThroughMemory>().is_none(), "decide solved memory for the body");
 }
 
+/// The facts decide asked of the manager beside the values were the memory
+/// annotations and points-to of the whole body (26.0 M of d_faces -O2); across
+/// the corpus (1,580 compiles, 33,932 runs, 3,002 decisions) a decision made
+/// without them is the same decision, none lost, none new.
+#[test]
+fn decide_asks_no_memory_annotations_or_points_to() {
+    let text = ACROSS_READONLY_CALL.replace(
+        "  ret i16 %v\n",
+        "  %c = icmp eq i16 %v, 7\n  br i1 %c, label %b1, label %b2\n\nb1:\n  ret i16 1\n\nb2:\n  ret i16 2\n",
+    );
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
+    super::_decided(context, &layout, function, &mut analyses).expect("decides");
+    assert!(analyses.cached::<llrm_analysis::manager::PointerValues>().is_none(), "decide solved points-to");
+    assert!(analyses.cached::<llrm_analysis::manager::Annotated>().is_none(), "decide annotated the body's memory");
+}
+
 /// Whether @f still has a block named `name`.
 fn has(
     module: &Module,

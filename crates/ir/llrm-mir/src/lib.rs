@@ -6,6 +6,8 @@ pub mod alias;
 pub mod blocklist;
 pub mod build;
 pub mod callgraph;
+pub mod constantrange;
+pub mod constfold;
 pub mod context;
 pub mod counts;
 pub mod datalayout;
@@ -22,11 +24,13 @@ mod facts_rewrite;
 pub mod footprint;
 pub mod forest;
 pub mod hash;
+pub mod inline;
 pub mod interpret;
 pub mod intrinsics;
+pub mod knownbits;
 pub mod lexer;
 pub mod lint;
-pub mod loops;
+pub mod loopinfo;
 pub mod memory;
 pub mod module;
 pub mod opcode;
@@ -35,6 +39,7 @@ pub mod passes;
 pub mod print;
 pub mod program;
 pub mod scalarevolution;
+pub mod simplify;
 pub mod spaces;
 pub mod splice;
 pub mod target;
@@ -63,6 +68,8 @@ mod edit_tests;
 mod interpret_tests;
 #[cfg(test)]
 mod lint_tests;
+#[cfg(test)]
+mod loopinfo_tests;
 #[cfg(test)]
 mod pass_tests;
 #[cfg(test)]
