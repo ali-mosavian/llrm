@@ -185,9 +185,20 @@ impl Function {
         if self.values[value.0 as usize].name.is_some() {
             return;
         }
-        let held = &mut self.registry().held;
-        let version = (1..).map(|n| format!("{name}.{n}")).find(|candidate| !held.contains_key(candidate));
-        let version = version.expect("some version is free");
+        let Names { held, taken_below } = self.registry();
+        // Shares `unique_name`'s memo: `x.1` .. below it are taken, the way
+        // LLVM's per-alloca counter remembers the next version.
+        let key = format!("{name}.");
+        let from = taken_below.get(&key).copied().unwrap_or(1);
+        let free = (from..)
+            .find(|n| {
+                #[cfg(test)]
+                NAMES_LOOKED_AT.with(|one| one.set(one.get() + 1));
+                !held.contains_key(&format!("{name}.{n}"))
+            })
+            .expect("some version is free");
+        taken_below.insert(key, free + 1);
+        let version = format!("{name}.{free}");
         *held.entry(version.clone()).or_default() += 1;
         self.values[value.0 as usize].name = Some(version);
     }
