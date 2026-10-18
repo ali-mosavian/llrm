@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopidioms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopidioms.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:ffca51f899467bd35ce9e28b73362ecbcd2677ce8ef0e6cf3b924bdc47a7e9d2 -->
+<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:dece3e699d500dcf0af64ed9d0844cbb96d93f65841c8f40b676e04934d29c4e -->
 
 # loopidioms
 
@@ -65,9 +65,8 @@ at least two non-volatile stores of one repeated byte to adjacent bytes of
 one object (no other memory access between them) is one memset placed where
 the last stood, if profitable (LLVM's `isProfitableToUseMemset`: four stores
 or 16 bytes, or fewer only where the memset needs fewer widest-integer
-stores). A run of adjacent constants that are not one byte repeated becomes
-stores of the widest legal integer, when that is no more code bytes (a value
-stored more than once lives in a register, which is cheaper). `Merge` runs
+stores). The other stores, of constants and of loaded values, to adjacent
+cells are wider ones (`mergestores`). `Merge` runs
 after the scalar passes have settled: no pass asks a memset what a cell
 holds, so merging sooner would lose a store's value to the forwarding after
 it.
