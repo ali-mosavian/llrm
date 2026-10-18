@@ -122,6 +122,23 @@ use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
 use llrm_mir::types::Type;
 
+/// What the motion of a value to a preheader leaves while the pass goes on: the
+/// blocks, the values and the facts about them. The edges the intervals stand
+/// on follow where a value is defined, and the pressure and the intervals are
+/// made of them, so those are let go (`LLRM_CHECK_REPLAY`,
+/// `LLRM_CHECK_UNREPORTED`).
+fn kept_when_a_value_moves() -> PreservedAnalyses {
+    use llrm_analysis::manager::{Annotated, AssumptionCache, Counted, ExposedFrames, Registers};
+    PreservedAnalyses::none()
+        .preserve::<ExposedFrames>()
+        .preserve::<Annotated>()
+        .preserve::<Dominators>()
+        .preserve::<Loops>()
+        .preserve::<Registers>()
+        .preserve::<AssumptionCache>()
+        .preserve::<Counted>()
+}
+
 use crate::profit::{self, OperationCosts};
 
 /// `size`: price a run in bytes, every block once (-Os), not in executed work.
@@ -210,12 +227,7 @@ pub fn hoisted(
         // stands (`LLRM_CHECK_REPLAY`, `LLRM_CHECK_UNREPORTED`).
         let mut bounds = || {
             if moved && !asked_after_moving {
-                analyses.invalidate(
-                    unit.function,
-                    &PreservedAnalyses::all()
-                        .except::<llrm_analysis::manager::DominatedEdges>()
-                        .except::<llrm_analysis::manager::Bounded>(),
-                );
+                analyses.invalidate(unit.function, &kept_when_a_value_moves());
             }
             asked_after_moving = moved;
             analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function)
@@ -275,7 +287,7 @@ fn _affordable(
     // The cache holds the pressure of the function before the motions this pass
     // has made, which are not told to it until it is let go.
     if moved_before && room.priced() {
-        analyses.invalidate(unit.function, &PreservedAnalyses::all().except::<crate::spill::Pressure>());
+        analyses.invalidate(unit.function, &kept_when_a_value_moves());
     }
     let base =
         (room.priced()).then(|| analyses.get::<crate::spill::Pressure>(unit.context, unit.layout, unit.function));

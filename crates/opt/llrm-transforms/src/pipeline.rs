@@ -1094,8 +1094,7 @@ impl Fixed {
             declared: &mut declared,
         };
         for pass in &mut self.passes {
-            let before = copy.function.mark();
-            let preserved = pass.run(&mut copy, &mut analyses.fresh()).unless_unchanged(copy.function, before);
+            let preserved = pass.run(&mut copy, &mut analyses.fresh());
             if !preserved.are_all_preserved() {
                 eprintln!("LLRM_CHECK_ROUNDS: round {} would change the body with {}", rounds + 1, pass.name());
                 return;
@@ -1325,12 +1324,10 @@ impl Run {
         }
         self.steps += 1;
         self.input(name, unit, analyses);
-        let before = unit.function.mark();
         let outside = llrm_mir::passes::read::swap(0);
         let billed = self.billing.then(|| (llrm_support::debug::work(), llrm_support::debug::analysed_work()));
         let running = llrm_mir::counts::pass_run_over(pass.name(), unit.function);
-        let preserved =
-            llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
+        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses));
         drop(running);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
@@ -1385,7 +1382,6 @@ impl Run {
         let mut context = unit.context.clone();
         let mut function = unit.function.clone();
         let mut declared = unit.declared.clone();
-        let before = function.mark();
         let mut copy = Unit {
             context: &mut context,
             layout: unit.layout,
@@ -1394,7 +1390,7 @@ impl Run {
             metadata: unit.metadata,
             declared: &mut declared,
         };
-        let preserved = pass.run(&mut copy, &mut analyses.fresh()).unless_unchanged(copy.function, before);
+        let preserved = pass.run(&mut copy, &mut analyses.fresh());
         assert!(preserved.are_all_preserved(), "{} was skipped and would have changed the body", pass.name());
     }
 
