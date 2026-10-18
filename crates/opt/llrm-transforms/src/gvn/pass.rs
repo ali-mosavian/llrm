@@ -7,7 +7,7 @@
 //! them a load is numbered and entered as a leader, as LLVM does when
 //! `processLoad` finds nothing.
 //!
-//! DEVIATE 1, the analyses: `DomTree` is rebuilt after a pass of CFG
+//! DEVIATE 1, the analyses: `DominatorTree` is rebuilt after a pass of CFG
 //! edits (`MergeBlockIntoPredecessor`, a split critical edge); LLVM keeps it
 //! with `DomTreeUpdater`. `LoopInfo`, `MemorySSAUpdater` and
 //! `ImplicitControlFlowTracking` are not kept: nothing in this part reads

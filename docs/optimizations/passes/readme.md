@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 79 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 83 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -16,6 +16,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | candidate | Trying a rewrite on a copy of the body: the copy is cleaned by the pipeline's own passes and replaces the body only if it is better. | `adopted`, `priced`, `priced_at`, `frequencies`, `Pricing`, `Gain`, | [candidate](candidate.md) |
 | canonical | Canonical forms, as LLVM's InstCombine puts them: compares with the constant on the right, no neutral terms, and a zero test at the width of what it tests, so that every later pass matches one shape of each. | Not a step of the fixed point on its own: `fold` runs `compares` and | [canonical](canonical.md) |
 | cfg | Control-flow cleanup: a block that jumps unconditionally to a block only it reaches takes that block's instructions (LLVM's SimplifyCFG `MergeBlockIntoPredecessor`). | A library function, called by `decide` after it decides branches and by | [cfg](cfg.md) |
+| constraintelim | `constraint-elimination`: conditions the dominating branches, assumes and memory accesses already decide become constants, by Fourier-Motzkin elimination on a system of linear constraints over the values compared. | Nothing yet: `difference` and `guards::Given::holds` move here. | [constraintelim](constraintelim.md) |
 | counting | What a counted-loop rewrite places before the loop: its seeds, skip test and exit values (LLVM's SCEVExpander, as IndVarSimplify and LoopRotate use it). | [`crate::loopidioms`](loopidioms.md), [`crate::loopexit`](loopexit.md), [`crate::window`](window.md) and | [counting](counting.md) |
 | dead | Instructions nothing needs, removed: LLVM's ADCE and DCE. | Once per pass of the function fixed point, after `algebraic`, and again | [dead](dead.md) |
 | deadargs | Dead argument elimination (LLVM's DeadArgumentElimination): a parameter nothing reads goes, and with it the argument at every call. | In the interprocedural step, after the callers' arguments have been | [deadargs](deadargs.md) |
@@ -34,7 +35,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | globaldce | Delete the module's own bodies and variables that nothing live names. | Once, as a program pass after the interprocedural step, so the bodies that | [globaldce](globaldce.md) |
 | globalopt | Mark internal globals that are only ever loaded from as `constant`, and drop the stores of those only ever stored to. | Once, as a module pass before the per-body pipeline and before the | [globalopt](globalopt.md) |
 | gvn | Reuses a value the function already has, so the same operation is not computed twice and the same bytes are not read again: LLVM's GVN and gcc's FRE/PRE. | `EqualCalls` runs early in the body pipeline, before `tailrec`; `Gvn` after | [gvn](gvn.md) |
-| hoist | Moves work whose operands do not change in a loop, and loads nothing in it writes, to before the loop, so it runs once and not every trip: LLVM's LICM hoisting and gcc's `-fmove-loop-invariants`. | Early, after `floatloop` and before `loopmotion`; and again after | [hoist](hoist.md) |
+| hoist | Moves work whose operands do not change in a loop, and loads nothing in it writes, to before the loop, so it runs once and not every trip: LLVM's LICM hoisting and gcc's `-fmove-loop-invariants`. | In `llvm_order`, first without speculation (only what the loop certainly | [hoist](hoist.md) |
 | homes | Marks each phi whose value also sits in a memory cell with `!llrm.home`, naming a store of that cell, so a spill of the phi reads the cell instead of paying for a slot. | Last in the module pipeline, after `spares`, so the instruction ids it names | [homes](homes.md) |
 | indvars | Settles what a loop's counters are worth: a counter's value after its loop becomes a number, and a narrow counter read as a wider index becomes a counter of that width. | In the body pipeline after `promote`, with `exit_values: false`. With | [indvars](indvars.md) |
 | inferspace | Replaces a far pointer made from a near one by the near one where its users allow it, so an access needs no segment register loaded and held for it. | In every body's pipeline before `gvn`, so a far pointer cast from a near one | [inferspace](inferspace.md) |

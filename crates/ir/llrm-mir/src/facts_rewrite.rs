@@ -210,7 +210,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 22] = [
+        const CHECKED: [&str; 24] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -243,6 +243,13 @@ mod tests {
             // LLVM does.
             "local.rs",
             "pass.rs",
+            // LazyValueInfo.cpp's `binaryOp(BO)`, `Trunc->getNoWrapKind()`,
+            // `m_NUWMul` and `m_AddLike`, and `stripInBoundsOffsets`, read
+            // them where LLVM does.
+            "lazyvalueinfo.rs",
+            // ConstraintElimination.cpp reads nuw/inbounds/nsw where LLVM
+            // does (`decompose`, `getFlagsFor...`).
+            "constraintelim.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

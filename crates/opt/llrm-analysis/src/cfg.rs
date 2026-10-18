@@ -613,9 +613,7 @@ pub fn _unreachable(
             function.erase(inst).expect("its uses were replaced");
         }
     }
-    for &one in &dead {
-        function.erase_block(one).expect("an emptied block nothing names");
-    }
+    function.erase_blocks(&dead).expect("emptied blocks nothing names");
     changed || !dead.is_empty()
 }
 
