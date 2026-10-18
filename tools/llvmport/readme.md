@@ -9,3 +9,5 @@ Each `*_dump.cpp` runs the LLVM operations over every input of small widths (and
 
 They build against `$LLVM_BUILD` and `$LLVM_SRC` (checkouts at `d1106deb71cc`; the scripts say what they default to).
 Regenerate a golden file only with that build; the Rust side and the C++ side must list operations in the same order.
+
+`constfold_dump.sh FILE.ll` prints what `ConstantFoldInstruction` makes of each instruction whose operands are all constants; `cfcompare.py PATH...` runs it beside `cargo run --release -p llrm-mir --example cfdump` and names every line that differs (`--write-expected` writes the `tests/cf/fold/NAME.expected` and `.deviates` that `constantfolding_tests` reads).
