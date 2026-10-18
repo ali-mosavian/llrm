@@ -120,6 +120,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("sroa@776", Simplify, "sroa", Old, "sroa.rs"),
     entry("inferspace@787", Simplify, "infer-address-spaces (target)", Old, ""),
     entry("gvn@787", Simplify, "gvn", Old, "gvn-port"),
+    entry("sccp@792", Simplify, "sccp", Missing, ""),
+    entry("bdce@797", Simplify, "bdce", Translated, ""),
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@801", Simplify, "adce", Old, "adce-port"),
     entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
@@ -138,7 +140,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
     entry("loop-rotate@728", Simplify, "loop-rotate<header-duplication>", Missing, ""),
-    entry("sccp-bdce", Simplify, "sccp, bdce", Missing, ""),
     entry("dfa-jump-threading", Simplify, "dfa-jump-threading", Missing, ""),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
 ];

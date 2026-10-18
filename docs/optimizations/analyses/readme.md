@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 42 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 43 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|

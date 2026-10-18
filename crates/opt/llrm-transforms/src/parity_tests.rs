@@ -64,3 +64,16 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
     assert!(parity::TODO.iter().any(|one| one.contains("kept updated by the pass")));
     assert!(parity::TODO.iter().any(|one| one.contains("CFGAnalyses")));
 }
+
+/// LLVM runs BDCE after GVN and before the second InstCombine; the joined
+/// slot was missing from the -O2 list, so its output never reached later slots.
+#[test]
+fn test_bdce_stands_between_gvn_and_the_next_fold() {
+    let on = Applied {
+        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
+        ..Applied::default()
+    };
+    let built = names(&on, Phase::Simplify);
+    let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
+    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("fold@801"), "{built:?}");
+}

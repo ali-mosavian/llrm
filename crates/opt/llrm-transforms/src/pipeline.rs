@@ -154,10 +154,10 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fixednarrow, floatloop, fold, gepoffset,
-    globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute, loopfuse,
-    loopidioms, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt, peel,
-    phiopt, ports, promote, rotate, simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam,
+    addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fixednarrow, floatloop, fold,
+    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
+    loopfuse, loopidioms, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt,
+    peel, phiopt, ports, promote, rotate, simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam,
     unswitch, window,
 };
 
