@@ -1192,9 +1192,9 @@ fn a_numbering_dearer_in_work_than_the_crossing_one_is_not_forecast_for_spills()
 }
 
 /// Two loads of one cell are one load once the pass has run, and the two
-/// products of them one product: the scalar pass runs again over what load
-/// numbering merged. Run once, before it, the products stayed two, and a later
-/// pass saw no square (x_primes -O2 +4% clocks).
+/// products of them one product: the scalar pass runs over what load numbering
+/// merged. Run only before it, the products stayed two, and a later pass saw no
+/// square (x_primes -O2 +4% clocks).
 #[test]
 fn a_product_of_two_loads_of_one_cell_is_one_with_a_product_of_the_same() {
     let text = "define i16 @f(ptr %p) {
@@ -1217,4 +1217,59 @@ b0:
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let after = printed(&module);
     assert_eq!(after.matches("mul i16").count(), 1, "{after}");
+}
+
+/// hanoi.bas at -O2 (every BASIC front end, +2% to +4% instructions): the
+/// second load of the by-reference `%0` is the first, and so the second
+/// `sub` is the first, only if the numbering that merges the loads is priced
+/// with the arithmetic merged too. Priced without, the careful numbering won
+/// and the load stayed.
+#[test]
+fn a_load_served_across_a_call_is_priced_with_the_arithmetic_it_merges() {
+    let text = "declare i16 @hanoi(ptr nocapture readonly, ptr nocapture readnone) memory(argmem: read)
+
+define i16 @f(ptr nocapture readonly %p, ptr nocapture readnone %q) memory(argmem: read) {
+b1:
+  %a = alloca i16
+  %b = alloca i16
+  %c = alloca i16
+  %n = load i16, ptr %p
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b2, label %b3
+
+b2:
+  store i16 0, ptr %c
+  br label %b5
+
+b3:
+  %l1 = load i16, ptr %p
+  %s1 = sub i16 %l1, 1
+  store i16 %s1, ptr %a
+  %r1 = call i16 @hanoi(ptr %a, ptr %q)
+  %t1 = add i16 %r1, 1
+  %l2 = load i16, ptr %p
+  %s2 = sub i16 %l2, 1
+  store i16 %s2, ptr %b
+  %r2 = call i16 @hanoi(ptr %b, ptr %q)
+  %t2 = add i16 %t1, %r2
+  store i16 %t2, ptr %c
+  br label %b5
+
+b5:
+  %v = load i16, ptr %c
+  ret i16 %v
+}
+";
+    for registers in 1..=8 {
+        let mut module = parsed(text);
+        let mut manager = PassManager::default();
+        manager.verify_each = true;
+        manager.require::<Summaries>();
+        manager.add(Gvn::default());
+        manager
+            .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers, ..Default::default() }))
+            .unwrap();
+        let after = printed(&module);
+        assert_eq!(after.matches("load i16, ptr %p").count(), 1, "{registers} registers\n{after}");
+    }
 }

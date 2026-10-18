@@ -285,9 +285,6 @@ pub fn optimized(
         // load is served wherever it is redundant and nothing is numbered
         // twice.
         _numbered(unit, outer, accesses, &profit::costs(outer), if pre { profit::registers(outer) } else { crate::spill::Room::default() }, trips, registers, shape)?;
-    // Loads merged above are operands that two expressions now share.
-    let renumbered = numbered && pass::run_impl(unit.context, unit.layout, unit.function, outer);
-    let numbered = numbered || renumbered;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, pre && !subexpressed)?;
@@ -343,11 +340,14 @@ fn _numbered(
     // Whether some load was served across a store: the one thing the second
     // numbering does differently from the first.
     let crossed = std::cell::Cell::new(false);
-    let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
+    let numbered = |context: &mut llrm_mir::context::Context,
+                    function: &Function,
+                    avoid_store_crossing: bool|
+     -> Result<(Function, (bool, bool)), String> {
         NUMBERINGS.with(|runs| runs.set(runs.get() + 1));
         let mut function = function.fork();
         let forwarded = transform::forwarded(
-            unit.context,
+            context,
             unit.layout,
             &mut function,
             outer,
@@ -360,21 +360,24 @@ fn _numbered(
         )?;
         let subexpressed =
             transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()), &crossed)?;
+        // The scalar numbering, over the loads merged above: two expressions
+        // of one cell's loads are one, and each numbering is priced with that.
+        let scalar = pass::run_impl(context, unit.layout, &mut function, outer);
         // Equal calls that touch nothing are one, after the arithmetic that
         // makes their arguments equal.
-        let called = transform::equal_calls(&mut function, &silent(unit.context, outer))?;
-        Ok((function, (forwarded || subexpressed || called, subexpressed || called)))
+        let called = transform::equal_calls(&mut function, &silent(context, outer))?;
+        Ok((function, (forwarded || subexpressed || called || scalar, subexpressed || called || scalar)))
     };
-    let crossing = numbered(unit.function, false)?;
+    let crossing = numbered(unit.context, unit.function, false)?;
     // What `one` costs: its work, and the spills it forecasts. The work alone
     // is the lower bound of the price, and is the cheap half.
-    let price = |one: &Function, under: i64| {
-        let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, one, Some(trips))?;
-        let work = profit::weighted(unit.context, unit.layout, one, outer.callees(), costs, &frequency)?;
+    let price = |context: &llrm_mir::context::Context, one: &Function, under: i64| {
+        let frequency = profit::_frequencies(context, unit.metadata, &outer.globals, one, Some(trips))?;
+        let work = profit::weighted(context, unit.layout, one, outer.callees(), costs, &frequency)?;
         if work >= under {
             return Some(work);
         }
-        profit::motion_price(unit.context, unit.layout, outer, one, costs, room, &frequency)
+        profit::motion_price(context, unit.layout, outer, one, costs, room, &frequency)
     };
     // Where no load crossed a store, the second numbering is the first: it is
     // neither made nor priced.
@@ -387,8 +390,12 @@ fn _numbered(
             // is not made.
             Some((_, true)) | None => crossing,
             Some((crossed, false)) => {
-                let careful = numbered(unit.function, true)?;
-                if price(&careful.0, crossed).is_some_and(|kept| kept < crossed) { careful } else { crossing }
+                let careful = numbered(unit.context, unit.function, true)?;
+                if price(unit.context, &careful.0, crossed).is_some_and(|kept| kept < crossed) {
+                    careful
+                } else {
+                    crossing
+                }
             }
         }
     };
