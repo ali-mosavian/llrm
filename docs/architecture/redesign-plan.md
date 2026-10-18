@@ -1328,7 +1328,7 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 
 **Translate first (user, 2026-10-18).** Before implementing anything, check whether LLVM has that pass or analysis at the pin `d1106deb71cc`; if it does, translate it, with the changes we need. Keep the result as close to O(n) as possible. The PR description names the LLVM source file and function translated (permalink), or states "LLVM has no such pass" and why. Any super-linear step needs a stated reason and a slope test. A fix to our own pass that has an LLVM counterpart is a translation row first.
 
-**Parity slot and join step (user, 2026-10-18).** Every port PR names its parity slot (section 2.5) and its join step. A translation is done when it has joined the parity pipeline with its oracle passing, not when it merges off. A PR that joins a translated slot outranks a new translation, and no new translation starts while one of the owner's is translated but not joined.
+**Parity slot and join step (user, 2026-10-18).** Every port PR names its parity slot (section 2.5) and its join step. A translation is done when it has joined the parity pipeline with its oracle passing, not when it merges off. A PR that joins a translated slot outranks a new translation, and no new translation starts while one of the owner's is translated but not joined. Every port PR also carries a `Box:` line naming its box in [target-architecture.md](target-architecture.md).
 
 **Pass rules shared by every step:**
 
