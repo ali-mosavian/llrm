@@ -156,6 +156,12 @@ pub struct ScalarEvolution {
     pub(super) scev_users: HashMap<Scev, HashSet<Scev>>,
     /// `LoopUsers`: the add recurrences of each loop.
     pub(super) loop_users: IdMap<BlockId, Vec<Scev>>,
+    /// `ValuesAtScopes`: each expression's value in the scope of a loop (none:
+    /// the function body); the second is empty while it is being computed.
+    pub(super) values_at_scopes: HashMap<Scev, Vec<(Option<BlockId>, Option<Use>)>>,
+    /// `ValuesAtScopesUsers`: for each value at scope, the (loop, expression)
+    /// pairs it is the value of.
+    pub(super) values_at_scopes_users: HashMap<Scev, Vec<(Option<BlockId>, Scev)>>,
     /// `FoldCacheUser`: the `fold_cache` keys each SCEV is the answer of.
     pub(super) fold_cache_user: HashMap<Scev, Vec<(Type, Use, Ty)>>,
     /// `CouldNotCompute`.
@@ -184,6 +190,8 @@ impl ScalarEvolution {
             expr_value_map: HashMap::new(),
             scev_users: HashMap::new(),
             loop_users: IdMap::new(),
+            values_at_scopes: HashMap::new(),
+            values_at_scopes_users: HashMap::new(),
             fold_cache_user: HashMap::new(),
             could_not_compute: Scev(0),
         };
