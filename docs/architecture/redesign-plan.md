@@ -1,3 +1,7 @@
+---
+architecture-index: the plan to reach clang's compile time
+architecture-order: 430
+---
 # Compile time at clang's level: the plan
 
 **Scoreboard.** `d_faces` -O2 is 2,104 M instructions at main `9d50a350e` in a clean dist build, 5.1x clang 24's 413 M (section 2.0; the 2,253 M at `5e2e995ef` was not taken in the clean-build mode and is superseded; it was 2,903 M and 6.8x at `21f5c9fc8`); about 900 allocations per IR instruction against 19; 3.4 computes per pass run. Updated after each landing ([compile-gap-series]).
