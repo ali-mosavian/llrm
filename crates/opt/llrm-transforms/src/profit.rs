@@ -395,6 +395,23 @@ pub fn scev_trips(
     (count != 0).then_some(i64::from(count))
 }
 
+/// At most how often `loop_`'s latch runs, where ScalarEvolution proves a
+/// bound (`getSmallConstantMaxTripCount`, the header's runs, which the
+/// latch's never exceed): the loop may also leave by another exit.
+pub fn scev_trip_bound(
+    session: &mut ScevSession,
+    unit: &memory::Unit,
+    loop_: &llrm_analysis::graph::loops::Loop,
+) -> Option<i64> {
+    let header = cfg::block(loop_.header);
+    let count =
+        session.ask_within(unit.context, unit.layout, unit.globals, unit.metadata, unit.function, |scev, cx| {
+            cx.loops.get_loop_for(header).filter(|found| found.get_header() == header)?;
+            Some(scev.get_small_constant_max_trip_count(cx, header))
+        })?;
+    (count != 0).then_some(i64::from(count))
+}
+
 /// [`proven_trips`], asking ScalarEvolution (`scev`) or `induction`.
 pub fn proven_trips_using(
     unit: &memory::Unit,
