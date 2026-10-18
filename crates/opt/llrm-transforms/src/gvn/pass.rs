@@ -1,5 +1,6 @@
-//! `GVNPass`, the scalar part: a translation of the driver, `processInstruction`,
-//! `propagateEquality`, `findLeader` and the dead-block handling of
+//! `GVNPass`, the scalar part: a translation of the driver,
+//! `processInstruction`, `propagateEquality`, `findLeader` and the dead-block
+//! handling of
 //! [`GVN.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp)
 //! at d1106deb71cc. Loads, load PRE and scalar PRE are the later stages of
 //! `docs/architecture/gvn-port.md`; where `processInstruction` would call
@@ -11,6 +12,15 @@
 //! with `DomTreeUpdater`. `LoopInfo`, `MemorySSAUpdater` and
 //! `ImplicitControlFlowTracking` are not kept: nothing in this part reads
 //! them (the last is read by PRE, stage 5).
+//!
+//! DEVIATE 14, what "changed" says: LLVM's `processFoldableCondBr` answers true
+//! for a branch on a constant it found a dead arm of, whether or not it edited
+//! anything, and its pass manager lets that stand. A pipeline run to a fixed
+//! point here would not end, so the pass answers whether the function changed.
+//!
+//! DEVIATE 15, a phi is not simplified to a value defined in a loop the phi is
+//! outside of: LLVM forms LCSSA inside its loop pipeline only, and here `lcssa`
+//! and this pass run to one fixed point, which they would never reach.
 //!
 //! DEVIATE 3, `salvageAndRemoveInstruction` removes the instruction: MIR has no
 //! debug-value use list to salvage into, and `salvageKnowledge` reads
@@ -46,6 +56,8 @@ pub struct GvnPass<'a> {
     vn: ValueTable,
     leader_table: LeaderMap,
     dead_blocks: IndexMap<BlockId, ()>,
+    /// The natural loops of the body, found when first asked.
+    loops: Option<Vec<llrm_analysis::graph::loops::Loop>>,
 }
 
 /// `runImpl`'s scalar part. Whether anything changed.
@@ -65,8 +77,11 @@ pub fn run_impl(
         vn: ValueTable::new(),
         leader_table: LeaderMap::default(),
         dead_blocks: IndexMap::default(),
+        loops: None,
     };
-    pass.run_impl()
+    let mark = pass.function.mark();
+    let computed = pass.run_impl();
+    pass.function.changes_since(mark).map_or(computed, |changes| !changes.is_empty())
 }
 
 impl GvnPass<'_> {
@@ -88,6 +103,21 @@ impl GvnPass<'_> {
 
     fn refresh_dominators(&mut self) {
         self.dt = DominatorTree::new(self.function);
+        self.loops = None;
+    }
+
+    /// Whether `value` is defined in a loop that the block of `phi` is not in.
+    fn leaves_loop(
+        &mut self,
+        phi: InstId,
+        value: Operand,
+    ) -> bool {
+        let Some(def) = self.defining(value).and_then(|one| self.function.parent(one)) else { return false };
+        let Some(at) = self.function.parent(phi) else { return false };
+        let function = &*self.function;
+        let loops = self.loops.get_or_insert_with(|| llrm_analysis::cfg::Shape::of(function).loops);
+        let (def, at) = (llrm_analysis::cfg::id(def), llrm_analysis::cfg::id(at));
+        loops.iter().any(|one| one.body.contains(&def) && !one.body.contains(&at))
     }
 
     /// `runImpl`
@@ -100,7 +130,7 @@ impl GvnPass<'_> {
             if !self.function.layout().contains(&block) {
                 continue;
             }
-            changed |= local::merge_block_into_predecessor(self.function, block);
+            changed |= local::merge_block_into_predecessor(self.context, self.function, block, false);
         }
         if changed {
             self.refresh_dominators();
@@ -150,7 +180,8 @@ impl GvnPass<'_> {
         // Since we may not have visited the input blocks of the phis, we can't
         // use our normal hash approach for phis. Instead, simply look for
         // obvious duplicates.
-        let (mut changed, to_remove) = local::eliminate_duplicate_phi_nodes(self.function, block);
+        let mut to_remove = std::collections::BTreeSet::new();
+        let mut changed = local::eliminate_duplicate_phi_nodes(self.function, block, &mut to_remove);
         for phi in to_remove {
             self.remove_instruction(phi);
         }
@@ -215,14 +246,20 @@ impl GvnPass<'_> {
         &self,
         value: Operand,
     ) -> bool {
-        matches!(value, Operand::Value(id) if matches!(self.function.value(id).def, ValueDef::Argument(_)))
+        matches!(
+            value,
+            Operand::Value(id) if matches!(self.function.value(id).def, ValueDef::Argument(_))
+        )
     }
 
     fn is_instruction(
         &self,
         value: Operand,
     ) -> bool {
-        matches!(value, Operand::Value(id) if matches!(self.function.value(id).def, ValueDef::Instruction(_)))
+        matches!(
+            value,
+            Operand::Value(id) if matches!(self.function.value(id).def, ValueDef::Instruction(_))
+        )
     }
 
     fn defining(
@@ -246,7 +283,9 @@ impl GvnPass<'_> {
         let Operand::Constant(id) = value else { return None };
         match self.context.get(id).kind {
             ConstantKind::Int(bits) => Some(bits),
-            ConstantKind::Zero | ConstantKind::Null if self.context.types.int_bits(self.context.get(id).ty).is_some() => {
+            ConstantKind::Zero | ConstantKind::Null
+                if self.context.types.int_bits(self.context.get(id).ty).is_some() =>
+            {
                 Some(0)
             }
             _ => None,
@@ -272,7 +311,10 @@ impl GvnPass<'_> {
         &self,
         value: Operand,
     ) -> bool {
-        matches!(value, Operand::Value(id) if self.function.users(id).len() == 1)
+        matches!(
+            value,
+            Operand::Value(id) if self.function.users(id).len() == 1
+        )
     }
 
     /// `isOnlyReachableViaThisEdge`
@@ -338,7 +380,8 @@ impl GvnPass<'_> {
             // right-hand side, so the shortest lived term will be replaced by
             // the longest lived. This tends to expose more simplifications.
             let mut lvn = self.lookup_or_add(lhs);
-            if (self.is_argument(lhs) && self.is_argument(rhs)) || (self.is_instruction(lhs) && self.is_instruction(rhs))
+            if (self.is_argument(lhs) && self.is_argument(rhs))
+                || (self.is_instruction(lhs) && self.is_instruction(rhs))
             {
                 // Move the 'oldest' value to the right-hand side, using the
                 // value number as a proxy for age.
@@ -356,7 +399,17 @@ impl GvnPass<'_> {
             // is equal to 'LHS' then ensure it will be turned into 'RHS'.
             // The leader table only tracks basic blocks, not edges. Only add
             // to if we have the simple case where the edge dominates the end.
-            if !self.is_instruction(rhs) && local::can_replace_pointers_if_equal(self.context, self.layout, lhs, rhs) {
+            if !self.is_instruction(rhs)
+                && local::can_replace_pointers_if_equal(
+                    self.context,
+                    self.layout,
+                    &self.outer.globals,
+                    self.outer.sizes(),
+                    self.function,
+                    lhs,
+                    rhs,
+                )
+            {
                 for &block in &dominated_blocks {
                     self.leader_table.insert(lvn, rhs, block);
                 }
@@ -397,9 +450,13 @@ impl GvnPass<'_> {
             // also propagate the equality A == B. When propagating a
             // comparison such as "(A >= B)" == "true", replace all instances
             // of "A < B" with "false".
-            if let Some(cmp) = self.defining(lhs).filter(|&inst| {
-                matches!(self.function.instruction(inst).opcode, Opcode::ICmp(_) | Opcode::FCmp(_))
-            }) {
+            if let Some(cmp) = self
+                .defining(lhs)
+                .filter(|&inst| matches!(
+                    self.function.instruction(inst).opcode,
+                    Opcode::ICmp(_) | Opcode::FCmp(_)
+                ))
+            {
                 let instruction = self.function.instruction(cmp);
                 let (op0, op1) = (instruction.operands[0], instruction.operands[1]);
                 let (opcode, flags, ty) = (instruction.opcode.clone(), instruction.flags, instruction.ty);
@@ -546,9 +603,7 @@ impl GvnPass<'_> {
                 let predicate = if invert { predicate.inverse() } else { *predicate };
                 match predicate {
                     FloatPredicate::Ueq if !flags.contains(Flags::NNAN) => false,
-                    FloatPredicate::Ueq | FloatPredicate::Oeq => {
-                        self.non_zero_fp(op0) || self.non_zero_fp(op1)
-                    }
+                    FloatPredicate::Ueq | FloatPredicate::Oeq => self.non_zero_fp(op0) || self.non_zero_fp(op1),
                     _ => false,
                 }
             }
@@ -575,7 +630,8 @@ impl GvnPass<'_> {
         }
     }
 
-    /// `replaceDominatedUsesWithIf` from `root`, with `canReplacePointersInUseIfEqual`.
+    /// `replaceDominatedUsesWithIf` from `root`, with
+    /// `canReplacePointersInUseIfEqual`.
     fn replace_dominated_uses_with_if(
         &mut self,
         from: Operand,
@@ -583,22 +639,37 @@ impl GvnPass<'_> {
         root: Root,
     ) -> usize {
         let Operand::Value(from) = from else { return 0 };
-        let (context, layout) = (&*self.context, self.layout);
-        let allowed = |function: &Function, user: llrm_mir::module::Use, to: Operand| {
-            local::can_replace_pointers_in_use_if_equal(context, layout, function, user, to)
+        let (context, layout, outer) = (&*self.context, self.layout, self.outer);
+        let allowed = |function: &Function, at: llrm_mir::module::Use, to: Operand| {
+            local::can_replace_pointers_in_use_if_equal(
+                context,
+                layout,
+                &outer.globals,
+                outer.sizes(),
+                function,
+                at,
+                to,
+            )
         };
         match root {
             Root::Edge(start, end) => local::replace_dominated_uses_with_if_edge(
+                self.context,
                 self.function,
-                &self.dt,
                 from,
                 to,
-                (start, end),
-                &allowed,
+                &self.dt,
+                local::BasicBlockEdge { start, end },
+                allowed,
             ),
-            Root::Inst(inst) => {
-                local::replace_dominated_uses_with_if_inst(self.function, &self.dt, from, to, inst, &allowed)
-            }
+            Root::Inst(inst) => local::replace_dominated_uses_with_if_instruction(
+                self.context,
+                self.function,
+                from,
+                to,
+                &self.dt,
+                inst,
+                allowed,
+            ),
         }
     }
 
@@ -610,13 +681,17 @@ impl GvnPass<'_> {
         root: Root,
     ) -> usize {
         let Operand::Value(from) = from else { return 0 };
-        let always = |_: &Function, _: llrm_mir::module::Use, _: Operand| true;
         match root {
-            Root::Edge(start, end) => {
-                local::replace_dominated_uses_with_if_edge(self.function, &self.dt, from, to, (start, end), &always)
-            }
+            Root::Edge(start, end) => local::replace_dominated_uses_with_edge(
+                self.context,
+                self.function,
+                from,
+                to,
+                &self.dt,
+                local::BasicBlockEdge { start, end },
+            ),
             Root::Inst(inst) => {
-                local::replace_dominated_uses_with_if_inst(self.function, &self.dt, from, to, inst, &always)
+                local::replace_dominated_uses_with_instruction(self.context, self.function, from, to, &self.dt, inst)
             }
         }
     }
@@ -632,7 +707,15 @@ impl GvnPass<'_> {
         // redundancies, for example if it determines that %y is equal to %x
         // then the instruction "%z = and i32 %x, %y" becomes "%z = and i32 %x,
         // %x" which we now simplify.
-        if let Some(simplified) = llrm_mir::simplify::simplify_instruction(self.context, self.function, inst) {
+        let mut simplified = llrm_mir::simplify::simplify_instruction(self.context, self.function, inst);
+        // DEVIATE 15: a phi that carries a loop's value out of it stays.
+        if let Some(value) = simplified
+            && self.function.instruction(inst).opcode == Opcode::Phi
+            && self.leaves_loop(inst, value)
+        {
+            simplified = None;
+        }
+        if let Some(simplified) = simplified {
             let mut changed = false;
             let result = self.function.instruction(inst).result;
             if let Some(result) = result
@@ -641,7 +724,13 @@ impl GvnPass<'_> {
                 self.function.replace_all_uses_with(result, simplified);
                 changed = true;
             }
-            if local::is_instruction_trivially_dead(self.context, self.outer, self.function, inst) {
+            if local::is_instruction_trivially_dead(
+                self.context,
+                self.outer.callees(),
+                &self.outer.globals,
+                self.function,
+                inst,
+            ) {
                 self.salvage_and_remove_instruction(inst);
                 changed = true;
             }
@@ -749,7 +838,14 @@ impl GvnPass<'_> {
         }
 
         // Remove it!
-        local::patch_and_replace_all_uses_with(self.function, inst, repl);
+        local::patch_and_replace_all_uses_with(
+            self.context,
+            &self.outer.globals,
+            &self.outer.metadata,
+            self.function,
+            inst,
+            repl,
+        );
         self.salvage_and_remove_instruction(inst);
         true
     }
@@ -759,7 +855,8 @@ impl GvnPass<'_> {
         inst: InstId,
     ) -> bool {
         let Some(callee) = llrm_mir::memory::callee(self.context, self.function, inst) else { return false };
-        self.outer.globals[callee.0 as usize].name.as_deref().and_then(Intrinsic::named) == Some(Intrinsic::Assume)
+        self.outer.globals.get(callee.0 as usize).and_then(|global| global.name.as_deref()).and_then(Intrinsic::named)
+            == Some(Intrinsic::Assume)
     }
 
     /// `processAssumeIntrinsic`
@@ -776,17 +873,20 @@ impl GvnPass<'_> {
                 // Insert a new store to null instruction before the assume to
                 // indicate that this code is not reachable.
                 let i8_ty = self.context.types.int(8);
-                let poison = Operand::Constant(self.context.constant(Constant { ty: i8_ty, kind: ConstantKind::Poison }));
+                let poison =
+                    Operand::Constant(self.context.constant(Constant { ty: i8_ty, kind: ConstantKind::Poison }));
                 let ptr_ty = self.context.types.ptr(0);
                 let null = Operand::Constant(self.context.constant(Constant { ty: ptr_ty, kind: ConstantKind::Null }));
                 let void = self.context.types.void();
-                let store = self.function.create_instruction(
-                    Opcode::Store { align: None, volatile: false },
-                    void,
-                    vec![poison, null],
-                    Flags::default(),
-                    None,
-                );
+                let store = self
+                    .function
+                    .create_instruction(
+                        Opcode::Store { align: None, volatile: false },
+                        void,
+                        vec![poison, null],
+                        Flags::default(),
+                        None,
+                    );
                 self.function.insert(store, Position::Before(assume)).expect("a placed assume");
             }
             self.salvage_and_remove_instruction(assume);

@@ -439,10 +439,11 @@ b4:
 }
 ",
     );
+    // The select and the widening are simplified on the way.
     assert!(
         after.contains("br i1 true, label %b2, label %b3")
-            && after.contains("select i1 true")
-            && after.contains("zext i1 false"),
+            && after.contains("b2:\n  ret i16 %y")
+            && after.contains("b4:\n  ret i16 0"),
         "{after}"
     );
 }
@@ -500,7 +501,8 @@ b0:
     manager.add(Gvn::default());
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let after = printed(&module);
-    assert!(after.matches("inttoptr").count() == 1 && after.contains("load i16, ptr addrspace(1) %f1"), "{after}");
+    // One cast, and the load reads what the store wrote.
+    assert!(after.matches("inttoptr").count() == 1 && !after.contains("load i16, ptr addrspace(1)"), "{after}");
 }
 
 /// A load of what the language says is written once and never again is the
@@ -1160,7 +1162,9 @@ b0:
 "
         );
         let after = numbered(&text);
-        assert_eq!(after.matches("load i16, ptr %qq").count() == 2, reloaded, "{both}\n{after}");
+        // Told of one only, `%qq` is `%q` itself: the zero GEP is simplified.
+        let read = if both { "load i16, ptr %qq" } else { "load i16, ptr %q" };
+        assert_eq!(after.matches(read).count() == 2, reloaded, "{both}\n{after}");
     }
 }
 

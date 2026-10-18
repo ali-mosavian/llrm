@@ -6,18 +6,23 @@
 //! # How it works
 //! `Gvn` runs these steps on a body, in order.
 //!
-//! 1. Branch equality (`propagated`, LLVM's `propagateEquality`). In what the
-//!    edge to a successor dominates, the branch's condition is that edge's
-//!    constant.
-//! 2. Numbering (`transform::forwarded`, `transform::subexpressions`,
+//! 1. The scalar pass (`pass::run_impl`, `table`: LLVM's `GVNPass` and
+//!    `ValueTable` without the load and PRE parts). Blocks with one way in are
+//!    merged into it, then each block is met in reverse postorder, its
+//!    instructions simplified or numbered by opcode, type and operand numbers
+//!    (a commutative pair ordered, a compare's predicate swapped with its
+//!    operands, a GEP by the bytes it adds, flags in no key): one that a
+//!    dominating leader has is replaced, keeping the flags both have. In what an
+//!    edge of a branch, a switch case or an assume dominates, the condition is
+//!    that edge's constant (`propagateEquality`), and the arm of a branch on a
+//!    constant is dead: its join's phis read poison from it. Two calls with the
+//!    same callee and arguments that read and write no memory are one.
+//! 2. Load numbering (`transform::forwarded`, `transform::subexpressions`,
 //!    `transform::equal_calls`). A load a known value serves becomes that
 //!    value: a dominating store of the same bytes and type, or an earlier load
-//!    of them, with nothing between that may write them. Two pure operations on
-//!    the same operands are one, a copy counting as its source and a
-//!    commutative pair ordered. The blocks are met dominators first, not in
-//!    layout order, which a removed join leaves behind the blocks it came to
-//!    dominate. Two calls with the same callee and arguments that read and
-//!    write no memory are one.
+//!    of them, with nothing between that may write them. The blocks are met
+//!    dominators first, not in layout order, which a removed join leaves behind
+//!    the blocks it came to dominate.
 //! 3. Join PRE (`joined`). An expression every predecessor of a join already
 //!    computes becomes a phi of those values. With `pre`, a predecessor that
 //!    lacks it gets the computation inserted before its unconditional `br`, if
@@ -177,11 +182,12 @@ impl FunctionPass for Gvn {
     ) -> PreservedAnalyses {
         // The scalar pass first: it may merge blocks and split edges, and what
         // the rest reads is read of the body it leaves.
+        let blocks = unit.function.layout().len();
         let scalar = pass::run_impl(unit.context, unit.layout, unit.function, analyses.outer());
         let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
         let pointers = analyses.get::<PointerValues>(unit.context, unit.layout, unit.function);
-        // Only `loadjoins` changes the CFG, and only by splitting an edge.
-        let blocks = unit.function.layout().len();
+        // Only the scalar pass and `loadjoins` change the CFG: by merging
+        // blocks, and by splitting edges.
         let pointers = Result::as_ref(&*pointers).map_err(String::clone);
         // Numbering leaves the CFG alone: every candidate has these trips.
         let registers = analyses.get::<Registers>(unit.context, unit.layout, unit.function);

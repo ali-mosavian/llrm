@@ -83,7 +83,10 @@ impl PartialEq for Expression {
         &self,
         other: &Self,
     ) -> bool {
-        self.opcode == other.opcode && self.ty == other.ty && self.var_args == other.var_args && self.attrs == other.attrs
+        self.opcode == other.opcode
+            && self.ty == other.ty
+            && self.var_args == other.var_args
+            && self.attrs == other.attrs
     }
 }
 
@@ -125,7 +128,7 @@ impl Env<'_> {
         call: InstId,
     ) -> Option<Intrinsic> {
         let callee = llrm_mir::memory::callee(self.context, self.function, call)?;
-        self.outer.globals[callee.0 as usize].name.as_deref().and_then(Intrinsic::named)
+        self.outer.globals.get(callee.0 as usize)?.name.as_deref().and_then(Intrinsic::named)
     }
 
     /// `C->isConvergent()`.
@@ -156,7 +159,13 @@ fn commutative(
     matches!(
         opcode,
         Opcode::Binary(
-            BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::FAdd | BinaryOp::FMul
+            BinaryOp::Add
+                | BinaryOp::Mul
+                | BinaryOp::And
+                | BinaryOp::Or
+                | BinaryOp::Xor
+                | BinaryOp::FAdd
+                | BinaryOp::FMul
         )
     )
 }
@@ -551,13 +560,18 @@ impl ValueTable {
         number: u32,
         phi_block: BlockId,
     ) -> bool {
-        let call = leaders.get_leaders(number).iter().find_map(|leader| {
-            let Operand::Value(value) = leader.value else { return None };
-            let ValueDef::Instruction(inst) = env.function.value(value).def else { return None };
-            (matches!(env.function.instruction(inst).opcode, Opcode::Call(_))
-                && env.function.parent(inst) == Some(phi_block))
-            .then_some(inst)
-        });
+        let call = leaders
+            .get_leaders(number)
+            .iter()
+            .find_map(
+                |leader| {
+                    let Operand::Value(value) = leader.value else { return None };
+                    let ValueDef::Instruction(inst) = env.function.value(value).def else { return None };
+                    (matches!(env.function.instruction(inst).opcode, Opcode::Call(_))
+                        && env.function.parent(inst) == Some(phi_block))
+                    .then_some(inst)
+                },
+            );
         call.is_some_and(|call| env.does_not_access_memory(call))
     }
 
@@ -593,7 +607,8 @@ impl ValueTable {
 
         // If there is any value related with Num is defined in a BB other than
         // PhiBlock, it cannot depend on a phi in PhiBlock without going through
-        // a backedge. We can do an early exit in that case to save compile time.
+        // a backedge. We can do an early exit in that case to save compile
+        // time.
         if !Self::are_all_vals_in_bb(number, phi_block, leaders) {
             return number;
         }
@@ -711,7 +726,8 @@ fn collect_offset(
                 }
                 continue;
             }
-            // Handle a struct index, which adds its field offset to the pointer.
+            // Handle a struct index, which adds its field offset to the
+            // pointer.
             if let Some(struct_ty) = field_of {
                 let (_, offsets) = env.layout.struct_layout(types, struct_ty);
                 constant = mask(constant.wrapping_add(u128::from(offsets[bits as usize])));

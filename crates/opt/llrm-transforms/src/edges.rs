@@ -180,7 +180,8 @@ pub fn split_critical_edge(
     if !is_critical_edge(function, from, to) {
         return None;
     }
-    let first = function.block(to).instructions().iter().copied().find(|&one| function.instruction(one).opcode != Opcode::Phi);
+    let first =
+        function.block(to).instructions().iter().copied().find(|&one| function.instruction(one).opcode != Opcode::Phi);
     if first.is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. })) {
         return None;
     }
