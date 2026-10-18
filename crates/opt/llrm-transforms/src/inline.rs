@@ -480,10 +480,7 @@ fn copy_byval_arguments(
         let (pointer, void, flag) = (context.types.ptr(0), context.types.void(), context.types.int(1));
         let entry = function.entry().ok_or("a caller with a body")?;
         let first = anchor.or_else(|| {
-            function
-                .block(entry)
-                .iter()
-                .find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }))
+            function.block(entry).iter().find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }))
         });
         let alloca = function.create_instruction(
             Opcode::Alloca { allocated: aggregate, align: None, address_space: 0 },
@@ -1179,10 +1176,8 @@ pub fn expanded_all(
         }
     }
     let end = (plan.own, plan.frame);
-    let mut placed = Placed {
-        base: function.entry().and_then(|entry| function.block(entry).first()),
-        ..Placed::default()
-    };
+    let mut placed =
+        Placed { base: function.entry().and_then(|entry| function.block(entry).first()), ..Placed::default() };
     for (call, planned) in sites.iter().rev() {
         executed(context, function, caller.layout, *call, planned, declared, &mut placed)?;
     }

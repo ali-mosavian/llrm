@@ -583,7 +583,7 @@ fn hoisting(applied: &Applied) -> Box<dyn FunctionPass> {
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
 fn translated() -> Vec<Box<dyn FunctionPass>> {
-    vec![Box::new(bdce::Bdce), Box::new(crate::cvp::Cvp)]
+    vec![Box::new(crate::cvp::Cvp)]
 }
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`).

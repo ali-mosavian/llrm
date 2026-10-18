@@ -681,11 +681,8 @@ fn _split(
     // a walk's huge pointer, past its last window. A skipped loop leaves with
     // the starts.
     let test = if found.proof.posttested { found.latch } else { found.header };
-    let exit_phis: Vec<InstId> = function
-        .block(found.exit)
-        .iter()
-        .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
-        .collect();
+    let exit_phis: Vec<InstId> =
+        function.block(found.exit).iter().take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect();
     for phi in exit_phis {
         let mut arms = function.instruction(phi).operands.clone();
         let mut skipped = None;
