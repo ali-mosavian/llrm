@@ -1500,10 +1500,15 @@ fn accumulate_constant_offset(
 }
 
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L732>
-fn strip_and_accumulate_in_bounds_constant_offsets(
+///
+/// `Value::stripAndAccumulateConstantOffsets` with the default arguments
+/// but `AllowNonInbounds`: no invariant group, no external analysis, no look
+/// through `inttoptr`.
+pub fn strip_and_accumulate_constant_offsets(
     q: &Query,
     v: Operand,
     width: u32,
+    allow_non_inbounds: bool,
 ) -> (Operand, u128) {
     if !q.is_pointer(v) {
         return (v, 0);
@@ -1515,7 +1520,7 @@ fn strip_and_accumulate_in_bounds_constant_offsets(
     loop {
         let Some(operator) = operator(q, current) else { return (current, offset) };
         if let Some(gep) = gep_of(&operator) {
-            if !gep.inbounds {
+            if !allow_non_inbounds && !gep.inbounds {
                 return (current, offset);
             }
             let gep_width = q
@@ -1581,13 +1586,13 @@ fn is_non_equal_pointers_with_recursive_gep(
 
     let Some(space) = q.type_of(start).and_then(|ty| pointer_space(q, ty)) else { return false };
     let index_width = q.layout.pointer(space).index_bits;
-    let (start, start_offset) = strip_and_accumulate_in_bounds_constant_offsets(q, start, index_width);
-    let (step, step_offset) = strip_and_accumulate_in_bounds_constant_offsets(q, step, index_width);
+    let (start, start_offset) = strip_and_accumulate_constant_offsets(q, start, index_width, false);
+    let (step, step_offset) = strip_and_accumulate_constant_offsets(q, step, index_width, false);
 
     if step != gep_a.pointer {
         return false;
     }
-    let (b, offset_b) = strip_and_accumulate_in_bounds_constant_offsets(q, b, index_width);
+    let (b, offset_b) = strip_and_accumulate_constant_offsets(q, b, index_width, false);
     let (start_signed, step_signed, b_signed) =
         (signed(start_offset, index_width), signed(step_offset, index_width), signed(offset_b, index_width));
     start == b && ((start_signed >= b_signed && step_signed > 0) || (start_signed <= b_signed && step_signed < 0))
