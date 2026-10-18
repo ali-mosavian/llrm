@@ -23,6 +23,7 @@ pub mod divrec;
 pub mod eval;
 pub mod exit_limit;
 pub mod exit_value;
+pub mod expand;
 pub mod expander;
 pub mod expr;
 pub mod forget;
@@ -46,6 +47,8 @@ pub mod sequential;
 pub mod trip;
 #[cfg(test)]
 mod trip_tests;
+#[cfg(test)]
+mod expand_tests;
 
 use std::collections::{HashMap, HashSet};
 
