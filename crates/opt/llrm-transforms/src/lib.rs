@@ -146,6 +146,9 @@ pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
+pub mod parity;
+#[cfg(test)]
+mod parity_tests;
 pub mod peel;
 pub mod phiopt;
 pub mod pipeline;

@@ -626,7 +626,7 @@ fn experiment_llvm() -> bool {
 }
 
 /// Where a list of LLVM's order stands.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Phase {
     /// The early function pipeline (l.1178-1180).
     Early,
@@ -1134,6 +1134,9 @@ impl Fixed {
         linear.unrollers.clear();
         linear.last.clear();
         linear.passes = llvm_order(applied, phase);
+        let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
+        let checked = crate::parity::check_phase(phase, &built);
+        debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
         if !matches!(phase, Phase::Simplify) {
             linear.peelers.clear();
