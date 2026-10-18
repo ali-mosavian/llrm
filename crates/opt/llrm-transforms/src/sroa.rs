@@ -40,8 +40,9 @@
 //!   MIR's does.
 //! - `AssumptionCache`, `DomTreeUpdater`, statistics, names that follow
 //!   `.sroa.` suffix rules.
-//! - Offsets are `i128` and do not wrap at the index width; an offset below
-//!   zero is outside the alloca.
+//! - Offsets are `i128` kept in `0..2^index width` after each GEP, as the
+//!   `APInt` of `PtrUseVisitor` wraps; one past the alloca is outside it,
+//!   and so is a negative one, which wraps to a large number.
 //! - `IRBuilder` here makes what it is told and does not fold constants
 //!   (`ConstantFolder`) except the splat of a constant byte; `fold` does that
 //!   after.
@@ -501,7 +502,14 @@ fn build_slices(
                     instruction.operands[1..].iter().map(|&one| constant_index(context, one)).collect();
                 let (known, offset) = if known && indices.iter().all(Option::is_some) {
                     let (constant, variable) = layout.collect_offset(&context.types, *source, &indices);
-                    if variable.is_empty() { (true, offset + constant) } else { (false, 0) }
+                    if variable.is_empty() {
+                        // `Offset += GEPOffset` on an `APInt` of the index
+                        // width: it wraps, and every range check is unsigned.
+                        let bits = layout.pointer(pointer_space(context, instruction.ty)).index_bits;
+                        (true, (offset + constant).rem_euclid(1i128 << bits))
+                    } else {
+                        (false, 0)
+                    }
                 } else {
                     (false, 0)
                 };
@@ -3092,7 +3100,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let function = self.function();
         let result = function.instruction(phi).result?;
         let users = function.users(result);
-        let [only] = users else { return None };
+        let only = users.only()?;
         let store = only.user;
         let Opcode::Store { volatile: false, .. } = function.instruction(store).opcode else { return None };
         if only.index != 1 {
@@ -3174,7 +3182,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         phi: InstId,
     ) {
         let result = self.function().instruction(phi).result.expect("a phi");
-        let store = self.function().users(result)[0].user;
+        let store = self.function().users(result).first().expect("the phi's store").user;
         let pairs: Vec<Operand> = self.function().instruction(phi).operands.clone();
         let mut seen: Vec<llrm_mir::module::BlockId> = Vec::new();
         for pair in pairs.chunks(2) {
