@@ -124,6 +124,7 @@ pub mod ipacp;
 pub mod jumpthread;
 pub mod lcssa;
 pub mod lcssamerges;
+pub mod licm;
 pub mod loadjoins;
 pub mod loopclone;
 pub mod loopdistribute;
