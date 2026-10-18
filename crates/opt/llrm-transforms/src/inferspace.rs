@@ -173,7 +173,7 @@ fn met(
 }
 
 fn inferred(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     spaces: Spaces,

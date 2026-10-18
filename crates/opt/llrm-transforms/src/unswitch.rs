@@ -207,7 +207,7 @@ pub fn optimized(
 /// `function` with its first loop that has a pure invariant condition
 /// specialized into a copy for each way the condition goes, or `None`.
 pub fn specialized(
-    context: &mut Context,
+    context: &Context,
     function: &Function,
 ) -> Result<Option<Function>, String> {
     let mut closed = function.clone();

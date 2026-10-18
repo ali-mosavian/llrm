@@ -34,7 +34,8 @@ macro_rules! llvm_answers {
 }
 
 llvm_answers!(
-    assume, casts, chain, cond, guard, icmp, intrinsics, loops, pointers, predicates, ranges, select, switch, uses
+    assume, casts, chain, cond, guard, icmp, intrinsics, loops, pointers, predicates, ranges, select, switch, undef,
+    uses
 );
 
 /// The work of `getConstantRange` of every result, then of `%x` at the end of

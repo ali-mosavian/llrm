@@ -13,10 +13,13 @@ N/A.
 | ConstantFolding | `isa<UndefValue>` sites that read `is_poison` | OWED (vt-constantfolding) |
 | InstSimplify | `simplifyPHINode`, `simplifySelectInst`, `simplifyICmpInst`, `simplifyDivRem`, `simplifyAdd/Sub/Mul/And/Or/Xor/Shl/RightShift`, `isPoisonShift`, `expandBinOp` (`getWithoutUndef`), `threadBinOpOverSelect`, `simplifyGEPInst` | DONE |
 | InstSimplify (rest) | `simplifyFreezeInst`, `simplifyInsertValueInst` (#2250), `simplifyWithOpsReplaced` (`CanUseUndef`), `simplifyAndOrWithICmpEq`, the intrinsics (#2248) | OWED |
-| ValueTracking | `isGuaranteedNotToBeUndefOrPoison`, `computeKnownBits` of an undef | OWED (check) |
-| LVI, CVP | `getFromConstant` (undef state), `ValueLatticeElement` | OWED: lattice folds poison into `Undef` |
-| GVN, PHITransAddr, EarlyCSE | undef operands in value numbering | OWED |
-| SimplifyCFG, JumpThreading | branch or switch on undef | OWED |
-| SCEV | `getUnknown` of an undef | OWED (check) |
+| ValueTracking | `isGuaranteedNotToBeUndefOrPoison` L8154, `computeKnownBits` L2647, phi `hasConstantValue` L2004, `isBytewiseValue` L6744 | DONE |
+| LVI, CVP | `ValueLatticeElement::get` (undef state), `getValueFromICmpCondition` L1390 | DONE |
+| GVN | `analyzeLoadAvailability` L1443 (load of an alloca is undef) | OWED with load PRE (not ported); dead-block poison is the pin's poison: DONE |
+| EarlyCSE, PHITransAddr | vector masks only | N/A |
+| SimplifyCFG (Local.cpp) | `CanMergeValues`, `selectIncomingValueForBlock`, `gatherIncomingValuesToPhi`, `replaceUndefValuesInPhi` | DONE |
+| SimplifyCFG (rest) | `markAliveBlocks` store to undef ptr (Local L2758), `assume(undef)` L2703, lookup tables L7198, `passingUndefUB` L9174 | OWED |
+| JumpThreading | `getKnownConstant` L543, branch on undef L1009, xor L1838 | OWED |
+| SCEV | the pin has no `UndefValue` arm; an undef is an unknown | N/A |
 | LICM, LSR, indvars | none known | N/A until found |
 | isel, legalize | undef lowers as any value: zero | DONE (#2532) |

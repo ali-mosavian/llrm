@@ -515,7 +515,7 @@ fn _shape_of(
 /// where the guard sends it to `first` and skipped to the exit otherwise
 /// (`true`: the guard is true on the way out).
 pub(crate) fn _rotate(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     shape: &Shape,
     guard: Option<(Operand, bool)>,
@@ -618,7 +618,7 @@ pub(crate) fn _rotate(
 
 /// The first proven loop not in `done` entered at its body; whether one was.
 fn rotated(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
@@ -660,7 +660,7 @@ fn rotated(
 /// the last loop pass finds it. Comparing a build with and without `-ftree-ch`
 /// shows a loop whose symbolic count the copy lost.
 fn census(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     id: Option<llrm_mir::context::GlobalId>,

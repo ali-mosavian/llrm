@@ -254,7 +254,7 @@ pub trait Assumption {
     /// `copy` made to take it for granted.
     fn assumed(
         &self,
-        context: &mut Context,
+        context: &Context,
         function: &mut Function,
         copy: &LoopCopy,
     ) -> Result<(), String>;

@@ -568,7 +568,8 @@ b0:
     );
     assert!(changed);
     assert!(!text.contains("%duplicate"), "{text}");
-    assert!(text.contains("%r = load i16, ptr %first"), "{text}");
+    // The load of the stored bytes is the stored value.
+    assert!(text.contains("ret i16 %x"), "{text}");
 }
 
 /// An address took its cell for a read, so no two addresses of one descriptor

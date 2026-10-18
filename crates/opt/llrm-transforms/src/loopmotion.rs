@@ -170,7 +170,7 @@ fn kept_when_stores_move() -> PreservedAnalyses {
 /// Each loop's unobserved stores moved to the front of its one exit;
 /// whether any moved.
 pub fn sunk_stores(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     callees: &Callees,
     function: &mut Function,
