@@ -163,6 +163,7 @@ pub mod sink;
 pub mod spares;
 pub mod spill;
 pub mod splitcopy;
+pub mod switchcg;
 pub mod switchlower;
 pub mod tailrec;
 #[cfg(test)]
