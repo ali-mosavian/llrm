@@ -264,7 +264,7 @@ impl<'a> Scan<'a> {
         let overlaps = |cell: &MemRef, inst: InstId| self.overlaps(cell, inst);
         let mut held = Vec::new();
         for &block in function.layout() {
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 let phi = function.instruction(inst);
                 let (Opcode::Phi, Some(result)) = (&phi.opcode, phi.result) else { continue };
                 let inputs: Vec<(Operand, BlockId)> = phi
@@ -470,7 +470,7 @@ pub(crate) fn homed_scanning(
     };
     let mut homes = Vec::new();
     for &block in function.layout() {
-        for &inst in function.block(block).instructions() {
+        for inst in function.block(block).iter() {
             let phi = function.instruction(inst);
             let (Opcode::Phi, Some(result)) = (&phi.opcode, phi.result) else { continue };
             let inputs: Vec<(Operand, BlockId)> = phi

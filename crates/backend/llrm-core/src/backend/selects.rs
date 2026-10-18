@@ -173,7 +173,7 @@ fn sunk(
 ) -> Option<InstId> {
     let Operand::Value(value) = operand else { return None };
     let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { return None };
-    if function.users(value).len() != 1 || function.users(value)[0].user != select {
+    if function.users(value).only().is_none_or(|only| only.user != select) {
         return None;
     }
     if !llrm_transforms::licm::hoist::is_safe_to_speculatively_execute_in(
@@ -209,7 +209,7 @@ fn _branched(
     let [condition, yes, no] = op.operands[..] else { return Err("a select of three operands".into()) };
     let result = op.result.ok_or("a select's value")?;
     // What follows the select moves to the join, the block's way out with it.
-    let body = function.block(block).instructions().to_vec();
+    let body = function.block(block).iter().collect::<Vec<_>>();
     let after = body.iter().position(|&inst| inst == select).expect("its own block") + 1;
     let join = function.create_block(None);
     function.insert_block(join, Some(block))?;
@@ -255,7 +255,7 @@ fn _branched(
         Flags::default(),
         None,
     );
-    let first = function.block(join).instructions()[0];
+    let first = function.block(join).first().expect("a block with instructions");
     function.insert(phi, Position::Before(first))?;
     function.replace_all_uses_with(result, Operand::Value(function.instruction(phi).result.expect("a phi's value")));
     function.erase(select)
@@ -270,9 +270,7 @@ fn _renamed_edges(
 ) {
     let phis = function
         .block(next)
-        .instructions()
         .iter()
-        .copied()
         .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
         .collect::<Vec<_>>();
     for phi in phis {
@@ -413,10 +411,9 @@ entry:
         let divides = |block| {
             function
                 .block(block)
-                .instructions()
                 .iter()
                 .any(
-                    |&inst| matches!(
+                    |inst| matches!(
                         function.instruction(inst).opcode,
                         Opcode::Binary(llrm_mir::opcode::BinaryOp::UDiv)
                     ),

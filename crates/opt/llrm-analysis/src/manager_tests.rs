@@ -1439,7 +1439,7 @@ b0:
         let before = analyses.get::<super::ExposedFrames>(context, &layout, function);
         assert_eq!(before.len(), 1, "%c is stored");
         // The store of %b's value to %b's address now stores %b's address.
-        let store = function.block(function.layout()[0]).instructions()[4];
+        let store = function.block(function.layout()[0]).iter().nth(4).unwrap();
         let b = Operand::Value(value(function, "b"));
         function.set_operand(store, 0, b);
         analyses.invalidate(function, &PreservedAnalyses::none());
