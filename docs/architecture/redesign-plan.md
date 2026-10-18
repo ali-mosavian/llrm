@@ -1296,7 +1296,12 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 6. `LazyValueInfo.cpp` and `CorrelatedValuePropagation.cpp` are translated at the pin `d1106deb71cc`. LLVM -O2 runs CVP, and JumpThreading reads LVI, so it is the real counterpart of `ranger.rs`'s uses there. Owner vt-constantfolding (valuetracking-port, which translated `ConstantRange` and `ValueTracking`), ordered after the DomTree stack lands (domtree-port). llrm's `ranger.rs` uses are deleted when it becomes default.
 7. `JumpThreading.cpp` is translated after it. JumpThreading is our worst ratio (26.33x in the per-pass table; 28.8x by oversight's reading). Owner decided when the LVI row lands.
 8. Glue (projection, 108 M on `d_faces`): `Stamp`, `Summaries` and the interprocedural stage. Owner cgscc-poc (the plan page is theirs). Each is replaced by LLVM's mechanism or deleted.
-9. Emission and `masm` (21 M): owner backend-slopes.
+9. Emission and `masm` (21 M; slot 64): owner backend-slopes, ranked last until the split below. Not one pass (backend-slopes; files checked to exist at the pin):
+   - Frame sequences and return cleanup (`masm` listing, shrinkwrap, cleaned returns, duplicated returns): LLVM does them before the AsmPrinter, in `PrologEpilogInserter.cpp`, `ShrinkWrap.cpp`, `X86FrameLowering.cpp` (`hasFPImpl`, `emitPrologue`, `emitEpilogue`) and X86ExpandPseudo. Translation, one row with the `hasFP` row (slot 65); part of its cost is counted under the LIR clean-up, not emission.
+   - Encode, branch relaxation, relocations: `X86MCInstLower.cpp`, `X86MCCodeEmitter.cpp`, `MCObjectStreamer.cpp`, `MCAssembler.cpp`. Translation, DEVIATE: llrm relaxes a flat item list at one fixed point, LLVM uses MCFragments; the `_trampolined` size step has no LLVM counterpart and stays a numbered DEVIATE.
+   - Object writers: ELF, COFF and MachO have counterparts; OMF: LLVM has no such pass (`llvm/lib/MC` has no OMF writer), llrm keeps it.
+   - `masm::text` (-S and the BASIC driver): AsmPrinter and `X86IntelInstPrinter`; LLVM's object path never prints, so the C and Nib object path has no printing step to translate.
+   - Next: split the 21 M by step (cleaned returns, return overhead, duplicated returns, shrink-wrap tails, stack checks, debug info, object write, OMF write) from a CI-style build, then rank the first two.
 10. The C translate stage (about 29 M): unowned. Nobody in the plan is named for the C front end; hir-branch-icmp-2211 works nearest to it (HIR). Owner owed.
 11. The scoreboard is the projection (llvm-difftest's table), refreshed half-hourly.
 
