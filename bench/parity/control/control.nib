@@ -8,6 +8,7 @@ fn parity_control(value: i16, limit: i16) -> i32:
             total -= i32(value) - i32(index)
     return total
 
+@noipa
 fn bench_control() -> i32:
     return parity_control(7, 6) * 1000 + parity_control(-3, 5)
 

@@ -8,6 +8,7 @@ fn ls_scale_byte(raw: i16, sval: i16) -> i16:
         value = 0
     return i16(value)
 
+@noipa
 fn bench_qlight() -> i32:
     return i32(ls_scale_byte(200, 120)) * 1000000 + i32(ls_scale_byte(200, 60)) * 1000 + i32(ls_scale_byte(200, 240)) + i32(ls_scale_byte(-20, 120))
 

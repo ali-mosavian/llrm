@@ -1,0 +1,71 @@
+reason = "@noipa on the six Nib bench kernels (#2196): the kernel is opaque to the interprocedural passes, so the compiler no longer specialises it on its caller's constants (matmul's seed 0) or reads its body from main. The same measurement as the C and BASIC rows (volatile pointer): the general kernel. +2 or +3 code bytes each (the entry a standalone procedure keeps), matmul +174/+177 instructions and +79/+60 bytes. At -O3 the six rows were 'not in the map' (the call was evaluated at compile time) and are measured now."
+
+[[row]]
+label = "crc nib -O2"
+counter = "code_bytes"
+to = 102
+
+[[row]]
+label = "crc nib -Os"
+counter = "code_bytes"
+to = 101
+
+[[row]]
+label = "matmul nib -O2"
+counter = "code_bytes"
+to = 374
+
+[[row]]
+label = "matmul nib -Os"
+counter = "code_bytes"
+to = 342
+
+[[row]]
+label = "matmul nib -O2"
+counter = "instructions"
+to = 6335
+
+[[row]]
+label = "matmul nib -Os"
+counter = "instructions"
+to = 6715
+
+[[row]]
+label = "parity/algebra nib -O2"
+counter = "code_bytes"
+to = 93
+
+[[row]]
+label = "parity/algebra nib -Os"
+counter = "code_bytes"
+to = 77
+
+[[row]]
+label = "parity/control nib -O2"
+counter = "code_bytes"
+to = 135
+
+[[row]]
+label = "parity/control nib -Os"
+counter = "code_bytes"
+to = 111
+
+[[row]]
+label = "parity/loop nib -O2"
+counter = "code_bytes"
+to = 108
+
+[[row]]
+label = "parity/loop nib -Os"
+counter = "code_bytes"
+to = 86
+
+[[row]]
+label = "parity/qlight nib -O2"
+counter = "code_bytes"
+to = 193
+
+[[row]]
+label = "parity/qlight nib -Os"
+counter = "code_bytes"
+to = 157
