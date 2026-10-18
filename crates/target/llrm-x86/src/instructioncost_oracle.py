@@ -28,7 +28,7 @@ fn("arith", "i16 %a, i16 %b, i32 %w, i32 %x, double %d, float %f",
   %a7 = fadd float %f, 1.0
   %a8 = fneg double %d
   %a9 = udiv i32 %w, %x""")
-fn("casts", "i16 %a, i32 %w, double %d, float %f, ptr %p",
+fn("casts", "i16 %a, i32 %w, double %d, float %f, ptr %p, ptr %q, ptr addrspace(2) %p2",
    """  %c1 = zext i16 %a to i32
   %c2 = sext i16 %a to i32
   %c3 = trunc i32 %w to i16
@@ -38,7 +38,17 @@ fn("casts", "i16 %a, i32 %w, double %d, float %f, ptr %p",
   %c7 = fptrunc double %d to float
   %c8 = ptrtoint ptr %p to i32
   %c9 = inttoptr i32 %w to ptr
-  %c10 = bitcast float %f to i32""")
+  %c10 = bitcast float %f to i32
+  %c11 = inttoptr i16 %a to ptr addrspace(2)
+  %c12 = addrspacecast ptr addrspace(2) %p2 to ptr
+  %c13 = ptrtoint ptr %q to i16
+  %c14 = ptrtoint ptr %q to i64
+  %k1 = load i16, ptr %q
+  %c15 = sitofp i16 %k1 to float
+  %k2 = load i8, ptr %q
+  %c16 = uitofp i8 %k2 to double
+  %k3 = load i32, ptr %q
+  %c17 = sitofp i32 %k3 to double""")
 fn("cmpsel", "i16 %a, i16 %b, i1 %c, i1 %e, double %d",
    """  %m1 = icmp slt i16 %a, %b
   %m2 = icmp eq i16 %a, 0
@@ -55,7 +65,11 @@ fn("memory", "ptr %p, i16 %a, i32 %w, double %d",
   %l5 = trunc i32 %l4 to i16
   store i16 %a, ptr %p
   store i32 7, ptr %p
-  store double %d, ptr %p""")
+  store double %d, ptr %p
+  %gi = getelementptr i32, ptr %p, i32 %w
+  store i32 1, ptr %gi
+  %gc = getelementptr i32, ptr %p, i32 2
+  store i32 1, ptr %gc""")
 fn("geps", "ptr %p, i16 %i, i32 %w, i32 %j",
    """  %g1 = getelementptr i16, ptr %p, i16 %i
   %g2 = getelementptr i16, ptr %p, i32 3
@@ -109,31 +123,43 @@ define internal i32 @in(i32 %x) {
 
 # Every intrinsic llrm knows, at the widths it meets.
 INTRINSICS = []
-def intr(name, ret, args, mangle=""):
+def intr(name, ret, args):
     INTRINSICS.append((name, ret, args))
-for ty in ["i16", "i32"]:
+INTS = ["i8", "i16", "i32", "i64"]
+FLOATS = [("f64", "double"), ("f32", "float")]
+PTRS = {"p0": "ptr", "p1": "ptr addrspace(1)", "p2": "ptr addrspace(2)"}
+for ty in INTS:
     for m in ["smax", "smin", "umax", "umin"]:
         intr(f"llvm.{m}.{ty}", ty, [ty, ty])
     for m in ["sadd", "uadd", "ssub", "usub", "smul", "umul"]:
         intr(f"llvm.{m}.with.overflow.{ty}", "{ " + ty + ", i1 }", [ty, ty])
-for f, t in [("f64", "double"), ("f32", "float")]:
-    for m in ["fabs", "sqrt", "sin", "cos", "log2", "exp2", "rint"]:
+    intr(f"llvm.ctpop.{ty}", ty, [ty]); intr(f"llvm.bswap.{ty}", ty, [ty]) if ty != "i8" else None
+    intr(f"llvm.abs.{ty}", ty, [ty, "i1"])
+    intr(f"llvm.smul.fix.{ty}", ty, [ty, ty, "i32"])
+    intr(f"llvm.fshl.{ty}", ty, [ty, ty, ty]); intr(f"llvm.fshr.{ty}", ty, [ty, ty, ty])
+for f, t in FLOATS:
+    for m in ["fabs", "sqrt", "sin", "cos", "atan", "log2", "exp2", "rint"]:
         intr(f"llvm.{m}.{f}", t, [t])
     intr(f"llvm.fmuladd.{f}", t, [t, t, t])
-intr("llvm.lrint.i32.f64", "i32", ["double"])
-intr("llvm.ctpop.i16", "i16", ["i16"]); intr("llvm.bswap.i32", "i32", ["i32"]); intr("llvm.abs.i16", "i16", ["i16", "i1"])
-intr("llvm.smul.fix.i16", "i16", ["i16", "i16", "i32"])
+    for r in ["i16", "i32"]:
+        intr(f"llvm.lrint.{r}.{f}", r, [t])
 # The cost model prints no price for `llvm.lifetime.*`: test_lifetime_and_assume_are_free covers them.
-intr("llvm.assume", "void", ["i1"]); intr("llvm.memcpy.p0.p0.i32", "void", ["ptr", "ptr", "i32", "i1"]); intr("llvm.memmove.p0.p0.i32", "void", ["ptr", "ptr", "i32", "i1"])
-intr("llvm.memset.p0.i32", "void", ["ptr", "i8", "i32", "i1"])
+intr("llvm.assume", "void", ["i1"])
+for dst, dty in PTRS.items():
+    for ln in ["i16", "i32"]:
+        intr(f"llvm.memset.{dst}.{ln}", "void", [dty, "i8", ln, "i1"])
+        for src, sty in PTRS.items():
+            intr(f"llvm.memcpy.{dst}.{src}.{ln}", "void", [dty, sty, ln, "i1"])
+            intr(f"llvm.memmove.{dst}.{src}.{ln}", "void", [dty, sty, ln, "i1"])
 body = []; decls = []
 for n, (name, ret, args) in enumerate(INTRINSICS):
-    vals = {"i16": "%a", "i32": "%w", "double": "%d", "float": "%f", "i1": "false", "i64": "4", "ptr": "%p", "i8": "0"}
+    vals = {"i8": "%b", "i16": "%a", "i32": "%w", "i64": "%q", "double": "%d", "float": "%f", "i1": "false",
+            "ptr": "%p", "ptr addrspace(1)": "%p1", "ptr addrspace(2)": "%p2"}
     cargs = ", ".join(f"{t} {vals[t]}" for t in args)
-    if name.startswith("llvm.smul.fix"): cargs = "i16 %a, i16 %a, i32 3"
+    if ".fix." in name: cargs = f"{args[0]} {vals[args[0]]}, {args[1]} {vals[args[1]]}, i32 3"
     body.append(f"  {'' if ret == 'void' else f'%v{n} = '}call {ret} @{name}({cargs})")
     decls.append(f"declare {ret} @{name}({', '.join(args)})")
-fn("intrinsics", "i16 %a, i32 %w, double %d, float %f, ptr %p", "\n".join(body), "\n".join(decls) + "\n")
+fn("intrinsics", "i8 %b, i16 %a, i32 %w, i64 %q, double %d, float %f, ptr %p, ptr addrspace(1) %p1, ptr addrspace(2) %p2", "\n".join(body), "\n".join(decls) + "\n")
 
 corpus = HEAD + G + "".join(FUNCS.values())
 open(os.path.join(HERE, "instructioncost_corpus.ll"), "w").write(corpus)

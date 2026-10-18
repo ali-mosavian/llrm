@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/mem2reg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/mem2reg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/mem2reg.rs sha256:907c0ed4989a23e39b032d301e63d0c83b059be3dafea7b761642fe3a951b45e -->
+<!-- src: crates/opt/llrm-transforms/src/mem2reg.rs sha256:6a9c3fe8895a710f8663bf2e36acfaa2f0d3295579431e28a1188bb357da7e60 -->
 
 # mem2reg
 
@@ -29,7 +29,6 @@ DEVIATE, each with its reason:
   MIR has none.
 - No `llvm.assume`, so no `convertMetadataToAssumes` (`noundef` metadata)
   and no droppable users; no `fake_use`. Lifetime markers are translated.
-- MIR has `poison` and no `undef`: `UndefValue` is `poison`.
 - `isGuaranteedNotToBePoison` is true of a constant that is not `poison`
   only (no `noundef` arguments).
 - The iterated dominance frontier is `Dominance::frontiers` iterated with

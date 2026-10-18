@@ -2190,14 +2190,7 @@ impl LazyValueInfoImpl {
             // This also disallows looking through phi nodes: If the phi node is
             // part of a cycle, we might end up reasoning about
             // values from different cycle iterations (PR60629).
-            let single_use = curr_inst
-                .result
-                .and_then(
-                    |r| match function.users(r) {
-                        [only] => Some(*only),
-                        _ => None,
-                    },
-                );
+            let single_use = curr_inst.result.and_then(|r| function.users(r).only().copied());
             let Some(next_use) = single_use else { break };
             if !is_safe_to_speculatively_execute_with_variable_replaced(env, curr_i, false) {
                 break;
@@ -3166,7 +3159,7 @@ impl LazyValueInfoImpl {
         }
 
         // Print LVI in blocks where `I` is used.
-        for u in result_id.map_or(&[][..], |result| function.users(result)) {
+        for u in result_id.map(|result| function.users(result).to_vec()).unwrap_or_default().iter() {
             let use_i = function.instruction(u.user);
             let use_bb = function.parent(u.user).expect("a placed user");
             if use_i.opcode != Opcode::Phi || dt.dominates(parent_bb, use_bb) {
@@ -3245,7 +3238,7 @@ fn constant_fold_compare_inst_operands(
     c1: &LatticeConstant,
     c2: &LatticeConstant,
 ) -> Option<bool> {
-    let mut make = |c: &LatticeConstant| match c {
+    let make = |c: &LatticeConstant| match c {
         LatticeConstant::Undef => None,
         LatticeConstant::Int { width, bits } => {
             let ty = env.context.types.int(*width);

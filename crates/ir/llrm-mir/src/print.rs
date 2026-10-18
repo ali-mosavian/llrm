@@ -785,6 +785,7 @@ impl Printer<'_> {
             },
             ConstantKind::Null => "null".to_owned(),
             ConstantKind::Poison => "poison".to_owned(),
+            ConstantKind::Undef => "undef".to_owned(),
             ConstantKind::Zero => "zeroinitializer".to_owned(),
             ConstantKind::Bytes(bytes) => format!("c{}", string(bytes)),
             ConstantKind::Global(global) => {

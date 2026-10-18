@@ -735,7 +735,7 @@ mod length_tests {
     /// operand's own width.
     #[test]
     fn test_a_length_is_unsigned_at_the_width_of_its_type() {
-        let mut context = Context::new();
+        let context = Context::new();
         let (i16_, i32_) = (context.types.int(16), context.types.int(32));
         for (ty, value) in
             [(i16_, 32767), (i16_, 32768), (i16_, 40000), (i16_, 65535), (i32_, 65535), (i32_, 2_147_483_648)]

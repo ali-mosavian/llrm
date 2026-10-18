@@ -60,6 +60,11 @@ pub struct Expander {
     pub(super) insert_point: Option<InstId>,
     /// `InsertedValues`: what this expander made, in order.
     pub(super) inserted: Vec<InstId>,
+    /// `inserted` as a set, for `isInsertedInstruction`.
+    pub(super) inserted_set: llrm_mir::dense::IdSet<InstId>,
+    /// `OrigFlags`: the flags an instruction had before the expander changed
+    /// them (`rememberFlags`), put back by a cleanup.
+    pub(super) orig_flags: llrm_mir::dense::IdMap<InstId, llrm_mir::opcode::Flags>,
     /// `InsertedExpressions`: a SCEV expanded at an insert point.
     pub(super) expressions: HashMap<(Scev, InstId), Operand>,
     /// `RelevantLoops`.
@@ -86,6 +91,8 @@ impl Expander {
             name,
             insert_point: None,
             inserted: Vec::new(),
+            inserted_set: Default::default(),
+            orig_flags: Default::default(),
             expressions: HashMap::default(),
             relevant_loops: HashMap::default(),
             canonical_mode: true,
@@ -142,6 +149,72 @@ impl Expander {
     /// `clearPostInc`.
     pub fn clear_post_inc(&mut self) {
         self.post_inc_loops.clear();
+    }
+
+    /// `rememberInstruction`.
+    pub(super) fn remember(
+        &mut self,
+        inst: InstId,
+    ) {
+        if self.inserted_set.insert(inst) {
+            self.inserted.push(inst);
+        }
+    }
+
+    /// `isInsertedInstruction`: the expander made `inst` (or reused it as its
+    /// own).
+    pub fn is_inserted_instruction(
+        &self,
+        inst: &InstId,
+    ) -> bool {
+        self.inserted_set.contains(inst)
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L848
+    /// `hoistIVInc(IncV, InsertPos, RecomputePoisonFlags)`: move a simple IV
+    /// increment (and the chain back to its phi) above `insert_pos`, where it
+    /// can be reached from the uses there; false if it cannot be hoisted.
+    pub fn hoist_iv_inc(
+        &mut self,
+        env: &Env,
+        context: &mut Context,
+        function: &mut Function,
+        se: &mut ScalarEvolution,
+        inc: InstId,
+        insert_pos: InstId,
+        recompute_poison_flags: bool,
+    ) -> bool {
+        let mut declared = Declared::default();
+        let mut run = super::expand::Run { x: self, env: *env, context, declared: &mut declared, function, se };
+        run.hoist_iv_inc(inc, insert_pos, recompute_poison_flags)
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L901
+    /// `canReuseFlagsFromOriginalIVInc(OrigPhi, WidePhi, OrigInc, WideInc)`:
+    /// both increments are the same binary operation of their phi.
+    pub fn can_reuse_flags_from_original_iv_inc(
+        function: &Function,
+        orig_phi: InstId,
+        wide_phi: InstId,
+        orig_inc: InstId,
+        wide_inc: InstId,
+    ) -> bool {
+        let reads = |inc: InstId, phi: InstId| {
+            let one = function.instruction(inc);
+            let phi_value = function.instruction(phi).result.map(Operand::Value);
+            matches!(one.opcode, llrm_mir::opcode::Opcode::Binary(_))
+                && one.operands.len() == 2
+                && phi_value.is_some_and(|v| one.operands.contains(&v))
+        };
+        reads(orig_inc, orig_phi)
+            && reads(wide_inc, wide_phi)
+            && function.instruction(orig_inc).opcode == function.instruction(wide_inc).opcode
+    }
+
+    /// `getAllInsertedInstructions`: what the expander made, in order, less
+    /// what it reused.
+    pub fn inserted_instructions(&self) -> Vec<InstId> {
+        self.inserted.iter().copied().filter(|inst| !self.reused.contains(inst)).collect()
     }
 
     /// `getInsertedIVs`.
@@ -281,6 +354,15 @@ impl ExpanderCleaner {
         if self.result_used {
             return;
         }
+        // Restore the original poison flags.
+        let originals: Vec<_> = expander.orig_flags.iter().map(|(inst, flags)| (inst, *flags)).collect();
+        expander.orig_flags = Default::default();
+        for (inst, flags) in originals {
+            if !function.is_erased(inst) {
+                function.set_flags(inst, flags);
+            }
+        }
+        expander.inserted_set = Default::default();
         let reused = std::mem::take(&mut expander.reused);
         let mut inserted = std::mem::take(&mut expander.inserted);
         expander.expressions.clear();

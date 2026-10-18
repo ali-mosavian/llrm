@@ -125,7 +125,7 @@ impl Run<'_> {
         let at = self.x.insert_point.expect("an insert point");
         let inst = self.function.create_instruction(opcode, ty, operands, flags, None);
         self.function.insert(inst, Position::Before(at)).expect("a placed position");
-        self.x.inserted.push(inst);
+        self.x.remember(inst);
         Operand::Value(self.function.instruction(inst).result.expect("a value"))
     }
 
@@ -189,7 +189,7 @@ impl Run<'_> {
         while matches!(self.function.instruction(all[at]).opcode, Opcode::Phi) {
             at += 1;
         }
-        while all[at] != must_dominate && self.x.inserted.contains(&all[at]) {
+        while all[at] != must_dominate && self.x.is_inserted_instruction(&all[at]) {
             at += 1;
         }
         all[at]
@@ -606,7 +606,7 @@ impl Run<'_> {
                 if computable {
                     at = self.first_insertion_pt(l.expect("a loop"));
                 }
-                while at != here && self.x.inserted.contains(&at) {
+                while at != here && self.x.is_inserted_instruction(&at) {
                     let block = self.function.parent(at).expect("placed");
                     let all = self.function.block(block).instructions();
                     let next = all.iter().position(|&one| one == at).expect("in its block") + 1;

@@ -1137,7 +1137,9 @@ fn a_round_follows_an_unroll_that_changed_the_body_past_the_budget() {
     assert_eq!(rounds(2), 3, "a third round runs after the unroll of the second, none after the third");
 }
 
-/// Six sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them,
+/// Sixty sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them
+/// (six sweeps are completely unrolled by `LoopFullUnroll`, which LLVM's order
+/// runs before the jam, and leave no nest to jam),
 /// through the whole pipeline at -O3 with and without unroll-and-jam, and at
 /// -O2: the jam changes the code of -O3 alone, and the nest computes what it
 /// did. Before the pass was in the pipeline the first two were the same text.
@@ -1154,7 +1156,7 @@ b0:
 
 outer:
   %t = phi i16 [ 0, %b0 ], [ %tn, %outerlatch ]
-  %go = icmp slt i16 %t, 6
+  %go = icmp slt i16 %t, 60
   br i1 %go, label %pre, label %done
 
 pre:
@@ -1365,12 +1367,13 @@ entry:
     assert!(!crate::testing::printed(&gone).contains("@twice"), "premise: -O2 inlines it");
 }
 
-/// tile.c's inner sum is 40 trips of one load and one add. gcc's
-/// `max-completely-peel-times` (16) keeps it a loop at -O3, as clang's is not
-/// capped: -Omax completes it (tile -O3 8,159 clocks against clang's 4,236;
-/// -Omax unrolls it).
+/// tile.c's inner sum is 40 trips of one load and one add. LLVM's full unroll
+/// has no cap on the trips: it completes the loop where the unrolled size is
+/// under the threshold, 150 at -O2 and 300 at -O3
+/// (`UnrollThresholdAggressive`). gcc's `max-completely-peel-times` (16) kept
+/// it a loop at -O3 (tile -O3 8,159 clocks against clang's 4,236).
 #[test]
-fn test_a_forty_trip_loop_is_completed_at_omax_and_kept_at_o3() {
+fn test_a_forty_trip_loop_is_completed_where_the_unrolled_size_is_under_the_threshold() {
     let text = "@t = global [40 x i16] zeroinitializer
 
 define i16 @f() {
@@ -1404,7 +1407,8 @@ x:
         .unwrap();
         llrm_mir::print::module(&module).contains("phi i16")
     };
-    assert!(looped(pipeline::Options::speed()), "-O3 keeps 40 trips rolled");
+    assert!(looped(pipeline::Options::standard()), "-O2: 202 over the threshold of 150 keeps 40 trips rolled");
+    assert!(!looped(pipeline::Options::speed()), "-O3: 202 under 300 copies them out");
     assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
 }
 
@@ -1440,8 +1444,14 @@ fn test_sroa_and_mem2reg_are_on_by_default_and_the_registry_calls_their_slots_tr
         for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
             let built = pipeline::llvm_order(applied, phase).iter().map(|one| one.name()).collect::<Vec<_>>();
             let level = crate::parity::Level::O2;
-            let checked =
-                crate::parity::check_phase_with(phase, &built, level, applied.options.sroa, applied.options.mem2reg);
+            let checked = crate::parity::check_phase_with(
+                phase,
+                &built,
+                level,
+                applied.options.sroa,
+                applied.options.mem2reg,
+                applied.options.rotate_slot,
+            );
             assert_eq!(checked, Ok(()), "{phase:?} sroa {} mem2reg {}", applied.options.sroa, applied.options.mem2reg);
         }
     }

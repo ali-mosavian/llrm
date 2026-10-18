@@ -297,6 +297,13 @@ impl Flags {
         self.0 |= other.0;
     }
 
+    pub fn remove(
+        &mut self,
+        other: Flags,
+    ) {
+        self.0 &= !other.0;
+    }
+
     pub fn is_empty(self) -> bool {
         self.0 == 0
     }

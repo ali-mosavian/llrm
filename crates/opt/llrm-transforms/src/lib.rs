@@ -142,6 +142,7 @@ pub mod local;
 #[cfg(test)]
 mod local_tests;
 pub mod loopclone;
+pub mod loopdeletion;
 pub mod loopdistribute;
 pub mod loopexit;
 pub mod loopfuse;
@@ -155,6 +156,7 @@ pub mod loopshape;
 pub mod loopsimplify;
 pub mod loopsplit;
 pub mod loopunroll;
+pub mod loopunrollpass;
 pub mod loopversion;
 pub mod lsr;
 pub mod mem2reg;
@@ -195,7 +197,6 @@ pub mod transform;
 pub mod trivialunswitch;
 pub mod twoentryphi;
 pub mod unroll;
-pub mod widen;
 pub mod unroll_jam;
 pub mod unswitch;
 pub mod versionalias;
@@ -203,6 +204,7 @@ pub mod versionstride;
 pub mod vncoercion;
 #[cfg(test)]
 mod vncoercion_tests;
+pub mod widen;
 pub mod window;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called
