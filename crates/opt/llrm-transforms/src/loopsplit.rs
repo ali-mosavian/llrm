@@ -229,9 +229,9 @@ fn _candidate(
                 continue;
             }
             let invariant = |operand: Operand| match operand {
-                Operand::Value(value) => owners
-                    .get(&value)
-                    .is_none_or(|&owner| !loop_.body.contains(&owner) && shape.dominance.dominates(owner, entry)),
+                Operand::Value(value) => owners.get(&value).is_none_or(|&owner| {
+                    !loop_.body.contains(&owner) && shape.dominance.dominates(function, owner, entry)
+                }),
                 _ => true,
             };
             let tests = loop_

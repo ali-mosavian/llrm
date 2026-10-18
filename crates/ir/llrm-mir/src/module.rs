@@ -519,6 +519,11 @@ impl Function {
         self.layout.first().copied()
     }
 
+    /// One more than the largest block number: LLVM's `getMaxNumber`.
+    pub fn block_capacity(&self) -> usize {
+        self.blocks.len()
+    }
+
     /// The block holding `inst`, while it is placed.
     pub fn parent(
         &self,
@@ -779,6 +784,9 @@ pub enum UnnamedAddr {
 pub struct GlobalVariable {
     pub ty: TypeId,
     pub constant: bool,
+    /// `externally_initialized`: the initializer may change before the program
+    /// runs.
+    pub externally_initialized: bool,
     pub initializer: Option<ConstantId>,
     pub align: Option<u64>,
 }

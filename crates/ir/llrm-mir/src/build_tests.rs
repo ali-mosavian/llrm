@@ -37,7 +37,13 @@ fn a_built_module_is_the_one_its_text_describes() {
     let count = module
         .add_variable(
             "count",
-            GlobalVariable { ty: i16, constant: false, initializer: Some(zero), align: None },
+            GlobalVariable {
+                externally_initialized: false,
+                ty: i16,
+                constant: false,
+                initializer: Some(zero),
+                align: None,
+            },
             Linkage::Internal,
         )
         .unwrap();

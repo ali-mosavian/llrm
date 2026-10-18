@@ -4,7 +4,7 @@
 //! of such. Arithmetic wraps, so each holds modulo its width.
 
 use crate::context::{ConstantKind, Context};
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::hash::HashMap;
 use crate::loopinfo::{Loop, LoopInfo};
 use crate::module::{BlockId, Function, Operand, ValueDef, ValueId};
@@ -318,7 +318,7 @@ pub struct Counted {
 pub fn counted(
     context: &Context,
     function: &Function,
-    tree: &DominatorTree,
+    tree: &DomTree,
     evolution: &Evolution,
     one: Loop<'_>,
 ) -> Option<Counted> {

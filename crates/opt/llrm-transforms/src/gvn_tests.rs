@@ -174,6 +174,40 @@ fn test_gvn_numbers_then_joins() {
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS));
 }
 
+/// The premise of `simplifycfg`'s trivial-phi cleanup (D5): gvn forwards the
+/// cell a loop stores its phi to, and leaves `phi [%p, entry], [%self, latch]`.
+/// LLVM's GVN builds its phis with SSAUpdater, which never leaves one; the
+/// cleanup stays until gvn does the same (#2186).
+#[test]
+fn test_forwarding_a_loops_cell_to_its_phi_leaves_a_phi_of_itself() {
+    let text = "@g = global ptr null
+
+define i16 @f(ptr %p, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %q = phi ptr [ %p, %b0 ], [ %r, %b1 ]
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  store ptr %q, ptr @g
+  %r = load ptr, ptr @g
+  %j = add i16 %i, 1
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %j
+}
+";
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(Gvn::default());
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("%q = phi ptr [ %p, %b0 ], [ %q, %b1 ]"), "{after}");
+}
+
 /// Under the pass manager a load through a global is served across a
 /// call to a `readonly` callee. The pass once saw no globals, so it took
 /// the callee for one that may write and loaded @g again.
@@ -373,7 +407,8 @@ b0:
     manager.add(Gvn::default());
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let text = printed(&module);
-    assert!(text.contains("%y = zext i8 7 to i16"), "{text}");
+    // The load is the stored 7, and the widening of a constant is simplified.
+    assert!(text.contains("ret i16 7"), "{text}");
 }
 
 /// A view lent to @bump holds a pointer to %values; @bump reads it out
@@ -439,10 +474,11 @@ b4:
 }
 ",
     );
+    // The select and the widening are simplified on the way.
     assert!(
         after.contains("br i1 true, label %b2, label %b3")
-            && after.contains("select i1 true")
-            && after.contains("zext i1 false"),
+            && after.contains("b2:\n  ret i16 %y")
+            && after.contains("b4:\n  ret i16 0"),
         "{after}"
     );
 }
@@ -500,7 +536,8 @@ b0:
     manager.add(Gvn::default());
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let after = printed(&module);
-    assert!(after.matches("inttoptr").count() == 1 && after.contains("load i16, ptr addrspace(1) %f1"), "{after}");
+    // One cast, and the load reads what the store wrote.
+    assert!(after.matches("inttoptr").count() == 1 && !after.contains("load i16, ptr addrspace(1)"), "{after}");
 }
 
 /// A load of what the language says is written once and never again is the
@@ -1160,7 +1197,9 @@ b0:
 "
         );
         let after = numbered(&text);
-        assert_eq!(after.matches("load i16, ptr %qq").count() == 2, reloaded, "{both}\n{after}");
+        // Told of one only, `%qq` is `%q` itself: the zero GEP is simplified.
+        let read = if both { "load i16, ptr %qq" } else { "load i16, ptr %q" };
+        assert_eq!(after.matches(read).count() == 2, reloaded, "{both}\n{after}");
     }
 }
 
@@ -1184,4 +1223,87 @@ fn a_numbering_dearer_in_work_than_the_crossing_one_is_not_forecast_for_spills()
     let (_, forecasts) = crate::profit::PRICED.with(std::cell::Cell::get);
     assert!(!printed(&module).contains("%b = load i16, ptr @x"), "the reload is served");
     assert_eq!(forecasts, 1, "{forecasts} whole-function forecasts for the two numberings");
+}
+
+/// Two loads of one cell are one load once the pass has run, and the two
+/// products of them one product: the scalar pass runs over what load numbering
+/// merged. Run only before it, the products stayed two, and a later pass saw no
+/// square (x_primes -O2 +4% clocks).
+#[test]
+fn a_product_of_two_loads_of_one_cell_is_one_with_a_product_of_the_same() {
+    let text = "define i16 @f(ptr %p) {
+b0:
+  %a = load i16, ptr %p
+  %b = load i16, ptr %p
+  %m = mul i16 %a, %b
+  %c = load i16, ptr %p
+  %d = load i16, ptr %p
+  %n = mul i16 %c, %d
+  %r = sub i16 %m, %n
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(Gvn::default());
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    let after = printed(&module);
+    assert_eq!(after.matches("mul i16").count(), 1, "{after}");
+}
+
+/// hanoi.bas at -O2 (every BASIC front end, +2% to +4% instructions): the
+/// second load of the by-reference `%0` is the first, and so the second
+/// `sub` is the first, only if the numbering that merges the loads is priced
+/// with the arithmetic merged too. Priced without, the careful numbering won
+/// and the load stayed.
+#[test]
+fn a_load_served_across_a_call_is_priced_with_the_arithmetic_it_merges() {
+    let text = "declare i16 @hanoi(ptr nocapture readonly, ptr nocapture readnone) memory(argmem: read)
+
+define i16 @f(ptr nocapture readonly %p, ptr nocapture readnone %q) memory(argmem: read) {
+b1:
+  %a = alloca i16
+  %b = alloca i16
+  %c = alloca i16
+  %n = load i16, ptr %p
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b2, label %b3
+
+b2:
+  store i16 0, ptr %c
+  br label %b5
+
+b3:
+  %l1 = load i16, ptr %p
+  %s1 = sub i16 %l1, 1
+  store i16 %s1, ptr %a
+  %r1 = call i16 @hanoi(ptr %a, ptr %q)
+  %t1 = add i16 %r1, 1
+  %l2 = load i16, ptr %p
+  %s2 = sub i16 %l2, 1
+  store i16 %s2, ptr %b
+  %r2 = call i16 @hanoi(ptr %b, ptr %q)
+  %t2 = add i16 %t1, %r2
+  store i16 %t2, ptr %c
+  br label %b5
+
+b5:
+  %v = load i16, ptr %c
+  ret i16 %v
+}
+";
+    for registers in 1..=8 {
+        let mut module = parsed(text);
+        let mut manager = PassManager::default();
+        manager.verify_each = true;
+        manager.require::<Summaries>();
+        manager.add(Gvn::default());
+        manager
+            .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers, ..Default::default() }))
+            .unwrap();
+        let after = printed(&module);
+        assert_eq!(after.matches("load i16, ptr %p").count(), 1, "{registers} registers\n{after}");
+    }
 }

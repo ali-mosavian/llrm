@@ -1,0 +1,6 @@
+(urem (c 16 100) (use nuw (addrec -:- 1 (u 2) (u 1))))	(100 + ((100 /u {%c,+,%b}<%h1><u nuw>) * {%c,+,%b}<%h1><u nuw>)<nuw>) : i16	(100 + ((100 /u {%c,+,%b}<%h1><u nuw>) * {(-1 * %c),+,(-1 * %b)}<%h1>)) : i16
+(urem (u 2) (use nuw (addrec -:- 1 (u 2) (u 1))))	(((%c /u {%c,+,%b}<%h1><u nuw>) * {%c,+,%b}<%h1><u nuw>)<nuw> + %c) : i16	(((%c /u {%c,+,%b}<%h1><u nuw>) * {(-1 * %c),+,(-1 * %b)}<%h1>) + %c) : i16
+(mul -:- (c 16 7) (udiv (u 2) (use nuw (addrec -:- 1 (u 2) (u 1)))) (use nuw (addrec -:- 1 (u 2) (u 1))))	SEGFAULT	((%c /u {%c,+,%b}<%h1><u nuw>) * {(7 * %c),+,(7 * %b)}<%h1>) : i16
+(mul -:- (u 0) (udiv (u 2) (use nuw (addrec -:- 1 (u 2) (u 1)))) (use nuw (addrec -:- 1 (u 2) (u 1))))	SEGFAULT	((%c /u {%c,+,%b}<%h1><u nuw>) * {(%a * %c),+,(%a * %b)}<%h1>) : i16
+(add -:- (u 0) (udiv (u 2) (use nuw (addrec -:- 1 (u 2) (u 1)))) (use nuw (addrec -:- 1 (u 2) (u 1))))	SEGFAULT	((%c /u {%c,+,%b}<%h1><u nuw>) + {(%a + %c),+,%b}<%h1>) : i16
+(add -:- (c 16 5) (udiv (u 2) (use nuw (addrec -:- 1 (u 2) (u 1)))) (use nuw (addrec -:- 1 (u 2) (u 1))))	SEGFAULT	((%c /u {%c,+,%b}<%h1><u nuw>) + {(5 + %c),+,%b}<%h1>) : i16

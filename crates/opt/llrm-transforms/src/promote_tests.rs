@@ -960,6 +960,39 @@ fn liveness_visits_a_block_a_few_times_whatever_the_cells() {
     assert!(spent <= 3 * blocks, "{blocks} blocks took {spent} visits");
 }
 
+/// LLVM's PromoteMemToReg and SROA delete an alloca left with no load together
+/// with its stores; `Promote` left 175 allocas and 336 stores in the 11 bodies
+/// of d_faces -O2 for `dse` to find. A slot whose address leaves the function
+/// stays.
+#[test]
+fn test_an_alloca_nothing_loads_goes_with_its_stores_and_one_that_is_read_or_escapes_stays() {
+    let mut module = parsed(
+        "declare void @sink(ptr)
+
+define i32 @f(i32 %a) {
+b0:
+  %dead = alloca i32
+  %pair = alloca [2 x i32]
+  %read = alloca i32
+  %out = alloca i32
+  store i32 %a, ptr %dead
+  %second = getelementptr i32, ptr %pair, i32 1
+  store i32 %a, ptr %second
+  store i32 %a, ptr %read
+  store i32 %a, ptr %out
+  call void @sink(ptr %out)
+  %x = load i32, ptr %read
+  ret i32 %x
+}
+",
+    );
+    managed(&mut module, Promote);
+    let after = managed(&mut module, super::DeadSlots);
+    assert!(!after.contains("%dead") && !after.contains("%pair") && !after.contains("%second"), "{after}");
+    assert!(after.contains("%out = alloca i32") && after.contains("store i32 %a, ptr %out"), "{after}");
+    assert_eq!(after.matches("store").count(), 1, "{after}");
+}
+
 /// `sroa` split a copy into an array nothing reads (the copy goes) and then
 /// asked the manager for facts of the body, which held what had been asked of
 /// it before the split: `Pointers` made from the exposed frames of the body
