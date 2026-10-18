@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/argumentattrs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/argumentattrs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/argumentattrs.rs sha256:89fbd829f363108de1d533a9f3a6f9c459e89cdf958b05068860d9b1d5247ad3 -->
+<!-- src: crates/opt/llrm-analysis/src/argumentattrs.rs sha256:8a50069dec50d4774fb8f98405d9f34af82bd5f8d58e1779e796d4bfb3f8956a -->
 
 # argumentattrs
 
@@ -47,4 +47,5 @@ b0:
 
 ## See also
 LLVM `FunctionAttrs.cpp` (`addArgumentAttrs`, `addAccessAttrs`,
-`determinePointerAccessAttrs`, `ArgumentUsesTracker`), `CaptureTracking.cpp`.
+`determinePointerAccessAttrs`, `ArgumentUsesTracker`),
+`CaptureTracking.cpp`.

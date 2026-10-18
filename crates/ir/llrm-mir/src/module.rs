@@ -91,6 +91,83 @@ impl Block {
     pub fn instructions(&self) -> &[InstId] {
         &self.instructions
     }
+
+    /// `BasicBlock::begin` to `end`: the instructions in order.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = InstId> + ExactSizeIterator + '_ {
+        self.instructions.iter().copied()
+    }
+
+    /// `BasicBlock::front`.
+    pub fn first(&self) -> Option<InstId> {
+        self.instructions.first().copied()
+    }
+
+    /// `BasicBlock::back`.
+    pub fn last(&self) -> Option<InstId> {
+        self.instructions.last().copied()
+    }
+
+    /// `BasicBlock::size`.
+    pub fn len(&self) -> usize {
+        self.instructions.len()
+    }
+
+    /// `BasicBlock::empty`.
+    pub fn is_empty(&self) -> bool {
+        self.instructions.is_empty()
+    }
+}
+
+/// Each instruction's place in its block, numbered lazily like LLVM's
+/// `Instruction::Order` (`BasicBlock::renumberInstructions`): an edit of a
+/// block invalidates it, the next ask renumbers the block once. Not part of
+/// what a function is: a copy starts with none and two functions compare equal
+/// whatever they hold.
+#[derive(Default)]
+pub(crate) struct OrderCache(pub(crate) std::cell::RefCell<OrderNumbers>);
+
+#[derive(Default)]
+pub(crate) struct OrderNumbers {
+    /// By instruction.
+    pub(crate) at: Vec<u32>,
+    /// By block: whether the numbers of its instructions are true.
+    pub(crate) valid: Vec<bool>,
+}
+
+impl OrderCache {
+    pub(crate) fn invalidate(
+        &self,
+        block: BlockId,
+    ) {
+        let mut numbers = self.0.borrow_mut();
+        if let Some(one) = numbers.valid.get_mut(block.0 as usize) {
+            *one = false;
+        }
+    }
+}
+
+impl Clone for OrderCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl std::fmt::Debug for OrderCache {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        out.write_str("OrderCache")
+    }
+}
+
+impl PartialEq for OrderCache {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
 }
 
 /// What a debugger is told of a source variable, from a point of the code on:
@@ -319,6 +396,7 @@ pub struct Function {
     pub(crate) layout: Vec<BlockId>,
     pub(crate) value_uses: Vec<Vec<Use>>,
     pub(crate) block_uses: Vec<Vec<Use>>,
+    pub(crate) order: OrderCache,
     pub(crate) changes: ChangeLog,
     /// How many edits of each kind the function has had: no part of what it is.
     pub(crate) epochs: crate::touched::Epochs,
@@ -383,6 +461,7 @@ impl Function {
             layout: Vec::new(),
             value_uses: Vec::new(),
             block_uses: Vec::new(),
+            order: OrderCache::default(),
             changes: ChangeLog::default(),
             epochs: crate::touched::Epochs::default(),
             taken: 0,
@@ -501,6 +580,60 @@ impl Function {
         id: BlockId,
     ) -> &Block {
         &self.blocks[id.0 as usize]
+    }
+
+    /// `inst`'s number in its block, the block renumbered if an edit made its
+    /// numbers false.
+    fn number_of(
+        &self,
+        inst: InstId,
+    ) -> Option<(BlockId, u32)> {
+        let block = self.parent(inst)?;
+        let mut numbers = self.order.0.borrow_mut();
+        if numbers.valid.len() < self.blocks.len() {
+            numbers.valid.resize(self.blocks.len(), false);
+        }
+        if numbers.at.len() < self.instructions.len() {
+            numbers.at.resize(self.instructions.len(), 0);
+        }
+        if !numbers.valid[block.0 as usize] {
+            for (at, &one) in self.blocks[block.0 as usize].instructions.iter().enumerate() {
+                numbers.at[one.0 as usize] = at as u32;
+            }
+            numbers.valid[block.0 as usize] = true;
+        }
+        Some((block, numbers.at[inst.0 as usize]))
+    }
+
+    /// `Instruction::getNextNode`: what follows `inst` in its block.
+    pub fn next_in_block(
+        &self,
+        inst: InstId,
+    ) -> Option<InstId> {
+        let (block, at) = self.number_of(inst)?;
+        self.blocks[block.0 as usize].instructions.get(at as usize + 1).copied()
+    }
+
+    /// `Instruction::getPrevNode`: what stands before `inst` in its block.
+    pub fn prev_in_block(
+        &self,
+        inst: InstId,
+    ) -> Option<InstId> {
+        let (block, at) = self.number_of(inst)?;
+        self.blocks[block.0 as usize].instructions.get((at as usize).checked_sub(1)?).copied()
+    }
+
+    /// `Instruction::comesBefore`: whether `a` stands before `b` in their one
+    /// block (false for two in different blocks, or one that is not placed).
+    pub fn comes_before(
+        &self,
+        a: InstId,
+        b: InstId,
+    ) -> bool {
+        match (self.number_of(a), self.number_of(b)) {
+            (Some((x, i)), Some((y, j))) => x == y && i < j,
+            _ => false,
+        }
     }
 
     pub fn layout(&self) -> &[BlockId] {
