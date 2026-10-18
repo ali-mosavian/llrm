@@ -5,7 +5,7 @@ use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::module::Module;
 use llrm_mir::passes::Outer;
 
-use super::{_threaded, Decide, decided};
+use super::{_threaded, Decide, decided, decided_using};
 use crate::testing::{ACROSS_READONLY_CALL, managed, parsed, printed, results};
 
 /// @f decided; whether anything changed.
@@ -13,6 +13,13 @@ fn decide(module: &mut Module) -> bool {
     let (layout, outer) = (layout(module), Outer::of(module, None));
     let (context, function) = module.function_mut("f").expect("@f");
     decided(context, &layout, function, &outer).expect("decides")
+}
+
+/// @f decided by ScalarEvolution (`LLRM_EXP_SCEV_DECIDE`).
+fn decide_by_scev(module: &mut Module) -> bool {
+    let (layout, outer) = (layout(module), Outer::of(module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    decided_using(context, &layout, function, &outer, true).expect("decides")
 }
 
 /// `text` decided is `expected`, and computes what it did on `inputs`.
@@ -350,7 +357,7 @@ fn decide_solves_no_memory() {
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
     let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
-    super::_decided(context, &layout, function, &mut analyses).expect("decides");
+    super::_decided(context, &layout, function, &mut analyses, false).expect("decides");
     assert!(analyses.cached::<llrm_analysis::manager::ThroughMemory>().is_none(), "decide solved memory for the body");
 }
 
@@ -368,7 +375,7 @@ fn decide_asks_no_memory_annotations_or_points_to() {
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
     let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
-    super::_decided(context, &layout, function, &mut analyses).expect("decides");
+    super::_decided(context, &layout, function, &mut analyses, false).expect("decides");
     assert!(analyses.cached::<llrm_analysis::manager::PointerValues>().is_none(), "decide solved points-to");
     assert!(analyses.cached::<llrm_analysis::manager::Annotated>().is_none(), "decide annotated the body's memory");
 }
@@ -587,20 +594,57 @@ crash:
 !0 = !{i16 0, i16 -32768}
 ";
 
-/// The partition index is not an add recurrence (the counter steps it in one
-/// arm only), so ScalarEvolution does not bound it by the guards, as at the
-/// pin: LLVM's `opt` keeps this check through `simplifycfg`, `jump-threading`
-/// and `correlated-propagation`, and drops it only after `loop-rotate`,
-/// `indvars` and `simplifycfg` have run. The old guard engine of `decide` did
-/// it alone; the answer is the same at the end of the pipeline, and `decide`
-/// alone leaves the check.
 #[test]
-fn test_an_index_that_follows_the_counter_is_left_to_the_loop_passes() {
+fn test_an_index_that_follows_the_counter_is_below_the_length_the_loop_was_checked_against() {
     let mut module = parsed(&format!("{DOS}{PARTITION_CHECK}"));
     let before = results(&module, INPUTS);
-    decide(&mut module);
+    assert!(printed(&module).contains("br i1 %i_ok"), "premise: the check is in the loop");
+    assert!(decide(&mut module));
+    let after = printed(&module);
+    assert!(!after.contains("br i1 %i_ok"), "{after}");
+    assert_eq!(results(&module, INPUTS), before);
+}
+
+/// With `LLRM_EXP_SCEV_DECIDE`, ScalarEvolution does not bound that index by
+/// the guards: it is not an add recurrence (the counter steps it in one arm
+/// only), as at the pin, where `opt` keeps this check through `simplifycfg`,
+/// `jump-threading` and `correlated-propagation` and drops it after
+/// `loop-rotate`, `indvars` and `simplifycfg`.
+#[test]
+fn test_an_index_that_follows_the_counter_is_left_to_the_loop_passes_by_scev() {
+    let mut module = parsed(&format!("{DOS}{PARTITION_CHECK}"));
+    let before = results(&module, INPUTS);
+    decide_by_scev(&mut module);
     assert!(printed(&module).contains("br i1 %i_ok"), "{}", printed(&module));
     assert_eq!(results(&module, INPUTS), before);
+}
+
+/// A condition a dominating branch implies is decided by either engine:
+/// `n > 5` taken, `n > 3` is true.
+#[test]
+fn test_a_compare_a_dominating_branch_implies_is_decided_by_both_engines() {
+    let text = "define i16 @f(i16 %n) {
+b:
+  %big = icmp sgt i16 %n, 5
+  br i1 %big, label %in, label %out
+in:
+  %mid = icmp sgt i16 %n, 3
+  br i1 %mid, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+out:
+  ret i16 2
+}
+";
+    for by_scev in [false, true] {
+        let mut module = parsed(&format!("{DOS}{text}"));
+        let (layout, outer) = (layout(&module), Outer::of(&module, None));
+        let (context, function) = module.function_mut("f").expect("@f");
+        assert!(decided_using(context, &layout, function, &outer, by_scev).expect("decides"));
+        assert!(!printed(&module).contains("br i1 %mid"), "scev {by_scev}: {}", printed(&module));
+    }
 }
 
 /// Where the counter may be negative the check stays: `lo` is not known below
@@ -634,6 +678,19 @@ crash:
     let mut module = parsed(&format!("{DOS}{text}"));
     assert!(decide(&mut module));
     assert!(!printed(&module).contains("br i1 %fits"), "{}", printed(&module));
+}
+
+/// Every guard query found the body's `llvm.assume`s again, a walk of the whole
+/// body naming each call's callee by string (`Intrinsic::named`): decide was
+/// 5.9% of QCport, a fifth of it that. The body's assumptions are found once,
+/// as LLVM's AssumptionCache.
+#[test]
+fn test_a_body_is_searched_for_its_assumptions_once_however_many_guards_are_asked() {
+    let mut module = parsed(&format!("{DOS}{PARTITION_CHECK}"));
+    let before = llrm_analysis::assumptions::built();
+    assert!(decide(&mut module));
+    let searched = llrm_analysis::assumptions::built() - before;
+    assert_eq!(searched, 1, "the body was searched {searched} times");
 }
 
 /// `decide` solved what the counted loops bound twice: once for the points-to

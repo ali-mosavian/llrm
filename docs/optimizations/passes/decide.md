@@ -81,6 +81,14 @@ before `phiopt`. `Options::decide` turns it off (no `-f` flag); nothing runs
 at -O0. `jumpthread` is the separate pass that threads a state variable's
 edges.
 
+## ScalarEvolution
+With `LLRM_EXP_SCEV_DECIDE` set, a branch the other engines leave is asked of
+ScalarEvolution (`isKnownPredicateAt` at the branch, then its inverse) in place
+of the `guards` engine; off by default. It moves 60 of 1,590 objects, and the
+nested counted loops of `rectwo` are 10% slower at -O2 and -O3, so it stays off
+until `simple-loop-unswitch` and `simplifycfg`, which LLVM leaves them to, are
+joined.
+
 ## Needs
 `consts`, `constant_cycles`, `ranges`, `guards`, `induction`, points-to
 (`pointers`), the CFG shape.
