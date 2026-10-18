@@ -29,6 +29,7 @@ pub const CALLER_POPS: i64 = 0x80;
 pub const FAR_CALL: i64 = 0x4;
 pub const INTERRUPT: i64 = 0x8;
 // cg_target_switches (x86swi.h)
+pub const BIG_DATA: i64 = 0x2;
 pub const BIG_CODE: i64 = 0x4;
 
 /// Borland headers expose these as compiler intrinsics, while their callable

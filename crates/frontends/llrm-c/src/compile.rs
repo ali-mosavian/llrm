@@ -468,6 +468,15 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--os-layer" => os_layer = Some(value("--os-layer")?),
             "-fentry-requests" => entry_requests = true,
+            // The memory model the front end is asked
+            // for: `-mmodel=small|medium|compact|large` is its -ms -mm -mc -ml.
+            flag if flag.starts_with("-mmodel=") => match &flag[8..] {
+                "small" => watcom.push("-ms".to_owned()),
+                "medium" => watcom.push("-mm".to_owned()),
+                "compact" => watcom.push("-mc".to_owned()),
+                "large" => watcom.push("-ml".to_owned()),
+                other => return Err(format!("-mmodel={other}: expected small, medium, compact or large")),
+            },
             // Watcom's: relaxed alias checking; relaxed floating point.
             "-oa" => watcom.push("-oa".to_owned()),
             "-on" => watcom.push("-on".to_owned()),
@@ -1393,6 +1402,30 @@ mod tests {
         let (push, code, pop) =
             (asm.find("push dx").expect(&asm), asm.find("db 0cch").expect(&asm), asm.find("add sp, 4").expect(&asm));
         assert!(push < code && code < pop, "{asm}");
+    }
+
+    /// `-mmodel=large` asks the front end for far data: an unmarked pointer is
+    /// a far one (a segment and an offset, the load through `es`). The
+    /// model was fixed at medium whatever it was told: `TY_POINTER` was always
+    /// 2 bytes.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_the_large_model_makes_an_unmarked_pointer_far() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("far.c");
+        std::fs::write(&source, "int first(int *p) { return *p; }\n").unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let listing = |model: &[&str]| {
+            let text = super::recorded_for(&source, &[], false, model, &profile).expect("wccq records far.c");
+            let options = llrm_core::driver::Options {
+                abi: Some("watcom".to_owned()),
+                ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+            };
+            llrm_core::backend::masm::text(&super::selected(&text, "far", None, &options).unwrap()).unwrap()
+        };
+        assert!(!listing(&[]).contains("es:"), "medium reads through DS");
+        assert!(listing(&["-ml"]).contains("es:"), "large reads through ES");
     }
 
     /// A far pointer made from a long in memory had its segment as a word-wide

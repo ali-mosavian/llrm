@@ -586,9 +586,9 @@ impl<'u> Types<'u> {
             {
                 Shape::Pointer(4)
             }
-            // An unmarked pointer is the target's near one, whatever model the
-            // front end was told.
-            "TY_POINTER" => Shape::Pointer(2),
+            // An unmarked pointer is far in a model with far data (the front
+            // end's -mc, -ml).
+            "TY_POINTER" => Shape::Pointer(big(hir::BIG_DATA)),
             "TY_CODE_PTR" => Shape::Pointer(big(hir::BIG_CODE)),
             "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" => Shape::Pointer(2),
             "TY_HUGE_POINTER" => Shape::Huge,
@@ -603,7 +603,9 @@ impl<'u> Types<'u> {
             },
         };
         let class = match type_.as_str() {
-            "TY_POINTER" if !self.flat => Some("pointer2"),
+            "TY_POINTER" if !self.flat => {
+                Some(if self.unit.target & hir::BIG_DATA != 0 { "pointer4" } else { "pointer2" })
+            }
             other => classes_for(self.flat, other),
         };
         Ok(self.of(shape, Some(class.unwrap_or(CHAR))))

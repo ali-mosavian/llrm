@@ -123,6 +123,12 @@ takes arguments, for `__argc`, which builds `argv`: the references Open Watcom's
 final routines the start-up walks) are declared with their markers in every object (`bracketed_segments`): without
 them a linker laid the ranges out empty, `argc` was 0 and no initializer ran.
 
+## Memory models
+
+`-mmodel=small|medium|compact|large` asks the front end for that model (its `-ms -mm -mc -ml`); medium, far code and
+near data, is the default. With far data (`compact`, `large`) an unmarked pointer is a far one, as `__far` makes it in
+any model. `block_alloc` and `block_free` of the OS layer (real mode) give a far heap its DOS memory blocks.
+
 ## Numbers as pointers
 
 A number used as a pointer (`NULL`, Open Watcom's `SIG_DFL` = `(handler)2`) is the pointer with those bits, whatever
