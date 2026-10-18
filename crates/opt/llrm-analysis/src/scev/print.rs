@@ -194,6 +194,7 @@ impl ScalarEvolution {
             Operand::Constant(id) => match &cx.context.get(id).kind {
                 ConstantKind::Null => "null".to_owned(),
                 ConstantKind::Poison => "poison".to_owned(),
+                ConstantKind::Undef => "undef".to_owned(),
                 ConstantKind::Global(global) => {
                     format!(
                         "@{}",
