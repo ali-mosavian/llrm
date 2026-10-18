@@ -519,6 +519,11 @@ impl Function {
         self.layout.first().copied()
     }
 
+    /// One more than the largest block number: LLVM's `getMaxNumber`.
+    pub fn block_capacity(&self) -> usize {
+        self.blocks.len()
+    }
+
     /// The block holding `inst`, while it is placed.
     pub fn parent(
         &self,

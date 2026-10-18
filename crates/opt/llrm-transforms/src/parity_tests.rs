@@ -1,5 +1,6 @@
+use crate::parity::Phase;
 use crate::parity::{self, Entry, SlotKind};
-use crate::pipeline::{self, Applied, Phase};
+use crate::pipeline::{self, Applied};
 
 fn names(
     applied: &Applied,
