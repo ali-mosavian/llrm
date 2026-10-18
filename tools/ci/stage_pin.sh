@@ -16,6 +16,9 @@ cp -a "/usr/bin/$triple-gcc-13" "$stage/gcc/bin/"
 ln -s "$triple-gcc-13" "$stage/gcc/bin/gcc"; ln -s "$triple-gcc-13" "$stage/gcc/bin/gcc-13"
 cp -a "/usr/libexec/gcc/$triple/13" "$stage/gcc/libexec/gcc/$triple/"
 cp -a "/usr/lib/gcc/$triple/13" "$stage/gcc/lib/gcc/$triple/"
+# gcc's dev links to the system's sanitizer/runtime libraries point out of the stage: dropped, so a -fsanitize/-fopenmp link fails plainly (no pin test uses them).
+find "$stage" -xtype l -delete
+python3 "$here/tools/ci/check_stage.py" "$stage"
 (cd "$stage" && find . -type f -printf '%s %p\n' | sort -k2 > MANIFEST && sha256sum $(find . -type f ! -name MANIFEST | sort) >> MANIFEST)
 # Verified from the staged path: the pinned build's version, gcc 13.4.0, and a compile with each.
 export LLRM_PIN_DIR=$stage PATH="$stage/gcc/bin:$PATH"
