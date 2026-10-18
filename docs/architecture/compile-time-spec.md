@@ -377,6 +377,23 @@ The budgets are counts, not times, so a test can assert them exactly. `llrm-supp
 
 A budget test fails like any other test, with the counter, the budget and the fixture named. Each budget is set at the end of the stage that reaches it, and never raised without a measured reason in the PR. The existing relative gate (`measure` in `tools/gate/tiers.toml`, against the merge-base) stays.
 
+**Clang's budgets (`tools/clang_pass_budgets.py`, d_faces, the plan's reference 24.0.0git `d1106deb71cc`, callgrind on `-cc1`).** Phases, M instructions: -O1 front end 45, optimizer 121, codegen 184 (350); -O2 45 / 178 / 193 (416); -Os 45 / 176 / 188 (409). The front end is the rest of the total; the optimizer is the new pass manager's module pipeline, codegen the legacy manager (selection to the object). Per IR instruction per run (a pass's inclusive `run` over the IR of each dump before it), the optimizer's aggregate is 430 at -O2 over 1,132 runs; llrm's, by `tools/pass_budgets.py`, is 7,664 over 966 runs, 18 times as much, on half the IR instructions run over (202 k against 401 k). The "220" the plan quotes is not a per-pass floor: InstCombine spends 4,061 and GVN 25,649. The gap in M, by role, -O2 (llrm's `mir NAME` totals include the analyses each asked for):
+
+| role (llrm / clang) | llrm M | clang M | gap M | per IR instr per run, llrm / clang |
+|---|---|---|---|---|
+| fold + algebraic / InstCombine | 330.0 | 39.5 | +290.5 | 24,444 / 4,061 |
+| gvn / GVN | 230.6 | 32.1 | +198.5 | 28,902 / 25,649 |
+| hoist / LICM | 164.5 | 7.3 | +157.2 | 16,740 / 770 |
+| lsr / LoopStrengthReduce (codegen in LLVM) | 159.3 | 10.4 | +148.9 | 105,281 / n.a. |
+| decide / CVP + SimplifyCFG | 133.7 | 15.1 | +118.6 | 16,047 / 2,790 + 716 |
+| promote + sroa / SROA | 125.8 | 9.8 | +116.0 | 13,211 / 1,427 |
+| jumpthread / JumpThreading | 112.5 | 4.5 | +108.0 | 70,897 / 1,852 |
+| indvars / IndVarSimplify | 72.0 | 11.6 | +60.4 | 8,729 / 4,952 |
+| dse / DSE | 61.9 | 2.3 | +59.6 | 8,694 / n.a. |
+| lcssa / LCSSA | 24.7 | 0.4 | +24.3 | 2,523 / 70 |
+
+The pairs are by role; llrm's fold, algebraic and decide split what InstCombine, SimplifyCFG and CVP do. The roles sum to a gap of 1,341 M against the 2,929 M llrm compile and clang's 416 M. A per-pass budget at clang's own number, not 300, is what step 4.1 can hold a pass to.
+
 ## 7. Migration
 
 Each stage lands alone. Stages marked *identical* must pass `tools/identical.py` (every program and QCport module at every level, byte-identical, with the `LLRM_CHECK_*` modes on). Stages that change output must pass the gate of 4.3. The expected d_faces -O1 after each stage is projected from the measured component it removes; the components are in review sections 2-7.
