@@ -377,6 +377,23 @@ The budgets are counts, not times, so a test can assert them exactly. `llrm-supp
 
 A budget test fails like any other test, with the counter, the budget and the fixture named. Each budget is set at the end of the stage that reaches it, and never raised without a measured reason in the PR. The existing relative gate (`measure` in `tools/gate/tiers.toml`, against the merge-base) stays.
 
+**Clang's budgets (`tools/clang_pass_budgets.py`, d_faces, the plan's reference 24.0.0git `d1106deb71cc`, callgrind on `-cc1`).** Phases, M instructions: -O1 front end 45, optimizer 121, codegen 184 (350); -O2 45 / 178 / 193 (416); -Os 45 / 176 / 188 (409). The front end is the rest of the total; the optimizer is the new pass manager's module pipeline, codegen the legacy manager (selection to the object). Per IR instruction per run (a pass's inclusive `run` over the IR of each dump before it), the optimizer's aggregate is 430 at -O2 over 1,132 runs; llrm's, by `tools/pass_budgets.py`, is 7,664 over 966 runs, 18 times as much, on half the IR instructions run over (202 k against 401 k). The "220" the plan quotes is not a per-pass floor: InstCombine spends 4,061 and GVN 25,649. The gap in M, by role, -O2 (llrm's `mir NAME` totals include the analyses each asked for):
+
+| role (llrm / clang) | llrm M | clang M | gap M | per IR instr per run, llrm / clang |
+|---|---|---|---|---|
+| fold + algebraic / InstCombine | 330.0 | 39.5 | +290.5 | 24,444 / 4,061 |
+| gvn / GVN | 230.6 | 32.1 | +198.5 | 28,902 / 25,649 |
+| hoist / LICM | 164.5 | 7.3 | +157.2 | 16,740 / 770 |
+| lsr / LoopStrengthReduce (codegen in LLVM) | 159.3 | 10.4 | +148.9 | 105,281 / n.a. |
+| decide / CVP + SimplifyCFG | 133.7 | 15.1 | +118.6 | 16,047 / 2,790 + 716 |
+| promote + sroa / SROA | 125.8 | 9.8 | +116.0 | 13,211 / 1,427 |
+| jumpthread / JumpThreading | 112.5 | 4.5 | +108.0 | 70,897 / 1,852 |
+| indvars / IndVarSimplify | 72.0 | 11.6 | +60.4 | 8,729 / 4,952 |
+| dse / DSE | 61.9 | 2.3 | +59.6 | 8,694 / n.a. |
+| lcssa / LCSSA | 24.7 | 0.4 | +24.3 | 2,523 / 70 |
+
+The pairs are by role; llrm's fold, algebraic and decide split what InstCombine, SimplifyCFG and CVP do. The roles sum to a gap of 1,341 M against the 2,929 M llrm compile and clang's 416 M. A per-pass budget at clang's own number, not 300, is what step 4.1 can hold a pass to.
+
 ## 7. Migration
 
 Each stage lands alone. Stages marked *identical* must pass `tools/identical.py` (every program and QCport module at every level, byte-identical, with the `LLRM_CHECK_*` modes on). Stages that change output must pass the gate of 4.3. The expected d_faces -O1 after each stage is projected from the measured component it removes; the components are in review sections 2-7.
@@ -479,6 +496,7 @@ Changes that were correct and measured, and did not pay on the main they were me
 - **Algebraic's analyses taken from the manager instead of derived** (measured, not built; d_faces -O2, probe in `algebraic.rs`). Of the pass's 101 M, 73 M is set-up: `induction::advances` 28.7 M (8 asks, 3.6 M each), `Ranges::of` 26.8 M (20 asks, 6 real rebuilds of 4.5 M), `Shape::of` 12.4 M (114), `DemandedBits` 5.9 M. Asks on an unchanged body version: 2.1 M of the 73 (the manager already holds what is unchanged); every other ask follows an edit. Rewrites made by the ranges rule: 0 of 80 candidates on d_faces, 6 in 225 uses over the 37 bench programs. Switching a rule off, whole-compile instructions: ranges -15.6 M (-0.57%, the next consumer re-pays 11 M of the facts algebraic kept warm), advances -28.7 M (-1.05%), both -45.3 M (-1.66%), d_faces output identical; on the benches ranges off changes frames, huge, matmul, recpow and tile, advances off changes ring and tile. So the saving is per-candidate asks (advances for the loops that hold a masked source: landed as its own change), not a cache; ranges per candidate is capped at 0.57% and waits for the combine worklist, whose asks are per visited instruction.
 - **Each pass run once, in round 1** (measured, not built; `LLRM_ONCE=<pass>` on a worktree of main `4f12e5818`, identical.py -O1/-O2/-Os, 1,447 objects, d_faces -O2 instructions). Objects whose output differs without the repeat runs / instructions with them dropped: fold 80 / -3.4%, decide 83 / -2.6%, algebraic 39 / -0.5%, phiopt 0 / 0.0%, dead 444 / +0.2%, fill 115 / -1.0%, lcssa 166 / -1.5%, hoist 56 / -0.8% (-3.9% at -Os), gvn 323 / -8.9%, indvars 28 / -8.3% (-13.5% at -Os), dse 1,289 / +11.5%, promote 7 / -1.1%, loopmotion 7 / -0.3%; sroa, unroll, ports, equalcalls, floatloop 0 / 0.0%. The combine's members (fold, algebraic, phiopt, decide) need a repeat on 202 objects at most (14%), and dropping their repeats is worth 6.5% of the compile: the case for one worklist pass with LLVM's re-queue rule instead of three rounds. `dead`'s 444 are the deletion LLVM does on the spot, and `dse`'s 1,289 (and +11.5%) show it is the pass the others need repeated.
 
+- **The old MemorySSA walker's caps and stops** (measured; closed as superseded by #2127, branches kept: #2011, #2020, #2034, #2083). #2011: `mem` N=1600 7,299 to 6,668 M (-8.6%), peak RSS 331 to 181 MB, `loop` 30,626 to 31,034 M (+1.3%). #2020: `loop` N=1600 31,034 to 26,136 M (-15.8%). #2034: `diamond` N=1600 (with #2010) 2,517 to 2,183 M (-13%). #2083: `mem` N=1600 6,809 to 6,045 M (-11.2%). The stack together takes `loop` N=1600 down 65% and the exponent to 1.1; `d_faces` +0.07% to +0.11% across #2020 and #2034. Turn-on criterion for the translated walker: at LLVM's caps, `loop` and `mem` at N=1600 and the exponent are at or below the stack's, on the ladder, before any client moves over.
 
 ## 9. Container profile
 

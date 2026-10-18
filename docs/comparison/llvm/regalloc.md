@@ -2,6 +2,8 @@
 
 TL;DR: on 800 diamonds (3,213 IR instructions) LLVM's greedy allocator and live-interval analysis cost 11 M instructions of a 222 M `llc` run; llrm's allocator costs 831 M of 2,014 M. LLVM splits 3 live ranges (`splitAroundRegion`, 3 calls); llrm makes 79 split attempts, each of which re-reads the whole function (`split placed` 221 M, `split carving` 148 M), because it holds 31 merged `x & mask` values across the chain where LLVM tests `x` again at each branch (187 `TEST8ri`; 419 stack operands against 5).
 
+> **Reference note.** The LLVM allocator figures on this page (greedy 39.5 M, 815 assignments, 78 evictions, per-decision costs) were taken from the distro `llc` 20.1.8, are not reproduced on the pinned or the distro `llc`, and are being re-taken on the pinned 24.0.0git `d1106deb71cc` by regalloc-core-poc. Do not quote them until its old-versus-new lands.
+
 ## LLVM
 
 A live range is split only after assignment and eviction fail, by a ladder of cheap tests: one-block ranges split locally, then one region split, then block by block. Interference comes from a 32-entry cache ([`InterferenceCache.h#L137`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/InterferenceCache.h#L137)) and the edge bundles are an analysis computed once ([`RegAllocGreedy.cpp#L240`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L240)).
