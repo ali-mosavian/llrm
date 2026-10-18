@@ -277,9 +277,10 @@ b2:
     assert!(text.contains("zext i1 true") || text.contains("ret i16 1"), "{text}");
 }
 
-/// `x == 5` taken: `x` is 5 in the arm.
+/// `x == 5` taken: the compare is true in the arm, and `x` stays (DEVIATE 17:
+/// replacing it by 5 made matmul -O2 +5.7% code bytes on Nib).
 #[test]
-fn test_an_equality_taken_replaces_the_variable_by_the_constant() {
+fn test_an_equality_taken_leaves_the_compared_operand() {
     let (text, changed) = numbered(
         "define i16 @f(i16 %x) {
 b0:
@@ -287,8 +288,11 @@ b0:
   br i1 %c, label %b1, label %b2
 
 b1:
+  %d = icmp eq i16 %x, 5
+  %e = zext i1 %d to i16
   %y = add i16 %x, %x
-  ret i16 %y
+  %r = add i16 %y, %e
+  ret i16 %r
 
 b2:
   ret i16 0
@@ -297,7 +301,7 @@ b2:
         &[&[5], &[6]],
     );
     assert!(changed);
-    assert!(text.contains("ret i16 10"), "{text}");
+    assert!(text.contains("%y = add i16 %x, %x") && text.contains("add i16 %y, 1"), "{text}");
 }
 
 /// The case value is the switch value in the case's block, when one edge
@@ -339,14 +343,14 @@ define i16 @f(i16 %x) {
 b0:
   %c = icmp eq i16 %x, 7
   call void @llvm.assume(i1 %c)
-  %y = add i16 %x, 1
-  ret i16 %y
+  %d = zext i1 %c to i16
+  ret i16 %d
 }
 ",
         &[&[7]],
     );
     assert!(changed);
-    assert!(text.contains("ret i16 8"), "{text}");
+    assert!(text.contains("ret i16 1"), "{text}");
 }
 
 /// A branch on a constant makes its other arm dead; the phi it feeds takes

@@ -13,6 +13,8 @@
 //! `ImplicitControlFlowTracking` are not kept: nothing in this part reads
 //! them (the last is read by PRE, stage 5).
 //!
+//! DEVIATE 17, see `PROPAGATE_COMPARE_FACTS`.
+//!
 //! DEVIATE 14, what "changed" says: LLVM's `processFoldableCondBr` answers true
 //! for a branch on a constant it found a dead arm of, whether or not it edited
 //! anything, and its pass manager lets that stand. A pipeline run to a fixed
@@ -41,6 +43,12 @@ use llrm_support::hash::{HashMap, HashSet, IndexMap};
 
 use super::table::{Env, ExprOp, LeaderMap, ValueTable};
 use crate::local;
+
+/// DEVIATE 17 (temporary): what a taken compare says of its operands (`A == B`
+/// replaces `A` by `B`; `A >= B` makes `A < B` false) is not propagated. A
+/// measured loss: matmul -O2 +5.7% code bytes on Nib, +2.5% on BASIC, jpeg
+/// +0.9%. The compare itself still becomes its edge's constant.
+const PROPAGATE_COMPARE_FACTS: bool = false;
 
 /// What `propagateEquality` is rooted at: the edge from a block to a
 /// successor, or an instruction (an assume).
@@ -450,7 +458,7 @@ impl GvnPass<'_> {
                 // replace A with B everywhere in the scope. For floating point
                 // operations, we have to be careful since equality does not
                 // always imply equivalance.
-                if self.is_equivalence(&opcode, flags, op0, op1, is_known_false) {
+                if PROPAGATE_COMPARE_FACTS && self.is_equivalence(&opcode, flags, op0, op1, is_known_false) {
                     worklist.push((op0, op1));
                 }
 
@@ -473,7 +481,7 @@ impl GvnPass<'_> {
                 // If the number we were assigned was brand new then there is no
                 // point in looking for an instruction realizing it: there
                 // cannot be one!
-                if num < next_num {
+                if PROPAGATE_COMPARE_FACTS && num < next_num {
                     for entry in self.leader_table.get_leaders(num).to_vec() {
                         // Only look at leaders that either dominate the start
                         // of the edge, or are dominated by the end. This check
@@ -504,8 +512,10 @@ impl GvnPass<'_> {
                 // value number is replaced with false. The leader table only
                 // tracks basic blocks, not edges. Only add to if we have the
                 // simple case where the edge dominates the end.
-                for &block in &dominated_blocks {
-                    self.leader_table.insert(num, not_val, block);
+                if PROPAGATE_COMPARE_FACTS {
+                    for &block in &dominated_blocks {
+                        self.leader_table.insert(num, not_val, block);
+                    }
                 }
                 continue;
             }
