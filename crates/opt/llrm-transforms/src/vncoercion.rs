@@ -44,7 +44,8 @@
 //! `vncoercion_tests.rs`.
 //!
 //! # Used by
-//! Nothing yet; `gvn`'s load elimination (stage 4 of the GVN port) is the caller this is for.
+//! Nothing yet; `gvn`'s load elimination (stage 4 of the GVN port) is the
+//! caller this is for.
 
 use llrm_mir::constfold;
 use llrm_mir::context::{Constant, ConstantKind, Context};
