@@ -87,7 +87,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     assert_eq!(parity::check(parity::REGISTRY, Phase::Backend, &built), Ok(()));
     let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@99"), "{why}");
-    let why = parity::check_backend(&["floatalloc@8", "jumps@17", "unknown@1"]).unwrap_err();
+    let why = parity::check_backend(&["floatalloc@8", "jumps@17", "allocate@11", "unknown@1"]).unwrap_err();
     assert!(why.contains("unknown@1"), "{why}");
 }
 
@@ -102,8 +102,9 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
     assert!(why.contains("jumps@17"), "{why}");
     assert!(parity::joined_slots(parity::REGISTRY, &built).all(|one| one != "jumps@17"));
     let count = parity::tally(parity::REGISTRY);
-    assert_eq!(count.partial, 1);
-    assert!(parity::report().contains("jumps@17") && parity::report().contains("1 partial"));
+    // jumps@17 and allocate@11 (greedy by default under LLVM's order).
+    assert_eq!(count.partial, 2);
+    assert!(parity::report().contains("jumps@17") && parity::report().contains("2 partial"));
 }
 
 /// A Partial slot without its criterion and exit says what is done and not what
