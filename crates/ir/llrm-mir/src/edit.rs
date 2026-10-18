@@ -72,7 +72,6 @@ impl Function {
         at: Use,
     ) {
         if let Some(uses) = self.uses_of(operand) {
-            #[cfg(test)]
             USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
             uses.retain(|one| *one != at);
         }
@@ -418,7 +417,6 @@ impl Function {
             }
             for (operand, indexes) in places {
                 if let Some(uses) = self.uses_of(operand) {
-                    #[cfg(test)]
                     USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
                     uses.retain(|one| one.user != inst || indexes.binary_search(&one.index).is_err());
                 }
@@ -688,7 +686,6 @@ impl Function {
         }
         for operand in operands {
             if let Some(uses) = self.uses_of(operand) {
-                #[cfg(test)]
                 USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
                 uses.retain(|one| !gone.contains(&one.user));
             }
@@ -1146,7 +1143,12 @@ pub fn instructions_scanned() -> usize {
     SCANNED.with(std::cell::Cell::get)
 }
 
-#[cfg(test)]
 thread_local! {
     pub(crate) static USES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many use-list entries this thread has looked over to remove uses, for a
+/// test that a pass does not scan a long list once per use it removes.
+pub fn uses_scanned() -> usize {
+    USES_SCANNED.with(std::cell::Cell::get)
 }
