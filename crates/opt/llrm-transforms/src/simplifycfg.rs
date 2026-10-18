@@ -102,6 +102,13 @@
 //!   LLVM's default (`simplifycfg-require-and-preserve-domtree` off, where the
 //!   pass is given no `DominatorTree`) the analyses are invalidated when
 //!   anything changed: that is a MIRROR.
+//! - D5. After a terminator was folded, `transform::_trivial_phis` runs over
+//!   the whole body, as `decide` did after the branches it decided: LLVM's pass
+//!   cleans only the phis of the blocks it touched (`removePredecessor`), and
+//!   `bintree` -O3 was 7 instructions longer without the rest (gvn leaves `phi
+//!   [%x, entry], [%self, latch]`; nothing else removes it, and a rule in
+//!   `algebraic` that did made `x_hanoi2` -O2 23% slower by exposing an
+//!   invariant to `hoist`).
 //!
 //! # Runs
 //! Once per round of the function fixed point, before `decide`: the branches
@@ -170,16 +177,23 @@ pub fn simplified(
     callees: &Callees,
     function: &mut Function,
 ) -> bool {
-    let ever = unreachable_removed(context, callees, function) | iteratively_simplified(context, callees, function);
+    let mut folded = false;
+    let ever = unreachable_removed(context, callees, function, &mut folded)
+        | iteratively_simplified(context, callees, function, &mut folded);
     // `iterativelySimplifyCFG` can make a loop dead; the removal and the
     // visits then alternate until neither does anything.
     if !ever {
         return false;
     }
-    if !unreachable_removed(context, callees, function) {
-        return true;
+    if unreachable_removed(context, callees, function, &mut folded) {
+        while iteratively_simplified(context, callees, function, &mut folded)
+            | unreachable_removed(context, callees, function, &mut folded)
+        {}
     }
-    while iteratively_simplified(context, callees, function) | unreachable_removed(context, callees, function) {}
+    if folded {
+        // D5.
+        transform::_trivial_phis(function).expect("a phi nothing reads is erased");
+    }
     true
 }
 
@@ -189,12 +203,13 @@ fn iteratively_simplified(
     context: &mut Context,
     callees: &Callees,
     function: &mut Function,
+    folded: &mut bool,
 ) -> bool {
     let (mut changed, mut local) = (false, true);
     while local {
         local = false;
         for block in function.layout().to_vec() {
-            if function.is_placed(block) && block_simplified(context, callees, function, block) {
+            if function.is_placed(block) && block_simplified(context, callees, function, block, folded) {
                 local = true;
             }
         }
@@ -210,6 +225,7 @@ fn block_simplified(
     callees: &Callees,
     function: &mut Function,
     block: BlockId,
+    folded: &mut bool,
 ) -> bool {
     // No predecessor but not the entry, or only itself: unreachable.
     let predecessors = function.predecessors(block);
@@ -218,6 +234,7 @@ fn block_simplified(
         return true;
     }
     let mut changed = terminator_folded(context, callees, function, block, true);
+    *folded |= changed;
     changed |= transform::duplicate_phis_in(function, block).expect("a phi nothing reads is erased");
     changed | cfg::merged_into_predecessor(function, block)
 }
@@ -229,13 +246,16 @@ pub fn unreachable_removed(
     context: &mut Context,
     callees: &Callees,
     function: &mut Function,
+    folded: &mut bool,
 ) -> bool {
     let Some(entry) = function.entry() else { return false };
     let mut reached = llrm_support::hash::HashSet::default();
     reached.insert(entry);
     let (mut pending, mut changed) = (vec![entry], false);
     while let Some(block) = pending.pop() {
-        changed |= terminator_folded(context, callees, function, block, true);
+        let one = terminator_folded(context, callees, function, block, true);
+        *folded |= one;
+        changed |= one;
         for successor in function.successors(block) {
             if reached.insert(successor) {
                 pending.push(successor);

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifycfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifycfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:692039155fe4bfd4f977a4421bd0d24f99b7c7bf905a4fca0a2661740c03211b -->
+<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:fb173eb1fd234dadee136a9610d04597d11fb23bc94ae99099fdadc2e4554f10 -->
 
 # simplifycfg
 
@@ -107,6 +107,13 @@ the defaults). `MIRROR` unless a line below says `DEVIATE`.
   LLVM's default (`simplifycfg-require-and-preserve-domtree` off, where the
   pass is given no `DominatorTree`) the analyses are invalidated when
   anything changed: that is a MIRROR.
+- D5. After a terminator was folded, `transform::_trivial_phis` runs over
+  the whole body, as `decide` did after the branches it decided: LLVM's pass
+  cleans only the phis of the blocks it touched (`removePredecessor`), and
+  `bintree` -O3 was 7 instructions longer without the rest (gvn leaves `phi
+  [%x, entry], [%self, latch]`; nothing else removes it, and a rule in
+  `algebraic` that did made `x_hanoi2` -O2 23% slower by exposing an
+  invariant to `hoist`).
 
 ## Runs
 Once per round of the function fixed point, before `decide`: the branches

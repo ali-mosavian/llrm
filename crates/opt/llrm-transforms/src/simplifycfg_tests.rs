@@ -240,3 +240,37 @@ b3:
     assert!(simplify(&mut module));
     assert!(printed(&module).contains("br label %b1, !llvm.loop"), "{}", printed(&module));
 }
+
+/// `decide` took out `phi [%x, entry], [%self, latch]` (gvn leaves them) when
+/// it decided a branch; with the literal branches folded here first, `bintree`
+/// -O3 kept the phis and its build loop came out 7 instructions longer.
+#[test]
+fn test_a_fold_takes_a_phi_of_itself_and_one_value_out_of_the_body() {
+    let mut module = parsed(
+        "define i16 @f(i16 %x, i16 %n) {
+b0:
+  br i1 true, label %b1, label %b4
+
+b1:
+  %p = phi i16 [ %x, %b0 ], [ %p, %b2 ]
+  %i = phi i16 [ 0, %b0 ], [ %j, %b2 ]
+  %j = add i16 %i, %p
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  br label %b1
+
+b3:
+  ret i16 %j
+
+b4:
+  ret i16 0
+}
+",
+    );
+    let before = results(&module, &[&[1, 5], &[2, 9]]);
+    assert!(simplify(&mut module));
+    assert_eq!(printed(&module).matches("phi").count(), 1, "{}", printed(&module));
+    assert_eq!(results(&module, &[&[1, 5], &[2, 9]]), before);
+}
