@@ -30,8 +30,8 @@ pub fn module(text: &str) -> Parsed<Module> {
 }
 
 /// Constructs llrm has no producer for, named so the refusal says why.
-const OUTSIDE_SUBSET: [&str; 9] =
-    ["undef", "fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
+const OUTSIDE_SUBSET: [&str; 8] =
+    ["fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
 
 struct Parser {
     tokens: Vec<(Token, usize)>,
@@ -514,7 +514,7 @@ impl Parser {
             }
             Token::Punct('[' | '{' | '<') => true,
             Token::Word(word) => {
-                ["true", "false", "null", "poison", "zeroinitializer", "getelementptr"].contains(&word.as_str())
+                ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr"].contains(&word.as_str())
                     || spelled(&CAST, word).is_some()
             }
             _ => false,
@@ -872,6 +872,7 @@ impl Parser {
                 ConstantKind::Null
             }
             Token::Word(word) if word == "poison" => ConstantKind::Poison,
+            Token::Word(word) if word == "undef" => ConstantKind::Undef,
             Token::Word(word) if word == "zeroinitializer" => ConstantKind::Zero,
             Token::Global(name) => return self.global_ref(&name, ty, line),
             Token::Bytes(bytes) => {

@@ -107,14 +107,13 @@ fn solves_grow_linearly_with_the_function() {
     }
 }
 
-/// DEVIATE 1 and 2: MIR has no vectors and no `undef`.
+/// DEVIATE 1: MIR has no vectors.
 #[test]
-fn mir_has_no_vectors_or_undef() {
+fn mir_has_no_vectors() {
     assert!(
         parse::module("define <2 x i32> @f(<2 x i32> %v) {\nentry:\n  %r = insertelement <2 x i32> %v, i32 1, i32 0\n  ret <2 x i32> %r\n}\n")
             .is_err()
     );
-    assert!(parse::module("define i32 @f() {\nentry:\n  ret i32 undef\n}\n").is_err());
 }
 
 /// DEVIATE 13: the `range` LLVM's tables give

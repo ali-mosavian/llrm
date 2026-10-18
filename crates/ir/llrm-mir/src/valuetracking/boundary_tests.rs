@@ -30,11 +30,6 @@ fn mir_has_no_scalable_vectors_and_no_vscale_range() {
 }
 
 #[test]
-fn mir_has_no_undef() {
-    assert!(rejects("define i32 @f() {\n  ret i32 undef\n}\n"));
-}
-
-#[test]
 fn mir_has_no_operand_bundles() {
     assert!(rejects("declare void @g()\ndefine void @f() {\n  call void @g() [ \"deopt\"(i32 1) ]\n  ret void\n}\n"));
 }
