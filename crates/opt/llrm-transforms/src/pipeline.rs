@@ -229,6 +229,10 @@ pub struct Options {
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); `LLRM_EXP_MEM2REG` sets it, off by default.
     pub mem2reg: bool,
+    /// Under `llvm_order` the SROA slots run the translated unit (`SROA.cpp`,
+    /// [`crate::sroa`], with [`crate::mem2reg`]); `LLRM_EXP_SROA` sets it, off
+    /// by default.
+    pub sroa: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -294,6 +298,7 @@ impl Default for Options {
             unroll_jam: false,
             interchange: false,
             mem2reg: experiment_mem2reg(),
+            sroa: llrm_support::env_flag!("LLRM_EXP_SROA"),
             copy_headers: true,
             for_size: false,
             expensive: true,
@@ -594,6 +599,10 @@ impl FunctionPass for Together {
         self.name
     }
 
+    fn parts(&self) -> Vec<&'static str> {
+        self.parts.iter().flat_map(|part| part.parts()).collect()
+    }
+
     fn adds_memory_operations(&self) -> bool {
         self.parts.iter().any(|part| part.adds_memory_operations())
     }
@@ -652,11 +661,14 @@ pub(crate) fn llvm_order(
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
+    let translated = applied.options.sroa;
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
-        Box::new(Together {
-            name,
-            parts: vec![Box::new(promote::Sroa), Box::new(promote::Promote), Box::new(promote::DeadSlots)],
-        })
+        let parts: Vec<Box<dyn FunctionPass>> = if translated {
+            vec![Box::new(crate::sroa::Sroa), Box::new(crate::mem2reg::Mem2Reg), Box::new(promote::DeadSlots)]
+        } else {
+            vec![Box::new(promote::Sroa), Box::new(promote::Promote), Box::new(promote::DeadSlots)]
+        };
+        Box::new(Together { name, parts })
     };
     let earlycse = |name| slot(name, Box::new(crate::earlycse::EarlyCse));
     let hoist = |name| slot(name, Box::new(hoist::Hoist { size }));
@@ -704,7 +716,7 @@ pub(crate) fn llvm_order(
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             list.extend([
-                slot("fill@737", Box::new(fill::Fill { size })),
+                slot("fill@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot(
                     "indvars@738",
                     Box::new(indvars::IndVars {
@@ -720,7 +732,7 @@ pub(crate) fn llvm_order(
                 dead("dead@801"),
                 decide("decide@809"),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
-                slot("merge@818", Box::new(fill::Merge { size })),
+                slot("merge@818", Box::new(loopidioms::Merge { size })),
                 slot("dse@820", Box::new(dse::Dse)),
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
@@ -1135,7 +1147,7 @@ impl Fixed {
         linear.last.clear();
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
-        let checked = crate::parity::check_phase(phase, &built);
+        let checked = crate::parity::check_phase(phase, &built, applied.options.sroa);
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
         if !matches!(phase, Phase::Simplify) {

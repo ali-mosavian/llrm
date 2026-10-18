@@ -2080,6 +2080,11 @@ impl ModuleAnalyses {
 
 pub trait FunctionPass {
     fn name(&self) -> &'static str;
+    /// The names of the passes that run under `name` (a slot that stands for
+    /// one pass of LLVM and runs several): the pass itself if it is one.
+    fn parts(&self) -> Vec<&'static str> {
+        vec![self.name()]
+    }
     /// Whether the pass may add a memory operation a function did not have (a
     /// load speculated, a call made). The module analyses frozen at a point
     /// of the pipeline (`PassManager::freeze`) are held past a pass that says
