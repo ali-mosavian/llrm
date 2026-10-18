@@ -307,11 +307,71 @@ fn _outside(
         .collect()
 }
 
+thread_local! {
+    /// Blocks looked at to find loops' exits, for a test of the pass's slope.
+    pub(crate) static EXIT_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn exit_work(blocks: usize) {
+    EXIT_WORK.with(|work| work.set(work.get() + blocks));
+}
+
+/// Whether any of `loops` is not in the form: `_needs_grouping` of each, with
+/// the exits of all of them found in one sweep over the blocks and their
+/// predecessors, not by a walk over every loop's body (the blocks times how
+/// deep they nest, on every run of a pass that finds nothing to do).
+fn any_needs_grouping(
+    function: &Function,
+    loops: &[loops::Loop],
+) -> bool {
+    let Some(first) = loops.first() else { return false };
+    let forest = std::rc::Rc::clone(first.body.forest());
+    let mut entered = vec![false; forest.loops.len()];
+    for loop_ in loops {
+        let outside = _outside(function, loop_);
+        let Some(&parent) = outside.first() else { continue };
+        if outside.len() != 1
+            || function.successors(cfg::block(parent)) != [cfg::block(loop_.header)]
+            || loop_.latches.len() != 1
+        {
+            return true;
+        }
+        entered[loop_.body.index()] = true;
+    }
+    // An exit `target` of a loop is dedicated when every predecessor is in the
+    // loop. A predecessor is in the loops from its innermost one up to the
+    // first that holds `target`: a loop on some of those chains and not on all
+    // has an exit reached from outside it too.
+    let mut seen: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for target in function.layout().to_vec() {
+        let predecessors = function.predecessors(target);
+        exit_work(1 + predecessors.len());
+        if predecessors.len() < 2 {
+            continue;
+        }
+        seen.clear();
+        let at = cfg::id(target);
+        for &from in predecessors.iter() {
+            let mut inner = forest.innermost(cfg::id(from));
+            while let Some(index) = inner.filter(|&index| !forest.contains(index, at)) {
+                exit_work(1);
+                *seen.entry(index).or_default() += 1;
+                inner = forest.loops[index].parent;
+            }
+        }
+        if seen.iter().any(|(&index, &count)| count < predecessors.len() && entered[index]) {
+            return true;
+        }
+    }
+    false
+}
+
 /// The blocks outside `loop_` that its blocks branch to.
 fn _exits(
     function: &Function,
     loop_: &loops::Loop,
 ) -> BTreeSet<i64> {
+    exit_work(loop_.body.len());
     loop_
         .body
         .iter()
@@ -342,6 +402,9 @@ fn _simplified(
     mut shape: cfg::Shape,
 ) -> bool {
     if function.entry().is_none() || !shape.dominance.irreducible(function).is_empty() {
+        return false;
+    }
+    if !any_needs_grouping(function, &shape.loops) {
         return false;
     }
     let mut changed = false;

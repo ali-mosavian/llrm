@@ -498,3 +498,40 @@ fn loops_already_in_simplified_form_make_no_copy_of_the_function() {
     };
     assert!(!changed, "a loop in the form was changed");
 }
+
+/// `depth` loops one in the next, each with a preheader, one latch and a
+/// dedicated exit.
+fn nest(depth: usize) -> String {
+    let mut text = String::from("define i16 @f(i16 %m) {\n");
+    for k in 0..depth {
+        let enter = if k == 0 { "b0".to_owned() } else { format!("p{k}") };
+        let inner = if k + 1 < depth { format!("p{}", k + 1) } else { format!("l{k}") };
+        text += &format!(
+            "{enter}:\n  br label %h{k}\n\nh{k}:\n  %i{k} = phi i16 [ 0, %{enter} ], [ %n{k}, %l{k} ]\n  br label %{inner}\n\n"
+        );
+    }
+    for k in (0..depth).rev() {
+        text += &format!(
+            "l{k}:\n  %n{k} = add i16 %i{k}, 1\n  %c{k} = icmp ult i16 %n{k}, %m\n  br i1 %c{k}, label %h{k}, label %x{k}\n\n"
+        );
+        text +=
+            &if k == 0 { format!("x{k}:\n  ret i16 %n{k}\n") } else { format!("x{k}:\n  br label %l{}\n\n", k - 1) };
+    }
+    text + "}\n"
+}
+
+/// The `nest` scaling row: `mir loopsimplify` rescanned every loop's whole body
+/// for exits on each of its runs that found nothing to do, x3.2 per doubling of
+/// the depth (1.85, 5.19, 16.6 Minstr at 16, 32, 64; #2260).
+#[test]
+fn test_a_nest_already_in_form_costs_a_sweep_not_a_walk_of_every_loops_body() {
+    let work = |depth: usize| {
+        let mut module = parsed(&nest(depth));
+        let (_, function) = module.function_mut("f").expect("@f");
+        let before = super::EXIT_WORK.with(std::cell::Cell::get);
+        assert!(!simplified(function), "premise: a nest in form has nothing to group");
+        super::EXIT_WORK.with(std::cell::Cell::get) - before
+    };
+    let (small, big) = (work(16), work(32));
+    assert!(big <= 2 * small + 8, "{small} blocks looked at for 16 loops, {big} for 32");
+}
