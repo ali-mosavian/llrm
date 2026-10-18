@@ -1,0 +1,13 @@
+args 0 cru=[10,20) crs=[10,20) pat=-
+args 1 cru=[-5,5) crs=[-5,5) pat=-
+args 2 cru=full-set crs=full-set pat=-
+args 3 cru=full-set crs=full-set pat=-
+calls 0 cru=[3,9) crs=[3,9) pat=-
+calls 1 cru=[5,7) crs=[5,7) pat=-
+calls 2 cru=[3,6) crs=[3,6) pat=-
+calls 3 cru=[1,5) crs=[1,5) pat=-
+calls 4 cru=[1,30) crs=[1,30) pat=-
+calls 5 cru=[1,5) crs=[1,5) pat=-
+calls 6 cru=[1,30) crs=[1,30) pat=-
+consts 0 cru=full-set crs=full-set pat=-
+consts 1 cru=full-set crs=full-set pat=-
