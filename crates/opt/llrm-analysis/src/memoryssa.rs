@@ -1738,7 +1738,7 @@ fn structure_of(
     let mut next_id = entries.len() + 1;
     for block in &graph {
         let mut current = entries[&block.at];
-        for &inst in function.block(cfg::block(block.at)).instructions() {
+        for inst in function.block(cfg::block(block.at)).iter() {
             let writes = accesses.shared_writes(inst, &nothing);
             let defines = writes.as_ref().is_none_or(|stores| !stores.is_empty());
             if !defines && accesses.reads(inst).is_some_and(<[MemRef]>::is_empty) {

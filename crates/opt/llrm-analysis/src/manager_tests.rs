@@ -825,7 +825,7 @@ fn test_erasing_a_dead_pointer_load_does_not_work_the_call_effects_out_again() {
     llrm_mir::passes::trace_recomputes(true);
     analyses.get::<CallEffects>(context, &layout, f);
     let entry = f.entry().expect("an entry");
-    let load = f.block(entry).instructions()[0];
+    let load = f.block(entry).first().expect("a block with an instruction");
     f.erase(load).expect("an unused load");
     analyses.invalidate(f, &PreservedAnalyses::none());
     analyses.get::<CallEffects>(context, &layout, f);
