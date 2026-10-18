@@ -511,13 +511,66 @@ impl AAResults for BasicAA<'_> {
         self.alias_check(a, b, aaqi)
     }
 
+    /// `getModRefInfoMask`: a location in a constant global or a
+    /// `noalias readonly` argument is never written; one in no object this
+    /// walk (through selects and phis of up to eight arms) names is
+    /// anything.
     fn get_mod_ref_info_mask(
         &mut self,
-        _: &MemoryLocation,
+        loc: &MemoryLocation,
         _: &mut AAQueryInfo,
-        _: bool,
+        ignore_locals: bool,
     ) -> ModRefInfo {
-        ModRefInfo::ModRef
+        let mut max_lookup = 8;
+        let mut worklist = vec![loc.ptr];
+        let mut visited: Vec<Operand> = Vec::new();
+        let mut result = ModRefInfo::NoModRef;
+        // `do { ... } while (!Worklist.empty() && --MaxLookup)`: a `continue`
+        // of the C++ still counts a step.
+        loop {
+            let next = worklist.pop().expect("a non-empty worklist");
+            'step: {
+                let object = self.underlying(next);
+                if visited.contains(&object) {
+                    break 'step;
+                }
+                visited.push(object);
+                let defining = self.defining(object);
+                if ignore_locals && defining.is_some_and(|one| matches!(one.opcode, Opcode::Alloca { .. })) {
+                    break 'step;
+                }
+                if let Some(attrs) = self.argument_attrs(object) {
+                    let facts = llrm_mir::facts::Facts::of(attrs);
+                    if facts.no_alias() && facts.read_only() {
+                        result = result.union(ModRefInfo::Ref);
+                        break 'step;
+                    }
+                }
+                if let Operand::Constant(id) = object {
+                    if let ConstantKind::Global(global) = self.unit.context.get(id).kind {
+                        match self.unit.globals.get(global.0 as usize).map(|one| &one.kind) {
+                            Some(GlobalKind::Variable(variable)) if variable.constant => break 'step,
+                            _ => return ModRefInfo::ModRef,
+                        }
+                    }
+                }
+                match defining.map(|one| (&one.opcode, &one.operands)) {
+                    Some((Opcode::Select, operands)) => worklist.extend([operands[1], operands[2]]),
+                    Some((Opcode::Phi, operands)) => {
+                        if operands.len() / 2 > 8 {
+                            return ModRefInfo::ModRef;
+                        }
+                        worklist.extend(operands.iter().step_by(2).copied());
+                    }
+                    _ => return ModRefInfo::ModRef,
+                }
+            }
+            max_lookup -= 1;
+            if worklist.is_empty() || max_lookup == 0 {
+                break;
+            }
+        }
+        if worklist.is_empty() { result } else { ModRefInfo::ModRef }
     }
 
     fn get_arg_mod_ref_info(
@@ -643,5 +696,42 @@ mod tests {
         let body = "define i32 @f() {\nentry:\n  %a = alloca i32\n  %b = alloca i32\n  ret i32 0\n}\n";
         assert_eq!(answer(body, "a", "b", 4), AliasResult::NoAlias);
         assert_eq!(answer(body, "a", "a", 4), AliasResult::MustAlias);
+    }
+
+    /// `getModRefInfoMask` of `%a` in `@f`.
+    fn mask(
+        body: &str,
+        ignore_locals: bool,
+    ) -> ModRefInfo {
+        let module = parsed(&format!("{M32}{body}"));
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let location = MemoryLocation::new(Operand::Value(value(function, "a")), LocationSize::Precise(4));
+        BasicAA::new(&unit).get_mod_ref_info_mask(&location, &mut AAQueryInfo::default(), ignore_locals)
+    }
+
+    /// A pointer into a constant global is never written, one into a mutable
+    /// global may be, a `noalias readonly` argument is read only (the
+    /// mask answered ModRef for all of them before).
+    #[test]
+    fn the_mask_of_a_constant_global_is_none_and_of_a_mutable_one_is_everything() {
+        let body = |kind: &str| {
+            format!("@g = internal {kind} [8 x i8] zeroinitializer\ndefine void @f() {{\nentry:\n  %a = getelementptr i8, ptr @g, i32 4\n  ret void\n}}\n")
+        };
+        assert_eq!(mask(&body("constant"), false), ModRefInfo::NoModRef);
+        assert_eq!(mask(&body("global"), false), ModRefInfo::ModRef);
+        let argument = "define void @f(ptr noalias readonly %a) {\nentry:\n  ret void\n}\n";
+        assert_eq!(mask(argument, false), ModRefInfo::Ref);
+    }
+
+    /// An alloca is skipped when locals are ignored and anything else when
+    /// not: a select of a constant global and an alloca is NoModRef only with
+    /// locals ignored.
+    #[test]
+    fn the_mask_skips_allocas_only_when_asked_and_follows_a_select() {
+        let body = "@g = internal constant i32 0\ndefine void @f(i1 %c) {\nentry:\n  %l = alloca i32\n  %a = select i1 %c, ptr @g, ptr %l\n  ret void\n}\n";
+        assert_eq!(mask(body, true), ModRefInfo::NoModRef);
+        assert_eq!(mask(body, false), ModRefInfo::ModRef);
     }
 }
