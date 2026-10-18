@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/parity.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/parity.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/parity.rs sha256:90964de8eb350276d7be3d75c1c67d59a6ff4b54e2f31b4c95d8f54e1d17b82f -->
+<!-- src: crates/opt/llrm-transforms/src/parity.rs sha256:48c5e53064c4178ac5bdd62c3646a50cd449674bcb82489187153098279a8288 -->
 
 # parity
 
@@ -21,7 +21,7 @@ old caller can be deleted.
 
 A translation joins when its oracle passes (output identical to `opt` at the
 pin), not when it is on by default; see
-`docs/architecture/parity-pipeline.md`.
+the parity pipeline plan page (PR 2288).
 
 ## Used by
 `pipeline` (`Fixed::linear`), the registry tests.

@@ -1419,10 +1419,10 @@ fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translat
     assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
     assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
     let names = |phase| pipeline::llvm_order(&on, phase).iter().map(|one| one.name()).collect::<Vec<_>>();
-    let simplify = names(pipeline::Phase::Simplify);
+    let simplify = names(crate::parity::Phase::Simplify);
     let count = |what: &str| simplify.iter().filter(|one| one.split('@').next() == Some(what)).count();
     assert_eq!((count("gvn"), count("dse"), count("earlycse")), (1, 1, 1), "{simplify:?}");
-    assert!(names(pipeline::Phase::Early).contains(&"earlycse@1180"), "{:?}", names(pipeline::Phase::Early));
+    assert!(names(crate::parity::Phase::Early).contains(&"earlycse@1180"), "{:?}", names(crate::parity::Phase::Early));
 }
 
 /// A body computes the same answer through LLVM's order.
