@@ -67,7 +67,7 @@ impl Run<'_> {
         }
     }
 
-    pub(super) fn ir_ty(
+    fn ir_ty(
         &mut self,
         ty: Ty,
     ) -> TypeId {
@@ -77,7 +77,7 @@ impl Run<'_> {
         }
     }
 
-    pub(super) fn ty_of_operand(
+    fn ty_of_operand(
         &self,
         v: Operand,
     ) -> TypeId {
@@ -88,7 +88,7 @@ impl Run<'_> {
         }
     }
 
-    pub(super) fn is_pointer(
+    fn is_pointer(
         &self,
         v: Operand,
     ) -> bool {
@@ -98,7 +98,7 @@ impl Run<'_> {
         )
     }
 
-    pub(super) fn constant(
+    fn constant(
         &mut self,
         ty: TypeId,
         value: i128,
@@ -115,7 +115,7 @@ impl Run<'_> {
 
     /// `rememberInstruction` and the builder's insert: `inst` goes before the
     /// insert point.
-    pub(super) fn emit(
+    fn emit(
         &mut self,
         opcode: Opcode,
         ty: TypeId,
@@ -130,7 +130,7 @@ impl Run<'_> {
     }
 
     /// `Builder.CreateCast`, folded as `InstSimplifyFolder` does.
-    pub(super) fn create_cast(
+    fn create_cast(
         &mut self,
         op: CastOp,
         v: Operand,
@@ -177,7 +177,7 @@ impl Run<'_> {
 
     /// The instruction after the last of `inst`'s block's phis that follows
     /// `inst`, past what this expander inserted: `findInsertPointAfter`.
-    pub(super) fn find_insert_point_after(
+    fn find_insert_point_after(
         &self,
         inst: InstId,
         must_dominate: InstId,
@@ -196,7 +196,7 @@ impl Run<'_> {
     }
 
     /// `getFirstInsertionPt` of `block`.
-    pub(super) fn first_insertion_pt(
+    fn first_insertion_pt(
         &self,
         block: BlockId,
     ) -> InstId {
@@ -399,7 +399,7 @@ impl Run<'_> {
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L303
     /// `expandAddToGEP`: `base + sum(offsets)` as an `i8` GEP.
-    pub(super) fn expand_add_to_gep(
+    fn expand_add_to_gep(
         &mut self,
         offsets: Vec<Scev>,
         base: Operand,
@@ -673,12 +673,12 @@ impl Run<'_> {
             Kind::UMin(ops) => self.expand_min_max(s, &ops, false),
             Kind::SMin(ops) => self.expand_min_max(s, &ops, false),
             Kind::SequentialUMin(ops) => self.expand_min_max(s, &ops, true),
-            Kind::AddRec(ops, header) => self.visit_add_rec(s, &ops, header),
+            Kind::AddRec(..) => todo!("S6 round 2: visitAddRecExpr"),
             Kind::CouldNotCompute => unreachable!("Attempt to use a SCEVCouldNotCompute object!"),
         }
     }
 
-    pub(super) fn scev_ir_ty(
+    fn scev_ir_ty(
         &mut self,
         s: Scev,
     ) -> TypeId {

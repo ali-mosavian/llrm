@@ -402,6 +402,18 @@ pub trait Target {
     /// The CPU a compile is priced for where none is asked.
     fn default_cpu(&self) -> &'static str;
 
+    /// `TargetLowering::getPrefFunctionAlignment` as a power of two (X86: 16
+    /// bytes, 4); 0: functions are not aligned.
+    fn pref_function_alignment(&self) -> u8 {
+        0
+    }
+
+    /// `X86AsmBackend::getMaximumNopSize`: the longest single no-operation
+    /// the padding of this target's code may use.
+    fn max_nop_bytes(&self) -> u8 {
+        1
+    }
+
     /// The operations priced by `price` (the CPU's clocks of a form), as the
     /// target's `opcosts.txt` makes them of forms; `prefix` is the CPU's
     /// operand-size prefix cost.
