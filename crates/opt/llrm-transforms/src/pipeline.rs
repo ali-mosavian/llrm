@@ -634,6 +634,9 @@ pub(crate) enum Phase {
     Cleanup,
     /// `buildFunctionSimplificationPipeline` (l.630-837), once for a function.
     Simplify,
+    /// The machine phases of `llc`: no function-pass list, only registry
+    /// entries (`parity::check_backend`).
+    Backend,
 }
 
 /// The passes of `phase`, each once in the place LLVM runs it (the line is the
@@ -665,6 +668,7 @@ pub(crate) fn llvm_order(
         [slot(a, Box::new(loopsimplify::LoopSimplify)), slot(b, Box::new(lcssa::LoopClosedSSA))]
     };
     let list: Vec<Box<dyn FunctionPass>> = match phase {
+        Phase::Backend => Vec::new(),
         Phase::Early => {
             vec![decide("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
         }

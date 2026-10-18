@@ -60,6 +60,27 @@ pub fn machine<'a>(
 /// The phases -O0 leaves out: each only makes code better.
 const UNOPTIMIZED: [&str; 5] = ["Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink"];
 
+/// The parity registry's slot of each machine phase, by class name.
+const SLOTS: [(&str, &str); 17] = [
+    ("FarIndirectCalls", "farcall@1"),
+    ("SharedConstants", "phiconst@2"),
+    ("SsaSpill", "ssaspill@3"),
+    ("PhiElimination", "phielim@4"),
+    ("PressureSink", "pressuresink@5"),
+    ("FloatFold", "floatfold@6"),
+    ("FloatAssign", "floatassign@7"),
+    ("FloatAlloc", "floatalloc@8"),
+    ("TwoAddress", "twoaddr@9"),
+    ("Coalescer", "coalesce@10"),
+    ("RegAlloc", "allocate@11"),
+    ("ParallelCopy", "parcopy@12"),
+    ("Prologue", "prologue@13"),
+    ("Peephole", "peephole@14"),
+    ("LoopSlots", "loopslots@15"),
+    ("Scheduler", "schedule@16"),
+    ("ControlFlow", "jumps@17"),
+];
+
 /// `machine`, its peephole made of the rules `rules` holds; the spiller, where
 /// `spilling` names a run, reports to it.
 #[allow(clippy::too_many_arguments)]
@@ -147,6 +168,15 @@ pub fn machine_with<'a>(
     // -O0: gcc and clang improve nothing after selection and allocation.
     if !target.optimized {
         phases.retain(|phase| !UNOPTIMIZED.contains(&phase.class_name()));
+    }
+    if cfg!(debug_assertions) {
+        // At -O0 the optional phases are not run; a slot that is Translated
+        // must be, and none of those is.
+        let built: Vec<&str> = phases
+            .iter()
+            .map(|phase| SLOTS.iter().find(|(class, _)| *class == phase.class_name()).map_or("unknown", |(_, slot)| *slot))
+            .collect();
+        llrm_transforms::parity::check_backend(&built)?;
     }
     Ok(phases)
 }

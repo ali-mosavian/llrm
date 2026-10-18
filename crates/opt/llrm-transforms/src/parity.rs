@@ -31,6 +31,10 @@ pub enum SlotKind {
     /// llrm's own pass does part of the job; `replaced_by` names the
     /// translation that will take the slot.
     Old,
+    /// Part of the slot is translated and runs; the rest is still llrm's own.
+    /// `replaced_by` says which part and the issue that holds the exit. Never
+    /// counted as joined.
+    Partial,
     /// LLVM runs a pass here and llrm nothing.
     Missing,
 }
@@ -58,8 +62,8 @@ const fn entry(
     Entry { slot, phase, llvm, kind, replaced_by }
 }
 
-use Phase::{Cleanup, Early, Simplify};
-use SlotKind::{Missing, Old, Translated};
+use Phase::{Backend, Cleanup, Early, Simplify};
+use SlotKind::{Missing, Old, Partial, Translated};
 
 /// Every slot of the -O2 function pipeline in `llvm_order` (-O1 builds a
 /// subset), then the slots LLVM has that llrm does not.
@@ -123,6 +127,34 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("sccp-bdce", Simplify, "sccp, bdce", Missing, ""),
     entry("dfa-jump-threading", Simplify, "dfa-jump-threading", Missing, ""),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
+    // The machine phases of `llc`, one slot per phase of `flow::machine_with`
+    // (`module@row`, the row of the table in `backend/mod.rs`).
+    entry("farcall@1", Backend, "x86 far-call lowering (target)", Old, ""),
+    entry("phiconst@2", Backend, "none (shared phi constants)", Old, ""),
+    entry("ssaspill@3", Backend, "none (spiller route)", Old, ""),
+    entry("phielim@4", Backend, "phi-node-elimination", Old, "lir-cleanup-poc"),
+    entry("pressuresink@5", Backend, "machine-sink", Old, "lir-cleanup-poc"),
+    entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
+    entry("floatassign@7", Backend, "x87 stack slots (regalloc, target)", Old, "regalloc-core-poc"),
+    entry("floatalloc@8", Backend, "x86-fp-stackifier (X86FloatingPoint.cpp)", Old, "backend-slopes"),
+    entry("twoaddr@9", Backend, "two-address-instruction", Old, "lir-cleanup-poc"),
+    entry("coalesce@10", Backend, "register-coalescer", Old, "lir-cleanup-poc"),
+    entry("allocate@11", Backend, "greedy, spill-code-placement, virtregrewriter, stack-slot-coloring", Old, "regalloc-core-poc"),
+    entry("parcopy@12", Backend, "phi-node-elimination copies, virtregrewriter", Old, ""),
+    entry("prologue@13", Backend, "prologepilog", Old, ""),
+    entry("peephole@14", Backend, "peephole-opt, machine-cse, machine-dce", Old, ""),
+    entry("loopslots@15", Backend, "greedy region splitting (SplitKit)", Old, "regalloc-core-poc"),
+    entry("schedule@16", Backend, "post-RA scheduler", Old, ""),
+    entry(
+        "jumps@17",
+        Backend,
+        "branch-folder, block-placement, tailduplication",
+        Partial,
+        "TailMergeBlocks only (#2241); placement and tail duplication are gcc's; exit in #2307",
+    ),
+    entry("early-tailduplication", Backend, "early-tailduplication", Missing, ""),
+    entry("stack-coloring", Backend, "stack-coloring", Missing, ""),
+    entry("shrink-wrap", Backend, "shrink-wrap", Missing, ""),
 ];
 
 /// One analysis of the parity pipeline.
@@ -168,7 +200,7 @@ pub(crate) fn check(
     phase: Phase,
     built: &[&str],
 ) -> Result<(), String> {
-    for one in registry.iter().filter(|one| one.phase == phase && one.kind == Translated) {
+    for one in registry.iter().filter(|one| one.phase == phase && matches!(one.kind, Translated | Partial)) {
         if !built.contains(&one.slot) {
             return Err(format!("slot {} is Translated ({}) and not run in {phase:?}", one.slot, one.llvm));
         }
@@ -181,6 +213,15 @@ pub(crate) fn check(
     Ok(())
 }
 
+/// The Translated slots of `REGISTRY` that `built` runs: a Partial slot is not
+/// one of them, it is never joined.
+pub(crate) fn joined_slots<'a>(
+    registry: &'a [Entry],
+    built: &'a [&str],
+) -> impl Iterator<Item = &'static str> + 'a {
+    registry.iter().filter(|one| one.kind == Translated && built.contains(&one.slot)).map(|one| one.slot)
+}
+
 /// [`check`] against [`REGISTRY`]; the built slots that are Translated are told
 /// to the counts as joined.
 pub(crate) fn check_phase(
@@ -188,16 +229,50 @@ pub(crate) fn check_phase(
     built: &[&str],
 ) -> Result<(), String> {
     check(REGISTRY, phase, built)?;
-    llrm_mir::counts::joined(
-        REGISTRY.iter().filter(|one| one.kind == Translated && built.contains(&one.slot)).map(|one| one.slot),
-    );
+    llrm_mir::counts::joined(joined_slots(REGISTRY, built));
     Ok(())
+}
+
+/// [`check_phase`] for the machine phases `llc` runs: `built` is the slot of
+/// each phase of `flow::machine_with` that runs.
+pub fn check_backend(built: &[&str]) -> Result<(), String> {
+    check_phase(Phase::Backend, built)
+}
+
+/// How many slots are in each state; Partial is counted apart from Translated.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Tally {
+    pub translated: usize,
+    pub partial: usize,
+    pub old: usize,
+    pub missing: usize,
+}
+
+pub(crate) fn tally(registry: &[Entry]) -> Tally {
+    let mut out = Tally::default();
+    for one in registry {
+        match one.kind {
+            Translated => out.translated += 1,
+            Partial => out.partial += 1,
+            Old => out.old += 1,
+            Missing => out.missing += 1,
+        }
+    }
+    out
 }
 
 /// The registry as text: each Old slot with the translation that takes it, each
 /// analysis with its oracle.
 pub fn report() -> String {
     let mut out = String::new();
+    let count = tally(REGISTRY);
+    out += &format!(
+        "slots: {} translated, {} partial, {} old, {} missing\n",
+        count.translated, count.partial, count.old, count.missing
+    );
+    for one in REGISTRY.iter().filter(|one| one.kind == Partial) {
+        out += &format!("{} ({}) partial: {}\n", one.slot, one.llvm, one.replaced_by);
+    }
     for one in REGISTRY.iter().filter(|one| one.kind == Old && !one.replaced_by.is_empty()) {
         out += &format!("{} ({}) -> {}\n", one.slot, one.llvm, one.replaced_by);
     }
