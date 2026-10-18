@@ -698,10 +698,21 @@ impl Summary {
         let within = |old_unknown: bool, new_unknown: bool, old: &SliceSet, new: &SliceSet| {
             old_unknown
                 || new_unknown
-                || new
-                    .iter()
-                    .filter(|one| one.object.kind != MemoryKind::Unknown && !unplaced(one))
-                    .all(|one| old.contains(one))
+                || new.iter().filter(|one| one.object.kind != MemoryKind::Unknown && !unplaced(one)).all(|one| {
+                    // Bytes past the object's end are no byte of it, and a
+                    // slice stands for the bytes it names, not for its shape.
+                    let clipped = one
+                        .object
+                        .extent
+                        .and_then(
+                            |extent| {
+                                let high = one.high.min(extent);
+                                let width = one.width.min(extent - (high - 1));
+                                Slice::new(one.object, one.low, high, one.stride, width.max(1)).ok()
+                            },
+                        );
+                    old.iter().any(|kept| kept.contains(one) || clipped.as_ref().is_some_and(|c| kept.contains(c)))
+                })
         };
         within(self.unknown_read, fresh.unknown_read, &self.reads, &fresh.reads)
             && within(self.unknown_write, fresh.unknown_write, &self.writes, &fresh.writes)
