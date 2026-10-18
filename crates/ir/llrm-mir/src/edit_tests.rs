@@ -586,3 +586,59 @@ fn a_block_is_placed_from_its_insertion_to_its_erasure() {
     f.delete_body();
     assert!(!f.is_placed(made) && !f.is_placed(entry) && agrees(f), "a deleted body has none");
 }
+
+/// The list API of LLVM's `BasicBlock`: ends, neighbours and order of a block's
+/// instructions, true again after an edit.
+#[test]
+fn a_block_answers_ends_neighbours_and_order_after_every_edit() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let entry = f.entry().unwrap();
+    let (x, _) = named(f, "x");
+    let (y, _) = named(f, "y");
+    let ret = f.terminator(entry).unwrap();
+    assert_eq!((f.block(entry).len(), f.block(entry).first(), f.block(entry).last()), (3, Some(x), Some(ret)));
+    assert_eq!(f.block(entry).iter().collect::<Vec<_>>(), [x, y, ret]);
+    assert_eq!((f.prev_in_block(x), f.next_in_block(x), f.next_in_block(ret)), (None, Some(y), None));
+    assert!(f.comes_before(x, y) && !f.comes_before(y, x) && !f.comes_before(x, x));
+    // The numbers were taken: an edit must make them false.
+    f.move_to(x, Position::Before(ret)).expect("moved");
+    assert!(f.comes_before(y, x), "x moved after y");
+    assert_eq!((f.prev_in_block(x), f.next_in_block(y)), (Some(y), Some(x)));
+}
+
+#[test]
+fn an_instruction_goes_after_another() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let (x, _) = named(f, "x");
+    let (y, _) = named(f, "y");
+    f.move_to(x, Position::After(y)).expect("moved");
+    assert_eq!(f.block(f.entry().unwrap()).iter().take(2).collect::<Vec<_>>(), [y, x]);
+}
+
+/// A run moved as one is the run moved one by one, and costs a rewrite of the
+/// block, not one per instruction.
+#[test]
+fn a_run_spliced_is_the_run_moved_one_by_one_in_a_scan_of_the_block() {
+    let run = |together: bool| {
+        let mut module = module(&adds(400));
+        let f = function(&mut module);
+        let moved: Vec<InstId> = (0..100).map(|i| named(f, &format!("x{i}")).0).collect();
+        let entry = f.entry().unwrap();
+        let ret = f.terminator(entry).unwrap();
+        crate::edit::SCANNED.with(|scanned| scanned.set(0));
+        if together {
+            f.splice(&moved, Position::Before(ret)).expect("spliced");
+        } else {
+            moved.iter().for_each(|&one| f.move_to(one, Position::Before(ret)).expect("moved"));
+        }
+        assert!(f.check_uses().is_empty());
+        (print::module(&module), crate::edit::SCANNED.with(|scanned| scanned.get()))
+    };
+    let (one_by_one, many) = run(false);
+    let (together, few) = run(true);
+    assert_eq!(together, one_by_one);
+    assert!(few <= 2 * 401, "{few} instructions scanned splicing 100 of 400");
+    assert!(many > few * 10, "the one-by-one scans no longer show the cost: {many}");
+}
