@@ -126,6 +126,9 @@ pub mod jumpthread;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loadjoins;
+pub mod local;
+#[cfg(test)]
+mod local_tests;
 pub mod loopclone;
 pub mod loopdistribute;
 pub mod loopexit;
