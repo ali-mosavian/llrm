@@ -499,7 +499,8 @@ fn copy_byval_arguments(
         let copy = Operand::Value(function.instruction(alloca).result.expect("a pointer"));
         let count_type = context.types.int(width);
         let length = Operand::Constant(context.int(count_type, i128::from(bytes)));
-        let (memcpy, memcpy_type) = crate::fill::_copy(context, declared, crate::fill::How::Apart, 0, space, width);
+        let (memcpy, memcpy_type) =
+            crate::loopidioms::_copy(context, declared, crate::loopidioms::How::Apart, 0, space, width);
         let callee_pointer = Operand::Constant(
             context.constant(llrm_mir::context::Constant { ty: pointer, kind: ConstantKind::Global(memcpy) }),
         );

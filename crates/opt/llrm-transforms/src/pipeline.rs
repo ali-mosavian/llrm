@@ -94,9 +94,9 @@
 //! Options are `Options`; `Level::options` in llrm-core's `driver/flags.rs`
 //! maps `-O0`, `-O1`, `-O2`, `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og` to
 //! `Options::none`, `basic`, `standard`, `speed`, `aggressive`, `size`,
-//! `min_size` (`-Og`: `basic` without `fill`). `-f` flags set single fields
-//! (`PASSES` in the same file). The per-level table, with the gcc and LLVM
-//! counterpart of each limit, is
+//! `min_size` (`-Og`: `basic` without `loopidioms`). `-f` flags set single
+//! fields (`PASSES` in the same file). The per-level table, with the gcc and
+//! LLVM counterpart of each limit, is
 //! [docs/reference/levels.md](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/docs/reference/levels.md).
 //!
 //! `Options::wanted` gates passes by name, so every pass can be bisected off:
@@ -112,7 +112,7 @@
 //! | `promote` | `sroa`, `promote` |
 //! | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
 //! | `unroll`, `peel` | the pass of that name |
-//! | `fill` | `fill`, `merge`, `memcpyopt` |
+//! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
 //! | `unswitch`, `split`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
@@ -123,9 +123,9 @@
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `expensive`
 //! enables `jumpthread`'s state machines and `copy_headers` its correlated
-//! branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `fill`, `lsr`,
-//! `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals` lets
-//! alias and branch decisions use the intervals of counted loops. `limits`
+//! branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
+//! `lsr`, `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals`
+//! lets alias and branch decisions use the intervals of counted loops. `limits`
 //! are the copy budgets of `unroll` and `peel`.
 //!
 //! # Needs
@@ -153,10 +153,10 @@ use llrm_mir::program::Program;
 use crate::interprocedural::Interprocedural;
 use crate::settled::{self, Settled};
 use crate::{
-    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
-    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
-    loopfuse, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt,
-    ports, promote, rotate, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fixednarrow, floatloop, fold, gepoffset,
+    globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute, loopfuse,
+    loopidioms, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt, peel,
+    phiopt, ports, promote, rotate, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -198,7 +198,7 @@ pub struct Options {
     pub strength: bool,
     pub unroll: bool,
     pub peel: bool,
-    pub fill: bool,
+    pub loopidioms: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
     /// A loop with a test of its counter against an invariant becomes two,
@@ -284,7 +284,7 @@ impl Default for Options {
             strength: true,
             unroll: true,
             peel: true,
-            fill: true,
+            loopidioms: true,
             sibcalls: true,
             unswitch: false,
             split: false,
@@ -466,7 +466,7 @@ impl Options {
             "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
-            "fill" | "merge" | "memcpyopt" => self.fill,
+            "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
             "tailrec" => self.sibcalls,
             "ipa-ranges" => self.ipa_ranges,
             _ => true,
@@ -540,8 +540,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
         Box::new(peel::Peel { limits: limits() }),
-        Box::new(fill::Fill { size: applied.options.prefers_size() }),
-        Box::new(fill::Merge { size: applied.options.prefers_size() }),
+        Box::new(loopidioms::LoopIdioms { size: applied.options.prefers_size() }),
+        Box::new(loopidioms::Merge { size: applied.options.prefers_size() }),
         Box::new(memcpyopt::MemCpyOpt { size: applied.options.prefers_size() }),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
