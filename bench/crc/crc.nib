@@ -1,3 +1,4 @@
+@noipa
 fn bench_crc(salt: u32) -> u32:
     let data: u8[9] = [49, 50, 51, 52, 53, 54, 55, 56, 57]
     let mut crc: u32 = 4294967295 ^ salt

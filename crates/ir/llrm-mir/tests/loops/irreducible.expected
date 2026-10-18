@@ -1,0 +1,3 @@
+Loop info for function 'irreducible':
+Loop at depth 1 containing: %outer<header>,%b,%c,%latch<latch><exiting>
+Loop info for function 'bare':

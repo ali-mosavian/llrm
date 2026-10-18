@@ -116,6 +116,25 @@
 //! in
 //! `manager_tests.rs`.
 //!
+//! # Order check
+//! A result a pass reads is a function of the body, not of when something first
+//! asked for it (#1909: a `ThroughMemory` asked early and kept past sound edits
+//! made `fold` weaker, 18 KB of asm against 34 KB). `LLRM_CHECK_ORDER=SEED`
+//! asks some analyses early at each body pass's entry, which ones by the seed,
+//! and the object must be the lazy compile's. `tests/analysis_order.rs` runs it
+//! on matmul. The wide sweep is a command, not a gate; run it before a release
+//! and when an analysis starts to be kept:
+//!
+//! ```text
+//! for s in 1 2 3 4 5 6 7 8; do
+//!   LLRM_CHECK_ORDER=$s tools/identical.py target/release/llrm-c target/release/llrm-c
+//! done
+//! ```
+//!
+//! `tools/identical.py` keeps a `LLRM_CHECK_*` value already set; the bench
+//! BASIC and Nib programs under the harness flags are compiled the same way
+//! with and without the seed.
+//!
 //! # Provides
 //! The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
 //! `CallEffects`, `Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
@@ -554,7 +573,10 @@ struct Slots {
 
 /// `module`'s defined functions, each with its id.
 fn bodies(module: &Module) -> impl Iterator<Item = (GlobalId, &Function)> {
-    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, function)| (id, function))
+    module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration() && !llrm_mir::facts::opaque(function))
+        .map(|(id, _, function)| (id, function))
 }
 
 /// What a body gives `Summaries` that is of the body, the declarations and (for
@@ -1263,9 +1285,17 @@ impl Analysis for CallEffects {
         substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
         _changes: &[llrm_mir::module::Change],
         _context: &Context,
-        _function: &Function,
+        function: &Function,
     ) -> Option<Self::Result> {
-        Some(Ok(alias::effects_renamed(old.as_ref().ok()?, substituted)?))
+        let old = old.as_ref().ok()?;
+        // A reference holds its pointer's decomposition (root, base, scale),
+        // read down the chain of instructions below it. Renaming a value to one
+        // that decomposes otherwise (a load forwarded to the GEP it loaded)
+        // gives a reference that knows less than a fresh one: derived again.
+        if renamed_into_a_chain(function, substituted, old) {
+            return None;
+        }
+        Some(Ok(alias::effects_renamed(old, substituted)?))
     }
     fn run(
         context: &Context,
@@ -1283,6 +1313,63 @@ impl Analysis for CallEffects {
         }
         call_effects(&unit, outer)
     }
+}
+
+/// Whether a value replaced by another is read the same by a decomposition:
+/// both stop it (a load, a call, an allocation, a phi, a parameter, a
+/// constant), or both are one instruction (opcode, operands and flags: an
+/// inbounds gep goes on through its index where a plain one does not).
+pub(crate) fn decomposes_alike(
+    function: &Function,
+    was: ValueId,
+    now: ValueId,
+) -> bool {
+    use llrm_mir::module::ValueDef;
+    let ends = |value: ValueId| match function.value(value).def {
+        ValueDef::Instruction(inst) => matches!(
+            function.instruction(inst).opcode,
+            Opcode::Load { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Alloca { .. } | Opcode::Phi
+        ),
+        _ => true,
+    };
+    match (function.value(was).def, function.value(now).def) {
+        (ValueDef::Instruction(a), ValueDef::Instruction(b)) => {
+            let (a, b) = (function.instruction(a), function.instruction(b));
+            (ends(was) && ends(now))
+                || (!ends(was) && !ends(now) && a.opcode == b.opcode && a.operands == b.operands && a.flags == b.flags)
+        }
+        _ => ends(was) && ends(now),
+    }
+}
+
+/// Whether a value some reference of `effects` names is replaced by one that a
+/// fresh decomposition reads differently: the reference would name the new
+/// value as its root, where a decomposition goes on through the definition of a
+/// GEP, a cast, an add, and stops at a parameter, a constant, a load, a call,
+/// an allocation, a phi. A load forwarded to the pointer it loaded (a GEP) is
+/// the case; a value replaced by an equal instruction (the same opcode and
+/// operands) decomposes alike.
+fn renamed_into_a_chain(
+    function: &Function,
+    substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
+    effects: &IndexMap<InstId, alias::Effect>,
+) -> bool {
+    use llrm_mir::module::Operand;
+    let alike = |was: ValueId, now: ValueId| decomposes_alike(function, was, now);
+    let differs = |one: &crate::memory::MemRef| {
+        [one.pointer, one.root, one.base.map(Operand::Value), one.segment].into_iter().any(|named| {
+            matches!(
+                named,
+                Some(Operand::Value(was)) if matches!(substituted(was), Some(Operand::Value(now)) if !alike(was, now))
+            )
+        })
+    };
+    // The lists calls share are looked at once.
+    let mut seen: llrm_support::hash::HashSet<*const [crate::memory::MemRef]> = Default::default();
+    effects.values().any(|effect| {
+        let mut lists = [&effect.loads, &effect.stores].into_iter().filter(|list| seen.insert(Rc::as_ptr(list)));
+        lists.any(|list| list.iter().any(&differs)) || effect.fills.iter().any(&differs)
+    })
 }
 
 /// What each call of `unit` reads and writes, its callee as `Summaries`
@@ -2161,3 +2248,78 @@ impl Held {
 #[cfg(test)]
 #[path = "manager_tests.rs"]
 mod tests;
+
+/// `LLRM_CHECK_ORDER`: some function analyses asked of `function`, each when
+/// a hash of `mix` and its number falls on one in eight. A result a pass reads
+/// must be a function of the body, not of when something first asked; asked
+/// early and left to be kept past the edits after it, an analysis shows it.
+pub fn ask_some(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    analyses: &mut Analyses,
+    mix: u64,
+) {
+    let mut number = 0u64;
+    let mut chosen = || {
+        number += 1;
+        (mix.wrapping_add(number).wrapping_mul(0xD6E8_FEB8_6659_FD93) >> 40) % 8 == 0
+    };
+    if chosen() {
+        analyses.get::<Shape>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<ExposedFrames>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<PointerValues>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Pointers>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Annotated>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<CallEffects>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Writes>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Registers>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<DemandedBits>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<AssumptionCache>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Followers>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Counted>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<PlainAccesses>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<ThroughMemory>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<FloatFacts>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<DominatedEdges>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Bounded>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<TableLoads>(context, layout, function);
+    }
+    if chosen() {
+        let _ = memoryssa::Accesses::managed(context, layout, function, analyses);
+    }
+}

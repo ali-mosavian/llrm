@@ -77,6 +77,55 @@ hint 325; locally hot 525; the cost-benefit analysis is off (`inline-enable-cost
 - D7 `shouldBeDeferred` needs the other callers of the callee with their costs: translated over the module call
   graph the interprocedural stage holds.
 
+- D9 `noipa` (GCC's attribute; LLVM has no IR equivalent: `optnone`/`noinline` keep a function from being changed
+  or inlined, not from being read by its callers' passes). A bench kernel is a real procedure its callers cannot
+  fold away. Scope: functions the source marks `noipa`, nothing else; no `-O` flag sets it.
+
+## INLINEDECIDE: what turning it on does (#2140, off by default)
+
+`LLRM_EXP_INLINEDECIDE=1` decides each call site by [`inline_cost`](https://github.com/ali-mosavian/llrm/blob/55ecae453e40/crates/opt/llrm-transforms/src/inlinecost.rs)
+(the translation of InlineCost.cpp); `LLRM_EXP_INLINECOST=1` prints the cost beside the old decision. Both are off, and
+a build without them is byte-identical to main (1,583 objects of `tools/identical.py`).
+
+Compile time, instructions (`perf stat instructions:u`, `llrm-c -O2`, QCport modules, base against the switch on):
+
+| file | base | decide | | per-body pipeline re-runs after a splice / fixed-point steps (base -> decide) |
+|---|--:|--:|--:|---|
+| cmd.c | 1,787.8M | 2,668.1M | +49% | 9 / 35 -> 15 / 88 |
+| ls.c | 666.1M | 1,245.9M | +87% | 4 / 19 -> 10 / 63 |
+| dbg.c | 114.9M | 146.8M | +28% | 0 / 0 -> 2 / 7 |
+
+The cost analysis itself is a small part (`inlinecost::sites`: 20M of the 827M that cmd.c gains); the rest is the
+pipeline over larger bodies, about 6 fixed-point steps per re-run. A callees-first walk (branch `feat/inline-walk`,
+`LLRM_EXP_INLINEWALK`) visits each function once and gives the same rows: cmd.c 2,554M, ls.c 1,403M, dbg.c 146M
+(87, 71 and 7 steps), so the order is not the cost; the single pass-list run of the order work (llvm-order-poc's step 3.2) is, and the walk PR is not opened until it lands.
+
+Rows (71 vsgcc programs, m32, against the pinned references of `rows/main24d`: gcc 13.4.0, clang 24.0.0git
+d1106deb71cc): only x_dct and x_heapsort move, at -O2 and -O3. Clocks -25.0% / -27.9% and -15.1%; code bytes +32% on
+each at -O2. Rows above min(gcc, clang), clocks 32 -> 31 at -O2; code bytes 29 -> 31 at -O2. The bench.py set: 8
+parity programs and jpeg (c) move; jpeg_fixed (c) code grows 3,331 -> 5,471 B at -O2 for no change in time.
+
+Turning it on is a trade of those rows against the compile time above; it is oversight's decision.
+
+## noipa: the contract (D9)
+
+The fact: a `noipa` function is opaque to every interprocedural pass. Its body is still optimised by the per-body
+pipeline; what no pass does is use the body for anyone else, or change how it is called.
+
+- Inlining and cloning: never inlined (`inline`, the InlineCost decision), never cloned or specialised (`ipacp`),
+  never argument-promoted, dead-argument-pruned or given a new calling convention (`calleepop`, argument promotion).
+- Facts read off the body: none. `Stamp` (function-attrs) does not infer attributes for it and callers read only
+  the attributes the source declared; `Summaries`, `GlobalsAA`, `CalleeEffects` and `CallRegisters` treat a call of
+  it as a call of a declaration with its declared attributes.
+- Constants and values from callers (`current_call_constants`, IPSCCP-style propagation) are not pushed into it.
+- It is not deleted by `globaldce` while the module names it, and a call of it is never removed as dead unless the
+  declared attributes allow it.
+
+Test, fail first: `crc/nib` at -O3, where `bench_crc` is folded into `main` today ("not in the map"), keeps its
+procedure and its call; one unit test per honouring pass (a `noipa` callee stays out of the inline candidates, out of
+the stamp, out of the summaries, out of the constants pushed in). The bench sources that name the attribute and the
+re-blessed rows are llvm-difftest's, in the same PR.
+
 ## Measurements before code is long
 
 - Body size at the inline stage's input and at gvn's input, llrm against LLVM, on d_faces -O2 and an inlining

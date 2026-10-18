@@ -124,6 +124,7 @@ class Variant:
     dialect: str = "qb45"
     timed_only: bool = False  # no instruction count (the emulator would step ~10^8 of them): timed in DOSBox, sized, output-checked there
     data: tuple[str, ...] = ()  # files it reads, as run_tests' `data:` header: `@name` is a cached corpus
+    ci_bytes: int = 0  # the default bench (no --time) feeds a timed-only program this many bytes of its corpus, and checks NAME.ci.out
 
 
 def directory_name(directory: Path) -> str:
@@ -145,7 +146,7 @@ def variants(directory: Path) -> list[Variant]:
             head = run_tests.header(source)
             region = settings["region"].get(language) or settings["region"]["bas"]  # our BASIC is the same kernel
             out.append(Variant(name, language, source, region, None if language in OURS_BASIC else head.get("known"), head.get("dialect", "qb45").split()[0],
-                              bool(settings.get("timed_only")), tuple(head.get("data", "").split())))
+                              bool(settings.get("timed_only")), tuple(head.get("data", "").split()), int(settings.get("ci_bytes", 0))))
     return out
 
 
@@ -300,7 +301,7 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
         return {"code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
     entry = maps.locate(exe, listing, region)
     if entry is None:
-        return {"error": f"{region} is not in the map, and main does not call one function of its own"}
+        return {"error": f"unmeasured: kernel folded away: {region} is not in the map, and main does not call one function of its own"}
     result = icount.run(exe, entry, exe.parent)
     if result.error:
         return {"error": result.error}
@@ -560,18 +561,35 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
             plain[key] = exe  # timed, not counted
         else:
             jobs.append((key, (stem, exe, listing, None if variant.timed_only else variant.region, expected_output(directory), folder / f"{stem}.obj")))
-            needs[key] = timing_input(variant, directory)
+            needs[key] = timing_input(variant, directory, None if timing else folder / "ci-input" / stem)
     with ProcessPoolExecutor() as pool:
         counted = [(key, job) for key, job in jobs if job is not None]
         for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
             out[key] = counts
     out |= measure_flat(flat, folder / "flat")
     jobs = [(key, job if job is not None else (flat[key][0], flat[key][1], None, None, None, None)) for key, job in jobs]
-    if timing:
-        exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
-        for key, timed in time_programs(exes, folder / "time", {key: needs[key] for key in exes if needs.get(key)}).items():
-            out[key] = out.get(key, {}) | ({"time_error": timed["error"]} if "error" in timed else timed)
+    exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
+    run_timed(out, exes, {key: needs[key] for key in exes if needs.get(key)}, folder / "time", timing, already=set(flat))
     return out
+
+
+def run_timed(out: dict, exes: dict, needs: dict, work: Path, timing: bool, already: frozenset | set = frozenset()) -> None:
+    """The timed-only programs run in DOSBox and their output is compared with the expected one, always: a program with no instruction count
+    is otherwise sized and never run, and a miscompile there reaches no gate. `timing` also keeps the times (--time); without it a row gets
+    only `checked: true`, or an error row when it prints something else, or `unchecked: why` when its corpus is not here. `already`: the flat
+    target's rows, which measure_flat has run on the whole corpus and compared: run again here beside the others, whose files are the reduced
+    corpus under the same DOS name, they read whichever copy the shared volume held (grep bq32 printed the 1 MiB answer, 115, against 4745)."""
+    if not timing:
+        exes = {key: path for key, path in exes.items() if key in needs and key not in already}
+    for key, timed in time_programs(exes, work, needs).items():
+        if timing:
+            out[key] = out.get(key, {}) | ({"time_error": timed["error"]} if "error" in timed else timed)
+        elif "error" in timed and timed["error"].startswith("skipped: "):
+            out[key] = out.get(key, {}) | {"unchecked": timed["error"][len("skipped: "):]}
+        elif "error" in timed:
+            out[key] = {"error": timed["error"]}
+        else:
+            out[key] = out.get(key, {}) | {"checked": True}
 
 
 def mark_known(measured: dict, all_variants: list[Variant], opts: list[str]) -> dict:
@@ -591,15 +609,24 @@ def mark_known(measured: dict, all_variants: list[Variant], opts: list[str]) -> 
     return measured
 
 
-def timing_input(variant: Variant, directory: Path) -> dict | None:
+def timing_input(variant: Variant, directory: Path, reduced: Path | None = None) -> dict | None:
     """{files a timed-only program reads, want: the output it must print}, or {skip: why} when its corpus is unavailable, or None
-    for the programs the emulator counts."""
+    for the programs the emulator counts. With `reduced` (a work folder) and a program that names `ci_bytes`, the first ci_bytes of each
+    corpus are copied there under the corpus's own name and the output wanted is NAME.ci.out's (tools/bench/mkci.py): the default bench
+    runs the program on every gate, --time runs it on all of its corpus."""
     if not variant.timed_only:
         return None
     try:
         files = tuple(corpus.path(one[1:]) if one.startswith("@") else variant.source.parent / one for one in variant.data)
     except corpus.Unavailable as error:
         return {"skip": str(error)}
+    if reduced is not None and variant.ci_bytes:
+        reduced.mkdir(parents=True, exist_ok=True)
+        small = []
+        for file in files:
+            (reduced / file.name).write_bytes(file.read_bytes()[: variant.ci_bytes])
+            small.append(reduced / file.name)
+        return {"files": tuple(small), "want": run_tests.lines((directory / f"{directory.name}.ci.out").read_text())}
     return {"files": files, "want": expected_output(directory)}
 
 
