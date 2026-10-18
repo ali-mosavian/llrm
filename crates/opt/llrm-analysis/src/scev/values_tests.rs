@@ -4,14 +4,15 @@
 
 use super::values::print_module_values;
 
-/// A global in the far space, read through a `getelementptr`. The pinned opt
-/// prints `(6 + @g)<nuw><nsw> U: [6,-9) S: [-32762,32767)`: the object is 8
-/// bytes and a global's preferred alignment is the aggregate's, 8, so its
-/// address is at most 65520. `pointer_alignment` used the ABI alignment of the
-/// packed struct, 1, and printed `<nuw> U: [6,-2) S: [6,0)`: no `nsw`, ranges
-/// 18 values too wide. Every known-bits query on such a global lost 3 bits.
+/// A global in the far space, read through a `getelementptr`. LLVM places a
+/// global at its type's preferred alignment, so the pinned opt prints
+/// `(6 + @g)<nuw><nsw> U: [6,-9) S: [-32762,32767)` (an address at most
+/// 65520). llrm's backend aligns a global only as stated, so a pointer to one
+/// has its ABI alignment, 1 for this packed struct: assuming 8 gave known bits
+/// the global does not have (a freeze of feat/parity: d_faces miscompiled),
+/// and `nsw` and ranges 18 values narrower than the code can promise.
 #[test]
-fn test_a_global_is_aligned_to_its_types_preferred_alignment() {
+fn test_a_global_is_aligned_only_as_llrm_places_it() {
     let text = "target datalayout = \"e-m:e-p:16:16-p1:32:16:16:16\"\n\
         @g = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> zeroinitializer\n\
         define ptr addrspace(1) @f() {\n\
@@ -19,7 +20,7 @@ fn test_a_global_is_aligned_to_its_types_preferred_alignment() {
           ret ptr addrspace(1) %p\n\
         }\n";
     let module = llrm_mir::parse::module(text).expect("parses");
-    assert_eq!(print_module_values(&module), "@f\n%p\t(6 + @g)<nuw><nsw> U: [6,-9) S: [-32762,32767)\n");
+    assert_eq!(print_module_values(&module), "@f\n%p\t(6 + @g)<nuw> U: [6,-2) S: [6,0)\n");
 }
 
 /// `for (i = 0; ; i++)` with a loop-invariant bound: the PHI is the add
