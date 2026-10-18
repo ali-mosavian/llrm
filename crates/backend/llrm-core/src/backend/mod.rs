@@ -182,6 +182,7 @@ mod isel_tests;
 pub mod jumps;
 pub mod lanes;
 pub mod layout;
+pub mod legalize;
 pub mod lifetimes;
 pub mod lirtext;
 pub mod live;
