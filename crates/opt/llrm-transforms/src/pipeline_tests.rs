@@ -2168,3 +2168,23 @@ fn test_the_llvm_order_hoists_invariants_the_spill_forecast_would_keep() {
     let b0 = f[f.find("\nb0:\n").unwrap() + 5..].lines().take_while(|line| line.starts_with("  ")).collect::<Vec<_>>();
     assert_eq!(b0.iter().filter(|line| line.contains("load")).count(), 6, "{printed}");
 }
+
+/// d_faces -O2: the interprocedural stage ran body 32 again (`_clip_w`) and its
+/// `[runs] body` line named `_d_draw_faces`, the last function the manager's
+/// loop had set. A rerun names the function it runs.
+#[test]
+fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
+    let mut module = llrm_analysis::testing::parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %d = add i16 %x, 1\n  ret i16 %x\n}\n\ndefine i16 @g(i16 %x) {\nb0:\n  ret i16 %x\n}\n",
+    );
+    let mut analyses = llrm_mir::passes::ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_x86_m16::Dos::default()));
+    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
+    fixed.only = false;
+    fixed.passes = vec![Box::new(EraseUnused)];
+    // The manager's loop last set `g`.
+    llrm_mir::passes::set_running_function("g");
+    let (_, lines) = pipeline::capturing_runs(|| {
+        super::rerun(&mut module, &mut analyses, llrm_mir::context::GlobalId(0), &mut fixed).unwrap()
+    });
+    assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
+}
