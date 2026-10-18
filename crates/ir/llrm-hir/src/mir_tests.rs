@@ -367,6 +367,42 @@ fn a_far_pointer_offset_is_a_gep_at_the_index_width() {
     );
 }
 
+/// An index scaled by the element size and used as a displacement is one
+/// GEP with that stride, as clang's subscript is a typed GEP: `a[i]` was a
+/// `mul` and a byte GEP (167 of d_faces' first dump, one instruction each).
+#[test]
+fn a_scaled_displacement_is_a_gep_of_that_stride() {
+    use crate::model::AddressKind;
+    let values = vec![
+        Value { id: 1, r#type: 2 },
+        Value { id: 2, r#type: 1 },
+        Value { id: 3, r#type: 1 },
+        Value { id: 4, r#type: 2 },
+        Value { id: 5, r#type: 1 },
+    ];
+    // A front end's constant is a copy.
+    let four = Instruction::new(3, Op::Copy, vec![5], vec![Operand::constant(1, 4)]);
+    let scale = Instruction::new(1, Op::Mul, vec![3], vec![Operand::value_ref(2), Operand::value_ref(5)]);
+    let advance = Instruction::new(2, Op::PtrOffset, vec![4], vec![Operand::value_ref(1), Operand::value_ref(3)]);
+    let block = Block::new(
+        1,
+        vec![four, scale, advance],
+        Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(4)], Vec::new()),
+    );
+    let mut function = Function::new(1, "AT", 2, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1, 2];
+    let mut program = program(function);
+    let mut far = Type::new(2, "far", TypeKind::Pointer, 4);
+    far.address = AddressKind::Far;
+    program.modules[0].types.push(far);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("getelementptr [4 x i8], ptr addrspace(1) %0, i16 %1"), "{text}");
+    assert!(!text.contains(" mul "), "{text}");
+}
+
 /// `CINT(x)`: BASIC rounds to nearest, ties to even, as `llvm.lrint` does.
 #[test]
 fn a_float_converted_to_an_integer_is_rounded() {

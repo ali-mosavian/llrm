@@ -214,9 +214,22 @@ pub fn operation(
         Opcode::Binary(BinaryOp::Mul) => costs.multiply,
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => costs.divide,
         Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => costs.shift,
-        Opcode::GetElementPtr { .. } => {
+        Opcode::GetElementPtr { source } => {
             let constant = instruction.operands[1..].iter().all(|&index| matches!(index, Operand::Constant(_)));
-            advance(context, layout, function.value(instruction.result?).ty, costs.address, constant, costs)
+            // An index scaled by the element size is the multiply it was when
+            // the front end spelled the product apart from a byte step.
+            let scaled = !constant && {
+                let indices: Vec<_> = instruction.operands[1..]
+                    .iter()
+                    .map(|&index| match index {
+                        Operand::Constant(_) => Some(0),
+                        _ => None,
+                    })
+                    .collect();
+                layout.collect_offset(&context.types, *source, &indices).1.iter().any(|&(_, scale)| scale > 1)
+            };
+            let step = advance(context, layout, function.value(instruction.result?).ty, costs.address, constant, costs);
+            step + if scaled { costs.multiply } else { 0 }
         }
         Opcode::Alloca { .. } => costs.address,
         // Lowered as a jump around a move, the compare priced on its own.

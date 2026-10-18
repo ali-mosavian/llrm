@@ -1987,6 +1987,107 @@ fn operand_type(
 /// `function`'s blocks, each after its dominators -- reverse postorder from
 /// the entry and every external entry, the unreachable ones last -- so a
 /// value is emitted before its uses whatever the HIR's block order.
+/// A product `index * size` that only a displacement reads.
+#[derive(Clone, Copy)]
+struct Stride<'h> {
+    product: &'h model::Instruction,
+    size: i64,
+    index: &'h Operand,
+}
+
+/// The products `index * size` (a constant size over one) that nothing but a
+/// `ptr_offset`'s displacement reads: a subscript's scaling, made one GEP.
+fn scaled_displacements(function: &model::Function) -> HashMap<i64, Stride<'_>> {
+    let mut reads: HashMap<i64, usize> = HashMap::default();
+    let mut displaced: HashSet<i64> = HashSet::default();
+    let mut constants: HashMap<i64, i64> = HashMap::default();
+    let mut steps: HashMap<i64, i64> = HashMap::default();
+    let mut copies: HashMap<i64, i64> = HashMap::default();
+    let mut offsets: Vec<(i64, &Operand)> = Vec::new();
+    fn count(
+        reads: &mut HashMap<i64, usize>,
+        operands: &[Operand],
+    ) {
+        for operand in operands {
+            match operand {
+                Operand::ValueRef(one) => *reads.entry(one.value).or_default() += 1,
+                Operand::ArrayElement(one) => count(reads, &one.indices),
+                Operand::ProjectedPlace(one) => count(reads, &one.indices),
+                Operand::IndirectPlace(one) => {
+                    *reads.entry(one.base).or_default() += 1;
+                    if let Some(origin) = one.origin {
+                        *reads.entry(origin).or_default() += 1;
+                    }
+                }
+                Operand::DescriptorPlace(one) => *reads.entry(one.base).or_default() += 1,
+                Operand::Constant(_) | Operand::PlaceRef(_) => {}
+            }
+        }
+    }
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            count(&mut reads, &instruction.operands);
+            match (instruction.op, &instruction.results[..], &instruction.operands[..]) {
+                (Op::PtrOffset, [result], [from, Operand::ValueRef(one)]) => {
+                    displaced.insert(one.value);
+                    steps.insert(one.value, *result);
+                    offsets.push((*result, from));
+                }
+                (Op::Copy, [result], [Operand::Constant(model::Constant { value: model::Number::Int(n), .. })]) => {
+                    constants.insert(*result, *n);
+                }
+                (Op::Copy, [result], [Operand::ValueRef(from)]) => {
+                    copies.insert(*result, from.value);
+                }
+                _ => {}
+            }
+        }
+        count(&mut reads, &block.terminator.operands);
+    }
+    // A step from another step's result keeps the byte form the optimizer
+    // merges: nothing merges steps of different strides.
+    let results: HashSet<i64> = offsets.iter().map(|(result, _)| *result).collect();
+    let chained: HashSet<i64> = offsets
+        .iter()
+        .filter_map(|(result, from)| match from {
+            Operand::ValueRef(base) => {
+                // Through the copies a front end leaves between two steps.
+                let mut base = base.value;
+                while let Some(&next) = copies.get(&base) {
+                    base = next;
+                }
+                results.contains(&base).then_some([*result, base])
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    // A size over one, as a constant: a front end makes its constants a copy.
+    let size = |operand: &Operand| match operand {
+        Operand::ValueRef(one) => constants.get(&one.value).copied().filter(|&n| n > 1 && n <= i64::from(u16::MAX)),
+        _ => None,
+    };
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|instruction| instruction.op == Op::Mul && instruction.results.len() == 1)
+        .filter_map(|instruction| {
+            let result = instruction.results[0];
+            let [a, b] = &instruction.operands[..] else { return None };
+            let (index, size) = match (size(a), size(b)) {
+                (None, Some(size)) => (a, size),
+                (Some(size), None) => (b, size),
+                _ => return None,
+            };
+            (reads.get(&result) == Some(&1)
+                && displaced.contains(&result)
+                && steps.get(&result).is_some_and(|step| !chained.contains(step)))
+            .then_some((result, Stride { product: instruction, size, index }))
+        })
+        .collect()
+}
+
 fn emission_order(function: &model::Function) -> Vec<&model::Block> {
     let blocks: HashMap<i64, &model::Block> = function.blocks.iter().map(|block| (block.id, block)).collect();
     let successors = |block: &model::Block| {
@@ -2064,6 +2165,10 @@ struct Body<'b, 'm, 'h> {
     /// The `i1` each comparison's result was widened from: what an assumption
     /// is made of.
     truths: HashMap<i64, Value>,
+    /// Each product `index * size` that only a displacement reads: not made,
+    /// the displacement is a GEP of `size` bytes a step (its `mul`, the
+    /// size).
+    strides: HashMap<i64, Stride<'h>>,
     /// Each local place's frame object, and its offset in it.
     frame: HashMap<i64, (usize, i64)>,
     /// Where a variadic function's variadic arguments start, if a parameter
@@ -2113,6 +2218,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             blocks: HashMap::default(),
             values,
             truths: HashMap::default(),
+            strides: scaled_displacements(function),
             frame: HashMap::default(),
             passed: None,
             objects: Vec::new(),
@@ -2730,6 +2836,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         self.at_instruction = instruction.id;
         self.operands_at = instruction.operands.iter().map(|one| one as *const Operand as usize).collect();
         let op = instruction.op;
+        if op == Op::Mul && instruction.results.first().is_some_and(|one| self.strides.contains_key(one)) {
+            return Ok(());
+        }
         let binary = match op {
             Op::Add => Some(BinaryOp::Add),
             Op::Sub => Some(BinaryOp::Sub),
@@ -3062,6 +3171,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             // At the pointer's index width: 16 bits for a far pointer, which
             // moves the offset alone; 32 for a huge one, which carries.
             Op::PtrOffset => {
+                if self.strided(instruction)? {
+                    return Ok(());
+                }
                 let [pointer, displacement] = self.operands(instruction)?[..] else {
                     return Err("ptr_offset without two operands".to_owned());
                 };
@@ -3377,6 +3489,47 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     ) -> Emit<Value> {
         let bits = self.b.context.types.int_bits(ty).ok_or("a zero of a non-integer")?;
         Ok(self.b.int(bits, 0))
+    }
+
+    /// `ptr_offset` of a product `index * size` as one GEP of `size` bytes a
+    /// step, as clang's subscript is a typed GEP (`emitArraySubscriptGEP`).
+    /// The product wraps in its own width and the GEP in the index's, so they
+    /// are one only where the product is no narrower; else the `mul` is made
+    /// where it was left and the displacement is a byte GEP. Whether it was
+    /// made.
+    fn strided(
+        &mut self,
+        instruction: &model::Instruction,
+    ) -> Emit<bool> {
+        let Some(Operand::ValueRef(displacement)) = instruction.operands.get(1) else { return Ok(false) };
+        let Some(&Stride { product, size, index: index_operand }) = self.strides.get(&displacement.value) else {
+            return Ok(false);
+        };
+        let pointer = self.value(&instruction.operands[0])?;
+        let space = match self.b.context.types.get(self.b.type_of(pointer)) {
+            Type::Pointer(space) => *space,
+            _ => 0,
+        };
+        let bits = self.tables.layout.pointer(space).index_bits;
+        let index = self.value(index_operand)?;
+        let width = self.b.context.types.int_bits(self.b.type_of(index)).unwrap_or(0);
+        if width < bits {
+            self.strides.remove(&displacement.value);
+            self.instruction(product)?;
+            return Ok(false);
+        }
+        let signed = self.operand_hir_type(index_operand).signed != Some(false);
+        let index_type = self.b.context.types.int(bits);
+        let index = self.convert(index, signed, index_type)?;
+        let mut flags = self.stated_flags(instruction);
+        if width == bits && self.stated_flags(product).contains(Flags::NUW) {
+            flags.insert(Flags::NUW);
+        }
+        let byte = self.b.context.types.int(8);
+        let stride = self.b.context.types.intern(Type::Array { element: byte, count: size as u64 });
+        let result = self.b.gep(stride, pointer, &[index], flags, "");
+        self.define(instruction, result);
+        Ok(true)
     }
 
     fn convert(
