@@ -58,6 +58,7 @@ COUNTERPART = {
     "decide": "simplifycfg",
     "trivialunswitch": "loop-mssa(simple-loop-unswitch<no-nontrivial>)",
     "dead": "adce",
+    "bdce": "bdce",
     "tailrec": "tailcallelim",
     "memcpyopt": "memcpyopt",
 }
@@ -80,6 +81,7 @@ SOURCE = {
     "simplifycfg": "Transforms/Utils/SimplifyCFG.cpp",
     "loop-mssa(simple-loop-unswitch<no-nontrivial>)": "Transforms/Scalar/SimpleLoopUnswitch.cpp",
     "adce": "Transforms/Scalar/ADCE.cpp",
+    "bdce": "Transforms/Scalar/BDCE.cpp",
     "tailcallelim": "Transforms/Scalar/TailRecursionElimination.cpp",
     "memcpyopt": "Transforms/Scalar/MemCpyOptimizer.cpp",
 }

@@ -153,8 +153,8 @@ use llrm_mir::program::Program;
 use crate::interprocedural::Interprocedural;
 use crate::settled::{self, Settled};
 use crate::{
-    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
-    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
+    addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fill, fixednarrow, floatloop,
+    fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
     loopfuse, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt,
     ports, promote, rotate, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
@@ -542,9 +542,17 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
 
-/// The order, from the pipeline itself rather than beside it.
+/// Translations that have not joined the pipeline yet: `llrm-pass` and
+/// `Applied::only` run them alone, which is what `tools/difftest` compares
+/// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
+fn translated() -> Vec<Box<dyn FunctionPass>> {
+    vec![Box::new(bdce::Bdce)]
+}
+
+/// The order, from the pipeline itself rather than beside it, then the
+/// translations not yet in it.
 pub fn passes() -> Vec<&'static str> {
-    pipeline(&Applied::default()).iter().map(|one| one.name()).collect()
+    pipeline(&Applied::default()).iter().chain(translated().iter()).map(|one| one.name()).collect()
 }
 
 /// Plugs the pass manager's steps into `LLRM_DEBUG=time` and `runs`, if either
@@ -852,7 +860,9 @@ impl Fixed {
             Some("drop_stores") => Some("dse"),
             other => other,
         };
-        let passes = pipeline(applied).into_iter().filter(|one| only.is_none_or(|only| one.name() == only));
+        let translated = only.map(|_| translated()).unwrap_or_default();
+        let passes =
+            pipeline(applied).into_iter().chain(translated).filter(|one| only.is_none_or(|only| one.name() == only));
         // SROA establishes the scalar memory shape at structural
         // boundaries; it is no member of the scalar fixed point.
         let (boundary, passes): (Vec<_>, Vec<_>) = passes.partition(|one| one.name() == "sroa");
