@@ -83,3 +83,35 @@ fn test_a_value_the_loop_stores_is_left_computed_by_the_loop() {
     let (changed, after) = rewritten(&text);
     assert!(!changed, "{after}");
 }
+
+/// A sum over `n` trips of the counter, `n(n-1)/2`, is computed in `i33` (the
+/// product of two `zext i32` operands): the back end cannot select it (#2497,
+/// `-O3` of a float counted loop failed `a i33 value`). The sum stays computed
+/// by the loop.
+#[test]
+fn test_no_exit_value_is_written_in_an_odd_width() {
+    let text = "define i32 @f(i32 %n) {
+entry:
+  %any = icmp ne i32 %n, 0
+  br i1 %any, label %pre, label %done
+pre:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %pre ], [ %inc, %loop ]
+  %s = phi i32 [ 0, %pre ], [ %s2, %loop ]
+  %s2 = add i32 %s, %i
+  %inc = add i32 %i, 1
+  %c = icmp ne i32 %inc, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  %out = phi i32 [ %s2, %loop ]
+  br label %done
+done:
+  %r = phi i32 [ 0, %entry ], [ %out, %exit ]
+  ret i32 %r
+}
+";
+    let (changed, after) = rewritten(text);
+    assert!(!after.contains("i33") && !after.contains("i34"), "{after}");
+    assert!(!changed, "{after}");
+}
