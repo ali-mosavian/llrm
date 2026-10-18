@@ -5043,3 +5043,137 @@ fn a_pass_that_changes_nothing_returns_every_block_as_it_was() {
         assert!(result.blocks[0].insns.same_as(&input.blocks[0].insns));
     }
 }
+
+/// `LLRM_CHECK_DATAFLOW` found `qcport/savegame.c`'s `_savegame_load@3` under
+/// the order switch with a 3-block cycle (a header with two successors, a
+/// latch, a block between) in which the worklist and the rounds disagreed on
+/// one `stored` flag of (DI, [BP-1284]). Every way of reaching that shape from
+/// the cell's stores, reloads and a store from another register: the two
+/// solvers must give one answer, whatever the order the blocks are reached.
+#[test]
+fn test_spillforward_solvers_agree_on_a_cycle_of_reloads_and_stores() {
+    crate::analysis::dataflow::check_always();
+    let cell = || Loc::Mem(mem(frame(-1284), 2, RegId::BP, 0, 2));
+    let reload = |at: i64| {
+        Arc::new(Insn {
+            spill_reload: true,
+            ..insn(
+                at,
+                Some((at, at)),
+                Some(sem(Operation::Move, "mov", vec![rl(RegId::DI, 2)], vec![cell()])),
+                vec![],
+                vec![],
+            )
+        })
+    };
+    let store = |at: i64, register: RegId| {
+        Arc::new(insn(
+            at,
+            Some((at, at)),
+            Some(sem(Operation::Move, "mov", vec![cell()], vec![rl(register, 2)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let branch = |at: i64, to: i64| {
+        Arc::new(insn(
+            at,
+            Some((at, at)),
+            Some(semt(Operation::Branch, "jne", vec![], vec![], Some(to))),
+            vec![],
+            vec![],
+        ))
+    };
+    let jump = |at: i64, to: i64| {
+        Arc::new(insn(at, Some((at, at)), Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(to))), vec![], vec![]))
+    };
+    let ret = |at: i64| {
+        Arc::new(insn(at, Some((at, at)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![]))
+    };
+    // What a block does to the cell: nothing, a reload of DI, a store from DI,
+    // a store from CX.
+    let effect = |kind: usize, at: i64| match kind {
+        0 => vec![],
+        1 => vec![reload(at)],
+        2 => vec![store(at, RegId::DI)],
+        _ => vec![store(at, RegId::CX)],
+    };
+    for entry_kind in 0..4 {
+        for header_kind in 0..4 {
+            for middle_kind in 0..4 {
+                for latch_kind in 0..4 {
+                    // 626 -> 629 {641, 637}; 641 -> 637; 637 -> {629, 627}; 627
+                    // returns.
+                    let mut entry = effect(entry_kind, 100);
+                    entry.push(jump(101, 629));
+                    let mut header = effect(header_kind, 200);
+                    header.push(branch(201, 641));
+                    header.push(jump(202, 637));
+                    let mut middle = effect(middle_kind, 300);
+                    middle.push(jump(301, 637));
+                    let mut latch = effect(latch_kind, 400);
+                    latch.push(branch(401, 629));
+                    latch.push(jump(402, 627));
+                    let input = body(
+                        "cycle",
+                        626,
+                        vec![
+                            block(626, entry, vec![629]).into(),
+                            block(629, header, vec![641, 637]).into(),
+                            block(641, middle, vec![637]).into(),
+                            block(637, latch, vec![629, 627]).into(),
+                            block(627, vec![ret(500)], vec![]).into(),
+                        ],
+                    );
+                    spillforward::forwarded(&input);
+                }
+            }
+        }
+    }
+}
+
+/// What a block's transfer makes of the fact (DI, [BP-1284]): absent, a
+/// register a reload filled (false), or one a store wrote the slot from (true),
+/// in that order of what is known. A store of DI is redundant where the fact is
+/// already present and kept where it is absent, and the first left the fact as
+/// it was (false) while the second made it true: the fact present as false gave
+/// LESS than the fact absent, so the transfer was not monotone, and a loop
+/// through it had two fixed points (the worklist's and the rounds' of
+/// `LLRM_CHECK_DATAFLOW` on `_savegame_load@3`).
+#[test]
+fn test_spillforward_transfer_gives_more_for_more_known() {
+    let cell = || Loc::Mem(mem(frame(-1284), 2, RegId::BP, 0, 2));
+    let store = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Move, "mov", vec![cell()], vec![rl(RegId::DI, 2)])),
+        vec![],
+        vec![],
+    ));
+    let input = body("monotone", 1, vec![block(1, vec![store], vec![]).into()]);
+    let regs = input.regs();
+    let fact = (
+        r(RegId::DI, 2),
+        match cell() {
+            Loc::Mem(cell) => cell,
+            _ => unreachable!(),
+        },
+    );
+    let rank = |facts: &crate::backend::spillforward::Facts| match facts.get(&fact) {
+        None => 0,
+        Some(false) => 1,
+        Some(true) => 2,
+    };
+    let out = |begin: Option<bool>| {
+        let mut facts = crate::backend::spillforward::Facts::default();
+        if let Some(stored) = begin {
+            facts.insert(fact.clone(), stored);
+        }
+        rank(&crate::backend::spillforward::_transfer(regs, input.bits, &input.blocks[0], facts).2)
+    };
+    let (absent, reloaded, stored) = (out(None), out(Some(false)), out(Some(true)));
+    assert!(
+        absent <= reloaded && reloaded <= stored,
+        "absent {absent}, reload-filled {reloaded}, store-written {stored}"
+    );
+}

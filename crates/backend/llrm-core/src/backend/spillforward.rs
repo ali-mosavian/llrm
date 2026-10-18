@@ -298,7 +298,7 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
 }
 
 /// The reloads `facts` makes redundant in `block`, and the facts after it.
-fn _transfer(
+pub(crate) fn _transfer(
     regs: Regs,
     bits: u32,
     block: &LirBlock,
