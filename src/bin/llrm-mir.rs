@@ -170,6 +170,10 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
             }
             // The bytes this access reaches, as the consumers of the facts read them.
             reference.provenance = facts.reference(&unit, &reference).or(reference.provenance.take());
+            // Without the type tags: what BasicAA alone could know (`LLRM_ALIASES_NO_TBAA=1`).
+            if std::env::var_os("LLRM_ALIASES_NO_TBAA").is_some() {
+                reference.typed = None;
+            }
             entries.push((text, reference.width, reference));
         }
         for (at, one) in entries.iter().enumerate() {
