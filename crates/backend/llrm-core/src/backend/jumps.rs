@@ -191,6 +191,9 @@ pub fn optimized(
     let price = Branches::of(cpu);
     let mut candidate = _placed(&_hoisted(body), size)?;
     let baseline = threaded(&candidate);
+    if llrm_support::env_flag!("LLRM_JUMPS_SHADOW_TAIL") {
+        _shadow_tail_merge(&baseline);
+    }
     let settled = candidate.clone();
     // Merging one physical tail may make the condition selecting between its
     // former copies dead; deleting that compare can in turn make predecessor
@@ -2468,3 +2471,77 @@ pub fn _prune(body: &mut LirBody) {
 #[cfg(test)]
 #[path = "jumps_tests.rs"]
 mod tests;
+
+/// Spike: what `BranchFolder::TailMergeBlocks` would find in `body`
+/// ([`BranchFolding.cpp#L1109`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L1109)):
+/// blocks are hashed by their last instruction (`HashEndOfMBB`), the common
+/// tail of two in a bucket is counted back from the end
+/// (`ComputeCommonTailLength`,
+/// [`#L417`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L417)),
+/// and a tail of at least `MinCommonTailLength` (3) is one it would merge.
+/// Prints, for the body, the blocks that have one, the instructions its longest
+/// tails hold, the pairs that are whole identical blocks (all `merged` takes)
+/// and the real instructions in all.
+fn _shadow_tail_merge(body: &LirBody) {
+    type Shaped = (Semantics, BTreeSet<RegId>, BTreeSet<RegId>, Vec<RegId>, Vec<RegId>, bool);
+    let shaped = |one: &Arc<Insn>| -> Option<Shaped> {
+        let what = one.what.as_ref()?;
+        if matches!(
+            what.op,
+            Operation::Barrier | Operation::Call | Operation::Data
+        )
+            || one.symbol == Some(true)
+            || one.group.is_some()
+        {
+            return None;
+        }
+        Some((
+            what.clone(),
+            one.clobbers.clone(),
+            one.clobbers_high.clone(),
+            one.requires.iter().map(|(_value, register)| *register).collect(),
+            one.delivers.iter().map(|(_value, register)| *register).collect(),
+            one.frame_adjust,
+        ))
+    };
+    let ends: Vec<Vec<Option<Shaped>>> =
+        body.blocks.iter().map(|block| _real(block).iter().map(&shaped).collect()).collect();
+    let total: usize = ends.iter().map(Vec::len).sum();
+    let mut buckets: IndexMap<String, Vec<usize>> = IndexMap::default();
+    for (at, tail) in ends.iter().enumerate() {
+        if let Some(Some(last)) = tail.last() {
+            buckets.entry(format!("{last:?}")).or_default().push(at);
+        }
+    }
+    let (mut best, mut whole) = (vec![0usize; ends.len()], 0usize);
+    for members in buckets.values() {
+        for (x, &a) in members.iter().enumerate().take(150) {
+            for &b in members.iter().skip(x + 1).take(150) {
+                let length = ends[a]
+                    .iter()
+                    .rev()
+                    .zip(ends[b].iter().rev())
+                    .take_while(|(one, other)| one.is_some() && one == other)
+                    .count();
+                if length >= 3 {
+                    best[a] = best[a].max(length);
+                    best[b] = best[b].max(length);
+                    if length == ends[a].len() && length == ends[b].len() && body.blocks[a].succ == body.blocks[b].succ
+                    {
+                        whole += 1;
+                    }
+                }
+            }
+        }
+    }
+    let with: Vec<usize> = best.iter().copied().filter(|length| *length > 0).collect();
+    eprintln!(
+        "[jumps-shadow] {} blocks {} real {} with-a-tail-of-3+ {} longest-tails-sum {} whole-identical-pairs {}",
+        body.name,
+        body.blocks.len(),
+        total,
+        with.len(),
+        with.iter().sum::<usize>(),
+        whole
+    );
+}
