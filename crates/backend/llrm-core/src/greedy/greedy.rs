@@ -464,7 +464,9 @@ impl<'a> RAGreedy<'a> {
             stage = LiveRangeStage::Assign;
             self.extra.set_stage(reg, stage);
         }
-        let prio = self.get_priority(li);
+        // A pinned value is LLVM's physical register range, in the matrix
+        // before any virtual one is assigned: it is dequeued first.
+        let prio = if self.pinned.contains(&reg) { u32::MAX } else { self.get_priority(li) };
         // The virtual register number is a tie breaker for same-sized ranges.
         // Give lower vreg numbers higher priority to assign them first.
         self.queue.push((prio, !reg));
