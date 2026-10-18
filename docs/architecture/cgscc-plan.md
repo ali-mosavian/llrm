@@ -1,3 +1,7 @@
+---
+architecture-index: the inliner as LLVM's: translation plan
+architecture-order: 450
+---
 # The inliner as LLVM's: translation plan
 
 TL;DR: translate `InlineCost.cpp` (the cost model and thresholds) and `InlineAdvisor.cpp::shouldInline`
