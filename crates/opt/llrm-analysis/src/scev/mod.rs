@@ -28,6 +28,7 @@ pub mod eval;
 pub mod exit_limit;
 pub mod exit_value;
 pub mod expand;
+pub mod expand_iv;
 #[cfg(test)]
 mod expand_tests;
 pub mod expander;
