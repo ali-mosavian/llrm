@@ -615,3 +615,22 @@ fn an_icmp_takes_another_predicate() {
     assert_eq!(f.instruction(c).opcode, Opcode::ICmp(crate::opcode::IntPredicate::Ult));
     assert_eq!(f.take_changes(), vec![Change::Rewritten(c)]);
 }
+
+/// Taking `!range` off a load changes what is known of its result, so the log
+/// tells of the rewrite: EarlyCSE took it off the surviving load of two and
+/// logged nothing, the manager kept the ranger's answers of the old range and
+/// `LLRM_CHECK_REPLAY` panicked on bintree.nib (#2369).
+#[test]
+fn test_unannotate_logs_the_rewrite_of_the_instruction() {
+    let mut module = module(
+        "define i16 @f(ptr %p) {\nentry:\n  %v = load i16, ptr %p, !range !0\n  ret i16 %v\n}\n\n!0 = !{i16 0, i16 -32768}\n",
+    );
+    let f = function(&mut module);
+    let (v, _) = named(f, "v");
+    f.take_changes();
+    f.unannotate(v, "range");
+    assert!(f.instruction(v).metadata.is_empty(), "premise: the range is gone");
+    assert_eq!(f.take_changes(), vec![Change::Rewritten(v)]);
+    f.unannotate(v, "range");
+    assert!(f.take_changes().is_empty(), "nothing was taken off the second time");
+}
