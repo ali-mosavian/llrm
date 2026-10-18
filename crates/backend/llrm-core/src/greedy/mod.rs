@@ -14,4 +14,5 @@ pub mod matrix;
 pub mod shadow;
 pub mod spill;
 pub mod spillplacement;
+pub mod splitkit;
 pub mod virtregmap;
