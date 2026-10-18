@@ -189,7 +189,7 @@ fn param_has_dereferenceable(
 }
 
 /// `CallBase::paramHasNonNullAttr(ArgNo, AllowUndefOrPoison)`.
-fn param_has_non_null_attr(
+pub(crate) fn param_has_non_null_attr(
     q: &Query,
     instruction: &Instruction,
     arg: usize,

@@ -229,6 +229,11 @@ pub struct Options {
     /// [`llvm_order`]), not in the rounds; on by default, `LLRM_NO_LLVM_ORDER`
     /// turns it off.
     pub llvm_order: bool,
+    /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
+    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating;
+    /// `LLRM_EXP_ROTATE` sets it, off by default (the loop passes refuse a
+    /// rotated loop: docs/architecture/rotate-refusals.md).
+    pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); `LLRM_EXP_MEM2REG` sets it, off by default.
     pub mem2reg: bool,
@@ -267,6 +272,7 @@ impl Default for Options {
         Self {
             optimize: true,
             llvm_order: llvm_order_default(),
+            rotate_slot: experiment_rotate(),
             limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default(),
             lcssa: true,
@@ -527,7 +533,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Strict floating recurrences must retain their original iteration
         // order; LICM may move invariant preparation out afterwards.
         Box::new(floatloop::FloatLoop),
-        Box::new(hoist::Hoist { size: applied.options.prefers_size() }),
+        Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true }),
         Box::new(loopmotion::LoopMotion),
         // The loop's exit tests that nothing in it changes are made once, with
         // the loop's entry.
@@ -627,6 +633,12 @@ impl FunctionPass for Together {
     }
 }
 
+/// `LLRM_EXP_ROTATE`, read once: set, the rotate slot of [`llvm_order`] runs
+/// (it stays off until the loop passes accept a rotated loop).
+fn experiment_rotate() -> bool {
+    llrm_support::env_flag!("LLRM_EXP_ROTATE")
+}
+
 /// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by
 /// default (PassBuilderPipelines.cpp at d1106deb71cc is the order otherwise).
 fn llvm_order_default() -> bool {
@@ -656,7 +668,7 @@ pub(crate) fn llvm_order(
         })
     };
     let earlycse = |name| slot(name, Box::new(crate::earlycse::EarlyCse));
-    let hoist = |name| slot(name, Box::new(hoist::Hoist { size }));
+    let hoist = |name, speculate| slot(name, Box::new(hoist::Hoist { size, speculate }));
     let loopmotion = |name| slot(name, Box::new(loopmotion::LoopMotion));
     let canonical = |a: &'static str, b: &'static str| {
         [slot(a, Box::new(loopsimplify::LoopSimplify)), slot(b, Box::new(lcssa::LoopClosedSSA))]
@@ -691,11 +703,28 @@ pub(crate) fn llvm_order(
                 slot("algebraic@696", Box::new(algebraic::Algebraic { size })),
             ]);
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
+            // Without the rotate slot the first LICM keeps speculating, as the
+            // single hoist did.
+            let rotating = applied.options.copy_headers && !size && applied.options.rotate_slot;
             list.extend([
                 slot("floatloop@724", Box::new(floatloop::FloatLoop)),
-                hoist("hoist@724"),
+                // LPM1
+                // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L724:
+                // licm<no-allowspeculation> L724, loop-rotate L728,
+                // licm<allowspeculation> L730. The first hoists only what the
+                // loop certainly runs; the rotate puts a guard before a loop
+                // not proven to run, so that the second hoists into a preheader
+                // behind it (#2194). llrm skips the header copy at -Os, as
+                // gcc's -ftree-ch.
+                hoist("hoist@724", !rotating),
                 loopmotion("loopmotion@724"),
-                hoist("hoist@730"),
+            ]);
+            if rotating {
+                list.push(slot("rotate@728", Box::new(rotate::Rotate { proven: false, copy: true })));
+                list.extend(canonical("loopsimplify@728", "lcssa@728"));
+            }
+            list.extend([
+                hoist("hoist@730", true),
                 slot("trivialunswitch@732", Box::new(trivialunswitch::TrivialUnswitch)),
                 decide("decide@766"),
                 phiopt("phiopt@766"),
@@ -725,7 +754,7 @@ pub(crate) fn llvm_order(
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
             list.extend([
-                hoist("hoist@823"),
+                hoist("hoist@823", true),
                 loopmotion("loopmotion@823"),
                 decide("decide@832"),
                 phiopt("phiopt@832"),
@@ -925,7 +954,7 @@ pub fn recorded(
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if !guarded && applied.options.wanted("hoist") {
-        manager.add(hoist::Hoist { size: applied.options.prefers_size() });
+        manager.add(hoist::Hoist { size: applied.options.prefers_size(), speculate: true });
     }
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {
@@ -987,7 +1016,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
-        passes.push(Box::new(hoist::Hoist { size: applied.options.prefers_size() }));
+        passes.push(Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true }));
     }
     passes
 }

@@ -1456,6 +1456,52 @@ fn test_llvm_order_keeps_a_loop_computing_the_same() {
     assert!(!llrm_mir::print::module(&module).contains("alloca"), "an alloca is left");
 }
 
+/// #2194, x_hanoi2's `mv`: the loop `tailrec` makes of the second call has the
+/// invariant argument `to` as a plain parameter, and its `mul` sits behind the
+/// `n == 0` exit. One speculating `hoist` ahead of any rotate lifted it into
+/// the entry block, before the test, so the frame was needed before the test
+/// (x_hanoi2 -O2 +22.8%). LLVM's LPM1 hoists without speculation, rotates (a
+/// guard before the loop), then hoists with it: the `mul` lands behind the
+/// guard. `rotate_slot: false` holds the order to the failing form (the
+/// premise).
+#[test]
+fn test_llvm_order_hoists_behind_the_guard_the_rotate_makes_not_into_the_entry() {
+    let text = "@top = global [3 x i16] zeroinitializer
+define void @mv(i16 %n, i16 %from, i16 %to, i16 %via) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %body
+body:
+  %m = sub i16 %n, 1
+  call void @mv(i16 %m, i16 %from, i16 %via, i16 %to)
+  %o = mul i16 %to, 2
+  %p = getelementptr i8, ptr @top, i16 %o
+  %t = load i16, ptr %p
+  %t1 = add i16 %t, 1
+  store i16 %t1, ptr %p
+  call void @mv(i16 %m, i16 %from, i16 %to, i16 %via)
+  ret void
+done:
+  ret void
+}
+";
+    let entry_has_mul = |rotate_slot: bool| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied {
+            options: pipeline::Options { llvm_order: true, rotate_slot, ..Default::default() },
+            ..Applied::default()
+        };
+        let printed =
+            crate::testing::managed(&mut module, pipeline::Fixed::linear(&applied, pipeline::Phase::Simplify));
+        let entry = printed.split("\n\n").find(|one| one.contains("b0:")).expect("the entry block").to_owned();
+        (entry.contains("mul i16"), printed)
+    };
+    let (without, plain) = entry_has_mul(false);
+    assert!(without, "premise: without the rotate slot the mul is in the entry block\n{plain}");
+    let (with, rotated) = entry_has_mul(true);
+    assert!(!with, "the mul is behind the guard, not in the entry block\n{rotated}");
+}
+
 /// `LLRM_DUMP_INPUTS` for the POCs of single passes: a pass that finds nothing
 /// to do left no dump, so its input was nowhere to be had. A run that changes
 /// nothing now leaves its input and a manifest line.

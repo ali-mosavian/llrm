@@ -87,11 +87,11 @@ mod calleepop_tests;
 pub mod candidate;
 pub mod canonical;
 pub mod cfg;
-#[cfg(test)]
-mod corpus_tests;
 pub mod constraintelim;
 #[cfg(test)]
 mod constraintelim_tests;
+#[cfg(test)]
+mod corpus_tests;
 pub mod counting;
 pub mod dead;
 pub mod deadargs;
