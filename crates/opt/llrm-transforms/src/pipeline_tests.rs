@@ -1450,7 +1450,7 @@ fn test_sroa_and_mem2reg_are_on_by_default_and_the_registry_calls_their_slots_tr
                 level,
                 applied.options.sroa,
                 applied.options.mem2reg,
-                applied.options.rotate_slot,
+                applied.options.rotating(),
             );
             assert_eq!(checked, Ok(()), "{phase:?} sroa {} mem2reg {}", applied.options.sroa, applied.options.mem2reg);
         }
@@ -2209,4 +2209,16 @@ fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
         super::rerun(&mut module, &mut analyses, llrm_mir::context::GlobalId(0), &mut fixed).unwrap()
     });
     assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
+}
+
+/// LoopRotate was behind `LLRM_EXP_ROTATE` (off) until `loopexit`/`indvars`,
+/// `loopidioms` and the counter-loop deletion took a rotated loop; it is on
+/// by default, and off where unroll-and-jam runs, whose nests are the
+/// header-tested form (RJ1).
+#[test]
+fn test_the_rotate_slot_is_on_by_default_and_off_where_unroll_jam_is() {
+    assert!(pipeline::Options::default().rotating());
+    assert!(pipeline::Options::basic().rotating());
+    assert!(!pipeline::Options::speed().rotating());
+    assert!(!pipeline::Options::aggressive().rotating());
 }

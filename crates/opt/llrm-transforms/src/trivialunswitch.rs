@@ -56,6 +56,8 @@
 //! that stays in the loop on both sides, is [`crate::unswitch`]'s, which
 //! copies the loop.
 //!
+//! A rotated loop, one whose header jumps back to itself, is left alone (TU1).
+//!
 //! The pass repeats while a loop changes.
 //!
 //! # Example
@@ -190,6 +192,12 @@ fn planned(
         function.predecessors(header).into_iter().filter(|one| !loop_.body.contains(&cfg::id(*one))).collect();
     let [preheader] = outside[..] else { return None };
     if function.successors(preheader) != [header] {
+        return None;
+    }
+    // TU1 A rotated loop, whose header tests the exit after its body, is
+    // left alone: SimpleLoopUnswitch's trivial path (the translation that
+    // replaces this pass) decides it from the exiting block.
+    if function.successors(header).contains(&header) {
         return None;
     }
     let branch = function.terminator(header)?;
