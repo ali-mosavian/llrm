@@ -555,7 +555,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
             exit_values: false,
             unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
         }),
-        Box::new(algebraic::Algebraic { size: applied.options.prefers_size() }),
+        Box::new(algebraic::Algebraic { size: applied.options.prefers_size(), llvm: false }),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
         Box::new(peel::Peel { limits: limits() }),
@@ -720,7 +720,7 @@ pub(crate) fn llvm_order(
                 slot("tailrec@688", Box::new(tailrec::TailRecursion)),
                 decide("decide@690"),
                 phiopt("phiopt@690"),
-                slot("algebraic@696", Box::new(algebraic::Algebraic { size })),
+                slot("algebraic@696", Box::new(algebraic::Algebraic { size, llvm: true })),
             ]);
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
             // Without the rotate slot the first LICM keeps speculating, as the
@@ -1058,7 +1058,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(loopsimplify::LoopSimplify));
     passes.push(Box::new(lcssa::LoopClosedSSA));
     passes.push(Box::new(fold::Fold));
-    passes.push(Box::new(algebraic::Algebraic { size: false }));
+    passes.push(Box::new(algebraic::Algebraic { size: false, llvm: false }));
     // A counted exit's values are numbers where the copy made its test the one
     // that leaves.
     passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None }));
