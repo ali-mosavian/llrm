@@ -303,9 +303,8 @@ pub fn emitted(
                 module.globals.iter().filter_map(|global| global.function()).filter(|one| !one.is_declaration())
             })
         };
-        let instructions: usize = bodies()
-            .map(|one| one.layout().iter().map(|&block| one.block(block).instructions().len()).sum::<usize>())
-            .sum();
+        let instructions: usize =
+            bodies().map(|one| one.layout().iter().map(|&block| one.block(block).len()).sum::<usize>()).sum();
         llrm_support::debug!("mir", "functions {} instructions {}", bodies().count(), instructions);
     }
     Ok((linked, data))

@@ -3244,7 +3244,7 @@ fn escapes(
     let function = unit.function;
     let graph = cfg::graph(function);
     let values = &solved.values;
-    let instructions = |at: i64| function.block(cfg::block(at)).instructions();
+    let instructions = |at: i64| function.block(cfg::block(at)).iter();
     // Escape is flow-sensitive separately from pointer contents. A pointer
     // published after a call must not make the earlier call reach its frame.
     let mut pointer_fields: IndexMap<ObjectRef, BTreeSet<ObjectRef>> = IndexMap::default();
@@ -3347,7 +3347,7 @@ fn escapes(
         // What a block holds of its cells on entry is not carried between
         // blocks: what a cell held anywhere is `pointer_fields`'.
         let mut mine: HashMap<InstId, Vec<usize>> = HashMap::default();
-        for &inst in instructions(block.at) {
+        for inst in instructions(block.at) {
             let op = function.instruction(inst);
             // What publishes an object: a call, a return, a store of a pointer,
             // an integer made of a pointer, a pointer an
@@ -3451,7 +3451,7 @@ fn escapes(
         let mut steps = Vec::new();
         for inst in instructions(block.at) {
             let publishes = publishes[&block.at]
-                .get(inst)
+                .get(&inst)
                 .map(
                     |objects| {
                         objects.iter().for_each(|one| every.insert(*one));
@@ -3460,13 +3460,13 @@ fn escapes(
                         sorted
                     },
                 );
-            let asked = calls.contains(inst)
+            let asked = calls.contains(&inst)
                 || matches!(
-                    function.instruction(*inst).opcode,
+                    function.instruction(inst).opcode,
                     Opcode::Load { .. } | Opcode::Store { .. }
                 );
             if publishes.is_some() || asked {
-                steps.push(Step { inst: *inst, publishes, asked });
+                steps.push(Step { inst, publishes, asked });
             }
         }
         order.push(steps);
