@@ -17,6 +17,12 @@
 //! - some other exit's count is below all of its own, by the constants or by
 //!   the guards on entry (`guards::holds`): it never leaves.
 //!
+//! The exits and their counts are ScalarEvolution's (`getExitCount`,
+//! `isLoopEntryGuardedByCond`: LLVM's `optimizeLoopExits`: zero, below the
+//! loop's symbolic maximum, a count an earlier exit has).
+//! `LLRM_NO_SCEV_EXITFOLD` restores `induction::exits`; the two differ on 2 of
+//! 1,590 corpus objects, both smaller.
+//!
 //! The branch is given the constant that decides it; `decide` then makes it a
 //! jump. Nothing else changes, so no effect or value between the exits matters.
 //!
@@ -107,6 +113,8 @@
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, AffineOperand, ExitCount, Scev};
 use llrm_analysis::num::Num as BigInt;
+use llrm_analysis::scev::analysis::ScevSession;
+use llrm_analysis::scev::backedge::ExitCountKind;
 use llrm_analysis::{cfg, guards, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -159,6 +167,19 @@ pub fn folded_with(
     outer: &Outer,
     standing: &mut memory::Standing,
 ) -> bool {
+    folded_by(context, layout, function, outer, standing, scev_enabled())
+}
+
+/// [`folded_with`], the exits their counts decide found by ScalarEvolution
+/// (`scev`) or by `induction::exits`.
+pub fn folded_by(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    standing: &mut memory::Standing,
+    scev: bool,
+) -> bool {
     let (decided, hoisted, predicated, merged) = {
         let shape = standing.shape(function);
         let unit = memory::Unit::within(context, layout, function, outer).with_shape(&shape);
@@ -170,13 +191,17 @@ pub fn folded_with(
         let facts = standing.of(&unit);
         let unit = unit.with_registers(facts);
         let loops = shape.loops.clone();
+        let mut session = scev.then(|| ScevSession::of(context, function, outer));
         let mut decided = Vec::new();
         let mut hoisted = Vec::new();
         let mut predicated = Vec::new();
         let mut merged = Vec::new();
         for loop_ in &loops {
             let exits = induction::exits(&unit, loop_, Some(facts), false);
-            let folding = _decided(&unit, loop_, &exits);
+            let folding = match session.as_mut() {
+                Some(session) => _decided_by_scev(&unit, outer, session, loop_, &exits),
+                None => _decided(&unit, loop_, &exits),
+            };
             let lifting = _hoisted(&unit, outer, loop_, &exits, &folding);
             // One rewrite of a loop's exits a round: each reads them as they
             // were.
@@ -827,7 +852,7 @@ fn _hoisted(
             continue;
         }
         'candidate: {
-            if !shape.dominance.dominates(exit.block, latch) {
+            if !shape.dominance.dominates(unit.function, exit.block, latch) {
                 break 'candidate;
             }
             let Some((counter, right, predicate)) = _tested(unit, exit, &counters, &still) else { break 'candidate };
@@ -886,6 +911,79 @@ fn _hoisted(
         earlier.extend(taken);
     }
     found
+}
+
+/// Read once: the exits their counts decide are found by ScalarEvolution's
+/// exit counts (LLVM's `optimizeLoopExits`), not by `induction::exits`;
+/// `LLRM_NO_SCEV_EXITFOLD` turns that off.
+fn scev_enabled() -> bool {
+    !llrm_support::env_flag!("LLRM_NO_SCEV_EXITFOLD")
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp#L1661
+/// `IndVarSimplify::optimizeLoopExits`' folding of the exits whose count is
+/// known: the branches of `loop_`'s exits ScalarEvolution's counts decide, and
+/// their exits. `exits` names the exiting blocks the latch follows, in
+/// dominance order, as LLVM keeps them. The exits of an unknown count go to
+/// `optimizeLoopExitWithUnknownExitCount` (`_hoisted`).
+fn _decided_by_scev(
+    unit: &memory::Unit,
+    outer: &Outer,
+    session: &mut ScevSession,
+    loop_: &Loop,
+    exits: &[ExitCount],
+) -> Vec<(InstId, i64, Decided)> {
+    let function = unit.function;
+    // Only an exit of this loop and no inner one decides this loop's trips.
+    let innermost = |at: i64| {
+        unit.shape().loops.iter().filter(|one| one.body.contains(&at)).all(|one| one.body.len() >= loop_.body.len())
+    };
+    let header = cfg::block(loop_.header);
+    session.ask(unit.context, unit.layout, function, outer, |scev, cx| {
+        let mut decided = Vec::new();
+        // Get a symbolic upper bound on the loop backedge taken count.
+        let max_be_count = scev.get_backedge_taken_count(cx, header, ExitCountKind::SymbolicMaximum);
+        if scev.is_could_not_compute(max_be_count) {
+            return decided;
+        }
+        let mut dominating_exact_exit_counts = llrm_support::hash::HashSet::default();
+        for exit in exits {
+            let condition = function.instruction(exit.branch).operands.first().copied();
+            if !innermost(exit.block) || matches!(condition, Some(Operand::Constant(_))) {
+                continue;
+            }
+            let exact_exit_count = scev.get_exit_count(cx, header, cfg::block(exit.block), ExitCountKind::Exact);
+            if scev.is_could_not_compute(exact_exit_count) {
+                continue;
+            }
+            // If we know we'd exit on the first iteration, rewrite the exit to
+            // reflect this.
+            if scev.as_constant(exact_exit_count).is_some_and(|count| count.is_zero()) {
+                decided.push((exit.branch, exit.exit, Decided::Leaves));
+                continue;
+            }
+
+            let wider = scev.get_wider_type(cx, scev.type_of(max_be_count), scev.type_of(exact_exit_count));
+            let exact_exit_count = scev.get_noop_or_zero_extend(cx, exact_exit_count, wider);
+            let max_be_count = scev.get_noop_or_zero_extend(cx, max_be_count, wider);
+
+            // Can we prove that some other exit must be taken strictly before
+            // this one?
+            if scev.is_loop_entry_guarded_by_cond_pred(cx, header, IntPredicate::Ult, max_be_count, exact_exit_count) {
+                decided.push((exit.branch, exit.exit, Decided::Stays));
+                continue;
+            }
+
+            // As we run, keep track of which exit counts we've encountered. If
+            // we find a duplicate, we've found an exit which would have exited
+            // on the exiting iteration, but (from the visit order) strictly
+            // follows another which does the same and is thus dead.
+            if !dominating_exact_exit_counts.insert(exact_exit_count) {
+                decided.push((exit.branch, exit.exit, Decided::Stays));
+            }
+        }
+        decided
+    })
 }
 
 /// The branches of `loop_`'s exits their counts decide, and their exits.

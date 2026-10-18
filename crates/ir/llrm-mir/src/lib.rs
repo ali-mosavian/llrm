@@ -5,20 +5,25 @@
 pub mod alias;
 pub mod apfloat;
 pub mod apint;
+pub mod blockfrequency;
 pub mod blocklist;
 pub mod build;
 pub mod callgraph;
+pub mod constantfolding;
+pub mod constantfolding_dump;
 pub mod constantfprange;
 pub mod constantrange;
 pub mod constfold;
 pub mod constraintsystem;
 pub mod context;
 pub mod counts;
+pub mod cycleinfo;
 pub mod datalayout;
 pub mod debuginfo;
 pub mod dense;
 pub mod depends;
 pub mod domtree;
+pub mod domtree_address;
 pub mod domtree_updater;
 pub mod dumpdir;
 pub mod edit;
@@ -32,6 +37,7 @@ pub mod fpclass;
 pub mod hash;
 pub mod idf;
 pub mod inline;
+pub mod instructioncost;
 pub mod interpret;
 mod intrinsic_attrs;
 pub mod intrinsics;
@@ -79,6 +85,8 @@ mod apfloat_tests;
 #[cfg(test)]
 mod build_tests;
 #[cfg(test)]
+mod constantfolding_tests;
+#[cfg(test)]
 mod constantfprange_tests;
 #[cfg(test)]
 mod constantrange_tests;
@@ -94,6 +102,7 @@ mod interpret_tests;
 mod knownbits_tests;
 #[cfg(test)]
 mod knownfpclass_tests;
+#[cfg(test)]
 mod lazyvalueinfo_tests;
 #[cfg(test)]
 mod lint_tests;

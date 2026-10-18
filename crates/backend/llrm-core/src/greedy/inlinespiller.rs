@@ -47,7 +47,6 @@
 //! `shadow::decide_inline`.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -62,6 +61,7 @@ use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::slotindex::InstrKey;
 use crate::model::ir::{Held, Loc, Operation, Semantics};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody};
+use crate::support::hash::HashMap;
 
 /// What the allocator keeps per register and the spiller must extend for the
 /// registers it makes: the allocation order and the widest access.
@@ -71,7 +71,7 @@ pub struct Tables {
     pub widths: RefCell<HashMap<u32, u32>>,
     /// The registers whose one definition can be made again where they are
     /// read (`isTriviallyReMaterializable`).
-    pub remat: RefCell<std::collections::HashSet<u32>>,
+    pub remat: RefCell<crate::support::hash::HashSet<u32>>,
 }
 
 // DEVIATE D-I: `isTriviallyReMaterializable` is answered by the spiller's own
@@ -250,7 +250,9 @@ impl<'a> InlineSpiller<'a> {
                             w.sources.as_slice(),
                             [Loc::Held(h)] if h.value == reg && h.width == defined.width
                         )
-                        && (one.group.is_none() || !def.uses.iter().any(|read| written.contains(read)));
+                        // A copy group's members stay moves (`parcopy`).
+                        && (one.group.is_none()
+                            || what.op == Operation::Move && !def.uses.iter().any(|read| written.contains(read)));
                     ok.then(|| {
                         let mut folded = (**one).clone();
                         folded.what = Some(Semantics { dests: vec![Loc::Held(*dest)], ..what.clone() });
@@ -272,7 +274,13 @@ impl<'a> InlineSpiller<'a> {
             }
             let value = lis.next_virtual_register();
             lis.reserve_virtual_register(value);
+            // It stands beside the unit and claims none of the def's bytes,
+            // as `spiller::_inserted` places what it makes.
+            let beside = lis.instr(members[0]);
+            let at = beside.covers.map_or(beside.at, |covers| covers.0);
             let again = Arc::new(Insn {
+                at: beside.at,
+                covers: Some((at, at)),
                 defines: vec![value],
                 what: Some(Semantics { dests: vec![Loc::Held(Held { value, width: defined.width })], ..what.clone() }),
                 spill_reload: true,

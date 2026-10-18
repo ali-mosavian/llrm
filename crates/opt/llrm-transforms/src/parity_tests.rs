@@ -63,7 +63,9 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
     let report = parity::report();
     assert!(report.contains("gvn@787 (gvn) -> gvn-port") && report.contains("shadow_mssa"), "{report}");
     assert!(parity::TODO.iter().any(|one| one.contains("kept updated by the pass")));
-    assert!(parity::TODO.iter().any(|one| one.contains("CFGAnalyses")));
+    assert!(parity::TODO.iter().all(|one| !one.contains("CFGAnalyses")), "the CFG set exists now");
+    let loops = parity::ANALYSES.iter().find(|one| one.key == "loops").expect("loops is registered");
+    assert_eq!((loops.llvm, loops.kind, loops.off), ("LoopAnalysis", SlotKind::Translated, false));
 }
 
 /// A Translated machine slot that `flow::machine_with` does not run passed
@@ -87,7 +89,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     assert_eq!(parity::check(parity::REGISTRY, Phase::Backend, &built), Ok(()));
     let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@99"), "{why}");
-    let why = parity::check_backend(&["jumps@17", "unknown@1"]).unwrap_err();
+    let why = parity::check_backend(&["floatalloc@8", "jumps@17", "allocate@11", "unknown@1"]).unwrap_err();
     assert!(why.contains("unknown@1"), "{why}");
 }
 
@@ -102,8 +104,9 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
     assert!(why.contains("jumps@17"), "{why}");
     assert!(parity::joined_slots(parity::REGISTRY, &built).all(|one| one != "jumps@17"));
     let count = parity::tally(parity::REGISTRY);
-    assert_eq!(count.partial, 1);
-    assert!(parity::report().contains("jumps@17") && parity::report().contains("1 partial"));
+    // jumps@17 and allocate@11 (greedy by default under LLVM's order).
+    assert_eq!(count.partial, 2);
+    assert!(parity::report().contains("jumps@17") && parity::report().contains("2 partial"));
 }
 
 /// A Partial slot without its criterion and exit says what is done and not what
@@ -113,4 +116,66 @@ fn test_a_partial_slot_states_its_criterion_and_exit() {
     for one in parity::REGISTRY.iter().filter(|one| one.kind == SlotKind::Partial) {
         assert!(one.note.contains("criterion:") && one.note.contains("exit:"), "{}: {:?}", one.slot, one.note);
     }
+}
+
+const TWO_FUNCTIONS: &str = "define i16 @h(ptr %p) {\nb0:\n  store i16 1, ptr %p\n  %v = load i16, ptr %p\n  ret i16 %v\n}\n\ndefine i16 @f(i16 %x) {\nb0:\n  %a = add i16 %x, 1\n  %b = add i16 %x, 1\n  %c = mul i16 %a, %b\n  ret i16 %c\n}\n\ndefine i16 @g(i16 %x) {\nb0:\n  %a = mul i16 %x, 3\n  ret i16 %a\n}\n";
+
+fn runs_of(applied: &Applied) -> Vec<String> {
+    let mut module = crate::testing::parsed(TWO_FUNCTIONS);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    for stage in pipeline::function_stages(applied) {
+        manager.add(stage);
+    }
+    pipeline::capturing_runs(|| {
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap()
+    })
+    .1
+}
+
+/// d_faces -O2 ran `gvn` 35 times over 12 bodies in the rounds (the fixed point
+/// repeats a body until nothing changes), clang 11: once per function. Under
+/// the LLVM order it is once per body.
+#[test]
+fn test_the_llvm_order_runs_gvn_once_per_body_and_the_rounds_do_not() {
+    let order = runs_of(&Applied::default());
+    assert_eq!(parity::check_run_counts(&order, 3, parity::Level::O2), Ok(()), "{order:?}");
+    let rounds = runs_of(&Applied {
+        options: pipeline::Options { llvm_order: false, ..Default::default() },
+        ..Applied::default()
+    });
+    assert!(
+        parity::check_run_counts(&rounds, 3, parity::Level::O2).is_err(),
+        "premise: the rounds run gvn more than once per body: {rounds:?}"
+    );
+}
+
+/// `LLRM_DEBUG=counts` said nothing of who asked for an analysis under the
+/// parity pipeline (the plan page called the counter "not built yet"). The
+/// default order tells the counts its Translated slots and a `callers` line
+/// splits each analysis between them and the old passes; the rounds have none.
+#[test]
+fn test_the_default_order_prints_callers_lines_split_by_joined_slots() {
+    llrm_mir::counts::per_pass();
+    let _ = runs_of(&Applied::default());
+    let callers = llrm_mir::counts::callers();
+    assert!(
+        callers.iter().any(|line| line.starts_with("[counts] callers ") && !line.contains(" 0 joined ")),
+        "no analysis was computed by a joined slot under the default order: {callers:?}"
+    );
+}
+
+/// The pin's `default<O1>` has no GVN, and the -O1 list had it: `gvn@787` ran
+/// over every body at -O1 where LLVM runs none. At -O1 the order builds no
+/// GVN and the registry does not require the Translated slot; -O2 keeps one
+/// per body.
+#[test]
+fn test_the_llvm_order_has_no_gvn_at_o1_as_the_pin_has_none() {
+    let o1 =
+        Applied { options: pipeline::Options { llvm_order: true, ..pipeline::Options::basic() }, ..Applied::default() };
+    let lines = runs_of(&o1);
+    assert_eq!(parity::check_run_counts(&lines, 3, parity::Level::O1), Ok(()), "{lines:?}");
+    let o2 = runs_of(&Applied::default());
+    let gvn = |lines: &[String]| lines.iter().filter(|line| line.contains("-gvn@787")).count();
+    assert_eq!(gvn(&lines), 0, "-O1 ran gvn: {lines:?}");
+    assert!(gvn(&o2) > 0, "premise: the -O2 order runs gvn: {o2:?}");
 }

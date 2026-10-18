@@ -636,6 +636,65 @@ fn test_an_anchor_before_the_shared_tail_leaves_the_arm_with_it() {
     assert_eq!(anchors, 1, "the arm that now jumps still holds its anchor");
 }
 
+/// The stackifier's `sahf` is an inserted `Nothing` that emits a byte, and was
+/// taken for an anchor: the shared tail began after it, one arm lost its
+/// `sahf`, and `d_faces` -Os computed other results (feat/parity bisect).
+#[test]
+fn test_a_sahf_is_not_an_anchor_and_stays_on_every_path() {
+    let sahf = |at: i64| {
+        let what = Semantics { name: Some("sahf".into()), ..Semantics::new(Operation::Nothing) };
+        _inserted(Arc::new(Insn::new(at, None, Some(what), Vec::new(), Vec::new())))
+    };
+    let arm = |at: i64, first: Loc| {
+        let insns = vec![
+            _inserted(_move(at, first)),
+            sahf(at + 1),
+            _inserted(_move(at + 2, bx())),
+            _inserted(_jump(at + 9, 40)),
+        ];
+        block(at, insns, vec![40]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10, imm(1)),
+            arm(20, imm(2)),
+            block(40, vec![_return(40)], vec![]).into(),
+        ],
+    );
+
+    let result = tailmerge::merged(&source, true).unwrap().expect("nothing was merged");
+
+    let sahfs = |at: i64| {
+        let mut path = 0;
+        let mut at = at;
+        loop {
+            let block = result.blocks.iter().find(|one| one.at == at).expect("a block");
+            path += block
+                .insns
+                .iter()
+                .filter(|one| one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("sahf")))
+                .count();
+            match block.succ.as_slice() {
+                [next] => at = *next,
+                _ => return path,
+            }
+        }
+    };
+    assert_eq!((sahfs(10), sahfs(20)), (1, 1), "an arm lost its sahf");
+}
+
+/// An unnamed pseudo that clobbers a register emits no bytes but is not an
+/// anchor: `_inert` asked the name alone and would have dropped it.
+#[test]
+fn test_an_unnamed_flag_clobbering_pseudo_is_not_inert() {
+    let pseudo = Insn { clobbers: [RegId::AX].into(), ..(*_inserted(nothing(5, None))).clone() };
+    assert!(!super::_inert(&pseudo));
+    assert!(super::_inert(&_inserted(nothing(5, None))));
+}
+
 /// `jne T; jmp F` left T, a block that only jumps, in place: `recpow` -O2 ran
 /// an extra `jmp` after every taken `jne`, +0.14% clocks and 15 bytes.
 #[test]
@@ -850,13 +909,49 @@ fn test_byte_neutral_return_duplication_removes_a_join_jump() {
         ],
     );
 
-    let result = duplicated_returns(source, 1);
+    let result = duplicated_returns(source, &|| 1);
     let physical: Vec<Semantics> =
         result.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|one| one.what.clone()).collect();
 
     assert!(result.blocks.iter().all(|block| block.at != 30));
     assert_eq!(physical.iter().filter(|one| one.op == Operation::Return).count(), 2);
     assert!(physical.iter().all(|one| one.op != Operation::Jump));
+}
+
+/// The leave sequence was encoded for every procedure (17.5 M on `d_faces` -O2,
+/// 11 procedures), also those whose one return has nothing to duplicate into.
+#[test]
+fn test_return_duplication_asks_for_the_overhead_only_for_a_tail_with_two_jumping_parents() {
+    let asked = std::cell::Cell::new(0);
+    let counted = || {
+        asked.set(asked.get() + 1);
+        1
+    };
+    let single = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![_move(10, ax())], vec![30]).into(),
+            block(20, vec![_move(20, bx())], vec![30]).into(),
+            block(30, vec![_inserted(_return(30))], vec![]).into(),
+        ],
+    );
+    duplicated_returns(single, &counted);
+    assert_eq!(asked.get(), 0);
+
+    let joined = body(
+        "g",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![_move(10, imm(8))], vec![30]).into(),
+            block(30, vec![_inserted(_return(30))], vec![]).into(),
+            block(20, vec![_move(20, imm(10)), _inserted(_jump(21, 30))], vec![30]).into(),
+        ],
+    );
+    duplicated_returns(joined, &counted);
+    assert_eq!(asked.get(), 1);
 }
 
 /// A larger return tail, or one owning source bytes, stays shared.
@@ -879,8 +974,8 @@ fn test_return_duplication_rejects_growth_and_source_owned_tails() {
     let owned = candidate(vec![_return(30)]);
 
     // Python `is`: nothing changed, so the result equals the input.
-    assert_eq!(duplicated_returns(large.clone(), 1), large);
-    assert_eq!(duplicated_returns(owned.clone(), 1), owned);
+    assert_eq!(duplicated_returns(large.clone(), &|| 1), large);
+    assert_eq!(duplicated_returns(owned.clone(), &|| 1), owned);
 }
 
 /// The raise lays a C loop out test first, so entered at its body the

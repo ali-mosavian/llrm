@@ -297,3 +297,13 @@ def test_no_step_grows_faster_than_the_program_does(axis):
     paid = [one["name"] for one in debts("steps", axis) if one["name"] not in rising]
     assert not grown, f"{axis} at N={SIZES[axis]} -> 2N: " + "; ".join(grown)
     assert not paid, f"{axis}: paid, so out of budgets.toml: {paid}"
+
+
+def test_the_dominators_of_branches_grow_with_the_program_at_2n_and_at_4n():
+    """`rotate` asked for the dominator tree after each of its loops and each ask applied the edits at O(N): `analysis dominators` read
+    25.5 -> 83.4 Minstr (x3.27) from N=256 to 512. The tree is brought up to date when a reader asks (a lazy `DomTreeUpdater`)."""
+    n = SIZES["branches"]
+    empty = empty_steps("branches").get("analysis dominators", 0.0)
+    work = [parsed_steps(run(source_of("branches", size), "branches", "time")).get("analysis dominators", 0.0) - empty for size in (n, 2 * n, 4 * n)]
+    assert work[0] > 0.5, f"premise: the step ran and was counted, {work}"
+    assert work[1] <= DEFAULT["steps"] * work[0] and work[2] <= DEFAULT["steps"] * work[1], f"N, 2N, 4N: {work[0]:.1f} {work[1]:.1f} {work[2]:.1f} Minstr (limit {DEFAULT['steps']} per doubling)"

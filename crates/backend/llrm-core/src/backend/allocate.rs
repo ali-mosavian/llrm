@@ -404,6 +404,16 @@ pub fn live(body: &LirBody) -> (Live, Live) {
     (rows.sets(true), rows.sets(false))
 }
 
+/// `live` for the values `keep` names only: no other value is numbered,
+/// followed or put in a set.
+pub fn live_among(
+    body: &LirBody,
+    keep: impl Fn(u32) -> bool,
+) -> (Live, Live) {
+    let rows = live_rows_by(body, keep);
+    (rows.sets(true), rows.sets(false))
+}
+
 /// What is live at each block's entry and exit as the fixed point leaves it:
 /// rows of bits, which a reader that only walks the values need not turn into
 /// sets.
@@ -1806,6 +1816,44 @@ fn greedy_check(
                 );
             }
         }
+    }
+}
+
+/// Whether the translated greedy allocator allocates: by default, the allocate
+/// slot of LLVM's order being greedy's; `LLRM_NO_LLVM_ORDER` turns it off
+/// unless `LLRM_GREEDY` is set, and `LLRM_NO_GREEDY` alone, under the order.
+pub fn greedy_on() -> bool {
+    #[cfg(test)]
+    if OLD_ALLOCATOR.with(std::cell::Cell::get) {
+        return false;
+    }
+    llrm_support::env_flag!("LLRM_GREEDY")
+        || !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER") && !llrm_support::env_flag!("LLRM_NO_GREEDY")
+}
+
+#[cfg(test)]
+thread_local! {
+    static OLD_ALLOCATOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The old allocator on this thread until dropped: for the tests of its
+/// mechanics (last resort, trial search, rebuilds), which greedy does not have
+/// and which are deleted with it.
+#[cfg(test)]
+pub struct OldAllocator;
+
+#[cfg(test)]
+impl OldAllocator {
+    pub fn pinned() -> Self {
+        OLD_ALLOCATOR.with(|old| old.set(true));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for OldAllocator {
+    fn drop(&mut self) {
+        OLD_ALLOCATOR.with(|old| old.set(false));
     }
 }
 
@@ -4279,7 +4327,7 @@ impl RegAlloc {
             // Each spill gets a slot of its own; they are shared once, over the
             // allocation kept (`spiller::slots_colored`).
             frame.borrow_mut().defer_colours = true;
-            let allocate = if llrm_support::env_flag!("LLRM_GREEDY")
+            let allocate = if greedy_on()
                 && std::env::var("LLRM_GREEDY_ONLY").map_or(true, |only| only.split(',').any(|n| n == candidate.name))
             {
                 greedy_rewritten
@@ -4317,7 +4365,7 @@ impl RegAlloc {
         BASE_SPLITS.with(|splits| splits.set(base_stats.0));
         // LLVM allocates each function once: the translated allocator runs no
         // search over other shapes of the body.
-        if !spilled.is_empty() && cpu.search && !llrm_support::env_flag!("LLRM_GREEDY") {
+        if !spilled.is_empty() && cpu.search && !greedy_on() {
             // Other shapes of the same body, which the base allocation's spills
             // suggest: each is kept only if its output is cheaper.
             let building = llrm_support::debug::span("regalloc candidates");

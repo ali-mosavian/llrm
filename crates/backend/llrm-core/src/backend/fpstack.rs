@@ -56,8 +56,8 @@
 //! asserts).
 //!
 //! # Runs
-//! In place of `floatalloc`'s conversion when `LLRM_EXP_FPS` is set, after
-//! `floatassign`, once per function with floating values. Off by default.
+//! As the body of `floatalloc` (slot `floatalloc@8`), after `floatassign`, once
+//! per function with floating values.
 //!
 //! # Example
 //! `a * b` where `a` is read again afterwards. Before:
@@ -79,7 +79,7 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::backend::allocate::live;
+use crate::backend::allocate::live_among;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::floatalloc;
 use crate::backend::floatalloc::{
@@ -1007,7 +1007,7 @@ pub(super) fn converted(
     if floating.is_empty() {
         return Ok(body.clone());
     }
-    let (live_in, live_out) = live(body);
+    let (live_in, live_out) = live_among(body, |value| floating.contains(&value));
     let bundles = spillplacement::bundles(body);
     // DEVIATE 7: a block of its own on each critical forward edge into a block
     // that reads fewer floating values than its bundle holds, where the
@@ -1018,7 +1018,7 @@ pub(super) fn converted(
     let split = floatalloc::_split_for_the_stack(body, &floating, (&live_in, &live_out), &bundles);
     let (body, live_in, live_out, bundles) = match split {
         Some(body) => {
-            let (live_in, live_out) = live(&body);
+            let (live_in, live_out) = live_among(&body, |value| floating.contains(&value));
             let bundles = spillplacement::bundles(&body);
             (std::borrow::Cow::Owned(body), live_in, live_out, bundles)
         }

@@ -53,7 +53,13 @@ pub fn handled(
     let table = module.context.types.intern(Type::Array { element: i16, count: lines.len() as u64 });
     let members = lines.iter().map(|&line| module.context.int(i16, i128::from(line as u16 as i16))).collect();
     let initializer = module.context.constant(Constant { ty: table, kind: ConstantKind::Aggregate(members) });
-    let variable = GlobalVariable { ty: table, constant: true, initializer: Some(initializer), align: None };
+    let variable = GlobalVariable {
+        externally_initialized: false,
+        ty: table,
+        constant: true,
+        initializer: Some(initializer),
+        align: None,
+    };
     let lines = module.add_variable(&format!("$QB$ERL${name}"), variable, Linkage::Internal)?;
     let lines = (module.reference(lines), table);
     let types = &mut module.context.types;
@@ -88,7 +94,13 @@ pub fn active_global(module: &mut Module) -> Result<ConstantId, String> {
     let none = module.context.int(i16, 0);
     let global = module.add_variable(
         "$QB$ACTIVE",
-        GlobalVariable { ty: i16, constant: false, initializer: Some(none), align: None },
+        GlobalVariable {
+            externally_initialized: false,
+            ty: i16,
+            constant: false,
+            initializer: Some(none),
+            align: None,
+        },
         Linkage::Internal,
     )?;
     Ok(module.reference(global))
@@ -102,7 +114,13 @@ pub fn last_erl_global(module: &mut Module) -> Result<ConstantId, String> {
     let none = module.context.int(i16, 0);
     let global = module.add_variable(
         "$QB$ERL",
-        GlobalVariable { ty: i16, constant: false, initializer: Some(none), align: None },
+        GlobalVariable {
+            externally_initialized: false,
+            ty: i16,
+            constant: false,
+            initializer: Some(none),
+            align: None,
+        },
         Linkage::Internal,
     )?;
     Ok(module.reference(global))

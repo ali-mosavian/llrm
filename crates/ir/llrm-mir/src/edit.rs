@@ -74,7 +74,6 @@ impl Function {
         at: Use,
     ) {
         if let Some(uses) = self.uses_of(operand) {
-            #[cfg(test)]
             USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
             uses.retain(|one| *one != at);
         }
@@ -487,7 +486,6 @@ impl Function {
             }
             for (operand, indexes) in places {
                 if let Some(uses) = self.uses_of(operand) {
-                    #[cfg(test)]
                     USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
                     uses.retain(|one| one.user != inst || indexes.binary_search(&one.index).is_err());
                 }
@@ -529,6 +527,18 @@ impl Function {
             *volatile = true;
             self.log(Change::Rewritten(inst));
         }
+    }
+
+    /// Gives the `icmp` `inst` the predicate `predicate`, as LLVM's
+    /// `CmpInst::setPredicate`.
+    pub fn set_icmp_predicate(
+        &mut self,
+        inst: InstId,
+        predicate: crate::opcode::IntPredicate,
+    ) {
+        let Opcode::ICmp(held) = &mut self.instructions[inst.0 as usize].opcode else { panic!("an icmp") };
+        *held = predicate;
+        self.log(Change::Rewritten(inst));
     }
 
     /// Replaces an instruction's flags.
@@ -745,7 +755,6 @@ impl Function {
         }
         for operand in operands {
             if let Some(uses) = self.uses_of(operand) {
-                #[cfg(test)]
                 USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
                 uses.retain(|one| !gone.contains(&one.user));
             }
@@ -984,7 +993,13 @@ impl Function {
         inst: InstId,
         kind: &str,
     ) {
-        self.instructions[inst.0 as usize].metadata.retain(|(one, _)| one != kind);
+        let metadata = &mut self.instructions[inst.0 as usize].metadata;
+        let held = metadata.len();
+        metadata.retain(|(one, _)| one != kind);
+        // `!range` and the like are facts about the result.
+        if metadata.len() != held {
+            self.log(Change::Rewritten(inst));
+        }
     }
 
     /// A copy of `inst`, placed nowhere, its result unnamed.
@@ -1204,7 +1219,12 @@ pub fn instructions_scanned() -> usize {
     SCANNED.with(std::cell::Cell::get)
 }
 
-#[cfg(test)]
 thread_local! {
     pub(crate) static USES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many use-list entries this thread has looked over to remove uses, for a
+/// test that a pass does not scan a long list once per use it removes.
+pub fn uses_scanned() -> usize {
+    USES_SCANNED.with(std::cell::Cell::get)
 }

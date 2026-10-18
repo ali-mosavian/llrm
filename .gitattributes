@@ -5,3 +5,5 @@ docs/examples/basic/*.BI text eol=crlf
 *.nib linguist-language=Python linguist-detectable=false
 # Two branches that lower the same file's count merge as both lines; the guard asks for a re-bless.
 tests/target_facts.baseline merge=union
+# Golden data, one row per line; trailing spaces are part of the rows.
+crates/ir/llrm-mir/src/idf_golden.txt whitespace=-trailing-space

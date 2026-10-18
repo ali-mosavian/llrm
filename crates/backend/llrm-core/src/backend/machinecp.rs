@@ -28,7 +28,7 @@
 //! effects are the old ones with the renamed lanes replaced.
 //!
 //! LLVM's `CopyTracker` is one `DenseMap` of units; here the units are 28
-//! slots of an array and a set of units is a `u32` mask.
+//! slots of an array and a set of units is a `u64` mask.
 //!
 //! DEVIATE 1: LLVM asks a machine operand whether it is `renamable` and
 //! whether `getRegClassConstraint` admits the new register; llrm has neither
@@ -45,8 +45,10 @@
 //! with every other rewrite. The tests build the bodies.
 //!
 //! # Runs
-//! In place of `regthrash` and `copyprop` in the peephole phase under
-//! `LLRM_EXP_MCP`.
+//! In the peephole phase, where `copyprop` ran (it and `regthrash`'s rename
+//! are gone from the pipeline). Skipped when the body holds no register copy
+//! (`needs::COPY`); again after the zero-extension rewrite on targets that
+//! have one.
 //!
 //! # See also
 //! LLVM [`MachineCopyPropagation`]
@@ -65,11 +67,30 @@ use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Block, Insn, LirBody};
 use crate::support::hash::IndexMap;
 
-/// The byte lanes of the general registers: seven roots of four bytes.
-const UNITS: usize = 28;
+/// The byte lanes of the general registers (seven roots of four bytes), then
+/// of the six segment registers. A segment register is tracked as the source
+/// of a copy, never as its destination: a string instruction reads `es`, which
+/// its effect does not say, so a dead-looking `mov es, bx` must stay.
+const UNITS: usize = 40;
+
+/// The units of the general registers.
+const GENERAL: usize = 28;
+
+/// A set of units.
+type Mask = u64;
 
 thread_local! {
     static STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+thread_local! {
+    static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has run copy propagation, for a test that a body
+/// with no copy is not given to it.
+pub fn runs() -> usize {
+    RUNS.with(std::cell::Cell::get)
 }
 
 /// How many units this thread's tracker has visited, for the slope test.
@@ -78,7 +99,7 @@ pub fn steps() -> usize {
 }
 
 /// The units of a mask, lowest first.
-fn units_of(mut mask: u32) -> impl Iterator<Item = usize> {
+fn units_of(mut mask: Mask) -> impl Iterator<Item = usize> {
     std::iter::from_fn(move || {
         (mask != 0).then(|| {
             STEPS.with(|steps| steps.set(steps.get() + 1));
@@ -94,8 +115,8 @@ fn units_of(mut mask: u32) -> impl Iterator<Item = usize> {
 struct Copy {
     /// `(destination unit, source unit)` per byte.
     pairs: Vec<(usize, usize)>,
-    dst: u32,
-    src: u32,
+    dst: Mask,
+    src: Mask,
 }
 
 impl Copy {
@@ -125,7 +146,7 @@ struct Info {
     /// Instructions that read this unit as a copy's source (backward only).
     src_users: Vec<usize>,
     /// The units the copies from this one defined.
-    defs: u32,
+    defs: Mask,
     avail: bool,
 }
 
@@ -150,7 +171,7 @@ impl Tracker {
     /// `markRegsUnavailable`.
     fn mark_unavailable(
         &mut self,
-        mask: u32,
+        mask: Mask,
     ) {
         for unit in units_of(mask) {
             if let Some(info) = &mut self.units[unit] {
@@ -163,13 +184,13 @@ impl Tracker {
     /// defined.
     fn invalidate(
         &mut self,
-        mask: u32,
+        mask: Mask,
         copies: &[Option<Copy>],
     ) {
         if !self.any {
             return;
         }
-        let mut doomed = 0u32;
+        let mut doomed = 0 as Mask;
         for unit in units_of(mask) {
             if let Some(info) = &self.units[unit] {
                 for copy in [info.copy, info.last_use_in_copy].into_iter().flatten() {
@@ -214,7 +235,7 @@ impl Tracker {
 
     fn clobber(
         &mut self,
-        mask: u32,
+        mask: Mask,
         copies: &[Option<Copy>],
     ) {
         if !self.any {
@@ -274,7 +295,7 @@ impl Tracker {
     /// register.
     fn avail_copy(
         &self,
-        mask: u32,
+        mask: Mask,
         copies: &[Option<Copy>],
     ) -> Option<usize> {
         if !self.any {
@@ -287,7 +308,7 @@ impl Tracker {
     /// `findAvailBackwardCopy`: the copy whose source is the register.
     fn avail_backward_copy(
         &self,
-        mask: u32,
+        mask: Mask,
         copies: &[Option<Copy>],
     ) -> Option<usize> {
         if !self.any {
@@ -300,7 +321,7 @@ impl Tracker {
     /// `trackSrcUsers`.
     fn track_src_users(
         &mut self,
-        mask: u32,
+        mask: Mask,
         user: usize,
         copies: &[Option<Copy>],
     ) -> bool {
@@ -323,7 +344,7 @@ impl Tracker {
 
     fn src_users(
         &self,
-        mask: u32,
+        mask: Mask,
     ) -> Vec<usize> {
         self.units[mask.trailing_zeros() as usize].as_ref().map_or_else(Vec::new, |info| info.src_users.clone())
     }
@@ -357,14 +378,16 @@ struct Machine {
 impl Machine {
     fn new(body: &LirBody) -> Self {
         let regs = body.regs();
-        let lanes: Vec<Lane> = llrm_x86::registers::ROOTS.into_iter().flat_map(|one| _lanes(regs, one)).collect();
+        let segments = [RegId::ES, RegId::CS, RegId::SS, RegId::DS, RegId::FS, RegId::GS];
+        let lanes: Vec<Lane> =
+            llrm_x86::registers::ROOTS.into_iter().chain(segments).flat_map(|one| _lanes(regs, one)).collect();
         assert_eq!(lanes.len(), UNITS, "the general registers' byte lanes");
         let mut places = vec![[u8::MAX; 4]; 512];
         for (unit, (register, byte)) in lanes.iter().enumerate() {
             places[register.index()][*byte as usize] = unit as u8;
         }
         let mut register_for = IndexMap::default();
-        for &register in regs.integer_registers() {
+        for &register in regs.integer_registers().iter().chain(&segments) {
             let held: Vec<Lane> = _lanes(regs, register).into_iter().collect();
             if !held.is_empty() && !regs.is_stack(register) {
                 register_for.insert(held, register);
@@ -385,7 +408,7 @@ impl Machine {
     fn mask(
         &self,
         lanes: &Lanes,
-    ) -> u32 {
+    ) -> Mask {
         lanes.iter().filter_map(|lane| self.unit(&lane)).fold(0, |mask, unit| mask | 1 << unit)
     }
 
@@ -393,7 +416,7 @@ impl Machine {
     fn register_mask(
         &self,
         register: RegId,
-    ) -> Option<u32> {
+    ) -> Option<Mask> {
         let held: Vec<Lane> = _lanes(self.regs, register).into_iter().collect();
         if held.is_empty() {
             return None;
@@ -436,8 +459,8 @@ impl Machine {
             .zip(&sources)
             .map(|(dst, src)| Some((self.unit(dst)?, self.unit(src)?)))
             .collect::<Option<Vec<_>>>()?;
-        let (dst, src) = pairs.iter().fold((0, 0), |(dst, src), (d, s)| (dst | 1 << d, src | 1 << s));
-        (dst & src == 0).then_some(Copy { pairs, dst, src })
+        let (dst, src) = pairs.iter().fold((0 as Mask, 0 as Mask), |(dst, src), (d, s)| (dst | 1 << d, src | 1 << s));
+        (dst & src == 0 && dst >> GENERAL == 0).then_some(Copy { pairs, dst, src })
     }
 
     /// Every register `what` names, with where it sits: explicit operands and
@@ -503,6 +526,29 @@ impl Machine {
         out
     }
 
+    /// `after` is `before` with every use of the lanes `from` renamed `to`, on
+    /// both sides, and nothing else: it selects, and its reads and writes are
+    /// the old ones with `from` swapped for `to`, which `before` did not touch.
+    fn same_renamed(
+        &self,
+        before: &Semantics,
+        after: &Semantics,
+        (from, to): (&Lanes, &Lanes),
+    ) -> bool {
+        let Some(old) = _register_effects_of_what(self.regs, self.bits, before, true, false) else {
+            return false;
+        };
+        if select::priced_in(self.bits, after, 0, None, false, false, None).is_none() {
+            return false;
+        }
+        let Some(new) = _register_effects_of_what(self.regs, self.bits, after, true, false) else {
+            return false;
+        };
+        let swap =
+            |lanes: &Lanes| -> Lanes { lanes.iter().filter(|lane| !from.contains(lane)).chain(to.iter()).collect() };
+        to.is_disjoint(&old.0) && to.is_disjoint(&old.1) && new.0 == swap(&old.0) && new.1 == swap(&old.1)
+    }
+
     /// `after` is `before` with the lanes `from` named `to` and nothing else:
     /// it selects, writes what `before` wrote and reads what it read, the one
     /// side swapped. `write` says which side `from` was on.
@@ -545,6 +591,13 @@ struct Walk<'a> {
     maybe_dead: Vec<usize>,
     dead: Vec<bool>,
     changed: bool,
+    /// Per unit, the last instruction that wrote it and the last that read it
+    /// (`usize::MAX` for one that did either to everything).
+    writer: [Option<usize>; UNITS],
+    reader: [Option<usize>; UNITS],
+    /// Per instruction, the available copy `D = R` it found when it wrote `R`
+    /// and read it (a two-address producer).
+    twin: Vec<Option<usize>>,
 }
 
 impl<'a> Walk<'a> {
@@ -556,7 +609,20 @@ impl<'a> Walk<'a> {
         let effects = insns.iter().map(|one| liveness::effect(machine.regs, machine.bits, one)).collect();
         let copies = insns.iter().map(|one| machine.copy_of(one)).collect();
         let dead = vec![false; insns.len()];
-        Self { machine, insns, effects, copies, tracker: Tracker::new(), maybe_dead: Vec::new(), dead, changed: false }
+        let twin = vec![None; insns.len()];
+        Self {
+            machine,
+            insns,
+            effects,
+            copies,
+            tracker: Tracker::new(),
+            maybe_dead: Vec::new(),
+            dead,
+            changed: false,
+            writer: [None; UNITS],
+            reader: [None; UNITS],
+            twin,
+        }
     }
 
     /// `at` replaced by `one`, its effect and copy worked out again.
@@ -586,7 +652,7 @@ impl<'a> Walk<'a> {
     /// `readRegister`: a copy whose destination is read is not dead.
     fn read(
         &mut self,
-        mask: u32,
+        mask: Mask,
     ) {
         for unit in units_of(mask) {
             if let Some(copy) = self.tracker.copy_for(unit, false) {
@@ -602,7 +668,7 @@ impl<'a> Walk<'a> {
         reversed: bool,
     ) -> bool {
         let copy = self.copies[at].clone().expect("a copy");
-        let (look, pairs): (u32, Vec<(usize, usize)>) = if reversed {
+        let (look, pairs): (Mask, Vec<(usize, usize)>) = if reversed {
             (copy.src, copy.pairs.iter().map(|(dst, src)| (*src, *dst)).collect())
         } else {
             (copy.dst, copy.pairs.clone())
@@ -689,8 +755,12 @@ impl<'a> Walk<'a> {
         live_out: &Lanes,
     ) {
         let machine = self.machine;
+        let live_after = self.live_after(live_out);
         for at in 0..self.insns.len() {
             if self.copies[at].is_some() && (self.erase_if_redundant(at, false) || self.erase_if_redundant(at, true)) {
+                continue;
+            }
+            if self.copies[at].is_some() && self.fold_tied(at, &live_after[at]) {
                 continue;
             }
             self.forward_uses(at);
@@ -705,9 +775,18 @@ impl<'a> Walk<'a> {
                         self.dead[copy] = false;
                     }
                     self.tracker.clear();
+                    self.writer = [Some(usize::MAX); UNITS];
+                    self.reader = [Some(usize::MAX); UNITS];
                 }
                 Some(effect) => {
-                    let (reads, writes) = (machine.mask(&effect.reads), machine.mask(&effect.writes));
+                    let (reads, writes) = (machine.mask(&effect.all_reads()), machine.mask(&effect.writes));
+                    self.note_tied(at, reads);
+                    for unit in units_of(reads) {
+                        self.reader[unit] = Some(at);
+                    }
+                    for unit in units_of(writes) {
+                        self.writer[unit] = Some(at);
+                    }
                     self.read(reads);
                     self.tracker.clobber(writes, &self.copies);
                     if let Some(copy) = self.copies[at].clone() {
@@ -729,6 +808,124 @@ impl<'a> Walk<'a> {
             }
         }
         self.tracker.clear();
+    }
+
+    /// What is live after each instruction, given what is live out.
+    fn live_after(
+        &self,
+        live_out: &Lanes,
+    ) -> Vec<Lanes> {
+        let mut live = *live_out;
+        let mut out = vec![live; self.insns.len()];
+        for at in (0..self.insns.len()).rev() {
+            out[at] = live;
+            live = self.live_before(at, &live);
+        }
+        out
+    }
+
+    /// A two-address producer of `R` while a copy `D = R` is available: `D`
+    /// holds `R`'s value, so the producer could work on `D` instead.
+    fn note_tied(
+        &mut self,
+        at: usize,
+        reads: Mask,
+    ) {
+        if !self.tracker.any {
+            return;
+        }
+        let machine = self.machine;
+        let Some(what) = &self.insns[at].what else {
+            return;
+        };
+        for (place, register, _) in machine.registers(what) {
+            let Place::Dest(_) = place else { continue };
+            let Some(mask) = machine.register_mask(register) else { continue };
+            if mask & reads == 0 {
+                continue;
+            }
+            if let Some(copy) = self.tracker.copy_def_via(mask.trailing_zeros() as usize, &self.copies) {
+                if self.copies[copy].as_ref().is_some_and(|rec| rec.src == mask) {
+                    self.twin[at] = Some(copy);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// `R = op R; D = R` where `D = R` held before the op and `R` dies at the
+    /// second copy: the op works on `D` and the copy goes. (`propagateDefs`
+    /// declines a tied definition; the copy before it is what lets this one.)
+    fn fold_tied(
+        &mut self,
+        k: usize,
+        live_after: &Lanes,
+    ) -> bool {
+        let machine = self.machine;
+        let copy = self.copies[k].clone().expect("a copy");
+        let Some(&Some(j)) = self.writer.get(copy.src.trailing_zeros() as usize) else {
+            return false;
+        };
+        if j == usize::MAX
+            || units_of(copy.src).any(|unit| self.writer[unit] != Some(j))
+            || self.reader.iter().enumerate().any(|(unit, reader)| {
+                // Nothing reads the source after the op but this copy, and
+                // nothing reads the destination between the op and the copy.
+                let after = reader.is_some_and(|reader| reader > j);
+                (copy.src >> unit & 1 == 1 || copy.dst >> unit & 1 == 1) && after
+            })
+        {
+            return false;
+        }
+        let Some(prior) = self.twin[j] else {
+            return false;
+        };
+        let held = self.copies[prior].as_ref().is_some_and(|rec| rec.repeats(&copy) && copy.repeats(rec));
+        if !held || units_of(copy.dst).any(|unit| self.writer[unit] != Some(prior)) {
+            return false;
+        }
+        if !machine.lanes_of(copy.src).iter().all(|lane| !live_after.contains(lane)) {
+            return false;
+        }
+        let (Some(from), Some(to)) = (machine.register_for_mask(copy.src), machine.register_for_mask(copy.dst)) else {
+            return false;
+        };
+        let one = Arc::clone(&self.insns[j]);
+        let Some(what) = &one.what else {
+            return false;
+        };
+        if !one.clobbers.is_empty()
+            || !one.clobbers_high.is_empty()
+            || !one.requires.is_empty()
+            || !one.delivers.is_empty()
+            || !one.spread.is_empty()
+            || one.group.is_some()
+            || one.symbol == Some(true)
+        {
+            return false;
+        }
+        let mut proposed = what.clone();
+        for (place, register, _) in machine.registers(what) {
+            if register == from {
+                proposed = machine.renamed(&proposed, place, to);
+            }
+        }
+        if !machine.same_renamed(what, &proposed, (&machine.lanes_of(copy.src), &machine.lanes_of(copy.dst))) {
+            return false;
+        }
+        // The destination is read by the op now, so its earlier copy is not
+        // dead.
+        self.read(copy.dst);
+        self.put(j, Arc::new(Insn { what: Some(proposed), ..(*one).clone() }));
+        self.remove(k);
+        self.tracker.clobber(copy.dst, &self.copies);
+        for unit in units_of(copy.dst) {
+            self.writer[unit] = Some(j);
+        }
+        for unit in units_of(copy.src) {
+            self.writer[unit] = Some(usize::MAX);
+        }
+        true
     }
 
     /// `propagateDefs`: the producer of a copy's source writes the destination.
@@ -754,7 +951,7 @@ impl<'a> Walk<'a> {
             return None;
         }
         let machine = self.machine;
-        let reads = self.effects[at].as_ref().map_or(0, |effect| machine.mask(&effect.reads));
+        let reads = self.effects[at].as_ref().map_or(0, |effect| machine.mask(&effect.all_reads()));
         for (place, register, _) in machine.registers(what) {
             if !matches!(place, Place::Dest(_)) {
                 continue;
@@ -857,8 +1054,8 @@ impl<'a> Walk<'a> {
             let one = Arc::clone(&self.insns[at]);
             match (&one.what, &self.effects[at]) {
                 (Some(what), Some(effect)) => {
-                    let (reads, writes) = (machine.mask(&effect.reads), machine.mask(&effect.writes));
-                    let (mut seen_reads, mut seen_writes) = (0u32, 0u32);
+                    let (reads, writes) = (machine.mask(&effect.all_reads()), machine.mask(&effect.writes));
+                    let (mut seen_reads, mut seen_writes) = (0 as Mask, 0 as Mask);
                     for (place, register, _) in machine.registers(what) {
                         let Some(mask) = machine.register_mask(register) else {
                             continue;
@@ -893,7 +1090,7 @@ impl Machine {
     /// The lanes of the units in `mask`.
     fn lanes_of(
         &self,
-        mask: u32,
+        mask: Mask,
     ) -> Lanes {
         units_of(mask).map(|unit| self.lanes[unit]).collect()
     }
@@ -901,7 +1098,7 @@ impl Machine {
     /// The register that holds exactly the units of `mask`.
     fn register_for_mask(
         &self,
-        mask: u32,
+        mask: Mask,
     ) -> Option<RegId> {
         let mut held: Vec<Lane> = units_of(mask).map(|unit| self.lanes[unit]).collect();
         held.sort();
@@ -911,6 +1108,7 @@ impl Machine {
 
 /// `body` with each block's copies propagated and its dead copies removed.
 pub fn propagated(body: &LirBody) -> LirBody {
+    RUNS.with(|runs| runs.set(runs.get() + 1));
     if body.blocks.iter().any(|block| !block.phis.is_empty()) {
         return body.clone();
     }

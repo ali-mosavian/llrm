@@ -5,6 +5,7 @@ use llrm_mir::passes::Outer;
 
 use super::simplified;
 use crate::testing::{parsed, printed, results};
+use crate::transform::BLOCKS_VISITED;
 
 /// @f simplified; whether anything changed.
 fn simplify(module: &mut Module) -> bool {
@@ -213,7 +214,8 @@ b2:
     check(text, text, &[&[1], &[2]]);
 }
 
-/// The jump that closes a loop keeps its `!llvm.loop`.
+/// The jump that closes a loop keeps its `!llvm.loop`, on the branch that
+/// now closes it.
 #[test]
 fn test_the_new_jump_keeps_the_loop_metadata() {
     let mut module = parsed(
@@ -238,7 +240,7 @@ b3:
 ",
     );
     assert!(simplify(&mut module));
-    assert!(printed(&module).contains("br label %b1, !llvm.loop"), "{}", printed(&module));
+    assert!(printed(&module).contains("br i1 %c, label %b1, label %b3, !llvm.loop"), "{}", printed(&module));
 }
 
 /// `decide` took out `phi [%x, entry], [%self, latch]` (gvn leaves them) when
@@ -275,8 +277,9 @@ b4:
     assert_eq!(results(&module, &[&[1, 5], &[2, 9]]), before);
 }
 
-/// A chain of n folded branches, each leaving a phi of one value, simplified.
-fn chain_time(n: usize) -> std::time::Duration {
+/// Blocks `_trivial_phis` looked at simplifying a chain of n folded branches,
+/// each leaving a phi of one value.
+fn chain_work(n: usize) -> usize {
     let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  br i1 true, label %b1, label %d0\n\n");
     for i in 0..n {
         let next =
@@ -291,22 +294,167 @@ fn chain_time(n: usize) -> std::time::Duration {
         text += &format!("  {}\n\n", next.replace("%p", &format!("%p{}", i + 1)));
     }
     text += "}\n";
-    (0..5)
-        .map(|_| {
-            let mut module = parsed(&text);
-            let start = std::time::Instant::now();
-            simplify(&mut module);
-            start.elapsed()
-        })
-        .min()
-        .unwrap()
+    let mut module = parsed(&text);
+    BLOCKS_VISITED.with(|visited| visited.set(0));
+    simplify(&mut module);
+    BLOCKS_VISITED.with(std::cell::Cell::get)
 }
 
-/// The fold loop and the phi cleanup after it took time linear in the
-/// function: 4x the blocks must cost well under the 16x of a quadratic one.
+/// The phi cleanup after the folds ran once per pass: 4x the blocks is 4x the
+/// blocks looked at. Run after every fold it looked at 16x (the first version
+/// of this test timed the pass and failed under host load; this counts).
+/// Seen to fail first with `_trivial_phis` called after each fold.
 #[test]
-fn test_simplifying_a_chain_of_folds_is_linear_in_its_length() {
-    let small = chain_time(400);
-    let large = chain_time(1600);
-    assert!(large < small * 9, "400 blocks {small:?}, 1600 blocks {large:?}: slope above 1.6");
+fn test_simplifying_a_chain_of_folds_looks_at_blocks_linearly_in_its_length() {
+    let small = chain_work(100);
+    let large = chain_work(400);
+    assert!(small > 0 && large < small * 6, "100 blocks {small} blocks looked at, 400 blocks {large}: slope above 1.3");
+}
+
+/// A block holding only a jump left the CFG a hop longer than LLVM's
+/// (`decide` bypassed it only where the target had no phi).
+#[test]
+fn test_a_block_that_only_jumps_is_bypassed_and_the_phi_after_it_follows() {
+    check(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  %y = add i16 %x, 1
+  br label %b3
+
+b3:
+  %p = phi i16 [ %x, %b1 ], [ %y, %b2 ]
+  ret i16 %p
+}
+",
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b3, label %b2
+
+b2:
+  %y = add i16 %x, 1
+  br label %b3
+
+b3:
+  %p = phi i16 [ %y, %b2 ], [ %x, %b0 ]
+  ret i16 %p
+}
+",
+        &[&[3, 0], &[3, 1]],
+    );
+}
+
+/// Both sides of a conflict: b0 reaches b2 itself with 1 and through b1 with
+/// 2, so b1 must stay.
+#[test]
+fn test_a_jump_block_stays_where_a_shared_predecessor_would_send_two_values() {
+    check(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b2
+
+b2:
+  %p = phi i16 [ 1, %b0 ], [ 2, %b1 ]
+  ret i16 %p
+}
+",
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b2
+
+b2:
+  %p = phi i16 [ 1, %b0 ], [ 2, %b1 ]
+  ret i16 %p
+}
+",
+        &[&[3, 0], &[3, 1]],
+    );
+}
+
+/// A block with phis of its own and two predecessors is merged into its
+/// successor's phis.
+#[test]
+fn test_a_block_of_phis_and_a_jump_is_merged_into_the_successor() {
+    check(
+        "define i16 @f(i16 %x, i1 %c, i1 %d) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br i1 %d, label %b3, label %b4
+
+b2:
+  br label %b3
+
+b3:
+  %q = phi i16 [ %x, %b1 ], [ 5, %b2 ]
+  br label %b4
+
+b4:
+  %r = phi i16 [ %q, %b3 ], [ 7, %b1 ]
+  ret i16 %r
+}
+",
+        "define i16 @f(i16 %x, i1 %c, i1 %d) {
+b0:
+  br i1 %c, label %b1, label %b4
+
+b1:
+  br i1 %d, label %b3, label %b4
+
+b3:
+  br label %b4
+
+b4:
+  %r = phi i16 [ 7, %b1 ], [ 5, %b0 ], [ %x, %b3 ]
+  ret i16 %r
+}
+",
+        &[&[3, 0, 0], &[3, 0, 1], &[3, 1, 0], &[3, 1, 1]],
+    );
+}
+
+/// The block that joins a loop's two ways back is its one latch; sent on to
+/// the header from two blocks, the loop would lose its simple form
+/// (`NeedCanonicalLoop`).
+#[test]
+fn test_the_one_latch_of_a_loop_is_not_bypassed_by_its_two_ways_back() {
+    let text = "define i16 @f(i16 %x) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %m, %b4 ]
+  %t = icmp ult i16 %i, %x
+  br i1 %t, label %b2, label %b5
+
+b2:
+  %a = add i16 %i, 1
+  %d = icmp ult i16 %a, 5
+  br i1 %d, label %b3, label %b4
+
+b3:
+  %b = add i16 %i, 2
+  br label %b4
+
+b4:
+  %m = phi i16 [ %a, %b2 ], [ %b, %b3 ]
+  br label %b1
+
+b5:
+  ret i16 %i
+}
+";
+    check(text, text, &[&[0], &[7]]);
 }

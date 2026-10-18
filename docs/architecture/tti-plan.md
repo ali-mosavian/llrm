@@ -26,7 +26,7 @@ costs). The vector, masked, gather, interleave and reduction costs return `Inval
 `Cost { value: i64, valid: bool }` is `InstructionCost`. `CostKind` is `TCK_RecipThroughput | Latency | CodeSize |
 SizeAndLatency`. One trait, `Tti`, with a profile each (`Generic`, `X86 { cpu }`, `cpu` from `-march` (its scalar features)):
 
-- `instruction_cost(function, inst, kind)`: `getInstructionCost`, the dispatcher (InlineCost, unroll).
+- `llrm_mir::instructioncost::instruction_cost(tti, context, layout, globals, function, inst, kind)`: `getInstructionCost`, the dispatcher (loop rotate, unroll, InlineCost, peel); checked against `print<cost-model>` on `instructioncost_corpus.ll`, 3,416 rows (7 cpus, 4 kinds).
 - `arithmetic_cost(opcode, ty, kind, op1_info, op2_info, args)`, `cast_cost(opcode, dst, src, context, kind)`,
   `cmp_sel_cost(opcode, value_ty, cond_ty, predicate, kind)`, `memory_op_cost(opcode, ty, align, space, kind)`,
   `cf_instr_cost(opcode, kind)`, `int_imm_cost(imm, ty)`, `int_imm_cost_inst(opcode, idx, imm, ty, kind)`.
@@ -132,3 +132,12 @@ a translated pass keeps LLVM's thresholds, which are tuned to LLVM's units, so i
 decides in executed clocks or bytes, which `Tti` does not state. Nothing derives one from the other: `Tti` rows are
 copies of LLVM's tables checked against `opt`; `OperationCosts` rows come from the target's data sheets. They stay two
 because they price two things; the migration owed above moves the MIR readers to `Tti`.
+- T7 Intrinsics are priced from a table, not derived. Fact: `BasicTTIImplBase::getIntrinsicInstrCost` and X86's tables
+  expand each intrinsic into primitive costs (about 700 lines for the scalar cases), and llrm has 32 intrinsics, so
+  `llrm-x86/src/tti_intrinsics.txt` holds the pinned `opt`'s answer per profile, kind and callee name (made by
+  `instructioncost_oracle.py`, equal across the cpus without SSE); an intrinsic not in it is `Invalid`. LLVM:
+  [`getIntrinsicInstrCost`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L1716).
+- T8 A GEP is priced without its access type. Fact: X86's `isLegalAddressingMode` reads the scalar type of no mode
+  (llrm models no vector). LLVM: [`getGEPCost`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h#L1348).
+- T9 `fpround` (llrm's own instruction: a float rounded to its type's precision) costs `TCC_Basic`, the default of the
+  switch; LLVM has no such instruction.

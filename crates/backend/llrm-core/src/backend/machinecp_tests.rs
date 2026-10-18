@@ -220,3 +220,59 @@ fn test_the_work_grows_with_the_block_not_with_its_square() {
     let (small, large) = (work(200), work(400));
     assert!(large as f64 <= 2.2 * small as f64, "{small} units for 200 copies, {large} for 400");
 }
+
+/// A constant shift reads its destination only where the result is live, so
+/// `Effect::reads` leaves it out: the copy `bx = ax` that feeds `shl bx, 1`
+/// was taken for dead (the loop in `test_an_exact_elements_offset_is_folded_
+/// into_a_scaled_address` read an undefined `bx`).
+#[test]
+fn test_a_copy_read_by_a_shift_is_not_dead() {
+    let shift = Arc::new(Insn::new(
+        1,
+        Some((1, 1)),
+        Some(semantics(Operation::Binary, "shl", vec![rl(RegId::BX, 2)], vec![rl(RegId::BX, 2), imm(1, 1)])),
+        vec![],
+        vec![],
+    ));
+    let got = propagated(&body(vec![mov(0, rl(RegId::BX, 2), rl(RegId::AX, 2)), shift], &[RegId::BX]));
+    assert_eq!(lines(&got)[0], "mov BX,AX");
+}
+
+/// `bx = ss` then `es = bx`: the segment register is read from `ss`.
+#[test]
+fn test_a_segment_register_is_loaded_from_the_source_of_the_copy() {
+    let got = propagated(&body(
+        vec![mov(0, rl(RegId::BX, 2), rl(RegId::SS, 2)), mov(1, rl(RegId::ES, 2), rl(RegId::BX, 2))],
+        &[RegId::BX],
+    ));
+    assert_eq!(lines(&got), ["-", "mov ES,SS"]);
+}
+
+/// A segment register that is only ever a copy's destination is not a copy to
+/// drop: `es` is read by string instructions that say nothing of it.
+#[test]
+fn test_a_copy_into_a_segment_register_is_kept() {
+    let got = propagated(&body(vec![mov(0, rl(RegId::ES, 2), rl(RegId::BX, 2))], &[RegId::ES]));
+    assert_eq!(lines(&got), ["mov ES,BX"]);
+}
+
+/// `bx` is shifted in place and then copied to `ax`, which held `bx` already:
+/// the shift works on `ax` and the copy goes. (`propagateDefs` declines a
+/// tied definition; the pinned output of the fixed-point test was this form.)
+#[test]
+fn test_a_tied_producer_works_on_the_register_that_already_holds_its_value() {
+    let shift = |at| {
+        Arc::new(Insn::new(
+            at,
+            Some((at, at)),
+            Some(semantics(Operation::Binary, "shl", vec![rl(RegId::BX, 2)], vec![rl(RegId::BX, 2), imm(3, 1)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let got = propagated(&body(
+        vec![mov(0, rl(RegId::AX, 2), rl(RegId::BX, 2)), shift(1), mov(2, rl(RegId::AX, 2), rl(RegId::BX, 2))],
+        &[RegId::BX],
+    ));
+    assert_eq!(lines(&got), ["mov AX,BX", "shl AX,AX,imm", "-"]);
+}

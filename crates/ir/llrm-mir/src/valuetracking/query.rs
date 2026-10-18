@@ -241,7 +241,7 @@ const MAX_ASSUMES_PER_VALUE: usize = 1024;
 
 /// `AssumptionCache`: the `llvm.assume` calls of a function, and the values
 /// each one tells of.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct AssumptionCache {
     pub assumes: Vec<InstId>,
     affected: HashMap<Operand, Vec<InstId>>,
@@ -253,8 +253,18 @@ impl AssumptionCache {
         module: &Module,
         function: &Function,
     ) -> Self {
+        Self::of(&module.context, &module.globals, &module.metadata, function)
+    }
+
+    /// `AssumptionCache(F)` from the parts of a module a pass holds.
+    pub fn of(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        function: &Function,
+    ) -> Self {
         let layout = DataLayout::default();
-        let query = Query::new(module, function, &layout);
+        let query = Query { globals, metadata, ..Query::bare(context, function, &layout) };
         let assumes: Vec<InstId> = function
             .walk()
             .filter(|(_, inst)| query.intrinsic(*inst) == Some(Intrinsic::Assume))
@@ -366,6 +376,21 @@ impl FunctionAnalyses {
     ) -> Self {
         let layout = module.datalayout.as_deref().and_then(|text| DataLayout::parse(text).ok()).unwrap_or_default();
         Self { layout, dt: DomTree::of(function), assumptions: AssumptionCache::new(module, function) }
+    }
+
+    /// The same from the parts of a module a pass holds, not the module.
+    pub fn of(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Self {
+        Self {
+            layout: layout.clone(),
+            dt: DomTree::of(function),
+            assumptions: AssumptionCache::of(context, globals, metadata, function),
+        }
     }
 
     /// The dominator tree (`SQ.DT`).
