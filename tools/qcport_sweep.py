@@ -32,7 +32,12 @@ KNOWN = HERE / "qcport_sweep_known.toml"
 
 def kind(message: str) -> str:
     """The failure's kind: its last line without numbers, `name@3` function names and L1_125-style labels."""
-    last = next((line for line in reversed(message.strip().splitlines()) if line.strip()), "no message")
+    lines = message.strip().splitlines()
+    for i, line in enumerate(lines):
+        if "panicked at" in line and i + 1 < len(lines):  # the message under a panic, not rustc's trailing backtrace note
+            where = re.sub(r"^.*panicked at ", "", line).rstrip(":")
+            return re.sub(r"\d+", "N", f"panic {where}: {lines[i + 1].strip()}")[:160]
+    last = next((line for line in reversed(lines) if line.strip() and not line.startswith("note: run with")), "no message")
     last = re.sub(r"@?\w+@\d+:?", "F", last)
     last = re.sub(r"\bL\d+_\d+\b", "L", last)
     last = re.sub(r"\(\s*[\d, ]+\)", "(...)", last)
@@ -51,6 +56,24 @@ def sweep(compiler: Path, qcport: Path, include: Path, levels=LEVELS, jobs: int 
 
     with ThreadPoolExecutor(jobs) as pool:
         return [r for r in pool.map(one, todo) if r]
+
+
+ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "COALESCE", "REPLAY", "INTERN", "SKIPPED", "STALE")
+# Front ends and targets QCport does not cover: the Nib and BASIC front ends at both machines, with every oracle on (the smoke's `programs` step, here per level).
+EXTRA = [(tool, ext, machine, level) for tool, ext in (("llrm-nib", "nib"), ("llrm-qb", "bas")) for machine in ("-m16", "-m32") for level in LEVELS]
+
+
+def sweep_extra(bins: Path, jobs: int = 8) -> list[tuple[str, str, str]]:
+    """(program, 'machine level', kind) of every failed compile of bench/bintree in Nib and BASIC at both machines and all levels, oracles on."""
+    env = {**os.environ, **{f"LLRM_CHECK_{name}": "1" for name in ORACLES}}
+
+    def one(job):
+        tool, ext, machine, level = job
+        done = subprocess.run([str(bins / tool), str(ROOT / f"bench/bintree/bintree.{ext}"), level, machine, "-o", os.devnull], capture_output=True, text=True, env=env)
+        return None if done.returncode == 0 else (f"bintree.{ext}", f"{machine} {level}", kind(done.stderr or done.stdout))
+
+    with ThreadPoolExecutor(jobs) as pool:
+        return [r for r in pool.map(one, EXTRA) if r]
 
 
 def grouped(failures: list[tuple[str, str, str]]) -> dict[str, list[tuple[str, str]]]:
@@ -122,12 +145,12 @@ def main() -> int:
     include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
     compiler = (args.bin or llrmbin.bin_dir()) / "llrm-c"
     head = subprocess.run(["git", "rev-parse", "origin/feat/parity"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    failures = sweep(compiler, qcport, include, jobs=args.jobs)
+    failures = sweep(compiler, qcport, include, jobs=args.jobs) + sweep_extra(compiler.parent, jobs=args.jobs)
     groups = grouped(failures)
     known = tomllib.loads(KNOWN.read_text()).get("known", []) if KNOWN.exists() else []
     fresh = new_kinds(groups, known)
     modules = len(list((qcport / "render").glob("*.c"))) + sum(len(list((qcport / p).glob("*.c"))) for p in MODULES if p != "render")
-    print(f"QCport sweep of feat/parity {head[:9]}: {modules} modules x {len(LEVELS)} levels, {len(failures)} failed compiles, {len(groups)} kinds, {len(fresh)} new")
+    print(f"QCport sweep of feat/parity {head[:9]}: {modules} modules x {len(LEVELS)} levels + {len(EXTRA)} front-end compiles, {len(failures)} failed compiles, {len(groups)} kinds, {len(fresh)} new")
     for why, where in groups.items():
         entry = next((e for e in known if e["match"] in why), None)
         print(f"  {'KNOWN #' + str(entry['issue']) if entry else 'NEW'}: {why} -- {', '.join(sorted({f'{m} {l}' for m, l in where})[:8])}")

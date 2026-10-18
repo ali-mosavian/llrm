@@ -1819,6 +1819,44 @@ fn greedy_check(
     }
 }
 
+/// Whether greedy allocates the x87 values into FP0..FP6 (`LLRM_GREEDY_RFP`):
+/// off until the stackifier reads the assignment (backend-slopes), then on
+/// with floatassign gone.
+pub fn rfp_on() -> bool {
+    #[cfg(test)]
+    if RFP_ON.with(std::cell::Cell::get) {
+        return true;
+    }
+    llrm_support::env_flag!("LLRM_GREEDY_RFP")
+}
+
+#[cfg(test)]
+thread_local! {
+    static RFP_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `LLRM_GREEDY_RFP` for the life of the value, on this thread: for tests.
+#[cfg(test)]
+pub struct RfpOn;
+
+#[cfg(test)]
+impl RfpOn {
+    pub fn set() -> Self {
+        RFP_ON.with(|one| one.set(true));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for RfpOn {
+    fn drop(&mut self) {
+        RFP_ON.with(|one| one.set(false));
+    }
+}
+
+/// The RFP registers FP0..FP6 (`class::RFP`), in allocation order.
+pub const RFP: [RegId; 7] = [RegId::MM0, RegId::MM1, RegId::MM2, RegId::MM3, RegId::MM4, RegId::MM5, RegId::MM6];
+
 /// Whether the translated greedy allocator allocates: by default, the allocate
 /// slot of LLVM's order being greedy's; `LLRM_NO_LLVM_ORDER` turns it off
 /// unless `LLRM_GREEDY` is set, and `LLRM_NO_GREEDY` alone, under the order.
@@ -3186,7 +3224,7 @@ pub fn _widest(body: &LirBody) -> IndexMap<u32, u32> {
 }
 
 /// Each (value, width) an instruction names.
-fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_ {
+pub(crate) fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_ {
     one.what
         .iter()
         .flat_map(|what| what.dests.iter().chain(&what.sources))

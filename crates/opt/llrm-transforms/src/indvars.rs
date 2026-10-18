@@ -213,8 +213,19 @@ impl FunctionPass for IndVars {
             analyses.invalidate(function, &kept);
             analyses.get::<llrm_analysis::manager::Registers>(context, layout, function)
         });
-        let compared = crate::simplifyindvar::enabled()
-            && crate::simplifyindvar::simplified(unit.context, unit.layout, unit.function, &outer);
+        let extending = crate::simplifyindvar::widening_enabled();
+        let compared = if extending {
+            crate::simplifyindvar::simplified_and_extended(
+                unit.context,
+                unit.layout,
+                unit.function,
+                unit.declared,
+                &outer,
+            )
+        } else {
+            crate::simplifyindvar::enabled()
+                && crate::simplifyindvar::simplified(unit.context, unit.layout, unit.function, &outer)
+        };
         if compared {
             standing.changed();
         }
@@ -238,14 +249,15 @@ impl FunctionPass for IndVars {
         if sunk {
             standing.changed();
         }
-        let widened = widened_with(
-            unit.context,
-            unit.layout,
-            unit.function,
-            &outer,
-            &mut standing,
-            if self.exit_values { None } else { self.unrolls },
-        );
+        let widened = !extending
+            && widened_with(
+                unit.context,
+                unit.layout,
+                unit.function,
+                &outer,
+                &mut standing,
+                if self.exit_values { None } else { self.unrolls },
+            );
         let merged = congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
         let rewound = rewound_with(
             unit.context,

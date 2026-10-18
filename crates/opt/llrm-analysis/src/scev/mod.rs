@@ -46,6 +46,7 @@ mod guards_tests;
 pub mod how_many;
 pub mod implied;
 pub mod minmax;
+pub mod normalize;
 pub mod pattern;
 pub mod poison;
 pub mod predicate;

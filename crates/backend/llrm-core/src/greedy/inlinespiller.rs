@@ -361,6 +361,12 @@ impl<'a> InlineSpiller<'a> {
         if let Some(folded) = self.fold_into_copy(lis, reg, block, members, &old) {
             return Some(folded);
         }
+        // An x87 value (FP0..FP6) spills in floatassign's format, `fstp` and
+        // `fld` of a qword cell, and folds into nothing.
+        let float = self.tables.orders.borrow().get(&reg).is_some_and(|order| order.first() == Some(&RegId::MM0));
+        if float {
+            return self.spill_float_unit(lis, reg, block, members, &old);
+        }
         let width = self.tables.widths.borrow().get(&reg).copied().unwrap_or(0);
         let width = if width > 0 { width } else { widest_operand(&old, reg)? };
         let cell = self.frame.cell(reg, width).ok()?;
@@ -424,6 +430,55 @@ impl<'a> InlineSpiller<'a> {
         }
         self.tables.orders.borrow_mut().insert(new, order);
         self.tables.widths.borrow_mut().insert(new, width);
+        NATIVE_UNITS.with(|one| one.set(one.get() + 1));
+        Some(vec![new])
+    }
+}
+
+impl InlineSpiller<'_> {
+    /// `spill_unit` for an x87 value: a register made from `reg`, an `fld`
+    /// of its cell before where the unit reads it and an `fstp` after where it
+    /// writes it. DEVIATE D-RFP1: the cell is a qword, floatassign's spill
+    /// format, not the class width (`RFP80` would be m80). Exit: the class
+    /// width once floatassign is gone and the rows are compared.
+    fn spill_float_unit(
+        &mut self,
+        lis: &mut LiveIntervals,
+        reg: u32,
+        block: usize,
+        members: &[InstrKey],
+        old: &[Arc<Insn>],
+    ) -> Option<Vec<u32>> {
+        let cell = self.frame.cell(reg, 8).ok()?;
+        let new = lis.next_virtual_register();
+        lis.reserve_virtual_register(new);
+        let reads = old.iter().any(|one| one.uses.contains(&reg));
+        let writes = old.iter().any(|one| one.defines.contains(&reg));
+        let renamed: Vec<Arc<Insn>> =
+            old.iter().map(|one| one.renamed(&|value| if value == reg { new } else { value })).collect();
+        for (key, one) in members.iter().zip(&renamed) {
+            lis.rewrite_instr(block, *key, Arc::clone(one));
+        }
+        let beside = |one: &Insn| -> (i64, Option<(i64, i64)>) {
+            let at = one.covers.map_or(one.at, |covers| covers.0);
+            (one.at, Some((at, at)))
+        };
+        if reads {
+            let mut reload = (*crate::backend::floatassign::_spill_home(new, cell.clone())).clone();
+            (reload.at, reload.covers) = beside(&old[0]);
+            reload.spill_reload = true;
+            lis.insert_instr_before(block, Some(renamed[0].id()), Arc::new(reload));
+            self.reloads += 1;
+        }
+        if writes {
+            let last = &old[old.len() - 1];
+            let (at, _) = beside(last);
+            let store = crate::backend::floatassign::_stored(new, &cell, at);
+            lis.insert_instr_after(block, renamed[renamed.len() - 1].id(), store);
+            self.stores += 1;
+        }
+        self.tables.orders.borrow_mut().insert(new, crate::backend::allocate::RFP.to_vec());
+        self.tables.widths.borrow_mut().insert(new, 10);
         NATIVE_UNITS.with(|one| one.set(one.get() + 1));
         Some(vec![new])
     }

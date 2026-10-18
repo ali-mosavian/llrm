@@ -15,7 +15,12 @@ fn names(
 fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
-    let mut registry = parity::REGISTRY.to_vec();
+    // The rotate slot is Old while `LLRM_EXP_ROTATE` is unset, as in the pipeline's own check.
+    let rotate = pipeline::Options::default().rotate_slot;
+    let mut registry: Vec<Entry> = parity::REGISTRY
+        .iter()
+        .map(|one| Entry { kind: if !rotate && one.slot == "rotate@728" { SlotKind::Old } else { one.kind }, ..*one })
+        .collect();
     registry.push(Entry {
         slot: "ghost@999",
         phase: Phase::Simplify,
@@ -26,8 +31,16 @@ fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
     });
     let why = parity::check(&registry, Phase::Simplify, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@999"), "{why}");
+    registry.pop();
     let without: Vec<_> = built.iter().copied().filter(|one| *one != "earlycse@649").collect();
-    let why = parity::check(parity::REGISTRY, Phase::Simplify, &without).expect_err("earlycse@649 left out");
+    // The rotate slot is Old while `LLRM_EXP_ROTATE` is unset, as in the
+    // pipeline's own check.
+    let rotate = pipeline::Options::default().rotate_slot;
+    let registry: Vec<Entry> = parity::REGISTRY
+        .iter()
+        .map(|one| Entry { kind: if !rotate && one.slot == "rotate@728" { SlotKind::Old } else { one.kind }, ..*one })
+        .collect();
+    let why = parity::check(&registry, Phase::Simplify, &without).expect_err("earlycse@649 left out");
     assert!(why.contains("earlycse@649"), "{why}");
 }
 
@@ -51,18 +64,19 @@ fn test_the_built_lists_satisfy_the_registry_at_every_level() {
     }
 }
 
-/// The MemorySSA entry carries its dependency on alias analysis, and the
-/// preserved-and-updated vocabulary is a named TODO until the manager has it.
+/// The MemorySSA entry carries its dependency on alias analysis, is asked by
+/// default (EarlyCSE, LICM), and what is open of keeping it updated is named.
 #[test]
 fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() {
     let mssa = parity::ANALYSES.iter().find(|one| one.key == "mssa").expect("mssa is registered");
     assert_eq!(
         (mssa.llvm, mssa.kind, mssa.off, mssa.deps),
-        ("MemorySSAAnalysis", SlotKind::Translated, true, &["aa"][..])
+        ("MemorySSAAnalysis", SlotKind::Translated, false, &["aa"][..])
     );
     let report = parity::report();
     assert!(report.contains("gvn@787 (gvn) -> gvn-port") && report.contains("shadow_mssa"), "{report}");
-    assert!(parity::TODO.iter().any(|one| one.contains("kept updated by the pass")));
+    assert!(parity::TODO.iter().any(|one| one.contains("LICM")), "LICM still drops what it updates");
+    assert!(parity::TODO.iter().all(|one| !one.contains("not a PreservedAnalyses variant")), "the variant exists now");
     assert!(parity::TODO.iter().all(|one| !one.contains("CFGAnalyses")), "the CFG set exists now");
     let loops = parity::ANALYSES.iter().find(|one| one.key == "loops").expect("loops is registered");
     assert_eq!((loops.llvm, loops.kind, loops.off), ("LoopAnalysis", SlotKind::Translated, false));

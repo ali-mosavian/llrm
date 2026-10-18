@@ -254,3 +254,58 @@ done:
     let inputs: [&[i128]; 3] = [&[0], &[1], &[10]];
     assert_eq!(crate::testing::results(&on, &inputs), crate::testing::results(&off, &inputs));
 }
+
+/// Old: a load of memory nothing wrote was `poison`, and a read-modify-write of
+/// a fresh bitfield poisoned its container (`and poison, -8` is poison), so
+/// `v.x = 5; return v.x` folded wrong. The pin gives `undef`; MIR has none, and
+/// the zero of the type refines it.
+#[test]
+fn test_a_read_of_unwritten_memory_is_the_zero_of_its_type_not_poison() {
+    let after = promoted(
+        "define i8 @f() {
+b0:
+  %s = alloca i8
+  %x = load i8, ptr %s
+  %y = and i8 %x, -8
+  %z = or i8 %y, 5
+  store i8 %z, ptr %s
+  %r = load i8, ptr %s
+  ret i8 %r
+}
+",
+    );
+    assert!(!after.contains("poison") && !after.contains("alloca"), "{after}");
+    assert!(after.contains("and i8 0, -8"), "{after}");
+}
+
+/// The value on entry to a phi is the zero as well: one arm stores, the other
+/// reaches the join with the slot unwritten.
+#[test]
+fn test_the_entry_value_of_a_slot_at_a_join_is_zero_and_a_pointer_slot_is_null() {
+    let after = promoted(
+        "define i32 @f(i32 %a, i1 %c) {
+b0:
+  %s = alloca i32
+  br i1 %c, label %b1, label %b2
+b1:
+  store i32 %a, ptr %s
+  br label %b2
+b2:
+  %x = load i32, ptr %s
+  ret i32 %x
+}
+",
+    );
+    assert!(!after.contains("poison"), "{after}");
+    assert!(after.contains("phi i32") && after.contains("0, %b0"), "{after}");
+    let after = promoted(
+        "define ptr @g() {
+b0:
+  %s = alloca ptr
+  %x = load ptr, ptr %s
+  ret ptr %x
+}
+",
+    );
+    assert!(after.contains("ret ptr null"), "{after}");
+}

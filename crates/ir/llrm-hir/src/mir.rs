@@ -245,6 +245,19 @@ fn value_type(
     })
 }
 
+/// The type a pointer step of `size` bytes steps over: an integer where the
+/// size is one, else an array of bytes.
+fn element_type(
+    types: &mut Types,
+    size: i64,
+) -> TypeId {
+    let byte = types.int(8);
+    match size {
+        1 | 2 | 4 | 8 => types.int(8 * size as u32),
+        _ => types.intern(Type::Array { element: byte, count: size as u64 }),
+    }
+}
+
 /// A HIR type's MIR type in memory: bytes where it is no value.
 fn stored_type(
     types: &mut Types,
@@ -3145,8 +3158,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             // At the pointer's index width: 16 bits for a far pointer, which
             // moves the offset alone; 32 for a huge one, which carries.
             Op::PtrOffset => {
-                let [pointer, displacement] = self.operands(instruction)?[..] else {
-                    return Err("ptr_offset without two operands".to_owned());
+                let operands = self.operands(instruction)?;
+                let (pointer, displacement) = match operands[..] {
+                    [pointer, displacement] | [pointer, displacement, _] => (pointer, displacement),
+                    _ => return Err("ptr_offset without two operands".to_owned()),
                 };
                 let signed = self.operand_hir_type(&instruction.operands[1]).signed != Some(false);
                 let space = match self.b.context.types.get(self.b.type_of(pointer)) {
@@ -3155,9 +3170,17 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 };
                 let index = self.b.context.types.int(self.tables.layout.pointer(space).index_bits);
                 let displacement = self.convert(displacement, signed, index)?;
-                let byte = self.b.context.types.int(8);
+                // A third operand is the element size in bytes, and the
+                // displacement counts elements: clang's `a[i]`.
+                let element = match instruction.operands.get(2) {
+                    Some(Operand::Constant(model::Constant { value: Number::Int(size), .. })) => {
+                        element_type(&mut self.b.context.types, *size)
+                    }
+                    Some(_) => return Err("a ptr_offset scale that is no constant".to_owned()),
+                    None => self.b.context.types.int(8),
+                };
                 let flags = self.stated_flags(instruction);
-                let result = self.b.gep(byte, pointer, &[displacement], flags, "");
+                let result = self.b.gep(element, pointer, &[displacement], flags, "");
                 self.define(instruction, result);
             }
             Op::PtrDiff => {
