@@ -9,6 +9,18 @@ A green CI run means what `gate.py run` passing locally means: the same planner,
 3. The run's last job prints `GATE <tier> PASS at <head sha>`, or `FAIL: <groups>`, the line `gate.py run` prints.
 4. Per pull request CI tests that PR merged with main as it is then. Batch interactions are the periodic full gate on main's job and the merger's premerge against current main.
 
+## The merge candidate
+
+Every push of a pull request runs the cheap tier: static, build, unit, tools, run, integration, python, oracle and reference. Bench, cost and perf run once, for the **merge candidate**: the merge loop (`cimerge.sh`) puts the label `merge-candidate` on one pull request at a time, the head of the merge order, and takes it off when the pull request merges or loses its place. While the label stays, each push runs the candidate tier again. Any other label starts no run. A push to main keeps every group (main records the bench counts).
+
+The `ci` job's line says which tier ran: `GATE <tier> PASS at <head12> on <main12> (cheap: no perf)` or `GATE <tier> CANDIDATE PASS at <head12> on <main12>`; `<main12>` is the main the run tested (the merge commit's first parent). Only the second lets a merge, and only if `tools/ci/candidate_ok.py <head> <main> <line>` exits 0:
+
+- the line is a candidate PASS (a cheap PASS, FAIL or STALE line never merges);
+- `<head12>` is the pull request's head now (a push after the label made the run stale; re-run);
+- `<main12>` is main now, or every commit since touches only `[inert]` paths (`tiers.toml`: docs, Markdown, editors, `.github`).
+
+The loop cancels a candidate run in flight when main moves by a non-inert commit, so the runner does not spend 55 minutes on a stale main. `tools/ci/test_candidate_ok.py` holds the cases: cheap pass only, another head, moved main, docs-only move.
+
 ## Runners
 
 Only the groups that need hardware perf counters (`perf`: the scaling tests, `cost`: `measure`) prefer tinytim; every other job, and anything tinytim cannot take, runs on `ubuntu-24.04` (tinytim is shared with every session's builds: the same build took 82-103 s hosted and 243-669 s there). `tools/ci/workflow-version` is bumped by a commit that changes what a run checks or how it judges (the bench judge and waivers, the steps or capabilities a tier runs, the `ci` job's pass logic, the tests of the gate), not by one that only makes it cheaper (jobs, shards, runners, caching): a pull request run whose merge parent lacks the latest bump prints `STALE WORKFLOW (not a pass)`. A pull request that changes the compiler's source and whose `perf` or `cost` job fell back to hosted (no idle tinytim) prints `GATE <tier> PERF SKIPPED at <head12>` and fails: the counter tests judge the compiler, so it is re-run when tinytim is idle. Other changes may skip them. GitHub has no "prefer A, else B", so `plan` chooses: `tools/ci/pick_runners.py` reads the repository variable `TINYTIM_HEARTBEAT` (`<epoch> <idle runners>`, written each minute by the supervisor). Missing, older than 3 minutes or zero idle means hosted, so a dead tinytim never blocks a run. Only a push to main and a pull request from this repository can get tinytim; a fork's pull request, a push to any other branch and a manual run elsewhere are hosted. The idle count can be a minute stale: another run may take the runner before the job starts, and the job then waits for a free one. That wait is not bounded by `timeout-minutes`, and there is no cancel-and-rerun-hosted timeout: accepted. The run summary and the `ci` line (`GATE <tier> PASS at <head12>  [runners: tinytim: ...; hosted: ...]`) say which runner took each job.

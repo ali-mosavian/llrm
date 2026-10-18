@@ -29,3 +29,22 @@ def test_perf_may_only_be_missing_on_a_hosted_runner():
 def test_the_verdict_line_keeps_its_form_and_names_the_runners():
     """Parity needs `GATE <tier> PASS at <head12>` (a pull request's adds ` on <parent12>`); the runners follow it, so one PR passing on tinytim and failing hosted is legible."""
     assert 'line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}$on"' in CI and "[runners: ${{ needs.plan.outputs.runner_summary }}]" in CI
+
+
+def test_a_pull_request_runs_the_cheap_tier_and_only_the_labelled_one_also_bench_cost_and_perf():
+    """Every push of every pull request ran bench, cost and perf (a 55-minute candidate-sized run each): they run once, for the merge candidate."""
+    assert "labeled]" in CI.split("pull_request:")[1].split("push:")[0]
+    plan = CI.split("  plan:")[1].split("outputs:")[0]
+    assert "github.event.label.name == 'merge-candidate'" in plan, "any other label would start a run"
+    assert "contains(github.event.pull_request.labels.*.name, 'merge-candidate')" in CI
+    assert 'g not in ("bench", "cost", "perf")' in CI and 'os.environ["CANDIDATE"] == "true"' in CI
+    assert "github.event_name != 'pull_request' ||" in CI, "a push to main keeps every group: main records the bench counts"
+
+
+def test_the_verdict_line_says_which_tier_ran_and_a_cheap_pass_is_not_a_candidate_pass():
+    """cimerge.sh reads this line through tools/ci/candidate_ok.py: a cheap PASS must not parse as a candidate one."""
+    import candidate_ok
+
+    assert 'CANDIDATE PASS at ${head:0:12}$on"' in CI and '(cheap: no perf)"' in CI
+    assert candidate_ok.CANDIDATE.search("GATE full CANDIDATE PASS at 0123456789ab on ba9876543210")
+    assert not candidate_ok.CANDIDATE.search("GATE full PASS at 0123456789ab on ba9876543210 (cheap: no perf)")
