@@ -1065,7 +1065,7 @@ impl Analysis for ExposedFrames {
     const SKIPS: bool = true;
     const INCREMENTAL: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: allocas_only, flows: Some(stops_at) })
+        Some(Depends { models: models_scalars, keyed: allocas_only, flows: Some(stops_at), edges: false })
     }
     fn run(
         context: &Context,
@@ -1140,7 +1140,7 @@ impl Analysis for PointerValues {
     const NAME: &'static str = "pointer-values";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
+        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at), edges: false })
     }
     fn run(
         context: &Context,
@@ -1161,7 +1161,7 @@ impl Analysis for Pointers {
     const NAME: &'static str = "points-to";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
+        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at), edges: true })
     }
     fn run(
         context: &Context,
@@ -1247,14 +1247,14 @@ impl Analysis for CallEffects {
         function: &Function,
     ) -> bool {
         match (old, fresh) {
-            (Ok(old), Ok(fresh)) => {
-                old.iter().all(|(inst, effect)| function.is_erased(*inst) || fresh.get(inst) == Some(effect))
-            }
+            (Ok(old), Ok(fresh)) => old.iter().all(|(inst, effect)| {
+                function.is_erased(*inst) || fresh.get(inst).is_some_and(|found| effect.covers(found))
+            }),
             (old, fresh) => old == fresh,
         }
     }
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
     }
     /// Each effect with the values it names followed through the substitution:
     /// the same bytes by the value that replaced one found equal.
@@ -1639,7 +1639,7 @@ impl Analysis for Writes {
     const NAME: &'static str = "writes";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
     }
     fn run(
         context: &Context,
@@ -2091,6 +2091,24 @@ impl Held {
             counted: alias.then(|| analyses.get::<Counted>(context, layout, function)),
             followers: alias.then(|| analyses.get::<Followers>(context, layout, function)),
             bounded: None,
+        }
+    }
+
+    /// `of` without the memory annotations and points-to (`PointerValues`,
+    /// `Annotated`): the loop facts and what is known without memory, for a
+    /// pass that decides from the values.
+    pub fn of_without_memory(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self {
+        Self {
+            values: None,
+            annotated: None,
+            counted: Some(analyses.get::<Counted>(context, layout, function)),
+            followers: Some(analyses.get::<Followers>(context, layout, function)),
+            ..Self::of(context, layout, function, analyses, false)
         }
     }
 
