@@ -22,6 +22,7 @@ fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
         llvm: "ghost",
         kind: SlotKind::Translated,
         replaced_by: "",
+        note: "",
     });
     let why = parity::check(&registry, Phase::Simplify, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@999"), "{why}");
@@ -65,4 +66,53 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
     assert!(parity::TODO.iter().all(|one| !one.contains("CFGAnalyses")), "the CFG set exists now");
     let loops = parity::ANALYSES.iter().find(|one| one.key == "loops").expect("loops is registered");
     assert_eq!((loops.llvm, loops.kind, loops.off), ("LoopAnalysis", SlotKind::Translated, false));
+}
+
+/// A Translated machine slot that `flow::machine_with` does not run passed
+/// unnoticed, and a phase that runs with no slot had no kind.
+#[test]
+fn test_a_translated_backend_slot_that_is_not_run_fails() {
+    let mut registry = parity::REGISTRY.to_vec();
+    registry.push(Entry {
+        slot: "ghost@99",
+        phase: Phase::Backend,
+        llvm: "ghost",
+        kind: SlotKind::Translated,
+        replaced_by: "",
+        note: "",
+    });
+    let built: Vec<&str> = parity::REGISTRY
+        .iter()
+        .filter(|one| one.phase == Phase::Backend && one.kind != SlotKind::Missing)
+        .map(|one| one.slot)
+        .collect();
+    assert_eq!(parity::check(parity::REGISTRY, Phase::Backend, &built), Ok(()));
+    let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
+    assert!(why.contains("ghost@99"), "{why}");
+    let why = parity::check_backend(&["floatalloc@8", "jumps@17", "unknown@1"]).unwrap_err();
+    assert!(why.contains("unknown@1"), "{why}");
+}
+
+/// A Partial slot that is not run fails like a Translated one, but it is never
+/// counted as joined: `jumps@17` is TailMergeBlocks only.
+#[test]
+fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined() {
+    let built: Vec<&str> =
+        parity::REGISTRY.iter().filter(|one| one.phase == Phase::Backend).map(|one| one.slot).collect();
+    let without: Vec<&str> = built.iter().copied().filter(|one| *one != "jumps@17").collect();
+    let why = parity::check(parity::REGISTRY, Phase::Backend, &without).expect_err("jumps@17 left out");
+    assert!(why.contains("jumps@17"), "{why}");
+    assert!(parity::joined_slots(parity::REGISTRY, &built).all(|one| one != "jumps@17"));
+    let count = parity::tally(parity::REGISTRY);
+    assert_eq!(count.partial, 1);
+    assert!(parity::report().contains("jumps@17") && parity::report().contains("1 partial"));
+}
+
+/// A Partial slot without its criterion and exit says what is done and not what
+/// is left.
+#[test]
+fn test_a_partial_slot_states_its_criterion_and_exit() {
+    for one in parity::REGISTRY.iter().filter(|one| one.kind == SlotKind::Partial) {
+        assert!(one.note.contains("criterion:") && one.note.contains("exit:"), "{}: {:?}", one.slot, one.note);
+    }
 }

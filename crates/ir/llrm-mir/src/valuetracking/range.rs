@@ -304,7 +304,7 @@ fn edge_dominates_block(
 
 /// `DominatorTree::dominates(BasicBlockEdge, Use)`.
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L213>
-fn edge_dominates_use(
+pub fn edge_dominates_use(
     function: &Function,
     dt: &DomTree,
     start: BlockId,

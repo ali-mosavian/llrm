@@ -1712,7 +1712,7 @@ impl Analysis for Counted {
             one.body.iter().any(|at| reached.contains(&crate::cfg::block(*at)))
                 || (cfg_changed
                     && (function.predecessors(crate::cfg::block(one.header)).iter().any(|pred| reached.contains(pred))
-                        || reached.iter().any(|r| shape.dominance.dominates(crate::cfg::id(r), one.header))))
+                        || reached.iter().any(|r| shape.dominance.dominates(function, crate::cfg::id(r), one.header))))
         }))
     }
 }
@@ -1965,13 +1965,14 @@ impl Analysis for DominatedEdges {
         let shape = analyses.get::<Shape>(context, layout, function);
         let reached: llrm_mir::dense::IdSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
         let held = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone()).ok()?;
-        Some(Ok(held.keeping(|at| !dominated_by(&shape, &reached, at))))
+        Some(Ok(held.keeping(|at| !dominated_by(&shape, function, &reached, at))))
     }
 }
 
 /// Whether `at`, or a block above it, is one of `reached`.
 pub fn dominated_by(
     shape: &Shape,
+    function: &Function,
     reached: &llrm_mir::dense::IdSet<i64>,
     at: i64,
 ) -> bool {
@@ -1980,7 +1981,7 @@ pub fn dominated_by(
         if reached.contains(&one) {
             return true;
         }
-        above = shape.dominance.immediate(one);
+        above = shape.dominance.immediate(function, one);
     }
     false
 }
@@ -2027,7 +2028,7 @@ impl Analysis for Bounded {
         // block a change reached or one it dominates may have changed.
         let reached: llrm_mir::dense::IdSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
         let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, &|at| {
-            dominated_by(&shape, &reached, at)
+            dominated_by(&shape, function, &reached, at)
         });
         Some(Self::solved(context, layout, function, analyses, Some((bounds, &dirty))))
     }

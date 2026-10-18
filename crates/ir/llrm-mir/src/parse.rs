@@ -272,6 +272,7 @@ impl Parser {
                                     unnamed_addr: UnnamedAddr::None,
                                     address_space: 0,
                                     kind: GlobalKind::Variable(GlobalVariable {
+                                        externally_initialized: false,
                                         ty: void,
                                         constant: false,
                                         initializer: None,
@@ -472,7 +473,7 @@ impl Parser {
         let linkage = self.linkage();
         let unnamed_addr = self.unnamed_addr();
         let address_space = self.address_space()?;
-        self.eat_word("externally_initialized");
+        let externally_initialized = self.eat_word("externally_initialized");
         let constant = match self.word()?.as_str() {
             "global" => false,
             "constant" => true,
@@ -499,7 +500,7 @@ impl Parser {
             linkage,
             unnamed_addr,
             address_space,
-            kind: GlobalKind::Variable(GlobalVariable { ty, constant, initializer, align }),
+            kind: GlobalKind::Variable(GlobalVariable { externally_initialized, ty, constant, initializer, align }),
         };
         self.defined_globals.insert(id);
         Ok(())

@@ -8,6 +8,8 @@ pub mod apint;
 pub mod blocklist;
 pub mod build;
 pub mod callgraph;
+pub mod constantfolding;
+pub mod constantfolding_dump;
 pub mod constantfprange;
 pub mod constantrange;
 pub mod constfold;
@@ -37,10 +39,12 @@ mod intrinsic_attrs;
 pub mod intrinsics;
 pub mod knownbits;
 pub mod knownfpclass;
+pub mod lazyvalueinfo;
 pub mod lexer;
 pub mod lint;
 pub mod loopinfo;
 pub mod lowering;
+pub mod lvidump;
 pub mod memory;
 pub mod module;
 pub mod opcode;
@@ -57,6 +61,7 @@ pub mod tbaa;
 pub mod touched;
 pub mod tti;
 pub mod types;
+pub mod valuelattice;
 pub mod valuetracking;
 pub mod verify;
 
@@ -76,6 +81,8 @@ mod apfloat_tests;
 #[cfg(test)]
 mod build_tests;
 #[cfg(test)]
+mod constantfolding_tests;
+#[cfg(test)]
 mod constantfprange_tests;
 #[cfg(test)]
 mod constantrange_tests;
@@ -91,6 +98,8 @@ mod interpret_tests;
 mod knownbits_tests;
 #[cfg(test)]
 mod knownfpclass_tests;
+#[cfg(test)]
+mod lazyvalueinfo_tests;
 #[cfg(test)]
 mod lint_tests;
 #[cfg(test)]

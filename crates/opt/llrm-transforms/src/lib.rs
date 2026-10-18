@@ -139,6 +139,7 @@ pub mod loopclone;
 pub mod loopdistribute;
 pub mod loopexit;
 pub mod loopfuse;
+pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;
 pub mod loopmotion;
