@@ -119,6 +119,8 @@ pub struct LoopCtx<'a> {
     /// (`isTriviallyReplaceablePHI`): the pass that moves instructions does
     /// not split exit blocks.
     pub strict_sink: bool,
+    /// `LicmAllowSpeculation` of this run: false for LPM1's first LICM.
+    pub allow_speculation: bool,
 }
 
 impl LoopCtx<'_> {
@@ -259,6 +261,7 @@ pub fn decide(
             innermost: &innermost,
             state: &state,
             strict_sink: false,
+            allow_speculation: true,
         };
         let header = cfg::block(one.header);
         let (sunk, hoisted) = sink_and_hoist(unit, &outer, &ctx, &mut mssa, &aa, &accesses);
@@ -325,6 +328,7 @@ fn record_edits(
 pub fn run(
     unit: &mut passes::Unit,
     analyses: &mut Analyses,
+    allow_speculation: bool,
 ) -> Decisions {
     let shape = analyses.get::<Shape>(unit.context, unit.layout, unit.function);
     let mut decisions = Decisions::default();
@@ -409,6 +413,7 @@ pub fn run(
                 innermost: &innermost,
                 state: &state,
                 strict_sink: $strict,
+                allow_speculation,
             };
             $body
         }};
@@ -463,6 +468,7 @@ pub fn run(
                 innermost: &innermost,
                 state: &State::default(),
                 strict_sink: true,
+                allow_speculation: true,
             };
             promote::unique_exit_blocks(&ctx)
                 .into_iter()
@@ -537,7 +543,7 @@ fn seeded(
     loop_: &Loop,
 ) -> bool {
     let state = State::default();
-    let ctx = LoopCtx { function, shape, loop_, innermost, state: &state, strict_sink: true };
+    let ctx = LoopCtx { function, shape, loop_, innermost, state: &state, strict_sink: true, allow_speculation: true };
     ctx.loop_.body.iter().any(|&at| {
         let block = cfg::block(at);
         !ctx.in_sub_loop(block)
@@ -579,7 +585,8 @@ fn sink_and_hoist(
         ctx.loop_.body.iter().map(|&at| cfg::block(at)),
         mssa,
     );
-    let safety = LoopSafety::new(unit.context, unit.function, accesses, outer, ctx.loop_, ctx.shape);
+    let safety = LoopSafety::new(unit.context, unit.function, accesses, outer, ctx.loop_, ctx.shape)
+        .allowing_speculation(ctx.allow_speculation);
     let sunk = if has_dedicated_exits(ctx) {
         sink::sink_region(unit, outer, ctx, mssa, aa, accesses, &mut flags, &safety)
     } else {
@@ -619,7 +626,8 @@ fn promotion_round(
     if !has_dedicated_exits(ctx) || flags.too_many_memory_accesses() {
         return (0, Vec::new());
     }
-    let safety = LoopSafety::new(unit.context, unit.function, accesses, outer, ctx.loop_, ctx.shape);
+    let safety = LoopSafety::new(unit.context, unit.function, accesses, outer, ctx.loop_, ctx.shape)
+        .allowing_speculation(ctx.allow_speculation);
     let exits = promote::unique_exit_blocks(ctx);
     let mut candidates = 0;
     let mut promoted = Vec::new();
@@ -665,6 +673,9 @@ struct Built {
 
 pub struct Licm {
     pub apply: bool,
+    /// `LicmAllowSpeculation`: `licm<no-allowspeculation>` hoists only what
+    /// the loop certainly runs.
+    pub speculate: bool,
 }
 
 thread_local! {
@@ -686,7 +697,7 @@ impl FunctionPass for Licm {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let found = if self.apply { run(unit, analyses) } else { decide(unit, analyses) };
+        let found = if self.apply { run(unit, analyses, self.speculate) } else { decide(unit, analyses) };
         let changed = found_changed(&found);
         if self.apply && llrm_support::env_flag!("LLRM_DEBUG_LICM") {
             eprintln!(

@@ -28,6 +28,7 @@ pub struct LoopSafety<'a> {
     first_write: RefCell<IdMap<BlockId, Option<usize>>>,
     guaranteed: RefCell<IdMap<BlockId, bool>>,
     may_throw: bool,
+    allow_speculation: bool,
 }
 
 impl<'a> LoopSafety<'a> {
@@ -51,9 +52,23 @@ impl<'a> LoopSafety<'a> {
             first_write: Default::default(),
             guaranteed: Default::default(),
             may_throw: false,
+            allow_speculation: true,
         };
         safety.may_throw = loop_.body.iter().any(|&at| safety.block_may_throw(cfg::block(at)));
         safety
+    }
+
+    /// `AllowSpeculation` of the run these queries are asked in.
+    pub fn allowing_speculation(
+        mut self,
+        allow: bool,
+    ) -> Self {
+        self.allow_speculation = allow;
+        self
+    }
+
+    pub fn allow_speculation(&self) -> bool {
+        self.allow_speculation
     }
 
     /// `anyBlockMayThrow`.

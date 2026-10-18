@@ -21,7 +21,7 @@ fn named(
     DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
     let mut module = parsed(text);
     let mut passes = llrm_mir::passes::PassManager::default();
-    passes.add(Licm { apply: false });
+    passes.add(Licm { apply: false, speculate: true });
     passes
         .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -45,7 +45,7 @@ fn promoted(text: &str) -> Vec<(Vec<String>, bool)> {
     DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
     let mut module = parsed(text);
     let mut passes = llrm_mir::passes::PassManager::default();
-    passes.add(Licm { apply: false });
+    passes.add(Licm { apply: false, speculate: true });
     passes
         .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -294,12 +294,21 @@ fn applied(
     text: &str,
     inputs: &[Vec<i128>],
 ) -> (String, String) {
+    applied_speculating(text, inputs, true)
+}
+
+/// As `applied`, `licm<no-allowspeculation>` where `speculate` is false.
+fn applied_speculating(
+    text: &str,
+    inputs: &[Vec<i128>],
+    speculate: bool,
+) -> (String, String) {
     use crate::testing::{printed, results};
     let before = parsed(text);
     let mut after = before.clone();
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
-    passes.add(Licm { apply: true });
+    passes.add(Licm { apply: true, speculate });
     passes
         .run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -499,4 +508,55 @@ b3:
 ";
     let (_, after) = applied(text, &[vec![0], vec![1], vec![3]]);
     assert!(block_of(&after, "b2").iter().any(|line| line.starts_with("store i16")), "{after}");
+}
+
+/// LPM1's first LICM is `licm<no-allowspeculation>`: a multiply the loop may
+/// skip stays where it is, and the second LICM (speculating) hoists it. Without
+/// the flag the first one hoisted it too and the guard the rotate puts before
+/// the loop (#2194) had nothing left to protect.
+#[test]
+fn test_without_allow_speculation_a_conditional_multiply_stays_in_the_loop() {
+    let text = "define i16 @f(i16 %n, i16 %a) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b4 ]
+  %t = and i16 %i, 1
+  %c = icmp eq i16 %t, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %k = mul i16 %a, 3
+  br label %b4
+
+b3:
+  br label %b4
+
+b4:
+  %p = phi i16 [ %k, %b2 ], [ 0, %b3 ]
+  %j = add i16 %i, 1
+  %d = icmp slt i16 %j, %n
+  br i1 %d, label %b1, label %b5
+
+b5:
+  ret i16 %p
+}
+";
+    let inputs: Vec<Vec<i128>> = [0, 1, 3].iter().flat_map(|&n| [1, 2].map(|a| vec![n, a])).collect();
+    let (_, speculated) = applied_speculating(text, &inputs, true);
+    assert_eq!(block_of(&speculated, "b0"), ["%k = mul i16 %a, 3", "br label %b1"], "{speculated}");
+    let (_, kept) = applied_speculating(text, &inputs, false);
+    assert_eq!(block_of(&kept, "b2"), ["%k = mul i16 %a, 3", "br label %b4"], "{kept}");
+}
+
+/// A store after the loop's exit test, of the loop's own counter: the value
+/// the global holds at the exit is the counter of the trip before, not the
+/// counter the header holds then (`fill` stored 8 where the loop's last store
+/// was 7).
+#[test]
+fn test_a_store_after_the_exit_test_leaves_the_value_of_the_last_trip() {
+    let text = global_loop("  store i16 %i, ptr @g\n");
+    let (_, after) = applied(&text, &trips());
+    assert!(block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
 }
