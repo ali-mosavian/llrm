@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/transform.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/transform.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/transform.rs sha256:64a706b3b9baf12c23b0a1379d6c566a721a1303a637728c72e891c6aab4eb45 -->
+<!-- src: crates/opt/llrm-transforms/src/transform.rs sha256:96717b2c98d1a129385bd0470f7b4288630ae9a06b67813f79e9ae469f104b41 -->
 
 # transform
 
@@ -8,19 +8,15 @@ The helpers [`crate::gvn`](gvn.md), [`crate::dead`](dead.md), [`crate::decide`](
 values, and cleanup of phis after an edge goes.
 
 ## How it works
-`subexpressions` is common-subexpression elimination. Blocks are taken in
-layout order; each instruction whose whole answer is in its operands gets a
-key (`_computation`): the opcode with its predicate, cast and flags, the
-type, and the operands as they stand once earlier replacements are made. A
-commutative pair (`add`, `mul`, `and`, `or`, `xor`, `icmp eq` and `ne`) is
-sorted and a pair of equal operands is one. The pure kinds are in `_PURE`,
-plus floating arithmetic and its conversions, which have no exceptions
-here. An instruction whose key an earlier one has, where that one has
-certainly run (`_reaches`: in the same block before it, or in a dominating
-block), reads the earlier result and is erased. A load is reused only
-within its block and only if nothing between the two may write its bytes
-(`_undisturbed`, from `memoryssa::Accesses`); with `avoid_store_crossing` a
-store between them refuses it too.
+`subexpressions` reuses a load: blocks are taken in layout order, and a
+non-volatile load gets a key (`_computation`): its opcode, flags and type,
+and its pointer as earlier replacements leave it. A load whose key an
+earlier one has in its block, with nothing between the two that may write
+its bytes (`_undisturbed`, from `memoryssa::Accesses`), reads the earlier
+result and is erased; with `avoid_store_crossing` a store between them
+refuses it too. Arithmetic, comparisons, addresses and casts are numbered
+by `gvn::table`, as LLVM's GVN does; `joined` keys them with `_computation`
+until scalar PRE replaces it.
 
 `equal_calls` makes two calls with one callee and arguments one when the
 caller's `silent` says they touch no memory: the later takes the earlier's
@@ -34,8 +30,6 @@ walk for the second numbering of one function.
 
 ```text
   before                        after
-  %a = add %x, %y               %a = add %x, %y
-  %c = add %y, %x               (uses of %c read %a)
   %b = load %p                  %b = load %p
   store %v, %q                  store %v, %q   ; may not write %p's bytes
   %d = load %p                  (uses of %d read %b)
