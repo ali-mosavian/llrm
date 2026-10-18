@@ -374,15 +374,36 @@ fn _numbered(
             &forwarding,
             &crossed,
         )?;
-        let subexpressed =
+        let mut subexpressed =
             transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()), &crossed)?;
-        // The scalar numbering, over the loads merged above: two expressions
-        // of one cell's loads are one, and each numbering is priced with that.
-        let (scalar, cfg) = if forwarded || subexpressed {
-            pass::run_impl_cfg(context, unit.layout, &mut function, outer, Some(shape.dominance.tree()))
-        } else {
-            (false, false)
-        };
+        // The scalar numbering, over the loads merged above, and the loads
+        // again over the addresses it merged: `iterateOnFunction`'s
+        // repeat until nothing changes (a few rounds here; a load's
+        // address is one round deep).
+        let (mut scalar, mut cfg) = (false, false);
+        for _ in 0..4 {
+            if !(forwarded || subexpressed) {
+                break;
+            }
+            let (changed, split) =
+                pass::run_impl_cfg(context, unit.layout, &mut function, outer, Some(shape.dominance.tree()));
+            scalar |= changed;
+            cfg |= split;
+            if !changed || split {
+                break;
+            }
+            let again = transform::subexpressions(
+                &mut function,
+                accesses,
+                avoid_store_crossing,
+                Some(outer.program()),
+                &crossed,
+            )?;
+            subexpressed |= again;
+            if !again {
+                break;
+            }
+        }
         // Equal calls that touch nothing are one, after the arithmetic that
         // makes their arguments equal.
         let called = transform::equal_calls(&mut function, &silent(context, outer))?;
