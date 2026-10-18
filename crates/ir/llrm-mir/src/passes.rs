@@ -237,8 +237,13 @@ impl Declared {
         let id = GlobalId(self.next);
         self.next += 1;
         self.names().insert(name.clone(), id);
-        let variable =
-            crate::module::GlobalVariable { ty, constant: true, initializer: Some(initializer), align: None };
+        let variable = crate::module::GlobalVariable {
+            externally_initialized: false,
+            ty,
+            constant: true,
+            initializer: Some(initializer),
+            align: None,
+        };
         self.pending.push(Pending::Table(name, variable));
         id
     }
