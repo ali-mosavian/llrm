@@ -2191,7 +2191,7 @@ impl Selector<'_, '_, '_> {
             _ => return,
         }
         let result = instruction.result.expect("a comparison's value");
-        if let [only] = function.users(result)
+        if let Some(only) = function.users(result).only()
             && function.terminator(block) == Some(only.user)
             && function.instruction(only.user).opcode == Opcode::Br
         {
@@ -2236,7 +2236,7 @@ impl Selector<'_, '_, '_> {
                 && one.index == 0
                 && self.constant(reading.operands[1], 4) == Some(16);
             let Some(shifted) = reading.result.filter(|_| high) else { return };
-            let [only] = function.users(shifted) else { return };
+            let Some(only) = function.users(shifted).only() else { return };
             let Some(result) = word(only.user) else { return };
             halves.push((2, result));
             readers.extend([one.user, only.user]);
@@ -2291,7 +2291,7 @@ impl Selector<'_, '_, '_> {
     ) -> bool {
         let function = self.function;
         let ValueDef::Instruction(definition) = function.value(value).def else { return false };
-        matches!(function.users(value), [only] if only.user == user)
+        function.users(value).only().is_some_and(|only| only.user == user)
             && function.parent(definition) == function.parent(user)
     }
 
@@ -2676,8 +2676,9 @@ impl Selector<'_, '_, '_> {
         let block = function.parent(inst)?;
         let only_in_block = |value: ValueId, reader: InstId| -> Option<InstId> {
             let ValueDef::Instruction(def) = function.value(value).def else { return None };
-            (function.parent(def) == Some(block) && matches!(function.users(value)[..], [only] if only.user == reader))
-                .then_some(def)
+            (function.parent(def) == Some(block)
+                && function.users(value).only().is_some_and(|only| only.user == reader))
+            .then_some(def)
         };
         let join = only_in_block(condition, inst)?;
         let conjunction = match function.instruction(join).opcode {
