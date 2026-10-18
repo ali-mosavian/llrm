@@ -1408,6 +1408,18 @@ x:
     assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
 }
 
+/// The LLVM order was off unless an env switch set it, so a default compile ran
+/// the rounds, not the parity pipeline: the default now has the three stages
+/// (early, cleanup, simplify) and the off knob the single fixed-point stage.
+#[test]
+fn test_the_llvm_order_is_the_default_and_its_off_switch_is_the_rounds() {
+    let on = Applied::default();
+    assert!(on.options.llvm_order, "the order is on by default");
+    assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
+    let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
+    assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
+}
+
 /// With `Options::llvm_order` a body goes through LLVM's early function
 /// pipeline, GlobalCleanup and function simplification once each, in that
 /// order, and `gvn` and `dse` run once; without it the rounds stand. The
@@ -1415,14 +1427,14 @@ x:
 #[test]
 fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translated_earlycse() {
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
-    let off = Applied::default();
+    let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
     assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
     assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
     let names = |phase| pipeline::llvm_order(&on, phase).iter().map(|one| one.name()).collect::<Vec<_>>();
-    let simplify = names(pipeline::Phase::Simplify);
+    let simplify = names(crate::parity::Phase::Simplify);
     let count = |what: &str| simplify.iter().filter(|one| one.split('@').next() == Some(what)).count();
     assert_eq!((count("gvn"), count("dse"), count("earlycse")), (1, 1, 1), "{simplify:?}");
-    assert!(names(pipeline::Phase::Early).contains(&"earlycse@1180"), "{:?}", names(pipeline::Phase::Early));
+    assert!(names(crate::parity::Phase::Early).contains(&"earlycse@1180"), "{:?}", names(crate::parity::Phase::Early));
 }
 
 /// A body computes the same answer through LLVM's order.

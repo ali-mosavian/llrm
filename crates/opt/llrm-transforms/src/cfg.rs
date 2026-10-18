@@ -107,7 +107,7 @@ pub fn merged(function: &mut Function) -> bool {
         // Blocks go only as the target of a merge here, so the layout need not
         // be searched for `first` (N blocks, N^2: `switchlower` of 2048 cases).
         while !gone.contains(&first) {
-            let Some(second) = merged_into(function, first, entry) else { break };
+            let Some(second) = emptied_into(function, first, entry) else { break };
             gone.insert(second);
             emptied.push(second);
             changed = true;
@@ -118,9 +118,32 @@ pub fn merged(function: &mut Function) -> bool {
     changed
 }
 
-/// Whether `first` took the block it jumps to, if it alone reaches it: the
-/// block is left empty and unnamed, for the caller to erase.
-fn merged_into(
+/// Whether `block` was merged into its predecessor: LLVM's
+/// `MergeBlockIntoPredecessor(BB)`, the one predecessor jumping only to it.
+pub fn merged_into_predecessor(
+    function: &mut Function,
+    block: llrm_mir::module::BlockId,
+) -> bool {
+    let Some(entry) = function.entry() else { return false };
+    let predecessors = function.predecessors(block);
+    let [first] = predecessors[..] else { return false };
+    merged_into(function, first, entry) == Some(block)
+}
+
+/// Whether `first` took the block it jumps to, if it alone reaches it.
+pub(crate) fn merged_into(
+    function: &mut Function,
+    first: llrm_mir::module::BlockId,
+    entry: llrm_mir::module::BlockId,
+) -> Option<llrm_mir::module::BlockId> {
+    let second = emptied_into(function, first, entry)?;
+    function.erase_block(second).expect("an emptied block nothing names");
+    Some(second)
+}
+
+/// `merged_into` that leaves the emptied block placed, for the caller to
+/// `erase_blocks` together with the others.
+pub(crate) fn emptied_into(
     function: &mut Function,
     first: llrm_mir::module::BlockId,
     entry: llrm_mir::module::BlockId,
