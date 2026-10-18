@@ -17,6 +17,24 @@ use count 2 0 cr=i32:[0,101)
 use count 3 0 cr=i1:full-set
 use count 4 0 cr=i32:[0,100)
 use count 6 0 cr=i32:[100,101)
+lat count arg0 bb0 overdefined
+lat count arg0 bb1 overdefined
+lat count arg0 bb2 overdefined
+lat count arg0 bb3 overdefined
+lat count i0 bb0 overdefined
+lat count i0 bb1 overdefined
+lat count i1 bb1 constantrange<0, 101>
+lat count i1 bb2 constantrange<0, 100>
+lat count i1 bb3 constantrange<100, 101>
+lat count i2 bb1 overdefined
+lat count i2 bb2 constantrange<-1, 0>
+lat count i2 bb3 constantrange<0, -1>
+lat count i3 bb1 overdefined
+lat count i3 bb2 overdefined
+lat count i3 bb3 overdefined
+lat count i4 bb2 constantrange<1, 101>
+lat count i5 bb2 overdefined
+lat count i6 bb3 overdefined
 val count_down 0 cr=i32:full-set cst=- pn=-
 val count_down 1 cr=i1:full-set cst=- pn=-
 val count_down 2 cr=i32:full-set cst=- pn=-
@@ -42,6 +60,20 @@ use count_down 2 0 cr=i32:[0,50)
 use count_down 3 0 cr=i32:[1,0)
 use count_down 4 0 cr=i32:full-set
 use count_down 5 0 cr=i1:full-set
+lat count_down arg0 bb0 overdefined
+lat count_down arg0 bb1 constantrange<0, 50>
+lat count_down arg0 bb2 overdefined
+lat count_down i0 bb0 overdefined
+lat count_down i0 bb1 constantrange<-1, 0>
+lat count_down i0 bb2 overdefined
+lat count_down i1 bb0 overdefined
+lat count_down i1 bb1 overdefined
+lat count_down i1 bb2 overdefined
+lat count_down i2 bb1 overdefined
+lat count_down i3 bb1 overdefined
+lat count_down i4 bb1 overdefined
+lat count_down i5 bb1 overdefined
+lat count_down i6 bb2 overdefined
 val two_phis 0 cr=i1:full-set cst=- pn=-
 val two_phis 1 cr=i32:full-set cst=- pn=-
 val two_phis 2 cr=i1:full-set cst=- pn=-
@@ -76,6 +108,33 @@ use two_phis 8 0 cr=i32:[1,201)
 use two_phis 8 1 cr=i32:[101,4)
 use two_phis 9 0 cr=i32:[1,201)
 use two_phis 10 0 cr=i32:full-set
+lat two_phis arg0 bb0 overdefined
+lat two_phis arg0 bb1 overdefined
+lat two_phis arg0 bb2 overdefined
+lat two_phis arg0 bb3 overdefined
+lat two_phis arg0 bb4 overdefined
+lat two_phis arg1 bb0 overdefined
+lat two_phis arg1 bb1 constantrange<0, 4>
+lat two_phis arg1 bb2 constantrange<4, 0>
+lat two_phis arg1 bb3 constantrange<4, 101>
+lat two_phis arg1 bb4 constantrange<101, 4>
+lat two_phis i0 bb0 overdefined
+lat two_phis i0 bb1 constantrange<-1, 0>
+lat two_phis i0 bb2 constantrange<0, -1>
+lat two_phis i1 bb0 overdefined
+lat two_phis i1 bb1 overdefined
+lat two_phis i1 bb2 overdefined
+lat two_phis i10 bb4 overdefined
+lat two_phis i2 bb1 overdefined
+lat two_phis i3 bb2 overdefined
+lat two_phis i3 bb3 constantrange<0, -1>
+lat two_phis i4 bb2 overdefined
+lat two_phis i4 bb3 overdefined
+lat two_phis i5 bb3 overdefined
+lat two_phis i6 bb4 constantrange<1, 201>
+lat two_phis i7 bb4 constantrange<101, 4>
+lat two_phis i8 bb4 overdefined
+lat two_phis i9 bb4 overdefined
 val nested 0 cr=i32:full-set cst=- pn=-
 val nested 1 cr=i32:[0,11) cst=- pn=-
 val nested 2 cr=i1:full-set cst=- pn=-
@@ -115,6 +174,35 @@ use nested 8 0 cr=i32:[0,10)
 use nested 10 0 cr=i32:[10,11)
 use nested 10 1 cr=i32:full-set
 use nested 11 0 cr=i32:full-set
+lat nested arg0 bb0 overdefined
+lat nested arg0 bb1 overdefined
+lat nested arg0 bb2 overdefined
+lat nested arg0 bb3 overdefined
+lat nested arg0 bb4 overdefined
+lat nested i0 bb0 overdefined
+lat nested i0 bb1 overdefined
+lat nested i1 bb1 constantrange<0, 11>
+lat nested i1 bb2 constantrange<0, 10>
+lat nested i1 bb3 constantrange<0, 10>
+lat nested i1 bb4 constantrange<10, 11>
+lat nested i10 bb4 overdefined
+lat nested i11 bb4 overdefined
+lat nested i2 bb1 overdefined
+lat nested i2 bb2 constantrange<-1, 0>
+lat nested i2 bb4 constantrange<0, -1>
+lat nested i3 bb1 overdefined
+lat nested i3 bb2 overdefined
+lat nested i3 bb4 overdefined
+lat nested i4 bb2 constantrange<0, 20>
+lat nested i4 bb3 constantrange<18, 20>
+lat nested i5 bb2 overdefined
+lat nested i5 bb3 constantrange<20, 0>
+lat nested i6 bb2 overdefined
+lat nested i6 bb3 constantrange<0, -1>
+lat nested i7 bb2 overdefined
+lat nested i7 bb3 overdefined
+lat nested i8 bb3 constantrange<1, 11>
+lat nested i9 bb3 overdefined
 val self_loop 0 cr=i32:full-set cst=- pn=-
 val self_loop 1 cr=i32:full-set cst=- pn=-
 val self_loop 2 cr=i1:full-set cst=- pn=-
@@ -131,7 +219,26 @@ use self_loop 1 0 cr=i32:full-set
 use self_loop 2 0 cr=i32:full-set
 use self_loop 3 0 cr=i1:full-set
 use self_loop 4 0 cr=i32:[1,0)
+lat self_loop arg0 bb0 overdefined
+lat self_loop arg0 bb1 overdefined
+lat self_loop arg0 bb2 overdefined
+lat self_loop i0 bb0 overdefined
+lat self_loop i0 bb1 overdefined
+lat self_loop i1 bb1 overdefined
+lat self_loop i1 bb2 constantrange<1, 0>
+lat self_loop i2 bb1 overdefined
+lat self_loop i2 bb2 constantrange<0, -1>
+lat self_loop i3 bb1 overdefined
+lat self_loop i3 bb2 overdefined
+lat self_loop i4 bb2 overdefined
 val unreachable_pred 0 cr=i32:full-set cst=- pn=-
 val unreachable_pred 1 cr=i32:[5,10) cst=- pn=-
 rval unreachable_pred 1 cr=i32:[5,10)
 use unreachable_pred 3 0 cr=i32:[5,10)
+lat unreachable_pred arg0 bb0 overdefined
+lat unreachable_pred arg0 bb2 overdefined
+lat unreachable_pred i0 bb0 overdefined
+lat unreachable_pred i0 bb2 overdefined
+lat unreachable_pred i1 bb1 overdefined
+lat unreachable_pred i2 bb2 constantrange<5, 10>
+lat unreachable_pred i3 bb2 overdefined

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::datalayout::DataLayout;
 use crate::dominators::DominatorTree;
-use crate::lazyvalueinfo::{Env, LazyValueInfo};
+use crate::lazyvalueinfo::{Env, LazyValueInfo, Subject};
 use crate::module::{BlockId, GlobalKind, InstId, Operand, Use, ValueDef};
 use crate::opcode::{IntPredicate, Opcode};
 use crate::parse;
@@ -284,6 +284,39 @@ pub fn dump(text: &str) -> Result<String, String> {
                         let slot = if instruction.opcode == Opcode::Phi { k / 2 } else { k };
                         out += &format!("use {name} {} {slot} cr={}\n", index[&inst], show(&range));
                     }
+                }
+            }
+
+            // printLVI, where every block, argument and result has a name.
+            let named =
+                function.parameters().iter().all(|&p| function.value(p).name.is_some())
+                    && function.layout().iter().all(|&bb| {
+                        function.block(bb).name.is_some()
+                            && function.block(bb).instructions().iter().all(|&i| {
+                                function.instruction(i).result.is_none_or(|r| function.value(r).name.is_some())
+                            })
+                    });
+            if named {
+                let annotations = match lvi.get_impl() {
+                    Some(imp) => imp.annotations(&mut env, &dt),
+                    None => Vec::new(),
+                };
+                let mut lines: Vec<String> = annotations
+                    .iter()
+                    .map(|a| match a.subject {
+                        Subject::Argument(arg) => {
+                            let k = function.parameters().iter().position(|&p| p == arg).expect("a parameter");
+                            format!("lat {name} arg{k} bb{} {}", block[&a.block], a.lattice)
+                        }
+                        Subject::Instruction(i) => {
+                            format!("lat {name} i{} bb{} {}", index[&i], block[&a.block], a.lattice)
+                        }
+                    })
+                    .collect();
+                lines.sort();
+                for line in lines {
+                    out += &line;
+                    out += "\n";
                 }
             }
         }

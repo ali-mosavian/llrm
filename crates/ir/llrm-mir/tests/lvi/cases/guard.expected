@@ -8,3 +8,8 @@ use guarded 0 0 cr=i32:full-set
 use guarded 1 0 cr=i1:full-set
 use guarded 2 0 cr=i32:[0,10)
 use guarded 3 0 cr=i32:[1,11)
+lat guarded arg0 bb0 overdefined
+lat guarded i0 bb0 overdefined
+lat guarded i1 bb0 overdefined
+lat guarded i2 bb0 constantrange<1, 11>
+lat guarded i3 bb0 overdefined

@@ -23,6 +23,21 @@ use ext 4 1 cr=i32:[0,100)
 use ext 5 0 cr=i32:[0,199)
 use ext 6 0 cr=i8:[100,0)
 use ext 7 0 cr=i32:[-128,128)
+lat ext arg0 bb0 overdefined
+lat ext arg0 bb1 constantrange<0, 100>
+lat ext arg0 bb2 constantrange<100, 0>
+lat ext i0 bb0 overdefined
+lat ext i0 bb1 constantrange<-1, 0>
+lat ext i0 bb2 constantrange<0, -1>
+lat ext i1 bb0 overdefined
+lat ext i1 bb1 overdefined
+lat ext i1 bb2 overdefined
+lat ext i2 bb1 constantrange<0, 100>
+lat ext i3 bb1 constantrange<0, 100>
+lat ext i4 bb1 constantrange<0, 199>
+lat ext i5 bb1 overdefined
+lat ext i6 bb2 constantrange<-128, 128>
+lat ext i7 bb2 overdefined
 val trunc_range 0 cr=i32:full-set cst=- pn=-
 val trunc_range 1 cr=i1:full-set cst=- pn=-
 val trunc_range 2 cr=i8:[0,100) cst=- pn=-
@@ -50,6 +65,22 @@ use trunc_range 5 1 cr=i8:[0,100)
 use trunc_range 6 0 cr=i8:[0,-57)
 use trunc_range 6 1 cr=i8:[0,100)
 use trunc_range 7 0 cr=i8:full-set
+lat trunc_range arg0 bb0 overdefined
+lat trunc_range arg0 bb1 constantrange<0, 100>
+lat trunc_range arg0 bb2 constantrange<100, 0>
+lat trunc_range i0 bb0 overdefined
+lat trunc_range i0 bb1 constantrange<-1, 0>
+lat trunc_range i0 bb2 constantrange<0, -1>
+lat trunc_range i1 bb0 overdefined
+lat trunc_range i1 bb1 overdefined
+lat trunc_range i1 bb2 overdefined
+lat trunc_range i2 bb1 constantrange<0, 100>
+lat trunc_range i3 bb1 constantrange<0, 100>
+lat trunc_range i4 bb1 constantrange<0, 100>
+lat trunc_range i5 bb1 constantrange<0, -57>
+lat trunc_range i6 bb1 overdefined
+lat trunc_range i7 bb1 overdefined
+lat trunc_range i8 bb2 overdefined
 val ptrint 0 cr=- cst=- pn=-
 val ptrint 1 cr=i64:full-set cst=- pn=-
 val ptrint 2 cr=i32:full-set cst=- pn=-
@@ -57,6 +88,10 @@ rval ptrint 2 cr=i32:full-set
 rval ptrint 1 cr=i64:full-set
 use ptrint 1 0 cr=i64:full-set
 use ptrint 2 0 cr=i32:full-set
+lat ptrint arg0 bb0 overdefined
+lat ptrint i0 bb0 overdefined
+lat ptrint i1 bb0 overdefined
+lat ptrint i2 bb0 overdefined
 val shifts 0 cr=i32:full-set cst=- pn=-
 val shifts 1 cr=i1:full-set cst=- pn=-
 val shifts 2 cr=i32:[0,125) cst=- pn=-
@@ -95,6 +130,26 @@ use shifts 9 0 cr=i32:[0,1000)
 use shifts 10 0 cr=i32:[0,125)
 use shifts 10 1 cr=i32:[0,3997)
 use shifts 11 0 cr=i32:[0,4121)
+lat shifts arg0 bb0 overdefined
+lat shifts arg0 bb1 constantrange<0, 1000>
+lat shifts arg0 bb2 constantrange<1000, 0>
+lat shifts i0 bb0 overdefined
+lat shifts i0 bb1 constantrange<-1, 0>
+lat shifts i0 bb2 constantrange<0, -1>
+lat shifts i1 bb0 overdefined
+lat shifts i1 bb1 overdefined
+lat shifts i1 bb2 overdefined
+lat shifts i10 bb1 constantrange<0, 4121>
+lat shifts i11 bb1 overdefined
+lat shifts i12 bb2 overdefined
+lat shifts i2 bb1 constantrange<0, 125>
+lat shifts i3 bb1 constantrange<0, 3997>
+lat shifts i4 bb1 constantrange<0, 500>
+lat shifts i5 bb1 constantrange<0, 13>
+lat shifts i6 bb1 constantrange<1, 1000>
+lat shifts i7 bb1 constantrange<0, 1024>
+lat shifts i8 bb1 constantrange<0, 10>
+lat shifts i9 bb1 constantrange<0, 143>
 val flags 0 cr=i32:full-set cst=- pn=-
 val flags 1 cr=i32:full-set cst=- pn=-
 val flags 2 cr=i1:full-set cst=- pn=-
@@ -136,3 +191,29 @@ use flags 8 0 cr=i32:[0,100)
 use flags 8 1 cr=i32:[0,100)
 use flags 9 0 cr=i32:[0,100)
 use flags 10 0 cr=i32:[0,9802)
+lat flags arg0 bb0 overdefined
+lat flags arg0 bb1 constantrange<0, 100>
+lat flags arg0 bb2 overdefined
+lat flags arg1 bb0 overdefined
+lat flags arg1 bb1 constantrange<0, 100>
+lat flags arg1 bb2 overdefined
+lat flags i0 bb0 overdefined
+lat flags i0 bb1 overdefined
+lat flags i0 bb2 overdefined
+lat flags i1 bb0 overdefined
+lat flags i1 bb1 overdefined
+lat flags i1 bb2 overdefined
+lat flags i10 bb1 overdefined
+lat flags i11 bb2 overdefined
+lat flags i2 bb0 overdefined
+lat flags i2 bb1 constantrange<-1, 0>
+lat flags i2 bb2 constantrange<0, -1>
+lat flags i3 bb0 overdefined
+lat flags i3 bb1 overdefined
+lat flags i3 bb2 overdefined
+lat flags i4 bb1 constantrange<0, 9802>
+lat flags i5 bb1 constantrange<0, 9802>
+lat flags i6 bb1 constantrange<0, 199>
+lat flags i7 bb1 constantrange<0, 100>
+lat flags i8 bb1 constantrange<0, 128>
+lat flags i9 bb1 overdefined

@@ -5,6 +5,8 @@
 //   pred  <fn> <i> a=<T|F|-> b=<T|F|->                       every icmp, getPredicateAt with / without block values
 //   epred <fn> <from> <succ> <i> <T|F|->                     every conditional icmp branch, getPredicateOnEdge
 //   use   <fn> <i> <k> cr=<range>                            every int operand use, getConstantRangeAtUse
+//   lat   <fn> arg<k>|i<i> bb<b> <lattice>                   printLVI's annotations, sorted; only for functions whose blocks,
+//                                                            arguments and results all have names
 // <n> numbers the function's arguments then its int or pointer results (as vtdump.cpp), <i> its instructions, <from>
 // and <to> its blocks, all in order. Unreachable blocks and values that do not dominate the query are skipped.
 // usage: lvi_dump FILE.ll...     `tools/llvmport/lvicompare.py` runs it beside the Rust `lvidump` example.
@@ -21,7 +23,10 @@
 #include "llvm/Support/SourceMgr.h"
 #include <cstdio>
 #include <map>
+#include <algorithm>
 #include <set>
+#include <sstream>
+#include <vector>
 #include <string>
 
 using namespace llvm;
@@ -202,6 +207,88 @@ int main(int argc, char **argv) {
             printf("use %s %u %u cr=%s\n", Name, Index[&I], k,
                    cr(LVI.getConstantRangeAtUse(I.getOperandUse(k), false)).c_str());
           }
+      }
+
+      // printLVI.
+      bool Named = true;
+      for (Argument &Arg : F.args()) Named &= Arg.hasName();
+      for (BasicBlock &BB : F) {
+        Named &= BB.hasName();
+        for (Instruction &I : BB) Named &= I.getType()->isVoidTy() || I.hasName();
+      }
+      if (Named) {
+        std::string Text;
+        raw_string_ostream OS(Text);
+        LVI.printLVI(F, DT, OS);
+        OS.flush();
+        std::map<std::string, unsigned> BlockByText;
+        for (BasicBlock &BB : F) {
+          std::string T;
+          raw_string_ostream BOS(T);
+          BB.printAsOperand(BOS, false);
+          BOS.flush();
+          BlockByText[T] = Block[&BB];
+        }
+        std::map<std::string, unsigned> ArgByText;
+        unsigned k = 0;
+        for (Argument &Arg : F.args()) {
+          std::string T;
+          raw_string_ostream AOS(T);
+          AOS << Arg;
+          AOS.flush();
+          ArgByText[T] = k++;
+        }
+        std::vector<std::string> Lines, Pending;
+        unsigned Next = 0, CurBlock = 0;
+        std::istringstream In(Text);
+        std::string Line;
+        const std::string Head = "; LatticeVal for: '";
+        std::string Open;
+        while (std::getline(In, Line)) {
+          if (!Open.empty()) {
+            // An instruction that prints on several lines (a switch) spans its annotation's.
+            Open += "\n" + Line;
+            if (Open.find("' is: ") != std::string::npos) {
+              Pending.push_back(Open);
+              Open.clear();
+            }
+          } else if (Line.compare(0, Head.size(), Head) == 0) {
+            if (Line.find("' is: ") == std::string::npos)
+              Open = Line;
+            else
+              Pending.push_back(Line);
+          } else if (Line.size() > 2 && Line[0] != ' ' && Line[0] != ';' && Line.compare(0, 6, "define") != 0 &&
+                     Line[0] != '}' && Line.find(':') != std::string::npos) {
+            CurBlock = BlockByText["%" + Line.substr(0, Line.find(':'))];
+          } else if (Line.size() > 2 && Line[0] == ' ' && Line[1] == ' ' && Line[2] != ' ' && Line[2] != ';' &&
+                     Line[2] != ']') {
+            for (const std::string &P : Pending) {
+              size_t Is = P.rfind("' is: ");
+              size_t InBB = P.rfind("' in BB: '");
+              std::string Subject = P.substr(Head.size(), std::min(Is, InBB) - Head.size());
+              if (InBB == std::string::npos) {
+                Lines.push_back("lat " + std::string(Name) + " arg" + std::to_string(ArgByText[Subject]) + " bb" +
+                                std::to_string(CurBlock) + " " + P.substr(Is + 6));
+              } else {
+                size_t BE = Is;
+                std::string BBText = P.substr(InBB + 10, BE - InBB - 10);
+                Lines.push_back("lat " + std::string(Name) + " i" + std::to_string(Next) + " bb" +
+                                std::to_string(BlockByText[BBText]) + " " + P.substr(BE + 6));
+              }
+            }
+            Pending.clear();
+            ++Next;
+          }
+        }
+        // `*Constant` writes a global's whole definition; MIR writes its type and name.
+        for (std::string &L : Lines) {
+          size_t At = L.find("constant<@");
+          if (At == std::string::npos) continue;
+          size_t Eq = L.find(" = ", At), End = L.find('>', At);
+          L = L.substr(0, At) + "constant<ptr " + L.substr(At + 9, Eq - At - 9) + L.substr(End);
+        }
+        std::sort(Lines.begin(), Lines.end());
+        for (const std::string &L : Lines) printf("%s\n", L.c_str());
       }
     }
   }

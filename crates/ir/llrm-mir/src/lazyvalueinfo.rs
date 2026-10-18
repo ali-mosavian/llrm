@@ -3053,8 +3053,22 @@ impl LazyValueInfoImpl {
         env: &mut Env,
         dtree: &DominatorTree,
     ) -> String {
-        let function = env.function;
         let mut out = String::new();
+        for annotation in self.annotations(env, dtree) {
+            out += &annotation.text(env);
+        }
+        out
+    }
+
+    /// What `F.print(OS, &Writer)` asks `LazyValueInfoAnnotatedWriter` for, in
+    /// the order it asks.
+    pub fn annotations(
+        &mut self,
+        env: &mut Env,
+        dtree: &DominatorTree,
+    ) -> Vec<Annotation> {
+        let function = env.function;
+        let mut out = Vec::new();
         for &bb in function.layout() {
             self.emit_basic_block_start_annot(env, bb, &mut out);
             for &i in function.block(bb).instructions() {
@@ -3072,7 +3086,7 @@ impl LazyValueInfoImpl {
         &mut self,
         env: &mut Env,
         bb: BlockId,
-        os: &mut String,
+        os: &mut Vec<Annotation>,
     ) {
         // Find if there are latticevalues defined for arguments of the
         // function.
@@ -3082,11 +3096,11 @@ impl LazyValueInfoImpl {
             if result.is_unknown() {
                 continue;
             }
-            os.push_str(&format!(
-                "; LatticeVal for: '{}' is: {}\n",
-                value_text(env, Operand::Value(arg)),
-                result.print(env.context, env.globals)
-            ));
+            os.push(Annotation {
+                subject: Subject::Argument(arg),
+                block: bb,
+                lattice: result.print(env.context, env.globals),
+            });
         }
     }
 
@@ -3102,11 +3116,10 @@ impl LazyValueInfoImpl {
         env: &mut Env,
         dt: &DominatorTree,
         i: InstId,
-        os: &mut String,
+        os: &mut Vec<Annotation>,
     ) {
         let function = env.function;
-        let Some(result_id) = function.instruction(i).result else { return };
-        let value = Operand::Value(result_id);
+        let result_id = function.instruction(i).result;
         let parent_bb = function.parent(i).expect("a placed instruction");
         let mut blocks_containing_lvi = crate::dense::IdSet::<BlockId>::new();
         // We can generate (solve) LVI values only for blocks that are dominated
@@ -3115,17 +3128,22 @@ impl LazyValueInfoImpl {
         // information, we print LVI for blocks that may use this LVI
         // information (such as immediate successor blocks, and blocks
         // that contain uses of `I`).
-        let mut print_result = |this: &mut Self, env: &mut Env, bb: BlockId, os: &mut String| {
+        let mut print_result = |this: &mut Self, env: &mut Env, bb: BlockId, os: &mut Vec<Annotation>| {
             if !blocks_containing_lvi.insert(bb) {
                 return;
             }
-            let result = this.get_value_in_block(env, value, bb, None);
-            os.push_str(&format!(
-                "; LatticeVal for: '{}' in BB: '%{}' is: {}\n",
-                value_text(env, value),
-                function.block(bb).name.clone().unwrap_or_default(),
-                result.print(env.context, env.globals)
-            ));
+            // An instruction with no result is no value MIR can name; LVI
+            // gives it nothing to go on (`getFromRangeMetadata`) in its own
+            // block and in every block its block dominates (DEVIATE 9).
+            let lattice = match result_id {
+                Some(result) => this.get_value_in_block(env, Operand::Value(result), bb, None),
+                None => Lattice::get_overdefined(),
+            };
+            os.push(Annotation {
+                subject: Subject::Instruction(i),
+                block: bb,
+                lattice: lattice.print(env.context, env.globals),
+            });
         };
 
         print_result(self, env, parent_bb, os);
@@ -3138,11 +3156,58 @@ impl LazyValueInfoImpl {
         }
 
         // Print LVI in blocks where `I` is used.
-        for u in function.users(result_id) {
+        for u in result_id.map_or(&[][..], |result| function.users(result)) {
             let use_i = function.instruction(u.user);
             let use_bb = function.parent(u.user).expect("a placed user");
             if use_i.opcode != Opcode::Phi || dt.dominates(parent_bb, use_bb) {
                 print_result(self, env, use_bb, os);
+            }
+        }
+    }
+}
+
+/// What a `; LatticeVal for:` line is about.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Subject {
+    Argument(crate::module::ValueId),
+    Instruction(InstId),
+}
+
+/// One `; LatticeVal for:` line of `printLVI`: the value, the block it is
+/// asked in, and the lattice element as `operator<<` prints it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Annotation {
+    pub subject: Subject,
+    pub block: BlockId,
+    pub lattice: String,
+}
+
+impl Annotation {
+    /// The line as LLVM writes it, an instruction named by its result or its
+    /// opcode where LLVM writes the whole instruction (DEVIATE 9).
+    fn text(
+        &self,
+        env: &Env,
+    ) -> String {
+        match self.subject {
+            Subject::Argument(arg) => {
+                format!("; LatticeVal for: '{}' is: {}\n", value_text(env, Operand::Value(arg)), self.lattice)
+            }
+            Subject::Instruction(i) => {
+                let instruction = env.function.instruction(i);
+                let subject = match instruction.result {
+                    Some(result) => value_text(env, Operand::Value(result)),
+                    None => format!("{:?}", instruction.opcode)
+                        .split(['(', ' ', '{'])
+                        .next()
+                        .unwrap_or_default()
+                        .to_lowercase(),
+                };
+                format!(
+                    "; LatticeVal for: '{subject}' in BB: '%{}' is: {}\n",
+                    env.function.block(self.block).name.clone().unwrap_or_default(),
+                    self.lattice
+                )
             }
         }
     }
