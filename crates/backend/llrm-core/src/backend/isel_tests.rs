@@ -5532,3 +5532,19 @@ b0:
     let got = listing(text, "f");
     assert!(got.iter().any(|line| line == "retf"), "{got:?}");
 }
+
+/// Old: `@g = global i16 undef` was refused as "a poison initializer". An undef
+/// initializer is any bytes; the data is zero, as a `zeroinitializer` is.
+#[test]
+fn test_an_undef_initializer_is_zero_bytes() {
+    use crate::backend::masm::{Datum, Label};
+    let text = "@u = internal global i16 undef\n@s = internal global { i8, i16 } undef\n";
+    let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
+    let names =
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
+    let datums = |name: &str| {
+        crate::backend::globals::datums(&module, module.named(name).expect("a global"), &names).expect("data")
+    };
+    assert_eq!(datums("u"), [Datum::Label(Label { name: "u".to_owned() }), Datum::Bytes(vec![0, 0])]);
+    assert_eq!(datums("s"), [Datum::Label(Label { name: "s".to_owned() }), Datum::Bytes(vec![0, 0, 0, 0])]);
+}
