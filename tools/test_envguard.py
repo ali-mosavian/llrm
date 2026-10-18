@@ -31,3 +31,9 @@ def test_abmeasure_refuses_a_pair_before_it_builds_anything(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["abmeasure.py", "HEAD^", "HEAD", "--allow-env", "LLRM_CHECK_ORDER"])
     with pytest.raises(AssertionError, match="built"):
         abmeasure.main()
+
+
+def test_the_off_switch_of_the_llvm_order_is_refused_by_name():
+    """The order is on by default; a run with LLRM_NO_LLVM_ORDER in one side only compared two pipelines, not two commits."""
+    with pytest.raises(SystemExit, match="LLRM_NO_LLVM_ORDER=1"):
+        envguard.require_clean("abmeasure", {"LLRM_NO_LLVM_ORDER": "1", "PATH": "/bin"})

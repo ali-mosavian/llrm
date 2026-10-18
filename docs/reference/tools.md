@@ -29,6 +29,7 @@ name them in an environment variable, listed in the tool's header.
 | `dosbatch/cpulimit.py`, `dosbatch/conftest.py` | A host command stopped by CPU seconds; the slow DOS tier (`-m slow_dos` or `LLRM_DOS_SLOW=1`) |
 | `dosbatch/corpus.py` | Corpora too big for the tree: fetched once, cached, verified against a pinned SHA-256 |
 | `dosbatch/dirty.asm` | `DIRTY.COM`: fills free memory with `0A5h`, then runs a program, to expose reads of memory it never wrote |
+| `intrinsics/gen.py`, `intrinsics/attrdump.cpp` | Writes `intrinsic_attrs.rs`, the attributes LLVM gives each intrinsic, from `Intrinsics.td`; `attrdump.cpp` prints them from a real LLVM, for the drift test |
 | `nib-build.sh` | Builds a Nib module into a DOS `.EXE` with `jwasm` and `jwlink` |
 | `test_*.py`, `*/test_*.py` | Tests of the tools themselves: `uv run --project tools python -m pytest tools/NAME` |
 

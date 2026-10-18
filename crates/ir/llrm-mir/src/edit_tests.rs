@@ -642,3 +642,20 @@ fn a_run_spliced_is_the_run_moved_one_by_one_in_a_scan_of_the_block() {
     assert!(few <= 2 * 401, "{few} instructions scanned splicing 100 of 400");
     assert!(many > few * 10, "the one-by-one scans no longer show the cost: {many}");
 }
+
+/// Erasing several empty blocks at once leaves the others in order, and a
+/// block that still holds an instruction refuses the whole call.
+#[test]
+fn erase_blocks_removes_each_empty_block_in_one_pass() {
+    let mut module = module("define void @f() {\nentry:\n  br label %c\n\nc:\n  ret void\n}\n");
+    let f = function(&mut module);
+    let (a, b) = (f.create_block(Some("a")), f.create_block(Some("b")));
+    f.insert_block(a, None).expect("placed");
+    f.insert_block(b, None).expect("placed");
+    let entry = f.entry().unwrap();
+    assert!(f.erase_blocks(&[a, entry]).is_err());
+    assert!(f.is_placed(a));
+    f.erase_blocks(&[a, b]).expect("empty and unnamed");
+    assert_eq!(f.layout().len(), 2);
+    assert!(!f.is_placed(a) && !f.is_placed(b));
+}

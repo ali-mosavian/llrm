@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchlower.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchlower.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:bfc9166cf96258d9fd6a8755363b532557d10ccebfb29174ad94ee3498864605 -->
+<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:4774ca7d63946dce0c4ae51b7af8b9d744032e9f44e795d90a4a4f8c4a1b1d8d -->
 
 # switchlower
 
@@ -42,7 +42,9 @@ replace, and at least the target's `jump_table` cases (gcc's
 `case_values_threshold`, 5 on x86; 0: no table jump). Such a run is `x -
 low` behind its range test and a `switch table` over the indices `0..n`,
 every index a block that only jumps on; the backend makes it a jump through
-a table of code addresses. `-fno-jump-tables` leaves them in the tree.
+a table of code addresses. `-fno-jump-tables` leaves them in the tree. A run
+dense as a whole is one table without the search for the fewest runs
+(LLVM's `findJumpTables` "cheap case").
 
 ## Runs
 As two passes, gcc's: `switchconv` (`pass_convert_switch`, -O2 and up),
