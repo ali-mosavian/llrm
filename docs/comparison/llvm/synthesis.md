@@ -2,6 +2,8 @@
 
 TL;DR: llrm compiles `d_faces` -O2 in 2,903 M instructions, LLVM in 415 M (6.8x; 4.8x to 6.4x in cycles, 13.9x in L1d misses). The measured causes, largest first: the optimizer's fact tower (651 M of analyses), allocation and copying (518 M, cutting across the rest), the register allocator (444 M against 39.5 M), passes whose cost grows faster than the body, runs that change nothing (224 M of their own work), the LIR clean-up (about 340 M against about 40 M), bookkeeping (about 128 M) and the front end (125 M against 33 M). Instruction selection is at parity. Of the rows below, four are landed or in flight; the unowned ones are marked.
 
+> **Reference note.** The LLVM allocator figures on this page (greedy 39.5 M, 815 assignments, 78 evictions, 122, 13/22/33 K per decision) were taken from the distro `llc` 20.1.8, are not reproduced on the pinned or the distro `llc`, and are being re-taken on the pinned 24.0.0git `d1106deb71cc` by regalloc-core-poc. Do not quote them until its old-versus-new lands.
+
 Shares are of the `d_faces` -O2 compile under callgrind (2,903 M; the flat profile uses 2,874 M), `-m32 -march=i486 -fno-inline-functions`, llrm main `21f5c9fc8`, LLVM clang 24 at `d1106deb71cc`. Rows overlap: allocation is inside the analyses and the passes, and a pass's inclusive cost holds the analyses it asks for. A row's share is therefore its own measurement, not a slice of a sum. Status: landed (PR merged), in flight (PR open or designed with an owner), not kept (measured, rejected), unowned.
 
 ## Ranked causes

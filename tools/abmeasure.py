@@ -7,7 +7,8 @@ Each commit gets a worktree and a target directory of its own under $LLRM_AB_DIR
 `CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile dist --bin llrm-c`, the compiler the cost gate measures (tools/measure.py): `release`
 re-partitions its 16 codegen units when one file changes and flips the inlining of unrelated functions (the same PR read +0.46..0.61% on the gate's
 shapes in release, +0.01..0.04% in dist), and its `incremental = true` makes a 6% heavier llrm-c with the opposite sign (#2077: +0.24%
-incremental, -0.58% CI mode). `--profile release` measures the old way. Prints per program and level `perf stat` instructions:u of both, and with --cycles N the min and
+incremental, -0.58% CI mode). `--profile release` measures the old way. A CHECK or EXP switch in the environment that `--allow-env` does not name is refused (tools/envguard.py): both sides run in one environment.
+Prints per program and level `perf stat` instructions:u of both, and with --cycles N the min and
 median of cycles:u over N alternated runs (a loaded host's cycles are noise: instructions are the claim), with --cache callgrind's
 Ir, D1 and last-level misses. d_faces needs QCPORT (QCport's src) and is left out without it.
 """
@@ -22,6 +23,11 @@ import argparse
 import statistics
 import subprocess
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import corpora  # noqa: E402
+import envguard  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path(os.environ.get("LLRM_AB_DIR") or Path.home() / ".cache/llrm/ab")
@@ -66,9 +72,31 @@ def programs(root: Path, names: list[str], qcport: str | None, work: Path) -> di
     return out
 
 
+# A compile that fails (QCPORT without the game headers: "Unable to open 'world.h'") stops in ~8 M instructions where d_faces takes ~2 G, and perf stat
+# counts it all the same: fold-poc read 8.1 M as a result. A row is a compile that exited 0 and cost at least this much.
+FLOOR = {"d_faces": 500_000_000}
+
+
+def checked(done: subprocess.CompletedProcess, source: Path) -> None:
+    """SystemExit with the compiler's first message when the compile failed."""
+    if done.returncode:
+        lines = (done.stdout + done.stderr).splitlines()
+        # The dist binary embeds the path of its wccq (build.rs LLRM_WCCQ_DIR, inside its own target dir): a binary whose target is gone fails with
+        # "wccq failed ... No such file" after ~2.8 M instructions, and the message must name that path.
+        key = [line for line in lines if "Error!" in line or "error:" in line or "No such file" in line]
+        first = " | ".join(key[:2] or lines[:2]) or "no message"
+        raise SystemExit(f"abmeasure: the compile of {source.name} failed (exit {done.returncode}): {first}")
+
+
+def floored(name: str, count: int) -> None:
+    if count < FLOOR.get(name, 0):
+        raise SystemExit(f"abmeasure: {name} counted {count:,} instructions, under its floor {FLOOR[name]:,}: it did not compile")
+
+
 def counted(binary: Path, source: Path, arguments: list[str], level: str, events: str = "instructions:u") -> dict[str, int]:
     """perf stat's counts of one compile, by event name (cycles and instructions)."""
     done = subprocess.run(["perf", "stat", "-x,", "-e", events, str(binary), *arguments, f"-{level}", "-o", "/dev/null", str(source)], capture_output=True, text=True)
+    checked(done, source)
     return {name: int(n) for n, name in re.findall(r"^(\d+),,(\w+)", done.stderr, re.M)}
 
 
@@ -81,6 +109,7 @@ def callgrind(binary: Path, source: Path, arguments: list[str], level: str) -> d
     done = subprocess.run(
         ["valgrind", "--tool=callgrind", "--cache-sim=yes", "--callgrind-out-file=/dev/null", str(binary), *arguments, f"-{level}", "-o", "/dev/null", str(source)], capture_output=True, text=True
     )
+    checked(done, source)
     text = done.stderr
     num = lambda pattern: int(re.search(pattern, text).group(1).replace(",", ""))  # noqa: E731
     return {
@@ -96,18 +125,26 @@ def main() -> int:
     parser.add_argument("parent")
     parser.add_argument("head")
     parser.add_argument("--profile", choices=["dist", "release"], default="dist")
+    parser.add_argument("--allow-env", nargs="*", default=[], metavar="NAME", help="the LLRM_CHECK_*/LLRM_EXP_* switch under test, set alike for both sides; any other is refused")
     parser.add_argument("--levels", nargs="+", default=["O1", "O2", "Os"])
     parser.add_argument("--programs", nargs="+", default=["d_faces", "lru", "bintree"])
     parser.add_argument("--cycles", type=int, default=0, metavar="N", help="also cycles:u, min and median of N alternated runs")
     parser.add_argument("--cache", action="store_true", help="also callgrind's cache simulation (slow)")
+    parser.add_argument("--allow-other-corpus", action="store_true", help="measure a d_faces source tree whose hash is not the registered one (tools/corpora.py)")
     args = parser.parse_args()
+    envguard.require_clean("abmeasure", allow=args.allow_env)
+    dfaces = None
+    if "d_faces" in args.programs:
+        dfaces = str(corpora.resolve("dfaces", os.environ.get("DFACES_SRC") or os.environ.get("QCPORT"), args.allow_other_corpus))
+        print(corpora.header("dfaces", dfaces))
     a, b = build(args.parent, profile=args.profile) / "llrm-c", build(args.head, profile=args.profile) / "llrm-c"
     work = CACHE / "work"
     work.mkdir(parents=True, exist_ok=True)
-    print(f"parent {args.parent} -> {a}\nhead   {args.head} -> {b}\nbuild: CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile {args.profile} --bin llrm-c; load {open('/proc/loadavg').read().split()[0]}")
-    for name, (source, flags) in programs(ROOT, args.programs, os.environ.get("QCPORT") or os.environ.get("DFACES_SRC"), work).items():
+    print(f"parent {args.parent} -> {a}\nhead   {args.head} -> {b}\nbuild: CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile {args.profile} --bin llrm-c; switches: {' '.join(envguard.stray(allow=())) or 'none'}{' (allowed: ' + ' '.join(args.allow_env) + ')' if args.allow_env else ''}; load {open('/proc/loadavg').read().split()[0]}")
+    for name, (source, flags) in programs(ROOT, args.programs, dfaces, work).items():
         for level in args.levels:
             ia, ib = counted(a, source, flags, level)["instructions"], counted(b, source, flags, level)["instructions"]
+            floored(name, min(ia, ib))
             line = f"{name:8} -{level:2} instructions {ia / 1e6:9.1f}M -> {ib / 1e6:9.1f}M ({change(ia, ib)})"
             if args.cycles:
                 ca, cb = [], []

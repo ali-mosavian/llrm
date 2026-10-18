@@ -1,6 +1,6 @@
 # Compile-cost gap against clang and gcc, by date
 
-Each table is one run of `tools/compile-gap.py` (`-m32 -march=i486 -fno-inline-functions`, an object written by each compiler) with the tree's dist-profile `llrm-c`, on a given commit of `main`. Cost is user-space instructions (`perf stat`, quickest of three by cycles), in millions. The ratio is llrm over the cheaper of clang 20.1.8 and gcc 13.4.0. Instructions are the claim: the host is loaded, so cycles are not compared.
+Each table is one run of `tools/compile-gap.py` (`-m32 -march=i486 -fno-inline-functions`, an object written by each compiler) with the tree's dist-profile `llrm-c`, on a given commit of `main`. Cost is user-space instructions (`perf stat`, quickest of three by cycles), in millions. The ratio is llrm over the cheaper of clang 20.1.8 and gcc 13.4.0. **Reference note:** every clang column in this file before the section of `5e2e995ef` is the distro clang 20.1.8 (`tools/compile-gap.py` defaults `--clang` to the `PATH` clang), not the pinned 24.0.0git `d1106deb71cc`; those clang figures (for example 553 / 555 M for `d_faces` -O2 / -O3) and the ratios derived from them (5.1x, 5.6x) are void as a reference to clang 24, whose `d_faces` -O2 is 415.5 M. The section of `5e2e995ef` gives both; the scoreboard in the plan uses the pinned binary only. Instructions are the claim: the host is loaded, so cycles are not compared.
 
 A table is read against the one before it: the delta column is the change in llrm's instructions and in the ratio since the previous date. The worst ratio is named beside the geometric mean of the ratios.
 
@@ -114,7 +114,7 @@ One table at one main SHA (`5e2e995ef`, `--profile dist` and the same tree with 
 | -O3 | 2,497 | 415 | 6.0x | 464 | 5.4x | 48.4 | 1,748 | 747 | 3008 / 1021 = 2.9 |
 | -Os | 2,322 | 407 | 5.7x | 459 | 5.1x | 48.4 | 1,560 | 729 | 2227 / 758 = 2.9 |
 
-The -O2 row against the plan's start (`21f5c9fc8`, 2,903 M, 6.8x): 2,253 M, 5.5x clang 24. Rows at this SHA (71 vsgcc programs, m32, llrm / min(gcc, clang), `tools/rows/run.sh base-5e2e995ef`; 852 results): clocks per level, geomean, worst program, rows above 1.00:
+The -O2 row against the plan's start (`21f5c9fc8`, 2,903 M, 6.8x): 2,253 M, 5.5x clang 24. Rows at this SHA (distro clang 20.1.8 as the clang reference, void as a clang-24 reference and replaced by `rows/main24d` in the plan's section 2.0; 71 vsgcc programs, m32, llrm / min(gcc, clang), `tools/rows/run.sh base-5e2e995ef`; 852 results): clocks per level, geomean, worst program, rows above 1.00:
 
 | level | clocks geomean | worst (program) | rows above 1.00 | code bytes geomean | worst (program) | rows above 1.00 |
 |---|---:|---|---:|---:|---|---:|

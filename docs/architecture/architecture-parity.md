@@ -5,6 +5,8 @@ Pinned sources: LLVM at [`d1106deb71cc`][llvm], llrm main at [`bd6e647f6`][llrm]
 ## 1. TL;DR
 
 `d_faces` -O2 costs 2,903 M instructions in llrm and 415 M in LLVM (6.8x) ([synthesis]). Six architectural differences carry it. They are ranked here by measured cost; the pools overlap.
+> **Reference note.** The LLVM allocator figures on this page (greedy 39.5 M, 815 assignments, 78 evictions, per-decision costs) were taken from the distro `llc` 20.1.8, are not reproduced on the pinned or the distro `llc`, and are being re-taken on the pinned 24.0.0git `d1106deb71cc` by regalloc-core-poc. Do not quote them until its old-versus-new lands.
+
 
 | # | difference | llrm, measured | LLVM | decision |
 |---:|---|---|---|---|

@@ -32,6 +32,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
+import corpora  # noqa: E402
 import llrmbin  # noqa: E402
 
 QCPORT = Path(os.environ.get("QCPORT", Path.home() / "scratch/qbq-llrm/src"))
@@ -334,7 +335,12 @@ def main() -> int:
     parser.add_argument("--json", type=Path)
     parser.add_argument("--detail", action="store_true", help="the largest gcc and clang timers of each category, to check the matching")
     parser.add_argument("--diff", type=Path, help="a map made earlier (--json): the table shows each step's change")
+    parser.add_argument("--allow-other-corpus", action="store_true", help="read a d_faces tree whose hash is not the registered one (tools/corpora.py)")
     args = parser.parse_args()
+    global QCPORT, INCLUDES
+    QCPORT = corpora.resolve("dfaces", os.environ.get("DFACES_SRC") or os.environ.get("QCPORT"), args.allow_other_corpus)
+    INCLUDES = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(QCPORT / d))]
+    print(corpora.header("dfaces", QCPORT))
     result = build_map(args)
     old = json.loads(args.diff.read_text()) if args.diff else None
     print(show(result, old))

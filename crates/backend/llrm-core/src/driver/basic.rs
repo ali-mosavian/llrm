@@ -745,7 +745,10 @@ pub fn compiled(
         resolved.segments.push(Segment { name: segment.name.clone(), items: items.collect(), size: segment.size });
     }
     super::optimized(&mut mir, options)?;
-    llrm_support::debug::timed("assemble", || assembled(&mir.modules[0], &resolved, program.runtime, options))
+    let module =
+        llrm_support::debug::timed("assemble", || assembled(&mir.modules[0], &resolved, program.runtime, options))?;
+    super::stage_files(options, "", &module)?;
+    Ok(module)
 }
 
 /// A lifter's `module` compiled into the BASIC module object `object` lays
