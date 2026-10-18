@@ -92,7 +92,15 @@ impl FunctionPass for FixedNarrow {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let narrow = narrowable(unit, analyses);
+        // The operands were taken before any rewrite: one that is an earlier
+        // product's result reads its replacement.
+        let mut replaced: std::collections::HashMap<Operand, Operand> = std::collections::HashMap::new();
         for product in &narrow {
+            let product = &Narrow {
+                a: *replaced.get(&product.a).unwrap_or(&product.a),
+                b: *replaced.get(&product.b).unwrap_or(&product.b),
+                ..*product
+            };
             let ty = unit.function.instruction(product.inst).ty;
             let make = |unit: &mut passes::Unit, opcode, operands| {
                 let new = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
@@ -105,6 +113,7 @@ impl FunctionPass for FixedNarrow {
                 result = make(unit, Opcode::Binary(BinaryOp::AShr), vec![result, by]);
             }
             let old = unit.function.instruction(product.inst).result.expect("a value");
+            replaced.insert(Operand::Value(old), result);
             unit.function.replace_all_uses_with(old, result);
             unit.function.erase(product.inst).expect("its uses were replaced");
         }
