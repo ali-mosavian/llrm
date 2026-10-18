@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 42 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 45 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -23,6 +23,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 42 documented, 0 undoc
 | floatbounds | Floating operations that are exact over bounded, not necessarily known, integers. | `exact`, `evaluated`, `_memory`. No pass consumes them: only this module's | [floatbounds](floatbounds.md) |
 | floatfacts | Exact finite values of floating-point operations, and the memory they pass through. | `Solved { integers, facts }`, `solved_with`, `solved_over`, `known`, | [floatfacts](floatfacts.md) |
 | frameescape | Which frame objects' addresses reach where, and which are exposed. | `exposed_allocas`, `exposes`, `framed`, `analysed`. Consumers: | [frameescape](frameescape.md) |
+| functionattrs | `norecurse`, `nounwind`, `willreturn` and `noreturn` of one call-graph SCC, as LLVM's `PostOrderFunctionAttrs` infers them from a body and the attributes of its callees. | `interprocedural::stamped` once per SCC, callees first. | [functionattrs](functionattrs.md) |
 | generated | Random loops for checking the recurrence form (`induction::Scev`) against the interpreter. | `case`, `seeds`, `observed`, `Inputs`, `Rng`, `Tracked`, built only for | [generated](generated.md) |
 | globalsaa | Which globals no code outside the program reaches but by name: LLVM's GlobalsAA, GCC's ipa-reference. | `Globals` (`tracked`, `unsummarized`, `entries`, `covers`), `analysis`, | [globalsaa](globalsaa.md) |
 | graph | Block-graph algorithms (loops, depth, reducibility, dominators) over any IR whose blocks implement `loops::Node`. | The algorithms of `loops`. Consumers: [`crate::cfg`](cfg.md) (`Loop`, `Node`, | [graph](graph.md) |
@@ -30,9 +31,11 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 42 documented, 0 undoc
 | induction | Which values are affine functions of a loop's counter, and how many trips a loop makes. | `AffineOperand`, `Affine`, `CountedLoop`, `Counted`, `ExitCount`, `Scev`, | [induction](induction.md) |
 | interprocedural | Finds what the two sides of a direct call make certain: constant arguments, constant returns, purity and termination. | The functions above, and the re-export of `noreturn::terminal_sites`. | [interprocedural](interprocedural.md) |
 | liveness | Which SSA values are live at each block's entry and exit, and how many are live at once. | `Liveness`, `live`, `live_where`, `pressure`, `pressure_of`, `entry_values`, | [liveness](liveness.md) |
+| loopaccess | `getPointersDiff` and `isConsecutiveAccess`. |  | [loopaccess](loopaccess.md) |
 | manager | The memory and range analyses as entries of llrm-mir's analysis manager: asked for by name, cached, kept or brought up to date after a pass. | The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`, | [manager](manager.md) |
 | memory | The memory model every alias query reads: objects, byte slices, provenance, accesses (`MemRef`) and the `Unit` that carries a function's facts. | The types above; `exposed_frames`, `object_of`, `global_object`, `typed`, | [memory](memory.md) |
 | memoryssa | Memory SSA: a single memory state versioned by stores and writing calls, with a walker that finds the writes a load may see. | `Accesses` (analysis `accesses`), `MemorySSA` via `built`, `Kind`, `Access`, | [memoryssa](memoryssa.md) |
+| mustexecute | `SimpleLoopSafetyInfo`. |  | [mustexecute](mustexecute.md) |
 | nearest | The items placed in blocks that dominate a given block, nearest first. | The `Nearest` index and its `Walk` iterator. Consumers: [`crate::avail`](avail.md) and | [nearest](nearest.md) |
 | noreturn | Finds the bodies and blocks that cannot reach a normal return, and cuts a block after a call that cannot return, so the code after it and the paths into it fold away. | `TerminalSites` (analysis of the function with no body proven noreturn), | [noreturn](noreturn.md) |
 | num | An integer that is a machine word until it must not be. | `Num`, for [`crate::ranges`](ranges.md) and [`crate::induction`](induction.md). | [num](num.md) |

@@ -6,7 +6,8 @@
 //!   and the loads, stores and calls added, removed, moved and rewritten. An
 //!   instruction added and erased inside the window is in neither.
 //!   `Function::touched_since` derives it, in time of the changes since the
-//!   mark.
+//!   mark. `Function::reach_of` derives only what `reach` reads: not `named`,
+//!   which reads every operand list an edit replaced.
 //! - [`Epochs`] are counters the editor bumps as it logs a change, never reset:
 //!   a memo that stores the epochs it read is valid exactly while they are
 //!   equal, in O(1) and without the log (which a pass may no longer hold).
@@ -101,6 +102,13 @@ impl Reach {
 #[cfg(test)]
 thread_local! {
     pub(crate) static VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// Operands the digest has read to name the values an edit touched, for a test
+// that `reach` does not pay for them.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl Touched {
@@ -290,7 +298,7 @@ impl Function {
         &self,
         changes: &[Change],
     ) -> Option<Reach> {
-        let touched = self.touched_with(changes, false);
+        let touched = self.touched_with(changes, false, false);
         (!touched.parameters).then(|| touched.reach(self))
     }
 
@@ -299,17 +307,20 @@ impl Function {
         &self,
         changes: &[Change],
     ) -> Touched {
-        self.touched_with(changes, true)
+        self.touched_with(changes, true, true)
     }
 
     /// `touched_by`, with the edges added and removed (`cfg`) found only where
     /// asked: a consumer of `reach` needs to know that a terminator changed
     /// (`terminators_rewritten`), not which edges differ, and a switch of N
-    /// arms rewritten for each of N edits costs N each time.
+    /// arms rewritten for each of N edits costs N each time. The same goes for
+    /// `named`, which reads every operand list an edit replaced: a consumer of
+    /// `reach` does not read it, and `names` is false for it.
     fn touched_with(
         &self,
         changes: &[Change],
         edges: bool,
+        names: bool,
     ) -> Touched {
         let mut out = Touched::default();
         let mut added = IdSet::<InstId>::new();
@@ -476,6 +487,8 @@ impl Function {
             let one = self.instruction(inst);
             named.extend(one.result);
             for operand in &one.operands {
+                #[cfg(test)]
+                SCANNED.with(|scanned| scanned.set(scanned.get() + 1));
                 if let Operand::Value(value) = operand {
                     named.insert(*value);
                 }
@@ -488,23 +501,31 @@ impl Function {
                 | Change::Moved { inst, .. }
                 | Change::Cloned { to: inst, .. } => {
                     out.terminators_made |= self.instruction(*inst).opcode.is_terminator();
-                    name_inst(&mut out.named, *inst);
+                    if names {
+                        name_inst(&mut out.named, *inst);
+                    }
                 }
                 Change::Rewritten(inst) => {
                     out.terminators_rewritten |= self.instruction(*inst).opcode.is_terminator();
-                    name_inst(&mut out.named, *inst);
+                    if names {
+                        name_inst(&mut out.named, *inst);
+                    }
                 }
                 Change::Operand { inst, was, .. } => {
                     out.terminators_rewritten |= self.instruction(*inst).opcode.is_terminator();
-                    if let Operand::Value(value) = was {
+                    if let (true, Operand::Value(value)) = (names, was) {
                         out.named.insert(*value);
                     }
                 }
                 Change::Operands { inst, was } => {
                     out.terminators_rewritten |= self.instruction(*inst).opcode.is_terminator();
-                    for operand in was.iter() {
-                        if let Operand::Value(value) = operand {
-                            out.named.insert(*value);
+                    if names {
+                        for operand in was.iter() {
+                            #[cfg(test)]
+                            SCANNED.with(|scanned| scanned.set(scanned.get() + 1));
+                            if let Operand::Value(value) = operand {
+                                out.named.insert(*value);
+                            }
                         }
                     }
                 }

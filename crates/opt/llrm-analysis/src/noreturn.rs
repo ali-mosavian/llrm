@@ -235,6 +235,7 @@ pub fn cold(
     function: &Function,
     terminal_calls: &BTreeSet<InstId>,
 ) -> BTreeSet<i64> {
+    llrm_mir::counts::bump(llrm_mir::counts::Event::ColdScans);
     let blocks = cfg::graph(function);
     let marked = |at: i64| {
         function
