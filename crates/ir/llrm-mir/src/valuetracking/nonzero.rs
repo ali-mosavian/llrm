@@ -120,7 +120,7 @@ fn pointer_space(
 }
 
 /// `NullPointerIsDefined(F, AS)`.
-fn null_pointer_is_defined(
+pub(crate) fn null_pointer_is_defined(
     function: Option<&Function>,
     space: u32,
 ) -> bool {
@@ -189,7 +189,7 @@ fn param_has_dereferenceable(
 }
 
 /// `CallBase::paramHasNonNullAttr(ArgNo, AllowUndefOrPoison)`.
-fn param_has_non_null_attr(
+pub(crate) fn param_has_non_null_attr(
     q: &Query,
     instruction: &Instruction,
     arg: usize,
