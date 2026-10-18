@@ -1473,7 +1473,10 @@ pub fn optimized_with<E: From<String>>(
                 bases[at].insert(id, size);
             }
             for &id in made.added.iter().chain(&made.edited) {
-                llrm_mir::memory::unsplit(&mut function_mut(&mut program.modules[at], id).1.attrs);
+                llrm_mir::memory::unsplit(
+                    &mut function_mut(&mut program.modules[at], id).1.attrs,
+                    llrm_mir::memory::Moved::OutOfArguments,
+                );
                 edited(&mut modules[at], &[id]);
                 reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-cp.")?;
                 cloned_now = true;
