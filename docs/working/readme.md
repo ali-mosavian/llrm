@@ -13,6 +13,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [fragility](fragility.md) | What broke, or hid a break, and what guards it |
 | [figures](figures.md) | Drawing a figure as mermaid, and the generated pass pages |
 | [codegen-improvements](codegen-improvements.md) | Backend ideas drawn from other compilers |
+| [fold-split](fold-split.md) | The plan splitting the fold work between valuetracking-port and fold-poc |
 
 ## Docs with the change
 
