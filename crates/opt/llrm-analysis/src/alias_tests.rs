@@ -1769,3 +1769,26 @@ fn a_byval_argument_that_initializes_fills_nothing_of_the_callers_object() {
     assert_eq!(fills(""), 1, "premise: a plain parameter initializes the object");
     assert_eq!(fills("byval(i32) "), 0);
 }
+
+/// A callee that writes its byval parameter writes its own copy: the object
+/// the call passes is not written. Without `byval` the same call writes it.
+#[test]
+fn a_callee_that_writes_a_byval_parameter_writes_nothing_of_the_callers_object() {
+    let writes_global = |attrs: &str| {
+        let text = CALLEE_WRITES_ITS_PARAMETER.replace("@callee(ptr %p)", &format!("@callee(ptr {attrs}%p)"));
+        let parsed = Parsed::new(&text);
+        let procedures =
+            IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+        let known = summaries(&procedures, None).unwrap();
+        let effect = &parsed.effects(&known)[0];
+        let Some(super::Actual::Provenance(passed)) =
+            procedures["f"].arguments.values().next().map(|actual| actual[0].clone())
+        else {
+            panic!("@g's slice")
+        };
+        let g = passed.slices.first().unwrap().object;
+        writes(effect, &bytes(&g, 6, 8))
+    };
+    assert!(writes_global(""), "premise: a plain parameter's store writes the object");
+    assert!(!writes_global("byval(i16) "));
+}

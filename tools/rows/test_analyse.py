@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -148,3 +149,13 @@ def test_a_wrong_output_row_is_named_wrong_output_and_stays_out_of_the_geomean(t
     text = "\n".join(module.out)
     assert "q/llrmO3 (failed in main: wrong output: got [0])" in text
     assert "| -O3 | 1.0000 | 1.0000 |" in text
+
+
+def test_a_wrong_reference_row_is_failed_like_a_wrong_llrm_row():
+    """The census reads `ok` of every variant: a gcc or clang binary that prints the wrong value must not become the min(gcc, clang) of a row."""
+    sys.path.insert(0, str(HERE))
+    import rowcheck
+
+    rows = {"p/gccO2": {"ok": False, "got": [7], "ins": 1, "mem": 1, "clocks": 1, "code": 1}, "p/clangO2": {"ok": True, "ins": 1, "mem": 1, "clocks": 1, "code": 1}}
+    line, bad = rowcheck.census({"base": rows})
+    assert bad == ["p/gccO2 (failed in base: wrong output: got [7])"] and "failed 1" in line

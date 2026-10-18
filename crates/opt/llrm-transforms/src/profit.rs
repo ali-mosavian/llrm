@@ -93,7 +93,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::branchprob;
 use llrm_analysis::cfg;
-use llrm_analysis::consts::Known;
 use llrm_analysis::effects::Declarations;
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::{induction, memory};
@@ -287,7 +286,7 @@ pub fn site(
 ) -> llrm_analysis::peelsize::Site {
     let entries = match frequencies.0.get_or_init(|| {
         FREQUENCIES.with(|runs| runs.set(runs.get() + 1));
-        let trips = proven_trips(unit, &unit.registers());
+        let trips = proven_trips(unit);
         _frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips))
     }) {
         Some(frequency) => cfg::graph(unit.function)
@@ -356,10 +355,7 @@ pub fn priced(
 /// Each loop's trips by latch (the runs of its latch), where ScalarEvolution
 /// proves them (`getSmallConstantTripCount`): the `trips` that replaces the
 /// conventional ten. `LLRM_NO_SCEV_TRIPS` asks `induction` instead.
-pub fn proven_trips(
-    unit: &memory::Unit,
-    facts: &IndexMap<ValueId, Known>,
-) -> IndexMap<i64, i64> {
+pub fn proven_trips(unit: &memory::Unit) -> IndexMap<i64, i64> {
     proven_trips_using(unit, scev_trips_enabled())
 }
 

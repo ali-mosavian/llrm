@@ -685,7 +685,6 @@ pub(crate) fn _frequency(
             .with_shape(&shape)
             .with_registers(&facts)
             .with_counted(&counted),
-        &facts,
     );
     profit::_frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips))
 }
