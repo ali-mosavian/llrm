@@ -1307,14 +1307,18 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
     body.with_blocks(blocks)
 }
 
-/// An inserted anchor: no bytes, no machine effect, only a virtual definition.
-/// A named `Nothing` (the stackifier's `sahf`) emits code.
+/// An inserted anchor: no bytes and no machine effect, only a virtual
+/// definition. What emits code or writes a register (the stackifier's `sahf`,
+/// a pseudo that clobbers the flags) is an instruction.
 fn _inert(one: &Insn) -> bool {
-    one.what
-        .as_ref()
-        .is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty))
+    one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing)
         && one.inserted()
         && one.spread.is_empty()
+        && !one.emits()
+        && one.clobbers.is_empty()
+        && one.clobbers_high.is_empty()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
 }
 
 /// The blocks that name each value, and the edges between blocks, which a hoist
