@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/copyprop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/copyprop.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/copyprop.rs sha256:c2d0a1b11ed842ebb2965d2f9094075a79a6f8125815ac3d4f12560528c9086d -->
+<!-- src: crates/backend/llrm-core/src/backend/copyprop.rs sha256:a0e05a2c6bf32bbd0a61a32418c03c4f5547750a32c55d25ad9478d88374637b -->
 
 # copyprop
 
@@ -61,8 +61,8 @@ that rewrite makes are forwarded. Once per peephole run, not a fixed
 point. No flag of its own.
 
 ## Needs
-`crate::analysis::dataflow` and loop predecessors
-(`crate::analysis::loops`).
+[`crate::analysis::dataflow`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/scev/analysis.rs) and loop predecessors
+([`crate::analysis::loops`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/scev/analysis.rs)).
 
 ## See also
 LLVM `MachineCopyPropagation`; `crate::backend`

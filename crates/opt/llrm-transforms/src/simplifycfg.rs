@@ -14,8 +14,10 @@
 //! 2. `iteratively_simplified` visits the blocks in layout order until a visit
 //!    changes none (`iterativelySimplifyCFG`). A visit (`block_simplified`,
 //!    LLVM's `simplifyOnce`) deletes a block with no predecessor (or only
-//!    itself), folds its terminator, removes the duplicate phis of the block
-//!    and merges it into its one predecessor.
+//!    itself), folds its terminator, removes the duplicate phis of the block,
+//!    merges it into its one predecessor and, if it holds only phis and a jump,
+//!    removes it (`empty_block_removed`): its predecessors go to its successor,
+//!    which takes over its phis.
 //! 3. When step 2 changed anything, unreachable blocks are removed again and,
 //!    if that removed any, step 2 and the removal alternate until neither does.
 //!
@@ -74,7 +76,10 @@
 //! |---|---|---|
 //! | [`simplifyFunctionCFGImpl`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L272) | `simplified` | MIRROR |
 //! | [`iterativelySimplifyCFG`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L229) | `iteratively_simplified` | MIRROR; D1 |
-//! | [`SimplifyCFGOpt::simplifyOnce`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9303) | `block_simplified` | partly: the steps up to the merge; the rest is not ported yet (D2) |
+//! | [`SimplifyCFGOpt::simplifyOnce`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9303) | `block_simplified` | partly: the steps up to `simplifyUncondBranch`'s first half; the rest is not ported yet (D2) |
+//! | [`simplifyUncondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8800) | `jump_simplified` | the empty-block half; D2 |
+//! | [`TryToSimplifyUncondBranchFromEmptyBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L1147) | `empty_block_removed` | MIRROR; D6 |
+//! | [`FindFunctionBackedges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L236) | `loop_headers` | MIRROR |
 //! | [`removeUnreachableBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2912) and `markAliveBlocks` | `unreachable_removed` | the terminator folding and the deletion; D3 |
 //! | [`ConstantFoldTerminator`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L133) | `terminator_folded` | MIRROR; D4 |
 //! | [`BasicBlock::removePredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/BasicBlock.cpp#L446) | `Function::predecessor_removed` (`edit.rs`) | MIRROR (one phi input an edge) |
@@ -82,15 +87,16 @@
 //! | [`EliminateDuplicatePHINodes`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L1527) | `transform::duplicate_phis_in` | MIRROR |
 //! | [`MergeBlockIntoPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L237) | `cfg::merged_into_predecessor` | MIRROR |
 //!
-//! - D1. LLVM's `LoopHeaders` (the targets of back edges, found once) are not
-//!   computed: nothing ported so far reads them. They come with the first step
-//!   that does (`simplifyUncondBranch`, `NeedCanonicalLoop`).
+//! - D1. `LoopHeaders` is found once per `iteratively_simplified` and keeps the
+//!   blocks that go; LLVM's `WeakVH`s drop them. Nothing reads a deleted
+//!   block's entry.
 //! - D2. Not ported yet, each a later change of this series:
 //!   `tailMergeBlocksWithSimilarFunctionTerminators`,
 //!   `removeUndefIntroducingPredecessor`, `sinkCommonCodeFromPredecessors` (off
 //!   at this slot), `foldTwoEntryPHINode` (`phiopt` meanwhile), and the
-//!   terminator simplifications `simplifyUncondBranch`, `simplifyCondBranch`,
-//!   `simplifySwitch`, `simplifyUnreachable`.
+//!   terminator simplifications `simplifyUncondBranch` beyond the empty block
+//!   (`tryToSimplifyUncondBranchWithICmpInIt`, landing pads: none in the MIR),
+//!   `simplifyCondBranch`, `simplifySwitch`, `simplifyUnreachable`.
 //! - D3. `markAliveBlocks` also turns what follows a call of a `noreturn`
 //!   function, `llvm.assume(false)` and a store to `undef` into `unreachable`
 //!   (`FoldInstsToUnreachable`): not ported yet. It reads the target's
@@ -127,6 +133,12 @@
 //!   (#2194; a rule in `algebraic` that removed the phis made `x_hanoi2` -O2
 //!   22.8% slower through it); then this goes.
 //!
+//! - D6. A block keeps no `takeName` (the MIR has no rename); an `llvm.loop` on
+//!   the removed jump is any `llvm.loop` (the MIR has no debug-loc-only ones);
+//!   `undef` is `poison`, the MIR's one. `decide`'s `_threaded` is not removed
+//!   yet: it also bypasses jumps in the loop-simplify shapes this keeps; its
+//!   removal needs the corpus run.
+//!
 //! # Runs
 //! Once per round of the function fixed point, before `decide`: the branches
 //! on a literal that `fold` just made are jumps before `decide` asks for the
@@ -149,15 +161,19 @@
 //! # See also
 //! [`crate::cfg`], [`crate::decide`].
 
+use std::collections::BTreeSet;
+
+use llrm_analysis::occurrence::arms;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::Position;
 use llrm_mir::footprint::Footprint;
 use llrm_mir::memory::Callees;
-use llrm_mir::module::{BlockId, Function, InstId, Operand};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+use llrm_support::hash::{HashMap, HashSet};
 
-use crate::{cfg, dead, transform};
+use crate::{cfg, dead, edges, transform};
 
 /// LLVM's `SimplifyCFGPass` at the options of the early function pipeline
 /// slot (`SimplifyCFGOptions()`: `PassBuilderPipelines.cpp`).
@@ -222,10 +238,11 @@ fn iteratively_simplified(
     folded: &mut bool,
 ) -> bool {
     let (mut changed, mut local) = (false, true);
+    let headers = loop_headers(function);
     while local {
         local = false;
         for block in function.layout().to_vec() {
-            if function.is_placed(block) && block_simplified(context, callees, function, block, folded) {
+            if function.is_placed(block) && block_simplified(context, callees, function, block, folded, &headers) {
                 local = true;
             }
         }
@@ -242,6 +259,7 @@ fn block_simplified(
     function: &mut Function,
     block: BlockId,
     folded: &mut bool,
+    headers: &HashSet<BlockId>,
 ) -> bool {
     // No predecessor but not the entry, or only itself: unreachable.
     let predecessors = function.predecessors(block);
@@ -252,7 +270,348 @@ fn block_simplified(
     let mut changed = terminator_folded(context, callees, function, block, true);
     *folded |= changed;
     changed |= transform::duplicate_phis_in(function, block).expect("a phi nothing reads is erased");
-    changed | cfg::merged_into_predecessor(function, block)
+    changed |= cfg::merged_into_predecessor(function, block);
+    changed | (function.is_placed(block) && jump_simplified(context, function, block, headers))
+}
+
+/// The back edges' targets, by one walk from the entry: LLVM's
+/// `FindFunctionBackedges`, whose targets are `LoopHeaders`.
+fn loop_headers(function: &Function) -> HashSet<BlockId> {
+    let mut headers = HashSet::default();
+    let Some(entry) = function.entry() else { return headers };
+    // 0 unseen, 1 on the walk's path, 2 done.
+    let mut state: HashMap<BlockId, u8> = HashMap::default();
+    state.insert(entry, 1);
+    let mut path = vec![(entry, function.successors(entry).into_iter().collect::<Vec<_>>(), 0usize)];
+    while let Some((block, successors, next)) = path.last_mut() {
+        let Some(&successor) = successors.get(*next) else {
+            state.insert(*block, 2);
+            path.pop();
+            continue;
+        };
+        *next += 1;
+        match state.get(&successor) {
+            Some(1) => {
+                headers.insert(successor);
+            }
+            Some(_) => {}
+            None => {
+                state.insert(successor, 1);
+                path.push((successor, function.successors(successor).into_iter().collect(), 0));
+            }
+        }
+    }
+    headers
+}
+
+/// `block` holds only phis and a jump: its jump removed, if `block` is not a
+/// loop's header or entry in the way (`NeedCanonicalLoop`): the first part of
+/// LLVM's `simplifyUncondBranch`.
+fn jump_simplified(
+    context: &mut Context,
+    function: &mut Function,
+    block: BlockId,
+    loop_headers: &HashSet<BlockId>,
+) -> bool {
+    let Some(last) = function.terminator(block) else { return false };
+    let (Opcode::Br, &[Operand::Block(successor)]) =
+        (&function.instruction(last).opcode, &function.instruction(last).operands[..])
+    else {
+        return false;
+    };
+    if function.entry() == Some(block)
+        || function.block(block).instructions().len() != edges::phis(function, block).len() + 1
+    {
+        return false;
+    }
+    let canonical = edge_sources(function, block).len() >= 2
+        && !loop_headers.is_empty()
+        && (loop_headers.contains(&block) || loop_headers.contains(&successor));
+    !canonical && empty_block_removed(context, function, block, successor)
+}
+
+/// The block of each edge into `block`, one per edge.
+fn edge_sources(
+    function: &Function,
+    block: BlockId,
+) -> Vec<BlockId> {
+    function
+        .block_users(block)
+        .iter()
+        .filter(|one| function.instruction(one.user).opcode.is_terminator())
+        .filter_map(|one| function.parent(one.user))
+        .collect()
+}
+
+/// The value `phi` takes from `from`.
+fn value_from(
+    function: &Function,
+    phi: InstId,
+    from: BlockId,
+) -> Option<Operand> {
+    arms(function, phi).into_iter().find(|&(_, at)| at == from).map(|(value, _)| value)
+}
+
+fn is_poison(
+    context: &Context,
+    value: Operand,
+) -> bool {
+    matches!(
+        value,
+        Operand::Constant(id) if context.get(id).kind == ConstantKind::Poison
+    )
+}
+
+/// `value` is a phi of `block`.
+fn phi_of(
+    function: &Function,
+    value: Operand,
+    block: BlockId,
+) -> Option<InstId> {
+    let Operand::Value(id) = value else { return None };
+    let ValueDef::Instruction(inst) = function.value(id).def else { return None };
+    (function.instruction(inst).opcode == Opcode::Phi && function.parent(inst) == Some(block)).then_some(inst)
+}
+
+/// `block`, holding only phis and a jump to `successor`, removed (or only its
+/// predecessors sent on): LLVM's `TryToSimplifyUncondBranchFromEmptyBlock`.
+/// MIRROR, except that a block keeps its name, and a loop's metadata check
+/// is on any `llvm.loop`.
+fn empty_block_removed(
+    context: &mut Context,
+    function: &mut Function,
+    block: BlockId,
+    successor: BlockId,
+) -> bool {
+    if block == successor {
+        return false;
+    }
+    let sources = edge_sources(function, block);
+    let predecessors: BTreeSet<BlockId> = sources.iter().copied().collect();
+    let killable = predecessors_propagate(context, function, block, successor, &predecessors);
+    let mut common = None;
+    let mergeable = killable || redirectable(function, block, successor, &predecessors, &mut common);
+    if (!killable && !mergeable) || too_many_phi_entries(function, block, successor, sources.len()) {
+        return false;
+    }
+    let alone = function.predecessors(successor).len() == 1;
+    // A phi of `block` read elsewhere than by the successor's phis for this
+    // edge keeps `block` (it dominates the successor).
+    if !alone {
+        for phi in edges::phis(function, block) {
+            let result = function.instruction(phi).result.expect("a phi's value");
+            if function.users(result).iter().any(|one| {
+                let user = function.instruction(one.user);
+                user.opcode != Opcode::Phi || user.operands[one.index as usize + 1] != Operand::Block(block)
+            }) {
+                return false;
+            }
+        }
+    }
+    let last = function.terminator(block).expect("a jump");
+    let loop_node =
+        function.instruction(last).metadata.iter().find(|(kind, _)| kind == "llvm.loop").map(|&(_, node)| node);
+    if loop_node.is_some()
+        && predecessors.iter().any(|&one| {
+            function
+                .terminator(one)
+                .is_some_and(|term| function.instruction(term).metadata.iter().any(|(kind, _)| kind == "llvm.loop"))
+        })
+    {
+        return false;
+    }
+
+    for phi in edges::phis(function, successor) {
+        values_redirected(context, function, block, &sources, phi, common);
+    }
+
+    if alone {
+        function.erase(last).expect("a jump defines nothing");
+        let anchor = function
+            .block(successor)
+            .instructions()
+            .iter()
+            .copied()
+            .find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        for inst in function.block(block).instructions().to_vec() {
+            function.move_to(inst, anchor.map_or(Position::End(successor), Position::Before)).expect("a placed phi");
+        }
+    } else {
+        for phi in edges::phis(function, block) {
+            function.set_operands(phi, Vec::new());
+            function.erase(phi).expect("no use of an emptied phi is left");
+        }
+        if let Some(node) = loop_node {
+            for &one in &predecessors {
+                let term = function.terminator(one).expect("a predecessor's terminator");
+                function.annotate(term, "llvm.loop", node);
+            }
+        }
+    }
+
+    if killable {
+        function.replace_block_uses_with(block, successor);
+        if let Some(last) = function.terminator(block) {
+            function.erase(last).expect("a jump defines nothing");
+        }
+        function.erase_block(block).expect("a block nothing names");
+    } else {
+        // Everything but the common predecessor now goes to the successor.
+        for one in function.block_users(block).to_vec() {
+            let parent = function.parent(one.user);
+            if function.instruction(one.user).opcode.is_terminator()
+                && parent.is_some_and(|at| at != common.expect("a common predecessor") && predecessors.contains(&at))
+            {
+                function.set_operand(one.user, one.index as usize, Operand::Block(successor));
+            }
+        }
+    }
+    true
+}
+
+/// Whether the successor's phis and `block`'s agree where `block` and the
+/// successor share a predecessor: `CanPropagatePredecessorsForPHIs`.
+fn predecessors_propagate(
+    context: &Context,
+    function: &Function,
+    block: BlockId,
+    successor: BlockId,
+    predecessors: &BTreeSet<BlockId>,
+) -> bool {
+    if function.predecessors(successor).len() == 1 {
+        return true;
+    }
+    let merge =
+        |first: Operand, second: Operand| first == second || is_poison(context, first) || is_poison(context, second);
+    for phi in edges::phis(function, successor) {
+        let from_block = value_from(function, phi, block).expect("a phi entry for each edge");
+        let inner = phi_of(function, from_block, block);
+        for (value, at) in arms(function, phi) {
+            if !predecessors.contains(&at) {
+                continue;
+            }
+            let own = match inner {
+                Some(inner) => value_from(function, inner, at).expect("an entry for each edge"),
+                None => from_block,
+            };
+            if !merge(own, value) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// The one predecessor `block` and its successor share, when `block` cannot
+/// go but its other predecessors can be sent on:
+/// `CanRedirectPredsOfEmptyBBToSucc`.
+fn redirectable(
+    function: &Function,
+    block: BlockId,
+    successor: BlockId,
+    predecessors: &BTreeSet<BlockId>,
+    common: &mut Option<BlockId>,
+) -> bool {
+    if edges::phis(function, block).is_empty()
+        || edges::phis(function, successor).is_empty()
+        || edge_sources(function, block).len() < 2
+    {
+        return false;
+    }
+    for one in function.predecessors(successor) {
+        if predecessors.contains(&one) {
+            if common.is_some() {
+                return false;
+            }
+            *common = Some(one);
+        }
+    }
+    true
+}
+
+/// Removing `block` would add more than 1000 entries to the successor's
+/// phis: `introduceTooManyPhiEntries`.
+fn too_many_phi_entries(
+    function: &Function,
+    block: BlockId,
+    successor: BlockId,
+    edges_in: usize,
+) -> bool {
+    if edges_in == 1 {
+        return false;
+    }
+    let changed = edges::phis(function, successor)
+        .into_iter()
+        .filter(|&phi| phi_of(function, value_from(function, phi, block).expect("an entry"), block).is_none())
+        .count();
+    (edges_in - 1) * changed > 1000
+}
+
+/// `phi` of the successor takes, from each edge of `block`'s predecessors,
+/// the value it took from `block`: `redirectValuesFromPredecessorsToPhi`
+/// with its undef rules (poison is MIR's only undef).
+fn values_redirected(
+    context: &Context,
+    function: &mut Function,
+    block: BlockId,
+    sources: &[BlockId],
+    phi: InstId,
+    common: Option<BlockId>,
+) {
+    let old = value_from(function, phi, block).expect("a phi entry for each edge");
+    let mut operands = function.instruction(phi).operands.clone();
+    let at = operands.chunks(2).position(|pair| pair[1] == Operand::Block(block)).expect("the entry");
+    operands.drain(2 * at..2 * at + 2);
+
+    let mut known: HashMap<BlockId, Option<Operand>> = sources.iter().map(|&one| (one, None)).collect();
+    for pair in operands.chunks(2) {
+        if let (value, Operand::Block(from)) = (pair[0], pair[1])
+            && !is_poison(context, value)
+            && let Some(slot) = known.get_mut(&from)
+        {
+            *slot = Some(value);
+        }
+    }
+    let mut select = |value: Operand, from: BlockId| -> Operand {
+        if !is_poison(context, value) {
+            known.insert(from, Some(value));
+            return value;
+        }
+        known.get(&from).copied().flatten().unwrap_or(value)
+    };
+    let mut added = Vec::new();
+    if let Some(inner) = phi_of(function, old, block) {
+        for (value, from) in arms(function, inner) {
+            if Some(from) != common {
+                added.push((select(value, from), from));
+            }
+        }
+        if let Some(common) = common {
+            added.push((value_from(function, inner, common).expect("an entry for the common predecessor"), block));
+        }
+    } else {
+        for &from in sources {
+            if Some(from) != common {
+                added.push((select(old, from), from));
+            }
+        }
+        if common.is_some() {
+            added.push((old, block));
+        }
+    }
+    for (value, from) in added {
+        operands.extend([value, Operand::Block(from)]);
+    }
+    // A poison input takes the value another input gives that predecessor.
+    for pair in operands.chunks_mut(2) {
+        if let (value, Operand::Block(from)) = (pair[0], pair[1])
+            && is_poison(context, value)
+            && let Some(Some(one)) = known.get(&from)
+        {
+            pair[0] = *one;
+        }
+    }
+    function.set_operands(phi, operands);
 }
 
 /// The blocks the entry does not reach, deleted, after each block it reaches
