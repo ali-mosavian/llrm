@@ -360,7 +360,7 @@ pub fn proven_trips(
     unit: &memory::Unit,
     facts: &IndexMap<ValueId, Known>,
 ) -> IndexMap<i64, i64> {
-    proven_trips_using(unit, facts, scev_trips_enabled())
+    proven_trips_using(unit, scev_trips_enabled())
 }
 
 /// `LLRM_NO_SCEV_TRIPS`, read once: trip counts come from ScalarEvolution
@@ -415,7 +415,6 @@ pub fn scev_trip_bound(
 /// [`proven_trips`], asking ScalarEvolution (`scev`) or `induction`.
 pub fn proven_trips_using(
     unit: &memory::Unit,
-    facts: &IndexMap<ValueId, Known>,
     scev: bool,
 ) -> IndexMap<i64, i64> {
     let mut trips = IndexMap::default();
@@ -430,7 +429,7 @@ pub fn proven_trips_using(
         return trips;
     }
     for loop_ in loops {
-        if let Some(count) = induction::trip_count(unit, loop_, facts).and_then(|count| count.to_i64()) {
+        if let Some(count) = induction::trip_count(unit, loop_, &unit.registers()).and_then(|count| count.to_i64()) {
             trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
         }
     }
