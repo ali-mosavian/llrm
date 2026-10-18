@@ -220,3 +220,20 @@ fn test_the_work_grows_with_the_block_not_with_its_square() {
     let (small, large) = (work(200), work(400));
     assert!(large as f64 <= 2.2 * small as f64, "{small} units for 200 copies, {large} for 400");
 }
+
+/// A constant shift reads its destination only where the result is live, so
+/// `Effect::reads` leaves it out: the copy `bx = ax` that feeds `shl bx, 1`
+/// was taken for dead (the loop in `test_an_exact_elements_offset_is_folded_
+/// into_a_scaled_address` read an undefined `bx`).
+#[test]
+fn test_a_copy_read_by_a_shift_is_not_dead() {
+    let shift = Arc::new(Insn::new(
+        1,
+        Some((1, 1)),
+        Some(semantics(Operation::Binary, "shl", vec![rl(RegId::BX, 2)], vec![rl(RegId::BX, 2), imm(1, 1)])),
+        vec![],
+        vec![],
+    ));
+    let got = propagated(&body(vec![mov(0, rl(RegId::BX, 2), rl(RegId::AX, 2)), shift], &[RegId::BX]));
+    assert_eq!(lines(&got)[0], "mov BX,AX");
+}

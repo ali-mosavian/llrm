@@ -317,9 +317,9 @@ fn test_division_and_variable_shifts() {
             "mov ax, bx",
             "xor dx, dx",
             "div cx",
+            "add si, dx",
+            "shl si, cl",
             "mov ax, si",
-            "add ax, dx",
-            "shl ax, cl",
             "pop si",
             "pop bp",
             "retf",
@@ -949,9 +949,10 @@ define i16 @f() addrspace(1) {{
             "push di",
             "L0_0:",
             "lea di, [bp-8]",
-            "mov es, ss",
+            "mov bx, ss",
             "mov eax, 16843009",
             "mov cx, 1",
+            "mov es, bx",
             "rep stosd",
             "stosw",
             "stosb",
@@ -2600,7 +2601,7 @@ done:
         )
     };
     let element = |text: &str| inner(text).into_iter().find(|line| line.contains("a[")).expect("the element's read");
-    assert_eq!(element(&sum("inbounds")), "add ax, word ptr a[ebx+ebx]");
+    assert_eq!(element(&sum("inbounds")), "add ax, word ptr a[ebx+ebx]", "{:?}", inner(&sum("inbounds")));
     // Without `inbounds` nothing places the start: the offset may wrap.
     assert_eq!(element(&sum("")), "add ax, word ptr a[bx]");
 }
@@ -3134,7 +3135,8 @@ b1:
             "mov eax, ebx",
             "cdq",
             "shld edx, ebx, 16",
-            "shl eax, 16",
+            "shl ebx, 16",
+            "mov eax, ebx",
             "idiv ecx",
             "shld edx, eax, 16",
             "pop bp",
