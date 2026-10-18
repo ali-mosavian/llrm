@@ -850,7 +850,10 @@ impl LiveIntervals {
         };
         // The slot indexes of every `SlotIndexes` of a thread live in one
         // arena, which a new one empties: what this holds is named first.
-        let mut regs: Vec<u32> = self.intervals.keys().copied().collect();
+        // A register nothing names holds the range it had when it was split
+        // (`isOriginalEndpoint` reads it): it is no longer computed from
+        // anything, so it is not compared.
+        let mut regs: Vec<u32> = self.intervals.keys().copied().filter(|r| !self.reg_nodbg_empty(*r)).collect();
         regs.sort_unstable();
         let held: Vec<(u32, Vec<_>)> = regs.iter().map(|reg| (*reg, shape(self, &self.intervals[reg]))).collect();
         let mut fresh = Self::new(body);

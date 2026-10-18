@@ -118,6 +118,14 @@ impl LiveIntervalUnion {
         }
     }
 
+    /// `I.value()` of the entry starting at `key`: the register holding it.
+    pub fn vreg_of(
+        &self,
+        key: &SlotIndex,
+    ) -> VReg {
+        self.segments[key].1
+    }
+
     /// `I.stop()` of the entry starting at `key`.
     pub fn stop_of(
         &self,

@@ -3224,7 +3224,7 @@ pub fn _widest(body: &LirBody) -> IndexMap<u32, u32> {
 }
 
 /// Each (value, width) an instruction names.
-fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_ {
+pub(crate) fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_ {
     one.what
         .iter()
         .flat_map(|what| what.dests.iter().chain(&what.sources))

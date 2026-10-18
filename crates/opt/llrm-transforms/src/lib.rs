@@ -195,6 +195,7 @@ pub mod transform;
 pub mod trivialunswitch;
 pub mod twoentryphi;
 pub mod unroll;
+pub mod widen;
 pub mod unroll_jam;
 pub mod unswitch;
 pub mod versionalias;

@@ -2467,16 +2467,21 @@ impl<'a, 't> Body<'a, 't> {
         let field = ones(width) << start;
         let kept = !field & ones(bits);
         let value = self.resized(value, signed, unit);
-        let whole = self.loaded(pointer, volatile, first, bytes, unit);
-        let (shift, inside, outside) = (
-            self.constant(unit, Number::Int(start.into())),
-            self.constant(unit, Number::Int(field.into())),
-            self.constant(unit, Number::Int(kept.into())),
-        );
+        let (shift, inside) =
+            (self.constant(unit, Number::Int(start.into())), self.constant(unit, Number::Int(field.into())));
         let placed = self.op(Op::Shl, unit, vec![value_ref(value), value_ref(shift)]);
         let part = self.op(Op::And, unit, vec![value_ref(placed), value_ref(inside)]);
-        let rest = self.op(Op::And, unit, vec![value_ref(whole), value_ref(outside)]);
-        let joined = self.op(Op::Or, unit, vec![value_ref(rest), value_ref(part)]);
+        // A field that fills its container keeps nothing: clang stores it
+        // (`EmitStoreThroughBitfieldLValue`, `StorageSize == Info.Size`). The
+        // read-modify-write of an unwritten container read poison at -O2.
+        let joined = if start == 0 && width == bytes * 8 {
+            part
+        } else {
+            let whole = self.loaded(pointer, volatile, first, bytes, unit);
+            let outside = self.constant(unit, Number::Int(kept.into()));
+            let rest = self.op(Op::And, unit, vec![value_ref(whole), value_ref(outside)]);
+            self.op(Op::Or, unit, vec![value_ref(rest), value_ref(part)])
+        };
         self.stored(pointer, volatile, first, bytes, unit, joined);
         Ok(if signed {
             let (up, down) = (
