@@ -207,4 +207,18 @@ The design above is superseded: the allocator is now the translation of LLVM's g
 
 Acceptance item from [#2260]: the `lir loopslots` row (x5.82 per doubling) is replaced by this port, with SplitKit's region splitting as its counterpart. With greedy the default, the loopslots step is gone and no step on the cases or nest axes exceeds its limit at 2N (`tools/test_budgets.py`).
 
+Acceptance at 4N ([#2265], debts in [#2260]): each step within its limit under greedy, own Minstr 2N to 4N, `LLRM_GREEDY=1` (e1db028db).
+
+| axis | step | old | greedy | counterpart |
+|---|---|--:|--:|---|
+| nest | intervals walk | x1.73 | x3.16 | not only allocator: coalesce and twoaddr (lir-cleanup-poc), `Facts::of` and `slots_colored` (greedy: LiveIntervals, LiveStacks) |
+| nest | intervals liveness | x3.31 | x4.43 | as above |
+| nest | spill cleanup | x2.03 | x2.90 | InlineSpiller without `spiller.rs` (step 2) |
+| nest | spill rewrite | x1.74 | x1.55 | within |
+| joins | spill slots shared | x2.36 | x2.22 | within; StackSlotColoring/LiveStacks |
+| unrolled | regalloc frequency | x2.11 | gone | MBFI |
+| unrolled | siblings depths | x2.59 | gone | none needed |
+| unrolled | facts masks | x1.81 | x2.00 | within; regmask slots |
+
 [#2260]: https://github.com/ali-mosavian/llrm/issues/2260
+[#2265]: https://github.com/ali-mosavian/llrm/issues/2265
