@@ -549,6 +549,41 @@ fn naming_a_value_does_not_look_at_every_name_of_the_function() {
     assert!(many < 6 * few, "600 names looked at {few} times, 2400 names {many}");
 }
 
+/// Names looked at to give `count` unnamed values versions of the name `x`.
+fn versioning_cost(count: usize) -> usize {
+    let mut module = module(TEXT);
+    let i16 = module.context.types.int(16);
+    let one = module.context.int(i16, 1);
+    let f = function(&mut module);
+    let values: Vec<_> = (0..count)
+        .map(|_| {
+            let operand = Operand::Constant(one);
+            let add = f.create_instruction(
+                Opcode::Binary(BinaryOp::Add),
+                i16,
+                vec![operand, operand],
+                Flags::default(),
+                None,
+            );
+            f.instruction(add).result.expect("an add has a result")
+        })
+        .collect();
+    crate::edit::NAMES_LOOKED_AT.with(|looked| looked.set(0));
+    for value in values {
+        f.name_version(value, "x");
+    }
+    crate::edit::NAMES_LOOKED_AT.with(std::cell::Cell::get)
+}
+
+/// `name_version` scanned `x.1`, `x.2`, ... from 1 for each new version, so k
+/// versions of one name looked at k(k+1)/2 names; LLVM's counter looks at k.
+/// Four times the versions must cost about four times the looks, not sixteen.
+#[test]
+fn versioning_a_name_does_not_rescan_the_versions_already_made() {
+    let (few, many) = (versioning_cost(300), versioning_cost(1200));
+    assert!(many < 6 * few, "300 versions looked at {few} times, 1200 versions {many}");
+}
+
 #[test]
 fn a_name_is_free_again_when_its_block_is_erased() {
     let mut module = module(TEXT);
