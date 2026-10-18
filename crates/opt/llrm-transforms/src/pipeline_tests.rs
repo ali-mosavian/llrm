@@ -1415,7 +1415,7 @@ x:
 fn test_the_llvm_order_is_the_default_and_its_off_switch_is_the_rounds() {
     let on = Applied::default();
     assert!(on.options.llvm_order, "the order is on by default");
-    assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
+    assert_eq!(pipeline::function_stages(&on).len(), 4, "early, cleanup, simplify and late");
     let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
     assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
 }
@@ -1456,12 +1456,24 @@ fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translat
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
     assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
-    assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
+    assert_eq!(pipeline::function_stages(&on).len(), 4, "early, cleanup, simplify and late");
     let names = |phase| pipeline::llvm_order(&on, phase).iter().map(|one| one.name()).collect::<Vec<_>>();
     let simplify = names(crate::parity::Phase::Simplify);
     let count = |what: &str| simplify.iter().filter(|one| one.split('@').next() == Some(what)).count();
     assert_eq!((count("gvn"), count("dse"), count("earlycse")), (1, 1, 1), "{simplify:?}");
     assert!(names(crate::parity::Phase::Early).contains(&"earlycse@1180"), "{:?}", names(crate::parity::Phase::Early));
+}
+
+/// Old: LLVM's `InstSimplifyPass` (PassBuilderPipelines.cpp#L1662) was Missing
+/// and never ran, so an identity left after the last pass stayed in the body.
+/// Now its slot is Translated and the order ends with it.
+#[test]
+fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
+    assert_eq!(late, ["instsimplify@1662"]);
+    let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
+    assert_eq!(kind, Some(crate::parity::SlotKind::Translated));
 }
 
 /// A body computes the same answer through LLVM's order.
@@ -2167,4 +2179,24 @@ fn test_the_llvm_order_hoists_invariants_the_spill_forecast_would_keep() {
     let f = &printed[printed.find("define i16 @f(").expect("f")..];
     let b0 = f[f.find("\nb0:\n").unwrap() + 5..].lines().take_while(|line| line.starts_with("  ")).collect::<Vec<_>>();
     assert_eq!(b0.iter().filter(|line| line.contains("load")).count(), 6, "{printed}");
+}
+
+/// d_faces -O2: the interprocedural stage ran body 32 again (`_clip_w`) and its
+/// `[runs] body` line named `_d_draw_faces`, the last function the manager's
+/// loop had set. A rerun names the function it runs.
+#[test]
+fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
+    let mut module = llrm_analysis::testing::parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %d = add i16 %x, 1\n  ret i16 %x\n}\n\ndefine i16 @g(i16 %x) {\nb0:\n  ret i16 %x\n}\n",
+    );
+    let mut analyses = llrm_mir::passes::ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_x86_m16::Dos::default()));
+    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
+    fixed.only = false;
+    fixed.passes = vec![Box::new(EraseUnused)];
+    // The manager's loop last set `g`.
+    llrm_mir::passes::set_running_function("g");
+    let (_, lines) = pipeline::capturing_runs(|| {
+        super::rerun(&mut module, &mut analyses, llrm_mir::context::GlobalId(0), &mut fixed).unwrap()
+    });
+    assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
 }

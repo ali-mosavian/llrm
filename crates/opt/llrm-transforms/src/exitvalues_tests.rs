@@ -83,3 +83,27 @@ fn test_a_value_the_loop_stores_is_left_computed_by_the_loop() {
     let (changed, after) = rewritten(&text);
     assert!(!changed, "{after}");
 }
+
+/// A do-while over an unknown `n` runs `smax(n, 1)` times; the expansion would
+/// call `llvm.smax.i16`, which the back end does not select (QCport failed on
+/// it, #2485). The exit value stays computed by the loop.
+#[test]
+fn test_no_exit_value_is_written_as_a_min_or_max_call() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %inc, %loop ]
+  %inc = add nsw i16 %i, 1
+  %c = icmp slt i16 %inc, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i16 %inc
+}
+";
+    let (changed, after) = rewritten(text);
+    assert!(!changed, "{after}");
+    for call in ["llvm.smax", "llvm.smin", "llvm.umax", "llvm.umin"] {
+        assert!(!after.contains(call), "{call}: {after}");
+    }
+}

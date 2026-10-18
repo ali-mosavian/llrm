@@ -66,9 +66,15 @@ fn users(
     inst: InstId,
 ) -> Vec<InstId> {
     let Some(result) = ctx.function.instruction(inst).result else { return Vec::new() };
-    let gone = ctx.state.gone.borrow();
-    let mut found: Vec<InstId> =
-        ctx.function.users(result).iter().map(|one| one.user).filter(|user| !gone.contains(user)).collect();
+    let (gone, sunk) = (ctx.state.gone.borrow(), ctx.state.sunk.borrow());
+    // An instruction sunk reads its operands from the exit block: a user there.
+    let mut found: Vec<InstId> = ctx
+        .function
+        .users(result)
+        .iter()
+        .map(|one| one.user)
+        .filter(|user| !gone.contains(user) || sunk.contains(user))
+        .collect();
     found.dedup();
     found
 }
@@ -120,6 +126,7 @@ pub fn sink_region(
                 && can_sink(ctx, inst)
             {
                 ctx.state.gone.borrow_mut().insert(inst);
+                ctx.state.sunk.borrow_mut().insert(inst);
                 ctx.state.moved.borrow_mut().insert(inst, into);
                 found.push((inst, Sinking::Sunk));
             }
@@ -139,7 +146,7 @@ fn is_not_used_in_loop(
     if users.iter().any(|&user| ctx.contains(user)) {
         return None;
     }
-    users.first().and_then(|&user| ctx.function.parent(user))
+    users.first().and_then(|&user| ctx.state.moved.borrow().get(&user).copied().or_else(|| ctx.function.parent(user)))
 }
 
 /// Whether
@@ -156,13 +163,17 @@ fn can_sink(
     let users = users(ctx, inst);
     !users.is_empty()
         && users.iter().all(|&user| {
+            // A user that was sunk reads it through a phi made for the clone.
+            if ctx.state.sunk.borrow().contains(&user) {
+                return true;
+            }
             let instruction = function.instruction(user);
             if !matches!(instruction.opcode, Opcode::Phi) {
                 return false;
             }
             // `isTriviallyReplaceablePHI`: every incoming value is `inst`'s.
             let trivial = instruction.operands.chunks(2).all(|pair| pair[0] == Operand::Value(result));
-            trivial || can_split_predecessors(ctx, user)
+            trivial || (!ctx.strict_sink && can_split_predecessors(ctx, user))
         })
 }
 

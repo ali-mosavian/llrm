@@ -21,7 +21,7 @@ fn named(
     DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
     let mut module = parsed(text);
     let mut passes = llrm_mir::passes::PassManager::default();
-    passes.add(Licm);
+    passes.add(Licm { apply: false });
     passes
         .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -45,7 +45,7 @@ fn promoted(text: &str) -> Vec<(Vec<String>, bool)> {
     DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
     let mut module = parsed(text);
     let mut passes = llrm_mir::passes::PassManager::default();
-    passes.add(Licm);
+    passes.add(Licm { apply: false });
     passes
         .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -285,4 +285,218 @@ b3:
 }
 ";
     assert_eq!(promoted(text), [(vec!["constant".to_owned()], false)]);
+}
+
+/// `text` through `Licm` with the edits made, under the verifier and the
+/// preserved-analyses check, and the answers of @f before and after on
+/// `inputs`.
+fn applied(
+    text: &str,
+    inputs: &[Vec<i128>],
+) -> (String, String) {
+    use crate::testing::{printed, results};
+    let before = parsed(text);
+    let mut after = before.clone();
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.add(Licm { apply: true });
+    passes
+        .run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    let inputs: Vec<&[i128]> = inputs.iter().map(Vec::as_slice).collect();
+    assert_eq!(results(&after, &inputs), results(&before, &inputs), "{}", printed(&after));
+    (printed(&before), printed(&after))
+}
+
+/// The instructions of @f's block `name`.
+fn block_of(
+    text: &str,
+    name: &str,
+) -> Vec<String> {
+    let f = &text[text.find("define i16 @f(").expect("@f")..];
+    let start = f.find(&format!("\n{name}:\n")).unwrap_or_else(|| panic!("no {name} in\n{text}")) + name.len() + 3;
+    f[start..].lines().take_while(|line| line.starts_with("  ")).map(|line| line.trim().to_owned()).collect()
+}
+
+fn trips() -> Vec<Vec<i128>> {
+    [0, 1, 5, -1].iter().map(|&n| vec![n]).collect()
+}
+
+/// Hoisting applied: the invariant leaves the loop for the preheader and the
+/// function answers as it did.
+#[test]
+fn test_an_invariant_operation_is_moved_to_the_preheader() {
+    let text = looped("", ", i16 %a", "", "  %k = mul i16 %a, 3\n  %v = add i16 %k, 1\n");
+    let inputs: Vec<Vec<i128>> = [0, 1, 5].iter().flat_map(|&n| [0, 7, -3].map(|a| vec![n, a])).collect();
+    let (_, after) = applied(&text, &inputs);
+    assert_eq!(block_of(&after, "b0"), ["%k = mul i16 %a, 3", "%v = add i16 %k, 1", "br label %b1"]);
+}
+
+/// Sinking applied: the value only the code after the loop reads is computed
+/// there, from an LCSSA phi of what it reads in the loop.
+#[test]
+fn test_a_value_read_after_the_loop_is_computed_there() {
+    let text = sinking("  %a = mul i16 %i, 3\n  %v = add i16 %a, 1\n");
+    let (_, after) = applied(&text, &trips());
+    assert!(!block_of(&after, "b1").iter().any(|line| line.contains("mul") || line.contains("add i16 %a")), "{after}");
+    let exit = block_of(&after, "b3");
+    assert!(
+        exit.iter().any(|line| line.contains("mul i16")) && exit.iter().any(|line| line.contains("add i16")),
+        "{after}"
+    );
+}
+
+/// A nest: what the inner loop hoists into the outer loop's body leaves that
+/// loop too, the graph made again after the inner loop changed.
+#[test]
+fn test_what_an_inner_loop_hoists_leaves_the_outer_loop_too() {
+    let text = "define i16 @f(i16 %n, i16 %a) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b4 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b5
+
+b2:
+  br label %b3
+
+b3:
+  %j = phi i16 [ 0, %b2 ], [ %j1, %b3 ]
+  %k = mul i16 %a, 3
+  %j1 = add i16 %j, %k
+  %d = icmp slt i16 %j1, 20
+  br i1 %d, label %b3, label %b4
+
+b4:
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b5:
+  ret i16 %i
+}
+";
+    let inputs: Vec<Vec<i128>> = [0, 1, 3].iter().flat_map(|&n| [1, 2].map(|a| vec![n, a])).collect();
+    DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+    let (_, after) = applied(text, &inputs);
+    assert_eq!(block_of(&after, "b0"), ["%k = mul i16 %a, 3", "br label %b1"], "{after}");
+    assert_eq!(DECIDED.with(|all| all.borrow().rebuilds), 3, "one graph, one more after each loop that changed");
+}
+
+/// A loop over a slot (a global) with the accesses `body` makes; the exit
+/// returns the slot.
+fn global_loop(body: &str) -> String {
+    format!(
+        "@g = global i16 5
+@h = global i16 7
+
+define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+{body}  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = load i16, ptr @g
+  ret i16 %r
+}}
+"
+    )
+}
+
+/// A global read and written in the loop is one value there: loaded before it,
+/// stored once after, the loop's own loads and stores gone.
+#[test]
+fn test_a_global_read_and_written_in_a_loop_lives_in_a_register() {
+    let text = global_loop("  %x = load i16, ptr @g\n  %y = add i16 %x, %i\n  store i16 %y, ptr @g\n");
+    let (_, after) = applied(&text, &trips());
+    let body = block_of(&after, "b2");
+    assert!(!body.iter().any(|line| line.contains("@g")), "{after}");
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
+    assert!(
+        block_of(&after, "b3").iter().any(|line| line.starts_with("store i16") && line.contains("ptr @g")),
+        "{after}"
+    );
+}
+
+/// A store the loop makes whenever it is entered, and no load: nothing is
+/// loaded before the loop, the value stored last is stored once after it.
+#[test]
+fn test_a_global_only_written_in_a_loop_is_stored_once_after_it() {
+    let text = "@g = global i16 5
+
+define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  store i16 %i, ptr @g
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+";
+    let (_, after) = applied(text, &trips());
+    assert!(!block_of(&after, "b1").iter().any(|line| line.contains("@g")), "{after}");
+    assert!(!block_of(&after, "b0").iter().any(|line| line.contains("load")), "{after}");
+    assert!(block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
+}
+
+/// A store made only on some trips: the value before the loop is loaded first,
+/// so a loop that never stores leaves it as it was.
+#[test]
+fn test_a_store_made_on_some_trips_is_preceded_by_a_load_before_the_loop() {
+    let text = global_loop("  store i16 %i, ptr @g\n");
+    let (_, after) = applied(&text, &trips());
+    assert!(!block_of(&after, "b2").iter().any(|line| line.contains("@g")), "{after}");
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
+}
+
+/// Two globals, one a load whose address is another's value: promoted in
+/// rounds. Stores to a global stay when the loop's other accesses may read it.
+#[test]
+fn test_a_slot_read_through_a_changing_pointer_keeps_its_stores() {
+    let text = "@g = global [4 x i16] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %x = load i16, ptr @g
+  %q = getelementptr i16, ptr @g, i16 %i
+  %z = load i16, ptr %q
+  %y = add i16 %x, %z
+  store i16 %y, ptr @g
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+";
+    let (_, after) = applied(text, &[vec![0], vec![1], vec![3]]);
+    assert!(block_of(&after, "b2").iter().any(|line| line.starts_with("store i16")), "{after}");
 }
