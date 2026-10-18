@@ -1,23 +1,14 @@
 [run]
-cases = ["arith", "bitfield_long_long"]
-
-[units."llrm-support"]
-tests = [
-  ["debug::tests::test_the_instr_total_row_names_how_many_spans_it_timed", 0.0],
-  ["decoder_tests::test_the_decoder_has_no_tables_for_instructions_no_target_has", 0.0],
-  ["leaf::tests::a_number_is_tagged_from_0x8000_and_by_the_smallest_width", 0.0],
-  ["pyjson::tests::dumps_spells_floats_and_non_ascii_as_python", 0.0],
-  ["pyjson::tests::loads_refuses_with_pythons_messages", 0.0],
-  ["pypath::tests::test_resolve_keeps_the_spelling_it_was_given", 0.0],
-  ["pyrepr::tests::bytes_quote_like_python", 0.0],
-  ["pyrepr::tests::floats_print_like_python", 0.0],
-  ["pyrepr::tests::string_quotes_like_python", 0.0],
-  ["pyrepr::tests::tuples_keep_the_single_comma", 0.0],
-  ["pyset::tests::hashes_match_cpython", 0.0],
-  ["pyset::tests::iteration_follows_cpython_slot_order", 0.0],
-  ["pyset::tests::membership_examines_a_few_slots_whatever_the_size", 0.0],
-  ["reached_tests::test_a_reached_check_is_counted_by_oracle_and_other_switches_are_not", 0.0],
-  ["pyset::tests::a_table_always_keeps_an_unused_slot_for_a_probe_to_end_at", 0.006],
-  ["debug::tests::test_the_work_counter_counts_the_same_loop_the_same_and_at_least_its_instructions", 0.028],
-  ["debug::tests::test_the_work_counter_does_not_move_with_the_load_on_the_host", 0.076],
+# tests/run programs by name (run_tests.py selects by name): the six C programs at -O2 for the 16-bit target that caught the trySplit miscompile on 14220782f
+# (bintree 5736113 -> 165553, ...), ~1.4 s of CPU together, and two small cases.
+cases = [
+  "arith",
+  "bitfield_long_long",
+  "byval_initializes",
+  "bintree/bintree.c [-O2 -march=i486]",
+  "algebra/algebra.c [-O2 -march=i486]",
+  "loop/loop.c [-O2 -march=i486]",
+  "branch/branch.c [-O2 -march=i486]",
+  "memory/memory.c [-O2 -march=i486]",
+  "recpow/recpow.c [-O2 -march=i486]",
 ]
