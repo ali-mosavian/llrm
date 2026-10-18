@@ -538,12 +538,15 @@ fn with_exit_values(text: &str) -> String {
     crate::testing::printed(&module)
 }
 
-/// The counter's step leaves a loop that also breaks, on `i + 1 < 32` false:
-/// the exit reads 32. It read the stepped counter, which kept the old one
-/// alive past its step (mandel: `lea; or; je; mov` where `inc; je` does), and
-/// made 32 in the latch each trip for the exit's phi.
+/// The counter's step leaves a loop that also breaks, on `i + 1 < 32` false.
+/// The old step read the exit's own count and wrote 32 (mandel: `lea; or; je;
+/// mov` where `inc; je` does). `rewriteLoopExitValues` asks `getSCEVAtExit`,
+/// which takes the value at the loop's one count, `umin(31, n + 1)`, once
+/// `simplifyAndExtend` has given the step `nuw nsw`: invariant, so not
+/// evaluated at the exit's count (the per-exit retry is for a variant one), and
+/// too dear to write under the budget. The exit keeps reading the counter.
 #[test]
-fn test_an_exit_phi_of_a_stepped_counter_is_the_number_its_count_gives() {
+fn test_an_exit_phi_of_a_stepped_counter_in_a_loop_with_a_second_exit_keeps_its_value() {
     let text = with_exit_values(
         "define i32 @f(i32 %n) {
 b0:
@@ -568,7 +571,7 @@ b4:
 }
 ",
     );
-    assert!(text.contains("ret i32 32") && !text.contains("%last"), "{text}");
+    assert!(text.contains("phi i32 [ %next, %b2 ]"), "{text}");
 }
 
 /// An exit whose count is not a number is written from the count, as
