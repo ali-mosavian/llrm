@@ -1502,6 +1502,45 @@ done:
     assert!(!with, "the mul is behind the guard, not in the entry block\n{rotated}");
 }
 
+/// The rotate slot is LLVM's `LoopRotate`: a loop whose latch only increments
+/// (`for (i = 0; ; i++)` with the test in the header after a body block) has
+/// the increment folded into the block that exits (`simplifyLoopLatch`) and
+/// is one block, test last. The stand-in `rotate` copies the header and leaves
+/// the latch a block of its own.
+#[test]
+fn test_the_rotate_slot_folds_a_one_increment_latch_into_the_exit_test() {
+    let text = "define i16 @f(i16 %x, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b3 ]
+  %acc = phi i16 [ %x, %b0 ], [ %s, %b3 ]
+  %s = add i16 %acc, %i
+  %go = icmp slt i16 %s, %n
+  br i1 %go, label %b3, label %b2
+
+b3:
+  %next = add i16 %i, 1
+  br label %b1
+
+b2:
+  %r = phi i16 [ %s, %b1 ]
+  ret i16 %r
+}
+";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied {
+        options: pipeline::Options { llvm_order: true, rotate_slot: true, ..Default::default() },
+        ..Applied::default()
+    };
+    let printed = crate::testing::managed(&mut module, pipeline::Fixed::linear(&applied, pipeline::Phase::Simplify));
+    let looped = printed.split("\n\n").find(|one| one.contains("phi i16 [ 0")).expect("the loop block");
+    assert!(looped.contains("add i16 %") && looped.contains("icmp slt") && looped.contains("br i1"), "{printed}");
+    assert_eq!(printed.matches("phi i16 [ 0,").count(), 1, "{printed}");
+    assert!(!printed.contains("b3:"), "the latch is folded into the exit test\n{printed}");
+}
+
 /// `LLRM_DUMP_INPUTS` for the POCs of single passes: a pass that finds nothing
 /// to do left no dump, so its input was nowhere to be had. A run that changes
 /// nothing now leaves its input and a manifest line.

@@ -438,6 +438,17 @@ impl LiveIntervals {
         self.indexes.remove_machine_instr_from_maps(key);
     }
 
+    /// `body` with the instructions as edited through this (same blocks, same
+    /// edges): what `assert_intervals_equal_afresh` compares with.
+    pub fn body_like(
+        &self,
+        body: &LirBody,
+    ) -> LirBody {
+        let blocks =
+            body.blocks.iter().enumerate().map(|(n, block)| block.with_insns(self.blocks[n].clone())).collect();
+        body.with_blocks(blocks)
+    }
+
     /// `extendToIndices` (LiveIntervals.cpp#L695): extends `lr` to reach each
     /// of `indices`, as `LiveRangeCalc::extend` does for a use.
     pub fn extend_to_indices(
