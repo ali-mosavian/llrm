@@ -272,6 +272,22 @@ impl LiveIntervals {
         &self.intervals[&reg]
     }
 
+    /// `getInterval` as a shared pointer, of a register whose interval is held.
+    pub fn get_interval_rc(
+        &self,
+        reg: u32,
+    ) -> Rc<LiveInterval> {
+        Rc::clone(&self.intervals[&reg])
+    }
+
+    /// `getInterval` to edit: a copy is made first if a queue still shares it.
+    pub fn interval_mut(
+        &mut self,
+        reg: u32,
+    ) -> &mut LiveInterval {
+        Rc::make_mut(self.intervals.get_mut(&reg).expect("an interval is held"))
+    }
+
     /// How many intervals are held.
     pub fn interval_count(&self) -> usize {
         self.intervals.len()
@@ -342,6 +358,19 @@ impl LiveIntervals {
         before: Option<InstrKey>,
         insn: Arc<Insn>,
     ) -> SlotIndex {
+        self.insert_instr_before_at(block, before, insn, false)
+    }
+
+    /// `insertMachineInstrInMaps(MI, Late)` for an instruction put immediately
+    /// before `before` (or at the end of the block): with `late` its index is
+    /// immediately before `before`'s, after any null entries.
+    pub fn insert_instr_before_at(
+        &mut self,
+        block: usize,
+        before: Option<InstrKey>,
+        insn: Arc<Insn>,
+        late: bool,
+    ) -> SlotIndex {
         let pos = before.map_or(self.blocks[block].len(), |key| self.position_of(block, key));
         let prev = if pos == 0 {
             self.indexes.get_mbb_start_idx(block)
@@ -352,7 +381,7 @@ impl LiveIntervals {
             Some(key) => self.indexes.get_instruction_index(key),
             None => self.indexes.get_mbb_end_idx(block),
         };
-        let index = self.indexes.insert_machine_instr_in_maps(insn.id(), block, &prev, &next, false);
+        let index = self.indexes.insert_machine_instr_in_maps(insn.id(), block, &prev, &next, late);
         self.add_operands(&insn);
         self.insns.insert(insn.id(), Arc::clone(&insn));
         self.blocks[block].insert(pos, insn);
