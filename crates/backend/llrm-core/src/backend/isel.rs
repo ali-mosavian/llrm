@@ -2889,6 +2889,15 @@ impl Selector<'_, '_, '_> {
     }
 
     /// Bytes of an address held in a register: the space-0 pointer's.
+    /// A memory intrinsic's constant length or count: llrm_mir's one reading,
+    /// unsigned at its own type's width.
+    fn length(
+        &self,
+        operand: Operand,
+    ) -> Option<i64> {
+        llrm_mir::intrinsics::length(&self.module.context, operand).and_then(|length| i64::try_from(length).ok())
+    }
+
     fn address_bytes(&self) -> u32 {
         self.layout.pointer(0).bits / 8
     }
@@ -5937,7 +5946,7 @@ impl Selector<'_, '_, '_> {
         };
         let volatile = self.constant(volatile, 1) != Some(0);
         let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
-        let constant = self.constant(length, self.address_bytes());
+        let constant = self.length(length);
         self.copied(to, from, constant, Some(length), volatile, backward, at, out)
     }
 
@@ -6241,7 +6250,7 @@ impl Selector<'_, '_, '_> {
         let put =
             |what: Semantics, out: &mut Vec<Arc<Insn>>| out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
         let imm = |value: i64, width: u32| Loc::Imm(Imm { value, width, address: None });
-        let constant = byte.zip(self.constant(length, self.address_bytes()));
+        let constant = byte.zip(self.length(length));
         if let Some((byte, length)) = constant
             && self.stored_by_pieces(byte == 0, length)
         {
@@ -6372,7 +6381,7 @@ impl Selector<'_, '_, '_> {
         if self.module.context.types.int_bits(counted).is_some_and(|bits| bits > self.address_bytes() * 8) {
             return refuse("a pattern fill counted past an address");
         }
-        if let Some(count) = self.constant(count, self.address_bytes()).filter(|&count| count <= MEMSET_STORES) {
+        if let Some(count) = self.length(count).filter(|&count| count <= MEMSET_STORES) {
             for cell in 0..count {
                 let memory = Self::memory(regs, pointer.moved(cell * i64::from(width)), width);
                 out.push(Arc::new(Insn {
@@ -6382,7 +6391,7 @@ impl Selector<'_, '_, '_> {
             }
             return Ok(());
         }
-        let count = match self.constant(count, self.address_bytes()) {
+        let count = match self.length(count) {
             Some(count) => Loc::Imm(Imm { value: count, width: 2, address: None }),
             None => Loc::Held(self.held(count, counted, at, out)?),
         };
