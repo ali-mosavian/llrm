@@ -69,8 +69,23 @@ No pass changes if A is complete.
 Before B: SROA alone, same sources, on an index-linked list in an arena
 (prev/next per instruction, head/tail per block), against the Vec version on
 mem400/800, loop400/800, diamond400/800 (replay inputs, `sroa-poc sroa-unit`).
-B is approved only if the ratio per doubling comes near LLVM's 2.05. Result:
-to be filled in here by the POC.
+B is approved only if the ratio per doubling comes near LLVM's 2.05.
+
+Bound, before building it (perf CPU samples of `sroa-poc sroa-unit`, 25 kHz;
+list = `detach`, `attach`, `erase`, memmove; rest = everything else, parse
+included, so it is a floor on linearity). Per doubling, 400 to 800:
+
+| ladder | total | list ops | rest |
+|---|---|---|---|
+| mem | x2.75 | x3.56 | x2.13 |
+| loop | x2.74 | x4.1 | x1.75 |
+| diamond | x3.1 | x4.8 (4 to 19 samples) | x2.98 |
+
+With the list ops taken to O(1) the rest bounds the ratio: mem about 2.1, loop
+about 1.8, so the swap can bring SROA near LLVM's x2.05 on those. Diamond's
+rest is x3.0 by itself: a second super-linear term that is not the list
+(unlocated; its own issue). The arena POC (SROA on a linked list, measured as
+above) confirms this bound before B is built; result to be added here.
 
 ## DEVIATE
 None planned: the list is LLVM's. A deviation is recorded here only if the
