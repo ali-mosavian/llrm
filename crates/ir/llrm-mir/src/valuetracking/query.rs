@@ -378,6 +378,21 @@ impl FunctionAnalyses {
         Self { layout, dt: DomTree::of(function), assumptions: AssumptionCache::new(module, function) }
     }
 
+    /// The same from the parts of a module a pass holds, not the module.
+    pub fn of(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Self {
+        Self {
+            layout: layout.clone(),
+            dt: DomTree::of(function),
+            assumptions: AssumptionCache::of(context, globals, metadata, function),
+        }
+    }
+
     /// The dominator tree (`SQ.DT`).
     pub fn dominator_tree(&self) -> &DomTree {
         &self.dt
