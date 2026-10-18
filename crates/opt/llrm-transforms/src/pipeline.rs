@@ -943,6 +943,8 @@ pub fn recorded(
                 let outer = analyses.outer_held(module);
                 let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
                 let Module { context, metadata, .. } = &mut *module;
+                // A specialised copy has no global of its own yet.
+                llrm_mir::passes::set_running_function("(specialised copy)");
                 let mut unit = Unit {
                     context,
                     layout: &layout,
@@ -1115,6 +1117,7 @@ fn rerun(
     let outer = analyses.outer(module);
     let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
     let Module { context, globals, metadata, .. } = &mut *module;
+    llrm_mir::passes::set_running_function(globals[id.0 as usize].name.as_deref().unwrap_or_default());
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
         return Err(format!("@{}: not a function", id.0));
     };
