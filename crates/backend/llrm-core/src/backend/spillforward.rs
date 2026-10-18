@@ -352,3 +352,26 @@ pub fn forwarded(body: &LirBody) -> LirBody {
     }
     body.with_blocks(blocks)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::backend::regalloc_input::{Calls, before_phase_skipping, through};
+
+    /// The meet of a loop's reloads that no outside edge disproves:
+    /// `LLRM_CHECK_DATAFLOW` found the worklist's answer for `qcport/
+    /// savegame.c`'s `_savegame_load@3` (-Omax, 247 blocks, a 3-block cycle
+    /// entered from one block) different from the rounds': one fact
+    /// `stored` true by the one, false by the other, and the removal of a store
+    /// was decided by whichever the order reached. The oracle is on here, and
+    /// the solve must agree with itself.
+    #[test]
+    fn test_a_cycle_of_reloads_has_one_answer_whatever_the_order() {
+        crate::analysis::dataflow::check_always();
+        for cpu in ["386", "486", "P5", "P6", "K5", "K6", "K7", "Core"] {
+            let (body, mut phases) =
+                before_phase_skipping(Calls::C, "savegame_load_order.ll", "_savegame_load@3", cpu, "Peephole", &[]);
+            let peephole = phases.remove(0);
+            through(body, vec![peephole]).unwrap_or_else(|error| panic!("{cpu}: {error}"));
+        }
+    }
+}

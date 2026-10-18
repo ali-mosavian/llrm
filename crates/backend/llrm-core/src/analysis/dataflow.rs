@@ -44,6 +44,25 @@ thread_local! {
 /// pass's meet, and its boundary at the entry), `transfer(at, input)` the
 /// output across it. A block starts with no input; its input is worked out the
 /// first time it is worked.
+#[cfg(test)]
+thread_local! {
+    static ALWAYS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A test asks for the oracle on this thread, whatever the environment says.
+#[cfg(test)]
+pub fn check_always() {
+    ALWAYS.with(|on| on.set(true));
+}
+
+fn checking() -> bool {
+    #[cfg(test)]
+    if ALWAYS.with(std::cell::Cell::get) {
+        return true;
+    }
+    crate::support::env_flag!("LLRM_CHECK_DATAFLOW")
+}
+
 pub fn solve<S: Clone + PartialEq>(
     nodes: &[&Block],
     direction: Direction,
@@ -84,7 +103,7 @@ pub fn solve<S: Clone + PartialEq>(
             pending.extend(feeds[index].iter().map(|dependent| place(*dependent)));
         }
     }
-    if crate::support::env_flag!("LLRM_CHECK_DATAFLOW") {
+    if checking() {
         let mut rounds: IndexMap<i64, S> = nodes.iter().map(|block| (block.at, initial(block.at))).collect();
         let mut seen: IndexMap<i64, S> = IndexMap::default();
         let mut changed = true;
