@@ -189,6 +189,8 @@ impl FunctionPass for Gvn {
         let cfg_changed = unit.function.layout().len() != blocks;
         if cfg_changed {
             analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        } else if scalar {
+            analyses.invalidate(unit.function, &PreservedAnalyses::all().except::<Registers>());
         }
         let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
         let pointers = analyses.get::<PointerValues>(unit.context, unit.layout, unit.function);
@@ -196,19 +198,7 @@ impl FunctionPass for Gvn {
         // blocks, and by splitting edges.
         let pointers = Result::as_ref(&*pointers).map_err(String::clone);
         // Numbering leaves the CFG alone: every candidate has these trips.
-        let managed = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
-        let fresh;
-        let registers = if scalar && !cfg_changed {
-            fresh = llrm_analysis::consts::known(&memory::Unit::within(
-                unit.context,
-                unit.layout,
-                unit.function,
-                analyses.outer(),
-            ));
-            &fresh
-        } else {
-            &*managed
-        };
+        let registers = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let trips = if !self.pre || !profit::registers(analyses.outer()).priced() {
             IndexMap::default()
@@ -216,14 +206,14 @@ impl FunctionPass for Gvn {
             let counted = analyses.get::<llrm_analysis::manager::Counted>(unit.context, unit.layout, unit.function);
             profit::proven_trips(
                 &memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer())
-                    .with_registers(registers)
+                    .with_registers(&registers)
                     .with_shape(&shape)
                     .with_counted(&counted),
-                registers,
+                &registers,
             )
         };
         match accesses.and_then(|accesses| {
-            optimized(unit, analyses.outer(), &accesses, pointers?, &trips, registers, &shape, self.pre, scalar)
+            optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape, self.pre, scalar)
         }) {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
