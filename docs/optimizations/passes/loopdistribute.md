@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopdistribute.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopdistribute.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopdistribute.rs sha256:b31e11ad0b49fbb6c75ab3b2aa1c72bc031c92ba3d1ff800825503f2be36d97f -->
+<!-- src: crates/opt/llrm-transforms/src/loopdistribute.rs sha256:e364187149091afdcca3876d81b37a5e0c0464ab46756cd5d55417e9c2f0f87e -->
 
 # loopdistribute
 
@@ -29,9 +29,10 @@ first where free: LLVM's `InstPartitionContainer` with its dependence
 graph.
 
 Splitting a loop costs a loop's control, so it pays only for a partition
-that is no loop: one `fill` takes whole (`fill::takes`: a fill of a value
-the loop does not change, or a copy), as in gcc's pattern distribution.
-Those stand alone and what lies between them is one loop, as it was.
+that is no loop: one `loopidioms` takes whole (`loopidioms::takes`: a fill
+of a value the loop does not change, or a copy), as in gcc's pattern
+distribution. Those stand alone and what lies between them is one loop, as
+it was.
 
 ```text
   for i: a[i] = 0; b[i] = c[i] * 3        memset(a); for i: b[i] = c[i] * 3
@@ -41,8 +42,8 @@ Cheap checks come before the copy: what the idioms' stores and their
 operands cost, as often as they run (an upper bound on what a split saves),
 must be `MIN_PERCENT` of the body's price. The loop is then copied once for
 each partition but the last ([`crate::loopclone`](loopclone.md)'s `copied`), each copy
-keeps its partition's stores and the original the last's, `fill` runs over
-the parts and what nothing reads is removed, and the result is priced
+keeps its partition's stores and the original the last's, `loopidioms` runs
+over the parts and what nothing reads is removed, and the result is priced
 beside the body. Only then is the pipeline run over it, as in
 [`crate::unswitch`](unswitch.md), and [`crate::candidate`](candidate.md) keeps it when its price,
 spills included, is `MIN_PERCENT` smaller (`Gain::CheaperBy`). At most
@@ -97,8 +98,9 @@ Once per body, after `unswitch`, `split` and `fuse`, at -O3 and -Omax
 
 ## Needs
 [`crate::candidate`](candidate.md), [`crate::loopclone`](loopclone.md) (`copied`), [`crate::loopshape`](loopshape.md),
-[`crate::fill`](fill.md) (`takes`), [`crate::profit`](profit.md), [`llrm_analysis::access`](../analyses/access.md),
-[`llrm_analysis::dependence`](../analyses/dependence.md) (`meetings`), `induction` (`counted`).
+[`crate::loopidioms`](loopidioms.md) (`takes`), [`crate::profit`](profit.md),
+[`llrm_analysis::access`](../analyses/access.md), [`llrm_analysis::dependence`](../analyses/dependence.md) (`meetings`),
+`induction` (`counted`).
 
 ## Keeps
 Nothing when it splits: the function is replaced by the candidate.
