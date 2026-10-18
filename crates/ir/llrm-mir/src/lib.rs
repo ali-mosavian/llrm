@@ -31,6 +31,7 @@ pub mod inline;
 pub mod interpret;
 pub mod intrinsics;
 pub mod knownbits;
+pub mod knownfpclass;
 pub mod lexer;
 pub mod lint;
 pub mod loops;
@@ -79,6 +80,8 @@ mod golden_dump;
 mod interpret_tests;
 #[cfg(test)]
 mod knownbits_tests;
+#[cfg(test)]
+mod knownfpclass_tests;
 #[cfg(test)]
 mod lint_tests;
 #[cfg(test)]

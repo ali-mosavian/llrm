@@ -4,6 +4,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::apfloat::*;
+
 pub(crate) struct Dump {
     hash: u64,
     current: u64,
@@ -99,4 +101,120 @@ pub(crate) fn assert_many_answers(
     }
     assert!(count >= least_lines, "{count} lines");
     assert!(constant.is_empty(), "these always answer the same thing: {constant:?}");
+}
+
+/// The formats and the values the floating-point dump drivers run on:
+/// `tools/llvmport/fpinputs.h`.
+pub(crate) struct Fmt {
+    pub(crate) name: &'static str,
+    pub(crate) sem: Sem,
+    pub(crate) eb: u32,
+    pub(crate) fb: u32,
+    pub(crate) explicit: bool,
+    pub(crate) size: u32,
+    pub(crate) tiny: bool,
+}
+
+pub(crate) fn formats() -> Vec<Fmt> {
+    let f = |name, sem, eb, fb, explicit, size, tiny| Fmt { name, sem, eb, fb, explicit, size, tiny };
+    vec![
+        f("e5m2", FLOAT8_E5M2, 5, 2, false, 8, true),
+        f("e4m3", FLOAT8_E4M3, 4, 3, false, 8, true),
+        f("single", IEEE_SINGLE, 8, 23, false, 32, false),
+        f("double", IEEE_DOUBLE, 11, 52, false, 64, false),
+        f("x87", X87_DOUBLE_EXTENDED, 15, 63, true, 80, false),
+    ]
+}
+
+pub(crate) fn ones(bits: u32) -> u128 {
+    if bits >= 128 { u128::MAX } else { (1_u128 << bits) - 1 }
+}
+
+pub(crate) fn pattern(
+    f: &Fmt,
+    sign: u32,
+    exp: u128,
+    frac: u128,
+    int_bit: u32,
+) -> u128 {
+    let trailing = f.fb + u32::from(f.explicit);
+    (u128::from(sign) << (f.size - 1)) | (exp << trailing) | (u128::from(int_bit) << f.fb) | frac
+}
+
+pub(crate) fn inputs(f: &Fmt) -> Vec<u128> {
+    let mut v = Vec::new();
+    if f.tiny {
+        return (0..256).collect();
+    }
+    let bias = (1_u128 << (f.eb - 1)) - 1;
+    let top = ones(f.eb);
+    let fr = ones(f.fb);
+    let x = u32::from(f.explicit);
+    let half = 1_u128 << (f.fb - 1);
+    for s in 0..2 {
+        v.push(pattern(f, s, 0, 0, 0));
+        v.push(pattern(f, s, 0, 1, 0));
+        v.push(pattern(f, s, 0, fr, 0));
+        v.push(pattern(f, s, 0, half, 0));
+        v.push(pattern(f, s, 1, 0, x));
+        v.push(pattern(f, s, 1, 1, x));
+        v.push(pattern(f, s, bias - 1, half, x));
+        v.push(pattern(f, s, bias, 0, x));
+        v.push(pattern(f, s, bias, 1, x));
+        v.push(pattern(f, s, bias, half, x));
+        v.push(pattern(f, s, bias + 1, 0, x));
+        v.push(pattern(f, s, bias + 1, half, x));
+        v.push(pattern(f, s, bias + u128::from(f.fb) - 1, 1, x));
+        v.push(pattern(f, s, bias + u128::from(f.fb), 0, x));
+        v.push(pattern(f, s, bias + u128::from(f.fb) + 1, 0, x));
+        v.push(pattern(f, s, top - 1, fr - 1, x));
+        v.push(pattern(f, s, top - 1, fr, x));
+        v.push(pattern(f, s, top - 1, 0, x));
+        v.push(pattern(f, s, top, 0, x));
+        v.push(pattern(f, s, top, half, x));
+        v.push(pattern(f, s, top, half | 1, x));
+        v.push(pattern(f, s, top, 1, x));
+        v.push(pattern(f, s, top, 1 << (f.fb - 2), x));
+        v.push(pattern(f, s, top, fr, x));
+        if f.explicit {
+            v.push(pattern(f, s, 0, 0, 1));
+            v.push(pattern(f, s, 0, 1, 1));
+            v.push(pattern(f, s, 1, 5, 0));
+            v.push(pattern(f, s, bias, 0, 0));
+            v.push(pattern(f, s, top, 0, 0));
+            v.push(pattern(f, s, top, 3, 0));
+        }
+    }
+    let mut st = 0x9e3779b97f4a7c15_u64 ^ u64::from(f.size);
+    let mut next = || {
+        st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        st >> 33
+    };
+    for _ in 0..120 {
+        let s = (next() & 1) as u32;
+        let e: u128 = if next() & 1 == 1 {
+            let d = (next() % 25) as i64 - 12;
+            let c = bias as i64 + d;
+            if c < 0 {
+                0
+            } else if c as u128 > top {
+                top
+            } else {
+                c as u128
+            }
+        } else {
+            u128::from(next()) % (top + 1)
+        };
+        let (w1, w2, w3) = (u128::from(next()), u128::from(next()), u128::from(next()));
+        let mut frac = ((((w1 << 32) ^ w2) << 32) ^ w3) & fr;
+        if next() % 4 == 0 {
+            frac &= !ones(f.fb / 2);
+        }
+        let mut ib = if f.explicit { u32::from(e != 0) } else { 0 };
+        if f.explicit && next() % 16 == 0 {
+            ib ^= 1;
+        }
+        v.push(pattern(f, s, e, frac, ib));
+    }
+    v
 }
