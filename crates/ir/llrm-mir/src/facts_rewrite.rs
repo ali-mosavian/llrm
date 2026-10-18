@@ -41,7 +41,11 @@
 //! x, c2 - c1` where the sum cannot wrap): the compare is a user of the sum, so
 //! the sum ran wherever the compare does, the new compare is made in the old
 //! one's place, and where the sum would have wrapped it is poison and either
-//! answer stands. `ranges`, `guards` and `consts` read no flag. Value tracking
+//! answer stands. `simplify` reads the flags of the instructions that define
+//! the operands of the instruction it simplifies, as LLVM's
+//! `InstructionSimplify` does (`(X <<nuw Y) >> Y` is `X`): each is an operand,
+//! so it ran wherever the user does, and the answer replaces that user only.
+//! `ranges`, `guards` and `consts` read no flag. Value tracking
 //! (`valuetracking/`: `context`, `guarantee`, `known`, `nonzero`, `power2`,
 //! `range`, and the matchers in `pattern`) reads a promise of the instruction
 //! it is asked about, or of an operand of it, to conclude about that
@@ -205,8 +209,9 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 15] = [
+        const CHECKED: [&str; 16] = [
             "algebraic.rs",
+            "simplify.rs",
             "induction.rs",
             "memory.rs",
             "gepoffset.rs",
