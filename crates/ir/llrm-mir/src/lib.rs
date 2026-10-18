@@ -70,6 +70,7 @@ pub mod touched;
 pub mod tti;
 pub mod types;
 pub mod valuelattice;
+pub mod uselist;
 pub mod valuetracking;
 pub mod verify;
 
