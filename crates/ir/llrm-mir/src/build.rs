@@ -68,7 +68,13 @@ impl Module {
                 let Some(ty) = self.context.types.imported(&from.context.types, variable.ty) else { return Ok(None) };
                 self.add_variable(
                     name,
-                    GlobalVariable { ty, constant: variable.constant, initializer: None, align: variable.align },
+                    GlobalVariable {
+                        externally_initialized: false,
+                        ty,
+                        constant: variable.constant,
+                        initializer: None,
+                        align: variable.align,
+                    },
                     Linkage::External,
                 )?
             }
@@ -131,7 +137,7 @@ pub fn function_declaration(
         function.value_uses.push(Vec::new());
         function.parameter_attrs.push(Vec::new());
     }
-    intrinsics::declare(&mut function, name);
+    intrinsics::declare(&mut function, &context.types, name);
     Ok(function)
 }
 

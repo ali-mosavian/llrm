@@ -1,6 +1,6 @@
 declare { i32, i1 } @llvm.uadd.with.overflow.i32(i32, i32) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
-declare i32 @llvm.usub.sat.i32(i32, i32)
+declare i32 @llvm.usub.sat.i32(i32, i32) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
 define range(i32 769, 511) i32 @f(i32 %x, i32 %y) {
 entry:

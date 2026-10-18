@@ -20,7 +20,7 @@
 //! here with its permalink: `BasicBlock::removePredecessor`,
 //! `PHINode::removeIncomingValue`, `PHINode::hasConstantValue`, the `switch`
 //! arm of `ConstantFoldTerminator`, `SwitchInst::removeCase`,
-//! `SwitchInstProfUpdateWrapper`, `DominatorTree::dominates(Instruction,
+//! `SwitchInstProfUpdateWrapper`, `DomTree::dominates(Instruction,
 //! BasicBlock)` and `GlobalValue::hasExactDefinition`.
 //!
 //! DEVIATE, permanent (MIR or Rust lacks the construct):
@@ -91,7 +91,7 @@ use llrm_mir::constantrange::{ConstantRange, NO_SIGNED_WRAP, NO_UNSIGNED_WRAP, P
 use llrm_mir::constfold;
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, mask, signed};
 use llrm_mir::dense::IdMap;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::lazyvalueinfo::{Env, LazyValueInfo};
 use llrm_mir::module::{
@@ -433,7 +433,7 @@ impl State<'_, '_> {
     }
 
     /// The dominator tree: up to date with every `switch` edge removed so far.
-    fn dominator_tree(&mut self) -> Rc<DominatorTree> {
+    fn dominator_tree(&mut self) -> Rc<DomTree> {
         let function = &*self.unit.function;
         self.analyses.invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>());
         self.analyses.get::<Dominators>(&*self.unit.context, self.unit.layout, function)
@@ -856,7 +856,7 @@ impl State<'_, '_> {
             }
         }
 
-        if let Some(v) = simplify_instruction(self.unit.context, self.unit.function, p) {
+        if let Some(v) = simplify_instruction(self.unit.context, self.unit.layout, self.unit.function, p) {
             self.replace_and_erase(p, v);
             changed = true;
         }
@@ -2205,13 +2205,13 @@ impl State<'_, '_> {
         self.unit.function.set_call_attributes(call, info.attrs, info.return_attrs, arguments);
     }
 
-    /// `DominatorTree::dominates(const Instruction *Def, const BasicBlock
+    /// `DomTree::dominates(const Instruction *Def, const BasicBlock
     /// *UseBB)`.
     ///
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L134>
     fn dominates_block(
         &self,
-        dt: &DominatorTree,
+        dt: &DomTree,
         def: InstId,
         use_bb: BlockId,
     ) -> bool {
@@ -2244,13 +2244,13 @@ impl State<'_, '_> {
         dt.dominates(def_bb, use_bb)
     }
 
-    /// `DominatorTree::dominates(const BasicBlockEdge &BBE, const BasicBlock
+    /// `DomTree::dominates(const BasicBlockEdge &BBE, const BasicBlock
     /// *UseBB)`.
     ///
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L162>
     fn dominates_edge(
         &self,
-        dt: &DominatorTree,
+        dt: &DomTree,
         start: BlockId,
         end: BlockId,
         use_bb: BlockId,

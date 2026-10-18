@@ -840,7 +840,7 @@ pub fn must_execute_ub_if_poison_on_path_to(
     q: &Query,
     root: InstId,
     on_path_to: InstId,
-    dt: &crate::dominators::DominatorTree,
+    dt: &crate::domtree::DomTree,
 ) -> bool {
     let mut known_poison: HashSet<Operand> = HashSet::default();
     let mut worklist = vec![root];
