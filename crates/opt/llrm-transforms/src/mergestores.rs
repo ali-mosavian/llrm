@@ -175,7 +175,7 @@ fn chunks(
 /// `function` with each run of copies of adjacent cells to adjacent cells made
 /// one wider copy; whether any was.
 pub fn merged_copies(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     callees: &Callees,
     function: &mut Function,
@@ -439,7 +439,7 @@ fn constants_merged(
 /// `function` with each run of stores of constants to adjacent cells of one
 /// object made stores of the widest legal integer; whether any was.
 pub fn merged_constants(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     callees: &Callees,
     function: &mut Function,

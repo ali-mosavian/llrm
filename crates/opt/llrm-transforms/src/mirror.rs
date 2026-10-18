@@ -247,7 +247,7 @@ fn family_of(
 
 /// The pointer cycle for the plan, and its accesses reading it.
 pub(crate) fn applied(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     plan: &Plan,
 ) {

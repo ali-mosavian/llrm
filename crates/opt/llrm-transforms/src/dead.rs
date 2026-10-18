@@ -111,7 +111,7 @@ impl FunctionPass for Dead {
 /// Instructions whose results nothing that stays reads, removed. Whether
 /// any went.
 pub fn dead(
-    context: &mut Context,
+    context: &Context,
     callees: &Callees,
     function: &mut Function,
 ) -> bool {

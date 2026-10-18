@@ -851,7 +851,7 @@ fn element_containing_offset(
 /// `getTypePartition`. SROA.cpp#L4832
 fn get_type_partition(
     layout: &DataLayout,
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
     offset: u64,
     size: u64,
@@ -1068,7 +1068,7 @@ fn is_integer_widening_viable_for_slice(
 /// `isIntegerWideningViable`. SROA.cpp#L2551
 fn is_integer_widening_viable(
     layout: &DataLayout,
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     slices: &[Slice],
     p: &Partition,

@@ -257,7 +257,7 @@ struct Path {
 /// Every switch's paths that can be threaded, a switch's all at once within the
 /// limits; whether any was.
 pub fn threaded(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -331,7 +331,7 @@ pub fn threaded(
 /// The paths of the first switch or branch that has any, within what is left of
 /// `MAX_COPIED`.
 fn found(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     outer: &Outer,
@@ -791,7 +791,7 @@ struct Copies {
 /// its way in leaves, its last jumping to the case it ends in; the instructions
 /// copied.
 fn copy(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     paths: &[Path],
 ) -> usize {
@@ -1113,7 +1113,7 @@ fn arms_of(
 /// Every loop `arms_of` finds, split into a loop for each arm, within what is
 /// left of `MAX_COPIED`; whether any was.
 fn split_arms(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     copied: &mut usize,
 ) -> bool {
@@ -1151,7 +1151,7 @@ fn split_arms(
 }
 
 fn _split(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     arms: &Arms,
 ) {

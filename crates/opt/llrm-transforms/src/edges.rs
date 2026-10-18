@@ -209,7 +209,7 @@ pub fn split_critical_edge(
 /// and no GVN runs after them; the branch on the phi then decides itself.
 /// Whether any use changed.
 pub fn conditions_decided(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
 ) -> bool {
     let mut found = Vec::new();

@@ -214,7 +214,7 @@ pub(crate) fn emptied_into(
 /// branch, which then goes where `bb` went. The emptied `bb` is left placed,
 /// for the caller to `erase_blocks` with the others; whether it merged.
 pub fn merge_block_into_predecessor(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     bb: BlockId,
     with_two_successors: bool,

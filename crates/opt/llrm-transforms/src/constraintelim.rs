@@ -2266,7 +2266,7 @@ fn context_inst_of(
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstraintElimination.cpp#L2361>
 pub fn eliminate_constraints(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     declarations: &[GlobalValue],
     metadata: &[MetadataNode],
@@ -2795,7 +2795,7 @@ fn check_or_and_op_implied_by_other(
 
 /// Does what a check found.
 fn apply(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     tree: &DomTree,
     positions: &[u32],
@@ -2874,7 +2874,7 @@ fn apply(
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstraintElimination.cpp#L2315>
 fn replace_overflow_uses(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
     op: BinaryOp,

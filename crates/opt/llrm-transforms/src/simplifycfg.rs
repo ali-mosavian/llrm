@@ -339,7 +339,7 @@ fn block_simplified(
 /// The one-armed `if` ending `block` run before its branch: the speculation
 /// of LLVM's `simplifyCondBranch`.
 fn branch_speculated(
-    context: &mut Context,
+    context: &Context,
     spec: &Speculation,
     function: &mut Function,
     block: BlockId,
@@ -396,7 +396,7 @@ fn loop_headers(function: &Function) -> IdSet<BlockId> {
 /// loop's header or entry in the way (`NeedCanonicalLoop`): the first part of
 /// LLVM's `simplifyUncondBranch`.
 fn jump_simplified(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     block: BlockId,
     loop_headers: &IdSet<BlockId>,
@@ -466,7 +466,7 @@ fn phi_of(
 /// MIRROR, except that a block keeps its name, and a loop's metadata check
 /// is on any `llvm.loop`.
 fn empty_block_removed(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     block: BlockId,
     successor: BlockId,
@@ -706,7 +706,7 @@ fn values_redirected(
 /// has had its terminator folded (so a successor that no longer runs is not
 /// followed): `removeUnreachableBlocks` over `markAliveBlocks`.
 pub fn unreachable_removed(
-    context: &mut Context,
+    context: &Context,
     callees: &Callees,
     function: &mut Function,
     folded: &mut bool,
@@ -738,7 +738,7 @@ pub fn unreachable_removed(
 /// defined replaced by poison, its instructions and then the blocks erased.
 /// LLVM's `DeleteDeadBlocks`.
 fn dead_blocks_deleted(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     blocks: &[BlockId],
 ) {
@@ -809,7 +809,7 @@ fn terminator_replaced(
 /// same way: LLVM's `ConstantFoldTerminator`. `delete_dead_conditions`: the
 /// condition nothing reads afterwards goes, with what only it read.
 pub fn terminator_folded(
-    context: &mut Context,
+    context: &Context,
     callees: &Callees,
     function: &mut Function,
     block: BlockId,
@@ -859,7 +859,7 @@ fn condition_deleted(
 /// case.
 #[allow(clippy::too_many_arguments)]
 fn switch_folded(
-    context: &mut Context,
+    context: &Context,
     callees: &Callees,
     function: &mut Function,
     block: BlockId,
