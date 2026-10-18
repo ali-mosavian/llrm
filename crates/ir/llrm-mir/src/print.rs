@@ -95,7 +95,7 @@ pub fn body(
 /// The name each value of `function` prints under (`%name` or its number), as
 /// `body` prints it: a report that is compared with another tool's reading of
 /// the same text names values alike.
-pub fn value_names(function: &Function) -> std::collections::HashMap<ValueId, String> {
+pub fn value_names(function: &Function) -> HashMap<ValueId, String> {
     Slots::new(function).values
 }
 

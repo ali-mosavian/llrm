@@ -53,6 +53,12 @@ fn main() -> ExitCode {
     };
     match llrm_mir::parse::module(&text) {
         Ok(module) => {
+            // A pass input is a module of one function body and the declarations it
+            // names, which the verifier does not take for a whole module.
+            if aliases_wanted {
+                print!("{}", aliases(&module));
+                return ExitCode::SUCCESS;
+            }
             let problems = llrm_mir::verify::verify(&module);
             if !problems.is_empty() {
                 problems.iter().for_each(|one| eprintln!("{path}: {one}"));
@@ -60,10 +66,6 @@ fn main() -> ExitCode {
             }
             if ivs {
                 print!("{}", induction_variables(&module));
-                return ExitCode::SUCCESS;
-            }
-            if aliases_wanted {
-                print!("{}", aliases(&module));
                 return ExitCode::SUCCESS;
             }
             if !run {
@@ -138,7 +140,7 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
         let Ok(facts) = llrm_analysis::alias::points_to(&unit, None, None) else { continue };
         let names = llrm_mir::print::value_names(function);
         let mut pointers: Vec<ValueId> = Vec::new();
-        let mut note = |operand: Operand, pointers: &mut Vec<ValueId>| {
+        let note = |operand: Operand, pointers: &mut Vec<ValueId>| {
             if let Operand::Value(value) = operand
                 && function.operand_type(&module.context, operand).is_some_and(|ty| matches!(module.context.types.get(ty), llrm_mir::types::Type::Pointer(_)))
                 && !pointers.contains(&value)
