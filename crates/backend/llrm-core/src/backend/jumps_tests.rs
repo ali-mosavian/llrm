@@ -686,6 +686,77 @@ fn test_a_sahf_is_not_an_anchor_and_stays_on_every_path() {
     assert_eq!((sahfs(10), sahfs(20)), (1, 1), "an arm lost its sahf");
 }
 
+/// A block with a branch before its last two (`jne A; ...; jne B; jmp C`, B
+/// laid out next) had its final jump taken for a fall-through and the branch
+/// reversed: three ways out and no instruction choosing among them, and
+/// QCport's `menu.c`, `triggers.c` and `sb_build.c` failed the verifier at
+/// -O1/-O2/-O3.
+#[test]
+fn test_a_block_with_an_inner_branch_keeps_a_way_out_the_verifier_can_read() {
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(
+                1,
+                vec![_compare(1), _branch(2, "jne", 20), _compare(3), _branch(4, "jne", 77), _jump(5, 75)],
+                vec![20, 77, 75],
+            )
+            .into(),
+            block(77, vec![_move(77, imm(1)), _return(78)], vec![]).into(),
+            block(75, vec![_move(75, imm(2)), _return(76)], vec![]).into(),
+            block(20, vec![_move(20, imm(3)), _return(21)], vec![]).into(),
+        ],
+    );
+
+    let result = threaded(&source);
+
+    for block in &result.blocks {
+        masm::_falls_to(block, "f").unwrap_or_else(|why| panic!("{why:?}"));
+    }
+}
+
+/// A branch before the shared tail named a block its arm's successors no longer
+/// listed after the merge: the block was dropped as unreachable and the branch
+/// jumped nowhere (QCport `sb_build.c` -O2, "a jump to L1_149, which is
+/// nowhere").
+#[test]
+fn test_a_branch_before_the_shared_tail_keeps_its_target_a_successor() {
+    let arm = |at: i64, first: Loc| {
+        let mut insns = vec![_inserted(_move(at, first)), _compare(at + 1), _branch(at + 2, "jne", 50)];
+        insns.extend([_move(at + 3, bx()), _compare(at + 4), _move(at + 5, imm(7))].into_iter().map(_inserted));
+        insns.push(_inserted(_jump(at + 9, 40)));
+        block(at, insns, vec![50, 40]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10, imm(1)),
+            arm(20, imm(2)),
+            block(40, vec![_return(40)], vec![]).into(),
+            block(50, vec![_move(50, imm(9)), _return(51)], vec![]).into(),
+        ],
+    );
+
+    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+
+    for block in &result.blocks {
+        for one in &block.insns {
+            let Some(target) = one
+                .what
+                .as_ref()
+                .filter(|w| matches!(w.op, Operation::Branch | Operation::Jump))
+                .and_then(|w| w.target)
+            else {
+                continue;
+            };
+            assert!(block.succ.contains(&target), "block {} names {target} but leaves for {:?}", block.at, block.succ);
+        }
+    }
+}
+
 /// An unnamed pseudo that clobbers a register emits no bytes but is not an
 /// anchor: `_inert` asked the name alone and would have dropped it.
 #[test]

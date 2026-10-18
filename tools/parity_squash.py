@@ -104,7 +104,7 @@ def smoke_bins(env: dict | None = None) -> str:
     raise SystemExit(f"PARITY_BIN is unset and {found} lacks {', '.join(n for n in BINARIES if not (found / n).is_file())}: `cargo build --release --bin llrm-c --bin llrm-qb --bin llrm-nib`, or set PARITY_BIN to a directory that has them")
 
 
-SMOKE_STEPS = ("programs", "sc", "d_faces", "run")
+SMOKE_STEPS = ("programs", "sc", "d_faces", "qc_d_faces", "run")
 
 
 def parse_known_red(args: list[str]) -> dict[str, str]:
