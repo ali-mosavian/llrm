@@ -3,6 +3,7 @@
 //! docs/architecture/basicaa-port.md). Per query: nothing is solved for the
 //! whole function, and what one query learns lives in its `AAQueryInfo`.
 //!
+//! # How it works
 //! Translated: `aliasCheck` (empty locations, casts stripped, the same value,
 //! the underlying objects, identified objects, arguments against function-local
 //! objects, an escape source against a non-captured local object, an access
@@ -11,8 +12,21 @@
 //! `aliasGEP` as far as it needs no value ranges: the inbounds and
 //! constant-difference rules, nuw, and the GCD test. Not yet (deviations in the
 //! plan page): `GetLinearExpression` through casts, `analyzeVariableOffsets`'
-//! ranges, `aliasPHI`, `aliasSelect`, the mod/ref queries (they answer the top
-//! of the lattice).
+//! ranges, `aliasPHI`, `aliasSelect`, and the mod/ref queries but `getModRefInfoMask` and
+//! `getModRefInfo(Call, Loc)`.
+//!
+//! # Example
+//! Two allocas never alias, and a call cannot touch an alloca nobody holds a
+//! pointer to:
+//!
+//! ```text
+//! %a = alloca i32
+//! %b = alloca i32        ; alias(%a, %b) = NoAlias
+//! call void @g()         ; getModRefInfo(call, %a) = NoModRef
+//! ```
+//!
+//! # Provides
+//! [`BasicAA`], an [`crate::aa::AAResults`]. No client reads it yet.
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
@@ -493,6 +507,94 @@ impl<'a> BasicAA<'a> {
     }
 }
 
+impl BasicAA<'_> {
+    /// `getModRefInfo(Call, Loc)`: what the call does to the location, from
+    /// the call's memory effects and, for what it reaches only through
+    /// arguments, from which arguments may alias the location.
+    fn call_mod_ref(
+        &mut self,
+        call: llrm_mir::module::InstId,
+        loc: &MemoryLocation,
+        aaqi: &mut AAQueryInfo,
+    ) -> ModRefInfo {
+        use crate::aa::IRMemLocation::{ArgMem, ErrnoMem, InaccessibleMem, Other};
+        let op = self.unit.function.instruction(call);
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { return ModRefInfo::ModRef };
+        let object = self.underlying(loc.ptr);
+        let local_slot = self.defining(object).is_some_and(|one| matches!(one.opcode, Opcode::Alloca { .. }));
+        // A tail call cannot reach this frame's slots, but may take one by value.
+        let by_value = |attrs: &[llrm_mir::opcode::Attribute]| {
+            attrs.iter().any(|one| {
+                matches!(one, llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval")
+            })
+        };
+        if local_slot
+            && info.tail == llrm_mir::opcode::Tail::Tail
+            && !(by_value(&info.attrs) || by_value(&info.return_attrs) || info.argument_attrs.iter().any(|one| by_value(one)))
+        {
+            return ModRefInfo::NoModRef;
+        }
+        let effects = self.get_memory_effects(call, aaqi).with(InaccessibleMem, ModRefInfo::NoModRef);
+        if effects.does_not_access_memory() {
+            return ModRefInfo::NoModRef;
+        }
+        let mut arg = effects.mod_ref(ArgMem);
+        let errno = effects.mod_ref(ErrnoMem);
+        let mut other = effects.mod_ref(Other);
+        // What does not escape is reached through arguments only.
+        let callee = llrm_mir::memory::callee(self.unit.context, self.unit.function, call)
+            .and_then(|one| match &self.unit.globals.get(one.0 as usize)?.kind {
+                GlobalKind::Function(function) => Some(function),
+                GlobalKind::Variable(_) => None,
+            });
+        let returns_twice = llrm_mir::memory::has(&info.attrs, "returns_twice")
+            || callee.is_some_and(|one| llrm_mir::memory::has(&one.attrs, "returns_twice"));
+        let is_call_itself = matches!(object, Operand::Value(value) if op.result == Some(value));
+        if other != ModRefInfo::NoModRef
+            && matches!(object, Operand::Value(_))
+            && !is_call_itself
+            && (local_slot || !returns_twice)
+            && self.not_captured(object, aaqi)
+        {
+            other = ModRefInfo::NoModRef;
+        }
+        if arg.union(other) != other {
+            let mut narrowed = ModRefInfo::NoModRef;
+            let arguments = op.operands.len().saturating_sub(1);
+            for at in 0..arguments {
+                if self.unit.space(op.operands[at]).is_none() {
+                    continue;
+                }
+                let at = at as u32;
+                let Some(place) = MemoryLocation::get_for_argument(self.unit, call, at) else { continue };
+                if self.alias_check(&place, loc, aaqi) != AliasResult::NoAlias {
+                    narrowed = narrowed.union(arg.intersect(self.get_arg_mod_ref_info(call, at)));
+                }
+                if narrowed == arg {
+                    break;
+                }
+            }
+            arg = narrowed;
+        }
+        let mut result = arg.union(other);
+        // aliasErrno without the target's int size: only a local slot or an
+        // access wider than an int (32 bits) is told apart.
+        if errno.union(result) != result {
+            let apart = self.identified_local(object) || loc.size.value().is_some_and(|bytes| bytes * 8 > 32);
+            if !apart {
+                result = result.union(errno);
+            }
+        }
+        if result != ModRefInfo::ModRef {
+            return result;
+        }
+        let invariant_start = llrm_mir::memory::callee(self.unit.context, self.unit.function, call)
+            .and_then(|one| self.unit.globals.get(one.0 as usize)?.name.as_deref())
+            .is_some_and(|name| name.starts_with("llvm.invariant.start"));
+        if invariant_start { ModRefInfo::Ref } else { ModRefInfo::ModRef }
+    }
+}
+
 fn gcd(
     a: i128,
     b: i128,
@@ -589,13 +691,19 @@ impl AAResults for BasicAA<'_> {
         MemoryEffects::unknown()
     }
 
+    /// A call against a location is `getModRefInfo(Call, Loc)`; every other
+    /// instruction is not answered yet.
     fn get_mod_ref_info(
         &mut self,
-        _: llrm_mir::module::InstId,
-        _: Option<&MemoryLocation>,
-        _: &mut AAQueryInfo,
+        inst: llrm_mir::module::InstId,
+        loc: Option<&MemoryLocation>,
+        aaqi: &mut AAQueryInfo,
     ) -> ModRefInfo {
-        ModRefInfo::ModRef
+        let is_call = matches!(self.unit.function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_));
+        match loc {
+            Some(loc) if is_call => self.call_mod_ref(inst, loc, aaqi),
+            _ => ModRefInfo::ModRef,
+        }
     }
 
     fn get_mod_ref_info_call(
@@ -733,5 +841,43 @@ mod tests {
         let body = "@g = internal constant i32 0\ndefine void @f(i1 %c) {\nentry:\n  %l = alloca i32\n  %a = select i1 %c, ptr @g, ptr %l\n  ret void\n}\n";
         assert_eq!(mask(body, true), ModRefInfo::NoModRef);
         assert_eq!(mask(body, false), ModRefInfo::ModRef);
+    }
+
+    /// What the call in `@f` does to `%a`, the one call in the body.
+    fn call_on(body: &str) -> ModRefInfo {
+        let module = parsed(&format!("{M32}{body}"));
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let call = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|inst| matches!(function.instruction(*inst).opcode, Opcode::Call(_)))
+            .expect("a call");
+        let location = MemoryLocation::new(Operand::Value(value(function, "a")), LocationSize::Precise(4));
+        BasicAA::new(&unit).get_mod_ref_info(call, Some(&location), &mut AAQueryInfo::default())
+    }
+
+    /// A call touches a local slot nobody holds a pointer to only if the slot
+    /// is passed; the call answered ModRef for both (the mod/ref methods
+    /// were placeholders).
+    #[test]
+    fn a_call_cannot_touch_a_slot_that_never_escapes_unless_it_is_passed() {
+        let body = |pass: &str| {
+            format!("declare void @h(ptr)\ndeclare void @g()\ndefine void @f() {{\nentry:\n  %a = alloca i32\n  call void {pass}\n  ret void\n}}\n")
+        };
+        assert_eq!(call_on(&body("@g()")), ModRefInfo::NoModRef);
+        assert_eq!(call_on(&body("@h(ptr %a)")), ModRefInfo::ModRef);
+    }
+
+    /// A `tail` call cannot reach the caller's slots, unless it takes one
+    /// `byval`.
+    #[test]
+    fn a_tail_call_cannot_touch_a_slot_of_the_frame_unless_it_takes_one_by_value() {
+        let body = |arg: &str| {
+            format!("declare void @h(ptr)\ndefine void @f() {{\nentry:\n  %a = alloca i32\n  tail call void @h(ptr {arg} %a)\n  ret void\n}}\n")
+        };
+        assert_eq!(call_on(&body("")), ModRefInfo::NoModRef);
+        assert_eq!(call_on(&body("byval(i32)")), ModRefInfo::ModRef);
     }
 }
