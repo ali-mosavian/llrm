@@ -146,3 +146,7 @@ A step that neither writes to its log nor uses CPU anywhere in its process tree 
 | Compile cost | `measure` |
 
 A run language, test binary or step whose tool is missing locally is skipped by name, never passed.
+
+## Before a push
+
+`tools/prepush.sh` runs the gate's cheap, tree-reading steps (tiers.toml `[prepush]`: `fmt`, `docs`, `products`, `scans`, `facts`, and the `docs_links` test) and prints `PREPUSH PASS` or `PREPUSH FAIL: <steps>` first. A scan added to `[[scan]]` is picked up by the next run. It does not run the build, the tests, the benches, the oracle sweep, perf or cost.

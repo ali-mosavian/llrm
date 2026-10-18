@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import corpora  # noqa: E402
 import envguard  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -129,13 +130,18 @@ def main() -> int:
     parser.add_argument("--programs", nargs="+", default=["d_faces", "lru", "bintree"])
     parser.add_argument("--cycles", type=int, default=0, metavar="N", help="also cycles:u, min and median of N alternated runs")
     parser.add_argument("--cache", action="store_true", help="also callgrind's cache simulation (slow)")
+    parser.add_argument("--allow-other-corpus", action="store_true", help="measure a d_faces source tree whose hash is not the registered one (tools/corpora.py)")
     args = parser.parse_args()
     envguard.require_clean("abmeasure", allow=args.allow_env)
+    dfaces = None
+    if "d_faces" in args.programs:
+        dfaces = str(corpora.resolve("dfaces", os.environ.get("DFACES_SRC") or os.environ.get("QCPORT"), args.allow_other_corpus))
+        print(corpora.header("dfaces", dfaces))
     a, b = build(args.parent, profile=args.profile) / "llrm-c", build(args.head, profile=args.profile) / "llrm-c"
     work = CACHE / "work"
     work.mkdir(parents=True, exist_ok=True)
     print(f"parent {args.parent} -> {a}\nhead   {args.head} -> {b}\nbuild: CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile {args.profile} --bin llrm-c; switches: {' '.join(envguard.stray(allow=())) or 'none'}{' (allowed: ' + ' '.join(args.allow_env) + ')' if args.allow_env else ''}; load {open('/proc/loadavg').read().split()[0]}")
-    for name, (source, flags) in programs(ROOT, args.programs, os.environ.get("QCPORT") or os.environ.get("DFACES_SRC"), work).items():
+    for name, (source, flags) in programs(ROOT, args.programs, dfaces, work).items():
         for level in args.levels:
             ia, ib = counted(a, source, flags, level)["instructions"], counted(b, source, flags, level)["instructions"]
             floored(name, min(ia, ib))

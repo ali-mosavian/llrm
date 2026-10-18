@@ -1046,3 +1046,77 @@ fn test_a_walk_stops_at_the_step_limit_with_the_access_it_stopped_at() {
     assert!(steps <= MAX_WALK_STEPS + 1, "{steps} steps for one walk");
     assert!(found.iter().all(|id| graph.access(*id).kind != Kind::Live), "the walk said nothing clobbers the load");
 }
+
+/// A store moved (the structure is not kept) and then an edit that leaves the
+/// structure alone: the second carried the cell's structure over as if it were
+/// the first's result, and the structure made before the store moved passed
+/// for the body's. The x_rle kernel under the order switch
+/// (`LLRM_CHECK_CLOBBERS`: "the structure kept past the edits is not the one
+/// the body makes", 396 of 408 failing compiles): `hoist` and `loopmotion`
+/// moved stores, nothing asked the structure, then `lcssa` inserted phis.
+#[test]
+fn a_structure_is_not_carried_past_an_edit_that_changed_it() {
+    use llrm_mir::edit::Position;
+    use llrm_mir::passes::{Outer, PreservedAnalyses};
+    let mut module = parsed(&format!(
+        "{DOS}define i16 @f(ptr %p, i16 %x) {{
+b0:
+  br label %b1
+
+b1:
+  store i16 %x, ptr %p
+  br label %b2
+
+b2:
+  %a = add i16 %x, 1
+  %v = load i16, ptr %p
+  ret i16 %v
+}}
+"
+    ));
+    let layout = layout(&module);
+    let mut analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
+    let store_block = |module: &Module, analyses: &mut Analyses| {
+        let (context, function) = (&module.context, function(module, "f"));
+        let accesses = Accesses::managed(context, &layout, function, analyses).unwrap();
+        let unit = Unit::within(context, &layout, function, analyses.outer());
+        let graph = built(&unit, &accesses);
+        let store = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
+            .unwrap();
+        graph.at(store).block
+    };
+    let b0 = Some(cfg::id(block(function(&module, "f"), "b0")));
+    assert_ne!(store_block(&module, &mut analyses), b0);
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let store = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
+            .unwrap();
+        let end = function.terminator(block(function, "b0")).unwrap();
+        function.move_to(store, Position::Before(end)).unwrap();
+        analyses.invalidate(function, &PreservedAnalyses::none());
+    }
+    // Something asks for the accesses, not the structure; then an edit that
+    // leaves a structure alone.
+    {
+        let (context, function) = (&module.context, function(&module, "f"));
+        Accesses::managed(context, &layout, function, &mut analyses).unwrap();
+    }
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let add = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| function.instruction(inst).opcode == Opcode::Binary(llrm_mir::opcode::BinaryOp::Add))
+            .unwrap();
+        let x = function.instruction(add).operands[0];
+        function.set_operand(add, 1, x);
+        analyses.invalidate(function, &PreservedAnalyses::none());
+    }
+    assert_eq!(store_block(&module, &mut analyses), b0, "the store moved to b0, the structure still has it in b1");
+}

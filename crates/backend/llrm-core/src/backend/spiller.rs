@@ -337,8 +337,18 @@ pub fn materialized(
     let Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow } = plan;
     let merging: BTreeSet<u32> = stored.difference(plain).copied().collect();
     let first = fresh;
+    // A value made again where it is read cannot take the place of a stored
+    // one.
+    let again: BTreeSet<u32> = constants
+        .keys()
+        .chain(addresses.keys())
+        .chain(extensions.keys())
+        .chain(frame_loads.keys())
+        .chain(rebuilt.keys())
+        .copied()
+        .collect();
     let (body, next) =
-        llrm_support::debug::timed("spill short updates", || _short_update_runs(body, &merging, frame, fresh))?;
+        llrm_support::debug::timed("spill short updates", || _short_update_runs(body, &merging, &again, frame, fresh))?;
     fresh = next;
     let (body, next) =
         llrm_support::debug::timed("spill local updates", || _local_updates(&body, &merging, frame, fresh))?;
@@ -740,6 +750,7 @@ fn _sunk_whole(
 fn _short_update_runs<'b>(
     body: &'b LirBody,
     stored: &BTreeSet<u32>,
+    again: &BTreeSet<u32>,
     frame: &mut Frame,
     fresh: u32,
 ) -> Result<(Cow<'b, LirBody>, u32), Error> {
@@ -764,7 +775,7 @@ fn _short_update_runs<'b>(
     if starts.is_empty() {
         return Ok((Cow::Borrowed(body), fresh));
     }
-    let (made, next) = _short_update_runs_whole(body, stored, frame, fresh, &starts)?;
+    let (made, next) = _short_update_runs_whole(body, stored, again, frame, fresh, &starts)?;
     Ok((made.map_or(Cow::Borrowed(body), Cow::Owned), next))
 }
 
@@ -774,6 +785,7 @@ fn _short_update_runs<'b>(
 fn _short_update_runs_whole(
     body: &LirBody,
     stored: &BTreeSet<u32>,
+    again: &BTreeSet<u32>,
     frame: &mut Frame,
     fresh: u32,
     starts: &[(u32, u32)],
@@ -810,6 +822,7 @@ fn _short_update_runs_whole(
             let after = Segment { start: ranges::def_point(slot), end: ranges::def_point(slot) + 1 };
             let eligible = stored.contains(&into)
                 && !stored.contains(&outof)
+                && !again.contains(&outof)
                 && !live.get(&outof).expect("live").segments.iter().any(|segment| segment.overlaps(&after))
                 && first.covers == Some((first.at, first.at))
                 && second.group.is_none()
@@ -1735,41 +1748,63 @@ fn _existing_colors(
     let found = _existing_colors_by(body, frame, false);
     if llrm_support::env_flag!("LLRM_CHECK_COLORS") {
         let whole = _existing_colors_by(body, frame, true);
-        assert!(_same_colors(&found.0, &whole.0), "{}: the slot colors differ from working them out whole", body.name);
         // What is asked of a value is where it is live (`slots::fits` overlaps
-        // segments). Its weight is not read, and counts a value an
+        // segments of values with those of homes), so the homes and the values
+        // are compared together, the weight not read: it counts a value an
         // instruction names twice once more than the body made of the homes
         // does.
         assert!(
-            found
-                .1
-                .iter()
-                .all(|(value, interval)| whole.1.get(value).is_some_and(|other| other.segments == interval.segments)),
-            "{}: where a value is live differs from working it out whole",
-            body.name
-        );
-        assert!(
-            found.1.len() == whole.1.len(),
-            "{}: a value has no interval where working it out whole gives one",
+            found.1.len() == whole.1.len()
+                && found.1.iter().all(|(value, _)| whole.1.get(value).is_some())
+                && _same_liveness(&found, &whole),
+            "{}: the slot colors or where a value is live differ from working them out whole",
             body.name
         );
     }
     found
 }
 
-/// Whether two sets of slot colors are the same where each home is live: the
-/// weights of the occupants are not read.
-fn _same_colors(
-    one: &[(i64, u32, Vec<Interval>)],
-    other: &[(i64, u32, Vec<Interval>)],
+/// Whether two sets of slot colors, with the values' intervals beside them, say
+/// the same of where each is live, whatever numbers their positions carry. A
+/// body found by parts numbers its instructions as it remembers them and one
+/// worked out whole as it lays them out, so the same liveness comes in other
+/// numbers (27 of the 71 vsgcc programs at -O2, the first four segments of a
+/// home six instructions apart). What the colors read of a position is where it
+/// lies among the others, so the order of all the ends, the homes' and the
+/// values' in one order, is compared.
+fn _same_liveness(
+    one: &(Vec<(i64, u32, Vec<Interval>)>, Lives),
+    other: &(Vec<(i64, u32, Vec<Interval>)>, Lives),
 ) -> bool {
-    one.len() == other.len()
-        && one.iter().zip(other).all(|(left, right)| {
-            left.0 == right.0
-                && left.1 == right.1
-                && left.2.len() == right.2.len()
-                && left.2.iter().zip(&right.2).all(|(a, b)| a.value == b.value && a.segments == b.segments)
-        })
+    let shape = |colors: &[(i64, u32, Vec<Interval>)], lives: &Lives| {
+        let homes: Vec<(i64, u32, Vec<(u32, usize)>)> = colors
+            .iter()
+            .map(|(home, color, intervals)| {
+                (*home, *color, intervals.iter().map(|one| (one.value, one.segments.len())).collect())
+            })
+            .collect();
+        let values: std::collections::BTreeMap<u32, usize> =
+            lives.iter().map(|(value, interval)| (*value, interval.segments.len())).collect();
+        (homes, values)
+    };
+    // Every end of every segment, the homes' then the values' by value number,
+    // as its rank among the distinct positions.
+    let ranks = |colors: &[(i64, u32, Vec<Interval>)], lives: &Lives| -> Vec<usize> {
+        let by_value: std::collections::BTreeMap<u32, &Interval> =
+            lives.iter().map(|(value, interval)| (*value, interval)).collect();
+        let ends: Vec<i64> = colors
+            .iter()
+            .flat_map(|c| &c.2)
+            .chain(by_value.values().copied())
+            .flat_map(|i| &i.segments)
+            .flat_map(|s| [s.start, s.end])
+            .collect();
+        let mut distinct = ends.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        ends.iter().map(|end| distinct.binary_search(end).expect("an end is among them")).collect()
+    };
+    shape(&one.0, &one.1) == shape(&other.0, &other.1) && ranks(&one.0, &one.1) == ranks(&other.0, &other.1)
 }
 
 // `_existing_colors`, with the intervals of the homes' pseudo-values found
@@ -4853,7 +4888,8 @@ fn _memory_source_read_first(
     fresh: u32,
 ) -> Option<(Arc<Insn>, Arc<Insn>)> {
     let what = one.what.as_ref()?;
-    if one.group.is_some() {
+    // A lea's cell is an address: nothing is read from it.
+    if one.group.is_some() || what.op == Operation::Address {
         return None;
     }
     let tied: Vec<u32> =
@@ -5236,7 +5272,7 @@ mod tests {
         let body = _body(vec![copied, shifted]);
         crate::analysis::intervals::indexed_shared(&body);
         let mut frame = crate::backend::frame::Frame::new(0);
-        super::_short_update_runs(&body, &BTreeSet::from([2]), &mut frame, 100).expect("runs");
+        super::_short_update_runs(&body, &BTreeSet::from([2]), &BTreeSet::new(), &mut frame, 100).expect("runs");
         super::_local_updates(&body, &BTreeSet::from([2]), &mut frame, 100).expect("updates");
         // One ask above, then one by each pass.
         assert_eq!(body.facts.0.counted("indexed-remembered"), 2, "the passes numbered the body again");
@@ -5577,6 +5613,91 @@ mod tests {
         insns.iter().filter(|one| one.what.as_ref().is_some_and(|w| w.op == Operation::Address)).collect()
     }
 
+    /// `x = x * 5` as `lea x, [x + x*4]` with `x` spilled: the spill wrote
+    /// `mov r, [r]` then `lea r2, r`, which the assembler refuses (N$PQ4 of the
+    /// Nib runtime at -m32 -O2 under the translated greedy allocator).
+    #[test]
+    fn test_a_lea_that_redefines_its_own_spilled_base_and_index_still_leas_a_cell() {
+        let cell = Mem {
+            base: Some(Held { value: 1, width: 4 }),
+            index: Some(Held { value: 1, width: 4 }),
+            scale: 4,
+            ..Mem::new(None, 4)
+        };
+        let first = insn(0, (0, 3), semantics(Operation::Move, "mov", vec![held(1, 4)], vec![imm(8, 4)]), &[1], &[]);
+        let times_five =
+            insn(4, (4, 6), semantics(Operation::Address, "lea", vec![held(1, 4)], vec![Loc::Mem(cell)]), &[1], &[1]);
+        let store = insn(8, (8, 10), semantics(Operation::Move, "mov", vec![held(3, 4)], vec![held(1, 4)]), &[3], &[1]);
+        let result = _out(&_body(vec![first, times_five, store]), &[1]);
+        for one in &result {
+            let w = what(one);
+            if w.op == Operation::Address {
+                assert!(matches!(w.sources.as_slice(), [Loc::Mem(_) | Loc::Address(_)]), "a lea of a register: {w:?}");
+            }
+        }
+    }
+
+    /// `q = load [param]; x = q; x = x + 5` with `q` and `x` both spilled: the
+    /// short update renamed `x` to `q`, and `q` is made again from its cell, so
+    /// the store into `x`'s slot wrote the cell's value, not the sum (digits of
+    /// `decimal` inlined into `print_float` read as NULs under the translated
+    /// greedy allocator).
+    #[test]
+    fn test_a_short_update_does_not_rename_into_a_value_made_again_from_its_cell() {
+        let parameter = mem(Addr::new(Space::Frame, 6), 2, RegId::BP, 0, 2);
+        let load = insn(
+            0x100,
+            (0x100, 0x100),
+            semantics(Operation::Move, "mov", vec![held(1, 2)], vec![Loc::Mem(parameter.clone())]),
+            &[1],
+            &[],
+        );
+        let copy = insn(
+            0x102,
+            (0x102, 0x102),
+            semantics(Operation::Move, "mov", vec![held(2, 2)], vec![held(1, 2)]),
+            &[2],
+            &[1],
+        );
+        let add = insn(
+            0x104,
+            (0x104, 0x104),
+            semantics(Operation::Binary, "add", vec![held(2, 2)], vec![held(2, 2), imm(5, 2)]),
+            &[2],
+            &[2],
+        );
+        let user = insn(
+            0x106,
+            (0x106, 0x106),
+            semantics(Operation::Move, "mov", vec![held(3, 2)], vec![held(2, 2)]),
+            &[3],
+            &[2],
+        );
+        let mut frame = Frame::new(0);
+        let (result, _made) = spilled(
+            &_body(vec![load, copy, add, user]),
+            &set(&[1, 2]),
+            Some(&mut frame),
+            &crate::backend::classes::RegisterClasses::m16(),
+        )
+        .expect("spills");
+        let mut values: Vec<(Loc, i64)> = vec![(Loc::Mem(parameter), 100)];
+        let value = |values: &Vec<(Loc, i64)>, arg: &Loc| match arg {
+            Loc::Imm(imm) => imm.value,
+            _ => values.iter().rev().find(|(key, _)| key == arg).map(|(_, value)| *value).expect("a value"),
+        };
+        for one in result.insns() {
+            let args: Vec<i64> = what(&one).sources.iter().map(|arg| value(&values, arg)).collect();
+            let result = match name(&one) {
+                Some("mov") => args[0],
+                Some("add") => args[0] + args[1],
+                other => panic!("{other:?}"),
+            };
+            values.push((what(&one).dests[0].clone(), result));
+        }
+        assert_eq!(value(&values, &held(3, 2)), 105);
+    }
+
     /// `p = *p` with `p` spilled: the load read its own base from a register
     /// nothing had reloaded, and the allocator emitted `mov cx, [bx]` with bx
     /// never set (found by the allocator fuzz lane, seed 25).
@@ -5911,6 +6032,28 @@ mod tests {
         );
     }
 
+    /// The colors found by parts and worked out whole are the same liveness in
+    /// other numbers (27 of the 71 vsgcc programs at -O2: x_fib's home -52 had
+    /// its segments six instruction slots apart), and `LLRM_CHECK_COLORS`
+    /// called them different. What the colors read is the order of the ends
+    /// of the homes and the values together: a shift is the same, a value
+    /// that now reaches a home is not.
+    #[test]
+    fn test_slot_colors_that_differ_only_in_position_numbers_are_the_same() {
+        use crate::analysis::intervals::{Interval, Segment};
+        let segments =
+            |runs: &[(i64, i64)]| runs.iter().map(|&(start, end)| Segment { start, end }).collect::<Vec<_>>();
+        let found = |home: (i64, i64), value: (i64, i64)| {
+            let colors = vec![(-52, 4, vec![Interval::new(7, segments(&[home]))])];
+            let lives =
+                super::Lives { shared: None, own: [(9, Interval::new(9, segments(&[value])))].into_iter().collect() };
+            (colors, lives)
+        };
+        let before = found((36, 72), (80, 90));
+        assert!(super::_same_liveness(&before, &found((42, 78), (86, 96))), "the same order of ends in other numbers");
+        assert!(!super::_same_liveness(&before, &found((42, 88), (86, 96))), "a home that now reaches the value");
+    }
+
     /// Every spill made a body of every instruction with the slots in it as
     /// values, and numbered it and found every interval again to colour the
     /// slots: 16 s of compiling `d_faces` (#559). The slots are found among
@@ -5934,7 +6077,7 @@ mod tests {
             super::_existing_colors_by(&spilt, &mut frame, false),
             super::_existing_colors_by(&spilt, &mut frame, true),
         );
-        assert!(super::_same_colors(&among.0, &whole.0), "{:?} {:?}", among.0, whole.0);
+        assert!(super::_same_liveness(&among, &whole), "{:?} {:?}", among.0, whole.0);
         assert!(
             among.1.len() == whole.1.len()
                 && among
@@ -5968,7 +6111,7 @@ mod tests {
             super::_existing_colors_by(&spilt, &mut frame, false),
             super::_existing_colors_by(&spilt, &mut frame, true),
         );
-        assert!(super::_same_colors(&among.0, &whole.0), "{:?} {:?}", among.0, whole.0);
+        assert!(super::_same_liveness(&among, &whole), "{:?} {:?}", among.0, whole.0);
     }
 
     #[test]

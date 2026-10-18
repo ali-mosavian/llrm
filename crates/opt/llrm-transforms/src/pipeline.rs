@@ -94,9 +94,9 @@
 //! Options are `Options`; `Level::options` in llrm-core's `driver/flags.rs`
 //! maps `-O0`, `-O1`, `-O2`, `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og` to
 //! `Options::none`, `basic`, `standard`, `speed`, `aggressive`, `size`,
-//! `min_size` (`-Og`: `basic` without `fill`). `-f` flags set single fields
-//! (`PASSES` in the same file). The per-level table, with the gcc and LLVM
-//! counterpart of each limit, is
+//! `min_size` (`-Og`: `basic` without `loopidioms`). `-f` flags set single
+//! fields (`PASSES` in the same file). The per-level table, with the gcc and
+//! LLVM counterpart of each limit, is
 //! [docs/reference/levels.md](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/docs/reference/levels.md).
 //!
 //! `Options::wanted` gates passes by name, so every pass can be bisected off:
@@ -112,7 +112,7 @@
 //! | `promote` | `sroa`, `promote` |
 //! | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
 //! | `unroll`, `peel` | the pass of that name |
-//! | `fill` | `fill`, `merge`, `memcpyopt` |
+//! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
 //! | `unswitch`, `split`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
@@ -123,9 +123,9 @@
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `expensive`
 //! enables `jumpthread`'s state machines and `copy_headers` its correlated
-//! branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `fill`, `lsr`,
-//! `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals` lets
-//! alias and branch decisions use the intervals of counted loops. `limits`
+//! branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
+//! `lsr`, `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals`
+//! lets alias and branch decisions use the intervals of counted loops. `limits`
 //! are the copy budgets of `unroll` and `peel`.
 //!
 //! # Needs
@@ -153,10 +153,10 @@ use llrm_mir::program::Program;
 use crate::interprocedural::Interprocedural;
 use crate::settled::{self, Settled};
 use crate::{
-    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
-    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
-    loopfuse, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, memcpyopt, peel, phiopt, ports,
-    promote, rotate, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fixednarrow, floatloop, fold, gepoffset,
+    globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute, loopfuse,
+    loopidioms, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt, peel,
+    phiopt, ports, promote, rotate, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -198,7 +198,7 @@ pub struct Options {
     pub strength: bool,
     pub unroll: bool,
     pub peel: bool,
-    pub fill: bool,
+    pub loopidioms: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
     /// A loop with a test of its counter against an invariant becomes two,
@@ -222,6 +222,9 @@ pub struct Options {
     /// `-floop-interchange`, -O3 (gcc's `gimple-loop-interchange.cc`); -Omax
     /// too. LLVM's `LoopInterchange` is off in its pipelines.
     pub interchange: bool,
+    /// The round's `Promote` is the translated `PromoteMemToReg`
+    /// ([`crate::mem2reg`]); `LLRM_EXP_MEM2REG` sets it, off by default.
+    pub mem2reg: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -276,7 +279,7 @@ impl Default for Options {
             strength: true,
             unroll: true,
             peel: true,
-            fill: true,
+            loopidioms: true,
             sibcalls: true,
             unswitch: false,
             split: false,
@@ -285,6 +288,7 @@ impl Default for Options {
             version: false,
             unroll_jam: false,
             interchange: false,
+            mem2reg: experiment_mem2reg(),
             copy_headers: true,
             for_size: false,
             expensive: true,
@@ -457,7 +461,7 @@ impl Options {
             "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
-            "fill" | "merge" | "memcpyopt" => self.fill,
+            "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
             "tailrec" => self.sibcalls,
             "ipa-ranges" => self.ipa_ranges,
             _ => true,
@@ -474,6 +478,12 @@ pub struct Applied {
     /// Where each body's changed steps are written, `N/NNN-stage.ll`, the
     /// Nth body run; the manager writes the module after it there.
     pub dump: Option<PathBuf>,
+}
+
+/// `LLRM_EXP_MEM2REG`, read once: the round's `Promote` is the translated
+/// `PromoteMemToReg` ([`crate::mem2reg`]). Off by default.
+fn experiment_mem2reg() -> bool {
+    llrm_support::env_flag!("LLRM_EXP_MEM2REG")
 }
 
 /// The passes, in order, that `applied` leaves on.
@@ -514,8 +524,9 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(inferspace::InferAddressSpaces),
         Box::new(dse::Dse),
         Box::new(gvn::Gvn { pre: applied.options.pre }),
-        // Ordinary scalar write-through promotion remains after memory GVN.
-        Box::new(promote::Promote),
+        // Ordinary scalar write-through promotion remains after memory GVN;
+        // `LLRM_EXP_MEM2REG` swaps in the translated PromoteMemToReg.
+        if applied.options.mem2reg { Box::new(mem2reg::Mem2Reg) } else { Box::new(promote::Promote) },
         Box::new(indvars::IndVars {
             exit_values: false,
             unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
@@ -524,8 +535,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
         Box::new(peel::Peel { limits: limits() }),
-        Box::new(fill::Fill { size: applied.options.prefers_size() }),
-        Box::new(fill::Merge { size: applied.options.prefers_size() }),
+        Box::new(loopidioms::LoopIdioms { size: applied.options.prefers_size() }),
+        Box::new(loopidioms::Merge { size: applied.options.prefers_size() }),
         Box::new(memcpyopt::MemCpyOpt { size: applied.options.prefers_size() }),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
@@ -1094,8 +1105,7 @@ impl Fixed {
             declared: &mut declared,
         };
         for pass in &mut self.passes {
-            let before = copy.function.mark();
-            let preserved = pass.run(&mut copy, &mut analyses.fresh()).unless_unchanged(copy.function, before);
+            let preserved = pass.run(&mut copy, &mut analyses.fresh());
             if !preserved.are_all_preserved() {
                 eprintln!("LLRM_CHECK_ROUNDS: round {} would change the body with {}", rounds + 1, pass.name());
                 return;
@@ -1124,6 +1134,7 @@ impl FunctionPass for Fixed {
         let mut run = Run {
             version: 0,
             promotes,
+            inputs: dump.is_some() && llrm_support::env_flag!("LLRM_DUMP_INPUTS"),
             dump,
             rounds: 0,
             steps: 0,
@@ -1180,6 +1191,8 @@ struct Run {
     /// Whether promotion may run: not over an irreducible CFG.
     promotes: bool,
     dump: Option<PathBuf>,
+    /// `LLRM_DUMP_INPUTS`: the body at the input of every pass run is dumped.
+    inputs: bool,
     /// For `LLRM_DEBUG=runs`: fixed points reached, rounds in them, passes run,
     /// passes skipped as settled.
     fixed: usize,
@@ -1321,12 +1334,22 @@ impl Run {
             return false;
         }
         self.steps += 1;
-        let before = unit.function.mark();
+        self.input(name, unit, analyses);
+        // `LLRM_CHECK_ORDER=SEED`: some analyses asked at this pass's entry,
+        // which ones by the seed, the step and the body, so that each
+        // is first asked earlier than a pass needs it, somewhere else
+        // on every seed. A result a pass reads is a function of the
+        // body: the object is the lazy one's.
+        if let Some(seed) = order_seed() {
+            let mix = seed
+                ^ (self.steps as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                ^ (unit.function.mark().position() as u64);
+            llrm_analysis::manager::ask_some(unit.context, unit.layout, unit.function, analyses, mix);
+        }
         let outside = llrm_mir::passes::read::swap(0);
         let billed = self.billing.then(|| (llrm_support::debug::work(), llrm_support::debug::analysed_work()));
         let running = llrm_mir::counts::pass_run_over(pass.name(), unit.function);
-        let preserved =
-            llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
+        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses));
         drop(running);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
@@ -1381,7 +1404,6 @@ impl Run {
         let mut context = unit.context.clone();
         let mut function = unit.function.clone();
         let mut declared = unit.declared.clone();
-        let before = function.mark();
         let mut copy = Unit {
             context: &mut context,
             layout: unit.layout,
@@ -1390,7 +1412,7 @@ impl Run {
             metadata: unit.metadata,
             declared: &mut declared,
         };
-        let preserved = pass.run(&mut copy, &mut analyses.fresh()).unless_unchanged(copy.function, before);
+        let preserved = pass.run(&mut copy, &mut analyses.fresh());
         assert!(preserved.are_all_preserved(), "{} was skipped and would have changed the body", pass.name());
     }
 
@@ -1414,7 +1436,16 @@ impl Run {
     ) {
         self.version += 1;
         let Some(directory) = &self.dump else { return };
-        // The body beside every global's declaration, which is what it names.
+        let file = directory.join(format!("{:03}-{stage}.ll", self.version));
+        Self::write(&file, unit, analyses);
+    }
+
+    /// The body beside every global's declaration, which is what it names.
+    fn write(
+        file: &std::path::Path,
+        unit: &Unit,
+        analyses: &Analyses,
+    ) {
         let mut globals = analyses.outer().globals.to_vec();
         globals.push(GlobalValue {
             name: Some("pipeline.body".to_owned()),
@@ -1430,13 +1461,39 @@ impl Run {
             metadata: unit.metadata.to_vec(),
             named_metadata: Vec::new(),
         };
-        let file = directory.join(format!("{:03}-{stage}.ll", self.version));
-        std::fs::create_dir_all(directory)
-            .and_then(|()| std::fs::write(&file, llrm_mir::print::module(&module)))
+        std::fs::create_dir_all(file.parent().expect("a file in a directory"))
+            .and_then(|()| std::fs::write(file, llrm_mir::print::module(&module)))
             .unwrap_or_else(|error| panic!("{}: {error}", file.display()));
+    }
+
+    /// `LLRM_DUMP_INPUTS`: the body each pass is about to run over, a run that
+    /// changes nothing included, with a line in `manifest.txt` (pass, run,
+    /// file, instructions) beside the dump.
+    fn input(
+        &self,
+        name: &str,
+        unit: &Unit,
+        analyses: &Analyses,
+    ) {
+        let Some(directory) = &self.dump else { return };
+        if !self.inputs {
+            return;
+        }
+        let file = format!("{:04}-in-{name}.ll", self.steps);
+        Self::write(&directory.join(&file), unit, analyses);
+        let line = format!("{name} {} {file} {}\n", self.steps, unit.function.walk().count());
+        let manifest = directory.join("manifest.txt");
+        let mut out = std::fs::OpenOptions::new().create(true).append(true).open(&manifest).expect("a manifest");
+        std::io::Write::write_all(&mut out, line.as_bytes()).expect("a manifest line");
     }
 }
 
 #[cfg(test)]
 #[path = "pipeline_tests.rs"]
 mod pipeline_tests;
+
+/// The seed of `LLRM_CHECK_ORDER`, where it is a number.
+fn order_seed() -> Option<u64> {
+    static SEED: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *SEED.get_or_init(|| std::env::var("LLRM_CHECK_ORDER").ok().and_then(|value| value.parse().ok()))
+}
