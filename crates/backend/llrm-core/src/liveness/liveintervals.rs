@@ -446,7 +446,19 @@ impl LiveIntervals {
     ) -> LirBody {
         let blocks =
             body.blocks.iter().enumerate().map(|(n, block)| block.with_insns(self.blocks[n].clone())).collect();
-        body.with_blocks(blocks)
+        LirBody { inputs: self.inputs.clone(), ..body.with_blocks(blocks) }
+    }
+
+    /// A parameter that joined another value is that value now (the rename
+    /// `updateRegDefsUses` makes in every instruction, for the entry's def).
+    pub fn rename_input(
+        &mut self,
+        from: u32,
+        to: u32,
+    ) {
+        if self.inputs.remove(&from) {
+            self.inputs.insert(to);
+        }
     }
 
     /// `extendToIndices` (LiveIntervals.cpp#L695): extends `lr` to reach each
