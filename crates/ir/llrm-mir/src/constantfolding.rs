@@ -15,30 +15,29 @@
 //! of `constfold`, else the expression MIR can hold.
 //!
 //! DEVIATE, permanent (MIR lacks the construct; the fact is stated):
-//! 1. Vectors: \`FoldBitCast\`'s vector arms (L189-L406),
-//!    \`ConstantFoldFixedVectorCall\`, the vector intrinsics, \`masked_load\`
-//!    (L1776-L1801); \`is_constant\` of a vector. MIR types vectors but has no
+//! 1. Vectors: `FoldBitCast`'s vector arms (L189-L406),
+//!    `ConstantFoldFixedVectorCall`, the vector intrinsics, `masked_load`
+//!    (L1776-L1801); `is_constant` of a vector. MIR types vectors but has no
 //!    lane operation and nothing produces one (#2201).
-//! 2. \`undef\`, \`ptrtoaddr\`: MIR has \`poison\`/\`freeze\` and no
-//!    \`ptrtoaddr\` opcode (#2202, #2204). Byte types and \`inrange\`: MIR has
-//!    no byte type and its constant GEP has no \`inrange\`.
+//! 2. `undef`, `ptrtoaddr`: MIR has `poison`/`freeze` and no `ptrtoaddr` opcode
+//!    (#2202, #2204). Byte types and `inrange`: MIR has no byte type and its
+//!    constant GEP has no `inrange`.
 //! 3. Target intrinsics (AMDGCN, ARM, AArch64, Wasm, NVVM, x86): the MIR
-//!    verifier rejects a \`llvm.*\` name \`Intrinsic\` does not enumerate, and
-//!    it enumerates none of them.
+//!    verifier rejects a `llvm.*` name `Intrinsic` does not enumerate, and it
+//!    enumerates none of them.
 //!
 //! OWED (MIR can represent it; each has an issue and its exit):
-//! 4. GEP \`nuw\`/\`nusw\` on a constant expression:
-//!    \`ConstantExpr::GetElementPtr\` keeps \`inbounds\` only. Exit: add the
-//!    flags to it, the parser and the printer (#2261).
-//! 5. The constant expressions \`add\`, \`sub\`, \`xor\`, \`select\`:
-//!    \`ConstantExpr\` has GEP and cast only, so a fold that would make one
-//!    (L1463) gives none, as does the \`(sub 0, V)\` arm (L1658). Exit: add the
-//!    variants (#2262).
-//! 6. \`HasExternalState\` pointers: the \`pe\` flag of a \`p\` datalayout spec
-//!    is not parsed. Exit: parse it into \`PointerSpec\` (#2263).
-//! 7. Floating point: \`fneg\` and the FP binary operations (L1138-L1159,
-//!    L1574), \`fcmp\`, FP intrinsics and libcalls (#2246); an \`x86_fp80\`
-//!    load, held as a double (#2251).
+//! 4. GEP `nuw`/`nusw` on a constant expression: `ConstantExpr::GetElementPtr`
+//!    keeps `inbounds` only. Exit: add the flags to it, the parser and the
+//!    printer (#2261).
+//! 5. The constant expressions `add`, `sub`, `xor`, `select`: `ConstantExpr`
+//!    has GEP and cast only, so a fold that would make one (L1463) gives none,
+//!    as does the `(sub 0, V)` arm (L1658). Exit: add the variants (#2262).
+//! 6. `HasExternalState` pointers: the `pe` flag of a `p` datalayout spec is
+//!    not parsed. Exit: parse it into `PointerSpec` (#2263).
+//! 7. Floating point: `fneg` and the FP binary operations (L1138-L1159, L1574),
+//!    `fcmp`, FP intrinsics and libcalls (#2246); an `x86_fp80` load, held as a
+//!    double (#2251).
 //!
 //! Gap of [`constfold`](crate::constfold) the oracle shows: a pointer compare
 //! of globals or `null` (#2247).
