@@ -19,7 +19,11 @@ The reason, read from `_fill` (`fill.rs`, `counters.len() != phis.len()`): the r
 
 and `induction::basics` finds one counter: it follows a header phi that is the counter's next plus a constant (the header-copy case), not a phi that is a cast of it. LLVM does not ask: `runOnCountableLoop` takes `getBackedgeTakenCount` and `processLoopStridedStore` the store address's `SCEVAddRecExpr`, and SCEV's `getZeroExtendExpr` of an add recurrence that cannot wrap is `{0,+,1}` in the wider type, whatever phis carry it. So the premise is a SCEV fact, not a guard to patch in `fill`.
 
-Acceptance test (S0, fail-first, in `fill_tests.rs`): the sieve fill loop as the slot leaves it (the IR above, a guard `limit != 0` ahead, the test on the stepped counter) becomes one `llvm.memset` of `limit` bytes; it fails on main's `fill`. Second test: the same loop unrotated still does.
+Ruling (oversight, rule 6: only general solutions): no stand-in in `induction::basics`. `LoopIdiomRecognize` is translated with the SCEV queries it reads, against scev-port's concrete `llrm_analysis::scev::ScalarEvolution` (one method per C++ function, snake case, each taking `cx: &Cx`; S1+S2, with S3, S5 and S6), no trait of ours; the non-SCEV parts are translated now.
+
+Acceptance row, gated on scev-port's S1+S2: sieve -O2 with the slot on, `rep stos` 2 (as without the slot). Until the tree exists it is recorded as open, not waived; the fail-first test for it (the loop as the slot leaves it becomes one `llvm.memset`) is written with the translation and runs against the tree.
+
+What the countable half reads of SCEV (`LoopIdiomRecognize.cpp` at the pin, count of calls): `getSCEV` 19, `getBackedgeTakenCount` and `hasLoopInvariantBackedgeTakenCount` (indvars-decide-poc's `BackedgeCounts`), `getTripCountFromExitCount` 2, `applyLoopGuards` 2, matchers `m_scev_AffineAddRec` 6, `m_scev_APInt` 6, `m_scev_Specific`, casts to `SCEVConstant`/`SCEVAddRecExpr`/`SCEVUnknown`, `getMulExpr` 3, `getAddExpr`, `getMinusSCEV` 2, `getNegativeSCEV` 2, `getTruncateOrZeroExtend` 3, `getTruncateOrSignExtend`, `getConstant` 3, `getZero`, `getPointerBase`, `isSCEVable`, `isLoopInvariant`, `isKnownNonNegative`, `forgetLoop` 7; the Expander: `expandCodeFor` 9, `isSafeToExpand` 3, `setInsertPoint`, `clear`, `SCEVExpanderCleaner`. Beyond expressions and folds it needs the zext/sext/trunc of an add recurrence distributing where no wrap is provable (the sieve fact), the add recurrence's no-wrap flags, `getPointerBase` over MIR's pointer arithmetic (scev-port's D3: near pointers translated, a far pointer is an unknown never inside a GEP, which the flat sieve does not need; the far-pointer loops of m16 wait), and `isSafeToExpand` with an insertion API on MIR.
 
 ## 1. What `fill` is today
 
@@ -92,18 +96,17 @@ DEVIATEs. A deviation is kept only where it rests on something MIR or the target
 - D5. The loop cut to one trip with `counting::Seeds` exit values, where LLVM zaps the stores and leaves the empty loop to `LoopDeletion` and `IndVarSimplify`. Approved until `LoopDeletion` is translated (fact: no loop deletion in the pipeline); then mirrored.
 - D6. No `ScalarEvolution`: strides, counts and exit values come from `induction`/`counting`. Not a deviation to live with: a project-level dependency, sized separately.
 - D7. `getPopcntSupport` and the FFS cost as target hooks. Approved: x86 has no fast popcount before Nehalem (fact: `PSK_FastHardware` never holds on 486/P5). `ctlz`/`cttz` need MIR intrinsics and `bsf`/`bsr` selection, which i386 and later have: a later representation item, not never.
-- D10. S0 only: `basics` follows a cast of a counter's next. LLVM has no such rule: `getZeroExtendExpr` of a non-wrapping add recurrence is an add recurrence. Pending oversight; deleted when scev-port's tree lands and `basics` is replaced (fact: no SCEV yet, scev-port, PR #2150).
 - D9. CRC loops (`HashRecognize`, `Clmul`, table): not translated. Pending: no carry-less multiply on any target here; the table strategy is open.
 
 (`isLibFuncEmittable` is LLVM's own rule, not a deviation: no `strlen` in the program's library, no call.)
 
 ## 5. Stages and gates
 
-Priority: S0 gates the rotate slot (#2194) and comes first; the rest is low, taking no time from LICM, InstCombine or LVI.
+Priority: the rotate slot (#2194) waits on the acceptance row above, so LP0 comes first; the rest is low, taking no time from LICM, InstCombine or LVI.
 
 | stage | content | gate |
 |---|---|---|
-| S0 | the acceptance test above and the smallest change that makes it pass on what exists: `induction::basics` follows a header phi that is a `zext`/`sext`/`trunc` of a counter's next when the counter's step cannot wrap over the proven trips (D10); then `fill` accepts the rotated loop with no change of its own | the test; sieve `rep stos` 2 with the slot; rows (section 7) with `rotate_slot` on; `identical.py` with every `LLRM_CHECK_*` without it |
+| LP0 | the non-SCEV parts of the countable half translated now, in `loopidiom/`: `runOnLoop`, `collectStores`, `processLoopStores`, `processLoopMemIntrinsic`, store grouping, the memset and memcpy pattern recognition, `mayLoopAccessLocation`, the pass wiring, with the SCEV queries above written as calls to scev-port's names (`get_scev`, `get_add_expr`, `apply_loop_guards`, `match_affine_add_rec`, `scev::expander::Expander::expand_code_for`, ...; signatures from scev-port's seams commit on `alim/feat/scev-s1`); tests derived by hand against the pinned `opt -passes=loop-idiom` | each test's expected IR from the pinned `opt`; nothing runs in the pipeline yet |
 | S1 | the first PR: `Fill` moves to LLVM's slot (before `indvars` and full unroll, mirroring the pipeline) and its cost on the same inputs is brought to LoopIdiomRecognize's, per IR instruction. D4 gets its number or goes | rows (section 7); `d_faces` -O1/-O2/-Os cycles of the pass against LLVM's |
 | L0 | idiom-bearing inputs for the replay corpus, `difftest` gains `fill -> loop(loop-idiom)`; before any further port | the oracle reports a nonzero number; the 112 runs' zero is explained, not accepted |
 | L1 | decisions only, countable half, against `opt -passes='loop(loop-idiom)'` and against `Fill` | counts per function; every difference classified |
@@ -118,7 +121,7 @@ Priority: S0 gates the rotate slot (#2194) and comes first; the rest is low, tak
 ## 6. Dependencies
 
 - Position: `pass-list-parity` and `llvm-order-poc` own the loop slot; S1 follows their position.
-- SCEV (D6): sized separately by the coordinator.
+- SCEV (D6): scev-port's tree (PR #2150: S1+S2 expressions, folds and ranges; S3 `createSCEV`; S5 `applyLoopGuards`; S6 the Expander) and indvars-decide-poc's `BackedgeTakenInfo`. LP0 builds on neither; the gated acceptance row and S1's apply need them.
 - ValueTracking (`isKnownNonZero`, `isDereferenceableAndAlignedPointer`): `valuetracking-port`; until it lands the FFS zero-input check is `ranger`'s fact.
 - `LoopDeletion` (D5).
 - MemorySSA ([memoryssa-port](memoryssa-port.md)) for `mayLoopAccessLocation`.
