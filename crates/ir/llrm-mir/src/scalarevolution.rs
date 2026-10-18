@@ -6,7 +6,7 @@
 use crate::context::{ConstantKind, Context};
 use crate::dominators::DominatorTree;
 use crate::hash::HashMap;
-use crate::loops::{Loop, LoopInfo};
+use crate::loopinfo::{Loop, LoopInfo};
 use crate::module::{BlockId, Function, Operand, ValueDef, ValueId};
 use crate::opcode::{BinaryOp, IntPredicate, Opcode};
 use crate::types::Type;
@@ -40,7 +40,7 @@ impl Evolution {
         let mut solver = Solver { context, function, loops, known: HashMap::default() };
         for (block, inst) in function.walk() {
             if let Some(value) = function.instruction(inst).result
-                && loops.loop_of(block).is_some()
+                && loops.get_loop_for(block).is_some()
             {
                 solver.recurrence(value, 0);
             }
@@ -66,7 +66,7 @@ impl Evolution {
         loops: &LoopInfo,
         header: BlockId,
     ) -> usize {
-        let Some(inside) = loops.loop_of(header).map(|one| &one.blocks) else { return 0 };
+        let Some(inside) = loops.get_loop_for(header) else { return 0 };
         function
             .block(header)
             .instructions()
@@ -79,7 +79,7 @@ impl Evolution {
                 None => matches!(context.types.get(function.value(value).ty), Type::Pointer(_))
                     && phi.operands.chunks(2).any(|pair| {
                         let (Operand::Value(next), Operand::Block(from)) = (pair[0], pair[1]) else { return false };
-                        inside.contains(&from)
+                        inside.contains(from)
                             && matches!(
                                 function.value(next).def,
                                 ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. }) && function.instruction(def).operands[0] == Operand::Value(value)
@@ -111,7 +111,7 @@ impl Solver<'_> {
     fn invariant(
         &self,
         operand: Operand,
-        one: &Loop,
+        one: Loop<'_>,
         width: u32,
     ) -> Option<Linear> {
         match operand {
@@ -120,9 +120,7 @@ impl Solver<'_> {
                 _ => None,
             },
             Operand::Value(value) => match self.function.value(value).def {
-                ValueDef::Instruction(inst)
-                    if self.function.parent(inst).is_some_and(|block| one.blocks.contains(&block)) =>
-                {
+                ValueDef::Instruction(inst) if self.function.parent(inst).is_some_and(|block| one.contains(block)) => {
                     None
                 }
                 _ => Some(Linear { terms: vec![(value, 1)], constant: 0 }),
@@ -153,7 +151,7 @@ impl Solver<'_> {
     ) -> Option<Recurrence> {
         let ValueDef::Instruction(inst) = self.function.value(value).def else { return None };
         let block = self.function.parent(inst)?;
-        let one = self.loops.loop_of(block)?;
+        let one = self.loops.get_loop_for(block)?;
         let width = self.width(value)?;
         let instruction = self.function.instruction(inst);
         let operands = instruction.operands.clone();
@@ -168,10 +166,10 @@ impl Solver<'_> {
                 return None;
             }
             let found = this.recurrence(value, depth + 1)?;
-            (found.header == one.header).then_some((found.start, found.step))
+            (found.header == one.get_header()).then_some((found.start, found.step))
         };
         let (start, step) = match instruction.opcode {
-            Opcode::Phi if block == one.header => {
+            Opcode::Phi if block == one.get_header() => {
                 let [
                     Operand::Value(_) | Operand::Constant(_),
                     Operand::Block(first),
@@ -181,7 +179,7 @@ impl Solver<'_> {
                 else {
                     return None;
                 };
-                let (entry, next) = match (one.blocks.contains(&first), one.blocks.contains(&second)) {
+                let (entry, next) = match (one.contains(first), one.contains(second)) {
                     (false, true) => (operands[0], operands[2]),
                     (true, false) => (operands[2], operands[0]),
                     _ => return None,
@@ -210,7 +208,7 @@ impl Solver<'_> {
             _ => return None,
         };
         // A value that does not change is invariant, no recurrence.
-        (step != Linear::default()).then_some(Recurrence { header: one.header, start, step })
+        (step != Linear::default()).then_some(Recurrence { header: one.get_header(), start, step })
     }
 
     /// What `next`, the value a latch hands `phi`, adds to it.
@@ -218,7 +216,7 @@ impl Solver<'_> {
         &self,
         phi: ValueId,
         next: Operand,
-        one: &Loop,
+        one: Loop<'_>,
         width: u32,
     ) -> Option<Linear> {
         let Operand::Value(next) = next else { return None };
@@ -322,17 +320,17 @@ pub fn counted(
     function: &Function,
     tree: &DominatorTree,
     evolution: &Evolution,
-    one: &Loop,
+    one: Loop<'_>,
 ) -> Option<Counted> {
-    one.blocks.iter().find_map(|&block| {
-        if !one.latches.iter().all(|&latch| tree.dominates(block, latch)) {
+    one.get_blocks().iter().find_map(|&block| {
+        if !one.get_loop_latches(function).iter().all(|&latch| tree.dominates(block, latch)) {
             return None;
         }
         let branch = function.instruction(function.terminator(block)?);
         let [Operand::Value(condition), Operand::Block(taken), Operand::Block(otherwise)] = branch.operands[..] else {
             return None;
         };
-        let (stays_on_true, inside) = match (one.blocks.contains(&taken), one.blocks.contains(&otherwise)) {
+        let (stays_on_true, inside) = match (one.contains(taken), one.contains(otherwise)) {
             (true, false) => (true, taken),
             (false, true) => (false, otherwise),
             _ => return None,
@@ -343,7 +341,7 @@ pub fn counted(
         let (left, right) = (compare.operands[0], compare.operands[1]);
         let stepped = |operand: Operand| -> Option<(ValueId, i8)> {
             let Operand::Value(value) = operand else { return None };
-            let found = evolution.of(value).filter(|found| found.header == one.header)?;
+            let found = evolution.of(value).filter(|found| found.header == one.get_header())?;
             let width = context.types.int_bits(function.value(value).ty)?;
             match (found.step.terms.is_empty(), found.step.constant) {
                 (true, 1) => Some((value, 1)),
@@ -353,7 +351,7 @@ pub fn counted(
         };
         let invariant = |operand: Operand| match operand {
             Operand::Value(value) => match function.value(value).def {
-                ValueDef::Instruction(inst) => function.parent(inst).is_some_and(|block| !one.blocks.contains(&block)),
+                ValueDef::Instruction(inst) => function.parent(inst).is_some_and(|block| !one.contains(block)),
                 ValueDef::Argument(_) => true,
             },
             _ => true,

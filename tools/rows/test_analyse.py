@@ -92,3 +92,33 @@ def test_a_failed_row_stops_the_table_and_is_named_instead_of_leaving_the_geomea
     monkeypatch.setattr("sys.argv", ["analyse.py", "--allow-failed"])
     spec.loader.exec_module(module)
     assert module.out[0].startswith("1 rows failed") and module.out[1].startswith("rows total 12") and "allowed: p/llrmO3" in module.out[2]
+
+
+def object_with_comment(path, comment):
+    import shutil
+    import subprocess
+
+    source = path.with_suffix(".c")
+    source.write_text("int f(void) { return 1; }\n")
+    subprocess.run(["gcc", "-c", str(source), "-o", str(path)], check=True)
+    note = path.with_suffix(".txt")
+    note.write_bytes(comment.encode() + b"\0")
+    subprocess.run(["objcopy", "--update-section", f".comment={note}", str(path)], check=True)
+    assert shutil.which("readelf")
+
+
+def test_a_clang_object_built_by_the_distro_clang_stops_the_rows(tmp_path):
+    """rows/main's *.clangO1.o were built by Ubuntu clang 20.1.8 (tools/rows build.sh called `clang` from PATH): nothing in the table said so."""
+    import sys
+
+    sys.path.insert(0, str(HERE))
+    import rowcheck
+
+    object_with_comment(tmp_path / "p.clangO1.o", "Ubuntu clang version 20.1.8 (0ubuntu4)")
+    with pytest.raises(SystemExit, match=r"1 of 1 clang objects .* not built by the pinned clang.*p.clangO1.o: Ubuntu clang version 20.1.8"):
+        rowcheck.compiler_premise(tmp_path)
+    good = tmp_path / "good"
+    good.mkdir()
+    object_with_comment(good / "p.clangO1.o", "clang version 24.0.0git (https://github.com/llvm/llvm-project.git d1106deb71cc81016406a1917d0508d2df296266)")
+    assert "all built by the pinned clang" in rowcheck.compiler_premise(good)
+    assert "premise unchecked" in rowcheck.compiler_premise(tmp_path / "empty")

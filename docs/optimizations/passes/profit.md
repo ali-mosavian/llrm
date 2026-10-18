@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/profit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/profit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/profit.rs sha256:051060be37e949c477e875deb604527a351ce9bfbdb46e87da10a4b50b5add01 -->
+<!-- src: crates/opt/llrm-transforms/src/profit.rs sha256:e86372dc6c8b795b5fa2bddff68476e9496646a715ab62ef4fc88ef1526254b2 -->
 
 # profit
 
@@ -82,12 +82,12 @@ From unit test `an_unpriced_instruction_makes_the_body_unpriced` in
 
 ## Used by
 Each of [`crate::lsr`](lsr.md), [`crate::hoist`](hoist.md), [`crate::gvn`](gvn.md),
-[`crate::unswitch`](unswitch.md), [`crate::unroll`](unroll.md), [`crate::peel`](peel.md), [`crate::fill`](fill.md),
-[`crate::window`](window.md), [`crate::gepoffset`](gepoffset.md), [`crate::indvars`](indvars.md),
-[`crate::tailrec`](tailrec.md), [`crate::ipacp`](ipacp.md), [`crate::inline`](inline.md) and
-[`crate::interprocedural`](../analyses/interprocedural.md) asks it, before a rewrite that trades code size
-or registers for speed, whether the rewrite pays. Not a pass: it runs only
-inside those.
+[`crate::unswitch`](unswitch.md), [`crate::unroll`](unroll.md), [`crate::peel`](peel.md),
+[`crate::loopidioms`](loopidioms.md), [`crate::window`](window.md), [`crate::gepoffset`](gepoffset.md),
+[`crate::indvars`](indvars.md), [`crate::tailrec`](tailrec.md), [`crate::ipacp`](ipacp.md), [`crate::inline`](inline.md)
+and [`crate::interprocedural`](../analyses/interprocedural.md) asks it, before a rewrite that trades code
+size or registers for speed, whether the rewrite pays. Not a pass: it runs
+only inside those.
 
 ## Needs
 The target's `OperationCosts` and registers, [`crate::spill`](spill.md) for the

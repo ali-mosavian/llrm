@@ -377,6 +377,16 @@ struct Slots {
     blocks: HashMap<BlockId, String>,
 }
 
+/// The label each placed block is written with, `%` left off: its name, else
+/// its slot.
+pub fn block_labels(function: &Function) -> crate::dense::IdMap<BlockId, String> {
+    let mut labels = crate::dense::IdMap::new();
+    for (block, label) in Slots::new(function).blocks {
+        labels.insert(block, label);
+    }
+    labels
+}
+
 impl Slots {
     fn new(function: &Function) -> Self {
         let mut next = 0;

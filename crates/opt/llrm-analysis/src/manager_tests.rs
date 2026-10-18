@@ -1521,3 +1521,19 @@ fn the_audit_of_points_to_refuses_facts_that_forgot_a_join_with_an_unknown_arm()
     }));
     assert!(refused.is_err(), "facts that lost the slot behind the join were accepted by the audit");
 }
+
+/// A gep replaced by another of the same operands that differs in `inbounds`
+/// does not decompose alike (an inbounds one goes on through its index), and
+/// the effects named it as a leaf where a fresh decomposition reads base and
+/// index (qcport triggers -O1 with LLRM_CHECK_REPLAY, #2158). Equal geps still
+/// do.
+#[test]
+fn a_gep_that_differs_in_inbounds_is_not_read_alike_and_an_equal_one_is() {
+    let module = parsed(
+        "define void @f(ptr %q, i16 %i) {\nentry:\n  %plain = getelementptr i8, ptr %q, i16 %i\n  %bounded = getelementptr inbounds i8, ptr %q, i16 %i\n  %again = getelementptr i8, ptr %q, i16 %i\n  ret void\n}\n",
+    );
+    let f = function(&module, "f");
+    let (plain, bounded, again) = (value(f, "plain"), value(f, "bounded"), value(f, "again"));
+    assert!(!super::decomposes_alike(f, plain, bounded), "an inbounds gep was read like a plain one");
+    assert!(super::decomposes_alike(f, plain, again), "two equal geps were read apart");
+}

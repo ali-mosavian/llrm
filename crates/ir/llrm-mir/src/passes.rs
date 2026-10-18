@@ -652,7 +652,7 @@ impl Analysis for Dominators {
 pub struct Loops;
 
 impl Analysis for Loops {
-    type Result = crate::loops::LoopInfo;
+    type Result = crate::loopinfo::LoopInfo;
     const READS_OUTER: bool = false;
     const NAME: &'static str = "loops";
     fn run(
@@ -660,8 +660,8 @@ impl Analysis for Loops {
         layout: &DataLayout,
         function: &Function,
         analyses: &mut Analyses,
-    ) -> crate::loops::LoopInfo {
-        crate::loops::LoopInfo::new(function, &analyses.get::<Dominators>(context, layout, function))
+    ) -> crate::loopinfo::LoopInfo {
+        crate::loopinfo::LoopInfo::analyze(function, || analyses.get::<Dominators>(context, layout, function))
     }
 }
 
@@ -2523,6 +2523,15 @@ pub fn check_stale(on: bool) {
     CHECK_STALE.with(|check| check.set(on));
 }
 
+static STALE_CHECKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// How many times `LLRM_CHECK_STALE` recomputed held analyses in this process:
+/// `LLRM_DEBUG=checks` reports it (llrm-mir cannot name llrm-support's
+/// counter), so a sweep sees whether the oracle ran at all.
+pub fn stale_checks_run() -> u32 {
+    STALE_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// `LLRM_CHECK_STALE`: the module analyses held past `pass`, which said it adds
 /// no memory operation, still cover what working them out afresh gives.
 fn checked_stale(
@@ -2537,6 +2546,7 @@ fn checked_stale(
     if frozen.is_empty() || !on {
         return;
     }
+    STALE_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     for kind in frozen {
         let Some((_, held)) = analyses.results.get(&kind.id) else { continue };
         let held = Rc::clone(held);

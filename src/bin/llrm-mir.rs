@@ -9,6 +9,7 @@
 //! operands of its loads, stores and calls, one `NoAlias|MayAlias|MustAlias
 //! %a %b` line a pair, in the order `opt -passes=aa-eval` lists them, for
 //! tools/aliascompare.py.
+//! `llrm-mir --loops FILE` prints `print<loops>`'s text for each function.
 
 use std::process::ExitCode;
 
@@ -35,6 +36,10 @@ fn main() -> ExitCode {
     }
     let calls_wanted = arguments.first().is_some_and(|one| one == "--calls");
     if calls_wanted {
+        arguments.remove(0);
+    }
+    let loops = arguments.first().is_some_and(|one| one == "--loops");
+    if loops {
         arguments.remove(0);
     }
     let mut option = |flag: &str| {
@@ -81,6 +86,10 @@ fn main() -> ExitCode {
                 problems.iter().for_each(|one| eprintln!("{path}: {one}"));
                 return ExitCode::FAILURE;
             }
+            if loops {
+                print!("{}", llrm_mir::loopinfo::print_loops(&module));
+                return ExitCode::SUCCESS;
+            }
             if ivs {
                 print!("{}", induction_variables(&module));
                 return ExitCode::SUCCESS;
@@ -118,13 +127,15 @@ fn induction_variables(module: &llrm_mir::module::Module) -> String {
         if function.layout().is_empty() {
             continue;
         }
-        let tree = llrm_mir::dominators::DominatorTree::new(function);
-        let loops = llrm_mir::loops::LoopInfo::new(function, &tree);
+        let loops =
+            llrm_mir::loopinfo::LoopInfo::analyze(function, || llrm_mir::dominators::DominatorTree::new(function));
         let evolution = llrm_mir::scalarevolution::Evolution::new(&module.context, function, &loops);
-        let inner = (0..loops.loops.len()).filter(|&at| !loops.loops.iter().any(|one| one.parent == Some(at)));
-        for (number, at) in inner.enumerate() {
-            let header = loops.loops[at].header;
-            let count = evolution.counted(&module.context, function, &loops, header);
+        // Larger loops first, by header among the same size: the order the
+        // numbers in tools/loops were counted in.
+        let mut inner: Vec<_> = loops.get_loops_in_preorder().into_iter().filter(|one| one.is_innermost()).collect();
+        inner.sort_by_key(|one| (std::cmp::Reverse(one.get_num_blocks()), one.get_header()));
+        for (number, one) in inner.into_iter().enumerate() {
+            let count = evolution.counted(&module.context, function, &loops, one.get_header());
             out += &format!("{}\t{number}\t{count}\n", global.name.as_deref().unwrap_or("?"));
         }
     }
