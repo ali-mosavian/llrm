@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/gvn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gvn.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:cc15f9897849173f145dea58bf53a50758b5190c23e06a2a2bb8d99e7f2be5b0 -->
+<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:37ce3d88a704ee4e7ff2e884a1f0b93bdd2fce887aa90311528a6bdb37c6ab37 -->
 
 # gvn
 
@@ -11,18 +11,23 @@ load or a store. `Gvn` is the pass; `EqualCalls` is its call part alone.
 ## How it works
 `Gvn` runs these steps on a body, in order.
 
-1. Branch equality (`propagated`, LLVM's `propagateEquality`). In what the
-   edge to a successor dominates, the branch's condition is that edge's
-   constant.
-2. Numbering (`transform::forwarded`, `transform::subexpressions`,
+1. The scalar pass (`pass::run_impl`, `table`: LLVM's `GVNPass` and
+   `ValueTable` without the load and PRE parts). Blocks with one way in are
+   merged into it, then each block is met in reverse postorder, its
+   instructions simplified or numbered by opcode, type and operand numbers
+   (a commutative pair ordered, a compare's predicate swapped with its
+   operands, a GEP by the bytes it adds, flags in no key): one that a
+   dominating leader has is replaced, keeping the flags both have. In what
+   an edge of a branch, a switch case or an assume dominates, the condition
+   is that edge's constant (`propagateEquality`), and the arm of a branch on
+   a constant is dead: its join's phis read poison from it. Two calls with
+   the same callee and arguments that read and write no memory are one.
+2. Load numbering (`transform::forwarded`, `transform::subexpressions`,
    `transform::equal_calls`). A load a known value serves becomes that
    value: a dominating store of the same bytes and type, or an earlier load
-   of them, with nothing between that may write them. Two pure operations on
-   the same operands are one, a copy counting as its source and a
-   commutative pair ordered. The blocks are met dominators first, not in
-   layout order, which a removed join leaves behind the blocks it came to
-   dominate. Two calls with the same callee and arguments that read and
-   write no memory are one.
+   of them, with nothing between that may write them. The blocks are met
+   dominators first, not in layout order, which a removed join leaves behind
+   the blocks it came to dominate.
 3. Join PRE (`joined`). An expression every predecessor of a join already
    computes becomes a phi of those values. With `pre`, a predecessor that
    lacks it gets the computation inserted before its unconditional `br`, if

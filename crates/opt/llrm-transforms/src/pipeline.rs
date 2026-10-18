@@ -24,7 +24,7 @@
 //!   a["<b>A  once, whole module</b><br/><small>globalopt, ports (every body),<br/>stamp</small>"]:::mid
 //!   subgraph g_b["B  EACH BODY, TO A FIXED POINT (FIXED, MIR PIPELINE)"]
 //!     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
-//!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
+//!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
 //!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
@@ -104,7 +104,7 @@
 //! | field | passes |
 //! |---|---|
 //! | `optimize` | all; off, only `available-externally` runs |
-//! | `lcssa`, `floatloop`, `fold`, `decide`, `dead` | the pass of that name |
+//! | `lcssa`, `floatloop`, `fold`, `simplifycfg`, `decide`, `dead` | the pass of that name |
 //! | `hoist` | `hoist`, `loopmotion` |
 //! | `forward` and `drop_loads` | `gvn`, `equalcalls` |
 //! | `drop_stores` | `dse` |
@@ -151,12 +151,14 @@ use llrm_mir::print;
 use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
+use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fixednarrow, floatloop, fold, gepoffset,
     globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute, loopfuse,
     loopidioms, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt, peel,
-    phiopt, ports, promote, rotate, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    phiopt, ports, promote, rotate, simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam,
+    unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -176,6 +178,7 @@ pub struct Options {
     pub lcssa: bool,
     pub floatloop: bool,
     pub fold: bool,
+    pub simplifycfg: bool,
     pub decide: bool,
     pub dead: bool,
     pub hoist: bool,
@@ -270,6 +273,7 @@ impl Default for Options {
             floatloop: true,
             rounds: ROUNDS,
             fold: true,
+            simplifycfg: true,
             decide: true,
             dead: true,
             hoist: true,
@@ -456,6 +460,7 @@ impl Options {
             "lcssa" => self.lcssa,
             "floatloop" => self.floatloop,
             "fold" => self.fold,
+            "simplifycfg" => self.simplifycfg,
             "decide" => self.decide,
             "dead" => self.dead,
             "hoist" | "loopmotion" => self.hoist,
@@ -504,6 +509,9 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(fold::Fold),
         // Before anything asks what a port call does to memory.
         Box::new(ports::Ports),
+        // A terminator on a literal is a jump before `decide` asks what the
+        // body's values are.
+        Box::new(simplifycfg::SimplifyCfg),
         Box::new(decide::Decide),
         // gcc runs phiopt at -O1 and above (opts.cc:609); it is priced in bytes
         // at -Os.
@@ -632,17 +640,6 @@ fn experiment_llvm() -> bool {
     llrm_support::env_flag!("LLRM_EXP_LLVM")
 }
 
-/// Where a list of LLVM's order stands.
-#[derive(Clone, Copy)]
-pub(crate) enum Phase {
-    /// The early function pipeline (l.1178-1180).
-    Early,
-    /// GlobalCleanup (l.1241-1244).
-    Cleanup,
-    /// `buildFunctionSimplificationPipeline` (l.630-837), once for a function.
-    Simplify,
-}
-
 /// The passes of `phase`, each once in the place LLVM runs it (the line is the
 /// slot's name).
 pub(crate) fn llvm_order(
@@ -672,6 +669,9 @@ pub(crate) fn llvm_order(
         [slot(a, Box::new(loopsimplify::LoopSimplify)), slot(b, Box::new(lcssa::LoopClosedSSA))]
     };
     let list: Vec<Box<dyn FunctionPass>> = match phase {
+        // Not function lists: their builders call `parity::check_phase`
+        // themselves.
+        Phase::Module | Phase::Backend => Vec::new(),
         Phase::Early => {
             vec![decide("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
         }
@@ -1144,6 +1144,9 @@ impl Fixed {
         linear.unrollers.clear();
         linear.last.clear();
         linear.passes = llvm_order(applied, phase);
+        let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
+        let checked = crate::parity::check_phase(phase, &built);
+        debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
         if !matches!(phase, Phase::Simplify) {
             linear.peelers.clear();

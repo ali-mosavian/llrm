@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::context::{Constant, ConstantKind, Context};
 use crate::module::{
     Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, NameIndex, Names,
     Operand, Use, ValueData, ValueDef, ValueId,
@@ -1015,6 +1016,72 @@ impl Function {
         self.erased.fill(true);
         self.value_uses.iter_mut().for_each(Vec::clear);
         self.block_uses.iter_mut().for_each(Vec::clear);
+    }
+
+    /// One edge from `predecessor` into `block` gone: its phis lose one input
+    /// from it. Unless `keep_one_input_phis`, a phi left with one value (or
+    /// none) is replaced by it (or by poison). LLVM's
+    /// [`BasicBlock::removePredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/BasicBlock.cpp#L446),
+    /// with `PHINode::hasConstantValue` (L468). MIRROR, except a phi has one
+    /// input per edge, so one call drops one input.
+    pub fn predecessor_removed(
+        &mut self,
+        context: &mut Context,
+        block: BlockId,
+        predecessor: BlockId,
+        keep_one_input_phis: bool,
+    ) {
+        let phis: Vec<InstId> = self
+            .block(block)
+            .instructions()
+            .iter()
+            .copied()
+            .take_while(|&one| self.instruction(one).opcode == Opcode::Phi)
+            .collect();
+        for phi in phis {
+            let mut operands = self.instruction(phi).operands.clone();
+            let Some(at) = operands.chunks(2).position(|pair| pair[1] == Operand::Block(predecessor)) else {
+                continue;
+            };
+            operands.drain(2 * at..2 * at + 2);
+            let result = self.instruction(phi).result.expect("a phi's value");
+            let emptied = operands.is_empty();
+            self.set_operands(phi, operands);
+            if keep_one_input_phis {
+                continue;
+            }
+            let only = if emptied {
+                let poison = context.constant(Constant { ty: self.value(result).ty, kind: ConstantKind::Poison });
+                Some(Operand::Constant(poison))
+            } else {
+                self.phi_constant_value(phi)
+            };
+            if let Some(only) = only {
+                self.replace_value(result, only);
+                self.set_operands(phi, Vec::new());
+                self.erase(phi).expect("a phi nothing reads");
+            }
+        }
+    }
+
+    /// The one value all of `phi`'s inputs are, itself not counted: LLVM's
+    /// `PHINode::hasConstantValue`.
+    fn phi_constant_value(
+        &self,
+        phi: InstId,
+    ) -> Option<Operand> {
+        let result = Operand::Value(self.instruction(phi).result.expect("a phi's value"));
+        let mut only = None;
+        for pair in self.instruction(phi).operands.chunks(2) {
+            if pair[0] == result {
+                continue;
+            }
+            if only.is_some_and(|one| one != pair[0]) {
+                return None;
+            }
+            only = Some(pair[0]);
+        }
+        only
     }
 
     /// Removes an empty block nothing names.
