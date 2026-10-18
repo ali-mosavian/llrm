@@ -31,7 +31,7 @@ Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when 
 | 0.1 one baseline | llvm-compare | done at `5e2e995ef` except rows | `d_faces` -O2 2,253 M (5.5x clang 24), -O1 1,789, -O3 2,497, -Os 2,322; 2.98 M allocations, 601.7 MB |
 | 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost 0.03% by callgrind own-function sum (bar 0.1% met by that number, not by perf stat, whose +0.13% total is inside the noise floor) |
 | 0.3 `ObjectRef` identity (spike S0) | objectref-identity | answered: not a cause on main | `LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ; the 131 came from a loose share key; the context-free ordering cost +0.7% and was reverted |
-| 1.0 inline storage | fold-poc | [#2051] (InlineVec) merged: instructions only (-0.55%), cycles not claimed (taken at load about 90); [#2069] and [#2077] wait for a quiet-host cycles run | [#1956]: 259 K allocations |
+| 1.0 inline storage | fold-poc | [#2051] (InlineVec) merged: instructions -0.277% (first taken -0.55%), cycles -0.14% against an A/A of 0.36, so inside noise (quiet window of 2026-10-18; first merged on instructions only, load about 90); [#2069] and [#2077] wait for a quiet-host cycles run | [#1956]: 259 K allocations |
 | 1.1 slab | pass-list-parity | [#2022] merged | -4.2% instructions, -2.9% cycles (in the 5e2e995ef baseline) |
 | 1.2 dense ids | attrs-budgets, ssa-spill-m16 | [#1971], [#2032] merged | -1.17%; -0.38% |
 | 1.3 escape phase | keep-analyses | [#2035] open, [#2037] draft | -0.29%, -0.64% |
@@ -1183,6 +1183,8 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 
 **Bundling.** Constant-factor PRs under 0.5% are bundled per area; slopes, soundness and architecture items are separate PRs.
 
+**The quiet window of 2026-10-18 (05:30 to 06:15 CEST; the procedure that worked).** The CI runners were stopped idle-only with the user's direct permission, restarted afterwards and confirmed online; load was 1.0 to 1.4; the measurement ran on core 8, outside the CI cpusets. The A/A control is a copy of the base binary, not the same file twice: a repeated file stays warm in the page cache and fakes +6% to +13%. Results: [#2173] `d_faces` +0.3% to +0.5% cycles for +0.09% to +0.20% instructions; bench inputs of 15 to 60 ms are unreadable (an A/A of identical binaries swings 0.1% to 8.9%); the fold chain is inside the noise; [#2051] post hoc: cycles -0.14% against an A/A of 0.36, instructions -0.277%.
+
 **Method M (every exit measurement).**
 
 1. **Binaries.** The base is the PR's first parent (`git rev-parse <head>^1`), never main of another day and never the merge-base after main moved. Build both with `cargo build --release --bins` in separate worktrees on the perf host. Check each binary's mtime is after its commit, and record both SHAs in the PR.
@@ -1423,6 +1425,7 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2132]: https://github.com/ali-mosavian/llrm/pull/2132
 [#2145]: https://github.com/ali-mosavian/llrm/pull/2145
 [#2150]: https://github.com/ali-mosavian/llrm/pull/2150
+[#2173]: https://github.com/ali-mosavian/llrm/pull/2173
 [#2151]: https://github.com/ali-mosavian/llrm/pull/2151
 [#2134]: https://github.com/ali-mosavian/llrm/pull/2134
 [#2094]: https://github.com/ali-mosavian/llrm/pull/2094
