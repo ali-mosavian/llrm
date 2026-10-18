@@ -68,6 +68,10 @@ impl ScalarEvolution {
         self.signed_ranges.remove(&s);
         self.constant_multiple_cache.remove(&s);
 
+        // `UnsignedWrapViaInductionTried.erase(AR)` and the signed one.
+        self.unsigned_wrap_via_induction_tried.remove(&s);
+        self.signed_wrap_via_induction_tried.remove(&s);
+
         if let Some(values) = self.expr_value_map.remove(&s) {
             for value in values {
                 self.value_expr_map.remove(&value);

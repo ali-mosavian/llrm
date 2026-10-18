@@ -43,6 +43,7 @@ pub mod sequential;
 pub mod values;
 #[cfg(test)]
 mod values_tests;
+pub mod wrap_proof;
 
 use std::collections::{HashMap, HashSet};
 
@@ -156,6 +157,9 @@ pub struct ScalarEvolution {
     pub(super) scev_users: HashMap<Scev, HashSet<Scev>>,
     /// `LoopUsers`: the add recurrences of each loop.
     pub(super) loop_users: IdMap<BlockId, Vec<Scev>>,
+    /// `UnsignedWrapViaInductionTried` and `SignedWrapViaInductionTried`.
+    pub(super) unsigned_wrap_via_induction_tried: HashSet<Scev>,
+    pub(super) signed_wrap_via_induction_tried: HashSet<Scev>,
     /// `ValuesAtScopes`: each expression's value in the scope of a loop (none:
     /// the function body); the second is empty while it is being computed.
     pub(super) values_at_scopes: HashMap<Scev, Vec<(Option<BlockId>, Option<Use>)>>,
@@ -190,6 +194,8 @@ impl ScalarEvolution {
             expr_value_map: HashMap::new(),
             scev_users: HashMap::new(),
             loop_users: IdMap::new(),
+            unsigned_wrap_via_induction_tried: HashSet::new(),
+            signed_wrap_via_induction_tried: HashSet::new(),
             values_at_scopes: HashMap::new(),
             values_at_scopes_users: HashMap::new(),
             fold_cache_user: HashMap::new(),
