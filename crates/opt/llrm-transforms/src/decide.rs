@@ -95,12 +95,11 @@ use llrm_analysis::cfg;
 use llrm_analysis::constant_cycles::{self, State};
 use llrm_analysis::consts::{self, Known, masked};
 use llrm_analysis::graph::loops;
-use llrm_analysis::guards;
-use llrm_analysis::induction::{self, Scev};
 use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::ranges;
+use llrm_analysis::scev::analysis::ScevView;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -166,9 +165,10 @@ fn _decided(
     // here decided none of 574 branches at d_faces -O2 and was a quarter of
     // the pass.
     let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
+    let scev = ScevView::of(context, layout, function, analyses);
     let held =
         Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
-    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), &registers)?;
+    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), &registers, &scev)?;
     if decisions.is_empty() {
         return Ok(threaded);
     }
@@ -185,6 +185,7 @@ fn _decided(
 fn _decisions(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
+    scev: &ScevView,
 ) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
     // Points-to only for a pointer compared with null, as LLVM asks
@@ -256,33 +257,33 @@ fn _decisions(
             }
         }
         if answer.is_none() {
-            answer = _implied(unit, block, last);
+            answer = _implied(unit, scev, last);
         }
         out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
     }
     Ok(out)
 }
 
-/// Whether the compare `last` branches on holds or fails there, by what the
-/// guards over `block` and the loops holding it prove of its two sides.
+/// Whether the compare `last` branches on holds or fails there, by what
+/// ScalarEvolution proves of its two sides at `last` (`isKnownPredicateAt`,
+/// which reads the guards over its block and the loops holding it).
 fn _implied(
     unit: &Unit,
-    block: BlockId,
+    scev: &ScevView,
     last: InstId,
 ) -> Option<bool> {
     let function = unit.function;
     let Some(Operand::Value(condition)) = function.instruction(last).operands.first().copied() else { return None };
     let (_, compare) = unit.defining(Operand::Value(condition))?;
     let (Opcode::ICmp(predicate), [left, right]) = (&compare.opcode, &compare.operands[..]) else { return None };
-    let width = unit.int_bits(*left)?;
-    let (left, right) = (induction::term(unit, *left)?, induction::term(unit, *right)?);
-    let (left, right) = (Scev::of(&left, width), Scev::of(&right, width));
-    let at = cfg::id(block);
-    let given = guards::Given::at(unit, at, &[]);
-    if given.holds(unit, *predicate, &left, &right) {
-        return Some(true);
-    }
-    given.holds(unit, predicate.inverse(), &left, &right).then_some(false)
+    unit.int_bits(*left)?;
+    scev.ask(unit.context, unit.layout, function, |scev, cx| {
+        let (left, right) = (scev.get_scev(cx, *left), scev.get_scev(cx, *right));
+        if scev.is_known_predicate_at(cx, *predicate, left, right, Some(last)) {
+            return Some(true);
+        }
+        scev.is_known_predicate_at(cx, predicate.inverse(), left, right, Some(last)).then_some(false)
+    })
 }
 
 /// `last`, a terminator, replaced by a jump to `target`.
