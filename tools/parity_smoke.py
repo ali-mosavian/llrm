@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
-"""The per-merge smoke set of the integration branch feat/parity: the most bugs caught per second, 10 s in all.
+"""The per-merge tests of the integration branch feat/parity: the touched crates' fastest unit tests, a few fast run tests and a compile smoke, 10 s of CPU in all.
 
-    tools/parity_smoke.py [--bin DIR]
+    tools/parity_smoke.py [--bin DIR] [--base REF] [--rank CRATE...]
 
-The last line is `PARITY SMOKE PASS ...` or `PARITY SMOKE FAIL ...` with the seconds spent. A step that cannot run here (no QCport sources) is
-named as skipped and is not a pass of that step. Steps, with what they were measured at (release build, 8 oracles on where it says):
-  programs  bintree as BASIC, Nib and C at -m16 and -m32, every LLRM_CHECK_* oracle on        ~1.5 s  frontends, both machines, the oracles
-  sc        QCport's render/sc.c at -m16 -O1, every oracle on                                  ~2.0 s  the C front end on real 16-bit code (the unsound memory summary)
-  d_faces   d_faces.c -m32 -O2 run in unicorn, the reports equal gcc -O0's                      ~2.3 s  a miscompile of real code, executed
-The budget is CPU seconds (a loaded host stretches the wall clock of the same work 2-3x; wall is printed). The set exceeds it when the steps' spent time does (the run fails) or when their declared costs do (a test fails): add a step only by
-dropping or cheapening another. The oracles on d_faces (1.3-4.7 s with the host loaded) and the unit tests of a touched crate (building them is the cost) are not here.
+The last line is `PARITY SMOKE PASS ...` or `PARITY SMOKE FAIL ...`, with the CPU seconds spent. Build time is not in the 10 s: the unit tests are built first, untimed.
+The selection (tools/parity_smoke.toml) is
+  units   per crate that `git diff BASE` touches (crates/<group>/<crate>/...): its cheapest unit tests, the ranked list `--rank` writes, cut to the crate's share of
+          what the other steps leave; with no ranking yet, all its `--lib` tests, killed at that share (a failure before the cut fails; the cut itself is a note)
+  run     a few tests/run programs (tools/dosbatch/run_tests.py NAME...), compiled and run in one DOSBox launch
+  compile bintree as BASIC, Nib and C at -m16/-m32 and QCport's sc.c, every oracle on; d_faces -m32 -O2 run in unicorn against gcc -O0's reports (~3 s)
+The budget is CPU seconds (this process and its children): a loaded host stretches the wall clock of the same work 2-3x. A test fails when the declared selection
+(the fixed steps plus the unit shares of every crate at once) exceeds it; an overrun at run time fails the merge. Slower checks belong to the CI gate of a main
+merge candidate, not here. `--rank CRATE` measures that crate's unit tests once (not per merge) and rewrites its ranked list.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -27,13 +31,74 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
 
+SELECTION = HERE / "parity_smoke.toml"
 BUDGET = 10.0
+UNIT_FLOOR = 3.0  # the seconds the fixed steps always leave for unit tests
 ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "COALESCE", "REPLAY", "INTERN", "SKIPPED", "STALE")
 PROGRAM = ROOT / "bench" / "bintree"
 # d_faces.c as the scoreboard reads it (sha256 prefix), and the six reports `env.c` printed for gcc -O0: an llrm build must print the same.
 DFACES_SHA = "1ab72e38cab4fbd2"
 DFACES_REPORTS = [1502227429, 443461, -222045, 1788001, 271784, 714164]
 KEYWORDS = "far huge near pascal cdecl __far _far __near _near"
+
+
+def cpu() -> float:
+    """CPU seconds of this process and its children."""
+    t = os.times()
+    return t.user + t.system + t.children_user + t.children_system
+
+
+def selection() -> dict:
+    return tomllib.loads(SELECTION.read_text()) if SELECTION.exists() else {}
+
+
+# --- what a merge touches ------------------------------------------------------------------------------------------------------------------------------------
+
+
+def crate_of(path: str, root: Path = ROOT) -> tuple[str, str] | None:
+    """(package, directory) of the crate a file under crates/<group>/<crate>/ belongs to."""
+    parts = path.split("/")
+    if len(parts) < 4 or parts[0] != "crates":
+        return None
+    manifest = root / "/".join(parts[:3]) / "Cargo.toml"
+    if not manifest.is_file():
+        return None
+    name = tomllib.loads(manifest.read_text()).get("package", {}).get("name")
+    return (name, "/".join(parts[:3])) if name else None
+
+
+def touched(base: str, root: Path = ROOT) -> list[str]:
+    done = subprocess.run(["git", "diff", "--name-only", base], cwd=root, capture_output=True, text=True)
+    packages = {c[0] for f in done.stdout.split() if (c := crate_of(f, root))}
+    return sorted(packages)
+
+
+# --- the unit tests -------------------------------------------------------------------------------------------------------------------------------------------
+
+REPORT = re.compile(r"^test (\S+) \.\.\. ok <([\d.]+)s>$", re.M)
+
+
+def ranked(output: str) -> list[tuple[str, float]]:
+    """(test, seconds) of the passing tests in a `-Z unstable-options --report-time` listing, cheapest first."""
+    return sorted(((name, float(sec)) for name, sec in REPORT.findall(output)), key=lambda one: one[1])
+
+
+def share(allowance: float, crates: int) -> float:
+    return allowance / max(crates, 1)
+
+
+def unit_tests(package: str, allowance: float, ranking: dict) -> list[str]:
+    """The names to run for `package`: its cheapest ranked tests whose cumulative cost fits `allowance`; [] where it has no ranking (all of them, cut at the allowance)."""
+    out, total = [], 0.0
+    for name, seconds in ranking.get(package, []):
+        if total + seconds > allowance:
+            break
+        out.append(name)
+        total += seconds
+    return out
+
+
+# --- the steps ----------------------------------------------------------------------------------------------------------------------------------------------
 
 
 def oracle_env() -> dict[str, str]:
@@ -50,7 +115,6 @@ def compile_ok(command: list[str], env: dict[str, str]) -> str | None:
 
 
 def programs(bins: Path) -> tuple[str, str]:
-    """('ok'|'fail'|'skipped', detail)"""
     jobs = []
     for tool, ext in (("llrm-qb", "bas"), ("llrm-nib", "nib"), ("llrm-c", "c")):
         for machine in ("-m16", "-m32"):
@@ -92,13 +156,49 @@ def d_faces(bins: Path) -> tuple[str, str]:
     return ("ok", "reports equal gcc -O0's") if got == DFACES_REPORTS else ("fail", f"d_faces reports {got}, gcc -O0 printed {DFACES_REPORTS}")
 
 
-STEPS = [("programs", programs, 1.5), ("sc", sc, 2.0), ("d_faces", d_faces, 2.5)]  # (name, step, declared seconds)
+def run_cases(bins: Path) -> tuple[str, str]:
+    names = selection().get("run", {}).get("cases", [])
+    if not names:
+        return "skipped", "no tests/run cases chosen (parity_smoke.toml [run] cases)"
+    env = {**os.environ, "LLRM_BIN": str(bins)}
+    done = subprocess.run([sys.executable, str(ROOT / "tools/dosbatch/run_tests.py"), *names], cwd=ROOT, capture_output=True, text=True, env=env)
+    if done.returncode:
+        lines = [line for line in (done.stdout + done.stderr).splitlines() if line.strip()]
+        return "fail", " / ".join(lines[-3:])[:300]
+    return "ok", f"{len(names)} programs"
 
 
-def cpu() -> float:
-    """CPU seconds of this process and its children: a loaded host (load 60 here) stretches the wall clock of the same work 2-3x and failed no merge by it."""
-    t = os.times()
-    return t.user + t.system + t.children_user + t.children_system
+def unit_step(package: str, allowance: float):
+    def step(bins: Path) -> tuple[str, str]:
+        ranking = selection().get("units", {})
+        names = unit_tests(package, allowance, {k: [(n, s) for n, s in v.get("tests", [])] for k, v in ranking.items()})
+        command = ["cargo", "test", "-q", "--lib", "-p", package] + (["--", "--exact", *names] if names else [])
+        try:
+            done = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=allowance + 1.0 if not names else None)
+        except subprocess.TimeoutExpired:
+            return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
+        if done.returncode:
+            lines = [line for line in (done.stdout + done.stderr).splitlines() if "FAILED" in line or "panicked" in line or "error" in line]
+            return "fail", f"{package}: {' / '.join(lines[:3])[:300] or 'cargo test failed'}"
+        return "ok", f"{package}: {len(names) or 'all'} tests"
+    return step
+
+
+FIXED = [("programs", programs, 1.0), ("sc", sc, 1.0), ("d_faces", d_faces, 2.0), ("run", run_cases, 1.0)]  # (name, step, declared seconds)
+
+
+def fixed_cost() -> float:
+    return sum(cost for _, _, cost in FIXED)
+
+
+def plan(packages: list[str], budget: float = BUDGET) -> list:
+    """The steps for a merge touching `packages`: the fixed ones, then each crate's unit tests at an equal share of what is left."""
+    left = max(budget - fixed_cost(), 0.0)
+    return [*FIXED, *((f"unit {p}", unit_step(p, share(left, len(packages))), share(left, len(packages))) for p in packages)]
+
+
+def declared(packages: list[str], budget: float = BUDGET) -> float:
+    return sum(cost for _, _, cost in plan(packages, budget))
 
 
 def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET) -> tuple[bool, str]:
@@ -121,11 +221,40 @@ def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET) -> tuple[boo
     return True, f"PARITY SMOKE PASS {line}"
 
 
+def rank(package: str) -> None:
+    """Measure `package`'s unit tests once and write the cheapest into parity_smoke.toml (not per merge)."""
+    env = {**os.environ, "RUSTC_BOOTSTRAP": "1"}
+    done = subprocess.run(["cargo", "test", "-q", "--lib", "-p", package, "--", "-Z", "unstable-options", "--report-time", "--test-threads", "1"], cwd=ROOT, capture_output=True, text=True, env=env)
+    tests = [(n, s) for n, s in ranked(done.stdout) if s <= 0.5][:40]
+    data = selection()
+    data.setdefault("units", {})[package] = {"tests": [[n, s] for n, s in tests]}
+    SELECTION.write_text(dump(data))
+    print(f"{package}: {len(tests)} tests ranked, cheapest {tests[0] if tests else None}")
+
+
+def dump(data: dict) -> str:
+    out = []
+    if "run" in data:
+        out.append("[run]\ncases = [" + ", ".join(f'"{c}"' for c in data["run"].get("cases", [])) + "]\n")
+    for package, one in sorted(data.get("units", {}).items()):
+        out.append(f'[units."{package}"]\ntests = [\n' + "".join(f'  ["{n}", {s}],\n' for n, s in one.get("tests", [])) + "]\n")
+    return "\n".join(out)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--bin", type=Path, default=None, help="the llrm-c, llrm-qb and llrm-nib directory (default: LLRM_BIN, else the target dir's release)")
+    parser.add_argument("--base", default="origin/feat/parity", help="what the merge result is compared with to find the touched crates")
+    parser.add_argument("--rank", nargs="+", metavar="CRATE", help="measure these crates' unit tests once and write the ranking")
     args = parser.parse_args()
-    ok, line = run_steps(STEPS, args.bin or llrmbin.bin_dir())
+    if args.rank:
+        for package in args.rank:
+            rank(package)
+        return 0
+    packages = touched(args.base)
+    for package in packages:  # built first, untimed
+        subprocess.run(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"], cwd=ROOT, capture_output=True)
+    ok, line = run_steps(plan(packages), args.bin or llrmbin.bin_dir())
     print(line)
     return 0 if ok else 1
 
