@@ -738,7 +738,7 @@ fn _entry_value(
 
 /// `value`, `from` bits wide, as `to` bits.
 fn _resized(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     value: Operand,
     from: u32,
@@ -762,7 +762,7 @@ fn _resized(
 /// first trip; a walk down, on its last.
 #[allow(clippy::too_many_arguments)]
 fn _windowed(
-    context: &mut Context,
+    context: &Context,
     declared: &mut Declared,
     function: &mut Function,
     layout: &llrm_mir::datalayout::DataLayout,
@@ -821,7 +821,7 @@ fn _windowed(
 /// stepped value.
 #[allow(clippy::too_many_arguments)]
 fn _far(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     walk: &Walk,
     origin: Operand,
@@ -885,7 +885,7 @@ fn _erased(
 /// `Intrinsic::Window` from `huge` pointers to `far` ones, declared where the
 /// module has none.
 fn _declared(
-    context: &mut Context,
+    context: &Context,
     declared: &mut Declared,
     far: TypeId,
     huge: TypeId,

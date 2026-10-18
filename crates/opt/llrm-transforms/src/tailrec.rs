@@ -185,7 +185,7 @@ struct Step {
 /// is exposed, so a callee cannot read what the frame holds and the next trip
 /// may reuse it.
 pub fn eliminated(
-    context: &mut Context,
+    context: &Context,
     callees: &Callees,
     globals: &[GlobalValue],
     function: &mut Function,
@@ -436,7 +436,7 @@ fn returned_from(
 
 /// The accumulator's value before the first trip: what `op` leaves a number as.
 fn identity(
-    context: &mut Context,
+    context: &Context,
     op: BinaryOp,
     bits: u32,
 ) -> Operand {
@@ -451,7 +451,7 @@ fn identity(
 }
 
 fn rewrite(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     found: &[Site],
     operation: Option<BinaryOp>,

@@ -86,7 +86,7 @@ pub fn widening_enabled() -> bool {
 /// Every comparison with an induction variable that ScalarEvolution decides,
 /// replaced by what it decides; whether any was.
 pub fn simplified(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
