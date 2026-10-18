@@ -1,3 +1,7 @@
+---
+architecture-index: GVN and MemoryDependenceAnalysis as a translation of LLVM's
+architecture-order: 280
+---
 # GVN and MemoryDependenceAnalysis as a translation of LLVM's: the plan
 
 TL;DR: `GVN.cpp`, `MemoryDependenceAnalysis.cpp` and `VNCoercion.cpp` (6,410 lines at `d1106deb71cc`) are translated function for function, in six small stages that each delete the llrm code they replace. Engine and options are those of `-O2`/`-O3`/`-Os` in the pinned `buildFunctionSimplificationPipeline`: MemoryDependenceAnalysis, scalar PRE, load PRE and load-in-loop PRE on, backedge-split load PRE off. No `-O1` change (see Out of scope).

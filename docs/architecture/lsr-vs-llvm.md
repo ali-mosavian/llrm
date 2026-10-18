@@ -1,3 +1,7 @@
+---
+architecture-index: lsr against LoopStrengthReduce
+architecture-order: 160
+---
 # lsr against LLVM's LoopStrengthReduce
 
 TL;DR: `lsr` is 148 M of `d_faces` -O2 (2,689 M), LLVM's `LoopStrengthReduce` 10.4 M. The structure differs by design (gcc's ivopts search with a per-loop spill forecast against LLVM's register-count cost), and the forecast is worth its price: switching it off changes 425 of 1,583 objects and grows the bench code. What is left to take is mechanism-identical and small; none of it is a slope.

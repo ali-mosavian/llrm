@@ -1,3 +1,7 @@
+---
+architecture-index: LoopIdiomRecognize as a translation of LLVM's
+architecture-order: 240
+---
 # LoopIdiomRecognize as a translation of LLVM's: the plan
 
 TL;DR: `LoopIdiomRecognize.cpp` (3,881 lines at `d1106deb71cc`) is translated as `loopidiom/` and replaces `LoopIdioms` (the loop half of `loopidioms.rs`). `loopidioms` does the memset and memcpy idioms of the countable half and none of the noncountable half (popcount, ctlz/cttz, shift-until, strlen, CRC). Oversight's rulings: the slot is LLVM's (before `indvars` and full unroll); priority is low, behind LICM, InstCombine and LVI; the first PR moves `loopidioms` to that slot and brings its cost (17.1 M of `d_faces` -O2) to LoopIdiomRecognize's on the same inputs; idiom-bearing inputs (L0) come before any further porting. `loopidioms` acts on 0 of the 112 runs the replay corpus holds, so the corpus cannot judge it.
