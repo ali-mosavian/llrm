@@ -108,3 +108,13 @@ fn an_exported_function_keeps_its_signature() {
     let after = run(&sum(READS, "", ""));
     assert!(after.contains("@sum(ptr addrspace(1)"), "{after}");
 }
+
+/// A `noipa` routine keeps the pointer it is passed; the same one without the
+/// attribute takes the fields instead (the premise above).
+#[test]
+fn a_noipa_routine_keeps_its_pointer_parameter() {
+    let marked = sum(READS, "internal ", "").replace(") {\nb0:", ") noipa {\nb0:");
+    assert_ne!(marked, sum(READS, "internal ", ""));
+    let after = run(&marked);
+    assert!(after.contains("call i16 @sum(ptr addrspace(1)"), "{after}");
+}
