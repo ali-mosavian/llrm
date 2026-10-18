@@ -1,5 +1,5 @@
 use crate::dominators::DominatorTree;
-use crate::loopinfo::{LoopInfo, print_loops};
+use crate::loopinfo::{LoopBlocksDfs, LoopBlocksRpo, LoopInfo, print_loops};
 use crate::module::{BlockId, Function, Module};
 use crate::parse;
 
@@ -137,4 +137,93 @@ fn test_loops_are_found_once_while_the_cfg_is_kept() {
     let found = analyses.get::<Loops>(&module.context, &layout, function);
     assert_eq!(get(Event::Forests) - before, 2, "control: the CFG changed, found again");
     assert!(!found.is_loop_header(block(function, "i")));
+}
+
+fn value_named(
+    function: &Function,
+    name: &str,
+) -> crate::module::ValueId {
+    function
+        .parameters
+        .iter()
+        .copied()
+        .chain(function.walk().filter_map(|(_, inst)| function.instruction(inst).result))
+        .find(|&one| function.value(one).name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("value {name}"))
+}
+
+fn find<'a>(
+    module: &'a Module,
+    name: &str,
+) -> &'a Function {
+    module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).expect("a function").2
+}
+
+/// `isLCSSAForm`: a use of a loop-defined value outside the loop, not in a
+/// phi of the exit, makes the loop not LCSSA; the phi closes it.
+#[test]
+fn test_a_value_used_outside_the_loop_without_a_phi_is_not_lcssa() {
+    let module = load("queries.ll");
+    for (name, closed) in [("leaks", false), ("closed", true)] {
+        let function = find(&module, name);
+        let tree = DominatorTree::new(function);
+        let info = LoopInfo::analyze(function, || &tree);
+        let one = info.get_loop_for(block(function, "h")).expect("loop");
+        assert_eq!(one.is_lcssa_form(function, &tree), closed, "{name}");
+        assert_eq!(one.is_recursively_lcssa_form(function, &tree, &info), closed, "{name}");
+    }
+}
+
+#[test]
+fn test_loop_invariance_is_a_definition_outside_the_loop() {
+    let module = load("queries.ll");
+    let function = find(&module, "invariance");
+    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let one = info.get_loop_for(block(function, "h")).expect("loop");
+    let value = |name: &str| crate::module::Operand::Value(value_named(function, name));
+    assert!(one.is_loop_invariant(function, value("k")), "defined in the entry");
+    assert!(one.is_loop_invariant(function, value("n")), "an argument");
+    assert!(!one.is_loop_invariant(function, value("i")), "a header phi");
+    let inst = |name: &str| match function.value(value_named(function, name)).def {
+        crate::module::ValueDef::Instruction(inst) => inst,
+        crate::module::ValueDef::Argument(_) => unreachable!(),
+    };
+    assert!(one.has_loop_invariant_operands(function, inst("m")), "k + n");
+    assert!(!one.has_loop_invariant_operands(function, inst("j")), "i + k");
+}
+
+#[test]
+fn test_loop_simplify_form_and_the_incoming_and_back_edges() {
+    let module = load("shapes.ll");
+    let (selfloop, two) = (find(&module, "self"), find(&module, "two_latches"));
+    let info = LoopInfo::analyze(selfloop, || DominatorTree::new(selfloop));
+    let one = info.get_loop_for(block(selfloop, "l")).expect("loop");
+    assert!(one.is_loop_simplify_form(selfloop));
+    assert_eq!(one.get_incoming_and_back_edge(selfloop), Some((block(selfloop, "entry"), block(selfloop, "l"))));
+    let info = LoopInfo::analyze(two, || DominatorTree::new(two));
+    let one = info.get_loop_for(block(two, "h")).expect("loop");
+    assert!(!one.is_loop_simplify_form(two), "two latches");
+    assert_eq!(one.get_incoming_and_back_edge(two), None, "three edges into the header");
+}
+
+/// `LoopBlocksRPO`, by hand: from `h` the search takes `a` before `b`; `m`
+/// finishes first, then `a`, `b`, `h`: postorder m a b h, reverse h b a m.
+#[test]
+fn test_loop_blocks_rpo_is_the_reverse_of_the_search_postorder() {
+    let module = load("queries.ll");
+    let function = find(&module, "diamond");
+    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let one = info.get_loop_for(block(function, "h")).expect("loop");
+    let mut dfs = LoopBlocksDfs::new(one);
+    assert!(!dfs.has_preorder(block(function, "h")));
+    dfs.perform(function);
+    let [h, a, b, m] = ["h", "a", "b", "m"].map(|name| block(function, name));
+    assert!(dfs.is_complete());
+    assert_eq!(dfs.postorder(), [m, a, b, h]);
+    assert_eq!(dfs.rpo().collect::<Vec<_>>(), [h, b, a, m]);
+    assert_eq!((dfs.get_postorder(m), dfs.get_rpo(m), dfs.get_rpo(h)), (1, 4, 1));
+    assert!(!dfs.has_preorder(block(function, "exit")), "outside the loop");
+    let mut rpo = LoopBlocksRpo::new(one);
+    rpo.perform(function);
+    assert_eq!(rpo.iter().collect::<Vec<_>>(), [h, b, a, m]);
 }

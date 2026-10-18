@@ -1,14 +1,34 @@
-//! `LoopInfo` and `Loop`, a translation of LLVM's `GenericLoopInfo.h` and
-//! `GenericLoopInfoImpl.h` at `d1106deb71cc`: the loops of a function as a
-//! tree, each with its blocks header first, each subloop's blocks contiguous
-//! inside its parent's. Found by `analyzeImpl`'s single depth-first search
-//! (Wei et al., SAS 2007); the dominator tree is asked only when a loop has a
-//! second entry.
+//! The loops of a function as LLVM's `LoopInfo` and `Loop` give them, a
+//! translation of `GenericLoopInfo.h`, `GenericLoopInfoImpl.h`,
+//! `LoopInfo.cpp` and `LoopIterator.h` at `d1106deb71cc`.
 //!
-//! Top-level loops are in reverse program order and subloops in program
-//! order, as LLVM keeps them. Successors are the terminator's block operands
-//! with repeats, as `children<BasicBlock *>` gives them; predecessors are one
-//! per edge, as `inverse_children` gives them.
+//! # How it works
+//! `LoopInfo::analyze` is `analyzeImpl`: one depth-first search tags each block
+//! with its innermost enclosing header (Wei et al., SAS 2007); the dominator
+//! tree is asked only when a cycle is entered other than through its header.
+//! Blocks are laid out header first with each subloop's blocks contiguous
+//! inside its parent's, so a loop's blocks are a slice. Top-level loops are in
+//! reverse program order and subloops in program order, as LLVM keeps them.
+//! Successors are the terminator's block operands with repeats, as
+//! `children<BasicBlock *>` gives them; predecessors are one per edge, as
+//! `inverse_children` gives them. Everything is generic over a [`LoopGraph`];
+//! `Function` is one, and so is the address graph the LIR walks use.
+//!
+//! # Used by
+//! The `Loops` analysis (`passes`), `cfg::Shape`, the forest of block
+//! addresses the graph walks read (`forest`), argpromotion, sink and the
+//! rich-MIR scalar evolution.
+//!
+//! # Example
+//! A loop with a body block, `entry -> h -> {b, exit}`, `b -> h`:
+//!
+//! | Query | Result |
+//! | --- | --- |
+//! | blocks of the loop at `h` | `h`, `b` |
+//! | `get_loop_latch` | `b` |
+//! | `get_loop_preheader` | `entry` |
+//! | `get_exit_blocks` | `exit` |
+//! | `get_loop_depth(exit)` | 0 |
 
 use crate::dominators::DominatorTree;
 use crate::module::{BlockId, Function, MetadataNode, MetadataOperand, Operand};
@@ -34,6 +54,8 @@ const UNVISITED: u32 = 0;
 const OFF_PATH: u32 = 1;
 const IS_HEADER: u32 = 2;
 const IS_REENTERED: u32 = 3;
+/// `LoopBlocksDfs`: a block not yet reached.
+const UNSEEN: u32 = u32::MAX;
 const FIRST_ON_PATH: u32 = 4;
 
 /// A loop of a [`LoopInfo`]: its place in the loops, outer loops first.
@@ -642,6 +664,58 @@ fn single<B: Copy + Eq>(
 }
 
 impl Loop<'_, BlockId> {
+    /// `isLoopInvariant`: any value but an instruction in the loop.
+    pub fn is_loop_invariant(
+        &self,
+        function: &Function,
+        value: Operand,
+    ) -> bool {
+        match value {
+            Operand::Value(id) => match function.value(id).def {
+                crate::module::ValueDef::Instruction(inst) => !self.contains_instruction(function, inst),
+                crate::module::ValueDef::Argument(_) => true,
+            },
+            _ => true,
+        }
+    }
+
+    /// `hasLoopInvariantOperands`.
+    pub fn has_loop_invariant_operands(
+        &self,
+        function: &Function,
+        inst: crate::module::InstId,
+    ) -> bool {
+        function.instruction(inst).operands.iter().all(|&operand| self.is_loop_invariant(function, operand))
+    }
+
+    /// `isLCSSAForm`: no value defined in the loop is used outside it but in
+    /// a block the entry does not reach.
+    pub fn is_lcssa_form(
+        &self,
+        function: &Function,
+        tree: &DominatorTree,
+    ) -> bool {
+        self.get_blocks().iter().all(|&block| is_block_in_lcssa_form(function, *self, block, tree))
+    }
+
+    /// `isRecursivelyLCSSAForm`: every block's values are used only in its
+    /// innermost loop, which makes this loop and those in it LCSSA.
+    pub fn is_recursively_lcssa_form(
+        &self,
+        function: &Function,
+        tree: &DominatorTree,
+        info: &LoopInfo,
+    ) -> bool {
+        self.get_blocks()
+            .iter()
+            .all(
+                |&block| {
+                    let innermost = info.get_loop_for(block).expect("a block of the loop");
+                    is_block_in_lcssa_form(function, innermost, block, tree)
+                },
+            )
+    }
+
     /// `contains(const InstT *)`.
     pub fn contains_instruction(
         &self,
@@ -948,6 +1022,40 @@ impl<'a, B: BlockNumber> Loop<'a, B> {
         latch
     }
 
+    /// `isLoopSimplifyForm`: a preheader, a single backedge, and exits whose
+    /// predecessors are all in the loop.
+    pub fn is_loop_simplify_form(
+        &self,
+        graph: &impl LoopGraph<Block = B>,
+    ) -> bool {
+        self.get_loop_preheader(graph).is_some()
+            && self.get_loop_latch(graph).is_some()
+            && self.has_dedicated_exits(graph)
+    }
+
+    /// `getIncomingAndBackEdge`: (incoming, backedge) for a header with
+    /// exactly one edge from outside the loop and one from inside.
+    pub fn get_incoming_and_back_edge(
+        &self,
+        graph: &impl LoopGraph<Block = B>,
+    ) -> Option<(B, B)> {
+        let mut preds = graph.inverse_children(self.get_header());
+        let mut backedge = preds.next().expect("Loop must have at least one backedge!");
+        let mut incoming = preds.next()?;
+        if preds.next().is_some() {
+            return None;
+        }
+        if self.contains(incoming) {
+            if self.contains(backedge) {
+                return None;
+            }
+            std::mem::swap(&mut incoming, &mut backedge);
+        } else if !self.contains(backedge) {
+            return None;
+        }
+        Some((incoming, backedge))
+    }
+
     /// `LoopBase::print`.
     fn print(
         &self,
@@ -979,6 +1087,169 @@ impl<'a, B: BlockNumber> Loop<'a, B> {
             sub.print(graph, block_name, depth + 2, out);
         }
     }
+}
+
+/// `LoopBlocksDFS`: a depth-first search of a loop's blocks from its header,
+/// keeping the postorder. A block is taken the first time an edge reaches it
+/// if the loop holds it (`LoopBlocksTraversal::insertEdge`), so the back edge
+/// to the header is not followed.
+pub struct LoopBlocksDfs<'a, B = BlockId> {
+    one: Loop<'a, B>,
+    /// A block's postorder number by block number: 0 from when it is reached
+    /// to when it is finished, `UNSEEN` before.
+    post_numbers: Vec<u32>,
+    post_blocks: Vec<B>,
+}
+
+impl<'a, B: BlockNumber> LoopBlocksDfs<'a, B> {
+    pub fn new(one: Loop<'a, B>) -> Self {
+        Self { one, post_numbers: Vec::new(), post_blocks: Vec::with_capacity(one.get_num_blocks()) }
+    }
+
+    pub fn get_loop(&self) -> Loop<'a, B> {
+        self.one
+    }
+
+    /// `perform`: the search, once.
+    pub fn perform(
+        &mut self,
+        graph: &impl LoopGraph<Block = B>,
+    ) {
+        debug_assert!(self.post_blocks.is_empty(), "Need clear DFS result before traversing");
+        let header = self.one.get_header();
+        self.post_numbers = vec![UNSEEN; graph.max_number()];
+        self.post_numbers[header.number()] = 0;
+        let mut stack: Vec<(B, usize)> = vec![(header, 0)];
+        while let Some(&(block, _)) = stack.last() {
+            let cursor = &mut stack.last_mut().expect("nonempty").1;
+            match graph.child(block, cursor) {
+                Some(child) => {
+                    if self.one.contains(child) && self.post_numbers[child.number()] == UNSEEN {
+                        self.post_numbers[child.number()] = 0;
+                        stack.push((child, 0));
+                    }
+                }
+                None => {
+                    stack.pop();
+                    self.post_blocks.push(block);
+                    self.post_numbers[block.number()] = self.post_blocks.len() as u32;
+                }
+            }
+        }
+    }
+
+    /// `isComplete`: every block of the loop has a postorder number.
+    pub fn is_complete(&self) -> bool {
+        self.post_blocks.len() == self.one.get_num_blocks()
+    }
+
+    /// `beginPostorder`.
+    pub fn postorder(&self) -> &[B] {
+        debug_assert!(self.is_complete(), "bad loop DFS");
+        &self.post_blocks
+    }
+
+    /// `beginRPO`.
+    pub fn rpo(&self) -> impl Iterator<Item = B> + '_ {
+        debug_assert!(self.is_complete(), "bad loop DFS");
+        self.post_blocks.iter().rev().copied()
+    }
+
+    /// `hasPreorder`.
+    pub fn has_preorder(
+        &self,
+        block: B,
+    ) -> bool {
+        self.post_numbers.get(block.number()).is_some_and(|&one| one != UNSEEN)
+    }
+
+    /// `hasPostorder`.
+    pub fn has_postorder(
+        &self,
+        block: B,
+    ) -> bool {
+        self.post_numbers.get(block.number()).is_some_and(|&one| one != UNSEEN && one != 0)
+    }
+
+    /// `getPostorder`.
+    pub fn get_postorder(
+        &self,
+        block: B,
+    ) -> u32 {
+        let found = self
+            .post_numbers
+            .get(block.number())
+            .copied()
+            .filter(|&one| one != UNSEEN)
+            .expect("block not visited by DFS");
+        debug_assert!(found != 0, "block not finished by DFS");
+        found
+    }
+
+    /// `getRPO`.
+    pub fn get_rpo(
+        &self,
+        block: B,
+    ) -> u32 {
+        1 + self.post_blocks.len() as u32 - self.get_postorder(block)
+    }
+}
+
+/// `LoopBlocksRPO`: the loop's blocks in reverse postorder.
+pub struct LoopBlocksRpo<'a, B = BlockId> {
+    dfs: LoopBlocksDfs<'a, B>,
+}
+
+impl<'a, B: BlockNumber> LoopBlocksRpo<'a, B> {
+    pub fn new(one: Loop<'a, B>) -> Self {
+        Self { dfs: LoopBlocksDfs::new(one) }
+    }
+
+    pub fn perform(
+        &mut self,
+        graph: &impl LoopGraph<Block = B>,
+    ) {
+        self.dfs.perform(graph);
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = B> + '_ {
+        self.dfs.rpo()
+    }
+}
+
+/// `loopContainsUser`, for every use of every value `block` defines:
+/// `isBlockInLCSSAForm`. A use in a phi is in the incoming block; a use in
+/// `block` itself, or in a block the entry does not reach, needs no phi.
+fn is_block_in_lcssa_form(
+    function: &Function,
+    one: Loop<'_, BlockId>,
+    block: BlockId,
+    tree: &DominatorTree,
+) -> bool {
+    function
+        .block(block)
+        .instructions
+        .iter()
+        .all(
+            |&inst| {
+                let Some(result) = function.instruction(inst).result else { return true };
+                function
+                    .users(result)
+                    .iter()
+                    .all(
+                        |usage| {
+                            let user = function.instruction(usage.user);
+                            let Some(mut user_block) = function.parent(usage.user) else { return true };
+                            if user.opcode == Opcode::Phi
+                                && let Operand::Block(incoming) = user.operands[usage.index as usize | 1]
+                            {
+                                user_block = incoming;
+                            }
+                            user_block == block || one.contains(user_block) || !tree.is_reachable(user_block)
+                        },
+                    )
+            },
+        )
 }
 
 /// `print<loops>`'s text for each function of `module` with a body.
