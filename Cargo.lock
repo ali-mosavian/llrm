@@ -193,6 +193,7 @@ name = "llrm"
 version = "0.1.0"
 dependencies = [
  "llrm-alloc",
+ "llrm-analysis",
  "llrm-bcdriver",
  "llrm-c",
  "llrm-core",
