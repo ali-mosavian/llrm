@@ -337,7 +337,8 @@ pub fn materialized(
     let Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow } = plan;
     let merging: BTreeSet<u32> = stored.difference(plain).copied().collect();
     let first = fresh;
-    // A value made again where it is read cannot take the place of a stored one.
+    // A value made again where it is read cannot take the place of a stored
+    // one.
     let again: BTreeSet<u32> = constants
         .keys()
         .chain(addresses.keys())
@@ -346,9 +347,8 @@ pub fn materialized(
         .chain(rebuilt.keys())
         .copied()
         .collect();
-    let (body, next) = llrm_support::debug::timed("spill short updates", || {
-        _short_update_runs(body, &merging, &again, frame, fresh)
-    })?;
+    let (body, next) =
+        llrm_support::debug::timed("spill short updates", || _short_update_runs(body, &merging, &again, frame, fresh))?;
     fresh = next;
     let (body, next) =
         llrm_support::debug::timed("spill local updates", || _local_updates(&body, &merging, frame, fresh))?;
@@ -635,26 +635,18 @@ pub fn materialized(
     // Only a block that held one of those instructions has any to remove.
     for &at in &marked {
         if !rematerialized_definitions.is_empty() {
-            result.blocks[at] = result
-                .blocks[at]
-                .with_insns(
-                    lir::without(
-                        &result.blocks[at].insns,
-                        |one| rematerialized_definitions.contains(&key(one)),
-                        never,
-                    ),
-                );
+            result.blocks[at] = result.blocks[at].with_insns(lir::without(
+                &result.blocks[at].insns,
+                |one| rematerialized_definitions.contains(&key(one)),
+                never,
+            ));
         }
         if !identities.is_empty() {
-            result.blocks[at] = result
-                .blocks[at]
-                .with_insns(
-                    lir::without(
-                        &result.blocks[at].insns,
-                        |one| identities.contains(&key(one)),
-                        never,
-                    ),
-                );
+            result.blocks[at] = result.blocks[at].with_insns(lir::without(
+                &result.blocks[at].insns,
+                |one| identities.contains(&key(one)),
+                never,
+            ));
         }
     }
     let result = _remove_abandoned_in(result, &abandoned, &marked);
@@ -1139,14 +1131,11 @@ fn siblings_over(
     // A shared slot holds each member at every width it is used, not just
     // moved.
     let width_of = |value: u32| -> Option<u32> {
-        *widths_known
-            .borrow_mut()
-            .entry(value)
-            .or_insert_with(
-                || llrm_support::debug::timed("siblings widths", || {
-                    _widest_by(body, &BTreeSet::from([value]), postings).get(&value).copied()
-                }),
-            )
+        *widths_known.borrow_mut().entry(value).or_insert_with(|| {
+            llrm_support::debug::timed("siblings widths", || {
+                _widest_by(body, &BTreeSet::from([value]), postings).get(&value).copied()
+            })
+        })
     };
     let whole: std::cell::OnceCell<coalesce::Graph> = std::cell::OnceCell::new();
     // Whether `candidate` is live with a member of `group` where a register
@@ -2064,14 +2053,12 @@ fn frame_cells(one: &Insn) -> impl Iterator<Item = (i64, u32, bool)> + '_ {
         let addr = cell.addr?;
         (addr.space == Space::Frame).then_some((addr.disp, cell.width, defines))
     };
-    one.what
-        .iter()
-        .flat_map(
-            move |what| what.dests
-                .iter()
-                .filter_map(move |operand| cell(operand, true))
-                .chain(what.sources.iter().filter_map(move |operand| cell(operand, false))),
-        )
+    one.what.iter().flat_map(move |what| {
+        what.dests
+            .iter()
+            .filter_map(move |operand| cell(operand, true))
+            .chain(what.sources.iter().filter_map(move |operand| cell(operand, false)))
+    })
 }
 
 /// What names a home: an instruction, by the frame cells it names.
@@ -2246,28 +2233,23 @@ fn homes_kept(
     // whose structure is this body's: the blocks are told apart by identity,
     // and the structure, which is compared block by block, only for the states
     // taken in that order until one is.
-    let kept = body
-        .facts
-        .0
-        .stash(
-            |held: &mut HomesHeld| {
-                let mut by_change: Vec<(usize, &Arc<HomesState>)> = held
-                    .0
+    let kept = body.facts.0.stash(|held: &mut HomesHeld| {
+        let mut by_change: Vec<(usize, &Arc<HomesState>)> = held
+            .0
+            .iter()
+            .map(|state| {
+                let differing = state
+                    .insns
                     .iter()
-                    .map(|state| {
-                        let differing = state
-                            .insns
-                            .iter()
-                            .zip(&body.blocks)
-                            .filter(|(insns, block)| !insns.same_insns(&block.insns))
-                            .count();
-                        (differing, state)
-                    })
-                    .collect();
-                by_change.sort_by_key(|(differing, _)| *differing);
-                by_change.into_iter().find(|(_, state)| state.structure.is_of(body)).map(|(_, state)| Arc::clone(state))
-            },
-        );
+                    .zip(&body.blocks)
+                    .filter(|(insns, block)| !insns.same_insns(&block.insns))
+                    .count();
+                (differing, state)
+            })
+            .collect();
+        by_change.sort_by_key(|(differing, _)| *differing);
+        by_change.into_iter().find(|(_, state)| state.structure.is_of(body)).map(|(_, state)| Arc::clone(state))
+    });
     let mut result: Option<IndexMap<u32, Interval>> = None;
     if let Some(state) = &kept {
         let blocks: Vec<(i64, &crate::model::lir::Insns)> =
@@ -2358,14 +2340,10 @@ fn homes_kept(
         known: homes.iter().copied().collect(),
         count: body.blocks.iter().map(|block| block.insns.len()).sum(),
     };
-    body.facts
-        .0
-        .stash(
-            |held: &mut HomesHeld| {
-                held.0.insert(0, Arc::new(state));
-                held.0.truncate(3);
-            },
-        );
+    body.facts.0.stash(|held: &mut HomesHeld| {
+        held.0.insert(0, Arc::new(state));
+        held.0.truncate(3);
+    });
     result
 }
 
@@ -2451,16 +2429,12 @@ fn _existing_colors_by(
                     }
                     None
                 };
-                let framed = what
-                    .dests
-                    .iter()
-                    .chain(&what.sources)
-                    .any(
-                        |operand| matches!(
-                            operand,
-                            Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)
-                        ),
-                    );
+                let framed = what.dests.iter().chain(&what.sources).any(|operand| {
+                    matches!(
+                        operand,
+                        Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)
+                    )
+                });
                 if !framed {
                     continue;
                 }
@@ -3052,19 +3026,14 @@ impl Events<'_> {
         let own = self.own.get(&block).and_then(|list| {
             list.iter().rev().find(|(at, _)| position.is_none_or(|bound| *at < bound)).map(|(at, load)| (*at, *load))
         });
-        let background = self
-            .background
-            .as_ref()
-            .and_then(
-                |background| {
-                    let list = background.lists.get(block)?;
-                    let mut end = position.map_or(list.len(), |bound| list.partition_point(|at| *at < bound));
-                    while end > 0 && background.excluded.binary_search(&(block, list[end - 1])).is_ok() {
-                        end -= 1;
-                    }
-                    end.checked_sub(1).map(|last| (list[last], false))
-                },
-            );
+        let background = self.background.as_ref().and_then(|background| {
+            let list = background.lists.get(block)?;
+            let mut end = position.map_or(list.len(), |bound| list.partition_point(|at| *at < bound));
+            while end > 0 && background.excluded.binary_search(&(block, list[end - 1])).is_ok() {
+                end -= 1;
+            }
+            end.checked_sub(1).map(|last| (list[last], false))
+        });
         match (own, background) {
             (Some(own), Some(background)) => Some(if background.0 > own.0 { background } else { own }),
             (one, other) => one.or(other),
@@ -3087,16 +3056,10 @@ impl Writers {
         };
         for (block, one_block) in body.blocks.iter().enumerate() {
             for (position, one) in one_block.insns.iter().enumerate() {
-                let dests = one
-                    .what
-                    .iter()
-                    .flat_map(|what| &what.dests)
-                    .filter_map(
-                        |dest| match dest {
-                            Loc::Mem(cell) => Some(cell),
-                            _ => None,
-                        },
-                    );
+                let dests = one.what.iter().flat_map(|what| &what.dests).filter_map(|dest| match dest {
+                    Loc::Mem(cell) => Some(cell),
+                    _ => None,
+                });
                 let mut wild = one.call.is_some() || one.unmodeled_write();
                 let mut hard = wild;
                 let mut key: Option<(u8, i64)> = None;
@@ -3178,15 +3141,11 @@ impl Writers {
         found.extend(self.mixed.iter().copied());
         let group = self.fixed.get(&key);
         if let Some(group) = group {
-            let by_byte = group
-                .by_byte
-                .get_or_init(
-                    || {
-                        let mut sorted = group.places.clone();
-                        sorted.sort_unstable();
-                        sorted
-                    },
-                );
+            let by_byte = group.by_byte.get_or_init(|| {
+                let mut sorted = group.places.clone();
+                sorted.sort_unstable();
+                sorted
+            });
             let first = by_byte.partition_point(|(byte, _)| *byte < low - self.widest_fixed + 1);
             found.extend(by_byte[first..].iter().take_while(|(byte, _)| *byte < high).map(|(_, place)| *place));
         }
@@ -3381,15 +3340,10 @@ fn _written<'a>(
     cell: &Mem,
 ) -> impl Iterator<Item = &'a Mem> + Clone {
     let spared = _in_frame(cell) && one.call.as_ref().is_some_and(|call| call.writes() && call.spares_the_frame());
-    one.what
-        .iter()
-        .flat_map(|what| &what.dests)
-        .filter_map(
-            move |dest| match dest {
-                Loc::Mem(dest) if !(spared && dest.addr.is_some_and(|addr| addr.space != Space::Frame)) => Some(dest),
-                _ => None,
-            },
-        )
+    one.what.iter().flat_map(|what| &what.dests).filter_map(move |dest| match dest {
+        Loc::Mem(dest) if !(spared && dest.addr.is_some_and(|addr| addr.space != Space::Frame)) => Some(dest),
+        _ => None,
+    })
 }
 
 /// The predecessors of every block, `at`s outside the body ignored.
@@ -3911,19 +3865,13 @@ fn _flags_overwritten(crossed: &[Arc<Insn>]) -> bool {
         let Some(what) = &one.what else {
             continue;
         };
-        if matches!(
-            what.op,
-            Operation::Branch | Operation::Jump | Operation::Call | Operation::Return
-        ) {
+        if matches!(what.op, Operation::Branch | Operation::Jump | Operation::Call | Operation::Return) {
             return false;
         }
         if what.name.as_deref().is_some_and(crate::backend::peephole::_reads_flags) {
             return false;
         }
-        if matches!(
-            what.name.as_deref(),
-            Some("add" | "sub" | "and" | "or" | "xor" | "cmp" | "test")
-        ) {
+        if matches!(what.name.as_deref(), Some("add" | "sub" | "and" | "or" | "xor" | "cmp" | "test")) {
             return true;
         }
     }
@@ -5652,7 +5600,13 @@ mod tests {
             &[1],
             &[],
         );
-        let copy = insn(0x102, (0x102, 0x102), semantics(Operation::Move, "mov", vec![held(2, 2)], vec![held(1, 2)]), &[2], &[1]);
+        let copy = insn(
+            0x102,
+            (0x102, 0x102),
+            semantics(Operation::Move, "mov", vec![held(2, 2)], vec![held(1, 2)]),
+            &[2],
+            &[1],
+        );
         let add = insn(
             0x104,
             (0x104, 0x104),
@@ -5660,7 +5614,13 @@ mod tests {
             &[2],
             &[2],
         );
-        let user = insn(0x106, (0x106, 0x106), semantics(Operation::Move, "mov", vec![held(3, 2)], vec![held(2, 2)]), &[3], &[2]);
+        let user = insn(
+            0x106,
+            (0x106, 0x106),
+            semantics(Operation::Move, "mov", vec![held(3, 2)], vec![held(2, 2)]),
+            &[3],
+            &[2],
+        );
         let mut frame = Frame::new(0);
         let (result, _made) = spilled(
             &_body(vec![load, copy, add, user]),
@@ -6808,16 +6768,14 @@ mod tests {
         let add = insn(0x100, (0x100, 0x104), what_, &[1], &[1]);
         let got = _out(&_body(vec![add]), &[1]);
         let symbolic = |one: &Insn| {
-            one.what
-                .as_ref()
-                .is_some_and(
-                    |what| operands(what).any(|x| {
-                        matches!(
-                            x,
-                            Loc::Mem(Mem { addr: Some(addr), .. }) if addr.space == Space::Segment
-                        )
-                    }),
-                )
+            one.what.as_ref().is_some_and(|what| {
+                operands(what).any(|x| {
+                    matches!(
+                        x,
+                        Loc::Mem(Mem { addr: Some(addr), .. }) if addr.space == Space::Segment
+                    )
+                })
+            })
         };
         let lifted: Vec<&Arc<Insn>> = got.iter().filter(|one| symbolic(one)).collect();
         assert_eq!(lifted.len(), 1, "{got:?}");
@@ -6890,11 +6848,9 @@ mod tests {
     }
 
     fn _folded_add(one: &Insn) -> bool {
-        one.what
-            .as_ref()
-            .is_some_and(
-                |what| what.name.as_deref() == Some("add") && what.sources.len() == 2 && is_mem(&what.sources[1]),
-            )
+        one.what.as_ref().is_some_and(|what| {
+            what.name.as_deref() == Some("add") && what.sources.len() == 2 && is_mem(&what.sources[1])
+        })
     }
 
     /// farloadloop reloaded a carried word index solely to address one cell.
