@@ -12,7 +12,7 @@ Two kinds:
 - events, exact and the same on any host (`LLRM_DEBUG=counts`: analysis misses, copies of a function, allocations, builders of
   dominators, loops, shapes): every count at 2N is at most `linear` times its count at N, plus `slack`, and the counts of a program of
   one function that make one thing per function do not grow at all;
-- steps, which need an instruction counter (`LLRM_DEBUG=time`'s `[instr]` rows): each step with `share` of the compile's work at 2N is
+- steps, which need an instruction counter (`LLRM_DEBUG=time`'s `[instr]` rows): each step with at least `floor_minstr` Minstr of work at 2N (any share of the compile: a share is a cliff that build flags and neighbours move) is
   at most `steps` times its own work at N. Both less the empty file's.
 """
 import os
@@ -55,23 +55,36 @@ def still_rising(work_small: float, work_big: float) -> bool:
     return work_big > PAID_MARGIN * DEFAULT["steps"] * max(work_small, 1e-9)
 
 
+def onset(work_small: float) -> bool:
+    """A step whose work at N is under `onset_minstr` begins only at 2N: lazily built data (`siblings interference`, 0.0 -> 17.3) or a branch first taken
+    (`peep facts exits`, 0.2 -> 10.2). Its ratio to a base of nothing is a number of the base, not a slope."""
+    return work_small < DEFAULT["onset_minstr"]
+
+
+def test_a_step_that_begins_between_the_two_sizes_has_no_slope_to_judge():
+    """#2260 listed 'siblings interference' (0.0 -> 17.3, x1.7e10) and 'peep facts exits' (0.2 -> 10.2, x63) as debts: both are built on first use and
+    absent at the small size."""
+    assert onset(0.0) and onset(0.2)
+    assert not onset(1.0) and not onset(11.3)
+
+
 def read(work_big: float, total: float) -> bool:
-    """Whether the test reads a step: it has the share of the compile's work and the floor."""
-    return work_big >= DEFAULT["share"] * total and work_big >= DEFAULT["floor_minstr"]
+    """Whether the test reads a step: its own work at 2N reaches the floor, whatever share of the compile that is."""
+    return work_big >= DEFAULT["floor_minstr"]
 
 
 def near_read(work_big: float, total: float) -> bool:
-    """Within 10% under the share or the floor: a step that hovers there is read on one build and not on the next."""
-    return work_big >= 0.9 * DEFAULT["share"] * total and work_big >= 0.9 * DEFAULT["floor_minstr"]
+    """Within 10% under the floor: a step that hovers there is read on one build and not on the next."""
+    return work_big >= 0.9 * DEFAULT["floor_minstr"]
 
 
-def test_a_debt_step_hovering_at_the_share_threshold_does_not_flip_the_result():
-    """lir pressuresink was 2.03% of the compile (limit 2%): it entered the test at one commit (blamed on #2195) and could leave it, 'paid' by dipping."""
-    total = 1850.0
-    for work_big in (0.0205 * total, 0.0199 * total, 0.0195 * total):
-        assert read(work_big, total) == (work_big >= 0.02 * total)
-        assert near_read(work_big, total), "within 10% under the share: still held to its debt"
-    assert not near_read(0.015 * total, total)
+def test_a_step_is_judged_by_its_own_slope_whatever_share_of_the_compile_it_is():
+    """lir pressuresink (x3.3) sat at 2.03% of the compile against a 2% share: it entered the test at one commit (blamed on #2195) and read paid on
+    an incremental build (1.72%). The same step at a 1.9% and a 2.1% share, with the same work, gets the same verdict."""
+    work_small, work_big = 11.3, 37.6
+    for total in (work_big / 0.019, work_big / 0.021):
+        assert read(work_big, total) and still_rising(work_small, work_big)
+    assert not read(4.0, 100.0), "under the floor in Minstr: not read, whatever its share"
 
 
 def test_a_step_at_the_limit_is_not_paid_and_one_well_under_it_is():
@@ -175,9 +188,11 @@ def test_no_step_grows_faster_than_the_program_does(axis):
     grown, rising = [], set()
     for name, value in big.items():
         work_small, work_big = max(small.get(name, 0.0) - empty.get(name, 0.0), 0.0), max(value - empty.get(name, 0.0), 0.0)
+        if onset(work_small):
+            continue  # the step starts between N and 2N: no slope to judge from a base of nothing
         if not read(work_big, total):
             if near_read(work_big, total) and work_big > DEFAULT["steps"] * max(work_small, 1e-9):
-                rising.add(name)  # a debt's step that dips under the share is not paid by dipping
+                rising.add(name)  # a debt's step that dips under the floor is not paid by dipping
             continue
         ratio, debt = allowed("steps", axis, name, DEFAULT["steps"])
         if still_rising(work_small, work_big):

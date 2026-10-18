@@ -23,7 +23,7 @@ Levels and flags: [levels](../reference/levels.md).
 |  | `equalcalls`, [`gvn`](passes/gvn.md) |  |
 |  | [`tailrec`](passes/tailrec.md), [`loopsimplify`](passes/loopsimplify.md), [`lcssa`](passes/lcssa.md), [`floatloop`](passes/floatloop.md), [`trivialunswitch`](passes/trivialunswitch.md), [`inferspace`](passes/inferspace.md) |  |
 |  | [`hoist`](passes/hoist.md), [`loopmotion`](passes/loopmotion.md), [`indvars`](passes/indvars.md), [`algebraic`](passes/algebraic.md) |  |
-|  | [`dse`](passes/dse.md), [`promote`](passes/promote.md), [`dead`](passes/dead.md), [`fill`](passes/fill.md) |  |
+|  | [`dse`](passes/dse.md), [`promote`](passes/promote.md), [`dead`](passes/dead.md), [`loopidioms`](passes/loopidioms.md) |  |
 |  | [`unroll`](passes/unroll.md), [`peel`](passes/peel.md), [`unswitch`](passes/unswitch.md), [`loopsplit`](passes/loopsplit.md), [`loopfuse`](passes/loopfuse.md), [`loopdistribute`](passes/loopdistribute.md), `unroll-jam` |  |
 | Module, interprocedural | [`inline`](passes/inline.md), [`argpromotion`](passes/argpromotion.md), [`deadargs`](passes/deadargs.md), [`ipacp`](passes/ipacp.md), [`interprocedural`](passes/interprocedural.md) | [module-analyses](module-analyses.md), [early-summaries](early-summaries.md) |
 | After the interprocedural step | [`globaldce`](passes/globaldce.md), [`calleepop`](passes/calleepop.md), [`fixednarrow`](passes/fixednarrow.md), [`lsr`](passes/lsr.md), [`window`](passes/window.md), [`rotate`](passes/rotate.md), [`jumpthread`](passes/jumpthread.md), [`gepoffset`](passes/gepoffset.md), [`addresssink`](passes/addresssink.md), [`sink`](passes/sink.md), [`spares`](passes/spares.md), [`homes`](passes/homes.md) |  |
