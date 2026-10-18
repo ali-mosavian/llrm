@@ -13,6 +13,7 @@
 //! function for function, each naming its C++ original, and verified against
 //! LLVM's own constructors through `tools/scev/oracle.cpp`.
 
+pub mod analysis;
 pub mod ap;
 pub mod arith;
 pub mod backedge;
