@@ -158,3 +158,18 @@ impl ScalarEvolution {
         self.value_expr_map.get(&id).copied()
     }
 }
+
+impl ScalarEvolution {
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ScalarEvolution.cpp#L4526
+    /// `getSCEVValues`: the values `s` was made for (`ExprValueMap`), in the
+    /// order they were first mapped.
+    pub fn get_scev_values(
+        &self,
+        s: Scev,
+    ) -> Vec<Operand> {
+        self.expr_value_map
+            .get(&s)
+            .map(|values| values.iter().map(|id| Operand::Value(*id)).collect())
+            .unwrap_or_default()
+    }
+}
