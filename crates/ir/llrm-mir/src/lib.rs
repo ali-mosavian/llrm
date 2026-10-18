@@ -28,6 +28,7 @@ pub mod footprint;
 pub mod forest;
 pub mod fpclass;
 pub mod hash;
+pub mod idf;
 pub mod inline;
 pub mod interpret;
 mod intrinsic_attrs;

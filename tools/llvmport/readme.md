@@ -11,6 +11,7 @@ Each `*_dump.cpp` runs the LLVM operations over every input of small widths (and
     tools/llvmport/knownfpclass_dump.sh  > crates/ir/llrm-mir/src/knownfpclass_golden.txt
     tools/llvmport/constantfprange_dump.sh > crates/ir/llrm-mir/src/constantfprange_golden.txt
     tools/llvmport/domtree_dump.sh       > crates/ir/llrm-mir/src/domtree_golden.txt
+    tools/llvmport/idf_dump.sh           > crates/ir/llrm-mir/src/idf_golden.txt
 
 They build against `$LLVM_BUILD` and `$LLVM_SRC` (checkouts at `d1106deb71cc`; the scripts say what they default to).
 Regenerate a golden file only with that build; the Rust side and the C++ side must list operations in the same order.
