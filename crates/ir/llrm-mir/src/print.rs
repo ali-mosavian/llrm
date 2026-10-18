@@ -370,6 +370,16 @@ struct Slots {
     blocks: HashMap<BlockId, String>,
 }
 
+/// The label each placed block is written with, `%` left off: its name, else
+/// its slot.
+pub fn block_labels(function: &Function) -> crate::dense::IdMap<BlockId, String> {
+    let mut labels = crate::dense::IdMap::new();
+    for (block, label) in Slots::new(function).blocks {
+        labels.insert(block, label);
+    }
+    labels
+}
+
 impl Slots {
     fn new(function: &Function) -> Self {
         let mut next = 0;
@@ -423,10 +433,12 @@ impl Printer<'_> {
 
     /// A calling convention as LLVM writes it; none for C's.
     fn convention(number: u32) -> Option<String> {
+        // Only the conventions LLVM names are named: llrm's own are `cc N`,
+        // which LLVM's parser reads.
         match crate::opcode::CONVENTIONS.iter().find(|(_, one)| *one == number) {
             Some((_, 0)) => None,
-            Some((name, _)) => Some((*name).to_owned()),
-            None => Some(format!("cc{number}")),
+            Some((name, one)) if *one < 1000 => Some((*name).to_owned()),
+            _ => Some(format!("cc {number}")),
         }
     }
 
@@ -480,7 +492,10 @@ impl Printer<'_> {
             parameters.push("...".to_owned());
         }
         let mut words: Vec<String> = vec![(if declaration { "declare" } else { "define" }).to_owned()];
-        words.extend(Self::linkage(global.linkage).map(str::to_owned));
+        // A declaration has no linkage but external's, in LLVM's syntax.
+        if !declaration {
+            words.extend(Self::linkage(global.linkage).map(str::to_owned));
+        }
         words.extend(Self::convention(function.calling_convention));
         let return_attrs = attributes(&self.context, &function.return_attrs);
         if !return_attrs.is_empty() {

@@ -499,7 +499,8 @@ fn copy_byval_arguments(
         let copy = Operand::Value(function.instruction(alloca).result.expect("a pointer"));
         let count_type = context.types.int(width);
         let length = Operand::Constant(context.int(count_type, i128::from(bytes)));
-        let (memcpy, memcpy_type) = crate::fill::_copy(context, declared, crate::fill::How::Apart, 0, space, width);
+        let (memcpy, memcpy_type) =
+            crate::loopidioms::_copy(context, declared, crate::loopidioms::How::Apart, 0, space, width);
         let callee_pointer = Operand::Constant(
             context.constant(llrm_mir::context::Constant { ty: pointer, kind: ConstantKind::Global(memcpy) }),
         );
@@ -547,7 +548,7 @@ fn frame(
 
 /// The stack a copy of `body` adds to a caller: its allocas, and a copy of each
 /// `byval` object it may write.
-fn grown(
+pub(crate) fn grown(
     context: &Context,
     layout: &DataLayout,
     body: &Function,
@@ -585,6 +586,7 @@ pub(crate) fn copyable(
     body: &Function,
 ) -> bool {
     !body.is_declaration()
+        && !llrm_mir::facts::opaque(body)
         && carries(body)
         && stated(body) != Some(Inlining::Never)
         && body.walk().any(|(_, inst)| body.instruction(inst).opcode == Opcode::Ret)

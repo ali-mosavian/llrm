@@ -1,4 +1,10 @@
+---
+architecture-index: compile time against gcc and clang
+architecture-order: 110
+---
 # llrm compile time against gcc 13.4 and clang 20: review and design
+
+> **Reference note.** The clang figures and the "x clang" ratios in this review are from the distro clang 20.1.8; they are void as a cost reference to the pinned 24.0.0git `d1106deb71cc` (`d_faces` -O2 415.5 M) and are re-derived in the plan's scoreboard.
 
 Input `qbq-llrm/src/render/d_faces.c`, `-m32`, flags of `compile_time.sh`. llrm at [0b0770d37](https://github.com/ali-mosavian/llrm/commit/0b0770d37a113eb051460385d7b3bba98306ba8b), release profile. Instructions are `perf stat -e instructions:u`; step costs are `LLRM_DEBUG=time` own work (its total, 8583 M, is 4% above perf's 8280 M from the timer itself). How to reproduce: appendix C.
 

@@ -205,6 +205,8 @@ pub struct Module {
     /// The functions `@export` exposes, each with its symbol and foreign ABI,
     /// if any.
     pub exports: BTreeMap<String, Export>,
+    /// The functions `@noipa` keeps out of every interprocedural pass.
+    pub noipa: std::collections::BTreeSet<String>,
     /// The language's library methods, compiled only where called.
     pub library: Vec<Function>,
     /// The linked modules' names, which spans name by index; the main

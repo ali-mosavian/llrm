@@ -1,6 +1,12 @@
+---
+architecture-index: the allocator on the LIR core
+architecture-order: 180
+---
 # The allocator on the LIR core: design for plan step 3.3
 
 TL;DR: `regalloc` is 415.5 M of `d_faces` -O2 (2,612 M), against greedy's 39.5 M. The decisions are comparable (837 assignments against LLVM's 815, 67 evictions against 78); the rounds cost 2.0 M each against LLVM's 150 K, and a fit over bodies of 191 to 4,664 instructions says a round costs 431 K plus 309 instructions per body instruction. The sites I and greedy-port have measured add to about 55 M of new work beside the 57 M of #1958; the fit says 57% of a round on the large function scales with the body and a fixed 431 K does not (section 1.1). This page is the joint design; each half is a section, and the steps are in the plan's block format. Status: draft after review, nothing built.
+
+> **Reference note.** The LLVM allocator figures on this page (greedy 39.5 M, 815 assignments, 78 evictions, 122, 13/22/33 K per decision) were taken from the distro `llc` 20.1.8, are not reproduced on the pinned or the distro `llc`, and are being re-taken on the pinned 24.0.0git `d1106deb71cc` by regalloc-core-poc. Do not quote them until its old-versus-new lands.
 
 ## 1. Where the 415.5 M goes
 

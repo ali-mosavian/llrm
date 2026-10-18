@@ -883,6 +883,7 @@ fn billed_asking_for_costly(trips: u64) -> (super::Run, u64) {
         version: 0,
         promotes: true,
         dump: None,
+        inputs: false,
         rounds: 0,
         steps: 0,
         skipped: 0,
@@ -1405,4 +1406,141 @@ x:
     };
     assert!(looped(pipeline::Options::speed()), "-O3 keeps 40 trips rolled");
     assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
+}
+
+/// With `Options::llvm_order` a body goes through LLVM's early function
+/// pipeline, GlobalCleanup and function simplification once each, in that
+/// order, and `gvn` and `dse` run once; without it the rounds stand. The
+/// EarlyCSE in both of its places is the translated pass.
+#[test]
+fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translated_earlycse() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let off = Applied::default();
+    assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
+    assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
+    let names = |phase| pipeline::llvm_order(&on, phase).iter().map(|one| one.name()).collect::<Vec<_>>();
+    let simplify = names(crate::parity::Phase::Simplify);
+    let count = |what: &str| simplify.iter().filter(|one| one.split('@').next() == Some(what)).count();
+    assert_eq!((count("gvn"), count("dse"), count("earlycse")), (1, 1, 1), "{simplify:?}");
+    assert!(names(crate::parity::Phase::Early).contains(&"earlycse@1180"), "{:?}", names(crate::parity::Phase::Early));
+}
+
+/// A body computes the same answer through LLVM's order.
+#[test]
+fn test_llvm_order_keeps_a_loop_computing_the_same() {
+    let text = "define i16 @f(i16 %n) {\nb0:\n  %p = alloca i16\n  store i16 0, ptr %p\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp slt i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %s = load i16, ptr %p\n  %t = add i16 %s, %i\n  store i16 %t, ptr %p\n  %j = add i16 %i, 1\n  br label %h\nx:\n  %r = load i16, ptr %p\n  ret i16 %r\n}\n";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let before = interpret::run(&module, "f", vec![interpret::Val::Int { bits: 6, width: 16 }], FUEL);
+    let applied =
+        Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap_or_else(|error| panic!("{error}"));
+    let after = interpret::run(&module, "f", vec![interpret::Val::Int { bits: 6, width: 16 }], FUEL);
+    assert_eq!(format!("{before:?}"), format!("{after:?}"));
+    assert!(!llrm_mir::print::module(&module).contains("alloca"), "an alloca is left");
+}
+
+/// `LLRM_DUMP_INPUTS` for the POCs of single passes: a pass that finds nothing
+/// to do left no dump, so its input was nowhere to be had. A run that changes
+/// nothing now leaves its input and a manifest line.
+#[test]
+fn test_a_run_that_changes_nothing_leaves_its_input_and_a_manifest_line() {
+    use llrm_mir::module::{GlobalKind, Module};
+    use llrm_mir::passes::{Analyses, Declared, Outer, Unit};
+    let directory = std::env::temp_dir().join(format!("llrm-inputs-{}", std::process::id()));
+    let mut module: Module = crate::testing::parsed("define i16 @f() {\nb:\n  ret i16 0\n}\n");
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let mut analyses = Analyses::new(std::rc::Rc::new(Outer::of(&module, None)));
+    let mut declared = Declared::of(&module);
+    let Module { context, globals, metadata, .. } = &mut module;
+    let GlobalKind::Function(function) = &mut globals[0].kind else { panic!("a function") };
+    let mut unit = Unit { context, layout: &layout, function, id: None, metadata, declared: &mut declared };
+    let mut run = super::Run {
+        version: 0,
+        promotes: true,
+        inputs: true,
+        dump: Some(directory.clone()),
+        rounds: 0,
+        steps: 0,
+        skipped: 0,
+        fixed: 0,
+        billing: false,
+        idle: 0,
+        useful: 0,
+        idle_with_analyses: 0,
+        useful_with_analyses: 0,
+        classified: unit.function.mark(),
+        stretches: Vec::new(),
+        unreached: 0,
+        slice: None,
+        persisted: 0,
+        records: unit.context.extension::<crate::settled::Settled>(),
+        rerun: false,
+        idle_at: Vec::new(),
+    };
+    assert!(!run.step(&mut Idle, "idle", &mut unit, &mut analyses));
+    let manifest = std::fs::read_to_string(directory.join("manifest.txt")).expect("a manifest");
+    let _ = std::fs::remove_dir_all(&directory);
+    assert_eq!(manifest, "idle 1 0001-in-idle.ll 1\n");
+}
+
+struct Idle;
+
+impl llrm_mir::passes::FunctionPass for Idle {
+    fn name(&self) -> &'static str {
+        "idle"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// Erases the first instruction nothing uses.
+struct EraseUnused;
+
+impl llrm_mir::passes::FunctionPass for EraseUnused {
+    fn name(&self) -> &'static str {
+        "erase-unused"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        let unused = unit.function.walk().map(|(_, one)| one).find(|&one| {
+            unit.function.instruction(one).result.is_some_and(|result| unit.function.users(result).is_empty())
+        });
+        let Some(unused) = unused else { return llrm_mir::passes::PreservedAnalyses::all() };
+        unit.function.erase(unused).unwrap();
+        llrm_mir::passes::PreservedAnalyses::none()
+    }
+}
+
+/// The `runs` lines gave no sizes, so the body a slot enters and leaves was
+/// guessed from the IR dumps, which map to the runs lines 12 to 34 on
+/// d_faces. A step now says `in=` and `out=` (an idle one the same), and the
+/// body line names the function.
+#[test]
+fn test_the_runs_lines_carry_the_sizes_a_step_enters_and_leaves_and_the_body_name() {
+    let mut module = llrm_analysis::testing::parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %d = add i16 %x, 1\n  %y = add i16 %x, 2\n  ret i16 %y\n}\n",
+    );
+    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
+    fixed.only = false;
+    fixed.passes = vec![Box::new(EraseUnused)];
+    let (_, lines) = pipeline::capturing_runs(|| crate::testing::managed(&mut module, fixed));
+    let steps: Vec<&String> = lines.iter().filter(|line| line.starts_with("step ")).collect();
+    assert!(steps.first().is_some_and(|line| line.contains(" changed ") && line.ends_with(" in=3 out=2")), "{lines:?}");
+    assert!(steps.last().is_some_and(|line| line.contains(" idle ") && line.ends_with(" in=2 out=2")), "{lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
 }

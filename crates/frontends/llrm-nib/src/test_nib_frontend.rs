@@ -1057,8 +1057,8 @@ fn test_dictionary_comprehension_deduplicates_and_has_explicit_lookup() {
 
 #[test]
 fn test_a_repeat_literal_in_the_frame_is_one_string_fill() {
-    // The fill loop stepped its byte address to zero under `!=`, which `fill`
-    // missed: 64 stores in a loop.
+    // The fill loop stepped its byte address to zero under `!=`, which
+    // `loopidioms` missed: 64 stores in a loop.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
@@ -3155,4 +3155,22 @@ fn test_a_zip_loop_tested_for_equality_ends_on_the_flags_of_its_byte_counter() {
     let at = body.iter().position(|one| *one == "add bx, 2").expect("the byte counter steps");
     assert_eq!(body.get(at + 1).map(|one| &one[..4]), Some("jne "), "{body:?}");
     assert!(!body.iter().any(|one| one.contains("[bp-")), "{body:?}");
+}
+
+/// `@noipa` keeps a bench kernel a procedure its caller calls: at -O3
+/// `bench_crc(0)` was specialised on its constant salt and folded into `main`
+/// (`mov eax, -873187034`), so the kernel was gone from the object and the
+/// bench harness found no function to measure.
+#[test]
+fn test_a_noipa_kernel_survives_o3_as_a_procedure_main_calls() {
+    let body = "fn bench_crc(salt: u32) -> u32:\n    let data: u8[9] = [49, 50, 51, 52, 53, 54, 55, 56, 57]\n    let mut crc: u32 = 4294967295 ^ salt\n    for i in 0..9:\n        crc ^= data[i]\n        for bit in 0..8:\n            crc = (crc >> 1) ^ (3988292384 & (0 - (crc & 1)))\n    return crc ^ 4294967295\n\nfn main() -> i16:\n    print(i32(bench_crc(0)))\n    return 0\n";
+    let directory = tempfile::tempdir().expect("a directory");
+    let plain = written(&directory, "plain.nib", body);
+    let marked = written(&directory, "marked.nib", &format!("@noipa\n{body}"));
+    let folded = listing(&parsed(&plain), "main", &level("O3"));
+    assert!(!folded.contains("bench_crc proc"), "premise: without @noipa the kernel is folded away");
+    let kept = listing(&parsed(&marked), "main", &level("O3"));
+    assert!(kept.contains("bench_crc proc"), "{kept}");
+    let main = &kept[kept.find("_main proc").expect("main")..kept.find("_main endp").expect("main ends")];
+    assert!(main.contains("call") && main.contains("_bench_crc"), "{kept}");
 }

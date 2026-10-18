@@ -89,12 +89,12 @@ use std::rc::Rc;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::dominators::DominatorTree;
-use llrm_mir::loops::LoopInfo;
+use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis, Dominators, Loops, PreservedAnalyses};
 use llrm_mir::{Constant, ConstantKind, Context};
-use llrm_support::hash::{HashMap, HashSet};
+use llrm_support::hash::HashSet;
 
 use crate::graph::loops::{self, Dominates, Loop, Node};
 
@@ -161,8 +161,13 @@ impl Canonical {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Block {
     pub at: i64,
-    pub succ: Vec<i64>,
+    /// One or two ids for nearly every block, held in the block: a `Vec` for
+    /// each was 117,763 of a d_faces -O2 compile's 2.9 M allocations.
+    pub succ: Successors,
 }
+
+/// A block's successors' ids; two are inline (a branch).
+pub type Successors = llrm_mir::inline::InlineVec<i64, 2>;
 
 impl Node for Block {
     fn at(&self) -> i64 {
@@ -197,7 +202,7 @@ pub fn graph(function: &Function) -> Vec<Block> {
 pub fn successors_of(
     function: &Function,
     at: i64,
-) -> Vec<i64> {
+) -> Successors {
     function.successors(block(at)).into_iter().map(id).collect()
 }
 
@@ -426,17 +431,18 @@ pub fn natural(
     function: &Function,
     info: &LoopInfo,
 ) -> Vec<Loop> {
-    let headers = info.loops.iter().map(|one| (one.header, one)).collect::<HashMap<_, _>>();
+    let forest = std::rc::Rc::new(llrm_mir::forest::Forest::of_loop_info(function, info));
     let mut seen = HashSet::default();
-    let mut found = Vec::with_capacity(info.loops.len());
+    let mut found = Vec::with_capacity(forest.loops.len());
     for &at in function.layout() {
         for successor in function.successors(at) {
-            let Some(one) = headers.get(&successor) else { continue };
-            if one.latches.contains(&at) && seen.insert(successor) {
+            let Some(one) = info.get_loop_for(successor).filter(|one| one.get_header() == successor) else { continue };
+            let index = one.id().0 as usize;
+            if one.contains(at) && seen.insert(successor) {
                 found.push(Loop {
                     header: id(successor),
-                    latches: one.latches.iter().map(|&latch| id(latch)).collect(),
-                    body: one.blocks.ids().clone(),
+                    latches: forest.loops[index].latches.iter().copied().collect(),
+                    body: llrm_mir::forest::Body::new(&forest, index),
                 });
             }
         }
@@ -529,7 +535,7 @@ impl Shape {
         DERIVED.with(|count| count.set(count.get() + 1));
         llrm_mir::counts::bump(llrm_mir::counts::Event::Shapes);
         let dominance = Dominance::of(function);
-        let loops = natural(function, &LoopInfo::new(function, dominance.tree()));
+        let loops = natural(function, &LoopInfo::analyze(function, || dominance.tree()));
         Self { dominance, loops, reaching: Reaching::default() }
     }
 }
@@ -663,10 +669,10 @@ dead:
         assert_eq!(
             graph(function),
             [
-                Block { at: b1, succ: vec![b2, b3] },
-                Block { at: b2, succ: vec![] },
-                Block { at: b3, succ: vec![] },
-                Block { at: dead, succ: vec![b2] },
+                Block { at: b1, succ: vec![b2, b3].into() },
+                Block { at: b2, succ: vec![].into() },
+                Block { at: b3, succ: vec![].into() },
+                Block { at: dead, succ: vec![b2].into() },
             ]
         );
     }

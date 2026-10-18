@@ -42,3 +42,48 @@ fn a_dump_into_tmpfs_is_refused_by_each_tool() {
     }
     let _ = std::fs::remove_file(source);
 }
+
+/// `llrm-qb --dump` wrote the source and the HIR and no MIR stage at all: every
+/// difftest and oracle run that read the stage dumps saw only C programs. A
+/// BASIC program's dump has the stage files a C program's has, in `mir/`.
+#[test]
+fn a_basic_programs_dump_has_the_stage_files_a_c_programs_has() {
+    let scratch = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let c = scratch.path().join("p.c");
+    std::fs::write(&c, "int f(int a) { return a + 1; }\n").unwrap();
+    let bas = scratch.path().join("p.bas");
+    std::fs::write(&bas, "PRINT 1 + 2\n").unwrap();
+    let names = |directory: std::path::PathBuf| {
+        let mut found: Vec<String> = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains('-') && name.ends_with(".ll"))
+            .collect();
+        found.sort();
+        found
+    };
+    let in_c = scratch.path().join("dump-c");
+    let in_bas = scratch.path().join("dump-bas");
+    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .arg(&c)
+        .args(["-m16", "-O2", "--dump"])
+        .arg(&in_c)
+        .arg("-o")
+        .arg(scratch.path().join("p.obj"))
+        .output()
+        .unwrap();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    let done = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+        .arg(&bas)
+        .args(["-O2", "--dump"])
+        .arg(&in_bas)
+        .arg("-o")
+        .arg(scratch.path().join("b.obj"))
+        .output()
+        .unwrap();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    assert_eq!(names(in_bas.join("mir")), names(in_c), "the stage list of a BASIC program is a C program's");
+    for file in ["listing.asm", "cost"] {
+        assert!(in_bas.join("mir").join(file).exists(), "mir/{file} was not written");
+    }
+}

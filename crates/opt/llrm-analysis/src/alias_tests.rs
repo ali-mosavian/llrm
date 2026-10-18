@@ -1638,3 +1638,110 @@ fn the_live_points_of_a_block_allocate_a_set_each_not_a_node_for_eleven_values()
     assert!(points.len() > 2 * values - 2);
     assert!(made <= 4 * points.len(), "{} points of up to {values} live values made {made} allocations", points.len());
 }
+
+/// Two arguments of a call, one a constant global and one a pointer nothing
+/// places, replaced by one value the analysis knows nothing of: the effect kept
+/// past the edit lists the global beside the unknown, a fresh run lists the
+/// unknown alone. `covers` took that for a contradiction and the replay check
+/// (`LLRM_CHECK_REPLAY`) stopped QCport's `ls` at -O2 once two arguments were
+/// merged. The kept effect has every reference of the fresh one.
+#[test]
+fn an_effect_with_a_global_beside_the_unknown_covers_the_unknown_alone() {
+    let global = MemoryObject {
+        identity: Some(Identity::Global(12)),
+        extent: Some(2),
+        constant: true,
+        ..MemoryObject::new(MemoryKind::Global)
+    };
+    let other =
+        MemoryObject { identity: Some(Identity::Global(13)), extent: Some(2), ..MemoryObject::new(MemoryKind::Global) };
+    let reference =
+        |provenance: Provenance| MemRef { provenance: Some(provenance.clone()), ..MemRef::reach(1, provenance) };
+    let effect = |loads: Vec<MemRef>| Effect { loads: loads.into(), ..Effect::default() };
+    let placed = reference(one(&global, 0, 2));
+    let unknown = reference(UNKNOWN.clone());
+    assert!(
+        effect(vec![unknown.clone(), placed.clone()]).covers(&effect(vec![unknown])),
+        "the global is within the unknown"
+    );
+    assert!(
+        !effect(vec![placed.clone()]).covers(&effect(vec![reference(one(&other, 0, 2))])),
+        "another global is a new read"
+    );
+    let unknown = reference(UNKNOWN.clone());
+    assert!(!effect(vec![placed]).covers(&effect(vec![unknown])), "a kept global does not cover a fresh unknown");
+}
+
+/// A fresh run of a call states a slice of an escaped object (a parameter the
+/// body stored away) where the kept effect has the unknown object's whole range
+/// alone: the unknown reaches what escaped, so nothing is new (greeting.nib and
+/// pipeline.nib at -O1: 'the result kept past 56 sound edits contradicts what
+/// deriving it afresh gives'). The other way is still flagged: a kept effect
+/// that lists the parameter alone does not cover a fresh unknown, and the
+/// unknown does not cover an object that never escaped.
+#[test]
+fn an_effect_of_the_unknown_covers_a_fresh_slice_of_an_escaped_object_and_not_the_reverse() {
+    let escaped = MemoryObject {
+        identity: Some(Identity::Int(3)),
+        captured: true,
+        addressed: true,
+        ..MemoryObject::new(MemoryKind::Parameter)
+    };
+    let private = MemoryObject {
+        identity: Some(Identity::Value(9)),
+        extent: Some(4),
+        addressed: false,
+        captured: false,
+        ..MemoryObject::new(MemoryKind::Frame)
+    };
+    let reference =
+        |provenance: Provenance| MemRef { provenance: Some(provenance.clone()), ..MemRef::reach(1, provenance) };
+    let effect = |loads: Vec<MemRef>| Effect { loads: loads.into(), ..Effect::default() };
+    let unknown = reference(UNKNOWN.clone());
+    let parameter = reference(one(&escaped, 0, 1));
+    assert!(
+        effect(vec![unknown.clone()]).covers(&effect(vec![unknown.clone(), parameter.clone()])),
+        "the unknown reaches what escaped"
+    );
+    assert!(
+        !effect(vec![parameter.clone()]).covers(&effect(vec![parameter.clone(), unknown.clone()])),
+        "a kept parameter does not cover a fresh unknown"
+    );
+    assert!(
+        !effect(vec![unknown]).covers(&effect(vec![reference(one(&private, 0, 2))])),
+        "the unknown does not reach an object that never escaped"
+    );
+}
+
+/// A summary stands for the bytes its slices name. A fresh read of two bytes
+/// at offset 2 of a 7-byte global lies in a kept read of its bytes [0, 7), and
+/// a two-byte read starting anywhere in [0, 7) names the object's last byte
+/// only as far as its end: `covers` took each for a new read
+/// (`LLRM_CHECK_STALE` stopped `rotate`, `lsr` and `lcssa` on entries.nib,
+/// roster.nib and flat_containers.nib).
+#[test]
+fn a_summary_covers_a_read_by_the_bytes_it_names_not_by_its_shape() {
+    let global =
+        MemoryObject { identity: Some(Identity::Global(7)), extent: Some(7), ..MemoryObject::new(MemoryKind::Global) };
+    let reads = |slices: &[(i64, i64, i64)]| Summary {
+        reads: slices
+            .iter()
+            .map(|&(low, high, width)| Slice::new(global.clone(), low, high, 1, width).unwrap())
+            .collect::<BTreeSet<_>>()
+            .into(),
+        ..Summary::default()
+    };
+    let kept = reads(&[(0, 7, 1)]);
+    assert!(kept.covers(&reads(&[(0, 7, 1), (2, 3, 2), (4, 5, 2)])), "bytes 2..4 and 4..6 are in [0, 7)");
+    assert!(kept.covers(&reads(&[(0, 7, 2)])), "the byte past the end is no byte of the object");
+    assert!(!reads(&[(0, 3, 1)]).covers(&reads(&[(2, 5, 1)])), "bytes the kept read does not name");
+    // The clip is the object's end, not the kept slice's: in a larger object
+    // the byte after the kept ones is a new read.
+    let large = MemoryObject { extent: Some(20), ..global.clone() };
+    let in_large = |low, high, width| Summary {
+        reads: BTreeSet::from([Slice::new(large.clone(), low, high, 1, width).unwrap()]).into(),
+        ..Summary::default()
+    };
+    assert!(!in_large(0, 7, 1).covers(&in_large(5, 8, 1)), "byte 7 of a 20-byte object is a new read");
+    assert!(!in_large(0, 7, 1).covers(&in_large(0, 7, 2)), "so is the byte after a two-byte read from 6");
+}
