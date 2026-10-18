@@ -253,8 +253,19 @@ impl AssumptionCache {
         module: &Module,
         function: &Function,
     ) -> Self {
+        Self::of(&module.context, &module.globals, &module.metadata, function)
+    }
+
+    /// `new` for a pass that holds the parts of its module, not the module.
+    pub fn of(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        function: &Function,
+    ) -> Self {
         let layout = DataLayout::default();
-        let query = Query::new(module, function, &layout);
+        let query =
+            Query { context, globals, metadata, function, layout: &layout, ..Query::bare(context, function, &layout) };
         let assumes: Vec<InstId> = function
             .walk()
             .filter(|(_, inst)| query.intrinsic(*inst) == Some(Intrinsic::Assume))
