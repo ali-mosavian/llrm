@@ -66,7 +66,9 @@ pub(crate) struct Entry {
     /// LLVM's pass in the slot.
     pub llvm: &'static str,
     pub kind: SlotKind,
-    /// For `Old`: the translation that will replace it.
+    /// For `Old`: the translation that will replace it; for a Translated slot
+    /// that an off switch (`LLRM_NO_SROA`, `LLRM_NO_MEM2REG`) puts back to the
+    /// stand-in, the translation's file.
     pub replaced_by: &'static str,
     /// For `Partial`, required: "criterion: ...; exit: ...".
     pub note: &'static str,
@@ -99,14 +101,14 @@ use SlotKind::{Missing, Old, Partial, Translated};
 pub(crate) const REGISTRY: &[Entry] = &[
     entry("decide@1178", Early, "simplifycfg", Old, "simplifycfg-port"),
     entry("phiopt@1178", Early, "simplifycfg", Old, "simplifycfg-port"),
-    entry("sroa@1179", Early, "sroa<modify-cfg>", Old, "sroa.rs"),
+    entry("sroa@1179", Early, "sroa<modify-cfg>", Translated, "sroa.rs"),
     entry("earlycse@1180", Early, "early-cse", Translated, ""),
-    entry("promote@1241", Cleanup, "mem2reg", Old, "mem2reg.rs"),
+    entry("promote@1241", Cleanup, "mem2reg", Translated, "mem2reg.rs"),
     entry("fold@1242", Cleanup, "instcombine", Old, "instcombine-port"),
     entry("dead@1242", Cleanup, "instcombine", Old, "instcombine-port"),
     entry("decide@1244", Cleanup, "simplifycfg", Old, "simplifycfg-port"),
     entry("phiopt@1244", Cleanup, "simplifycfg", Old, "simplifycfg-port"),
-    entry("sroa@646", Simplify, "sroa", Old, "sroa.rs"),
+    entry("sroa@646", Simplify, "sroa", Translated, "sroa.rs"),
     entry("earlycse@649", Simplify, "early-cse<memssa>", Translated, ""),
     entry("cvp@669", Simplify, "correlated-propagation", Translated, ""),
     entry("decide@675", Simplify, "simplifycfg, jump-threading, correlated-propagation", Old, "simplifycfg-port"),
@@ -133,7 +135,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loopidioms@737", Simplify, "loop-idiom", Old, "loop-idiom-port"),
     entry("indvars@738", Simplify, "indvars", Old, "scev-port"),
     entry("unroll@753", Simplify, "loop-unroll-full", Old, "loop-passes-port"),
-    entry("sroa@776", Simplify, "sroa", Old, "sroa.rs"),
+    entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
     entry("inferspace@787", Simplify, "infer-address-spaces (target)", Old, ""),
     entry("gvn@787", Simplify, "gvn", Old, "gvn-port"),
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
@@ -371,21 +373,26 @@ pub fn check_phase_at(
     built: &[&str],
     level: Level,
 ) -> Result<(), String> {
-    check_phase_with(phase, built, level, false)
+    check_phase_with(phase, built, level, true, true)
 }
 
-/// [`check_phase_at`] with `sroa` (`LLRM_EXP_SROA`): the SROA slots are
-/// Translated, the translated unit is what runs there.
+/// [`check_phase_at`] with the explicit off switches: the slots whose
+/// translation is `sroa.rs` are Old when `LLRM_NO_SROA` is set, those of
+/// `mem2reg.rs` when `LLRM_NO_MEM2REG` is, and the old stand-in is what runs.
 pub(crate) fn check_phase_with(
     phase: Phase,
     built: &[&str],
     level: Level,
     sroa: bool,
+    mem2reg: bool,
 ) -> Result<(), String> {
     let absent = if level == Level::O1 { ABSENT_AT_O1 } else { &[] };
     let registry: Vec<Entry> = REGISTRY
         .iter()
-        .map(|one| Entry { kind: if sroa && one.replaced_by == "sroa.rs" { Translated } else { one.kind }, ..*one })
+        .map(|one| {
+            let off = (!sroa && one.replaced_by == "sroa.rs") || (!mem2reg && one.replaced_by == "mem2reg.rs");
+            Entry { kind: if off { Old } else { one.kind }, ..*one }
+        })
         .collect();
     check_without(&registry, phase, built, absent)?;
     llrm_mir::counts::joined(joined_slots(&registry, built));
