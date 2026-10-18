@@ -2887,6 +2887,24 @@ impl Selector<'_, '_, '_> {
         width_of(self.module, &self.layout, ty)
     }
 
+    /// A length or count: `constant` read unsigned, as `size_t` is. A 16-bit
+    /// 40000 is -25536 signed, and a negative length stored nothing: `for
+    /// (i = 0; i < 40000u; i++) a[i] = 2;` became an empty function.
+    fn unsigned_constant(
+        &self,
+        operand: Operand,
+        width: u32,
+    ) -> Option<i64> {
+        let Operand::Constant(id) = operand else { return None };
+        let bits = match self.module.context.get(id).kind {
+            ConstantKind::Int(bits) => bits,
+            ConstantKind::Null | ConstantKind::Zero => 0,
+            _ => return None,
+        };
+        let shift = 128 - 8 * width;
+        Some(((bits << shift) >> shift) as i64)
+    }
+
     fn constant(
         &self,
         operand: Operand,
@@ -5912,7 +5930,7 @@ impl Selector<'_, '_, '_> {
         };
         let volatile = self.constant(volatile, 1) != Some(0);
         let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
-        let constant = self.constant(length, self.address_bytes());
+        let constant = self.unsigned_constant(length, self.address_bytes());
         self.copied(to, from, constant, Some(length), volatile, backward, at, out)
     }
 
@@ -6216,7 +6234,7 @@ impl Selector<'_, '_, '_> {
         let put =
             |what: Semantics, out: &mut Vec<Arc<Insn>>| out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
         let imm = |value: i64, width: u32| Loc::Imm(Imm { value, width, address: None });
-        let constant = byte.zip(self.constant(length, self.address_bytes()));
+        let constant = byte.zip(self.unsigned_constant(length, self.address_bytes()));
         if let Some((byte, length)) = constant
             && self.stored_by_pieces(byte == 0, length)
         {
@@ -6347,7 +6365,8 @@ impl Selector<'_, '_, '_> {
         if self.module.context.types.int_bits(counted).is_some_and(|bits| bits > self.address_bytes() * 8) {
             return refuse("a pattern fill counted past an address");
         }
-        if let Some(count) = self.constant(count, self.address_bytes()).filter(|&count| count <= MEMSET_STORES) {
+        if let Some(count) = self.unsigned_constant(count, self.address_bytes()).filter(|&count| count <= MEMSET_STORES)
+        {
             for cell in 0..count {
                 let memory = Self::memory(regs, pointer.moved(cell * i64::from(width)), width);
                 out.push(Arc::new(Insn {
@@ -6357,7 +6376,7 @@ impl Selector<'_, '_, '_> {
             }
             return Ok(());
         }
-        let count = match self.constant(count, self.address_bytes()) {
+        let count = match self.unsigned_constant(count, self.address_bytes()) {
             Some(count) => Loc::Imm(Imm { value: count, width: 2, address: None }),
             None => Loc::Held(self.held(count, counted, at, out)?),
         };
