@@ -19,13 +19,25 @@ Rule for the code: each Rust function is a translation of the C++ function named
 
 `tools/llvmport/domtree_dump.sh` builds an 8-block graph (a loop, a diamond, a fan, an unreachable block, an infinite loop) in the pinned LLVM, applies every single edge flip, every pair and some triples as one `applyUpdates` batch, and prints a hash of each resulting `DominatorTree` and `PostDominatorTree` (immediate dominator, level and children in order, roots). `domtree_tests.rs` recomputes the 4,720 hashes from the port; all match. Premise assertions: the golden file names `LLVM 24.0.0git` and the commit `d1106deb71cc` (the test fails on any other binary), has one line per case and tree, and holds the cases where LLVM's updated post-dominator tree differs from a fresh one (267; none for dominators), so the port is checked against what LLVM does, not against a fresh build.
 
-## 3. Readers and stages
+## 3. D2 measured
+
+Own `analysis dominators` Minstr at N, 2N and the ratio (release, `perf` counts, `tools/budgets.toml` sizes: `branches` 256, `unrolled` 8; limit x2.3):
+
+| axis | main | D2 |
+|---|---|---|
+| branches | 25.5 -> 83.4, x3.27 | 25.6 -> 89.6, x3.49 |
+| unrolled | 2.3 -> 5.7, x2.47 | 2.3 -> 5.2, x2.27 |
+| cases | 9.2 -> 18.1, x1.98 | 7.7 -> 15.4, x2.01 |
+
+The time is not the tree's build: `rotate` asks for the tree after each of its N/8 loops, each ask applies three edge updates, and in a function whose loops follow one another every block after the edit is in the subtree LLVM's `DeleteReachable` and `InsertReachable` walk. That is O(N) per update by LLVM's algorithm too, so the count of asks is what grows.
+
+## 4. Readers and stages
 
 One analysis owns dominance: the `Dominators` analysis in `llrm-mir`. Every reader asks it.
 
 | stage | what moves | deletes |
 |---|---|---|
-| D1 (landed) | `DomTreeBase`, oracle | |
+| D1 (#2268) | `DomTreeBase`, oracle | |
 | D2 (with D1, one step) | `Dominators` result is `DomTree`; `Analysis::update` turns the change log into `Update`s for `applyUpdates`; readers in `llrm-mir` (`loopinfo`, `verify`, `valuetracking/*`, `scalarevolution`, `simplify`) and `cfg::Dominance` | `llrm-mir/src/dominators.rs`. Acceptance: `branches` and `unrolled` `analysis dominators` own slope within the limit at 2N |
 | D3 | `graph::loops::{dominators, immediate_dominators, frontiers}` readers in `llrm-analysis` and `llrm-transforms` (`promote`, `mem2reg`, `gvn`, `sink`, `hoist`, ...) | the CFG-generic walks |
 | D4 | LIR back end: `llrm-core` `analysis::loops`, `shrinkwrap`, `ssarepair`, `phiconst` | `llrm_core::analysis::loops::{dominators, immediate_dominators}` |
