@@ -150,11 +150,10 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("floatalloc@8", Backend, "x86-fp-stackifier (X86FloatingPoint.cpp)", Old, "backend-slopes"),
     entry("twoaddr@9", Backend, "two-address-instruction", Old, "lir-cleanup-poc"),
     entry("coalesce@10", Backend, "register-coalescer", Old, "lir-cleanup-poc"),
-    entry(
+    partial(
         "allocate@11",
         Backend,
         "greedy, spill-code-placement, virtregrewriter, stack-slot-coloring",
-        Partial,
         "greedy under the parity switch (#2312); criterion: LLRM_CHECK_LIVEINTERVALS and LLRM_GREEDY_CHECK pass; exit: SplitKit translated and rows at or below the old allocator per row",
     ),
     entry("parcopy@12", Backend, "phi-node-elimination copies, virtregrewriter", Old, ""),
