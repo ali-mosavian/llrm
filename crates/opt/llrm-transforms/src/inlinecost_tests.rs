@@ -160,3 +160,42 @@ b0:
     );
     assert_eq!(priced(&text, 0, false, CallerSize::OptSize).1, 75);
 }
+
+/// A `noipa` callee is never inlined, whatever its cost (`alwaysinline`
+/// included): the same callee without it costs -20 and is inlined (the
+/// premise).
+#[test]
+fn a_noipa_callee_is_never_inlined_by_cost() {
+    let text = |attribute: &str| {
+        format!(
+            "{GLOBAL}define internal i32 @callee(i32 %x) {attribute} {{\nb0:\n  %a = load i32, ptr @g\n  %b = add i32 %a, %x\n  store i32 %b, ptr @g\n  ret i32 %b\n}}\n\ndefine i32 @f(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  %s = call i32 @callee(i32 %r)\n  ret i32 %s\n}}\n"
+        )
+    };
+    assert_eq!(priced(&text(""), 0, false, CallerSize::Speed), (-20, 337), "premise");
+    for attribute in ["noipa", "noipa alwaysinline"] {
+        let module = crate::testing::parsed(&text(attribute));
+        let layout = llrm_mir::datalayout::DataLayout::default();
+        let (caller_id, _, caller) = module.functions().find(|(_, g, _)| g.name.as_deref() == Some("f")).unwrap();
+        let (callee_id, _, callee) = module.functions().find(|(_, g, _)| g.name.as_deref() == Some("callee")).unwrap();
+        let call = caller
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(callee_id))
+            .unwrap();
+        let site = Site {
+            module: &module,
+            layout: &layout,
+            caller,
+            caller_id,
+            call,
+            callee,
+            callee_id,
+            sole_call_to_local: false,
+            caller_recursive: false,
+            caller_size: CallerSize::Speed,
+            relative_frequency: None,
+        };
+        let verdict = inline_cost(&site, InlineParams::from_level(2));
+        assert!(matches!(verdict, InlineCost::Never(_)) && !verdict.is_ok(), "{attribute}: {verdict:?}");
+    }
+}

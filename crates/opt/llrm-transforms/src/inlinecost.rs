@@ -60,6 +60,8 @@
 //! - D8: -Os and -Oz share one pipeline here, so every caller at -Os is
 //!   `optsize` (clang's `OptimizeForSize`, InlineCost.cpp:2125) and none
 //!   `minsize` (:2117).
+//! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
+//!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
 //!   `LoopInfo`.
 //!
@@ -252,6 +254,10 @@ fn call_info(
 pub fn attribute_decision(site: &Site) -> Option<Result<(), String>> {
     let call = call_info(site.caller, site.call)?;
     let callee_attrs = &site.callee.attrs;
+    // D9: GCC's `noipa` keeps a routine out of every interprocedural pass.
+    if llrm_mir::facts::opaque(site.callee) {
+        return Some(Err("noipa function attribute".into()));
+    }
     if has_flag(&call.attrs, "alwaysinline") || has_flag(callee_attrs, "alwaysinline") {
         if has_flag(&call.attrs, "noinline") {
             return Some(Err("noinline call site attribute".into()));
