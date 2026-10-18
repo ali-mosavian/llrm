@@ -1,3 +1,7 @@
+---
+architecture-index: MemorySSA as a translation of LLVM's
+architecture-order: 250
+---
 # MemorySSA as a translation of LLVM's: the plan
 
 TL;DR: `MemorySSA.cpp` and `MemorySSAUpdater.cpp` (4,213 lines at `d1106deb71cc`) are translated into a new module, function for function, beside today's `memoryssa.rs`; the walker and the updater are the parts llrm lacks (it rebuilds the graph per body version and walks from the site per query). Shadow first: the translated walker answers every query the old one answers on the dumped inputs, and the build and the walk are costed per IR instruction against LLVM's on the same bodies.

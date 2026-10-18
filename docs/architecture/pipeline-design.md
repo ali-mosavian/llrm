@@ -1,3 +1,7 @@
+---
+architecture-index: optimizer pipeline design
+architecture-order: 100
+---
 # The optimizer pipeline: what it costs and a structure that costs less
 
 A design note, with the measurements it rests on. Nothing here is built yet.
