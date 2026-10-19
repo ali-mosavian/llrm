@@ -21,6 +21,9 @@
 //! successor is the same list of instructions, so nothing is skipped and the
 //! successors empty out.
 //!
+//! # Example
+//! The instructions both arms open with run once, before the branch:
+//!
 //! ```text
 //!   b0: br %c, b1, b2            b0: %t = add %x, 1
 //!   b1: %t1 = add %x, 1                br %j
@@ -158,11 +161,38 @@ fn commutative(opcode: &Opcode) -> bool {
 
 /// The `!mmra` tags of `inst`: two instructions with different ones are not
 /// hoisted together.
-fn mmra(
+pub(crate) fn mmra(
     function: &Function,
     inst: InstId,
 ) -> Option<llrm_mir::module::MetadataId> {
     function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "mmra").map(|&(_, value)| value)
+}
+
+/// The same operation and type, whatever the operands: two calls need only
+/// attribute lists that intersect (`isSameOperationAs` with
+/// `CompareUsingIntersectedAttrs`).
+pub(crate) fn same_operation(
+    function: &Function,
+    first: InstId,
+    second: InstId,
+) -> bool {
+    let (one, two) = (function.instruction(first), function.instruction(second));
+    if one.ty != two.ty || one.operands.len() != two.operands.len() {
+        return false;
+    }
+    match (&one.opcode, &two.opcode) {
+        (Opcode::Call(a), Opcode::Call(b)) => {
+            a.function_type == b.function_type
+                && a.calling_convention == b.calling_convention
+                && a.tail == b.tail
+                && crate::local::attribute_list_intersect_with(
+                    (&a.attrs, &a.return_attrs, &a.argument_attrs),
+                    (&b.attrs, &b.return_attrs, &b.argument_attrs),
+                )
+                .is_some()
+        }
+        (a, b) => a == b,
+    }
 }
 
 /// The same operation, type and operands, or a compare or a commutative

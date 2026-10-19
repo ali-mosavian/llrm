@@ -549,12 +549,12 @@ other:
             "mov ax, 10",
             "pop bp",
             "retf",
-            "L0_3:",
-            "mov ax, 50",
-            "pop bp",
-            "retf",
             "L0_4:",
             "xor ax, ax",
+            "pop bp",
+            "retf",
+            "L0_3:",
+            "mov ax, 50",
             "pop bp",
             "retf",
         ]
@@ -1323,15 +1323,15 @@ small:
             "fcomp qword ptr [bp-24]",
             "fnstsw ax",
             "sahf",
-            "ja L1_8",
-            "L1_10:",
-            "xor ax, ax",
-            "leave",
-            "retf",
+            "jbe L1_10",
             "L1_8:",
             "fld qword ptr [bp-32]",
             "fistp word ptr [bp-2]",
             "mov ax, word ptr [bp-2]",
+            "leave",
+            "retf",
+            "L1_10:",
+            "xor ax, ax",
             "leave",
             "retf",
         ]
@@ -1625,6 +1625,30 @@ other:
     let call = got.iter().position(|line| line == "call far ptr B$SCMP").expect("the call");
     // Either polarity: the branch reads the call's flags, no compare between.
     assert!(got[call + 1].starts_with("jg ") || got[call + 1].starts_with("jle "), "{got:?}");
+}
+
+/// A loop rotated left the counter's increment between B$SCMP's compare and
+/// the branch: the compare was fused, the flags no longer reached it and the
+/// function was refused (qbdemo at every level).
+#[test]
+fn test_a_flags_result_compare_with_an_add_before_the_branch_still_selects() {
+    let text = "declare cc1000 i16 @llrm.qb.B$SCMP(ptr, ptr) addrspace(1)
+define i16 @f(ptr %a, ptr %b, i16 %n) addrspace(1) {
+entry:
+  %s = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
+  %c = icmp sgt i16 %s, 0
+  %m = add i16 %n, 1
+  br i1 %c, label %greater, label %other
+greater:
+  ret i16 %m
+other:
+  ret i16 0
+}
+";
+    let got = listing(text, "f");
+    let call = got.iter().position(|line| line == "call far ptr B$SCMP").expect("the call");
+    // The flags are taken before the add can disturb them.
+    assert!(got[call + 1].starts_with("set") || got[call + 1].starts_with("j"), "{got:?}");
 }
 
 /// A float function no x87 instruction is stays one operation on st(0),
@@ -5857,4 +5881,19 @@ define i16 @f(i16 %i) addrspace(1) {
     // `pushw`.
     let has = |text: &str| got.iter().any(|one| one == text);
     assert!(has("mov ax, DGROUP") && has("mov bx, offset g") && has("shl eax, 16") && has("pushw 47104"), "{got:?}");
+}
+
+/// A branch's LIR odds are `BranchProbabilityInfo`'s: `p == null` is the
+/// pointer heuristic's 12 in 32, to the bit `opt -passes='print<branch-prob>'`
+/// prints (0x30000000 and 0x50000000). They were `branchprob`'s GCC estimates.
+#[test]
+fn test_a_branchs_odds_are_llvms_branch_probabilities() {
+    let text = "declare void @use(i16) addrspace(1)\n\
+        define void @f(ptr %p) addrspace(1) {\nentry:\n  %c = icmp eq ptr %p, null\n  br i1 %c, label %yes, label %no\n\
+        yes:\n  call addrspace(1) void @use(i16 1)\n  br label %no\n\
+        no:\n  ret void\n}\n";
+    let body = selected(text, "f").expect("selects").body;
+    let mut taken: Vec<u32> = body.odds.taken.values().copied().collect();
+    taken.sort();
+    assert_eq!(taken, vec![0x3000_0000, 0x5000_0000], "{:?}", body.odds.taken);
 }

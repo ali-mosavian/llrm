@@ -76,7 +76,10 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
         ("MemorySSAAnalysis", SlotKind::Translated, false, &["aa"][..])
     );
     let report = parity::report();
-    assert!(report.contains("gvn@787 (gvn) -> gvn-port") && report.contains("shadow_mssa"), "{report}");
+    assert!(
+        report.contains("fold@677 (instcombine) -> instcombine-port") && report.contains("shadow_mssa"),
+        "{report}"
+    );
     assert!(parity::TODO.iter().any(|one| one.contains("LICM")), "LICM still drops what it updates");
     assert!(parity::TODO.iter().all(|one| !one.contains("not a PreservedAnalyses variant")), "the variant exists now");
     assert!(parity::TODO.iter().all(|one| !one.contains("CFGAnalyses")), "the CFG set exists now");

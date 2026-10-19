@@ -45,12 +45,14 @@
 //! (`alias::captured`, a `ret` and a store of it included); `dead_on_return`
 //! and byval arguments (stage 3), and non-alloca objects with no capture
 //! (malloc) are absent. Exit: stage 3.
-//! DEVIATE 4: `free` as a memory terminator (`lifetime.end` is in), the
-//! `initializes` attribute, `tryFoldIntoCalloc` and
+//! DEVIATE 4: `free` as a memory terminator (`lifetime.end` is in),
+//! `tryFoldIntoCalloc` and
 //! `eliminateRedundantStoresViaDominatingConditions` are stage 2 and 3. Partial
 //! overwrites (`isPartialOverwrite`, `IOLs`,
 //! `tryToMergePartialOverlappingStores`, `tryToShorten` of memsets) and
-//! `eliminateRedundantStoresOfExistingValues` are in. Exit: stage 2.
+//! `eliminateRedundantStoresOfExistingValues` are in, and a call's
+//! `initializes` (`Accesses::fills`, which holds `getInitializesArgMemLoc`'s
+//! argument and capture rules; nothing unwinds). Exit: stage 2.
 //! DEVIATE 5: only stores and constant-length memsets are candidates, and
 //! `storeIsNoop` knows no `getInitialValueOfAllocation` (it needs `calloc`
 //! and friends). Exit: stage 2.
@@ -297,7 +299,7 @@ impl<'a> Dse<'a> {
                 let Some(access) = state.mssa.get_memory_access(inst) else { continue };
                 if state.mssa.access(access).kind == Kind::Def
                     && state.mem_defs.len() < DEFS_PER_BLOCK_LIMIT
-                    && state.killing_loc(inst).is_some()
+                    && (state.killing_loc(inst).is_some() || !state.accesses.fills(inst).is_empty())
                 {
                     state.mem_defs.push(access);
                 }
@@ -556,14 +558,6 @@ impl<'a> Dse<'a> {
         }) == false
     }
 
-    /// `isInvisibleToCallerOnUnwind`: nothing unwinds, so the same.
-    fn invisible_on_unwind(
-        &self,
-        loc: &Location,
-    ) -> bool {
-        self.invisible_after_return(loc)
-    }
-
     // ---- loops --------------------------------------------------------------
 
     /// The innermost loop of `block`, by its header (`CycleInfo::getCycle`).
@@ -816,6 +810,7 @@ impl<'a> Dse<'a> {
         scan_limit: &mut u32,
         walker_step_limit: &mut u32,
         partial_limit: &mut u32,
+        init: bool,
     ) -> Found {
         if *scan_limit == 0 || *walker_step_limit == 0 {
             return None;
@@ -970,7 +965,10 @@ impl<'a> Dse<'a> {
             }
             // Uses which may read the original def mean it cannot be
             // eliminated.
-            if self.is_read_clobber(&maybe_dead_loc, use_inst) {
+            // A call that initializes the object reads it only after writing:
+            // its own read is no read of the dead def.
+            let own_read = init && use_inst == killing_inst && self.same_object(killing_loc, &maybe_dead_loc);
+            if self.is_read_clobber(&maybe_dead_loc, use_inst) && !own_read {
                 return None;
             }
             // If the walk comes back to the original access (and the pointer is
@@ -1366,6 +1364,7 @@ impl<'a> Dse<'a> {
         &mut self,
         killing_def: AccessId,
         killing_loc: Rc<Location>,
+        init: bool,
     ) -> (bool, bool) {
         let mut changed = false;
         let mut scan_limit = SCAN_LIMIT;
@@ -1388,6 +1387,7 @@ impl<'a> Dse<'a> {
                 &mut scan_limit,
                 &mut walker_step_limit,
                 &mut partial_limit,
+                init,
             ) else {
                 continue;
             };
@@ -1600,12 +1600,23 @@ impl<'a> Dse<'a> {
                 continue;
             }
             let killing_inst = self.inst_of(killing_def);
-            let Some(killing_loc) = self.killing_loc(killing_inst) else { continue };
-            let (did, deleted_killing) = self.eliminate_dead_defs_of(killing_def, Rc::clone(&killing_loc));
-            changed |= did;
-            if !deleted_killing && self.store_is_noop(killing_def) {
-                self.delete_dead_instruction(killing_inst, None);
-                changed = true;
+            // `getLocForInst`: what it writes (or terminates), then what the
+            // call fills before it reads (`initializes`).
+            let mut locations: Vec<(Rc<Location>, bool)> =
+                self.killing_loc(killing_inst).into_iter().map(|loc| (loc, false)).collect();
+            let fills: Vec<llrm_analysis::memory::MemRef> = self.accesses.fills(killing_inst).to_vec();
+            locations.extend(fills.iter().map(|fill| (self.aa.location_for(fill, false), true)));
+            for (killing_loc, init) in locations {
+                let (did, deleted_killing) = self.eliminate_dead_defs_of(killing_def, Rc::clone(&killing_loc), init);
+                changed |= did;
+                if deleted_killing {
+                    break;
+                }
+                if !init && self.store_is_noop(killing_def) {
+                    self.delete_dead_instruction(killing_inst, None);
+                    changed = true;
+                    break;
+                }
             }
         }
         changed |= self.remove_partially_overlapped_stores();

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/tailmerge.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/tailmerge.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/tailmerge.rs sha256:e3ce365647779393efbcbd95c2f38e3b02701d5653fe414051cad68b960ada01 -->
+<!-- src: crates/opt/llrm-transforms/src/tailmerge.rs sha256:be884afba933ebd9602bb74e9a1a0ca79fecd6f4c8ad29acda153cd5c793bcf5 -->
 
 # tailmerge
 
@@ -13,6 +13,9 @@ successor, and, when there are two or more of one kind, makes a block
 the terminator, and the terminator on the phis. Each of the blocks then
 jumps to it, passing its own operand. The pass that follows empties and
 removes the blocks that held nothing else.
+
+## Example
+Two returns become one block that returns a phi:
 
 ```text
   a: ...; ret i16 %x           a: ...; br %common.ret
