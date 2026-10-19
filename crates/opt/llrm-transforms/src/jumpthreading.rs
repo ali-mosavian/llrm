@@ -166,6 +166,41 @@ impl FunctionPass for JumpThreading {
     }
 }
 
+/// One step of the walk over the layout: where it goes next, and how many
+/// positions it looked at to find out.
+pub(crate) struct LayoutStep {
+    pub(crate) next: usize,
+    pub(crate) examined: usize,
+}
+
+/// Where the walk goes after `block`, which stood at `at` (or near it: the
+/// pass may have placed or removed blocks before `at`). A block that is no
+/// longer placed is not searched for, and neither is a gone `after`: the
+/// search runs outward from `at`, so it costs the distance the target moved,
+/// not the length of the layout.
+pub(crate) fn layout_step(
+    layout: &[BlockId],
+    is_placed: impl Fn(BlockId) -> bool,
+    block: BlockId,
+    at: usize,
+    after: Option<BlockId>,
+) -> LayoutStep {
+    let mut examined = 0;
+    let mut near = |wanted: BlockId| {
+        (0..layout.len())
+            .flat_map(|distance| [at.checked_sub(distance), Some(at + distance)])
+            .flatten()
+            .inspect(|_| examined += 1)
+            .find(|&index| layout.get(index) == Some(&wanted))
+    };
+    let next = if is_placed(block) {
+        near(block).map_or(layout.len(), |index| index + 1)
+    } else {
+        after.filter(|&after| is_placed(after)).and_then(near).unwrap_or(layout.len())
+    };
+    LayoutStep { next, examined }
+}
+
 /// A value known in a predecessor: `PredValueInfoTy`.
 type PredValues = Vec<(ConstantId, BlockId)>;
 
@@ -595,18 +630,8 @@ impl State<'_, '_> {
         at: usize,
         after: Option<BlockId>,
     ) -> usize {
-        let layout = self.function().layout();
-        let near = |wanted: BlockId| {
-            (0..layout.len())
-                .flat_map(|distance| [at.checked_sub(distance), Some(at + distance)])
-                .flatten()
-                .find(|&index| layout.get(index) == Some(&wanted))
-        };
-        match (near(block), after) {
-            (Some(index), _) => index + 1,
-            (None, Some(after)) => near(after).unwrap_or(layout.len()),
-            (None, None) => layout.len(),
-        }
+        let function = self.function();
+        layout_step(function.layout(), |one| function.is_placed(one), block, at, after).next
     }
 
     /// The blocks reachable from `entry`.
