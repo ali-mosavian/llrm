@@ -209,7 +209,7 @@ fn the_table_gives_the_effects_the_decoder_does() {
     let mut unanswered: Vec<String> = Vec::new();
     let mut wrong = Vec::new();
     for (target, bits) in [(&llrm_x86_m16::M16 as &dyn Target, 16), (&llrm_x86_m32::M32, 32)] {
-        let forms = parse::parse(&target.forms_text()).unwrap();
+        let forms = parse::parse(&target.forms_text(), target.dialect()).unwrap();
         for form in &forms {
             let widths = if form.widths.is_empty() { vec![32] } else { form.widths.clone() };
             for &width in &widths {
@@ -397,7 +397,7 @@ fn every_name_the_encoder_emits_has_a_row() {
     // Some target's: `les` is real mode's.
     let forms: Vec<_> = [&llrm_x86_m16::M16 as &dyn Target, &llrm_x86_m32::M32]
         .iter()
-        .flat_map(|target| parse::parse(&target.forms_text()).unwrap())
+        .flat_map(|target| parse::parse(&target.forms_text(), target.dialect()).unwrap())
         .collect();
     let control = ["Branch", "Jump", "Call", "Return", "Escape", "Restore"];
     let missing: Vec<String> = emitted
