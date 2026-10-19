@@ -1430,3 +1430,28 @@ fn a_module_or_program_pass_dumps_its_input_when_inputs_are_dumped() {
     let _ = std::fs::remove_dir_all(directory);
     let _ = std::fs::remove_dir_all(off);
 }
+
+/// A dump per pass added: five passes of the three kinds wrote fewer input
+/// files and manifest lines than that when a kind was left out.
+#[test]
+fn a_manager_with_n_passes_writes_n_input_dumps_and_n_manifest_lines() {
+    let directory = std::env::temp_dir().join(format!("llrm-dump-count-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let mut module = parse::module(TEXT).unwrap_or_else(|error| panic!("{error}"));
+    let mut passes = PassManager::default();
+    passes.dump = Some(directory.clone());
+    passes.dump_inputs = true;
+    passes.add_program(Nothing);
+    passes.add(Idle);
+    passes.add_program(Nothing);
+    passes.add(Idle);
+    passes.add(Idle);
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    let files = std::fs::read_dir(&directory)
+        .unwrap()
+        .filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().contains("-in-"))
+        .count();
+    let manifest = std::fs::read_to_string(directory.join("manifest.txt")).expect("a manifest");
+    assert_eq!((files, manifest.lines().count()), (5, 5), "{manifest}");
+    let _ = std::fs::remove_dir_all(directory);
+}
