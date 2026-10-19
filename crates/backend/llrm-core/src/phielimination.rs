@@ -28,12 +28,6 @@
 //! register allocation, so a copy of an x87 value costs an `fld` and an `fstp`
 //! that nothing joins away.
 //!
-//! DEVIATE P5 (no number): a phi that reads another phi's result of its own
-//! block on an edge, and that other phi, are left for `phielim`'s parallel
-//! copy (see `entangled_phis`). Fact: with per-phi registers a loop-carried
-//! cycle needs a spare register where the parallel copy needs an `xchg`; an
-//! i64 Fibonacci loop on the 386 in 16-bit code spills a dword without it.
-//!
 //! DEVIATE P2 (no number): `IMPLICIT_DEF` and undef incoming values do not
 //! exist in LIR, so `allPhiOperandsUndefined`, `ImpDefs` and `SrcUndef` are not
 //! translated.
@@ -121,29 +115,6 @@ fn edges_to_split(
     split
 }
 
-/// The phis one of whose incoming values on an edge is the result of another
-/// phi of the same block, and the phis they read: a value handed over on the
-/// edge is read after another is written, so the copies must be made at once.
-/// They are the swap and lost-copy problems of out-of-SSA, which LLVM solves
-/// with a register for each phi and a spare register to hold what is in the
-/// way. The parallel copy of `phielim` solves it with none (an `xchg` for a
-/// cycle of two), which is worth a register where the registers are few.
-fn entangled_phis(body: &LirBody) -> crate::support::hash::HashSet<u32> {
-    let mut found = crate::support::hash::HashSet::default();
-    for block in &body.blocks {
-        let results: crate::support::hash::HashSet<u32> = block.phis.iter().map(|phi| phi.result).collect();
-        for phi in block.phis.iter() {
-            for &(_, value) in &phi.incoming {
-                if value != phi.result && results.contains(&value) {
-                    found.insert(phi.result);
-                    found.insert(value);
-                }
-            }
-        }
-    }
-    found
-}
-
 /// `body` with every phi lowered to copies.
 pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
     if body.blocks.iter().all(|block| block.phis.is_empty()) {
@@ -184,7 +155,6 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         }
     }
     let floating = crate::backend::ssaspill::floating(body);
-    let entangled = entangled_phis(body);
     for block in &body.blocks {
         let mut stays = Vec::new();
         // If all incoming edges are critical, identical phis are lowered
@@ -193,10 +163,7 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             && body.blocks.iter().filter(|one| one.succ.contains(&block.at)).all(|one| one.succ.len() >= 2);
         let mut lowered_phis: HashMap<Vec<(i64, u32)>, u32> = HashMap::default();
         for phi in block.phis.iter() {
-            if phi.incoming.iter().any(|(pre, _)| !at_of.contains_key(pre))
-                || floating.contains(&phi.result)
-                || entangled.contains(&phi.result)
-            {
+            if phi.incoming.iter().any(|(pre, _)| !at_of.contains_key(pre)) || floating.contains(&phi.result) {
                 stays.push(phi.clone());
                 continue;
             }
@@ -339,12 +306,11 @@ mod tests {
     }
 
     /// `a = phi [.., b]`, `b = phi [.., c]`: a hands over `b`, which another
-    /// phi of the block rewrites. The copies must happen at once (a
-    /// parallel copy, an `xchg` where no register is free), so both phis
-    /// stay for `phielim`. With a register for each phi the i64 Fibonacci
-    /// loop spilled a dword.
+    /// phi of the block rewrites. Each phi is lowered through a register of
+    /// its own, as LLVM's are; left to `phielim`'s parallel copy (DEVIATE P5)
+    /// they cost idiv_loop_os 14% of its estimate at -O2 and recgcd as much.
     #[test]
-    fn test_phis_that_read_each_other_are_left_for_the_parallel_copy() {
+    fn test_phis_that_read_each_other_are_lowered_like_any_other() {
         let phis = vec![
             Phi { result: 10, incoming: vec![(0, 1), (1, 11)] },
             Phi { result: 11, incoming: vec![(0, 2), (1, 12)] },
@@ -355,8 +321,8 @@ mod tests {
             block(2, vec![read(10)], &[], vec![]),
         ]);
         let now = lowered(&was).expect("lowers");
-        assert_eq!(now.blocks[1].phis.len(), 2, "both phis are left");
-        assert!(copies(&now.blocks[0]).is_empty() && copies(&now.blocks[1]).is_empty());
+        assert!(now.blocks.iter().all(|one| one.phis.is_empty()), "a phi was left");
+        assert_eq!(copies(&now.blocks[0]).len(), 2, "one copy per phi on the entry edge");
     }
 
     /// The edge from a block with two successors to a phi's block is split
