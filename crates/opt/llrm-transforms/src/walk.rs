@@ -9,6 +9,16 @@
 //! bodies it changes are reported to their module's analyses; no pipeline
 //! runs here.
 //!
+//! # Deviations
+//! - W1: `deadargelim` runs before the Simplify list, LLVM's after the CGSCC
+//!   walk (`PassBuilderPipelines.cpp` l.1335). Fact: nothing here cleans a body
+//!   after the walk (LLVM's later module optimization pipeline does), and the
+//!   argument a dropped parameter leaves behind is dead code only the list
+//!   removes. Issue: it sees bodies simplified by Early only. Exit: a post-walk
+//!   cleanup stage, then `deadargelim` after the walk.
+//! - W2: `ipa-cp` clones with the clocks' cost model (`ipacp`), not
+//!   `FunctionSpecialization`; exit W5.
+//!
 //! # Example
 //! `@f` is called with an argument its second parameter never reads; it is
 //! dropped before the Simplify list, which then runs once over `@f` and
@@ -28,8 +38,9 @@
 //! }
 //! ```
 //!
-//! From unit test `test_a_body_changed_by_an_interprocedural_stage_does_not_rerun_the_list`
-//! in `walk_tests.rs`.
+//! From unit test
+//! `test_a_body_changed_by_an_interprocedural_stage_does_not_rerun_the_list` in
+//! `walk_tests.rs`.
 //!
 //! # Runs
 //! Once per compile under `Options::llvm_order`, after the Early stage.

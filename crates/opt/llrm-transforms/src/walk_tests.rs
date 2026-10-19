@@ -29,9 +29,7 @@ fn pipeline_runs(
         llrm_mir::program::Program::lend(
             &mut module,
             std::rc::Rc::new(llrm_x86_m16::Dos::default()),
-            |program: &mut llrm_mir::program::Program| {
-                crate::pipeline::applied(program, applied)
-            },
+            |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, applied),
         )
         .and_then(|done| done)
         .expect("the pipeline runs");
@@ -108,6 +106,7 @@ fn test_a_body_cloned_for_a_constant_does_not_rerun_the_list() {
     };
     let lines = pipeline_runs(TWO_CONSTANTS, &o3);
     let reruns = passes_run_by_ipa_stages(&lines);
-    let bodies: Vec<&str> = lines.iter().filter(|line| line.starts_with("body ")).map(|line| &line[..50.min(line.len())]).collect();
+    let bodies: Vec<&str> =
+        lines.iter().filter(|line| line.starts_with("body ")).map(|line| &line[..50.min(line.len())]).collect();
     assert!(reruns.iter().all(|(_, runs)| *runs < 10), "the list ran again: {reruns:?} {bodies:?}");
 }
