@@ -56,6 +56,7 @@ COUNTERPART = {
     "unroll": "loop(loop-unroll-full)",
     "peel": "loop-unroll<peeling>",
     "decide": "simplifycfg",
+    "simplifycfg": "simplifycfg",
     "trivialunswitch": "loop-mssa(simple-loop-unswitch<no-nontrivial>)",
     "dead": "adce",
     "sccp": "sccp",

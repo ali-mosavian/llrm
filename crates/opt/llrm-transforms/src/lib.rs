@@ -134,6 +134,7 @@ pub mod gvn;
 mod gvn_load_tests;
 #[cfg(test)]
 mod gvn_scalar_tests;
+pub mod hoistcommon;
 pub mod homes;
 pub mod indvars;
 pub mod inferspace;
