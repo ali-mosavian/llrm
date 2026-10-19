@@ -115,6 +115,7 @@ impl Fact {
             | Fact::ReadOnly
             | Fact::ReadNone
             | Fact::NonNull
+            | Fact::NoUndef
             | Fact::NoCapture
             | Fact::NoRetain
             | Fact::Releases
