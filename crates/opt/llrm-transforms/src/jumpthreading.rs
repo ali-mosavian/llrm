@@ -167,6 +167,10 @@ impl FunctionPass for JumpThreading {
         "jumpthreading"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("jump-threading")
+    }
+
     /// `JumpThreadingPass::run`
     /// ([L240](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L240)).
     fn run(

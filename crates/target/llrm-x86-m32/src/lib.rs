@@ -214,6 +214,11 @@ impl llrm_target::Target for M32 {
         4
     }
 
+    /// X86ISelLowering.cpp: `setPrefLoopAlignment(Align(16))`.
+    fn pref_loop_alignment(&self) -> u8 {
+        4
+    }
+
     /// The i486 and Pentium have no `nopl` (`FeatureNOPL`): one byte.
     fn max_nop_bytes(&self) -> u8 {
         1
