@@ -1204,7 +1204,7 @@ fn _copied(
         return None;
     };
     let loaded = function.instruction(load).result?;
-    if function.instruction(store).operands[0] != Operand::Value(loaded) || function.users(loaded).len() != 1 {
+    if function.instruction(store).operands[0] != Operand::Value(loaded) || !function.users(loaded).has_one_use() {
         return None;
     }
     let bits = unit.int_bits(Operand::Value(loaded))?;

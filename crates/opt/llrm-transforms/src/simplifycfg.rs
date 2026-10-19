@@ -539,7 +539,7 @@ pub fn empty_block_removed(
         function.erase_block(block).expect("a block nothing names");
     } else {
         // Everything but the common predecessor now goes to the successor.
-        for one in function.block_users(block).to_vec() {
+        for one in function.block_users(block).snapshot() {
             let parent = function.parent(one.user);
             if function.instruction(one.user).opcode.is_terminator()
                 && parent.is_some_and(|at| at != common.expect("a common predecessor") && predecessors.contains(&at))
