@@ -281,6 +281,13 @@ pub trait Tti {
         "generic"
     }
 
+    /// `TargetLowering::convertSelectOfConstantsToMath`: whether a select
+    /// between two scalar integer constants may become arithmetic on its
+    /// condition (X86: yes for every scalar integer).
+    fn convert_select_of_constants_to_math(&self) -> bool {
+        true
+    }
+
     /// The cost of an integer-to-float cast whose operand is a load, where the
     /// target prices it apart (X86: the extension of a narrow integer to i32 is
     /// free for a load, `FILD` reads it from memory); none: as any cast (T4).
