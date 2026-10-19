@@ -1161,6 +1161,39 @@ mod tests {
         assert_eq!(order, ["XIB", "XI", "XIE"], "{asm}");
     }
 
+    /// A register list that spells the default convention's own assignment
+    /// (`__parm [__ax] [__dx] [__bx]`, the heap's `__MemAllocator`) was refused
+    /// as "has a register calling convention", and clib's malloc and free with
+    /// it. A list that differs still is.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_register_list_that_is_the_default_assignment_is_the_default_convention() {
+        let directory = tempfile::tempdir().unwrap();
+        let build = |pragma: &str| {
+            let source = directory.path().join("alloc.c");
+            std::fs::write(
+                &source,
+                format!(
+                    "extern void *allocator(unsigned a, void *b, unsigned c);\n{pragma}\n\
+                     void *use(unsigned n) {{ return allocator(n, 0, 3); }}\n"
+                ),
+            )
+            .unwrap();
+            let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+            let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records alloc.c");
+            let options = llrm_core::driver::Options {
+                abi: Some("watcom".to_owned()),
+                ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+            };
+            super::selected(&text, "alloc", None, &options).map(|built| llrm_core::backend::masm::text(&built).unwrap())
+        };
+        let same = build("#pragma aux allocator \"*\" __parm [__ax] [__dx] [__bx]").expect("the default's own list");
+        assert!(same.contains("mov bx, 3") && same.contains("call far ptr allocator"), "{same}");
+        let other = build("#pragma aux allocator \"*\" __parm [__dx] [__ax] [__bx]").expect_err("another list");
+        assert!(format!("{other:?}").contains("register calling convention"), "{other:?}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`
