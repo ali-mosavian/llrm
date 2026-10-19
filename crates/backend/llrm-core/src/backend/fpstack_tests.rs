@@ -315,3 +315,24 @@ fn test_liveness_for_the_stack_numbers_only_the_floating_values() {
     let rows = crate::backend::allocate::live_rows_by(&body, |value| value == 100);
     assert_eq!(rows.numbered(), 1, "the values numbered");
 }
+
+/// A port write leaves the x87 stack as it is: a value held across `out` stays
+/// on the stack. Every `Barrier` was a boundary, so a value the allocator kept
+/// in a register across an `out` was refused ("a floating value is live
+/// across a boundary") and the QB demos qbdemo and deedlines did not compile.
+#[test]
+fn test_a_value_stays_on_the_stack_across_a_port_write() {
+    let cell = frame_cell(-8, 8);
+    let out = Semantics {
+        op: Operation::Barrier,
+        name: Some("out".to_owned()),
+        dests: vec![],
+        sources: vec![],
+        target: None,
+        indirect: false,
+        table: vec![],
+    };
+    let body = _body(vec![_load(1, &cell), out, _store(&cell, 1)]);
+    let converted = converted(&body, &RegisterClasses::of(&llrm_x86_m16::M16)).expect("a value across an out");
+    assert_eq!(count(&converted, "out"), 1, "{:?}", names(&converted));
+}

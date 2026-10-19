@@ -92,8 +92,6 @@ pub struct AliasQuery<'a> {
     /// Entries of the cache looked at to answer the questions: one a question,
     /// for the test that holds the cost linear.
     cache_steps: std::cell::Cell<u64>,
-    /// The allocas whose address is exposed, found when first asked.
-    exposed: std::cell::OnceCell<Rc<llrm_mir::dense::IdSet<llrm_mir::module::ValueId>>>,
     /// `BasicAA`'s answers for the pointer pairs asked: one `AAQueryInfo` for
     /// the batch.
     basic: RefCell<crate::aa::AAQueryInfo>,
@@ -121,21 +119,10 @@ impl<'a> AliasQuery<'a> {
             cache: Default::default(),
             asked: Default::default(),
             cache_steps: Default::default(),
-            exposed: Default::default(),
             basic: Default::default(),
             bases: Default::default(),
             bases_walked: Default::default(),
         }
-    }
-
-    /// The allocas whose address is exposed, where the caller has them already
-    /// (exposure does not change as instructions move between blocks).
-    pub fn with_exposed(
-        self,
-        exposed: Rc<llrm_mir::dense::IdSet<llrm_mir::module::ValueId>>,
-    ) -> Self {
-        let _ = self.exposed.set(exposed);
-        self
     }
 
     /// The walks down a pointer's GEP chain made so far.
@@ -302,10 +289,17 @@ impl<'a> AliasQuery<'a> {
     ) -> bool {
         use llrm_mir::module::Operand;
         let Some(Operand::Value(alloca)) = self.identified_object(reference) else { return false };
-        !self
-            .exposed
-            .get_or_init(|| Rc::new(crate::memory::exposed_frames(self.unit).into_iter().collect()))
-            .contains(&alloca)
+        !self.captured(alloca)
+    }
+
+    /// Whether the address of the alloca `alloca` may be captured, a return
+    /// included (`PointerMayBeCaptured`), remembered in the batch.
+    fn captured(
+        &self,
+        alloca: llrm_mir::module::ValueId,
+    ) -> bool {
+        crate::basicaa::BasicAA::new(self.unit)
+            .is_captured(llrm_mir::module::Operand::Value(alloca), &mut self.basic.borrow_mut())
     }
 
     /// Whether `pointer` is derived only from objects other than the alloca
@@ -352,9 +346,7 @@ impl<'a> AliasQuery<'a> {
     ) -> bool {
         use llrm_mir::module::Operand;
         let Some(Operand::Value(alloca)) = self.identified_object(local) else { return false };
-        let exposed =
-            self.exposed.get_or_init(|| Rc::new(crate::memory::exposed_frames(self.unit).into_iter().collect()));
-        if exposed.contains(&alloca) {
+        if self.captured(alloca) {
             return false;
         }
         other.pointer.is_some_and(|pointer| self.derived_from_elsewhere(pointer, alloca, 0))
