@@ -162,9 +162,14 @@ def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
     directory = Path(smoke_bins(env))
     if not llrmbin.stale_binaries(directory, cwd):
         return ""
-    (build or (lambda: subprocess.run(slotted(["cargo", "build", "--release", "--bins", "-q"]), cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True)))()
+    built = (build or (lambda: subprocess.run(slotted(["cargo", "build", "--release", "--bins", "-q"]), cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True)))()
     still = llrmbin.stale_binaries(directory, cwd)
-    return f"binaries still older than the merged tree after a rebuild: {', '.join(still)} in {directory}" if still else ""
+    if not still:
+        return ""
+    # A stale binary after a rebuild is a build that failed (its exit code and last lines) or one that left the binaries older than a source: say which.
+    ran = f"; the rebuild exited {built.returncode}: {' / '.join((built.stderr or built.stdout or '').strip().splitlines()[-3:])[:300]}" if getattr(built, "returncode", 0) else ""
+    detail = llrmbin.stale_detail(directory, cwd)
+    return f"binaries still older than the merged tree after a rebuild: {', '.join(still)} in {directory}{'; ' + detail if detail else ''}{ran}"
 
 
 SMOKE_STEPS = ("programs", "sc", "d_faces", "qc_d_faces", "qc_modules", "run")

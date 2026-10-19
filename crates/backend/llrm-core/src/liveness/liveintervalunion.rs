@@ -41,7 +41,8 @@ thread_local! {
     static LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The searches of a union's map made on this thread, for a test that a cursor walking blocks does not search per step.
+/// The searches of a union's map made on this thread, for a test that a cursor
+/// walking blocks does not search per step.
 #[cfg(test)]
 pub fn lookups() -> usize {
     LOOKUPS.with(std::cell::Cell::get)
@@ -116,7 +117,8 @@ impl LiveIntervalUnion {
         self.segments.range((Bound::Excluded(x.clone()), Bound::Unbounded)).next().map(|(start, _)| start.clone())
     }
 
-    /// `find` with the stop of the entry it finds, so an iterator held as (start, stop) is read without a lookup.
+    /// `find` with the stop of the entry it finds, so an iterator held as
+    /// (start, stop) is read without a lookup.
     pub fn find_entry(
         &self,
         x: &SlotIndex,
@@ -130,8 +132,10 @@ impl LiveIntervalUnion {
         self.segments.range((Bound::Excluded(*x), Bound::Unbounded)).next().map(|(start, (stop, _))| (*start, *stop))
     }
 
-    /// `IntervalMap::const_iterator::advanceTo(x)`: from the entry `at` (start, stop), the first entry whose stop is after `x`. The
-    /// held stop answers a step that stays; a few steps of one range, then a search.
+    /// `IntervalMap::const_iterator::advanceTo(x)`: from the entry `at` (start,
+    /// stop), the first entry whose stop is after `x`. The
+    /// held stop answers a step that stays; a few steps of one range, then a
+    /// search.
     pub fn advance_entry(
         &self,
         at: Option<(SlotIndex, SlotIndex)>,
@@ -152,8 +156,10 @@ impl LiveIntervalUnion {
         self.find_entry(x)
     }
 
-    /// `advanceTo(x)` from the entry `at` (which starts before `x`), then `--I` when that is not an entry starting before `x`: the
-    /// iterator after the move and the last entry that starts before `x`. A few steps of one range find both; a far one is a search.
+    /// `advanceTo(x)` from the entry `at` (which starts before `x`), then `--I`
+    /// when that is not an entry starting before `x`: the iterator after
+    /// the move and the last entry that starts before `x`. A few steps of one
+    /// range find both; a far one is a search.
     pub fn advance_to_last_before(
         &self,
         at: (SlotIndex, SlotIndex),
@@ -181,7 +187,8 @@ impl LiveIntervalUnion {
         (moved, last)
     }
 
-    /// `--I`: the entry before the one starting at `at`; the last entry from the end (`None`).
+    /// `--I`: the entry before the one starting at `at`; the last entry from
+    /// the end (`None`).
     pub fn prev_entry(
         &self,
         at: Option<&(SlotIndex, SlotIndex)>,
