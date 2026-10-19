@@ -217,6 +217,27 @@ fn _in_frame(addr: Option<Addr>) -> bool {
     addr.is_some_and(|addr| addr.space == Space::Frame)
 }
 
+/// What a [`Field`] says about the operand beside it.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum FieldKind {
+    /// A shifted register: `code` names the shift (lsl, lsr, ...).
+    Shift,
+    /// A condition: `code` is the target's condition code.
+    Condition,
+    /// An extended register: `code` names the extension (uxtw, sxtb, ...).
+    Extend,
+}
+
+/// An instruction field that is no register, cell or value: a shift or
+/// extension and its amount, or a condition. `code` is the target's numbering,
+/// which its description names.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Field {
+    pub kind: FieldKind,
+    pub code: u8,
+    pub amount: u8,
+}
+
 /// Every selected machine operand Python LIR may carry.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Loc {
@@ -225,6 +246,7 @@ pub enum Loc {
     Imm(Imm),
     Address(AddressRef),
     Held(Held),
+    Field(Field),
 }
 
 impl Loc {
@@ -572,7 +594,7 @@ pub fn values(where_: &Loc) -> Values {
                 named(held);
             }
         }
-        Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_) => {}
+        Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_) | Loc::Field(_) => {}
     }
     found
 }
@@ -933,6 +955,7 @@ impl Repr for Loc {
             Loc::Imm(one) => one.repr(),
             Loc::Address(one) => one.repr(),
             Loc::Held(one) => one.repr(),
+            Loc::Field(one) => format!("Field({:?}, code={}, amount={})", one.kind, one.code, one.amount),
         }
     }
 }

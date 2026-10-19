@@ -259,6 +259,29 @@ def test_a_compile_that_outgrows_the_memory_limit_is_reported_as_a_memory_limit(
     assert why and why.startswith("memory limit"), why
 
 
+def test_an_unformatted_file_refuses_a_pr_through_the_prepush_ratchet():
+    """#2732 and #2735 landed with unformatted files: the smoke ran neither fmt nor the docs scans. prepush's failing steps are ratchets of the smoke."""
+    class Done:
+        def __init__(self, out, code):
+            self.stdout, self.stderr, self.returncode = out, "", code
+
+    failed = ps.prepush_failures(run=lambda command: Done("PREPUSH FAIL: fmt, docs\ncovers: fmt, docs", 1))
+    assert set(failed) == {"ratchet:prepush-fmt", "ratchet:prepush-docs"}, failed
+    assert ps.prepush_failures(run=lambda command: Done("PREPUSH PASS\n", 0)) == {}
+    assert set(ps.prepush_failures(run=lambda command: Done("", 2))) == {"ratchet:prepush-did-not-run"}
+
+
+def test_unused_code_fails_the_warnings_check_and_clean_code_passes(tmp_path):
+    """deadstore.rs landed with unused code under -D warnings."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "Cargo.toml").write_text('[package]\nname = "w"\nversion = "0.0.0"\nedition = "2021"\n')
+    (tmp_path / "src/lib.rs").write_text("fn unused() {}\n")
+    why = ps.warnings_check(tmp_path, tmp_path / "t")
+    assert why, "an unused function must fail under -D warnings"
+    (tmp_path / "src/lib.rs").write_text("pub fn used() {}\n")
+    assert ps.warnings_check(tmp_path, tmp_path / "t") == ""
+
+
 def test_a_failed_unit_step_names_each_failed_test_not_its_crate():
     """The subset rule compared checks: a PR adding one failing test inside an already-red crate failed `unit llrm-qb`, which the red head failed too, and landed."""
     out = "running 3 tests\\nfailures:\\n\\n---- t::a stdout ----\\n    printed\\n\\nfailures:\\n    t::a\\n    t::b\\n\\ntest result: FAILED. 1 passed; 2 failed\\n".replace("\\n", "\n")
@@ -293,3 +316,21 @@ def test_a_header_change_without_the_docs_sync_is_refused_with_the_page_named():
     failed = ps.docs_failures(run=lambda command: Done(stale, 1))
     assert set(failed) == {"ratchet:docs"} and "docs/optimizations/backend/jumps.md" in failed["ratchet:docs"] and "--sync" in failed["ratchet:docs"], failed
     assert ps.docs_failures(run=lambda command: Done("ok\n", 0)) == {}
+
+
+def test_the_ratchets_run_side_by_side_and_report_in_command_order():
+    """A precheck spent ~45 s of its ~70 s running ten cargo test ratchets one after another; four at a time they overlap their links and runs."""
+    import threading
+
+    gate = threading.Barrier(2, timeout=5)  # a serial runner never reaches 2 parties: the barrier breaks (10 ratchets: pairs)
+
+    class Done:
+        def __init__(self, code):
+            self.returncode, self.stdout, self.stderr = code, "", ""
+
+    def run(command):
+        gate.wait()
+        return Done(1 if "facts_rewrite" in " ".join(command) else 0)
+
+    failed = ps.ratchet_failures(run=run)
+    assert list(failed) == ["ratchet:facts_rewrite"], failed
