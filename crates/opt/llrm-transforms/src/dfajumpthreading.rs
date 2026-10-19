@@ -23,7 +23,7 @@
 //!                     sw: switch s      det, sw stay for the paths nobody decided
 //! ```
 //!
-//! DEVIATE (DF1..DF3):
+//! DEVIATE (DF1..DF3; DF5 is a parity note):
 //! - DF1. A `select` in the use-def chain of the state rejects the switch
 //!   (`isCandidate` would accept it and `unfold` it into control flow):
 //!   `unfold` is stage S2.
@@ -36,6 +36,11 @@
 //! - DF3. A path through a block that starts with a `landingpad` is not
 //!   threaded: the copy would be a second pad, and the one module handler
 //!   (`ehprepare`) cannot choose between two (J10 of `jumpthreading.rs`).
+//! - DF5 (parity, not a deviation). `x_switch` m16 -O2/-O3 is +17 B (320 vs
+//!   303) and 70 vs 63 asm lines: the pass threads the state cycle and peels
+//!   two iterations, as `opt -passes=dfa-jump-threading` does on the same
+//!   entering IR (m16 target, identical per `difftest.py dumps`). The source is
+//!   UB at m16 (`r >> 16` on 16 bits); -Os is identical (size gate).
 //!
 //! # Example
 //! The state is set to 1 on one path and to 2 on the other, and the `switch`

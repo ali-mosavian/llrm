@@ -61,7 +61,7 @@ Estimate for S1: about one day of fork time after this note lands (JumpThreading
 
 ## 6. Status: S1 landed
 
-`dfajumpthreading.rs` (with `dfajumpthreading/{mainswitch,paths,transform}.rs`), slot `dfajumpthreading@806` Partial, on by default, `LLRM_NO_DFAJUMPTHREADING` (set) turns it off. DEVIATE: DF1 a `select` in the state chain rejects the switch (S2); DF2 no `DomTreeUpdater`; DF3 a path through a landing pad is not copied (J10 of `jumpthreading.rs`).
+`dfajumpthreading.rs` (with `dfajumpthreading/{mainswitch,paths,transform}.rs`), slot `dfajumpthreading@806` Partial, on by default, `LLRM_NO_DFAJUMPTHREADING` (set) turns it off. DEVIATE: DF1 a `select` in the state chain rejects the switch (S2); DF2 no `DomTreeUpdater`; DF3 a path through a landing pad is not copied (J10 of `jumpthreading.rs`). Note DF5 (parity, not a deviation): `x_switch` m16 -O2/-O3 is +17 B (320 vs 303), 70 vs 63 asm lines, because the pass threads the state cycle and peels the first two iterations; `opt -passes=dfa-jump-threading` on the entering IR at the m16 target (`i386-unknown-unknown-code16`, `p:16:16`) gives the identical function (`difftest.py dumps`, 1 function compared, identical), so it is LLVM's choice. The source is undefined behaviour at m16 (`r >> 16` on a 16-bit unsigned: W135), clocks are not measurable (no m16 harness for the row); -Os is identical (the size gate threads nothing).
 
 Oracle: `difftest.py pair` against `opt -passes=dfa-jump-threading` on `tests/dfajumpthreading/*.ll`: 8 fixtures, 8 identical (`simple_machine`, `two_level`, `calls_are_cloned`, `outer_use`, `equivalent_states`, and the three the pin leaves alone: `over_cost`, `shared_select`, `unpredictable_state`).
 
