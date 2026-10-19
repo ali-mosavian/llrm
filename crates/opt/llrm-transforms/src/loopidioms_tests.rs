@@ -344,11 +344,13 @@ fn a_fill_is_priced_against_its_loop() {
     assert!(super::_cheaper(size.fill + 1, None, None, &size, true, None));
 }
 
-/// A fill through a huge pointer reached isel as a count of 32 bits it
-/// refused, failing a Nib build; `rep stos` would wrap at 64K besides. It
-/// stays a loop, whose pointer carries.
+/// A fill through a huge pointer is one fill in the pointer's space, with a
+/// count of 32 bits: the intrinsic carries the address space, and isel splits
+/// it at each 64K segment (`isel/huge.rs`). It was left a loop, ten
+/// instructions to a byte. A word of two different bytes is a pattern; a byte
+/// is a memset.
 #[test]
-fn a_fill_through_a_huge_pointer_is_kept() {
+fn a_fill_through_a_huge_pointer_is_one_fill_in_its_space() {
     let text = "@big = addrspace(3) global [40000 x i16] zeroinitializer
 
 define i16 @f(i32 %n) {
@@ -371,7 +373,12 @@ b3:
 }
 ";
     assert!(text.contains("store i16 4660"), "premise: a loop of word stores");
-    kept(text, &[&[0], &[1], &[300]]);
+    let after = managed_fill(text, &[&[0], &[1], &[300]]);
+    assert!(after.contains("call void @llvm.experimental.memset.pattern.p3.i16.i32(ptr addrspace(3) "), "{after}");
+    let bytes =
+        text.replace("[40000 x i16]", "[40000 x i8]").replace("i16 4660", "i8 65").replace("store i16", "store i8");
+    let after = managed_fill(&bytes, &[&[0], &[1], &[300]]);
+    assert!(after.contains("call void @llvm.memset.p3.i32(ptr addrspace(3) "), "{after}");
 }
 
 /// Two arrays of 64 words, each cell its own number, and @f(n, q): `body`
