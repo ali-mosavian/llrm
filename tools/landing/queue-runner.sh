@@ -15,9 +15,13 @@ while true; do
   # never run beside another landing (old runner's land.sh)
   while ps -eo args | awk '/land\.sh/ && !/awk/ {f=1} END{exit !f}'; do sleep 20; done
   "$HERE/build-queue.sh" > $Q.new && mv $Q.new $Q || echo "build-queue failed, keeping the old queue"
+  # landings outside the gate: every first-parent commit of feat/parity not in landed.log, reported once
+  git -C "$W" fetch -q origin 2>/dev/null; (cd "$W" && "$HERE/unlogged.sh" 2>/dev/null) | while read -r l; do
+    grep -qxF "$l" "${LAND_TMP:-/tmp/landing}/unlogged.log" 2>/dev/null || { echo "UNLOGGED LANDING: $l"; echo "$l" >> "${LAND_TMP:-/tmp/landing}/unlogged.log"; }
+  done
   # size cap: cargo never removes the artifacts of older hashes
   [ "$(du -sk "$T" 2>/dev/null | cut -f1)" -gt "${TARGET_CAP_KB:-41943040}" ] && echo "target over cap: $(PRUNE_LOG=${LAND_TMP:-/tmp/landing}/prune.log "$HERE/prune-target.sh" "$T" --apply)"
-  # every cargo target over 30 GB loses its stale hashes, at most every 10 minutes
+  # every cargo target over 15 GB loses its stale hashes, at most every 10 minutes
   if [ -z "$(find "${LAND_TMP:-/tmp/landing}/sweep.stamp" -mmin -10 2>/dev/null)" ]; then
     touch "${LAND_TMP:-/tmp/landing}/sweep.stamp"; "$HERE/sweep-targets.sh" 2>&1 | sed "s/^/$(date +%H:%M) /" >> "${LAND_TMP:-/tmp/landing}/sweep.log"
   fi

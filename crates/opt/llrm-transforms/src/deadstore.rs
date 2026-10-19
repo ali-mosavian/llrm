@@ -56,6 +56,14 @@
 //! DEVIATE 5: only stores and constant-length memsets are candidates, and
 //! `storeIsNoop` knows no `getInitialValueOfAllocation` (it needs `calloc`
 //! and friends). Exit: stage 2.
+//! DEVIATE 6: a call that initializes an object keeps the earlier writes to it
+//! when a pointer into the object also reaches the call through another
+//! argument (the pin trusts `initializes`: the callee reads before it writes
+//! through that alias). Exit: none, while a pointer can be passed twice.
+//! DEVIATE 7: a load through an unknown pointer is taken to read a local that
+//! is captured anywhere in the function, where BasicAA's `isNotCapturedBefore`
+//! asks at the instruction; a store a later escape follows stays. Exit:
+//! basicaa-port's captured-before query in the alias stand-in (10-23).
 //!
 //! # Example
 //! A local written and never read:
@@ -138,6 +146,20 @@ impl FunctionPass for DeadStoreElimination {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
+        // Only a store, or a call that fills bytes, can be dead: a body with
+        // neither builds nothing.
+        let writes = {
+            let probe = View::within(unit.context, unit.layout, unit.function, &outer);
+            unit.function
+                .walk()
+                .any(
+                    |(_, inst)| matches!(unit.function.instruction(inst).opcode, Opcode::Store { .. })
+                        || llrm_analysis::memory::MemRef::filled(&probe, inst).is_some(),
+                )
+        };
+        if !writes {
+            return PreservedAnalyses::all();
+        }
         let accesses = match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
             Ok(accesses) => accesses,
             Err(error) => panic!("dse: {error}"),

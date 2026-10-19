@@ -113,7 +113,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("promote@1241", Cleanup, "mem2reg", Translated, "mem2reg.rs"),
     entry("fold@1242", Cleanup, "instcombine", Old, "instcombine-port"),
     entry("dead@1242", Cleanup, "instcombine", Old, "instcombine-port"),
-    entry("decide@1244", Cleanup, "simplifycfg", Old, "simplifycfg-port"),
+    partial(
+        "decide@1244",
+        Cleanup,
+        "simplifycfg",
+        "translated SimplifyCfg at the default options (convertSwitchRangeToICmp is read by simplifySwitch, untranslated) runs here and Decide does not; untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@1244) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     entry("phiopt@1244", Cleanup, "simplifycfg", Old, "simplifycfg-port"),
     entry("sroa@646", Simplify, "sroa", Translated, "sroa.rs"),
     entry("earlycse@649", Simplify, "early-cse<memssa>", Translated, ""),
@@ -136,7 +141,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("tailrec@688", Simplify, "tailcallelim", Old, "tailcallelim-port"),
     entry("decide@690", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("phiopt@690", Simplify, "simplifycfg", Old, "simplifycfg-port"),
-    entry("algebraic@696", Simplify, "reassociate", Old, "reassociate-port"),
+    entry("reassociate@696", Simplify, "reassociate", Translated, ""),
+    entry("algebraic@696", Simplify, "instcombine", Old, "instcombine-port"),
     entry("loopsimplify@764", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@764", Simplify, "lcssa", Old, "lcssa-port"),
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
@@ -499,12 +505,6 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         "vt-constantfolding (floating-point InstSimplify) and mssa",
     ),
     old_analysis("table-loads", "TableLoads", "none", "none: DEVIATE or delete candidate (consts::is_table_load)"),
-    old_analysis(
-        "terminal-sites",
-        "TerminalSites",
-        "none",
-        "none: DEVIATE or delete candidate (noreturn::terminal_sites)",
-    ),
     old_analysis("published", "Published", "none", "none: DEVIATE or delete candidate (observers.rs)"),
     old_analysis(
         "loop-products",
@@ -693,13 +693,14 @@ pub fn check_phase_at(
     built: &[&str],
     level: Level,
 ) -> Result<(), String> {
-    check_phase_with(phase, built, level, true, true, crate::pipeline::Options::default().rotate_slot, &[])
+    check_phase_with(phase, built, level, true, true, crate::pipeline::Options::default().rotate_slot, &[], &[])
 }
 
 /// [`check_phase_at`] with the explicit off switches: the slots whose
 /// translation is `sroa.rs` are Old when `LLRM_NO_SROA` is set, those of
 /// `mem2reg.rs` when `LLRM_NO_MEM2REG` is, and the old stand-in is what runs;
-/// with `rotate` false (the default) the rotate slot is not run.
+/// with `rotate` false (the default) the rotate slot is not run. `off` are
+/// the slots an option switches off, which are not required.
 pub(crate) fn check_phase_with(
     phase: Phase,
     built: &[&str],
@@ -707,9 +708,11 @@ pub(crate) fn check_phase_with(
     sroa: bool,
     mem2reg: bool,
     rotate: bool,
+    off: &[&str],
     held: &[(&str, Vec<&'static str>)],
 ) -> Result<(), String> {
-    let absent = if level == Level::O1 { ABSENT_AT_O1 } else { &[] };
+    let absent: Vec<&str> =
+        if level == Level::O1 { ABSENT_AT_O1.iter().chain(off).copied().collect() } else { off.to_vec() };
     // The translated `loop-rotate` is in the order only with `LLRM_ROTATE`.
     let registry: Vec<Entry> = REGISTRY
         .iter()
@@ -720,7 +723,7 @@ pub(crate) fn check_phase_with(
             Entry { kind: if off { Old } else { one.kind }, ..*one }
         })
         .collect();
-    check_without(&registry, phase, built, absent)?;
+    check_without(&registry, phase, built, &absent)?;
     check_old_slots(&registry, held)?;
     llrm_mir::counts::joined(joined_slots(&registry, built));
     Ok(())
