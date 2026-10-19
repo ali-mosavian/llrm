@@ -103,7 +103,7 @@ pub fn program(
 
 /// `program` through the shared mid-end at -O2.
 pub fn optimized(program: &mut Program) -> Result<(), String> {
-    let dump = std::env::var_os("LLRM_MIR_STAGES").map(Into::into);
+    let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
     llrm_transforms::pipeline::applied(program, &Applied { dump, ..Applied::default() })
 }
 
