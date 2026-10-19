@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 114 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 115 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -26,6 +26,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_compares | InstCombine's `visitICmpInst` and the helpers it calls, from [`InstCombineCompares.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp) at d1106deb71cc. | `combine::visit`, once the compares slot is flipped. | [combine_compares](combine_compares.md) |
 | combine_shared | What InstCombine's integer `visit*` functions share from `InstructionCombining.cpp`: the complexity order that puts constants on the right, and the reassociation of an associative or commutative operation. | `combine_addsub` (`visitAdd`, `visitSub`) and the families after it. | [combine_shared](combine_shared.md) |
 | combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
+| condstores | Two conditional stores to one address, one in each of two if-then-else diamonds or triangles in a row, are one store after them, predicated on either condition: SimplifyCFG's `mergeConditionalStores`. |  | [condstores](condstores.md) |
 | constraintelim | `constraint-elimination`: conditions the dominating branches, assumes and memory accesses already decide become constants, by Fourier-Motzkin elimination on a system of linear constraints over the values compared. | Nothing yet: `difference` and `guards::Given::holds` move here. | [constraintelim](constraintelim.md) |
 | counting | What a counted-loop rewrite places before the loop: its seeds, skip test and exit values (LLVM's SCEVExpander, as IndVarSimplify and LoopRotate use it). | [`crate::loopidioms`](loopidioms.md), [`crate::loopexit`](loopexit.md), [`crate::window`](window.md) and | [counting](counting.md) |
 | cvp | Correlated value propagation: a value is replaced, narrowed or given a flag when the branches and ranges around it prove the fact, as LLVM's `correlated-propagation`. | Alone, through `llrm-pass cvp`; not in the pipeline. `tools/difftest` | [cvp](cvp.md) |
