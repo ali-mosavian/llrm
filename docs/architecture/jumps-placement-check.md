@@ -65,7 +65,7 @@ Tests that encoded gcc's rules, each re-checked with `llc -O2 -mtriple=i386 -tai
 Deviations:
 
 - D13 a block is counted without the jump to the block laid out next, and `jcc next; jmp other` as one `jncc`: LLVM's form after branch folding, which the explicit jumps here do not have yet.
-- D14 `TailDupSize` is 2 (1 for size); `-O3`'s 4 needs the optimisation level, which the profile does not carry.
+- D14 `TailDupSize` is 2 (1 for size, 4 at -O3 via `cpu::Profile::aggressive`). Bench: the -O3 threshold loses the -O3 size gain (m32 -595 B to +26 B, m16 -354 to -94; clocks .8972 vs .8964); kept, as the pin does.
 - D15 not copied: a block with a phi, a call's record, a group, a symbol, spread bytes, data, a barrier, a call or an indirect jump; the entry is never copied or removed (it may have predecessors here). Copies claim none of the source bytes.
 - D16 the old guard against a copy that makes a loop irreducible is gone: LLVM has none. Fact to measure: how many bodies become irreducible on the corpus, and what `Frequency` makes of them.
 - D17 the odds of a pred after a copy are the tail's (`BlockOdds::rerouted`); block frequencies are not updated, as `MBFI` is not.
