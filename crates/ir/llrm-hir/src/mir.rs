@@ -728,6 +728,31 @@ fn emit_module<'h>(
             refused.push((function.name.clone(), why));
         }
     }
+    // A routine only addressed in code, as one only addressed in data (below),
+    // is declared once every call has declared its own.
+    for (function, _) in &functions {
+        for instruction in function.blocks.iter().flat_map(|one| &one.instructions) {
+            let (Op::Address, true, Some(callee)) =
+                (instruction.op, instruction.operands.is_empty(), instruction.callee.as_deref())
+            else {
+                continue;
+            };
+            if tables.callees.contains_key(callee) {
+                continue;
+            }
+            let returns = module.context.types.void();
+            let ty = function_type(&mut module.context.types, returns, Vec::new());
+            match module.add_function(callee, ty, Linkage::External) {
+                Ok(global) => {
+                    place_function(&mut module, global, (0, tables.spaces.far));
+                    let reference = module.reference(global);
+                    tables.callees.insert(callee.to_owned(), reference);
+                    tables.conventions.insert(callee.to_owned(), 0);
+                }
+                Err(why) => refused.push((callee.to_owned(), why)),
+            }
+        }
+    }
     let declared: HashMap<i64, GlobalId> =
         functions.iter().filter_map(|(function, global)| Some((function.id, (*global)?))).collect();
     for one in &hir.facts {
@@ -1931,6 +1956,15 @@ fn asm_name(asm: &model::Asm) -> String {
         outputs: asm.outputs.clone(),
         clobbers: asm.clobbers.clone(),
         memory: asm.memory,
+        fixups: asm
+            .fixups
+            .iter()
+            .map(|one| llrm_mir::intrinsics::AsmFixup {
+                at: one.at as usize,
+                kind: one.kind.clone(),
+                addend: one.addend,
+            })
+            .collect(),
     })
 }
 
