@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 152 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 153 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -150,6 +150,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], [`crate::unswitch`] share: equal calls, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `equal_calls` on each function it numbers; | [transform](transform.md) |
 | trivialunswitch | A branch in a loop's header on a loop-invariant condition, one side of which leaves the loop, is decided in the preheader instead of on every trip. | In the function pipeline's fixed point, after `loopmotion` and before | [trivialunswitch](trivialunswitch.md) |
 | twoentryphi | A two-entry phi that a branch chooses between becomes a `select`, the arms' cheap code hoisted into the branch's block: the `foldTwoEntryPHINode` step of SimplifyCFG. |  | [twoentryphi](twoentryphi.md) |
+| uncondicmp | A block that holds an equality compare of a switch's value with a constant (and perhaps a `select` on it), and jumps on, folded into the switch: LLVM's [`tryToSimplifyUncondBranchWithICmpSelectInIt`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5328) and its `ICmpInIt` form (a compare alone), the parts of `simplifyUncondBranch` ([L8800](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8800)) after the empty block's removal. |  | [uncondicmp](uncondicmp.md) |
 | undefpred | A predecessor that gives a block a value that is undefined behavior to use there stops reaching it: SimplifyCFG's `removeUndefIntroducingPredecessor`. |  | [undefpred](undefpred.md) |
 | unroll | Full unrolling of a loop with an exact trip count of at least two: its trips become one straight line in the latch and the loop is gone. | In the pipeline's fixed point, after each round of scalar passes and when | [unroll](unroll.md) |
 | unroll_jam | Unroll-and-jam: the outer loop of a two-loop nest is unrolled by N and the N copies of the inner loop are fused into one, so what the outer iterations share is used by all N in one pass of the inner loop. | Once per body, after `unswitch`, so an invariant guard is out of the | [unroll_jam](unroll_jam.md) |

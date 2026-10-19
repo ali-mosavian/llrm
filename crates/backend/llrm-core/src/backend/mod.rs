@@ -221,6 +221,7 @@ pub mod relayout;
 pub mod rmw;
 pub mod saverestore;
 pub mod schedule;
+pub mod selectconstants;
 pub mod selects;
 pub mod shrinkwrap;
 pub mod slots;
