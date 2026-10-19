@@ -32,7 +32,7 @@ fn dead(body: &str) -> (Sites, Sites) {
                 let at = unit.function.parent(inst).unwrap();
                 (
                     unit.function.block(at).name.clone().unwrap(),
-                    unit.function.block(at).iter().position(|one| one == inst).unwrap(),
+                    unit.function.iter_block(at).position(|one| one == inst).unwrap(),
                 )
             })
             .collect::<Vec<_>>()

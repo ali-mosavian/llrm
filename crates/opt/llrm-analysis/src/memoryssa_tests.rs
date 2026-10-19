@@ -40,7 +40,7 @@ fn site(
     name: &str,
     index: usize,
 ) -> InstId {
-    unit.function.block(block(unit.function, name)).iter().nth(index).unwrap()
+    unit.function.iter_block(block(unit.function, name)).nth(index).unwrap()
 }
 
 fn at(

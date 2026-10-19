@@ -48,7 +48,7 @@ use llrm_mir::simplify::{simplify_binop_operands, simplify_cast_operand, simplif
 /// What a translation reads: the context and layout the simplifier folds with,
 /// the function, and the dominator tree (`DT`, absent where C++ passes null).
 pub struct Env<'a> {
-    pub context: &'a mut Context,
+    pub context: &'a Context,
     pub layout: &'a DataLayout,
     pub function: &'a Function,
     pub dt: Option<&'a DomTree>,
@@ -395,9 +395,15 @@ impl PhiTransAddr {
                     return Some(v);
                 }
                 // `gep x, 0` is x.
-                if let Some(simplified) =
-                    simplify_gep_operands(env.context, env.layout, function, source, translated[0], &translated[1..], flags)
-                {
+                if let Some(simplified) = simplify_gep_operands(
+                    env.context,
+                    env.layout,
+                    function,
+                    source,
+                    translated[0],
+                    &translated[1..],
+                    flags,
+                ) {
                     for &operand in &translated {
                         remove_inst_inputs(function, operand, &mut self.inputs);
                     }

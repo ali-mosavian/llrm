@@ -198,7 +198,7 @@ pub fn sunk_stores(
         let inside = loop_
             .body
             .iter()
-            .flat_map(|&at| function.block(cfg::block(at)).iter().collect::<Vec<_>>())
+            .flat_map(|&at| function.iter_block(cfg::block(at)).collect::<Vec<_>>())
             .collect::<Vec<_>>();
         let refused = |inst: InstId| match function.instruction(inst).opcode {
             Opcode::Store { volatile, .. } => volatile,
@@ -288,7 +288,7 @@ fn _moved(
     }
     let unobserved = |inst: InstId| _unobserved(unit, inst, &index, references, &address_values);
     let mut moved = Vec::new();
-    for inst in function.block(cfg::block(source)).iter() {
+    for inst in function.iter_block(cfg::block(source)) {
         if unobserved(inst) && function.instruction(inst).operands.iter().all(|&one| reaches(one)) {
             moved.push((inst, None));
         }

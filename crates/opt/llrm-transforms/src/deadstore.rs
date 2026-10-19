@@ -1,6 +1,6 @@
 //! Dead store elimination: LLVM's `DSEPass`, stage 1 (`DSEState`,
-//! `eliminateDeadDefs`, `getDomMemoryDef`, `eliminateDeadWritesAtEndOfFunction`,
-//! `storeIsNoop`).
+//! `eliminateDeadDefs`, `getDomMemoryDef`,
+//! `eliminateDeadWritesAtEndOfFunction`, `storeIsNoop`).
 //!
 //! # How it works
 //! MemorySSA is built once. Every store and every `llvm.memset` of a constant
@@ -38,15 +38,16 @@
 //! location is the one object of its provenance, and "must alias with an
 //! offset" is the same address with sizes (`AliasResult::Partial`). Exit:
 //! none; the model is llrm's.
-//! DEVIATE 2: nothing throws (no unwinding in MIR), so `ThrowingBlocks` is empty
-//! and every local object is invisible on unwind. Exit: when MIR has EH.
+//! DEVIATE 2: nothing throws (no unwinding in MIR), so `ThrowingBlocks` is
+//! empty and every local object is invisible on unwind. Exit: when MIR has EH.
 //! DEVIATE 3: an object is invisible after the function returns when it is
 //! a stack or frame object (`isa<AllocaInst>`); `dead_on_return` and byval
 //! arguments (stage 3), and non-alloca objects with no capture (malloc) are
 //! absent. Exit: stage 3.
 //! DEVIATE 4: memory terminators (`lifetime.end`, `free`), the `initializes`
-//! attribute, `tryFoldIntoCalloc` and `eliminateRedundantStoresViaDominatingConditions`
-//! are stage 2 and 3. Partial overwrites (`isPartialOverwrite`, `IOLs`,
+//! attribute, `tryFoldIntoCalloc` and
+//! `eliminateRedundantStoresViaDominatingConditions` are stage 2 and 3. Partial
+//! overwrites (`isPartialOverwrite`, `IOLs`,
 //! `tryToMergePartialOverlappingStores`, `tryToShorten` of memsets) and
 //! `eliminateRedundantStoresOfExistingValues` are in. Exit: stage 2.
 //! DEVIATE 5: only stores and constant-length memsets are candidates, and
@@ -73,7 +74,8 @@
 //! The blocks and edges: only instructions are removed.
 //!
 //! # See also
-//! LLVM [`DeadStoreElimination.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp).
+//! LLVM
+//! [`DeadStoreElimination.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp).
 
 use std::rc::Rc;
 
@@ -162,13 +164,15 @@ impl FunctionPass for DeadStoreElimination {
                 let i8 = unit.context.types.int(8);
                 let offset = Operand::Constant(unit.context.int(length_ty, i128::from(skip)));
                 let ptr_ty = unit.function.operand_type(unit.context, operands[0]).expect("a typed pointer");
-                let gep = unit.function.create_instruction(
-                    Opcode::GetElementPtr { source: i8 },
-                    ptr_ty,
-                    vec![operands[0], offset],
-                    llrm_mir::opcode::Flags::default(),
-                    None,
-                );
+                let gep = unit
+                    .function
+                    .create_instruction(
+                        Opcode::GetElementPtr { source: i8 },
+                        ptr_ty,
+                        vec![operands[0], offset],
+                        llrm_mir::opcode::Flags::default(),
+                        None,
+                    );
                 unit.function.insert(gep, llrm_mir::edit::Position::Before(memset)).expect("a placed instruction");
                 now[0] = Operand::Value(unit.function.instruction(gep).result.expect("an address"));
             }
@@ -281,7 +285,7 @@ impl<'a> Dse<'a> {
         // Post-order numbers, and the defs that could kill.
         for (number, block) in post_order_of(function).into_iter().enumerate() {
             state.post_order.insert(block, number as u32);
-            for &inst in function.block(block).instructions() {
+            for inst in function.iter_block(block) {
                 let Some(access) = state.mssa.get_memory_access(inst) else { continue };
                 if state.mssa.access(access).kind == Kind::Def
                     && state.mem_defs.len() < DEFS_PER_BLOCK_LIMIT
@@ -291,11 +295,14 @@ impl<'a> Dse<'a> {
                 }
             }
         }
-        state.any_unreachable_exit = pdt.roots().iter().any(|&root| {
-            function
-                .terminator(root)
-                .is_some_and(|last| matches!(function.instruction(last).opcode, Opcode::Unreachable))
-        });
+        state.any_unreachable_exit = pdt
+            .roots()
+            .iter()
+            .any(
+                |&root| function
+                    .terminator(root)
+                    .is_some_and(|last| matches!(function.instruction(last).opcode, Opcode::Unreachable)),
+            );
         state
     }
 
@@ -353,7 +360,8 @@ impl<'a> Dse<'a> {
         }
         self.memset(inst)?;
         let filled = llrm_analysis::memory::MemRef::filled(self.aa.unit(), inst)?;
-        // The provenance the accesses annotated, with the bytes the memset fills.
+        // The provenance the accesses annotated, with the bytes the memset
+        // fills.
         let provenance = match self.accesses.writes(inst) {
             Some([written]) => written.provenance.clone(),
             _ => filled.provenance.clone(),
@@ -385,7 +393,10 @@ impl<'a> Dse<'a> {
         inst: InstId,
     ) -> bool {
         let volatile = self.function.instruction(inst).operands[3];
-        !matches!(volatile, Operand::Constant(id) if matches!(self.context.get(id).kind, llrm_mir::context::ConstantKind::Int(0)))
+        !matches!(
+            volatile,
+            Operand::Constant(id) if matches!(self.context.get(id).kind, llrm_mir::context::ConstantKind::Int(0))
+        )
     }
 
     /// `isNoopIntrinsic`: lifetime markers.
@@ -422,10 +433,11 @@ impl<'a> Dse<'a> {
     }
 
     /// `isIdentifiedObject`: a local or a global object.
-    fn is_identified(
-        object: &llrm_analysis::memory::ObjectRef
-    ) -> bool {
-        matches!(object.kind, MemoryKind::Stack | MemoryKind::Frame | MemoryKind::Global)
+    fn is_identified(object: &llrm_analysis::memory::ObjectRef) -> bool {
+        matches!(
+            object.kind,
+            MemoryKind::Stack | MemoryKind::Frame | MemoryKind::Global
+        )
     }
 
     /// `isInvisibleToCallerAfterRet`: a local (an alloca).
@@ -610,8 +622,8 @@ impl<'a> Dse<'a> {
         if self.is_noop_intrinsic(use_inst) {
             return false;
         }
-        // A store reads nothing (atomic orderings stronger than monotonic do not
-        // exist in MIR).
+        // A store reads nothing (atomic orderings stronger than monotonic do
+        // not exist in MIR).
         if self.is_store(use_inst) {
             return false;
         }
@@ -806,7 +818,8 @@ impl<'a> Dse<'a> {
         let mut at = 0;
         while at < work.len() {
             let use_access = work[at];
-            // Bail out if the number of accesses to check exceeds the scan limit.
+            // Bail out if the number of accesses to check exceeds the scan
+            // limit.
             if *scan_limit < (work.len() - at) as u32 {
                 return None;
             }
@@ -815,7 +828,9 @@ impl<'a> Dse<'a> {
             if self.mssa.access(use_access).kind == Kind::Phi {
                 let phi_block = self.mssa.access(use_access).block;
                 if killing_defs.iter().any(|&inst| {
-                    self.function.parent(inst).is_some_and(|block| block != phi_block && self.dt.dominates(block, phi_block))
+                    self.function
+                        .parent(inst)
+                        .is_some_and(|block| block != phi_block && self.dt.dominates(block, phi_block))
                 }) {
                     continue;
                 }
@@ -830,7 +845,8 @@ impl<'a> Dse<'a> {
                 self.push_mem_uses(use_access, &mut work, &mut visited);
                 continue;
             }
-            // Uses which may read the original def mean it cannot be eliminated.
+            // Uses which may read the original def mean it cannot be
+            // eliminated.
             if self.is_read_clobber(&maybe_dead_loc, use_inst) {
                 return None;
             }
@@ -842,8 +858,8 @@ impl<'a> Dse<'a> {
             if killing_def == use_access || maybe_dead_access == use_access {
                 continue;
             }
-            // Check all uses of defs, except for defs completely overwriting the
-            // original location.
+            // Check all uses of defs, except for defs completely overwriting
+            // the original location.
             if self.mssa.access(use_access).kind == Kind::Def {
                 if self.is_complete_overwrite(&maybe_dead_loc, maybe_dead_inst, use_inst) {
                     let killing_block = self.function.parent(use_inst).expect("a placed instruction");
@@ -860,8 +876,8 @@ impl<'a> Dse<'a> {
                 }
             }
         }
-        // For locations visible after the function returns, the location must be
-        // overwritten along all paths from the dead def to the exit.
+        // For locations visible after the function returns, the location must
+        // be overwritten along all paths from the dead def to the exit.
         if !self.invisible_after_return(killing_loc) {
             let mut killing_blocks: Vec<BlockId> = Vec::new();
             for &inst in &killing_defs {
@@ -877,7 +893,8 @@ impl<'a> Dse<'a> {
                 common = self.pdt.find_nearest_common_dominator(self.function, so_far, block);
             }
             let dead_block = self.mssa.access(maybe_dead_access).block;
-            // Every path from the dead def to an exit goes through a killing block.
+            // Every path from the dead def to an exit goes through a killing
+            // block.
             let post_dominates = common.is_some_and(|block| self.pdt.dominates(block, dead_block));
             if !post_dominates {
                 if !self.any_unreachable_exit {
@@ -948,8 +965,8 @@ impl<'a> Dse<'a> {
 
     // ---- removal ------------------------------------------------------------
 
-    /// `deleteDeadInstruction`: `inst` leaves MemorySSA and the function, and the
-    /// operands that were only its own go with it.
+    /// `deleteDeadInstruction`: `inst` leaves MemorySSA and the function, and
+    /// the operands that were only its own go with it.
     fn delete_dead_instruction(
         &mut self,
         inst: InstId,
@@ -1066,18 +1083,16 @@ impl<'a> Dse<'a> {
         let mut visited: Vec<BlockId> = Vec::new();
         let mut work: Vec<(BlockId, bool)> = vec![(second_block, true)];
         while let Some((block, is_first)) = work.pop() {
-            let instructions = self.function.block(block).instructions();
-            let start = if block == first_block {
-                instructions.iter().position(|one| *one == first).map_or(0, |at| at + 1)
-            } else {
-                0
+            // The block after `first` where it holds it, up to `second` where
+            // that is the block's end of the walk; empty if `first` is not before.
+            let backwards = block == first_block && is_first && !self.function.comes_before(first, second);
+            let rest: Box<dyn Iterator<Item = InstId> + '_> = match (backwards, block == first_block) {
+                (true, _) => Box::new(std::iter::empty()),
+                (false, true) => Box::new(self.function.iter_after(first)),
+                (false, false) => Box::new(self.function.iter_block(block)),
             };
-            let end = if is_first {
-                instructions.iter().position(|one| *one == second).unwrap_or(instructions.len())
-            } else {
-                instructions.len()
-            };
-            for &inst in &instructions[start.min(end)..end] {
+            let until = is_first.then_some(second);
+            for inst in rest.take_while(|&one| Some(one) != until) {
                 if inst != second
                     && !self.to_remove.contains(&inst)
                     && self.may_write(inst)
@@ -1100,8 +1115,9 @@ impl<'a> Dse<'a> {
 
     /// `isPartialOverwrite` with `EnablePartialOverwriteTracking`: the part of
     /// the dead write the killing write covers joins the intervals found for
-    /// it, and together they may cover all of it. (`OW_PartialEarlierWithFullLater`
-    /// and the shortening of a store are stage 2.)
+    /// it, and together they may cover all of it.
+    /// (`OW_PartialEarlierWithFullLater` and the shortening of a store are
+    /// stage 2.)
     fn is_partial_overwrite(
         &mut self,
         killing: &Location,
@@ -1179,8 +1195,8 @@ impl<'a> Dse<'a> {
         true
     }
 
-    /// `removePartiallyOverlappedStores`: for each partly overwritten memset, the
-    /// part its killing intervals cover at the end, then at the start.
+    /// `removePartiallyOverlappedStores`: for each partly overwritten memset,
+    /// the part its killing intervals cover at the end, then at the start.
     fn remove_partially_overlapped_stores(&mut self) -> bool {
         let mut changed = false;
         for dead in self.overlap_order.clone() {
@@ -1350,9 +1366,9 @@ impl<'a> Dse<'a> {
         true
     }
 
-    /// `eliminateRedundantStoresOfExistingValues`: a store of what the clobbering
-    /// def before it wrote already (an identical instruction, or a memset of
-    /// the byte) is removed.
+    /// `eliminateRedundantStoresOfExistingValues`: a store of what the
+    /// clobbering def before it wrote already (an identical instruction, or
+    /// a memset of the byte) is removed.
     fn eliminate_redundant_stores_of_existing_values(&mut self) -> bool {
         let mut changed = false;
         let defs = self.mem_defs.clone();
@@ -1367,11 +1383,8 @@ impl<'a> Dse<'a> {
             }
             // To conserve compile time the walk to the next clobbering def is
             // not made: the optimized access, if there is one.
-            let upper = if self.mssa.is_optimized(def) {
-                self.mssa.get_optimized(def)
-            } else {
-                self.mssa.access(def).defining
-            };
+            let upper =
+                if self.mssa.is_optimized(def) { self.mssa.get_optimized(def) } else { self.mssa.access(def).defining };
             let Some(upper) = upper else { continue };
             if self.mssa.is_live_on_entry_def(upper) || self.mssa.access(upper).kind != Kind::Def {
                 continue;

@@ -182,13 +182,11 @@ pub fn is_valid_assume_for_context(
         if !allow_ephemerals && assume == cxt {
             return false;
         }
-        let list = q.function.block(cxt_block).instructions();
-        let (Some(from), Some(to)) =
-            (list.iter().position(|one| *one == cxt), list.iter().position(|one| *one == assume))
-        else {
-            return false;
-        };
-        if !super::guarantee::is_guaranteed_to_transfer_execution_to_successor_range(q, &list[from..to], 15) {
+        if !super::guarantee::is_guaranteed_to_transfer_execution_to_successor_range(
+            q,
+            q.function.iter_range(cxt, assume),
+            15,
+        ) {
             return false;
         }
         return allow_ephemerals || !is_ephemeral_value_of(q, assume, cxt);
@@ -210,8 +208,8 @@ pub fn will_not_free_between(
     ctx: InstId,
 ) -> bool {
     let mut checked = 0_u32;
-    let mut has_no_free_in_range = |range: &[InstId]| -> bool {
-        for &inst in range {
+    let mut has_no_free_in_range = |range: &mut dyn Iterator<Item = InstId>| -> bool {
+        for inst in range {
             let n = checked;
             checked += 1;
             if n > MAX_INSTRS_TO_CHECK_FOR_FREE {
@@ -229,24 +227,21 @@ pub fn will_not_free_between(
         true
     };
     let (Some(ctx_block), Some(assume_block)) = (q.block_of(ctx), q.block_of(assume)) else { return false };
-    let position = |block: BlockId, inst: InstId| q.function.block(block).iter().position(|one| one == inst);
     if ctx_block == assume_block {
         if assume != ctx && !q.comes_before(assume, ctx) {
             return false;
         }
-        let (Some(from), Some(to)) = (position(ctx_block, assume), position(ctx_block, ctx)) else { return false };
-        return has_no_free_in_range(&q.function.block(ctx_block).instructions()[from..to]);
+        return has_no_free_in_range(&mut q.function.iter_range(assume, ctx));
     }
     let mut cur = ctx_block;
     loop {
-        let list = q.function.block(cur).instructions();
         if cur == assume_block {
-            let Some(from) = position(cur, assume) else { return false };
-            return has_no_free_in_range(&list[from..]);
+            return has_no_free_in_range(&mut q.function.iter_from(assume));
         }
         let Some(pred) = single_predecessor(q, cur) else { return false };
-        let end = if cur == ctx_block { position(cur, ctx).unwrap_or(list.len()) } else { list.len() };
-        if !has_no_free_in_range(&list[..end]) {
+        // The context's own block is read up to it, the others whole.
+        let upto = (cur == ctx_block).then_some(ctx);
+        if !has_no_free_in_range(&mut q.function.iter_block(cur).take_while(|&one| Some(one) != upto)) {
             return false;
         }
         cur = pred;

@@ -230,11 +230,11 @@ fn rotated_with(trips: u32) -> String {
 
 /// Layout, block and use-list entries `unroll_loop` looks over at `trips`.
 fn unroll_scanned(trips: u32) -> usize {
-    use llrm_mir::edit::{instructions_scanned, layout_scanned};
+    use llrm_mir::edit::layout_scanned;
     let mut module = parsed(&rotated_with(trips));
-    let before = layout_scanned() + instructions_scanned();
+    let before = layout_scanned();
     assert_eq!(unrolled(&mut module, "b1", trips, &[("b2", trips)]), Unrolled::Fully);
-    layout_scanned() + instructions_scanned() - before
+    layout_scanned() - before
 }
 
 /// Unrolling scanned the layout, the exit's use list and its phi once per copy,

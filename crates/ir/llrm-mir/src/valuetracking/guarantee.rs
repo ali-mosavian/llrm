@@ -266,8 +266,7 @@ pub fn may_throw(
         Opcode::Invoke(_) => {
             let unwind = instruction.operands.len().checked_sub(2).map(|at| instruction.operands[at]);
             let Some(Operand::Block(destination)) = unwind else { return false };
-            let pad =
-                q.function.block(destination).iter().find(|one| q.function.instruction(*one).opcode != Opcode::Phi);
+            let pad = q.function.iter_block(destination).find(|one| q.function.instruction(*one).opcode != Opcode::Phi);
             match pad {
                 Some(pad) if matches!(q.function.instruction(pad).opcode, Opcode::LandingPad { .. }) => {
                     can_unwind_past_landing_pad(q, pad, false)
@@ -891,37 +890,21 @@ pub fn is_guaranteed_to_transfer_execution_to_successor_block(
     q: &Query,
     block: BlockId,
 ) -> bool {
-    q.function.block(block).iter().all(|one| is_guaranteed_to_transfer_execution_to_successor(q, one))
+    q.function.iter_block(block).all(|one| is_guaranteed_to_transfer_execution_to_successor(q, one))
 }
 
-/// `isGuaranteedToTransferExecutionToSuccessor(Begin, End, ScanLimit)`:
-/// `begin..end` are positions in `block`.
-///
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L8413>
-pub fn is_guaranteed_to_transfer_execution_to_successor_between(
-    q: &Query,
-    block: BlockId,
-    begin: usize,
-    end: usize,
-    scan_limit: u32,
-) -> bool {
-    is_guaranteed_to_transfer_execution_to_successor_range(
-        q,
-        &q.function.block(block).instructions()[begin..end],
-        scan_limit,
-    )
-}
-
-/// `isGuaranteedToTransferExecutionToSuccessor(Range, ScanLimit)`.
+/// `isGuaranteedToTransferExecutionToSuccessor(Range, ScanLimit)`, and with
+/// it the `(Begin, End, ScanLimit)` form: the range is an iterator, as
+/// `Function::iter_range` and `iter_from` make one.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L8420>
 pub fn is_guaranteed_to_transfer_execution_to_successor_range(
     q: &Query,
-    range: &[InstId],
+    range: impl Iterator<Item = InstId>,
     scan_limit: u32,
 ) -> bool {
     let mut scan_limit = scan_limit;
-    for &inst in range {
+    for inst in range {
         scan_limit -= 1;
         if scan_limit == 0 {
             return false;
@@ -944,7 +927,7 @@ pub fn is_guaranteed_to_execute_for_every_iteration(
     if q.block_of(inst) != Some(l.get_header()) {
         return false;
     }
-    for one in q.function.block(l.get_header()).iter() {
+    for one in q.function.iter_block(l.get_header()) {
         if one == inst {
             return true;
         }
@@ -1157,10 +1140,10 @@ fn program_undefined_if_undef_or_poison_of(
     v: Operand,
     poison_only: bool,
 ) -> bool {
+    // Where the walk of a block starts: the instruction after `v`'s, or none.
     let (mut block, mut begin) = if let Some((inst, _)) = q.instruction_of(v) {
         let Some(block) = q.block_of(inst) else { return false };
-        let at = q.function.block(block).iter().position(|one| one == inst);
-        (block, at.map_or(0, |at| at + 1))
+        (block, q.function.next_in_block(inst))
     } else if let Operand::Value(value) = v
         && let ValueDef::Argument(_) = q.function.value(value).def
     {
@@ -1168,7 +1151,7 @@ fn program_undefined_if_undef_or_poison_of(
             return false;
         }
         let Some(entry) = q.function.entry() else { return false };
-        (entry, 0)
+        (entry, q.function.block(entry).first())
     } else {
         return false;
     };
@@ -1176,7 +1159,7 @@ fn program_undefined_if_undef_or_poison_of(
     let mut scan_limit = 32_u32;
 
     if !poison_only {
-        for &inst in &q.function.block(block).instructions()[begin..] {
+        for inst in begin.into_iter().flat_map(|first| q.function.iter_from(first)) {
             scan_limit -= 1;
             if scan_limit == 0 {
                 break;
@@ -1197,7 +1180,7 @@ fn program_undefined_if_undef_or_poison_of(
     visited.insert(block);
 
     loop {
-        for &inst in &q.function.block(block).instructions()[begin..] {
+        for inst in begin.into_iter().flat_map(|first| q.function.iter_from(first)) {
             scan_limit -= 1;
             if scan_limit == 0 {
                 return false;
@@ -1245,12 +1228,7 @@ fn program_undefined_if_undef_or_poison_of(
             break;
         }
         block = next;
-        begin = q
-            .function
-            .block(block)
-            .iter()
-            .position(|one| q.function.instruction(one).opcode != Opcode::Phi)
-            .unwrap_or(q.function.block(block).len());
+        begin = q.function.iter_block(block).find(|&one| q.function.instruction(one).opcode != Opcode::Phi);
     }
     false
 }
