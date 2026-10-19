@@ -44,9 +44,9 @@
 
 use std::rc::Rc;
 
+use llrm_mir::dense::IdMap;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::module::{InstId, Operand, ValueId};
-use llrm_support::hash::HashMap;
 
 use crate::basicaa::is_identified_function_local;
 #[cfg(test)]
@@ -92,7 +92,7 @@ fn local(
 #[derive(Debug, Default)]
 pub struct SimpleCaptureAnalysis {
     /// `IsCapturedCache`.
-    cache: HashMap<ValueId, CaptureResult>,
+    cache: IdMap<ValueId, CaptureResult>,
 }
 
 impl CaptureAnalysis for SimpleCaptureAnalysis {
@@ -107,8 +107,8 @@ impl CaptureAnalysis for SimpleCaptureAnalysis {
         let Some(value) = local(unit, object) else { return CaptureComponents::PROVENANCE };
         let found = *self
             .cache
-            .entry(value)
-            .or_insert_with(
+            .get_or_insert_with(
+                value,
                 || pointer_may_be_captured(
                     unit.function,
                     unit.globals,
@@ -131,14 +131,14 @@ pub struct EarliestEscapeAnalysis {
     tree: Option<Rc<DomTree>>,
     /// `EarliestEscapes`: the instruction before which the object does not
     /// escape (none if it never does) and what any use may capture.
-    escapes: HashMap<ValueId, (Option<InstId>, CaptureResult)>,
+    escapes: IdMap<ValueId, (Option<InstId>, CaptureResult)>,
     /// `Inst2Obj`: the objects an instruction is the earliest escape of.
-    by_instruction: HashMap<InstId, Vec<ValueId>>,
+    by_instruction: IdMap<InstId, Vec<ValueId>>,
 }
 
 impl Default for EarliestEscapeAnalysis {
     fn default() -> Self {
-        Self { tree: None, escapes: HashMap::default(), by_instruction: HashMap::default() }
+        Self { tree: None, escapes: IdMap::new(), by_instruction: IdMap::new() }
     }
 }
 
@@ -204,11 +204,11 @@ impl CaptureAnalysis for EarliestEscapeAnalysis {
                 DEFAULT_MAX_USES_TO_EXPLORE,
             );
             if let Some(earliest) = found.0 {
-                self.by_instruction.entry(earliest).or_default().push(value);
+                self.by_instruction.get_or_insert_with(earliest, Vec::new).push(value);
             }
             self.escapes.insert(value, found);
         }
-        let (earliest, result) = self.escapes[&value];
+        let (earliest, result) = *self.escapes.get(&value).expect("searched above");
         if return_captures {
             assert!(inst.is_none(), "a context instruction is not supported with ReturnCaptures");
             return result.with_ret;
