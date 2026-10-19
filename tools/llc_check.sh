@@ -12,7 +12,7 @@ triple=${LLRM_TRIPLE:-x86_64-linux-gnu}
 "$clang" --version | head -1
 out=$(mktemp -d)
 progs=${*:-$(cd "$root/tests/llc" && ls *.c | sed 's/\.c$//')}
-printf '%-10s %-6s %8s %8s\n' prog result clang llrm
+printf '%-10s %-6s %8s %8s   (.text bytes)\n' prog result clang llrm
 bad=0
 for p in $progs; do
   src=$root/tests/llc/$p.c
@@ -22,7 +22,7 @@ for p in $progs; do
     "$out/$p.ref" > "$out/$p.ref.out" 2>&1; rr=$?
     "$out/$p.llrm" > "$out/$p.llrm.out" 2>&1; lr=$?
     if [ $rr = $lr ] && cmp -s "$out/$p.ref.out" "$out/$p.llrm.out"; then r=ok; else r=DIFF; bad=1; fi
-    a=$(size "$out/$p.ref.o" | awk 'NR==2{print $1}'); b=$(size "$out/$p.o" | awk 'NR==2{print $1}')
+    a=$(size -A "$out/$p.ref.o" | awk '$1==".text"{print $2}'); b=$(size -A "$out/$p.o" | awk '$1==".text"{print $2}')
   else r=FAIL; bad=1; a=-; b=-; head -c 300 "$out/$p.err" | head -3
   fi
   printf '%-10s %-6s %8s %8s\n' "$p" "$r" "$a" "$b"

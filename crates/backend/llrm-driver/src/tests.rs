@@ -303,3 +303,21 @@ fn a_freed_frame_register_holding_a_value_is_saved() {
     assert!(uses_rbp, "premise: the frame register holds a value\n{listing}");
     assert!(saved, "{listing}");
 }
+
+/// The pin's one-operand `llvm.lifetime.start.p0(ptr)` was a call MIR could not
+/// read, so its alloca escaped and nothing was promoted: every local of a
+/// clang-front-end program stayed in the frame (`loop.c` kept its loop and four
+/// stores for a constant).
+#[test]
+fn an_alloca_with_the_pins_lifetime_markers_is_promoted() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.lifetime.start.p0(ptr captures(none))\n\
+                declare void @llvm.lifetime.end.p0(ptr captures(none))\n\
+                define i32 @f() {\n  %p = alloca i32, align 4\n  call void @llvm.lifetime.start.p0(ptr %p)\n  store i32 5, ptr %p, align 4\n  %v = load i32, ptr %p, align 4\n  call void @llvm.lifetime.end.p0(ptr %p)\n  ret i32 %v\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let body: Vec<&str> =
+        listing.lines().map(str::trim).filter(|line| line.starts_with("mov") || *line == "ret").collect();
+    assert_eq!(body, ["mov eax, 5", "ret"], "{listing}");
+}

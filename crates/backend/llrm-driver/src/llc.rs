@@ -25,10 +25,28 @@ fn without_triple(text: &str) -> (Option<String>, String) {
         if line.starts_with(';') {
             continue;
         }
-        kept.push_str(&line.replace(" dso_local", ""));
+        kept.push_str(&lifetime_markers_with_a_size(&line.replace(" dso_local", "")));
         kept.push('\n');
     }
     (triple, kept)
+}
+
+/// The pin's `llvm.lifetime.start.p0(ptr)` as MIR's `(i64 size, ptr)`: MIR's
+/// markers still take the size `Intrinsics.td` dropped, and a marker it cannot
+/// read is a call that makes its alloca escape (nothing is promoted). The size
+/// is -1, which LangRef calls unknown.
+fn lifetime_markers_with_a_size(line: &str) -> String {
+    for marker in ["@llvm.lifetime.start.p0(", "@llvm.lifetime.end.p0("] {
+        if let Some(at) = line.find(marker) {
+            let (head, tail) = line.split_at(at + marker.len());
+            if tail.starts_with("i64") {
+                return line.to_owned();
+            }
+            let size = if line.starts_with("declare") { "i64 immarg, " } else { "i64 -1, " };
+            return format!("{head}{size}{tail}");
+        }
+    }
+    line.to_owned()
 }
 
 fn bound(
