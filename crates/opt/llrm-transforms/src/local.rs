@@ -177,7 +177,7 @@ fn intrinsic_of(
     Intrinsic::named(declarations.get(global.0 as usize)?.name.as_deref()?)
 }
 
-fn is_lifetime(
+pub(crate) fn is_lifetime(
     context: &Context,
     declarations: &Declarations,
     function: &Function,

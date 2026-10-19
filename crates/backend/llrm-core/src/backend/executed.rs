@@ -196,7 +196,7 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
     if !loops::irreducible(graph, Some(body.entry)).is_empty() {
         return None;
     }
-    let frequency = Frequency::of(body);
+    let frequency = Frequency::counted(body);
     let x87 = |one: &Insn| one.what.as_ref().is_some_and(|what| what.op.is_x87());
     let slots: IndexSet<Addr> = body
         .blocks

@@ -30,7 +30,7 @@ use llrm_analysis::ssaupdater::SsaUpdater;
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{BlockId, InstId, Operand};
+use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
 
 use super::{GvnPass, local};
@@ -654,6 +654,31 @@ impl GvnPass<'_> {
             // The only dependence is unknown.
             return false;
         }
+        let mut changed = false;
+        // This is a limited form of scalar PRE for load indices. If this load
+        // follows a GEP, see if we can PRE the indices before analyzing.
+        if self.pre {
+            let pointer = self.function.instruction(load).operands[0];
+            if let Operand::Value(value) = pointer
+                && let ValueDef::Instruction(gep) = self.function.value(value).def
+                && matches!(
+                    self.function.instruction(gep).opcode,
+                    Opcode::GetElementPtr { .. }
+                )
+            {
+                for index in self.function.instruction(gep).operands[1..].to_vec() {
+                    // Instructions inserted by GVN during this iteration (e.g.
+                    // coercion casts from MaterializeAdjustedValue) may not
+                    // have value numbers yet, so they are skipped.
+                    if let Operand::Value(index) = index
+                        && let ValueDef::Instruction(index) = self.function.value(index).def
+                        && self.vn.exists(Operand::Value(self.function.instruction(index).result.expect("a value")))
+                    {
+                        changed |= self.perform_scalar_pre(index);
+                    }
+                }
+            }
+        }
         // Step 2: Analyze the availability of the load.
         let mut values_per_block = Vec::new();
         let mut unavailable_blocks = Vec::new();
@@ -661,7 +686,7 @@ impl GvnPass<'_> {
         // If we have no predecessors that produce a known value for this load,
         // exit early.
         if values_per_block.is_empty() {
-            return false;
+            return changed;
         }
         // Step 3: Eliminate fully redundancy.
         if unavailable_blocks.is_empty() {
@@ -674,9 +699,10 @@ impl GvnPass<'_> {
         }
         // Step 4: Eliminate partial redundancy (`enable-load-pre`).
         if !self.pre {
-            return false;
+            return changed;
         }
         self.perform_loop_load_pre(load, &mut values_per_block, &unavailable_blocks)
             || self.perform_load_pre(load, &mut values_per_block, &unavailable_blocks)
+            || changed
     }
 }

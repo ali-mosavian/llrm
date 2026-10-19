@@ -468,6 +468,37 @@ fn test_an_alias_question_looks_at_one_cache_entry() {
     }
 }
 
+/// A pointer's underlying object is found once, however often it is asked: the
+/// walk down its GEP chain, made again at every step of every store's upward
+/// walk, was two thirds of DSE's cost on a body of 400 stores through one
+/// pointer.
+#[test]
+fn test_an_underlying_object_is_walked_once_per_pointer() {
+    use super::alias::AliasQuery;
+    let mut text = String::from("define void @f(ptr %p, i32 %a) {\nb0:\n");
+    for k in 0..64 {
+        text += &format!("  %g{k} = getelementptr i8, ptr %p, i16 {}\n  store i32 %a, ptr %g{k}\n", 4 * k);
+    }
+    text += "  ret void\n}\n";
+    let parsed = Parsed::new(&text);
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let locations: Vec<_> = unit.function.walk().filter_map(|(_, inst)| aa.location_of(inst)).collect();
+    assert_eq!(locations.len(), 64);
+    for _ in 0..8 {
+        for pair in locations.windows(2) {
+            aa.alias(&pair[0], &pair[1]);
+        }
+    }
+    assert!(
+        aa.bases_walked() <= locations.len() as u64,
+        "{} walks for {} locations",
+        aa.bases_walked(),
+        locations.len()
+    );
+}
+
 /// A pointer read from memory cannot point into an alloca whose address is
 /// never taken, so a store through it does not clobber the alloca's load
 /// (`isNonEscapingLocalObject`). Without it every loop that stores through a

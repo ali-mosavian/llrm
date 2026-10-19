@@ -158,3 +158,38 @@ fn test_unrolling_loops_in_sequence_scans_in_proportion_to_their_number() {
     let (a, b, c) = (scanned(64), scanned(128), scanned(256));
     assert!(b * 100 <= a * 250 && c * 100 <= b * 250, "64: {a}, 128: {b}, 256: {c}");
 }
+
+/// `LoopUnrollPass::run` puts every loop in simplified form first (L1762); a
+/// loop with no preheader and a shared exit was skipped as "not in
+/// loop-simplify form", so unroll@753 left what `opt` unrolled (bench's
+/// oracle at i486).
+#[test]
+fn test_a_loop_not_in_simplified_form_is_simplified_then_unrolled() {
+    let text = "define i16 @f(i16 %x, i16 %g) {
+b0:
+  %c = icmp eq i16 %g, 0
+  br i1 %c, label %b2, label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi i16 [ %x, %b0 ], [ %s, %b1 ]
+  %s = add i16 %acc, %i
+  %next = add i16 %i, 1
+  %go = icmp slt i16 %next, 4
+  br i1 %go, label %b1, label %b2
+
+b2:
+  %r = phi i16 [ %x, %b0 ], [ %s, %b1 ]
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let before = parsed(text);
+    let function = module.function_mut("f").expect("@f").1;
+    assert!(crate::loopsimplify::simplified(&mut function.clone()), "the input is in simplified form already");
+    let tti = X86::of_cpu("i486").expect("a cpu");
+    let options =
+        Options { opt_level: 2, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+    assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
+    assert_eq!(results(&module, &[&[1, 0], &[1, 1], &[-3, 7]]), results(&before, &[&[1, 0], &[1, 1], &[-3, 7]]));
+}

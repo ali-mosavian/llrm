@@ -97,6 +97,12 @@ pub struct AliasQuery<'a> {
     /// `BasicAA`'s answers for the pointer pairs asked: one `AAQueryInfo` for
     /// the batch.
     basic: RefCell<crate::aa::AAQueryInfo>,
+    /// `getUnderlyingObject` of each pointer asked: the walk down a GEP chain
+    /// was a third of a store-heavy body's cost, asked again at each step.
+    bases: RefCell<llrm_support::hash::HashMap<llrm_mir::module::Operand, llrm_mir::module::Operand>>,
+    /// How many of those walks were made, for the test that holds it to one a
+    /// pointer.
+    bases_walked: std::cell::Cell<u64>,
 }
 
 /// A width large enough to stand for 'any byte after the pointer'.
@@ -117,6 +123,8 @@ impl<'a> AliasQuery<'a> {
             cache_steps: Default::default(),
             exposed: Default::default(),
             basic: Default::default(),
+            bases: Default::default(),
+            bases_walked: Default::default(),
         }
     }
 
@@ -128,6 +136,11 @@ impl<'a> AliasQuery<'a> {
     ) -> Self {
         let _ = self.exposed.set(exposed);
         self
+    }
+
+    /// The walks down a pointer's GEP chain made so far.
+    pub fn bases_walked(&self) -> u64 {
+        self.bases_walked.get()
     }
 
     /// Cache entries looked at to answer the questions so far.
@@ -245,7 +258,14 @@ impl<'a> AliasQuery<'a> {
             reference.root
         } else {
             let unit = self.unit;
-            Some(llrm_mir::valuetracking::underlying(unit.context, unit.layout, unit.function, reference.pointer?).0)
+            let pointer = reference.pointer?;
+            if let Some(&base) = self.bases.borrow().get(&pointer) {
+                return Some(base);
+            }
+            self.bases_walked.set(self.bases_walked.get() + 1);
+            let base = llrm_mir::valuetracking::underlying(unit.context, unit.layout, unit.function, pointer).0;
+            self.bases.borrow_mut().insert(pointer, base);
+            Some(base)
         }
     }
 

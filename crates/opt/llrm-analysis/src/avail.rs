@@ -1,36 +1,10 @@
-//! Available loads and dead stores, as LLVM's GVN load forwarding and DSE find
-//! them through MemoryDependence.
+//! Dead stores, and the cells loads and stores name, as LLVM's DSE finds them.
 //!
 //! # How it works
-//! Two independent queries share the memory model (`MemRef` cells and
-//! [`crate::memoryssa`]'s `Accesses`).
+//! The memory model is `MemRef` cells and [`crate::memoryssa`]'s `Accesses`.
+//! Load forwarding is `llrm-transforms`' `gvn` (MemoryDependence), not here.
 //!
-//! Forwarding. `forwardable_walk` takes a set of loads and, for each plain
-//! (non-volatile) load, asks MemorySSA for the nearest writes that may clobber
-//! its bytes and tries three sources in order:
-//!
-//! 1. One clobber that is a plain store to the same bytes, defined before the
-//!    load, whose value has the load's type: the load is that value.
-//! 2. Two or more clobbers (at most `MAX_NEAREST_WRITES`) that are all exact
-//!    stores of one value defined where the load can read it, such as the arms
-//!    of a join that each stored the same thing.
-//! 3. A dominating load of the same bytes, nearest first, with nothing between
-//!    the two that may change them (`MemorySSA::unchanged`). A candidate whose
-//!    walk fails also fails every load that dominates it.
-//!
-//! A value serves a read only of its own type. Each answer is a `Forward { at,
-//! value }`.
-//!
-//! ```text
-//!    store i32 %v, p          %a = load p     <- 1: %a is %v
-//!    ...                      ...
-//!    %a = load p              %b = load p     <- 3: %b is %a
-//!    ...
-//!    br c, T, F      T: store %v, p   F: store %v, p
-//!    J: %b = load p                                 <- 2: %b is %v
-//! ```
-//!
-//! Dead stores. `dead_stores` is a backward must-overwrite analysis over the
+//! `dead_stores` is a backward must-overwrite analysis over the
 //! CFG. Every cell a function stores to is numbered once (`Stored`), as LLVM's
 //! DSE numbers its memory locations, and a block's state is a set of numbered
 //! cells overwritten before any read. Walking a block backward:
@@ -64,34 +38,7 @@
 //! compared with those (`Members::meeting`) and not with its object's cells.
 //!
 //! # Example
-//! Forwarding. Both arms of a join store `%v` to the cell, so the load at the
-//! join is `%v` (with `%w` on one arm instead, it is not forwarded):
-//!
-//! ```mir
-//! define i16 @f(i1 %c, i16 %v, i16 %w) {
-//! b0:
-//!   br i1 %c, label %b1, label %b2
-//!
-//! b1:
-//!   store i16 %v, ptr getelementptr (i8, ptr @g, i16 32)
-//!   br label %b3
-//!
-//! b2:
-//!   store i16 %v, ptr getelementptr (i8, ptr @g, i16 32)
-//!   br label %b3
-//!
-//! b3:
-//!   %x = load i16, ptr getelementptr (i8, ptr @g, i16 32)
-//!   ret i16 %x
-//! }
-//! ```
-//!
-//! `forwardable_walk` returns `Forward { at: the load in b3, value: %v }`.
-//!
-//! From unit test `test_a_join_keeps_what_every_predecessor_agrees_on` in
-//! `avail_tests.rs`.
-//!
-//! Dead store. The first store is overwritten before any read, so `dead_stores`
+//! The first store is overwritten before any read, so `dead_stores`
 //! returns it:
 //!
 //! ```mir
@@ -107,9 +54,8 @@
 //! in `avail_tests.rs`.
 //!
 //! # Provides
-//! `forwardable_walk`, `dead_stores`, `dead_stores_escaping`, and the
-//! accessors `loaded_into`, `stored_from`, `stored_cell`. Consumers:
-//! `transform` (load forwarding), `loadjoins` and `dse` in `llrm-transforms`.
+//! `dead_stores`, `dead_stores_escaping`, and the accessors `loaded_into`,
+//! `stored_from`, `stored_cell`. Consumer: `dse` in `llrm-transforms`.
 //!
 //! # Needs
 //! [`crate::memoryssa`], [`crate::alias`] (`EscapedBefore`), [`crate::ranges`]
@@ -124,7 +70,6 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use llrm_mir::dense::IdSet;
 use llrm_mir::module::{InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::bits::Bits;
@@ -135,7 +80,6 @@ use crate::cellmap::CellMap;
 use crate::cfg;
 use crate::memory::{AliasClass, MemRef, ObjectRef, Unit, alias_class, classes_may_alias};
 use crate::memoryssa::{self, Accesses, covered, covers, may_clobber, placed, same_bytes};
-use crate::ranges;
 use crate::regions::{
     Frame, OverlapBucket, OverlapBuckets, displaced_span, overlap_bucket, overlap_buckets, overlap_frame, overlap_span,
 };
@@ -178,41 +122,6 @@ pub fn stored_cell(
     stored_from(unit, accesses, inst).map(|(cell, _)| cell).or_else(|| {
         MemRef::filled(unit, inst).filter(|one| !one.volatile).and_then(|_| accesses.references.get(&inst).cloned())
     })
-}
-
-/// Loads in `want` that a known value can serve, by the MemorySSA walk.
-pub fn forwardable_walk(
-    unit: &Unit,
-    accesses: &Accesses,
-    want: &IdSet<InstId>,
-) -> Vec<Forward> {
-    WALKED.with(|walked| walked.set(walked.get() + 1));
-    let missing: Vec<InstId> = unit
-        .function
-        .layout()
-        .iter()
-        .flat_map(|&block| unit.function.iter_block(block).collect::<Vec<_>>())
-        .filter(|inst| want.contains(inst) && loaded_into(unit, accesses, *inst).is_some())
-        .collect();
-    if missing.is_empty() { Vec::new() } else { memory_providers(unit, accesses, &missing) }
-}
-
-thread_local! {
-    static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many times this thread has walked for every load, for a test that a
-/// function numbered twice walks once.
-pub fn walked() -> usize {
-    WALKED.with(std::cell::Cell::get)
-}
-
-/// A load whose bytes equal a known value.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Forward {
-    pub at: InstId,
-    // Which register holds it is the allocator's answer.
-    pub value: Operand,
 }
 
 /// Every cell a function stores to, numbered once for its dead-store solve.
@@ -1137,260 +1046,6 @@ thread_local! {
 /// a test that a cell is compared with those in its buckets and not with all.
 pub fn related_pairs() -> usize {
     RELATED.with(std::cell::Cell::get)
-}
-
-thread_local! {
-    static SAMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many times this thread has compared a load's bytes with a missing one's
-/// in `memory_providers`.
-pub fn same_runs() -> usize {
-    SAMES.with(std::cell::Cell::get)
-}
-
-thread_local! {
-    static COLLECTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many loads this thread has collected as candidates for a missing one in
-/// `memory_providers`, for a test that a load blocked by a write collects none.
-pub fn collected_candidates() -> usize {
-    COLLECTED.with(std::cell::Cell::get)
-}
-
-/// Whether `holder` can stand for `value`: it has its type.
-fn serves(
-    unit: &Unit,
-    holder: Operand,
-    value: ValueId,
-) -> bool {
-    unit.operand_type(holder) == Some(unit.function.value(value).ty)
-}
-
-/// Recover dominating memory values the forward lattice lost at loops.
-fn memory_providers(
-    unit: &Unit,
-    accesses: &Accesses,
-    missing: &[InstId],
-) -> Vec<Forward> {
-    let function = unit.function;
-    // Register facts only, as the availability map reads them: a memory-aware
-    // solve per query costs more than it finds.
-    let graph = memoryssa::built(unit, accesses).with_known(ranges::constants(unit).into_iter().collect());
-    let shape = unit.shape();
-    let dominance = &shape.dominance;
-    let places: HashMap<InstId, (i64, usize)> = function
-        .layout()
-        .iter()
-        .flat_map(|&block| {
-            function.iter_block(block).enumerate().map(move |(index, inst)| (inst, (cfg::id(block), index)))
-        })
-        .collect();
-    let loads: Vec<(InstId, (MemRef, ValueId))> =
-        graph.sites.keys().filter_map(|&site| loaded_into(unit, accesses, site).map(|loaded| (site, loaded))).collect();
-    // Where each load is among them, which is the order of its block.
-    let mut load_of: llrm_mir::dense::IdMap<InstId, usize> = llrm_mir::dense::IdMap::new();
-    for (at, (site, _)) in loads.iter().enumerate() {
-        load_of.insert(*site, at);
-    }
-    let available = |source: InstId, site: InstId| -> bool {
-        let ((source_block, source_index), (block, index)) = (places[&source], places[&site]);
-        dominance.dominates(unit.function, source_block, block) && (source_block != block || source_index < index)
-    };
-
-    // Whether `value` is defined where `site` can read it.
-    let available_value = |value: Operand, site: InstId| -> bool {
-        match value {
-            Operand::Value(one) => match function.value(one).def {
-                llrm_mir::module::ValueDef::Instruction(def) => available(def, site),
-                _ => true,
-            },
-            _ => true,
-        }
-    };
-
-    let mut groups: Vec<(&MemRef, Vec<usize>)> = Vec::new();
-    let mut group_of: HashMap<&MemRef, usize> = HashMap::default();
-    // The groups by what a group naming the same bytes shares, so a load
-    // compares itself with those and not with all.
-    let mut group_keys: Vec<Vec<memoryssa::ByteKey>> = Vec::new();
-    let mut load_group: Vec<usize> = Vec::with_capacity(loads.len());
-    for (at, (_, (loaded, _))) in loads.iter().enumerate() {
-        let group = *group_of
-            .entry(loaded)
-            .or_insert_with(
-                || {
-                    groups.push((loaded, Vec::new()));
-                    group_keys.push(memoryssa::byte_keys(unit, loaded).list());
-                    groups.len() - 1
-                },
-            );
-        groups[group].1.push(at);
-        load_group.push(group);
-    }
-    // The loads by the bytes they name, in the blocks that hold them: those
-    // that dominate a site are found from its block upward, nearest first,
-    // where every load of the same bytes was taken and sorted for each site
-    // (9.5 M candidates for 7,000 sites at N=1024).
-    let tree = shape.dominance.tree(unit.function);
-    let nearest = crate::nearest::Nearest::of(
-        tree,
-        loads
-            .iter()
-            .enumerate()
-            .filter_map(|(at, (site, _))| function.parent(*site).map(|block| (at, block)))
-            .flat_map(|(at, block)| group_keys[load_group[at]].iter().cloned().map(move |key| (key, block, at))),
-    );
-    let mut found = Vec::new();
-    for &site in missing {
-        let Some((cell, result)) = loaded_into(unit, accesses, site) else {
-            continue;
-        };
-        // A load that is invariant is clobbered by nothing; the store before it
-        // that initialised what it reads is still the value it has.
-        let clobbers = graph.nearest_writes(site, &cell);
-        let single = if clobbers.len() == 1 { clobbers.first().map(|id| graph.access(*id)) } else { None };
-        if let Some(source) = single.filter(|access| access.kind == memoryssa::Kind::Def).and_then(|access| access.site)
-            && let Some((stored, value)) = stored_from(unit, accesses, source)
-            && available(source, site)
-            && same_bytes(unit, &stored, &cell)
-            && serves(unit, value, result)
-        {
-            found.push(Forward { at: site, value });
-            continue;
-        }
-        // Several clobbers, each an exact store of the one value, and that
-        // value defined where it reaches the load: the arms of a join
-        // that stored the same thing.
-        if (2..=memoryssa::MAX_NEAREST_WRITES).contains(&clobbers.len())
-            && let Some(value) = joined_store(unit, accesses, &graph, &clobbers, &cell, site, &available_value)
-            && serves(unit, value, result)
-        {
-            found.push(Forward { at: site, value });
-            continue;
-        }
-        // Loads of one address are one group, whose bytes are compared with
-        // `cell` once; the candidates are then taken in load order, as
-        // when each was compared.
-        let keys = memoryssa::byte_keys(unit, &cell).list();
-        // Whether the loads of a group name the bytes of `cell`, asked once of
-        // each.
-        let mut same: HashMap<usize, bool> = HashMap::default();
-        let mut names = |group: usize| -> bool {
-            *same
-                .entry(group)
-                .or_insert_with(
-                    || {
-                        SAMES.with(|runs| runs.set(runs.get() + 1));
-                        same_bytes(unit, groups[group].0, &cell)
-                    },
-                )
-        };
-        // The loads that dominate the site and name its bytes, in load order.
-        // None for a site the entry does not reach: nothing is `available`
-        // there.
-        let reached = function.parent(site).filter(|&block| tree.is_reachable(block));
-        let below = load_of.get(&site).copied().unwrap_or(usize::MAX);
-        let walk = || {
-            reached.into_iter().flat_map(|block| {
-                nearest.dominating_below(tree, &keys.iter().collect::<Vec<_>>(), block, below).map(|(_, at)| at)
-            })
-        };
-        // Nearest first (the order `dominating` yields), the first load that is
-        // usable here: a write between it and the site is between every
-        // load above it and the site too, so where its walk finds one, no other
-        // load can serve, and the loads above it, tens to thousands of
-        // them on a chain of branches, are neither collected nor sorted (338 of
-        // the 707 Minstr `memory_providers` spent on `branches` at
-        // N=1024).
-        let usable = |&at: &usize| {
-            let (source, (_, value)) = &loads[at];
-            available(*source, site) && serves(unit, Operand::Value(*value), result)
-        };
-        let nearest_usable = walk().filter(|&at| names(load_group[at])).find(|at| usable(at));
-        let checked = llrm_support::env_flag!("LLRM_CHECK_GROUPS");
-        let served = nearest_usable.filter(|&at| {
-            let (source, (loaded, _)) = &loads[at];
-            graph.unchanged(*source, site, loaded)
-        });
-        if !checked {
-            if let Some(at) = served {
-                found.push(Forward { at: site, value: Operand::Value(loads[at].1.1) });
-            }
-            continue;
-        }
-        let none_can_serve = served.is_none();
-        let mut candidates: Vec<usize> = walk().filter(|&at| names(load_group[at])).collect();
-        candidates.sort_unstable();
-        COLLECTED.with(|runs| runs.set(runs.get() + candidates.len()));
-        if checked {
-            let every: Vec<usize> = groups
-                .iter()
-                .filter(|(loaded, _)| same_bytes(unit, loaded, &cell))
-                .flat_map(|(_, members)| members.iter().copied())
-                .filter(|&at| available(loads[at].0, site))
-                .collect();
-            let mut every = every;
-            every.sort_unstable();
-            let kept: Vec<usize> = candidates.iter().copied().filter(|&at| available(loads[at].0, site)).collect();
-            assert_eq!(
-                kept, every,
-                "LLRM_CHECK_GROUPS: the loads that dominate a site, found from its block up, are not those a scan of every group finds"
-            );
-        }
-        // Nearest first: a walk from the load stops at the first value that
-        // holds, and the loads before it, each a walk to fail, are not tried.
-        // Every candidate holds the same bytes, so the one a chain of served
-        // loads ends in is the same. A candidate whose walk finds a write
-        // fails every load that dominates it too: the write lies on a path
-        // from the farther one through the nearer, so those are not walked.
-        let mut failed: Vec<InstId> = Vec::new();
-        let before = found.len();
-        for at in candidates.into_iter().rev() {
-            let (source, (loaded, value)) = &loads[at];
-            if !available(*source, site)
-                || !serves(unit, Operand::Value(*value), result)
-                || failed.iter().any(|&nearer| available(*source, nearer))
-            {
-                continue;
-            }
-            if graph.unchanged(*source, site, loaded) {
-                found.push(Forward { at: site, value: Operand::Value(*value) });
-                break;
-            }
-            failed.push(*source);
-        }
-        assert!(
-            !(none_can_serve && found.len() > before),
-            "LLRM_CHECK_GROUPS: the nearest usable load's walk found a write, and another load served"
-        );
-    }
-    found
-}
-
-/// The one value every clobber of a load stores into its exact bytes, when each
-/// clobber is such a store and the value is defined where `site` reads it.
-fn joined_store(
-    unit: &Unit,
-    accesses: &Accesses,
-    graph: &memoryssa::MemorySSA,
-    clobbers: &BTreeSet<usize>,
-    cell: &MemRef,
-    site: InstId,
-    available_value: &dyn Fn(Operand, InstId) -> bool,
-) -> Option<Operand> {
-    let mut one = None;
-    for id in clobbers {
-        let access = graph.access(*id);
-        let source = access.site.filter(|_| access.kind == memoryssa::Kind::Def)?;
-        let (stored, value) = stored_from(unit, accesses, source)?;
-        if !same_bytes(unit, &stored, cell) || one.is_some_and(|before| before != value) {
-            return None;
-        }
-        one = Some(value);
-    }
-    one.filter(|&value| available_value(value, site))
 }
 
 #[cfg(test)]
