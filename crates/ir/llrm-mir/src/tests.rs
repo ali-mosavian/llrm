@@ -345,6 +345,26 @@ b0:
     );
 }
 
+/// Verifier.cpp: `llvm.bswap` takes whole 16-bit units; an `i8` or an `i24` is
+/// reported at the call, an `i16` is not.
+#[test]
+fn a_bswap_of_an_odd_number_of_bytes_is_reported() {
+    let problems = |bits: u32| {
+        crate::verify::verify(
+            &parse::module(&format!(
+                "declare i{bits} @llvm.bswap.i{bits}(i{bits})\n\
+                 define i{bits} @f(i{bits} %x) {{\nb0:\n  %r = call i{bits} @llvm.bswap.i{bits}(i{bits} %x)\n  ret i{bits} %r\n}}\n"
+            ))
+            .unwrap_or_else(|error| panic!("{error}")),
+        )
+    };
+    assert_eq!(problems(16), Vec::<String>::new());
+    for bits in [8, 24] {
+        let found = problems(bits);
+        assert!(found.iter().any(|one| one.contains("bswap must be an even number of bytes")), "i{bits}: {found:?}");
+    }
+}
+
 fn dominance_problems(text: &str) -> Vec<String> {
     crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")))
         .into_iter()

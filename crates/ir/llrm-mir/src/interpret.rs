@@ -427,6 +427,10 @@ impl<'m> Machine<'m> {
                 }
                 Val::Int { bits: count.apply(bits, width), width }
             }
+            Intrinsic::ByteSwap => {
+                let Val::Int { bits, width } = argument(0) else { return Ok(Val::Poison) };
+                Val::Int { bits: bits.swap_bytes() >> (128 - width), width }
+            }
             Intrinsic::Compare { signed } => {
                 let (Val::Int { .. }, Val::Int { .. }) = (argument(0), argument(1)) else { return Ok(Val::Poison) };
                 let width = self.types().int_bits(returns).expect("an integer result");
