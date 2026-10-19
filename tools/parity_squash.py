@@ -236,7 +236,7 @@ def _precheck(number, info, dev, target, checks, merge, deletions, head_failed, 
         return f"{number}: REFUSED: {why}"
     after = precheck_items(dev, checks, seconds=seconds, only=git("diff", "--name-only", base_sha, sha, cwd=dev).split())
     with (cache.parent / "precheck-times.log").open("a") as log:  # where a precheck's minutes go, per PR
-        log.write(json.dumps({"pr": number, "at": datetime.datetime.now().strftime("%H:%M:%S"), **seconds}) + "\n")
+        log.write(json.dumps({"pr": number, "at": datetime.datetime.now().strftime("%H:%M:%S"), "load": round(os.getloadavg()[0], 1), **seconds}) + "\n")
     if problems := (deletions or refusals)(sha, info["body"] or "", BASE, dev):
         after["deletes"] = {problem.split(":")[0] for problem in problems}
     new = {name: items - before.get(name, set()) for name, items in after.items() if name not in (head_failed or set())}

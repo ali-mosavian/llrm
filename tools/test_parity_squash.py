@@ -463,7 +463,7 @@ def test_a_precheck_logs_the_seconds_each_check_took(tmp_path, monkeypatch):
     """A precheck pass took ~16 minutes for 16 PRs and nothing said where: the ratchets, the merge or fmt. One log line per PR now names each."""
     run_precheck(tmp_path, monkeypatch, Tree(set(), set()), number="7")
     row = json.loads((tmp_path / "precheck-times.log").read_text().splitlines()[-1])
-    assert row["pr"] == "7" and {"merge", "fmt", "ratchets"} <= row.keys(), row
+    assert row["pr"] == "7" and {"merge", "fmt", "ratchets", "load"} <= row.keys(), row  # the load average: 150 s of ratchets at load 44 is not 57 s at load 30
 
 
 def test_a_precheck_verdict_is_cached_per_pr_head_and_feat_parity_sha(tmp_path, monkeypatch):
