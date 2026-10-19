@@ -46,7 +46,7 @@ while true; do
     [ "$2" = true ] && gh pr ready $m --repo $R >/dev/null
   done
   log=${LAND_TMP:-/tmp/landing}/sqb-${batch[0]}.log
-  ( cd $W && git fetch -q origin && git reset -q --hard && git checkout -q --detach origin/feat/parity \
+  ( cd $W && git fetch -q origin && git reset -q --hard && git checkout -q --detach ${LAND_TOOLS_REF:-origin/feat/parity} \
     && PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}" 2>&1 \
       | awk '{print strftime("%H:%M:%S"), $0; fflush()}' > $log )
   for m in "${batch[@]}"; do
