@@ -262,7 +262,7 @@ end
 # covered here would be left unselected under it.
 pattern arithmetic_cell for add=add sub=sub or=or xor=xor
   match $mir.i16|i32(a:value, v=load(p))
-  when tryfold(), !promoted, nonvolatile(v), only_reader(v), dies(a), unwritten(v), !stored_back(v), !local(v)
+  when !indexing(), !promoted, nonvolatile(v), only_reader(v), dies(a), unwritten(v), !stored_back(v), !local(v)
   cover v
   let x = held(a)
   let y = access(p)
@@ -272,7 +272,7 @@ end
 # The same with the load first, for the operations that commute.
 pattern arithmetic_cell_first for add=add or=or xor=xor
   match $mir.i16|i32(v=load(p), b:value)
-  when tryfold(), !promoted, nonvolatile(v), only_reader(v), dies(b), unwritten(v), !stored_back(v), !local(v)
+  when !indexing(), !promoted, nonvolatile(v), only_reader(v), dies(b), unwritten(v), !stored_back(v), !local(v)
   cover v
   let x = held(b)
   let y = access(p)
