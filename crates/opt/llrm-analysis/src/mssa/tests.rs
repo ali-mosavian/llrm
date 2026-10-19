@@ -491,12 +491,7 @@ fn test_an_underlying_object_is_walked_once_per_pointer() {
             aa.alias(&pair[0], &pair[1]);
         }
     }
-    assert!(
-        aa.bases_walked() <= locations.len() as u64,
-        "{} walks for {} locations",
-        aa.bases_walked(),
-        locations.len()
-    );
+    assert!(aa.bases_walked() <= locations.len() as u64, "{} walks for {} locations", aa.bases_walked(), locations.len());
 }
 
 /// A pointer read from memory cannot point into an alloca whose address is

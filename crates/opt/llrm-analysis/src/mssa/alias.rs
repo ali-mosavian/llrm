@@ -97,8 +97,7 @@ pub struct AliasQuery<'a> {
     /// `getUnderlyingObject` of each pointer asked: the walk down a GEP chain
     /// was a third of a store-heavy body's cost, asked again at each step.
     bases: RefCell<llrm_support::hash::HashMap<llrm_mir::module::Operand, llrm_mir::module::Operand>>,
-    /// How many of those walks were made, for the test that holds it to one a
-    /// pointer.
+    /// How many of those walks were made, for the test that holds it to one a pointer.
     bases_walked: std::cell::Cell<u64>,
 }
 
