@@ -32,8 +32,10 @@
 //!    equal, a narrow one a truncation of a wide one included, are one, and
 //!    `dead` removes the rest.
 //! 3. `canonexit::canonicalized` (`canonicalizeExitCondition`;
-//!    `LLRM_NO_SCEV_CANONEXIT`), then `exitfold::folded`: exits their counts
-//!    decide are folded.
+//!    `LLRM_NO_SCEV_CANONEXIT`), `exitopt::optimized` (`optimizeLoopExits`;
+//!    `LLRM_NO_SCEV_EXITOPT`), `exitpredicate::predicated`
+//!    (`predicateLoopExits`; `LLRM_NO_SCEV_PREDICATE`), then
+//!    `exitfold::folded`: exits their counts decide are folded.
 //! 4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
 //!    exit tests a counter against the value it has at the last trip.
 //! 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
@@ -202,9 +204,13 @@ impl FunctionPass for IndVars {
         // What is known without memory is the manager's until a step changes
         // the body.
         let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
-        // Only a `sext` of a counter asks what the loops bound.
-        let widens =
-            unit.function.walk().any(|(_, inst)| unit.function.instruction(inst).opcode == Opcode::Cast(CastOp::SExt));
+        // Only the old widening, for a `sext` of a counter, asks what the loops
+        // bound; `simplifyAndExtend` reads ScalarEvolution's ranges.
+        let widens = !crate::simplifyindvar::widening_enabled()
+            && unit
+                .function
+                .walk()
+                .any(|(_, inst)| unit.function.instruction(inst).opcode == Opcode::Cast(CastOp::SExt));
         let bounded =
             widens.then(|| analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function));
         let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
@@ -270,6 +276,16 @@ impl FunctionPass for IndVars {
         if canonical {
             standing.changed();
         }
+        let optimized = crate::exitopt::enabled()
+            && crate::exitopt::optimized(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if optimized {
+            standing.changed();
+        }
+        let predicated = crate::exitpredicate::enabled()
+            && crate::exitpredicate::predicated(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if predicated {
+            standing.changed();
+        }
         let folded = crate::exitfold::folded_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
         if folded {
             standing.reshaped();
@@ -294,11 +310,31 @@ impl FunctionPass for IndVars {
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
-        let dead = (compared || rewrote || canonical || tested || sunk || rewound || widened || merged)
+        let dead = (compared
+            || rewrote
+            || canonical
+            || optimized
+            || predicated
+            || tested
+            || sunk
+            || rewound
+            || widened
+            || merged)
             && dead::dead(unit.context, outer.callees(), unit.function);
         if folded {
             PreservedAnalyses::none()
-        } else if compared || rewrote || canonical || tested || sunk || rewound || widened || merged || dead {
+        } else if compared
+            || rewrote
+            || canonical
+            || optimized
+            || predicated
+            || tested
+            || sunk
+            || rewound
+            || widened
+            || merged
+            || dead
+        {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
         } else {

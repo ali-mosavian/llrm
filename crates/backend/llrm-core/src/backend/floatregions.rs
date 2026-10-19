@@ -80,6 +80,20 @@ impl fmt::Display for Raised {
 
 impl std::error::Error for Raised {}
 
+/// Whether the x87 stack is cleared at this instruction (`handleCall`): a call,
+/// or code nothing is known of. A barrier (a port access) leaves it as it is.
+#[must_use]
+pub fn clears_stack(
+    regs: Regs,
+    one: &Insn,
+) -> bool {
+    let Some(what) = &one.what else {
+        return true;
+    };
+    what.op == Operation::Call
+        || what.sources.iter().chain(&what.dests).any(|place| crate::backend::target::positional_place(regs, place))
+}
+
 /// Whether the x87 stack cannot be assumed to survive this instruction.
 #[must_use]
 pub fn boundary(

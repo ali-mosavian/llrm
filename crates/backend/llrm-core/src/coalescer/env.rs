@@ -36,9 +36,14 @@ use crate::support::hash::IndexMap;
 pub struct TargetEnv {
     pub palettes: IndexMap<u32, BTreeSet<RegId>>,
     pub pins: IndexMap<u32, RegId>,
+    pub size: bool,
 }
 
 impl CoalescerEnv for TargetEnv {
+    fn tuned_for_size(&self) -> bool {
+        self.size
+    }
+
     fn can_share(
         &self,
         a: u32,

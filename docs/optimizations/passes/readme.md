@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 120 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 124 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -14,6 +14,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | argpromotion | Argument promotion (LLVM's ArgumentPromotion): a pointer parameter a function only reads at fixed offsets is replaced by the fields read. | In the interprocedural step, once, after its inlining loop and before | [argpromotion](argpromotion.md) |
 | availableexternally | LLVM's EliminateAvailableExternally: a body held only to inline from becomes a declaration again once inlining is done. | A program pass. At -O1 and above it runs after the interprocedural step and | [availableexternally](availableexternally.md) |
 | bdce | Bit-tracking dead code elimination: a translation of LLVM's BDCE (`BDCE.cpp` at d1106deb71cc). | LLVM runs it after SCCP, before ADCE (slot 34 of the pipeline). Not in | [bdce](bdce.md) |
+| branchtocommon | A block that is only a comparison (and a few instructions that can run early) and a branch is folded into a predecessor that branches to it and to one of its successors: SimplifyCFG's `foldBranchToCommonDest`. |  | [branchtocommon](branchtocommon.md) |
 | calleepop | Callee-pops calling convention (LLVM's GlobalOpt giving an internal function a `fastcc`): an internal function all of whose callers are seen pops its own stack arguments. | A module pass, once, after the interprocedural step, `globaldce` and | [calleepop](calleepop.md) |
 | candidate | Trying a rewrite on a copy of the body: the copy is cleaned by the pipeline's own passes and replaces the body only if it is better. | `adopted`, `priced`, `priced_at`, `frequencies`, `Pricing`, `Gain`, | [candidate](candidate.md) |
 | canonexit | A loop's exit compare of a zero-extended counter is made unsigned, and the extension is moved off the counter onto the invariant side. | Not wired in: [`crate::indvars`](indvars.md) will run `canonicalized` after the | [canonexit](canonexit.md) |
@@ -23,8 +24,11 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_addsub | InstCombine's `visitAdd` and the helpers it calls, from [`InstCombineAddSub.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp) at d1106deb71cc. | `combine::visit`, once the add family's slot is flipped. | [combine_addsub](combine_addsub.md) |
 | combine_build | `InstCombiner::Builder`: the `IRBuilder` over `InstSimplifyFolder` that InstCombine's `visit*` functions build new instructions with. | `combine_addsub` and the families after it. | [combine_build](combine_build.md) |
 | combine_compares | InstCombine's `visitICmpInst` and the helpers it calls, from [`InstCombineCompares.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp) at d1106deb71cc. | `combine::visit`, once the compares slot is flipped. | [combine_compares](combine_compares.md) |
+| combine_loadstore | InstCombine's stores: the store that cannot matter is erased, the one that cannot execute stores poison. | `combine` (its `visit`). | [combine_loadstore](combine_loadstore.md) |
+| combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
 | combine_shared | What InstCombine's integer `visit*` functions share from `InstructionCombining.cpp`: the complexity order that puts constants on the right, and the reassociation of an associative or commutative operation. | `combine_addsub` (`visitAdd`, `visitSub`) and the families after it. | [combine_shared](combine_shared.md) |
 | combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
+| condstores | Two conditional stores to one address, one in each of two if-then-else diamonds or triangles in a row, are one store after them, predicated on either condition: SimplifyCFG's `mergeConditionalStores`. |  | [condstores](condstores.md) |
 | congruentiv | Phis of a loop header that ScalarEvolution proves equal are one phi. | [`crate::indvars`](indvars.md), which leaves the phis it replaced to `dead`. | [congruentiv](congruentiv.md) |
 | constraintelim | `constraint-elimination`: conditions the dominating branches, assumes and memory accesses already decide become constants, by Fourier-Motzkin elimination on a system of linear constraints over the values compared. | Nothing yet: `difference` and `guards::Given::holds` move here. | [constraintelim](constraintelim.md) |
 | counting | What a counted-loop rewrite places before the loop: its seeds, skip test and exit values (LLVM's SCEVExpander, as IndVarSimplify and LoopRotate use it). | [`crate::loopidioms`](loopidioms.md), [`crate::window`](window.md) and | [counting](counting.md) |
