@@ -453,6 +453,8 @@ pub struct Collection<'a, 'b> {
     /// The equality compares whose operands the caller is to swap, so the
     /// operand to replace is the left one.
     pub swapped_compares: Vec<InstId>,
+    /// How many formulae were offered to `insert_formula`: the work generation did.
+    pub insert_attempts: usize,
 }
 
 impl<'a, 'b> Collection<'a, 'b> {
@@ -480,6 +482,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             baseline_cost: Cost::new(),
             changed: false,
             swapped_compares: Vec::new(),
+            insert_attempts: 0,
         }
     }
 
@@ -695,6 +698,7 @@ impl<'a, 'b> Collection<'a, 'b> {
         lu_idx: usize,
         f: &Formula,
     ) -> bool {
+        self.insert_attempts += 1;
         let lu = &self.uses[lu_idx];
         // A formula that cannot be expanded is not inserted.
         assert!(is_legal_use_formula(self.tti, lu.min_offset, lu.max_offset, lu.kind, f), "Formula is illegal");
