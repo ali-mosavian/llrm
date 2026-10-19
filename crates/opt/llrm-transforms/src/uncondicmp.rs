@@ -13,6 +13,7 @@
 //! constant becomes a case of its own, to a block that jumps to the join with
 //! the value the compare chose:
 //!
+//! # Example
 //! ```text
 //!   switch i8 %a, label %d [ 0, %end  1, %c ]        switch i8 %a, label %d [ 0, %end  1, %c  2, %edge ]
 //!   d:  %t = icmp eq i8 %a, 2                  ==>   d:    br %end

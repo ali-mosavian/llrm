@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/uncondicmp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/uncondicmp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/uncondicmp.rs sha256:c6ef79c1d20c8de9a78246af50ff63dfa5abca16c12e21b9c13c8ce4e6f6d69e -->
+<!-- src: crates/opt/llrm-transforms/src/uncondicmp.rs sha256:ea50ab20604e56254bfb3c4300a656e394d0e9b07269d5d265808a61c7e9a1a6 -->
 
 # uncondicmp
 
@@ -18,6 +18,7 @@ default, a compare with a value some case has is known, else the compare's
 constant becomes a case of its own, to a block that jumps to the join with
 the value the compare chose:
 
+## Example
 ```text
   switch i8 %a, label %d [ 0, %end  1, %c ]        switch i8 %a, label %d [ 0, %end  1, %c  2, %edge ]
   d:  %t = icmp eq i8 %a, 2                  ==>   d:    br %end
