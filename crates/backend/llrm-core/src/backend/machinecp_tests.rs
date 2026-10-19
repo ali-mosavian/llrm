@@ -289,9 +289,9 @@ fn stosd(at: i64) -> Arc<Insn> {
     Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]))
 }
 
-/// `mov si, di; rep stosd; mov [si+4], 0` was `ss:[di+4]` after the stores of lru (bench/lru, -O2
-/// m16): `di` is what `si` held before the string store moved it by 28 bytes (the cache held
-/// 1.4 vs 6.0 for the clock).
+/// `mov si, di; rep stosd; mov [si+4], 0` was `ss:[di+4]` after the stores of
+/// lru (bench/lru, -O2 m16): `di` is what `si` held before the string store
+/// moved it by 28 bytes (the cache held 1.4 vs 6.0 for the clock).
 #[test]
 fn test_a_copy_is_not_forwarded_across_a_string_store_that_writes_its_source() {
     let got = propagated(&body(
@@ -301,7 +301,8 @@ fn test_a_copy_is_not_forwarded_across_a_string_store_that_writes_its_source() {
     assert_eq!(lines(&got)[2], "add BX,BX,SI", "{:?}", lines(&got));
 }
 
-/// `rep movsd` writes `si` and `di` the same way: a copy of either is dead after it.
+/// `rep movsd` writes `si` and `di` the same way: a copy of either is dead
+/// after it.
 #[test]
 fn test_a_copy_is_not_forwarded_across_a_string_move_that_writes_its_source() {
     use crate::model::ir::Mem;
