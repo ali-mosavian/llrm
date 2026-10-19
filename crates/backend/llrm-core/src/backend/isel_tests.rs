@@ -310,6 +310,19 @@ fn a_bit_count_intrinsic_is_refused_until_it_is_lowered() {
     }
 }
 
+/// `llvm.scmp` and `llvm.ucmp` verify but have no lowering yet: a program that
+/// calls one stops with a named refusal, not a wrong result.
+#[test]
+fn a_compare_intrinsic_is_refused_until_it_is_lowered() {
+    for name in ["scmp", "ucmp"] {
+        let text = format!(
+            "declare i16 @llvm.{name}.i16.i16(i16, i16)\n\
+             define i16 @f(i16 %a, i16 %b) addrspace(1) {{\n  %r = call i16 @llvm.{name}.i16.i16(i16 %a, i16 %b)\n  ret i16 %r\n}}\n"
+        );
+        assert_eq!(selected(&text, "f").err(), Some(Unselected(format!("@llvm.{name}.i16.i16"))), "{name}");
+    }
+}
+
 /// `llvm.stacksave` reads the stack pointer and `llvm.stackrestore` writes it
 /// from a pointer.
 #[test]
