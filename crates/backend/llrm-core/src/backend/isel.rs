@@ -147,7 +147,7 @@
 //! # See also
 //! `docs/machine/targets.md`; LLVM `SelectionDAGISel`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use llrm_analysis::cfg;
@@ -1018,6 +1018,7 @@ pub fn selected_with<'c>(
         pair_phi_inputs: IndexMap::default(),
         stand_ins: IndexMap::default(),
         current: None,
+        symbol_registers: BTreeMap::new(),
         far_globals: IndexMap::default(),
         materialized: Vec::new(),
         edges: IndexMap::default(),
@@ -1614,6 +1615,8 @@ pub struct Selector<'m, 'c, 'p> {
     stand_ins: IndexMap<u32, u32>,
     /// The block being selected.
     current: Option<BlockId>,
+    /// A global's address register, and the block it was made in.
+    symbol_registers: BTreeMap<(Space, i64, i64), (Option<BlockId>, Held)>,
     /// Each far global's offset and selector, where a block made them.
     far_globals: IndexMap<(BlockId, GlobalId, i64), (Held, Held)>,
     /// What `global` made for the instruction being selected, placed before it.
@@ -3506,6 +3509,28 @@ impl Selector<'_, '_, '_> {
         }
     }
 
+    /// The register holding a global's address in this block: made by the
+    /// first access, shared by the rest.
+    fn symbol_register(
+        &mut self,
+        pointer: Pointer,
+        width: u32,
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Held {
+        let Pointer::Global { space, index, offset, .. } = pointer else { unreachable!("a global") };
+        let key = (space, index, offset);
+        if let Some(&(block, held)) = self.symbol_registers.get(&key)
+            && block == self.current
+        {
+            return held;
+        }
+        let held = Held { value: self.fresh(), width };
+        out.push(insn(at, self.address(pointer, held)));
+        self.symbol_registers.insert(key, (self.current, held));
+        held
+    }
+
     /// Where a pointer operand points.
     fn pointer(
         &mut self,
@@ -4001,6 +4026,25 @@ impl Selector<'_, '_, '_> {
                 address,
                 Pointer::Based { base: both, index: Some(sum), scale: 1, offset: start + offset as i64, segment },
             );
+            return Ok(());
+        }
+        // From the instruction pointer a symbol's address is a register: one
+        // per block, and the sum an access reads is its index, `[sym+idx*s]`.
+        if self.pc_relative()
+            && let Pointer::Global { base: None, plus: None, .. } = pointer
+        {
+            if self.only_addressed(address) {
+                let Pointer::Global { space, index, offset: start, .. } = pointer else { unreachable!("a global") };
+                let symbol = Pointer::Global { space, index, offset: 0, base: None, scale: 1, plus: None };
+                let base = self.symbol_register(symbol, width, at, out);
+                let offset = start + offset as i64;
+                self.pointers.insert(address, Pointer::Based { base, index: Some(sum), scale: tail, offset, segment: None });
+                return Ok(());
+            }
+            let start = self.symbol_register(pointer.moved(offset as i64), width, at, out);
+            let result = Held { value: self.value(address), width };
+            let scaled = Loc::Held(sum);
+            out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(result)], vec![Loc::Held(start), scaled])));
             return Ok(());
         }
         let start = match pointer {

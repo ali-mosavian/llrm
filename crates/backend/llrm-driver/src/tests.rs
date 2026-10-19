@@ -405,3 +405,20 @@ fn a_global_holding_a_pointer_lists_as_a_quadword() {
     let listing = llrm_core::backend::masm::text(&built).unwrap();
     assert!(listing.contains("dq x"), "{listing}");
 }
+
+/// Every access to a global array made its own `lea reg,[rip+sym]` and `add
+/// reg,index`: two stores were four instructions more than `llc`'s one `lea`
+/// and `[base+index*4]` stores.
+#[test]
+fn accesses_to_one_global_share_its_address_and_take_the_index_in_the_address() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @a = global [64 x i32] zeroinitializer\n\
+                define void @f(i64 %i) {\n  %p = getelementptr [64 x i32], ptr @a, i64 0, i64 %i\n  store i32 1, ptr %p\n  %q = getelementptr [64 x i32], ptr @a, i64 1, i64 %i\n  store i32 2, ptr %q\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let leas = lines.iter().filter(|line| line.ends_with("offset a")).count();
+    let adds = lines.iter().filter(|line| line.starts_with("add")).count();
+    assert_eq!((leas, adds), (1, 0), "{listing}");
+}
