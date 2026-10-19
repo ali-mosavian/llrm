@@ -1752,10 +1752,17 @@ impl crate::analysis::facts::Fact for BodyRoots {
                     found.disturbed.insert(disturbed);
                 }
                 let Some(what) = &one.what else { continue };
-                // An instruction that writes the stack pointer itself (a
-                // dynamic `alloca`, `stackrestore`).
-                found.moves_stack |=
-                    what.dests.iter().any(|place| matches!(place, Loc::Reg(reg) if root(reg.register) == stack));
+                // An instruction that sets the stack pointer to something not
+                // known at compile time (a dynamic
+                // `alloca`, `stackrestore`); `add sp, n` and `sub sp, n`, the
+                // cleanup after a call, are the frame's own.
+                let known = matches!(
+                    (what.name.as_deref(), &what.dests[..], &what.sources[..]),
+                    (Some("add" | "sub"), [Loc::Reg(dest)], [Loc::Reg(source), Loc::Imm(_)])
+                        if root(dest.register) == stack && root(source.register) == stack
+                );
+                found.moves_stack |= !known
+                    && what.dests.iter().any(|place| matches!(place, Loc::Reg(reg) if root(reg.register) == stack));
                 for r#where in what.dests.iter().chain(&what.sources) {
                     if let Loc::Reg(ir::Reg { register, .. }) = r#where {
                         found.plain.insert(root(*register));
