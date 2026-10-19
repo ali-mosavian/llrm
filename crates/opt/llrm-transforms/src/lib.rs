@@ -179,8 +179,11 @@ pub mod loopunrollpass;
 pub mod loopversion;
 pub mod lsr;
 pub mod lsr_formula;
+pub mod lsr_use;
 #[cfg(test)]
 mod lsr_formula_tests;
+#[cfg(test)]
+mod lsr_use_tests;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
