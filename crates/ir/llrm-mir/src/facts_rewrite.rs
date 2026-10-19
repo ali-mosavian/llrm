@@ -302,6 +302,10 @@ mod tests {
             // not-null, and `visitCastInst` a `trunc`'s no-wrap kind for the
             // result range, where LLVM does.
             "sccpsolver.rs",
+            // InstCombineCompares.cpp's `foldICmpWithZero` reads a multiply's
+            // `nuw`/`nsw` (`BO0->hasNoUnsignedWrap()`) to drop it from an
+            // equality with zero; it never drops one.
+            "combine_compares.rs",
             // PredicateInfo.cpp's `m_NUWTrunc(m_Value(Op0))` in
             // `processBranch`, `processAssume` and `getConstraint`.
             "predicateinfo.rs",
