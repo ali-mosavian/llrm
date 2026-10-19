@@ -129,3 +129,34 @@ end:
         &[],
     );
 }
+
+/// Many jump-only predecessors that give the join the same value are one:
+/// every duplicate is found by hashing what the phis take from it (a scan of
+/// the phi's arms and of the kept ones for each was quadratic).
+#[test]
+fn test_hundreds_of_identical_jump_only_predecessors_are_one() {
+    let n = 400;
+    let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  switch i16 %x, label %j0 [\n");
+    for i in 1..n {
+        text += &format!("    i16 {i}, label %j{i}\n");
+    }
+    text += "  ]\n\n";
+    for i in 0..n {
+        text += &format!("j{i}:\n  br label %e\n\n");
+    }
+    text += "e:\n  %p = phi i16 [ 1, %j0 ]";
+    for i in 1..n {
+        text += &format!(", [ 1, %j{i} ]");
+    }
+    text += "\n  ret i16 %p\n}\n";
+    let options = Options { speculate_blocks: false, sink_common_insts: true, ..Default::default() };
+    let mut module = parsed(&text);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let (context, function) = module.function_mut("f").expect("@f");
+    assert!(simplified_with(&options, context, &spec, function));
+    let printed = printed(&module);
+    assert!(printed.contains("ret i16"), "{printed}");
+    assert!(printed.matches("br label").count() <= 1, "{printed}");
+}
