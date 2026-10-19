@@ -152,23 +152,6 @@ impl Block {
     }
 }
 
-/// A block read through its function, so that its instructions can be listed:
-/// `first`, `last`, `len`, `is_empty` and the fields read the block as it is;
-/// `instructions` and `iter` build the view from the links on the first ask
-/// after an edit (and count the rebuild as a scan).
-pub struct BlockRef<'a> {
-    function: &'a Function,
-    block: &'a Block,
-}
-
-impl std::ops::Deref for BlockRef<'_> {
-    type Target = Block;
-
-    fn deref(&self) -> &Block {
-        self.block
-    }
-}
-
 /// Each instruction's place in its block, numbered lazily like LLVM's
 /// `Instruction::Order` (`BasicBlock::renumberInstructions`): an edit of a
 /// block invalidates it, the next ask renumbers the block once. Not part of
@@ -630,8 +613,8 @@ impl Function {
     pub fn block(
         &self,
         id: BlockId,
-    ) -> BlockRef<'_> {
-        BlockRef { function: self, block: &self.blocks[id.0 as usize] }
+    ) -> &Block {
+        &self.blocks[id.0 as usize]
     }
 
     /// `BasicBlock::begin` to `end` without the view: a cursor over the links.
