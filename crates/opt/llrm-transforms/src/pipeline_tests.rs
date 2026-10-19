@@ -2241,3 +2241,34 @@ fn test_a_slot_of_the_order_can_be_run_alone_when_the_level_builds_it() {
     let o1 = Applied { options: pipeline::Options { pre: false, ..Default::default() }, ..Applied::default() };
     assert!(!pipeline::slot_built(&o1, "gvn@787"), "-O1 has no GVN");
 }
+
+/// d_faces -O2 under the LLVM order: `sink` (its register-pressure forecast)
+/// and a second `hoist` after the fixed point ran where LLVM has no pass, the
+/// translated LICM doing the moving in its slots. They run only under
+/// `LLRM_NO_LICM` (`Options::licm` off).
+#[test]
+fn test_the_llvm_order_runs_no_sink_and_no_hoist_after_the_licm_slots() {
+    let text = "define i16 @f(i16 %n, i16 %a) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp slt i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %k = mul i16 %a, 3\n  %j = add i16 %i, %k\n  br label %h\nx:\n  ret i16 %i\n}\n";
+    llrm_mir::counts::per_pass();
+    let ran = |licm: bool| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied { options: pipeline::Options { licm, ..Default::default() }, ..Applied::default() };
+        let before = llrm_mir::counts::lines();
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+            pipeline::applied(program, &applied)
+        })
+        .and_then(|done| done)
+        .expect("the pipeline runs");
+        let runs = |lines: &[String], name: &str| {
+            lines
+                .iter()
+                .find_map(|line| line.strip_prefix(&format!("[counts] pass {name} "))?.split(' ').next()?.parse().ok())
+                .unwrap_or(0u64)
+        };
+        let after = llrm_mir::counts::lines();
+        (runs(&after, "sink") - runs(&before, "sink"), runs(&after, "hoist") - runs(&before, "hoist"))
+    };
+    assert_eq!(ran(true), (0, 0), "the LLVM order ran the old sink or hoist");
+    let off = ran(false);
+    assert!(off.0 + off.1 > 0, "premise: the old path runs sink or hoist: {off:?}");
+}

@@ -5568,3 +5568,20 @@ fn test_an_undef_initializer_is_zero_bytes() {
     assert_eq!(datums("u"), [Datum::Label(Label { name: "u".to_owned() }), Datum::Bytes(vec![0, 0])]);
     assert_eq!(datums("s"), [Datum::Label(Label { name: "s".to_owned() }), Datum::Bytes(vec![0, 0, 0, 0])]);
 }
+
+/// `freeze undef` and a bare `undef` operand are selected as any value: a
+/// constant, no register read and no refusal (an `undef` constant had no
+/// case in the selector before #2532).
+#[test]
+fn test_freeze_of_undef_and_an_undef_operand_are_selected_as_a_constant() {
+    for (ty, body) in [
+        ("i16", "%f = freeze i16 undef\n  ret i16 %f"),
+        ("i32", "%f = freeze i32 undef\n  ret i32 %f"),
+        ("i16", "%f = add i16 undef, 5\n  ret i16 %f"),
+        ("i32", "%a = add i32 undef, 5\n  %f = freeze i32 %a\n  ret i32 %f"),
+    ] {
+        let text = format!("define {ty} @f() addrspace(1) {{\n  {body}\n}}\n");
+        let got = listing(&text, "f");
+        assert!(!got.is_empty() && got.iter().all(|one| !one.contains("undef") && !one.contains("[")), "{body}: {got:?}");
+    }
+}
