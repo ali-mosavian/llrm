@@ -10,6 +10,7 @@ pub mod arena;
 mod arena_tests;
 pub mod blockfrequency;
 pub mod blocklist;
+pub mod blockorder;
 pub mod build;
 pub mod callgraph;
 pub mod codemetrics;

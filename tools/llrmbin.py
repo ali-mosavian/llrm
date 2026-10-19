@@ -82,7 +82,8 @@ def stale_detail(directory: Path, repo: Path = REPO) -> str:
     oldest = min(found, key=lambda one: one[1])
     newest = max(found, key=lambda one: one[3])
     clock = lambda t: time.strftime("%H:%M:%S", time.localtime(t))
-    return f"oldest binary {oldest[0]} built {clock(oldest[1])}; newest source {newest[2]} written {clock(newest[3])} ({newest[3] - oldest[1]:.0f} s later)"
+    future = " (its mtime is in the FUTURE: a copy that kept a future timestamp stays newer than any binary built today)" if newest[3] > time.time() else ""
+    return f"oldest binary {oldest[0]} built {clock(oldest[1])}; newest source {newest[2]} written {clock(newest[3])} ({newest[3] - oldest[1]:.0f} s later){future}"
 
 
 def target_dir(env: dict | None = None, repo: Path = REPO) -> Path:

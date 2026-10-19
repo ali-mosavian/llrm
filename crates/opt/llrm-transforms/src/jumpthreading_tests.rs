@@ -309,3 +309,31 @@ fn three_phis_on_one_condition_keep_each_paths_value_after_threading() {
     let (before, after) = value_before_and_after("logical_value_chain", &[]);
     assert_eq!(after, before);
 }
+
+/// Positions `layout_step` looks at while a sweep removes every block it
+/// visits, over `n` blocks.
+fn removing_sweep_work(n: u32) -> usize {
+    use llrm_mir::module::BlockId;
+
+    let mut layout: Vec<BlockId> = (0..n).map(BlockId).collect();
+    let mut placed = vec![true; n as usize];
+    let (mut at, mut work) = (0, 0);
+    while let Some(&block) = layout.get(at) {
+        let after = layout.get(at + 1).copied();
+        layout.remove(at);
+        placed[block.0 as usize] = false;
+        let step = crate::jumpthreading::layout_step(&layout, |one| placed[one.0 as usize], block, at, after);
+        work += step.examined;
+        at = step.next;
+    }
+    work
+}
+
+/// The walk looked a removed block up by scanning the whole layout, so a
+/// sweep that removes every block it visits (empty forwarding blocks)
+/// cost n^2/2 positions: 4x the blocks was 16x the work.
+#[test]
+fn a_sweep_that_removes_every_block_looks_at_a_linear_number_of_positions() {
+    let (small, large) = (removing_sweep_work(500), removing_sweep_work(2000));
+    assert!(large * 2 <= small * 9, "500 blocks looked at {small} positions, 2000 looked at {large}");
+}

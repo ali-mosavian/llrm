@@ -228,6 +228,7 @@ pub use matcher::selector;
 #[cfg(test)]
 pub(crate) use matcher::{HOOKED, m16};
 mod expand;
+mod huge;
 mod wide;
 
 /// Where one parameter arrives: a cell in the frame, by its displacement from
@@ -3164,12 +3165,17 @@ impl Selector<'_, '_, '_> {
             && let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::PtrToInt, value }) =
                 self.module.context.get(id).kind.clone()
             && self.is_far(self.module.context.get(value).ty)
-            && width == 4
         {
             let (offset, selector) = self.far(Operand::Constant(value), at, out)?;
-            let joined = Held { value: self.fresh(), width };
-            self.joined(joined, offset, selector, at, out);
-            return Ok(joined);
+            // Narrower than the pair, the integer is its offset word.
+            if width == offset.width {
+                return Ok(offset);
+            }
+            if width == 4 {
+                let joined = Held { value: self.fresh(), width };
+                self.joined(joined, offset, selector, at, out);
+                return Ok(joined);
+            }
         }
         let operand = self.through_ptrtoint(operand);
         let pointer = match operand {
@@ -3420,12 +3426,14 @@ impl Selector<'_, '_, '_> {
         {
             let Some(block) = self.current else { return refuse("a far constant outside a block") };
             let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
-            let (base, selector) = (self.fresh_held(2), self.fresh_held(2));
-            for (into, value) in [base, selector].into_iter().zip(dword_halves(bits)) {
-                let word = Loc::Imm(Imm { value, width: 2, address: None });
-                self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![word])));
-            }
-            return Ok(Pointer::Far { selector, base: Some(base), index: None, scale: 1, offset: 0 });
+            // The offset is the displacement of whatever address the pointer
+            // ends up in (`matchAddress` of a constant: `AM.Disp += Val`),
+            // not a register that holds it.
+            let [offset, high] = dword_halves(bits);
+            let selector = self.fresh_held(2);
+            let word = Loc::Imm(Imm { value: high, width: 2, address: None });
+            self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(selector)], vec![word])));
+            return Ok(Pointer::Far { selector, base: None, index: None, scale: 1, offset });
         }
         // An address no global owns, near: its number, read as a direct
         // address.
@@ -4545,6 +4553,52 @@ impl Selector<'_, '_, '_> {
         let (at, ty) = (self.ats[&inst], instruction.ty);
         let wide = self.cpu.operand_bytes as u32;
         let signed = matches!(op, BinaryOp::SDiv | BinaryOp::SRem);
+        // CVP narrows `udiv i32 x, 5` to a byte: as LLVM promotes the byte to
+        // a legal width before multiplying by the reciprocal, so is the
+        // dividend taken to a dword here.
+        if let Some(constant) = self.constant(instruction.operands[1], 1).filter(|_| !signed) {
+            let byte = self.held(instruction.operands[0], ty, at, out)?;
+            let (dividend, quotient, remainder) = (self.fresh_held(4), self.fresh_held(4), self.fresh_held(4));
+            let mut parts =
+                vec![semantics(Operation::Extend, "movzx", vec![Loc::Held(dividend)], vec![Loc::Held(byte)])];
+            let mut next = self.next;
+            let mut fresh = || {
+                next += 1;
+                next
+            };
+            let both = self.paired.contains_key(&inst) || matches!(op, BinaryOp::URem);
+            let bits = self.significant_bits(instruction.operands[0], false, inst);
+            let reciprocal = division::unsigned_reciprocal(
+                dividend,
+                i64::from(constant as u8),
+                &[quotient, remainder],
+                &mut fresh,
+                self.cpu,
+                both,
+                bits,
+            )
+            .map_err(Unselected)?;
+            self.next = next;
+            if let Some(reciprocal) = reciprocal {
+                parts.extend(reciprocal);
+                out.extend(parts.into_iter().map(|what| insn(at, what)));
+                let quotient_of = matches!(op, BinaryOp::UDiv);
+                let keep = |value: u32, from: Held, out: &mut Vec<Arc<Insn>>| {
+                    let low = Held { width: 1, ..from };
+                    let into = Held { value, width: 1 };
+                    out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Held(low)])));
+                };
+                keep(
+                    self.value(instruction.result.expect("a result")),
+                    if quotient_of { quotient } else { remainder },
+                    out,
+                );
+                if let Some(&partner) = self.paired.get(&inst) {
+                    keep(self.value(partner), if quotient_of { remainder } else { quotient }, out);
+                }
+                return Ok(());
+            }
+        }
         let extend = if signed { "movsx" } else { "movzx" };
         let mut widened = |this: &mut Self, operand: Operand| -> Result<Held, Unselected> {
             let byte = this.held(operand, ty, at, out)?;
@@ -6263,6 +6317,9 @@ impl Selector<'_, '_, '_> {
         let &[destination, source, length, volatile] = arguments else {
             return refuse("a memcpy of other than four operands");
         };
+        if self.is_huge(destination) || self.is_huge(source) {
+            return self.huge_copy(destination, source, length, backward, at, out);
+        }
         let volatile = self.constant(volatile, 1) != Some(0);
         let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
         let constant = self.length(length);
@@ -6562,6 +6619,9 @@ impl Selector<'_, '_, '_> {
         let &[destination, value, length, volatile] = arguments else {
             return refuse("a memset of other than four operands");
         };
+        if self.is_huge(destination) {
+            return self.huge_fill(destination, value, length, at, out);
+        }
         let volatile = self.constant(volatile, 1) != Some(0);
         let byte = self.constant(value, 1);
         let pattern = |byte: i64, width: u32| (0..width).fold(0i64, |word, _| (word << 8) | (byte & 0xFF));
@@ -6688,6 +6748,9 @@ impl Selector<'_, '_, '_> {
         let &[destination, value, count, volatile] = arguments else {
             return refuse("a pattern fill of other than four operands");
         };
+        if self.is_huge(destination) {
+            return self.huge_fill(destination, value, count, at, out);
+        }
         let volatile = self.constant(volatile, 1) != Some(0);
         let ty = self.function.operand_type(&self.module.context, value).expect("a typed cell");
         let width = match self.module.context.types.int_bits(ty) {
