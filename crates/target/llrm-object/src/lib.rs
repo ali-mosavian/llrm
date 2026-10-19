@@ -96,7 +96,10 @@ impl Kind {
     }
 
     pub fn relative(self) -> bool {
-        matches!(self, Kind::PcRel { .. } | Kind::Branch { .. } | Kind::Branch26 | Kind::Page21 | Kind::GotPage21)
+        matches!(
+            self,
+            Kind::PcRel { .. } | Kind::Branch { .. } | Kind::Branch26 | Kind::Page21 | Kind::GotPage21
+        )
     }
 }
 
