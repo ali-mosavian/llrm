@@ -18,6 +18,8 @@ pub struct Dialect {
     pub conditions: Vec<(String, u32)>,
     /// Rows have a last column naming the assembler's code.
     pub assembler_column: bool,
+    /// The flags an arithmetic instruction writes: what a rule's `any` reads.
+    pub arithmetic: Vec<String>,
 }
 
 impl Dialect {
@@ -30,7 +32,9 @@ impl Dialect {
                 .and_then(toml::Value::as_array)
                 .ok_or_else(|| format!("dialect.toml: no list `{key}`"))?
                 .iter()
-                .map(|one| one.as_str().map(str::to_owned).ok_or_else(|| format!("dialect.toml: `{key}` holds a non-string")))
+                .map(|one| {
+                    one.as_str().map(str::to_owned).ok_or_else(|| format!("dialect.toml: `{key}` holds a non-string"))
+                })
                 .collect()
         };
         let flags: Vec<(String, u32)> = table
@@ -49,15 +53,17 @@ impl Dialect {
             .map(|list| {
                 list.iter()
                     .map(|one| {
-                        let name = one.get("name").and_then(toml::Value::as_str).ok_or("dialect.toml: a condition has no name")?;
+                        let name = one
+                            .get("name")
+                            .and_then(toml::Value::as_str)
+                            .ok_or("dialect.toml: a condition has no name")?;
                         let mut mask = 0;
                         for flag in one.get("flags").and_then(toml::Value::as_array).into_iter().flatten() {
                             let flag = flag.as_str().unwrap_or("");
-                            mask |= flags
-                                .iter()
-                                .find(|(one, _)| one == flag)
-                                .map(|(_, bit)| *bit)
-                                .ok_or_else(|| format!("dialect.toml: condition `{name}` tests no flag `{flag}`"))?;
+                            mask |=
+                                flags.iter().find(|(one, _)| one == flag).map(|(_, bit)| *bit).ok_or_else(|| {
+                                    format!("dialect.toml: condition `{name}` tests no flag `{flag}`")
+                                })?;
                         }
                         Ok((name.to_owned(), mask))
                     })
@@ -70,8 +76,14 @@ impl Dialect {
             .and_then(toml::Value::as_array)
             .ok_or("dialect.toml: no list `widths`")?
             .iter()
-            .map(|one| one.as_integer().and_then(|bits| u32::try_from(bits).ok()).ok_or("dialect.toml: a width is no number"))
+            .map(|one| {
+                one.as_integer().and_then(|bits| u32::try_from(bits).ok()).ok_or("dialect.toml: a width is no number")
+            })
             .collect::<Result<_, _>>()?;
+        let arithmetic = strings("arithmetic").unwrap_or_default();
+        if let Some(missing) = arithmetic.iter().find(|name| !flags.iter().any(|(one, _)| one == *name)) {
+            return Err(format!("dialect.toml: `arithmetic` names no flag `{missing}`"));
+        }
         Ok(Self {
             file: table.get("file").and_then(toml::Value::as_str).ok_or("dialect.toml: no `file`")?.to_owned(),
             registers: strings("registers")?,
@@ -79,14 +91,20 @@ impl Dialect {
             flags,
             conditions,
             assembler_column: table.get("assembler_column").and_then(toml::Value::as_bool).unwrap_or(false),
+            arithmetic,
         })
     }
 
-    fn flag(
+    pub fn flag(
         &self,
         name: &str,
     ) -> Option<u32> {
         self.flags.iter().find(|(one, _)| one == name).map(|(_, bit)| *bit)
+    }
+
+    /// The bits of the flags an arithmetic instruction writes.
+    pub fn arithmetic_mask(&self) -> u32 {
+        self.arithmetic.iter().filter_map(|name| self.flag(name)).fold(0, |all, bit| all | bit)
     }
 }
 
@@ -393,7 +411,9 @@ mod tests {
             assert!(forms[0].sources[2].allows(kind.chars().next().unwrap()));
         }
         assert!(
-            parse("add3 binary r/r,r,z 32 alu_rr - - - -/- Add_{w}", &dialect()).unwrap_err().contains("kinds r m i a s h c e")
+            parse("add3 binary r/r,r,z 32 alu_rr - - - -/- Add_{w}", &dialect())
+                .unwrap_err()
+                .contains("kinds r m i a s h c e")
         );
     }
 
@@ -408,12 +428,15 @@ mod tests {
              [flags]\nN = 8\nZ = 4\nC = 2\nV = 1\n",
         )
         .expect("a dialect");
-        let forms = parse("b.{cc} branch -/- 64 alu_rr - - - cc/- -", &arm64).expect("parses");
+        let forms = parse("b.{cc} branch -/- 64 alu_rr - - - cc/-", &arm64).expect("parses");
         let names: Vec<_> = forms.iter().map(|form| (form.name.as_str(), form.flags_read)).collect();
         assert_eq!(names, [("b.eq", 4), ("b.ne", 4)]);
-        assert_eq!(parse("x branch -/- 64 alu_rr - - - -/-", &dialect()).unwrap_err(), "x86.instr:1: 9 columns, not 10");
         assert_eq!(
-            parse("x branch -/- 64 alu_rr x1=sp - - -/- -", &arm64).unwrap_err(),
+            parse("x branch -/- 64 alu_rr - - - -/-", &dialect()).unwrap_err(),
+            "x86.instr:1: 9 columns, not 10"
+        );
+        assert_eq!(
+            parse("x branch -/- 64 alu_rr x1=sp - - -/-", &arm64).unwrap_err(),
             "arm64.instr:1: fixed `x1=sp` is not dN=REG or sN=REG"
         );
     }

@@ -80,3 +80,11 @@ Tests: `test_a_join_of_one_instruction_is_copied_into_both_arms` (llc at the pin
 - D18 the loop of a block is the nearest natural loop of the final layout, with no `llvm.loop.align` metadata.
 - Tests: `test_for_size_a_two_way_branch_keeps_its_condition` (failed before the skip), `test_a_loop_block_nothing_falls_into_is_aligned`.
 - Not translated, as off by default at the pin: `ExtTsp` placement, `rotateLoopWithProfile`, profile-driven duplicate candidates.
+
+## Branch folding (OptimizeBranches)
+
+`jumps/branchfold.rs` replaces `_step` and the bookkeeping it needed (`Places`, `_stranded`, `_converged`). Output is unchanged on 41 kernels and d_faces at -Os/-O1/-O2/-O3, m32 and m16 (assembly compared against the build before).
+
+- D20 `OptimizeBlock`'s rules that move a block (`moveAfter`, `moveBefore`) are not translated: placement has laid the blocks out, and LLVM redoes its layout when this pass changes anything after placement, which we do not.
+- D21 The next block is the next that emits something, and a block's own jump is read against it, not the previous block's against this one: the explicit form leaves blocks of only anchors in between.
+- Not yet translated: merging a block into its only predecessor, the identical-conditional single-branch block, the tail-call fold (no unconditional tail calls reach this pass).

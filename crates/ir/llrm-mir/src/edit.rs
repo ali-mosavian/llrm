@@ -314,6 +314,11 @@ impl Function {
             return None;
         }
         let [Operand::Block(target)] = self.instruction(inst).operands[..] else { return None };
+        // A branch to its own block enters no other: its records have no start
+        // to go to but itself, which is going away.
+        if self.parent(inst) == Some(target) {
+            return None;
+        }
         // A phi that names the block as where its value comes from is a use of
         // it too, but no way in. (An erase has already taken its own
         // use of the block away.)
@@ -618,6 +623,29 @@ impl Function {
         self.values[to.0 as usize].name = name;
     }
 
+    /// `BasicBlock::takeName`: `to` is named what `from` was, which goes
+    /// unnamed; the name stays taken in the function.
+    pub fn take_block_name(
+        &mut self,
+        from: BlockId,
+        to: BlockId,
+    ) {
+        let name = self.blocks[from.0 as usize].name.take();
+        self.blocks[to.0 as usize].name = name;
+    }
+
+    /// `BasicBlock::setName`: `block` is named `name`, or `name` with the least
+    /// number appended that nothing live holds.
+    pub fn set_block_name(
+        &mut self,
+        block: BlockId,
+        name: &str,
+    ) {
+        self.release_name(block);
+        let name = self.unique_name(name);
+        self.blocks[block.0 as usize].name = Some(name);
+    }
+
     /// Replaces an instruction's opcode in place (a `getelementptr`'s source
     /// type, say); operands and users stay.
     pub fn set_opcode(
@@ -901,6 +929,37 @@ impl Function {
         info.return_attrs = return_attrs;
         info.argument_attrs = argument_attrs;
         self.log(Change::Rewritten(inst));
+    }
+
+    /// `CallBase::removeUBImplyingAttrs` of
+    /// `Instruction::dropUBImplyingAttrsAndMetadata`: the call `inst` keeps
+    /// no attribute of its result or arguments that makes it undefined (a
+    /// fact's `implies_ub`, and `dereferenceable_or_null`). Whether any was
+    /// dropped.
+    pub fn drop_ub_implying_attrs(
+        &mut self,
+        inst: InstId,
+    ) -> bool {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
+            return false;
+        };
+        let implies_ub = |attr: &crate::opcode::Attribute| {
+            crate::facts::Fact::of_attribute(attr).is_some_and(crate::facts::Fact::implies_ub)
+                || matches!(
+                    attr,
+                    crate::opcode::Attribute::Int(name, _) if name == "dereferenceable_or_null"
+                )
+        };
+        let before = info.return_attrs.len() + info.argument_attrs.iter().map(Vec::len).sum::<usize>();
+        info.return_attrs.retain(|attr| !implies_ub(attr));
+        for attrs in &mut info.argument_attrs {
+            attrs.retain(|attr| !implies_ub(attr));
+        }
+        let changed = before != info.return_attrs.len() + info.argument_attrs.iter().map(Vec::len).sum::<usize>();
+        if changed {
+            self.log(Change::Rewritten(inst));
+        }
+        changed
     }
 
     /// Gives the call `inst` calling convention `convention`.

@@ -63,12 +63,15 @@ pub(crate) fn runtime_registers(
 ) -> BTreeSet<Reg> {
     let mut out: BTreeSet<Reg> = registers
         .iter()
-        .map(|register| match register.full_register32() {
-            RegId::EAX => Reg::Ax,
-            RegId::EBX => Reg::Bx,
-            RegId::ECX => Reg::Cx,
-            RegId::EDX => Reg::Dx,
-            other => panic!("an inline routine names {other:?}"),
+        .map(|register| match (*register == RegId::ES, register.full_register32()) {
+            (true, _) => Reg::Es,
+            (_, RegId::EAX) => Reg::Ax,
+            (_, RegId::EBX) => Reg::Bx,
+            (_, RegId::ECX) => Reg::Cx,
+            (_, RegId::EDX) => Reg::Dx,
+            (_, RegId::ESI) => Reg::Si,
+            (_, RegId::EDI) => Reg::Di,
+            (_, other) => panic!("an inline routine names {other:?}"),
         })
         .collect();
     if flags {

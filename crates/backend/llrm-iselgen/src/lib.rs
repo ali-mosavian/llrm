@@ -347,7 +347,8 @@ pub fn generate(
     writeln!(code, "pub static COVERS: [bool; {}] = {covering:?};", covering.len()).unwrap();
     let (mut holds, mut covers, mut costs, mut emits) = (String::new(), String::new(), String::new(), String::new());
     for (index, pattern) in patterns.patterns.iter().enumerate() {
-        let mut checker = Checker { file: &dialect.file, pattern, forms: &forms, bound: bindings(pattern), lets: Vec::new() };
+        let mut checker =
+            Checker { file: &dialect.file, pattern, forms: &forms, bound: bindings(pattern), lets: Vec::new() };
         writeln!(holds, "            {index} => {},", condition(&checker, false)?).unwrap();
         if !pattern.covers.is_empty() {
             let marks: Vec<String> = pattern

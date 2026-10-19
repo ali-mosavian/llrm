@@ -62,7 +62,8 @@ pub fn target(
     let (patterns, forms) = (dir.join("src/isel/patterns.isel"), dir.join("src/instructions/x86.instr"));
     let forms = format!("{}\n{}", family.forms, read(&forms));
     let patterns = spliced(&family.patterns, &read(&patterns));
-    let generated = generate(&forms, &patterns, &name, core, &family.dialect).unwrap_or_else(|error| panic!("{name}: {error}"));
+    let generated =
+        generate(&forms, &patterns, &name, core, &family.dialect).unwrap_or_else(|error| panic!("{name}: {error}"));
     std::fs::write(out.join(format!("isel_{ident}.rs")), generated.code).unwrap();
     let layout = read(&dir.join("src/machines/datalayout.toml"));
     let mode = layout
@@ -199,12 +200,11 @@ fn peephole(
     } else {
         String::new()
     };
-    let made = llrm_peepgen::generate(forms, &dialect.file, &format!("{family}\n{own}"), "peephole.peep", dialect).unwrap_or_else(
-        |error| {
+    let made = llrm_peepgen::generate(forms, &dialect.file, &format!("{family}\n{own}"), "peephole.peep", dialect)
+        .unwrap_or_else(|error| {
             eprintln!("{error}");
             std::process::exit(1);
-        },
-    );
+        });
     for (group, _, _) in &made.groups {
         assert!(
             groups.iter().any(|(name, _)| name == group),

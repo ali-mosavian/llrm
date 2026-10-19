@@ -13,7 +13,8 @@ pub const OWN: &str = include_str!("x86.instr");
 
 pub static TEXT: LazyLock<String> = LazyLock::new(|| llrm_x86::instructions::joined(OWN));
 
-pub static FORMS: LazyLock<Vec<Form>> = LazyLock::new(|| parse::parse(&TEXT, llrm_x86::instructions::dialect()).expect("x86.instr parses"));
+pub static FORMS: LazyLock<Vec<Form>> =
+    LazyLock::new(|| parse::parse(&TEXT, llrm_x86::instructions::dialect()).expect("x86.instr parses"));
 
 static CODES: LazyLock<HashMap<String, Code>> =
     LazyLock::new(|| Code::values().map(|code| (format!("{code:?}"), code)).collect());
@@ -92,7 +93,9 @@ mod tests {
 
     #[test]
     fn a_malformed_line_is_refused_with_its_line() {
-        let error = parse::parse("add binary rm/^0,rmx 16 alu_rr - - - -/- Add_rm{w}_r{w}", llrm_x86::instructions::dialect()).unwrap_err();
+        let error =
+            parse::parse("add binary rm/^0,rmx 16 alu_rr - - - -/- Add_rm{w}_r{w}", llrm_x86::instructions::dialect())
+                .unwrap_err();
         assert_eq!(error, "x86.instr:1: operand `rmx` is not made of the kinds r m i a s h c e");
     }
 

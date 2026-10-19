@@ -91,10 +91,12 @@
 
 pub mod aa;
 pub mod access;
+pub mod aggregate;
 pub mod alias;
 pub mod aliassets;
 pub mod argumentattrs;
 pub mod assumptions;
+pub mod attrsummary;
 pub mod avail;
 pub mod basicaa;
 pub mod blockfreq;
@@ -127,6 +129,7 @@ pub mod guards;
 pub mod induction;
 pub mod interprocedural;
 pub mod liveness;
+pub mod loads;
 pub mod loadstorepromoter;
 pub mod loopaccess;
 pub mod loopunrollanalyzer;
