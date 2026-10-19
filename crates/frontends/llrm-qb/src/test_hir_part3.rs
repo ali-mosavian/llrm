@@ -481,10 +481,12 @@ fn test_nested_integer_division_keeps_each_dividend() {
     let assembly = listing(&source);
     let scale = between(&assembly, "SCALE proc far\n", "SCALE endp\n");
 
-    assert!(scale.contains("mov eax, 80\n"));
-    assert!(scale.contains("mov eax, 30\n"));
-    assert_eq!(scale.matches("idiv e").count(), 2);
-    assert!(!scale.contains("idiv ax"));
+    // CVP narrows both quotients (80 \\ x fits 16 bits, then 8): two word
+    // divisions in place of two dword ones, each with its own dividend.
+    assert!(scale.contains("mov ax, 80\n"));
+    assert!(scale.contains("mov bx, 30\n"));
+    assert_eq!(scale.matches("idiv").count(), 2);
+    assert!(!scale.contains("idiv e"));
 }
 
 /// -2 ^ 3 printed 8: the exponent's parity sat in eax across `fnstsw ax`.
