@@ -56,6 +56,14 @@
 //! DEVIATE 5: only stores and constant-length memsets are candidates, and
 //! `storeIsNoop` knows no `getInitialValueOfAllocation` (it needs `calloc`
 //! and friends). Exit: stage 2.
+//! DEVIATE 6: a call that initializes an object keeps the earlier writes to it
+//! when a pointer into the object also reaches the call through another
+//! argument (the pin trusts `initializes`: the callee reads before it writes
+//! through that alias). Exit: none, while a pointer can be passed twice.
+//! DEVIATE 7: a load through an unknown pointer is taken to read a local that
+//! is captured anywhere in the function, where BasicAA's `isNotCapturedBefore`
+//! asks at the instruction; a store a later escape follows stays. Exit:
+//! basicaa-port's captured-before query in the alias stand-in (10-23).
 //!
 //! # Example
 //! A local written and never read:
