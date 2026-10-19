@@ -5859,6 +5859,19 @@ define i16 @f() addrspace(1) {
     assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
 }
 
+/// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
+/// address of no global": 13 llrm-qb tests failed to assemble a POKE.
+#[test]
+fn test_a_gep_off_a_segment_constant_is_a_far_number() {
+    let text = "define i8 @f() addrspace(1) {
+  %v = load i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 -24576 to ptr addrspace(2)) to ptr addrspace(1)), i16 1)
+  ret i8 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov bx, 1".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
+}
+
 /// More constant-expression operands (alias/farstruct.c, textfill): the dword
 /// of a far pointer to near data (`ptrtoint (addrspacecast @g)`), and a segment
 /// constant widened to far (`addrspacecast (inttoptr N to ptr addrspace(2))`),
