@@ -3840,7 +3840,6 @@ fn simplify_icmp_of_extensions(
 
 /// `getUnsignedMonotonicValues`
 /// ([:3170](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3170)).
-/// DEVIATE: `uadd.sat` / `usub.sat` are intrinsics.
 fn unsigned_monotonic_values(
     q: &Query,
     result: &mut Vec<Operand>,
@@ -3856,6 +3855,25 @@ fn unsigned_monotonic_values(
         return;
     }
     let depth = depth + 1;
+    // m_Intrinsic<uadd_sat>(X, Y) like the or; m_Intrinsic<usub_sat>(X) as the
+    // and's first operand.
+    let saturating = {
+        let tracking = q.tracking();
+        let call = tracking
+            .instruction_of(v)
+            .and_then(|(inst, _)| pattern::call_intrinsic(&tracking, inst).map(|id| (inst, id)));
+        call.map(|(inst, id)| (id, q.function.instruction(inst).operands.to_vec()))
+    };
+    match saturating {
+        Some((pattern::IntrinsicId::UaddSat, args)) if greater_eq => {
+            unsigned_monotonic_values(q, result, args[0], greater_eq, depth);
+            unsigned_monotonic_values(q, result, args[1], greater_eq, depth);
+        }
+        Some((pattern::IntrinsicId::UsubSat, args)) if !greater_eq => {
+            unsigned_monotonic_values(q, result, args[0], greater_eq, depth);
+        }
+        _ => {}
+    }
     let Some((op, x, y, flags)) = q.binary(v) else { return };
     if greater_eq {
         if op == BinaryOp::Or {

@@ -398,10 +398,6 @@ fn found(
                 if copies > (BRANCH_PATH - 1) / PATH_SCALE || spent + copies > MAX_COPIED {
                     continue;
                 }
-                // The same way in found through a second state is one path.
-                if paths.iter().any(|one: &Path| one.from == source && one.blocks == [block]) {
-                    continue;
-                }
                 spent += copies.max(1);
                 paths.push(Path { from: source, blocks: vec![block], target });
             }
@@ -436,7 +432,15 @@ fn found(
         };
         let mut paths = Vec::new();
         let mut spent = copied;
+        let mut seen = IdSet::new();
         for (value, from) in arms(function, phi) {
+            // A switch with two cases to one block gives its phi two inputs
+            // from the same predecessor: one way in, as LLVM's
+            // `UniqueBlocks` takes it
+            // (DFAJumpThreading.cpp#L618-L623 at d1106deb71cc).
+            if !seen.insert(from) {
+                continue;
+            }
             // The constant on each way in, and the blocks copied ahead of the
             // chain.
             let ways = resolved(function, &unit, value, from, 4);
@@ -501,9 +505,6 @@ fn found(
                 llrm_support::debug!("jumpthread", "path from {:?}: {} copies, {} phis", source, copies, phis);
                 let copies = copies + phis;
                 if copies > limit || spent + copies > MAX_COPIED {
-                    continue;
-                }
-                if paths.iter().any(|one: &Path| one.from == source && one.blocks == blocks) {
                     continue;
                 }
                 // A path of phis and a branch still costs a block, or the
