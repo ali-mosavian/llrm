@@ -610,7 +610,7 @@ impl Function {
     pub fn positions(&self) -> Vec<u32> {
         let mut positions = vec![0; self.instructions.len()];
         for &block in self.layout() {
-            for (index, inst) in self.block(block).instructions().iter().enumerate() {
+            for (index, inst) in self.block(block).iter().enumerate() {
                 positions[inst.0 as usize] = index as u32;
             }
         }

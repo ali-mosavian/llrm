@@ -1047,7 +1047,7 @@ impl LazyValueInfoImpl {
 
         // If guards are not used in the module, don't spend time looking for
         // them
-        if self.guard_decl && function.block(bb).instructions().first() != Some(&bbi) {
+        if self.guard_decl && function.block(bb).first() != Some(bbi) {
             let instructions = function.block(bb).instructions();
             let at = instructions.iter().position(|&i| i == bbi).expect("bbi is in its block");
             for &i in instructions[..at].iter().rev() {
