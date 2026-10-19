@@ -131,7 +131,7 @@ fn analyse(function: &MFunc) -> (HashMap<Reg, Ranges>, Vec<u32>, HashMap<Reg, f6
         .blocks
         .iter()
         .enumerate()
-        .map(|(at, block)| successors_of(block, at, function.blocks.len(), &labels))
+        .map(|(at, block)| crate::mfunc::successors_of(block, at, function.blocks.len(), &labels))
         .collect();
     let mut live_in: Vec<BTreeSet<Reg>> = vec![BTreeSet::new(); function.blocks.len()];
     let mut live_out: Vec<BTreeSet<Reg>> = vec![BTreeSet::new(); function.blocks.len()];
@@ -195,36 +195,6 @@ fn analyse(function: &MFunc) -> (HashMap<Reg, Ranges>, Vec<u32>, HashMap<Reg, f6
         one.normalize();
     }
     (ranges, calls, weight)
-}
-
-fn successors_of(
-    block: &crate::mfunc::MBlock,
-    at: usize,
-    count: usize,
-    labels: &HashMap<&str, usize>,
-) -> Vec<usize> {
-    let mut out = Vec::new();
-    let mut falls_through = true;
-    for op in &block.ops {
-        match op {
-            Op::I(Inst::Branch { link: false, target: Target::Label(label) }) => {
-                out.extend(labels.get(label.as_str()).copied());
-                falls_through = false;
-            }
-            Op::I(Inst::BranchCond { target: Target::Label(label), .. })
-            | Op::I(Inst::CompareBranch { target: Target::Label(label), .. })
-            | Op::I(Inst::TestBranch { target: Target::Label(label), .. }) => {
-                out.extend(labels.get(label.as_str()).copied());
-            }
-            Op::Return { .. } => falls_through = false,
-            Op::I(Inst::Brk { .. }) => falls_through = false,
-            _ => {}
-        }
-    }
-    if falls_through && at + 1 < count {
-        out.push(at + 1);
-    }
-    out
 }
 
 /// Joins the virtual registers a copy connects whose live ranges do not

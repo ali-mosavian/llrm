@@ -259,7 +259,8 @@ impl<G: FlowGraph, F: Frame, Q: Frequencies> Shrink<'_, G, F, Q> {
                     break;
                 }
             } else {
-                // Push Restore out of its loop, past the post-dominator of its exits.
+                // Push Restore out of its loop, past the post-dominator of its
+                // exits.
                 let cycle = self.cycles.get_cycle(restore);
                 let mut ipdom = Some(restore);
                 for &exiting in self.cycles.get_blocks(cycle) {
@@ -311,7 +312,10 @@ impl<G: FlowGraph, F: Frame, Q: Frequencies> Shrink<'_, G, F, Q> {
             let (Some(save), Some(restore)) = (self.save, self.restore) else { break };
             let cheap = self.entry_freq >= self.freq.block(save);
             let can_prologue = self.frame.can_use_as_prologue(save);
-            if cheap && self.entry_freq >= self.freq.block(restore) && can_prologue && self.frame.can_use_as_epilogue(restore)
+            if cheap
+                && self.entry_freq >= self.freq.block(restore)
+                && can_prologue
+                && self.frame.can_use_as_epilogue(restore)
             {
                 break;
             }

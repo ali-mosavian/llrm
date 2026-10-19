@@ -11,6 +11,7 @@ pub mod layout;
 pub mod machine;
 pub mod mc;
 pub mod mfunc;
+pub mod prepass;
 pub mod regalloc;
 pub mod tti;
 #[cfg(test)]

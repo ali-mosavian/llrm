@@ -3,6 +3,8 @@
 //! (`MachineFunction`), the frame objects it needs, and the pseudo
 //! instructions only the backend's own phases understand.
 
+use std::collections::HashMap;
+
 use crate::mc::inst::{Gpr, Inst, Target, Vreg};
 use crate::mc::visit::{Reg, RegRef, Role};
 
@@ -190,4 +192,36 @@ pub fn block_label(
 
 pub fn branch_to(label: &str) -> Op {
     Op::I(Inst::Branch { link: false, target: Target::Label(label.to_owned()) })
+}
+
+/// The blocks `block` (the `at`th of `count`) can go to, from the labels its
+/// branches name and its fall-through.
+pub fn successors_of(
+    block: &MBlock,
+    at: usize,
+    count: usize,
+    labels: &HashMap<&str, usize>,
+) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut falls_through = true;
+    for op in &block.ops {
+        match op {
+            Op::I(Inst::Branch { link: false, target: Target::Label(label) }) => {
+                out.extend(labels.get(label.as_str()).copied());
+                falls_through = false;
+            }
+            Op::I(Inst::BranchCond { target: Target::Label(label), .. })
+            | Op::I(Inst::CompareBranch { target: Target::Label(label), .. })
+            | Op::I(Inst::TestBranch { target: Target::Label(label), .. }) => {
+                out.extend(labels.get(label.as_str()).copied());
+            }
+            Op::Return { .. } => falls_through = false,
+            Op::I(Inst::Brk { .. }) => falls_through = false,
+            _ => {}
+        }
+    }
+    if falls_through && at + 1 < count {
+        out.push(at + 1);
+    }
+    out
 }
