@@ -84,6 +84,7 @@
 //! | [`foldTwoEntryPHINode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3834), called from `simplifyOnce` ([L9351](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9351)) under `SpeculateBlocks` | `twoentryphi::folded`, `Options::speculate_blocks` | MIRROR; see that module |
 //! | [`speculativelyExecuteBB`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3244), called from `simplifyCondBranch` ([L9060](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9060)) | `branch_speculated`, `speculate::executed` | MIRROR for the call; see that module |
 //! | [`tailMergeBlocksWithSimilarFunctionTerminators`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L142), called from `simplifyFunctionCFGImpl` after the first `removeUnreachableBlocks` | `tailmerge::merged` | MIRROR; see that module |
+//! | [`sinkCommonCodeFromPredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L2425) and [`simplifyDuplicatePredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8573), called from `simplifyOnce` ([L9336](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9336)) under `SinkCommonInsts` | `sinkcommon::sunk`, `sinkcommon::duplicate_predecessors_merged`, `Options::sink_common_insts` | MIRROR for the calls; see that module |
 //! | [`FindFunctionBackedges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L236) | `loop_headers` | MIRROR |
 //! | [`removeUnreachableBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2912) and `markAliveBlocks` | `unreachable_removed` | the terminator folding and the deletion; D3 |
 //! | [`ConstantFoldTerminator`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L133) | `terminator_folded` | MIRROR; D4 |
@@ -96,11 +97,10 @@
 //!   blocks that go; LLVM's `WeakVH`s drop them. Nothing reads a deleted
 //!   block's entry.
 //! - D2. Not ported yet, each a later change of this series:
-//!   `removeUndefIntroducingPredecessor`, `sinkCommonCodeFromPredecessors` (off
-//!   at this slot), and the terminator simplifications `simplifyUncondBranch`
-//!   beyond the empty block (`tryToSimplifyUncondBranchWithICmpInIt`, landing
-//!   pads: none in the MIR), `simplifyCondBranch`, `simplifySwitch`,
-//!   `simplifyUnreachable`.
+//!   `removeUndefIntroducingPredecessor`, and the terminator simplifications
+//!   `simplifyUncondBranch` beyond the empty block
+//!   (`tryToSimplifyUncondBranchWithICmpInIt`, landing pads: none in the MIR),
+//!   `simplifyCondBranch`, `simplifySwitch`, `simplifyUnreachable`.
 //! - D3. `markAliveBlocks` also turns what follows a call of a `noreturn`
 //!   function, `llvm.assume(false)` and a store to `undef` into `unreachable`
 //!   (`FoldInstsToUnreachable`): not ported yet. It reads the target's
@@ -185,7 +185,7 @@ use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
 use crate::twoentryphi::{self, Speculation};
 use crate::{cfg, dead, edges, transform};
-use crate::{hoistcommon, speculate, tailmerge};
+use crate::{hoistcommon, sinkcommon, speculate, tailmerge};
 
 /// LLVM's `SimplifyCFGPass` at the options of the early function pipeline
 /// slot (`SimplifyCFGOptions()`: `PassBuilderPipelines.cpp`).
@@ -227,11 +227,18 @@ pub struct Options {
     /// `HoistCommonInsts`: hoist the code the arms of a branch share even
     /// where the arms differ; off, only arms that are the same entirely.
     pub hoist_common_insts: bool,
+    /// `SinkCommonInsts`: sink the code every jump into a block shares.
+    pub sink_common_insts: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { need_canonical_loop: true, speculate_blocks: true, hoist_common_insts: false }
+        Options {
+            need_canonical_loop: true,
+            speculate_blocks: true,
+            hoist_common_insts: false,
+            sink_common_insts: false,
+        }
     }
 }
 
@@ -329,6 +336,16 @@ fn block_simplified(
     *folded |= changed;
     changed |= transform::duplicate_phis_in(function, block).expect("a phi nothing reads is erased");
     changed |= cfg::merged_into_predecessor(function, block);
+    if options.sink_common_insts && function.is_placed(block) {
+        if sinkcommon::sunk(context, spec, function, block) {
+            return true;
+        }
+        if !(options.need_canonical_loop && headers.contains(&block))
+            && sinkcommon::duplicate_predecessors_merged(function, block)
+        {
+            return true;
+        }
+    }
     if options.speculate_blocks && function.is_placed(block) && twoentryphi::folded(context, spec, function, block) {
         return true;
     }

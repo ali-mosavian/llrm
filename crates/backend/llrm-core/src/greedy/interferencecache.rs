@@ -173,7 +173,7 @@ impl Entry {
         if self.prev_pos != start {
             if !self.prev_pos.is_valid() || start < self.prev_pos {
                 for rui in &mut self.reg_units {
-                    rui.virt_i = liu(rui.unit).find(&start);
+                    rui.virt_i = liu(rui.unit).find_entry(&start);
                     rui.fixed_i = fixed.fixed_range(rui.unit).map_or(0, |f| f.find(&start));
                 }
             } else {
