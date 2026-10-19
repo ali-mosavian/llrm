@@ -290,7 +290,7 @@ pub const ABSENT_AT_O1: &[&str] = &["gvn@787"];
 /// 4/10/10/10).
 pub const RUN_COUNTS_OPEN: &[&str] = &[
     "loopsimplify@764,772,823 and lcssa: one pair per loop-pass adaptor",
-    "-O3 reruns a body's whole list after `ipa-cp.` and `ipa-deadargs.` (d_faces: _d_draw_faces runs the 52 steps three times, 17 gvn runs over 12 bodies against -O2's 12): LLVM runs IPSCCP and deadargelim before the function pipelines, so a body is not run twice (cgscc-poc's single pass-list run per SCC visit)",
+    "-O3 d_faces: one `ipa-range` rerun of the list remains (ranges that appear after cloning and inlining; 11 M); `walk::ModuleIpo` runs ipa-args, ipa-cp, ipa-range and deadargs before the list once",
 ];
 
 /// The phase and kind of the slot named `slot` (`sroa@1179`), if the registry
