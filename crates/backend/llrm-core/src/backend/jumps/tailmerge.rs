@@ -231,6 +231,30 @@ struct Folder {
     changed: bool,
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SELF_LOOP_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The blocks on a cycle: members of a component of two or more, or a block
+/// that jumps to itself.
+pub(crate) fn cyclic_blocks(blocks: &[crate::model::lir::Block]) -> HashSet<i64> {
+    let selfish: HashSet<i64> = blocks
+        .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            SELF_LOOP_SCANS.with(|one| one.set(one.get() + 1));
+        })
+        .filter(|block| block.succ.contains(&block.at))
+        .map(|block| block.at)
+        .collect();
+    llrm_support::graph::components(blocks)
+        .into_iter()
+        .filter(|members| members.len() > 1 || selfish.contains(&members[0]))
+        .flatten()
+        .collect()
+}
+
 impl Folder {
     /// The innermost loop header of each block, and the headers, of the body
     /// as it came.
@@ -247,14 +271,7 @@ impl Folder {
             }
         }
         self.headers = loops.iter().map(|found| found.header).collect();
-        self.cyclic = llrm_support::graph::components(&self.source.blocks)
-            .into_iter()
-            .filter(|members| {
-                members.len() > 1
-                    || self.source.blocks.iter().any(|block| block.at == members[0] && block.succ.contains(&members[0]))
-            })
-            .flatten()
-            .collect();
+        self.cyclic = cyclic_blocks(&self.source.blocks);
         self.inner = Some(inner);
     }
 
