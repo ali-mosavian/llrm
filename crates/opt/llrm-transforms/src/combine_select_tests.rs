@@ -154,3 +154,77 @@ fn combined_either(text: &str) -> String {
     combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit_either);
     printed(&module)
 }
+
+/// `visit` that does only the binary-operator-of-selects folds.
+fn visit_selects(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    let Opcode::Binary(_) = c.function.instruction(inst).opcode else { return Visit::None };
+    let [lhs, rhs] = c.function.instruction(inst).operands[..] else { return Visit::None };
+    if let Some(found) = c.simplify_selects_feeding_binary_op(inst, lhs, rhs) {
+        return Visit::Replace(found);
+    }
+    c.fold_bin_op_select_bin_op(inst)
+}
+
+fn combined_selects(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit_selects);
+    printed(&module)
+}
+
+fn of(body: &str) -> String {
+    format!("define i16 @f(i1 %c, i1 %d, i16 %x, i16 %y, i16 %z) {{\nb0:\n{body}  ret i16 %r\n}}\n")
+}
+
+/// Two selects on one condition: one select of the operation on each pair.
+#[test]
+fn two_selects_on_one_condition_become_one() {
+    let text = of("  %a = select i1 %c, i16 1, i16 2\n  %b = select i1 %c, i16 10, i16 20\n  %r = add i16 %a, %b\n");
+    assert_eq!(combined_selects(&text), of("  %r = select i1 %c, i16 11, i16 22\n"));
+}
+
+/// A select against an unknown: both arms must fold, else nothing is made.
+#[test]
+fn a_select_and_an_unknown_need_both_arms_to_fold() {
+    let text = of("  %a = select i1 %c, i16 %x, i16 %y\n  %r = add i16 %a, %z\n");
+    assert_eq!(combined_selects(&text), text);
+}
+
+/// The outer condition implies the other select's: its arm is taken.
+#[test]
+fn an_inner_select_the_condition_implies_is_resolved() {
+    let text = of(
+        "  %e = or i1 %c, %d\n  %a = select i1 %c, i16 3, i16 0\n  %b = select i1 %e, i16 5, i16 7\n  %r = mul i16 %a, %b\n",
+    );
+    let out = combined_selects(&text);
+    assert!(out.contains("select i1 %c, i16 15, i16 0"), "{out}");
+}
+
+/// `(c ? 0 : -n) + z` is `c ? z : z - n`.
+#[test]
+fn a_negated_arm_takes_the_added_operand() {
+    let text = of("  %n = sub i16 0, %x\n  %a = select i1 %c, i16 0, i16 %n\n  %r = add i16 %a, %z\n");
+    let out = combined_selects(&text);
+    assert!(out.contains("sub i16 %z, %x") && out.contains("select i1 %c, i16 %z,"), "{out}");
+}
+
+/// `(c ? x + 3 : x) + 5` is `(c ? 8 : 5) + x`.
+#[test]
+fn constants_of_a_select_against_its_own_operation_are_folded() {
+    let text = of("  %t = add i16 %x, 3\n  %a = select i1 %c, i16 %t, i16 %x\n  %r = add i16 %a, 5\n");
+    let out = combined_selects(&text);
+    assert!(out.contains("select i1 %c, i16 8, i16 5") && out.contains("add i16 %0, %x"), "{out}");
+}
+
+/// A shared select is left.
+#[test]
+fn a_select_with_two_users_is_left_alone() {
+    let text =
+        of("  %t = add i16 %x, 3\n  %a = select i1 %c, i16 %t, i16 %x\n  %q = add i16 %a, 5\n  %r = mul i16 %q, %a\n");
+    assert_eq!(combined_selects(&text), text);
+}

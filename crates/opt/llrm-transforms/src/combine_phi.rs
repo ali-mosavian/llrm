@@ -330,7 +330,7 @@ impl Combiner<'_> {
 
 /// `Instruction::isAssociative`: the integer operations, and `fadd`/`fmul`
 /// with `reassoc` and `nsz`.
-fn is_associative(
+pub(crate) fn is_associative(
     op: BinaryOp,
     flags: Flags,
 ) -> bool {
@@ -342,7 +342,7 @@ fn is_associative(
 }
 
 /// An `m_ImmConstant`: a constant that is not, and holds no, expression.
-fn is_imm_constant(
+pub(crate) fn is_imm_constant(
     c: &Combiner,
     v: Operand,
 ) -> bool {
@@ -400,7 +400,7 @@ impl Combiner<'_> {
 
     /// `ConstantFoldBinaryOpOperands(op, a, b)`, the floating operations by
     /// what `simplifyBinOp` finds of two constants.
-    fn fold_constant_binop(
+    pub(crate) fn fold_constant_binop(
         &self,
         op: BinaryOp,
         a: Operand,

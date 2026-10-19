@@ -16,6 +16,20 @@
 //! operators, compares, casts and address computations, and MIR has no
 //! `MinMaxIntrinsic` among them.
 //!
+//! `SimplifySelectsFeedingBinaryOp` (:1356) and `foldBinOpSelectBinOp`
+//! (:1907): a binary operator of selects becomes a select of the operator on
+//! each arm, and `(select c, x, x op k1) op k2` a select of constants on `x
+//! op`.
+//!
+//! MIRROR: the three shapes (two selects on one condition, either operand a
+//! select with one use), the arm of an inner select an outer condition
+//! implies, `(c ? y : -n) + z` as `c ? y : z - n`; the new select takes the
+//! operation's name and the old select's `prof` and `unpredictable`.
+//!
+//! DEVIATE 2: the new select and operators carry the operation's fast-math
+//! flags (`IRBuilder::FastMathFlagGuard`) only on a float type; vectors do not
+//! exist in MIR.
+//!
 //! # Used by
 //! `foldBinOpIntoSelectOrPhi` and the `visit*` of the families that fold an
 //! operation into a select.
@@ -27,13 +41,15 @@
 //! ```
 
 use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{CastOp, FloatPredicate, IntPredicate, Opcode};
-use llrm_mir::simplify::simplify_instruction_operands_at;
-use llrm_mir::valuetracking::Query;
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
+use llrm_mir::simplify::{simplify_binop_with_flags_at, simplify_instruction_operands_at};
+use llrm_mir::valuetracking::context::is_implied_condition;
 use llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef_or_poison;
+use llrm_mir::valuetracking::{Query, pattern};
 
 use crate::combine::{Combiner, Visit};
-use crate::combine_phi::UB_IMPLYING;
+use crate::combine_phi::{UB_IMPLYING, is_associative, is_imm_constant};
+use crate::combine_shared::query;
 
 /// `CmpInst::isCommutative` of a float compare.
 fn commutative(pred: FloatPredicate) -> bool {
@@ -222,6 +238,208 @@ impl Combiner<'_> {
             }
         }
         Visit::Replace(Operand::Value(self.function.instruction(new).result.expect("a value")))
+    }
+
+    /// `m_Select(m_Value(A), m_Value(B), m_Value(C))`.
+    fn select_of(
+        &self,
+        v: Operand,
+    ) -> Option<(InstId, [Operand; 3])> {
+        let def = self.definition(v)?;
+        let instruction = self.function.instruction(def);
+        let [a, b, c] = instruction.operands[..] else { return None };
+        (instruction.opcode == Opcode::Select).then_some((def, [a, b, c]))
+    }
+
+    /// The new select the folds here make: before `at`, with `select`'s
+    /// `prof` and `unpredictable` (`CreateSelect(.., MDFrom = SI)`).
+    fn select_like(
+        &mut self,
+        at: InstId,
+        select: InstId,
+        operands: [Operand; 3],
+        flags: Flags,
+    ) -> Operand {
+        let ty = self.type_of(operands[1]);
+        let new = self.insert_before(at, Opcode::Select, ty, operands.to_vec(), flags);
+        for (kind, node) in self.function.instruction(select).metadata.clone() {
+            if kind == "prof" || kind == "unpredictable" {
+                self.function.annotate(new, &kind, node);
+            }
+        }
+        Operand::Value(self.function.instruction(new).result.expect("a value"))
+    }
+
+    /// `SimplifySelectsFeedingBinaryOp(I, LHS, RHS)`: the value `inst`, a
+    /// binary operator, equals as a select of the operator on each arm.
+    pub fn simplify_selects_feeding_binary_op(
+        &mut self,
+        inst: InstId,
+        lhs: Operand,
+        rhs: Operand,
+    ) -> Option<Operand> {
+        let (lhs_select, rhs_select) = (self.select_of(lhs), self.select_of(rhs));
+        let (select, ..) = lhs_select.or(rhs_select)?;
+        let Opcode::Binary(op) = self.function.instruction(inst).opcode else { return None };
+        let ty = self.function.instruction(inst).ty;
+        let fmf = if matches!(self.context.types.get(ty), llrm_mir::types::Type::Float(_)) {
+            self.function.instruction(inst).flags.intersect(Flags::FAST)
+        } else {
+            Flags::default()
+        };
+        let one_use = |c: &Self, v: Operand| matches!(v, Operand::Value(v) if c.function.users(v).has_one_use());
+
+        // `simplifyBinOp(Opcode, a, b, FMF, SQ.getWithInstruction(&I))`.
+        let simplify = |c: &Self, a: Operand, b: Operand| {
+            let env = c.env;
+            simplify_binop_with_flags_at(
+                c.context,
+                env.globals,
+                env.layout,
+                Some(&env.analyses),
+                c.function,
+                inst,
+                op,
+                fmf,
+                a,
+                b,
+            )
+        };
+        // A select whose condition `cond` implies resolves to the arm for it.
+        let with_implied_cond = |c: &Self, v: Operand, cond: Operand, cond_is_true: bool| {
+            let Some((_, [inner, if_true, if_false])) = c.select_of(v) else { return v };
+            if c.type_of(cond) != c.type_of(inner) {
+                return v;
+            }
+            let q = query(c, Some(inst));
+            match is_implied_condition(&q, cond, inner, cond_is_true, 0) {
+                Some(true) => if_true,
+                Some(false) => if_false,
+                None => v,
+            }
+        };
+
+        let (cond, mut if_true, mut if_false);
+        match (lhs_select, rhs_select) {
+            // (A ? B : C) op (A ? E : F) -> A ? (B op E) : (C op F)
+            (Some((_, [a, b, c])), Some((_, [d, e, f]))) if a == d => {
+                cond = a;
+                if_true = simplify(self, b, e);
+                if_false = simplify(self, c, f);
+                if one_use(self, lhs) && one_use(self, rhs) {
+                    match (if_true, if_false) {
+                        (None, Some(_)) => if_true = Some(self.create_binop(inst, op, b, e, fmf)),
+                        (Some(_), None) => if_false = Some(self.create_binop(inst, op, c, f, fmf)),
+                        _ => {}
+                    }
+                }
+            }
+            // (A ? B : C) op Y -> A ? (B op Y) : (C op Y)
+            (Some((_, [a, b, c])), _) if one_use(self, lhs) => {
+                cond = a;
+                let true_rhs = with_implied_cond(self, rhs, cond, true);
+                let false_rhs = with_implied_cond(self, rhs, cond, false);
+                if_true = simplify(self, b, true_rhs);
+                if_false = simplify(self, c, false_rhs);
+                if let Some(folded) = self.fold_add_negate(inst, select, cond, (b, c), rhs, (if_true, if_false), op) {
+                    return Some(folded);
+                }
+            }
+            // X op (D ? E : F) -> D ? (X op E) : (X op F)
+            (_, Some((_, [d, e, f]))) if one_use(self, rhs) => {
+                cond = d;
+                let true_lhs = with_implied_cond(self, lhs, cond, true);
+                let false_lhs = with_implied_cond(self, lhs, cond, false);
+                if_true = simplify(self, true_lhs, e);
+                if_false = simplify(self, false_lhs, f);
+                if let Some(folded) = self.fold_add_negate(inst, select, cond, (e, f), lhs, (if_true, if_false), op) {
+                    return Some(folded);
+                }
+            }
+            _ => return None,
+        }
+        let (if_true, if_false) = (if_true?, if_false?);
+        let new = self.select_like(inst, select, [cond, if_true, if_false], fmf);
+        if let (Operand::Value(from), Operand::Value(to)) = (self.value_operand(inst), new) {
+            self.function.take_name(from, to);
+        }
+        Some(new)
+    }
+
+    /// The result of `inst` as an operand.
+    fn value_operand(
+        &self,
+        inst: InstId,
+    ) -> Operand {
+        Operand::Value(self.function.instruction(inst).result.expect("a value"))
+    }
+
+    /// `foldAddNegate`: `(cond ? y : -n) + z` is `cond ? y : z - n` where the
+    /// other arm simplified (and the mirror), on exactly one arm.
+    fn fold_add_negate(
+        &mut self,
+        inst: InstId,
+        select: InstId,
+        cond: Operand,
+        (t_val, f_val): (Operand, Operand),
+        z: Operand,
+        (simplified_true, simplified_false): (Option<Operand>, Option<Operand>),
+        op: BinaryOp,
+    ) -> Option<Operand> {
+        if op != BinaryOp::Add {
+            return None;
+        }
+        // The arm that simplified keeps its value; the other, a negation `-n`,
+        // becomes `z - n`.
+        let (done, other, flipped) = match (simplified_true, simplified_false) {
+            (Some(done), None) => (done, f_val, false),
+            (None, Some(done)) => (done, t_val, true),
+            _ => return None,
+        };
+        let (_, n, _) = pattern::neg(&query(self, None), other)?;
+        let sub = self.create_sub(inst, z, n);
+        let operands = if flipped { [cond, sub, done] } else { [cond, done, sub] };
+        let new = self.select_like(inst, select, operands, Flags::default());
+        if let (Operand::Value(from), Operand::Value(to)) = (self.value_operand(inst), new) {
+            self.function.take_name(from, to);
+        }
+        Some(new)
+    }
+
+    /// `foldBinOpSelectBinOp(Op)`: `(c ? x : x op k1) op k2` is `(c ? k2 :
+    /// k1 op k2) op x` for an associative `op` and constants `k1`, `k2`.
+    pub fn fold_bin_op_select_bin_op(
+        &mut self,
+        inst: InstId,
+    ) -> Visit {
+        let instruction = self.function.instruction(inst);
+        let Opcode::Binary(op) = instruction.opcode else { return Visit::None };
+        let [first, constant] = instruction.operands[..] else { return Visit::None };
+        if !is_associative(op, instruction.flags) {
+            return Visit::None;
+        }
+        let one_use = |c: &Self, v: Operand| matches!(v, Operand::Value(v) if c.function.users(v).has_one_use());
+        let Some((select, [cond, if_true, if_false])) = self.select_of(first) else { return Visit::None };
+        if !is_imm_constant(self, constant) || !one_use(self, self.value_operand(inst)) || !one_use(self, first) {
+            return Visit::None;
+        }
+        // `m_BinOp(Opcode, m_Specific(other), m_ImmConstant(Const2))`
+        let with_constant = |c: &Self, arm: Operand, other: Operand| {
+            let def = c.definition(arm).filter(|_| one_use(c, arm))?;
+            let arm = c.function.instruction(def);
+            let [x, k2] = arm.operands[..] else { return None };
+            (arm.opcode == Opcode::Binary(op) && x == other && is_imm_constant(c, k2)).then_some(k2)
+        };
+        let (new_true, new_false, input) = if let Some(k2) = with_constant(self, if_true, if_false) {
+            (self.fold_constant_binop(op, constant, k2), Some(constant), if_false)
+        } else if let Some(k2) = with_constant(self, if_false, if_true) {
+            (Some(constant), self.fold_constant_binop(op, constant, k2), if_true)
+        } else {
+            return Visit::None;
+        };
+        let (Some(new_true), Some(new_false)) = (new_true, new_false) else { return Visit::None };
+        let new_select = self.select_like(inst, select, [cond, new_true, new_false], Flags::default());
+        self.replace_with_binop(inst, op, new_select, input, Flags::default())
     }
 }
 
