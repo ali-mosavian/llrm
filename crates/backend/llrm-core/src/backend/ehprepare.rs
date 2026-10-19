@@ -520,7 +520,7 @@ fn selected(
     let lp = landing_pad(function, pad).expect("a pad");
     let Some(value) = function.instruction(lp).result else { return Ok(()) };
     let i16 = context.types.int(16);
-    for one in function.users(value).to_vec() {
+    for one in function.users(value).snapshot() {
         let user = function.instruction(one.user);
         if user.opcode != Opcode::ExtractValue(vec![1]) {
             return Err("a landing pad read other than for its selector".to_owned());
@@ -741,7 +741,7 @@ fn demote_live(
             }
         };
         let kept = store(context, function, Operand::Value(value), slot, at)?;
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             if one.user == kept {
                 continue;
             }

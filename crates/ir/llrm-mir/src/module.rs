@@ -788,7 +788,7 @@ impl Function {
         block: BlockId,
     ) -> crate::blocklist::BlockList {
         let users = self.block_users(block);
-        if users.len() > SCAN {
+        if users.has_n_uses_or_more(SCAN + 1) {
             return self.parents_once(users);
         }
         let mut out = crate::blocklist::BlockList::new();

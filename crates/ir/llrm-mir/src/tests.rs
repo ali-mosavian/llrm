@@ -807,23 +807,26 @@ fn no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id() {
     assert!(over.is_empty(), "use llrm_mir::dense::{{IdMap, IdSet}} for ids: {over:?}");
 }
 
-/// Reads of a value's use list that treat it as a slice: `users(..)` followed
-/// by `.len()`, `.to_vec()` or `.contains(`. LLVM has no O(1) count, no copy
-/// and no search of a use list; `Users` has them only until the readers go.
+/// Copies of a value's use list: `users(..)` followed by `.snapshot()`. LLVM
+/// walks the list in place (`make_early_inc_range`); each copy is a place a
+/// pass could walk it instead, and costs the whole list.
 fn slice_user_counts(sources: &[(String, String)]) -> std::collections::BTreeMap<String, usize> {
     let mut counts = std::collections::BTreeMap::new();
     for (name, text) in sources {
         let mut found = 0;
-        for (at, _) in text.match_indices(".users(") {
+        // `.users(` and `.block_users(`, but not `all_users(` or `fn users(`.
+        for (at, _) in
+            text.match_indices("users(").filter(|(at, _)| matches!(text[..*at].chars().last(), Some('.' | '_')))
+        {
             let mut depth = 0;
             let mut end = None;
-            for (i, c) in text[at + ".users".len()..].char_indices() {
+            for (i, c) in text[at + "users".len()..].char_indices() {
                 match c {
                     '(' => depth += 1,
                     ')' => {
                         depth -= 1;
                         if depth == 0 {
-                            end = Some(at + ".users".len() + i + 1);
+                            end = Some(at + "users".len() + i + 1);
                             break;
                         }
                     }
@@ -831,7 +834,7 @@ fn slice_user_counts(sources: &[(String, String)]) -> std::collections::BTreeMap
                 }
             }
             let rest = end.map_or("", |end| text[end..].trim_start());
-            found += [".len()", ".to_vec()", ".contains("].iter().filter(|one| rest.starts_with(**one)).count();
+            found += [".snapshot()"].iter().filter(|one| rest.starts_with(**one)).count();
         }
         if found > 0 {
             counts.insert(name.clone(), found);
@@ -873,15 +876,18 @@ fn no_file_gains_a_slice_read_of_a_use_list() {
         .filter(|(name, found)| *found > ceilings.get(name.as_str()).copied().unwrap_or(0))
         .map(|(name, found)| format!("{name}: {found} > {}", ceilings.get(name.as_str()).copied().unwrap_or(0)))
         .collect();
-    assert!(over.is_empty(), "walk the use list (`users(v).iter()`, `.only()`, `is_empty()`) instead: {over:?}");
+    assert!(
+        over.is_empty(),
+        "copy of a use list (`users(v).snapshot()`); walk it (`iter()`, `only()`, `has_one_use()`) instead: {over:?}"
+    );
 }
 
 /// A scan that finds nothing in a tree full of such reads is the broken
 /// instrument: the three shapes count, an iteration and a nested call do not.
 #[test]
-fn a_slice_read_of_a_use_list_is_counted_and_a_walk_is_not() {
+fn a_copy_of_a_use_list_is_counted_and_a_walk_is_not() {
     let source = |text: &str| vec![("a.rs".to_owned(), text.to_owned())];
-    let text = "f.users(v).len(); f.users(g(v)).to_vec(); f.users(v)\n    .contains(&u); f.users(v).iter(); f.users(v).only();";
+    let text = "f.users(v).snapshot(); f.block_users(g(v)).snapshot(); f.users(v)\n    .snapshot(); f.users(v).iter(); f.users(v).only();";
     assert_eq!(slice_user_counts(&source(text)).get("a.rs"), Some(&3));
 }
 

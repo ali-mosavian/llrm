@@ -17,9 +17,11 @@
 //! A block is named by terminators and phis, so it has a list as a value does:
 //! LLVM's `BasicBlock` is a `Value` and its predecessors are its use list.
 //!
-//! DEVIATE 2 (temporary): `Users::{len, to_vec, contains}` read a use list as
-//! a slice, which LLVM cannot; the readers are counted by
-//! `slice-users.txt` and the methods go at zero.
+//! DEVIATE 2: `Users::snapshot` copies the list, where LLVM walks it with
+//! `make_early_inc_range` while the body edits. A Rust loop cannot hold the
+//! walk and the function it edits; the copies are counted by `slice-users.txt`
+//! and may only fall. There is no `len` or `contains`: LLVM has none (it has
+//! `hasOneUse`, `hasNUses` and `hasNUsesOrMore`).
 
 use crate::module::Use;
 
@@ -111,11 +113,6 @@ impl<'a> Users<'a> {
         self.head == NIL
     }
 
-    /// LLVM has no O(1) count; this walks the list.
-    pub fn len(&self) -> usize {
-        self.iter().count()
-    }
-
     pub fn first(&self) -> Option<&'a Use> {
         self.iter().next()
     }
@@ -127,15 +124,31 @@ impl<'a> Users<'a> {
         uses.next().is_none().then_some(one)
     }
 
-    pub fn to_vec(&self) -> Vec<Use> {
-        self.iter().copied().collect()
+    /// LLVM's `hasOneUse`.
+    pub fn has_one_use(&self) -> bool {
+        self.only().is_some()
     }
 
-    pub fn contains(
+    /// LLVM's `hasNUses`: it reads at most `n + 1` entries.
+    pub fn has_n_uses(
         &self,
-        one: &Use,
+        n: usize,
     ) -> bool {
-        self.iter().any(|other| other == one)
+        self.iter().take(n + 1).count() == n
+    }
+
+    /// LLVM's `hasNUsesOrMore`: it reads at most `n` entries.
+    pub fn has_n_uses_or_more(
+        &self,
+        n: usize,
+    ) -> bool {
+        self.iter().take(n).count() == n
+    }
+
+    /// The uses as they stand, for a loop whose body edits the list (LLVM's
+    /// `make_early_inc_range`): a copy of the whole list, so it is counted.
+    pub fn snapshot(&self) -> Vec<Use> {
+        self.iter().copied().collect()
     }
 }
 
