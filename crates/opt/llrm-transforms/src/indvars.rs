@@ -14,7 +14,10 @@
 //!    loop's latch included); `LLRM_NO_SCEV_EXITVALUES` turns it off.
 //! 1. `loopexit::evaluated`: values after a counted loop computed from its
 //!    trips.
-//! 2. `exitfold::folded`: exits their counts decide are folded.
+//! 2. `exitopt::optimized` (`optimizeLoopExits`; `LLRM_NO_SCEV_EXITOPT`) and
+//!    `exitpredicate::predicated` (`predicateLoopExits`;
+//!    `LLRM_NO_SCEV_PREDICATE`), then `exitfold::folded`: exits their counts
+//!    decide are folded.
 //! 4. `exitsink::sunk`: final updates only exit phis read move to the exits.
 //! 5. `widened`: a counter read through `zext` (or, where it is signed and
 //!    tested by `slt`, `sext`) to the address's index width, where `induction`
@@ -240,6 +243,16 @@ impl FunctionPass for IndVars {
         if evaluated {
             standing.reshaped();
         }
+        let optimized = crate::exitopt::enabled()
+            && crate::exitopt::optimized(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if optimized {
+            standing.changed();
+        }
+        let predicated = crate::exitpredicate::enabled()
+            && crate::exitpredicate::predicated(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if predicated {
+            standing.changed();
+        }
         let folded = crate::exitfold::folded_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
         if folded {
             standing.reshaped();
@@ -268,11 +281,11 @@ impl FunctionPass for IndVars {
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
-        let dead = (compared || rewrote || sunk || rewound || widened || merged)
+        let dead = (compared || rewrote || optimized || predicated || sunk || rewound || widened || merged)
             && dead::dead(unit.context, outer.callees(), unit.function);
         if evaluated || folded {
             PreservedAnalyses::none()
-        } else if compared || rewrote || sunk || rewound || widened || merged || dead {
+        } else if compared || rewrote || optimized || predicated || sunk || rewound || widened || merged || dead {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
         } else {

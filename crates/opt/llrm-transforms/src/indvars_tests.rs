@@ -925,3 +925,36 @@ e:
     let after = printed(&module);
     assert_eq!(leaks_a_loop_value(&module), None, "{after}");
 }
+
+/// bintree-O2 / lru-O2 `pipeline.body`: a loop that only counts and writes
+/// nothing. The pin's `predicateLoopExits` makes its test `br i1 false`: it
+/// leaves on its first trip. llrm kept the counter and the compare.
+#[test]
+fn test_a_read_only_counting_loop_leaves_on_its_first_trip() {
+    let mut module = parsed(
+        "target datalayout = \"e-p:32:32-n8:16:32\"
+
+@a = global [3 x i16] zeroinitializer
+
+define void @f() {
+b1:
+  br label %b4
+
+b4:
+  %i = phi i32 [ %n, %b4 ], [ 0, %b1 ]
+  %j = phi i16 [ %k, %b4 ], [ 0, %b1 ]
+  %p = getelementptr inbounds i16, ptr @a, i32 %i
+  %k = add i16 %j, 1
+  %n = sext i16 %k to i32
+  %c = icmp slt i16 %k, 3
+  br i1 %c, label %b4, label %b3
+
+b3:
+  ret void
+}
+",
+    );
+    managed(&mut module, IndVars { exit_values: true, unrolls: None });
+    let after = printed(&module);
+    assert!(after.contains("br i1 false, label %b4, label %b3"), "{after}");
+}
