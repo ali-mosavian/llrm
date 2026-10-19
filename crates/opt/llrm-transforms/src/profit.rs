@@ -96,6 +96,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::effects::Declarations;
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::{induction, memory};
+use llrm_mir::blockfrequency::frequency::BlockFrequency;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::{Callees, callee};
@@ -532,7 +533,7 @@ pub fn _loop_products_in(
         let factor = exact.iter().next().copied().unwrap_or(UNKNOWN_TRIPS);
         for at in &loop_.body {
             if let Some(count) = frequency.get_mut(at) {
-                *count *= factor;
+                *count = nested(*count, factor);
             }
         }
     }
@@ -566,16 +567,6 @@ pub fn _loop_products_by_branch_in(
     _products_with_odds_in(context, metadata, globals, function, shape, trips).map(|(weight, _)| weight)
 }
 
-/// `count * here / trip`: the product of a block's weight and an edge's odds,
-/// both on the odds' scale (`UNIT`), is past 64 bits for a weight of 10^8.
-fn scaled(
-    count: i64,
-    here: i64,
-    trip: i64,
-) -> i64 {
-    (i128::from(count) * i128::from(here) / i128::from(trip)) as i64
-}
-
 /// `_loop_products_by_branch_in`, and the odds of each edge it came from.
 pub fn _products_with_odds_in(
     context: &Context,
@@ -595,10 +586,41 @@ pub fn _products_with_odds_in(
         let trip: i64 = innermost.latches.iter().map(|latch| odds.get(latch).copied().unwrap_or(UNIT)).sum();
         let here = odds.get(at).copied().unwrap_or(UNIT);
         if here < trip {
-            *count = scaled(*count, here, trip).max(1);
+            *count = share_of(*count, here, trip);
         }
     }
     Some((weight, taken))
+}
+
+/// A block weight as the frequency type LLVM keeps it in: a saturating `u64`
+/// ([`BlockFrequency`](llrm_mir::blockfrequency::frequency::BlockFrequency),
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/BlockFrequency.h#L27>).
+/// DEVIATE: the maps keep `i64`, so a weight past `i64::MAX` is that.
+fn frequency(count: i64) -> BlockFrequency {
+    BlockFrequency(u64::try_from(count).unwrap_or(0))
+}
+
+fn weight(frequency: BlockFrequency) -> i64 {
+    i64::try_from(frequency.get_frequency()).unwrap_or(i64::MAX)
+}
+
+/// `count` for a block one loop deeper, which runs `factor` trips: the product
+/// of the trips of every loop around a block. Twenty nested loops of the
+/// assumed ten trips pass `i64`'s end.
+fn nested(
+    count: i64,
+    factor: i64,
+) -> i64 {
+    weight(frequency(count).saturating_mul(u64::try_from(factor).unwrap_or(0)))
+}
+
+/// `count` times the share `here / trip`, at least 1.
+fn share_of(
+    count: i64,
+    here: i64,
+    trip: i64,
+) -> i64 {
+    weight(frequency(count).scaled(u64::try_from(here).unwrap_or(0), u64::try_from(trip).unwrap_or(1))).max(1)
 }
 
 /// Profile-free expected work at `frequency`, a block's executions per entry
@@ -613,10 +635,10 @@ pub fn weighted(
 ) -> Option<i64> {
     #[cfg(test)]
     PRICED.with(|count| count.set((count.get().0 + 1, count.get().1)));
-    let mut total = 0;
+    let mut total: i64 = 0;
     for &block in function.layout() {
         let priced = _block(context, layout, function, callees, cfg::id(block), costs)?;
-        total += frequency[&cfg::id(block)] * priced;
+        total = total.saturating_add(frequency[&cfg::id(block)].saturating_mul(priced));
     }
     Some(total)
 }
