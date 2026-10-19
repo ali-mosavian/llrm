@@ -69,6 +69,16 @@ fn facts() -> Regex {
             parts.push(number(bytes as u64 - 1));
         }
     }
+    // Facts a pass writes as code, which no description lists to search for: a
+    // register constant by name, a mode test, a hard-wired target's classes, the
+    // x86 decoder (docs/architecture/target-facts-audit.md).
+    let shapes = [
+        r"(?-i:\bRegId::[A-Z][A-Z0-9_]*\b)",
+        r"(?-i:\.bits\s*(?:==|!=)\s*(?:16|32)\b)",
+        r"(?-i:\bRegisterClasses::m(?:16|32)\()",
+        r"(?-i:\biced_x86\b)",
+    ];
+    parts.extend(shapes.map(String::from));
     Regex::new(&format!("(?i)(?:{})", parts.join("|"))).expect("the facts pattern")
 }
 
@@ -421,7 +431,18 @@ fn the_search_is_built_from_the_descriptions() {
     ] {
         assert!(facts.is_match(sample), "{sample} is a target fact and is not found");
     }
-    for sample in ["let x = 4;", "\"ordinary\"", "65537"] {
+    // A pass that names a register constant, tests the mode or takes the x86
+    // decoder holds a machine fact the descriptions do not list.
+    for sample in [
+        "RegId::BP",
+        "if body.bits == 32 {",
+        "procedure.body.bits != 16",
+        "RegisterClasses::m16()",
+        "use iced_x86::Decoder;",
+    ] {
+        assert!(facts.is_match(sample), "{sample} is a target fact and is not found");
+    }
+    for sample in ["let x = 4;", "\"ordinary\"", "65537", "RegId::None", "bits == 64", "bits >= 8"] {
         assert!(!facts.is_match(sample), "{sample} is not a target fact");
     }
 }
