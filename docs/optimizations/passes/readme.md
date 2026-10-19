@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 133 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 134 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -35,6 +35,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
 | combine_select | `FoldOpIntoSelect`: an instruction that reads a select becomes a select of the instruction applied to each arm. | `foldBinOpIntoSelectOrPhi` and the `visit*` of the families that fold an | [combine_select](combine_select.md) |
 | combine_select_bools | `foldSelectOfBools`: a `select` of `i1` as a logical operation. |  | [combine_select_bools](combine_select_bools.md) |
+| combine_select_op_op | `foldSelectOpOp`: `select c, (op x, a), (op x, b)` as `op x, (select c, a, b)`. |  | [combine_select_op_op](combine_select_op_op.md) |
 | combine_shared | What InstCombine's integer `visit*` functions share from `InstructionCombining.cpp`: the complexity order that puts constants on the right, and the reassociation of an associative or commutative operation. | `combine_addsub` (`visitAdd`, `visitSub`) and the families after it. | [combine_shared](combine_shared.md) |
 | combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
 | combine_visit_select | `visitSelectInst`: the canonical forms of a `select`. |  | [combine_visit_select](combine_visit_select.md) |

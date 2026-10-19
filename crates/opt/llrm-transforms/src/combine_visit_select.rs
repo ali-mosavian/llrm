@@ -18,7 +18,7 @@
 //! `foldSelectValueEquivalence`, `foldSelectInstWithICmp`,
 //! `foldSelectICmpAndAnd`, `foldSelectBitTest`, `foldAddSubSelect`,
 //! `foldOverflowingAddSubSelect`, `foldSetClearBits`,
-//! `foldSelectZeroOrFixedOp`, `foldSelectOpOp`, `foldSelectIntrinsic`,
+//! `foldSelectZeroOrFixedOp`, `foldSelectIntrinsic`,
 //! `foldSelectExtConst`, `foldSelectWithSRem`, `foldSelectIntoOp`, the
 //! min/max (`matchSelectPattern`) folds, and everything after the not-condition
 //! (`foldSelectCmpBitcasts` ... `FoldSelectWithAndOrCond`).
@@ -45,6 +45,7 @@ use llrm_mir::valuetracking::pattern;
 use crate::combine::{Combiner, Visit};
 use crate::combine_phi::UB_IMPLYING;
 use crate::combine_select_bools::select_of_bools;
+use crate::combine_select_op_op::select_op_op;
 use crate::combine_shared::{has_one_use, query, replace_operand};
 
 /// The parts of a `select`.
@@ -63,6 +64,7 @@ const FOLDS: &[Fold] = &[
     cond_known_in_arms,
     select_of_bools,
     bool_to_extension,
+    select_op_op,
     select_of_gep,
     select_of_phi_condition,
     nested_select_implied,
