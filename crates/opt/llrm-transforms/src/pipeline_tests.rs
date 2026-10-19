@@ -2260,7 +2260,10 @@ fn test_the_write_through_promote_runs_after_sroa_only_where_gvn_has_no_pre() {
         let mut slots = Vec::new();
         for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
             for one in pipeline::llvm_order(applied, phase) {
-                if matches!(one.name(), "sroa@1179" | "promote@1241" | "sroa@646" | "sroa@776") {
+                if matches!(
+                    one.name(),
+                    "sroa@1179" | "promote@1241" | "sroa@646" | "sroa@776"
+                ) {
                     slots.push((one.name(), one.parts()));
                 }
             }
@@ -2272,10 +2275,7 @@ fn test_the_write_through_promote_runs_after_sroa_only_where_gvn_has_no_pre() {
     for (slot, parts) in &o2 {
         assert!(!parts.contains(&"promote") && !parts.contains(&"deadslots"), "{slot} {parts:?}");
     }
-    let o1 = Applied {
-        options: pipeline::Options { pre: false, ..Default::default() },
-        ..Applied::default()
-    };
+    let o1 = Applied { options: pipeline::Options { pre: false, ..Default::default() }, ..Applied::default() };
     for (slot, parts) in &parts(&o1) {
         assert!(parts.contains(&"promote"), "{slot} {parts:?}");
     }
