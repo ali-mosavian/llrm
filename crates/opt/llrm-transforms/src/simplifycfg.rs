@@ -193,9 +193,12 @@ use crate::{
 };
 use crate::{cfg, dead, edges, transform};
 
-/// LLVM's `SimplifyCFGPass` at the options of the early function pipeline
-/// slot (`SimplifyCFGOptions()`: `PassBuilderPipelines.cpp`).
-pub struct SimplifyCfg;
+/// LLVM's `SimplifyCFGPass` at one slot's `SimplifyCFGOptions`
+/// (`PassBuilderPipelines.cpp`); by default those of the early slot.
+#[derive(Default)]
+pub struct SimplifyCfg {
+    pub options: Options,
+}
 
 impl FunctionPass for SimplifyCfg {
     fn name(&self) -> &'static str {
@@ -218,7 +221,7 @@ impl FunctionPass for SimplifyCfg {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = crate::looprotate::target_tti(outer.target());
         let spec = Speculation { tti: &*tti, layout: unit.layout, outer: &outer };
-        if simplified(unit.context, &spec, unit.function) {
+        if simplified_with(&self.options, unit.context, &spec, unit.function) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()

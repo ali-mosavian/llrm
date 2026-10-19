@@ -541,7 +541,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(ports::Ports),
         // A terminator on a literal is a jump before `decide` asks what the
         // body's values are.
-        Box::new(simplifycfg::SimplifyCfg),
+        Box::new(simplifycfg::SimplifyCfg::default()),
         Box::new(decide::Decide),
         // gcc runs phiopt at -O1 and above (opts.cc:609); it is priced in bytes
         // at -Os.
@@ -601,6 +601,7 @@ fn translated() -> Vec<Box<dyn FunctionPass>> {
     vec![
         Box::new(crate::cvp::Cvp),
         Box::new(crate::jumpthreading::JumpThreading::from_env()),
+        Box::new(crate::dfajumpthreading::DfaJumpThreading::from_env()),
         Box::new(crate::tailcallelim::TailCallElim),
     ]
 }
@@ -710,7 +711,8 @@ pub(crate) fn llvm_order(
     let slot =
         |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
     let decide = |name| slot(name, Box::new(decide::Decide));
-    let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg));
+    let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
+    let simplify_cfg_with = |name, options| slot(name, Box::new(simplifycfg::SimplifyCfg { options }));
     let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
     let fold = |name| slot(name, Box::new(fold::Fold));
     let dead = |name| slot(name, Box::new(dead::Dead));
@@ -784,12 +786,16 @@ pub(crate) fn llvm_order(
             list.extend([
                 slot("jumpthreading@668", Box::new(crate::jumpthreading::JumpThreading::from_env())),
                 slot("cvp@669", Box::new(crate::cvp::Cvp)),
-                decide("decide@675"),
+                // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L675:
+                // the option is read by `simplifySwitch`, untranslated.
+                simplify_cfg("decide@675"),
                 phiopt("phiopt@675"),
                 fold("fold@677"),
                 dead("dead@677"),
                 slot("tailrec@688", Box::new(tailrec::TailRecursion)),
-                decide("decide@690"),
+                // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L691:
+                // the option is read by `simplifySwitch`, untranslated.
+                simplify_cfg("decide@690"),
                 phiopt("phiopt@690"),
                 slot("reassociate@696", Box::new(crate::reassociate::Reassociate)),
                 slot("algebraic@696", Box::new(algebraic::Algebraic { size, llvm: true })),
@@ -822,7 +828,9 @@ pub(crate) fn llvm_order(
             list.extend([
                 licm("licm@730", true),
                 slot("trivialunswitch@732", Box::new(simpleloopunswitch::SimpleLoopUnswitch)),
-                decide("decide@766"),
+                // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L766:
+                // the option is read by `simplifySwitch`, untranslated.
+                simplify_cfg("decide@766"),
                 phiopt("phiopt@766"),
                 fold("fold@768"),
                 dead("dead@768"),
@@ -857,6 +865,13 @@ pub(crate) fn llvm_order(
                 slot("bdce@797", Box::new(bdce::Bdce)),
                 fold("fold@801"),
                 dead("dead@801"),
+                // DFAJumpThreadingPass, PassBuilderPipelines.cpp#L806.
+                slot(
+                    "dfajumpthreading@806",
+                    Box::new(
+                        crate::dfajumpthreading::DfaJumpThreading::from_env().for_size(applied.options.prefers_size()),
+                    ),
+                ),
                 slot("jumpthreading@809", Box::new(crate::jumpthreading::JumpThreading::from_env())),
                 decide("decide@809"),
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
@@ -868,7 +883,13 @@ pub(crate) fn llvm_order(
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
             list.extend([
                 licm("licm@823", true),
-                decide("decide@832"),
+                // L832: hoistCommonInsts and sinkCommonInsts on, besides
+                // convertSwitchRangeToICmp and convertSwitchToArithmetic
+                // (read by `simplifySwitch`, untranslated).
+                simplify_cfg_with(
+                    "decide@832",
+                    simplifycfg::Options { hoist_common_insts: true, sink_common_insts: true, ..Default::default() },
+                ),
                 phiopt("phiopt@832"),
                 fold("fold@837"),
                 dead("dead@837"),
