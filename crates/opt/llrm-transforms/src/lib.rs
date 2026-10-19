@@ -221,6 +221,7 @@ pub mod ports;
 pub mod predicateinfo;
 pub mod profit;
 pub mod promote;
+pub mod reassociate_rank;
 pub mod rotate;
 pub mod sccp;
 pub mod sccpsolver;
