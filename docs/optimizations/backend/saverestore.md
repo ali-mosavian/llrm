@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/saverestore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/saverestore.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/saverestore.rs sha256:022fb71cee4883098eee75b7d65ed4721f69bd13c3f3faa2532fd21534c67e54 -->
+<!-- src: crates/backend/llrm-core/src/backend/saverestore.rs sha256:a86d5632d322316884d8ffe20d1bd9da5921c232b58a3d91a4ef9f3b2d411ff5 -->
 
 # saverestore
 
@@ -11,6 +11,20 @@ The pass reads the dominator and post-dominator trees, the cycles and the
 block frequencies of the body, and what each block does with the frame
 (`Frame`); it changes nothing. `run` answers with the `Placement` the
 procedure's prologue and epilogue go to, or none where the entry is as good.
+
+## Example
+A procedure that returns at once when its argument is 0 and otherwise calls
+itself (`hanoi`). Only block 1 needs the frame, and it dominates and is
+post-dominated by itself, so the procedure is set up and taken back there:
+
+```text
+  0: test; je 2          save: 1
+  1: call hanoi          restore: 1
+  2: ret                 (the entry and the return pay nothing)
+```
+
+This is `run` over that graph with block 1 as the only block that touches
+the frame (`test_a_call_on_one_path_is_wrapped_there_and_not_at_the_entry`).
 
 DEVIATE 1: no EH pads, funclets or `INLINEASM_BR` targets: LIR has none, so
 their arms are absent.

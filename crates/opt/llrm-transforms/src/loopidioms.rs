@@ -29,8 +29,10 @@
 //! The count in bytes must not wrap the index: a byte's trips never do, and
 //! wider cells need `inbounds` GEPs or the proof's `maximum`. The counter must
 //! not be wider than the index. A huge pointer, which carries into its
-//! selector, is refused. A volatile access, a call, or a value the loop changes
-//! keeps the loop.
+//! selector, is taken like any other: the intrinsic carries its address space,
+//! and instruction selection splits the fill at each 64K segment
+//! (`isel/huge.rs`; Owner: clib-huge-fill-2256). A volatile access, a call, or
+//! a value the loop changes keeps the loop.
 //!
 //! A loop with one fill of constant bytes is rewritten always. A pattern, a
 //! copy or a loop of several fills is priced (`_pays`, `_cheaper_by`) against
@@ -481,11 +483,6 @@ fn _fill(
     let Operand::Value(address) = pointer else { return None };
     let formula = walk.values.get(&address).filter(|one| one.pointer.is_some())?;
     let width = formula.width();
-    // A huge pointer carries into its selector: `rep stos` through es:di wraps
-    // at 64K.
-    if unit.layout.carries(unit.space(pointer)?) {
-        return None;
-    }
     let stride = formula.step.known()?;
     let descending = matches!(stored, Stored::Copy(_)) && stride == -bytes.clone();
     // Each stream strides by its own cell; the merged fill is all of them.
@@ -505,11 +502,7 @@ fn _fill(
         let Operand::Value(source) = copy.source else { return None };
         let from = walk.values.get(&source).filter(|one| one.pointer.is_some())?;
         let (bits, to) = (unit.layout.pointer(unit.space(copy.source)?).index_bits, formula);
-        if from.step != to.step
-            || from.width() != width
-            || bits != width
-            || unit.layout.carries(unit.space(copy.source)?)
-        {
+        if from.step != to.step || from.width() != width || bits != width {
             return None;
         }
         copy.how = _overlap(unit, copy.load, effect, from, to, &proof, &bytes, descending)?;
@@ -1234,9 +1227,14 @@ fn _overlap(
     bytes: &BigInt,
     descending: bool,
 ) -> Option<How> {
+    // Two objects (or a `restrict`, or two `!tbaa` types) are apart in every
+    // trip. `regions::overlapping` is not asked: for two accesses off one index
+    // it answers about one trip (a constant 7 past a one-byte cell is apart),
+    // where the ranges of all the trips overlap.
     let references = unit.annotated().ok();
     if let Some((read, written)) = references.as_ref().and_then(|found| found.get(&load).zip(found.get(&store)))
-        && !llrm_analysis::regions::overlapping(read, written, None, None, unit.program).unwrap_or(true)
+        && (llrm_analysis::regions::typed_apart(read, written)
+            || !llrm_analysis::regions::may_alias(read, written, None, None, unit.program).unwrap_or(true))
     {
         return Some(How::Apart);
     }
