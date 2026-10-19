@@ -205,6 +205,7 @@ pub mod settled;
 pub mod simpleloopunswitch;
 pub mod simplifycfg;
 pub mod simplifyindvar;
+pub mod sinkcommon;
 pub mod spares;
 pub mod speculate;
 pub mod spill;
