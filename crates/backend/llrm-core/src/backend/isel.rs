@@ -3265,7 +3265,11 @@ impl Selector<'_, '_, '_> {
         let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id)
             .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
         let space = crate::backend::globals::space(self.module, global);
-        if self.module.global(global).address_space != self.spaces.near {
+        // A near global cast to a far pointer (`addrspacecast (ptr @g to ptr addrspace(1))`)
+        // is its DGROUP selector and its offset, as the cast instruction makes it.
+        let widened = self.module.global(global).address_space == self.spaces.near
+            && self.is_far(self.module.context.get(id).ty);
+        if self.module.global(global).address_space != self.spaces.near || widened {
             let Some(block) = self.current else { return refuse("a far global outside a block") };
             // A carried pointer is canonical: whole 64K strides of its offset
             // are in the selector, so a constant past 64K is a
@@ -3282,7 +3286,15 @@ impl Selector<'_, '_, '_> {
                         Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })
                     };
                     for (into, from) in [
-                        (selector, symbol(Space::Group, crate::backend::globals::segment_of(global))),
+                        (
+                            selector,
+                            if widened {
+                                let (space, index) = crate::hir::symbols::DGROUP;
+                                symbol(space, index)
+                            } else {
+                                symbol(Space::Group, crate::backend::globals::segment_of(global))
+                            },
+                        ),
                         (base, symbol(space, i64::from(global.0))),
                     ] {
                         self.materialized
