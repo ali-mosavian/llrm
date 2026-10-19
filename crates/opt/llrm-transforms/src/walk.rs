@@ -71,7 +71,7 @@ use llrm_mir::passes::PreservedAnalyses;
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 
 use crate::interprocedural::{
-    declared, function_mut, managers, private, procedures, reporting_marked, stamped_all, unexported, vouched,
+    declared, function_mut, managers, private, procedures, reporting_marked, unexported, vouched,
 };
 
 /// What the interprocedural step does to a body before the Simplify list:
@@ -185,7 +185,6 @@ impl ProgramPass for Walk {
         analyses: &mut ProgramAnalyses,
     ) -> Result<(), String> {
         let mut modules = managers(program, analyses);
-        stamped_all(program, &mut modules)?;
         let params = crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 });
         let size = if self.inline.single {
             crate::inlinecost::CallerSize::OptSize
@@ -207,19 +206,35 @@ impl ProgramPass for Walk {
             let remarks = llrm_support::env_flag!("LLRM_INLINE_REMARKS");
             for id in order {
                 let mut decided = remarks.then(Vec::new);
-                let constant = crate::inlinecost::sites(
-                    module,
-                    &program.layout,
-                    id,
-                    &counts,
-                    &addressed,
-                    &recursive,
-                    params,
-                    size,
-                    self.inline.limit == 0,
-                    program.target.tti().as_deref(),
-                    decided.as_mut(),
-                );
+                // `sites` prices every block's frequency before it looks at a
+                // call.
+                let calls_a_body = module
+                    .global(id)
+                    .function()
+                    .is_some_and(
+                        |caller| caller.walk().any(|(_, inst)| {
+                            llrm_mir::memory::callee(&module.context, caller, inst).is_some_and(|callee| {
+                                module.global(callee).function().is_some_and(|one| !one.layout().is_empty())
+                            })
+                        }),
+                    );
+                let constant = if !calls_a_body {
+                    Default::default()
+                } else {
+                    crate::inlinecost::sites(
+                        module,
+                        &program.layout,
+                        id,
+                        &counts,
+                        &addressed,
+                        &recursive,
+                        params,
+                        size,
+                        self.inline.limit == 0,
+                        program.target.tti().as_deref(),
+                        decided.as_mut(),
+                    )
+                };
                 let mut declared = declared(&mut modules[at], module);
                 let (context, function) = function_mut(module, id);
                 let by = crate::inline::Caller {
