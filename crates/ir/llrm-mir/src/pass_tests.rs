@@ -1359,3 +1359,74 @@ fn the_stale_check_names_a_pass_that_declared_an_update_it_did_not_put_back() {
     let message = message.downcast_ref::<String>().cloned().unwrap_or_default();
     assert!(message.contains("updates-counted") && message.contains("replace"), "{message}");
 }
+
+/// A function pass that changes nothing.
+struct Idle;
+
+impl FunctionPass for Idle {
+    fn name(&self) -> &'static str {
+        "idle"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        PreservedAnalyses::all()
+    }
+}
+
+/// A program pass that changes nothing.
+struct Nothing;
+
+impl crate::program::ProgramPass for Nothing {
+    fn name(&self) -> &'static str {
+        "nothing"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut crate::program::Program,
+        _: &mut crate::program::ProgramAnalyses,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// `LLRM_DUMP_INPUTS` dumped the input of the pipeline's function passes only:
+/// a module or program pass (the inliner, GlobalDCE, IPSCCP) wrote nothing, and
+/// a miscompile after inlining could not name its pass (#2982).
+#[test]
+fn a_module_or_program_pass_dumps_its_input_when_inputs_are_dumped() {
+    let text = "define i16 @g() {\nentry:\n  ret i16 0\n}\n\ndefine i16 @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %b\nb:\n  ret i16 0\n}\n";
+    let run = |inputs: bool| {
+        let directory = std::env::temp_dir().join(format!("llrm-dump-inputs-{}-{inputs}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let mut module = parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+        let mut passes = PassManager::default();
+        passes.dump = Some(directory.clone());
+        passes.dump_inputs = inputs;
+        passes.add_module(MarkReadonly);
+        passes.add_program(Nothing);
+        passes.add(Idle);
+        passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+        directory
+    };
+    let directory = run(true);
+    let manifest = std::fs::read_to_string(directory.join("manifest.txt")).expect("a manifest");
+    let lines: Vec<Vec<&str>> = manifest.lines().map(|line| line.split(' ').collect()).collect();
+    let named: Vec<(&str, &str)> = lines.iter().map(|line| (line[0], line[2])).collect();
+    assert_eq!(
+        named,
+        [("mark-readonly", "0001-in-mark-readonly.ll"), ("nothing", "0002-in-nothing.ll"), ("idle", "0003-in-idle.ll"),]
+    );
+    assert!(lines.iter().all(|line| line[3].parse::<usize>().unwrap() > 0), "{manifest}");
+    for (_, file) in named {
+        assert!(directory.join(file).exists(), "{file}");
+    }
+    let off = run(false);
+    assert!(!off.join("manifest.txt").exists(), "an input dump without LLRM_DUMP_INPUTS");
+    let _ = std::fs::remove_dir_all(directory);
+    let _ = std::fs::remove_dir_all(off);
+}
