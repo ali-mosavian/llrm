@@ -46,7 +46,7 @@
 //! judges a rewrite tried on a copy of the body.
 //!
 //! Scalar and memory: `fold` (with `canonical` and `floatfold`), `decide`,
-//! `dead`, `algebraic`, `phiopt`, `cfg`, `dse`, `gvn` (with `loadjoins`),
+//! `dead`, `algebraic`, `phiopt`, `cfg`, `dse`, `gvn`,
 //! `promote` (`Sroa`, `Promote`, with `splitcopy`), `inferspace`, `jumpthread`,
 //! `gepoffset`, `addresssink`, `fixednarrow`, `ports`.
 //!
@@ -141,7 +141,6 @@ pub mod jumpthread;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod licm;
-pub mod loadjoins;
 pub mod local;
 #[cfg(test)]
 mod local_tests;
