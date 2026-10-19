@@ -44,7 +44,8 @@ use crate::combine_shared::query;
 
 /// Metadata that says something about the value computed where the original
 /// is, not where a copy is put (`dropUBImplyingAttrsAndMetadata`).
-const UB_IMPLYING: [&str; 6] = ["range", "nonnull", "align", "dereferenceable", "dereferenceable_or_null", "noundef"];
+pub(crate) const UB_IMPLYING: [&str; 6] =
+    ["range", "nonnull", "align", "dereferenceable", "dereferenceable_or_null", "noundef"];
 
 impl Combiner<'_> {
     /// `Value::DoPHITranslation(block, pred)`: the incoming value from `pred`
