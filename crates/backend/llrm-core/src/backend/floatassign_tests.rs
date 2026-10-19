@@ -284,7 +284,7 @@ fn test_a_cycle_of_float_copies_is_written_one_at_a_time() {
     // Ten copies and the temporary that holds the first value overwritten.
     assert_eq!(copies.len(), 11);
     // Simulate: each value holds its own number; the result is the rotation.
-    let mut values: std::collections::HashMap<u32, u32> = (1..=10).map(|v| (v, v)).collect();
+    let mut values: IndexMap<u32, u32> = (1..=10).map(|v| (v, v)).collect();
     for one in &copies {
         let what = one.what.as_ref().expect("a copy");
         let (Loc::Held(into), Loc::Held(from)) = (&what.dests[0], &what.sources[0]) else { panic!("held") };
