@@ -232,8 +232,7 @@ impl LoopGuards {
             let mut incoming_guards: Vec<(BlockId, LoopGuards)> = Vec::new();
             let phis: Vec<_> = cx
                 .function
-                .block(second)
-                .iter()
+                .iter_block(second)
                 .take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi)
                 .collect();
             for phi in phis {

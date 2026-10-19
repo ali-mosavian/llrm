@@ -209,7 +209,7 @@ fn _branched(
     let [condition, yes, no] = op.operands[..] else { return Err("a select of three operands".into()) };
     let result = op.result.ok_or("a select's value")?;
     // What follows the select moves to the join, the block's way out with it.
-    let body = function.block(block).iter().collect::<Vec<_>>();
+    let body = function.iter_block(block).collect::<Vec<_>>();
     let after = body.iter().position(|&inst| inst == select).expect("its own block") + 1;
     let join = function.create_block(None);
     function.insert_block(join, Some(block))?;
@@ -269,8 +269,7 @@ fn _renamed_edges(
     to: BlockId,
 ) {
     let phis = function
-        .block(next)
-        .iter()
+        .iter_block(next)
         .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
         .collect::<Vec<_>>();
     for phi in phis {
@@ -410,8 +409,7 @@ entry:
         let first = function.walk().next().map(|(block, _)| block).expect("a block");
         let divides = |block| {
             function
-                .block(block)
-                .iter()
+                .iter_block(block)
                 .any(
                     |inst| matches!(
                         function.instruction(inst).opcode,

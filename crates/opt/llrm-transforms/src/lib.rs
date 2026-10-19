@@ -90,6 +90,9 @@ pub mod candidate;
 pub mod canonical;
 pub mod cfg;
 pub mod combine;
+pub mod combine_sink;
+#[cfg(test)]
+mod combine_sink_tests;
 pub mod constraintelim;
 #[cfg(test)]
 mod constraintelim_tests;
@@ -103,8 +106,8 @@ pub mod dead;
 pub mod deadargs;
 #[cfg(test)]
 mod deadargs_tests;
-pub mod decide;
 pub mod deadstore;
+pub mod decide;
 pub mod dse;
 pub mod earlycse;
 pub mod edges;
@@ -186,6 +189,8 @@ pub mod ports;
 pub mod profit;
 pub mod promote;
 pub mod rotate;
+pub mod sccp;
+pub mod sccpsolver;
 pub mod settled;
 pub mod simpleloopunswitch;
 pub mod simplifycfg;

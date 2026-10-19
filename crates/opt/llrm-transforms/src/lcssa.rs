@@ -132,7 +132,7 @@ pub(crate) fn operations(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function.block(block).iter().filter(|&one| function.instruction(one).opcode != Opcode::Phi).collect()
+    function.iter_block(block).filter(|&one| function.instruction(one).opcode != Opcode::Phi).collect()
 }
 
 pub(crate) use llrm_analysis::occurrence::{arms, from_arms};
@@ -145,7 +145,7 @@ pub(crate) fn definitions(
     let mut defined = BTreeMap::new();
     for &at in blocks {
         let block = cfg::block(at);
-        for inst in function.block(block).iter() {
+        for inst in function.iter_block(block) {
             if let Some(value) = function.instruction(inst).result {
                 defined.insert(value, cfg::id(block));
             }

@@ -48,10 +48,11 @@
 //!   F4: no `writable` argument attribute to drop (MIR has none).
 //!
 //! # Runs
-//! `interprocedural::stamped` once per SCC, callees first, for the four flags.
-//! `infer_memory` is not wired yet: `LLRM_SHADOW_MEMORY=1` compares
-//! `stamp_memory`'s result with `stamped`'s `memory(...)` and prints one line
-//! per body that differs.
+//! `interprocedural::stamped` calls `post_order` once per SCC, callees first:
+//! `memory(...)`, the pointer parameters' attributes, then the four flags.
+//! DEVIATE F1: `willreturn` also where a loop's trip count is proved or the
+//! language promises each loop ends, in a function that does nothing
+//! observable (`will_return_by_loops`).
 //!
 //! # See also
 //! LLVM `FunctionAttrs.cpp` (`addNoRecurseAttrs`, `addNoReturnAttrs`,
@@ -59,14 +60,17 @@
 
 use std::collections::BTreeSet;
 
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Function, InstId, Linkage, Module};
 use llrm_mir::opcode::{Attribute, Opcode};
+use llrm_mir::spaces::Spaces;
 use llrm_mir::{BlockId, Context, GlobalId, memory};
 
 use crate::aa::{AAQueryInfo, AAResults, IRMemLocation, MemoryEffects, MemoryLocation, ModRefInfo};
 use crate::basicaa::BasicAA;
+use crate::cfg::Shape;
 use crate::effects::{self, Declarations};
 use crate::memory::Unit;
 
@@ -214,8 +218,7 @@ fn can_return(
             function.terminator(block).is_some_and(|last| function.instruction(last).opcode == Opcode::Ret);
         if ends_in_ret
             && !function
-                .block(block)
-                .iter()
+                .iter_block(block)
                 .any(|inst| effects::states(context, declarations, function, inst, Fact::NoReturn))
         {
             return true;
@@ -435,7 +438,7 @@ pub fn infer_memory(
         me = me.union(always);
         recursive = recursive.union(argument);
         if me == MemoryEffects::unknown() {
-            return Vec::new();
+            break;
         }
     }
     let argument = me.mod_ref(IRMemLocation::ArgMem);
@@ -481,13 +484,97 @@ pub fn stamp_memory(
     changed
 }
 
-/// `infer`'s flags stated on the members. The members whose attributes
-/// changed.
+/// DEVIATE F1: `willreturn` also where a loop's trip count induction proves,
+/// or the language promises each loop ends (`mustprogress` on the function,
+/// `llvm.loop.mustprogress` on each loop) of a function that does nothing
+/// observable; LLVM's rule is a body without back edges. The calls must state
+/// `willreturn` themselves. `norecurse` is as inferred or already stated.
+fn will_return_by_loops(
+    module: &Module,
+    layout: &DataLayout,
+    spaces: Spaces,
+    function: &Function,
+    norecurse: bool,
+) -> bool {
+    let context = &module.context;
+    let calls_state = || {
+        function
+            .walk()
+            .map(|(_, inst)| inst)
+            .all(
+                |inst| !matches!(
+                    function.instruction(inst).opcode,
+                    Opcode::Call(_) | Opcode::Invoke(_)
+                )
+                    || effects::states(context, &module.globals, function, inst, Fact::WillReturn),
+            )
+    };
+    let unit = || Unit::of(module, layout, function).with_spaces(spaces);
+    let counted = || {
+        let shape = Shape::of(function);
+        // Found once for the function, not for each loop: the proofs of every
+        // loop ask the same.
+        let registers = crate::consts::known(&unit());
+        shape
+            .loops
+            .iter()
+            .all(
+                |one| crate::induction::counted(
+                    &unit().with_registers(&registers).with_shape(&shape),
+                    one,
+                    Some(&registers),
+                    false,
+                )
+                .iter()
+                .any(|proof| {
+                    !proof.stops && (proof.count.is_some() || proof.step.magnitude() == crate::num::Num::from(1_u8))
+                }),
+            )
+    };
+    if counted() && calls_state() {
+        return true;
+    }
+    if !norecurse || !calls_state() {
+        return false;
+    }
+    let volatile = function
+        .walk()
+        .any(
+            |(_, inst)| matches!(
+                function.instruction(inst).opcode,
+                Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
+            ),
+        );
+    let callees = memory::callees(module);
+    let unobserved = !volatile
+        && function.walk().map(|(_, inst)| inst).all(|inst| {
+            !matches!(
+                function.instruction(inst).opcode,
+                Opcode::Call(_) | Opcode::Invoke(_)
+            )
+                || !memory::of(context, &callees, function, inst).writes
+        });
+    unobserved
+        && llrm_mir::loopinfo::ends_by_promise(&module.metadata, function, Facts::of(&function.attrs).must_progress())
+}
+
+/// `infer`'s flags stated on the members in `deriveAttrsInPostOrder`'s order
+/// (`noreturn`, `willreturn`, `nounwind`, `norecurse`), `willreturn` as F1 has
+/// it. The members whose attributes changed.
 fn stamp_flags(
     module: &mut Module,
+    layout: &DataLayout,
+    spaces: Spaces,
     members: &[GlobalId],
 ) -> Vec<GlobalId> {
-    let found = infer(module, &module.globals, members);
+    let mut found = infer(module, &module.globals, members);
+    for (id, one) in &mut found {
+        let Some(function) = module.global(*id).function().filter(|one| !one.is_declaration()) else { continue };
+        let norecurse = one.no_recurse || Facts::of(&function.attrs).no_recurse();
+        if !one.will_return && !Facts::of(&function.attrs).will_return() {
+            one.will_return = will_return_by_loops(module, layout, spaces, function, norecurse);
+        }
+    }
     let mut changed = Vec::new();
     for (id, one) in found {
         let llrm_mir::module::GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else {
@@ -495,10 +582,10 @@ fn stamp_flags(
         };
         let before = function.attrs.len();
         for (stated, fact) in [
-            (one.no_recurse, Fact::NoRecurse),
-            (one.no_unwind, Fact::NoUnwind),
-            (one.will_return, Fact::WillReturn),
             (one.no_return, Fact::NoReturn),
+            (one.will_return, Fact::WillReturn),
+            (one.no_unwind, Fact::NoUnwind),
+            (one.no_recurse, Fact::NoRecurse),
         ] {
             if stated && !Facts::of(&function.attrs).contains(fact) {
                 function.attrs.extend(fact.attribute());
@@ -517,6 +604,8 @@ fn stamp_flags(
 /// then the flags. The members whose attributes changed.
 pub fn post_order(
     module: &mut Module,
+    layout: &DataLayout,
+    spaces: Spaces,
     members: &[GlobalId],
 ) -> Vec<GlobalId> {
     // DEVIATE F3: a `noipa` body is not a member.
@@ -528,7 +617,7 @@ pub fn post_order(
     let list: Vec<GlobalId> = set.iter().copied().collect();
     let mut changed: BTreeSet<GlobalId> = stamp_memory(module, &list).into_iter().collect();
     changed.extend(crate::argumentattrs::add_argument_attrs(module, &set));
-    changed.extend(stamp_flags(module, &list));
+    changed.extend(stamp_flags(module, layout, spaces, &list));
     changed.into_iter().collect()
 }
 

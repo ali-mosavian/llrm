@@ -328,7 +328,7 @@ fn site(
         }
         _ => return None,
     };
-    let work: Vec<InstId> = function.block(block).iter().filter(|&one| one != end).collect();
+    let work: Vec<InstId> = function.iter_block(block).filter(|&one| one != end).collect();
     let is_call = |inst: InstId| {
         let op = function.instruction(inst);
         let Opcode::Call(info) = &op.opcode else { return false };
@@ -416,11 +416,7 @@ fn returned_from(
 ) -> Option<Option<Operand>> {
     let end = function.terminator(join).filter(|&one| function.instruction(one).opcode == Opcode::Ret)?;
     if join == from
-        || function
-            .block(join)
-            .instructions()
-            .iter()
-            .any(|&one| one != end && function.instruction(one).opcode != Opcode::Phi)
+        || function.iter_block(join).any(|one| one != end && function.instruction(one).opcode != Opcode::Phi)
     {
         return None;
     }
@@ -462,10 +458,9 @@ fn rewrite(
     let header = function.create_block(Some("tailrecurse"));
     function.insert_block(header, Some(entry)).expect("a new block");
     let first =
-        function.block(entry).iter().find(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }));
+        function.iter_block(entry).find(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }));
     let rest: Vec<_> = function
-        .block(entry)
-        .iter()
+        .iter_block(entry)
         .filter(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }))
         .collect();
     function.move_run(&rest, header).expect("a placed instruction");
@@ -566,7 +561,7 @@ fn rewrite(
     // A join nothing reaches any more goes.
     for join in joins {
         if function.layout().contains(&join) && function.predecessors(join).is_empty() {
-            for inst in function.block(join).instructions().iter().rev().copied().collect::<Vec<_>>() {
+            for inst in function.iter_block_rev(join).collect::<Vec<_>>() {
                 function.erase(inst).expect("only the block's own instructions use them");
             }
             function.erase_block(join).expect("an empty block nothing names");

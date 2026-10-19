@@ -676,8 +676,7 @@ fn header_phis(module: &mut Module) -> usize {
     let function = f(module);
     let [one] = &loops::loops(&cfg::graph(function), function.entry().map(cfg::id))[..] else { panic!("one loop") };
     function
-        .block(cfg::block(one.header))
-        .iter()
+        .iter_block(cfg::block(one.header))
         .filter(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
         .count()
 }

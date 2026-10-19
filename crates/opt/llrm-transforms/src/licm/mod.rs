@@ -475,10 +475,9 @@ pub fn run(
             promote::unique_exit_blocks(&ctx)
                 .into_iter()
                 .filter_map(|exit| {
-                    let block = view.function.block(exit).instructions();
-                    let first = block
-                        .iter()
-                        .copied()
+                    let first = view
+                        .function
+                        .iter_block(exit)
                         .find(|&one| !matches!(
                             view.function.instruction(one).opcode,
                             llrm_mir::opcode::Opcode::Phi
@@ -549,7 +548,7 @@ fn seeded(
     ctx.loop_.body.iter().any(|&at| {
         let block = cfg::block(at);
         !ctx.in_sub_loop(block)
-            && function.block(block).instructions().iter().any(|&inst| {
+            && function.iter_block(block).any(|inst| {
                 let instruction = function.instruction(inst);
                 if instruction.opcode.is_terminator() || matches!(instruction.opcode, llrm_mir::opcode::Opcode::Phi) {
                     return false;
