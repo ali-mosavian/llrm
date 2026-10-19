@@ -431,7 +431,7 @@ fn test_a_block_that_jumps_to_itself_stays() {
 /// `optimized`'s round: the tails merged, then the branches settled.
 fn merged(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
     let merged = tailmerge::merged(body, false)?.unwrap_or_else(|| body.clone());
-    Ok(machinedce::eliminated(_converged(&threaded(&merged))))
+    Ok(machinedce::eliminated(threaded(&merged)))
 }
 
 fn two_zero_tails(inserted: bool) -> LirBody {
@@ -1479,6 +1479,7 @@ fn test_threading_a_chain_of_removable_jumps_visits_blocks_a_few_times_not_n_tim
         .collect();
     blocks.push(block(count * 0x10, vec![_return(count * 0x10)], Vec::new()).into());
     let source = body("f", 0, blocks);
+    super::branchfold::VISITS.with(|one| one.set(0));
     let result = threaded(&source);
     let jumps = result
         .blocks
@@ -1486,16 +1487,10 @@ fn test_threading_a_chain_of_removable_jumps_visits_blocks_a_few_times_not_n_tim
         .flat_map(|block| block.insns.iter())
         .filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Jump));
     assert_eq!(jumps.count(), 0, "premise: every jump to the next block goes");
-    let visits = result.facts.0.counted("jump-visits");
+    let visits = super::branchfold::VISITS.with(|one| one.get());
     assert!(visits <= 3 * (count as usize + 1), "{visits} block visits for {count} removable jumps");
 }
 
-/// x_adler's loop: the latch `jne top; jmp exit` with a short return as the
-/// exit. The copy of the return in the jump's place left the loop's back
-/// branch taken over the copy on every trip (9 clocks a trip, not 7): the
-/// likelier way of a branch before the jump is not given up for the jump's.
-/// Not a loop: the same rule on a guard whose branch is the likelier way, and,
-/// for the other way round, a copy that is made.
 /// Every hoisted anchor solved the liveness of every value of the body afresh
 /// (a nest of 64 copied loops: a third of `lir jumps`); a value is live where
 /// its own reads and definitions say, so only the values a moved instruction
@@ -1712,14 +1707,19 @@ fn test_a_branch_or_table_is_remapped_by_its_blocks() {
     assert!(Semantics::new(Operation::Move).remapped(to).is_none());
 }
 
-/// Each branch threaded past a passage walked the whole body from the entry to
-/// find what it stranded, though one block can only strand the blocks it alone
-/// enters: N cases, N walks of N blocks (`cases` 1024: `lir jumps` 8196 Minstr
-/// of 25 G). The edges entering each block are counted; a walk is made only for
-/// a block on a cycle.
+/// Threading past a passage must not look at the whole body again for each
+/// one: N cases, N walks of N blocks (`cases` 1024: `lir jumps` 8196 Minstr of
+/// 25 G). Blocks looked at stay a small multiple of the blocks, at 40 and 160
+/// cases alike.
 #[test]
-fn threading_a_chain_of_passages_makes_no_walk_from_the_entry() {
-    let cases = 40;
+fn threading_a_chain_of_passages_looks_at_each_block_a_few_times() {
+    for cases in [40, 160] {
+        let visits = visits_threading_passages(cases);
+        assert!(visits <= 12 * (2 * cases + 2) as usize, "{visits} blocks looked at for {cases} passages");
+    }
+}
+
+fn visits_threading_passages(cases: i64) -> usize {
     let (exit, last) = (10_000, 10 * cases);
     let mut blocks = Vec::new();
     let mut passages = Vec::new();
@@ -1735,11 +1735,10 @@ fn threading_a_chain_of_passages_makes_no_walk_from_the_entry() {
     blocks.push(block(last, vec![_return(last)], vec![]));
     blocks.extend(passages);
     blocks.push(block(exit, vec![_return(exit)], vec![]));
-    WALKS.with(|one| one.set(0));
+    super::branchfold::VISITS.with(|one| one.set(0));
     let result = threaded(&body("f", 0, blocks.into_iter().collect()));
     assert!(result.blocks.len() < 2 * cases as usize, "the passages are threaded past");
-    let walks = WALKS.with(|one| one.get());
-    assert_eq!(walks, 0, "{walks} walks from the entry for {cases} passages");
+    super::branchfold::VISITS.with(|one| one.get())
 }
 
 /// A table jump to one passage in several entries freed the passage once for

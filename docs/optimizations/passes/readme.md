@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 131 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 132 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -63,6 +63,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | gvn | Reuses a value the function already has, so the same operation is not computed twice and the same bytes are not read again: LLVM's GVN and gcc's FRE/PRE. | `EqualCalls` runs early in the body pipeline, before `tailrec`; `Gvn` after | [gvn](gvn.md) |
 | hoistcommon | The code that opens the arms of a branch in the same way runs before the branch once: `hoistCommonCodeFromSuccessors` of SimplifyCFG. |  | [hoistcommon](hoistcommon.md) |
 | homes | Marks each phi whose value also sits in a memory cell with `!llrm.home`, naming a store of that cell, so a spill of the phi reads the cell instead of paying for a slot. | Last in the module pipeline, after `spares`, so the instruction ids it names | [homes](homes.md) |
+| icmpchain | A branch on an or/and chain of compares of one value with constants, turned into a switch (or a range check): LLVM's [`SimplifyCFGOpt::simplifyBranchOnICmpChain`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5469) with `ConstantComparesGatherer` ([L580](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L580)). |  | [icmpchain](icmpchain.md) |
 | indvars | Settles what a loop's counters are worth: a counter's value after its loop becomes a number, and a narrow counter read as a wider index becomes a counter of that width. | In the body pipeline after `promote`, with `exit_values: false`. With | [indvars](indvars.md) |
 | inferspace | Replaces a far pointer made from a near one by the near one where its users allow it, so an access needs no segment register loaded and held for it. | In every body's pipeline before `gvn`, so a far pointer cast from a near one | [inferspace](inferspace.md) |
 | inline | Whole-module MIR inlining: chooses the calls worth replacing by a copy of the callee's body, and makes the copies. | Library of [`crate::interprocedural`](../analyses/interprocedural.md), which runs it once every body has | [inline](inline.md) |
