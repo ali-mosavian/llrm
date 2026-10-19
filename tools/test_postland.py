@@ -59,3 +59,10 @@ def test_a_failed_run_that_names_no_test_is_a_failure_not_a_pass():
     """`cargo test -q` printed no `Running` lines, the parse found nothing, and 59 untested landings were reported 'No new failure'."""
     assert postland.unit_result("error: could not compile `llrm-c`\n", 101) == {"unit workspace::failed-without-a-test-name"}
     assert postland.unit_result("test result: ok. 3 passed\n", 0) == set()
+
+
+def test_stderr_and_stdout_keep_their_order(tmp_path):
+    """Cargo's `Running` (stderr) must stay before its crate's results (stdout); read apart, 14 failing tests had no crate."""
+    script = "echo 'Running unittests (deps/llrm_c-0a1b)' >&2; echo 'failures:'; echo '    t::x'"
+    output, code = postland.merged(["sh", "-c", script], tmp_path, {})
+    assert code == 0 and output.index("Running") < output.index("failures:")

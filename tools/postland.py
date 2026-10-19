@@ -141,6 +141,13 @@ def by_binary(output: str) -> dict[str, list[str]]:
     return found
 
 
+def merged(command: list[str], cwd: Path, env: dict[str, str]) -> tuple[str, int]:
+    """(output, exit code) with stderr and stdout as one stream: cargo prints `Running` on stderr and the results on stdout, and joined as two strings the
+    blocks lost their crate (0 named failures of 14)."""
+    done = subprocess.run(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    return done.stdout, done.returncode
+
+
 def unit_result(output: str, code: int) -> set[str]:
     """The failing `unit crate::test` ids of a workspace test run; a run that failed and named no test (a build error, an output this does not parse) is itself the failure,
     never a pass: `-q` printed no `Running` line, nothing parsed, and 59 landings read as 'No new failure'."""
@@ -154,8 +161,8 @@ def unit_failures(at: Path, name: str | None = None) -> set[str]:
     env = {**os.environ, "CARGO_TARGET_DIR": str(HOME / "target-test"), "CARGO_INCREMENTAL": "0"}
     env.pop("RUSTFLAGS", None)
     command = [*LOW, "buildslot", "cargo", "test", "--release", "--workspace", "--lib", "--no-fail-fast", *([name] if name else [])]
-    done = subprocess.run(command, cwd=at, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)  # one stream: `Running` is on stderr, the results on stdout
-    return unit_result(done.stdout, done.returncode)
+    output, code = merged(command, at, env)
+    return unit_result(output, code)
 
 
 def probe(failure: str, sha: str) -> bool:
