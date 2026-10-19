@@ -179,3 +179,14 @@ fn a_store_before_a_call_that_initializes_it_goes() {
     let after = managed(&mut module, DeadStoreElimination);
     assert!(!after.contains("store i32 %x"), "{after}");
 }
+
+/// A store over the head of a memset leaves its tail, which a load reads: the
+/// memset went, and the load at byte 6 read an undefined byte.
+#[test]
+fn a_memset_whose_tail_is_read_stays() {
+    let after = eliminated(
+        "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n\ndefine i16 @f(i16 %x) {\nb0:\n  %s = alloca [8 x i8]\n  call void @llvm.memset.p0.i16(ptr %s, i8 0, i16 8, i1 false)\n  store i16 %x, ptr %s\n  %s6 = getelementptr inbounds i8, ptr %s, i16 6\n  %v = load i16, ptr %s6\n  %w = load i16, ptr %s\n  %r = add i16 %v, %w\n  ret i16 %r\n}\n",
+        &[&[7]],
+    );
+    assert!(after.contains("i8 0, i16 6"), "{after}");
+}
