@@ -432,6 +432,15 @@ impl<'a> BasicAA<'a> {
         if return_captures { found.with_ret } else { found.without_ret }
     }
 
+    /// Whether the address of `object` may be captured, a return included.
+    pub(crate) fn is_captured(
+        &self,
+        object: Operand,
+        aaqi: &mut AAQueryInfo,
+    ) -> bool {
+        !self.captures_before(object, true, aaqi).captures_nothing()
+    }
+
     fn not_captured(
         &self,
         object: Operand,
