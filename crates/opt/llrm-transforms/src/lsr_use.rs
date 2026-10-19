@@ -11,7 +11,8 @@
 //! (`Tti`).
 //!
 //! # Example
-//! `p[i] = 0` in a loop is an address use with one fixup at offset 0; its formula `{%p,+,4}` costs one register and one recurrence (1 instruction).
+//! `p[i] = 0` in a loop is an address use with one fixup at offset 0; its
+//! formula `{%p,+,4}` costs one register and one recurrence (1 instruction).
 //!
 //! # Runs
 //! Nothing runs it yet: stage 2 of the translation of LSR (the old pass in

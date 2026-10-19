@@ -12,7 +12,9 @@
 //! The costs are the target's ([`llrm_mir::tti::Tti`]).
 //!
 //! # Example
-//! A local array filled and summed in a loop, exit `i + 1 == n`, becomes a pointer phi stepping by 4 and a counter from `%n - 1` to 0; the interpreter agrees on every input.
+//! A local array filled and summed in a loop, exit `i + 1 == n`, becomes a
+//! pointer phi stepping by 4 and a counter from `%n - 1` to 0; the interpreter
+//! agrees on every input.
 //!
 //! # Runs
 //! Instead of [`crate::lsr`] with `LLRM_EXP_LSR`.
@@ -23,10 +25,10 @@
 //! rewrite (what the later `dead` pass removes stays until it), and the debug
 //! value salvage. A loop of more than 200 IV users is left (`MaxIVUsers`).
 
+use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::expander::{Env as ExpandEnv, Expander};
 use llrm_analysis::scev::expr::Scev;
-use llrm_analysis::scev::ScalarEvolution;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, InstId};
@@ -152,9 +154,8 @@ fn plan_loop(
 
     let assumes = assume_calls(context, outer, function, lp.get_blocks());
     let effects_free = |inst: InstId| llrm_mir::memory::only_value(context, outer.callees(), function, inst);
-    let ephemeral = llrm_mir::codemetrics::collect_ephemeral_values(function, &effects_free, &assumes, &|block| {
-        lp.contains(block)
-    });
+    let ephemeral =
+        llrm_mir::codemetrics::collect_ephemeral_values(function, &effects_free, &assumes, &|block| lp.contains(block));
     let safe_to_speculate =
         |inst: InstId| crate::licm::hoist::is_safe_to_speculatively_execute_in(context, layout, function, outer, inst);
     let is_ephemeral = |inst: InstId| ephemeral.contains(&inst);
@@ -166,7 +167,8 @@ fn plan_loop(
     }
     // The exit tests: the first look finds what to edit, the second marks the
     // tests it made.
-    let mut iv_inc_insert_pos = function.terminator(lp.get_loop_latch(function).expect("a latch")).expect("a terminator");
+    let mut iv_inc_insert_pos =
+        function.terminator(lp.get_loop_latch(function).expect("a latch")).expect("a terminator");
     match marked {
         None => {
             let edits = lsr_prepare::analyze(se, &cx, tti, header, &users);
@@ -235,13 +237,15 @@ pub fn reduced(
                 }
                 Outcome::Planned(Some(plan)) => plan,
             };
-            let lp_blocks: llrm_support::hash::HashSet<BlockId> = env
-                .loops
-                .get_loop_for(header)
-                .map(|lp| lp.get_blocks().iter().copied().collect())
-                .unwrap_or_default();
-            if split_phi_edges(function, &plan, &|block| env.loops.is_loop_header(block), &|block| lp_blocks.contains(&block))
-            {
+            let mut lp_blocks = llrm_mir::dense::IdSet::<BlockId>::new();
+            if let Some(lp) = env.loops.get_loop_for(header) {
+                for &block in lp.get_blocks() {
+                    lp_blocks.insert(block);
+                }
+            }
+            if split_phi_edges(function, &plan, &|block| env.loops.is_loop_header(block), &|block| {
+                lp_blocks.contains(&block)
+            }) {
                 changed = true;
                 continue;
             }

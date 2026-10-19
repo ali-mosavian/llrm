@@ -103,13 +103,19 @@ fn optimize_max(
     // The IV is `{1,+,1}`.
     let iv = se.get_scev(cx, instruction.operands[0]);
     let (start, step, _) = se.match_affine_add_rec(iv)?;
-    if se.as_constant(start).map(|c| c.sext_value()) != Some(1) || se.as_constant(step).map(|c| c.sext_value()) != Some(1)
+    if se.as_constant(start).map(|c| c.sext_value()) != Some(1)
+        || se.as_constant(step).map(|c| c.sext_value()) != Some(1)
     {
         return None;
     }
     // The right operand of the select, which the new compare takes.
     let sel = function.instruction(select);
-    let is_one = |operand: Operand| matches!(operand, Operand::Constant(c) if cx.context.get(c).kind == llrm_mir::context::ConstantKind::Int(1));
+    let is_one = |operand: Operand| {
+        matches!(
+            operand,
+            Operand::Constant(c) if cx.context.get(c).kind == llrm_mir::context::ConstantKind::Int(1)
+        )
+    };
     let plus_one_of = |se: &mut ScalarEvolution, operand: Operand| -> Option<Operand> {
         let Operand::Value(v) = operand else { return None };
         let ValueDef::Instruction(def) = function.value(v).def else { return None };
@@ -171,7 +177,8 @@ pub fn analyze(
             edits.push(ExitEdit { exiting, max, post_inc: false });
             continue;
         }
-        // In a non-latch exit, there may be pre-inc users in the blocks between.
+        // In a non-latch exit, there may be pre-inc users in the blocks
+        // between.
         let mut declined = false;
         if latch != exiting {
             for (idx, other) in users.uses.iter().enumerate() {
@@ -182,7 +189,8 @@ pub fn analyze(
                 if cx.tree.properly_dominates(block, exiting) {
                     continue;
                 }
-                // The strides might share: a quotient that could be a legal scale.
+                // The strides might share: a quotient that could be a legal
+                // scale.
                 let (Some(mut a), Some(mut b)) =
                     (IvUsers::stride(se, cx, &users.uses[cond_idx], l), IvUsers::stride(se, cx, other, l))
                 else {
@@ -275,7 +283,10 @@ pub fn apply(
         let ValueDef::Instruction(mut cond) = function.value(cond_value).def else { continue };
         // The compare may be anywhere in the loop, with other users: it goes
         // beside the branch, or a copy of it does.
-        if matches!(function.instruction(cond).opcode, Opcode::ICmp(_) | Opcode::FCmp(_))
+        if matches!(
+            function.instruction(cond).opcode,
+            Opcode::ICmp(_) | Opcode::FCmp(_)
+        )
             && function.next_in_block(cond) != Some(term)
         {
             if function.users(cond_value).has_one_use() {

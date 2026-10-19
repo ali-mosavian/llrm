@@ -21,13 +21,14 @@
 //! ephemeral are asked of the caller (`Env`), which holds what they need.
 //! Walks each value's users once, with a visited set: O(users).
 
+use std::cell::RefCell;
+
 use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
+use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::pattern::phi_incoming;
-use llrm_support::hash::HashSet;
-use std::cell::RefCell;
 
 /// What the analysis asks of the pass that runs it.
 pub struct Env<'a> {
@@ -54,7 +55,7 @@ pub struct IvUsers {
     /// The header of the loop.
     pub l: BlockId,
     pub uses: Vec<IvStrideUse>,
-    processed: HashSet<InstId>,
+    processed: IdSet<InstId>,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVUsers.cpp#L52
@@ -75,7 +76,8 @@ fn is_interesting(
             if header == l {
                 return se.is_affine(s) || {
                     let block = cx.function.parent(inst).expect("a placed instruction");
-                    !lp.contains(block) && se.get_scev_at_scope(cx, s, cx.loops.get_loop_for(block).map(|one| one.get_header())) != s
+                    !lp.contains(block)
+                        && se.get_scev_at_scope(cx, s, cx.loops.get_loop_for(block).map(|one| one.get_header())) != s
                 };
             }
             // Otherwise the start is interesting and the step is not: there is
@@ -139,7 +141,7 @@ impl IvUsers {
         l: BlockId,
         env: &Env,
     ) -> Self {
-        let mut users = Self { l, uses: Vec::new(), processed: HashSet::default() };
+        let mut users = Self { l, uses: Vec::new(), processed: IdSet::new() };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {
@@ -192,7 +194,7 @@ impl IvUsers {
 
         let l = self.l;
         let lp = cx.loops.get_loop_for(l).expect("a loop");
-        let mut unique = HashSet::default();
+        let mut unique = IdSet::<InstId>::new();
         let users: Vec<InstId> = cx.function.users(result).iter().map(|one| one.user).collect();
         for user in users {
             if !unique.insert(user) {
@@ -263,7 +265,8 @@ impl IvUsers {
         se.get_scev(cx, u.operand)
     }
 
-    /// `getExpr`: the expression for the use, normalized for its post-inc loops.
+    /// `getExpr`: the expression for the use, normalized for its post-inc
+    /// loops.
     pub fn expr(
         se: &mut ScalarEvolution,
         cx: &Cx,

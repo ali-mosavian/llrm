@@ -81,7 +81,9 @@ fn named(
 fn the_users_of_an_induction_variable_are_those_not_reducible_further() {
     with_users(ARRAY, |cx, _, users, _, _| {
         let found: Vec<_> = users.uses.iter().map(|u| named(cx, u)).collect();
-        let has = |opcode: &str, operand: &str| found.iter().any(|(o, v)| o == opcode && v.trim_start_matches('%') == operand);
+        let has = |opcode: &str, operand: &str| {
+            found.iter().any(|(o, v)| o == opcode && v.trim_start_matches('%') == operand)
+        };
         assert!(has("Load", "a"), "{found:?}");
         assert!(has("Ret", "r"), "{found:?}");
         assert!(!found.iter().any(|(opcode, _)| opcode == "Phi"), "{found:?}");
@@ -111,7 +113,11 @@ fn a_user_after_the_loop_takes_the_post_incremented_value() {
 #[test]
 fn the_stride_of_an_array_walk_is_the_element_size() {
     with_users(ARRAY, |cx, se, users, header, _| {
-        let load = users.uses.iter().find(|u| matches!(cx.function.instruction(u.user).opcode, Opcode::Load { .. })).expect("the load");
+        let load = users
+            .uses
+            .iter()
+            .find(|u| matches!(cx.function.instruction(u.user).opcode, Opcode::Load { .. }))
+            .expect("the load");
         let stride = IvUsers::stride(se, cx, load, header).expect("a stride");
         assert_eq!(se.as_constant(stride).map(|one| one.sext_value()), Some(4));
     });

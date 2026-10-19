@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_implement.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_implement.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_implement.rs sha256:5c4a19b3adb984519ccd837871e399b15b3ddf2832068ea071362b69f8657cd9 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_implement.rs sha256:5e766e1bde31c849c650c3222b1e4f5fca7fe888218e2db82e52859021ad6c55 -->
 
 # lsr_implement
 
@@ -18,7 +18,9 @@ unread goes; increments of induction variables LSR reused move to the
 latch.
 
 ## Example
-The store's operand `getelementptr i32, %buf, %i` becomes a phi of a pointer that advances by 4; the compare's `%next == %n` becomes `%counter == 0` on a counter that falls by 1.
+The store's operand `getelementptr i32, %buf, %i` becomes a phi of a pointer
+that advances by 4; the compare's `%next == %n` becomes `%counter == 0` on a
+counter that falls by 1.
 
 ## Runs
 Behind `LLRM_EXP_LSR` ([`crate::lsr_pass`](lsr_pass.md)).

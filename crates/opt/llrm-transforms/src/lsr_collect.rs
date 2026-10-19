@@ -16,7 +16,8 @@
 //! are added as uses, so the solver sees what they pin in registers.
 //!
 //! # Example
-//! `p[i] = 0` with the exit `i + 1 == n`: an address use of `{%p,+,4}` and a compare use of `{(-1 + %n),+,-1}`; factors 4, -4 and -1.
+//! `p[i] = 0` with the exit `i + 1 == n`: an address use of `{%p,+,4}` and a
+//! compare use of `{(-1 + %n),+,-1}`; factors 4, -4 and -1.
 //!
 //! # Runs
 //! Nothing runs it yet: stage 3 of the translation of LSR.
@@ -152,8 +153,7 @@ pub fn get_exact_sdiv(
                 // C1*X*Y /s C2*X*Y.
                 if let ScevKind::Mul(rhs_operands) = se.node(rhs).kind.clone()
                     && (ignore_significant_bits || is_mul_sextable(se, cx, rhs))
-                    && let (Some(_), Some(_)) =
-                        (se.as_constant(operands[0].scev), se.as_constant(rhs_operands[0].scev))
+                    && let (Some(_), Some(_)) = (se.as_constant(operands[0].scev), se.as_constant(rhs_operands[0].scev))
                     && operands[1..] == rhs_operands[1..]
                 {
                     return get_exact_sdiv(se, cx, operands[0].scev, rhs_operands[0].scev, ignore_significant_bits);
@@ -291,7 +291,9 @@ pub fn is_address_use(
         Opcode::Call(_) => {
             let Some(name) = intrinsic_name(cx, inst) else { return false };
             let arg = |at: usize| instruction.operands.get(at) == Some(&operand);
-            if name.starts_with("llvm.memset") || name.starts_with("llvm.prefetch") || name.starts_with("llvm.masked.load")
+            if name.starts_with("llvm.memset")
+                || name.starts_with("llvm.prefetch")
+                || name.starts_with("llvm.masked.load")
             {
                 arg(0)
             } else if name.starts_with("llvm.masked.store") {
@@ -329,14 +331,16 @@ pub fn get_access_type(
     match &instruction.opcode {
         Opcode::Load { .. } => {
             access.mem_ty = Some(instruction.ty);
-            if let Some(space) = cx.function.operand_type(cx.context, instruction.operands[0]).and_then(|t| address_space(cx, t))
+            if let Some(space) =
+                cx.function.operand_type(cx.context, instruction.operands[0]).and_then(|t| address_space(cx, t))
             {
                 access.addr_space = space;
             }
         }
         Opcode::Store { .. } => {
             access.mem_ty = cx.function.operand_type(cx.context, instruction.operands[0]);
-            if let Some(space) = cx.function.operand_type(cx.context, instruction.operands[1]).and_then(|t| address_space(cx, t))
+            if let Some(space) =
+                cx.function.operand_type(cx.context, instruction.operands[1]).and_then(|t| address_space(cx, t))
             {
                 access.addr_space = space;
             }
@@ -458,7 +462,8 @@ pub struct Collection<'a, 'b> {
     /// The equality compares whose operands the caller is to swap, so the
     /// operand to replace is the left one.
     pub swapped_compares: Vec<InstId>,
-    /// How many formulae were offered to `insert_formula`: the work generation did.
+    /// How many formulae were offered to `insert_formula`: the work generation
+    /// did.
     pub insert_attempts: usize,
 }
 
@@ -535,9 +540,9 @@ impl<'a, 'b> Collection<'a, 'b> {
         true
     }
 
-    /// `getUse`: the index of a use and the offset of a fixup that needs `expr`,
-    /// with this kind and access type, and `expr` without that offset. Either an
-    /// existing use is reused or a new one made.
+    /// `getUse`: the index of a use and the offset of a fixup that needs
+    /// `expr`, with this kind and access type, and `expr` without that
+    /// offset. Either an existing use is reused or a new one made.
     pub fn get_use(
         &mut self,
         se: &mut ScalarEvolution,
@@ -585,8 +590,9 @@ impl<'a, 'b> Collection<'a, 'b> {
     ) -> Option<usize> {
         let orig_lu = &self.uses[orig];
         for (idx, lu) in self.uses.iter().enumerate() {
-            // Not an ICmpZero: it may hold formulae from GenerateICmpZeroScales,
-            // where adding fixup offsets may be invalid.
+            // Not an ICmpZero: it may hold formulae from
+            // GenerateICmpZeroScales, where adding fixup offsets
+            // may be invalid.
             if idx != orig
                 && lu.kind != Kind::ICmpZero
                 && lu.kind == orig_lu.kind
@@ -645,10 +651,8 @@ impl<'a, 'b> Collection<'a, 'b> {
         for (i, &first) in strides.iter().enumerate() {
             for &second in &strides[i + 1..] {
                 let (mut old, mut new) = (first, second);
-                let (old_bits, new_bits) = (
-                    se.get_type_size_in_bits(cx, se.type_of(old)),
-                    se.get_type_size_in_bits(cx, se.type_of(new)),
-                );
+                let (old_bits, new_bits) =
+                    (se.get_type_size_in_bits(cx, se.type_of(old)), se.get_type_size_in_bits(cx, se.type_of(new)));
                 if old_bits != new_bits {
                     if old_bits > new_bits {
                         new = se.get_sign_extend_expr(cx, ScevUse::of(new), se.type_of(old), 0);
@@ -809,9 +813,10 @@ impl<'a, 'b> Collection<'a, 'b> {
                     }
                     && !is_pointer
                 {
-                    // An expression that cannot be expanded in general (it has a
-                    // divide) but is already available before the loop is
-                    // wrapped in an unknown, so the expander does not redo it.
+                    // An expression that cannot be expanded in general (it has
+                    // a divide) but is already available
+                    // before the loop is wrapped in an
+                    // unknown, so the expander does not redo it.
                     let n = se.get_unknown(cx, nv);
                     let Some(n) = se.normalize_for_post_inc_use(cx, n, &post_inc_loops, true) else { continue };
                     kind = Kind::ICmpZero;
@@ -867,9 +872,9 @@ impl<'a, 'b> Collection<'a, 'b> {
     }
 
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L3774
-    /// `CollectLoopInvariantFixupsAndFormulae`: other uses of the loop-invariant
-    /// values in the registers are fixups too: they pin those values in
-    /// registers, making them less profitable to eliminate.
+    /// `CollectLoopInvariantFixupsAndFormulae`: other uses of the
+    /// loop-invariant values in the registers are fixups too: they pin
+    /// those values in registers, making them less profitable to eliminate.
     pub fn collect_loop_invariant_fixups_and_formulae(
         &mut self,
         se: &mut ScalarEvolution,
@@ -891,9 +896,10 @@ impl<'a, 'b> Collection<'a, 'b> {
                 | ScevKind::UMin(ops)
                 | ScevKind::SMin(ops)
                 | ScevKind::SequentialUMin(ops) => worklist.extend(ops.iter().map(|op| op.scev)),
-                ScevKind::Truncate(op) | ScevKind::ZeroExtend(op) | ScevKind::SignExtend(op) | ScevKind::PtrToAddr(op) => {
-                    worklist.push(op.scev)
-                }
+                ScevKind::Truncate(op)
+                | ScevKind::ZeroExtend(op)
+                | ScevKind::SignExtend(op)
+                | ScevKind::PtrToAddr(op) => worklist.push(op.scev),
                 ScevKind::UDiv(lhs, rhs) => worklist.extend([lhs.scev, rhs.scev]),
                 ScevKind::Unknown(Operand::Value(value)) => {
                     // An instruction defined in the loop is not invariant;
@@ -912,7 +918,9 @@ impl<'a, 'b> Collection<'a, 'b> {
                         }
                         // For a phi, the use is in the incoming block.
                         let use_block = if user.opcode == Opcode::Phi {
-                            let Operand::Block(from) = user.operands[u.index as usize + 1] else { unreachable!("a phi's block") };
+                            let Operand::Block(from) = user.operands[u.index as usize + 1] else {
+                                unreachable!("a phi's block")
+                            };
                             from
                         } else {
                             cx.function.parent(u.user).expect("a placed instruction")

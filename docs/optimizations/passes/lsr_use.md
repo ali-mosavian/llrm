@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_use.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_use.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_use.rs sha256:3938765f45c4a433625cc707180133f50f0c80120ba8ea8874d8a9d4e53830ae -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_use.rs sha256:774a1fa44fc62133cca6882c99c20d218b496a13ea2796c7611733815824a08b -->
 
 # lsr_use
 
@@ -16,7 +16,8 @@ the setup in the preheader. The target answers what an address mode folds
 (`Tti`).
 
 ## Example
-`p[i] = 0` in a loop is an address use with one fixup at offset 0; its formula `{%p,+,4}` costs one register and one recurrence (1 instruction).
+`p[i] = 0` in a loop is an address use with one fixup at offset 0; its
+formula `{%p,+,4}` costs one register and one recurrence (1 instruction).
 
 ## Runs
 Nothing runs it yet: stage 2 of the translation of LSR (the old pass in

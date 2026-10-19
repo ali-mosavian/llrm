@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_narrow.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_narrow.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_narrow.rs sha256:53d6b5d6a3c1b10f2ca53c23f8c1d4a2bd188b466caca77eeac5c12882ee86ed -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_narrow.rs sha256:7a377e6ceccdc8d88e3cfba467ff3f8be17553d7d3545e621adcf2682bb3d55f -->
 
 # lsr_narrow
 
@@ -17,7 +17,8 @@ merge uses outside the loop into those inside, and last pick the register
 most uses share and drop what does not use it, until the space fits.
 
 ## Example
-Four uses of twenty formulae each (160000 combinations) with a register all share: the formulae without it go, one is left per use.
+Four uses of twenty formulae each (160000 combinations) with a register all
+share: the formulae without it go, one is left per use.
 
 ## Runs
 Nothing runs it yet: stage 4 of the translation of LSR.

@@ -75,7 +75,10 @@ fn basic_use(offsets: &[i64]) -> Use {
 
 /// A use of `kind` with a fixup at each offset: a use with none has an empty
 /// range (min above max) and folds nothing.
-fn use_of(kind: Kind, offsets: &[i64]) -> Use {
+fn use_of(
+    kind: Kind,
+    offsets: &[i64],
+) -> Use {
     let mut lu = Use::new(kind, MemAccessTy::unknown(0));
     for &offset in offsets {
         let mut fixup = Fixup::new(llrm_mir::module::InstId(0), Operand::Value(llrm_mir::module::ValueId(0)));
@@ -159,7 +162,8 @@ fn fewer_instructions_win_before_fewer_registers() {
 #[test]
 fn what_an_address_mode_folds_by_kind() {
     let tti = X86::of_cpu("core2").unwrap();
-    let fold = |kind, gv, offset, base, scale| is_am_completely_folded_at(&tti, kind, gv, Immediate(offset), base, scale);
+    let fold =
+        |kind, gv, offset, base, scale| is_am_completely_folded_at(&tti, kind, gv, Immediate(offset), base, scale);
     assert!(fold(Kind::Address, false, 8, true, 4));
     assert!(!fold(Kind::Address, false, 1 << 40, true, 1), "a displacement is 32 bits");
     assert!(fold(Kind::Basic, false, 0, true, 0) && !fold(Kind::Basic, false, 0, true, 1));
@@ -175,7 +179,16 @@ fn what_an_address_mode_folds_by_kind() {
 fn offsets_that_wrap_with_the_base_do_not_fold() {
     let tti = X86::of_cpu("core2").unwrap();
     let range = |min, max, base| {
-        is_am_completely_folded_between(&tti, Immediate(min), Immediate(max), Kind::Address, false, Immediate(base), true, 1)
+        is_am_completely_folded_between(
+            &tti,
+            Immediate(min),
+            Immediate(max),
+            Kind::Address,
+            false,
+            Immediate(base),
+            true,
+            1,
+        )
     };
     assert!(range(-8, 8, 100));
     assert!(!range(0, 8, i64::MAX - 4));
@@ -183,23 +196,25 @@ fn offsets_that_wrap_with_the_base_do_not_fold() {
     assert!(!range(0, 1 << 32, 0), "the far end is past 32 bits");
 }
 
-/// In an address X86 prices a scale at one, whatever it is, and none at nothing;
-/// where the use does not fold it (a basic use takes no scale), a scale of 1
-/// is free and any other costs one.
+/// In an address X86 prices a scale at one, whatever it is, and none at
+/// nothing; where the use does not fold it (a basic use takes no scale), a
+/// scale of 1 is free and any other costs one.
 #[test]
 fn the_cost_of_a_scale_follows_whether_it_folds() {
     with_loop(|_, se, a, b, header, _| {
         let tti = X86::of_cpu("core2").unwrap();
         let lu = use_of(Kind::Address, &[0]);
         let at = |scale| {
-            let f = Formula { base_regs: vec![a], scaled_reg: Some(b), scale, has_base_reg: true, ..Formula::default() };
+            let f =
+                Formula { base_regs: vec![a], scaled_reg: Some(b), scale, has_base_reg: true, ..Formula::default() };
             scaling_factor_cost(&tti, se, &lu, &f, header)
         };
         assert_eq!(at(2), TtiCost::of(1));
         assert_eq!(at(1), TtiCost::of(1));
         let basic = use_of(Kind::Basic, &[0]);
         let in_basic = |scale| {
-            let f = Formula { base_regs: vec![a], scaled_reg: Some(b), scale, has_base_reg: true, ..Formula::default() };
+            let f =
+                Formula { base_regs: vec![a], scaled_reg: Some(b), scale, has_base_reg: true, ..Formula::default() };
             scaling_factor_cost(&tti, se, &basic, &f, header)
         };
         assert_eq!((in_basic(1), in_basic(2)), (TtiCost::FREE, TtiCost::of(1)));
@@ -215,7 +230,8 @@ fn the_cost_of_a_scale_follows_whether_it_folds() {
 fn a_use_keeps_one_formula_per_set_of_registers() {
     with_loop(|_, se, a, b, header, _| {
         let mut lu = Use::new(Kind::Address, MemAccessTy::unknown(0));
-        let mut ab = Formula { base_regs: vec![a], scaled_reg: Some(b), scale: 1, has_base_reg: true, ..Formula::default() };
+        let mut ab =
+            Formula { base_regs: vec![a], scaled_reg: Some(b), scale: 1, has_base_reg: true, ..Formula::default() };
         let ba = Formula { base_regs: vec![b], scaled_reg: Some(a), scale: 1, has_base_reg: true, ..ab.clone() };
         assert!(lu.insert_formula(se, &ab, header));
         assert!(lu.has_formula_with_same_regs(&ba));
@@ -257,7 +273,11 @@ fn fixups_widen_the_offset_range() {
 fn a_fixup_is_outside_the_loop_where_its_user_is() {
     with_loop(|cx, _, _, _, header, _| {
         let user = |opcode| {
-            cx.function.walk().map(|(_, inst)| inst).find(|&inst| cx.function.instruction(inst).opcode == opcode).unwrap()
+            cx.function
+                .walk()
+                .map(|(_, inst)| inst)
+                .find(|&inst| cx.function.instruction(inst).opcode == opcode)
+                .unwrap()
         };
         let ret = Fixup::new(user(Opcode::Ret), Operand::Value(cx.function.parameters()[1]));
         let add = Fixup::new(user(Opcode::Binary(BinaryOp::Add)), Operand::Value(cx.function.parameters()[1]));

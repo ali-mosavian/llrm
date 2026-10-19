@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_pass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_pass.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_pass.rs sha256:da931029d00e8913002546e78c7ee0e06cf877b67eb8bcba2001edd98e9b7275 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_pass.rs sha256:832cddfc58fb70f33feaf91e0851b0d17185da248dfd5b5b99c9a86298d97dbd -->
 
 # lsr_pass
 
@@ -17,7 +17,9 @@ picks one per use ([`crate::lsr_solve`](lsr_solve.md)). If it picks, the code is
 The costs are the target's ([`llrm_mir::tti::Tti`](https://github.com/ali-mosavian/llrm/blob/main/crates/ir/llrm-mir/src/tti.rs)).
 
 ## Example
-A local array filled and summed in a loop, exit `i + 1 == n`, becomes a pointer phi stepping by 4 and a counter from `%n - 1` to 0; the interpreter agrees on every input.
+A local array filled and summed in a loop, exit `i + 1 == n`, becomes a
+pointer phi stepping by 4 and a counter from `%n - 1` to 0; the interpreter
+agrees on every input.
 
 ## Runs
 Instead of [`crate::lsr`](lsr.md) with `LLRM_EXP_LSR`.

@@ -13,7 +13,9 @@
 //! latch.
 //!
 //! # Example
-//! The store's operand `getelementptr i32, %buf, %i` becomes a phi of a pointer that advances by 4; the compare's `%next == %n` becomes `%counter == 0` on a counter that falls by 1.
+//! The store's operand `getelementptr i32, %buf, %i` becomes a phi of a pointer
+//! that advances by 4; the compare's `%next == %n` becomes `%counter == 0` on a
+//! counter that falls by 1.
 //!
 //! # Runs
 //! Behind `LLRM_EXP_LSR` ([`crate::lsr_pass`]).
@@ -245,8 +247,8 @@ impl Implement<'_, '_> {
                     all_dominate = false;
                     break;
                 }
-                // A point in the middle of the block, not its end, so others use
-                // it.
+                // A point in the middle of the block, not its end, so others
+                // use it.
                 if function.parent(tentative) == function.parent(inst)
                     && better.is_none_or(|b| !tree.instruction_dominates(function, inst, b))
                 {
@@ -329,7 +331,10 @@ impl Implement<'_, '_> {
         // Climb as far as the inputs allow.
         let mut ip = self.hoist_insert_position(lowest, &inputs);
         // Not before phis, nor landing pads.
-        while matches!(function.instruction(ip).opcode, Opcode::Phi | Opcode::LandingPad { .. }) {
+        while matches!(
+            function.instruction(ip).opcode,
+            Opcode::Phi | Opcode::LandingPad { .. }
+        ) {
             ip = function.next_in_block(ip).expect("a terminator follows");
         }
         // Below what the expander inserted: the point is the same across
@@ -423,8 +428,8 @@ impl Implement<'_, '_> {
             } else {
                 // Expand the register and an explicit scale, to be matched as
                 // part of the address. The operands so far are flushed first to
-                // keep the expander from hoisting address modes, unless the mode
-                // is not folded.
+                // keep the expander from hoisting address modes, unless the
+                // mode is not folded.
                 if !ops.is_empty() && lu.kind == Kind::Address && is_am_completely_folded(self.tti, lu, f) {
                     let sum = self.add(&ops);
                     let full = self.expand_code_for(sum, None);
@@ -455,9 +460,8 @@ impl Implement<'_, '_> {
             }
             let space = self.env.globals[global.0 as usize].address_space;
             let pointer = self.context.types.ptr(space);
-            let constant = Operand::Constant(
-                self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(global) }),
-            );
+            let constant =
+                Operand::Constant(self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(global) }));
             let u = self.unknown(constant);
             ops.push(u);
         }
@@ -524,7 +528,10 @@ impl Implement<'_, '_> {
                 self.function.set_operand(ci, 1, v);
             } else {
                 // A scale of 1 was expanded as part of the base registers.
-                assert!(f.scale == 0 || f.scale == 1, "ICmp does not support folding a global value and a scale at the same time!");
+                assert!(
+                    f.scale == 0 || f.scale == 1,
+                    "ICmp does not support folding a global value and a scale at the same time!"
+                );
                 let effective_op = effective(self, op_ty);
                 let c = self.constant(effective_op, i128::from(offset.0.wrapping_neg()));
                 let c = if self.operand_ty(c) != op_ty_id { self.create_cast(c, op_ty_id, ci) } else { c };
@@ -582,14 +589,13 @@ impl Implement<'_, '_> {
             // A reuse by no-op cast gets the cast; a compare of pointers is
             // already in the integers.
             let op_ty = self.operand_ty(lf.operand);
-            let skip = lu.kind == Kind::ICmpZero
-                && matches!(self.context.types.get(op_ty), MirType::Pointer(_));
+            let skip = lu.kind == Kind::ICmpZero && matches!(self.context.types.get(op_ty), MirType::Pointer(_));
             if self.operand_ty(full) != op_ty && !skip {
                 full = self.create_cast(full, op_ty, lf.user);
             }
             if lu.kind == Kind::ICmpZero {
-                // `Expand` may have set the other operand to what the operand to
-                // replace now is, so only operand 0 is set.
+                // `Expand` may have set the other operand to what the operand
+                // to replace now is, so only operand 0 is set.
                 self.function.set_operand(lf.user, 0, full);
             } else {
                 let slots: Vec<usize> = self
@@ -687,16 +693,24 @@ impl Implement<'_, '_> {
             }
             // Where it can legally be scheduled: dominating every use.
             let pos = self.iv_inc_insert_pos;
-            let ok = self.function.users(inc).iter().all(|u| {
-                let user = self.function.instruction(u.user);
-                if user.opcode == Opcode::Phi {
-                    let Operand::Block(from) = user.operands[u.index as usize + 1] else { unreachable!("a phi's block") };
-                    let at = self.function.parent(pos).expect("a placed instruction");
-                    at == from || self.env.tree.dominates(at, from)
-                } else {
-                    self.env.tree.instruction_dominates(self.function, pos, u.user)
-                }
-            });
+            let ok = self
+                .function
+                .users(inc)
+                .iter()
+                .all(
+                    |u| {
+                        let user = self.function.instruction(u.user);
+                        if user.opcode == Opcode::Phi {
+                            let Operand::Block(from) = user.operands[u.index as usize + 1] else {
+                                unreachable!("a phi's block")
+                            };
+                            let at = self.function.parent(pos).expect("a placed instruction");
+                            at == from || self.env.tree.dominates(at, from)
+                        } else {
+                            self.env.tree.instruction_dominates(self.function, pos, u.user)
+                        }
+                    },
+                );
             if !ok {
                 continue;
             }

@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 121 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 122 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -86,6 +86,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | lsr_implement | Making LLVM's loop strength reduction's solution (`Expand`, `Rewrite`, `RewriteForPHI`, `AdjustInsertPositionForExpand`, `HoistInsertPosition` and `ImplementSolution`; LoopStrengthReduce.cpp at `d1106deb71cc`, l.5712-6306). | Behind `LLRM_EXP_LSR` ([`crate::lsr_pass`](lsr_pass.md)). | [lsr_implement](lsr_implement.md) |
 | lsr_narrow | How LLVM's loop strength reduction thins the formulae when there are too many for the solver (`NarrowSearchSpaceUsingHeuristics` and the heuristics it runs; LoopStrengthReduce.cpp at `d1106deb71cc`, l.4968-5560). | Nothing runs it yet: stage 4 of the translation of LSR. | [lsr_narrow](lsr_narrow.md) |
 | lsr_pass | LLVM's loop strength reduction as a pass (`LoopStrengthReduce`, `ReduceLoopStrength` and `LSRInstance::LSRInstance`; LoopStrengthReduce.cpp at `d1106deb71cc`, l.6307-6430 and 7187-7265). | Instead of [`crate::lsr`](lsr.md) with `LLRM_EXP_LSR`. | [lsr_pass](lsr_pass.md) |
+| lsr_prepare | What LLVM's loop strength reduction does to a loop before it collects (`OptimizeMax`, `OptimizeLoopTermCond` and `FindIVUserForCond`; LoopStrengthReduce.cpp at `d1106deb71cc`, l.2485-2815). | Before the collection, from [`crate::lsr_pass`](lsr_pass.md). | [lsr_prepare](lsr_prepare.md) |
 | lsr_solve | The solver of LLVM's loop strength reduction: one formula per use, by a depth-first search pruned by the best cost found (`SolveRecurse` and `Solve`; LoopStrengthReduce.cpp at `d1106deb71cc`, l.5573-5710). | Nothing runs it yet: stage 5 of the translation of LSR. | [lsr_solve](lsr_solve.md) |
 | lsr_use | The uses and the price of LLVM's loop strength reduction: `LSRFixup`, `LSRUse`, `Cost` and the addressing-mode checks they rate by (LoopStrengthReduce.cpp at `d1106deb71cc`, l.1070-2130). | Nothing runs it yet: stage 2 of the translation of LSR (the old pass in | [lsr_use](lsr_use.md) |
 | mem2reg | `mem2reg`: an alloca read and written only by direct loads and stores becomes SSA values and phis, and its loads, stores and the alloca go. | [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when | [mem2reg](mem2reg.md) |

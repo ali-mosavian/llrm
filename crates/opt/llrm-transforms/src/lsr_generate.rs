@@ -1,9 +1,10 @@
 //! The formulae LLVM's loop strength reduction generates for each use
-//! (`GenerateReassociations`, `GenerateCombinations`, `GenerateSymbolicOffsets`,
-//! `GenerateConstantOffsets`, `GenerateICmpZeroScales`, `GenerateScales`,
-//! `GenerateTruncates`, `GenerateCrossUseConstantOffsets`,
-//! `GenerateAllReuseFormulae` and `FilterOutUndesirableDedicatedRegisters`;
-//! LoopStrengthReduce.cpp at `d1106deb71cc`, l.3880-5000).
+//! (`GenerateReassociations`, `GenerateCombinations`,
+//! `GenerateSymbolicOffsets`, `GenerateConstantOffsets`,
+//! `GenerateICmpZeroScales`, `GenerateScales`, `GenerateTruncates`,
+//! `GenerateCrossUseConstantOffsets`, `GenerateAllReuseFormulae` and
+//! `FilterOutUndesirableDedicatedRegisters`; LoopStrengthReduce.cpp at
+//! `d1106deb71cc`, l.3880-5000).
 //!
 //! # How it works
 //! From a use's first formula, each generator makes the others the target could
@@ -11,12 +12,14 @@
 //! global moved into the address field, an offset moved between the immediate
 //! and a register, a factor of a stride folded into the scale, a wider
 //! induction variable truncated, and a register a constant apart from another
-//! use's. Each formula is offered to [`Collection::insert_formula`], which keeps
-//! one per set of registers. The recursion is capped (depth 3, and
+//! use's. Each formula is offered to [`Collection::insert_formula`], which
+//! keeps one per set of registers. The recursion is capped (depth 3, and
 //! sub-expression depth 3), as LLVM's is.
 //!
 //! # Example
-//! For the compare `{(-1 + %n),+,-1}`: `%n` with `{-1,+,-1}` scaled, and `(-1 + %n)` with `{0,+,-1}` scaled. For the store, `%p - 4 + 4*{1,+,1}`, sharing the compare's register.
+//! For the compare `{(-1 + %n),+,-1}`: `%n` with `{-1,+,-1}` scaled, and `(-1 +
+//! %n)` with `{0,+,-1}` scaled. For the store, `%p - 4 + 4*{1,+,1}`, sharing
+//! the compare's register.
 //!
 //! # Runs
 //! Nothing runs it yet: stage 4 of the translation of LSR.
@@ -132,7 +135,12 @@ fn collect_subexprs(
             });
             if let Some(remainder) = collect_subexprs(se, cx, operands[1].scev, c, ops, l, depth + 1) {
                 let product = se
-                    .get_mul_expr(cx, vec![ScevUse::of(c.expect("a factor")), ScevUse::of(remainder)], Flags::default(), 0)
+                    .get_mul_expr(
+                        cx,
+                        vec![ScevUse::of(c.expect("a factor")), ScevUse::of(remainder)],
+                        Flags::default(),
+                        0,
+                    )
                     .scev;
                 ops.push(product);
             }
@@ -226,8 +234,7 @@ impl Collection<'_, '_> {
             // The rest of the add goes back into the new formula.
             let fits = |se: &ScalarEvolution, s: Scev| se.as_constant(s).filter(|c| c.width <= 64);
             let sum_const = fits(se, inner_sum);
-            let unfolded_with =
-                |f: &Formula, c: u128| Immediate(f.unfolded_offset.0.wrapping_add(c as u64 as i64));
+            let unfolded_with = |f: &Formula, c: u128| Immediate(f.unfolded_offset.0.wrapping_add(c as u64 as i64));
             if let Some(c) = sum_const
                 && self.tti.is_legal_add_immediate(unfolded_with(&f, c.zext_value()).0)
             {
@@ -557,8 +564,9 @@ impl Collection<'_, '_> {
             let factor_s = se.get_constant_of_type(cx, int_ty, i128::from(factor));
             // No base register may overflow when multiplied.
             for i in 0..f.base_regs.len() {
-                f.base_regs[i] =
-                    se.get_mul_expr(cx, vec![ScevUse::of(f.base_regs[i]), ScevUse::of(factor_s)], Flags::default(), 0).scev;
+                f.base_regs[i] = se
+                    .get_mul_expr(cx, vec![ScevUse::of(f.base_regs[i]), ScevUse::of(factor_s)], Flags::default(), 0)
+                    .scev;
                 if get_exact_sdiv(se, cx, f.base_regs[i], factor_s, false) != Some(base.base_regs[i]) {
                     continue 'factor;
                 }
@@ -616,7 +624,16 @@ impl Collection<'_, '_> {
                 (lu.min_offset, lu.max_offset, lu.kind, lu.all_fixups_outside_loop)
             };
             let legal = |kind| {
-                is_legal_use(self.tti, min, max, kind, base.base_gv.is_some(), base.base_offset, base.has_base_reg, base.scale)
+                is_legal_use(
+                    self.tti,
+                    min,
+                    max,
+                    kind,
+                    base.base_gv.is_some(),
+                    base.base_offset,
+                    base.has_base_reg,
+                    base.scale,
+                )
             };
             if !legal(kind) {
                 // An out-of-loop basic use is special, and takes a -1 scale.
@@ -667,9 +684,9 @@ impl Collection<'_, '_> {
     }
 
     /// `getAnyExtendConsideringPostIncUses`: `expr` extended to `to`, for each
-    /// post-increment loop set of the fixups. Each is denormalized, extended and
-    /// normalized again, as the normalized form folds in ways that are not
-    /// valid in the post-inc context. They must all agree.
+    /// post-increment loop set of the fixups. Each is denormalized, extended
+    /// and normalized again, as the normalized form folds in ways that are
+    /// not valid in the post-inc context. They must all agree.
     fn any_extend_considering_post_inc_uses(
         se: &mut ScalarEvolution,
         cx: &llrm_analysis::scev::Cx,
@@ -764,10 +781,14 @@ impl Collection<'_, '_> {
         let mut sequence = Vec::new();
         for &use_reg in self.reg_uses.registers() {
             let (imm, reg) = extract_immediate(se, cx, use_reg);
-            let entry = map.entry(reg).or_insert_with(|| {
-                sequence.push(reg);
-                BTreeMap::new()
-            });
+            let entry = map
+                .entry(reg)
+                .or_insert_with(
+                    || {
+                        sequence.push(reg);
+                        BTreeMap::new()
+                    },
+                );
             entry.entry(imm).or_insert(use_reg);
             used_by.entry(reg).or_default().extend(self.reg_uses.used_by_indices(use_reg).set_bits());
         }
@@ -869,17 +890,23 @@ impl Collection<'_, '_> {
                             new_f = f.clone();
                             new_f.unfolded_offset = unfolded;
                         }
-                        new_f.base_regs[n] =
-                            se.get_add_expr(cx, vec![ScevUse::of(neg_imm), ScevUse::of(base_reg)], Flags::default(), 0).scev;
+                        new_f.base_regs[n] = se
+                            .get_add_expr(cx, vec![ScevUse::of(neg_imm), ScevUse::of(base_reg)], Flags::default(), 0)
+                            .scev;
                         // A constant in a register that brings the immediate no
                         // nearer zero makes the formula not worth it.
                         let off = new_f.base_offset.0;
-                        let skip = new_f.base_regs.iter().any(|&reg| {
-                            let Some(c) = se.as_constant(reg) else { return false };
-                            let sum = c.sext_value().wrapping_add(i128::from(off));
-                            sum.unsigned_abs() < u128::from(off.unsigned_abs())
-                                && (sum as u64).trailing_zeros() >= (off as u64).trailing_zeros()
-                        });
+                        let skip = new_f
+                            .base_regs
+                            .iter()
+                            .any(
+                                |&reg| {
+                                    let Some(c) = se.as_constant(reg) else { return false };
+                                    let sum = c.sext_value().wrapping_add(i128::from(off));
+                                    sum.unsigned_abs() < u128::from(off.unsigned_abs())
+                                        && (sum as u64).trailing_zeros() >= (off as u64).trailing_zeros()
+                                },
+                            );
                         if skip {
                             continue;
                         }
@@ -945,7 +972,8 @@ impl Collection<'_, '_> {
         let visited: HashSet<Scev> = HashSet::default();
         let mut losers: HashSet<Scev> = HashSet::default();
         for lu_idx in 0..self.uses.len() {
-            // The best formula for each unique set of shared registers, per use.
+            // The best formula for each unique set of shared registers, per
+            // use.
             let mut best_formulae: HashMap<Vec<Scev>, usize> = HashMap::default();
             let mut any = false;
             let mut f_idx = 0;

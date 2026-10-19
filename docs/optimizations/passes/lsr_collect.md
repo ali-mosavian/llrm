@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_collect.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_collect.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_collect.rs sha256:abc724a632e898badbffcb6b71abb1ab98ae132df149e3b863fa5e9e1e85caf1 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_collect.rs sha256:40a9177b83974e2b6a6f4fa9ddd0a0c1991791ad9fb4bc0f53b4dc1027e3d15f -->
 
 # lsr_collect
 
@@ -21,7 +21,8 @@ and invariant registers. Invariants that other code in the loop also uses
 are added as uses, so the solver sees what they pin in registers.
 
 ## Example
-`p[i] = 0` with the exit `i + 1 == n`: an address use of `{%p,+,4}` and a compare use of `{(-1 + %n),+,-1}`; factors 4, -4 and -1.
+`p[i] = 0` with the exit `i + 1 == n`: an address use of `{%p,+,4}` and a
+compare use of `{(-1 + %n),+,-1}`; factors 4, -4 and -1.
 
 ## Runs
 Nothing runs it yet: stage 3 of the translation of LSR.
