@@ -636,6 +636,11 @@ pub(super) enum TypeClass {
     Other,
 }
 
+/// The low and high 16-bit words of a dword constant, as numbers.
+fn dword_halves(bits: i64) -> [i64; 2] {
+    [i64::from(bits as u16), i64::from((bits >> 16) as u16)]
+}
+
 impl TypeClass {
     pub(super) fn of(
         types: &Types,
@@ -2293,6 +2298,30 @@ impl Selector<'_, '_, '_> {
             && function.parent(definition) == function.parent(user)
     }
 
+    /// Whether `value` is read once, by `user`, and is not live around a loop
+    /// `user` is in (`only_reader`, for an argument or a value made elsewhere
+    /// too): its register is free after `user`, so a two-address operation
+    /// updates it in place and needs no copy.
+    fn dies_at(
+        &self,
+        value: ValueId,
+        user: InstId,
+    ) -> bool {
+        let function = self.function;
+        if self.only_reader(value, user) {
+            return true;
+        }
+        if !function.users(value).only().is_some_and(|only| only.user == user) {
+            return false;
+        }
+        let Some(at) = function.parent(user).map(cfg::id) else { return false };
+        let made = match function.value(value).def {
+            ValueDef::Instruction(definition) => function.parent(definition).map(cfg::id),
+            ValueDef::Argument(_) => None,
+        };
+        self.shape.loops.iter().all(|one| !one.body.contains(&at) || made.is_some_and(|made| one.body.contains(&made)))
+    }
+
     /// Whether nothing after `from` and before `to`, in one block, may write
     /// memory.
     fn unwritten(
@@ -2894,6 +2923,31 @@ impl Selector<'_, '_, '_> {
         self.layout.pointer(0).bits / 8
     }
 
+    /// A far pointer constant that is a number: selector:offset as one
+    /// dword. A plain address constant, or a segment's selector widened to a
+    /// far pointer (`addrspacecast (ptr addrspace(2) inttoptr N to ptr addrspace(1))`,
+    /// `N:0`).
+    fn far_number(
+        &self,
+        id: llrm_mir::context::ConstantId,
+    ) -> Option<i64> {
+        if let Some(bits) = crate::backend::globals::absolute(self.module, &self.layout, id) {
+            return Some(bits);
+        }
+        let context = &self.module.context;
+        let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) =
+            &context.get(id).kind
+        else {
+            return None;
+        };
+        let Type::Pointer(from) = self.types().get(context.get(*value).ty) else { return None };
+        if !self.spaces.is_segment(Some(*from)) {
+            return None;
+        }
+        let selector = crate::backend::globals::absolute(self.module, &self.layout, *value)?;
+        Some(i64::from(selector as u16) << 16)
+    }
+
     /// `ptrtoint (ptr C to iN)` of a near pointer constant, N the pointer's
     /// width, is that address: the pointer constant, which a link-time
     /// address is. Any other operand is itself.
@@ -3002,7 +3056,7 @@ impl Selector<'_, '_, '_> {
     ) -> Result<Option<[Loc; 2]>, Unselected> {
         if let Some(bits) = self.constant(operand, 4) {
             return Ok(Some(
-                [bits & 0xFFFF, (bits >> 16) & 0xFFFF].map(|value| Loc::Imm(Imm { value, width: 2, address: None })),
+                dword_halves(bits).map(|value| Loc::Imm(Imm { value, width: 2, address: None })),
             ));
         }
         let Operand::Value(value) = operand else { return Ok(None) };
@@ -3066,6 +3120,18 @@ impl Selector<'_, '_, '_> {
             );
             out.push(insn(at, what));
             return Ok(held);
+        }
+        // `ptrtoint` of a far pointer constant: its two words, joined.
+        if let Operand::Constant(id) = operand
+            && let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::PtrToInt, value }) =
+                self.module.context.get(id).kind.clone()
+            && self.is_far(self.module.context.get(value).ty)
+            && width == 4
+        {
+            let (offset, selector) = self.far(Operand::Constant(value), at, out)?;
+            let joined = Held { value: self.fresh(), width };
+            self.joined(joined, offset, selector, at, out);
+            return Ok(joined);
         }
         let operand = self.through_ptrtoint(operand);
         let pointer = match operand {
@@ -3281,12 +3347,12 @@ impl Selector<'_, '_, '_> {
         // An address no global owns, far: its selector:offset number, in two
         // registers.
         if self.is_far(self.module.context.get(id).ty)
-            && let Some(bits) = crate::backend::globals::absolute(self.module, &self.layout, id)
+            && let Some(bits) = self.far_number(id)
         {
             let Some(block) = self.current else { return refuse("a far constant outside a block") };
             let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
             let (base, selector) = (self.fresh_held(2), self.fresh_held(2));
-            for (into, value) in [(base, bits & 0xFFFF), (selector, (bits >> 16) & 0xFFFF)] {
+            for (into, value) in [base, selector].into_iter().zip(dword_halves(bits)) {
                 let word = Loc::Imm(Imm { value, width: 2, address: None });
                 self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![word])));
             }
@@ -3302,10 +3368,11 @@ impl Selector<'_, '_, '_> {
         let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id)
             .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
         let space = crate::backend::globals::space(self.module, global);
-        // A near global cast to a far pointer (`addrspacecast (ptr @g to ptr addrspace(1))`)
-        // is its DGROUP selector and its offset, as the cast instruction makes it.
-        let widened = self.module.global(global).address_space == self.spaces.near
-            && self.is_far(self.module.context.get(id).ty);
+        // A near global cast to a far pointer (`addrspacecast (ptr @g to ptr
+        // addrspace(1))`) is its DGROUP selector and its offset, as the
+        // cast instruction makes it.
+        let widened =
+            self.module.global(global).address_space == self.spaces.near && self.is_far(self.module.context.get(id).ty);
         if self.module.global(global).address_space != self.spaces.near || widened {
             let Some(block) = self.current else { return refuse("a far global outside a block") };
             // A carried pointer is canonical: whole 64K strides of its offset
@@ -4676,12 +4743,16 @@ impl Selector<'_, '_, '_> {
     ) -> Result<(Held, Held), Unselected> {
         // A numeric constant, null among them: selector:offset as one dword.
         // An `inttoptr` constant is one as well.
-        let numeric = self.constant(operand, 4).or_else(|| match operand {
-            Operand::Constant(id) => crate::backend::globals::absolute(self.module, &self.layout, id),
-            _ => None,
-        });
+        let numeric = self
+            .constant(operand, 4)
+            .or_else(
+                || match operand {
+                    Operand::Constant(id) => self.far_number(id),
+                    _ => None,
+                },
+            );
         if let Some(bits) = numeric {
-            let halves = [bits & 0xFFFF, (bits >> 16) & 0xFFFF].map(|value| {
+            let halves = dword_halves(bits).map(|value| {
                 let held = self.fresh_held(2);
                 let word = Loc::Imm(Imm { value, width: 2, address: None });
                 out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![word])));
@@ -6751,7 +6822,7 @@ impl Selector<'_, '_, '_> {
         }
         let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
         let second = match self.constant(b, 4) {
-            Some(bits) => [word(bits & 0xFFFF), word((bits >> 16) & 0xFFFF)],
+            Some(bits) => dword_halves(bits).map(word),
             None => {
                 let (offset, selector) = self.far(b, at, out)?;
                 [Loc::Held(offset), Loc::Held(selector)]
@@ -6816,7 +6887,7 @@ impl Selector<'_, '_, '_> {
         let a = words(self, a)?;
         let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
         let b = match self.constant(b, 4) {
-            Some(bits) => [word(bits & 0xFFFF), word((bits >> 16) & 0xFFFF)],
+            Some(bits) => dword_halves(bits).map(word),
             None => words(self, b)?,
         };
         Some(self.words_equal(a, b, predicate, at, out))

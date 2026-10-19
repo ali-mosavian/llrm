@@ -400,7 +400,7 @@ def test_every_test_that_reads_the_trees_sources_is_a_listed_scan():
 def test_a_failing_scan_does_not_hide_the_ones_after_it(tmp_path):
     """&& stopped at the first red scan; the step runs every scan and fails if any did."""
     command = gate.commands(gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]), gate.load(), gate.packages())["scans"]
-    assert "&&" not in command.replace("cargo test", "") and command.count("|| rc=1") == 3 and command.endswith("exit $rc")
+    assert "&&" not in command.replace("cargo test", "") and command.count("|| rc=1") == command.count("cargo test") > 0 and command.endswith("exit $rc")
 
 
 def test_a_diff_that_selects_only_the_root_crate_runs_no_lib_or_doc_tests():
