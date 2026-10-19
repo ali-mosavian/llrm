@@ -260,7 +260,11 @@ fn float_move(
         sources: vec![held(from)],
         ..Semantics::new(Operation::Move)
     };
-    Arc::new(Insn { group, widths: vec![(into, 10), (from, 10)], ..Insn::new(at, Some((at, at)), Some(what), vec![into], vec![from]) })
+    Arc::new(Insn {
+        group,
+        widths: vec![(into, 10), (from, 10)],
+        ..Insn::new(at, Some((at, at)), Some(what), vec![into], vec![from])
+    })
 }
 
 /// A rotation of ten floats is one group of ten copies, each value read by one
@@ -271,13 +275,8 @@ fn float_move(
 fn test_a_cycle_of_float_copies_is_written_one_at_a_time() {
     use crate::model::lir::{Block, LirBlock};
     let insns: Vec<Arc<Insn>> = (0..10).map(|k| float_move(k as i64, Some(1), k + 1, (k + 1) % 10 + 1)).collect();
-    let body = LirBody::new(
-        "rot",
-        0,
-        vec![Block::from(LirBlock::new(0, insns))],
-        IndexMap::default(),
-        IndexMap::default(),
-    );
+    let body =
+        LirBody::new("rot", 0, vec![Block::from(LirBlock::new(0, insns))], IndexMap::default(), IndexMap::default());
     let made = _sequenced(&body);
     let copies = made.insns();
     assert!(copies.iter().all(|one| one.group.is_none()), "a copy is still grouped");

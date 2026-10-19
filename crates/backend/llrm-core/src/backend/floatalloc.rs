@@ -588,20 +588,20 @@ pub(super) fn _truncating(
                     ),
                 ]);
             } else {
-            insns.extend([
-                insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(saved.clone())], Vec::new()), at),
-                insn(semantics(Operation::Move, "mov", vec![Loc::Held(loaded)], vec![Loc::Mem(saved.clone())]), at),
-                insn(
-                    semantics(
-                        Operation::Binary,
-                        "or",
-                        vec![Loc::Held(chopped)],
-                        vec![Loc::Held(loaded), Loc::Imm(Imm { value: 0x0C00, width: 2, address: None })],
+                insns.extend([
+                    insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(saved.clone())], Vec::new()), at),
+                    insn(semantics(Operation::Move, "mov", vec![Loc::Held(loaded)], vec![Loc::Mem(saved.clone())]), at),
+                    insn(
+                        semantics(
+                            Operation::Binary,
+                            "or",
+                            vec![Loc::Held(chopped)],
+                            vec![Loc::Held(loaded), Loc::Imm(Imm { value: 0x0C00, width: 2, address: None })],
+                        ),
+                        at,
                     ),
-                    at,
-                ),
-                insn(semantics(Operation::Move, "mov", vec![Loc::Mem(chop.clone())], vec![Loc::Held(chopped)]), at),
-            ]);
+                    insn(semantics(Operation::Move, "mov", vec![Loc::Mem(chop.clone())], vec![Loc::Held(chopped)]), at),
+                ]);
             }
         }
         let mut current = modes.entering[&block.at];

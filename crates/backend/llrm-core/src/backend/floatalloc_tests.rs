@@ -295,19 +295,16 @@ fn test_truncation_saves_the_control_word_once_per_body() {
     assert_eq!(names, vec![(0, vec!["fnstcw", "mov", "or", "mov", "fldcw"]), (5, vec!["fistp", "fistp", "fldcw"])]);
 }
 
-/// With the registers allocated (`LLRM_GREEDY_RFP`) no value is left to hold the
-/// control word: the truncating word is made in memory alone. A `mov` of a
+/// With the registers allocated (`LLRM_GREEDY_RFP`) no value is left to hold
+/// the control word: the truncating word is made in memory alone. A `mov` of a
 /// value the allocator never saw reached the encoder as an unplaced value.
 #[test]
 fn test_the_truncating_word_is_made_in_memory_under_rfp() {
     let _rfp = crate::backend::allocate::RfpOn::set();
     let insn = |at: i64, what: Semantics| Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]));
     let cell = Mem { through: RegId::BP, offset: 0, disp_width: 2, ..frame_cell(-2, 2) };
-    let blocks = vec![block(
-        0,
-        vec![insn(0, sem(Operation::FloatStore, "fisttp", vec![m(&cell)], vec![st(0)]))],
-        vec![],
-    )];
+    let blocks =
+        vec![block(0, vec![insn(0, sem(Operation::FloatStore, "fisttp", vec![m(&cell)], vec![st(0)]))], vec![])];
     let mut frame = Frame::new(-8);
     let result = _truncating(
         &LirBody::new("t", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default()),
@@ -315,9 +312,12 @@ fn test_the_truncating_word_is_made_in_memory_under_rfp() {
     )
     .unwrap();
     assert!(
-        result.insns().iter().all(|one| one.what.as_ref().is_none_or(|what| {
-            what.dests.iter().chain(&what.sources).all(|place| !matches!(place, Loc::Held(_)))
-        })),
+        result
+            .insns()
+            .iter()
+            .all(|one| one.what.as_ref().is_none_or(|what| {
+                what.dests.iter().chain(&what.sources).all(|place| !matches!(place, Loc::Held(_)))
+            })),
         "a value is named"
     );
     assert_eq!(&names_of(&result, 0)[..3], ["fnstcw", "fnstcw", "or"]);
@@ -1977,7 +1977,8 @@ fn test_a_plain_move_of_a_float_to_and_from_a_cell_is_stored_and_loaded() {
     let from_cell = sem(Operation::Move, "mov", vec![fl(2)], vec![m(&spill)]);
     let body = _body(vec![_load(1, &source), to_cell, from_cell, _store(&source, 2)]);
     let result =
-        crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16)).expect("converts");
+        crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
+            .expect("converts");
     let insns = result.insns();
     let names: Vec<&str> = insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect();
     assert!(!names.contains(&"mov"), "{names:?}");
