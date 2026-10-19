@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import corpora  # noqa: E402
 import envguard  # noqa: E402
+import llrmbin  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path(os.environ.get("LLRM_AB_DIR") or Path.home() / ".cache/llrm/ab")
@@ -138,6 +139,7 @@ def main() -> int:
         dfaces = str(corpora.resolve("dfaces", os.environ.get("DFACES_SRC") or os.environ.get("QCPORT"), args.allow_other_corpus))
         print(corpora.header("dfaces", dfaces))
     a, b = build(args.parent, profile=args.profile) / "llrm-c", build(args.head, profile=args.profile) / "llrm-c"
+    print(llrmbin.assert_distinct(a, b, same_source=args.parent == args.head))
     work = CACHE / "work"
     work.mkdir(parents=True, exist_ok=True)
     print(f"parent {args.parent} -> {a}\nhead   {args.head} -> {b}\nbuild: CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile {args.profile} --bin llrm-c; switches: {' '.join(envguard.stray(allow=())) or 'none'}{' (allowed: ' + ' '.join(args.allow_env) + ')' if args.allow_env else ''}; load {open('/proc/loadavg').read().split()[0]}")

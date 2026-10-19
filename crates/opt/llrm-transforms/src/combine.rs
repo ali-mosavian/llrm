@@ -422,7 +422,10 @@ pub(crate) fn combine_with(
     function: &mut Function,
     visit: fn(&mut Combiner, InstId) -> Visit,
 ) -> bool {
-    let env = Env { globals, layout, analyses: FunctionAnalyses::of(context, globals, metadata, layout, function) };
+    // InstCombine's `SQ.DC`: what the branches dominating an instruction say.
+    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function)
+        .with_dom_conditions_of(context, globals, metadata, function);
+    let env = Env { globals, layout, analyses };
     let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default() };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
     changed |= drain(&mut c, visit);
