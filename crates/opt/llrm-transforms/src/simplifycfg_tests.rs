@@ -715,6 +715,78 @@ b9:
     );
 }
 
+/// The store of the arm runs before the branch, of the value it stores or
+/// the one the location already held (`HoistCondStores`): the location is
+/// known to be written, by the store just before the branch.
+#[test]
+fn test_a_store_over_a_store_just_before_the_branch_runs_early() {
+    check(
+        "define i16 @f(i16 %x, i1 %c) {
+entry:
+  %a = alloca i16
+  store i16 0, ptr %a
+  br i1 %c, label %then, label %end
+
+then:
+  store i16 %x, ptr %a
+  br label %end
+
+end:
+  %r = load i16, ptr %a
+  ret i16 %r
+}
+",
+        "define i16 @f(i16 %x, i1 %c) {
+entry:
+  %a = alloca i16
+  store i16 0, ptr %a
+  %spec.store.select = select i1 %c, i16 %x, i16 0
+  store i16 %spec.store.select, ptr %a
+  %r = load i16, ptr %a
+  ret i16 %r
+}
+",
+        &[&[7, 1], &[7, 0]],
+    );
+}
+
+/// A load of an alloca is safe to run early: the join has a third
+/// predecessor, so the two-entry fold does not apply, and the phi is a select.
+#[test]
+fn test_a_load_of_an_alloca_runs_before_the_branch() {
+    check(
+        "define i16 @f(i1 %c, i1 %d) {
+b9:
+  %a = alloca i16
+  store i16 5, ptr %a
+  br i1 %d, label %b0, label %end
+
+b0:
+  br i1 %c, label %then, label %end
+
+then:
+  %l = load i16, ptr %a
+  br label %end
+
+end:
+  %r = phi i16 [ 9, %b9 ], [ 0, %b0 ], [ %l, %then ]
+  ret i16 %r
+}
+",
+        "define i16 @f(i1 %c, i1 %d) {
+b9:
+  %a = alloca i16
+  store i16 5, ptr %a
+  %l = load i16, ptr %a
+  %0 = select i1 %c, i16 %l, i16 0
+  %1 = select i1 %d, i16 %0, i16 9
+  ret i16 %1
+}
+",
+        &[&[1, 1], &[0, 1], &[1, 0]],
+    );
+}
+
 /// A store is not run early (the pin only does that for a store it can prove
 /// safe, which is not ported).
 #[test]
