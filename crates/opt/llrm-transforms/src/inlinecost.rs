@@ -2199,6 +2199,30 @@ pub fn shadow(
     }
 }
 
+/// `opt -pass-remarks=inline`'s line for a decided site (InlineAdvisor.cpp
+/// `emitInlinedInto`, Inliner.cpp's missed remark); `spliced` says whether
+/// the copy was made, which a decision to inline may still be refused.
+pub fn remark(
+    caller: &str,
+    callee: &str,
+    cost: &InlineCost,
+    spliced: bool,
+) -> String {
+    let priced = match cost {
+        InlineCost::Always(why) => format!("(cost=always): {why}"),
+        InlineCost::Never(why) => format!("(cost=never): {why}"),
+        InlineCost::Cost { cost, threshold, .. } => format!("(cost={cost}, threshold={threshold})"),
+    };
+    match (spliced, cost.is_ok()) {
+        (true, _) => format!("'{callee}' inlined into '{caller}' with {priced}"),
+        (false, true) => format!("'{callee}' not inlined into '{caller}' because the copy was not made {priced}"),
+        (false, false) if matches!(cost, InlineCost::Never(_)) => {
+            format!("'{callee}' not inlined into '{caller}' because it should never be inlined {priced}")
+        }
+        (false, false) => format!("'{callee}' not inlined into '{caller}' because too costly to inline {priced}"),
+    }
+}
+
 fn caller_global_name(
     module: &Module,
     id: GlobalId,
@@ -2356,6 +2380,7 @@ pub fn sites(
     size: CallerSize,
     always_only: bool,
     tti: Option<&dyn llrm_mir::tti::Tti>,
+    mut decided: Option<&mut Vec<(InstId, GlobalId, InlineCost)>>,
 ) -> llrm_support::hash::SparseIdMap<InstId, crate::inline::Candidate> {
     let mut out = llrm_support::hash::SparseIdMap::default();
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
@@ -2395,6 +2420,9 @@ pub fn sites(
         // `-fno-inline-functions`: clang's pipeline is the always-inliner
         // alone.
         let cost = inline_cost(&site, params);
+        if let Some(decided) = decided.as_deref_mut() {
+            decided.push((inst, callee_id, cost.clone()));
+        }
         if if always_only { matches!(cost, InlineCost::Always("always inline attribute")) } else { cost.is_ok() } {
             out.insert(
                 inst,
