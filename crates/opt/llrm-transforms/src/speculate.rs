@@ -58,6 +58,70 @@ use crate::twoentryphi::{Speculation, metadata_dropped};
 /// `phi-node-folding-threshold`, in `TCC_Basic`.
 const THRESHOLD: i64 = 2;
 
+/// `isSafeToSpeculateStore`: where `store` writes what a store or a load just
+/// before the branch of `block` read or wrote, the location is known to be
+/// writable and the value that was there is the value to store instead.
+fn store_speculated(
+    context: &Context,
+    spec: &Speculation,
+    function: &Function,
+    store: InstId,
+    block: BlockId,
+) -> Option<Operand> {
+    let Opcode::Store { align, volatile: false } = function.instruction(store).opcode else { return None };
+    let (value, pointer) = (function.instruction(store).operands[0], function.instruction(store).operands[1]);
+    let ty = function.operand_type(context, value)?;
+    // The nine instructions before the branch.
+    for inst in function.iter_block_rev(block).take(9) {
+        let operation = function.instruction(inst);
+        if llrm_mir::memory::of(context, spec.outer.callees(), function, inst).writes
+            && !matches!(operation.opcode, Opcode::Store { .. })
+        {
+            return None;
+        }
+        match operation.opcode {
+            Opcode::Store { align: held, volatile } => {
+                // The previous store of the location, as simple and as aligned.
+                return (operation.operands[1] == pointer
+                    && function.operand_type(context, operation.operands[0]) == Some(ty)
+                    && !volatile
+                    && held >= align)
+                    .then_some(operation.operands[0]);
+            }
+            Opcode::Load { align: held, volatile: false }
+                if operation.operands[0] == pointer && operation.ty == ty && held >= align =>
+            {
+                let query = Query::bare(context, function, spec.layout);
+                let object = get_underlying_object(&query, pointer, 0);
+                // `isWritableObject` and `PointerMayBeCaptured`: an alloca
+                // that does not escape. D6.
+                if let Operand::Value(root) = object
+                    && let ValueDef::Instruction(def) = function.value(root).def
+                    && matches!(function.instruction(def).opcode, Opcode::Alloca { .. })
+                    && llrm_analysis::capturetracking::pointer_may_be_captured(
+                        function,
+                        &spec.outer.globals,
+                        context,
+                        root,
+                        llrm_analysis::capturetracking::CaptureComponents::PROVENANCE,
+                        |cc| {
+                            cc.intersect(llrm_analysis::capturetracking::CaptureComponents::PROVENANCE)
+                                == llrm_analysis::capturetracking::CaptureComponents::PROVENANCE
+                        },
+                        llrm_analysis::capturetracking::DEFAULT_MAX_USES_TO_EXPLORE,
+                    )
+                    .without_ret
+                    .captures_nothing()
+                {
+                    return operation.result.map(Operand::Value);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// The cost of the selects `end`'s phis need once `then` runs early, and
 /// whether any phi needs one; None where a phi cannot be a select.
 fn selects_priced(
