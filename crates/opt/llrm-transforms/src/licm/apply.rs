@@ -311,7 +311,7 @@ pub fn apply_loop(
     preheader: Option<BlockId>,
     sunk: &[(InstId, Sinking)],
     hoisted: &[(InstId, BlockId)],
-    reassociated: &[Reassociation],
+    reassociated: &[(usize, Reassociation)],
 ) -> Result<bool, String> {
     let mut changed = false;
     for &(inst, how) in sunk {
@@ -325,12 +325,19 @@ pub fn apply_loop(
         }
         changed = true;
     }
-    for &(inst, _) in hoisted {
+    // A reassociation goes to the preheader where the visit found it, among
+    // the hoists.
+    let mut pending = reassociated.iter().peekable();
+    for (at, &(inst, _)) in hoisted.iter().enumerate() {
+        while let Some((_, one)) = pending.next_if(|(after, _)| *after <= at) {
+            let preheader = preheader.ok_or("a reassociation with no preheader")?;
+            reassociate(function, context, graph, preheader, one)?;
+        }
         let preheader = preheader.ok_or("a hoist with no preheader")?;
         hoist(function, graph, inst, preheader)?;
         changed = true;
     }
-    for one in reassociated {
+    for (_, one) in pending {
         let preheader = preheader.ok_or("a reassociation with no preheader")?;
         reassociate(function, context, graph, preheader, one)?;
         changed = true;

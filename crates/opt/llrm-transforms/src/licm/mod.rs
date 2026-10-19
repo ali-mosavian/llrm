@@ -306,7 +306,7 @@ fn record_edits(
     header: BlockId,
     sunk: &[(InstId, sink::Sinking)],
     hoisted: &[(InstId, BlockId)],
-    reassociated: &[hoist::Reassociation],
+    reassociated: &[(usize, hoist::Reassociation)],
 ) {
     let count = |inst: InstId, decisions: &mut Decisions| match unit.function.instruction(inst).opcode {
         llrm_mir::opcode::Opcode::Load { .. } => decisions.moved_loads += 1,
@@ -326,7 +326,7 @@ fn record_edits(
         decisions.hoisted.push(Hoisted { function: unit.id, header, inst });
         count(inst, decisions);
     }
-    for one in reassociated {
+    for (_, one) in reassociated {
         decisions.reassociated.push(Hoisted { function: unit.id, header, inst: one.inst() });
     }
 }
@@ -611,7 +611,7 @@ fn sink_and_hoist(
     mssa: &mut Mssa,
     aa: &AliasQuery,
     accesses: &Accesses,
-) -> (Vec<(InstId, sink::Sinking)>, Vec<(InstId, BlockId)>, Vec<hoist::Reassociation>) {
+) -> (Vec<(InstId, sink::Sinking)>, Vec<(InstId, BlockId)>, Vec<(usize, hoist::Reassociation)>) {
     use llrm_analysis::cfg::Around;
     let preheader = ctx.loop_.preheader(unit.function).map(cfg::block);
     let mut flags = Flags::new(

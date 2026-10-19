@@ -40,9 +40,9 @@ fn loop_blocks_rpo(ctx: &LoopCtx) -> Vec<BlockId> {
 /// the instructions it hoists to `preheader`. Not built (L1): the
 /// reciprocal of an `fdiv` (MIR has no `arcp`), `hoistInsertPastInsert`
 /// (no vectors), the invariant-start and guard intrinsics, and
-/// `hoistArithmetics` but `hoistGEP` and `hoistBOAssociation` (the latter only for integers:
-/// a float add or multiply needs `reassoc` and `nsz`, and the intersection of
-/// the two fast-math flags).
+/// `hoistArithmetics` but `hoistGEP` and `hoistBOAssociation` (the latter only
+/// for integers: a float add or multiply needs `reassoc` and `nsz`, and the
+/// intersection of the two fast-math flags).
 #[allow(clippy::too_many_arguments)]
 pub fn hoist_region(
     unit: &passes::Unit,
@@ -53,7 +53,7 @@ pub fn hoist_region(
     aa: &AliasQuery,
     flags: &mut Flags,
     safety: &LoopSafety,
-) -> (Vec<(InstId, BlockId)>, Vec<Reassociation>) {
+) -> (Vec<(InstId, BlockId)>, Vec<(usize, Reassociation)>) {
     let mut found = Vec::new();
     let mut reassociated = Vec::new();
     for block in loop_blocks_rpo(ctx) {
@@ -80,7 +80,9 @@ pub fn hoist_region(
             // be done out of loop.
             } else if let Some(one) = hoist_gep(unit, ctx, inst).or_else(|| hoist_bo_association(unit, ctx, inst)) {
                 ctx.state.gone.borrow_mut().extend([one.inst(), one.erased()]);
-                reassociated.push(one);
+                // The preheader gets it where the visit reached it, after the
+                // hoists found so far.
+                reassociated.push((found.len(), one));
             }
         }
     }
@@ -190,9 +192,19 @@ fn hoist_gep(
     }
     // The swapped GEPs are inbounds if both were and every offset is
     // non-negative.
-    let non_negative = |operand: &Operand| {
-        llrm_mir::valuetracking::is_known_non_negative(unit.context, function, *operand, 0, Some(inst))
+    let query = llrm_mir::valuetracking::Query {
+        context: unit.context,
+        globals: &[],
+        metadata: &[],
+        function,
+        layout: unit.layout,
+        dt: None,
+        assumptions: None,
+        dom_conditions: None,
+        cond_context: None,
+        cxt: Some(inst),
     };
+    let non_negative = |operand: &Operand| llrm_mir::valuetracking::known::is_known_non_negative(&query, *operand, 0);
     let in_bounds = src.flags.contains(Wrap::INBOUNDS)
         && gep.flags.contains(Wrap::INBOUNDS)
         && src.operands[1..].iter().all(non_negative)
