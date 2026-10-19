@@ -45,15 +45,15 @@
 //! LLVM:
 //! [`InstructionWorklist.h`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/InstructionWorklist.h).
 
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::InstId;
-use llrm_support::hash::HashMap;
 
 /// One list: slots in push order, emptied by `remove`, and where each live
 /// instruction is.
 #[derive(Default)]
 struct Slots {
     slots: Vec<Option<InstId>>,
-    at: HashMap<InstId, usize>,
+    at: IdMap<InstId, usize>,
 }
 
 impl Slots {
@@ -61,8 +61,8 @@ impl Slots {
         &mut self,
         id: InstId,
     ) {
-        if let std::collections::hash_map::Entry::Vacant(slot) = self.at.entry(id) {
-            slot.insert(self.slots.len());
+        if !self.at.contains_key(&id) {
+            self.at.insert(id, self.slots.len());
             self.slots.push(Some(id));
         }
     }
@@ -138,7 +138,6 @@ impl InstWorklist {
         count: usize,
     ) {
         self.stack.slots.reserve(count + 16);
-        self.stack.at.reserve(count);
     }
 
     /// The end of a run: both lists must be empty; frees the map.
