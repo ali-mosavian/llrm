@@ -70,3 +70,13 @@ def test_parity_squash_main_runs_every_command_inside_the_landing(monkeypatch):
     monkeypatch.setattr(parity_squash, "dispatch", lambda: seen.append(os.environ.get(bs.LANDING)) or 0)
     monkeypatch.delenv(bs.LANDING, raising=False)
     assert parity_squash.main() == 0 and seen == ["1"] and bs.LANDING not in os.environ
+
+
+def test_a_build_slot_caps_cargo_jobs_unless_the_caller_sets_them(tmp_path):
+    """Four slots of cargo at every core (32 rustc of 1-1.7 GB each) ran the host out of memory: systemd-oomd killed whole sessions at 19:58 and 20:13-20:17."""
+    script = str(Path(__file__).resolve().parent / "buildslot")
+    run = lambda env: subprocess.run([script, "sh", "-c", "echo $CARGO_BUILD_JOBS"], capture_output=True, text=True, env=env).stdout.strip()  # noqa: E731
+    base = {**os.environ, "BUILDSLOT_DIR": str(tmp_path)}
+    default = run({k: v for k, v in base.items() if k != "CARGO_BUILD_JOBS"})
+    assert default == "8", default
+    assert run({**base, "CARGO_BUILD_JOBS": "3"}) == "3"
