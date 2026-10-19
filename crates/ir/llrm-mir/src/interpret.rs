@@ -418,6 +418,15 @@ impl<'m> Machine<'m> {
                     _ => Val::Poison,
                 }
             }
+            Intrinsic::BitCount(count) => {
+                let Val::Int { bits, width } = argument(0) else { return Ok(Val::Poison) };
+                // A zero is poison where the second argument says so.
+                let zero_is_poison = count.has_zero_poison_flag() && matches!(argument(1), Val::Int { bits: 1, .. });
+                if bits == 0 && zero_is_poison {
+                    return Ok(Val::Poison);
+                }
+                Val::Int { bits: count.apply(bits, width), width }
+            }
             Intrinsic::Fixed { divide } => {
                 let (Val::Int { bits: a, width }, Val::Int { bits: b, .. }, Val::Int { bits: scale, .. }) =
                     (argument(0), argument(1), argument(2))
@@ -524,6 +533,7 @@ impl<'m> Machine<'m> {
             Intrinsic::Window | Intrinsic::Restrict => argument(0),
             Intrinsic::PortIn | Intrinsic::PortOut => return unsupported("an I/O port"),
             Intrinsic::VaStart => return unsupported("a variadic argument list"),
+            Intrinsic::StackSave | Intrinsic::StackRestore => return unsupported("a stack pointer"),
             Intrinsic::Code => return unsupported("inline code"),
             Intrinsic::Asm => return unsupported("inline assembly"),
         })

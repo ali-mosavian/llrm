@@ -295,6 +295,47 @@ fn test_what_is_not_selected_yet_is_refused() {
     }
 }
 
+/// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop` verify but have no lowering yet:
+/// a program that calls one stops with a named refusal, not a wrong result.
+#[test]
+fn a_bit_count_intrinsic_is_refused_until_it_is_lowered() {
+    for (name, parameters, arguments) in
+        [("ctlz", ", i1", ", i1 false"), ("cttz", ", i1", ", i1 false"), ("ctpop", "", "")]
+    {
+        let text = format!(
+            "declare i16 @llvm.{name}.i16(i16{parameters})\n\
+             define i16 @f(i16 %a) addrspace(1) {{\n  %r = call i16 @llvm.{name}.i16(i16 %a{arguments})\n  ret i16 %r\n}}\n"
+        );
+        assert_eq!(selected(&text, "f").err(), Some(Unselected(format!("@llvm.{name}.i16"))), "{name}");
+    }
+}
+
+/// `llvm.stacksave` reads the stack pointer and `llvm.stackrestore` writes it
+/// from a pointer.
+#[test]
+fn a_stacksave_reads_the_stack_pointer_and_a_stackrestore_writes_it() {
+    let text = "declare ptr @llvm.stacksave.p0()\n\
+                declare void @llvm.stackrestore.p0(ptr)\n\
+                define ptr @save() addrspace(1) {\n  %s = call ptr @llvm.stacksave.p0()\n  ret ptr %s\n}\n\
+                define void @restore(ptr %p) addrspace(1) {\n  call void @llvm.stackrestore.p0(ptr %p)\n  ret void\n}\n";
+    assert_eq!(listing(text, "save"), ["L0_0:", "mov ax, sp", "retf"]);
+    // The epilogue sets SP from the frame register again: SP is not where the
+    // prologue left it.
+    assert_eq!(
+        listing(text, "restore"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "L1_0:",
+            "mov ax, word ptr [bp+6]",
+            "mov sp, ax",
+            "lea sp, word ptr [bp]",
+            "pop bp",
+            "retf"
+        ]
+    );
+}
+
 /// CVP narrows a `udiv` to i8 and expands a `urem` through a `freeze`; both
 /// were refused ("a byte division", "freeze") and stopped vid.c and screen.c.
 #[test]
@@ -832,6 +873,34 @@ define i16 @f() addrspace(1) {
     assert!(moves.iter().any(|one| one.contains("dword ptr")), "{moves:?}");
     assert!(moves.iter().any(|one| one.contains("byte ptr")), "{moves:?}");
     assert!(!listing(text, "f").iter().any(|one| one.starts_with("rep")), "{moves:?}");
+}
+
+/// A fill or copy through a huge pointer is the inline routine that ends each
+/// run where the offset wraps (`isel/huge.rs`), not one `rep` through es:di,
+/// which wraps at 64K: an 80000-byte fill of a huge array was `rep stosd` of
+/// 20000 dwords from offset 0. A near operand beside a huge one is its offset
+/// and DGROUP.
+#[test]
+fn test_a_fill_or_copy_through_a_huge_pointer_is_the_run_splitting_routine() {
+    let fill = "declare void @llvm.memset.p3.i32(ptr addrspace(3), i8, i32, i1)
+define void @f(ptr addrspace(3) %p, i32 %n) addrspace(1) {
+  call void @llvm.memset.p3.i32(ptr addrspace(3) %p, i8 7, i32 80000, i1 false)
+  call void @llvm.memset.p3.i32(ptr addrspace(3) %p, i8 7, i32 %n, i1 false)
+  ret void
+}
+";
+    let copy = "declare void @llvm.memcpy.p3.p0.i32(ptr addrspace(3), ptr, i32, i1)
+define void @f(ptr addrspace(3) %p) addrspace(1) {
+  %a = alloca [64 x i8]
+  call void @llvm.memcpy.p3.p0.i32(ptr addrspace(3) %p, ptr %a, i32 70000, i1 false)
+  ret void
+}
+";
+    for text in [fill, copy] {
+        let lines = listing(text, "f");
+        assert!(lines.iter().any(|one| one.starts_with("db ")), "the routine's bytes: {lines:?}");
+        assert!(!lines.iter().any(|one| one.starts_with("rep")), "no rep through es:di: {lines:?}");
+    }
 }
 
 /// A pattern fill of a word or dword is `rep stosw` or `rep stosd` of its
@@ -3564,6 +3633,41 @@ no:
     }
 }
 
+/// The `select` form of the same `and` and `or` (`select %x, true, %y`,
+/// `select %x, %y, false`) is split too. The middle end makes it where the
+/// second compare may be poison, as every C parameter's is: rectwo's
+/// `n == 0 || m == 0` kept `sete; test; jne; test; jne` where clang has two
+/// compare-and-branch pairs (+314 bytes at m16).
+#[test]
+fn test_a_branch_on_the_select_form_of_two_compares_branches_on_each() {
+    for join in ["select i1 %x, i1 true, i1 %y", "select i1 %x, i1 %y, i1 false"] {
+        let text = format!(
+            "declare void @g() addrspace(1)
+define void @f(i16 %a, i16 %b) addrspace(1) {{
+entry:
+  %x = icmp eq i16 %a, 0
+  %y = icmp slt i16 %b, 5
+  %c = {join}
+  br i1 %c, label %yes, label %no
+yes:
+  call addrspace(1) void @g()
+  ret void
+no:
+  ret void
+}}
+"
+        );
+        let got = listing_on("386", &text, "f");
+        assert!(
+            !got.iter().any(|line| line.starts_with("set") || line.starts_with("and") || line.starts_with("or ")),
+            "{join}: {got:?}"
+        );
+        let branches: Vec<&String> =
+            got.iter().filter(|line| line.starts_with('j') && !line.starts_with("jmp")).collect();
+        assert_eq!(branches.len(), 2, "{join}: {got:?}");
+    }
+}
+
 /// A 32-bit counter proven small indexes every frame array at its own
 /// scale, `[ebp+esi*4-disp]` with one register, and EBP's upper half zeroed
 /// once before the loop: truncated, each array took a shift and a register of
@@ -5860,6 +5964,21 @@ define i16 @f() addrspace(1) {
     assert!(got.contains(&"mov cx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
 }
 
+/// `ptrtoint` of a far global's GEP to a word is its offset: `at < messages +
+/// sizeof messages` (runtime/qb/error.c at -O2) was refused, "an address of no
+/// global".
+#[test]
+fn test_ptrtoint_of_a_far_global_to_a_word_is_its_offset() {
+    let text = "@messages = internal addrspace(1) global [8 x i8] zeroinitializer
+define i1 @f(i16 %x) addrspace(1) {
+  %c = icmp ult i16 %x, ptrtoint (ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) @messages, i16 8) to i16)
+  ret i1 %c
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov ax, offset messages".to_owned()) && got.contains(&"add ax, 8".to_owned()), "{got:?}");
+}
+
 /// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
 /// address of no global": 13 llrm-qb tests failed to assemble a POKE.
 #[test]
@@ -5870,7 +5989,7 @@ fn test_a_gep_off_a_segment_constant_is_a_far_number() {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov bx, 1".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov al, byte ptr es:[1]".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
 }
 
 /// More constant-expression operands (alias/farstruct.c, textfill): the dword
@@ -5909,4 +6028,36 @@ fn test_a_branchs_odds_are_llvms_branch_probabilities() {
     let mut taken: Vec<u32> = body.odds.taken.values().copied().collect();
     taken.sort();
     assert_eq!(taken, vec![0x3000_0000, 0x5000_0000], "{:?}", body.odds.taken);
+}
+
+/// A store through a far constant whose offset half is zero (`POKE` into
+/// segment `&HA000`): the address is `es:[index]`. The offset was a register
+/// loaded with 0 (`xor bx, bx` every trip of qbdemo's loop) used as the base,
+/// which LLVM's `matchAddress` folds into the displacement.
+#[test]
+fn test_a_far_constant_with_a_zero_offset_is_no_base_register() {
+    let text = "define void @f(i16 %i) addrspace(1) {
+  %p = getelementptr i8, ptr addrspace(1) inttoptr (i32 -1610612736 to ptr addrspace(1)), i16 %i
+  store i8 1, ptr addrspace(1) %p
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.contains("40960")), "the premise: the selector is set: {got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("xor ") || line.ends_with(", 0")), "{got:?}");
+}
+
+/// A dword constant returned in a word pair: DX is its high word as a
+/// constant. It was a shift of the register that holds the whole
+/// (`mov edx, 42; shr edx, 16` for a high word of 0).
+#[test]
+fn test_a_dword_constant_returned_in_a_word_pair_is_a_word_each() {
+    let text = "define cc1000 i32 @f() addrspace(1) {
+  ret i32 70000
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line == "mov ax, 4464"), "the premise: the low word: {got:?}");
+    assert!(got.iter().any(|line| line == "mov dx, 1"), "the high word is its own constant: {got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("shr ")), "{got:?}");
 }
