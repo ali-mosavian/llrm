@@ -397,7 +397,7 @@ fn adds(n: usize) -> String {
 }
 
 #[test]
-fn erasing_many_instructions_scans_their_block_once_not_once_each() {
+fn erasing_instructions_scans_no_block_one_at_a_time_or_together() {
     // Each erase looked its instruction up in the block and shifted the rest:
     // 200 of 400 cost 200 scans of the block. On a 2048-statement function
     // the lookups were 7.5% of the whole compile, growing fourfold a doubling.
@@ -412,13 +412,16 @@ fn erasing_many_instructions_scans_their_block_once_not_once_each() {
             gone.iter().rev().for_each(|&one| f.erase(one).expect("unused"));
         }
         assert!(f.check_uses().is_empty());
-        (print::module(&module), crate::edit::SCANNED.with(|scanned| scanned.get()))
+        let scans = crate::edit::SCANNED.with(|scanned| scanned.get());
+        (print::module(&module), scans)
     };
     let (one_by_one, many_scans) = erase(false);
     let (together, few_scans) = erase(true);
     assert_eq!(together, one_by_one);
-    assert!(few_scans <= 2 * 401, "{few_scans} instructions scanned erasing 200 of 400");
-    assert!(many_scans > few_scans * 10, "the one-by-one scans no longer show the cost: {many_scans}");
+    // The block is a linked list: an erase scans nothing, one at a time or
+    // together.
+    assert_eq!(few_scans, 0, "{few_scans} instructions scanned erasing 200 of 400");
+    assert_eq!(many_scans, 0, "{many_scans} instructions scanned erasing 200 of 400 one by one");
 }
 
 /// Each use an erased instruction made was looked for in its operand's list of
@@ -667,10 +670,10 @@ fn an_instruction_goes_after_another() {
     assert_eq!(f.block(f.entry().unwrap()).iter().take(2).collect::<Vec<_>>(), [y, x]);
 }
 
-/// A run moved as one is the run moved one by one, and costs a rewrite of the
-/// block, not one per instruction.
+/// A run moved as one is the run moved one by one; the block is a list, so
+/// neither scans it.
 #[test]
-fn a_run_spliced_is_the_run_moved_one_by_one_in_a_scan_of_the_block() {
+fn a_run_spliced_is_the_run_moved_one_by_one_and_neither_scans_the_block() {
     let run = |together: bool| {
         let mut module = module(&adds(400));
         let f = function(&mut module);
@@ -684,13 +687,15 @@ fn a_run_spliced_is_the_run_moved_one_by_one_in_a_scan_of_the_block() {
             moved.iter().for_each(|&one| f.move_to(one, Position::Before(ret)).expect("moved"));
         }
         assert!(f.check_uses().is_empty());
-        (print::module(&module), crate::edit::SCANNED.with(|scanned| scanned.get()))
+        let scans = crate::edit::SCANNED.with(|scanned| scanned.get());
+        (print::module(&module), scans)
     };
     let (one_by_one, many) = run(false);
     let (together, few) = run(true);
     assert_eq!(together, one_by_one);
-    assert!(few <= 2 * 401, "{few} instructions scanned splicing 100 of 400");
-    assert!(many > few * 10, "the one-by-one scans no longer show the cost: {many}");
+    // The block is a linked list: neither way scans it.
+    assert_eq!(few, 0, "{few} instructions scanned splicing 100 of 400");
+    assert_eq!(many, 0, "{many} instructions scanned moving 100 of 400 one by one");
 }
 
 /// Erasing several empty blocks at once leaves the others in order, and a

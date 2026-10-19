@@ -180,8 +180,8 @@ pub fn fingerprint(function: &Function) -> u128 {
         values.insert(parameter, slot(&mut next, &function.value(parameter).name));
     }
     for &block in &function.layout {
-        blocks.insert(block, slot(&mut next, &function.block(block).name));
-        for &inst in &function.block(block).instructions {
+        blocks.insert(block, slot(&mut next, &function.blocks[block.0 as usize].name));
+        for &inst in function.block(block).instructions() {
             if let Some(result) = function.instruction(inst).result {
                 values.insert(result, slot(&mut next, &function.value(result).name));
             }
@@ -211,7 +211,7 @@ pub fn fingerprint(function: &Function) -> u128 {
         if index > 0 || function.block(block).name.is_some() {
             shown(blocks.get(&block), block.0).hash(&mut digest);
         }
-        for &inst in &function.block(block).instructions {
+        for &inst in function.block(block).instructions() {
             for record in records.get(&inst).into_iter().flatten() {
                 record.variable.hash(&mut digest);
                 match record.what {
@@ -408,7 +408,7 @@ impl Slots {
         }
         for &block in &function.layout {
             blocks.insert(block, name(&function.block(block).name));
-            for &inst in &function.block(block).instructions {
+            for &inst in function.block(block).instructions() {
                 if let Some(result) = function.instruction(inst).result {
                     values.insert(result, name(&function.value(result).name));
                 }
@@ -550,7 +550,7 @@ impl Printer<'_> {
             if index > 0 || function.block(block).name.is_some() {
                 let _ = writeln!(out, "{}:", slots.blocks[&block]);
             }
-            for &inst in &function.block(block).instructions {
+            for &inst in function.block(block).instructions() {
                 for record in function.debug_records().iter().filter(|one| one.before == inst) {
                     let _ = match record.what {
                         DebugWhat::Declare(at) => {

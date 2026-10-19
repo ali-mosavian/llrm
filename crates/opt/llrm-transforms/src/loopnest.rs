@@ -119,11 +119,7 @@ pub(crate) fn phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .iter()
-        .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-        .collect()
+    function.block(block).iter().take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
 }
 
 /// `inner`'s nest in `outer`, where `outer` holds nothing else.

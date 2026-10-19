@@ -157,8 +157,7 @@ fn clone_in_exit_block(
                 let ty = function.value(value).ty;
                 let name = function.value(value).name.clone().map(|name| format!("{name}.lcssa"));
                 let phi = function.create_instruction(Opcode::Phi, ty, incoming, Flags::default(), name.as_deref());
-                let first =
-                    function.block(exit).first().map_or(Position::End(exit), Position::Before);
+                let first = function.block(exit).first().map_or(Position::End(exit), Position::Before);
                 function.insert(phi, first)?;
                 lcssa.insert(value, phi);
                 phi
