@@ -65,8 +65,9 @@ pub struct Convention {
     pub wide_pairs: Vec<[String; 2]>,
     /// Whether a register an argument skipped is free for a later one.
     pub backfill: bool,
-    /// The ABI guarantees the stack is a multiple of `stack_alignment` at every call, whatever the callee holds:
-    /// every function that calls frames itself to it.
+    /// The ABI guarantees the stack is a multiple of `stack_alignment` at every
+    /// call, whatever the callee holds: every function that calls frames
+    /// itself to it.
     pub aligned_calls: bool,
     /// The most bytes of an integer one argument register holds, where that is
     /// more than a stack slot (a long in a 32-bit register on a 16-bit

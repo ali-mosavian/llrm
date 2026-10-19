@@ -161,7 +161,11 @@ impl CalleeFacts {
         arch: &dyn llrm_target::Target,
         name: &str,
     ) -> i64 {
-        if self.aligned.contains(name) || arch.aligned_calls() { arch.stack_alignment() } else { arch.stack_slot_bytes() }
+        if self.aligned.contains(name) || arch.aligned_calls() {
+            arch.stack_alignment()
+        } else {
+            arch.stack_slot_bytes()
+        }
     }
 
     /// What each function of the module does to memory, where the facts were

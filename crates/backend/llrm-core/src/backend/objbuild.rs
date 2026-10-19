@@ -735,8 +735,10 @@ pub fn _code_by(
                 segment.put(&[&[0xE8][..], &displacement].concat(), &[]);
             }
             Encoded::Near(Near { name }) => {
-                segment
-                    .put(&vec![0; 1 + displacement_bytes(bits)], &[Fixup::new(1, relative(displacement_bytes(bits)), name.clone())]);
+                segment.put(
+                    &vec![0; 1 + displacement_bytes(bits)],
+                    &[Fixup::new(1, relative(displacement_bytes(bits)), name.clone())],
+                );
                 segment.image[at] = 0xE8;
             }
         }
@@ -844,7 +846,8 @@ pub fn _encoded(
             Loc::Imm(ir::Imm { address: Some(addr), .. }) if addr.space == Space::Group => {
                 (made.immediate_at, BASE, 0, addr)
             }
-            // Long mode loads a symbol's address with `lea` from the instruction pointer.
+            // Long mode loads a symbol's address with `lea` from the
+            // instruction pointer.
             Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if bits == 64 => {
                 (made.displacement_at, near, addr.disp + value, addr)
             }
@@ -854,7 +857,8 @@ pub fn _encoded(
         let Some(at) = at else {
             return Err(Unencodable(format!("{}: no field for {}", what.repr(), one.repr())));
         };
-        // Long mode reaches a symbol from the instruction pointer: the field is relative to the instruction's end.
+        // Long mode reaches a symbol from the instruction pointer: the field is
+        // relative to the instruction's end.
         let loc = if bits == 64 { Kind::PcRel { width: 4, from: code.len() - at } } else { loc };
         pack_field(&mut code, at, loc, addend);
         let name = names
@@ -1001,13 +1005,14 @@ pub fn _trampolined(
     }
 }
 
-/// The bytes of a near branch's displacement: a word in real mode, a dword from 32-bit mode up (long mode's is
-/// `rel32` too).
+/// The bytes of a near branch's displacement: a word in real mode, a dword from
+/// 32-bit mode up (long mode's is `rel32` too).
 fn displacement_bytes(bits: u32) -> usize {
     if bits == 16 { 2 } else { 4 }
 }
 
-/// An item's bytes in `bits`-bit mode: a near displacement is `displacement_bytes` wide.
+/// An item's bytes in `bits`-bit mode: a near displacement is
+/// `displacement_bytes` wide.
 pub fn _length(
     item: &Encoded,
     bits: u32,

@@ -120,11 +120,11 @@ use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 use llrm_x86::parse;
 
-use crate::backend::intbits::{low_mask, wrap_to};
 use crate::analysis::dataflow::{self, Direction};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
+use crate::backend::intbits::{low_mask, wrap_to};
 pub use crate::backend::lanes::{Lane, Lanes};
 use crate::backend::needs::{self, gated};
 use crate::backend::peep::{self, walk::Facts};
@@ -3006,7 +3006,10 @@ pub fn constants(body: &LirBody) -> LirBody {
             let moved = what.is_some_and(|what| what.op == Operation::Move && what.name.as_deref() == Some("mov"));
             let extend = what.is_some_and(|what| {
                 what.op == Operation::Extend
-                    && matches!(what.name.as_deref(), Some("cwd" | "cdq" | "cqo" | "movsx" | "movzx"))
+                    && matches!(
+                        what.name.as_deref(),
+                        Some("cwd" | "cdq" | "cqo" | "movsx" | "movzx")
+                    )
                     && what.dests.len() == 1
                     && what.sources.len() == 1
                     && what.dests.iter().chain(&what.sources).all(|arg| matches!(arg, Loc::Reg(_)))
@@ -3048,8 +3051,7 @@ pub fn constants(body: &LirBody) -> LirBody {
                     if regs.integer(dest.register) && source_width == Some(dest.width) {
                         match source {
                             Loc::Imm(source) if source.address.is_none() => {
-                                candidate =
-                                    Some((*dest, Known::Value(source.value & low_mask(dest.width))));
+                                candidate = Some((*dest, Known::Value(source.value & low_mask(dest.width))));
                             }
                             Loc::Reg(source) if regs.integer(source.register) => {
                                 let value = *held

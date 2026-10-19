@@ -4,7 +4,7 @@ architecture-order: 7
 ---
 # x86-64 spike
 
-TL;DR: POC, not for feat/parity until decided. ELF64 x86-64 (SysV AMD64) on tinytim, translated from the LLVM X86 backend at `d1106deb71cc`; oracle is the pinned `clang -target x86_64-linux-gnu`.
+TL;DR: POC, not for feat/parity until decided. ELF64 x86-64 (SysV AMD64) on tinytim, translated from the LLVM X86 backend at `d1106deb71cc`; oracle is the pinned `clang -target x86_64-linux-gnu`. Status 2026-10-19: target `x86-m64`; 14 of 15 programs of `tests/llc` match the pinned clang's run (`tools/llc_check.sh`); aggregates in registers, SSE and the variadic `al` are open. The front end is clang's (`llrm-llc`), see [LP64 C front end](lp64-c-frontend-plan.md).
 
 ## What exists
 

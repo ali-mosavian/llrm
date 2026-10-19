@@ -114,16 +114,8 @@ pub mod registers {
     /// pointer's included, the stack pointer's not.
     pub const ROOTS: [RegId; 7] = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI, RegId::EBP];
     /// The roots long mode adds to `ROOTS`, named by their dword views.
-    pub const ROOTS64: [RegId; 8] = [
-        RegId::R8D,
-        RegId::R9D,
-        RegId::R10D,
-        RegId::R11D,
-        RegId::R12D,
-        RegId::R13D,
-        RegId::R14D,
-        RegId::R15D,
-    ];
+    pub const ROOTS64: [RegId; 8] =
+        [RegId::R8D, RegId::R9D, RegId::R10D, RegId::R11D, RegId::R12D, RegId::R13D, RegId::R14D, RegId::R15D];
     /// The word view of a dword register, where it has one.
     pub fn word_of(dword: RegId) -> Option<RegId> {
         DWORDS.iter().position(|one| *one == dword).map(|at| WORDS[at])
@@ -176,8 +168,9 @@ pub mod registers {
                 at_width.entry(llrm_lir::root(one)).or_default().entry(size).or_insert(one);
             }
         }
-        // Long mode's views: the quadword of each family, and the families it adds. The first register of each
-        // width by iced's number (AL before AH).
+        // Long mode's views: the quadword of each family, and the families it
+        // adds. The first register of each width by iced's number (AL
+        // before AH).
         for one in RegId::values().filter(|one| one.is_gpr()) {
             at_width.entry(llrm_lir::root(one)).or_default().entry(one.size() as i64).or_insert(one);
         }

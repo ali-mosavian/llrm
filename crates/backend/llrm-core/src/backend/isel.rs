@@ -693,7 +693,8 @@ pub(super) fn width_of(
         (TypeClass::I1 | TypeClass::I8, _) => Ok(1),
         (TypeClass::I16, _) => Ok(2),
         (TypeClass::I32, _) => Ok(4),
-        // A quadword is a value where the datalayout has a legal i64; otherwise it is two halves (`is_wide`).
+        // A quadword is a value where the datalayout has a legal i64; otherwise
+        // it is two halves (`is_wide`).
         (TypeClass::I64, _) if layout.largest_legal_integer() >= 64 => Ok(8),
         (TypeClass::Ptr, Type::Pointer(space)) => Ok(layout.pointer(*space).bits / 8),
         // An x87 register holds any float, extended.
@@ -1483,7 +1484,8 @@ pub struct Selector<'m, 'c, 'p> {
     in_cells: llrm_mir::dense::IdSet<ValueId>,
     /// The register file of `arch`.
     regs: Regs,
-    /// Whether `arch` reaches a symbol from the instruction pointer (its object description, read once).
+    /// Whether `arch` reaches a symbol from the instruction pointer (its object
+    /// description, read once).
     pc_relative: bool,
     /// What the functions that take part leave different.
     callee_facts: &'c CalleeFacts,
@@ -1627,7 +1629,8 @@ pub struct Selector<'m, 'c, 'p> {
 }
 
 impl Selector<'_, '_, '_> {
-    /// Whether a symbol is reached from the instruction pointer, so that no address adds a register to it.
+    /// Whether a symbol is reached from the instruction pointer, so that no
+    /// address adds a register to it.
     fn pc_relative(&self) -> bool {
         self.pc_relative
     }
@@ -3055,8 +3058,9 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<Loc, Unselected> {
         let width = self.width(ty)?;
-        // A quadword immediate is a sign-extended dword: only `mov r64, imm64` takes more, so any other reader gets a
-        // register the constant is loaded into.
+        // A quadword immediate is a sign-extended dword: only `mov r64, imm64`
+        // takes more, so any other reader gets a register the constant
+        // is loaded into.
         if let Some(value) = self.constant(operand, width).filter(|&value| width < 8 || i32::try_from(value).is_ok()) {
             return Ok(Loc::Imm(Imm { value, width, address: None }));
         }

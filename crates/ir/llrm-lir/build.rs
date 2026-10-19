@@ -11,8 +11,8 @@ fn main() {
         code.push_str(&format!("    pub const {name}: RegId = RegId(Register::{name});\n"));
     }
     code.push_str("}\n");
-    // The dword of each general register's family (`root`), by iced's number: a table, as the answer is asked in
-    // every pass.
+    // The dword of each general register's family (`root`), by iced's number: a
+    // table, as the answer is asked in every pass.
     code.push_str(&format!("static ROOT_OF: [Register; {}] = [\n", iced_x86::Register::values().len()));
     for register in iced_x86::Register::values() {
         let whole = register.full_register();

@@ -623,8 +623,11 @@ fn moves_stack(body: &crate::model::lir::LirBody) -> bool {
 /// value.
 fn saved_of(procedure: &Procedure) -> Vec<RegId> {
     let found = procedure.body.facts.0.get::<BodyRoots>(&procedure.body);
-    let mut roots =
-        if procedure.registers.free { found.of_values(procedure.body.regs(), procedure.registers.pointer) } else { found.plain.clone() };
+    let mut roots = if procedure.registers.free {
+        found.of_values(procedure.body.regs(), procedure.registers.pointer)
+    } else {
+        found.plain.clone()
+    };
     roots.extend(found.disturbed.iter());
     // An interrupt handler has saved everything before its frame, and a
     // runtime-built one has saved SI and DI (B$ENRA/B$ENRD, restored by

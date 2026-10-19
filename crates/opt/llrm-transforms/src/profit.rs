@@ -591,9 +591,11 @@ pub fn _products_with_odds_in(
     Some((weight, taken))
 }
 
-/// `count` times the share `here / trip`, at least 1: the product is taken wide, since a function with nested
-/// loops weighs a block in the tens of trillions of `UNIT`s and `count * here` passed `i64`'s end (a recursive
-/// function the pipeline made loops of panicked `llrm-llc` in debug builds and wrapped in release ones).
+/// `count` times the share `here / trip`, at least 1: the product is taken
+/// wide, since a function with nested loops weighs a block in the tens of
+/// trillions of `UNIT`s and `count * here` passed `i64`'s end (a recursive
+/// function the pipeline made loops of panicked `llrm-llc` in debug builds and
+/// wrapped in release ones).
 fn share_of(
     count: i64,
     here: i64,
@@ -752,12 +754,12 @@ thread_local! {
 #[path = "profit_tests.rs"]
 mod tests;
 
-
 #[cfg(test)]
 mod share_tests {
     use super::share_of;
 
-    /// The weights of nine nested loops (count 1e8, odds 2e14) once overflowed `count * here`.
+    /// The weights of nine nested loops (count 1e8, odds 2e14) once overflowed
+    /// `count * here`.
     #[test]
     fn a_block_weight_of_nested_loops_does_not_overflow() {
         assert_eq!(share_of(100_000_000, 211_516_977_285_368, 218_340_105_584_896), 96_875_000);

@@ -1,5 +1,5 @@
-//! Integers of a given width held in an `i64`: the masks and wraps that stay defined at eight bytes, where
-//! `1 << 64` is not.
+//! Integers of a given width held in an `i64`: the masks and wraps that stay
+//! defined at eight bytes, where `1 << 64` is not.
 
 /// The low `width` bytes of an `i64` as a mask: all of it from eight bytes.
 pub fn low_mask(width: u32) -> i64 {
@@ -23,8 +23,9 @@ pub fn wrap_to(
 mod tests {
     use super::*;
 
-    /// `wrapped` once shifted 1 by 64 in `stepflags` and `peephole` (a compare of an i64 against a constant
-    /// panicked every x86-64 compile of a loop over a `long`).
+    /// `wrapped` once shifted 1 by 64 in `stepflags` and `peephole` (a compare
+    /// of an i64 against a constant panicked every x86-64 compile of a loop
+    /// over a `long`).
     #[test]
     fn eight_bytes_are_the_whole_integer() {
         assert_eq!((low_mask(4), low_mask(8)), (0xFFFF_FFFF, -1));

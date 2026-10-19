@@ -2,10 +2,12 @@
 
 use crate::registers::RegId;
 
-/// The root of a byte, word, dword or (long mode's) quadword general register: the dword register of its family,
-/// which iced states from the register itself (`AL`, `AX`, `EAX` and `RAX` are views of `EAX`; `R8B`..`R8` of
-/// `R8D`). The name is the token a target's `registers.regs` roots its family at; any other register (segment,
-/// x87, SSE) is its own. A 32-bit target never meets the 64-bit views, so its roots are what they were.
+/// The root of a byte, word, dword or (long mode's) quadword general register:
+/// the dword register of its family, which iced states from the register itself
+/// (`AL`, `AX`, `EAX` and `RAX` are views of `EAX`; `R8B`..`R8` of `R8D`). The
+/// name is the token a target's `registers.regs` roots its family at; any other
+/// register (segment, x87, SSE) is its own. A 32-bit target never meets the
+/// 64-bit views, so its roots are what they were.
 pub fn root(register: RegId) -> RegId {
     register.root()
 }
@@ -37,7 +39,8 @@ mod tests {
         }
         assert_eq!(root(RegId::ES), RegId::ES);
         assert_eq!(root(RegId::ST0), RegId::ST0);
-        // Long mode's registers root at their dword: the quadword and the new bytes are views of it.
+        // Long mode's registers root at their dword: the quadword and the new
+        // bytes are views of it.
         for (root_of, views) in [
             (RegId::ESI, [RegId::SIL, RegId::RSI]),
             (RegId::EAX, [RegId::AL, RegId::RAX]),

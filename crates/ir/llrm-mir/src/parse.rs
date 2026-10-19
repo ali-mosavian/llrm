@@ -648,8 +648,9 @@ impl Parser {
                     self.expect_punct(')')?;
                     out.push(Attribute::Type(word, ty));
                 }
-                // `captures(none)` is `nocapture`, as LLVM's bitcode upgrade reads it; any other capture set only
-                // says what may be captured, which no attribute-less pointer denies.
+                // `captures(none)` is `nocapture`, as LLVM's bitcode upgrade
+                // reads it; any other capture set only says what may be
+                // captured, which no attribute-less pointer denies.
                 Token::Word(word) if word == "captures" => {
                     self.next();
                     self.expect_punct('(')?;

@@ -366,8 +366,9 @@ pub fn place_operand(
         return None;
     };
     match addr.space {
-        // Long mode reaches a symbol through the instruction pointer: `[rip + disp32]`, the displacement a PC32
-        // relocation. A symbol plus a register has no such form.
+        // Long mode reaches a symbol through the instruction pointer: `[rip +
+        // disp32]`, the displacement a PC32 relocation. A symbol plus a
+        // register has no such form.
         Space::Segment | Space::External if bits == 64 => {
             (!based && addr.base == (RegId::None).iced()).then(|| (rip_operand(), true))
         }
@@ -428,8 +429,9 @@ pub fn place_operand(
     }
 }
 
-/// `[rip + disp32]` with the displacement left for the relocation: iced's operand is the target address, and
-/// the field it writes is replaced by the caller's addend.
+/// `[rip + disp32]` with the displacement left for the relocation: iced's
+/// operand is the target address, and the field it writes is replaced by the
+/// caller's addend.
 fn rip_operand() -> MemoryOperand {
     MemoryOperand::new(Register::RIP, Register::None, 1, 0, 8, false, Register::None)
 }
@@ -521,9 +523,7 @@ pub fn r#move(
     }
     let code = match (width_of(into)?, width_of(outof)?) {
         (8, 8) => Code::Mov_r64_rm64,
-        (4, 4) if crate::registers::DWORDS.contains(&into) || into.is_gpr64() == outof.is_gpr64() => {
-            Code::Mov_r32_rm32
-        }
+        (4, 4) if crate::registers::DWORDS.contains(&into) || into.is_gpr64() == outof.is_gpr64() => Code::Mov_r32_rm32,
         (2, 2) => Code::Mov_r16_rm16,
         (1, 1) => Code::Mov_r8_rm8,
         _ => return None,
@@ -727,8 +727,9 @@ pub fn load(
     _assemble(&made, at, true)
 }
 
-/// `mov r64, imm` in the shortest form that makes `value`: a dword load zero-extends (`mov r32, imm32`, 5 bytes),
-/// a sign-extended dword is `mov r/m64, imm32` (7), else the 10-byte `movabs`.
+/// `mov r64, imm` in the shortest form that makes `value`: a dword load
+/// zero-extends (`mov r32, imm32`, 5 bytes), a sign-extended dword is `mov
+/// r/m64, imm32` (7), else the 10-byte `movabs`.
 fn load_quadword(
     into: RegId,
     value: i64,
@@ -2018,8 +2019,9 @@ pub fn emit_in(
         let upper = name.to_uppercase();
         let wide = |register: RegId| width_of(register).unwrap_or(0);
         match (&dests[0], &sources[0]) {
-            // A dword widened to a quadword: `movsxd`; and the zero extension is the dword move, which zeroes the
-            // upper half of the register it writes.
+            // A dword widened to a quadword: `movsxd`; and the zero extension
+            // is the dword move, which zeroes the upper half of the register it
+            // writes.
             (Loc::Reg(into), Loc::Reg(outof)) if wide(into.register) == 8 && wide(outof.register) == 4 => {
                 let (code, into) = if name == "movzx" {
                     (Code::Mov_r32_rm32, into.register.full_register32())

@@ -348,8 +348,9 @@ pub trait Target {
         self.stack_slot_bytes()
     }
 
-    /// Whether every call finds the stack a multiple of `stack_alignment` (`calling.toml`'s `aligned_calls`),
-    /// not only those of a function that holds a double.
+    /// Whether every call finds the stack a multiple of `stack_alignment`
+    /// (`calling.toml`'s `aligned_calls`), not only those of a function
+    /// that holds a double.
     fn aligned_calls(&self) -> bool {
         false
     }
