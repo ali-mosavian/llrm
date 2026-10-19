@@ -22,7 +22,7 @@ def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
         found = target_dir(env, repo) / "release"
     stale = stale_binaries(found, repo)
     if stale:
-        raise SystemExit(f"stale binaries in {found}: {', '.join(stale)} older than the source they are built from; run `cargo build --release --bins` (`cargo build -p X` builds only the library)")
+        raise SystemExit(f"stale binaries in {found}: {'; '.join(stale_detail(found, repo)) or ', '.join(stale)} older than the source they are built from; run `cargo build --release --bins` (`cargo build -p X` builds only the library)")
     return found
 
 
@@ -43,6 +43,27 @@ def built_from(directory: Path, default: Path) -> Path:
                 if (parent / "Cargo.toml").is_file() and (parent / "crates").is_dir():
                     return parent
     return default
+
+
+def stale_detail(directory: Path, repo: Path = REPO) -> list[str]:
+    """One line per stale binary: the newest source that makes it stale, how much newer it is, and `(mtime in the FUTURE)` when that source claims a time after now: a
+    copy that kept a future timestamp stays newer than any binary built today, whatever `cargo build` does (cargo rebuilds on every run and the check never clears)."""
+    import time
+
+    repo = built_from(directory, repo)
+    patches = [(one.stat().st_mtime, one) for one in (repo / "toolchain/owshim").rglob("*") if one.is_file()]
+    out, built_here, now = [], declared(repo), time.time()
+    for info in sorted(directory.glob("*.d")) if directory.is_dir() else []:
+        binary = info.with_suffix("")
+        if binary.name not in built_here or not binary.is_file():
+            continue
+        written = directory.resolve().parent
+        sources = [Path(path) for path in info.read_text().partition(":")[2].replace("\\\n", " ").split()]
+        tracked = [(source.stat().st_mtime, source) for source in sources if source.is_file() and source.resolve().is_relative_to(repo.resolve()) and not source.resolve().is_relative_to(written)]
+        newest = max(tracked + patches, default=(0, None))
+        if newest[0] > binary.stat().st_mtime:
+            out.append(f"{binary.name}: {newest[1]} is {newest[0] - binary.stat().st_mtime:.0f} s newer" + (" (mtime in the FUTURE)" if newest[0] > now + 60 else ""))
+    return out
 
 
 def stale_binaries(directory: Path, repo: Path = REPO) -> list[str]:
