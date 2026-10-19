@@ -442,8 +442,8 @@ fn line(
 
 /// The registry's tally and the `[parity]` lines `LLRM_DEBUG=counts` prints are
 /// the recount of its rows by kind. A pinned number (`assert_eq!(partial, 14)`)
-/// made every slot-moving PR edit the same line, so every second one conflicted;
-/// the number to read lives in `LLRM_DEBUG=counts`, not in a test.
+/// made every slot-moving PR edit the same line, so every second one
+/// conflicted; the number to read lives in `LLRM_DEBUG=counts`, not in a test.
 fn the_counts_are_the_recount_of_the_rows(
     registry: &[Entry],
     analyses: &[parity::AnalysisEntry],
@@ -514,7 +514,10 @@ fn test_moving_a_row_changes_the_recount_and_no_literal() {
 /// translated pass Old in a copy of the registry, and the check names it.
 #[test]
 fn test_marking_a_wired_row_old_is_caught_on_the_real_lists() {
-    let on = Applied { options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() }, ..Applied::default() };
+    let on = Applied {
+        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
+        ..Applied::default()
+    };
     let mut checked = 0;
     for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late] {
         let passes = pipeline::llvm_order(&on, phase);
