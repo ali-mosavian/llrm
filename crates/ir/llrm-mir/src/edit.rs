@@ -4,7 +4,6 @@
 use std::collections::BTreeSet;
 
 use crate::context::{Constant, ConstantKind, Context};
-use crate::hash::HashMap;
 use crate::module::{
     Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, NameIndex, Names,
     Operand, Use, ValueData, ValueDef, ValueId,
@@ -585,6 +584,17 @@ impl Function {
         let Opcode::ICmp(held) = &mut self.instructions[inst.0 as usize].opcode else { panic!("an icmp") };
         *held = predicate;
         self.log(Change::Rewritten(inst));
+    }
+
+    /// `Value::takeName`: `to` is named what `from` was, which goes unnamed;
+    /// the name stays taken in the function.
+    pub fn take_name(
+        &mut self,
+        from: ValueId,
+        to: ValueId,
+    ) {
+        let name = self.values[from.0 as usize].name.take();
+        self.values[to.0 as usize].name = name;
     }
 
     /// Replaces an instruction's flags.
@@ -1357,6 +1367,6 @@ pub fn layout_scanned() -> usize {
 /// `ValueToValueMapTy`: what `clone_block` copied, original to copy.
 #[derive(Default)]
 pub struct ValueMap {
-    pub values: HashMap<ValueId, Operand>,
-    pub blocks: HashMap<BlockId, BlockId>,
+    pub values: crate::dense::IdMap<ValueId, Operand>,
+    pub blocks: crate::dense::IdMap<BlockId, BlockId>,
 }

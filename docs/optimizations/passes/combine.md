@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine.rs sha256:2943327a86e9e84af71141228df319de2d9afc46eb6747cb05523d24dd4a858a -->
+<!-- src: crates/opt/llrm-transforms/src/combine.rs sha256:fc851a0ad18c0983297d49a1c62b0a69e89acc77502efd30fd85bf664eb4ea75 -->
 
 # combine
 
@@ -34,7 +34,8 @@ as they are translated (the visit map in the combine page).
 `fold` (its number step).
 
 ## Example
-An instruction that simplifies is replaced, and what read it is visited again:
+An instruction that simplifies is replaced, and what read it is visited
+again:
 
 ```text
 %a = add i32 %x, 0
