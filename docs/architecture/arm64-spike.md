@@ -37,6 +37,10 @@ TL;DR: POC, not for feat/parity until decided. Mach-O arm64 (Darwin AAPCS64) fir
 
 Cost reading: items 1, 2 and 6 touch the shared backend and are the real price; 3 and 4 are new target crates. Decision after the first pass: do item 1 as a generic-layer PR before any AArch64 code.
 
+## Decision: arm64 gets its own backend from MIR (2026-10-19)
+
+The shared backend (`llrm-core`: 146 K lines, isel tables, masm, assembler) is x86 end to end: selection patterns and hooks, 16/32-bit `LirBody`, an iced encoder behind `masm`. Generalizing it first would touch the files 30 sessions are landing in. The spike therefore takes MIR (after the shared mid-end) through arm64 modules of its own in `llrm-arm64`: isel, register allocation, frame lowering, MC encoding, object. Reuse is by interface: MIR and the mid-end, `Target`/`Machine` descriptions, `RegId` ids, `Object` and its writers. Whether the machine passes (greedy allocator, copy propagation) can later run on arm64 LIR is a separate question, answered by trying it on this selector's output. Front end: clang's IR (the shared `llrm-llc` door of the x86-64 spike).
+
 ## Mac (Mach-O arm64 runs)
 
 The Mac needs: a clone or worktree of `feat/arm64-spike`; rustup (toolchain per `rust-toolchain.toml`); Xcode command line tools (`clang`, `ld`). Then:
