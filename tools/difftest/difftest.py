@@ -466,6 +466,10 @@ def llrm_target(stderr: str, mode: str) -> str:
     tti = targetdesc.targets()[mode].get("tti", "none")
     if f" tti {tti} " not in line:
         raise SystemExit(f"difftest: llrm side {line} does not price with TTI {tti}")
+    llrm_cpu = line.split(" cpu ", 1)[1].split()[0]
+    opt_cpu = targetdesc.targets()[mode]["llvm_cpu"]
+    if opt_cpu.removeprefix("i") != llrm_cpu.removeprefix("i"):
+        raise SystemExit(f"difftest: llrm prices for cpu {llrm_cpu} but opt is told -mcpu={opt_cpu}: the two sides compare different machines")
     return line
 
 

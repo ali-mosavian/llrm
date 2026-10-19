@@ -278,7 +278,7 @@ def test_every_opt_command_line_carries_llrms_triple_and_cpu(monkeypatch):
     monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m16")
     seen.clear()
     difftest.opt("sroa", "")
-    assert "-mtriple=i386-unknown-linux-gnu" in seen[0] and "-mcpu=i386" in seen[0]
+    assert "-mtriple=i386-unknown-linux-gnu" in seen[0] and "-mcpu=i486" in seen[0]
 
 
 def test_the_m16_runs_read_a_datalayout_with_16_bit_pointers(monkeypatch):
@@ -315,7 +315,7 @@ def test_the_replay_gets_the_targets_layout_so_pointer_width_answers_are_the_tar
         seen.append(list(command))
         mode = command[command.index("--mode") + 1]
         done = Done()
-        done.stderr = f"llrm-pass: target x86-m{mode} cpu 486 tti {'X86' if mode == '32' else 'none'} datalayout d\n"
+        done.stderr = f"llrm-pass: target x86-m{mode} cpu 486 tti X86 datalayout d\n"
         return done
 
     monkeypatch.setattr(difftest.subprocess, "run", run)
@@ -363,3 +363,12 @@ def test_a_failed_replay_names_the_panic_not_the_header_line_llrm_pass_printed_f
     )
     assert difftest.failure_line(stderr) == "crates/opt/x.rs:74:22: a SCEVable type, not Float(Float)"
     assert difftest.failure_line("llrm-pass: target x\nno such file\n") == "no such file"
+
+
+def test_a_cpu_llrm_does_not_price_for_is_refused_on_the_opt_side(monkeypatch):
+    """The m16 oracle ran llrm at cpu 486 against opt at -mcpu=i386: two machines under one header."""
+    monkeypatch.setattr(difftest.targetdesc, "targets", lambda: {"m16": {"mode": 16, "llvm_cpu": "i386", "tti": "X86"}})
+    with pytest.raises(SystemExit, match="cpu 486 but opt is told -mcpu=i386"):
+        difftest.llrm_target("llrm-pass: target x86-m16 cpu 486 tti X86 datalayout d\n", "m16")
+    monkeypatch.setattr(difftest.targetdesc, "targets", lambda: {"m16": {"mode": 16, "llvm_cpu": "i486", "tti": "X86"}})
+    assert difftest.llrm_target("llrm-pass: target x86-m16 cpu 486 tti X86 datalayout d\n", "m16").startswith("x86-m16 cpu 486")
