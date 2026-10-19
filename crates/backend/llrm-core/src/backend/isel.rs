@@ -5324,6 +5324,25 @@ impl Selector<'_, '_, '_> {
                 _ => return refuse("a far result the convention has no registers for"),
             }
         } else if let Some(&value) = operands.first() {
+            // A constant in a register pair is a half each: the second is its
+            // high half, not a shift of the register that holds the whole.
+            if let ([low, high], Operand::Constant(id)) = (&convention.returns[..], value)
+                && let Ok(whole) = self.width(type_of(value))
+                && whole % 2 == 0
+                && let ConstantKind::Int(bits) = self.module.context.get(id).kind
+            {
+                let half = whole / 2;
+                let (shift, mask) = (8 * half, (1i128 << (8 * half)) - 1);
+                let word = |part: i128| Loc::Imm(Imm { value: (part & mask) as i64, width: half, address: None });
+                let (low_word, high_word) = (self.fresh_held(half), self.fresh_held(half));
+                for (into, part) in [(low_word, bits as i128), (high_word, (bits >> shift) as i128)] {
+                    out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![word(part)])));
+                }
+                one.requires = vec![(low_word, *low), (high_word, *high)];
+                one.uses = vec![low_word.value, high_word.value];
+                out.push(Arc::new(one));
+                return Ok(());
+            }
             let held = self.held(value, type_of(value), at, out)?;
             one.requires = match convention.returns[..] {
                 [register] => vec![(held, register)],
