@@ -212,3 +212,89 @@ def test_a_second_landing_waits_for_the_first_one_to_release_the_lock(tmp_path):
             pass
     with ps.land_lock(lock, wait=False):
         pass
+
+
+def test_a_failing_pr_in_four_is_isolated_and_the_other_three_land():
+    """One smoke on the combined tree; when it fails the set is halved: 1+2 pass and land, 3 fails alone and is refused, 4 is tested on top and lands."""
+    landed, refused, tested = [], [], []
+
+    def passes(group):
+        tested.append(list(group))
+        return "3" not in group
+
+    ps.batch(["1", "2", "3", "4"], passes, landed.append, refused.append)
+    assert landed == ["1", "2", "4"] and refused == ["3"], (landed, refused)
+    assert tested[0] == ["1", "2", "3", "4"] and ["1", "2"] in tested and ["3"] in tested and ["4"] in tested
+
+
+def test_four_passing_prs_cost_one_test_and_land_in_order():
+    landed, tested = [], []
+    ps.batch(["1", "2", "3", "4"], lambda group: (tested.append(group), True)[1], landed.append, lambda pr: None)
+    assert landed == ["1", "2", "3", "4"] and len(tested) == 1
+
+
+def test_a_fix_for_a_red_head_is_accepted_and_a_new_failure_is_refused():
+    """The gate deadlocked on a red head: the fix for it failed the same checks the head did, so it could not land. The merged tree may fail a SUBSET of the head's failures."""
+    red = {"ratchet:block_list_ratchet", "qc_modules"}
+    assert ps.subset_refusals(red, {"qc_modules"}, fixes=True) == []
+    assert ps.subset_refusals(red, set(), fixes=True) == []
+    why = ps.subset_refusals(red, {"qc_modules", "run"}, fixes=False)
+    assert why and "run" in why[0] and "ratchet:block_list_ratchet" in why[0] and "qc_modules" in why[0], why
+    assert ps.subset_refusals(set(), {"run"}, fixes=False)
+
+
+def test_an_equal_failure_set_lands_only_without_the_fixes_claim():
+    red = {"qc_modules"}
+    assert ps.subset_refusals(red, set(red), fixes=False) == []
+    assert ps.subset_refusals(red, set(red), fixes=True)
+    assert ps.claims_fix("Fixes red: the ratchet\n") and ps.claims_fix("TL;DR\nFixes a red head\n") and not ps.claims_fix("This fixes reds nothing")
+
+
+def test_the_head_failure_set_is_computed_once_per_sha_and_never_guessed(tmp_path):
+    import pytest
+
+    calls = []
+    assert ps.head_failures("abc", lambda: (calls.append(1), {"x"})[1], tmp_path) == {"x"}
+    assert ps.head_failures("abc", lambda: (calls.append(1), {"y"})[1], tmp_path) == {"x"} and len(calls) == 1
+    with pytest.raises(SystemExit, match="no failure set is cached"):
+        ps.head_failures("other", None, tmp_path)
+
+
+def test_a_feat_parity_commit_absent_from_the_landing_log_is_listed(tmp_path):
+    """Direct pushes bypassed the lock; the log is what every landing writes, so a commit with no line in it is a landing that did not go through the squash."""
+    log = tmp_path / "landed.log"
+    ps.log_landed("aaaaaaa1111", "2700", "gate-ok", log)
+    ps.log_landed("bbbbbbb2222", "2701", "gate-ok", log)
+    assert ps.unlogged(log, ["aaaaaaa", "ccccccc", "bbbbbbb"]) == ["ccccccc"]
+    assert ps.unlogged(tmp_path / "none.log", ["ddddddd"]) == ["ddddddd"]
+
+
+def test_bins_older_than_the_merged_tree_are_rebuilt_or_named_not_an_empty_refusal(tmp_path, monkeypatch):
+    """The merge rewrote files after the binaries were built: the smoke exited non-zero with an empty last line and the tool printed 'the fast set fails' with no reason."""
+    import llrmbin
+
+    stale = [["llrm-c"]]
+    monkeypatch.setattr(llrmbin, "stale_binaries", lambda directory, repo=None: stale[0])
+    monkeypatch.setattr(ps, "smoke_bins", lambda env=None: str(tmp_path))
+    built = []
+
+    def fresh():
+        built.append(1)
+        stale[0] = []
+
+    assert ps.ensure_bins(build=fresh) == "" and built == [1]
+    stale[0] = ["llrm-c", "llrm-qb"]
+    why = ps.ensure_bins(build=lambda: built.append(2))
+    assert "still older" in why and "llrm-c, llrm-qb" in why, why
+    stale[0] = []
+    assert ps.ensure_bins(build=lambda: built.append(3)) == "" and 3 not in built
+
+
+def test_a_smoke_that_exits_non_zero_without_a_summary_line_names_its_stderr(monkeypatch):
+    class Done:
+        returncode, stdout, stderr = 1, "", "stale binaries in /x: llrm-c older than the source\nrun cargo build"
+
+    monkeypatch.setattr(ps, "smoke_bins", lambda env=None: "/x")
+    monkeypatch.setattr(ps.subprocess, "run", lambda *a, **k: Done())
+    failed, last = ps.smoke_failures()
+    assert failed == {"smoke-did-not-finish"} and "stale binaries in /x" in last and "exited 1" in last, last

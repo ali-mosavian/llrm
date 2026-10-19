@@ -87,6 +87,7 @@ pub mod calleepop;
 #[cfg(test)]
 mod calleepop_tests;
 pub mod candidate;
+pub mod canonexit;
 pub mod canonical;
 pub mod cfg;
 pub mod combine;
@@ -133,6 +134,7 @@ pub mod gvn;
 mod gvn_load_tests;
 #[cfg(test)]
 mod gvn_scalar_tests;
+pub mod hoistcommon;
 pub mod homes;
 pub mod indvars;
 pub mod inferspace;
@@ -154,6 +156,7 @@ pub mod jumpthreading;
 mod jumpthreading_tests;
 pub mod lcssa;
 pub mod lcssamerges;
+pub mod lftr;
 pub mod licm;
 pub mod local;
 #[cfg(test)]
@@ -209,6 +212,7 @@ pub mod splitcopy;
 pub mod sroa;
 pub mod switchcg;
 pub mod switchlower;
+pub mod tailmerge;
 pub mod tailrec;
 #[cfg(test)]
 pub mod testing;

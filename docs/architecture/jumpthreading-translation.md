@@ -4,7 +4,7 @@ architecture-order: 276
 ---
 # JumpThreading as a translation of LLVM's: the plan
 
-TL;DR: `JumpThreading.cpp` (3,314 lines, pin `d1106deb71cc`) is translated into a new `jumpthreading.rs` on `LazyValueInfo` and `DomTreeUpdater`; the first slice (about 900 lines) is the driver, constant folding of terminators and `threadEdge` over a known-constant `phi`/LVI condition. Missing: `FindAvailableLoadedValue`, `SplitBlockPredecessors`, `cloneBasicBlock`'s value map, `TryToSimplifyUncondBranchFromEmptyBlock`, `DeleteDeadBlock`. S1 is built (`jumpthreading.rs`, slots `jumpthreading@668` and `@809`, Partial); see section 6.
+TL;DR: `JumpThreading.cpp` (3,314 lines, pin `d1106deb71cc`) is translated into a new `jumpthreading.rs` on `LazyValueInfo` and `DomTreeUpdater`; the first slice (about 900 lines) is the driver, constant folding of terminators and `threadEdge` over a known-constant `phi`/LVI condition. Missing: `FindAvailableLoadedValue`, `SplitBlockPredecessors`, `cloneBasicBlock`'s value map, `TryToSimplifyUncondBranchFromEmptyBlock`, `DeleteDeadBlock`. S1 to S3 are built (`jumpthreading.rs`, slots `jumpthreading@668` and `@809`, Partial); see section 6.
 
 Rule for the code: each Rust function is a translation of the C++ function named in its comment (permalink at the pin); anything not translated is a numbered DEVIATE (J1, J2, ...) in the module header.
 
@@ -52,7 +52,7 @@ T = missing translation, a TODO row (section 3). Present and used as they are: L
 
 The pinned list ([slots](parity-pipeline-slots.md)) runs `jump-threading` twice per function at -O2, -Os and -O3 (not -O1), after `early-cse<memssa>` and after `dfa-jump-threading`; 6 runs summed at x_hanoi2, 22 at d_faces, at -O2 and -O3 (run-count tables). Size gate: `jump-threading-threshold` 6, 3 for `minsize` ([L310](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L310)), 76 phis ([`PhiDuplicateThreshold`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L99)); no threading across loop headers.
 
-Preserved: LVI and the dominator tree (`PreservedAnalyses` keeps both through `preserve`; the translation updates them through `DomTreeUpdater` and `LVI::thread_edge`), nothing else. Rule: ON by default under `llvm_order`, the replaced `decide` threading off behind `LLRM_NO_JUMPTHREADING` (presence, never `=0`); old rounds keep `decide` unchanged.
+Preserved: LVI and the dominator tree (`PreservedAnalyses` keeps both through `preserve`; the translation updates them through `DomTreeUpdater` and `LVI::thread_edge`), nothing else. Rule: was ON by default under `llvm_order`, the replaced `decide` threading off behind `LLRM_JUMPTHREADING` (off by default: datetime.c -Os runs away) (presence, never `=0`); old rounds keep `decide` unchanged.
 
 ## 5. Stages and oracles
 
@@ -67,6 +67,23 @@ A slice joins when its oracle shows 0 functions differing; a difference is class
 
 Fail-first tests for S1, one per shape, each seen failing with the shape's code stubbed: (1) a `br` on a `phi` of constants in the block is threaded from each constant predecessor; (2) a condition LVI proves on one edge is threaded from that edge only; (3) a block over the 6-instruction limit is not copied, 3 with `minsize`; (4) a loop header is not threaded across; (5) a copied value used below gets one `phi` from `SsaUpdater`; (6) `thread_edge` leaves LVI answering as a new LVI does; (7) an empty predecessor-less block is deleted.
 
-## 6. State of S1
+## 6. State of S1 to S3
 
-`jumpthreading.rs` ports S1; the slots run before `decide@675`/`decide@809`, which keep their threading until S2 to S4 close. Switch: `LLRM_NO_JUMPTHREADING`. Seven fixtures in `tests/jumpthreading` read identical to `opt` through `difftest.py pair`. On ten `decide` inputs of `d_faces -O2` six are identical (three unchanged by both) and four differ: `10/0046` is a branch on a `phi` defined in the single predecessor (read in the diff: `maybethreadThroughTwoBasicBlocks`, S2); `11/0046` and `11/0067` have the same opcode difference; `11/0004` has six loads `opt` removes (`simplifyPartiallyRedundantLoad`, S4 by its histogram). Only the first is read; the S2/S4 attributions of the other three are open until those stages run. Deviations J1 to J9 are in the module header.
+`jumpthreading.rs` ports S1, S2 and S3; the slots run before `decide@675`/`decide@809`, which keep their threading until S4 closes. Switch: `LLRM_JUMPTHREADING` (off by default: datetime.c -Os runs away). Fifteen fixtures in `tests/jumpthreading` read identical to `opt` through `difftest.py pair`; each function of S2 and S3 was seen failing a fixture with the function stubbed. Deviations J1 to J11 are in the module header.
+
+The instrument is the slot oracle, not the `decide` inputs the first S1 count used: `difftest.py inputs jumpthreading@668|@809` over `llrm-c -O2 --dump` of `d_faces` (`LLRM_DUMP_INPUTS=1`), 3 functions per slot. After S1 three differed (`668/03`, `809/02`, `809/03`); after S3 all changed functions are identical (2 of 2 at each slot).
+
+The four `decide` inputs of the first count, rerun on the S2+S3 build: the numbering moved when the JT slots came in (`10/0046` and `11/0046` are now run 0047 of `decide@832`; there is no run 0067 in bodies 10 and 11). All five `decide` slots (`@1244 @675 @766 @809 @832`) of bodies 10 and 11 were run through `llrm-pass jumpthreading` against `opt -passes=jump-threading`: 9 of 10 identical, among them both 0047 runs. `11/0004` (now `decide@1244`) differed; the cause and fix are in the table below. With the fix it is identical; the other nine were not rerun.
+
+Shapes of the four (the first three each a fixture that `opt` changes and S1 left alone):
+
+| input | shape | stage | fixture |
+|---|---|---|---|
+| `668/03`, `809/03` | `PredBB` (conditional branch, several predecessors) then `BB` testing a value the edge into `PredBB` decides, through LVI or a `phi` of `PredBB`; `opt` copies `PredBB` for that edge and threads it through `BB` | S2 `maybethreadThroughTwoBasicBlocks` | `two_block`, `two_block_phi` |
+| `668/03`, `809/03` | after that, `BB` is reached only through `PredBB`, whose one predecessor branches on the same condition | S3 `processImpliedCondition` (LVI answers "unknown" on both sides, so it is not an LVI gap) | `implied_condition` |
+| `809/02` | a `br i1` on a `phi i1` of two compares, each predecessor ending in `br` | S2 `duplicateCondBranchOnPHIIntoPred` via `processBranchOnPHI` | `dup_cond_branch` |
+| `11/0004` (`decide@1244`) | `opt` leaves `%t = phi i16 [ 2, %pred ]` in a block that threading reduced to one predecessor; the pass had the constant at the use | not a stage: `runImpl` walked a snapshot of the layout, `opt` the live list, so the `.thread` copy placed after `PredBB` was not visited before the next block merged into it and folded the phi. Fixed: the walk follows the live layout | `new_block_visited` |
+
+The fixtures `select_unfold_cmp`, `select_unfold_switch`, `select_in_curr_bb` and `branch_on_xor` cover the rest of S2; no input of `d_faces` needs them.
+
+Reduction: `llvm-reduce` (20) with an "opcode histogram differs the same way" test cut `668/03` to nothing smaller than the full function because every cut changes the histogram; the shapes above were read from the block diff of the two answers and checked by running `opt` and the pass on the hand-written fixtures.
