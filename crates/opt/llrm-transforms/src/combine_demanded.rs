@@ -131,6 +131,20 @@ fn limited(
     v.min(u128::from(limit)) as u32
 }
 
+/// What `SimplifyDemandedUseBits` knows of the instruction it is asked about,
+/// handed to the case of its opcode.
+#[derive(Clone, Copy)]
+struct Demand {
+    cxt: InstId,
+    inst: InstId,
+    demanded: u128,
+    depth: u32,
+    w: u32,
+    ty: llrm_mir::types::TypeId,
+    flags: Flags,
+    self_value: Operand,
+}
+
 impl Combiner<'_> {
     fn operand_of(
         &self,
@@ -327,841 +341,34 @@ impl Combiner<'_> {
         known: &mut KnownBits,
         depth: u32,
     ) -> Simplified {
-        let w = known.width;
         let (opcode, flags, ty) = {
             let instruction = self.function.instruction(inst);
             (instruction.opcode.clone(), instruction.flags, instruction.ty)
         };
-        let mut lhs = KnownBits::unknown(w);
-        let mut rhs = KnownBits::unknown(w);
-        let d1 = depth + 1;
-        let self_value = self.result_of(inst);
-
-        // Update flags after simplifying an operand based on the fact that
-        // some high order bits are not demanded.
-        let disable_wrap_flags = |c: &mut Self, nlz: u32| {
-            if nlz > 0 {
-                let flags = c.function.instruction(inst).flags;
-                c.function.set_flags(inst, flags.without(Flags::NSW).without(Flags::NUW));
+        let d = Demand { cxt, inst, demanded, depth, w: known.width, ty, flags, self_value: self.result_of(inst) };
+        let found = match opcode {
+            Opcode::Binary(BinaryOp::And) => self.demanded_and(&d, known),
+            Opcode::Binary(BinaryOp::Or) => self.demanded_or(&d, known),
+            Opcode::Binary(BinaryOp::Xor) => self.demanded_xor(&d, known),
+            Opcode::Select => self.demanded_select(&d, known),
+            Opcode::Cast(op @ (CastOp::Trunc | CastOp::ZExt)) => self.demanded_trunc_zext(&d, op, known),
+            Opcode::Cast(CastOp::SExt) => self.demanded_sext(&d, known),
+            Opcode::Binary(BinaryOp::Add) => self.demanded_add(&d, known),
+            Opcode::Binary(BinaryOp::Sub) => self.demanded_sub(&d, known),
+            Opcode::Binary(BinaryOp::Mul) => self.demanded_mul(&d, known),
+            Opcode::Binary(BinaryOp::Shl) => self.demanded_shl(&d, known),
+            Opcode::Binary(BinaryOp::LShr) => self.demanded_lshr(&d, known),
+            Opcode::Binary(BinaryOp::AShr) => self.demanded_ashr(&d, known),
+            Opcode::Binary(BinaryOp::UDiv) => self.demanded_udiv(&d, known),
+            Opcode::Binary(BinaryOp::SRem) => self.demanded_srem(&d, known),
+            Opcode::Call(_) => self.demanded_call(&d, known),
+            _ => {
+                self.known_of(cxt, d.self_value, known, depth);
+                Simplified::Nothing
             }
-            Simplified::Edited
         };
-
-        'switch: {
-            match opcode {
-                Opcode::Binary(BinaryOp::And) => {
-                    // If either the LHS or the RHS are Zero, the result is
-                    // zero.
-                    if self.simplify_demanded_bits(cxt, inst, 1, demanded, &mut rhs, d1)
-                        || self.simplify_demanded_bits(cxt, inst, 0, demanded & !rhs.zero, &mut lhs, d1)
-                    {
-                        return Simplified::Edited;
-                    }
-
-                    *known = analyze_known_bits_from_and_xor_or(&query(self, Some(cxt)), inst, &lhs, &rhs, depth);
-
-                    // If the client is only demanding bits that we know,
-                    // return the known constant.
-                    if subset(demanded, known.zero | known.one) {
-                        return Simplified::Other(self.int(ty, known.one));
-                    }
-
-                    // If all of the demanded bits are known 1 on one side,
-                    // return the other.
-                    if subset(demanded, lhs.zero | rhs.one) {
-                        return Simplified::Other(self.operand_of(inst, 0));
-                    }
-                    if subset(demanded, rhs.zero | lhs.one) {
-                        return Simplified::Other(self.operand_of(inst, 1));
-                    }
-
-                    // If the RHS is a constant, see if we can simplify it.
-                    if self.shrink_demanded_constant(inst, 1, demanded & !lhs.zero) {
-                        return Simplified::Edited;
-                    }
-                }
-                Opcode::Binary(BinaryOp::Or) => {
-                    // If either the LHS or the RHS are One, the result is One.
-                    if self.simplify_demanded_bits(cxt, inst, 1, demanded, &mut rhs, d1)
-                        || self.simplify_demanded_bits(cxt, inst, 0, demanded & !rhs.one, &mut lhs, d1)
-                    {
-                        // Disjoint flag may not longer hold.
-                        self.drop_poison_generating_flags(inst);
-                        return Simplified::Edited;
-                    }
-
-                    *known = analyze_known_bits_from_and_xor_or(&query(self, Some(cxt)), inst, &lhs, &rhs, depth);
-
-                    if subset(demanded, known.zero | known.one) {
-                        return Simplified::Other(self.int(ty, known.one));
-                    }
-
-                    // If all of the demanded bits are known zero on one side,
-                    // return the other.
-                    if subset(demanded, lhs.one | rhs.zero) {
-                        return Simplified::Other(self.operand_of(inst, 0));
-                    }
-                    if subset(demanded, rhs.one | lhs.zero) {
-                        return Simplified::Other(self.operand_of(inst, 1));
-                    }
-
-                    if self.shrink_demanded_constant(inst, 1, demanded) {
-                        return Simplified::Edited;
-                    }
-
-                    // Infer disjoint flag if no common bits are set.
-                    if !flags.contains(Flags::DISJOINT) {
-                        let (a, b) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
-                        let disjoint = KnownBits::have_no_common_bits_set(&lhs, &rhs)
-                            || known::have_no_common_bits_set(&query(self, Some(cxt)), a, b);
-                        if disjoint {
-                            let mut flags = flags;
-                            flags.insert(Flags::DISJOINT);
-                            self.function.set_flags(inst, flags);
-                            return Simplified::Edited;
-                        }
-                    }
-                }
-                Opcode::Binary(BinaryOp::Xor) => {
-                    if self.simplify_demanded_bits(cxt, inst, 1, demanded, &mut rhs, d1)
-                        || self.simplify_demanded_bits(cxt, inst, 0, demanded, &mut lhs, d1)
-                    {
-                        return Simplified::Edited;
-                    }
-
-                    *known = analyze_known_bits_from_and_xor_or(&query(self, Some(cxt)), inst, &lhs, &rhs, depth);
-
-                    if subset(demanded, known.zero | known.one) {
-                        return Simplified::Other(self.int(ty, known.one));
-                    }
-
-                    // If all of the demanded bits are known zero on one side,
-                    // return the other.
-                    if subset(demanded, rhs.zero) {
-                        return Simplified::Other(self.operand_of(inst, 0));
-                    }
-                    if subset(demanded, lhs.zero) {
-                        return Simplified::Other(self.operand_of(inst, 1));
-                    }
-
-                    let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
-
-                    // If all of the demanded bits are known to be zero on one
-                    // side or the other, turn this into an *inclusive* or.
-                    if subset(demanded, rhs.zero | lhs.zero) {
-                        let mut or_flags = Flags::default();
-                        if demanded == mask(w) {
-                            or_flags.insert(Flags::DISJOINT);
-                        }
-                        return Simplified::Other(self.insert_value(
-                            inst,
-                            Opcode::Binary(BinaryOp::Or),
-                            ty,
-                            vec![op0, op1],
-                            or_flags,
-                        ));
-                    }
-
-                    // If all of the demanded bits on one side are known, and
-                    // all of the set bits on that side are also known to be
-                    // set on the other side, turn this into an AND.
-                    if subset(demanded, rhs.zero | rhs.one) && subset(rhs.one, lhs.one) {
-                        let and_c = self.int(ty, !rhs.one & demanded);
-                        return Simplified::Other(self.insert_value(
-                            inst,
-                            Opcode::Binary(BinaryOp::And),
-                            ty,
-                            vec![op0, and_c],
-                            Flags::default(),
-                        ));
-                    }
-
-                    // If the RHS is a constant, see if we can change it. Don't
-                    // alter a -1 constant because that's a canonical 'not' op.
-                    if let Some(c) = self.apint_of(op1)
-                        && c != mask(w)
-                    {
-                        if (c | !demanded) & mask::<u128>(w) == mask(w) {
-                            // Force bits to 1 to create a 'not' op.
-                            let ones = self.all_ones(ty);
-                            self.function.set_operand(inst, 1, ones);
-                            return Simplified::Edited;
-                        }
-                        // If we can't turn this into a 'not', try to shrink
-                        // the constant.
-                        if self.shrink_demanded_constant(inst, 1, demanded) {
-                            return Simplified::Edited;
-                        }
-                    }
-
-                    // If our LHS is an 'and' and if it has one use, and if any
-                    // of the bits we are flipping are known to be set, then
-                    // the xor is just resetting those bits to zero.
-                    if let Some((_, _, _, and_c)) = self.binary_of(op0, BinaryOp::And)
-                        && self.has_one_use(op0)
-                        && let Some(xor_rhs) = self.apint_of(op1)
-                        && let Some(and_rhs) = self.apint_of(and_c)
-                        && lhs.one & rhs.one & demanded != 0
-                    {
-                        let new_mask = !(lhs.one & rhs.one & demanded) & mask::<u128>(w);
-                        let and_c = self.int(ty, new_mask & and_rhs);
-                        let new_and = self.insert_value(
-                            inst,
-                            Opcode::Binary(BinaryOp::And),
-                            ty,
-                            vec![op0, and_c],
-                            Flags::default(),
-                        );
-                        let xor_c = self.int(ty, new_mask & xor_rhs);
-                        return Simplified::Other(self.insert_value(
-                            inst,
-                            Opcode::Binary(BinaryOp::Xor),
-                            ty,
-                            vec![new_and, xor_c],
-                            Flags::default(),
-                        ));
-                    }
-                }
-                Opcode::Select => {
-                    if self.simplify_demanded_bits(cxt, inst, 2, demanded, &mut rhs, d1)
-                        || self.simplify_demanded_bits(cxt, inst, 1, demanded, &mut lhs, d1)
-                    {
-                        return Simplified::Edited;
-                    }
-
-                    // If the operands are constants, see if we can simplify
-                    // them.
-                    if self.canonicalize_select_constant(inst, 1, demanded)
-                        || self.canonicalize_select_constant(inst, 2, demanded)
-                    {
-                        return Simplified::Edited;
-                    }
-
-                    // Only known if known in both the LHS and RHS.
-                    let (cond, on_true, on_false) =
-                        (self.operand_of(inst, 0), self.operand_of(inst, 1), self.operand_of(inst, 2));
-                    let q = query(self, Some(cxt));
-                    adjust_known_bits_for_select_arm(&q, &mut lhs, cond, on_true, false, depth);
-                    adjust_known_bits_for_select_arm(&q, &mut rhs, cond, on_false, true, depth);
-                    *known = lhs.intersect_with(&rhs);
-                }
-                Opcode::Cast(op @ (CastOp::Trunc | CastOp::ZExt)) => {
-                    if op == CastOp::Trunc {
-                        // If we do not demand the high bits of a right-shifted
-                        // and truncated value, then we may be able to truncate
-                        // it before the shift.
-                        let op0 = self.operand_of(inst, 0);
-                        if let Some((_, _, x, amount)) = self.binary_of(op0, BinaryOp::LShr)
-                            && self.has_one_use(op0)
-                            && let Some(c) = self.apint_of(amount)
-                        {
-                            // The shift amount must be valid (not poison) in
-                            // the narrow type, and it must not be greater than
-                            // the high bits demanded of the result.
-                            if c < u128::from(w) && c <= u128::from(clz(demanded, w)) {
-                                // trunc (lshr X, C) --> lshr (trunc X), C
-                                let trunc = self.create_cast(inst, CastOp::Trunc, x, ty, Flags::default());
-                                let shift = self.int(ty, c);
-                                return Simplified::Other(self.create_binop(
-                                    inst,
-                                    BinaryOp::LShr,
-                                    trunc,
-                                    shift,
-                                    Flags::default(),
-                                ));
-                            }
-                        }
-                    }
-
-                    let src = self.operand_of(inst, 0);
-                    let src_w = self.context.types.int_bits(self.type_of(src)).expect("an integer cast");
-                    let input_demanded = if src_w >= w { demanded } else { demanded & mask::<u128>(src_w) };
-                    let mut input_known = KnownBits::unknown(src_w);
-                    if self.simplify_demanded_bits(cxt, inst, 0, input_demanded, &mut input_known, d1) {
-                        // For zext nneg, we may have dropped the instruction
-                        // which made the input non-negative.
-                        self.drop_poison_generating_flags(inst);
-                        return Simplified::Edited;
-                    }
-                    if op == CastOp::ZExt && flags.contains(Flags::NNEG) && !input_known.is_negative() {
-                        input_known.make_non_negative();
-                    }
-                    *known = input_known.zext_or_trunc(w);
-                }
-                Opcode::Cast(CastOp::SExt) => {
-                    // Compute the bits in the result that are not present in
-                    // the input.
-                    let src = self.operand_of(inst, 0);
-                    let src_w = self.context.types.int_bits(self.type_of(src)).expect("an integer cast");
-                    let mut input_demanded = demanded & mask::<u128>(src_w);
-
-                    // If any of the sign extended bits are demanded, we know
-                    // that the sign bit is demanded.
-                    if active_bits(demanded, w) > src_w {
-                        input_demanded |= 1 << (src_w - 1);
-                    }
-
-                    let mut input_known = KnownBits::unknown(src_w);
-                    if self.simplify_demanded_bits(cxt, inst, 0, input_demanded, &mut input_known, d1) {
-                        return Simplified::Edited;
-                    }
-
-                    // If the input sign bit is known zero, or if the NewBits
-                    // are not demanded convert this into a zero extension.
-                    if input_known.is_non_negative() || active_bits(demanded, w) <= src_w {
-                        return Simplified::Other(self.insert_value(
-                            inst,
-                            Opcode::Cast(CastOp::ZExt),
-                            ty,
-                            vec![src],
-                            Flags::default(),
-                        ));
-                    }
-
-                    // If the sign bit of the input is known set or clear, then
-                    // we know the top bits of the result.
-                    *known = input_known.sext(w);
-                }
-                Opcode::Binary(BinaryOp::Add) => {
-                    if demanded & 1 == 0 {
-                        // If we do not need the low bit, try to convert bool
-                        // math to logic.
-                        if let Some(found) = self.demanded_bool_add(inst, ty) {
-                            return Simplified::Other(found);
-                        }
-                    }
-
-                    // Right fill the mask of bits for the operands to demand
-                    // the most significant bit and all those below it.
-                    let nlz = clz(demanded, w);
-                    let from_ops = mask::<u128>(w - nlz);
-                    if self.shrink_demanded_constant(inst, 1, from_ops)
-                        || self.simplify_demanded_bits(cxt, inst, 1, from_ops, &mut rhs, d1)
-                    {
-                        return disable_wrap_flags(self, nlz);
-                    }
-
-                    // If low order bits are not demanded and known to be zero
-                    // in one operand, then we don't need to demand them from
-                    // the other operand, since they can't cause overflow into
-                    // any bits that are demanded in the result.
-                    let ntz = ctz(!(!demanded & rhs.zero), w);
-                    let from_lhs = from_ops & !mask::<u128>(ntz);
-                    if self.shrink_demanded_constant(inst, 0, from_lhs)
-                        || self.simplify_demanded_bits(cxt, inst, 0, from_lhs, &mut lhs, d1)
-                    {
-                        return disable_wrap_flags(self, nlz);
-                    }
-
-                    let ntz_lhs = ctz(!(!demanded & lhs.zero), w);
-                    let from_rhs = from_ops & !mask::<u128>(ntz_lhs);
-                    if self.shrink_demanded_constant(inst, 1, from_rhs) {
-                        return disable_wrap_flags(self, nlz);
-                    }
-
-                    // If we are known to be adding zeros to every bit below
-                    // the highest demanded bit, we just return the other side.
-                    if subset(from_ops, rhs.zero) {
-                        return Simplified::Other(self.operand_of(inst, 0));
-                    }
-                    if subset(from_ops, lhs.zero) {
-                        return Simplified::Other(self.operand_of(inst, 1));
-                    }
-
-                    // (add X, C) --> (xor X, C) IFF C is equal to the top bit
-                    // of the DemandMask
-                    if let Some(c) = self.apint_of(self.operand_of(inst, 1))
-                        && active_bits(demanded, w) > 0
-                        && c == 1 << (active_bits(demanded, w) - 1)
-                    {
-                        let x = self.operand_of(inst, 0);
-                        let c = self.int(ty, c);
-                        return Simplified::Other(self.create_binop(inst, BinaryOp::Xor, x, c, Flags::default()));
-                    }
-
-                    // Otherwise just compute the known bits of the result.
-                    *known = KnownBits::add(&lhs, &rhs, flags.contains(Flags::NSW), flags.contains(Flags::NUW), false);
-                }
-                Opcode::Binary(BinaryOp::Sub) => {
-                    let nlz = clz(demanded, w);
-                    let from_ops = mask::<u128>(w - nlz);
-                    if self.shrink_demanded_constant(inst, 1, from_ops)
-                        || self.simplify_demanded_bits(cxt, inst, 1, from_ops, &mut rhs, d1)
-                    {
-                        return disable_wrap_flags(self, nlz);
-                    }
-
-                    // If low order bits are not demanded and are known to be
-                    // zero in RHS, then we don't need to demand them from LHS,
-                    // since they can't cause a borrow from any bits that are
-                    // demanded in the result.
-                    let ntz = ctz(!(!demanded & rhs.zero), w);
-                    let from_lhs = from_ops & !mask::<u128>(ntz);
-                    if self.shrink_demanded_constant(inst, 0, from_lhs)
-                        || self.simplify_demanded_bits(cxt, inst, 0, from_lhs, &mut lhs, d1)
-                    {
-                        return disable_wrap_flags(self, nlz);
-                    }
-
-                    // If we are known to be subtracting zeros from every bit
-                    // below the highest demanded bit, we just return the other
-                    // side.
-                    if subset(from_ops, rhs.zero) {
-                        return Simplified::Other(self.operand_of(inst, 0));
-                    }
-                    // We can't do this with the LHS for subtraction, unless we
-                    // are only demanding the LSB.
-                    if from_ops == 1 && subset(from_ops, lhs.zero) {
-                        return Simplified::Other(self.operand_of(inst, 1));
-                    }
-
-                    // Canonicalize sub mask, X -> ~X
-                    let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
-                    if let Some((mask_c, _)) = pattern::low_bit_mask(&query(self, None), op0)
-                        && subset(from_ops, mask_c)
-                    {
-                        return Simplified::Other(self.create_not(inst, op1));
-                    }
-
-                    *known = KnownBits::sub(&lhs, &rhs, flags.contains(Flags::NSW), flags.contains(Flags::NUW));
-                }
-                Opcode::Binary(BinaryOp::Mul) => {
-                    // If the high-bits of a MUL are not demanded, then we do
-                    // not care about the high bits of the operands.
-                    let nlz = clz(demanded, w);
-                    let from_ops = mask::<u128>(w - nlz);
-                    if self.shrink_demanded_constant(inst, 0, from_ops)
-                        || self.simplify_demanded_bits(cxt, inst, 0, from_ops, &mut lhs, d1)
-                        || self.shrink_demanded_constant(inst, 1, from_ops)
-                        || self.simplify_demanded_bits(cxt, inst, 1, from_ops, &mut rhs, d1)
-                    {
-                        disable_wrap_flags(self, nlz);
-                        return Simplified::Edited;
-                    }
-
-                    let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
-                    if demanded.is_power_of_two() {
-                        // The LSB of X*Y is set only if (X & 1) == 1 and
-                        // (Y & 1) == 1. If we demand exactly one bit N and we
-                        // have "X * (C' << N)" where C' is odd, then the
-                        // left-shifted low bit of X is the answer.
-                        let n = demanded.trailing_zeros();
-                        if let Some(c) = self.apint_of(op1)
-                            && ctz(c, w) == n
-                        {
-                            let amount = self.int(ty, u128::from(n));
-                            return Simplified::Other(self.insert_value(
-                                inst,
-                                Opcode::Binary(BinaryOp::Shl),
-                                ty,
-                                vec![op0, amount],
-                                Flags::default(),
-                            ));
-                        }
-                    }
-                    // For a squared value "X * X", the bottom 2 bits are 0 and
-                    // X[0] because X * X is odd iff X is odd.
-                    if op0 == op1 && demanded < 4 {
-                        let one = self.int(ty, 1);
-                        return Simplified::Other(self.insert_value(
-                            inst,
-                            Opcode::Binary(BinaryOp::And),
-                            ty,
-                            vec![op0, one],
-                            Flags::default(),
-                        ));
-                    }
-
-                    self.known_of(cxt, self_value, known, depth);
-                }
-                Opcode::Binary(BinaryOp::Shl) => {
-                    let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
-                    if let Some(sa) = self.apint_of(op1) {
-                        for shr_op in [BinaryOp::LShr, BinaryOp::AShr] {
-                            if let Some((shr, _, _, amount)) = self.binary_of(op0, shr_op)
-                                && let Some(shr_amt) = self.apint_of(amount)
-                                && let Some(found) =
-                                    self.simplify_shr_shl_demanded_bits(shr, shr_amt, inst, sa, demanded, known)
-                            {
-                                return Simplified::Other(found);
-                            }
-                        }
-
-                        // Do not simplify if shl is part of funnel-shift
-                        // pattern
-                        if self.feeds_a_rotate(inst) {
-                            self.known_of(cxt, self_value, known, depth);
-                            break 'switch;
-                        }
-
-                        // We only want bits that already match the signbit
-                        // then we don't need to shift.
-                        let shift_amt = limited(sa, w - 1);
-                        if ctz(demanded, w) >= shift_amt {
-                            if flags.contains(Flags::NSW) {
-                                let hi_demanded = w - ctz(demanded, w);
-                                let sign_bits = compute_num_sign_bits(&query(self, Some(cxt)), op0, d1);
-                                if sign_bits > shift_amt && sign_bits - shift_amt >= hi_demanded {
-                                    return Simplified::Other(op0);
-                                }
-                            }
-
-                            // If we can pre-shift a right-shifted constant to
-                            // the left without losing any high bits and we
-                            // don't demand the low bits, then eliminate the
-                            // left-shift:
-                            // (C >> X) << LeftShiftAmtC --> (C <<
-                            // LeftShiftAmtC) >> X
-                            if let Some((_, _, c, x)) = self.binary_of(op0, BinaryOp::LShr)
-                                && let Some(c) = self.apint_of(c)
-                            {
-                                let new_c = shl_w(c, shift_amt, w);
-                                if lshr_w(new_c, shift_amt) == c {
-                                    let new_c = self.int(ty, new_c);
-                                    return Simplified::Other(self.insert_value(
-                                        inst,
-                                        Opcode::Binary(BinaryOp::LShr),
-                                        ty,
-                                        vec![new_c, x],
-                                        Flags::default(),
-                                    ));
-                                }
-                            }
-                        }
-
-                        let mut demanded_in = lshr_w(demanded, shift_amt);
-
-                        // If the shift is NUW/NSW, then it does demand the high
-                        // bits.
-                        if flags.contains(Flags::NSW) {
-                            demanded_in |= high_bits(w, shift_amt + 1);
-                        } else if flags.contains(Flags::NUW) {
-                            demanded_in |= high_bits(w, shift_amt);
-                        }
-
-                        if self.simplify_demanded_bits(cxt, inst, 0, demanded_in, known, d1) {
-                            return Simplified::Edited;
-                        }
-
-                        *known = KnownBits::shl(
-                            known,
-                            &KnownBits::constant(w, u128::from(shift_amt)),
-                            flags.contains(Flags::NUW),
-                            flags.contains(Flags::NSW),
-                            false,
-                        );
-                    } else {
-                        // This is a variable shift, so we can't shift the
-                        // demand mask by a known amount. But if we are not
-                        // demanding high bits, then we are not demanding those
-                        // bits from the pre-shifted operand either.
-                        let leading = clz(demanded, w);
-                        if leading != 0 {
-                            let from_op = mask::<u128>(w - leading);
-                            if self.simplify_demanded_bits(cxt, inst, 0, from_op, known, d1) {
-                                // We can't guarantee that nsw/nuw hold after
-                                // simplifying the operand.
-                                self.drop_poison_generating_flags(inst);
-                                return Simplified::Edited;
-                            }
-                        }
-                        self.known_of(cxt, self_value, known, depth);
-                    }
-                }
-                Opcode::Binary(BinaryOp::LShr) => {
-                    let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
-                    if let Some(sa) = self.apint_of(op1) {
-                        let shift_amt = limited(sa, w - 1);
-
-                        // Do not simplify if lshr is part of funnel-shift
-                        // pattern
-                        if self.feeds_a_rotate(inst) {
-                            self.known_of(cxt, self_value, known, depth);
-                            break 'switch;
-                        }
-
-                        // If we are just demanding the shifted sign bit and
-                        // below, then this can be treated as an ASHR in
-                        // disguise.
-                        if clz(demanded, w) >= shift_amt {
-                            // If we only want bits that already match the
-                            // signbit then we don't need to shift.
-                            let hi_demanded = w - ctz(demanded, w);
-                            let sign_bits = compute_num_sign_bits(&query(self, Some(cxt)), op0, d1);
-                            if sign_bits >= hi_demanded {
-                                return Simplified::Other(op0);
-                            }
-
-                            // If we can pre-shift a left-shifted constant to
-                            // the right without losing any low bits (we
-                            // already know we don't demand the high bits),
-                            // then eliminate the right-shift:
-                            // (C << X) >> RightShiftAmtC --> (C >>
-                            // RightShiftAmtC) << X
-                            if let Some((_, _, c, x)) = self.binary_of(op0, BinaryOp::Shl)
-                                && let Some(c) = self.apint_of(c)
-                            {
-                                let new_c = lshr_w(c, shift_amt);
-                                if shl_w(new_c, shift_amt, w) == c {
-                                    let new_c = self.int(ty, new_c);
-                                    return Simplified::Other(self.insert_value(
-                                        inst,
-                                        Opcode::Binary(BinaryOp::Shl),
-                                        ty,
-                                        vec![new_c, x],
-                                        Flags::default(),
-                                    ));
-                                }
-                            }
-
-                            if let Some((_, _, x, factor)) = self.binary_of(op0, BinaryOp::Mul)
-                                && self.has_one_use(op0)
-                                && let Some(factor) = self.apint_of(factor)
-                                && ctz(factor, w) >= shift_amt
-                            {
-                                let new_factor = self.int(ty, lshr_w(factor, shift_amt));
-                                return Simplified::Other(self.insert_value(
-                                    inst,
-                                    Opcode::Binary(BinaryOp::Mul),
-                                    ty,
-                                    vec![x, new_factor],
-                                    Flags::default(),
-                                ));
-                            }
-                        }
-
-                        // Unsigned shift right.
-                        let demanded_in = shl_w(demanded, shift_amt, w);
-                        if self.simplify_demanded_bits(cxt, inst, 0, demanded_in, known, d1) {
-                            // exact flag may not longer hold.
-                            self.drop_poison_generating_flags(inst);
-                            return Simplified::Edited;
-                        }
-                        *known = known.lshr_by(shift_amt);
-                        if shift_amt != 0 {
-                            // high bits known zero.
-                            known.zero |= high_bits(w, shift_amt);
-                        }
-                        break 'switch;
-                    }
-                    if let Some(found) = self.shift_selecting_packed_element(inst, demanded, depth) {
-                        return Simplified::Other(found);
-                    }
-
-                    self.known_of(cxt, self_value, known, depth);
-                }
-                Opcode::Binary(BinaryOp::AShr) => {
-                    let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
-                    let sign_bits = compute_num_sign_bits(&query(self, Some(cxt)), op0, d1);
-
-                    // If we only want bits that already match the signbit then
-                    // we don't need to shift.
-                    let hi_demanded = w - ctz(demanded, w);
-                    if sign_bits >= hi_demanded {
-                        return Simplified::Other(op0);
-                    }
-
-                    // If this is an arithmetic shift right and only the
-                    // low-bit is set, we can always convert this into a
-                    // logical shr, even if the shift amount is variable.
-                    if demanded == 1 {
-                        return Simplified::Other(self.insert_value(
-                            inst,
-                            Opcode::Binary(BinaryOp::LShr),
-                            ty,
-                            vec![op0, op1],
-                            Flags::default(),
-                        ));
-                    }
-
-                    if let Some(sa) = self.apint_of(op1) {
-                        let shift_amt = limited(sa, w - 1);
-
-                        // Signed shift right.
-                        let mut demanded_in = shl_w(demanded, shift_amt, w);
-                        // If any of the bits being shifted in are demanded,
-                        // then we should set the sign bit as demanded.
-                        let shifted_in_demanded = clz(demanded, w) < shift_amt;
-                        if shifted_in_demanded {
-                            demanded_in |= 1 << (w - 1);
-                        }
-                        if self.simplify_demanded_bits(cxt, inst, 0, demanded_in, known, d1) {
-                            // exact flag may not longer hold.
-                            self.drop_poison_generating_flags(inst);
-                            return Simplified::Edited;
-                        }
-
-                        // If the input sign bit is known to be zero, or if none
-                        // of the shifted in bits are demanded, turn this into
-                        // an unsigned shift right.
-                        if known.zero >> (w - 1) & 1 != 0 || !shifted_in_demanded {
-                            let exact = flags.intersect(Flags::EXACT);
-                            return Simplified::Other(self.insert_value(
-                                inst,
-                                Opcode::Binary(BinaryOp::LShr),
-                                ty,
-                                vec![op0, op1],
-                                exact,
-                            ));
-                        }
-
-                        *known = KnownBits::ashr(
-                            known,
-                            &KnownBits::constant(w, u128::from(shift_amt)),
-                            shift_amt != 0,
-                            flags.contains(Flags::EXACT),
-                        );
-                    } else {
-                        self.known_of(cxt, self_value, known, depth);
-                    }
-                }
-                Opcode::Binary(BinaryOp::UDiv) => {
-                    // UDiv doesn't demand low bits that are zero in the
-                    // divisor.
-                    if let Some(sa) = self.apint_of(self.operand_of(inst, 1)) {
-                        let trailing = ctz(sa, w);
-                        let demanded_in = high_bits(w, w - trailing);
-                        if self.simplify_demanded_bits(cxt, inst, 0, demanded_in, &mut lhs, d1) {
-                            // We can't guarantee that "exact" is still true
-                            // after changing the dividend.
-                            self.drop_poison_generating_flags(inst);
-                            return Simplified::Edited;
-                        }
-
-                        *known = KnownBits::udiv(&lhs, &KnownBits::constant(w, sa), flags.contains(Flags::EXACT));
-                    } else {
-                        self.known_of(cxt, self_value, known, depth);
-                    }
-                }
-                Opcode::Binary(BinaryOp::SRem) => {
-                    if let Some(rem) = self.apint_of(self.operand_of(inst, 1))
-                        && rem.is_power_of_two()
-                    {
-                        if demanded < rem {
-                            // srem won't affect demanded bits
-                            return Simplified::Other(self.operand_of(inst, 0));
-                        }
-
-                        let mask2 = (rem - 1) | 1 << (w - 1);
-                        if self.simplify_demanded_bits(cxt, inst, 0, mask2, &mut lhs, d1) {
-                            return Simplified::Edited;
-                        }
-                        *known = KnownBits::srem(&lhs, &KnownBits::constant(w, rem));
-                        break 'switch;
-                    }
-
-                    self.known_of(cxt, self_value, known, depth);
-                }
-                Opcode::Call(_) => {
-                    let mut known_computed = false;
-                    let id = pattern::call_intrinsic(&query(self, None), inst);
-                    let arg = |c: &Self, index: usize| c.operand_of(inst, index);
-                    match id {
-                        Some(IntrinsicId::Abs) => {
-                            if demanded == 1 {
-                                return Simplified::Other(arg(self, 0));
-                            }
-                        }
-                        Some(IntrinsicId::Bswap) => {
-                            // If the only bits demanded come from one byte of
-                            // the bswap result, just shift the input byte into
-                            // position to eliminate the bswap.
-                            let nlz = clz(demanded, w) & !7;
-                            let ntz = ctz(demanded, w) & !7;
-
-                            // If we need exactly one byte, we can do this
-                            // transformation.
-                            if w - nlz - ntz == 8 {
-                                // Replace this with either a left or right
-                                // shift to get the byte into the right place.
-                                let (op, amount) =
-                                    if nlz > ntz { (BinaryOp::LShr, nlz - ntz) } else { (BinaryOp::Shl, ntz - nlz) };
-                                let amount = self.int(ty, u128::from(amount));
-                                let x = arg(self, 0);
-                                return Simplified::Other(self.insert_value(
-                                    inst,
-                                    Opcode::Binary(op),
-                                    ty,
-                                    vec![x, amount],
-                                    Flags::default(),
-                                ));
-                            }
-                        }
-                        Some(id @ (IntrinsicId::Fshl | IntrinsicId::Fshr)) => {
-                            if let Some(sa) = self.apint_of(arg(self, 2)) {
-                                // Normalize to funnel shift left.
-                                let mut shift_amt = (sa % u128::from(w)) as u32;
-                                if id == IntrinsicId::Fshr {
-                                    shift_amt = w - shift_amt;
-                                }
-
-                                let demanded_lhs = lshr_w(demanded, shift_amt);
-                                let demanded_rhs = shl_w(demanded, w - shift_amt, w);
-                                let (op0, op1) = (arg(self, 0), arg(self, 1));
-                                if op0 != op1 {
-                                    if self.simplify_demanded_bits(cxt, inst, 0, demanded_lhs, &mut lhs, d1)
-                                        || self.simplify_demanded_bits(cxt, inst, 1, demanded_rhs, &mut rhs, d1)
-                                    {
-                                        // Range attribute or metadata may no
-                                        // longer hold.
-                                        self.drop_poison_generating_annotations(inst);
-                                        return Simplified::Edited;
-                                    }
-                                } else {
-                                    // fshl is a rotate. Avoid converting
-                                    // rotate into funnel shift. Only simplify
-                                    // if one operand is constant.
-                                    lhs = compute_known_bits(&query(self, Some(inst)), op0, d1);
-                                    if subset(demanded_lhs, lhs.zero | lhs.one) && self.apint_of(op0) != Some(lhs.one) {
-                                        let constant = self.int(ty, lhs.one);
-                                        replace_operand(self, inst, 0, constant);
-                                        self.drop_poison_generating_annotations(inst);
-                                        return Simplified::Edited;
-                                    }
-
-                                    rhs = compute_known_bits(&query(self, Some(inst)), op1, d1);
-                                    if subset(demanded_rhs, rhs.zero | rhs.one) && self.apint_of(op1) != Some(rhs.one) {
-                                        let constant = self.int(ty, rhs.one);
-                                        replace_operand(self, inst, 1, constant);
-                                        self.drop_poison_generating_annotations(inst);
-                                        return Simplified::Edited;
-                                    }
-                                }
-
-                                lhs = lhs.shl_by(shift_amt);
-                                rhs = rhs.lshr_by(w - shift_amt);
-                                *known = lhs.union_with(&rhs);
-                                known_computed = true;
-                            }
-                        }
-                        Some(IntrinsicId::Umax) => {
-                            // UMax(A, C) == A if the lowest non-zero bit of
-                            // DemandMask is higher than the highest non-zero
-                            // bit of C.
-                            if let Some(c) = self.apint_of(arg(self, 1))
-                                && ctz(demanded, w) >= active_bits(c, w)
-                            {
-                                return Simplified::Other(arg(self, 0));
-                            }
-                        }
-                        Some(IntrinsicId::Umin) => {
-                            // This comes from using DeMorgans on the above umax
-                            // example.
-                            if let Some(c) = self.apint_of(arg(self, 1))
-                                && ctz(demanded, w) >= active_bits(!c, w)
-                            {
-                                return Simplified::Other(arg(self, 0));
-                            }
-                        }
-                        _ => {}
-                    }
-
-                    if !known_computed {
-                        self.known_of(cxt, self_value, known, depth);
-                    }
-                }
-                _ => self.known_of(cxt, self_value, known, depth),
-            }
+        if found != Simplified::Nothing {
+            return found;
         }
 
         // If the client is only demanding bits that we know, return the known
@@ -1170,6 +377,956 @@ impl Combiner<'_> {
             return Simplified::Other(self.int(ty, known.one));
         }
 
+        Simplified::Nothing
+    }
+
+    /// Update flags after simplifying an operand based on the fact that some
+    /// high order bits are not demanded: with the top bit unread, `nsw` and
+    /// `nuw` can no longer be promised.
+    fn disable_wrap_flags(
+        &mut self,
+        inst: InstId,
+        nlz: u32,
+    ) -> Simplified {
+        if nlz > 0 {
+            let flags = self.function.instruction(inst).flags;
+            self.function.set_flags(inst, flags.without(Flags::NSW).without(Flags::NUW));
+        }
+        Simplified::Edited
+    }
+
+    fn demanded_and(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, ty, .. } = *d;
+        let d1 = depth + 1;
+        let mut lhs = KnownBits::unknown(w);
+        let mut rhs = KnownBits::unknown(w);
+        // If either the LHS or the RHS are Zero, the result is
+        // zero.
+        if self.simplify_demanded_bits(cxt, inst, 1, demanded, &mut rhs, d1)
+            || self.simplify_demanded_bits(cxt, inst, 0, demanded & !rhs.zero, &mut lhs, d1)
+        {
+            return Simplified::Edited;
+        }
+
+        *known = analyze_known_bits_from_and_xor_or(&query(self, Some(cxt)), inst, &lhs, &rhs, depth);
+
+        // If the client is only demanding bits that we know,
+        // return the known constant.
+        if subset(demanded, known.zero | known.one) {
+            return Simplified::Other(self.int(ty, known.one));
+        }
+
+        // If all of the demanded bits are known 1 on one side,
+        // return the other.
+        if subset(demanded, lhs.zero | rhs.one) {
+            return Simplified::Other(self.operand_of(inst, 0));
+        }
+        if subset(demanded, rhs.zero | lhs.one) {
+            return Simplified::Other(self.operand_of(inst, 1));
+        }
+
+        // If the RHS is a constant, see if we can simplify it.
+        if self.shrink_demanded_constant(inst, 1, demanded & !lhs.zero) {
+            return Simplified::Edited;
+        }
+        Simplified::Nothing
+    }
+
+    fn demanded_or(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, ty, flags, .. } = *d;
+        let d1 = depth + 1;
+        let mut lhs = KnownBits::unknown(w);
+        let mut rhs = KnownBits::unknown(w);
+        // If either the LHS or the RHS are One, the result is One.
+        if self.simplify_demanded_bits(cxt, inst, 1, demanded, &mut rhs, d1)
+            || self.simplify_demanded_bits(cxt, inst, 0, demanded & !rhs.one, &mut lhs, d1)
+        {
+            // Disjoint flag may not longer hold.
+            self.drop_poison_generating_flags(inst);
+            return Simplified::Edited;
+        }
+
+        *known = analyze_known_bits_from_and_xor_or(&query(self, Some(cxt)), inst, &lhs, &rhs, depth);
+
+        if subset(demanded, known.zero | known.one) {
+            return Simplified::Other(self.int(ty, known.one));
+        }
+
+        // If all of the demanded bits are known zero on one side,
+        // return the other.
+        if subset(demanded, lhs.one | rhs.zero) {
+            return Simplified::Other(self.operand_of(inst, 0));
+        }
+        if subset(demanded, rhs.one | lhs.zero) {
+            return Simplified::Other(self.operand_of(inst, 1));
+        }
+
+        if self.shrink_demanded_constant(inst, 1, demanded) {
+            return Simplified::Edited;
+        }
+
+        // Infer disjoint flag if no common bits are set.
+        if !flags.contains(Flags::DISJOINT) {
+            let (a, b) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
+            let disjoint = KnownBits::have_no_common_bits_set(&lhs, &rhs)
+                || known::have_no_common_bits_set(&query(self, Some(cxt)), a, b);
+            if disjoint {
+                let mut flags = flags;
+                flags.insert(Flags::DISJOINT);
+                self.function.set_flags(inst, flags);
+                return Simplified::Edited;
+            }
+        }
+        Simplified::Nothing
+    }
+
+    fn demanded_xor(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, ty, .. } = *d;
+        let d1 = depth + 1;
+        let mut lhs = KnownBits::unknown(w);
+        let mut rhs = KnownBits::unknown(w);
+        if self.simplify_demanded_bits(cxt, inst, 1, demanded, &mut rhs, d1)
+            || self.simplify_demanded_bits(cxt, inst, 0, demanded, &mut lhs, d1)
+        {
+            return Simplified::Edited;
+        }
+
+        *known = analyze_known_bits_from_and_xor_or(&query(self, Some(cxt)), inst, &lhs, &rhs, depth);
+
+        if subset(demanded, known.zero | known.one) {
+            return Simplified::Other(self.int(ty, known.one));
+        }
+
+        // If all of the demanded bits are known zero on one side,
+        // return the other.
+        if subset(demanded, rhs.zero) {
+            return Simplified::Other(self.operand_of(inst, 0));
+        }
+        if subset(demanded, lhs.zero) {
+            return Simplified::Other(self.operand_of(inst, 1));
+        }
+
+        let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
+
+        // If all of the demanded bits are known to be zero on one
+        // side or the other, turn this into an *inclusive* or.
+        if subset(demanded, rhs.zero | lhs.zero) {
+            let mut or_flags = Flags::default();
+            if demanded == mask(w) {
+                or_flags.insert(Flags::DISJOINT);
+            }
+            return Simplified::Other(self.insert_value(
+                inst,
+                Opcode::Binary(BinaryOp::Or),
+                ty,
+                vec![op0, op1],
+                or_flags,
+            ));
+        }
+
+        // If all of the demanded bits on one side are known, and
+        // all of the set bits on that side are also known to be
+        // set on the other side, turn this into an AND.
+        if subset(demanded, rhs.zero | rhs.one) && subset(rhs.one, lhs.one) {
+            let and_c = self.int(ty, !rhs.one & demanded);
+            return Simplified::Other(self.insert_value(
+                inst,
+                Opcode::Binary(BinaryOp::And),
+                ty,
+                vec![op0, and_c],
+                Flags::default(),
+            ));
+        }
+
+        // If the RHS is a constant, see if we can change it. Don't
+        // alter a -1 constant because that's a canonical 'not' op.
+        if let Some(c) = self.apint_of(op1)
+            && c != mask(w)
+        {
+            if (c | !demanded) & mask::<u128>(w) == mask(w) {
+                // Force bits to 1 to create a 'not' op.
+                let ones = self.all_ones(ty);
+                self.function.set_operand(inst, 1, ones);
+                return Simplified::Edited;
+            }
+            // If we can't turn this into a 'not', try to shrink
+            // the constant.
+            if self.shrink_demanded_constant(inst, 1, demanded) {
+                return Simplified::Edited;
+            }
+        }
+
+        // If our LHS is an 'and' and if it has one use, and if any
+        // of the bits we are flipping are known to be set, then
+        // the xor is just resetting those bits to zero.
+        if let Some((_, _, _, and_c)) = self.binary_of(op0, BinaryOp::And)
+            && self.has_one_use(op0)
+            && let Some(xor_rhs) = self.apint_of(op1)
+            && let Some(and_rhs) = self.apint_of(and_c)
+            && lhs.one & rhs.one & demanded != 0
+        {
+            let new_mask = !(lhs.one & rhs.one & demanded) & mask::<u128>(w);
+            let and_c = self.int(ty, new_mask & and_rhs);
+            let new_and =
+                self.insert_value(inst, Opcode::Binary(BinaryOp::And), ty, vec![op0, and_c], Flags::default());
+            let xor_c = self.int(ty, new_mask & xor_rhs);
+            return Simplified::Other(self.insert_value(
+                inst,
+                Opcode::Binary(BinaryOp::Xor),
+                ty,
+                vec![new_and, xor_c],
+                Flags::default(),
+            ));
+        }
+        Simplified::Nothing
+    }
+
+    fn demanded_select(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, .. } = *d;
+        let d1 = depth + 1;
+        let mut lhs = KnownBits::unknown(w);
+        let mut rhs = KnownBits::unknown(w);
+        if self.simplify_demanded_bits(cxt, inst, 2, demanded, &mut rhs, d1)
+            || self.simplify_demanded_bits(cxt, inst, 1, demanded, &mut lhs, d1)
+        {
+            return Simplified::Edited;
+        }
+
+        // If the operands are constants, see if we can simplify
+        // them.
+        if self.canonicalize_select_constant(inst, 1, demanded) || self.canonicalize_select_constant(inst, 2, demanded)
+        {
+            return Simplified::Edited;
+        }
+
+        // Only known if known in both the LHS and RHS.
+        let (cond, on_true, on_false) = (self.operand_of(inst, 0), self.operand_of(inst, 1), self.operand_of(inst, 2));
+        let q = query(self, Some(cxt));
+        adjust_known_bits_for_select_arm(&q, &mut lhs, cond, on_true, false, depth);
+        adjust_known_bits_for_select_arm(&q, &mut rhs, cond, on_false, true, depth);
+        *known = lhs.intersect_with(&rhs);
+        Simplified::Nothing
+    }
+
+    fn demanded_trunc_zext(
+        &mut self,
+        d: &Demand,
+        op: CastOp,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, ty, flags, .. } = *d;
+        let d1 = depth + 1;
+        if op == CastOp::Trunc {
+            // If we do not demand the high bits of a right-shifted
+            // and truncated value, then we may be able to truncate
+            // it before the shift.
+            let op0 = self.operand_of(inst, 0);
+            if let Some((_, _, x, amount)) = self.binary_of(op0, BinaryOp::LShr)
+                && self.has_one_use(op0)
+                && let Some(c) = self.apint_of(amount)
+            {
+                // The shift amount must be valid (not poison) in
+                // the narrow type, and it must not be greater than
+                // the high bits demanded of the result.
+                if c < u128::from(w) && c <= u128::from(clz(demanded, w)) {
+                    // trunc (lshr X, C) --> lshr (trunc X), C
+                    let trunc = self.create_cast(inst, CastOp::Trunc, x, ty, Flags::default());
+                    let shift = self.int(ty, c);
+                    return Simplified::Other(self.create_binop(inst, BinaryOp::LShr, trunc, shift, Flags::default()));
+                }
+            }
+        }
+
+        let src = self.operand_of(inst, 0);
+        let src_w = self.context.types.int_bits(self.type_of(src)).expect("an integer cast");
+        let input_demanded = if src_w >= w { demanded } else { demanded & mask::<u128>(src_w) };
+        let mut input_known = KnownBits::unknown(src_w);
+        if self.simplify_demanded_bits(cxt, inst, 0, input_demanded, &mut input_known, d1) {
+            // For zext nneg, we may have dropped the instruction
+            // which made the input non-negative.
+            self.drop_poison_generating_flags(inst);
+            return Simplified::Edited;
+        }
+        if op == CastOp::ZExt && flags.contains(Flags::NNEG) && !input_known.is_negative() {
+            input_known.make_non_negative();
+        }
+        *known = input_known.zext_or_trunc(w);
+        Simplified::Nothing
+    }
+
+    fn demanded_sext(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, ty, .. } = *d;
+        let d1 = depth + 1;
+        // Compute the bits in the result that are not present in
+        // the input.
+        let src = self.operand_of(inst, 0);
+        let src_w = self.context.types.int_bits(self.type_of(src)).expect("an integer cast");
+        let mut input_demanded = demanded & mask::<u128>(src_w);
+
+        // If any of the sign extended bits are demanded, we know
+        // that the sign bit is demanded.
+        if active_bits(demanded, w) > src_w {
+            input_demanded |= 1 << (src_w - 1);
+        }
+
+        let mut input_known = KnownBits::unknown(src_w);
+        if self.simplify_demanded_bits(cxt, inst, 0, input_demanded, &mut input_known, d1) {
+            return Simplified::Edited;
+        }
+
+        // If the input sign bit is known zero, or if the NewBits
+        // are not demanded convert this into a zero extension.
+        if input_known.is_non_negative() || active_bits(demanded, w) <= src_w {
+            return Simplified::Other(self.insert_value(
+                inst,
+                Opcode::Cast(CastOp::ZExt),
+                ty,
+                vec![src],
+                Flags::default(),
+            ));
+        }
+
+        // If the sign bit of the input is known set or clear, then
+        // we know the top bits of the result.
+        *known = input_known.sext(w);
+        Simplified::Nothing
+    }
+
+    fn demanded_add(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, ty, flags, .. } = *d;
+        let d1 = depth + 1;
+        let mut lhs = KnownBits::unknown(w);
+        let mut rhs = KnownBits::unknown(w);
+        if demanded & 1 == 0 {
+            // If we do not need the low bit, try to convert bool
+            // math to logic.
+            if let Some(found) = self.demanded_bool_add(inst, ty) {
+                return Simplified::Other(found);
+            }
+        }
+
+        // Right fill the mask of bits for the operands to demand
+        // the most significant bit and all those below it.
+        let nlz = clz(demanded, w);
+        let from_ops = mask::<u128>(w - nlz);
+        if self.shrink_demanded_constant(inst, 1, from_ops)
+            || self.simplify_demanded_bits(cxt, inst, 1, from_ops, &mut rhs, d1)
+        {
+            return self.disable_wrap_flags(inst, nlz);
+        }
+
+        // If low order bits are not demanded and known to be zero
+        // in one operand, then we don't need to demand them from
+        // the other operand, since they can't cause overflow into
+        // any bits that are demanded in the result.
+        let ntz = ctz(!(!demanded & rhs.zero), w);
+        let from_lhs = from_ops & !mask::<u128>(ntz);
+        if self.shrink_demanded_constant(inst, 0, from_lhs)
+            || self.simplify_demanded_bits(cxt, inst, 0, from_lhs, &mut lhs, d1)
+        {
+            return self.disable_wrap_flags(inst, nlz);
+        }
+
+        let ntz_lhs = ctz(!(!demanded & lhs.zero), w);
+        let from_rhs = from_ops & !mask::<u128>(ntz_lhs);
+        if self.shrink_demanded_constant(inst, 1, from_rhs) {
+            return self.disable_wrap_flags(inst, nlz);
+        }
+
+        // If we are known to be adding zeros to every bit below
+        // the highest demanded bit, we just return the other side.
+        if subset(from_ops, rhs.zero) {
+            return Simplified::Other(self.operand_of(inst, 0));
+        }
+        if subset(from_ops, lhs.zero) {
+            return Simplified::Other(self.operand_of(inst, 1));
+        }
+
+        // (add X, C) --> (xor X, C) IFF C is equal to the top bit
+        // of the DemandMask
+        if let Some(c) = self.apint_of(self.operand_of(inst, 1))
+            && active_bits(demanded, w) > 0
+            && c == 1 << (active_bits(demanded, w) - 1)
+        {
+            let x = self.operand_of(inst, 0);
+            let c = self.int(ty, c);
+            return Simplified::Other(self.create_binop(inst, BinaryOp::Xor, x, c, Flags::default()));
+        }
+
+        // Otherwise just compute the known bits of the result.
+        *known = KnownBits::add(&lhs, &rhs, flags.contains(Flags::NSW), flags.contains(Flags::NUW), false);
+        Simplified::Nothing
+    }
+
+    fn demanded_sub(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, flags, .. } = *d;
+        let d1 = depth + 1;
+        let mut lhs = KnownBits::unknown(w);
+        let mut rhs = KnownBits::unknown(w);
+        let nlz = clz(demanded, w);
+        let from_ops = mask::<u128>(w - nlz);
+        if self.shrink_demanded_constant(inst, 1, from_ops)
+            || self.simplify_demanded_bits(cxt, inst, 1, from_ops, &mut rhs, d1)
+        {
+            return self.disable_wrap_flags(inst, nlz);
+        }
+
+        // If low order bits are not demanded and are known to be
+        // zero in RHS, then we don't need to demand them from LHS,
+        // since they can't cause a borrow from any bits that are
+        // demanded in the result.
+        let ntz = ctz(!(!demanded & rhs.zero), w);
+        let from_lhs = from_ops & !mask::<u128>(ntz);
+        if self.shrink_demanded_constant(inst, 0, from_lhs)
+            || self.simplify_demanded_bits(cxt, inst, 0, from_lhs, &mut lhs, d1)
+        {
+            return self.disable_wrap_flags(inst, nlz);
+        }
+
+        // If we are known to be subtracting zeros from every bit
+        // below the highest demanded bit, we just return the other
+        // side.
+        if subset(from_ops, rhs.zero) {
+            return Simplified::Other(self.operand_of(inst, 0));
+        }
+        // We can't do this with the LHS for subtraction, unless we
+        // are only demanding the LSB.
+        if from_ops == 1 && subset(from_ops, lhs.zero) {
+            return Simplified::Other(self.operand_of(inst, 1));
+        }
+
+        // Canonicalize sub mask, X -> ~X
+        let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
+        if let Some((mask_c, _)) = pattern::low_bit_mask(&query(self, None), op0)
+            && subset(from_ops, mask_c)
+        {
+            return Simplified::Other(self.create_not(inst, op1));
+        }
+
+        *known = KnownBits::sub(&lhs, &rhs, flags.contains(Flags::NSW), flags.contains(Flags::NUW));
+        Simplified::Nothing
+    }
+
+    fn demanded_mul(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, ty, self_value, .. } = *d;
+        let d1 = depth + 1;
+        let mut lhs = KnownBits::unknown(w);
+        let mut rhs = KnownBits::unknown(w);
+        // If the high-bits of a MUL are not demanded, then we do
+        // not care about the high bits of the operands.
+        let nlz = clz(demanded, w);
+        let from_ops = mask::<u128>(w - nlz);
+        if self.shrink_demanded_constant(inst, 0, from_ops)
+            || self.simplify_demanded_bits(cxt, inst, 0, from_ops, &mut lhs, d1)
+            || self.shrink_demanded_constant(inst, 1, from_ops)
+            || self.simplify_demanded_bits(cxt, inst, 1, from_ops, &mut rhs, d1)
+        {
+            self.disable_wrap_flags(inst, nlz);
+            return Simplified::Edited;
+        }
+
+        let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
+        if demanded.is_power_of_two() {
+            // The LSB of X*Y is set only if (X & 1) == 1 and
+            // (Y & 1) == 1. If we demand exactly one bit N and we
+            // have "X * (C' << N)" where C' is odd, then the
+            // left-shifted low bit of X is the answer.
+            let n = demanded.trailing_zeros();
+            if let Some(c) = self.apint_of(op1)
+                && ctz(c, w) == n
+            {
+                let amount = self.int(ty, u128::from(n));
+                return Simplified::Other(self.insert_value(
+                    inst,
+                    Opcode::Binary(BinaryOp::Shl),
+                    ty,
+                    vec![op0, amount],
+                    Flags::default(),
+                ));
+            }
+        }
+        // For a squared value "X * X", the bottom 2 bits are 0 and
+        // X[0] because X * X is odd iff X is odd.
+        if op0 == op1 && demanded < 4 {
+            let one = self.int(ty, 1);
+            return Simplified::Other(self.insert_value(
+                inst,
+                Opcode::Binary(BinaryOp::And),
+                ty,
+                vec![op0, one],
+                Flags::default(),
+            ));
+        }
+
+        self.known_of(cxt, self_value, known, depth);
+        Simplified::Nothing
+    }
+
+    fn demanded_shl(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, ty, flags, self_value, .. } = *d;
+        let d1 = depth + 1;
+        let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
+        if let Some(sa) = self.apint_of(op1) {
+            for shr_op in [BinaryOp::LShr, BinaryOp::AShr] {
+                if let Some((shr, _, _, amount)) = self.binary_of(op0, shr_op)
+                    && let Some(shr_amt) = self.apint_of(amount)
+                    && let Some(found) = self.simplify_shr_shl_demanded_bits(shr, shr_amt, inst, sa, demanded, known)
+                {
+                    return Simplified::Other(found);
+                }
+            }
+
+            // Do not simplify if shl is part of funnel-shift
+            // pattern
+            if self.feeds_a_rotate(inst) {
+                self.known_of(cxt, self_value, known, depth);
+                return Simplified::Nothing;
+            }
+
+            // We only want bits that already match the signbit
+            // then we don't need to shift.
+            let shift_amt = limited(sa, w - 1);
+            if ctz(demanded, w) >= shift_amt {
+                if flags.contains(Flags::NSW) {
+                    let hi_demanded = w - ctz(demanded, w);
+                    let sign_bits = compute_num_sign_bits(&query(self, Some(cxt)), op0, d1);
+                    if sign_bits > shift_amt && sign_bits - shift_amt >= hi_demanded {
+                        return Simplified::Other(op0);
+                    }
+                }
+
+                // If we can pre-shift a right-shifted constant to
+                // the left without losing any high bits and we
+                // don't demand the low bits, then eliminate the
+                // left-shift:
+                // (C >> X) << LeftShiftAmtC --> (C <<
+                // LeftShiftAmtC) >> X
+                if let Some((_, _, c, x)) = self.binary_of(op0, BinaryOp::LShr)
+                    && let Some(c) = self.apint_of(c)
+                {
+                    let new_c = shl_w(c, shift_amt, w);
+                    if lshr_w(new_c, shift_amt) == c {
+                        let new_c = self.int(ty, new_c);
+                        return Simplified::Other(self.insert_value(
+                            inst,
+                            Opcode::Binary(BinaryOp::LShr),
+                            ty,
+                            vec![new_c, x],
+                            Flags::default(),
+                        ));
+                    }
+                }
+            }
+
+            let mut demanded_in = lshr_w(demanded, shift_amt);
+
+            // If the shift is NUW/NSW, then it does demand the high
+            // bits.
+            if flags.contains(Flags::NSW) {
+                demanded_in |= high_bits(w, shift_amt + 1);
+            } else if flags.contains(Flags::NUW) {
+                demanded_in |= high_bits(w, shift_amt);
+            }
+
+            if self.simplify_demanded_bits(cxt, inst, 0, demanded_in, known, d1) {
+                return Simplified::Edited;
+            }
+
+            *known = KnownBits::shl(
+                known,
+                &KnownBits::constant(w, u128::from(shift_amt)),
+                flags.contains(Flags::NUW),
+                flags.contains(Flags::NSW),
+                false,
+            );
+        } else {
+            // This is a variable shift, so we can't shift the
+            // demand mask by a known amount. But if we are not
+            // demanding high bits, then we are not demanding those
+            // bits from the pre-shifted operand either.
+            let leading = clz(demanded, w);
+            if leading != 0 {
+                let from_op = mask::<u128>(w - leading);
+                if self.simplify_demanded_bits(cxt, inst, 0, from_op, known, d1) {
+                    // We can't guarantee that nsw/nuw hold after
+                    // simplifying the operand.
+                    self.drop_poison_generating_flags(inst);
+                    return Simplified::Edited;
+                }
+            }
+            self.known_of(cxt, self_value, known, depth);
+        }
+        Simplified::Nothing
+    }
+
+    fn demanded_lshr(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, ty, self_value, .. } = *d;
+        let d1 = depth + 1;
+        let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
+        if let Some(sa) = self.apint_of(op1) {
+            let shift_amt = limited(sa, w - 1);
+
+            // Do not simplify if lshr is part of funnel-shift
+            // pattern
+            if self.feeds_a_rotate(inst) {
+                self.known_of(cxt, self_value, known, depth);
+                return Simplified::Nothing;
+            }
+
+            // If we are just demanding the shifted sign bit and
+            // below, then this can be treated as an ASHR in
+            // disguise.
+            if clz(demanded, w) >= shift_amt {
+                // If we only want bits that already match the
+                // signbit then we don't need to shift.
+                let hi_demanded = w - ctz(demanded, w);
+                let sign_bits = compute_num_sign_bits(&query(self, Some(cxt)), op0, d1);
+                if sign_bits >= hi_demanded {
+                    return Simplified::Other(op0);
+                }
+
+                // If we can pre-shift a left-shifted constant to
+                // the right without losing any low bits (we
+                // already know we don't demand the high bits),
+                // then eliminate the right-shift:
+                // (C << X) >> RightShiftAmtC --> (C >>
+                // RightShiftAmtC) << X
+                if let Some((_, _, c, x)) = self.binary_of(op0, BinaryOp::Shl)
+                    && let Some(c) = self.apint_of(c)
+                {
+                    let new_c = lshr_w(c, shift_amt);
+                    if shl_w(new_c, shift_amt, w) == c {
+                        let new_c = self.int(ty, new_c);
+                        return Simplified::Other(self.insert_value(
+                            inst,
+                            Opcode::Binary(BinaryOp::Shl),
+                            ty,
+                            vec![new_c, x],
+                            Flags::default(),
+                        ));
+                    }
+                }
+
+                if let Some((_, _, x, factor)) = self.binary_of(op0, BinaryOp::Mul)
+                    && self.has_one_use(op0)
+                    && let Some(factor) = self.apint_of(factor)
+                    && ctz(factor, w) >= shift_amt
+                {
+                    let new_factor = self.int(ty, lshr_w(factor, shift_amt));
+                    return Simplified::Other(self.insert_value(
+                        inst,
+                        Opcode::Binary(BinaryOp::Mul),
+                        ty,
+                        vec![x, new_factor],
+                        Flags::default(),
+                    ));
+                }
+            }
+
+            // Unsigned shift right.
+            let demanded_in = shl_w(demanded, shift_amt, w);
+            if self.simplify_demanded_bits(cxt, inst, 0, demanded_in, known, d1) {
+                // exact flag may not longer hold.
+                self.drop_poison_generating_flags(inst);
+                return Simplified::Edited;
+            }
+            *known = known.lshr_by(shift_amt);
+            if shift_amt != 0 {
+                // high bits known zero.
+                known.zero |= high_bits(w, shift_amt);
+            }
+            return Simplified::Nothing;
+        }
+        if let Some(found) = self.shift_selecting_packed_element(inst, demanded, depth) {
+            return Simplified::Other(found);
+        }
+
+        self.known_of(cxt, self_value, known, depth);
+        Simplified::Nothing
+    }
+
+    fn demanded_ashr(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, ty, flags, self_value, .. } = *d;
+        let d1 = depth + 1;
+        let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
+        let sign_bits = compute_num_sign_bits(&query(self, Some(cxt)), op0, d1);
+
+        // If we only want bits that already match the signbit then
+        // we don't need to shift.
+        let hi_demanded = w - ctz(demanded, w);
+        if sign_bits >= hi_demanded {
+            return Simplified::Other(op0);
+        }
+
+        // If this is an arithmetic shift right and only the
+        // low-bit is set, we can always convert this into a
+        // logical shr, even if the shift amount is variable.
+        if demanded == 1 {
+            return Simplified::Other(self.insert_value(
+                inst,
+                Opcode::Binary(BinaryOp::LShr),
+                ty,
+                vec![op0, op1],
+                Flags::default(),
+            ));
+        }
+
+        if let Some(sa) = self.apint_of(op1) {
+            let shift_amt = limited(sa, w - 1);
+
+            // Signed shift right.
+            let mut demanded_in = shl_w(demanded, shift_amt, w);
+            // If any of the bits being shifted in are demanded,
+            // then we should set the sign bit as demanded.
+            let shifted_in_demanded = clz(demanded, w) < shift_amt;
+            if shifted_in_demanded {
+                demanded_in |= 1 << (w - 1);
+            }
+            if self.simplify_demanded_bits(cxt, inst, 0, demanded_in, known, d1) {
+                // exact flag may not longer hold.
+                self.drop_poison_generating_flags(inst);
+                return Simplified::Edited;
+            }
+
+            // If the input sign bit is known to be zero, or if none
+            // of the shifted in bits are demanded, turn this into
+            // an unsigned shift right.
+            if known.zero >> (w - 1) & 1 != 0 || !shifted_in_demanded {
+                let exact = flags.intersect(Flags::EXACT);
+                return Simplified::Other(self.insert_value(
+                    inst,
+                    Opcode::Binary(BinaryOp::LShr),
+                    ty,
+                    vec![op0, op1],
+                    exact,
+                ));
+            }
+
+            *known = KnownBits::ashr(
+                known,
+                &KnownBits::constant(w, u128::from(shift_amt)),
+                shift_amt != 0,
+                flags.contains(Flags::EXACT),
+            );
+        } else {
+            self.known_of(cxt, self_value, known, depth);
+        }
+        Simplified::Nothing
+    }
+
+    fn demanded_udiv(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, depth, w, flags, self_value, .. } = *d;
+        let d1 = depth + 1;
+        let mut lhs = KnownBits::unknown(w);
+        // UDiv doesn't demand low bits that are zero in the
+        // divisor.
+        if let Some(sa) = self.apint_of(self.operand_of(inst, 1)) {
+            let trailing = ctz(sa, w);
+            let demanded_in = high_bits(w, w - trailing);
+            if self.simplify_demanded_bits(cxt, inst, 0, demanded_in, &mut lhs, d1) {
+                // We can't guarantee that "exact" is still true
+                // after changing the dividend.
+                self.drop_poison_generating_flags(inst);
+                return Simplified::Edited;
+            }
+
+            *known = KnownBits::udiv(&lhs, &KnownBits::constant(w, sa), flags.contains(Flags::EXACT));
+        } else {
+            self.known_of(cxt, self_value, known, depth);
+        }
+        Simplified::Nothing
+    }
+
+    fn demanded_srem(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, self_value, .. } = *d;
+        let d1 = depth + 1;
+        let mut lhs = KnownBits::unknown(w);
+        if let Some(rem) = self.apint_of(self.operand_of(inst, 1))
+            && rem.is_power_of_two()
+        {
+            if demanded < rem {
+                // srem won't affect demanded bits
+                return Simplified::Other(self.operand_of(inst, 0));
+            }
+
+            let mask2 = (rem - 1) | 1 << (w - 1);
+            if self.simplify_demanded_bits(cxt, inst, 0, mask2, &mut lhs, d1) {
+                return Simplified::Edited;
+            }
+            *known = KnownBits::srem(&lhs, &KnownBits::constant(w, rem));
+            return Simplified::Nothing;
+        }
+
+        self.known_of(cxt, self_value, known, depth);
+        Simplified::Nothing
+    }
+
+    fn demanded_call(
+        &mut self,
+        d: &Demand,
+        known: &mut KnownBits,
+    ) -> Simplified {
+        let Demand { cxt, inst, demanded, depth, w, ty, self_value, .. } = *d;
+        let d1 = depth + 1;
+        let mut lhs = KnownBits::unknown(w);
+        let mut rhs = KnownBits::unknown(w);
+        let mut known_computed = false;
+        let id = pattern::call_intrinsic(&query(self, None), inst);
+        let arg = |c: &Self, index: usize| c.operand_of(inst, index);
+        match id {
+            Some(IntrinsicId::Abs) => {
+                if demanded == 1 {
+                    return Simplified::Other(arg(self, 0));
+                }
+            }
+            Some(IntrinsicId::Bswap) => {
+                // If the only bits demanded come from one byte of
+                // the bswap result, just shift the input byte into
+                // position to eliminate the bswap.
+                let nlz = clz(demanded, w) & !7;
+                let ntz = ctz(demanded, w) & !7;
+
+                // If we need exactly one byte, we can do this
+                // transformation.
+                if w - nlz - ntz == 8 {
+                    // Replace this with either a left or right
+                    // shift to get the byte into the right place.
+                    let (op, amount) = if nlz > ntz { (BinaryOp::LShr, nlz - ntz) } else { (BinaryOp::Shl, ntz - nlz) };
+                    let amount = self.int(ty, u128::from(amount));
+                    let x = arg(self, 0);
+                    return Simplified::Other(self.insert_value(
+                        inst,
+                        Opcode::Binary(op),
+                        ty,
+                        vec![x, amount],
+                        Flags::default(),
+                    ));
+                }
+            }
+            Some(id @ (IntrinsicId::Fshl | IntrinsicId::Fshr)) => {
+                if let Some(sa) = self.apint_of(arg(self, 2)) {
+                    // Normalize to funnel shift left.
+                    let mut shift_amt = (sa % u128::from(w)) as u32;
+                    if id == IntrinsicId::Fshr {
+                        shift_amt = w - shift_amt;
+                    }
+
+                    let demanded_lhs = lshr_w(demanded, shift_amt);
+                    let demanded_rhs = shl_w(demanded, w - shift_amt, w);
+                    let (op0, op1) = (arg(self, 0), arg(self, 1));
+                    if op0 != op1 {
+                        if self.simplify_demanded_bits(cxt, inst, 0, demanded_lhs, &mut lhs, d1)
+                            || self.simplify_demanded_bits(cxt, inst, 1, demanded_rhs, &mut rhs, d1)
+                        {
+                            // Range attribute or metadata may no
+                            // longer hold.
+                            self.drop_poison_generating_annotations(inst);
+                            return Simplified::Edited;
+                        }
+                    } else {
+                        // fshl is a rotate. Avoid converting
+                        // rotate into funnel shift. Only simplify
+                        // if one operand is constant.
+                        lhs = compute_known_bits(&query(self, Some(inst)), op0, d1);
+                        if subset(demanded_lhs, lhs.zero | lhs.one) && self.apint_of(op0) != Some(lhs.one) {
+                            let constant = self.int(ty, lhs.one);
+                            replace_operand(self, inst, 0, constant);
+                            self.drop_poison_generating_annotations(inst);
+                            return Simplified::Edited;
+                        }
+
+                        rhs = compute_known_bits(&query(self, Some(inst)), op1, d1);
+                        if subset(demanded_rhs, rhs.zero | rhs.one) && self.apint_of(op1) != Some(rhs.one) {
+                            let constant = self.int(ty, rhs.one);
+                            replace_operand(self, inst, 1, constant);
+                            self.drop_poison_generating_annotations(inst);
+                            return Simplified::Edited;
+                        }
+                    }
+
+                    lhs = lhs.shl_by(shift_amt);
+                    rhs = rhs.lshr_by(w - shift_amt);
+                    *known = lhs.union_with(&rhs);
+                    known_computed = true;
+                }
+            }
+            Some(IntrinsicId::Umax) => {
+                // UMax(A, C) == A if the lowest non-zero bit of
+                // DemandMask is higher than the highest non-zero
+                // bit of C.
+                if let Some(c) = self.apint_of(arg(self, 1))
+                    && ctz(demanded, w) >= active_bits(c, w)
+                {
+                    return Simplified::Other(arg(self, 0));
+                }
+            }
+            Some(IntrinsicId::Umin) => {
+                // This comes from using DeMorgans on the above umax
+                // example.
+                if let Some(c) = self.apint_of(arg(self, 1))
+                    && ctz(demanded, w) >= active_bits(!c, w)
+                {
+                    return Simplified::Other(arg(self, 0));
+                }
+            }
+            _ => {}
+        }
+
+        if !known_computed {
+            self.known_of(cxt, self_value, known, depth);
+        }
         Simplified::Nothing
     }
 
