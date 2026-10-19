@@ -7,7 +7,7 @@ mkdir -p "${LAND_TMP:-/tmp/landing}"
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
-HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
 STACKS="2752 2773 2776|2785 2789 2797|2713 2738 2764|2753 2757 2763|2672 2683"
 group() { for g in ${STACKS//|/ |}; do :; done; echo "$STACKS" | tr '|' '\n' | grep -w -- "$1" | head -1; }
@@ -25,7 +25,10 @@ while true; do
   batch=("$n"); g=$(group "$n")
   if [ -z "$g" ]; then
     cand=(); for m in $(sed -n '1,40p' $Q); do [ -z "$(group "$m")" ] && cand+=("$m"); done
+    # the cheap static checks (ratchets, fmt, docs, deletions) on each PR merged with feat/parity: a failure never reaches a batch (and never halves it)
+    cand=($(prechecked "${cand[@]:0:${PRECHECK_WINDOW:-16}}"))
     batch=($(pick_disjoint 8 "${cand[@]}"))
+    [ ${#batch[@]} -eq 0 ] && { sleep 60; continue; }
   fi
   for m in "${batch[@]}"; do sed -i "/^$m\$/d" $Q; done
   open=($(open_only "${batch[@]}"))
