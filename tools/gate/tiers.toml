@@ -149,6 +149,10 @@ step = "integration"
 file = "tests/no_local_paths.rs"
 step = "integration"
 
+[[scan]]
+file = "tests/no_kill_by_pattern.rs"
+step = "integration"
+
 # Whole binaries that are heavy: every test in them is slow.
 [whole]
 cv4 = "cv4"

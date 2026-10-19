@@ -9,7 +9,6 @@ description = "Compiles llrm's peephole rules and instruction table into a decis
 llrm-support = { workspace = true }
 llrm-instr = { workspace = true }
 llrm-lir = { workspace = true }
-iced-x86 = { workspace = true }
 indexmap = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }

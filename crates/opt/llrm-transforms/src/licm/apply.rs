@@ -119,7 +119,8 @@ impl Graph<'_> {
 /// [`hoist`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1460):
 /// `inst` moved before the preheader's terminator. Every fact an instruction
 /// carries survives running where it did not run
-/// (`Fact::survives_speculation`), so none is dropped.
+/// (`Fact::survives_speculation`), so none is dropped; a call's attributes on
+/// its arguments and result are dropped by the caller.
 fn hoist(
     function: &mut Function,
     graph: &mut Graph,
@@ -310,7 +311,7 @@ pub fn apply_loop(
     loop_: &Loop,
     preheader: Option<BlockId>,
     sunk: &[(InstId, Sinking)],
-    hoisted: &[(InstId, BlockId)],
+    hoisted: &[super::hoist::Hoist],
     reassociated: &[(usize, Reassociation)],
 ) -> Result<bool, String> {
     let mut changed = false;
@@ -328,12 +329,17 @@ pub fn apply_loop(
     // A reassociation goes to the preheader where the visit found it, among
     // the hoists.
     let mut pending = reassociated.iter().peekable();
-    for (at, &(inst, _)) in hoisted.iter().enumerate() {
+    for (at, &super::hoist::Hoist { inst, guaranteed, .. }) in hoisted.iter().enumerate() {
         while let Some((_, one)) = pending.next_if(|(after, _)| *after <= at) {
             let preheader = preheader.ok_or("a reassociation with no preheader")?;
             reassociate(function, context, graph, preheader, one)?;
         }
         let preheader = preheader.ok_or("a hoist with no preheader")?;
+        // Hoisting a call that was not guaranteed to execute strips what would
+        // make it undefined where it did not run (`LICM.cpp:1478`).
+        if !guaranteed {
+            function.drop_ub_implying_attrs(inst);
+        }
         hoist(function, graph, inst, preheader)?;
         changed = true;
     }
