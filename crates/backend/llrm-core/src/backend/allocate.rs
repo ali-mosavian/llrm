@@ -1904,6 +1904,12 @@ thread_local! {
     static FACTS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+// `_emitted` runs, for a test that greedy prices nothing it does not compare.
+#[cfg(test)]
+thread_local! {
+    static PRICED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// How many times `Facts::of` has run on this thread.
 #[cfg(test)]
 fn facts_built() -> usize {
@@ -4368,6 +4374,9 @@ impl RegAlloc {
         }
         let start = frame.borrow().saved();
         drop(prepare);
+        // LLVM allocates each function once: the translated allocator runs no
+        // search over other shapes of the body, so nothing is priced.
+        let searched = cpu.search && !greedy_on();
         // One allocation per candidate body, each splitting and spilling as
         // it goes; the one whose output costs least is kept.
         let run = |name: &'static str,
@@ -4403,13 +4412,13 @@ impl RegAlloc {
             );
             frame.borrow_mut().defer_colours = false;
             let (got, out, spilled) = allocated?;
-            let cost = llrm_support::debug::timed("regalloc cost", || _emitted(&out));
+            let cost = searched.then(|| llrm_support::debug::timed("regalloc cost", || _emitted(&out)));
             Ok(Outcome { cost, got, out, spilled, slots: frame.borrow().saved(), forced: last_resorts() - before })
         };
         let mut best = run("regalloc base", &body, &reloads, &BTreeSet::new(), true)?;
         llrm_support::debug!(
             "regalloc",
-            "{}: {} insns, {} spilled, cost {}, {} forced",
+            "{}: {} insns, {} spilled, cost {:?}, {} forced",
             body.name,
             best.out.insns().len(),
             best.spilled.len(),
@@ -4419,9 +4428,7 @@ impl RegAlloc {
         let spilled = best.spilled.clone();
         let base_stats = LAST_STATS.with(std::cell::Cell::get);
         BASE_SPLITS.with(|splits| splits.set(base_stats.0));
-        // LLVM allocates each function once: the translated allocator runs no
-        // search over other shapes of the body.
-        if !spilled.is_empty() && cpu.search && !greedy_on() {
+        if !spilled.is_empty() && searched {
             // Other shapes of the same body, which the base allocation's spills
             // suggest: each is kept only if its output is cheaper.
             let building = llrm_support::debug::span("regalloc candidates");
@@ -4556,7 +4563,7 @@ impl RegAlloc {
                     };
                     llrm_support::debug!(
                         "regalloc",
-                        "  trial {shape:?} (splitting {splitting}): {} spilled, cost {}, {} forced",
+                        "  trial {shape:?} (splitting {splitting}): {} spilled, cost {:?}, {} forced",
                         trial.spilled.len(),
                         trial.cost,
                         trial.forced
@@ -4604,7 +4611,8 @@ impl Shape {
 
 /// One finished allocation: its output, what that costs, and the frame it left.
 struct Outcome {
-    cost: f64,
+    /// Only where a search compares it.
+    cost: Option<f64>,
     got: Assignment,
     out: LirBody,
     spilled: BTreeSet<u32>,
@@ -4621,6 +4629,8 @@ const MEMORY_OPERAND: f64 = 1.0;
 /// weighted by how often its block runs. Alternatives differ only in what the
 /// allocator added, so this is the cost of that.
 fn _emitted(body: &LirBody) -> f64 {
+    #[cfg(test)]
+    PRICED.with(|count| count.set(count.get() + 1));
     // The count the run makes: an anchor that prints nothing is not an
     // instruction.
     if let Some(work) = crate::backend::executed::work(body) {
@@ -5638,6 +5648,18 @@ mod tests {
         _through_regalloc(_one_block(insns), &[]);
         assert_eq!(greedy_runs().0 - runs, 1, "premise: the greedy allocator placed the body");
         assert_eq!(facts_built() - built, 0);
+    }
+
+    /// Each allocation was priced for the search over other shapes, which the
+    /// greedy allocator never runs: `executed` with its own frequencies, 4.4 M
+    /// of 1945 M instructions on d_faces.
+    #[test]
+    fn test_the_greedy_allocator_prices_no_allocation() {
+        let insns: Vec<Insn> = vec![_mov(1, 2, 4)];
+        let (runs, priced) = (greedy_runs().0, PRICED.with(std::cell::Cell::get));
+        _through_regalloc(_one_block(insns), &[]);
+        assert_eq!(greedy_runs().0 - runs, 1, "premise: the greedy allocator placed the body");
+        assert_eq!(PRICED.with(std::cell::Cell::get) - priced, 0);
     }
 
     fn _one_block(insns: Vec<Insn>) -> LirBody {
