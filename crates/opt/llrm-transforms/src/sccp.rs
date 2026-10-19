@@ -39,6 +39,7 @@ use llrm_mir::context::GlobalId;
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::module::{BlockId, Function, InstId, Linkage, MetadataNode, Operand, ValueId};
@@ -46,10 +47,11 @@ use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode,
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuelattice::LatticeConstant;
-use llrm_mir::valuetracking::Query;
 use llrm_mir::valuetracking::pattern::{self, IntrinsicId, add_like, binary, call_arguments};
+use llrm_mir::valuetracking::{AssumptionCache, Query};
 
 use crate::local;
+use crate::predicateinfo::PredicateInfo;
 use crate::sccpsolver::{Env, Results, Solver};
 
 pub struct Sccp;
@@ -69,7 +71,8 @@ impl FunctionPass for Sccp {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
-        let changed = run_sccp(unit.context, unit.layout, &outer, unit.metadata, unit.id, unit.function);
+        let dt = analyses.get::<llrm_mir::passes::Dominators>(&*unit.context, unit.layout, &*unit.function);
+        let changed = run_sccp(unit.context, unit.layout, &outer, unit.metadata, unit.id, &dt, unit.function);
         match (changed.anything, changed.control_flow) {
             (false, _) => PreservedAnalyses::all(),
             (true, false) => PreservedAnalyses::none()
@@ -121,15 +124,20 @@ pub fn run_sccp(
     outer: &Outer,
     metadata: &[MetadataNode],
     id: Option<GlobalId>,
+    dt: &DomTree,
     function: &mut Function,
 ) -> Changed {
     if function.is_declaration() {
         return Changed::default();
     }
     let tracks_returns = can_track_returns_interprocedurally(outer, function, id);
+    // `addPredicateInfo`: copies of the values a branch, switch or assume
+    // tells something about, for the code it holds for.
+    let assumptions = AssumptionCache::of(&*context, &outer.globals, metadata, function);
+    let predicates = PredicateInfo::new(&*context, &outer.globals, metadata, function, dt, &assumptions);
     // Solve for constants.
     let results = {
-        let env = Env { context: &mut *context, layout, outer, metadata, id, tracks_returns };
+        let env = Env { context: &mut *context, layout, outer, metadata, id, tracks_returns, predicates: &predicates };
         let mut solver = Solver::new(env, &*function);
         loop {
             solver.solve();
@@ -172,6 +180,18 @@ pub fn run_sccp(
         rewrite.delete_block(function, dead);
     }
     changed.control_flow |= !blocks_to_erase.is_empty();
+    // `removeSSACopies`.
+    let mut copies: Vec<InstId> = predicates.copies().collect();
+    copies.sort_by_key(|one| one.0);
+    for copy in copies {
+        if function.is_erased(copy) {
+            continue;
+        }
+        let instruction = function.instruction(copy);
+        let (result, source) = (instruction.result.expect("a copy has a value"), instruction.operands[0]);
+        function.replace_all_uses_with(result, source);
+        function.erase(copy).expect("its uses were replaced");
+    }
     changed.anything |= rewrite.infer_return_attributes(function);
     changed
 }
