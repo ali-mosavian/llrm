@@ -131,8 +131,9 @@ pub struct Convention {
     /// How many slots an i64 or a double takes.
     pub wide_slots: i64,
     pub variadic_float: String,
-    /// The register a variadic call sets, as a byte, to the number of vector registers it passes arguments in
-    /// (SysV AMD64's `al`); none where the convention has no such count.
+    /// The register a variadic call sets, as a byte, to the number of vector
+    /// registers it passes arguments in (SysV AMD64's `al`); none where the
+    /// convention has no such count.
     pub variadic_vector_register: Option<String>,
     /// For an interrupt handler: what its frame pointer addresses, lowest
     /// address first, each slot's register and bytes. Empty for the rest.

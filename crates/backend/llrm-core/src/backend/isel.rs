@@ -801,6 +801,11 @@ pub(super) fn size_of(
         (TypeClass::Float, Type::Float(FloatKind::Float)) => Ok(4),
         (TypeClass::Float, Type::Float(FloatKind::Double)) => Ok(8),
         (TypeClass::Float, Type::Float(FloatKind::X86Fp80)) => Ok(10),
+        // An aggregate of scalars answered in registers is as big as it is in
+        // memory.
+        (_, Type::Struct { .. }) => {
+            u32::try_from(layout.store_size(&module.context.types, ty)).map_err(|_| Unselected("a struct".into()))
+        }
         _ => width_of(module, layout, ty),
     }
 }
@@ -822,7 +827,13 @@ fn dword_indexed(
 }
 
 pub fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
-    Err(Unselected(what.into()))
+    let what = what.into();
+    // `LLRM_REFUSE_BACKTRACE=1`: where a refusal is made, as a panic carries
+    // it.
+    if llrm_support::env_flag!("LLRM_REFUSE_BACKTRACE") {
+        panic!("refused: {what}");
+    }
+    Err(Unselected(what))
 }
 
 /// Where a pointer points, when it need not be a register: a frame slot
@@ -5305,6 +5316,17 @@ impl Selector<'_, '_, '_> {
                 }
                 _ => return refuse("a far result the convention has no registers for"),
             }
+        } else if let Some(fields) = operands
+            .first()
+            .and_then(|&one| if let Operand::Value(value) = one { self.fields.get(&value).cloned() } else { None })
+        {
+            // An aggregate of scalars: each field in the register the
+            // convention names for it.
+            if fields.len() != convention.returns.len() {
+                return refuse("an aggregate result the convention has no registers for");
+            }
+            one.requires = fields.iter().copied().zip(convention.returns.iter().copied()).collect();
+            one.uses = fields.iter().map(|held| held.value).collect();
         } else if let Some(&value) = operands.first() {
             let held = self.held(value, type_of(value), at, out)?;
             one.requires = match convention.returns[..] {
@@ -5720,7 +5742,8 @@ impl Selector<'_, '_, '_> {
                     }
                 }
             }
-            // The vector registers a variadic call passes in, which the callee's prologue saves: none yet.
+            // The vector registers a variadic call passes in, which the
+            // callee's prologue saves: none yet.
             if let Some(name) = entry.variadic_vector_register.as_ref().filter(|_| variadic) {
                 let count = self.fresh_held(1);
                 let zero = Loc::Imm(Imm { value: 0, width: 1, address: None });
@@ -6044,6 +6067,23 @@ impl Selector<'_, '_, '_> {
                 }
                 _ => return refuse(format!("@{name}'s far result")),
             }
+        } else if let (Some(value), Type::Struct { fields, .. }) =
+            (instruction.result, self.types().get(instruction.ty).clone())
+        {
+            // An aggregate of scalars the convention answers in registers, one
+            // for each field.
+            let size = self.size(instruction.ty)?;
+            let named = results(self.arch, self::entry(self.arch, convention, variadic), size);
+            if named.len() != fields.len() {
+                return refuse(format!("@{name} answers {} registers for {} fields", named.len(), fields.len()));
+            }
+            let mut held = Vec::new();
+            for (field, register) in fields.into_iter().zip(named) {
+                let one = self.fresh_held(self.width(field)?);
+                delivers.push((one, register));
+                held.push(one);
+            }
+            self.fields.insert(value, held);
         } else if let Some(value) = instruction.result {
             let width = self.width(instruction.ty)?;
             let held = Held { value: self.value(value), width };

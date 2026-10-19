@@ -158,6 +158,14 @@ fn choose<E>(
     Ok(Some(best.1))
 }
 
+/// The type of field `index` of a struct's `types`.
+fn instruction_field(
+    types: &[llrm_mir::TypeId],
+    index: u32,
+) -> Result<llrm_mir::TypeId, Unselected> {
+    types.get(index as usize).copied().ok_or_else(|| Unselected(format!("field {index} of an aggregate")))
+}
+
 impl Selector<'_, '_, '_> {
     /// The opcode's name, for a pattern that refuses an instruction by it.
     pub fn mnemonic(
@@ -1411,6 +1419,42 @@ impl Selector<'_, '_, '_> {
         let Some(field) = field else { return refuse("an extractvalue of no answer in registers") };
         let result = Held { value: self.value(instruction.result.expect("a field")), width: field.width };
         out.push(insn(m.at, semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(field)])));
+        Ok(())
+    }
+
+    /// An aggregate with one field replaced: the fields of the aggregate it is
+    /// made of, each in a register, and the new one. An undefined aggregate
+    /// has fields nothing set, loaded as zero (a field that is never read is
+    /// dead code).
+    pub fn hook_insertvalue(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(m.inst);
+        let Opcode::InsertValue(indices) = &instruction.opcode else { unreachable!("an insertvalue") };
+        let &[index] = &indices[..] else { return refuse("an insertvalue into a nested aggregate") };
+        let llrm_mir::types::Type::Struct { fields: types, .. } = self.types().get(instruction.ty).clone() else {
+            return refuse("an insertvalue into other than a struct");
+        };
+        let mut fields = match instruction.operands[0] {
+            Operand::Value(aggregate) => self.fields.get(&aggregate).cloned(),
+            _ => None,
+        }
+        .unwrap_or_default();
+        if fields.len() != types.len() {
+            fields = Vec::new();
+            for &ty in &types {
+                let field = self.fresh_held(self.width(ty)?);
+                let zero = Loc::Imm(Imm { value: 0, width: field.width, address: None });
+                out.push(insn(m.at, semantics(Operation::Move, "mov", vec![Loc::Held(field)], vec![zero])));
+                fields.push(field);
+            }
+        }
+        let ty = instruction_field(&types, index)?;
+        fields[index as usize] = self.held(instruction.operands[1], ty, m.at, out)?;
+        let result = instruction.result.expect("an insertvalue's value");
+        self.fields.insert(result, fields);
         Ok(())
     }
 

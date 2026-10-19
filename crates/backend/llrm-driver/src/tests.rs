@@ -239,8 +239,9 @@ fn llvm_ir_is_found_by_its_triple_and_optimized() {
     assert_eq!(body, ["mov eax, 42", "ret"], "{listing}");
 }
 
-/// A call of a variadic function tells the callee in `al` how many vector registers carry arguments: SysV AMD64's
-/// callee saves them by it. It was never set, so `printf` read whatever the register held.
+/// A call of a variadic function tells the callee in `al` how many vector
+/// registers carry arguments: SysV AMD64's callee saves them by it. It was
+/// never set, so `printf` read whatever the register held.
 #[test]
 fn a_variadic_call_sets_al_to_the_vector_registers_it_uses() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
@@ -251,5 +252,33 @@ fn a_variadic_call_sets_al_to_the_vector_registers_it_uses() {
     let listing = llrm_core::backend::masm::text(&built).unwrap();
     let call = listing.lines().position(|line| line.trim() == "call printf").expect("the call");
     let before: Vec<&str> = listing.lines().take(call).map(str::trim).collect();
-    assert!(before.iter().any(|line| *line == "mov eax, 0" || *line == "xor eax, eax" || *line == "mov al, 0"), "{listing}");
+    assert!(
+        before.iter().any(|line| *line == "mov eax, 0" || *line == "xor eax, eax" || *line == "mov al, 0"),
+        "{listing}"
+    );
+}
+
+/// A struct of two quadwords returns in rax and rdx and arrives so:
+/// `insertvalue` and the `ret` and `call` of an aggregate had no selection ("a
+/// { i64, i64 } value").
+#[test]
+fn a_struct_of_two_quadwords_returns_in_rax_and_rdx() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare { i64, i64 } @mk(i64, i64)\n\
+                define { i64, i64 } @pair(i64 %a, i64 %b) {\n\
+                  %x = insertvalue { i64, i64 } poison, i64 %a, 0\n  %y = insertvalue { i64, i64 } %x, i64 %b, 1\n  ret { i64, i64 } %y\n}\n\
+                define i64 @sum(i64 %a, i64 %b) {\n  %r = call { i64, i64 } @mk(i64 %a, i64 %b)\n\
+                  %p = extractvalue { i64, i64 } %r, 0\n  %q = extractvalue { i64, i64 } %r, 1\n  %s = add i64 %p, %q\n  ret i64 %s\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "pair").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let mut lines = listing.lines().map(str::trim);
+    let pair: Vec<&str> =
+        lines.by_ref().skip_while(|line| *line != "pair proc near").take_while(|line| *line != "pair endp").collect();
+    assert!(pair.contains(&"mov rax, rdi") && pair.contains(&"mov rdx, rsi"), "{listing}");
+    let sum: Vec<&str> = listing.lines().map(str::trim).skip_while(|line| *line != "sum proc near").collect();
+    assert!(
+        sum.contains(&"call mk") && sum.iter().any(|line| line.starts_with("add ") && line.contains("rdx")),
+        "{listing}"
+    );
 }
