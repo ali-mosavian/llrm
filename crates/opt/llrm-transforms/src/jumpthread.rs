@@ -398,6 +398,10 @@ fn found(
                 if copies > (BRANCH_PATH - 1) / PATH_SCALE || spent + copies > MAX_COPIED {
                     continue;
                 }
+                // The same way in found through a second state is one path.
+                if paths.iter().any(|one: &Path| one.from == source && one.blocks == [block]) {
+                    continue;
+                }
                 spent += copies.max(1);
                 paths.push(Path { from: source, blocks: vec![block], target });
             }
@@ -497,6 +501,9 @@ fn found(
                 llrm_support::debug!("jumpthread", "path from {:?}: {} copies, {} phis", source, copies, phis);
                 let copies = copies + phis;
                 if copies > limit || spent + copies > MAX_COPIED {
+                    continue;
+                }
+                if paths.iter().any(|one: &Path| one.from == source && one.blocks == blocks) {
                     continue;
                 }
                 // A path of phis and a branch still costs a block, or the
