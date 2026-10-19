@@ -350,6 +350,8 @@ dependencies = [
  "llrm-lir",
  "llrm-target",
  "llrm-x86",
+ "llrm-x86-64",
+ "llrm-x86-64-select",
  "llrm-x86-m16",
  "llrm-x86-m16-select",
  "llrm-x86-m32",
@@ -580,6 +582,28 @@ dependencies = [
  "llrm-support",
  "llrm-target",
  "toml",
+]
+
+[[package]]
+name = "llrm-x86-64"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-iselgen",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-target",
+ "llrm-x86",
+]
+
+[[package]]
+name = "llrm-x86-64-select"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-core",
+ "llrm-iselgen",
+ "llrm-x86",
 ]
 
 [[package]]

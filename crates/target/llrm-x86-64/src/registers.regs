@@ -1,0 +1,77 @@
+# x86-64 registers, one per line, `-` for none. The schema is llrm-target's `registers.rs`; the classes are
+# those of x86-m32's, and the same ones apply. Allocation order is file order: SysV AMD64's caller-saved
+# registers first, then the callee-saved ones.
+#
+# REX makes every GPR's low byte addressable (sil, dil, bpl, spl, r8b..r15b). AH..BH are not described:
+# an instruction that has a REX prefix cannot encode them, and no x86-64 form needs them.
+#
+# @scratch: the words a pass may borrow for a moment, most preferred first.
+@scratch rcx rdx rax
+#
+# name  bits root lane classes dwarf codeview
+rax   64 rax  0 gpr,byte,base,index,int  0 328
+eax   32 rax  0 int  0 17
+ax    16 rax  0 int  0 9
+al    8  rax  0 int  0 1
+rcx   64 rcx  0 gpr,byte,base,index,int  2 330
+ecx   32 rcx  0 int  2 18
+cx    16 rcx  0 int  2 10
+cl    8  rcx  0 int  2 2
+rdx   64 rdx  0 gpr,byte,base,index,int  1 331
+edx   32 rdx  0 int  1 19
+dx    16 rdx  0 int  1 11
+dl    8  rdx  0 int  1 3
+rsi   64 rsi  0 gpr,byte,base,index,int  4 332
+esi   32 rsi  0 int  4 23
+si    16 rsi  0 int  4 15
+sil   8  rsi  0 int  4 324
+rdi   64 rdi  0 gpr,byte,base,index,int  5 333
+edi   32 rdi  0 int  5 24
+di    16 rdi  0 int  5 16
+dil   8  rdi  0 int  5 325
+r8    64 r8   0 gpr,byte,base,index,int  8 336
+r8d   32 r8   0 int  8 -
+r8w   16 r8   0 int  8 -
+r8l   8  r8   0 int  8 -
+r9    64 r9   0 gpr,byte,base,index,int  9 337
+r9d   32 r9   0 int  9 -
+r9w   16 r9   0 int  9 -
+r9l   8  r9   0 int  9 -
+r10   64 r10  0 gpr,byte,base,index,int  10 338
+r10d  32 r10  0 int  10 -
+r10w  16 r10  0 int  10 -
+r10l  8  r10  0 int  10 -
+r11   64 r11  0 gpr,byte,base,index,int  11 339
+r11d  32 r11  0 int  11 -
+r11w  16 r11  0 int  11 -
+r11l  8  r11  0 int  11 -
+rbx   64 rbx  0 gpr,byte,base,index,int  3 329
+ebx   32 rbx  0 int  3 20
+bx    16 rbx  0 int  3 12
+bl    8  rbx  0 int  3 4
+r12   64 r12  0 gpr,byte,base,index,int  12 340
+r12d  32 r12  0 int  12 -
+r12w  16 r12  0 int  12 -
+r12l  8  r12  0 int  12 -
+r13   64 r13  0 gpr,byte,base,index,int  13 341
+r13d  32 r13  0 int  13 -
+r13w  16 r13  0 int  13 -
+r13l  8  r13  0 int  13 -
+r14   64 r14  0 gpr,byte,base,index,int  14 342
+r14d  32 r14  0 int  14 -
+r14w  16 r14  0 int  14 -
+r14l  8  r14  0 int  14 -
+r15   64 r15  0 gpr,byte,base,index,int  15 343
+r15d  32 r15  0 int  15 -
+r15w  16 r15  0 int  15 -
+r15l  8  r15  0 int  15 -
+rbp   64 rbp  0 reserved,frame,base,index,int  6 334
+ebp   32 rbp  0 int  6 22
+bp    16 rbp  0 int  6 14
+bpl   8  rbp  0 int  6 326
+rsp   64 rsp  0 reserved,stack,base,int  7 335
+esp   32 rsp  0 int  7 21
+sp    16 rsp  0 int  7 13
+spl   8  rsp  0 int  7 327
+# The return address call frame information names (DWARF column 16); no code reaches it as a register.
+rip   64 rip  0 pc  16 -

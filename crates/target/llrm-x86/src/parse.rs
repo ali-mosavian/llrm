@@ -253,7 +253,7 @@ fn parse_rows(
                 .map(|bits| {
                     bits.parse()
                         .ok()
-                        .filter(|bits| [8, 16, 32].contains(bits))
+                        .filter(|bits| [8, 16, 32, 64].contains(bits))
                         .ok_or_else(|| format!("x86.instr:{line}: width `{bits}`"))
                 })
                 .collect::<Result<_, _>>()?

@@ -15,7 +15,7 @@ pub const DEFAULT: &str = "x86-m16";
 
 /// Every target built in.
 pub fn all() -> Vec<Rc<dyn Target>> {
-    vec![Rc::new(llrm_x86_m16::M16), Rc::new(llrm_x86_m32::M32)]
+    vec![Rc::new(llrm_x86_m16::M16), Rc::new(llrm_x86_m32::M32), Rc::new(llrm_x86_64::M64)]
 }
 
 /// The instruction selector of the target `name`, from its select crate.
@@ -23,6 +23,7 @@ pub fn selector(name: &str) -> Option<&'static Compiled> {
     match name {
         "x86-m16" => Some(&llrm_x86_m16_select::SELECTOR),
         "x86-m32" => Some(&llrm_x86_m32_select::SELECTOR),
+        "x86-64" => Some(&llrm_x86_64_select::SELECTOR),
         _ => None,
     }
 }
