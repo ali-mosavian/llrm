@@ -604,8 +604,7 @@ impl Lowering<'_, '_> {
     /// The default's first instruction, phis aside, is `unreachable`.
     fn default_is_unreachable(&self) -> bool {
         let function = &*self.unit.function;
-        let mut instructions =
-            function.block(self.switch.default).iter().map(|one| function.instruction(one));
+        let mut instructions = function.block(self.switch.default).iter().map(|one| function.instruction(one));
         instructions.find(|one| one.opcode != Opcode::Phi).is_some_and(|one| one.opcode == Opcode::Unreachable)
     }
 

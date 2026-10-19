@@ -1235,9 +1235,8 @@ fn test_a_callee_is_specialised_once_for_the_constants_its_sites_pass() {
 /// its globals and panicked (c/pattern_fill -O2 -m32).
 #[test]
 fn test_a_specialised_copy_calling_a_function_it_declared_is_priced() {
-    let mut module = parsed(
-        "declare void @ext(i16)\n\ndefine void @mix(i16 %a) {\nb:\n  call void @ext(i16 %a)\n  ret void\n}\n",
-    );
+    let mut module =
+        parsed("declare void @ext(i16)\n\ndefine void @mix(i16 %a) {\nb:\n  call void @ext(i16 %a)\n  ret void\n}\n");
     let (mix, ext) = (module.named("mix").unwrap(), module.named("ext").unwrap());
     let mut modules = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
     let three = {
@@ -1254,15 +1253,27 @@ fn test_a_specialised_copy_calling_a_function_it_declared_is_priced() {
             let mut declared = Declared::of(module);
             let ty = module.global(ext).function().unwrap().ty;
             let fresh = declared.declare("llvm.fresh", ty);
-            let call = function.walk().map(|(_, inst)| inst).find(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Call(_)));
+            let call = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .find(|&inst| matches!(
+                    function.instruction(inst).opcode,
+                    llrm_mir::opcode::Opcode::Call(_)
+                ));
             let call = call.unwrap();
             let last = function.instruction(call).operands.len() - 1;
-            let llrm_mir::module::Operand::Constant(was) = function.instruction(call).operands[last] else { unreachable!("a callee") };
+            let llrm_mir::module::Operand::Constant(was) = function.instruction(call).operands[last] else {
+                unreachable!("a callee")
+            };
             let pointer = module.context.get(was).ty;
-            let to = module.context.constant(llrm_mir::context::Constant {
-                ty: pointer,
-                kind: llrm_mir::context::ConstantKind::Global(fresh),
-            });
+            let to = module
+                .context
+                .constant(
+                    llrm_mir::context::Constant {
+                        ty: pointer,
+                        kind: llrm_mir::context::ConstantKind::Global(fresh),
+                    },
+                );
             function.set_operand(call, last, llrm_mir::module::Operand::Constant(to));
             Ok((function, declared))
         },

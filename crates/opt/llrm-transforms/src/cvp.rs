@@ -125,6 +125,9 @@ impl FunctionPass for Cvp {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        if llrm_support::env_flag!("LLRM_NO_CVP") {
+            return PreservedAnalyses::all();
+        }
         let globals = Rc::clone(&analyses.outer().globals);
         let assumptions = AssumptionCache::of(unit.context, &globals, unit.metadata, unit.function);
         let mut pass = State { unit, analyses, globals, assumptions, lvi: LazyValueInfo::new(), cfg_changed: false };
@@ -2632,11 +2635,8 @@ impl State<'_, '_> {
         keep_one_input_phis: bool,
     ) {
         let function = &*self.unit.function;
-        let phis: Vec<InstId> = function
-            .block(block)
-            .iter()
-            .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-            .collect();
+        let phis: Vec<InstId> =
+            function.block(block).iter().take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect();
         // Return early if there are no PHI nodes to update.
         let Some(&front) = phis.first() else { return };
 
