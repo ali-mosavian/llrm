@@ -135,8 +135,7 @@ pub fn machine_with<'a>(
                 pool,
                 basic_semantics,
                 status_word: classes.status_word(),
-            })
-                as Box<dyn LIRTransform + 'a>
+            }) as Box<dyn LIRTransform + 'a>
         } else {
             Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target })
         },
