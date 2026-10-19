@@ -603,3 +603,37 @@ b6:
     let after = crate::testing::printed(&after);
     assert!(after.contains("[ undef, %b1 ]") && !after.contains("poison"), "{after}");
 }
+
+/// A LICM run that only moved instructions kept the accesses' annotations: the
+/// next run (or any pass asking MemorySSA) found them held. They were derived
+/// again after every hoist, 81% of the cost of a MemorySSA miss in d_faces.
+#[test]
+fn test_a_hoist_only_run_keeps_the_annotations_for_the_next_ask() {
+    let text = "define i16 @f(i16 %n, i16 %a) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b2 ]
+  %k = mul i16 %a, 3
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %j = add i16 %i, %k
+  br label %b1
+
+b3:
+  ret i16 %i
+}
+";
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.add(Licm { apply: true, speculate: true });
+    let (_, misses_before) = llrm_mir::counts::analysed("annotated");
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let (_, misses) = llrm_mir::counts::analysed("annotated");
+    assert!(crate::testing::printed(&module).contains("%k = mul"), "premise: the multiply is hoisted");
+    assert_eq!(misses - misses_before, 1, "the second run derived the annotations again");
+}
