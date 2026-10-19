@@ -522,6 +522,15 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
 
 
 def main() -> int:
+    """The landing commands run at the landing's build priority (`buildslot.landing`); the others (audit, unlogged) start no cargo."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from buildslot import landing  # noqa: PLC0415
+
+    with landing():
+        return dispatch()
+
+
+def dispatch() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "merge":
         rest = sys.argv[3:]
         return merge(sys.argv[2], parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))
