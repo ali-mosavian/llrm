@@ -1871,6 +1871,7 @@ fn test_a_loop_is_not_rotated_where_its_exit_only_ties_the_top_fall_through() {
     let made = optimized(&loop_nest(), cpu::profile("486").unwrap()).unwrap();
     let order: Vec<i64> = made.blocks.iter().map(|one| one.at).collect();
     assert_eq!(order, [1, 10, 101, 103, 100, 102, 201, 203, 200, 202, 300, 302, 7000, 303, 301, 9999], "{order:?}");
+}
 
 /// Placement worked out the frequencies of the body again, as `over` over the
 /// blocks it was given, though the body's own answer stood in its facts: 68 M
