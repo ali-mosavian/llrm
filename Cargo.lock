@@ -420,6 +420,7 @@ dependencies = [
  "llrm-lir",
  "llrm-peepgen",
  "llrm-support",
+ "tempfile",
 ]
 
 [[package]]
@@ -490,7 +491,6 @@ dependencies = [
 name = "llrm-peepgen"
 version = "0.1.0"
 dependencies = [
- "iced-x86",
  "indexmap",
  "llrm-instr",
  "llrm-lir",

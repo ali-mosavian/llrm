@@ -200,39 +200,32 @@ impl FunctionPass for JumpThreading {
     }
 }
 
-/// One step of the walk over the layout: where it goes next, and how many
-/// positions it looked at to find out.
-pub(crate) struct LayoutStep {
-    pub(crate) next: usize,
-    pub(crate) examined: usize,
-}
-
 /// Where the walk goes after `block`, which stood at `at` (or near it: the
 /// pass may have placed or removed blocks before `at`). A block that is no
 /// longer placed is not searched for, and neither is a gone `after`: the
 /// search runs outward from `at`, so it costs the distance the target moved,
-/// not the length of the layout.
+/// not the length of the layout. `probe` is called once per position looked
+/// at, so a test can count the work.
 pub(crate) fn layout_step(
     layout: &[BlockId],
     is_placed: impl Fn(BlockId) -> bool,
     block: BlockId,
     at: usize,
     after: Option<BlockId>,
-) -> LayoutStep {
-    let mut examined = 0;
+    mut probe: impl FnMut(),
+) -> usize {
     let mut near = |wanted: BlockId| {
         (0..layout.len())
             .flat_map(|distance| [at.checked_sub(distance), Some(at + distance)])
             .flatten()
-            .inspect(|_| examined += 1)
+            .inspect(|_| probe())
             .find(|&index| layout.get(index) == Some(&wanted))
     };
-    let next = if is_placed(block) {
+    if is_placed(block) {
         near(block).map_or(layout.len(), |index| index + 1)
     } else {
         after.filter(|&after| is_placed(after)).and_then(near).unwrap_or(layout.len())
-    };
-    LayoutStep { next, examined }
+    }
 }
 
 /// A value known in a predecessor: `PredValueInfoTy`.
@@ -668,7 +661,7 @@ impl State<'_, '_> {
         after: Option<BlockId>,
     ) -> usize {
         let function = self.function();
-        layout_step(function.layout(), |one| function.is_placed(one), block, at, after).next
+        layout_step(function.layout(), |one| function.is_placed(one), block, at, after, || {})
     }
 
     /// The blocks reachable from `entry`.
@@ -1704,11 +1697,7 @@ impl State<'_, '_> {
         &self,
         bb: BlockId,
     ) -> bool {
-        let function = self.function();
-        function
-            .iter_block(bb)
-            .find(|&one| function.instruction(one).opcode != Opcode::Phi)
-            .is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+        crate::edges::starts_with_landing_pad(self.function(), bb)
     }
 
     /// `threadEdge`
