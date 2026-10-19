@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dfajumpthreading.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dfajumpthreading.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dfajumpthreading.rs sha256:0d2e98ed60300f975ae7f9cf266b6899ebdf47ca465bea996388e20134f48c41 -->
+<!-- src: crates/opt/llrm-transforms/src/dfajumpthreading.rs sha256:eac434ac0bd0f1ab471113e396cb6bc2d2f52b04bdd88b1d60825497516d2e9c -->
 
 # dfajumpthreading
 
@@ -12,15 +12,18 @@ jump to the case the constant picks; as LLVM's `dfa-jump-threading`.
 ## How it works
 A translation of LLVM `d1106deb71cc` `DFAJumpThreading.cpp`, one Rust
 function per C++ function, each linking its line; the plan and the stages
-are `docs/architecture/dfajumpthreading-translation.md`. This is stage S1.
-[`mainswitch`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dfajumpthreading/mainswitch.rs) decides whether a `switch` is a candidate (`MainSwitch`):
-its condition is a `phi` in a loop and what flows into it is constants or
-values nothing predicts. [`paths`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dfajumpthreading/paths.rs) enumerates the paths that set the state
-to a constant (`AllSwitchPaths`), bounded by the pin's three caps.
-[`transform`](transform.md) decides whether copying is legal and profitable and does it
-(`TransformDFA`): the blocks of each path from the determinator on are
-cloned per exit value, the predecessors are redirected to the clones, and
-SSA is restored.
+are `docs/architecture/dfajumpthreading-translation.md`. This is stages S1
+and S2. [`mainswitch`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dfajumpthreading/mainswitch.rs) decides whether a `switch` is a candidate
+(`MainSwitch`): its condition is a `phi` in a loop and what flows into it is
+constants, `select`s that can be unfolded or values nothing predicts.
+[`unfold`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dfajumpthreading/unfold.rs) turns those `select`s into control flow (a work list), so each
+value of the state is set on a path of its own; the pin counts that as a
+change even when nothing is threaded after it. [`paths`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dfajumpthreading/paths.rs) enumerates the
+paths that set the state to a constant (`AllSwitchPaths`), bounded by the
+pin's three caps. [`transform`](transform.md) decides whether copying is legal and
+profitable and does it (`TransformDFA`): the blocks of each path from the
+determinator on are cloned per exit value, the predecessors are redirected
+to the clones, and SSA is restored.
 
 ```text
   p1: s = 1 --\                       p1: s = 1 --> sw.jt1: br c1
@@ -28,16 +31,15 @@ SSA is restored.
                     sw: switch s      det, sw stay for the paths nobody decided
 ```
 
-DEVIATE (DF1..DF3; DF5 is a parity note):
-- DF1. A `select` in the use-def chain of the state rejects the switch
-  (`isCandidate` would accept it and `unfold` it into control flow):
-  `unfold` is stage S2.
+DEVIATE (DF2, DF3; DF1, a `select` in the chain rejecting the switch, was
+closed by S2, and DF4, the loop info rebuilt after the unfolding, by S3; DF5
+is a parity note):
 - DF2. No `DomTreeUpdater`: the pass returns `none()` when it threaded
   anything and the manager rebuilds the dominator tree and the loop info
   (the pin keeps the dominator tree, and the loop info unless it cloned);
   `updateSSA` reads a dominator tree built after the threading. No noalias
   scopes to clone (J8 of `jumpthreading.rs`), no optimization remarks,
-  `!prof` is not carried.
+  and no `!prof` or debug location is carried to the new branches.
 - DF3. A path through a block that starts with a `landingpad` is not
   threaded: the copy would be a second pad, and the one module handler
   (`ehprepare`) cannot choose between two (J10 of `jumpthreading.rs`).
