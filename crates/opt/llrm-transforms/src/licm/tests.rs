@@ -616,6 +616,7 @@ exit:
     let mut module = parsed(text);
     let after = crate::testing::managed(&mut module, Licm { apply: true, speculate: false });
     assert!(after.contains("store i16 1, ptr %a"), "the slot's store left the loop: {after}");
+}
 
 /// A promoted store with no load before the loop takes `UndefValue` on the
 /// preheader edge, as LLVM's `SSA.AddAvailableValue(Preheader, UndefValue)`;
