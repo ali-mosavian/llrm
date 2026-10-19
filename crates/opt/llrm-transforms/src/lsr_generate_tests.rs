@@ -41,6 +41,17 @@ fn generated_for(
     text: &str,
     body: impl FnOnce(&Cx, &mut ScalarEvolution, &mut Collection, BlockId),
 ) {
+    generated_marked(cpu, text, false, body)
+}
+
+/// [`generated_for`], with the exit tests marked to take the post-incremented
+/// value (`OptimizeLoopTermCond`) where `post_inc`.
+fn generated_marked(
+    cpu: &str,
+    text: &str,
+    post_inc: bool,
+    body: impl FnOnce(&Cx, &mut ScalarEvolution, &mut Collection, BlockId),
+) {
     let module = llrm_mir::parse::module(text).expect("a module");
     let (_, _, function) = module.functions().next().expect("a function");
     let layout = DataLayout::parse("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32").unwrap();
@@ -60,7 +71,21 @@ fn generated_for(
     let mut se = ScalarEvolution::new();
     let header = loops.top_level_loops().next().expect("a loop").get_header();
     let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false };
-    let users = IvUsers::of(&mut se, &cx, header, &env);
+    let mut users = IvUsers::of(&mut se, &cx, header, &env);
+    if post_inc {
+        let conds: Vec<InstId> = users
+            .uses
+            .iter()
+            .filter(|u| matches!(
+                cx.function.instruction(u.user).opcode,
+                llrm_mir::opcode::Opcode::ICmp(_)
+            ))
+            .map(|u| u.user)
+            .collect();
+        for cond in conds {
+            users.transform_to_post_inc(cond, header);
+        }
+    }
     let latch_terminator = {
         let lp = loops.get_loop_for(header).expect("a loop");
         function.terminator(lp.get_loop_latch(function).expect("a latch")).expect("a terminator")

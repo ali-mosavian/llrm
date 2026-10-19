@@ -12,7 +12,20 @@ fn reduced(
     cpu: &str,
     inputs: &[&[i128]],
 ) -> (bool, String) {
-    let mut module = parsed(&format!("{DOS}{text}"));
+    reduced_on(DOS, text, cpu, inputs)
+}
+
+/// 32-bit pointers, as the flat targets have.
+const FLAT: &str = "target datalayout = \"e-p:32:32-i64:32-f64:32-f80:32-n8:16:32-S32\"\n\n";
+
+/// [`reduced`] on the datalayout `prefix`.
+fn reduced_on(
+    prefix: &str,
+    text: &str,
+    cpu: &str,
+    inputs: &[&[i128]],
+) -> (bool, String) {
+    let mut module = parsed(&format!("{prefix}{text}"));
     let before = module.clone();
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let mut declared = llrm_mir::passes::Declared::of(&module);
@@ -51,7 +64,6 @@ exit:
 #[test]
 fn an_array_walk_is_a_pointer_and_a_counter_to_zero() {
     let (changed, after) = reduced(ARRAY, "i486", &[&[1], &[5], &[17], &[40]]);
-    eprintln!("{after}");
     assert!(changed, "{after}");
     assert!(after.contains("getelementptr i8, ptr"), "{after}");
     assert!(!after.contains("getelementptr i32"), "{after}");
@@ -81,4 +93,37 @@ exit:
         &[&[100]],
     );
     assert!(!changed, "{after}");
+}
+
+/// An index that is both stored as a value and the subscript of a store (the
+/// merge loop of `x_mergesort` keeps `k` and `k*4` live together with the old
+/// pass): the address takes `k` scaled by 4, so the one counter serves both,
+/// and no second induction variable is made.
+#[test]
+fn an_index_used_as_a_value_and_a_subscript_stays_one_counter() {
+    let (changed, after) = reduced_on(
+        FLAT,
+        "define i32 @f(i32 %n) {
+entry:
+  %buf = alloca [64 x i32]
+  br label %loop
+loop:
+  %k = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %a = getelementptr i32, ptr %buf, i32 %k
+  store i32 %k, ptr %a
+  %next = add i32 %k, 1
+  %c = icmp eq i32 %next, %n
+  br i1 %c, label %exit, label %loop
+exit:
+  %p = getelementptr i32, ptr %buf, i32 3
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+",
+        "i486",
+        &[&[5], &[17]],
+    );
+    let phis = after.matches(" = phi ").count();
+    assert!(changed, "{after}");
+    assert_eq!(phis, 1, "one induction variable: {after}");
 }
