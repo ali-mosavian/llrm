@@ -307,6 +307,10 @@ fn _operands(body: &LirBody) -> Vec<String> {
                 if regs.positional(reg.register) {
                     continue;
                 }
+                // FP0..FP6 are the stackifier's to place, never encoded.
+                if regs.in_class(reg.register, llrm_lir::registers::class::RFP) {
+                    continue;
+                }
                 let register = reg.register.index() as u32;
                 if !regs.described(reg.register) {
                     out.push(format!("{:#06x} names {register}, which is not a register this target has", one.at));
@@ -543,6 +547,24 @@ mod tests {
             let said = verify_for(&body, false, &flat);
             assert!(said.iter().any(|complaint| complaint.contains(says)), "{said:?}");
         }
+    }
+
+    /// Under `LLRM_GREEDY_RFP` an x87 operand is `FP0`..`FP6` after allocation;
+    /// the check named it "not a register this target has" and refused every
+    /// float function (`LLRM_VERIFY=1`, tests/run/c/float_in_place_update.c).
+    #[test]
+    fn test_an_x87_register_operand_is_a_register_the_target_has() {
+        let store = semantics(
+            Operation::FloatStore,
+            "fstp",
+            vec![Loc::Mem(ir::Mem::new(Some(ir::Addr::new(ir::Space::Frame, -8)), 8))],
+            vec![Loc::Reg(ir::Reg { register: crate::backend::allocate::RFP[0], width: 10 })],
+        );
+        let body = body(
+            "x87",
+            vec![LirBlock::new(1, vec![Arc::new(Insn::new(1, Some((1, 1)), Some(store), vec![], vec![]))]).into()],
+        );
+        assert_eq!(verify(&body, false), Vec::<String>::new());
     }
 
     /// A phase that made a frame cell from a displacement alone left the frame
