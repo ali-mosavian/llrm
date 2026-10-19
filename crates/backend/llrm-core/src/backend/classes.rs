@@ -86,7 +86,7 @@ impl RegisterClasses {
     pub fn of(arch: &dyn Target) -> Self {
         // A form that pins nothing has no requirement to give, and the
         // description is read at every compile.
-        let forms = parse::pinned(&arch.forms_text()).expect("the target's forms parse");
+        let forms = parse::pinned(&arch.forms_text(), arch.dialect()).expect("the target's forms parse");
         let operations: HashMap<&str, &'static str> =
             Operation::ALL.iter().map(|op| (op.as_str(), op.as_str())).collect();
         let mut pins: HashMap<Key, Vec<(Side, usize, RegId)>> = HashMap::default();
