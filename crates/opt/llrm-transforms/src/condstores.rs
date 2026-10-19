@@ -12,6 +12,9 @@
 //! and one store runs in a new block entered from `post`'s start when either
 //! store would have run. The value stored is a phi in `post` of the two.
 //!
+//! # Example
+//! Two stores of `%g` become one after both conditions:
+//!
 //! ```text
 //!   p: br %a, pt, pf        pt: store 1, %g     q: br %b, qt, qf      post:
 //!   qt: store 2, %g   ==>   post: %v = phi [1, ..], [2, ..]
