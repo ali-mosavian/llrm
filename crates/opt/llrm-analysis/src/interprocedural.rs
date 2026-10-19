@@ -445,7 +445,7 @@ pub fn noreturn_procedures(
 
 /// Noreturn's terminal-call cut, at the direct calls to `noreturn` bodies.
 pub fn terminal_calls(
-    context: &mut Context,
+    context: &Context,
     declarations: &Declarations,
     function: &mut Function,
     noreturn: &BTreeSet<GlobalId>,

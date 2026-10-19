@@ -41,8 +41,8 @@
 //! - `AssumptionCache`, `DomTreeUpdater`, statistics, names that follow
 //!   `.sroa.` suffix rules.
 //! - Offsets are `i128` kept in `0..2^index width` after each GEP, as the
-//!   `APInt` of `PtrUseVisitor` wraps; one past the alloca is outside it,
-//!   and so is a negative one, which wraps to a large number.
+//!   `APInt` of `PtrUseVisitor` wraps; one past the alloca is outside it, and
+//!   so is a negative one, which wraps to a large number.
 //! - `IRBuilder` here makes what it is told and does not fold constants
 //!   (`ConstantFolder`) except the splat of a constant byte; `fold` does that
 //!   after.
@@ -859,7 +859,7 @@ fn element_containing_offset(
 /// `getTypePartition`. SROA.cpp#L4832
 fn get_type_partition(
     layout: &DataLayout,
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
     offset: u64,
     size: u64,
@@ -1076,7 +1076,7 @@ fn is_integer_widening_viable_for_slice(
 /// `isIntegerWideningViable`. SROA.cpp#L2551
 fn is_integer_widening_viable(
     layout: &DataLayout,
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     slices: &[Slice],
     p: &Partition,

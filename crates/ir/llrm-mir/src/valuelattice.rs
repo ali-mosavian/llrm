@@ -54,7 +54,7 @@ impl LatticeConstant {
         id: ConstantId,
     ) -> Self {
         let constant = context.get(id);
-        if constant.kind == ConstantKind::Poison {
+        if matches!(constant.kind, ConstantKind::Poison | ConstantKind::Undef) {
             return Self::Undef;
         }
         if let Some(width) = context.types.int_bits(constant.ty) {

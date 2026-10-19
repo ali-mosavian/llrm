@@ -32,7 +32,7 @@
 use llrm_analysis::effects::Declarations;
 use llrm_analysis::occurrence::arms;
 use llrm_analysis::scev::analysis::ScevSession;
-use llrm_analysis::scev::expand_cost::{ExpansionTti, UnitCosts};
+use llrm_analysis::scev::expand_cost::{ExpansionTti, MachineCosts};
 use llrm_analysis::scev::expander::Expander;
 use llrm_analysis::scev::expr::Scev;
 use llrm_mir::context::Context;
@@ -88,7 +88,7 @@ pub fn rewritten(
         headers
     };
     let minimum_size = function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "minsize"));
-    let tti = UnitCosts { minimum_size };
+    let tti = MachineCosts { tti: outer.target().tti(), minimum_size };
     let mut rewriter = Expander::new("indvars");
     let mut changed = false;
     for header in headers {
@@ -393,9 +393,8 @@ fn can_loop_be_deleted(
     for &block in l.get_blocks() {
         if function
             .block(block)
-            .instructions()
             .iter()
-            .any(|&inst| local::may_have_side_effects(context, outer.callees(), declarations, function, inst))
+            .any(|inst| local::may_have_side_effects(context, outer.callees(), declarations, function, inst))
         {
             return false;
         }
@@ -432,9 +431,7 @@ fn first_insertion_point(
 ) -> InstId {
     function
         .block(block)
-        .instructions()
         .iter()
-        .copied()
         .find(|&inst| !matches!(
             function.instruction(inst).opcode,
             Opcode::Phi | Opcode::LandingPad { .. }
@@ -444,7 +441,7 @@ fn first_insertion_point(
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopInfo.cpp#L1036
 /// `LoopInfo::replacementPreservesLCSSAForm(From, To)`.
-fn replacement_preserves_lcssa_form(
+pub(crate) fn replacement_preserves_lcssa_form(
     cx: &llrm_analysis::scev::Cx,
     from: InstId,
     to: Operand,
