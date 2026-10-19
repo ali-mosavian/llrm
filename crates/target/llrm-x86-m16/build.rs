@@ -14,5 +14,5 @@ fn main() {
     let family = llrm_iselgen::build::family(std::path::Path::new("../llrm-x86"));
     let forms = llrm_iselgen::build::forms(std::path::Path::new("."), &family);
     println!("cargo:rerun-if-changed=src/instructions/x86.instr");
-    std::fs::write(out.join("effects.rs"), llrm_iselgen::build::effect_rows(&forms)).unwrap();
+    std::fs::write(out.join("effects.rs"), llrm_iselgen::build::effect_rows(&forms, &family.dialect)).unwrap();
 }

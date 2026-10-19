@@ -263,6 +263,15 @@ pub mod instructions {
     pub fn joined(own: &str) -> String {
         format!("{FAMILY}\n{own}")
     }
+
+    /// What the reader of `x86.instr` must know: its registers, widths, flags
+    /// and conditions (`dialect.toml`).
+    pub fn dialect() -> &'static llrm_instr::Dialect {
+        static DIALECT: std::sync::LazyLock<llrm_instr::Dialect> = std::sync::LazyLock::new(|| {
+            llrm_instr::Dialect::parse(include_str!("instructions/dialect.toml")).expect("dialect.toml parses")
+        });
+        &DIALECT
+    }
 }
 
 /// What DOS gives a program (function numbers, the extender's calls), shared by
