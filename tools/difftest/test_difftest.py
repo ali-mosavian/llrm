@@ -140,7 +140,7 @@ def test_llrms_answer_is_the_pass_run_alone_not_what_the_next_step_made_of_it(tm
     source = tmp_path / "in.ll"
     source.write_text(INPUT)
     runner = tmp_path / "llrm-pass"
-    runner.write_text(f"#!/bin/bash\ncat <<'EOF'\n{AGREES}EOF\n")
+    runner.write_text(f"#!/bin/bash\necho 'llrm-pass: target x86-m32 cpu 486 tti X86 datalayout d' >&2\ncat <<'EOF'\n{AGREES}EOF\n")
     runner.chmod(0o755)
     leaked = tmp_path / "next.ll"
     leaked.write_text(INPUT.replace("mul i32 %a, %b", "mul i32 %a, 7"))  # a pass after gvn changed the body further
@@ -309,7 +309,14 @@ def test_the_replay_gets_the_targets_layout_so_pointer_width_answers_are_the_tar
     class Done:
         returncode, stdout, stderr = 0, "", ""
 
-    monkeypatch.setattr(difftest.subprocess, "run", lambda command, *a, **k: (seen.append(list(command)), Done())[1])
+    def run(command, *a, **k):
+        seen.append(list(command))
+        mode = command[command.index("--mode") + 1]
+        done = Done()
+        done.stderr = f"llrm-pass: target x86-m{mode} cpu 486 tti {'X86' if mode == '32' else 'none'} datalayout d\n"
+        return done
+
+    monkeypatch.setattr(difftest.subprocess, "run", run)
     src = tmp_path / "x.ll"
     src.write_text("")
     difftest.isolated(Path("llrm-pass"), {"config": "c-O2", "pass": "loopidiom@737"}, src)
@@ -318,3 +325,29 @@ def test_the_replay_gets_the_targets_layout_so_pointer_width_answers_are_the_tar
     seen.clear()
     difftest.isolated(Path("llrm-pass"), {"config": "c-O2", "pass": "loopidiom@737"}, src)
     assert seen[0][seen[0].index("--mode") + 1] == "16"
+
+
+def test_a_neutral_llrm_side_is_refused_and_a_target_one_is_named():
+    """unroll, licm, rotate, indvars and loopidiom counts were taken with llrm-pass on Neutral (unit costs) against opt at i486: matmul unrolled to 36 blocks, opt's 216."""
+    ok = "llrm-pass: target x86-m32 cpu 486 tti X86 datalayout e-p:32:32\n"
+    assert difftest.llrm_target(ok, "m32").startswith("x86-m32 cpu 486 tti X86")
+    for stderr in ("llrm-pass: slot unroll@753\n", "llrm-pass: target neutral\n", ok.replace("tti X86", "tti none")):
+        with pytest.raises(SystemExit, match="llrm side"):
+            difftest.llrm_target(stderr, "m32")
+    assert difftest.llrm_target("llrm-pass: target neutral\n", "host") == "neutral"
+
+
+@pytest.mark.skipif(llrm_pass() is None, reason="llrm-pass is not built")
+def test_llrm_pass_unrolls_matmul_on_the_targets_machine_not_neutral(tmp_path):
+    """Neutral priced the unroll at unit cost and left matmul at 36 blocks; the i486 machine unrolls it to 216 as opt does."""
+    import subprocess
+
+    source = Path(__file__).parent / "fixtures/matmul-unroll-in.ll"
+
+    def blocks(*mode):
+        done = subprocess.run([str(llrm_pass()), "-O2", *mode, "--order", "unroll@753", str(source)], capture_output=True, text=True, check=True)
+        return sum(1 for line in done.stdout.splitlines() if line.endswith(":") and " " not in line), done.stderr
+
+    assert blocks()[0] == 36
+    count, stderr = blocks("--mode", "32")
+    assert count == 216 and "target x86-m32 cpu 486 tti X86 " in stderr

@@ -52,11 +52,9 @@ fn main() -> ExitCode {
             }
         };
         machine = profile.target();
-        let Some(tti) = machine.tti() else {
-            eprintln!("llrm-pass: --mode {}: {} on {cpu} has no TTI", target.layout().mode, target.name());
-            return ExitCode::FAILURE;
-        };
-        described = format!("{} cpu {cpu} tti {} datalayout {}", target.name(), tti.name(), target.layout().datalayout);
+        // m16 states no TTI: llrm-c prices there by the generic rules, and so does this.
+        let tti = machine.tti().map_or("none", |tti| tti.name());
+        described = format!("{} cpu {cpu} tti {tti} datalayout {}", target.name(), target.layout().datalayout);
         arguments.drain(..2);
     }
     let ordered = arguments.first().is_some_and(|one| one == "--order");
