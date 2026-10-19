@@ -24,6 +24,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
+sys.path.insert(0, str(HERE / "dosbatch"))
+import cpulimit  # noqa: E402
 
 LEVELS = ("-O1", "-O2", "-O3", "-Os")
 MODULES = ("host", "render", "model", "game", "sound", "ui")
@@ -51,7 +53,12 @@ def sweep(compiler: Path, qcport: Path, include: Path, levels=LEVELS, jobs: int 
 
     def one(job):
         source, level = job
-        done = subprocess.run([str(compiler), level, *flags, str(source), "-o", os.devnull], capture_output=True, text=True)
+        try:
+            done = cpulimit.run([str(compiler), level, *flags, str(source), "-o", os.devnull], 300, capture_output=True, text=True)
+        except cpulimit.MemoryLimit as error:
+            return (source.stem, level, f"memory limit: {error}")
+        except subprocess.TimeoutExpired:
+            return (source.stem, level, "timeout: 300 s of CPU")
         return None if done.returncode == 0 else (source.stem, level, kind(done.stderr or done.stdout))
 
     with ThreadPoolExecutor(jobs) as pool:
