@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/legalize.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/legalize.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/legalize.rs sha256:61d4982be0d6aa2beb7901ec5f4e235db988d4c8e1a2aa3ea711a3b8cbf215cb -->
+<!-- src: crates/backend/llrm-core/src/backend/legalize.rs sha256:e1d5013691639aefd8b560a7420adf34a1af2a5c656a5fd03a55430e4d70b6d6 -->
 
 # legalize
 
@@ -27,3 +27,12 @@ Once per module in `driver::optimized`, after `minmax_expanded` and before
 
 ## See also
 LLVM's `DAGTypeLegalizer::PromoteIntegerResult` and `PromoteIntegerOperand`.
+
+## Example
+An `i33` operation is made on `i64`; a shift right first zeroes the high
+bits:
+
+```text
+%a = add i33 %x, %y     ; add i64
+%d = lshr i33 %a, 1     ; and i64 %a, 0x1ffffffff, then lshr i64 by 1
+```

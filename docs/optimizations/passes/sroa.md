@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sroa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sroa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sroa.rs sha256:6e08fb994b10c4d237d00836ce1a0a34149159bab776fb3b27f49a40d76a3c3e -->
+<!-- src: crates/opt/llrm-transforms/src/sroa.rs sha256:c02abf63b88c7b44920d2dc6f42b00ccd694cebd20c82843aea402b5a89ee4d2 -->
 
 # sroa
 
@@ -53,3 +53,13 @@ DEVIATE, each with its reason (line numbers are SROA.cpp's):
   after.
 - Metadata: an access keeps its metadata where the type and offset are
   unchanged, and loses it otherwise (`adjustForAccess`).
+
+## Example
+An alloca of two `i32` fields, each stored and loaded whole, becomes two
+allocas and then registers:
+
+```text
+%s = alloca { i32, i32 }
+store i32 1, ptr %s          ; field 0
+%v = load i32, ptr %s        ; becomes the constant 1, the alloca is gone
+```

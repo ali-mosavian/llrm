@@ -12,6 +12,13 @@
 //!
 //! # Used by
 //! `adce` in llrm-transforms.
+//!
+//! # Example
+//! In a loop the edge to a block still on the stack is the back edge:
+//!
+//! ```text
+//! entry -> head -> body -> head   ; body -> head is the back edge
+//! ```
 
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function};

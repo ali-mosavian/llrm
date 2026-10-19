@@ -23,6 +23,14 @@
 //!
 //! # Keeps
 //! Blocks and edges are unchanged: dominators and loops are preserved.
+//!
+//! # Example
+//! An instruction that equals an operand is replaced by it and then deleted:
+//!
+//! ```text
+//! %a = add i32 %x, 0
+//! %b = mul i32 %a, 2   ; reads %x after the pass
+//! ```
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
