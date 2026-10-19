@@ -323,6 +323,32 @@ fn a_compare_intrinsic_is_refused_until_it_is_lowered() {
     }
 }
 
+/// `llvm.stacksave` reads the stack pointer and `llvm.stackrestore` writes it
+/// from a pointer.
+#[test]
+fn a_stacksave_reads_the_stack_pointer_and_a_stackrestore_writes_it() {
+    let text = "declare ptr @llvm.stacksave.p0()\n\
+                declare void @llvm.stackrestore.p0(ptr)\n\
+                define ptr @save() addrspace(1) {\n  %s = call ptr @llvm.stacksave.p0()\n  ret ptr %s\n}\n\
+                define void @restore(ptr %p) addrspace(1) {\n  call void @llvm.stackrestore.p0(ptr %p)\n  ret void\n}\n";
+    assert_eq!(listing(text, "save"), ["L0_0:", "mov ax, sp", "retf"]);
+    // The epilogue sets SP from the frame register again: SP is not where the
+    // prologue left it.
+    assert_eq!(
+        listing(text, "restore"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "L1_0:",
+            "mov ax, word ptr [bp+6]",
+            "mov sp, ax",
+            "lea sp, word ptr [bp]",
+            "pop bp",
+            "retf"
+        ]
+    );
+}
+
 /// CVP narrows a `udiv` to i8 and expands a `urem` through a `freeze`; both
 /// were refused ("a byte division", "freeze") and stopped vid.c and screen.c.
 #[test]
