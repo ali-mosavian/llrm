@@ -595,7 +595,7 @@ impl LoopIdiomRecognize {
                 .function
                 .instruction(args.the_load)
                 .result
-                .is_some_and(|result| run.function.users(result).len() == 1);
+                .is_some_and(|result| run.function.users(result).has_one_use());
             if !only_user {
                 return (changed, false);
             }

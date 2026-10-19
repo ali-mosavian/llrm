@@ -351,7 +351,7 @@ impl GvnPass<'_> {
     ) -> bool {
         matches!(
             value,
-            Operand::Value(id) if self.function.users(id).len() == 1
+            Operand::Value(id) if self.function.users(id).has_one_use()
         )
     }
 

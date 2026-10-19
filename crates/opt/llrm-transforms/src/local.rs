@@ -342,7 +342,7 @@ fn replace_dominated_uses_with_template(
     debug_assert_eq!(function.value(from).ty, type_of(context, function, to));
     let mut count = 0;
     // `fake_use` users are not skipped: DEVIATE 6.
-    for at in function.users(from).to_vec() {
+    for at in function.users(from).snapshot() {
         if !should_replace(&*function, at) {
             continue;
         }

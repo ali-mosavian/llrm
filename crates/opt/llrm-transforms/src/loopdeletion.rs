@@ -753,7 +753,7 @@ fn delete_dead_loop(
             if let Some(result) = run.function.instruction(inst).result {
                 let ty = run.function.instruction(inst).ty;
                 let poison = Operand::Constant(run.context.constant(Constant { ty, kind: ConstantKind::Poison }));
-                for user in run.function.users(result).to_vec() {
+                for user in run.function.users(result).snapshot() {
                     if run.function.parent(user.user).is_some_and(|at| inside.contains(&at)) {
                         continue;
                     }
@@ -765,7 +765,7 @@ fn delete_dead_loop(
     // A phi outside the loop (in a block nothing reaches) may still name a
     // block of the loop.
     for &block in &blocks {
-        for user in run.function.block_users(block).to_vec() {
+        for user in run.function.block_users(block).snapshot() {
             let outside = run.function.parent(user.user).is_some_and(|at| !inside.contains(&at));
             if outside && run.function.instruction(user.user).opcode == Opcode::Phi {
                 let phi = user.user;
