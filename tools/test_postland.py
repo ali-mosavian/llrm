@@ -98,3 +98,9 @@ def test_the_summaries_count_the_groups_and_the_crates_that_ran_and_say_so_when_
     assert postland.group_summary("") == "NOT RUN (no group line)"
     out = "     Running unittests src/lib.rs (deps/llrm_c-0a1b)\ntest result: FAILED. 140 passed; 2 failed; 0 ignored\n"
     assert postland.unit_summary(out) == "llrm-c 142/2" and postland.unit_summary("error") == "NOT RUN (no test result)"
+
+
+def test_the_partial_report_lists_what_ran_and_each_raw_failure_line():
+    """The list existed only in memory for 1 h; the owners could not be told while the bisect ran."""
+    text = postland.partial("f" * 40, "e" * 40, ["tests/run: 57 groups"], ["run c/x.c [-O2]: want '1', got '2'"])
+    assert "COVERED SUITES" in text and "want '1', got '2'" in text and "bisect pending" in text

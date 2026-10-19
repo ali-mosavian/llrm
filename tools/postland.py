@@ -133,12 +133,13 @@ def dist(at: Path, sha: str) -> Path:
     return out
 
 
-def run_groups(at: Path, bins: Path, only: str | None = None) -> tuple[set[str], str]:
+def run_groups(at: Path, bins: Path, only: str | None = None) -> tuple[set[str], str, dict[str, str]]:
     """`run <program>` for each FAIL line of the tests/run groups (both widths, any config) or of one program: the XFAIL list's ids carry no config."""
     command = [sys.executable, "tools/dosbatch/run_groups.py"] if only is None else [sys.executable, "tools/dosbatch/run_tests.py", only]
     done = subprocess.run([*LOW, *command], cwd=at, env={**os.environ, "LLRM_BIN": str(bins)}, capture_output=True, text=True)
     output = done.stdout + done.stderr
-    return {f"run {name.split(' [')[0]}" for name in pairruns.failures(output)}, group_summary(output)
+    reasons = pairruns.failures(output)
+    return {f"run {name.split(' [')[0]}" for name in reasons}, group_summary(output), reasons
 
 
 def group_summary(output: str) -> str:
@@ -217,19 +218,46 @@ def smoke(at: Path, bins: Path, previous: str) -> tuple[set[str], str]:
     return {f"smoke {one}" for one in named[1].split(",") if one}, last
 
 
-def check(sha: str, previous: str) -> tuple[set[str], list[str]]:
-    """Every failure of the head and the COVERED SUITES lines: tests/run at m16+m32, the workspace lib tests, parity_smoke's checks and budget."""
+def partial(sha: str, previous: str, covered: list[str], raw: list[str]) -> str:
+    """The report so far: what ran, and every failure line as the suite printed it (program [config]: want/got), before any bisect."""
+    lines = [f"# {sha[:9]} (previous {previous[:9]}) PARTIAL", "", "## COVERED SUITES (so far)", "", *(f"- {one}" for one in covered), "", "## Raw failures, bisect pending", ""]
+    return "\n".join([*lines, *(f"- {one}" for one in raw)]) + "\n"
+
+
+def combine_off(at: Path, bins: Path, programs: set[str]) -> str:
+    """Which of the failing tests/run programs still fail with the same binary under LLRM_NO_COMBINE=1: those that stop failing name combine as the cause."""
+    wrapper = HOME / f"dist-{bins.name.removeprefix('dist-')}-nocombine"
+    wrapper.mkdir(parents=True, exist_ok=True)
+    for name in BINS:
+        (wrapper / name).write_text(f'#!/bin/bash\nexec env LLRM_NO_COMBINE=1 {bins}/{name} "$@"\n')
+        (wrapper / name).chmod(0o755)
+    for name in ("jwasm", "jwlink", "dosbox-x"):
+        link = wrapper / name
+        link.unlink(missing_ok=True)
+        link.symlink_to(TOOLS / name)
+    cleared = sorted(one for one in programs if one not in run_groups(at, wrapper, Path(one.removeprefix("run ")).stem)[0])
+    return f"LLRM_NO_COMBINE=1 clears: {', '.join(cleared) or 'none'} (of {len(programs)} failing)"
+
+
+def check(sha: str, previous: str, emit=lambda covered, raw: None) -> tuple[set[str], list[str]]:
+    """Every failure of the head and the COVERED SUITES lines: tests/run at m16+m32 first (written out at once), the workspace lib tests, parity_smoke's checks and budget."""
     at = tree(sha)
     bins = dist(at, sha)
-    runs, run_line = run_groups(at, bins)
+    runs, run_line, reasons = run_groups(at, bins)
+    covered = [f"tests/run m16+m32 (run_groups): {run_line}"]
+    raw = [f"{name}: {why}" for name, why in reasons.items()]
+    emit(covered, raw)
+    if runs:
+        covered.append(combine_off(at, bins, runs))
+        emit(covered, raw)
     units, unit_line = unit_failures(at)
+    covered.append(f"workspace lib tests (tests run/failing per crate): {unit_line}")
+    raw += sorted(units)
+    emit(covered, raw)
     smoked, smoke_line = smoke(at, bins, previous)
-    covered = [
-        f"tests/run m16+m32 (run_groups): {run_line}",
-        f"workspace lib tests (tests run/failing per crate): {unit_line}",
-        f"parity_smoke (workspace check, ratchets, docs, warnings, instruction budget): {smoke_line}",
-        "NOT RUN: fmt.sh, prepush.sh, the integration tests (tests/*.rs), the bench rows",
-    ]
+    covered += [f"parity_smoke (workspace check, ratchets, docs, warnings, instruction budget): {smoke_line}", "NOT RUN: fmt.sh, prepush.sh, the integration tests (tests/*.rs), the bench rows"]
+    raw += sorted(smoked)
+    emit(covered, raw)
     return runs | units | smoked, covered
 
 
@@ -260,7 +288,8 @@ def once(sha: str | None = None) -> str:
     sha = git("rev-parse", sha or "origin/feat/parity")
     state = load_state()
     previous = state["last"]
-    failing, covered = check(sha, previous or sha)
+    HOME.mkdir(parents=True, exist_ok=True)
+    failing, covered = check(sha, previous or sha, lambda covered, raw: (HOME / f"{sha[:9]}.md").write_text(partial(sha, previous or sha, covered, raw)))
     listed = xfail.load()
     before = set(state["heads"].get(previous, [])) if previous else set()
     rows = []
