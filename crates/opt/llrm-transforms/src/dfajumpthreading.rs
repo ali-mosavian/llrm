@@ -26,21 +26,18 @@
 //!                     sw: switch s      det, sw stay for the paths nobody decided
 //! ```
 //!
-//! DEVIATE (DF2..DF4; DF1, a `select` in the chain rejecting the switch, was
-//! closed by S2; DF5 is a parity note):
+//! DEVIATE (DF2, DF3; DF1, a `select` in the chain rejecting the switch, was
+//! closed by S2, and DF4, the loop info rebuilt after the unfolding, by S3; DF5
+//! is a parity note):
 //! - DF2. No `DomTreeUpdater`: the pass returns `none()` when it threaded
 //!   anything and the manager rebuilds the dominator tree and the loop info
 //!   (the pin keeps the dominator tree, and the loop info unless it cloned);
 //!   `updateSSA` reads a dominator tree built after the threading. No noalias
-//!   scopes to clone (J8 of `jumpthreading.rs`), no optimization remarks,
-//!   `!prof` is not carried.
+//!   scopes to clone (J8 of `jumpthreading.rs`), no optimization remarks, and
+//!   no `!prof` or debug location is carried to the new branches.
 //! - DF3. A path through a block that starts with a `landingpad` is not
 //!   threaded: the copy would be a second pad, and the one module handler
 //!   (`ehprepare`) cannot choose between two (J10 of `jumpthreading.rs`).
-//! - DF4. The loop info is rebuilt after the `select`s are unfolded (the pin
-//!   adds the new blocks to the loop of the start block): `LoopInfo` has no
-//!   `addBasicBlockToLoop` (T3, S3). Once per switch with `select`s, linear in
-//!   the function. No `!prof` or debug location is carried to the new branches.
 //! - DF5 (parity, not a deviation). `x_switch` m16 -O2/-O3 is +17 B (320 vs
 //!   303) and 70 vs 63 asm lines: the pass threads the state cycle and peels
 //!   two iterations, as `opt -passes=dfa-jump-threading` does on the same
@@ -78,7 +75,6 @@ use std::rc::Rc;
 
 use llrm_mir::codemetrics::Query as CostQuery;
 use llrm_mir::context::ConstantKind;
-use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand};
@@ -252,11 +248,16 @@ impl Run<'_, '_> {
                 continue;
             };
             if !main.selects.is_empty() {
-                unfold::unfold_select_instrs(&mut self.unit.function, &main.selects);
+                unfold::unfold_select_instrs(&mut self.unit.function, Rc::make_mut(&mut loops), &main.selects);
                 unfolded = true;
-                // DF4: the unfolded blocks are in the loop of the `select`'s
-                // block; the loop info is rebuilt, not updated.
-                loops = Rc::new(LoopInfo::analyze(self.function(), || DomTree::of(self.function())));
+                // The update of the loop info equals an analysis made afresh.
+                debug_assert!(
+                    loops.equivalent(
+                        &LoopInfo::analyze(self.function(), || llrm_mir::domtree::DomTree::of(self.function())),
+                        self.function()
+                    ),
+                    "the loop info after unfolding differs from a fresh analysis"
+                );
             }
             let outermost = loops.get_loop_for(bb).expect("a candidate is in a loop").get_outermost_loop();
             let found = paths::find(self.function(), &*self.unit.context, &loops, self.options, main.switch, outermost);

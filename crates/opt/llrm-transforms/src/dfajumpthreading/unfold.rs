@@ -2,6 +2,7 @@
 //! so each of their values is set on a path of its own.
 
 use llrm_mir::edit::Position;
+use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
 
@@ -13,15 +14,31 @@ use crate::lcssa::{arms, from_arms};
 /// `DFAJumpThreading::unfoldSelectInstrs`
 /// ([L166](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L166)):
 /// every `select` of the work list is unfolded, and the `select`s that its
-/// values were are put on the list.
+/// values were are put on the list. The new blocks join the loop of the block
+/// the `select` was in (`Preserve loop info`).
 pub(super) fn unfold_select_instrs(
     function: &mut Function,
+    loops: &mut LoopInfo,
     selects: &[SelectToUnfold],
 ) {
     let mut stack = selects.to_vec();
     while let Some(next) = stack.pop() {
-        stack.extend(unfold(function, next));
+        let Unfolded { found, start_block, new_blocks } = unfold(function, next);
+        stack.extend(found);
+        if let Some(one) = loops.get_loop_for(start_block).map(|one| one.id()) {
+            loops.add_basic_blocks_to_loop(one, &new_blocks);
+        }
     }
+}
+
+/// What `unfold` made of a `select`.
+struct Unfolded {
+    /// The `select`s newly found, for the work list.
+    found: Vec<SelectToUnfold>,
+    /// The block the `select` was set in (`StartBlock`).
+    start_block: BlockId,
+    /// The blocks made (`NewBBs`).
+    new_blocks: Vec<BlockId>,
 }
 
 /// The `select` that defines `value`, if it is one.
@@ -106,11 +123,11 @@ fn replace_uses_of(
 /// `DFAJumpThreading::unfold`
 /// ([L201](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L201)):
 /// the `select` held in `to_unfold` replaced by control flow; the `select`s
-/// newly found are returned for the work list.
+/// newly found are returned for the work list, with the blocks made.
 fn unfold(
     function: &mut Function,
     to_unfold: SelectToUnfold,
-) -> Vec<SelectToUnfold> {
+) -> Unfolded {
     let SelectToUnfold { select, mut user } = to_unfold;
     let result = function.instruction(select).result.expect("a select's value");
     let [condition, true_value, false_value] = function.instruction(select).operands[..] else {
@@ -127,6 +144,7 @@ fn unfold(
     let start_term = function.terminator(start_block).expect("a terminated block");
     let void = function.instruction(start_term).ty;
     let mut found = Vec::new();
+    let new_blocks;
 
     if function.instruction(start_term).opcode == Opcode::Br && function.instruction(start_term).operands.len() == 1 {
         let Operand::Block(end_block) = function.instruction(start_term).operands[0] else {
@@ -152,6 +170,7 @@ fn unfold(
             Some(&format!("{}.si.unfold.phi", name_of(function, false_value))),
         );
         function.insert(new_phi, Position::Before(to_end)).expect("a placed phi");
+        new_blocks = vec![new_block];
         let new_phi_value = Operand::Value(function.instruction(new_phi).result.expect("a phi's value"));
 
         // Update any other PHI nodes in EndBlock.
@@ -205,6 +224,7 @@ fn unfold(
         let new_false = function.create_block(Some(&format!("{select_name}.si.unfold.false")));
         function.insert_block_before(new_true, end_block).expect("a new block");
         function.insert_block_before(new_false, end_block).expect("a new block");
+        new_blocks = vec![new_true, new_false];
 
         // Def only has one use in EndBlock.
         // Before transformation:
@@ -289,5 +309,5 @@ fn unfold(
 
     // The select is now dead.
     function.erase(select).expect("a select nothing uses");
-    found
+    Unfolded { found, start_block, new_blocks }
 }

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dfajumpthreading.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dfajumpthreading.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dfajumpthreading.rs sha256:a3b3d2bb4211be6aa2a2060d2559d1e726dcdecd053f106f1bb2ff2939bf1c3f -->
+<!-- src: crates/opt/llrm-transforms/src/dfajumpthreading.rs sha256:eac434ac0bd0f1ab471113e396cb6bc2d2f52b04bdd88b1d60825497516d2e9c -->
 
 # dfajumpthreading
 
@@ -31,21 +31,18 @@ to the clones, and SSA is restored.
                     sw: switch s      det, sw stay for the paths nobody decided
 ```
 
-DEVIATE (DF2..DF4; DF1, a `select` in the chain rejecting the switch, was
-closed by S2; DF5 is a parity note):
+DEVIATE (DF2, DF3; DF1, a `select` in the chain rejecting the switch, was
+closed by S2, and DF4, the loop info rebuilt after the unfolding, by S3; DF5
+is a parity note):
 - DF2. No `DomTreeUpdater`: the pass returns `none()` when it threaded
   anything and the manager rebuilds the dominator tree and the loop info
   (the pin keeps the dominator tree, and the loop info unless it cloned);
   `updateSSA` reads a dominator tree built after the threading. No noalias
   scopes to clone (J8 of `jumpthreading.rs`), no optimization remarks,
-  `!prof` is not carried.
+  and no `!prof` or debug location is carried to the new branches.
 - DF3. A path through a block that starts with a `landingpad` is not
   threaded: the copy would be a second pad, and the one module handler
   (`ehprepare`) cannot choose between two (J10 of `jumpthreading.rs`).
-- DF4. The loop info is rebuilt after the `select`s are unfolded (the pin
-  adds the new blocks to the loop of the start block): `LoopInfo` has no
-  `addBasicBlockToLoop` (T3, S3). Once per switch with `select`s, linear in
-  the function. No `!prof` or debug location is carried to the new branches.
 - DF5 (parity, not a deviation). `x_switch` m16 -O2/-O3 is +17 B (320 vs
   303) and 70 vs 63 asm lines: the pass threads the state cycle and peels
   two iterations, as `opt -passes=dfa-jump-threading` does on the same
