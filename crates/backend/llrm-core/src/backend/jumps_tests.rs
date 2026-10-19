@@ -227,9 +227,9 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         .collect();
     assert_eq!(
         real,
-        [(Operation::Compare, Some("cmp".to_owned()), None), (Operation::Branch, Some("je".to_owned()), Some(4))]
+        [(Operation::Compare, Some("cmp".to_owned()), None), (Operation::Branch, Some("jne".to_owned()), Some(9))]
     );
-    assert_eq!(result.blocks.iter().map(|block| block.at).collect::<Vec<_>>(), [1, 9, 4]);
+    assert_eq!(result.blocks.iter().map(|block| block.at).collect::<Vec<_>>(), [1, 4, 9]);
     let emitted = listed(result, "_f");
     assert!(!emitted.iter().any(|line| line.starts_with("jmp ")), "{emitted:?}");
 }
@@ -1069,9 +1069,11 @@ fn test_loop_test_is_placed_after_its_latch() {
     );
 }
 
-/// A loop whose first test could fail kept its test on top.
+/// A loop entered by falling into its test keeps the test on top, as `llc -O2`
+/// does (`rotateLoop` leaves a loop whose top is fallen into as often as it
+/// exits).
 #[test]
-fn test_loop_not_known_to_run_is_entered_at_its_test_placed_last() {
+fn test_a_loop_entered_by_falling_into_its_test_keeps_it_on_top() {
     let source = body(
         "f",
         1,
@@ -1084,12 +1086,35 @@ fn test_loop_not_known_to_run_is_entered_at_its_test_placed_last() {
     );
     assert_eq!(
         inner(listed(threaded(&placed(&source).unwrap()), "_f")),
-        ["L0_1:", "mov ax, cx", "jmp L0_3", "L0_8:", "mov ax, bx", "L0_3:", "cmp ax, bx", "jl L0_8", "L0_17:", "ret"]
+        ["L0_1:", "mov ax, cx", "L0_3:", "cmp ax, bx", "jge L0_17", "L0_8:", "mov ax, bx", "jmp L0_3", "L0_17:", "ret"]
     );
 }
 
-/// With the test placed after the latch, every pass took `jg out` and then `jmp
-/// body`.
+/// A loop its entry rarely reaches, the entry falling to a likelier block: no
+/// fall-through into the loop to keep, so its exit test goes last and the
+/// body first (`rotateLoop`; `llc -O2` on the same CFG puts the latch before
+/// the header). Left on top, every pass paid a `jmp` back to the test.
+#[test]
+fn test_a_loop_nothing_falls_into_is_rotated_to_end_at_its_exit_test() {
+    let mut source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 3)], vec![3, 20]).into(),
+            block(3, vec![_compare(3), _branch(4, "je", 30)], vec![30, 8]).into(),
+            block(8, vec![_move(8, bx()), _jump(9, 3)], vec![3]).into(),
+            block(20, vec![_return(20)], vec![]).into(),
+            block(30, vec![_return(30)], vec![]).into(),
+        ],
+    );
+    let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+    source.odds.taken.insert((1, 3), fixed(0.3));
+    source.odds.taken.insert((1, 20), fixed(0.7));
+    let order = placed(&source).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+    assert_eq!(order, vec![1, 20, 8, 3, 30]);
+}
+
+/// The block the loop leaves for follows the test.
 #[test]
 fn test_loop_test_is_followed_by_the_block_it_leaves_for() {
     let source = body(
@@ -1108,12 +1133,12 @@ fn test_loop_test_is_followed_by_the_block_it_leaves_for() {
         [
             "L0_1:",
             "mov ax, cx",
-            "jmp L0_3",
-            "L0_8:",
-            "mov ax, bx",
             "L0_3:",
             "cmp ax, bx",
-            "jl L0_8",
+            "jge L0_20",
+            "L0_8:",
+            "mov ax, bx",
+            "jmp L0_3",
             "L0_20:",
             "mov ax, cx",
             "L0_12:",
@@ -1162,60 +1187,28 @@ fn weighted_diamond(hot: f64) -> LirBody {
     made
 }
 
-/// An arm leaves its join, to land after the return, only where the edge
-/// into the join from the block before it is `LIKELY`, MachineBlockPlacement's
-/// 80%. At even odds the arm went off the join, and a diamond no heuristic
-/// tells apart lost the shorter layout: deedlines ran 177 ms slower.
+/// A diamond is placed as `MachineBlockPlacement` does (`llc -O2
+/// -tail-dup-placement=false` on the same CFG gives each order): the likelier
+/// arm follows the branch; its join follows it unless the other arm is a real
+/// alternative (`hasBetterLayoutPredecessor`), else that arm goes first and
+/// the likelier one jumps over it. At even odds the first successor wins.
+/// The gcc-era rules this replaced kept the likelier arm second.
 #[test]
-fn test_an_arm_leaves_its_join_only_for_a_likely_edge() {
+fn test_a_diamond_is_placed_as_machine_block_placement_does() {
     let order = |hot: f64| placed(&weighted_diamond(hot)).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
     assert_eq!(order(0.9), vec![1, 10, 30, 20]);
-    // Short of it both arms stay before the join, the likelier one second.
-    assert_eq!(order(0.7), vec![1, 20, 10, 30]);
-    assert_eq!(order(0.5), vec![1, 10, 20, 30]);
-}
-
-/// A diamond short of `LIKELY` keeps both arms before the join, so its
-/// likelier arm goes second and falls into the join. Made the fall-through
-/// at 62.5%, it jumped over the rare arm instead: deedlines' zoomdistort
-/// ran a jump more each of 31,000 passes.
-#[test]
-fn test_a_diamonds_likelier_arm_falls_into_its_join() {
-    let order = |hot: f64| placed(&weighted_diamond(hot)).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
-    // The branch arm 20 likelier: it goes second.
-    assert_eq!(order(0.375), vec![1, 10, 20, 30]);
-    // The fall-through arm 10 likelier: 20 first, 10 second.
-    assert_eq!(order(0.625), vec![1, 20, 10, 30]);
-    // `LIKELY` and over: the likely arm falls through, the rare one leaves its
-    // join.
+    assert_eq!(order(0.7), vec![1, 10, 20, 30]);
+    assert_eq!(order(0.5), vec![1, 20, 10, 30]);
+    assert_eq!(order(0.375), vec![1, 20, 10, 30]);
     assert_eq!(order(0.1), vec![1, 20, 30, 10]);
 }
 
-/// For size a diamond keeps both arms before its join, and its arm order
-/// is free where both arms keep short jumps either way: the likelier arm
-/// goes second, into the join, at no byte's cost. Not past a short jump's
-/// reach, where the order could change a jump's size.
+/// Size places as speed does, but for a loop's top (`findBestLoopTop`).
 #[test]
-fn test_for_size_a_diamonds_likelier_arm_goes_second_where_size_allows() {
+fn test_for_size_a_diamond_is_placed_as_for_speed() {
     let order = |body: LirBody| _placed(&body, true).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
-    // The premise: both arms are a few bytes, so either order uses short jumps.
-    let small = weighted_diamond(0.7);
-    assert!(
-        small
-            .blocks
-            .iter()
-            .filter(|one| [10, 20].contains(&one.at))
-            .all(|one| _arm_bytes(16, one).is_some_and(|bytes| bytes < 16))
-    );
-    assert_eq!(order(small), vec![1, 20, 10, 30]);
-    // Arm 10 past a short jump's reach: the order stays the source's.
-    let mut large = weighted_diamond(0.7);
-    let arm = large.blocks.iter_mut().find(|one| one.at == 10).unwrap();
-    let mut insns: Vec<Arc<Insn>> = (0..60).map(|_| _move(10, imm(4660))).collect();
-    insns.push(_jump(11, 30));
-    arm.insns = insns.into();
-    assert!(_arm_bytes(16, large.blocks.iter().find(|one| one.at == 10).unwrap()).is_some_and(|bytes| bytes > 127));
-    assert_eq!(order(large), vec![1, 10, 20, 30]);
+    assert_eq!(order(weighted_diamond(0.7)), vec![1, 10, 20, 30]);
+    assert_eq!(order(weighted_diamond(0.9)), vec![1, 10, 30, 20]);
 }
 
 /// A loop entered at its test, its body ending `jmp test`.
@@ -1798,12 +1791,11 @@ fn a_table_naming_one_passage_four_times_strands_it_once() {
     }
 }
 
-/// Each trace after the first began with a look at every block waiting, for
-/// the one the placed blocks reach last, and a map of the placed ones made
-/// again: N returns, N traces, N^2 (`cases` 1024: `_placed` 7% of the compile).
-/// They are kept as blocks are placed.
+/// A dispatch of many arms was placed block by block, each trace looking at
+/// every block waiting: `cases` 1024 spent 7% of the compile there. Every block
+/// is placed once, the entry first.
 #[test]
-fn starting_a_trace_does_not_look_at_every_block_waiting() {
+fn a_dispatch_of_many_arms_places_each_block_once() {
     let arms = 60;
     let mut blocks = vec![block(0, vec![_compare(0), _branch(1, "je", 1000)], vec![1000, 10])];
     blocks.extend((0..arms).map(|case| {
@@ -1817,9 +1809,11 @@ fn starting_a_trace_does_not_look_at_every_block_waiting() {
     blocks.push(block(10 + 10 * arms, vec![_return(10 + 10 * arms)], vec![]));
     blocks.push(block(1000, vec![_return(1000)], vec![]));
     blocks.extend((0..arms).map(|case| block(1010 + 10 * case, vec![_return(1010 + 10 * case)], vec![])));
-    EXAMINED.with(|one| one.set(0));
     let placed_body = placed(&body("f", 0, blocks.into_iter().collect())).unwrap();
     assert_eq!(placed_body.blocks.len(), 2 * arms as usize + 3);
-    let looked = EXAMINED.with(|one| one.get());
-    assert!(looked <= 8 * arms as usize, "{looked} entries looked at for {arms} arms");
+    let mut seen: Vec<i64> = placed_body.blocks.iter().map(|one| one.at).collect();
+    assert_eq!(seen[0], 0, "the entry is first");
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), placed_body.blocks.len(), "a block placed twice");
 }
