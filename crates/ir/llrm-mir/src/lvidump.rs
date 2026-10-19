@@ -86,7 +86,7 @@ pub fn dump(text: &str) -> Result<String, String> {
             }
             for (b, &bb) in function.layout().iter().enumerate() {
                 block.insert(bb, b as u32);
-                for inst in function.block(bb).iter() {
+                for inst in function.iter_block(bb) {
                     index.insert(inst, u);
                     u += 1;
                     if let Some(result) = function.instruction(inst).result
@@ -138,7 +138,7 @@ pub fn dump(text: &str) -> Result<String, String> {
             }
             for &bb in function.layout() {
                 if dt.is_reachable(bb) {
-                    for inst in function.block(bb).iter() {
+                    for inst in function.iter_block(bb) {
                         if let Some(result) = function.instruction(inst).result {
                             out.extend(dump_value(&mut env, Operand::Value(result), inst).map(|line| line + "\n"));
                         }
@@ -152,7 +152,7 @@ pub fn dump(text: &str) -> Result<String, String> {
                 if !dt.is_reachable(bb) {
                     continue;
                 }
-                for inst in function.block(bb).iter().rev() {
+                for inst in function.iter_block_rev(bb) {
                     let Some(result) = function.instruction(inst).result else { continue };
                     let op = Operand::Value(result);
                     if !is_int(env.context, op) {
@@ -170,7 +170,7 @@ pub fn dump(text: &str) -> Result<String, String> {
                 }
                 for succ in function.successors(bb) {
                     let mut done: Vec<Operand> = Vec::new();
-                    for inst in function.block(succ).iter() {
+                    for inst in function.iter_block(succ) {
                         let instruction = function.instruction(inst);
                         for (k, &v) in instruction.operands.iter().enumerate() {
                             if !matches!(v, Operand::Value(_)) || !is_int(env.context, v) || !dominates_block(v, bb) {
@@ -201,7 +201,7 @@ pub fn dump(text: &str) -> Result<String, String> {
                 if !dt.is_reachable(bb) {
                     continue;
                 }
-                for inst in function.block(bb).iter() {
+                for inst in function.iter_block(bb) {
                     let instruction = function.instruction(inst);
                     let Opcode::ICmp(pred) = instruction.opcode else { continue };
                     let (a, b) = (instruction.operands[0], instruction.operands[1]);
@@ -260,7 +260,7 @@ pub fn dump(text: &str) -> Result<String, String> {
                 if !dt.is_reachable(bb) {
                     continue;
                 }
-                for inst in function.block(bb).iter() {
+                for inst in function.iter_block(bb) {
                     let instruction = function.instruction(inst);
                     for (k, &v) in instruction.operands.iter().enumerate() {
                         if !matches!(v, Operand::Value(_)) || !is_int(env.context, v) {
@@ -292,8 +292,7 @@ pub fn dump(text: &str) -> Result<String, String> {
                 && function.layout().iter().all(|&bb| {
                     function.block(bb).name.is_some()
                         && function
-                            .block(bb)
-                            .iter()
+                            .iter_block(bb)
                             .all(|i| function.instruction(i).result.is_none_or(|r| function.value(r).name.is_some()))
                 });
             if named {

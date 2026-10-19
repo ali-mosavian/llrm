@@ -68,8 +68,7 @@ impl Evolution {
     ) -> usize {
         let Some(inside) = loops.get_loop_for(header) else { return 0 };
         function
-            .block(header)
-            .iter()
+            .iter_block(header)
             .map(|inst| function.instruction(inst))
             .filter(|one| one.opcode == Opcode::Phi)
             .filter_map(|phi| phi.result.map(|value| (phi, value)))

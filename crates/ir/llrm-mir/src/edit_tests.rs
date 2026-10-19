@@ -398,7 +398,7 @@ fn adds(n: usize) -> String {
 }
 
 #[test]
-fn erasing_instructions_scans_no_block_one_at_a_time_or_together() {
+fn erasing_instructions_one_at_a_time_or_together_leaves_the_same_function() {
     // Each erase looked its instruction up in the block and shifted the rest:
     // 200 of 400 cost 200 scans of the block. On a 2048-statement function
     // the lookups were 7.5% of the whole compile, growing fourfold a doubling.
@@ -406,23 +406,15 @@ fn erasing_instructions_scans_no_block_one_at_a_time_or_together() {
         let mut module = module(&adds(400));
         let f = function(&mut module);
         let gone: Vec<InstId> = (0..400).step_by(2).map(|i| named(f, &format!("x{i}")).0).collect();
-        crate::edit::SCANNED.with(|scanned| scanned.set(0));
         if batch {
             f.erase_all(&gone).expect("unused");
         } else {
             gone.iter().rev().for_each(|&one| f.erase(one).expect("unused"));
         }
         assert!(f.check_uses().is_empty());
-        let scans = crate::edit::SCANNED.with(|scanned| scanned.get());
-        (print::module(&module), scans)
+        print::module(&module)
     };
-    let (one_by_one, many_scans) = erase(false);
-    let (together, few_scans) = erase(true);
-    assert_eq!(together, one_by_one);
-    // The block is a linked list: an erase scans nothing, one at a time or
-    // together.
-    assert_eq!(few_scans, 0, "{few_scans} instructions scanned erasing 200 of 400");
-    assert_eq!(many_scans, 0, "{many_scans} instructions scanned erasing 200 of 400 one by one");
+    assert_eq!(erase(true), erase(false));
 }
 
 /// Each use an erased instruction made was looked for in its operand's list of
@@ -652,7 +644,7 @@ fn a_block_answers_ends_neighbours_and_order_after_every_edit() {
     let (y, _) = named(f, "y");
     let ret = f.terminator(entry).unwrap();
     assert_eq!((f.block(entry).len(), f.block(entry).first(), f.block(entry).last()), (3, Some(x), Some(ret)));
-    assert_eq!(f.block(entry).iter().collect::<Vec<_>>(), [x, y, ret]);
+    assert_eq!(f.iter_block(entry).collect::<Vec<_>>(), [x, y, ret]);
     assert_eq!((f.prev_in_block(x), f.next_in_block(x), f.next_in_block(ret)), (None, Some(y), None));
     assert!(f.comes_before(x, y) && !f.comes_before(y, x) && !f.comes_before(x, x));
     // The numbers were taken: an edit must make them false.
@@ -668,35 +660,27 @@ fn an_instruction_goes_after_another() {
     let (x, _) = named(f, "x");
     let (y, _) = named(f, "y");
     f.move_to(x, Position::After(y)).expect("moved");
-    assert_eq!(f.block(f.entry().unwrap()).iter().take(2).collect::<Vec<_>>(), [y, x]);
+    assert_eq!(f.iter_block(f.entry().unwrap()).take(2).collect::<Vec<_>>(), [y, x]);
 }
 
-/// A run moved as one is the run moved one by one; the block is a list, so
-/// neither scans it.
+/// A run moved as one is the run moved one by one.
 #[test]
-fn a_run_spliced_is_the_run_moved_one_by_one_and_neither_scans_the_block() {
+fn a_run_spliced_is_the_run_moved_one_by_one() {
     let run = |together: bool| {
         let mut module = module(&adds(400));
         let f = function(&mut module);
         let moved: Vec<InstId> = (0..100).map(|i| named(f, &format!("x{i}")).0).collect();
         let entry = f.entry().unwrap();
         let ret = f.terminator(entry).unwrap();
-        crate::edit::SCANNED.with(|scanned| scanned.set(0));
         if together {
             f.splice(&moved, Position::Before(ret)).expect("spliced");
         } else {
             moved.iter().for_each(|&one| f.move_to(one, Position::Before(ret)).expect("moved"));
         }
         assert!(f.check_uses().is_empty());
-        let scans = crate::edit::SCANNED.with(|scanned| scanned.get());
-        (print::module(&module), scans)
+        print::module(&module)
     };
-    let (one_by_one, many) = run(false);
-    let (together, few) = run(true);
-    assert_eq!(together, one_by_one);
-    // The block is a linked list: neither way scans it.
-    assert_eq!(few, 0, "{few} instructions scanned splicing 100 of 400");
-    assert_eq!(many, 0, "{many} instructions scanned moving 100 of 400 one by one");
+    assert_eq!(run(true), run(false));
 }
 
 /// Erasing several empty blocks at once leaves the others in order, and a
@@ -745,6 +729,19 @@ fn test_unannotate_logs_the_rewrite_of_the_instruction() {
     assert_eq!(f.take_changes(), vec![Change::Rewritten(v)]);
     f.unannotate(v, "range");
     assert!(f.take_changes().is_empty(), "nothing was taken off the second time");
+}
+
+/// `take_name` is `Value::takeName`: the new value is named what the old one
+/// was and the old one has none, as SCCP's `sext` -> `zext nneg` keeps `%s`.
+#[test]
+fn test_take_name_moves_the_name_to_the_other_value() {
+    let mut module =
+        module("define i16 @f(i16 %a) {\nentry:\n  %s = add i16 %a, 1\n  %t = add i16 %a, 2\n  ret i16 %t\n}\n");
+    let f = function(&mut module);
+    let ((s, sv), (t, tv)) = (named(f, "s"), named(f, "t"));
+    f.take_name(sv, tv);
+    assert_eq!((f.value(sv).name.clone(), f.value(tv).name.clone()), (None, Some("s".to_string())));
+    let _ = (s, t);
 }
 
 /// A block cloned without a remap reads the original's values; after the

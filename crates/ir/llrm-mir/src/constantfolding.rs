@@ -2388,7 +2388,7 @@ pub fn constant_fold_intrinsic(
 
 /// `ConstantFoldCall`
 /// ([L4803](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L4803)).
-fn constant_fold_call(
+pub fn constant_fold_call(
     context: &Context,
     caller: Option<&Function>,
     call: &crate::opcode::CallInfo,

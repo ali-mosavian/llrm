@@ -1355,8 +1355,7 @@ fn _phi_of_casts(
     function.insert(phi, Position::Before(inst)).expect("a placed phi");
     let block = function.parent(inst).expect("a placed phi");
     let first = function
-        .block(block)
-        .iter()
+        .iter_block(block)
         .find(|&one| function.instruction(one).opcode != Opcode::Phi)
         .expect("a terminated block");
     let cast = function.create_instruction(
@@ -1388,8 +1387,7 @@ fn _duplicate_phi(
     // One arm per predecessor: the same count, and each arm of this one among
     // the other's.
     let earlier = function
-        .block(block)
-        .iter()
+        .iter_block(block)
         .take_while(|&one| one != inst)
         .find(
             |&one| {
@@ -1733,7 +1731,7 @@ fn _selected(
 fn _reassociated_recurrences(function: &mut Function) -> bool {
     let mut updates = BTreeMap::<ValueId, ValueId>::new();
     for one in cfg::Shape::of(function).loops {
-        for phi in function.block(cfg::block(one.header)).iter() {
+        for phi in function.iter_block(cfg::block(one.header)) {
             let instruction = function.instruction(phi);
             if instruction.opcode != Opcode::Phi {
                 break;
@@ -1796,7 +1794,7 @@ fn _shared_shifts(
     let mut changed = false;
     for block in function.layout().to_vec() {
         let mut available = IndexMap::<Operand, BTreeMap<u128, ValueId>>::default();
-        for inst in function.block(block).iter().collect::<Vec<_>>() {
+        for inst in function.iter_block(block).collect::<Vec<_>>() {
             let Some(Scale { source, op: BinaryOp::Shl, constant, .. }) = _scale(context, function, inst) else {
                 continue;
             };

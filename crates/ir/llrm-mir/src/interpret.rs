@@ -707,10 +707,9 @@ impl<'m> Machine<'m> {
         let mut block = function.entry().expect("a body");
         let mut came_from: Option<BlockId> = None;
         loop {
-            let list = function.block(block).instructions();
             // Phis read together, along the edge taken.
             let mut chosen = Vec::new();
-            for &inst in list.iter().take_while(|&&one| function.instruction(one).opcode == Opcode::Phi) {
+            for inst in function.iter_block(block).take_while(|&one| function.instruction(one).opcode == Opcode::Phi) {
                 let instruction = function.instruction(inst);
                 let from = came_from.expect("the entry has no phis");
                 let pair = instruction
@@ -722,7 +721,7 @@ impl<'m> Machine<'m> {
             }
             values.extend(chosen);
             let mut next = None;
-            for &inst in list.iter().skip_while(|&&one| function.instruction(one).opcode == Opcode::Phi) {
+            for inst in function.iter_block(block).skip_while(|&one| function.instruction(one).opcode == Opcode::Phi) {
                 self.fuel = self.fuel.checked_sub(1).ok_or(Trap::OutOfFuel)?;
                 let instruction = function.instruction(inst);
                 let ops = &instruction.operands;

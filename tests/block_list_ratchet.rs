@@ -1,9 +1,8 @@
-//! A block holds its instructions as a `Vec<InstId>`; LLVM's is an intrusive
-//! list with a cursor. Every reader of the slice (`.instructions()` and the
-//! `Vec` calls on the field inside llrm-mir) is a place the list swap must
-//! rewrite, so their number may only fall. `tools/block_list/known.txt` holds
-//! each file's count. New code uses the cursor API. A file over its count
-//! fails with the file:line of its readers.
+//! A block's instructions are an intrusive list read with
+//! `Function::iter_block` and the cursors; the `.instructions()` slice view is
+//! gone. No source may name it again: `tools/block_list/known.txt` holds each
+//! file's count, which is zero. A file over its count fails with the file:line
+//! of its readers.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -11,30 +10,6 @@ use std::path::Path;
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 const KNOWN: &str = "tools/block_list/known.txt";
-const FIELD_CALLS: [&str; 22] = [
-    "[",
-    ".iter",
-    ".iter_mut",
-    ".len",
-    ".insert",
-    ".remove",
-    ".push",
-    ".first",
-    ".last",
-    ".get",
-    ".retain",
-    ".drain",
-    ".splice",
-    ".truncate",
-    ".swap",
-    ".is_empty",
-    ".contains",
-    ".clear",
-    ".extend",
-    ".pop",
-    ".position",
-    ".as_slice",
-];
 
 fn sources(
     dir: &Path,
@@ -55,27 +30,12 @@ fn sources(
 /// The 1-based lines of `text` that read a block's instruction slice. The
 /// field's `Vec` calls count only in llrm-mir, where the field is visible.
 fn readers(
-    file: &str,
+    _file: &str,
     text: &str,
 ) -> Vec<usize> {
-    let in_mir = file.starts_with("crates/ir/llrm-mir/src/");
     text.lines()
         .enumerate()
-        .filter(|(_, line)| {
-            let code = line.split("//").next().unwrap();
-            code.contains(".instructions()")
-                || (in_mir
-                    && code.match_indices(".instructions").any(|(at, name)| {
-                        let after = &code[at + name.len()..];
-                        FIELD_CALLS
-                            .iter()
-                            .any(
-                                |call| after.strip_prefix(call).is_some_and(|rest| {
-                                    !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_') || call.ends_with('[')
-                                }),
-                            )
-                    }))
-        })
+        .filter(|(_, line)| line.split("//").next().unwrap().contains(".instructions()"))
         .map(|(number, _)| number + 1)
         .collect()
 }
@@ -120,8 +80,8 @@ fn known_text(counts: &BTreeMap<String, Vec<usize>>) -> String {
 
 #[test]
 fn test_a_planted_slice_reader_is_found_and_the_cursor_api_is_not() {
-    let text = "let a = block.instructions();\nlet b = block.first();\nlet c = x.instructions.len(); // x\nlet d = done.instructions + 1;\nlet e = b.instructions[0];\nlet f = b.instructions_len();\n";
-    assert_eq!(readers("crates/ir/llrm-mir/src/a.rs", text), vec![1, 3, 5]);
+    let text = "let a = block.instructions();\nlet b = block.first();\nlet c = x.instructions.len(); // x\n// block.instructions() in a comment\nlet f = b.instructions_len();\n";
+    assert_eq!(readers("crates/ir/llrm-mir/src/a.rs", text), vec![1]);
     assert_eq!(readers("crates/opt/llrm-transforms/src/a.rs", text), vec![1]);
 }
 

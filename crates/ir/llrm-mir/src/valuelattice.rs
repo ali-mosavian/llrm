@@ -30,7 +30,7 @@
 //! - Used by: [`crate::lazyvalueinfo`]
 
 use crate::constantrange::{ConstantRange, PreferredRangeType};
-use crate::context::{ConstantId, ConstantKind, Context, mask, signed};
+use crate::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
 use crate::module::GlobalValue;
 use crate::opcode::IntPredicate;
 use crate::types::TypeId;
@@ -737,5 +737,33 @@ fn print_constant(
             };
             format!("{ty_text} {value}")
         }
+    }
+}
+
+/// `ConstantFoldCompareInstOperands(Pred, C1, C2, DL)` of two lattice
+/// constants: true, false, or unfolded (also for an undef).
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L1332>
+pub fn fold_compare(
+    context: &Context,
+    globals: &[GlobalValue],
+    layout: &crate::datalayout::DataLayout,
+    pred: IntPredicate,
+    c1: &LatticeConstant,
+    c2: &LatticeConstant,
+) -> Option<bool> {
+    let make = |c: &LatticeConstant| match c {
+        LatticeConstant::Undef => None,
+        LatticeConstant::Int { width, bits } => {
+            let ty = context.types.int(*width);
+            Some(context.constant(Constant { ty, kind: ConstantKind::Int(*bits) }))
+        }
+        LatticeConstant::Other { ty, kind } => Some(context.constant(Constant { ty: *ty, kind: kind.clone() })),
+    };
+    let (a, b) = (make(c1)?, make(c2)?);
+    let folded = crate::constantfolding::constant_fold_compare_inst_operands(context, globals, layout, pred, a, b)?;
+    match context.get(folded).kind {
+        ConstantKind::Int(bits) => Some(bits & 1 == 1),
+        _ => None,
     }
 }

@@ -79,7 +79,7 @@ impl Mssa {
         let mut defining_blocks: BTreeSet<i64> = BTreeSet::new();
         for &block in function.layout() {
             let mut insert_into_def = false;
-            for inst in function.block(block).iter() {
+            for inst in function.iter_block(block) {
                 let Some(access) = mssa.create_new_access(block, inst, modref) else { continue };
                 let lists = mssa.per_block.get_or_insert_with(block, BlockAccesses::default);
                 lists.accesses.push(access);
