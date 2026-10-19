@@ -34,9 +34,9 @@ def straight(n: int) -> str:
     return "unsigned fn(unsigned a, unsigned b, unsigned c, unsigned d) {\n" + body + "    return a ^ b ^ c ^ d;\n}\n"
 
 
-def steps(compiler: Path, source: Path, level: str = "-O1", *flags: str) -> dict[str, float]:
+def steps(compiler: Path, source: Path, level: str = "-O1", *flags: str, target: tuple[str, ...] = ("-m32", "-march=i486")) -> dict[str, float]:
     """Each step's own instructions in millions (`LLRM_DEBUG=time`'s `[instr]` rows); skips where the host has no counter."""
-    done = subprocess.run([str(compiler), "-m32", "-march=i486", level, *flags, "-o", os.devnull, str(source)], capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
+    done = subprocess.run([str(compiler), *target, level, *flags, "-o", os.devnull, str(source)], capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
     assert done.returncode == 0, done.stderr[-500:]
     rows = re.findall(r"^\[instr\]\s+([\d.]+) (Minstr|Mcpu-ns) own\s+[\d.]+ \S+ total\s+\d+x (.+)$", done.stderr, re.M)
     if not rows or any(unit != "Minstr" for _, unit, _ in rows):
@@ -594,3 +594,27 @@ def test_a_split_by_region_costs_a_fraction_of_a_million_instructions_not_a_mill
     assert splits >= 20, f"premise: branches N=200 -O2 made {splits} splits"
     each = run["split placed"] / splits
     assert each < 0.3, f"branches N=200 -O2: split placed cost {each:.3f} Minstr a split (0.3 allowed; 0.38 before)"
+
+
+def far_stores(n: int) -> str:
+    """A loop through a far pointer, then `n` guarded stores through it: every store splits the pointer's live range."""
+    body = "".join(f"    if (c[{k}]) fr[{k}].y = s + {k}.0f;\n" for k in range(n))
+    return (
+        "typedef struct { float x, y; } P;\nextern float g(float);\nfloat f(P far *fr, int *c, int n)\n{\n    int i; float s = 0;\n"
+        "    for (i = 0; i < n; i++) s += g(fr[i].x);\n" + body + "    return s;\n}\n"
+    )
+
+
+def test_a_split_rewrites_an_instruction_without_scanning_the_operands_of_its_register():
+    """`LiveIntervals::rewrite_instr` removed an instruction's operands with `retain` over the whole list of the register: each
+    split child of a far pointer rewrote ~n instructions, each a scan of ~n operands. `regalloc base` at -Os (code16) cost
+    41.96 / 233.45 Minstr at 400 / 1600 guarded stores (5.56x for 4x; clang's trySplit grows 4.18x). The operands sit in slots."""
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    cost = {}
+    with tempfile.TemporaryDirectory() as work:
+        for n in (400, 1600):
+            source = Path(work) / f"far{n}.c"
+            source.write_text(far_stores(n))
+            cost[n] = steps(compiler, source, "-Os", "-S", target=())["regalloc base"]
+    grown = cost[1600] / cost[400]
+    assert grown < 5.0, f"far stores -Os: 4x the stores cost regalloc base {grown:.2f}x as much (5.0 allowed; 5.56 before): {cost}"
