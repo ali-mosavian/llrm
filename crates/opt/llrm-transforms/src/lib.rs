@@ -110,12 +110,13 @@ pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_select;
 pub mod combine_select_bools;
+pub mod combine_select_into_op;
 pub mod combine_select_op_op;
 pub mod combine_shared;
 pub mod combine_sink;
-pub mod combine_visit_select;
 #[cfg(test)]
 mod combine_sink_tests;
+pub mod combine_visit_select;
 pub mod condstores;
 pub mod congruentiv;
 pub mod constraintelim;
