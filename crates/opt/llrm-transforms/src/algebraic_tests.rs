@@ -1239,6 +1239,37 @@ b0:
     assert_eq!(after.matches("and i32").count(), 1, "{after}");
 }
 
+/// A mask on a value whose high bits only a low-bits user reads is dropped, and
+/// the `nsw` of the sums and products that now see those bits goes with it:
+/// `x = (x * 25173 + 13849) & 0xFFFF` read as `& 0xFFF` kept `mul nsw` on the
+/// unmasked value, which overflows (poison in the interpreter;
+/// phi_slot_unknown_arm walked past it).
+#[test]
+fn test_dropping_a_mask_nobody_reads_drops_the_nsw_of_what_sees_its_bits() {
+    let text = "define i32 @f(i32 %x) {
+b0:
+  br label %loop
+
+loop:
+  %s = phi i32 [ %x, %b0 ], [ %m, %loop ]
+  %i = phi i16 [ 0, %b0 ], [ %i1, %loop ]
+  %mul = mul nsw i32 %s, 25173
+  %add = add nsw i32 %mul, 13849
+  %m = and i32 %add, 65535
+  %low = and i32 %add, 4095
+  %i1 = add i16 %i, 1
+  %c = icmp slt i16 %i1, 5
+  br i1 %c, label %loop, label %out
+
+out:
+  ret i32 %low
+}
+";
+    let inputs: Vec<Vec<i128>> = [0, 1, 255, 4095, 65535, 12345].iter().map(|&x| vec![x]).collect();
+    let after = checked(text, &inputs);
+    assert!(!after.contains("nsw"), "{after}");
+}
+
 /// bench/x_popcount: `rev32(s) & 255` read one byte of five 32-bit stages; the
 /// stages' other halves are never read, and `x << 16` is zero in every bit the
 /// `& 255` reads.
