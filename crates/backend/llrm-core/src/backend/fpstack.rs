@@ -86,7 +86,7 @@ use crate::backend::floatalloc::{
     _float_copy, _floating, _reversed, _terminators, _two_values, inserted, name_is, semantics, st, unlowered, unnamed,
 };
 use crate::backend::floatassign;
-use crate::backend::floatregions::{Raised, boundary};
+use crate::backend::floatregions::{Raised, clears_stack};
 use crate::backend::spillplacement;
 use crate::model::ir::{Held, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Block, Insn, LirBody};
@@ -1113,7 +1113,7 @@ pub(super) fn converted(
                 if one.uses.iter().chain(&one.defines).any(|value| floating.contains(value)) {
                     return Err(unlowered("floating value used by an unmodelled instruction"));
                 }
-                if boundary(regs, one) {
+                if clears_stack(regs, one) {
                     fps.one = Some(Arc::clone(one));
                     // `handleCall`: nothing may be on the stack across it.
                     if !fps.values.is_empty() {
