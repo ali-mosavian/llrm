@@ -91,6 +91,13 @@ fn main() -> ExitCode {
         })
         .is_some()
     };
+    let simple_loop_unswitch = {
+        let at = arguments.iter().position(|one| one == "--simple-loop-unswitch");
+        at.inspect(|&at| {
+            arguments.remove(at);
+        })
+        .is_some()
+    };
     let loop_deletion = {
         let at = arguments.iter().position(|one| one == "--loop-deletion");
         at.inspect(|&at| {
@@ -208,6 +215,16 @@ fn main() -> ExitCode {
             if dse {
                 let mut manager = llrm_mir::passes::PassManager::default();
                 manager.add(llrm_transforms::deadstore::DeadStoreElimination);
+                if let Err(error) = manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)) {
+                    eprintln!("{path}: {error}");
+                    return ExitCode::FAILURE;
+                }
+                print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
+            }
+            if simple_loop_unswitch {
+                let mut manager = llrm_mir::passes::PassManager::default();
+                manager.add(llrm_transforms::simpleloopunswitch::SimpleLoopUnswitch);
                 if let Err(error) = manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)) {
                     eprintln!("{path}: {error}");
                     return ExitCode::FAILURE;

@@ -184,6 +184,7 @@ pub mod profit;
 pub mod promote;
 pub mod rotate;
 pub mod settled;
+pub mod simpleloopunswitch;
 pub mod simplifycfg;
 pub mod simplifyindvar;
 pub mod sink;
