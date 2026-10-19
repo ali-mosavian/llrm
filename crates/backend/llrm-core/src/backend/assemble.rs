@@ -1058,7 +1058,7 @@ fn staged(
         Rc::clone(target.classes)
     };
     let body = if llrm_support::debug::verifying() {
-        timed("lir verify", || flow::verified(body, "isel", true, &target.arch.layout().spaces.roles))
+        timed("lir verify", || flow::verified(body, "isel", true, None, &target.arch.layout().spaces.roles))
             .map_err(|error| error.0)?
     } else {
         body
@@ -1094,6 +1094,9 @@ fn phased_to(
     let frame = Rc::new(RefCell::new(staged.frame.clone()));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
+    let preserved: std::collections::BTreeSet<RegId> =
+        registers.saved.iter().map(|(whole, _)| whole.full_register()).collect();
+    let mut allocated = false;
     for mut phase in flow::machine_with(
         &pinned,
         Some(Rc::clone(&frame)),
@@ -1115,12 +1118,22 @@ fn phased_to(
             in_ssa = false;
         }
         let kept = (!body.notes.is_empty()).then(|| body.clone());
-        body = flow::checked(body, phase.as_mut(), in_ssa, classes, target.segments, target.arch).map_err(|error| {
-            match error {
-                flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
-                flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
-            }
+        body = flow::checked(
+            body,
+            phase.as_mut(),
+            in_ssa,
+            allocated.then_some(&preserved),
+            classes,
+            target.segments,
+            target.arch,
+        )
+        .map_err(|error| match error {
+            flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
+            flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;
+        if phase.class_name() == "RegAlloc" {
+            allocated = true;
+        }
         if let Some(before) = &kept {
             body = body.with_notes_kept(before).with_defs_kept(before);
         }
