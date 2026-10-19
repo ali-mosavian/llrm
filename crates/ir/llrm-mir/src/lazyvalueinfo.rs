@@ -2213,13 +2213,11 @@ impl LazyValueInfoImpl {
 }
 
 /// `predecessors(BB)`, newest use first as LLVM walks a use list.
-fn predecessors(
+pub(crate) fn predecessors(
     function: &Function,
     bb: BlockId,
 ) -> Vec<BlockId> {
-    let mut preds: Vec<BlockId> = function.predecessors(bb).iter().copied().collect();
-    preds.reverse();
-    preds
+    function.predecessors(bb).iter().copied().collect()
 }
 
 /// `Constant::toConstantRange` of an integer constant.
