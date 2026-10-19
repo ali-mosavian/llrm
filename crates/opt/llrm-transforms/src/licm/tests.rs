@@ -764,6 +764,7 @@ b10:
     let after = crate::testing::managed(&mut module, Licm { apply: true, speculate: true });
     let header = after.split("\nb3:").nth(1).expect("the loop header").split("\n\n").next().expect("its end");
     assert!(header.contains("@key_pressed()"), "the poll left the loop: {after}");
+}
 
 /// `text` through `Licm` on the Dos target, printed.
 fn licm_printed(text: &str) -> String {
