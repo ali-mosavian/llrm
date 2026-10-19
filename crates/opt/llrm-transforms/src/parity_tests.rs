@@ -108,7 +108,8 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     assert_eq!(parity::check(parity::REGISTRY, Phase::Backend, &built), Ok(()));
     let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@99"), "{why}");
-    let why = parity::check_backend(&["floatalloc@8", "jumps@17", "allocate@11", "unknown@1"]).unwrap_err();
+    let why =
+        parity::check_backend(&["floatalloc@8", "coalesce@10", "jumps@17", "allocate@11", "unknown@1"]).unwrap_err();
     assert!(why.contains("unknown@1"), "{why}");
 }
 
@@ -125,9 +126,9 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
     let count = parity::tally(parity::REGISTRY);
     // jumps@17, allocate@11 (greedy by default under LLVM's order) and
     // merge@818 (MemCpyOpt's memsets), dse@820 (stage 1) and the two
-    // jumpthreading slots (stage S1).
-    assert_eq!(count.partial, 6);
-    assert!(parity::report().contains("jumps@17") && parity::report().contains("6 partial"));
+    // jumpthreading slots (stage S1), indvars@738 and coalesce@10.
+    assert_eq!(count.partial, 8);
+    assert!(parity::report().contains("jumps@17") && parity::report().contains("8 partial"));
 }
 
 /// A Partial slot without its criterion and exit says what is done and not what
@@ -136,6 +137,17 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
 fn test_a_partial_slot_states_its_criterion_and_exit() {
     for one in parity::REGISTRY.iter().filter(|one| one.kind == SlotKind::Partial) {
         assert!(one.note.contains("criterion:") && one.note.contains("exit:"), "{}: {:?}", one.slot, one.note);
+    }
+}
+
+/// indvars@738 and coalesce@10 ran translated code under the order at defaults
+/// but counted as Old, so the count of record hid the progress.
+#[test]
+fn test_indvars_and_coalesce_that_run_translations_are_partial_with_an_exit() {
+    for slot in ["indvars@738", "coalesce@10"] {
+        let one = parity::REGISTRY.iter().find(|one| one.slot == slot).expect(slot);
+        assert_eq!(one.kind, SlotKind::Partial, "{slot}");
+        assert!(one.note.contains("exit:"), "{slot}: {:?}", one.note);
     }
 }
 
@@ -274,4 +286,20 @@ fn test_sccp_stands_between_gvn_and_bdce() {
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
     assert_eq!((at("gvn@787") + 1, at("sccp@792") + 1), (at("sccp@792"), at("bdce@797")));
+}
+
+/// LSR's translated pieces landed with no registry row, so the count could not
+/// show them; DomTree was translated with no analyses row. The slot is Old
+/// while no pass calls the pieces, and `dominators` is a Translated analysis.
+#[test]
+fn test_lsr_is_a_registered_slot_and_dominators_a_translated_analysis() {
+    let lsr = parity::REGISTRY.iter().find(|one| one.slot == "lsr").expect("lsr is registered");
+    assert_eq!((lsr.llvm, lsr.kind), ("loop-reduce (LoopStrengthReduce.cpp)", SlotKind::Old));
+    assert!(!lsr.replaced_by.is_empty(), "an Old slot names who replaces it");
+    let dominators = parity::ANALYSES.iter().find(|one| one.key == "dominators").expect("dominators is registered");
+    assert_eq!(
+        (dominators.llvm, dominators.kind, dominators.off),
+        ("DominatorTreeAnalysis", SlotKind::Translated, false)
+    );
+    assert!(parity::ANALYSES.iter().all(|one| one.key != "shape"), "shape is a bundle, not a translation");
 }
