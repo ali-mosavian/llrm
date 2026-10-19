@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine.rs sha256:61c7e390de88d476f0f111e1d7202b707d9db33e922392f25c9f41ae665038c4 -->
+<!-- src: crates/opt/llrm-transforms/src/combine.rs sha256:c254f0e3cdc65fdf1b304b7905ce99f16a339f1f505ef0b3783211e742b57b40 -->
 
 # combine
 
@@ -13,7 +13,8 @@ at d1106deb71cc: `prepareWorklist` (:6031) seeds it, `run` (:5780) drains
 it, `eraseInstFromFunction` (InstCombineInternal.h:504) re-queues what lost
 a user, over
 [`InstructionWorklist`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/Transforms/Utils/InstructionWorklist.h).
-`visit` is [`llrm_mir::simplify::simplify_instruction_in`](https://github.com/ali-mosavian/llrm/blob/main/crates/ir/llrm-mir/src/simplify.rs).
+`visit` is [`llrm_mir::simplify::simplify_instruction_in`](https://github.com/ali-mosavian/llrm/blob/main/crates/ir/llrm-mir/src/simplify.rs), then the
+translated families' `visit*` of the opcode (`visitors`).
 
 MIRROR: the seed in reverse reverse-post-order after folding and deleting
 the dead as it walks; the live-successor handling of a constant branch (the
@@ -25,12 +26,12 @@ DEVIATE, with the reason: code sinking (`tryToSinkInstruction`) is not made
 blocks no live edge reaches keep their instructions (`decide` removes
 them; LLVM's `removeAllNonTerminatorAndEHPadInstructions` is a CFG edit
 this pass does not make); a call is never trivially dead here (`dead` knows
-what a call does not write); `visit` is `simplify_instruction_in` alone: the
-rewrites of InstCombine's `visit*` functions are `algebraic`'s, to move in
-as they are translated (the visit map in the combine page).
+what a call does not write); `visit` runs only the families translated so
+far (`visitors`: add, icmp, getelementptr, store): the other `visit*`
+rewrites are `algebraic`'s, to move in as they are translated.
 
 ## Used by
-`fold` (its number step).
+`combine_pass::Combine`, the `combine@N` slots of LLVM's order.
 
 ## Example
 An instruction that simplifies is replaced, and what read it is visited

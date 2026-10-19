@@ -1147,7 +1147,8 @@ fn a_round_follows_an_unroll_that_changed_the_body_past_the_budget() {
 fn only_o3_jams_a_nest_that_sweeps_the_same_cells() {
     let cells = |base: i32| (0..100).map(|at| format!("i16 {}", base + at % 7)).collect::<Vec<_>>().join(", ");
     let text = format!(
-        "@p = global [100 x i16] [{}]
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@p = global [100 x i16] [{}]
 @v = global [100 x i16] [{}]
 
 define i16 @main() {{

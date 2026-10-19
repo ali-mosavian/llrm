@@ -8,7 +8,8 @@
 //! it, `eraseInstFromFunction` (InstCombineInternal.h:504) re-queues what lost
 //! a user, over
 //! [`InstructionWorklist`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/Transforms/Utils/InstructionWorklist.h).
-//! `visit` is [`llrm_mir::simplify::simplify_instruction_in`].
+//! `visit` is [`llrm_mir::simplify::simplify_instruction_in`], then the
+//! translated families' `visit*` of the opcode (`visitors`).
 //!
 //! MIRROR: the seed in reverse reverse-post-order after folding and deleting
 //! the dead as it walks; the live-successor handling of a constant branch (the
@@ -20,12 +21,12 @@
 //! blocks no live edge reaches keep their instructions (`decide` removes
 //! them; LLVM's `removeAllNonTerminatorAndEHPadInstructions` is a CFG edit
 //! this pass does not make); a call is never trivially dead here (`dead` knows
-//! what a call does not write); `visit` is `simplify_instruction_in` alone: the
-//! rewrites of InstCombine's `visit*` functions are `algebraic`'s, to move in
-//! as they are translated (the visit map in the combine page).
+//! what a call does not write); `visit` runs only the families translated so
+//! far (`visitors`: add, icmp, getelementptr, store): the other `visit*`
+//! rewrites are `algebraic`'s, to move in as they are translated.
 //!
 //! # Used by
-//! `fold` (its number step).
+//! `combine_pass::Combine`, the `combine@N` slots of LLVM's order.
 //!
 //! # Example
 //! An instruction that simplifies is replaced, and what read it is visited

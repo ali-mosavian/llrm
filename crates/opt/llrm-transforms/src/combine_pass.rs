@@ -13,7 +13,7 @@ use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use crate::combine;
 
 pub struct Combine {
-    enabled: bool,
+    pub(crate) enabled: bool,
 }
 
 impl Combine {
@@ -37,8 +37,11 @@ impl FunctionPass for Combine {
             return PreservedAnalyses::all();
         }
         let outer = std::rc::Rc::clone(analyses.outer());
-        let changed =
-            combine::combine(unit.context, &outer.globals, &outer.metadata, unit.layout, unit.function);
+        let changed = combine::combine(unit.context, &outer.globals, &outer.metadata, unit.layout, unit.function);
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
+
+#[cfg(test)]
+#[path = "combine_pass_tests.rs"]
+mod tests;
