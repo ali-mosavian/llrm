@@ -1,4 +1,4 @@
-"""`slotted(command)`: a cargo command under `buildslot` (4 shared slots, nice 10) so builds and tests of many sessions do not pile up on the host.
+"""`slotted(command)`: a cargo command under `buildslot` (2 shared slots, nice 10) so builds and tests of many sessions do not pile up on the host.
 
 `BUILDSLOT_BYPASS=1` leaves a command as it is (the integration landing runs at normal priority). The landing itself (parity_squash merge, merge-batch,
 head-failures, and the smoke they start) runs inside `landing()`, which sets the same priority for its own commands and the subprocesses they start, so no

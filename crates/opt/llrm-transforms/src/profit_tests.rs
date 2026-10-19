@@ -505,3 +505,36 @@ fn a_loop_the_header_leaves_is_weighted_by_its_latch_runs_by_both_engines() {
     }
     assert_eq!(trips(pretested, true).values().copied().collect::<Vec<_>>(), [4]);
 }
+
+/// A nest of 24 loops whose trips are unknown (ten each) once panicked the
+/// products in a debug build and wrapped in a release one: `count * factor` and
+/// `count * here / trip` passed `i64`'s end by the nineteenth. A weight past it
+/// is the largest frequency, as `BlockFrequency` saturates.
+#[test]
+fn a_nest_of_loops_past_the_end_of_i64_saturates_its_weights() {
+    const DEPTH: usize = 24;
+    let mut text = String::from("define void @f(i16 %n) {\nb0:\n  br label %h0\n\n");
+    for k in 0..DEPTH {
+        let before = if k == 0 { "b0".to_owned() } else { format!("h{}", k - 1) };
+        text += &format!("h{k}:\n  %i{k} = phi i16 [ 0, %{before} ], [ %n{k}, %l{k} ]\n");
+        text += &if k + 1 < DEPTH { format!("  br label %h{}\n\n", k + 1) } else { format!("  br label %l{k}\n\n") };
+    }
+    for k in (0..DEPTH).rev() {
+        let out = if k == 0 { "out".to_owned() } else { format!("l{}", k - 1) };
+        text += &format!(
+            "l{k}:\n  %n{k} = add i16 %i{k}, 1\n  %c{k} = icmp ult i16 %n{k}, %n\n  br i1 %c{k}, label %h{k}, label %{out}\n\n"
+        );
+    }
+    text += "out:\n  ret void\n}\n";
+    let module = module(&text);
+    let f = function(&module);
+    let products = _loop_products(f, None).expect("products");
+    let named = |name: &str| {
+        cfg::id(*f.layout().iter().find(|&&one| f.block(one).name.as_deref() == Some(name)).expect("a block"))
+    };
+    assert_eq!(products[&named("h0")], 10);
+    assert_eq!(products[&named(&format!("h{}", DEPTH - 1))], i64::MAX);
+    let by_branch = super::_loop_products_by_branch(&module.context, &module.metadata, &module.globals, f, None)
+        .expect("products by branch");
+    assert!(by_branch[&named(&format!("h{}", DEPTH - 1))] >= 1_000_000_000_000_000_000, "{by_branch:?}");
+}
