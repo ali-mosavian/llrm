@@ -1309,7 +1309,9 @@ fn far_selectors_loaded(function: &str) -> Vec<bool> {
         .lines()
         .filter_map(|line| line.trim().strip_prefix("store volatile i8 "))
         .map(|store| {
-            let mut value = pointer.captures_iter(store).last().expect("the address")[1].to_owned();
+            // A constant address reloads nothing.
+            let Some(address) = pointer.captures_iter(store).last() else { return false };
+            let mut value = address[1].to_owned();
             while let Some(defined) = definition(function, &value) {
                 if defined.starts_with("load i16, ptr @b$seg") {
                     return true;
