@@ -622,6 +622,10 @@ impl FunctionPass for Slot {
         self.name
     }
 
+    fn translations(&self) -> Vec<&'static str> {
+        self.inner.translations()
+    }
+
     fn adds_memory_operations(&self) -> bool {
         self.inner.adds_memory_operations()
     }
@@ -654,6 +658,10 @@ impl FunctionPass for Together {
 
     fn parts(&self) -> Vec<&'static str> {
         self.parts.iter().flat_map(|part| part.parts()).collect()
+    }
+
+    fn translations(&self) -> Vec<&'static str> {
+        self.parts.iter().flat_map(|part| part.translations()).collect()
     }
 
     fn adds_memory_operations(&self) -> bool {
@@ -1334,6 +1342,7 @@ impl Fixed {
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
         let level = if applied.options.pre { crate::parity::Level::O2 } else { crate::parity::Level::O1 };
+        let held = linear.passes.iter().map(|one| (one.name(), one.translations())).collect::<Vec<_>>();
         let checked = crate::parity::check_phase_with(
             phase,
             &built,
@@ -1341,6 +1350,7 @@ impl Fixed {
             applied.options.sroa,
             applied.options.mem2reg,
             applied.options.rotating(),
+            &held,
         );
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
