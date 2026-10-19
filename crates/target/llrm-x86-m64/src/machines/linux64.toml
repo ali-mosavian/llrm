@@ -1,0 +1,6 @@
+# An x86-64 Linux user program: flat, no segments, no ports a program may touch. Joined with no PC ports.
+
+addressing = "flat"
+segment_end_faults = false
+far_bss = false
+flat_base = 0

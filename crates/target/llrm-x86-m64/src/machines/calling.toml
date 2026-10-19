@@ -1,0 +1,60 @@
+# The ABI a program has without -mabi=, and the convention an unmarked function has under it.
+default = "sysv"
+
+# A function nothing outside the program reaches takes SysV's too: no register convention is better here.
+private = "sysv64"
+
+[abi.sysv]
+convention = "sysv64"
+
+# sysv64: the System V AMD64 ABI as gcc and clang emit it on Linux (X86CallingConv.td's CC_X86_64_C and
+# RetCC_X86_64_C). Integer and pointer arguments take RDI, RSI, RDX, RCX, R8, R9 in order, then the stack in
+# 8-byte slots pushed right to left, which the caller removes; the stack is 16-byte aligned at the call.
+# RBX, RBP, R12-R15 are kept. Results: RAX, and RDX:RAX for 16 bytes. Floating point (XMM0-7, `al` = the
+# vector registers a variadic call uses) and aggregate classification join with the SSE register class;
+# until then a program with either is refused at selection.
+[sysv64]
+# MIR's `ccc`: C's convention is this one.
+cc = "cdecl"
+slot_bytes = 8
+stack_alignment = 16
+# Every call finds the stack aligned: the frame is sized for it in any function that calls.
+aligned_calls = true
+order = "right-to-left"
+cleanup = "caller"
+argument_registers = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
+sized_arguments = true
+skip_memory = true
+backfill = false
+return_address_bytes = 8
+# From RBP after `push rbp; mov rbp, rsp`: saved RBP and the return address.
+first_argument_offset = 16
+frame = "rbp"
+frame_optional = true
+stack = "rsp"
+# Each as (the root its family is rooted at, the register a prologue pushes).
+preserved = [["ebx", "rbx"], ["ebp", "rbp"], ["r12d", "r12"], ["r13d", "r13"], ["r14d", "r14"], ["r15d", "r15"]]
+clobbered = ["rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "flags"]
+entry_state = ["df_clear"]
+aggregate = "hidden-pointer"
+aggregate_in_register_bytes = []
+aggregate_pointer = "register"
+aggregate_pointer_register = "rdi"
+aggregate_pointer_returned = "rax"
+aggregate_pointer_popped_by = "caller"
+promotion = "slot"
+wide_slots = 1
+variadic_float = "double"
+# A variadic call tells the callee in AL how many vector registers carry arguments, so its prologue saves them.
+variadic_vector_register = "rax"
+
+[sysv64.symbol]
+elf = "*"
+
+[sysv64.result]
+1 = ["rax"]
+2 = ["rax"]
+4 = ["rax"]
+8 = ["rax"]
+16 = ["rax", "rdx"]
+pointer = ["rax"]

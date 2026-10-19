@@ -6,7 +6,7 @@
 
 use std::sync::LazyLock;
 
-use iced_x86::{Code, Decoder, DecoderOptions, Encoder, Instruction, MemoryOperand, RepPrefixKind};
+use iced_x86::{Code, Decoder, DecoderOptions, Encoder, Instruction, MemoryOperand, Register, RepPrefixKind};
 use llrm_lir::registers::RegId;
 use llrm_lir::{self as ir, Loc, Operation, Semantics, Space};
 use llrm_support::hash::IndexMap;
@@ -205,7 +205,7 @@ fn width_of(register: RegId) -> Option<i64> {
     crate::registers::WIDTHS.get(&register).copied()
 }
 
-/// Where an instruction goes, and the mode it is encoded in: 16 or 32 bits.
+/// Where an instruction goes, and the mode it is encoded in: 16, 32 or 64 bits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct At {
     pub ip: u64,
@@ -277,7 +277,7 @@ pub fn _displacement_size(
 ) -> u32 {
     // A 32-bit address, named by a 32-bit register or by the mode, carries
     // disp32.
-    let wide = bits == 32 || [base, index].into_iter().any(|one| width_of(one) == Some(4));
+    let wide = bits >= 32 || [base, index].into_iter().any(|one| width_of(one) >= Some(4));
     if base == RegId::None {
         return if wide { 4 } else { 2 };
     }
@@ -299,7 +299,7 @@ fn displacement_in(
     width: u32,
     bits: u32,
 ) -> u32 {
-    if bits == 32 && width == 2 { 4 } else { width }
+    if bits >= 32 && width == 2 { 4 } else { width }
 }
 
 /// The override `seg` is through `base`: none where the base already
@@ -325,6 +325,8 @@ fn memory_operand(
     // as its wrap, which is what the two-byte field holds.
     let displ =
         if displ_size == 2 && (base != RegId::None || index != RegId::None) { i64::from(displ as i16) } else { displ };
+    // iced spells a 32-bit displacement of a 64-bit address as size 8.
+    let displ_size = if displ_size == 4 && (base.is_gpr64() || index.is_gpr64()) { 8 } else { displ_size };
     MemoryOperand::new(base.iced(), index.iced(), scale as u32, displ, displ_size, false, overriding(base, seg).iced())
 }
 
@@ -352,7 +354,7 @@ pub fn place_operand(
     let Some(addr) = addr else {
         // Encodable where it is reached through a register.
         if [RegId::SI, RegId::DI, RegId::BX, RegId::BP].contains(&what.through)
-            || (bits == 32 && width_of(what.through) == Some(4))
+            || (bits >= 32 && width_of(what.through) >= Some(4))
         {
             let wide = if what.disp_width != 0 {
                 displacement_in(what.disp_width, bits)
@@ -364,12 +366,18 @@ pub fn place_operand(
         return None;
     };
     match addr.space {
+        // Long mode reaches a symbol through the instruction pointer: `[rip +
+        // disp32]`, the displacement a PC32 relocation. A symbol plus a
+        // register has no such form.
+        Space::Segment | Space::External if bits == 64 => {
+            (!based && addr.base == (RegId::None).iced()).then(|| (rip_operand(), true))
+        }
         Space::Segment | Space::External => {
             // Once a pass makes a value of the offset, `through` is where the
             // allocation put it. The relocation fills the displacement, which
             // a 32-bit base carries in four bytes.
             let base = if based { what.through } else { RegId::from(addr.base) };
-            let wide = if bits == 32 || width_of(base) == Some(4) { 4 } else { 2 };
+            let wide = if bits >= 32 || width_of(base) >= Some(4) { 4 } else { 2 };
             Some((memory_operand(base, RegId::None, 1, 0, wide, RegId::from(addr.segment)), true))
         }
         Space::Frame if addr.base == (RegId::None).iced() => {
@@ -421,6 +429,22 @@ pub fn place_operand(
     }
 }
 
+/// `[rip + disp32]` with the displacement left for the relocation: iced's
+/// operand is the target address, and the field it writes is replaced by the
+/// caller's addend.
+fn rip_operand() -> MemoryOperand {
+    MemoryOperand::new(Register::RIP, Register::None, 1, 0, 8, false, Register::None)
+}
+
+/// `lea into, [rip + symbol]`: the address of a symbol as a value in long mode.
+pub fn lea_symbol(
+    into: RegId,
+    at: At,
+) -> Option<Emitted> {
+    (width_of(into)? == 8).then_some(())?;
+    _assemble(&raised(create_reg_mem(Code::Lea_r64_m, into, rip_operand())), at, true)
+}
+
 pub const _WORD_BASES: [RegId; 2] = crate::addressing16::BASES;
 pub const _WORD_INDEXES: [RegId; 2] = crate::addressing16::INDEXES;
 
@@ -438,8 +462,8 @@ pub fn _scaled_operand(
     // price of it was none, so a function with one could not be priced in bytes
     // at all.
     let Some(addr) = what.addr else {
-        let wide = |register: RegId| width_of(register) == Some(4);
-        if !(bits == 32 && wide(what.index_through) && wide(what.through)) {
+        let wide = |register: RegId| width_of(register) >= Some(4);
+        if !(bits >= 32 && wide(what.index_through) && wide(what.through)) {
             return None;
         }
         let size = if what.disp_width != 0 {
@@ -459,8 +483,8 @@ pub fn _scaled_operand(
             return Some((memory_operand(what.through, what.index_through, 1, 0, 2, RegId::from(addr.segment)), true));
         }
         // The 67h form: any 32-bit base, a scaled index, a relocated disp32.
-        let wide = width_of(what.index_through) == Some(4)
-            && (what.through == RegId::None || width_of(what.through) == Some(4));
+        let wide = width_of(what.index_through) >= Some(4)
+            && (what.through == RegId::None || width_of(what.through) >= Some(4));
         return wide.then(|| {
             (memory_operand(what.through, what.index_through, what.scale, 0, 4, RegId::from(addr.segment)), true)
         });
@@ -497,14 +521,12 @@ pub fn r#move(
         // a move to itself is no instruction at all
         return Some(Emitted::new(Vec::new()));
     }
-    let code = if crate::registers::DWORDS.contains(&into) && crate::registers::DWORDS.contains(&outof) {
-        Code::Mov_r32_rm32
-    } else if crate::registers::WORDS.contains(&into) && crate::registers::WORDS.contains(&outof) {
-        Code::Mov_r16_rm16
-    } else if crate::registers::BYTES.contains(&into) && crate::registers::BYTES.contains(&outof) {
-        Code::Mov_r8_rm8
-    } else {
-        return None;
+    let code = match (width_of(into)?, width_of(outof)?) {
+        (8, 8) => Code::Mov_r64_rm64,
+        (4, 4) if crate::registers::DWORDS.contains(&into) || into.is_gpr64() == outof.is_gpr64() => Code::Mov_r32_rm32,
+        (2, 2) => Code::Mov_r16_rm16,
+        (1, 1) => Code::Mov_r8_rm8,
+        _ => return None,
     };
     _assemble(&raised(create_reg_reg(code, into, outof)), at, true)
 }
@@ -697,9 +719,30 @@ pub fn load(
     at: At,
 ) -> Option<Emitted> {
     let width = width_of(into)?;
+    if width == 8 {
+        return load_quadword(into, value, at);
+    }
     let code = _code(&format!("MOV_R{}_IMM{}", width * 8, width * 8))?;
     let made = create_reg_i32(code, into, _immediate(value, width)).ok()?;
     _assemble(&made, at, true)
+}
+
+/// `mov r64, imm` in the shortest form that makes `value`: a dword load
+/// zero-extends (`mov r32, imm32`, 5 bytes), a sign-extended dword is `mov
+/// r/m64, imm32` (7), else the 10-byte `movabs`.
+fn load_quadword(
+    into: RegId,
+    value: i64,
+    at: At,
+) -> Option<Emitted> {
+    if let Ok(low) = u32::try_from(value) {
+        let made = create_reg_i32(Code::Mov_r32_imm32, into.full_register32(), i64::from(low as i32)).ok()?;
+        return _assemble(&made, at, true);
+    }
+    if let Ok(signed) = i32::try_from(value) {
+        return _assemble(&create_reg_i32(Code::Mov_rm64_imm32, into, i64::from(signed)).ok()?, at, true);
+    }
+    _assemble(&Instruction::with2(Code::Mov_r64_imm64, into.iced(), value as u64).ok()?, at, true)
 }
 
 /// `<name> dest, source`, both registers, at the width they name.
@@ -730,7 +773,7 @@ pub fn fits_in_a_byte(value: i64) -> bool {
 /// Python binds `ACCUMULATOR` twice, `{2: AX, 4: EAX}` and later this; every
 /// function reads the global at call time, so only this binding is ever seen.
 pub static ACCUMULATOR: LazyLock<IndexMap<i64, RegId>> =
-    LazyLock::new(|| IndexMap::from_iter([(1, RegId::AL), (2, RegId::AX), (4, RegId::EAX)]));
+    LazyLock::new(|| IndexMap::from_iter([(1, RegId::AL), (2, RegId::AX), (4, RegId::EAX), (8, RegId::RAX)]));
 
 /// `<name> dest, imm`, in the shortest form the value and register allow.
 pub fn arith_imm(
@@ -750,11 +793,17 @@ pub fn arith_imm(
     if fits_in_a_byte(value) && !relocated {
         shapes.push((format!("{upper}_RM{}_IMM8", width * 8), 8));
     }
+    // A quadword operation takes a sign-extended dword.
+    let immediate = (width * 8).min(32);
     if Some(&dest) == ACCUMULATOR.get(&width) {
-        let accumulator = if width == 2 { "AX" } else { "EAX" };
-        shapes.push((format!("{upper}_{accumulator}_IMM{}", width * 8), width * 8));
+        let accumulator = match width {
+            2 => "AX",
+            4 => "EAX",
+            _ => "RAX",
+        };
+        shapes.push((format!("{upper}_{accumulator}_IMM{immediate}"), immediate));
     }
-    shapes.push((format!("{upper}_RM{}_IMM{}", width * 8, width * 8), width * 8));
+    shapes.push((format!("{upper}_RM{}_IMM{immediate}", width * 8), immediate));
     for (shape, _bits) in shapes {
         let Some(code) = _code(&shape) else {
             continue;
@@ -808,9 +857,15 @@ pub fn push_imm(
     relocated: bool,
 ) -> Option<Emitted> {
     let value = _immediate(value, width);
-    let mut names = vec![if width == 4 { "PUSHD_IMM32" } else { "PUSH_IMM16" }];
+    // A quadword push takes a sign-extended dword or byte.
+    let (full, short) = match width {
+        8 => ("PUSHQ_IMM32", "PUSHQ_IMM8"),
+        4 => ("PUSHD_IMM32", "PUSHD_IMM8"),
+        _ => ("PUSH_IMM16", "PUSHW_IMM8"),
+    };
+    let mut names = vec![full];
     if fits_in_a_byte(value) && !relocated {
-        names.insert(0, if width == 4 { "PUSHD_IMM8" } else { "PUSHW_IMM8" });
+        names.insert(0, short);
     }
     for one in names {
         let Some(code) = _code(one) else {
@@ -897,11 +952,15 @@ pub fn store_imm(
     at: At,
 ) -> Option<Emitted> {
     let built = operand_of(cell, at.bits);
-    if built.is_none() || ![1, 2, 4].contains(&cell.width) {
+    if built.is_none() || ![1, 2, 4, 8].contains(&cell.width) {
         return None;
     }
     let width = i64::from(cell.width);
-    let code = _code(&format!("MOV_RM{}_IMM{}", width * 8, width * 8))?;
+    // A quadword store takes a sign-extended dword.
+    let code = _code(&format!("MOV_RM{}_IMM{}", width * 8, (width * 8).min(32)))?;
+    if width == 8 && i32::try_from(value).is_err() {
+        return None;
+    }
     let (r#where, relocated) = built?;
     let made = create_mem_i32(code, r#where, _immediate(value, width)).ok()?;
     _assemble(&made, at, relocated)
@@ -943,7 +1002,11 @@ pub fn push_mem(
 /// `<name> target`, a conditional branch to an absolute address.
 /// iced's name of a relative branch's short and near forms in `bits`-bit mode.
 fn relative(at: At) -> (&'static str, &'static str) {
-    if at.bits == 32 { ("REL8_32", "REL32_32") } else { ("REL8_16", "REL16") }
+    match at.bits {
+        64 => ("REL8_64", "REL32_64"),
+        32 => ("REL8_32", "REL32_32"),
+        _ => ("REL8_16", "REL16"),
+    }
 }
 
 pub fn branch(
@@ -1001,6 +1064,7 @@ pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(
         ("retf", "RETFW"),
         ("cwd", "CWD"),
         ("cdq", "CDQ"),
+        ("cqo", "CQO"),
         // PDS /Ot closes a procedure with it: `mov sp,bp` then `pop bp`.
         ("leave", "LEAVEW"),
         // an interrupt handler's entry and exit
@@ -1035,12 +1099,17 @@ fn in_mode(
     name: &str,
     at: At,
 ) -> String {
-    if at.bits != 32 {
-        return name.to_owned();
-    }
+    // The word of a mode: 16 bits, a dword flat, a quadword in long mode; `nop`
+    // stays a dword there (`NOPQ` is not what a compiler emits).
+    let word = match at.bits {
+        32 => 'D',
+        64 if name == "NOPW" => 'D',
+        64 => 'Q',
+        _ => return name.to_owned(),
+    };
     match name.split_once("W_") {
-        Some((head, tail)) => format!("{head}D_{tail}"),
-        None if name.ends_with('W') => format!("{}D", &name[..name.len() - 1]),
+        Some((head, tail)) => format!("{head}{word}_{tail}"),
+        None if name.ends_with('W') => format!("{}{word}", &name[..name.len() - 1]),
         None => name.to_owned(),
     }
 }
@@ -1120,11 +1189,11 @@ pub fn test_immediate(
         Loc::Mem(one) => one.width,
         _ => return None,
     };
-    if ![1, 2, 4].contains(&width) {
+    if ![1, 2, 4, 8].contains(&width) {
         return None;
     }
     let width = i64::from(width);
-    let code = _code(&format!("TEST_RM{}_IMM{}", width * 8, width * 8))?;
+    let code = _code(&format!("TEST_RM{}_IMM{}", width * 8, (width * 8).min(32)))?;
     let value = _immediate(value, width);
     match dest {
         Loc::Reg(one) => _assemble(&raised(create_reg_i32(code, one.register, value)), at, true),
@@ -1410,7 +1479,7 @@ pub fn funnel(
 /// A count in cx or ecx is one in cl: every shift and rotate reads only `count
 /// & 31`.
 fn _cl(count: Option<RegId>) -> bool {
-    matches!(count, Some(RegId::CL | RegId::CX | RegId::ECX))
+    matches!(count, Some(RegId::CL | RegId::CX | RegId::ECX | RegId::RCX))
 }
 
 /// Shift a register or spill cell. `count` of None means by cl.
@@ -1950,6 +2019,26 @@ pub fn emit_in(
         let upper = name.to_uppercase();
         let wide = |register: RegId| width_of(register).unwrap_or(0);
         match (&dests[0], &sources[0]) {
+            // A dword widened to a quadword: `movsxd`; and the zero extension
+            // is the dword move, which zeroes the upper half of the register it
+            // writes.
+            (Loc::Reg(into), Loc::Reg(outof)) if wide(into.register) == 8 && wide(outof.register) == 4 => {
+                let (code, into) = if name == "movzx" {
+                    (Code::Mov_r32_rm32, into.register.full_register32())
+                } else {
+                    (Code::Movsxd_r64_rm32, into.register)
+                };
+                return _assemble(&raised(create_reg_reg(code, into, outof.register)), at, true);
+            }
+            (Loc::Reg(into), Loc::Mem(cell)) if wide(into.register) == 8 && cell.width == 4 => {
+                let (built, relocated) = operand_of(cell, at.bits)?;
+                let (code, into) = if name == "movzx" {
+                    (Code::Mov_r32_rm32, into.register.full_register32())
+                } else {
+                    (Code::Movsxd_r64_rm32, into.register)
+                };
+                return _assemble(&raised(create_reg_mem(code, into, built)), at, relocated);
+            }
             (Loc::Reg(into), Loc::Reg(outof)) => {
                 if let Some(short) = extended_in_place(name, into.register, outof.register, at) {
                     return Some(short);
@@ -1995,6 +2084,7 @@ pub fn emit_in(
             // `mov sreg,imm` the machine has no encoding for.
             (Loc::Reg(into), Loc::Imm(imm)) if seg(into.register) => load_segment(into.register, imm.value, at),
             (Loc::Reg(into), Loc::Reg(outof)) => r#move(into.register, outof.register, at),
+            (Loc::Reg(into), Loc::Imm(imm)) if at.bits == 64 && imm.address.is_some() => lea_symbol(into.register, at),
             (Loc::Reg(into), Loc::Imm(imm)) => load(into.register, imm.value, at),
             (Loc::Reg(into), Loc::Mem(cell)) => move_from(into.register, cell, at),
             (Loc::Mem(cell), Loc::Reg(outof)) => move_into(cell, outof.register, at),
@@ -2097,7 +2187,14 @@ pub fn emit_in(
     if op == Operation::Jump && what.indirect && sources.len() == 1 {
         // A near jump through a table of code addresses, each as wide as the
         // mode's word.
-        let (near, code) = (i64::from(at.bits / 8), if at.bits == 32 { Code::Jmp_rm32 } else { Code::Jmp_rm16 });
+        let (near, code) = (
+            i64::from(at.bits / 8),
+            match at.bits {
+                64 => Code::Jmp_rm64,
+                32 => Code::Jmp_rm32,
+                _ => Code::Jmp_rm16,
+            },
+        );
         if let Loc::Mem(cell) = &sources[0]
             && i64::from(cell.width) == near
             && let Some((built, relocated)) = operand_of(cell, at.bits)
@@ -2110,7 +2207,14 @@ pub fn emit_in(
         // A near code pointer is as wide as the mode's word; a pointer of two
         // words (offset and selector) is a far one, which only a
         // segmented mode has.
-        let (near, near_code) = (i64::from(at.bits / 8), if at.bits == 32 { Code::Call_rm32 } else { Code::Call_rm16 });
+        let (near, near_code) = (
+            i64::from(at.bits / 8),
+            match at.bits {
+                64 => Code::Call_rm64,
+                32 => Code::Call_rm32,
+                _ => Code::Call_rm16,
+            },
+        );
         match &sources[0] {
             Loc::Reg(one) if i64::from(one.width) == near => {
                 return _assemble(&raised(create_reg(near_code, one.register)), at, true);
@@ -2540,3 +2644,7 @@ mod sweep;
 #[cfg(test)]
 #[path = "select_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "select64_tests.rs"]
+mod tests64;

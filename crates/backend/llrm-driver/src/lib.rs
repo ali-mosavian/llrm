@@ -2,6 +2,8 @@
 //! name, among those it supports; nothing else in the tree matches on a
 //! target's name.
 
+pub mod llc;
+
 use std::rc::Rc;
 
 use llrm_core::abi::machine::Machine;
@@ -15,7 +17,13 @@ pub const DEFAULT: &str = "x86-m16";
 
 /// Every target built in.
 pub fn all() -> Vec<Rc<dyn Target>> {
-    vec![Rc::new(llrm_x86_m16::M16), Rc::new(llrm_x86_m32::M32)]
+    vec![Rc::new(llrm_x86_m16::M16), Rc::new(llrm_x86_m32::M32), Rc::new(llrm_x86_m64::M64)]
+}
+
+/// The target whose description states `triple` as its `llvm_triple`: the one a
+/// module's `target triple` names.
+pub fn by_triple(triple: &str) -> Option<Rc<dyn Target>> {
+    all().into_iter().find(|one| one.layout().llvm_triple.as_deref() == Some(triple))
 }
 
 /// The instruction selector of the target `name`, from its select crate.
@@ -23,6 +31,7 @@ pub fn selector(name: &str) -> Option<&'static Compiled> {
     match name {
         "x86-m16" => Some(&llrm_x86_m16_select::SELECTOR),
         "x86-m32" => Some(&llrm_x86_m32_select::SELECTOR),
+        "x86-m64" => Some(&llrm_x86_m64_select::SELECTOR),
         _ => None,
     }
 }

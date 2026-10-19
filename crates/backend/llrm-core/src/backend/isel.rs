@@ -583,7 +583,8 @@ fn saved(
         .flatten()
         .chain(returns.iter().copied().filter(|_| entry.results_clobbered))
         .collect();
-    kept.into_iter().filter(|(whole, _)| !changed.iter().any(|one| one.full_register32() == *whole)).collect()
+    let regs = Regs(arch.registers());
+    kept.into_iter().filter(|(whole, _)| !changed.iter().any(|one| regs.root(*one) == *whole)).collect()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -692,6 +693,9 @@ pub(super) fn width_of(
         (TypeClass::I1 | TypeClass::I8, _) => Ok(1),
         (TypeClass::I16, _) => Ok(2),
         (TypeClass::I32, _) => Ok(4),
+        // A quadword is a value where the datalayout has a legal i64; otherwise
+        // it is two halves (`is_wide`).
+        (TypeClass::I64, _) if layout.largest_legal_integer() >= 64 => Ok(8),
         (TypeClass::Ptr, Type::Pointer(space)) => Ok(layout.pointer(*space).bits / 8),
         // An x87 register holds any float, extended.
         (TypeClass::Float, Type::Float(FloatKind::Float | FloatKind::Double | FloatKind::X86Fp80)) => Ok(FLOAT),
@@ -797,6 +801,11 @@ pub(super) fn size_of(
         (TypeClass::Float, Type::Float(FloatKind::Float)) => Ok(4),
         (TypeClass::Float, Type::Float(FloatKind::Double)) => Ok(8),
         (TypeClass::Float, Type::Float(FloatKind::X86Fp80)) => Ok(10),
+        // An aggregate of scalars answered in registers is as big as it is in
+        // memory.
+        (_, Type::Struct { .. }) => {
+            u32::try_from(layout.store_size(&module.context.types, ty)).map_err(|_| Unselected("a struct".into()))
+        }
         _ => width_of(module, layout, ty),
     }
 }
@@ -818,7 +827,13 @@ fn dword_indexed(
 }
 
 pub fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
-    Err(Unselected(what.into()))
+    let what = what.into();
+    // `LLRM_REFUSE_BACKTRACE=1`: where a refusal is made, as a panic carries
+    // it.
+    if llrm_support::env_flag!("LLRM_REFUSE_BACKTRACE") {
+        panic!("refused: {what}");
+    }
+    Err(Unselected(what))
 }
 
 /// Where a pointer points, when it need not be a register: a frame slot
@@ -930,6 +945,7 @@ pub fn selected_with<'c>(
         }
     };
     let mut selector = Selector {
+        pc_relative: arch.object().pc_relative,
         module,
         function,
         arch,
@@ -1479,6 +1495,9 @@ pub struct Selector<'m, 'c, 'p> {
     in_cells: llrm_mir::dense::IdSet<ValueId>,
     /// The register file of `arch`.
     regs: Regs,
+    /// Whether `arch` reaches a symbol from the instruction pointer (its object
+    /// description, read once).
+    pc_relative: bool,
     /// What the functions that take part leave different.
     callee_facts: &'c CalleeFacts,
     layout: DataLayout,
@@ -1621,6 +1640,12 @@ pub struct Selector<'m, 'c, 'p> {
 }
 
 impl Selector<'_, '_, '_> {
+    /// Whether a symbol is reached from the instruction pointer, so that no
+    /// address adds a register to it.
+    fn pc_relative(&self) -> bool {
+        self.pc_relative
+    }
+
     /// The register file of the target being compiled for.
     pub(crate) fn regs(&self) -> Regs {
         self.regs
@@ -3044,10 +3069,18 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<Loc, Unselected> {
         let width = self.width(ty)?;
-        if let Some(value) = self.constant(operand, width) {
+        // A quadword immediate is a sign-extended dword: only `mov r64, imm64`
+        // takes more, so any other reader gets a register the constant
+        // is loaded into.
+        if let Some(value) = self.constant(operand, width).filter(|&value| width < 8 || i32::try_from(value).is_ok()) {
             return Ok(Loc::Imm(Imm { value, width, address: None }));
         }
-        if let Some(symbol) = self.symbol(self.through_ptrtoint(operand))? {
+        // A symbol is an immediate only where an instruction can hold one: from
+        // the instruction pointer it cannot, and its address is a
+        // register (`lea`).
+        if !self.pc_relative()
+            && let Some(symbol) = self.symbol(self.through_ptrtoint(operand))?
+        {
             return Ok(symbol);
         }
         Ok(Loc::Held(self.held(operand, ty, at, out)?))
@@ -3653,7 +3686,7 @@ impl Selector<'_, '_, '_> {
                 Pointer::Far { selector, base: None, index: None, offset, .. } => {
                     Some(Pointer::Far { selector, base: Some(first), index: Some(second), scale: 1, offset })
                 }
-                Pointer::Global { space, index, offset, base: None, plus: None, .. } => {
+                Pointer::Global { space, index, offset, base: None, plus: None, .. } if !self.pc_relative() => {
                     Some(Pointer::Global { space, index, offset, base: Some(first), scale: 1, plus: Some(second) })
                 }
                 _ => None,
@@ -3687,7 +3720,9 @@ impl Selector<'_, '_, '_> {
         }
         // A global's symbol is the displacement of the register holding the
         // index, [index+symbol], and the address as a value their sum.
-        if let Pointer::Global { space, index, offset: start, base: None, .. } = pointer {
+        if let Pointer::Global { space, index, offset: start, base: None, .. } = pointer
+            && !self.pc_relative()
+        {
             let indexed = Pointer::Global {
                 space,
                 index,
@@ -4165,7 +4200,7 @@ impl Selector<'_, '_, '_> {
             Pointer::Far { selector, base: None, index: None, offset, .. } => {
                 (Pointer::Far { selector, base: None, index: Some(wide), scale, offset }, None)
             }
-            Pointer::Global { space, index, offset, base: None, plus: None, .. } => {
+            Pointer::Global { space, index, offset, base: None, plus: None, .. } if !self.pc_relative() => {
                 (Pointer::Global { space, index, offset, base: Some(wide), scale, plus: None }, None)
             }
             // A register already added to the symbol: the scaled index beside
@@ -4417,7 +4452,7 @@ impl Selector<'_, '_, '_> {
         if width == 1 {
             return self.divide_byte(op, inst, out);
         }
-        if !matches!(width, 2 | 4) {
+        if !matches!(width, 2 | 4 | 8) {
             return refuse("a wide division");
         }
         let dividend = self.held(instruction.operands[0], ty, at, out)?;
@@ -4433,7 +4468,7 @@ impl Selector<'_, '_, '_> {
         // A signed division by a constant is a multiply by its reciprocal
         // where the target prices that cheaper, as the old route's
         // division::reciprocal selects.
-        if let Some(constant) = self.constant(instruction.operands[1], width) {
+        if let Some(constant) = self.constant(instruction.operands[1], width).filter(|_| width < 8) {
             let mut next = self.next;
             let mut fresh = || {
                 next += 1;
@@ -4468,7 +4503,11 @@ impl Selector<'_, '_, '_> {
             if signed {
                 semantics(
                     Operation::Extend,
-                    if width == 2 { "cwd" } else { "cdq" },
+                    match width {
+                        2 => "cwd",
+                        4 => "cdq",
+                        _ => "cqo",
+                    },
                     vec![Loc::Held(high)],
                     vec![Loc::Held(dividend)],
                 )
@@ -5240,7 +5279,7 @@ impl Selector<'_, '_, '_> {
             let [low_register, high_register] = convention.returns[..] else {
                 return refuse("a wide result the convention has no register pair for");
             };
-            one.requires = vec![(low, low_register.full_register32()), (high, high_register.full_register32())];
+            one.requires = vec![(low, self.regs().root(low_register)), (high, self.regs().root(high_register))];
             one.uses = vec![low.value, high.value];
         } else if let Some(&value) = operands.first().filter(|&&one| self.is_far(type_of(one))) {
             // One register holds both, offset low and selector high: the dword
@@ -5282,6 +5321,17 @@ impl Selector<'_, '_, '_> {
                 }
                 _ => return refuse("a far result the convention has no registers for"),
             }
+        } else if let Some(fields) = operands
+            .first()
+            .and_then(|&one| if let Operand::Value(value) = one { self.fields.get(&value).cloned() } else { None })
+        {
+            // An aggregate of scalars: each field in the register the
+            // convention names for it.
+            if fields.len() != convention.returns.len() {
+                return refuse("an aggregate result the convention has no registers for");
+            }
+            one.requires = fields.iter().copied().zip(convention.returns.iter().copied()).collect();
+            one.uses = fields.iter().map(|held| held.value).collect();
         } else if let Some(&value) = operands.first() {
             let held = self.held(value, type_of(value), at, out)?;
             one.requires = match convention.returns[..] {
@@ -5697,6 +5747,14 @@ impl Selector<'_, '_, '_> {
                     }
                 }
             }
+            // The vector registers a variadic call passes in, which the
+            // callee's prologue saves: none yet.
+            if let Some(name) = entry.variadic_vector_register.as_ref().filter(|_| variadic) {
+                let count = self.fresh_held(1);
+                let zero = Loc::Imm(Imm { value: 0, width: 1, address: None });
+                out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(count)], vec![zero])));
+                requires.push((count, regs.named(llrm_x86::calling::register(name), 1)));
+            }
             stack_only.retain(|&index| matches!(placement.places[index], llrm_target::calling::Place::Stack(_)));
             placed = Some((entry, placement));
         }
@@ -5844,7 +5902,7 @@ impl Selector<'_, '_, '_> {
         // above them, and the caller removes it with them. A callee that pops
         // its own arguments cannot be told to leave a pad.
         let align = self.callee_facts.stack_alignment(self.arch, &name);
-        let pad = if pops || align <= self.arch.stack_slot_bytes() || self.arch.object().bitness != 32 {
+        let pad = if pops || align <= self.arch.stack_slot_bytes() || self.arch.object().bitness < 32 {
             0
         } else {
             (align - pushed % align) % align
@@ -5913,7 +5971,7 @@ impl Selector<'_, '_, '_> {
                     .iter()
                     .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
                     .map(|name| llrm_x86::calling::register(name))
-                    .map(|register| if register.is_gpr() { register.full_register32() } else { register })
+                    .map(|register| if register.is_gpr() { self.regs().root(register) } else { register })
                     .chain(unnamed)
                     .collect::<BTreeSet<RegId>>(),
             )
@@ -5928,7 +5986,7 @@ impl Selector<'_, '_, '_> {
                 .iter()
                 .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
                 .map(|name| llrm_x86::calling::register(name))
-                .map(|register| if register.is_gpr() { register.full_register32() } else { register })
+                .map(|register| if register.is_gpr() { self.regs().root(register) } else { register })
                 .collect()
         });
         // Inline code changes what its block declares, which a function that
@@ -5995,14 +6053,14 @@ impl Selector<'_, '_, '_> {
             else {
                 return refuse(format!("@{name}'s wide result"));
             };
-            delivers = vec![(low, low_register.full_register32()), (high, high_register.full_register32())];
+            delivers = vec![(low, self.regs().root(low_register)), (high, self.regs().root(high_register))];
             self.wides.insert(value, (low, high));
         } else if let Some(value) = instruction.result.filter(|_| self.is_far(instruction.ty)) {
             match results(self.arch, self::entry(self.arch, convention, variadic), 4)[..] {
                 [low_register, high_register] => {
                     let (offset, selector) = (self.fresh_held(2), self.fresh_held(2));
                     delivers =
-                        vec![(offset, low_register.full_register32()), (selector, high_register.full_register32())];
+                        vec![(offset, self.regs().root(low_register)), (selector, self.regs().root(high_register))];
                     self.fars.insert(value, (Some(offset), selector));
                 }
                 // One register holds both: the offset low, the selector high,
@@ -6014,6 +6072,23 @@ impl Selector<'_, '_, '_> {
                 }
                 _ => return refuse(format!("@{name}'s far result")),
             }
+        } else if let (Some(value), Type::Struct { fields, .. }) =
+            (instruction.result, self.types().get(instruction.ty).clone())
+        {
+            // An aggregate of scalars the convention answers in registers, one
+            // for each field.
+            let size = self.size(instruction.ty)?;
+            let named = results(self.arch, self::entry(self.arch, convention, variadic), size);
+            if named.len() != fields.len() {
+                return refuse(format!("@{name} answers {} registers for {} fields", named.len(), fields.len()));
+            }
+            let mut held = Vec::new();
+            for (field, register) in fields.into_iter().zip(named) {
+                let one = self.fresh_held(self.width(field)?);
+                delivers.push((one, register));
+                held.push(one);
+            }
+            self.fields.insert(value, held);
         } else if let Some(value) = instruction.result {
             let width = self.width(instruction.ty)?;
             let held = Held { value: self.value(value), width };
@@ -6023,7 +6098,7 @@ impl Selector<'_, '_, '_> {
                 // neither upper word reaches the joined value.
                 [low_register, high_register] => {
                     let (low, high) = (self.fresh_held(4), self.fresh_held(4));
-                    delivers = vec![(low, low_register.full_register32()), (high, high_register.full_register32())];
+                    delivers = vec![(low, self.regs().root(low_register)), (high, self.regs().root(high_register))];
                     result = Some((held, low, high));
                 }
                 ref registers => delivers = vec![(held, registers[0])],
@@ -6047,7 +6122,7 @@ impl Selector<'_, '_, '_> {
             .callee_saved()
             .into_iter()
             .filter(|(full, pushed)| full == pushed)
-            .map(|(full, _)| crate::model::ir::root(full))
+            .map(|(full, _)| self.regs().root(full))
             .collect();
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {

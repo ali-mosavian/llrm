@@ -180,6 +180,61 @@ mod tests {
         assert_eq!((ran.status.code(), ran.stdout.as_slice()), (Some(0), &b"ello\n"[..]));
     }
 
+    /// `main` calls `puts` through the PLT (`Kind::Branch`, R_X86_64_PLT32)
+    /// with a `.rodata` string by `lea` (R_X86_64_PC32): the system compiler
+    /// driver links it against glibc as a PIE, and it prints the string.
+    #[test]
+    fn gcc_links_a_plt_call_and_a_pc_relative_string_against_glibc() {
+        if cfg!(not(all(target_os = "linux", target_arch = "x86_64")))
+            || Command::new("gcc").arg("--version").output().is_err()
+        {
+            eprintln!("skipped: needs x86-64 Linux and gcc");
+            return;
+        }
+        let text = [
+            vec![0x48, 0x83, 0xEC, 0x08],       // sub $8, %rsp
+            vec![0x48, 0x8D, 0x3D, 0, 0, 0, 0], // lea str(%rip), %rdi
+            vec![0xE8, 0, 0, 0, 0],             // call puts@plt
+            vec![0x31, 0xC0],                   // xor %eax, %eax
+            vec![0x48, 0x83, 0xC4, 0x08],       // add $8, %rsp
+            vec![0xC3],                         // ret
+        ]
+        .concat();
+        let relocs = vec![
+            Reloc { at: 7, kind: Kind::PcRel { width: 4, from: 4 }, target: Target::Symbol(1), addend: 0 },
+            Reloc { at: 12, kind: Kind::Branch { width: 4 }, target: Target::Symbol(2), addend: 0 },
+        ];
+        let object = Object {
+            name: "puts.s".into(),
+            arch: Arch::X8664,
+            sections: vec![
+                section(".text", Role::Text, text, relocs),
+                section(".rodata", Role::ROData, b"glibc ok\0".to_vec(), vec![]),
+            ],
+            symbols: vec![
+                symbol("main", Binding::Public, 0, 0),
+                symbol("str", Binding::Local, 1, 0),
+                Symbol {
+                    name: "puts".into(),
+                    binding: Binding::Public,
+                    definition: Definition::Undefined,
+                    size: 0,
+                    group: None,
+                },
+            ],
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            debug: None,
+        };
+        let scratch = tempfile::tempdir().unwrap();
+        let (file, program) = (scratch.path().join("puts.o"), scratch.path().join("puts"));
+        std::fs::write(&file, write(&object).unwrap()).unwrap();
+        let linked = Command::new("gcc").arg(&file).arg("-o").arg(&program).output().unwrap();
+        assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+        let ran = Command::new(&program).output().unwrap();
+        assert_eq!((ran.status.code(), ran.stdout.as_slice()), (Some(0), &b"glibc ok\n"[..]));
+    }
+
     /// An OMF-only reference is refused whatever the machine.
     #[test]
     fn a_segment_selector_is_refused() {
