@@ -144,3 +144,15 @@ fn a_returned_local_keeps_its_stores() {
         "{after}"
     );
 }
+
+/// A store to a local whose address escaped, and then `lifetime.end`: nothing
+/// reads it again and the end sweep spares it (it is visible to the callee's
+/// holder), but the terminator kills it (`isMemTerminator`).
+#[test]
+fn a_store_before_lifetime_end_goes() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @keep(ptr)\ndeclare void @llvm.lifetime.end.p0(i64, ptr)\n\ndefine void @f(i32 %x) addrspace(1) {{\nb0:\n  %a = alloca i32\n  call void @keep(ptr %a)\n  store i32 %x, ptr %a\n  call void @llvm.lifetime.end.p0(i64 4, ptr %a)\n  ret void\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(!after.contains("store i32 %x"), "{after}");
+}
