@@ -767,7 +767,7 @@ b3:
 }
 "#;
     let out = piped(TEXT);
-    assert!(out.contains("br i1 %0, label %b2,") && !out.contains("sext"), "{out}");
+    assert!(out.contains("i1 %0,") && out.matches("icmp").count() == 1 && !out.contains("sext"), "{out}");
     assert_eq!(out.matches("mul").count() + out.matches("shl").count(), 2, "{out}");
     assert!(out.contains("add i16") && out.contains(", 3"), "{out}");
 }
