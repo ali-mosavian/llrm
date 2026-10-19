@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/capturecheck.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/capturecheck.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/capturecheck.rs sha256:76a9059887c5dff12d56802a430c59a92258f37b4339d266161f2d1341db9a71 -->
+<!-- src: crates/opt/llrm-analysis/src/capturecheck.rs sha256:f2c9e07b8cbe0ea1d6f25f7d18ba32b470bd812033750219f92a1139c42f4514 -->
 
 # capturecheck
 
@@ -22,4 +22,4 @@ store ptr %p, ptr @g   ; captured
 ```
 
 ## Provides
-`may_be_captured` and the check behind `LLRM_CHECK_CAPTURES`.
+The check behind `LLRM_CHECK_CAPTURES`.

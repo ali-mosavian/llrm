@@ -17,7 +17,7 @@
 //! ```
 //!
 //! # Provides
-//! [`may_be_captured`] and the check behind `LLRM_CHECK_CAPTURES`.
+//! The check behind `LLRM_CHECK_CAPTURES`.
 
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{InstId, ValueId};
@@ -340,18 +340,6 @@ fn captured_by(
 /// `capture-tracking-max-uses-to-explore`'s default (150): past it a pointer is
 /// taken as captured.
 pub const MAX_USES_TO_EXPLORE: usize = 150;
-
-/// Whether the address `root` may be captured, as LLVM's `PointerMayBeCaptured`
-/// with stores counting (`isNonEscapingLocalObject`): a gep, cast, phi or
-/// select of it is followed; stored anywhere, returned, turned into an integer,
-/// or passed to a call whose parameter is not `nocapture` it is captured.
-pub(crate) fn may_be_captured(
-    unit: &Unit,
-    root: ValueId,
-) -> bool {
-    let mut held = Vec::new();
-    captured_by(unit, root, &mut held, None, false, true, MAX_USES_TO_EXPLORE).is_some() || !held.is_empty()
-}
 
 /// Panics on a frame object some use captures that `facts.escaped` lacks.
 pub fn check(
