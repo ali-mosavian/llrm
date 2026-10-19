@@ -93,6 +93,8 @@ fn an_exact_shift_times_a_power_of_two_plus_one_is_an_add() {
 
 /// `(zext X) * (-1 << C)` is `(zext (-X)) << C` when the shift clears the
 /// extended bits (`opt` agrees, and adds `nuw`).
+/// Unverified against `opt` where it differs: opt also puts `nuw` on the `shl`
+/// (visitShl's setShiftFlags runs after this visitor).
 #[test]
 fn an_extend_times_a_negated_power_of_two_is_a_negation_and_a_shift() {
     check(
@@ -226,6 +228,9 @@ fn an_exact_division_times_a_divisor_multiple_is_one_division() {
 
 /// `(X / Y) * Y` is `X - (X % Y)` on a frozen X; `(X / Y) * -Y` is `(X % Y) -
 /// X`; an exact division leaves X (`opt` agrees on the first and the last).
+/// Unverified against `opt` where it differs: opt also puts `nuw` on the `sub`
+/// (visitSub) and, for the signed form, reassociates `x - (x + y)` (visitSub,
+/// visitAdd): neither runs in this test.
 #[test]
 fn a_quotient_times_its_divisor_is_the_dividend_minus_the_remainder() {
     check(
@@ -250,6 +255,8 @@ fn a_quotient_times_its_divisor_is_the_dividend_minus_the_remainder() {
 
 /// `mul i1` and `(a & 1) * (b & 1)` are an `and` (`opt` agrees on the first;
 /// it folds the second one step further).
+/// Unverified against `opt` where it differs: for the second case opt merges
+/// the two masks (visitAnd), which is not run here.
 #[test]
 fn a_multiply_of_booleans_is_an_and() {
     check("i1", "i1 %a, i1 %b", "  %r = mul i1 %a, %b\n  ret i1 %r\n", "  %0 = and i1 %a, %b\n  ret i1 %0\n");
@@ -609,6 +616,8 @@ fn an_unsigned_division_by_a_large_divisor_is_a_compare() {
 
 /// `udiv`/`urem` of zero-extended operands, or of one and a constant that
 /// fits, is narrowed (`opt` agrees, and adds `nneg` to the extend).
+/// Unverified against `opt` where it differs: opt also puts `nneg` on the
+/// `zext` (visitZExt).
 #[test]
 fn an_unsigned_division_of_extends_is_narrowed() {
     check(
@@ -718,6 +727,8 @@ fn a_signed_division_known_to_be_exact_gets_exact() {
 /// A signed division of a non-negative dividend is unsigned: by a non-negative
 /// divisor, by a negated power of two (negated) or by `1 << Y` (`opt`
 /// agrees).
+/// Unverified against `opt` where it differs: opt narrows the mask through the
+/// shift (visitAnd, visitLShr) and puts `nsw` on the `sub`.
 #[test]
 fn a_signed_division_of_a_non_negative_dividend_is_unsigned() {
     check(
@@ -742,6 +753,8 @@ fn a_signed_division_of_a_non_negative_dividend_is_unsigned() {
 
 /// `-X / X` is `-X == INT_MIN ? 1 : -1` (`opt` folds the compare to `X ==
 /// INT_MIN`).
+/// Unverified against `opt` where it differs: opt also folds the compare of the
+/// negation to `icmp eq x, INT_MIN` (visitICmp).
 #[test]
 fn a_negation_divided_by_its_operand_is_a_select() {
     check(
@@ -754,6 +767,8 @@ fn a_negation_divided_by_its_operand_is_a_select() {
 
 /// `urem X, 1 << Y` is a mask; `urem 1, X` is `X != 1` (`opt` goes on to
 /// `shl -1`, and agrees on the second).
+/// Unverified against `opt` where it differs: opt rewrites `(1 << y) + -1` as
+/// `~(-1 << y)` (visitAdd).
 #[test]
 fn an_unsigned_remainder_by_a_power_of_two_is_a_mask() {
     check(
@@ -772,6 +787,8 @@ fn an_unsigned_remainder_by_a_power_of_two_is_a_mask() {
 
 /// `urem X, C` with `C` negative and `urem X, (sext i1)` are selects on a
 /// frozen X (`opt` agrees up to the `sub` spelling).
+/// Unverified against `opt` where it differs: opt writes `sub x, C` as `add x,
+/// -C` (visitSub).
 #[test]
 fn an_unsigned_remainder_by_a_large_divisor_is_a_select() {
     check(
@@ -790,6 +807,8 @@ fn an_unsigned_remainder_by_a_large_divisor_is_a_select() {
 
 /// `(X + 1) urem Y` with `X u< Y` is `(X + 1) == Y ? 0 : X + 1` (`opt`
 /// freezes `X` instead of the sum).
+/// Unverified against `opt` where it differs: opt also moves the `freeze` above
+/// the `and` and puts `nuw nsw` on the `add` (visitAdd, freeze).
 #[test]
 fn an_incremented_value_below_the_divisor_wraps_to_zero() {
     check(
