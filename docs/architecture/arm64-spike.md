@@ -25,6 +25,31 @@ TL;DR: POC, not for feat/parity until decided. Mach-O arm64 (Darwin AAPCS64) fir
 5. 11-07..11-20: TTI, isel, frame lowering from `AArch64ISelLowering`, `AArch64FrameLowering`.
 6. 11-21..11-30: milestone programs (return, loops, calls, globals, printf) run under qemu; on the Mac when a route exists.
 
+## x86 leaks (step 2 probe, first pass)
+
+1. `RegId` is a newtype over iced's `Register`; constants are generated from iced's names (`llrm-lir/build.rs`), `index()` is iced's number. AArch64 registers have no id. Fix: ids generated from the target's `registers.regs`, per target.
+2. `Flag` is iced's `RflagsBits`; LIR flag reads/writes are CF/PF/AF/ZF/SF/OF. AArch64 has NZCV. Fix: flag set per target.
+3. Selection tables are x86's: `x86.instr` (two-address `^0` ties, fixed cx shifts, rm/r shapes) and `family.isel`, `peephole.peep`. AArch64 needs its own tables; the format must carry three-address forms and condition-select.
+4. Encoding goes through iced (`llrm-x86/src/asm.rs`, block encoder). AArch64 needs its own fixed-width encoder, checked against `llvm-mc`.
+5. `Mem`/`Addr`/`Space` come from `llrm_omf::module` and carry segment/frame-BP notions (`FRAME`, `in_frame`). Flat targets use a subset; AArch64 addressing (base+imm, base+index<<s, pre/post-index, pairs) needs `AddressForm` entries.
+6. Backend files naming iced: 12 (`verify`, `registerinfo`, `peephole`, `valuetrack`, `target`, `cfi`, ...); `RegId::` appears in 78 files (1320 hits), `Space::` in 52.
+7. `Arch` and `objbuild.rs` know three x86 arches; `llrm-macho`, `llrm-elf64` write x86-64 relocations only.
+
+Cost reading: items 1, 2 and 6 touch the shared backend and are the real price; 3 and 4 are new target crates. Decision after the first pass: do item 1 as a generic-layer PR before any AArch64 code.
+
+## Mac (Mach-O arm64 runs)
+
+The Mac needs: a clone or worktree of `feat/arm64-spike`; rustup (toolchain per `rust-toolchain.toml`); Xcode command line tools (`clang`, `ld`). Then:
+
+```
+cargo build --release -p llrm-c --bin llrm-c
+target/release/llrm-c -O2 -c prog.c -o prog.o   # arm64 Mach-O, once step 5 lands
+clang -arch arm64 prog.o -o prog && ./prog       # system clang links; the compiler is llrm
+clang -arch arm64 -O2 prog.c -o ref && ./ref     # reference output
+```
+
+Until step 5 the Mac builds and runs the existing test suite only; the first useful Mac run is the writers check (step 3: `otool -rv`, `ld` accepts the object).
+
 ## Risk
 
 Step 2 decides cost: if LIR cannot carry 3-address and NZCV, the generic layer changes first.
