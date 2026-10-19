@@ -344,7 +344,11 @@ impl<'d> SplitEditor<'d> {
             Some(k) => Some(Arc::clone(cx.lis.instr(k))),
             None => cx.lis.block_insns(mbb).last().cloned(),
         };
-        let remade = cx.env.rematerialize(cx.lis, to, from, beside.as_deref());
+        // The one definition of a rematerializable parent is where its value
+        // starts.
+        let remade = (!parent_vni.is_phi_def() && !parent_vni.is_unused())
+            .then(|| cx.lis.instr(cx.lis.defining_instr(&parent_vni.def(), from)))
+            .and_then(|def| cx.env.rematerialize(def, to, from, beside.as_deref()));
         let copy = match remade {
             Some(made) => {
                 self.rematted.insert(parent_vni.id());
@@ -400,6 +404,20 @@ impl<'d> SplitEditor<'d> {
         (mbb, first.id())
     }
 
+    /// A pseudo-op that names the x87 value a call left in ST0.
+    fn takes_call_result(one: &crate::model::lir::Insn) -> bool {
+        use crate::model::ir::{Loc, Operation};
+        one.what
+            .as_ref()
+            .is_some_and(
+                |what| what.op == Operation::FloatLoad
+                    && what.name.as_deref().is_none_or(str::is_empty)
+                    && what.sources.is_empty()
+                    && !what.dests.is_empty()
+                    && what.dests.iter().all(|place| matches!(place, Loc::Held(held) if held.width == 10)),
+            )
+    }
+
     /// The instruction after `mi` in `mbb`, None at the end (`std::next`),
     /// after every member of a parallel copy that shares its index.
     fn next_instr(
@@ -441,7 +459,16 @@ impl<'d> SplitEditor<'d> {
             return idx;
         };
         let (mbb, mi) = Self::instr_at(cx, &idx);
-        let next = Self::next_instr(cx, mbb, mi);
+        let mut next = Self::next_instr(cx, mbb, mi);
+        // DEVIATE S-RFP1 (RFP-5): a copy after a call goes after the pseudo-ops
+        // that take its x87 results, which `X86FloatingPoint` finds right
+        // after the call (a `fld` between them left the result under it).
+        // Exit: the x87 results copied out of ST0 by the call's lowering.
+        if cx.lis.instr(mi).what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Call) {
+            while let Some(key) = next.filter(|key| Self::takes_call_result(cx.lis.instr(*key))) {
+                next = Self::next_instr(cx, mbb, key);
+            }
+        }
         self.def_from_parent(cx, self.open_idx, &parent_vni, idx, mbb, next).def()
     }
 
@@ -1425,6 +1452,7 @@ impl<'d> SplitEditor<'d> {
         cx: &mut SplitCx,
     ) {
         let mut dead: Vec<InstrKey> = Vec::new();
+        let mut marked: HashSet<InstrKey> = HashSet::default();
         for reg in self.regs() {
             for s in &cx.lis.get_interval(reg).segments {
                 let vni = s.valno.as_ref().expect("a segment has a value");
@@ -1447,7 +1475,7 @@ impl<'d> SplitEditor<'d> {
             }
             for op in operands {
                 let one = cx.lis.instr(op.instr);
-                if cx.env.is_pure_def(one) && one.defines == [reg] && !dead.contains(&op.instr) {
+                if cx.env.is_pure_def(one) && one.defines == [reg] && marked.insert(op.instr) {
                     dead.push(op.instr);
                 }
             }

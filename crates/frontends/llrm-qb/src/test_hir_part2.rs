@@ -352,7 +352,7 @@ fn test_qb_long_function_boundary_uses_the_legacy_dx_ax_pair() {
 
     let internal = listing(&parsed(&fixture("bare-function.bas")));
     let answer = between(&internal, "ANSWER proc far", "ANSWER endp");
-    assert!(answer.contains("shld edx, eax, 16"), "{internal}");
+    assert!(answer.contains("mov ax, 42\n    xor dx, dx\n"), "{internal}");
 }
 
 /// SYS_PARSE_ARGS exhausted string space when a native shell preceded B$ENRA.

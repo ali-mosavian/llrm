@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine.rs sha256:c254f0e3cdc65fdf1b304b7905ce99f16a339f1f505ef0b3783211e742b57b40 -->
+<!-- src: crates/opt/llrm-transforms/src/combine.rs sha256:9d4c315f1a47bd46b3480cb9406d034189a2cbf5e663828a3823895d26fafac2 -->
 
 # combine
 
@@ -21,12 +21,11 @@ the dead as it walks; the live-successor handling of a constant branch (the
 phi inputs of a dead edge become poison); the pop, delete-if-dead, visit,
 replace-all-uses, `pushUsersToWorkList`, erase sequence.
 
-DEVIATE, with the reason: code sinking (`tryToSinkInstruction`) is not made
-(no counterpart in llrm yet: its cost is a number the combine page owes);
-blocks no live edge reaches keep their instructions (`decide` removes
-them; LLVM's `removeAllNonTerminatorAndEHPadInstructions` is a CFG edit
-this pass does not make); a call is never trivially dead here (`dead` knows
-what a call does not write); `visit` runs only the families translated so
+DEVIATE, with the reason: blocks no live edge reaches keep their
+instructions (`decide` removes them; LLVM's
+`removeAllNonTerminatorAndEHPadInstructions` is a CFG edit this pass does
+not make); a call is never trivially dead here (`dead` knows what a call
+does not write); `visit` runs only the families translated so
 far (`visitors`: add, icmp, getelementptr, store): the other `visit*`
 rewrites are `algebraic`'s, to move in as they are translated.
 
