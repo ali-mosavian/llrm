@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/gvn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gvn.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:da2218defe08a8c10d126a9d6980c09c846f369b61d814b9d76be845d8951bcf -->
+<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:4058f5db704a24d14faeadea0c1d4651e4dd974cadab1d7125d3103f9e3a3c22 -->
 
 # gvn
 
@@ -29,17 +29,17 @@ load or a store. `Gvn` is the pass; `EqualCalls` is its call part alone.
    type (`vncoercion`); where several blocks serve it, a phi (`SsaUpdater`)
    merges them. A load with an unavailable block is left for step 4. Equal
    calls that touch no memory (`transform::equal_calls`) are one after it.
-3. Join PRE (`joined`). An expression every predecessor of a join already
-   computes becomes a phi of those values. With `pre`, a predecessor that
-   lacks it gets the computation inserted before its unconditional `br`, if
-   no loop is entered or left by the edge and the operands are available
-   there. Divisions (which may trap on a path that did not divide), loads
-   and floating expressions are never inserted here.
-4. Load PRE (`pass::loadpre`: `performLoadPRE`, `performLoopLoadPRE`). With
+3. Load PRE (`pass::loadpre`: `performLoadPRE`, `performLoopLoadPRE`). With
    `pre`, a load that is available on all but one of the ways into its block
    is loaded on that way too (an edge into the block with several ways out
    is split), and becomes a phi; a loop header's load of an address the loop
    does not change is loaded in the preheader and after the one clobber.
+4. Scalar PRE (`pass::scalarpre`: `performPRE`). With `pre`, an expression
+   that all but one predecessor of a join computes (none of them over a back
+   edge) is computed in that one too, before its terminator, and a phi takes
+   its place; an edge with several ways out is split first and the pass
+   tries again. Compares, GEPs, loads and instructions with effects are
+   left; so is any that could trap and may follow an exit.
 
 A volatile access is never numbered. Floats are numbered like integers; a
 value serves a read only of its own type, so a float store reaches a float
