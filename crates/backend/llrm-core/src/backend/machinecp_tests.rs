@@ -276,3 +276,27 @@ fn test_a_tied_producer_works_on_the_register_that_already_holds_its_value() {
     ));
     assert_eq!(lines(&got), ["mov AX,BX", "shl AX,AX,imm", "-"]);
 }
+
+/// `rep stosd` writes `di`: a read of `si` after it is not a read of `di`.
+fn stosd(at: i64) -> Arc<Insn> {
+    use crate::model::ir::Mem;
+    let what = Semantics {
+        name: Some("stosd".to_owned()),
+        dests: vec![Loc::Mem(Mem::new(None, 0)), rl(RegId::DI, 2), rl(RegId::CX, 2)],
+        sources: vec![rl(RegId::EAX, 4), rl(RegId::CX, 2), rl(RegId::DI, 2), rl(RegId::ES, 2)],
+        ..Semantics::new(Operation::Fill)
+    };
+    Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]))
+}
+
+/// `mov si, di; rep stosd; mov [si+4], 0` was `ss:[di+4]` after the stores of lru (bench/lru, -O2
+/// m16): `di` is what `si` held before the string store moved it by 28 bytes (the cache held
+/// 1.4 vs 6.0 for the clock).
+#[test]
+fn test_a_copy_is_not_forwarded_across_a_string_store_that_writes_its_source() {
+    let got = propagated(&body(
+        vec![mov(0, rl(RegId::SI, 2), rl(RegId::DI, 2)), stosd(1), add(2, rl(RegId::BX, 2), rl(RegId::SI, 2))],
+        &[RegId::BX],
+    ));
+    assert_eq!(lines(&got)[2], "add BX,BX,SI", "{:?}", lines(&got));
+}
