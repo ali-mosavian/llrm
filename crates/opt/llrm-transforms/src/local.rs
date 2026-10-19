@@ -487,6 +487,26 @@ fn may_throw(
     }
 }
 
+/// `isGuaranteedToTransferExecutionToSuccessor`
+/// ([ValueTracking.cpp:7951](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7951)):
+/// the instruction returns to the one after it and does not unwind. DEVIATE: a
+/// volatile access and a call that is not `willreturn`/`nounwind` are not; MIR
+/// has no other source.
+pub(crate) fn is_guaranteed_to_transfer_execution_to_successor(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    if matches!(
+        function.instruction(inst).opcode,
+        Opcode::Unreachable | Opcode::Resume
+    ) {
+        return false;
+    }
+    will_return(context, declarations, function, inst) && !may_throw(context, declarations, function, inst)
+}
+
 /// `Instruction::mayHaveSideEffects`
 /// ([Instruction.cpp:1358](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L1358)).
 pub(crate) fn may_have_side_effects(
