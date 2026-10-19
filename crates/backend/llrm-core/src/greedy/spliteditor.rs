@@ -344,7 +344,11 @@ impl<'d> SplitEditor<'d> {
             Some(k) => Some(Arc::clone(cx.lis.instr(k))),
             None => cx.lis.block_insns(mbb).last().cloned(),
         };
-        let remade = cx.env.rematerialize(cx.lis, to, from, beside.as_deref());
+        // The one definition of a rematerializable parent is where its value
+        // starts.
+        let remade = (!parent_vni.is_phi_def() && !parent_vni.is_unused())
+            .then(|| cx.lis.instr(cx.lis.defining_instr(&parent_vni.def(), from)))
+            .and_then(|def| cx.env.rematerialize(def, to, from, beside.as_deref()));
         let copy = match remade {
             Some(made) => {
                 self.rematted.insert(parent_vni.id());
@@ -1425,6 +1429,7 @@ impl<'d> SplitEditor<'d> {
         cx: &mut SplitCx,
     ) {
         let mut dead: Vec<InstrKey> = Vec::new();
+        let mut marked: HashSet<InstrKey> = HashSet::default();
         for reg in self.regs() {
             for s in &cx.lis.get_interval(reg).segments {
                 let vni = s.valno.as_ref().expect("a segment has a value");
@@ -1447,7 +1452,7 @@ impl<'d> SplitEditor<'d> {
             }
             for op in operands {
                 let one = cx.lis.instr(op.instr);
-                if cx.env.is_pure_def(one) && one.defines == [reg] && !dead.contains(&op.instr) {
+                if cx.env.is_pure_def(one) && one.defines == [reg] && marked.insert(op.instr) {
                     dead.push(op.instr);
                 }
             }

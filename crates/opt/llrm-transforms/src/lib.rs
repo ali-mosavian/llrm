@@ -94,9 +94,20 @@ pub mod cfg;
 pub mod combine;
 pub mod combine_addsub;
 pub mod combine_build;
+pub mod combine_casts;
+#[cfg(test)]
+mod combine_casts_tests;
 pub mod combine_compares;
+pub mod combine_gep;
+pub mod combine_gep_index;
+pub mod combine_gep_merge;
+pub mod combine_gep_phi;
 pub mod combine_loadstore;
+pub mod combine_muldivrem;
+#[cfg(test)]
+mod combine_muldivrem_tests;
 pub mod combine_phi;
+pub mod combine_select;
 pub mod combine_shared;
 pub mod combine_sink;
 #[cfg(test)]

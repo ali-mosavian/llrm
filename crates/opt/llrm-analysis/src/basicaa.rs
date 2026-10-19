@@ -439,19 +439,6 @@ impl<'a> BasicAA<'a> {
         !self.captures_before(object, None, true, true, aaqi).captures_nothing()
     }
 
-    /// Whether the address of `object` may be captured before `inst` or by it,
-    /// a return not counted. `getModRefInfo(Call, Loc)` leaves out `inst`
-    /// itself because it reads the call's arguments apart; a caller that does
-    /// not must count it.
-    pub(crate) fn is_captured_before(
-        &self,
-        object: Operand,
-        inst: llrm_mir::module::InstId,
-        aaqi: &mut AAQueryInfo,
-    ) -> bool {
-        !self.captures_before(object, Some(inst), true, false, aaqi).captures_nothing()
-    }
-
     /// `capturesNothing(getCapturesBefore(O, dyn_cast<Instruction>(Source),
     /// /*OrAt=*/true, /*ReturnCaptures=*/false))`.
     fn not_captured_before(
