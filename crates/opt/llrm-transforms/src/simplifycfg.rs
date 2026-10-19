@@ -364,7 +364,7 @@ fn branch_speculated(
 
 /// The back edges' targets, by one walk from the entry: LLVM's
 /// `FindFunctionBackedges`, whose targets are `LoopHeaders`.
-fn loop_headers(function: &Function) -> IdSet<BlockId> {
+pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
     let mut headers = IdSet::new();
     let Some(entry) = function.entry() else { return headers };
     // 0 unseen, 1 on the walk's path, 2 done.

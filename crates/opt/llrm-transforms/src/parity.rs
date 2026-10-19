@@ -112,6 +112,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("phiopt@1244", Cleanup, "simplifycfg", Old, "simplifycfg-port"),
     entry("sroa@646", Simplify, "sroa", Translated, "sroa.rs"),
     entry("earlycse@649", Simplify, "early-cse<memssa>", Translated, ""),
+    partial(
+        "jumpthreading@668",
+        Simplify,
+        "jump-threading",
+        "criterion: the S1 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; exit: stages S2-S4 (processBranchOnPHI/XOR, select unfolding, two-block threading, implied conditions, load PRE) and the old threading of decide@675 gone",
+    ),
     entry("cvp@669", Simplify, "correlated-propagation", Translated, ""),
     entry("decide@675", Simplify, "simplifycfg, jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("phiopt@675", Simplify, "simplifycfg", Old, "simplifycfg-port"),
@@ -145,6 +151,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("bdce@797", Simplify, "bdce", Translated, ""),
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@801", Simplify, "instcombine", Old, "instcombine-port"),
+    partial(
+        "jumpthreading@809",
+        Simplify,
+        "jump-threading",
+        "criterion: the S1 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; exit: stages S2-S4 and the old threading of decide@809 gone",
+    ),
     entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
     entry("adce@815", Simplify, "adce", Translated, ""),
@@ -279,10 +291,10 @@ impl Level {
     }
 }
 
-/// Registry slots the pin's `default<O1>` does not have (no GVN at -O1:
-/// `buildO1FunctionSimplificationPipeline`), so a Translated one is not
-/// required in a -O1 list.
-pub const ABSENT_AT_O1: &[&str] = &["gvn@787"];
+/// Registry slots the pin's `default<O1>` does not have (no GVN or
+/// JumpThreading at -O1: `buildO1FunctionSimplificationPipeline`), so a
+/// Translated one is not required in a -O1 list.
+pub const ABSENT_AT_O1: &[&str] = &["gvn@787", "jumpthreading@668", "jumpthreading@809"];
 
 /// Run counts LLVM does not match yet, stated and not checked:
 /// `loopsimplify`/`lcssa` run at three unconditional slots per body at every
