@@ -35,6 +35,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 import corpus  # noqa: E402
 import cpulimit  # noqa: E402
 import dosbatch  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import xfail  # noqa: E402
 llrmbin = dosbatch.llrmbin
 from dosbatch import BIN, ROOT, Job  # noqa: E402
 os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
@@ -335,15 +338,16 @@ def main() -> int:
             else:
                 got = masked(lines(result.text), program.mask)
                 problem = first_difference(lines(program.out.read_text()), got)
-        if problem and program.known:
+        marked = program.known or xfail.issue_of(f"run {program.name}")  # a `known:` header, or the XFAIL list (tools/xfail.toml)
+        if problem and marked:
             known += 1
-            print(f"KNOWN {program.name} ({program.known}): {problem}")
+            print(f"KNOWN {program.name} ({marked}): {problem}")
         elif problem:
             bad += 1
             print(f"FAIL  {program.name}: {problem}")
-        elif program.known:
+        elif marked:
             bad += 1
-            print(f"XPASS {program.name}: passes; remove its known mark ({program.known})")
+            print(f"XPASS {program.name}: passes; remove its known mark ({marked})")
         else:
             passed += 1
     print(f"{len(programs)} programs: {passed} pass, {known} known, {bad} fail")

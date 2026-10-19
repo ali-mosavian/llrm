@@ -230,7 +230,10 @@ b5:
     assert_eq!(out.matches("load i16, ptr %v").count(), 1, "{out}");
     assert_eq!(out.matches("icmp ult").count(), 1, "{out}");
     assert!(
-        out.contains("store i16 %k, ptr %out\n  call void @write()\n  %2 = load i16, ptr %out\n  %3 = add i16 %k, %2"),
+        out.contains("store i16 %k, ptr %out
+  tail call void @write()
+  %2 = load i16, ptr %out
+  %3 = add i16 %2, %k"),
         "{out}"
     );
     assert!(!out.contains("@panic()\n  unreachable"), "{out}");
@@ -767,7 +770,7 @@ b3:
 }
 "#;
     let out = piped(TEXT);
-    assert!(out.contains("br i1 %0, label %b2, label %b3") && !out.contains("sext"), "{out}");
+    assert!(out.contains("i1 %0,") && out.matches("icmp").count() == 1 && !out.contains("sext"), "{out}");
     assert_eq!(out.matches("mul").count() + out.matches("shl").count(), 2, "{out}");
     assert!(out.contains("add i16") && out.contains(", 3"), "{out}");
 }

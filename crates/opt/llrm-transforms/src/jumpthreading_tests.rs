@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
+use llrm_mir::interpret::Val;
 use llrm_mir::target::Neutral;
 
 use crate::jumpthreading::JumpThreading;
@@ -263,9 +264,74 @@ fn a_loop_whose_only_way_in_is_threaded_away_is_left_unreachable_as_opt_leaves_i
     assert!(after.contains("%c = add i32 %c, 1"), "{after}");
 }
 
-/// JumpThreading stage 1 ran away on datetime.c -Os (50 GB in 100 s) while on
-/// by default: unset, the pass is off.
+/// JumpThreading was off by default after the datetime.c runaway (#2736);
+/// the flip makes it on unless `LLRM_NO_JUMPTHREADING` is set.
 #[test]
-fn test_jumpthreading_is_off_unless_the_env_asks() {
-    assert_eq!(JumpThreading::from_env().enabled, std::env::var_os("LLRM_JUMPTHREADING").is_some());
+fn test_jumpthreading_is_on_unless_the_opt_out_is_set() {
+    assert_eq!(JumpThreading::from_env().enabled, std::env::var_os("LLRM_NO_JUMPTHREADING").is_none());
+}
+
+fn int(bits: u128) -> Val {
+    Val::Int { bits, width: 32 }
+}
+
+/// `f(arguments)` of fixture `name`, interpreted before and after the pass.
+fn value_before_and_after(
+    name: &str,
+    arguments: &[Val],
+) -> (Val, Val) {
+    let text = fixture(name);
+    let ran = |module: &llrm_mir::module::Module| {
+        llrm_mir::interpret::run(module, "f", arguments.to_vec(), 1_000_000).expect("the function runs")
+    };
+    let before = ran(&parsed(&text));
+    (before, ran(&parsed(&run(&text))))
+}
+
+/// c/logical_value.c -O2/-Os and c/compare_to_int64.c -O2 printed wrong
+/// values (#2886): `single_predecessor` was `getUniquePredecessor`, so a
+/// block reached twice from one conditional branch (`br %c, %t, %t`, as
+/// merging an empty block into its successor leaves) counted as having a
+/// single predecessor, `processImpliedCondition` took the branch's
+/// condition as true on that edge, and `f(0)` returned 1.
+#[test]
+fn a_branch_to_one_block_twice_does_not_imply_its_condition() {
+    for a in [0, 1] {
+        let (before, after) = value_before_and_after("branch_to_one_block_twice", &[int(a)]);
+        assert_eq!(after, before, "f({a})");
+    }
+}
+
+/// The same fault in c/logical_value.c's -O2 main: three phis on one
+/// condition. The sum printed was 30921, not 30192.
+#[test]
+fn three_phis_on_one_condition_keep_each_paths_value_after_threading() {
+    let (before, after) = value_before_and_after("logical_value_chain", &[]);
+    assert_eq!(after, before);
+}
+
+/// Positions `layout_step` looks at while a sweep removes every block it
+/// visits, over `n` blocks.
+fn removing_sweep_work(n: u32) -> usize {
+    use llrm_mir::module::BlockId;
+
+    let mut layout: Vec<BlockId> = (0..n).map(BlockId).collect();
+    let mut placed = vec![true; n as usize];
+    let (mut at, mut work) = (0, 0);
+    while let Some(&block) = layout.get(at) {
+        let after = layout.get(at + 1).copied();
+        layout.remove(at);
+        placed[block.0 as usize] = false;
+        at = crate::jumpthreading::layout_step(&layout, |one| placed[one.0 as usize], block, at, after, || work += 1);
+    }
+    work
+}
+
+/// The walk looked a removed block up by scanning the whole layout, so a
+/// sweep that removes every block it visits (empty forwarding blocks)
+/// cost n^2/2 positions: 4x the blocks was 16x the work.
+#[test]
+fn a_sweep_that_removes_every_block_looks_at_a_linear_number_of_positions() {
+    let (small, large) = (removing_sweep_work(500), removing_sweep_work(2000));
+    assert!(large * 2 <= small * 9, "500 blocks looked at {small} positions, 2000 looked at {large}");
 }

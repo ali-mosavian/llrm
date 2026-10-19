@@ -62,7 +62,7 @@ use crate::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
 use crate::datalayout::DataLayout;
 use crate::knownbits::KnownBits;
 use crate::module::{Function, GlobalValue, InstId, Operand, ValueDef};
-use crate::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use crate::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
 use crate::types::TypeId;
 use crate::valuetracking::{
     FunctionAnalyses, Query as ValueQuery, context as conditions, guarantee, known, nonzero, pattern, power2, range,
@@ -4275,6 +4275,10 @@ fn simplify_instruction_with_operands(
             let [lhs, rhs] = operands[..] else { return None };
             simplify_icmp(q, *pred, lhs, rhs, max_recurse)
         }
+        Opcode::FCmp(pred) => {
+            let [lhs, rhs] = operands[..] else { return None };
+            fp::simplify_fcmp(q, *pred, lhs, rhs)
+        }
         Opcode::Select => {
             let [cond, a, b] = operands[..] else { return None };
             simplify_select(q, cond, a, b, max_recurse)
@@ -4319,6 +4323,24 @@ pub fn simplify_binop_at(
 ) -> Option<Operand> {
     let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: true };
     simplify_binop_flags(&mut q, opcode, lhs, rhs, Flags::default(), RECURSION_LIMIT)
+}
+
+/// `simplifyBinOp(Opcode, LHS, RHS, FMF, SQ.getWithInstruction(&cxt))`:
+/// `simplify_binop_at` with the fast-math flags of the operation.
+pub fn simplify_binop_with_flags_at(
+    context: &Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+    analyses: Option<&FunctionAnalyses>,
+    function: &Function,
+    cxt: InstId,
+    opcode: BinaryOp,
+    flags: Flags,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: true };
+    simplify_binop_flags(&mut q, opcode, lhs, rhs, flags, RECURSION_LIMIT)
 }
 
 /// `simplifyInstructionWithOperands(&I, Ops, SQ.getWithInstruction(&cxt))`:

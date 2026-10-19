@@ -197,7 +197,7 @@ fn can_sink(
     }
     let first = insts[0];
     for &inst in &insts[1..] {
-        if !crate::hoistcommon::same_operation(function, first, inst)
+        if !crate::hoistcommon::same_operation(context, function, first, inst)
             || crate::hoistcommon::mmra(function, inst) != crate::hoistcommon::mmra(function, first)
         {
             return false;

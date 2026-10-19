@@ -160,3 +160,27 @@ fn test_hundreds_of_identical_jump_only_predecessors_are_one() {
     assert!(printed.contains("ret i16"), "{printed}");
     assert!(printed.matches("br label").count() <= 1, "{printed}");
 }
+
+/// `store i16` and `store i8` are not the same operation: the operand types
+/// differ (`isSameOperationAs`). Both stores were sunk on a phi of an `i16`
+/// and an `i8`, which sccp's solver met at -O2 with `decide@832` wired.
+#[test]
+fn test_stores_of_different_widths_are_not_sunk_together() {
+    const TEXT: &str = "define void @f(i16 %p, i8 %q, ptr %g, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 %p, ptr %g
+  br label %e
+
+b2:
+  store i8 %q, ptr %g
+  br label %e
+
+e:
+  ret void
+}
+";
+    check(TEXT, TEXT, &[]);
+}

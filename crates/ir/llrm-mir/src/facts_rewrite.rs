@@ -107,6 +107,17 @@ impl Fact {
         }
     }
 
+    /// Whether the fact states what makes an instruction undefined where it
+    /// should not run: what `dropUBImplyingAttrsAndMetadata` takes from a
+    /// call that is moved to where it may not run (`noundef`, `nonnull`,
+    /// `dereferenceable`, `align` and a range).
+    pub fn implies_ub(self) -> bool {
+        matches!(
+            self,
+            Fact::NoUndef | Fact::NonNull | Fact::Dereferenceable(_) | Fact::Align(_) | Fact::Range(_)
+        )
+    }
+
     /// Whether the fact still holds of an instruction run where it did not
     /// run. Every variant answers; see the module documentation.
     pub fn survives_speculation(self) -> bool {
@@ -115,6 +126,7 @@ impl Fact {
             | Fact::ReadOnly
             | Fact::ReadNone
             | Fact::NonNull
+            | Fact::NoUndef
             | Fact::NoCapture
             | Fact::NoRetain
             | Fact::Releases
@@ -318,6 +330,38 @@ mod tests {
             // and a sub's `nsw`/`nuw` where LLVM does, to give the
             // replacement the flags the operands prove.
             "combine_addsub.rs",
+            // InstructionCombining.cpp's `foldBinopWithRecurrence` merges the
+            // `nuw`/`nsw` of the three adds (`OverflowTracking`) so the new add
+            // has them only if all had them, and drops the rest.
+            "combine_phi.rs",
+            // InstructionCombining.cpp's `visitGetElementPtrInst` and
+            // `emitGEPOffset` read a GEP's `inbounds`/`nusw`/`nuw` to give the
+            // replacement GEPs and the offset arithmetic the flags the GEP had.
+            "combine_gep.rs",
+            "combine_gep_index.rs",
+            "combine_gep_merge.rs",
+            "combine_gep_phi.rs",
+            // InstCombineMulDivRem.cpp's `visitMul` and its helpers read the
+            // `nuw`/`nsw` of a multiply and of the add, sub and shift it looks
+            // through (`hasNoUnsignedWrap`, `hasNoSignedWrap`, `foldMulOp...`)
+            // to give the replacement the flags the operands prove, and drop
+            // the rest.
+            "combine_muldivrem.rs",
+            // InstCombineCasts.cpp's `visitTrunc`, `visitZExt` and `visitSExt`
+            // read a trunc's, a zext's and a sext's `nuw`/`nsw`/`nneg`
+            // (`hasNoUnsignedWrap`, `hasNoSignedWrap`, `hasNonNeg`) and give
+            // the replacement the flags the narrower or wider operation
+            // proves; `narrowBinOp` keeps an add's or sub's flags only where
+            // they still hold.
+            "combine_casts.rs",
+            // Reassociate.cpp's `OverflowTracking` (`mergeFlags`, `applyFlags`)
+            // merges the `nuw`/`nsw` of the nodes of a tree so the rewritten
+            // tree keeps them only if all had them; `ConvertShiftToMul` and
+            // `NegateValue` read a shift's and an add's, and clear or give
+            // them where LLVM does.
+            "reassociate_forms.rs",
+            "reassociate_negate.rs",
+            "reassociate_tree.rs",
             // MemCpyOptimizer.cpp's `CreateInBoundsPtrAdd` makes an inbounds
             // GEP; it reads no flag.
             "memcpyopt.rs",

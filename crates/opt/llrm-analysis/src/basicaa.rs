@@ -61,6 +61,34 @@ pub(crate) struct Decomposed {
     nuw: bool,
 }
 
+/// A load or store's place as `DecomposeGEPExpression` finds it: the object its
+/// pointer starts from, the constant offset in it (wrapped to the pointer's
+/// index width) and the bytes accessed. `indexed` says a variable index is
+/// added too, which the offset leaves out.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObjectCell {
+    pub object: Operand,
+    pub offset: i64,
+    pub size: u64,
+    pub indexed: bool,
+}
+
+/// The place `inst` accesses, if it is a load or store of a known size.
+pub fn object_cell(
+    unit: &Unit,
+    inst: llrm_mir::module::InstId,
+) -> Option<ObjectCell> {
+    let place = MemoryLocation::get(unit, inst)?;
+    let LocationSize::Precise(size) = place.size else { return None };
+    let found = BasicAA::new(unit).decomposed(place.ptr);
+    let bits = unit.layout.pointer(unit.space(place.ptr).unwrap_or(0)).index_bits;
+    let offset = match bits {
+        1..=127 => (found.offset << (128 - bits)) >> (128 - bits),
+        _ => found.offset,
+    };
+    Some(ObjectCell { object: found.base, offset: i64::try_from(offset).ok()?, size, indexed: !found.vars.is_empty() })
+}
+
 /// Bits of `BasicAA::class`.
 struct Class;
 
@@ -430,6 +458,15 @@ impl<'a> BasicAA<'a> {
             }
         };
         if return_captures { found.with_ret } else { found.without_ret }
+    }
+
+    /// Whether the address of `object` may be captured, a return included.
+    pub(crate) fn is_captured(
+        &self,
+        object: Operand,
+        aaqi: &mut AAQueryInfo,
+    ) -> bool {
+        !self.captures_before(object, true, aaqi).captures_nothing()
     }
 
     fn not_captured(
@@ -1317,5 +1354,48 @@ mod tests {
         };
         assert_eq!(call_on(&body("%a")), ModRefInfo::Ref);
         assert_eq!(call_on(&body("%q")), ModRefInfo::NoModRef);
+    }
+
+    /// On every load and store of the corpus that `MemRef` places at a constant
+    /// offset in an alloca, `object_cell` finds the same object, offset and
+    /// size: `slotstores` reads the second where it read the first.
+    #[test]
+    fn object_cell_agrees_with_memref_on_every_slot_access() {
+        use crate::memory::MemRef;
+        let (mut agreed, mut apart) = (0usize, Vec::new());
+        for (name, module) in crate::testing::corpus() {
+            let layout = layout(&module);
+            for (_, global, function) in module.functions().filter(|(_, _, f)| !f.is_declaration()) {
+                let unit = Unit::of(&module, &layout, function);
+                for (_, inst) in function.walk() {
+                    let Some(reference) = MemRef::of(&unit, inst) else { continue };
+                    let Some(Operand::Value(slot)) = reference.root else { continue };
+                    if !matches!(
+                        unit.defining(Operand::Value(slot)).map(|(_, one)| &one.opcode),
+                        Some(Opcode::Alloca { .. })
+                    ) || reference.base.is_some()
+                    {
+                        continue;
+                    }
+                    let want = (Operand::Value(slot), reference.disp, u64::from(reference.width));
+                    match object_cell(&unit, inst) {
+                        Some(cell) if !cell.indexed && (cell.object, cell.offset, cell.size) == want => agreed += 1,
+                        other => apart.push(format!(
+                            "{name}/@{} {inst:?}: {want:?} vs {other:?}",
+                            global.name.as_deref().unwrap_or("")
+                        )),
+                    }
+                }
+            }
+        }
+        // Premise: the corpus has slot accesses.
+        assert!(agreed > 0, "no slot access in the corpus");
+        assert!(
+            apart.is_empty(),
+            "{} of {} differ: {:#?}",
+            apart.len(),
+            agreed + apart.len(),
+            &apart[..apart.len().min(8)]
+        );
     }
 }
