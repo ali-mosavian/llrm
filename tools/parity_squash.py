@@ -450,6 +450,14 @@ def batch(prs: list, passes, land, refuse) -> None:
     batch(prs[middle:], passes, land, refuse)
 
 
+def clean_checkout(ref: str, cwd: Path = ROOT) -> None:
+    """`ref` checked out with nothing left from earlier batches: tracked changes reset and UNTRACKED files removed. A regenerated docs page left untracked made every later PR that adds
+    it fail its local merge ("would be overwritten"), which read as a conflict and left such PRs out for hours."""
+    git("reset", "-q", "--hard", cwd=cwd)
+    git("clean", "-fdq", cwd=cwd)
+    git("checkout", "-q", "--detach", ref, cwd=cwd)
+
+
 def fast_merge(numbers: list[str], merge_one) -> tuple[list[str], dict[str, str]]:
     """The PRs of a fast batch, in order: `merge_one(number)` merges one into the checkout and returns `""` or why it cannot join (a conflict with an earlier one, a deletion it
     does not name). A PR that cannot join is left out, with its reason, and never fails the others."""
@@ -480,7 +488,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
     def passes_fast(group: list[str]) -> bool:
         git("fetch", "-q", "origin", "feat/parity")
-        git("checkout", "-q", "--detach", BASE)
+        clean_checkout(BASE)
 
         def merge_one(number: str) -> str:
             before = git("rev-parse", "HEAD").strip()
