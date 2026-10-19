@@ -162,8 +162,9 @@ impl SsaUpdaterBulk {
             for &block in &idf_blocks {
                 let phi = function.block(block).first().expect("the phi just made");
                 let mut operands = Vec::new();
-                // `for (BasicBlock *Pred : predecessors(BB))`: one input per edge, so a
-                // switch with two cases to this block gives it two.
+                // `for (BasicBlock *Pred : predecessors(BB))`: one input per
+                // edge, so a switch with two cases to this
+                // block gives it two.
                 for pred in inverse_children(function, block) {
                     let value = compute_value(context, function, dt, &mut infos, rewrite.ty, pred, true);
                     operands.extend([value, Operand::Block(pred)]);
@@ -340,10 +341,11 @@ b4:
         assert_eq!(function.instruction(phi).operands.len(), 4, "an input for each of the two predecessors");
     }
 
-    /// `rewrite_all_uses` gave a phi one input for each predecessor block, where
-    /// the pin gives one for each edge: a switch with two cases to the block
-    /// left the phi an input short (DFAJumpThreading on x_switch -O2 m16 then
-    /// grew a 3 GB allocation in SCEV/liveness over the malformed phi).
+    /// `rewrite_all_uses` gave a phi one input for each predecessor block,
+    /// where the pin gives one for each edge: a switch with two cases to
+    /// the block left the phi an input short (DFAJumpThreading on x_switch
+    /// -O2 m16 then grew a 3 GB allocation in SCEV/liveness over the
+    /// malformed phi).
     #[test]
     fn test_a_phi_has_an_input_for_each_edge_of_a_switch_into_its_block() {
         let mut module = parsed(
