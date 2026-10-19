@@ -113,6 +113,33 @@ def ratchets(root: Path = ROOT, tiers: Path = TIERS, run=None) -> str:
     return ""
 
 
+def ratchet_name(command: list[str]) -> str:
+    """The name a ratchet is listed by in a failure set: the test (`--test NAME`, or the lib filter after `--`), else the filter word."""
+    if "--test" in command:
+        return command[command.index("--test") + 1]
+    return command[-1]
+
+
+def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[str, str]:
+    """name -> why, for EVERY ratchet that fails on the tree in `root` (the subset rule compares whole failure sets, not the first failure)."""
+    run = run or (lambda command: subprocess.run(slotted(command), cwd=root, capture_output=True, text=True))
+    failed = {}
+    for command in ratchet_commands(tiers):
+        done = run(command)
+        if done.returncode:
+            lines = [line for line in (done.stdout + done.stderr).splitlines() if "panicked" in line or "FAILED" in line or "error" in line]
+            failed[f"ratchet:{ratchet_name(command)}"] = " / ".join(lines[:2])[:240] or "failed"
+    return failed
+
+
+def failing_names(line: str) -> list[str]:
+    """The failed step names of a `PARITY SMOKE FAIL name: detail; name: detail | ...` line."""
+    if not line.startswith("PARITY SMOKE FAIL "):
+        return []
+    head = line[len("PARITY SMOKE FAIL "):].split(" | ")[0]
+    return [part.split(":")[0].strip() for part in head.split("; ") if part.strip()]
+
+
 def selection() -> dict:
     return tomllib.loads(SELECTION.read_text()) if SELECTION.exists() else {}
 
@@ -321,6 +348,16 @@ def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET, known_red: f
     return True, f"PARITY SMOKE PASS {line}"
 
 
+def run_twice_over_budget(run) -> tuple[bool, str]:
+    """`run()` -> (passed, line); when the ONLY failure is the CPU budget it runs once more and takes that verdict: on a host at load 20-60 the CPU seconds of the same
+    steps stretch (cache and hyper-thread contention), and a tools-only PR failed 'over the budget' with no unit test in the set."""
+    ok, line = run()
+    if not ok and failing_names(line) == ["over the budget"]:
+        ok, line = run()
+        line = line.replace("PARITY SMOKE", "PARITY SMOKE (second run, the first was over the budget)", 1)
+    return ok, line
+
+
 def rank(package: str) -> None:
     """Measure `package`'s unit tests once and write the cheapest into parity_smoke.toml (not per merge)."""
     env = {**os.environ, "RUSTC_BOOTSTRAP": "1"}
@@ -352,16 +389,23 @@ def main() -> int:
         for package in args.rank:
             rank(package)
         return 0
+    failing: list[str] = []
+    pre: list[str] = []
     if broken := workspace_check():
-        print(f"PARITY SMOKE FAIL the workspace does not compile: {broken}")
-        return 1
-    if broken := ratchets():
-        print(f"PARITY SMOKE FAIL a ratchet fails on the merged tree: {broken}")
-        return 1
+        failing.append("workspace")
+        pre.append(f"workspace: {broken}")
+    for name, why in ratchet_failures().items():
+        failing.append(name)
+        pre.append(f"{name}: {why}")
     packages = touched(args.base)
     for package in packages:  # built first, untimed
         subprocess.run(slotted(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"]), cwd=ROOT, capture_output=True)
-    ok, line = run_steps(plan(packages), args.bin or llrmbin.bin_dir(), known_red=frozenset(args.skip))
+    ok, line = run_twice_over_budget(lambda: run_steps(plan(packages), args.bin or llrmbin.bin_dir(), known_red=frozenset(args.skip)))
+    failing += failing_names(line.replace("PARITY SMOKE (second run, the first was over the budget)", "PARITY SMOKE"))
+    print(f"FAILING: {','.join(failing)}")
+    if pre:
+        print(f"PARITY SMOKE FAIL {'; '.join(pre)} | {line}")
+        return 1
     print(line)
     return 0 if ok else 1
 
