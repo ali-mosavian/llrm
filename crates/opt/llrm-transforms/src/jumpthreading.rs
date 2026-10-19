@@ -70,14 +70,16 @@
 //!   call-site frequency per clone level is 9920, 36448, 337548, 3254456,
 //!   31512005 off (about x10 each) and 12124, 13976, 6377, 481, 8 on; the test
 //!   `benefit * 1000 >= EVAL_THRESHOLD (500) * size` fails at the sixth clone
-//!   (benefit 2, 12 needed), so `.6`..`.8` are never made. Unlocated: why
-//!   `profit::_frequencies` loses the x10 loop-trip compounding on the threaded
-//!   CFG. Owners: cycles-queue (ipa-cp), the owner of `profit::_frequencies`.
-//!   Exit: that fixed, or W2's `inlinecost::decide` lands.
+//!   (benefit 2, 12 needed), so `.6`..`.8` are never made. Our block
+//!   frequencies equal `opt`'s `print<block-freq>` on the same IR, on and off
+//!   (stage 11 and the stage-12 clones): the estimator is not at fault, the
+//!   threaded bodies make the call sites cold. Owner: cycles-queue (ipa-cp
+//!   clone verdict). Exit: W2's `inlinecost::decide` lands.
 //! - J14. `hanoi` -O2 runs 109 -> 114 clocks. Our output equals `opt`. With it
 //!   on, `_hanoi` does `push ecx; mov ecx, eax` before the `n == 0` test, so
-//!   the early return pays frame setup (shrink-wrap and register allocation).
-//!   Exit: a shrink-wrap row (splitkit-port, lir-cleanup-port).
+//!   the early return pays frame setup (shrink-wrap) and the constant copy
+//!   sits before the test (pre-RA MachineSink). Exit: the ShrinkWrap port
+//!   (backend-two) and the MachineSink translation (lir-cleanup-port).
 //!
 //! Rows pair, one binary, on against off (feat/parity 846c0c0c6): clocks
 //! geomean llrm/min(gcc,clang) O2 .9149 -> .9161 (+0.1%), O3 .8851 -> .8889
