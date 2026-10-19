@@ -52,3 +52,35 @@ fn a_quadword_add_takes_a_sign_extended_dword() {
     assert_eq!(bytes(&add(16)), [0x48, 0x83, 0xc0, 0x10]);
     assert_eq!(bytes(&add(0x1000)), [0x48, 0x05, 0x00, 0x10, 0, 0]);
 }
+
+fn frame(
+    disp: i64,
+    width: u32,
+) -> Loc {
+    Loc::Mem(ir::Mem {
+        through: RegId::RBP,
+        disp_width: 2,
+        ..ir::Mem::new(Some(llrm_lir::Addr::new(Space::Frame, disp)), width)
+    })
+}
+
+#[test]
+fn a_frame_cell_is_addressed_through_rbp() {
+    // mov %rax,-0x8(%rbp); mov %rax,-0x90(%rbp); mov -0x4(%rbp),%ecx
+    let store = |disp| sem(Operation::Move, Some("mov"), vec![frame(disp, 8)], vec![rg(RegId::RAX, 8)], None, false);
+    assert_eq!(bytes(&store(-8)), [0x48, 0x89, 0x45, 0xf8]);
+    assert_eq!(bytes(&store(-0x90)), [0x48, 0x89, 0x85, 0x70, 0xff, 0xff, 0xff]);
+    let load = sem(Operation::Move, Some("mov"), vec![rg(RegId::ECX, 4)], vec![frame(-4, 4)], None, false);
+    assert_eq!(bytes(&load), [0x8b, 0x4d, 0xfc]);
+}
+
+#[test]
+fn a_dword_widens_to_a_quadword() {
+    let extend = |name, into, from| {
+        sem(Operation::Extend, Some(name), vec![rg(into, 8)], vec![rg(from, 4)], None, false)
+    };
+    // movslq %ecx,%rax; mov %ecx,%eax (zero extension); movslq %r9d,%r10
+    assert_eq!(bytes(&extend("movsx", RegId::RAX, RegId::ECX)), [0x48, 0x63, 0xc1]);
+    assert_eq!(bytes(&extend("movzx", RegId::RAX, RegId::ECX)), [0x8b, 0xc1]);
+    assert_eq!(bytes(&extend("movsx", RegId::R10, RegId::R9D)), [0x4d, 0x63, 0xd1]);
+}

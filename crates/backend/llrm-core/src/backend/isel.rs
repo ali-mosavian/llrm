@@ -693,6 +693,8 @@ pub(super) fn width_of(
         (TypeClass::I1 | TypeClass::I8, _) => Ok(1),
         (TypeClass::I16, _) => Ok(2),
         (TypeClass::I32, _) => Ok(4),
+        // A quadword is a value where the datalayout has a legal i64; otherwise it is two halves (`is_wide`).
+        (TypeClass::I64, _) if layout.largest_legal_integer() >= 64 => Ok(8),
         (TypeClass::Ptr, Type::Pointer(space)) => Ok(layout.pointer(*space).bits / 8),
         // An x87 register holds any float, extended.
         (TypeClass::Float, Type::Float(FloatKind::Float | FloatKind::Double | FloatKind::X86Fp80)) => Ok(FLOAT),
@@ -1622,6 +1624,11 @@ pub struct Selector<'m, 'c, 'p> {
 }
 
 impl Selector<'_, '_, '_> {
+    /// Whether a symbol is reached from the instruction pointer, so that no address adds a register to it.
+    fn pc_relative(&self) -> bool {
+        self.arch.object().pc_relative
+    }
+
     /// The register file of the target being compiled for.
     pub(crate) fn regs(&self) -> Regs {
         self.regs
@@ -3654,7 +3661,7 @@ impl Selector<'_, '_, '_> {
                 Pointer::Far { selector, base: None, index: None, offset, .. } => {
                     Some(Pointer::Far { selector, base: Some(first), index: Some(second), scale: 1, offset })
                 }
-                Pointer::Global { space, index, offset, base: None, plus: None, .. } => {
+                Pointer::Global { space, index, offset, base: None, plus: None, .. } if !self.pc_relative() => {
                     Some(Pointer::Global { space, index, offset, base: Some(first), scale: 1, plus: Some(second) })
                 }
                 _ => None,
@@ -3688,7 +3695,9 @@ impl Selector<'_, '_, '_> {
         }
         // A global's symbol is the displacement of the register holding the
         // index, [index+symbol], and the address as a value their sum.
-        if let Pointer::Global { space, index, offset: start, base: None, .. } = pointer {
+        if let Pointer::Global { space, index, offset: start, base: None, .. } = pointer
+            && !self.pc_relative()
+        {
             let indexed = Pointer::Global {
                 space,
                 index,
@@ -4166,7 +4175,7 @@ impl Selector<'_, '_, '_> {
             Pointer::Far { selector, base: None, index: None, offset, .. } => {
                 (Pointer::Far { selector, base: None, index: Some(wide), scale, offset }, None)
             }
-            Pointer::Global { space, index, offset, base: None, plus: None, .. } => {
+            Pointer::Global { space, index, offset, base: None, plus: None, .. } if !self.pc_relative() => {
                 (Pointer::Global { space, index, offset, base: Some(wide), scale, plus: None }, None)
             }
             // A register already added to the symbol: the scaled index beside
@@ -6048,7 +6057,7 @@ impl Selector<'_, '_, '_> {
             .callee_saved()
             .into_iter()
             .filter(|(full, pushed)| full == pushed)
-            .map(|(full, _)| crate::model::ir::root(full))
+            .map(|(full, _)| self.regs().root(full))
             .collect();
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {

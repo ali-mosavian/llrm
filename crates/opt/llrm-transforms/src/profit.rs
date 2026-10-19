@@ -585,10 +585,21 @@ pub fn _products_with_odds_in(
         let trip: i64 = innermost.latches.iter().map(|latch| odds.get(latch).copied().unwrap_or(UNIT)).sum();
         let here = odds.get(at).copied().unwrap_or(UNIT);
         if here < trip {
-            *count = (*count * here / trip).max(1);
+            *count = share_of(*count, here, trip);
         }
     }
     Some((weight, taken))
+}
+
+/// `count` times the share `here / trip`, at least 1: the product is taken wide, since a function with nested
+/// loops weighs a block in the tens of trillions of `UNIT`s and `count * here` passed `i64`'s end (a recursive
+/// function the pipeline made loops of panicked `llrm-llc` in debug builds and wrapped in release ones).
+fn share_of(
+    count: i64,
+    here: i64,
+    trip: i64,
+) -> i64 {
+    i64::try_from(i128::from(count) * i128::from(here) / i128::from(trip)).unwrap_or(i64::MAX).max(1)
 }
 
 /// Profile-free expected work at `frequency`, a block's executions per entry
@@ -740,3 +751,17 @@ thread_local! {
 #[cfg(test)]
 #[path = "profit_tests.rs"]
 mod tests;
+
+
+#[cfg(test)]
+mod share_tests {
+    use super::share_of;
+
+    /// The weights of nine nested loops (count 1e8, odds 2e14) once overflowed `count * here`.
+    #[test]
+    fn a_block_weight_of_nested_loops_does_not_overflow() {
+        assert_eq!(share_of(100_000_000, 211_516_977_285_368, 218_340_105_584_896), 96_875_000);
+        assert_eq!(share_of(3, 1, 4), 1);
+        assert_eq!(share_of(i64::MAX, 3, 4), i64::MAX / 4 * 3 + 2);
+    }
+}

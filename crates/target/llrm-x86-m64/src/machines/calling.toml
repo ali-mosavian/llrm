@@ -32,7 +32,8 @@ first_argument_offset = 16
 frame = "rbp"
 frame_optional = true
 stack = "rsp"
-preserved = ["rbx", "rbp", "r12", "r13", "r14", "r15"]
+# Each as (the root its family is rooted at, the register a prologue pushes).
+preserved = [["ebx", "rbx"], ["ebp", "rbp"], ["r12d", "r12"], ["r13d", "r13"], ["r14d", "r14"], ["r15d", "r15"]]
 clobbered = ["rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "flags"]
 entry_state = ["df_clear"]
 aggregate = "hidden-pointer"

@@ -490,8 +490,9 @@ pub fn machined(
 /// convention keeps that its body writes or a call in it disturbs.
 fn saves(made: &Machined) -> usize {
     let mut used = masm::_roots(&made.body);
+    let regs = made.body.regs();
     for one in made.body.insns() {
-        used.extend(one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(crate::model::ir::root)));
+        used.extend(one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(|register| regs.root(register))));
     }
     made.registers.saved.iter().filter(|(whole, _)| used.contains(whole)).count()
 }

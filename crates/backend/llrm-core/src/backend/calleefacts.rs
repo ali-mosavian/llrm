@@ -198,18 +198,19 @@ impl CalleeFacts {
         frame: &llrm_target::FrameRegisters,
     ) {
         if self.takes_part(name) {
+            let regs = body.regs();
             let mut whole = written_by(body);
             // The frame's own registers are its prologue's and epilogue's.
             for own in [frame.pointer, frame.stack] {
-                whole.remove(&ir::root(own));
+                whole.remove(&regs.root(own));
             }
             let mut high = BTreeSet::new();
             let mut saved_whole = BTreeSet::new();
             for (kept, pushed) in &frame.saved {
                 if kept == pushed {
-                    saved_whole.insert(ir::root(*kept));
+                    saved_whole.insert(regs.root(*kept));
                 }
-                if whole.remove(&ir::root(*kept)) && kept != pushed {
+                if whole.remove(&regs.root(*kept)) && kept != pushed {
                     high.insert(*kept);
                 }
             }
@@ -217,7 +218,7 @@ impl CalleeFacts {
             // too, unless the whole register is saved here.
             for one in body.insns() {
                 for lost in &one.clobbers_high {
-                    let root = ir::root(*lost);
+                    let root = regs.root(*lost);
                     if !whole.contains(&root) && !saved_whole.contains(&root) {
                         high.insert(root);
                     }
@@ -233,12 +234,14 @@ impl CalleeFacts {
 /// EAX): its destinations, the registers it pins values in and takes results
 /// from, and what its calls disturb.
 pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
+    let regs = body.regs();
+    let root = |register: RegId| regs.root(register);
     let mut found = BTreeSet::new();
     for one in body.insns() {
         if let Some(what) = &one.what {
             for place in &what.dests {
                 if let Loc::Reg(ir::Reg { register, .. }) = place {
-                    found.insert(ir::root(*register));
+                    found.insert(root(*register));
                 }
             }
         }
@@ -247,10 +250,10 @@ pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
         // unseen routine is a bound for the caller's allocator, not a thing
         // that routine does.
         match &one.call {
-            Some(call) => found.extend(call.disturbs.iter().copied().map(ir::root)),
-            None => found.extend(one.clobbers.iter().copied().map(ir::root)),
+            Some(call) => found.extend(call.disturbs.iter().copied().map(root)),
+            None => found.extend(one.clobbers.iter().copied().map(root)),
         }
-        found.extend(one.requires.iter().chain(&one.delivers).map(|(_, register)| ir::root(*register)));
+        found.extend(one.requires.iter().chain(&one.delivers).map(|(_, register)| root(*register)));
     }
     found
 }

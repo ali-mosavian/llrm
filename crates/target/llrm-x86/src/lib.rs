@@ -113,24 +113,16 @@ pub mod registers {
     /// The general registers a value or an address is held in, the frame
     /// pointer's included, the stack pointer's not.
     pub const ROOTS: [RegId; 7] = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI, RegId::EBP];
-    /// The general registers of x86-64 a value or an address is held in, the
-    /// frame pointer's included, the stack pointer's not.
-    pub const ROOTS64: [RegId; 15] = [
-        RegId::RAX,
-        RegId::RBX,
-        RegId::RCX,
-        RegId::RDX,
-        RegId::RSI,
-        RegId::RDI,
-        RegId::RBP,
-        RegId::R8,
-        RegId::R9,
-        RegId::R10,
-        RegId::R11,
-        RegId::R12,
-        RegId::R13,
-        RegId::R14,
-        RegId::R15,
+    /// The roots long mode adds to `ROOTS`, named by their dword views.
+    pub const ROOTS64: [RegId; 8] = [
+        RegId::R8D,
+        RegId::R9D,
+        RegId::R10D,
+        RegId::R11D,
+        RegId::R12D,
+        RegId::R13D,
+        RegId::R14D,
+        RegId::R15D,
     ];
     /// The word view of a dword register, where it has one.
     pub fn word_of(dword: RegId) -> Option<RegId> {
@@ -184,13 +176,10 @@ pub mod registers {
                 at_width.entry(llrm_lir::root(one)).or_default().entry(size).or_insert(one);
             }
         }
-        // The views of each 64-bit register, which long mode's targets root their families at: the first
-        // register of each width by iced's number (AL before AH).
+        // Long mode's views: the quadword of each family, and the families it adds. The first register of each
+        // width by iced's number (AL before AH).
         for one in RegId::values().filter(|one| one.is_gpr()) {
-            let whole = one.full_register();
-            if whole.is_gpr64() {
-                at_width.entry(whole).or_default().entry(one.size() as i64).or_insert(one);
-            }
+            at_width.entry(llrm_lir::root(one)).or_default().entry(one.size() as i64).or_insert(one);
         }
         at_width
     });

@@ -47,6 +47,9 @@ pub struct ObjectFormat {
     /// The DWARF version `-gdwarf` writes: the one the target's own consumers
     /// read.
     pub dwarf_version: u16,
+    /// A symbol is reached from the instruction pointer (`[rip + symbol]`): no address mixes a symbol with a
+    /// register, and a table of code addresses is not position independent.
+    pub pc_relative: bool,
 }
 
 /// What `-gdwarf` writes where the target does not say.
@@ -94,7 +97,11 @@ impl ObjectFormat {
                 .filter(|one| (2..=5).contains(one))
                 .ok_or("dwarf_version is not 2 to 5")?,
         };
-        Ok(Self { formats, default, bitness, header, dwarf_version })
+        let pc_relative = match value.get("pc_relative") {
+            None => false,
+            Some(one) => one.as_bool().ok_or("pc_relative is not a boolean")?,
+        };
+        Ok(Self { formats, default, bitness, header, dwarf_version, pc_relative })
     }
 
     /// The format written when `asked` is the one `-fobject-format=` named, if

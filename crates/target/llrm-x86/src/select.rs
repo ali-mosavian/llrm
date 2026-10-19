@@ -277,7 +277,7 @@ pub fn _displacement_size(
 ) -> u32 {
     // A 32-bit address, named by a 32-bit register or by the mode, carries
     // disp32.
-    let wide = bits == 32 || [base, index].into_iter().any(|one| width_of(one) == Some(4));
+    let wide = bits >= 32 || [base, index].into_iter().any(|one| width_of(one) >= Some(4));
     if base == RegId::None {
         return if wide { 4 } else { 2 };
     }
@@ -299,7 +299,7 @@ fn displacement_in(
     width: u32,
     bits: u32,
 ) -> u32 {
-    if bits == 32 && width == 2 { 4 } else { width }
+    if bits >= 32 && width == 2 { 4 } else { width }
 }
 
 /// The override `seg` is through `base`: none where the base already
@@ -325,6 +325,8 @@ fn memory_operand(
     // as its wrap, which is what the two-byte field holds.
     let displ =
         if displ_size == 2 && (base != RegId::None || index != RegId::None) { i64::from(displ as i16) } else { displ };
+    // iced spells a 32-bit displacement of a 64-bit address as size 8.
+    let displ_size = if displ_size == 4 && (base.is_gpr64() || index.is_gpr64()) { 8 } else { displ_size };
     MemoryOperand::new(base.iced(), index.iced(), scale as u32, displ, displ_size, false, overriding(base, seg).iced())
 }
 
@@ -352,7 +354,7 @@ pub fn place_operand(
     let Some(addr) = addr else {
         // Encodable where it is reached through a register.
         if [RegId::SI, RegId::DI, RegId::BX, RegId::BP].contains(&what.through)
-            || (bits == 32 && width_of(what.through) == Some(4))
+            || (bits >= 32 && width_of(what.through) >= Some(4))
         {
             let wide = if what.disp_width != 0 {
                 displacement_in(what.disp_width, bits)
@@ -374,7 +376,7 @@ pub fn place_operand(
             // allocation put it. The relocation fills the displacement, which
             // a 32-bit base carries in four bytes.
             let base = if based { what.through } else { RegId::from(addr.base) };
-            let wide = if bits == 32 || width_of(base) == Some(4) { 4 } else { 2 };
+            let wide = if bits >= 32 || width_of(base) >= Some(4) { 4 } else { 2 };
             Some((memory_operand(base, RegId::None, 1, 0, wide, RegId::from(addr.segment)), true))
         }
         Space::Frame if addr.base == (RegId::None).iced() => {
@@ -458,8 +460,8 @@ pub fn _scaled_operand(
     // price of it was none, so a function with one could not be priced in bytes
     // at all.
     let Some(addr) = what.addr else {
-        let wide = |register: RegId| width_of(register) == Some(4);
-        if !(bits == 32 && wide(what.index_through) && wide(what.through)) {
+        let wide = |register: RegId| width_of(register) >= Some(4);
+        if !(bits >= 32 && wide(what.index_through) && wide(what.through)) {
             return None;
         }
         let size = if what.disp_width != 0 {
@@ -479,8 +481,8 @@ pub fn _scaled_operand(
             return Some((memory_operand(what.through, what.index_through, 1, 0, 2, RegId::from(addr.segment)), true));
         }
         // The 67h form: any 32-bit base, a scaled index, a relocated disp32.
-        let wide = width_of(what.index_through) == Some(4)
-            && (what.through == RegId::None || width_of(what.through) == Some(4));
+        let wide = width_of(what.index_through) >= Some(4)
+            && (what.through == RegId::None || width_of(what.through) >= Some(4));
         return wide.then(|| {
             (memory_operand(what.through, what.index_through, what.scale, 0, 4, RegId::from(addr.segment)), true)
         });
@@ -2009,6 +2011,25 @@ pub fn emit_in(
         let upper = name.to_uppercase();
         let wide = |register: RegId| width_of(register).unwrap_or(0);
         match (&dests[0], &sources[0]) {
+            // A dword widened to a quadword: `movsxd`; and the zero extension is the dword move, which zeroes the
+            // upper half of the register it writes.
+            (Loc::Reg(into), Loc::Reg(outof)) if wide(into.register) == 8 && wide(outof.register) == 4 => {
+                let (code, into) = if name == "movzx" {
+                    (Code::Mov_r32_rm32, into.register.full_register32())
+                } else {
+                    (Code::Movsxd_r64_rm32, into.register)
+                };
+                return _assemble(&raised(create_reg_reg(code, into, outof.register)), at, true);
+            }
+            (Loc::Reg(into), Loc::Mem(cell)) if wide(into.register) == 8 && cell.width == 4 => {
+                let (built, relocated) = operand_of(cell, at.bits)?;
+                let (code, into) = if name == "movzx" {
+                    (Code::Mov_r32_rm32, into.register.full_register32())
+                } else {
+                    (Code::Movsxd_r64_rm32, into.register)
+                };
+                return _assemble(&raised(create_reg_mem(code, into, built)), at, relocated);
+            }
             (Loc::Reg(into), Loc::Reg(outof)) => {
                 if let Some(short) = extended_in_place(name, into.register, outof.register, at) {
                     return Some(short);
@@ -2157,7 +2178,14 @@ pub fn emit_in(
     if op == Operation::Jump && what.indirect && sources.len() == 1 {
         // A near jump through a table of code addresses, each as wide as the
         // mode's word.
-        let (near, code) = (i64::from(at.bits / 8), if at.bits == 32 { Code::Jmp_rm32 } else { Code::Jmp_rm16 });
+        let (near, code) = (
+            i64::from(at.bits / 8),
+            match at.bits {
+                64 => Code::Jmp_rm64,
+                32 => Code::Jmp_rm32,
+                _ => Code::Jmp_rm16,
+            },
+        );
         if let Loc::Mem(cell) = &sources[0]
             && i64::from(cell.width) == near
             && let Some((built, relocated)) = operand_of(cell, at.bits)
@@ -2170,7 +2198,14 @@ pub fn emit_in(
         // A near code pointer is as wide as the mode's word; a pointer of two
         // words (offset and selector) is a far one, which only a
         // segmented mode has.
-        let (near, near_code) = (i64::from(at.bits / 8), if at.bits == 32 { Code::Call_rm32 } else { Code::Call_rm16 });
+        let (near, near_code) = (
+            i64::from(at.bits / 8),
+            match at.bits {
+                64 => Code::Call_rm64,
+                32 => Code::Call_rm32,
+                _ => Code::Call_rm16,
+            },
+        );
         match &sources[0] {
             Loc::Reg(one) if i64::from(one.width) == near => {
                 return _assemble(&raised(create_reg(near_code, one.register)), at, true);

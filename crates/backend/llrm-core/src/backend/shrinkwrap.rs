@@ -108,7 +108,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use llrm_lir::registers::RegId;
+use llrm_lir::registers::{RegId, Regs};
 
 use crate::analysis::loops::{dominance, immediate_dominators, loops};
 use crate::model::ir::{self, Loc, Mem};
@@ -136,17 +136,20 @@ pub struct Wrap {
 
 /// The registers `one` names, and those the call it is disturbs by its
 /// convention.
-pub fn named(one: &Insn) -> BTreeSet<RegId> {
+pub fn named(
+    regs: Regs,
+    one: &Insn,
+) -> BTreeSet<RegId> {
     let mut found: BTreeSet<RegId> =
-        one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(ir::root)).collect();
+        one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(|register| regs.root(register))).collect();
     let Some(what) = &one.what else { return found };
     for place in what.dests.iter().chain(&what.sources) {
         match place {
             Loc::Reg(ir::Reg { register, .. }) => {
-                found.insert(ir::root(*register));
+                found.insert(regs.root(*register));
             }
             Loc::Mem(ir::Mem { through, index_through, .. }) => {
-                found.extend([*through, *index_through].map(ir::root));
+                found.extend([*through, *index_through].map(|register| regs.root(register)));
             }
             _ => {}
         }
@@ -203,7 +206,7 @@ pub fn wrapped(
         chain
     };
     let frame_registers: BTreeSet<RegId> =
-        frame.iter().flat_map(|(pointer, stack)| [ir::root(*pointer), ir::root(*stack)]).collect();
+        frame.iter().flat_map(|(pointer, stack)| [body.regs().root(*pointer), body.regs().root(*stack)]).collect();
     // The nearest block above every use that is not in a loop: a set-up there
     // would run each trip. None where that is the entry.
     let home_of = |uses: &[i64]| -> Option<i64> {
@@ -257,7 +260,7 @@ pub fn wrapped(
     for block in &body.blocks {
         let mut found: BTreeSet<Piece> = BTreeSet::new();
         for one in block.insns.iter() {
-            let names = named(one);
+            let names = named(body.regs(), one);
             if frame.is_some()
                 && (touches_frame(one) || names.iter().any(|register| frame_registers.contains(register)))
             {

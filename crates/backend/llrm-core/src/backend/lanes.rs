@@ -1,10 +1,10 @@
 //! A set of register and flag lanes, as a 256-bit mask.
 //!
 //! # How it works
-//! A lane is a byte of a general register root (4 each, 7 roots of a 32-bit
-//! target; 8 each, 15 roots of x86-64), a byte of a segment register (2 each,
-//! 6 segments), or a flag bit against `RegId::None` (32): 72 in all for a
-//! 32-bit target, 172 for x86-64. The table sorts the lanes in `(RegId, u32)`
+//! A lane is a byte of a general register root (8 each, 15 roots: the seven
+//! of a 32-bit target, whose upper four bytes it never names, and long mode's
+//! eight more), a byte of a segment register (2 each, 6 segments), or a flag
+//! bit against `RegId::None` (32): 164 in all. The table sorts the lanes in `(RegId, u32)`
 //! order, so flag bit `i` is mask bit `i`, and iteration visits lanes in the
 //! order a `BTreeSet<Lane>` would. Each register records the mask bit of its
 //! byte 0 and its byte count, so a lane's bit is a table lookup.
@@ -54,10 +54,8 @@ struct Table {
 
 static TABLE: LazyLock<Table> = LazyLock::new(|| {
     let mut lanes: Vec<Lane> = (0..32).map(|bit| (RegId::None, bit)).collect();
-    for root in llrm_x86::registers::ROOTS {
-        lanes.extend((0..4).map(|byte| (root, byte)));
-    }
-    for root in llrm_x86::registers::ROOTS64 {
+    // A root's bytes are those of its widest view: eight in long mode, of which a 32-bit target uses four.
+    for root in llrm_x86::registers::ROOTS.into_iter().chain(llrm_x86::registers::ROOTS64) {
         lanes.extend((0..8).map(|byte| (root, byte)));
     }
     for segment in llrm_x86::registers::SEGMENTS {

@@ -17,7 +17,9 @@ set_ratio           6
 clear_ratio         6
 set_ratio_size      3
 clear_ratio_size    2
-jump_table          5
+# No jump table: a table of code addresses needs an absolute relocation per entry, which a PIE refuses; the
+# position-independent form (a table of offsets from its own address) is not selected yet.
+jump_table          0
 cache_line          64
 pairing             0
 [clocks]

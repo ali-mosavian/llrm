@@ -841,6 +841,14 @@ impl Selector<'_, '_, '_> {
         self.definition(call).is_some_and(|inst| self.lrint(inst))
     }
 
+    /// Whether an i64 is held as two halves: the datalayout names no legal integer as wide.
+    pub fn is_splits_i64(
+        &self,
+        _: &Match,
+    ) -> bool {
+        self.layout.largest_legal_integer() < 64
+    }
+
     pub fn is_narrowed(
         &self,
         m: &Match,

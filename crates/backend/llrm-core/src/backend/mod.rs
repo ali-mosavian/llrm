@@ -202,6 +202,7 @@ pub mod objbuild;
 pub mod overlap;
 pub mod parcopy;
 pub mod peep;
+pub mod intbits;
 pub mod peephole;
 pub mod phiconst;
 pub mod phielim;

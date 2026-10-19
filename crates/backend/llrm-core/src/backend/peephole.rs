@@ -120,6 +120,7 @@ use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 use llrm_x86::parse;
 
+use crate::backend::intbits::{low_mask, wrap_to};
 use crate::analysis::dataflow::{self, Direction};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
@@ -192,19 +193,6 @@ fn reg(
     width: u32,
 ) -> Reg {
     Reg { register, width }
-}
-
-/// The low `width` bytes of an `i64` as a mask: all of it from eight bytes.
-fn low_mask(width: u32) -> i64 {
-    if width >= 8 { -1 } else { (1i64 << (width * 8)) - 1 }
-}
-
-/// `value` as a signed integer of `bits` bits, wrapped.
-fn wrap_to(
-    value: i64,
-    bits: i64,
-) -> i64 {
-    if bits >= 64 { value } else { (value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1)) }
 }
 
 /// The root `register` is a view of, in the target's register file.

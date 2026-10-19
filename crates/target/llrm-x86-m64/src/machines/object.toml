@@ -2,6 +2,8 @@
 formats = ["elf"]
 default = "elf"
 bitness = 64
+# Symbols are `[rip + symbol]`: the isel makes a symbol's address a value before it adds a register to it.
+pc_relative = true
 header = []
 
 # The ELF objects, linked by GNU ld: its emulation (`-m`).
