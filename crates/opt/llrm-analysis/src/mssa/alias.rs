@@ -7,6 +7,14 @@
 //! DEVIATE: LLVM's `MemoryLocation` is `{Ptr, Size, AAInfo}`; here a location
 //! is a `MemRef` (the pointer decomposed, with its type lineage) and a flag for
 //! a size made unknown (`LocationSize::beforeOrAfterPointer`).
+//!
+//! DEVIATE 2: `in_unexposed_alloca` asks the capture analysis with `OrAt`
+//! true, so the instruction asked about counts as a capture. LLVM's
+//! `getModRefInfo(Call, Loc)` asks with `OrAt` false and reads the call's
+//! arguments apart (`getArgModRefInfo`); the access lists here hold no
+//! argument effects for a call of unknown effects. Exit: the stand-in goes
+//! when call effects move to attrs and GlobalsModRef (funcattrs-port), and
+//! `BasicAA::get_mod_ref_info` answers the call.
 
 use std::cell::RefCell;
 use std::rc::Rc;
