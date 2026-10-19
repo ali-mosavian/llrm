@@ -602,6 +602,7 @@ fn translated() -> Vec<Box<dyn FunctionPass>> {
         Box::new(crate::cvp::Cvp),
         Box::new(crate::jumpthreading::JumpThreading::from_env()),
         Box::new(crate::dfajumpthreading::DfaJumpThreading::from_env()),
+        Box::new(crate::tailcallelim::TailCallElim),
     ]
 }
 
@@ -1350,6 +1351,11 @@ impl Fixed {
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
         let level = if applied.options.pre { crate::parity::Level::O2 } else { crate::parity::Level::O1 };
+        let off = crate::parity::REGISTRY
+            .iter()
+            .filter(|one| one.phase == phase && !applied.options.wanted(one.slot))
+            .map(|one| one.slot)
+            .collect::<Vec<_>>();
         let held = linear.passes.iter().map(|one| (one.name(), one.translations())).collect::<Vec<_>>();
         let checked = crate::parity::check_phase_with(
             phase,
@@ -1358,6 +1364,7 @@ impl Fixed {
             applied.options.sroa,
             applied.options.mem2reg,
             applied.options.rotating(),
+            &off,
             &held,
         );
         debug_assert!(checked.is_ok(), "{checked:?}");

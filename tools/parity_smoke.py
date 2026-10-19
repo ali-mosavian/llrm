@@ -137,6 +137,30 @@ TIERS = ROOT / "tools/gate/tiers.toml"
 EXTRA_RATCHETS = (["cargo", "test", "-q", "--test", "block_list_ratchet"], ["cargo", "test", "-q", "-p", "llrm-mir", "--lib", "facts_rewrite"])
 
 
+# tools/gate/prepush.py runs the gate's cheap static checks (fmt, docs, products, scans, facts, docs_links, the diff check) in about a minute and prints `PREPUSH FAIL: a, b`; its failing steps are
+# ratchets of the smoke too (#2735 and #2732 landed with unformatted files that the smoke never looked at).
+PREPUSH = ["python3", "tools/gate/prepush.py"]
+
+
+def prepush_failures(root: Path = ROOT, run=None) -> dict[str, str]:
+    run = run or (lambda command: subprocess.run(command, cwd=root, capture_output=True, text=True))
+    done = run(PREPUSH)
+    lines = [line for line in (done.stdout + done.stderr).splitlines() if line.startswith("PREPUSH FAIL")]
+    if not lines and not done.returncode:
+        return {}
+    names = lines[0].split(":", 1)[1].split(",") if lines else ["did-not-run"]
+    return {f"ratchet:prepush-{name.strip()}": " / ".join((done.stdout + done.stderr).strip().splitlines()[-2:])[:240] for name in names if name.strip()}
+
+
+def warnings_check(root: Path = ROOT, target: Path | None = None) -> str:
+    """"" when `cargo check --workspace --all-targets` under `-D warnings` is clean (deadstore.rs landed with unused code). Its own target directory: other RUSTFLAGS would rebuild the shared one."""
+    target = target or Path(os.environ.get("LLRM_WARN_TARGET", Path.home() / ".cache/llrm/warn-target"))
+    done = subprocess.run(slotted(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"]), cwd=root, capture_output=True, text=True, env={**os.environ, "RUSTFLAGS": "-D warnings", "CARGO_TARGET_DIR": str(target)})
+    if done.returncode == 0:
+        return ""
+    return " / ".join([line for line in done.stderr.splitlines() if "error" in line or "warning" in line][:3])[:300] or "cargo check -D warnings failed"
+
+
 def ratchet_commands(tiers: Path = TIERS) -> list[list[str]]:
     """Every source-scan test of the gate (tools/gate/tiers.toml `[[scan]]`) and the two that list readers (block list, facts_rewrite), as cargo commands. A test
     that counts what a crate's files read fails on a diff in ANOTHER crate: a reader added in llrm-transforms never ran llrm-mir's ratchets (loopdeletion +3,
@@ -480,9 +504,12 @@ def main() -> int:
     if broken := workspace_check():
         failing.append("workspace")
         pre.append(f"workspace: {broken}")
-    for name, why in ratchet_failures().items():
+    for name, why in {**ratchet_failures(), **prepush_failures()}.items():
         failing.append(name)
         pre.append(f"{name}: {why}")
+    if broken := warnings_check():
+        failing.append("warnings")
+        pre.append(f"warnings: {broken}")
     packages = touched(args.base)
     for package in packages:  # built first, untimed
         subprocess.run(slotted(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"]), cwd=ROOT, capture_output=True)
