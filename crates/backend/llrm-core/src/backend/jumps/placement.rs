@@ -1,10 +1,14 @@
-//! `MachineBlockPlacement`: chains and loops.
+//! `MachineBlockPlacement`: chains, loops and tail duplication.
 //!
 //! Every block starts as a chain of its own; chains are joined along the best
-//! edge until one is left, innermost loops first. Translated from
-//! `MachineBlockPlacement.cpp` at llvm-project
+//! edge until one is left, innermost loops first. A short block is copied into
+//! the blocks that jump to it where that saves a taken branch (`taildup`).
+//! Translated from `MachineBlockPlacement.cpp` at llvm-project
 //! d1106deb71cc81016406a1917d0508d2df296266; the function-by-function check
 //! is `docs/architecture/jumps-placement-check.md`.
+
+mod postdom;
+mod taildup;
 
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops::Loop;
@@ -13,6 +17,19 @@ use crate::support::hash::{HashSet, IndexMap};
 
 /// `block-placement-predecessor-limit`.
 const PREDECESSOR_LIMIT: usize = 1000;
+
+/// `TailDupPlacementThreshold`: the instructions a block may hold and be
+/// copied (1 for size).
+const TAIL_DUPLICATION: usize = 2;
+
+/// `TailDupPlacementAggressiveThreshold`, at -O3.
+const TAIL_DUPLICATION_AGGRESSIVE: usize = 4;
+
+/// `TailDupPlacementPenalty` (2 per cent).
+const TAIL_DUPLICATION_PENALTY: f64 = 0.02;
+
+/// `TriangleChainCount`.
+const TRIANGLE_CHAIN_COUNT: usize = 2;
 
 /// `StaticLikelyProb` (80): without a profile, the probability an edge needs
 /// to be placed over a block that other blocks also reach.
@@ -35,7 +52,7 @@ struct Placer {
     chain_of: Vec<usize>,
     chains: Vec<Chain>,
     /// `ComputedEdges`: the successor chosen for a block ahead of time.
-    computed: IndexMap<usize, usize>,
+    computed: IndexMap<usize, (usize, bool)>,
     /// `BlockWorkList`.
     work: Vec<usize>,
     /// The loop being placed is the blocks stamped with `active`
@@ -45,6 +62,23 @@ struct Placer {
     serial: u32,
     optimize_size: bool,
     entry: usize,
+    /// The loop's blocks in layout order (`BlockFilterSet`), and where
+    /// `getFirstUnplacedBlock` stands in them and in the function.
+    members: Vec<usize>,
+    next_member: usize,
+    next_block: usize,
+    /// `PreferredLoopExit`.
+    exit: Option<usize>,
+    /// The blocks as copies have made them, and those with nothing left
+    /// reaching them.
+    blocks: Vec<Block>,
+    dead: Vec<bool>,
+    /// The tail-duplication threshold in instructions (`TailDupSize`).
+    dup_size: usize,
+    postdom: postdom::PostDom,
+    /// Edges rerouted by copies, for the odds: (from, its successors before,
+    /// the tail, the tail's successors with their chances).
+    rerouted: Vec<(i64, Vec<i64>, i64, Vec<(i64, f64)>)>,
 }
 
 fn succ_seen(
@@ -56,7 +90,8 @@ fn succ_seen(
 }
 
 /// The blocks of `blocks` in the order `MachineBlockPlacement` lays them out,
-/// as indexes. The first is the entry.
+/// as they are after the copies it made, with the odds those leave. The first
+/// is the entry; blocks nothing reaches any more come last.
 pub(super) fn order(
     blocks: &[Block],
     entry: i64,
@@ -64,11 +99,19 @@ pub(super) fn order(
     busy: &Frequency,
     natural: &[Loop],
     size: bool,
-) -> Vec<usize> {
+    aggressive: bool,
+) -> (Vec<Block>, BlockOdds) {
     let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(place, block)| (block.at, place)).collect();
     let entry = index.get(&entry).copied().unwrap_or(0);
-    let mut placer = Placer::new(blocks, odds, busy, &index, size, entry);
-    placer.build(natural, &index)
+    let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, entry);
+    let order = placer.build(natural, &index);
+    let mut out = odds.clone();
+    for (from, succ, tail, into) in &placer.rerouted {
+        out.rerouted(*from, succ, *tail, into);
+    }
+    let placed: HashSet<usize> = order.iter().copied().collect();
+    let rest = (0..blocks.len()).filter(|one| !placed.contains(one));
+    (order.iter().copied().chain(rest).map(|one| placer.blocks[one].clone()).collect(), out)
 }
 
 impl Placer {
@@ -78,6 +121,7 @@ impl Placer {
         busy: &Frequency,
         index: &IndexMap<i64, usize>,
         size: bool,
+        aggressive: bool,
         entry: usize,
     ) -> Self {
         let n = blocks.len();
@@ -99,7 +143,9 @@ impl Placer {
                 pred[to].push(from);
             }
         }
+        let postdom = postdom::PostDom::of(&succ, &pred);
         Self {
+            postdom,
             succ,
             pred,
             chance,
@@ -114,6 +160,20 @@ impl Placer {
             serial: 0,
             optimize_size: size,
             entry,
+            members: Vec::new(),
+            next_member: 0,
+            next_block: 0,
+            exit: None,
+            blocks: blocks.to_vec(),
+            dead: vec![false; n],
+            dup_size: if size {
+                1
+            } else if aggressive {
+                TAIL_DUPLICATION_AGGRESSIVE
+            } else {
+                TAIL_DUPLICATION
+            },
+            rerouted: Vec::new(),
         }
     }
 
@@ -194,18 +254,18 @@ impl Placer {
         for found in natural {
             self.loop_chain(found, natural, index, &depth, &innermost);
         }
+        self.precompute_triangle_chains();
         let mut updated: HashSet<usize> = HashSet::default();
         for block in 0..n {
-            self.fill_work_lists(block, &mut updated);
+            if !self.dead[block] {
+                self.fill_work_lists(block, &mut updated);
+            }
         }
         let function = self.chain_of[entry];
-        self.build_chain(entry, function, None);
+        self.build_chain(entry, function, false);
         let mut order = std::mem::take(&mut self.chains[self.chain_of[entry]].blocks);
-        debug_assert_eq!(order.len(), n, "a block left out of the function's chain");
-        if order.len() != n {
-            let placed: HashSet<usize> = order.iter().copied().collect();
-            order.extend((0..n).filter(|block| !placed.contains(block)));
-        }
+        order.retain(|&block| !self.dead[block]);
+        debug_assert_eq!(order.len(), self.dead.iter().filter(|dead| !**dead).count(), "a block left out of the chain");
         order
     }
 
@@ -237,25 +297,32 @@ impl Placer {
     ) {
         for place in 0..self.chains[chain].blocks.len() {
             let block = self.chains[chain].blocks[place];
-            for to in 0..self.succ[block].len() {
-                let to = self.succ[block][to];
-                if !self.allowed(to) {
-                    continue;
-                }
-                let onward = self.chain_of[to];
-                if onward == chain || to == header {
-                    continue;
-                }
-                if self.chains[onward].unscheduled == 0 {
-                    continue;
-                }
-                self.chains[onward].unscheduled -= 1;
-                if self.chains[onward].unscheduled > 0 {
-                    continue;
-                }
-                let first = self.head(onward);
-                self.work.push(first);
+            self.mark_block_successors(chain, block, header);
+        }
+    }
+
+    /// `markBlockSuccessors`.
+    fn mark_block_successors(
+        &mut self,
+        chain: usize,
+        block: usize,
+        header: usize,
+    ) {
+        for to in 0..self.succ[block].len() {
+            let to = self.succ[block][to];
+            if !self.allowed(to) {
+                continue;
             }
+            let onward = self.chain_of[to];
+            if onward == chain || to == header || self.chains[onward].unscheduled == 0 {
+                continue;
+            }
+            self.chains[onward].unscheduled -= 1;
+            if self.chains[onward].unscheduled > 0 {
+                continue;
+            }
+            let first = self.head(onward);
+            self.work.push(first);
         }
     }
 
@@ -346,25 +413,33 @@ impl Placer {
         false
     }
 
-    /// `selectBestSuccessor`.
+    /// `selectBestSuccessor`: the block to lay out after `block`, and whether
+    /// it is to be copied into its predecessors.
     fn best_successor(
         &mut self,
         block: usize,
         chain: usize,
-    ) -> Option<usize> {
+    ) -> (Option<usize>, bool) {
         let (successors, left) = self.viable(block, chain);
-        if let Some(ahead) = self.computed.swap_remove(&block) {
+        if let Some((ahead, dup)) = self.computed.swap_remove(&block) {
             let onward = self.chain_of[ahead];
             if self.succ[block].contains(&ahead) && self.allowed(ahead) && onward != chain && ahead == self.head(onward)
             {
-                return Some(ahead);
+                return (Some(ahead), dup);
             }
         }
+        if self.is_trellis(block, &successors, chain) {
+            return self.best_trellis_successor(block, &successors, left, chain);
+        }
         let (mut best, mut best_prob) = (None, 0.0);
+        let mut candidates: Vec<(f64, usize)> = Vec::new();
         for to in successors {
             let real = self.prob(block, to);
             let adjusted = if real >= left { 1.0 } else { real / left };
             if self.has_better_layout_predecessor(block, to, real, chain) {
+                if self.should_tail_duplicate(to) {
+                    candidates.push((adjusted, to));
+                }
                 continue;
             }
             if best.is_some() && best_prob >= adjusted {
@@ -373,7 +448,135 @@ impl Placer {
             best = Some(to);
             best_prob = adjusted;
         }
-        best
+        candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut dup = false;
+        for (probability, to) in candidates {
+            if probability < best_prob {
+                break;
+            }
+            if self.can_tail_duplicate_unplaced_preds(block, to, chain)
+                && self.profitable_to_tail_duplicate(block, to, best_prob, chain)
+            {
+                best = Some(to);
+                dup = true;
+                break;
+            }
+        }
+        (best, dup)
+    }
+
+    /// `hasSameSuccessors`.
+    fn has_same_successors(
+        &self,
+        block: usize,
+        successors: &[usize],
+    ) -> bool {
+        self.succ[block].len() == successors.len()
+            && !successors.contains(&block)
+            && self.succ[block].iter().all(|to| successors.contains(to))
+    }
+
+    /// `isTrellis`: `block` and the other blocks that go to its two viable
+    /// successors have those two as their only successors.
+    fn is_trellis(
+        &self,
+        block: usize,
+        viable: &[usize],
+        chain: usize,
+    ) -> bool {
+        if self.succ[block].len() != 2 || viable.len() != 2 {
+            return false;
+        }
+        let successors = &self.succ[block];
+        let mut seen: HashSet<usize> = HashSet::default();
+        for &to in viable {
+            if self.pred[to].len() > PREDECESSOR_LIMIT {
+                return false;
+            }
+            let mut count = 0;
+            for &from in &self.pred[to] {
+                if successors.contains(&from) {
+                    if self.succ[from].iter().any(|one| !successors.contains(one)) {
+                        return false;
+                    }
+                    continue;
+                }
+                let from_chain = self.chain_of[from];
+                if from == block || !self.allowed(from) || from_chain == chain || from_chain == self.chain_of[to] {
+                    continue;
+                }
+                count += 1;
+                if !seen.insert(from) {
+                    continue;
+                }
+                if !self.has_same_successors(from, successors) {
+                    return false;
+                }
+            }
+            if count < 1 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// `getBestTrellisSuccessor`: of the edges into the two successors, the
+    /// heaviest pair that share no source, and `block`'s if it is in it.
+    fn best_trellis_successor(
+        &mut self,
+        block: usize,
+        viable: &[usize],
+        left: f64,
+        chain: usize,
+    ) -> (Option<usize>, bool) {
+        let _ = left;
+        if self.succ[block].len() != 2 || viable.len() != 2 {
+            return (None, false);
+        }
+        let mut edges: [Vec<(f64, usize, usize)>; 2] = [Vec::new(), Vec::new()];
+        for (which, &to) in viable.iter().enumerate() {
+            for &from in &self.pred[to] {
+                if from != block {
+                    if !self.allowed(from) {
+                        continue;
+                    }
+                    let from_chain = self.chain_of[from];
+                    if from_chain == chain || from_chain == self.chain_of[to] {
+                        continue;
+                    }
+                }
+                edges[which].push((self.freq[from] * self.prob(from, to), from, to));
+            }
+        }
+        for one in &mut edges {
+            one.sort_by(|a, b| b.0.total_cmp(&a.0));
+        }
+        let (mut a, mut b) = (edges[0][0], edges[1][0]);
+        if a.1 == b.1 {
+            let (second_a, second_b) = (edges[0][1], edges[1][1]);
+            if a.0 + second_b.0 < b.0 + second_a.0 {
+                a = second_a;
+            } else {
+                b = second_b;
+            }
+        }
+        if b.1 == block {
+            std::mem::swap(&mut a, &mut b);
+        }
+        if a.1 != block {
+            return (None, false);
+        }
+        if a.2 == b.1 {
+            let (first, second) = (a.2, b.2);
+            if self.should_tail_duplicate(second)
+                && self.can_tail_duplicate_unplaced_preds(block, second, chain)
+                && self.profitable_to_tail_duplicate(block, second, self.prob(block, first), chain)
+            {
+                return (Some(second), true);
+            }
+        }
+        self.computed.insert(b.1, (b.2, false));
+        (Some(a.2), false)
     }
 
     /// `selectBestCandidateBlock`: the most frequent block waiting.
@@ -394,45 +597,61 @@ impl Placer {
     }
 
     /// `buildChain`: `chain` grown from its end until nothing is left to put
-    /// after it. `members`: the loop's blocks, in layout order.
+    /// after it. `in_loop`: the blocks are the loop's `members`.
     fn build_chain(
         &mut self,
         top: usize,
         chain: usize,
-        members: Option<&[usize]>,
+        in_loop: bool,
     ) {
-        let (mut next_block, mut next_member) = (0, 0);
+        (self.next_block, self.next_member) = (0, 0);
         self.mark_chain_successors(chain, top);
         let mut block = self.tail(chain);
         loop {
-            let mut best = self.best_successor(block, chain);
+            let (mut best, mut dup) = self.best_successor(block, chain);
+            if let Some(next) = best {
+                dup |= self.can_tail_duplicate_unplaced_preds(block, next, chain);
+            }
             if best.is_none() {
                 best = self.best_candidate(chain);
             }
             if best.is_none() {
-                // `getFirstUnplacedBlock`: a loop that is no natural one.
-                best = match members {
-                    Some(members) => {
-                        while next_member < members.len() && self.chain_of[members[next_member]] == chain {
-                            next_member += 1;
-                        }
-                        members.get(next_member).map(|&one| self.head(self.chain_of[one]))
-                    }
-                    None => {
-                        while next_block < self.succ.len() && self.chain_of[next_block] == chain {
-                            next_block += 1;
-                        }
-                        (next_block < self.succ.len()).then(|| self.head(self.chain_of[next_block]))
-                    }
-                };
+                best = self.first_unplaced(chain, in_loop);
             }
             let Some(best) = best else { break };
+            if dup {
+                block = self.repeatedly_tail_duplicate(best, block, top, chain);
+                if !self.succ[block].contains(&best) {
+                    continue;
+                }
+            }
             let onward = self.chain_of[best];
             self.chains[onward].unscheduled = 0;
             self.mark_chain_successors(onward, top);
             self.merge(chain, onward);
             block = self.tail(chain);
         }
+    }
+
+    /// `getFirstUnplacedBlock`: where the CFG ends short of a block, as in a
+    /// loop that is no natural one.
+    fn first_unplaced(
+        &mut self,
+        chain: usize,
+        in_loop: bool,
+    ) -> Option<usize> {
+        if in_loop {
+            while self.next_member < self.members.len() && self.chain_of[self.members[self.next_member]] == chain {
+                self.next_member += 1;
+            }
+            return self.members.get(self.next_member).map(|&one| self.head(self.chain_of[one]));
+        }
+        while self.next_block < self.succ.len()
+            && (self.dead[self.next_block] || self.chain_of[self.next_block] == chain)
+        {
+            self.next_block += 1;
+        }
+        (self.next_block < self.succ.len()).then(|| self.head(self.chain_of[self.next_block]))
     }
 
     /// `buildLoopChains` for one loop.
@@ -444,8 +663,9 @@ impl Placer {
         depth: &[u32],
         innermost: &[Option<usize>],
     ) {
-        let Some(&header) = index.get(&found.header) else { return };
-        let mut members: Vec<usize> = found.body.to_set().iter().filter_map(|at| index.get(at).copied()).collect();
+        let Some(&header) = index.get(&found.header).filter(|&&one| !self.dead[one]) else { return };
+        let mut members: Vec<usize> =
+            found.body.to_set().iter().filter_map(|at| index.get(at).copied()).filter(|&one| !self.dead[one]).collect();
         members.sort_unstable();
         self.serial += 1;
         self.active = self.serial;
@@ -453,9 +673,10 @@ impl Placer {
             self.stamp[member] = self.active;
         }
         let top = self.best_loop_top(header);
-        let (mut exit, mut exit_freq) = (None, 0.0);
+        let mut exit_freq = 0.0;
+        self.exit = None;
         if top == header {
-            (exit, exit_freq) = self.best_loop_exit(found, header, &members, natural, depth, innermost);
+            (self.exit, exit_freq) = self.best_loop_exit(found, header, &members, natural, depth, innermost);
         }
         let chain = self.chain_of[top];
         let mut updated: HashSet<usize> = HashSet::default();
@@ -463,9 +684,12 @@ impl Placer {
         for &member in &members {
             self.fill_work_lists(member, &mut updated);
         }
-        self.build_chain(top, chain, Some(&members));
+        self.members = members;
+        self.build_chain(top, chain, true);
+        let exit = self.exit.take();
         self.rotate(chain, exit, exit_freq);
         self.work.clear();
+        self.members.clear();
         self.active = 0;
     }
 
@@ -602,7 +826,7 @@ impl Placer {
             old = Some(new);
             new = self.best_loop_top_helper(new, header);
             if Some(new) != old {
-                self.computed.insert(new, old.expect("set above"));
+                self.computed.insert(new, (old.expect("set above"), false));
             }
         }
         new

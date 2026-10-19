@@ -12,11 +12,7 @@
 //!    of the loop's count where the loop is left (`rewriteLoopExitValues`,
 //!    ScalarEvolution's exit values, from every exit of the loop, a rotated
 //!    loop's latch included); `LLRM_NO_SCEV_EXITVALUES` turns it off.
-//! 1. `loopexit::evaluated`: values after a counted loop computed from its
-//!    trips.
-//! 2. `exitfold::folded`: exits their counts decide are folded.
-//! 4. `exitsink::sunk`: final updates only exit phis read move to the exits.
-//! 5. `widened`: a counter read through `zext` (or, where it is signed and
+//! 1. `widened`: a counter read through `zext` (or, where it is signed and
 //!    tested by `slt`, `sext`) to the address's index width, where `induction`
 //!    proves its values never pass its own (`rises_unsigned`, `rises_signed`),
 //!    becomes a counter of that width. C's `unsigned short i` reads `a[zext
@@ -31,10 +27,19 @@
 //!    compares the wide one with that value extended
 //!    (`WidenIV::widenLoopCompare`); other readers of the narrow one read its
 //!    low part.
-//! 6. `congruent`: header counters with one start and one step are one counter
-//!    (`SCEVExpander::replaceCongruentIVs`); the later ones' readers read the
-//!    first, and `dead` removes them.
-//! 7. `rewound`: see below.
+//! 2. `congruentiv::replaced` (`SCEVExpander::replaceCongruentIVs`; the older
+//!    `congruent` under `LLRM_NO_SCEV_CONGRUENT`): header phis SCEV proves
+//!    equal, a narrow one a truncation of a wide one included, are one, and
+//!    `dead` removes the rest.
+//! 3. `canonexit::canonicalized` (`canonicalizeExitCondition`;
+//!    `LLRM_NO_SCEV_CANONEXIT`), `exitopt::optimized` (`optimizeLoopExits`;
+//!    `LLRM_NO_SCEV_EXITOPT`), `exitpredicate::predicated`
+//!    (`predicateLoopExits`; `LLRM_NO_SCEV_PREDICATE`), then
+//!    `exitfold::folded`: exits their counts decide are folded.
+//! 4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
+//!    exit tests a counter against the value it has at the last trip.
+//! 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
+//! 6. `rewound`: see below.
 //!
 //! `rewound` carries an exact inner recurrence's exit value around the outer
 //! loop. An inner loop running exactly `count` trips leaves as
@@ -126,7 +131,7 @@
 //!
 //! # Needs
 //! `Registers`, `Bounded` (for a `sext` counter), `induction`, `liveness`,
-//! [`crate::loopexit`], [`crate::exitfold`], [`crate::exitsink`],
+//! [`crate::exitvalues`], [`crate::exitfold`], [`crate::exitsink`],
 //! [`crate::profit`].
 //!
 //! # Keeps
@@ -158,7 +163,7 @@ use crate::lcssa::{arms, from_arms};
 use crate::profit::OperationCosts;
 
 /// What IndVarSimplify leaves a loop's counters: values after a loop
-/// computed from its trips (`loopexit::evaluated`), final updates sunk to
+/// computed from its trips (`exitvalues`), final updates sunk to
 /// the exits (`exitsink`), and an inner recurrence's exit value carried
 /// round the loop outside (`rewound`). Which counters the loop keeps is
 /// `lsr`'s.
@@ -170,6 +175,15 @@ pub struct IndVars {
     /// `max_unroll_iterations`, 0 for any number), none where it is off: a
     /// signed counter of such a loop is left for it until `exit_values`.
     pub unrolls: Option<i64>,
+    /// Whether LFTR runs: opt-in, `LLRM_LFTR` (D22).
+    pub lftr: bool,
+}
+
+/// `LLRM_LFTR`, read once: LFTR runs in the pipeline (D22). Off by default:
+/// the old `lsr` does not reduce the counter LFTR leaves, and every counted
+/// loop got a few bytes larger (+0.4% bytes of m32 code, rows pair on #2752).
+pub fn lftr_default() -> bool {
+    llrm_support::env_flag!("LLRM_LFTR")
 }
 
 impl FunctionPass for IndVars {
@@ -181,6 +195,10 @@ impl FunctionPass for IndVars {
         "indvars"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("indvars")
+    }
+
     fn run(
         &mut self,
         unit: &mut passes::Unit,
@@ -190,9 +208,13 @@ impl FunctionPass for IndVars {
         // What is known without memory is the manager's until a step changes
         // the body.
         let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
-        // Only a `sext` of a counter asks what the loops bound.
-        let widens =
-            unit.function.walk().any(|(_, inst)| unit.function.instruction(inst).opcode == Opcode::Cast(CastOp::SExt));
+        // Only the old widening, for a `sext` of a counter, asks what the loops
+        // bound; `simplifyAndExtend` reads ScalarEvolution's ranges.
+        let widens = !crate::simplifyindvar::widening_enabled()
+            && unit
+                .function
+                .walk()
+                .any(|(_, inst)| unit.function.instruction(inst).opcode == Opcode::Cast(CastOp::SExt));
         let bounded =
             widens.then(|| analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function));
         let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
@@ -234,21 +256,6 @@ impl FunctionPass for IndVars {
         if rewrote {
             standing.changed();
         }
-        let evaluated =
-            crate::loopexit::evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing)
-                .unwrap_or_else(|error| panic!("indvars: {error}"));
-        if evaluated {
-            standing.reshaped();
-        }
-        let folded = crate::exitfold::folded_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
-        if folded {
-            standing.reshaped();
-        }
-        let shape = standing.shape(unit.function);
-        let sunk = crate::exitsink::sunk(unit.function, &shape);
-        if sunk {
-            standing.changed();
-        }
         let widened = !extending
             && widened_with(
                 unit.context,
@@ -258,8 +265,46 @@ impl FunctionPass for IndVars {
                 &mut standing,
                 if self.exit_values { None } else { self.unrolls },
             );
-        let merged =
-            twin_phis(unit.function) | congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        let merged = twin_phis(unit.function)
+            | if crate::congruentiv::enabled() {
+                let merged = crate::congruentiv::replaced(unit.context, unit.layout, unit.function, &outer);
+                if merged {
+                    standing.changed();
+                }
+                merged
+            } else {
+                congruent(unit.context, unit.layout, unit.function, &outer, &mut standing)
+            };
+        let canonical = crate::canonexit::enabled()
+            && crate::canonexit::canonicalized(unit.context, unit.layout, unit.function, &outer);
+        if canonical {
+            standing.changed();
+        }
+        let optimized = crate::exitopt::enabled()
+            && crate::exitopt::optimized(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if optimized {
+            standing.changed();
+        }
+        let predicated = crate::exitpredicate::enabled()
+            && crate::exitpredicate::predicated(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if predicated {
+            standing.changed();
+        }
+        let folded = crate::exitfold::folded_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        if folded {
+            standing.reshaped();
+        }
+        let tested = self.lftr
+            && crate::lftr::enabled()
+            && crate::lftr::replaced(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if tested {
+            standing.changed();
+        }
+        let shape = standing.shape(unit.function);
+        let sunk = crate::exitsink::sunk(unit.function, &shape);
+        if sunk {
+            standing.changed();
+        }
         let rewound = rewound_with(
             unit.context,
             unit.layout,
@@ -269,11 +314,31 @@ impl FunctionPass for IndVars {
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
-        let dead = (compared || rewrote || sunk || rewound || widened || merged)
+        let dead = (compared
+            || rewrote
+            || canonical
+            || optimized
+            || predicated
+            || tested
+            || sunk
+            || rewound
+            || widened
+            || merged)
             && dead::dead(unit.context, outer.callees(), unit.function);
-        if evaluated || folded {
+        if folded {
             PreservedAnalyses::none()
-        } else if compared || rewrote || sunk || rewound || widened || merged || dead {
+        } else if compared
+            || rewrote
+            || canonical
+            || optimized
+            || predicated
+            || tested
+            || sunk
+            || rewound
+            || widened
+            || merged
+            || dead
+        {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
         } else {
@@ -664,7 +729,7 @@ fn _rewinding(
 
 #[cfg(test)]
 #[path = "indvars_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 /// A counter read through `zext` to the default address's index width is a
 /// counter of that width, where `induction` proves its values never pass its

@@ -133,8 +133,12 @@ const RESUME: &str = "llrm.qb.B$RESN";
 /// what the handlers cannot yet serve.
 pub fn prepared(
     module: &mut Module,
-    far: u32,
+    layout: &llrm_target::layout::Layout,
 ) -> Result<(), String> {
+    let far = layout.spaces.far;
+    // The runtime keeps a procedure's handler as an offset in its code
+    // segment: a word at m16, a flat address where a pointer is wider.
+    let offset = llrm_mir::datalayout::DataLayout::parse(&layout.datalayout)?.pointer(layout.spaces.near).bits.min(32);
     // An intrinsic raises no BASIC error.
     let nounwind: BTreeSet<GlobalId> = module
         .functions()
@@ -207,7 +211,7 @@ pub fn prepared(
         }
         pads.push((name.clone(), pad(function).map_err(why)?));
     }
-    let routines = if pads.iter().any(|(_, pad)| pad.is_some()) { Some(declare(module, far)?) } else { None };
+    let routines = if pads.iter().any(|(_, pad)| pad.is_some()) { Some(declare(module, far, offset)?) } else { None };
     for (name, pad) in pads {
         let why = |what: String| format!("@{name}: {what}");
         let (context, function) = module.function_mut(&name).expect("a handled function");
@@ -355,6 +359,8 @@ struct Routines {
     landing: ConstantId,
     null: ConstantId,
     landed: ConstantId,
+    /// The type of ON LOCAL ERROR's handler offset.
+    offset: TypeId,
 }
 
 /// The runtime routines the landing and the registrations call, and the
@@ -362,11 +368,12 @@ struct Routines {
 fn declare(
     module: &mut Module,
     space: u32,
+    offset: u32,
 ) -> Result<Routines, String> {
     let types = &mut module.context.types;
-    let (void, i16, far) = (types.void(), types.int(16), types.ptr(space));
+    let (void, i16, far, offset) = (types.void(), types.int(16), types.ptr(space), types.int(offset));
     let register = types.intern(llrm_mir::Type::Function { returns: void, parameters: vec![far], variadic: false });
-    let local = types.intern(llrm_mir::Type::Function { returns: void, parameters: vec![i16], variadic: false });
+    let local = types.intern(llrm_mir::Type::Function { returns: void, parameters: vec![offset], variadic: false });
     let asked = types.intern(llrm_mir::Type::Function { returns: i16, parameters: Vec::new(), variadic: false });
     let nothing = types.intern(llrm_mir::Type::Function { returns: void, parameters: Vec::new(), variadic: false });
     let mut routines = vec![(ERR, asked, &["nounwind"][..]), (RESUME, nothing, &["noreturn", "nounwind"][..])];
@@ -413,7 +420,7 @@ fn declare(
         registration.map(|one| (one, ty, module.reference(module.named(name).expect("declared"))))
     };
     let (onerror, onlocal) = (routine(onerror, REGISTER, register), routine(onlocal, REGISTER_LOCAL, local));
-    Ok(Routines { onerror, onlocal, landing, null, landed })
+    Ok(Routines { onerror, onlocal, landing, null, landed, offset })
 }
 
 /// A far function by BASIC's convention, as the runtime's are.
@@ -472,11 +479,11 @@ fn registered(
         let target = if Some(registration) == routines.onlocal.map(|(one, _, _)| one) {
             // The runtime keeps a procedure's handler as an offset in its code
             // segment.
-            let i16 = context.types.int(16);
+            let offset_ty = routines.offset;
             if on {
                 let offset = function.create_instruction(
                     Opcode::Cast(CastOp::PtrToInt),
-                    i16,
+                    offset_ty,
                     vec![Operand::Constant(routines.landing)],
                     Flags::default(),
                     None,
@@ -484,7 +491,7 @@ fn registered(
                 function.insert(offset, Position::Before(inst))?;
                 Operand::Value(function.instruction(offset).result.expect("a value"))
             } else {
-                Operand::Constant(context.int(i16, 0))
+                Operand::Constant(context.int(offset_ty, 0))
             }
         } else {
             Operand::Constant(if on { routines.landing } else { routines.null })
