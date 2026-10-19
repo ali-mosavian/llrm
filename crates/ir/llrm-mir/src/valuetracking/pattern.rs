@@ -23,7 +23,7 @@ pub fn binary<'a>(
     op: BinaryOp,
 ) -> Option<(InstId, &'a Instruction, Operand, Operand)> {
     let (inst, instruction) = q.instruction_of(v)?;
-    (instruction.opcode == Opcode::Binary(op))
+    (matches!(instruction.opcode, Opcode::Binary(kind) if kind == op))
         .then(|| (inst, instruction, instruction.operands[0], instruction.operands[1]))
 }
 
@@ -182,7 +182,8 @@ pub fn cast<'a>(
     op: CastOp,
 ) -> Option<(InstId, &'a Instruction, Operand)> {
     let (inst, instruction) = q.instruction_of(v)?;
-    (instruction.opcode == Opcode::Cast(op)).then(|| (inst, instruction, instruction.operands[0]))
+    (matches!(instruction.opcode, Opcode::Cast(kind) if kind == op))
+        .then(|| (inst, instruction, instruction.operands[0]))
 }
 
 /// `m_c_<Op>(P, m_Value(Other))`: `v` is `op a, b` where `a` or `b` satisfies
@@ -258,7 +259,7 @@ pub fn logical_and(
     if q.scalar_bits(v) != 1 {
         return None;
     }
-    if instruction.opcode == Opcode::Binary(BinaryOp::And) {
+    if matches!(instruction.opcode, Opcode::Binary(BinaryOp::And)) {
         return Some((instruction.operands[0], instruction.operands[1]));
     }
     let (_, _, cond, t, f) = select(q, v)?;
@@ -274,7 +275,7 @@ pub fn logical_or(
     if q.scalar_bits(v) != 1 {
         return None;
     }
-    if instruction.opcode == Opcode::Binary(BinaryOp::Or) {
+    if matches!(instruction.opcode, Opcode::Binary(BinaryOp::Or)) {
         return Some((instruction.operands[0], instruction.operands[1]));
     }
     let (_, _, cond, t, f) = select(q, v)?;
@@ -708,7 +709,7 @@ pub mod nested {
         r: Matcher,
     ) -> bool {
         let Some((_, instruction)) = q.instruction_of(v) else { return false };
-        if instruction.opcode != Opcode::Binary(op) || !instruction.flags.contains(needs) {
+        if !matches!(instruction.opcode, Opcode::Binary(kind) if kind == op) || !instruction.flags.contains(needs) {
             return false;
         }
         let (a, b) = (instruction.operands[0], instruction.operands[1]);
@@ -756,7 +757,7 @@ pub mod nested {
         inner: Matcher,
     ) -> bool {
         let Some((_, instruction)) = q.instruction_of(v) else { return false };
-        instruction.opcode == Opcode::Cast(op) && inner(instruction.operands[0])
+        matches!(instruction.opcode, Opcode::Cast(kind) if kind == op) && inner(instruction.operands[0])
     }
 
     /// `m_ICmp(Pred, L, R)` with `m_c_ICmp`'s swap when `commutable`: the

@@ -5608,3 +5608,18 @@ fn test_freeze_of_undef_and_an_undef_operand_are_selected_as_a_constant() {
         );
     }
 }
+
+/// Old: `addrspacecast (ptr @g to ptr addrspace(1))` as an operand (what
+/// `simplifyCastInst` makes of the cast since #2614) was refused, "a far
+/// constant", and 39 qb programs did not compile. It is DGROUP:offset.
+#[test]
+fn test_a_near_global_cast_to_a_far_pointer_constant_is_selected() {
+    let text = "@g = internal global i16 5
+define i16 @f() addrspace(1) {
+  %v = load i16, ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1))
+  ret i16 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|one| one.contains("DGROUP")), "{got:?}");
+}
