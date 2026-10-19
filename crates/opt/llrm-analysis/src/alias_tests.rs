@@ -8,7 +8,7 @@ use llrm_mir::opcode::Opcode;
 use llrm_support::hash::IndexMap;
 
 use super::{
-    _direct_summary, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences,
+    _direct_summary, _fills, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences,
     initialized, nonnull_by_definition, points_to, summaries,
 };
 use crate::memory::{
@@ -1744,4 +1744,51 @@ fn a_summary_covers_a_read_by_the_bytes_it_names_not_by_its_shape() {
     };
     assert!(!in_large(0, 7, 1).covers(&in_large(5, 8, 1)), "byte 7 of a 20-byte object is a new read");
     assert!(!in_large(0, 7, 1).covers(&in_large(0, 7, 2)), "so is the byte after a two-byte read from 6");
+}
+
+/// A byval parameter is the callee's own copy: `initializes` on it said the
+/// caller's object was written first, so `c/byval_inline` -O2 dropped the
+/// store `g.a[0] = 1`. Without `byval` the same call fills the object.
+#[test]
+fn a_byval_argument_that_initializes_fills_nothing_of_the_callers_object() {
+    let fills = |attrs: &str| {
+        let text = format!(
+            "declare void @h(ptr {attrs}initializes((0, 4)))\ndefine void @f() {{\nb0:\n  %a = alloca i32\n  call void @h(ptr %a)\n  ret void\n}}\n"
+        );
+        let parsed = Parsed::new(&text);
+        let unit = parsed.unit();
+        let facts = points_to(&unit, None, None).unwrap();
+        let call = unit
+            .function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| matches!(unit.function.instruction(inst).opcode, Opcode::Call(_)))
+            .unwrap();
+        _fills(&unit, &facts, call).len()
+    };
+    assert_eq!(fills(""), 1, "premise: a plain parameter initializes the object");
+    assert_eq!(fills("byval(i32) "), 0);
+}
+
+/// A callee that writes its byval parameter writes its own copy: the object
+/// the call passes is not written. Without `byval` the same call writes it.
+#[test]
+fn a_callee_that_writes_a_byval_parameter_writes_nothing_of_the_callers_object() {
+    let writes_global = |attrs: &str| {
+        let text = CALLEE_WRITES_ITS_PARAMETER.replace("@callee(ptr %p)", &format!("@callee(ptr {attrs}%p)"));
+        let parsed = Parsed::new(&text);
+        let procedures =
+            IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+        let known = summaries(&procedures, None).unwrap();
+        let effect = &parsed.effects(&known)[0];
+        let Some(super::Actual::Provenance(passed)) =
+            procedures["f"].arguments.values().next().map(|actual| actual[0].clone())
+        else {
+            panic!("@g's slice")
+        };
+        let g = passed.slices.first().unwrap().object;
+        writes(effect, &bytes(&g, 6, 8))
+    };
+    assert!(writes_global(""), "premise: a plain parameter's store writes the object");
+    assert!(!writes_global("byval(i16) "));
 }

@@ -89,21 +89,38 @@ def new_kinds(groups: dict, known: list[dict]) -> dict:
 
 
 def first_bad(commits: list[str], is_bad) -> str:
-    """The first bad commit of `commits` (old to new, the last one bad): binary search, `is_bad(commit)` builds and tests it. Assumes a single flip."""
+    """The first bad commit of `commits` (old to new, the last one bad): binary search, `is_bad(commit)` builds and tests it, and answers None for a commit that
+    does not build (a head broke for hours between two merges that each built). Such a commit is passed over: the probe takes the nearest one that builds, above
+    the middle or else below it. Assumes a single flip."""
     lo, hi = 0, len(commits) - 1  # hi is bad
     while lo < hi:
         mid = (lo + hi) // 2
-        if is_bad(commits[mid]):
-            hi = mid
+        for probe in [*range(mid, hi), *range(mid - 1, lo - 1, -1)]:
+            verdict = is_bad(commits[probe])
+            if verdict is not None:
+                break
         else:
-            lo = mid + 1
+            return commits[hi]  # nothing between lo and hi builds
+        if verdict:
+            hi = probe
+        elif probe >= mid:
+            lo = probe + 1
+        else:
+            return commits[hi]  # the nearest below mid is good and everything above it up to hi does not build
     return commits[hi]
 
 
 def bisect_one(good: str, repro: list[str], build) -> tuple[str, str]:
     """(sha, subject) of the first first-parent squash after `good` on which `repro` (a compile of the failing module) fails; `build(sha)` returns the llrm-c path."""
     shas = subprocess.run(["git", "log", "--first-parent", "--reverse", "--format=%H", f"{good}..origin/feat/parity"], cwd=ROOT, capture_output=True, text=True).stdout.split()
-    bad = lambda sha: subprocess.run([str(build(sha)), *repro], capture_output=True).returncode != 0  # noqa: E731
+
+    def bad(sha: str) -> bool | None:
+        try:
+            binary = build(sha)
+        except subprocess.CalledProcessError:
+            return None
+        return subprocess.run([str(binary), *repro], capture_output=True).returncode != 0
+
     found = first_bad(shas, bad)
     subject = subprocess.run(["git", "log", "-1", "--format=%s", found], cwd=ROOT, capture_output=True, text=True).stdout.strip()
     return found, subject

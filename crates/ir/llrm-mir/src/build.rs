@@ -122,7 +122,7 @@ impl Module {
 /// The declaration `@name` of type `ty` is, as `Module::add_function` makes it
 /// and a pass that declares a function sees it before the module has it.
 pub fn function_declaration(
-    context: &mut Context,
+    context: &Context,
     name: &str,
     ty: TypeId,
 ) -> Result<Function, String> {
@@ -134,7 +134,7 @@ pub fn function_declaration(
     for (at, ty) in parameters.into_iter().enumerate() {
         function.parameters.push(ValueId(function.values.len() as u32));
         function.values.push(ValueData { ty, name: None, def: ValueDef::Argument(at as u32) });
-        function.value_uses.push(Vec::new());
+        function.value_uses.push_value();
         function.parameter_attrs.push(Vec::new());
     }
     intrinsics::declare(&mut function, &context.types, name);

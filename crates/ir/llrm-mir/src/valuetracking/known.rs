@@ -791,7 +791,7 @@ fn phi_has_undef_constant_value(
     }
     matches!(
         constant_value,
-        Operand::Constant(id) if matches!(q.context().get(id).kind, ConstantKind::Poison)
+        Operand::Constant(id) if matches!(q.context().get(id).kind, ConstantKind::Poison | ConstantKind::Undef)
     )
 }
 
@@ -1653,7 +1653,11 @@ pub fn compute_known_bits_into(
     known.reset_all();
 
     if let Operand::Constant(id) = v {
-        if matches!(q.context().get(id).kind, ConstantKind::Poison) {
+        // We can't imply anything about undefs.
+        if matches!(
+            q.context().get(id).kind,
+            ConstantKind::Poison | ConstantKind::Undef
+        ) {
             return;
         }
     }

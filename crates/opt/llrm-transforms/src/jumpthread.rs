@@ -257,7 +257,7 @@ struct Path {
 /// Every switch's paths that can be threaded, a switch's all at once within the
 /// limits; whether any was.
 pub fn threaded(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -331,7 +331,7 @@ pub fn threaded(
 /// The paths of the first switch or branch that has any, within what is left of
 /// `MAX_COPIED`.
 fn found(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     outer: &Outer,
@@ -383,9 +383,8 @@ fn found(
                 );
                 let copies = function
                     .block(block)
-                    .instructions()
                     .iter()
-                    .filter(|&&inst| {
+                    .filter(|&inst| {
                         function.instruction(inst).opcode != Opcode::Phi
                             && !function.instruction(inst).opcode.is_terminator()
                     })
@@ -394,9 +393,8 @@ fn found(
                 let phis = if function.predecessors(block).len() > 1 && function.successors(block).len() > 1 {
                     function
                         .block(block)
-                        .instructions()
                         .iter()
-                        .filter(|&&inst| function.instruction(inst).opcode == Opcode::Phi)
+                        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
                         .count()
                 } else {
                     0
@@ -474,7 +472,7 @@ fn found(
                     // copies hold.
                     blocks
                         .iter()
-                        .flat_map(|&one| function.block(one).instructions().iter().copied())
+                        .flat_map(|&one| function.block(one).iter())
                         .filter(|&inst| {
                             function.instruction(inst).opcode != Opcode::Phi
                                 && !function.instruction(inst).opcode.is_terminator()
@@ -496,9 +494,8 @@ fn found(
                         .map(|&one| {
                             function
                                 .block(one)
-                                .instructions()
                                 .iter()
-                                .filter(|&&inst| function.instruction(inst).opcode == Opcode::Phi && inst != phi)
+                                .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi && inst != phi)
                                 .count()
                         })
                         .sum()
@@ -527,7 +524,7 @@ fn size_weighted(
     function: &Function,
     blocks: &[BlockId],
 ) -> usize {
-    let insts = blocks.iter().flat_map(|&one| function.block(one).instructions().iter().copied());
+    let insts = blocks.iter().flat_map(|&one| function.block(one).iter());
     (crate::inline::gcc_insns_in(function, insts) as usize).saturating_sub(1)
 }
 
@@ -686,10 +683,9 @@ fn copyable(
 ) -> bool {
     function
         .block(block)
-        .instructions()
         .iter()
         .all(
-            |&inst| {
+            |inst| {
                 let instruction = function.instruction(inst);
                 match &instruction.opcode {
                     Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume | Opcode::Alloca { .. } => false,
@@ -791,7 +787,7 @@ struct Copies {
 /// its way in leaves, its last jumping to the case it ends in; the instructions
 /// copied.
 fn copy(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     paths: &[Path],
 ) -> usize {
@@ -821,7 +817,7 @@ fn copy(
             // The way in: a phi takes what it takes from the block before on
             // the path.
             let before = if index == 0 { path.from } else { originals[index - 1] };
-            for inst in function.block(block).instructions().to_vec() {
+            for inst in function.block(block).iter().collect::<Vec<_>>() {
                 let instruction = function.instruction(inst).clone();
                 if instruction.opcode == Opcode::Phi {
                     // A phi of the path's one way in: the copy has one input,
@@ -895,7 +891,7 @@ fn copy(
             let leaving: Vec<BlockId> =
                 function.successors(clone).into_iter().filter(|to| !at.values().any(|one| one == to)).collect();
             for to in leaving {
-                for phi in function.block(to).instructions().to_vec() {
+                for phi in function.block(to).iter().collect::<Vec<_>>() {
                     if function.instruction(phi).opcode != Opcode::Phi {
                         break;
                     }
@@ -918,7 +914,7 @@ fn copy(
             .map(|&one| if one == Operand::Block(first) { Operand::Block(clones[0]) } else { one })
             .collect();
         function.set_operands(entry, redirected);
-        for phi in function.block(first).instructions().to_vec() {
+        for phi in function.block(first).iter().collect::<Vec<_>>() {
             if function.instruction(phi).opcode != Opcode::Phi {
                 break;
             }
@@ -939,7 +935,7 @@ fn copy(
     // iteration before: one updater joins the definitions where the paths meet.
     let originals: BTreeSet<BlockId> = paths.iter().flat_map(|path| path.blocks.iter().copied()).collect();
     for &block in &originals {
-        for inst in function.block(block).instructions().to_vec() {
+        for inst in function.block(block).iter().collect::<Vec<_>>() {
             let Some(result) = function.instruction(inst).result else { continue };
             // Read anywhere but its own block: an original block is reached
             // from the copies too, and reads what meets there.
@@ -1009,12 +1005,7 @@ fn arms_of(
     }
     // The header holds phis and its branch.
     let last = function.terminator(header)?;
-    if function
-        .block(header)
-        .instructions()
-        .iter()
-        .any(|&inst| inst != last && function.instruction(inst).opcode != Opcode::Phi)
-    {
+    if function.block(header).iter().any(|inst| inst != last && function.instruction(inst).opcode != Opcode::Phi) {
         return None;
     }
     let [Operand::Value(condition), Operand::Block(yes), Operand::Block(no)] = function.instruction(last).operands[..]
@@ -1105,7 +1096,7 @@ fn arms_of(
     }
     let size = crate::inline::gcc_insns_in(
         function,
-        chain.iter().flat_map(|&block| function.block(block).instructions().to_vec()),
+        chain.iter().flat_map(|&block| function.block(block).iter().collect::<Vec<_>>()),
     ) as usize;
     Some(Arms { header, heads: [yes, no], chain, regions, feeders, size })
 }
@@ -1113,7 +1104,7 @@ fn arms_of(
 /// Every loop `arms_of` finds, split into a loop for each arm, within what is
 /// left of `MAX_COPIED`; whether any was.
 fn split_arms(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     copied: &mut usize,
 ) -> bool {
@@ -1151,7 +1142,7 @@ fn split_arms(
 }
 
 fn _split(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     arms: &Arms,
 ) {
@@ -1203,7 +1194,7 @@ fn _split(
         let feeder = if arms.feeders[arm] == header { heads[arm] } else { arms.feeders[arm] };
         for &block in &arms.chain {
             let clone = at[&block];
-            for inst in function.block(block).instructions().to_vec() {
+            for inst in function.block(block).iter().collect::<Vec<_>>() {
                 let original = function.instruction(inst).clone();
                 if original.opcode == Opcode::Phi {
                     // The one way in of the join.
@@ -1302,7 +1293,7 @@ fn _split(
     // What the header made, an arm's blocks read as its copy has it.
     for arm in 0..2 {
         for block in arms.regions[arm].iter() {
-            for inst in function.block(block).instructions().to_vec() {
+            for inst in function.block(block).iter().collect::<Vec<_>>() {
                 let operands = function
                     .instruction(inst)
                     .operands

@@ -19,9 +19,8 @@
 //!    `ConstantFoldFixedVectorCall`, the vector intrinsics, `masked_load`
 //!    (L1776-L1801); `is_constant` of a vector. MIR types vectors but has no
 //!    lane operation and nothing produces one (#2201).
-//! 2. `undef`, `ptrtoaddr`: MIR has `poison`/`freeze` and no `ptrtoaddr` opcode
-//!    (#2202, #2204). Byte types and `inrange`: MIR has no byte type and its
-//!    constant GEP has no `inrange`.
+//! 2. `ptrtoaddr`: MIR has no `ptrtoaddr` opcode (#2202, #2204). Byte types and
+//!    `inrange`: MIR has no byte type and its constant GEP has no `inrange`.
 //! 3. Target intrinsics (AMDGCN, ARM, AArch64, Wasm, NVVM, x86): the MIR
 //!    verifier rejects a `llvm.*` name `Intrinsic` does not enumerate, and it
 //!    enumerates none of them.
@@ -131,7 +130,7 @@ fn is_all_ones_value(
 }
 
 fn int(
-    context: &mut Context,
+    context: &Context,
     width: u32,
     value: u128,
 ) -> ConstantId {
@@ -140,14 +139,14 @@ fn int(
 }
 
 fn undef(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> ConstantId {
     context.constant(Constant { ty, kind: ConstantKind::Undef })
 }
 
 fn poison(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> ConstantId {
     context.constant(Constant { ty, kind: ConstantKind::Poison })
@@ -155,7 +154,7 @@ fn poison(
 
 /// `Constant::getAllOnesValue` of an integer or floating type.
 fn all_ones_value(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> Option<ConstantId> {
     let kind = match *context.types.get(ty) {
@@ -170,7 +169,7 @@ fn all_ones_value(
 /// `ConstantStruct::get`/`ConstantArray::get`: all-zero and all-poison
 /// members make a `zeroinitializer` and a poison; all-undef, an undef.
 fn aggregate(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
     members: Vec<ConstantId>,
 ) -> ConstantId {
@@ -188,7 +187,7 @@ fn aggregate(
 
 /// `Constant::getAggregateElement`.
 fn aggregate_element(
-    context: &mut Context,
+    context: &Context,
     c: ConstantId,
     index: u64,
 ) -> Option<ConstantId> {
@@ -230,7 +229,7 @@ fn is_sequence_or_aggregate(
 
 /// `C` as LLVM uniques it: the aggregates made of zeros or poison are one.
 fn canonical(
-    context: &mut Context,
+    context: &Context,
     c: ConstantId,
 ) -> ConstantId {
     let Constant { ty, kind } = context.get(c).clone();
@@ -419,7 +418,7 @@ fn cast_is_valid(
 /// `getFoldedCast`, the fold of `ConstantFoldCastInstruction` or the
 /// expression.
 pub fn constant_expr_get_cast(
-    context: &mut Context,
+    context: &Context,
     op: CastOp,
     c: ConstantId,
     to: TypeId,
@@ -446,7 +445,7 @@ pub fn constant_expr_get_cast(
 /// and the expression `ConstantExpr::getGetElementPtr` makes otherwise
 /// ([Constants.cpp:2662](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Constants.cpp#L2662)).
 pub fn constant_fold_get_element_ptr(
-    context: &mut Context,
+    context: &Context,
     source: TypeId,
     c: ConstantId,
     indices: &[ConstantId],
@@ -473,7 +472,7 @@ pub fn constant_fold_get_element_ptr(
 
 /// `ConstantExpr::getPtrAdd`.
 fn constant_expr_get_ptr_add(
-    context: &mut Context,
+    context: &Context,
     ptr: ConstantId,
     offset: ConstantId,
     nw: u8,
@@ -485,7 +484,7 @@ fn constant_expr_get_ptr_add(
 /// `ConstantExpr::getGetElementPtr` with the data layout
 /// ([Constants.cpp:2713](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Constants.cpp#L2713)).
 pub fn constant_expr_get_gep_with_layout(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     source: TypeId,
     c: ConstantId,
@@ -736,7 +735,7 @@ fn definitive_constant_initializer(
 /// ([L181](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L181)),
 /// for scalars.
 fn fold_bit_cast(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     c: ConstantId,
     dest: TypeId,
@@ -880,7 +879,7 @@ fn is_eliminable_cast_pair(
 /// `ConstantFoldLoadThroughBitcast`
 /// ([L465](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L465)).
 pub fn constant_fold_load_through_bitcast(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     c: ConstantId,
     dest: TypeId,
@@ -1074,7 +1073,7 @@ fn read_data_from_global(
 /// `FoldReinterpretLoadFromConst`
 /// ([L686](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L686)).
 fn fold_reinterpret_load_from_const(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     c: ConstantId,
     load_ty: TypeId,
@@ -1149,7 +1148,7 @@ fn fold_reinterpret_load_from_const(
 /// ([L789](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L789)):
 /// the bytes of a constant global from `offset`, as a `c"..."` array.
 pub fn read_byte_array_from_global(
-    context: &mut Context,
+    context: &Context,
     env: Env,
     global: GlobalId,
     offset: u64,
@@ -1234,7 +1233,7 @@ fn get_gep_indices_for_offset(
 /// `getConstantAtOffset`
 /// ([L819](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L819)).
 fn get_constant_at_offset(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     base: ConstantId,
     offset: i64,
@@ -1264,7 +1263,7 @@ fn get_constant_at_offset(
 /// ([L845](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L845)):
 /// a load of `ty` at `offset` bytes (a signed 64-bit number) into `c`.
 pub fn constant_fold_load_from_const(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     c: ConstantId,
     ty: TypeId,
@@ -1290,7 +1289,7 @@ pub fn constant_fold_load_from_const(
 /// ([L876](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L876))
 /// with `offset` already added to `ptr` (`width` bits).
 fn constant_fold_load_from_const_ptr_at(
-    context: &mut Context,
+    context: &Context,
     env: Env,
     ptr: ConstantId,
     ty: TypeId,
@@ -1313,7 +1312,7 @@ fn constant_fold_load_from_const_ptr_at(
 /// `ConstantFoldLoadFromConstPtr`
 /// ([L898](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L898)).
 pub fn constant_fold_load_from_const_ptr(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     globals: &[GlobalValue],
     ptr: ConstantId,
@@ -1327,7 +1326,7 @@ pub fn constant_fold_load_from_const_ptr(
 /// `ConstantFoldLoadFromUniformValue`
 /// ([L904](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L904)).
 pub fn constant_fold_load_from_uniform_value(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     c: ConstantId,
     ty: TypeId,
@@ -1370,7 +1369,7 @@ fn with_query<R>(
 /// `SymbolicallyEvaluateBinop`
 /// ([L929](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L929)).
 fn symbolically_evaluate_binop(
-    context: &mut Context,
+    context: &Context,
     env: Env,
     op: BinaryOp,
     op0: ConstantId,
@@ -1631,7 +1630,7 @@ fn nw_of_flags(flags: Flags) -> u8 {
 /// `ConstantFoldExtractValueInstruction`
 /// ([ConstantFold.cpp:538](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantFold.cpp#L538)).
 pub fn constant_fold_extract_value_instruction(
-    context: &mut Context,
+    context: &Context,
     agg: ConstantId,
     indices: &[u32],
 ) -> Option<ConstantId> {
@@ -1643,7 +1642,7 @@ pub fn constant_fold_extract_value_instruction(
 /// `ConstantFoldInsertValueInstruction`
 /// ([ConstantFold.cpp:550](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantFold.cpp#L550)).
 pub fn constant_fold_insert_value_instruction(
-    context: &mut Context,
+    context: &Context,
     agg: ConstantId,
     value: ConstantId,
     indices: &[u32],
@@ -1768,7 +1767,7 @@ pub fn constant_fold_inst_operands_at(
 /// `ConstantFoldCompareInstOperands`
 /// ([L1332](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L1332)).
 pub fn constant_fold_compare_inst_operands(
-    context: &mut Context,
+    context: &Context,
     globals: &[GlobalValue],
     layout: &DataLayout,
     predicate: IntPredicate,
@@ -1861,7 +1860,7 @@ pub fn constant_fold_compare_inst_operands(
 /// ([L1448](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L1448)):
 /// the only unary operation is `fneg`, which this crate does not fold.
 pub fn constant_fold_unary_op_operand(
-    _context: &mut Context,
+    _context: &Context,
     _op: ConstantId,
 ) -> Option<ConstantId> {
     None
@@ -1873,7 +1872,7 @@ pub fn constant_fold_unary_op_operand(
 /// `ConstantFoldBinaryInstruction` and otherwise makes a binary expression,
 /// which MIR cannot hold.
 pub fn constant_fold_binary_op_operands(
-    context: &mut Context,
+    context: &Context,
     env: Env,
     op: BinaryOp,
     lhs: ConstantId,
@@ -1890,7 +1889,7 @@ pub fn constant_fold_binary_op_operands(
 /// `ConstantFoldCastOperand`
 /// ([L1619](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L1619)).
 pub fn constant_fold_cast_operand(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     op: CastOp,
     c: ConstantId,
@@ -1952,7 +1951,7 @@ pub fn constant_fold_cast_operand(
 /// `ConstantFoldIntegerCast`
 /// ([L1720](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L1720)).
 pub fn constant_fold_integer_cast(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     c: ConstantId,
     dest: TypeId,
@@ -2098,7 +2097,7 @@ fn intrinsic_propagates_poison(id: Folded) -> bool {
 /// `ConstantFoldScalarCall1`
 /// ([L2610](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L2610)).
 fn constant_fold_scalar_call1(
-    context: &mut Context,
+    context: &Context,
     id: Folded,
     ty: TypeId,
     operand: ConstantId,
@@ -2317,7 +2316,7 @@ fn smul_fix(
 /// ([L4149](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L4149)),
 /// the integer arms (L4265, L4298).
 fn constant_fold_scalar_call3(
-    context: &mut Context,
+    context: &Context,
     id: Folded,
     ty: TypeId,
     ops: &[ConstantId],

@@ -247,7 +247,7 @@ fn sides(
 }
 
 fn planned(
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     costs: &OperationCosts,
     scaled: Option<&dyn Machine>,
@@ -279,7 +279,7 @@ fn planned(
 /// `phi`, whose constants from `yes` and `no` are known, as the cheapest form,
 /// and what it costs.
 fn rewritten(
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     costs: &OperationCosts,
     scaled: Option<&dyn Machine>,
@@ -324,7 +324,7 @@ fn rewritten(
 }
 
 fn applied(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     plan: Plan,
 ) {

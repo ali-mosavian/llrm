@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sroa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sroa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sroa.rs sha256:d3b1ba0e46c24ef5235b3d3cde4e7bf2c5a6598611e34687f5e2f35d858bb907 -->
+<!-- src: crates/opt/llrm-transforms/src/sroa.rs sha256:6e08fb994b10c4d237d00836ce1a0a34149159bab776fb3b27f49a40d76a3c3e -->
 
 # sroa
 
@@ -45,8 +45,9 @@ DEVIATE, each with its reason (line numbers are SROA.cpp's):
   MIR's does.
 - `AssumptionCache`, `DomTreeUpdater`, statistics, names that follow
   `.sroa.` suffix rules.
-- Offsets are `i128` and do not wrap at the index width; an offset below
-  zero is outside the alloca.
+- Offsets are `i128` kept in `0..2^index width` after each GEP, as the
+  `APInt` of `PtrUseVisitor` wraps; one past the alloca is outside it, and
+  so is a negative one, which wraps to a large number.
 - `IRBuilder` here makes what it is told and does not fold constants
   (`ConstantFolder`) except the splat of a constant byte; `fold` does that
   after.
