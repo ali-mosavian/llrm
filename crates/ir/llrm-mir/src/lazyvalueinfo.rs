@@ -79,6 +79,7 @@ use crate::constantrange::{ConstantRange, NO_SIGNED_WRAP, NO_UNSIGNED_WRAP, Pref
 use crate::context::{Constant, ConstantId, ConstantKind, Context, mask};
 use crate::datalayout::DataLayout;
 use crate::domtree::DomTree;
+use crate::facts::Fact;
 use crate::hash::{HashMap, HashSet};
 use crate::knownbits::KnownBits;
 use crate::module::{
@@ -2516,7 +2517,7 @@ fn has_ub_implying_attrs(
             .iter()
             .any(
                 |a| match a {
-                    Attribute::Flag(name) => name == "noundef",
+                    Attribute::Flag(_) => Fact::of_attribute(a) == Some(Fact::NoUndef),
                     Attribute::Int(name, _) => name == "dereferenceable" || name == "dereferenceable_or_null",
                     _ => false,
                 },
