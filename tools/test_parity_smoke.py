@@ -141,3 +141,18 @@ def test_qcports_own_d_faces_is_compiled_at_all_four_levels_and_a_verifier_failu
     monkeypatch.setenv("QCPORT", str(tmp_path / "ok/src"))
     monkeypatch.setenv("QCPORT_INC", str(tmp_path / "ok/inc"))
     assert ps.qc_d_faces(tmp_path / "ok")[0] == "ok" and seen2.read_text().split() == ["-O1", "-O2", "-O3", "-Os"]
+
+
+def test_two_halves_that_each_compile_but_not_together_fail_the_workspace_check(tmp_path):
+    """#2544 (a fold calling `undef(context, ..)`) and #2564 (`undef` taking `&mut Context`, then `&Context`) each compiled; merged, feat/parity did not build
+    for three hours. The smoke built only the touched crates' unit tests and passed."""
+    (tmp_path / "Cargo.toml").write_text('[workspace]\nmembers = ["lib", "app"]\nresolver = "2"\n')
+    (tmp_path / "lib/src").mkdir(parents=True)
+    (tmp_path / "lib/Cargo.toml").write_text('[package]\nname = "lib"\nversion = "0.0.0"\nedition = "2021"\n')
+    (tmp_path / "lib/src/lib.rs").write_text("pub struct Context;\npub fn undef(_context: &mut Context) {}\n")
+    (tmp_path / "app/src").mkdir(parents=True)
+    (tmp_path / "app/Cargo.toml").write_text('[package]\nname = "app"\nversion = "0.0.0"\nedition = "2021"\n[dependencies]\nlib = { path = "../lib" }\n')
+    (tmp_path / "app/src/lib.rs").write_text("pub fn fold(context: &lib::Context) { lib::undef(context); }\n")
+    assert ps.workspace_check(tmp_path) != ""
+    (tmp_path / "app/src/lib.rs").write_text("pub fn fold(context: &mut lib::Context) { lib::undef(context); }\n")
+    assert ps.workspace_check(tmp_path) == ""
