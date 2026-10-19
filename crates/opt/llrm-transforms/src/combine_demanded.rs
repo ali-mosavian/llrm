@@ -177,16 +177,6 @@ impl Combiner<'_> {
         query(self, None).int_constant(v).map(|(bits, _)| bits)
     }
 
-    fn has_one_use(
-        &self,
-        v: Operand,
-    ) -> bool {
-        match v {
-            Operand::Value(value) => self.function.users(value).has_one_use(),
-            _ => false,
-        }
-    }
-
     /// `v` is `op a, b` with the flags it carries.
     fn binary_of(
         &self,

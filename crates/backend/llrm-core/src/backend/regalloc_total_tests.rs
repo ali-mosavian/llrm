@@ -4,7 +4,7 @@
 
 use llrm_lir::registers::RegId;
 
-use crate::backend::regalloc_input::{before_regalloc, before_regalloc_unspilled, through};
+use crate::backend::regalloc_input::{before_regalloc, through};
 use crate::model::ir::Loc;
 use crate::model::lir::LirBody;
 

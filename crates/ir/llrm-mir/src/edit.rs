@@ -585,6 +585,17 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// `FCmpInst::setPredicate`.
+    pub fn set_fcmp_predicate(
+        &mut self,
+        inst: InstId,
+        predicate: crate::opcode::FloatPredicate,
+    ) {
+        let Opcode::FCmp(held) = &mut self.instructions[inst.0 as usize].opcode else { panic!("an fcmp") };
+        *held = predicate;
+        self.log(Change::Rewritten(inst));
+    }
+
     /// `Value::setName`: `value` is named `name`, or `name` with the least
     /// number appended that nothing live holds.
     pub fn set_name(
