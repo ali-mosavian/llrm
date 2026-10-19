@@ -786,7 +786,9 @@ pub(crate) fn llvm_order(
             list.extend([
                 slot("jumpthreading@668", Box::new(crate::jumpthreading::JumpThreading::from_env())),
                 slot("cvp@669", Box::new(crate::cvp::Cvp)),
-                decide("decide@675"),
+                // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L675:
+                // the option is read by `simplifySwitch`, untranslated.
+                simplify_cfg("decide@675"),
                 phiopt("phiopt@675"),
                 fold("fold@677"),
                 dead("dead@677"),
@@ -826,7 +828,9 @@ pub(crate) fn llvm_order(
             list.extend([
                 licm("licm@730", true),
                 slot("trivialunswitch@732", Box::new(simpleloopunswitch::SimpleLoopUnswitch)),
-                decide("decide@766"),
+                // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L766:
+                // the option is read by `simplifySwitch`, untranslated.
+                simplify_cfg("decide@766"),
                 phiopt("phiopt@766"),
                 fold("fold@768"),
                 dead("dead@768"),
