@@ -50,9 +50,9 @@
 //! `eliminateRedundantStoresViaDominatingConditions` are stage 2 and 3. Partial
 //! overwrites (`isPartialOverwrite`, `IOLs`,
 //! `tryToMergePartialOverlappingStores`, `tryToShorten` of memsets) and
-//! `eliminateRedundantStoresOfExistingValues` are in, and a call's `initializes`
-//! (`Accesses::fills`, which holds `getInitializesArgMemLoc`'s argument and
-//! capture rules; nothing unwinds). Exit: stage 2.
+//! `eliminateRedundantStoresOfExistingValues` are in, and a call's
+//! `initializes` (`Accesses::fills`, which holds `getInitializesArgMemLoc`'s
+//! argument and capture rules; nothing unwinds). Exit: stage 2.
 //! DEVIATE 5: only stores and constant-length memsets are candidates, and
 //! `storeIsNoop` knows no `getInitialValueOfAllocation` (it needs `calloc`
 //! and friends). Exit: stage 2.
@@ -556,14 +556,6 @@ impl<'a> Dse<'a> {
         *self.captured.borrow_mut().entry(alloca).or_insert_with(|| {
             llrm_mir::alias::captured(self.context, self.callees, self.function, llrm_mir::module::ValueId(alloca))
         }) == false
-    }
-
-    /// `isInvisibleToCallerOnUnwind`: nothing unwinds, so the same.
-    fn invisible_on_unwind(
-        &self,
-        loc: &Location,
-    ) -> bool {
-        self.invisible_after_return(loc)
     }
 
     // ---- loops --------------------------------------------------------------
