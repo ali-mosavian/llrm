@@ -5025,7 +5025,16 @@ fn _memory_source_read_first(
                 .collect(),
             ..what.clone()
         });
-        made.uses = one.uses.iter().copied().chain([fresh]).collect();
+        // The cell's registers went to the load with it; what else the
+        // instruction names is read here still.
+        let rest = what
+            .sources
+            .iter()
+            .filter(|x| !matches!(x, Loc::Mem(_)))
+            .chain(what.dests.iter().filter(|x| matches!(x, Loc::Mem(_))));
+        let read: BTreeSet<u32> =
+            rest.flat_map(|place| ir::values(place)).map(|held| held.value).chain([fresh]).collect();
+        made.uses = one.uses.iter().copied().filter(|value| read.contains(value)).chain([fresh]).collect();
     });
     Some((load, rewritten))
 }
@@ -7460,6 +7469,18 @@ mod tests {
         let rebuilt =
             cell.base.is_some_and(|base| result.iter().any(|one| one.defines == [base.value] && one.rematerialized));
         assert!(cell.index.is_some() || !rebuilt, "{result:?}");
+    }
+
+    /// `v1 := mov [v5 + v1]` with v1 spilled became `v77 := mov [v5 + v1]` and
+    /// `v1 := mov v77`, the second still listing v5 and v1 as read: v5 had
+    /// no definition left to its name once it was spilled in turn (fuzz
+    /// seed 32, `unique value` in `LiveRangeCalc::extend`).
+    #[test]
+    fn test_the_move_after_a_split_off_load_reads_only_the_loaded_value() {
+        let read = _read(0x102, 1, _far(0, Some(1)), &[5, 1]);
+        let (load, rewritten) = super::_memory_source_read_first(&read, &BTreeSet::from([1]), 77).expect("a tied load");
+        assert_eq!(load.defines, [77]);
+        assert_eq!(rewritten.uses, [77], "{rewritten:?}");
     }
 
     /// The index fold may not move a second access through the same base.
