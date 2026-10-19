@@ -186,8 +186,7 @@ impl Function {
         for (index, &operand) in operands.iter().enumerate() {
             self.add_use(operand, Use { user: id, index: index as u32 });
         }
-        self.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata: Vec::new() });
-        self.link.push((0, 0));
+        self.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata: Vec::new(), link: (0, 0) });
         self.parent.push(None);
         self.erased.push(false);
         id
@@ -198,7 +197,7 @@ impl Function {
         &self,
         inst: InstId,
     ) -> Option<InstId> {
-        match self.link[inst.0 as usize].1 {
+        match self.instructions[inst.0 as usize].link.1 {
             0 => None,
             n => Some(InstId(n - 1)),
         }
@@ -212,9 +211,9 @@ impl Function {
     ) {
         let b = &mut self.blocks[block.0 as usize];
         let id = inst.0 + 1;
-        self.link[inst.0 as usize] = (b.tail, 0);
+        self.instructions[inst.0 as usize].link = (b.tail, 0);
         if b.tail != 0 {
-            self.link[(b.tail - 1) as usize].1 = id;
+            self.instructions[(b.tail - 1) as usize].link.1 = id;
         } else {
             b.head = id;
         }
@@ -230,12 +229,12 @@ impl Function {
         next: InstId,
     ) {
         let id = inst.0 + 1;
-        let prev = self.link[next.0 as usize].0;
-        self.link[inst.0 as usize] = (prev, next.0 + 1);
-        self.link[next.0 as usize].0 = id;
+        let prev = self.instructions[next.0 as usize].link.0;
+        self.instructions[inst.0 as usize].link = (prev, next.0 + 1);
+        self.instructions[next.0 as usize].link.0 = id;
         let b = &mut self.blocks[block.0 as usize];
         if prev != 0 {
-            self.link[(prev - 1) as usize].1 = id;
+            self.instructions[(prev - 1) as usize].link.1 = id;
         } else {
             b.head = id;
         }
@@ -248,19 +247,19 @@ impl Function {
         block: BlockId,
         inst: InstId,
     ) {
-        let (prev, next) = self.link[inst.0 as usize];
+        let (prev, next) = self.instructions[inst.0 as usize].link;
         let b = &mut self.blocks[block.0 as usize];
         if prev != 0 {
-            self.link[(prev - 1) as usize].1 = next;
+            self.instructions[(prev - 1) as usize].link.1 = next;
         } else {
             b.head = next;
         }
         if next != 0 {
-            self.link[(next - 1) as usize].0 = prev;
+            self.instructions[(next - 1) as usize].link.0 = prev;
         } else {
             b.tail = prev;
         }
-        self.link[inst.0 as usize] = (0, 0);
+        self.instructions[inst.0 as usize].link = (0, 0);
         b.len -= 1;
     }
 
@@ -807,7 +806,7 @@ impl Function {
             let mut next = None;
             while at != 0 {
                 let inst = InstId(at - 1);
-                let before = self.link[inst.0 as usize].0;
+                let before = self.instructions[inst.0 as usize].link.0;
                 if gone.contains(&inst) {
                     self.settle_records(inst, next, false);
                     self.log(Change::Erased { inst, block, next });
