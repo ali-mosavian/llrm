@@ -591,6 +591,15 @@ fn hoisting(applied: &Applied) -> Box<dyn FunctionPass> {
     }
 }
 
+/// Under LLVM's order the translated LICM does the moving of code out of and
+/// into loops, in its three slots: the passes after the fixed point that
+/// stood in for MachineLICM and gcc's `pass_sink_code` (`hoist` again, `sink`
+/// with its register-pressure forecast) have no counterpart there, and run only
+/// under `LLRM_NO_LICM` or without the order.
+pub fn llvm_motion(applied: &Applied) -> bool {
+    applied.options.llvm_order && applied.options.licm
+}
+
 /// Translations that have not joined the pipeline yet: `llrm-pass` and
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
@@ -1073,7 +1082,7 @@ pub fn recorded(
     }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
-    if !guarded && applied.options.wanted("hoist") {
+    if !guarded && applied.options.wanted("hoist") && !llvm_motion(applied) {
         manager.add_boxed(hoisting(applied));
     }
     // After hoist, which would move a constant `gep` out of its loop.
@@ -1088,7 +1097,7 @@ pub fn recorded(
     // After the passes that move work up and out: what is left below a branch
     // that a path skips is moved to where it is needed (gcc's
     // `pass_sink_code`).
-    if applied.options.wanted("sink") {
+    if applied.options.wanted("sink") && !llvm_motion(applied) {
         manager.add(sink::Sink { size: applied.options.prefers_size() });
     }
     // Last of the passes that reshape the body, as gcc's `pass_lower_switch`

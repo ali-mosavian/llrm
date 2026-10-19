@@ -601,5 +601,5 @@ b6:
     passes.add(Licm { apply: true, speculate: true });
     passes.run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let after = crate::testing::printed(&after);
-    assert!(after.contains("phi i16 [ undef") && !after.contains("poison"), "{after}");
+    assert!(after.contains("[ undef, %b1 ]") && !after.contains("poison"), "{after}");
 }
