@@ -1467,10 +1467,7 @@ impl WidenIv {
             }
             let cx = cx!(e);
             let query = cx.query(None);
-            let block = cx.function.parent(ctx).expect("placed");
-            let list = cx.function.block(block).instructions();
-            let at = list.iter().position(|one| *one == ctx).expect("in its block");
-            for &inst in list[..=at].iter().rev() {
+            for inst in std::iter::successors(Some(ctx), |&one| cx.function.prev_in_block(one)) {
                 if llrm_mir::valuetracking::pattern::call_intrinsic(&query, inst)
                     == Some(llrm_mir::valuetracking::pattern::IntrinsicId::ExperimentalGuard)
                 {
@@ -1617,9 +1614,7 @@ fn find_common_dominator(
                     cx.function.terminator(block).expect("a terminated block")
                 } else {
                     // Use whichever instruction is first in the block.
-                    let list = cx.function.block(a).instructions();
-                    let at = |x: InstId| list.iter().position(|y| *y == x);
-                    if at(one) < at(inst) { one } else { inst }
+                    if cx.function.comes_before(one, inst) { one } else { inst }
                 }
             }
         });
@@ -1633,8 +1628,7 @@ pub(crate) fn first_insertion_point(
     block: BlockId,
 ) -> InstId {
     function
-        .block(block)
-        .iter()
+        .iter_block(block)
         .find(|&inst| !matches!(
             function.instruction(inst).opcode,
             Opcode::Phi | Opcode::LandingPad { .. }

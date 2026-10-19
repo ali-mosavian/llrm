@@ -285,7 +285,7 @@ pub fn inline_viable(
 ) -> Result<(), String> {
     let returns_twice = has_flag(&callee.attrs, "returns_twice");
     for &block in callee.layout() {
-        for inst in callee.block(block).iter() {
+        for inst in callee.iter_block(block) {
             let opcode = &callee.instruction(inst).opcode;
             if !matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
                 continue;
@@ -1565,7 +1565,7 @@ impl<'a> Analyzer<'a> {
         &mut self,
         block: BlockId,
     ) -> Result<(), String> {
-        for inst in self.callee.block(block).iter() {
+        for inst in self.callee.iter_block(block) {
             // D5: no ephemeral values; a debug intrinsic costs nothing and is
             // not counted (:2750).
             if let Some(target) = llrm_mir::memory::callee(self.context, self.callee, inst)
@@ -2127,13 +2127,12 @@ pub fn shadow(
             .iter()
             .any(
                 |&block| caller
-                    .block(block)
-                    .iter()
+                    .iter_block(block)
                     .any(|inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(caller_id)),
             );
         let mut ordinal: HashMap<GlobalId, usize> = HashMap::default();
         for &block in caller.layout() {
-            for inst in caller.block(block).iter() {
+            for inst in caller.iter_block(block) {
                 let Some(callee_id) = llrm_mir::memory::callee(&module.context, caller, inst) else { continue };
                 let callee_global = module.global(callee_id);
                 let GlobalKind::Function(callee) = &callee_global.kind else { continue };
@@ -2170,8 +2169,7 @@ pub fn shadow(
                     .iter()
                     .any(
                         |&block| callee
-                            .block(block)
-                            .iter()
+                            .iter_block(block)
                             .any(
                                 |one| llrm_mir::memory::callee(&module.context, callee, one).is_some_and(|inner| {
                                     matches!(

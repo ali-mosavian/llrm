@@ -2403,8 +2403,7 @@ fn the_pad_goes_to_the_handler_named_last() {
         .iter()
         .copied()
         .find(|&block| {
-            main.block(block)
-                .iter()
+            main.iter_block(block)
                 .any(|one| matches!(
                     main.instruction(one).opcode,
                     llrm_mir::Opcode::LandingPad { .. }

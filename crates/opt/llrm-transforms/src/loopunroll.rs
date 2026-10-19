@@ -227,7 +227,7 @@ pub fn unroll_loop_blocks(
                     .collect::<Result<Vec<_>, String>>()?;
                 map.extend(incoming);
             }
-            for inst in function.block(at).iter().collect::<Vec<_>>() {
+            for inst in function.iter_block(at).collect::<Vec<_>>() {
                 if at == header && function.instruction(inst).opcode == Opcode::Phi {
                     continue;
                 }
@@ -269,7 +269,7 @@ pub fn unroll_loop_blocks(
             fresh.push(new);
         }
         for &new in &fresh {
-            for inst in function.block(new).iter().collect::<Vec<_>>() {
+            for inst in function.iter_block(new).collect::<Vec<_>>() {
                 // Only the operands that change: `set_operands` scans the
                 // use list of each, and a value every copy reads has `count`.
                 let operands = function.instruction(inst).operands.clone();
@@ -402,7 +402,7 @@ fn _closed(
     inside: &impl Fn(BlockId) -> bool,
 ) -> bool {
     blocks.iter().all(|&at| {
-        function.block(at).iter().filter_map(|inst| function.instruction(inst).result).all(|value| {
+        function.iter_block(at).filter_map(|inst| function.instruction(inst).result).all(|value| {
             function.users(value).iter().all(|one| {
                 function.parent(one.user).is_some_and(|block| {
                     inside(block) || (exits.contains(&block) && function.instruction(one.user).opcode == Opcode::Phi)

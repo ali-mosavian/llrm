@@ -30,9 +30,11 @@
 //!    target is a separate decision.
 //! 3. Floating-point folds, `bitcast (uitofp X)` included: #2246.
 //! 4. Loads, pointer compares, `addrspacecast`: #2247.
-//! 5. Calls and intrinsics, `simplifyICmpWithIntrinsicOnLHS`, the call arm of
-//!    `simplifyWithOpsReplaced`: #2248. Only the `llvm.smax` family is folded,
-//!    matched by `simplify_instruction_in`, whose caller passes the globals.
+//! 5. `simplifyICmpWithIntrinsicOnLHS`, the call arm of
+//!    `simplifyWithOpsReplaced`, the floating-point intrinsics: #2248, #2246.
+//!    `simplifyCall`'s integer intrinsics are `simplify_calls.rs`; the callee
+//!    is found by name, so `simplify_instruction_in`'s caller passes the
+//!    globals.
 //! 6. `simplifySelectWithICmpCond`, `simplifySelectBitTest`/`WithBitTest`,
 //!    `simplifySelectWithEquivalence`, `simplifyCmpSelOfMaxMin`,
 //!    `simplifyICmpWithDominatingAssume`: #2249.
@@ -49,9 +51,9 @@
 //! find only the facts that need none (a single-predecessor branch needs only
 //! the context instruction, which `simplify_instruction_in` sets).
 
+use crate::constantfolding;
 use crate::constantrange::ConstantRange;
 use crate::constantrange::PreferredRangeType;
-use crate::constantfolding;
 use crate::constfold;
 use crate::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
 use crate::datalayout::DataLayout;
@@ -69,7 +71,7 @@ const RECURSION_LIMIT: u32 = 3;
 
 /// The `SimplifyQuery`: what an operand is, looked up in `function`.
 struct Query<'a> {
-    context: &'a mut Context,
+    context: &'a Context,
     function: &'a Function,
     layout: &'a DataLayout,
     /// The module's globals, which name the callees; empty where the caller has
@@ -2791,7 +2793,8 @@ fn simplify_cast(
     _max_recurse: u32,
 ) -> Option<Operand> {
     if let Some(c) = q.constant(op) {
-        return constfold::cast(q.context, cast_opc, c, ty).map(Operand::Constant);
+        return constantfolding::constant_fold_cast_operand(q.context, q.layout, cast_opc, c, ty)
+            .map(Operand::Constant);
     }
     // A cast of a cast back to the source type that is eliminable
     // (`isEliminableCastPair == BitCast`): trunc (zext X) and trunc (sext X) to
@@ -3924,12 +3927,11 @@ fn simplify_gep(
     let indices_c = indices.iter().map(|&index| q.constant(index)).collect::<Option<Vec<_>>>()?;
     let nw = constantfolding::nw_of_flags(flags);
     let env = constantfolding::Env { globals: q.globals, layout: q.layout };
-    let folded = match constantfolding::constant_expr_get_gep_with_layout(
-        q.context, q.layout, source, ptr_c, &indices_c, nw,
-    ) {
-        Some(expr) => constantfolding::constant_fold_constant(q.context, env, expr),
-        None => constantfolding::constant_fold_get_element_ptr(q.context, source, ptr_c, &indices_c, nw),
-    };
+    let folded =
+        match constantfolding::constant_expr_get_gep_with_layout(q.context, q.layout, source, ptr_c, &indices_c, nw) {
+            Some(expr) => constantfolding::constant_fold_constant(q.context, env, expr),
+            None => constantfolding::constant_fold_get_element_ptr(q.context, source, ptr_c, &indices_c, nw),
+        };
     Some(Operand::Constant(folded))
 }
 
@@ -3937,7 +3939,7 @@ fn simplify_gep(
 /// ([:7741](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L7741),
 /// `simplifyInstructionWithOperands`): the value `inst` equals, or None.
 pub fn simplify_instruction(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     inst: InstId,
@@ -3952,7 +3954,7 @@ pub fn simplify_instruction(
 /// so the intrinsics (`llvm.smax`...) are known, and `analyses` give the
 /// dominator tree and the assumptions.
 pub fn simplify_instruction_in(
-    context: &mut Context,
+    context: &Context,
     globals: &[GlobalValue],
     layout: &DataLayout,
     analyses: Option<&FunctionAnalyses>,
@@ -4003,6 +4005,7 @@ fn simplify_instruction_with_operands(
         Opcode::Cast(op) => simplify_cast(q, *op, operands[0], instruction.ty, max_recurse),
         Opcode::Phi => simplify_phi(q, inst),
         Opcode::Freeze => simplify_freeze(q, operands[0]),
+        Opcode::Call(_) => calls::simplify_call(q, inst, operands),
         Opcode::GetElementPtr { source } => simplify_gep(q, *source, operands[0], &operands[1..], flags),
         _ => None,
     }
@@ -4011,7 +4014,7 @@ fn simplify_instruction_with_operands(
 /// `simplifyBinOp` for a caller that has operands and no instruction (a
 /// builder).
 pub fn simplify_binop_operands(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     opcode: BinaryOp,
@@ -4025,7 +4028,7 @@ pub fn simplify_binop_operands(
 
 /// `simplifyICmpInst` for operands.
 pub fn simplify_icmp_operands(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     predicate: IntPredicate,
@@ -4038,7 +4041,7 @@ pub fn simplify_icmp_operands(
 
 /// `simplifyCastInst` for operands.
 pub fn simplify_cast_operand(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     op: CastOp,
@@ -4051,7 +4054,7 @@ pub fn simplify_cast_operand(
 
 /// `simplifyGEPInst` for operands.
 pub fn simplify_gep_operands(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     source: TypeId,
@@ -4065,7 +4068,7 @@ pub fn simplify_gep_operands(
 
 /// `simplifySelectInst` for operands.
 pub fn simplify_select_operands(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     condition: Operand,
@@ -4075,6 +4078,9 @@ pub fn simplify_select_operands(
     let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None, can_use_undef: true };
     simplify_select(&mut q, condition, if_true, if_false)
 }
+
+#[path = "simplify_calls.rs"]
+mod calls;
 
 #[cfg(test)]
 #[path = "simplify_tests.rs"]

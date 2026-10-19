@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 
 use crate::context::{Constant, ConstantKind, Context};
+use crate::hash::HashMap;
 use crate::module::{
     Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, NameIndex, Names,
     Operand, Use, ValueData, ValueDef, ValueId,
@@ -220,7 +221,6 @@ impl Function {
         }
         b.tail = id;
         b.len += 1;
-        b.view.take();
     }
 
     /// Links `inst` before `next` in `block`'s list.
@@ -241,7 +241,6 @@ impl Function {
             b.head = id;
         }
         b.len += 1;
-        b.view.take();
     }
 
     /// Takes `inst` out of `block`'s list.
@@ -264,7 +263,6 @@ impl Function {
         }
         self.link[inst.0 as usize] = (0, 0);
         b.len -= 1;
-        b.view.take();
     }
 
     /// Links `inst` at `position`; the block and what follows it.
@@ -332,7 +330,7 @@ impl Function {
             (Some(only), None) if only == inst => {}
             _ => return None,
         }
-        self.block(target).iter().find(|&one| self.instruction(one).opcode != Opcode::Phi)
+        self.iter_block(target).find(|&one| self.instruction(one).opcode != Opcode::Phi)
     }
 
     /// Takes `inst` out of its block. What was said before it is said before
@@ -587,6 +585,17 @@ impl Function {
         let Opcode::ICmp(held) = &mut self.instructions[inst.0 as usize].opcode else { panic!("an icmp") };
         *held = predicate;
         self.log(Change::Rewritten(inst));
+    }
+
+    /// `Value::takeName`: `to` is named what `from` was, which goes unnamed;
+    /// the name stays taken in the function.
+    pub fn take_name(
+        &mut self,
+        from: ValueId,
+        to: ValueId,
+    ) {
+        let name = self.values[from.0 as usize].name.take();
+        self.values[to.0 as usize].name = name;
     }
 
     /// Replaces an instruction's flags.
@@ -1111,6 +1120,50 @@ impl Function {
         copy
     }
 
+    /// `CloneBasicBlock(BB, VMap)`
+    /// ([CloneFunction.cpp:40](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/CloneFunction.cpp#L40)):
+    /// a copy of `block` in the layout nowhere yet, its instructions copied in
+    /// order. `map` gets `block` and each result of the original (not the
+    /// `void` ones) with the copy's. The copies still read the original's
+    /// values: `remap_instruction` rewrites them.
+    pub fn clone_block(
+        &mut self,
+        block: BlockId,
+        map: &mut ValueMap,
+    ) -> BlockId {
+        let copy = self.create_block(None);
+        map.blocks.insert(block, copy);
+        for inst in self.iter_block(block).collect::<Vec<_>>() {
+            let duplicate = self.clone_instruction(inst);
+            self.insert(duplicate, Position::End(copy)).expect("a new block takes its instructions");
+            if let (Some(from), Some(to)) = (self.instruction(inst).result, self.instruction(duplicate).result) {
+                map.values.insert(from, Operand::Value(to));
+            }
+        }
+        copy
+    }
+
+    /// `RemapInstruction(I, VMap)`
+    /// ([ValueMapper.cpp:1014](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ValueMapper.cpp#L1014)):
+    /// the operands `map` has an entry for are replaced; the rest stay.
+    pub fn remap_instruction(
+        &mut self,
+        inst: InstId,
+        map: &ValueMap,
+    ) {
+        let operands = self
+            .instruction(inst)
+            .operands
+            .iter()
+            .map(|&one| match one {
+                Operand::Value(value) => map.values.get(&value).copied().unwrap_or(one),
+                Operand::Block(block) => map.blocks.get(&block).map_or(one, |&copy| Operand::Block(copy)),
+                Operand::Constant(_) => one,
+            })
+            .collect();
+        self.set_operands(inst, operands);
+    }
+
     /// A new, empty block, in the layout nowhere yet.
     pub fn create_block(
         &mut self,
@@ -1181,7 +1234,7 @@ impl Function {
         keep_one_input_phis: bool,
     ) {
         let phis: Vec<InstId> =
-            self.block(block).iter().take_while(|&one| self.instruction(one).opcode == Opcode::Phi).collect();
+            self.iter_block(block).take_while(|&one| self.instruction(one).opcode == Opcode::Phi).collect();
         for phi in phis {
             let mut operands = self.instruction(phi).operands.clone();
             let Some(at) = operands.chunks(2).position(|pair| pair[1] == Operand::Block(predecessor)) else {
@@ -1277,15 +1330,9 @@ pub fn layout_scanned() -> usize {
     LAYOUT_SCANNED.with(std::cell::Cell::get)
 }
 
-thread_local! {
-    /// Instructions of a block looked over to take instructions out of it: the
-    /// cost of erasing, which was a scan of the block per instruction erased.
-    pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many instructions of a block this thread has looked over to take
-/// instructions out of it, for a test that a pass erasing k of a block's n
-/// does not scan k times n.
-pub fn instructions_scanned() -> usize {
-    SCANNED.with(std::cell::Cell::get)
+/// `ValueToValueMapTy`: what `clone_block` copied, original to copy.
+#[derive(Default)]
+pub struct ValueMap {
+    pub values: HashMap<ValueId, Operand>,
+    pub blocks: HashMap<BlockId, BlockId>,
 }

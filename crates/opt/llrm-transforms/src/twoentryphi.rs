@@ -31,6 +31,17 @@
 //! # See also
 //! [`phiopt`](crate::phiopt), which prices a constant-only phi in the
 //! target's units and runs at its own slot.
+//!
+//! # Example
+//! The phi that a branch chooses between becomes a select in the branch's
+//! block:
+//!
+//! ```text
+//! entry: br i1 %c, label %then, label %end
+//! then:  br label %end
+//! end:   %p = phi i32 [ 1, %then ], [ 2, %entry ]
+//! ; becomes, in entry: %p = select i1 %c, i32 1, i32 2
+//! ```
 
 use llrm_analysis::occurrence::arms;
 use llrm_mir::context::{ConstantKind, Context};
@@ -261,7 +272,7 @@ pub fn folded(
     function: &mut Function,
     block: BlockId,
 ) -> bool {
-    let Some(&first) = function.block(block).instructions().first() else { return false };
+    let Some(first) = function.block(block).first() else { return false };
     if function.instruction(first).opcode != Opcode::Phi || arms(function, first).len() != 2 {
         return false;
     }
@@ -310,8 +321,7 @@ pub fn folded(
         }
     }
     // Every phi folded away.
-    let Some(&first) =
-        function.block(block).instructions().first().filter(|&&one| function.instruction(one).opcode == Opcode::Phi)
+    let Some(first) = function.block(block).first().filter(|&one| function.instruction(one).opcode == Opcode::Phi)
     else {
         return true;
     };
@@ -325,8 +335,7 @@ pub fn folded(
     }
     // Unless the arms are emptied, the control flow stays.
     for &arm in &if_blocks {
-        let body = function.block(arm).instructions();
-        if body[..body.len() - 1].iter().any(|&one| !seen.contains(&one)) {
+        if function.iter_block(arm).take(function.block(arm).len() - 1).any(|one| !seen.contains(&one)) {
             return changed;
         }
     }
@@ -362,7 +371,7 @@ fn hoisted_into(
     before: InstId,
     arm: BlockId,
 ) {
-    let body = function.block(arm).instructions().to_vec();
+    let body = function.iter_block(arm).collect::<Vec<_>>();
     for &inst in &body[..body.len() - 1] {
         function.move_to(inst, Position::Before(before)).expect("a placed instruction");
         metadata_dropped(function, inst);
