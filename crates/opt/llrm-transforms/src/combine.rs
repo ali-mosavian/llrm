@@ -10,10 +10,9 @@
 //! [`InstructionWorklist`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/Transforms/Utils/InstructionWorklist.h).
 //! `visit` is [`llrm_mir::simplify::simplify_instruction_in`].
 //!
-//! MIRROR: the worklist (a stack, a map from instruction to slot, a deferred
-//! set); the seed in reverse reverse-post-order after folding and deleting the
-//! dead as it walks; the live-successor handling of a constant branch (the phi
-//! inputs of a dead edge become poison); the pop, delete-if-dead, visit,
+//! MIRROR: the seed in reverse reverse-post-order after folding and deleting
+//! the dead as it walks; the live-successor handling of a constant branch (the
+//! phi inputs of a dead edge become poison); the pop, delete-if-dead, visit,
 //! replace-all-uses, `pushUsersToWorkList`, erase sequence.
 //!
 //! DEVIATE, with the reason: code sinking (`tryToSinkInstruction`) is not made
@@ -27,104 +26,29 @@
 //!
 //! # Used by
 //! `fold` (its number step).
-//!
-//! # Example
-//! An instruction that simplifies is replaced, and what read it is visited again:
-//!
-//! ```text
-//! %a = add i32 %x, 0
-//! %b = mul i32 %a, 1   ; %a becomes %x, then %b becomes %x
-//! ```
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::valuetracking::FunctionAnalyses;
 
-/// `InstructionWorklist`: a stack of instructions, one entry each, and the
-/// deferred ones that `eraseInstFromFunction` adds for what lost a user.
-#[derive(Default)]
-struct Worklist {
-    stack: Vec<Option<InstId>>,
-    slot: IdMap<InstId, usize>,
-    deferred: Vec<InstId>,
-    deferred_set: IdSet<InstId>,
-}
+use crate::instworklist::InstWorklist;
 
-impl Worklist {
-    fn is_empty(&self) -> bool {
-        self.stack.is_empty() && self.deferred.is_empty()
-    }
-
-    /// `add`: queue `inst` to be looked at before the worklist is popped.
-    fn add(
-        &mut self,
-        inst: InstId,
-    ) {
-        if self.deferred_set.insert(inst) {
-            self.deferred.push(inst);
-        }
-    }
-
-    /// `push`.
-    fn push(
-        &mut self,
-        inst: InstId,
-    ) {
-        if self.slot.get(&inst).is_none() {
-            self.slot.insert(inst, self.stack.len());
-            self.stack.push(Some(inst));
-        }
-    }
-
-    /// `popDeferred`.
-    fn pop_deferred(&mut self) -> Option<InstId> {
-        let inst = self.deferred.pop()?;
-        self.deferred_set.remove(&inst);
-        Some(inst)
-    }
-
-    /// `remove`.
-    fn remove(
-        &mut self,
-        inst: InstId,
-    ) {
-        if let Some(at) = self.slot.remove(&inst) {
-            self.stack[at] = None;
-        }
-        if self.deferred_set.remove(&inst) {
-            self.deferred.retain(|&one| one != inst);
-        }
-    }
-
-    /// `removeOne`: the top of the stack, skipping the holes `remove` left.
-    fn remove_one(&mut self) -> Option<InstId> {
-        while let Some(top) = self.stack.pop() {
-            if let Some(inst) = top {
-                self.slot.remove(&inst);
-                return Some(inst);
-            }
-        }
-        None
-    }
-
-    /// `handleUseCountDecrement`: an operand that lost a user, and the one user
-    /// it has left, are looked at again.
-    fn handle_use_count_decrement(
-        &mut self,
-        function: &Function,
-        operand: Operand,
-    ) {
-        let Some(inst) = defining(function, operand) else { return };
-        self.add(inst);
-        if let Some(result) = function.instruction(inst).result
-            && let Some(only) = function.users(result).only()
-        {
-            self.add(only.user);
-        }
+/// `handleUseCountDecrement`: an operand that lost a user, and the one user it
+/// has left, are looked at again.
+fn handle_use_count_decrement(
+    worklist: &mut InstWorklist,
+    function: &Function,
+    operand: Operand,
+) {
+    let Some(inst) = defining(function, operand) else { return };
+    worklist.add(inst);
+    if let Some(result) = function.instruction(inst).result
+        && let Some(only) = function.users(result).only()
+    {
+        worklist.add(only.user);
     }
 }
 
@@ -171,14 +95,14 @@ fn is_trivially_dead(
 /// again.
 fn erase(
     function: &mut Function,
-    worklist: &mut Worklist,
+    worklist: &mut InstWorklist,
     inst: InstId,
 ) {
     let operands = function.instruction(inst).operands.to_vec();
     worklist.remove(inst);
     function.erase(inst).expect("nothing reads it");
     for operand in operands {
-        worklist.handle_use_count_decrement(function, operand);
+        handle_use_count_decrement(worklist, function, operand);
     }
 }
 
@@ -190,7 +114,7 @@ fn prepare(
     env: &Env,
     context: &mut Context,
     function: &mut Function,
-    worklist: &mut Worklist,
+    worklist: &mut InstWorklist,
 ) -> bool {
     let mut changed = false;
     let Some(entry) = function.entry() else { return false };
@@ -323,7 +247,7 @@ fn drain(
     env: &Env,
     context: &mut Context,
     function: &mut Function,
-    worklist: &mut Worklist,
+    worklist: &mut InstWorklist,
 ) -> bool {
     let mut changed = false;
     while !worklist.is_empty() {
@@ -392,7 +316,7 @@ pub fn combine(
     function: &mut Function,
 ) -> bool {
     let env = Env { globals, layout, analyses: FunctionAnalyses::of(context, globals, metadata, layout, function) };
-    let mut worklist = Worklist::default();
+    let mut worklist = InstWorklist::default();
     let mut changed = prepare(&env, context, function, &mut worklist);
     changed |= drain(&env, context, function, &mut worklist);
     changed
