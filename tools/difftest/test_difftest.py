@@ -167,15 +167,17 @@ def llrm_pass():
 
 @pytest.mark.skipif(llrm_pass() is None, reason="llrm-pass is not built")
 def test_llrm_pass_runs_the_one_pass_it_is_asked_for_and_no_other(tmp_path):
-    """gvn takes the second add; fold would take `mul x, 1`: only the first happens when gvn is asked for."""
+    """gvn takes the second add; simplifycfg would fold `br i1 true`: only the first happens when gvn is asked for.
+
+    The premise was `mul x, 1`, which gvn simplifies itself (simplifyInstruction), so the test failed once gvn was translated."""
     import subprocess
 
     source = tmp_path / "in.mir"
     source.write_text(
-        "define i32 @f(i32 %x) {\nentry:\n  %a = add i32 %x, 1\n  %b = add i32 %x, 1\n  %c = mul i32 %a, 1\n  %d = add i32 %b, %c\n  ret i32 %d\n}\n"
+        "define i32 @f(i32 %x) {\nentry:\n  %a = add i32 %x, 1\n  %b = add i32 %x, 1\n  br i1 true, label %t, label %e\nt:\n  %d = add i32 %b, %a\n  ret i32 %d\ne:\n  ret i32 0\n}\n"
     )
     out = subprocess.run([str(llrm_pass()), "-O2", "gvn", str(source)], capture_output=True, text=True, check=True).stdout
-    assert out.count(" add i32 %") == 2 and "mul i32" in out, out
+    assert out.count(" add i32 %") == 2 and "br i1 true" in out, out
     refused = subprocess.run([str(llrm_pass()), "-O2", "nosuch", str(source)], capture_output=True, text=True)
     assert refused.returncode == 2 and "no pass named nosuch" in refused.stderr
 

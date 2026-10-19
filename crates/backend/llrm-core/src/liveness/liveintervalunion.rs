@@ -36,6 +36,24 @@ use std::ops::Bound;
 use super::liverange::LiveRange;
 use super::slotindex::SlotIndex;
 
+#[cfg(test)]
+thread_local! {
+    static LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The searches of a union's map made on this thread, for a test that a cursor
+/// walking blocks does not search per step.
+#[cfg(test)]
+pub fn lookups() -> usize {
+    LOOKUPS.with(std::cell::Cell::get)
+}
+
+/// One search of the map.
+fn probe() {
+    #[cfg(test)]
+    LOOKUPS.with(|n| n.set(n.get() + 1));
+}
+
 /// A virtual register, as `const LiveInterval *` is in C++.
 pub type VReg = u32;
 
@@ -90,6 +108,7 @@ impl LiveIntervalUnion {
         &self,
         x: &SlotIndex,
     ) -> Option<SlotIndex> {
+        probe();
         if let Some((start, (stop, _))) = self.segments.range(..=x.clone()).next_back() {
             if stop > x {
                 return Some(start.clone());
@@ -98,24 +117,97 @@ impl LiveIntervalUnion {
         self.segments.range((Bound::Excluded(x.clone()), Bound::Unbounded)).next().map(|(start, _)| start.clone())
     }
 
+    /// `find` with the stop of the entry it finds, so an iterator held as
+    /// (start, stop) is read without a lookup.
+    pub fn find_entry(
+        &self,
+        x: &SlotIndex,
+    ) -> Option<(SlotIndex, SlotIndex)> {
+        probe();
+        if let Some((start, (stop, _))) = self.segments.range(..=*x).next_back() {
+            if stop > x {
+                return Some((*start, *stop));
+            }
+        }
+        self.segments.range((Bound::Excluded(*x), Bound::Unbounded)).next().map(|(start, (stop, _))| (*start, *stop))
+    }
+
+    /// `IntervalMap::const_iterator::advanceTo(x)`: from the entry `at` (start,
+    /// stop), the first entry whose stop is after `x`. The
+    /// held stop answers a step that stays; a few steps of one range, then a
+    /// search.
+    pub fn advance_entry(
+        &self,
+        at: Option<(SlotIndex, SlotIndex)>,
+        x: &SlotIndex,
+    ) -> Option<(SlotIndex, SlotIndex)> {
+        let (start, stop) = at?;
+        if stop > *x {
+            return at;
+        }
+        probe();
+        let mut steps = self.segments.range((Bound::Excluded(start), Bound::Unbounded));
+        for _ in 0..3 {
+            let (start, (stop, _)) = steps.next()?;
+            if stop > x {
+                return Some((*start, *stop));
+            }
+        }
+        self.find_entry(x)
+    }
+
+    /// `advanceTo(x)` from the entry `at` (which starts before `x`), then `--I`
+    /// when that is not an entry starting before `x`: the iterator after
+    /// the move and the last entry that starts before `x`. A few steps of one
+    /// range find both; a far one is a search.
+    pub fn advance_to_last_before(
+        &self,
+        at: (SlotIndex, SlotIndex),
+        x: &SlotIndex,
+    ) -> (Option<(SlotIndex, SlotIndex)>, (SlotIndex, SlotIndex)) {
+        let mut last = at;
+        if at.1 > *x {
+            return (Some(at), at);
+        }
+        probe();
+        let mut steps = self.segments.range((Bound::Excluded(at.0), Bound::Unbounded));
+        for _ in 0..3 {
+            let Some((start, (stop, _))) = steps.next() else { return (None, last) };
+            let found = (*start, *stop);
+            if stop > x {
+                return (Some(found), if start < x { found } else { last });
+            }
+            last = found;
+        }
+        let moved = self.find_entry(x);
+        let last = match moved {
+            Some((start, _)) if start < *x => moved.expect("an entry"),
+            _ => self.prev_entry(moved.as_ref()).expect("an entry before the end"),
+        };
+        (moved, last)
+    }
+
+    /// `--I`: the entry before the one starting at `at`; the last entry from
+    /// the end (`None`).
+    pub fn prev_entry(
+        &self,
+        at: Option<&(SlotIndex, SlotIndex)>,
+    ) -> Option<(SlotIndex, SlotIndex)> {
+        probe();
+        let before = match at {
+            Some((start, _)) => self.segments.range(..*start).next_back(),
+            None => self.segments.iter().next_back(),
+        };
+        before.map(|(start, (stop, _))| (*start, *stop))
+    }
+
     /// The entry after the one starting at `key`.
     pub fn next(
         &self,
         key: &SlotIndex,
     ) -> Option<SlotIndex> {
+        probe();
         self.segments.range((Bound::Excluded(key.clone()), Bound::Unbounded)).next().map(|(start, _)| start.clone())
-    }
-
-    /// `--I`: the entry before the one starting at `key`; the last entry from
-    /// the end (`None`).
-    pub fn prev(
-        &self,
-        key: Option<&SlotIndex>,
-    ) -> Option<SlotIndex> {
-        match key {
-            Some(key) => self.segments.range(..*key).next_back().map(|(start, _)| *start),
-            None => self.segments.keys().next_back().copied(),
-        }
     }
 
     /// `I.value()` of the entry starting at `key`: the register holding it.
@@ -131,6 +223,7 @@ impl LiveIntervalUnion {
         &self,
         key: &SlotIndex,
     ) -> SlotIndex {
+        probe();
         self.segments[key].0
     }
 
