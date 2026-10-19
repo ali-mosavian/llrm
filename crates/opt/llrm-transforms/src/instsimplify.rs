@@ -163,6 +163,10 @@ impl FunctionPass for InstSimplify {
         "instsimplify"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("instsimplify")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,

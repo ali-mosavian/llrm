@@ -72,6 +72,9 @@ pub struct Frontend {
     pub unchecked_bounds: bool,
     /// `-g`: source lines and debug information.
     pub debug: bool,
+    /// `-fexcess-precision=standard`: an f32 variable rounds to single at each
+    /// assignment, where otherwise x87 keeps the wider value in its register.
+    pub float_store: bool,
     /// Each function compares SP with the runtime's limit on entry:
     /// `-fsanitize=stack`.
     pub checked_stack: bool,
@@ -161,6 +164,7 @@ impl Frontend {
             os: Os::for_target(target)?,
             unchecked_bounds: false,
             debug: false,
+            float_store: false,
             checked_stack: false,
             warn_target_width: true,
             warnings: Default::default(),
