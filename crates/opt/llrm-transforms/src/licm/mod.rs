@@ -7,7 +7,7 @@
 //! `docs/architecture/licm-port.md`; the MemorySSA it asks is
 //! `llrm_analysis::mssa`.
 
-mod apply;
+pub(crate) mod apply;
 mod calls;
 pub mod hoist;
 mod promote;
