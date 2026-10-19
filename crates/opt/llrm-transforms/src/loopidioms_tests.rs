@@ -853,3 +853,103 @@ fn a_loop_of_undef_bytes_is_a_memset_of_undef() {
     assert!(changed);
     assert!(text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 undef, i16 %1, i1 false)"), "{text}");
 }
+
+/// `buf[i + 7] = buf[i]` for `i` falling from `n - 1` (idiom_edges.c's
+/// `bytes_down`), the cells `body` addresses. Seven bytes apart and read
+/// before they are written: a backward `llvm.memmove`. The alias query's
+/// answer for two accesses off one index (apart: a constant 7 > the cell) is
+/// about one trip; across trips the ranges overlap, and a `memcpy` copies them
+/// forward through each other.
+fn bytes_down(
+    body: &str,
+    start: &str,
+) -> String {
+    format!(
+        "@buf = global [140 x i8] zeroinitializer
+
+{MEMSET}define i16 @f(i16 %n, i16 %q) {{
+b0:
+  %s = sub i16 %n, 1
+  br label %b1
+
+b1:
+  %i = phi i16 [ {start}, %b0 ], [ %next, %b2 ]
+  %c = icmp sge i16 %i, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+{body}  %next = sub i16 %i, 1
+  br label %b1
+
+b3:
+  %r = getelementptr i8, ptr @buf, i16 %q
+  %v = load i8, ptr %r
+  %w = zext i8 %v to i16
+  ret i16 %w
+}}
+"
+    )
+}
+
+#[test]
+fn a_falling_byte_copy_seven_apart_is_never_a_memcpy_whatever_its_addresses_look_like() {
+    const INPUTS: &[&[i128]] = &[&[0, 0], &[1, 7], &[17, 20], &[17, 3], &[30, 29]];
+    for body in [
+        "  %p = getelementptr i8, ptr @buf, i16 %i\n  %x = load i8, ptr %p\n  %j = add i16 %i, 7\n  %d = getelementptr i8, ptr @buf, i16 %j\n  store i8 %x, ptr %d\n",
+        "  %p = getelementptr i8, ptr @buf, i16 %i\n  %x = load i8, ptr %p\n  %k = getelementptr i8, ptr @buf, i16 %i\n  %d = getelementptr i8, ptr %k, i16 7\n  store i8 %x, ptr %d\n",
+    ] {
+        // A count only the call knows, and a constant one.
+        for start in ["%s", "16"] {
+            let after = managed_fill(&bytes_down(body, start), INPUTS);
+            assert!(!after.contains("llvm.memcpy"), "{start}\n{after}");
+            assert!(!after.contains("llvm.memmove") || after.contains("!llrm.backward"), "{start}\n{after}");
+        }
+    }
+}
+
+/// `screen[i + 80] = screen[i]` for `i` falling from `n - 1` (bench/scroll's
+/// scroll back down) on words.
+fn words_down(
+    body: &str,
+    start: &str,
+) -> String {
+    format!(
+        "@buf = global [2000 x i16] zeroinitializer
+
+{MEMSET}define i16 @f(i16 %n, i16 %q) {{
+b0:
+  %s = sub i16 %n, 1
+  br label %b1
+
+b1:
+  %i = phi i16 [ {start}, %b0 ], [ %next, %b2 ]
+  %c = icmp sge i16 %i, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+{body}  %next = sub i16 %i, 1
+  br label %b1
+
+b3:
+  %r = getelementptr i16, ptr @buf, i16 %q
+  %v = load i16, ptr %r
+  ret i16 %v
+}}
+"
+    )
+}
+
+#[test]
+fn a_falling_word_copy_eighty_cells_up_is_never_a_memcpy_whatever_its_addresses_look_like() {
+    const INPUTS: &[&[i128]] = &[&[0, 0], &[1, 80], &[100, 150], &[100, 3], &[1920, 1999]];
+    for body in [
+        "  %p = getelementptr i16, ptr @buf, i16 %i\n  %x = load i16, ptr %p\n  %j = add i16 %i, 80\n  %d = getelementptr i16, ptr @buf, i16 %j\n  store i16 %x, ptr %d\n",
+        "  %p = getelementptr i16, ptr @buf, i16 %i\n  %x = load i16, ptr %p\n  %k = getelementptr i16, ptr @buf, i16 %i\n  %d = getelementptr i8, ptr %k, i16 160\n  store i16 %x, ptr %d\n",
+    ] {
+        for start in ["%s", "1919"] {
+            let after = managed_fill(&words_down(body, start), INPUTS);
+            assert!(!after.contains("llvm.memcpy"), "{start}\n{after}");
+            assert!(!after.contains("llvm.memmove") || after.contains("!llrm.backward"), "{start}\n{after}");
+        }
+    }
+}
