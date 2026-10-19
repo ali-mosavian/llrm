@@ -964,6 +964,7 @@ pub fn selected_with<'c>(
     };
     let mut selector = Selector {
         pc_relative: arch.object().pc_relative,
+        got_external: arch.object().got_external,
         module,
         function,
         arch,
@@ -1517,6 +1518,9 @@ pub struct Selector<'m, 'c, 'p> {
     /// Whether `arch` reaches a symbol from the instruction pointer (its object
     /// description, read once).
     pc_relative: bool,
+    /// Whether `arch` loads the address of a symbol defined elsewhere from a
+    /// table the linker fills.
+    got_external: bool,
     /// What the functions that take part leave different.
     callee_facts: &'c CalleeFacts,
     layout: DataLayout,
@@ -3566,6 +3570,19 @@ impl Selector<'_, '_, '_> {
         let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id)
             .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
         let space = crate::backend::globals::space(self.module, global);
+        // A symbol defined elsewhere is reached through the table the linker
+        // fills: its address is loaded, once in each block that reads
+        // it, and the access is through that register.
+        if space == Space::External && self.got_external {
+            let Some(block) = self.current else { return refuse("a global outside a block") };
+            let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
+            let width = self.address_bytes();
+            let base = self.fresh_held(width);
+            let address = Addr { index: i64::from(global.0), ..Addr::new(space, 0) };
+            let symbol = Loc::Imm(Imm { value: 0, width, address: Some(address) });
+            self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(base)], vec![symbol])));
+            return Ok(Pointer::Based { base, index: None, scale: 1, offset, segment: None });
+        }
         // A near global cast to a far pointer (`addrspacecast (ptr @g to ptr
         // addrspace(1))`) is its DGROUP selector and its offset, as the
         // cast instruction makes it.

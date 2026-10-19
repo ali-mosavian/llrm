@@ -2475,6 +2475,7 @@ mod tests {
                 header: vec![".386".to_owned(), ".model flat".to_owned()],
                 dwarf_version: llrm_target::object::DEFAULT_DWARF_VERSION,
                 pc_relative: false,
+                got_external: false,
             },
             code: "T_TEXT".into(),
             names: no_names(),
