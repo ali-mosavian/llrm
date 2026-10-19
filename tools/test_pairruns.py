@@ -28,14 +28,14 @@ def test_a_failure_both_sides_have_is_not_the_flips_and_a_fixed_one_is_named():
 
 def test_a_base_that_fails_hundreds_of_programs_is_a_broken_premise_not_no_new_failure():
     """Both sides failed 493 programs ('jwasm: not found': the pair's dist dir lacked the tools) and the diff read 'no new tests/run failure' for #2907."""
-    flood = "".join(f"FAIL  c/p{i}.c: link: jwasm: not found\n" for i in range(493))
+    flood = "[c] 493 programs: 0 pass, 0 known, 493 fail\n" + "".join(f"FAIL  c/p{i}.c: link: jwasm: not found\n" for i in range(493))
     added, fixed = pairruns.compare(flood, flood)
     assert len(added) == 1 and added[0].startswith("PREMISE BROKEN: the base fails 493 programs") and "jwasm" in added[0] and fixed == []
 
 
 def test_a_new_side_that_fails_hundreds_of_programs_is_a_broken_premise_too():
     """The new side of #2948 and #2902 lacked jwasm (493 'not found' failures) while the base was clean: the guard looked at the base only and printed 493 NEW FAIL lines."""
-    flood = "".join(f"FAIL  c/p{i}.c: link: jwasm: not found\n" for i in range(493))
+    flood = "[c] 493 programs: 0 pass, 0 known, 493 fail\n" + "".join(f"FAIL  c/p{i}.c: link: jwasm: not found\n" for i in range(493))
     added, fixed = pairruns.compare("[c] 350 programs: 350 pass, 0 known, 0 fail\n", flood)
     assert len(added) == 1 and added[0].startswith("PREMISE BROKEN: the new fails 493 programs") and fixed == []
 
