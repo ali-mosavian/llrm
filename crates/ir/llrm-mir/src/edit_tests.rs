@@ -731,6 +731,19 @@ fn test_unannotate_logs_the_rewrite_of_the_instruction() {
     assert!(f.take_changes().is_empty(), "nothing was taken off the second time");
 }
 
+/// `take_name` is `Value::takeName`: the new value is named what the old one
+/// was and the old one has none, as SCCP's `sext` -> `zext nneg` keeps `%s`.
+#[test]
+fn test_take_name_moves_the_name_to_the_other_value() {
+    let mut module =
+        module("define i16 @f(i16 %a) {\nentry:\n  %s = add i16 %a, 1\n  %t = add i16 %a, 2\n  ret i16 %t\n}\n");
+    let f = function(&mut module);
+    let ((s, sv), (t, tv)) = (named(f, "s"), named(f, "t"));
+    f.take_name(sv, tv);
+    assert_eq!((f.value(sv).name.clone(), f.value(tv).name.clone()), (None, Some("s".to_string())));
+    let _ = (s, t);
+}
+
 /// A block cloned without a remap reads the original's values; after the
 /// remap its instructions read the copy's, and the original is untouched.
 #[test]

@@ -2893,7 +2893,9 @@ fn test_an_i64_to_a_float_is_filds_qword() {
 #[test]
 fn test_a_float_bitcast_to_an_integer_goes_through_the_stack() {
     let text = |from: &str, to: &str| {
-        inner(&format!("define {to} @f({from} %x) addrspace(1) {{\n  %b = bitcast {from} %x to {to}\n  ret {to} %b\n}}\n"))
+        inner(&format!(
+            "define {to} @f({from} %x) addrspace(1) {{\n  %b = bitcast {from} %x to {to}\n  ret {to} %b\n}}\n"
+        ))
     };
     let single = text("float", "i32");
     assert!(single.iter().any(|line| line.starts_with("fstp dword ptr [bp-")), "{single:?}");

@@ -29,7 +29,8 @@
 //! `fold` (its number step).
 //!
 //! # Example
-//! An instruction that simplifies is replaced, and what read it is visited again:
+//! An instruction that simplifies is replaced, and what read it is visited
+//! again:
 //!
 //! ```text
 //! %a = add i32 %x, 0
