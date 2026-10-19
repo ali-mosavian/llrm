@@ -1,0 +1,23 @@
+# flags: -O2 -march=i486 -fexcess-precision=standard | -O2 -march=i486 -m32 -fexcess-precision=standard
+# -fexcess-precision=standard rounds an f32 variable at each assignment: the sum of four
+# readings is 40.149998 and the mean 10.037499, not the 10.0375 of one extended sum.
+var raw: i32[4] = [0] * 4
+
+fn set(i: i16, v: i32) -> i16:
+    raw[i] = v
+    return 0
+
+fn mean(a: f32, b: f32, c: f32, d: f32) -> f32:
+    let readings: f32[4] = [a, b, c, d]
+    let mut total: f32 = 0.0
+    for r in readings:
+        total += r
+    return total / 4.0
+
+fn main() -> i16:
+    let _s0 = set(0, 2150)
+    let _s1 = set(1, 2175)
+    let _s2 = set(2, -320)
+    let _s3 = set(3, 10)
+    print(f"{mean(f32(raw[0]) / 100.0, f32(raw[1]) / 100.0, f32(raw[2]) / 100.0, f32(raw[3]) / 100.0)}")
+    return 0

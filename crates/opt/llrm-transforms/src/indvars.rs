@@ -195,6 +195,10 @@ impl FunctionPass for IndVars {
         "indvars"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("indvars")
+    }
+
     fn run(
         &mut self,
         unit: &mut passes::Unit,
