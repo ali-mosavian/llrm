@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/instworklist.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/instworklist.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/instworklist.rs sha256:671f32cbfc146b6c4412a4a9a2a84967fc894f52c38b8931a2318f0efbe9f012 -->
+<!-- src: crates/opt/llrm-transforms/src/instworklist.rs sha256:1009496a9bf1b0d6553256667ffdfaae81ba72ea0f85144c57524a035c4da15f -->
 
 # instworklist
 
@@ -47,4 +47,5 @@ Not a pass: a data structure. Nothing uses it yet; `instsimplify`'s driver
 will.
 
 ## See also
-LLVM: [`InstructionWorklist.h`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/InstructionWorklist.h).
+LLVM:
+[`InstructionWorklist.h`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/InstructionWorklist.h).
