@@ -107,6 +107,17 @@ impl Fact {
         }
     }
 
+    /// Whether the fact states what makes an instruction undefined where it
+    /// should not run: what `dropUBImplyingAttrsAndMetadata` takes from a
+    /// call that is moved to where it may not run (`noundef`, `nonnull`,
+    /// `dereferenceable`, `align` and a range).
+    pub fn implies_ub(self) -> bool {
+        matches!(
+            self,
+            Fact::NoUndef | Fact::NonNull | Fact::Dereferenceable(_) | Fact::Align(_) | Fact::Range(_)
+        )
+    }
+
     /// Whether the fact still holds of an instruction run where it did not
     /// run. Every variant answers; see the module documentation.
     pub fn survives_speculation(self) -> bool {
