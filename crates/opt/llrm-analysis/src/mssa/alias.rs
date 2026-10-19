@@ -119,7 +119,9 @@ impl<'a> AliasQuery<'a> {
             cache: Default::default(),
             asked: Default::default(),
             cache_steps: Default::default(),
-            basic: Default::default(),
+            basic: RefCell::new(crate::aa::AAQueryInfo::with_capture(Box::<
+                crate::captureanalysis::EarliestEscapeAnalysis,
+            >::default())),
             bases: Default::default(),
             bases_walked: Default::default(),
         }
@@ -207,7 +209,7 @@ impl<'a> AliasQuery<'a> {
         let writes = self.accesses.writes(def);
         // A write to anything does not reach an alloca no one holds the address
         // of.
-        let found = if writes.is_none() && self.in_unexposed_alloca(&loc.reference) {
+        let found = if writes.is_none() && self.in_unexposed_alloca(&loc.reference, def) {
             false
         } else {
             memoryssa::changes(&loc.effective, false, writes, |written| self.may_overlap(&loc.effective, written))
@@ -281,15 +283,20 @@ impl<'a> AliasQuery<'a> {
         identified.then_some(base)
     }
 
-    /// Whether `reference` is in an alloca whose address is never exposed:
-    /// nothing a call does by unknown means reaches it.
+    /// Whether `reference` is in an alloca whose address is not captured
+    /// before `at`: nothing `at` does by unknown means reaches it.
     fn in_unexposed_alloca(
         &self,
         reference: &MemRef,
+        at: InstId,
     ) -> bool {
         use llrm_mir::module::Operand;
         let Some(Operand::Value(alloca)) = self.identified_object(reference) else { return false };
-        !self.captured(alloca)
+        !crate::basicaa::BasicAA::new(self.unit).is_captured_before(
+            Operand::Value(alloca),
+            at,
+            &mut self.basic.borrow_mut(),
+        )
     }
 
     /// Whether the address of the alloca `alloca` may be captured, a return
@@ -444,7 +451,7 @@ impl<'a> AliasQuery<'a> {
         loc: &Location,
     ) -> ModRef {
         let touches = |list: Option<&[MemRef]>| match list {
-            None => !self.in_unexposed_alloca(&loc.reference),
+            None => !self.in_unexposed_alloca(&loc.reference, inst),
             Some(list) => list.iter().any(|one| self.may_overlap(one, &loc.effective)),
         };
         ModRef { reads: touches(self.accesses.reads(inst)), writes: touches(self.accesses.writes(inst)) }
