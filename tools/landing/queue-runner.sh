@@ -6,7 +6,7 @@ export BUILDSLOT_BYPASS=1
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-/tmp/claude-1000/land-runner.pgid}"
-HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/retry-singly.sh"
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/retry-singly.sh"; source "$HERE/pick-disjoint.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
 STACKS="2752 2773 2776|2785 2789 2797|2713 2738 2764|2753 2757 2763|2672 2683"
 group() { for g in ${STACKS//|/ |}; do :; done; echo "$STACKS" | tr '|' '\n' | grep -w -- "$1" | head -1; }
@@ -17,12 +17,8 @@ while true; do
   n=$(head -1 $Q); [ -z "$n" ] && { sleep 20; continue; }
   batch=("$n"); g=$(group "$n")
   if [ -z "$g" ]; then
-    for m in $(sed -n '2,40p' $Q); do
-      [ ${#batch[@]} -ge 8 ] && break
-      [ -n "$(group "$m")" ] && continue
-      [[ " ${batch[*]} " == *" $m "* ]] && continue
-      batch+=("$m")
-    done
+    cand=(); for m in $(sed -n '1,40p' $Q); do [ -z "$(group "$m")" ] && cand+=("$m"); done
+    batch=($(pick_disjoint 8 "${cand[@]}"))
   fi
   for m in "${batch[@]}"; do sed -i "/^$m\$/d" $Q; done
   open=($(open_only "${batch[@]}"))
