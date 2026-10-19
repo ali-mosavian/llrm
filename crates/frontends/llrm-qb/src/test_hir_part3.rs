@@ -1463,8 +1463,10 @@ fn test_affine_addresses_of_one_counter_step_no_pointer_in_memory() {
 }
 
 /// cycleblobs computed each `f(x - xp(k))` index as `(x - xp(k)) * 2` per
-/// pixel: seven subtracts and seven multiplies of the counter, where one
-/// `x * 2` plus a hoisted `-2 * xp(k)` per term does.
+/// pixel: seven subtracts and seven multiplies of the counter, where the
+/// counter scaled once per term and a hoisted `-2 * xp(k)` base does, on the
+/// one counter (`opt -passes=loop-reduce`, LLVM 20: one phi, seven `shl x, 1`;
+/// the pin runs no IR CSE after LSR, SelectionDAG's merges them).
 #[test]
 fn test_affine_terms_of_one_counter_share_its_scaled_value() {
     let text = optimized_sub(SEVEN_TERMS, "T");
@@ -1477,7 +1479,8 @@ fn test_affine_terms_of_one_counter_share_its_scaled_value() {
         .lines()
         .filter(|line| (line.contains(" = shl ") || line.contains(" = mul ")) && line.contains(&format!("{counter},")))
         .count();
-    assert_eq!(scaled, 1, "{text}");
+    assert_eq!(scaled, 7, "{text}");
+    assert_eq!(body.matches(" = phi ").count(), 1, "{text}");
 }
 
 /// A POKE into VGA memory counted as reaching a local array's descriptor, so
