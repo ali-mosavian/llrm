@@ -2294,16 +2294,18 @@ fn test_a_program_compiles_through_the_rich_mir() {
     );
 }
 
-/// The rich route priced every CPU as a 486, so a 386's dearer far call
-/// did not make evaluating `logic`'s calls pay. The body is one too dear to
-/// evaluate on a 486 after a complemented boolean folds to one compare.
+/// The rich route priced every CPU as a 486, so a P5's prices did not change
+/// what `logic`'s calls become. Now a body of products is folded into `main`
+/// on the 486 and 386 (no call left) and kept as four calls on the P5. (The
+/// 486/386 pair this test began with no longer differs: LLVM's inliner takes
+/// the call of the short boolean body on both.)
 #[test]
 fn test_the_rich_route_prices_the_configured_cpu() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
         "logic.nib",
-        "fn logic(a: i16, b: i16) -> bool:\n    return (a < b && a * 3 + b == 0) || (b == 7 && a + b * 5 == 2)\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n",
+        "fn logic(a: i16, b: i16) -> bool:\n    return a * b + a * 3 + b * 5 == 17\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n",
     );
     let calls = |cpu: &'static str| {
         let module = nib_compile::assembled(
@@ -2322,7 +2324,7 @@ fn test_the_rich_route_prices_the_configured_cpu() {
             .filter(|line| line.contains("call") && line.contains("_logic"))
             .count()
     };
-    assert_eq!((calls("486"), calls("386")), (4, 0));
+    assert_eq!((calls("486"), calls("386"), calls("P5")), (0, 0, 4));
 }
 
 /// runtime.nib's floats.assign: affine rewrote `at * 2 + copy(a)`, its own

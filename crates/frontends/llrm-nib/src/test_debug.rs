@@ -117,9 +117,12 @@ fn nib_inlined_code_keeps_its_lines_and_loses_its_symbols() {
         .flat_map(|one| omf::lines(one).1)
         .map(|(line, _)| line)
         .collect();
-    // Optimised, a statement whose code is gone has no line (it kept one while
-    // `-g` kept the stores): `scale`'s 9, `main`'s locals, and the code
-    // of lines 10 and 19, which has no code left.
+    // Optimised, a statement whose code is gone has no line. `counter` is 5 and
+    // `values[2]` is 3, so `result > 0` is known: the call's `return doubled +
+    // factor` (10) and the `if` (19) fold away and `print` follows
+    // unconditionally; what is left is `counter += 3` (17), `print` (20) and
+    // the `return` (21). Lines 10 and 19 had code while `result > 0` stayed a
+    // compare and a branch.
     assert_eq!(lines, [17, 20, 21]);
     let shape = cv4info::shape(&object);
     assert!(shape.iter().all(|one| !one.contains("scale")), "{shape:?}");
@@ -296,12 +299,12 @@ const LOOP: &str = "fn sum(n: i16, step: i16) -> i16:
     let mut total = 0
     let mut i = 0
     while i < n:
-        total = total + step
+        total = total * 3 + step
         i = i + 1
     return total
 
 fn main() -> i16:
-    print(sum(3, 4) + sum(5, 6))
+    print(sum(3, 4) + sum(5, 6) + sum(1000, 7))
     return 0
 ";
 
@@ -328,13 +331,13 @@ fn a_register_parameter_kept_across_a_loop_has_its_place_and_one_that_moves_has_
     let sum = info.functions.iter().find(|one| one.name == "sum").expect("sum");
     let n = sum.variables.iter().find(|one| one.name == "n").expect("n");
     let Location::List(entries) = &n.location else { panic!("{:?}", n.location) };
-    // With the header copy the loop counts by another value (`neg ax` at the
-    // entry) and nothing reads `n` inside it: ax is `n` up to that, and again
-    // on the path that skips the loop; in between it is optimized out, as a
+    // The loop counts by another value (`neg ax` at the entry) and nothing
+    // reads `n` inside it: ax is `n` up to that. On the path that skips the
+    // loop the next instruction (`mov ax, bx`) overwrites ax at once, so that
+    // path has no range of its own; in the loop it is optimized out, as a
     // debugger shows a value the code no longer holds.
     assert!(
-        matches!(&entries[..], [(first, Location::Register(one)), (second, Location::Register(two))]
-            if one == "ax" && two == "ax" && first.offset == 0 && first.offset + first.length < second.offset),
+        matches!(&entries[..], [(first, Location::Register(one))] if one == "ax" && first.offset == 0),
         "{entries:?}"
     );
     let end = entries.iter().map(|(range, _)| range.offset + range.length).max().expect("a range");
