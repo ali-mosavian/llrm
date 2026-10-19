@@ -8,7 +8,7 @@
 //! translated again.
 //!
 //! # How it works
-//! A fold takes `&mut Context` (it makes constants), the data layout and the
+//! A fold takes `&Context` (it interns constants), the data layout and the
 //! module's globals (a load reads a global's initializer, a call names its
 //! callee) and answers a constant or none. `ConstantExpr::get*` is
 //! [`constant_expr_get_cast`] and [`constant_fold_get_element_ptr`]: the fold
@@ -1409,7 +1409,7 @@ fn symbolically_evaluate_binop(
 /// `CastGEPIndices`
 /// ([L977](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L977)).
 fn cast_gep_indices(
-    context: &mut Context,
+    context: &Context,
     env: Env,
     source: TypeId,
     ops: &[ConstantId],
@@ -1459,7 +1459,7 @@ fn cast_gep_indices(
 /// `SymbolicallyEvaluateGEP`
 /// ([L1015](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L1015)).
 fn symbolically_evaluate_gep(
-    context: &mut Context,
+    context: &Context,
     env: Env,
     source: TypeId,
     nw: u8,
@@ -1543,7 +1543,7 @@ fn symbolically_evaluate_gep(
 /// `site` is the function of the instruction, or none for a constant
 /// expression.
 fn constant_fold_inst_operands_impl(
-    context: &mut Context,
+    context: &Context,
     env: Env,
     site: Option<&Function>,
     dest: TypeId,
@@ -1667,7 +1667,7 @@ pub fn constant_fold_insert_value_instruction(
 /// `ConstantFoldConstantImpl`
 /// ([L1231](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L1231)).
 fn constant_fold_constant_impl(
-    context: &mut Context,
+    context: &Context,
     env: Env,
     c: ConstantId,
     folded_ops: &mut HashMap<ConstantId, ConstantId>,
@@ -1709,7 +1709,7 @@ fn constant_fold_constant_impl(
 /// `ConstantFoldInstruction`
 /// ([L1268](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L1268)).
 pub fn constant_fold_instruction(
-    context: &mut Context,
+    context: &Context,
     env: Env,
     function: &Function,
     inst: InstId,
@@ -1744,7 +1744,7 @@ pub fn constant_fold_instruction(
 /// `ConstantFoldConstant`
 /// ([L1317](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L1317)).
 pub fn constant_fold_constant(
-    context: &mut Context,
+    context: &Context,
     env: Env,
     c: ConstantId,
 ) -> ConstantId {
@@ -1754,7 +1754,7 @@ pub fn constant_fold_constant(
 /// `ConstantFoldInstOperands`
 /// ([L1323](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L1323)).
 pub fn constant_fold_inst_operands_at(
-    context: &mut Context,
+    context: &Context,
     env: Env,
     function: &Function,
     inst: InstId,
@@ -2171,7 +2171,7 @@ fn pdep(
 /// ([L3491](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L3491)),
 /// the integer arm (L3808).
 fn constant_fold_intrinsic_call2(
-    context: &mut Context,
+    context: &Context,
     id: Folded,
     ty: TypeId,
     op0: ConstantId,
@@ -2192,7 +2192,7 @@ fn constant_fold_intrinsic_call2(
     let ty_width = context.types.int_bits(ty);
     let wide = mask(width);
     let (s0, s1) = (signed(c0, width), signed(c1, width));
-    let result = |context: &mut Context, value: u128| ty_width.map(|w| int(context, w, value));
+    let result = |context: &Context, value: u128| ty_width.map(|w| int(context, w, value));
     match id {
         Smax => result(context, if s0 > s1 { c0 } else { c1 }),
         Smin => result(context, if s0 < s1 { c0 } else { c1 }),
@@ -2353,7 +2353,7 @@ fn constant_fold_scalar_call3(
 /// `ConstantFoldScalarCall`
 /// ([L4334](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L4334)).
 fn constant_fold_scalar_call(
-    context: &mut Context,
+    context: &Context,
     id: Folded,
     ty: TypeId,
     ops: &[ConstantId],
@@ -2374,7 +2374,7 @@ fn constant_fold_scalar_call(
 /// ([L4788](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L4788)):
 /// the intrinsic named `name` (`llvm.smax.i32`).
 pub fn constant_fold_intrinsic(
-    context: &mut Context,
+    context: &Context,
     name: &str,
     ops: &[ConstantId],
     ty: TypeId,
@@ -2389,7 +2389,7 @@ pub fn constant_fold_intrinsic(
 /// `ConstantFoldCall`
 /// ([L4803](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L4803)).
 fn constant_fold_call(
-    context: &mut Context,
+    context: &Context,
     caller: Option<&Function>,
     call: &crate::opcode::CallInfo,
     callee: &Function,

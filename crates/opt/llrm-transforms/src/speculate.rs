@@ -31,6 +31,17 @@
 //!   `llvm.assume` are not ported; the MIR has no `NullPointerIsDefined`, so a
 //!   null pointer is undefined. What stands between the phi and the use must be
 //!   no call (`isGuaranteedToTransferExecutionToSuccessor`).
+//!
+//! # Example
+//! The arm's one cheap instruction runs before the branch and the phi becomes a
+//! select:
+//!
+//! ```text
+//! entry: br i1 %c, label %then, label %end
+//! then:  %t = add i32 %x, 1 ; br label %end
+//! end:   %p = phi i32 [ %t, %then ], [ %x, %entry ]
+//! ; becomes, in entry: %t = add i32 %x, 1 ; %p = select i1 %c, i32 %t, i32 %x
+//! ```
 
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::dense::IdMap;

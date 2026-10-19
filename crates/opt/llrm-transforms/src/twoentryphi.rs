@@ -31,6 +31,17 @@
 //! # See also
 //! [`phiopt`](crate::phiopt), which prices a constant-only phi in the
 //! target's units and runs at its own slot.
+//!
+//! # Example
+//! The phi that a branch chooses between becomes a select in the branch's
+//! block:
+//!
+//! ```text
+//! entry: br i1 %c, label %then, label %end
+//! then:  br label %end
+//! end:   %p = phi i32 [ 1, %then ], [ 2, %entry ]
+//! ; becomes, in entry: %p = select i1 %c, i32 1, i32 2
+//! ```
 
 use llrm_analysis::occurrence::arms;
 use llrm_mir::context::{ConstantKind, Context};

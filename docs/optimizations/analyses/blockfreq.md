@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/blockfreq.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/blockfreq.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/blockfreq.rs sha256:38f4aa3b4e66fc8516ff884e18cf639dc7ffd89a6835389847c096bbbd3eae84 -->
+<!-- src: crates/opt/llrm-analysis/src/blockfreq.rs sha256:06d69f07b7bc677ec3247c9708d9f71622905f734365b38f693d7a62630e9bbf -->
 
 # blockfreq
 
@@ -15,3 +15,12 @@ With `branch_weights` metadata on every branch the two agree.
 
 ## Used by
 `inlinecost` (cold and hot call sites, D1).
+
+## Example
+A diamond whose branch weighs 3 to 1 gives the arms 0.75 and 0.25 of the
+entry's frequency, and the join the entry's:
+
+```text
+entry: br i1 %c, label %a, label %b   ; !{branch_weights, 3, 1}
+; entry 1.0, a 0.75, b 0.25, join 1.0
+```

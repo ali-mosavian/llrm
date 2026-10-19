@@ -48,6 +48,16 @@
 //!   after.
 //! - Metadata: an access keeps its metadata where the type and offset are
 //!   unchanged, and loses it otherwise (`adjustForAccess`).
+//!
+//! # Example
+//! An alloca of two `i32` fields, each stored and loaded whole, becomes two
+//! allocas and then registers:
+//!
+//! ```text
+//! %s = alloca { i32, i32 }
+//! store i32 1, ptr %s          ; field 0
+//! %v = load i32, ptr %s        ; becomes the constant 1, the alloca is gone
+//! ```
 
 use std::cmp::Ordering;
 
