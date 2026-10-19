@@ -65,20 +65,40 @@ def executed(binary):
     return done.stdout, done.returncode, count
 
 
+def build(source, work, mode, runtime):
+    """`ours` and `ref` executables of `source`. In mode "whole" ours is the
+    unoptimized IR through this compiler's mid-end and backend, ref the pinned
+    clang -O2. In mode "backend" both take the pinned clang's -O2 IR (no
+    vectorizer), ours through the backend alone, ref through the pinned llc -O2."""
+    ir = work / "p.ll"
+    if mode == "whole":
+        run(CLANG, "-target", TRIPLE, "-O2", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-lifetime-markers",
+            "-S", "-emit-llvm", "-o", ir, source)
+        run(LLC, "-o", work / "ours.o", ir)
+        run(CLANG, "-target", TRIPLE, "-O2", "-c", "-o", work / "ref.o", source)
+    else:
+        run(CLANG, "-target", TRIPLE, "-O2", "-fno-vectorize", "-fno-slp-vectorize", "-fno-unroll-loops",
+            "-Xclang", "-disable-lifetime-markers", "-S", "-emit-llvm", "-o", ir, source)
+        run(LLC, "--no-opt", "-o", work / "ours.o", ir)
+        run(BUILD / "bin/llc", "-mtriple=" + TRIPLE, "-O2", "-filetype=obj", "-o", work / "ref.o", ir)
+    for name in ("ours", "ref"):
+        run(LLD, "-static", "-o", work / name, work / f"{name}.o", runtime)
+
+
 def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else "whole"
+    assert mode in ("whole", "backend"), "usage: arm64_compare.py [whole|backend]"
     runtime = tempfile.mkdtemp() + "/rt.o"
     run(CLANG, "-target", TRIPLE, "-O2", "-ffreestanding", "-fno-builtin", "-c", "-o", runtime, CRATE / "tests/rt/rt.c")
     print(f"{'program':12} {'code ours':>10} {'code clang':>10} {'exec ours':>10} {'exec clang':>10}  output")
     totals = [0, 0, 0, 0]
     for source in sorted((CRATE / "tests/programs").glob("*.c")):
         work = Path(tempfile.mkdtemp())
-        ir = work / "p.ll"
-        run(CLANG, "-target", TRIPLE, "-O2", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-lifetime-markers",
-            "-S", "-emit-llvm", "-o", ir, source)
-        run(LLC, "-o", work / "ours.o", ir)
-        run(CLANG, "-target", TRIPLE, "-O2", "-c", "-o", work / "ref.o", source)
-        for name in ("ours", "ref"):
-            run(LLD, "-static", "-o", work / name, work / f"{name}.o", runtime)
+        try:
+            build(source, work, mode, runtime)
+        except SystemExit as why:
+            print(f"{source.stem:12} not built: {str(why).splitlines()[-1][:90]}")
+            continue
         (out_ours, status_ours, n_ours), (out_ref, status_ref, n_ref) = executed(work / "ours"), executed(work / "ref")
         assert n_ref > 0 and n_ours > 0, "the trace counted nothing"
         same = out_ours == out_ref and status_ours == status_ref

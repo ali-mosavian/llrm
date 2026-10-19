@@ -83,6 +83,7 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
             crate::isel::select(module, id, &program.layout, platform).map_err(|why| format!("@{name}: {why}"))?;
         let allocation = crate::regalloc::allocate(&mut machine);
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
+        let blocks = crate::layout::fold(blocks);
         out.push(crate::emit::Function {
             symbol: crate::data::symbol_name(platform, &name),
             public: !matches!(
@@ -110,9 +111,12 @@ pub fn object(
     text: &str,
     platform: Platform,
     name: &str,
+    optimize: bool,
 ) -> Result<llrm_object::Object, String> {
     let mut program = program(text, platform)?;
-    optimized(&mut program)?;
+    if optimize {
+        optimized(&mut program)?;
+    }
     let lowered = functions(&program)?;
     crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)
 }
@@ -121,9 +125,12 @@ pub fn object(
 pub fn assembly(
     text: &str,
     platform: Platform,
+    optimize: bool,
 ) -> Result<String, String> {
     let mut program = program(text, platform)?;
-    optimized(&mut program)?;
+    if optimize {
+        optimized(&mut program)?;
+    }
     let mut out = String::new();
     for function in functions(&program)? {
         out.push_str(&format!("{}:\n", function.symbol));
@@ -142,8 +149,9 @@ pub fn object_file(
     text: &str,
     platform: Platform,
     name: &str,
+    optimize: bool,
 ) -> Result<Vec<u8>, String> {
-    let object = object(text, platform, name)?;
+    let object = object(text, platform, name, optimize)?;
     match platform {
         Platform::Darwin => llrm_macho::write(&object).map_err(|error| error.to_string()),
         Platform::Linux => llrm_elf_arm64::write(&object).map_err(|error| error.to_string()),

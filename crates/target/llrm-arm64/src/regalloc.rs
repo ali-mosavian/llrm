@@ -44,34 +44,69 @@ pub struct Allocation {
     pub saved_fprs: Vec<u32>,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Interval {
-    reg: Reg,
-    start: u32,
-    end: u32,
+/// A register's live ranges: half-open `[start, end)` over operation points
+/// (an operation `i` reads at `2i` and writes at `2i + 1`), disjoint and sorted.
+#[derive(Clone, Debug, Default)]
+struct Ranges(Vec<(u32, u32)>);
+
+impl Ranges {
+    fn push(
+        &mut self,
+        start: u32,
+        end: u32,
+    ) {
+        self.0.push((start, end));
+    }
+
+    /// Sorted, and adjoining or overlapping ranges joined.
+    fn normalize(&mut self) {
+        self.0.sort_unstable();
+        let mut joined: Vec<(u32, u32)> = Vec::with_capacity(self.0.len());
+        for &(start, end) in &self.0 {
+            match joined.last_mut() {
+                Some(last) if start <= last.1 => last.1 = last.1.max(end),
+                _ => joined.push((start, end)),
+            }
+        }
+        self.0 = joined;
+    }
+
+    fn overlaps(
+        &self,
+        other: &Ranges,
+    ) -> bool {
+        let (mut a, mut b) = (0, 0);
+        while a < self.0.len() && b < other.0.len() {
+            let (x, y) = (self.0[a], other.0[b]);
+            if x.0 < y.1 && y.0 < x.1 {
+                return true;
+            }
+            if x.1 <= y.1 { a += 1 } else { b += 1 }
+        }
+        false
+    }
+
+    fn start(&self) -> u32 {
+        self.0.first().map_or(0, |one| one.0)
+    }
+
+    fn extend(
+        &mut self,
+        other: &Ranges,
+    ) {
+        self.0.extend(other.0.iter().copied());
+        self.normalize();
+    }
 }
 
-/// Positions are `2 * index` for an operation; a use is read at the position, a
-/// definition written at the position + 1.
-fn analyse(function: &MFunc) -> (Vec<Interval>, Vec<u32>) {
-    let mut starts: HashMap<Reg, u32> = HashMap::new();
-    let mut ends: HashMap<Reg, u32> = HashMap::new();
-    let mut touch = |register: Reg, from: u32, to: u32| {
-        let start = starts.entry(register).or_insert(from);
-        *start = (*start).min(from);
-        let end = ends.entry(register).or_insert(to);
-        *end = (*end).max(to);
-    };
-    // Block extents, and the live-in and live-out sets by iterating to a fixed
-    // point.
+/// The live ranges of every register, and the points of the calls.
+fn analyse(function: &MFunc) -> (HashMap<Reg, Ranges>, Vec<u32>, HashMap<Reg, f64>) {
     let mut position = 0u32;
     let mut extents = Vec::new();
     let mut calls = Vec::new();
-    let mut uses_defs: Vec<(Vec<(Reg, u32)>, Vec<(Reg, u32)>)> = Vec::new();
     let mut gen_kill: Vec<(BTreeSet<Reg>, BTreeSet<Reg>)> = Vec::new();
     for block in &function.blocks {
         let first = position;
-        let (mut uses, mut defs) = (Vec::new(), Vec::new());
         let (mut gen_set, mut kill_set) = (BTreeSet::new(), BTreeSet::new());
         for op in &block.ops {
             let (op_defs, op_uses) = op.defs_and_uses();
@@ -79,22 +114,16 @@ fn analyse(function: &MFunc) -> (Vec<Interval>, Vec<u32>) {
                 if !kill_set.contains(register) {
                     gen_set.insert(*register);
                 }
-                uses.push((*register, position));
             }
-            for register in &op_defs {
-                kill_set.insert(*register);
-                defs.push((*register, position + 1));
-            }
+            kill_set.extend(op_defs);
             if matches!(op, Op::Call { .. }) {
                 calls.push(position);
             }
             position += 2;
         }
         extents.push((first, position));
-        uses_defs.push((uses, defs));
         gen_kill.push((gen_set, kill_set));
     }
-    // The control-flow successors, from the labels the branches name.
     let labels: HashMap<&str, usize> =
         function.blocks.iter().enumerate().map(|(at, one)| (one.label.as_str(), at)).collect();
     let successors: Vec<Vec<usize>> = function
@@ -122,27 +151,49 @@ fn analyse(function: &MFunc) -> (Vec<Interval>, Vec<u32>) {
             }
         }
     }
-    for (at, (first, last)) in extents.iter().enumerate() {
-        for register in &live_in[at] {
-            touch(*register, *first, *first);
-        }
-        for register in &live_out[at] {
-            touch(*register, *last, *last);
-        }
-        let (uses, defs) = &uses_defs[at];
-        for (register, at_position) in uses {
-            touch(*register, *at_position, *at_position);
-        }
-        for (register, at_position) in defs {
-            touch(*register, *at_position, *at_position);
+    // How deeply nested in loops a block is: a back edge `b -> h` (h at or before
+    // b) makes the blocks h..=b one level deeper.
+    let mut depth = vec![0u32; function.blocks.len()];
+    for (at, targets) in successors.iter().enumerate() {
+        for &target in targets {
+            if target <= at {
+                for block in target..=at {
+                    depth[block] += 1;
+                }
+            }
         }
     }
-    let mut intervals: Vec<Interval> = starts
-        .iter()
-        .map(|(register, start)| Interval { reg: *register, start: *start, end: ends[register] })
-        .collect();
-    intervals.sort_by_key(|one| (one.start, one.end));
-    (intervals, calls)
+    let mut ranges: HashMap<Reg, Ranges> = HashMap::new();
+    let mut weight: HashMap<Reg, f64> = HashMap::new();
+    for (at, block) in function.blocks.iter().enumerate() {
+        let (first, last) = extents[at];
+        // Walking backward, the end of the segment each live register has open.
+        let mut open: HashMap<Reg, u32> = live_out[at].iter().map(|register| (*register, last)).collect();
+        let frequency = 10f64.powi(depth[at].min(6) as i32);
+        for (index, op) in block.ops.iter().enumerate().rev() {
+            let point = first + 2 * index as u32;
+            let (defs, uses) = op.defs_and_uses();
+            for register in &defs {
+                *weight.entry(*register).or_default() += frequency;
+                match open.remove(register) {
+                    Some(end) => ranges.entry(*register).or_default().push(point + 1, end),
+                    // Defined and never read.
+                    None => ranges.entry(*register).or_default().push(point + 1, point + 2),
+                }
+            }
+            for register in &uses {
+                *weight.entry(*register).or_default() += frequency;
+                open.entry(*register).or_insert(point + 1);
+            }
+        }
+        for (register, end) in open {
+            ranges.entry(register).or_default().push(first, end);
+        }
+    }
+    for one in ranges.values_mut() {
+        one.normalize();
+    }
+    (ranges, calls, weight)
 }
 
 fn successors_of(
@@ -175,90 +226,149 @@ fn successors_of(
     out
 }
 
-/// `function` with every register physical.
-pub fn allocate(function: &mut MFunc) -> Allocation {
-    let (intervals, calls) = analyse(function);
-    // Busy ranges of physical registers, from the same analysis.
-    let mut fixed: HashMap<Reg, Vec<(u32, u32)>> = HashMap::new();
-    for interval in intervals.iter().filter(|one| !one.reg.is_virtual()) {
-        fixed.entry(interval.reg).or_default().push((interval.start, interval.end));
+/// Joins the virtual registers a copy connects whose live ranges do not
+/// overlap, so the copy disappears (the register coalescer, `RegisterCoalescer`,
+/// for the copies phi elimination leaves): the registers are renamed in place.
+fn coalesce(function: &mut MFunc) {
+    let (ranges, _, weight) = analyse(function);
+    let mut ranges = ranges;
+    let mut parent: HashMap<Reg, Reg> = HashMap::new();
+    fn find(
+        parent: &mut HashMap<Reg, Reg>,
+        register: Reg,
+    ) -> Reg {
+        let mut root = register;
+        while let Some(&up) = parent.get(&root) {
+            root = up;
+        }
+        let mut walk = register;
+        while let Some(&up) = parent.get(&walk) {
+            parent.insert(walk, root);
+            walk = up;
+        }
+        root
     }
-    let crosses_call = |interval: &Interval| calls.iter().any(|&call| interval.start < call && call + 1 < interval.end);
-    let overlaps_fixed = |register: Reg, interval: &Interval| {
-        fixed.get(&register).is_some_and(|ranges| ranges.iter().any(|&(s, e)| s <= interval.end && interval.start <= e))
-    };
-    // Hints: a physical register that a copy joins this register to.
-    let mut hints: HashMap<Reg, Reg> = HashMap::new();
+    // The copies, the heaviest (deepest in loops) first.
+    let mut copies: Vec<(f64, Reg, Reg)> = Vec::new();
     for block in &function.blocks {
         for op in &block.ops {
-            if let Op::Copy { dst, src } = op {
-                if dst.is_virtual() && !src.is_virtual() {
-                    hints.entry(*dst).or_insert(*src);
-                } else if src.is_virtual() && !dst.is_virtual() {
-                    hints.entry(*src).or_insert(*dst);
-                }
+            if let Op::Copy { dst, src } = op
+                && dst.is_virtual()
+                && src.is_virtual()
+            {
+                let w = weight.get(dst).copied().unwrap_or(0.0).min(weight.get(src).copied().unwrap_or(0.0));
+                copies.push((w, *dst, *src));
             }
         }
     }
+    copies.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut merged = false;
+    for (_, dst, src) in copies {
+        let (a, b) = (find(&mut parent, dst), find(&mut parent, src));
+        if a == b {
+            continue;
+        }
+        let (Some(left), Some(right)) = (ranges.get(&a), ranges.get(&b)) else { continue };
+        if left.overlaps(right) {
+            continue;
+        }
+        let right = right.clone();
+        ranges.get_mut(&a).expect("present").extend(&right);
+        parent.insert(b, a);
+        merged = true;
+    }
+    if !merged {
+        return;
+    }
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            op.visit(&mut |register, _| match register {
+                RegRef::Gpr(slot) => {
+                    if let Reg::Gpr(root) = find(&mut parent, Reg::Gpr(*slot)) {
+                        *slot = root;
+                    }
+                }
+                RegRef::Fpr(slot) => {
+                    if let Reg::Fpr(root) = find(&mut parent, Reg::Fpr(*slot)) {
+                        *slot = root;
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// `function` with every register physical.
+pub fn allocate(function: &mut MFunc) -> Allocation {
+    coalesce(function);
+    let (ranges, calls, weight) = analyse(function);
+    // What each physical register holds: its own live ranges (arguments, results)
+    // and, once a virtual register is given it, that one's; a call destroys every
+    // caller-saved register at its point.
+    let mut occupied: HashMap<Reg, Ranges> = HashMap::new();
+    for (register, live) in ranges.iter().filter(|(register, _)| !register.is_virtual()) {
+        occupied.entry(*register).or_default().extend(live);
+    }
+    let clobbered = |register: Reg| !pool::callee_saved(register);
+    let mut universe: Vec<Reg> = Vec::new();
+    universe.extend(pool::GPR_CALLER_SAVED.iter().map(|n| Reg::Gpr(Gpr(*n))));
+    universe.extend(pool::GPR_CALLEE_SAVED.iter().map(|n| Reg::Gpr(Gpr(*n))));
+    universe.extend(pool::FPR_CALLER_SAVED.iter().map(|n| Reg::Fpr(Vreg(*n))));
+    universe.extend(pool::FPR_CALLEE_SAVED.iter().map(|n| Reg::Fpr(Vreg(*n))));
+    for &call in &calls {
+        for &register in &universe {
+            if clobbered(register) {
+                occupied.entry(register).or_default().extend(&Ranges(vec![(call + 1, call + 2)]));
+            }
+        }
+    }
+    // Copy partners, for hints.
+    let mut partners: HashMap<Reg, Vec<Reg>> = HashMap::new();
+    for block in &function.blocks {
+        for op in &block.ops {
+            if let Op::Copy { dst, src } = op {
+                partners.entry(*dst).or_default().push(*src);
+                partners.entry(*src).or_default().push(*dst);
+            }
+        }
+    }
+    // Heaviest first, by use frequency over length; ties by position.
+    let mut order: Vec<Reg> = ranges.keys().copied().filter(|register| register.is_virtual()).collect();
+    let priority = |register: &Reg| {
+        let live = &ranges[register];
+        let length: u32 = live.0.iter().map(|(start, end)| end - start).sum();
+        (weight.get(register).copied().unwrap_or(0.0) / f64::from(length.max(1)), std::cmp::Reverse(live.start()))
+    };
+    order.sort_by(|a, b| priority(b).partial_cmp(&priority(a)).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(b)));
     let mut assigned: HashMap<Reg, Reg> = HashMap::new();
     let mut spilled: HashMap<Reg, u32> = HashMap::new();
-    let mut active: Vec<(Interval, Reg)> = Vec::new();
     let mut used_callee_saved: BTreeSet<Reg> = BTreeSet::new();
-    for interval in intervals.iter().filter(|one| one.reg.is_virtual()) {
-        active.retain(|(other, _)| other.end >= interval.start);
-        let crossing = crosses_call(interval);
-        let candidates: Vec<Reg> = match interval.reg {
-            Reg::Gpr(_) => {
-                let caller = pool::GPR_CALLER_SAVED.iter().map(|n| Reg::Gpr(Gpr(*n)));
-                let callee = pool::GPR_CALLEE_SAVED.iter().map(|n| Reg::Gpr(Gpr(*n)));
-                if crossing { callee.collect() } else { caller.chain(callee).collect() }
-            }
-            Reg::Fpr(_) => {
-                let caller = pool::FPR_CALLER_SAVED.iter().map(|n| Reg::Fpr(Vreg(*n)));
-                let callee = pool::FPR_CALLEE_SAVED.iter().map(|n| Reg::Fpr(Vreg(*n)));
-                if crossing { callee.collect() } else { caller.chain(callee).collect() }
-            }
+    for register in order {
+        let live = &ranges[&register];
+        let class: Vec<Reg> = match register {
+            Reg::Gpr(_) => universe.iter().copied().filter(|one| matches!(one, Reg::Gpr(_))).collect(),
+            Reg::Fpr(_) => universe.iter().copied().filter(|one| matches!(one, Reg::Fpr(_))).collect(),
         };
-        let free =
-            |register: &Reg| !active.iter().any(|(_, held)| held == register) && !overlaps_fixed(*register, interval);
-        let hinted = hints.get(&interval.reg).copied().filter(|hint| candidates.contains(hint) && free(hint));
-        let choice = hinted.or_else(|| candidates.iter().copied().find(free));
-        match choice {
-            Some(register) => {
-                if pool::callee_saved(register) {
-                    used_callee_saved.insert(register);
+        let fits = |candidate: &Reg| !occupied.get(candidate).is_some_and(|held| held.overlaps(live));
+        // A register a copy partner has (or is) is tried first.
+        let hinted = partners
+            .get(&register)
+            .into_iter()
+            .flatten()
+            .map(|partner| if partner.is_virtual() { assigned.get(partner).copied() } else { Some(*partner) })
+            .flatten()
+            .find(|candidate| class.contains(candidate) && fits(candidate));
+        match hinted.or_else(|| class.iter().copied().find(fits)) {
+            Some(chosen) => {
+                if pool::callee_saved(chosen) {
+                    used_callee_saved.insert(chosen);
                 }
-                assigned.insert(interval.reg, register);
-                active.push((*interval, register));
+                occupied.entry(chosen).or_default().extend(live);
+                assigned.insert(register, chosen);
             }
             None => {
-                // Spill the interval that lives longest: this one, or an active
-                // one whose register this could take.
-                let victim = active
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (other, held))| {
-                        candidates.contains(held)
-                            && other.end > interval.end
-                            && std::mem::discriminant(&other.reg) == std::mem::discriminant(&interval.reg)
-                            && !overlaps_fixed(*held, interval)
-                    })
-                    .max_by_key(|(_, (other, _))| other.end)
-                    .map(|(at, _)| at);
-                match victim {
-                    Some(at) => {
-                        let (other, held) = active.remove(at);
-                        assigned.remove(&other.reg);
-                        let slot = function.slot(8, 8);
-                        spilled.insert(other.reg, slot);
-                        assigned.insert(interval.reg, held);
-                        active.push((*interval, held));
-                    }
-                    None => {
-                        let slot = function.slot(8, 8);
-                        spilled.insert(interval.reg, slot);
-                    }
-                }
+                let slot = function.slot(8, 8);
+                spilled.insert(register, slot);
             }
         }
     }

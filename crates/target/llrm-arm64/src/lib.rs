@@ -7,6 +7,7 @@ pub mod emit;
 pub mod expand_imm;
 pub mod frame;
 pub mod isel;
+pub mod layout;
 pub mod machine;
 pub mod mc;
 pub mod mfunc;
