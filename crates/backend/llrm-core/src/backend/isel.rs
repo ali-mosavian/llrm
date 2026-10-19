@@ -2961,7 +2961,9 @@ impl Selector<'_, '_, '_> {
             let base = self.far_number(operands[0])?;
             let moved =
                 crate::backend::globals::constant_offset(self.module, &self.layout, *source, &operands[1..]).ok()?;
-            return Some(base & !0xFFFF | (base + moved) & 0xFFFF);
+            let Type::Pointer(space) = *self.types().get(context.get(id).ty) else { return None };
+            let wrap = (1i64 << self.layout.offset_bits(space)) - 1;
+            return Some(base & !wrap | (base + moved) & wrap);
         }
         let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) =
             &context.get(id).kind
