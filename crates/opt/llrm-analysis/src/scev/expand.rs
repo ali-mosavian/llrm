@@ -615,6 +615,7 @@ impl Run<'_> {
         }
         self.x.insert_point = Some(at);
         let v = self.visit(s);
+        let v = self.fixup_lcssa_form_for(v);
         self.x.insert_point = Some(here);
         self.x.expressions.insert((s, at), v);
         v
