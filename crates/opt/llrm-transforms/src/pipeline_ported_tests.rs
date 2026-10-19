@@ -230,10 +230,12 @@ b5:
     assert_eq!(out.matches("load i16, ptr %v").count(), 1, "{out}");
     assert_eq!(out.matches("icmp ult").count(), 1, "{out}");
     assert!(
-        out.contains("store i16 %k, ptr %out
+        out.contains(
+            "store i16 %k, ptr %out
   tail call void @write()
   %2 = load i16, ptr %out
-  %3 = add i16 %2, %k"),
+  %3 = add i16 %2, %k"
+        ),
         "{out}"
     );
     assert!(!out.contains("@panic()\n  unreachable"), "{out}");

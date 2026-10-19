@@ -127,6 +127,17 @@ impl Checker<'_> {
         self.function.operand_type(self.context, operand)
     }
 
+    /// The intrinsic `operand` names, if it names one MIR has.
+    fn called_intrinsic(
+        &self,
+        operand: Operand,
+    ) -> Option<Intrinsic> {
+        let Operand::Constant(id) = operand else { return None };
+        let ConstantKind::Global(global) = self.context.get(id).kind else { return None };
+        let name = self.module.global(global).name.as_deref()?;
+        intrinsics::is_reserved(name).then(|| Intrinsic::named(name)).flatten()
+    }
+
     /// The type of the intrinsic `operand` names, if it names one.
     fn intrinsic(
         &self,
@@ -471,6 +482,13 @@ impl Checker<'_> {
                     && declared != info.function_type
                 {
                     self.fail(format!("{at}: Intrinsic called with incompatible signature"));
+                }
+                // Verifier.cpp's `visitIntrinsicCall`: a byte swap of whole
+                // 16-bit units.
+                if self.called_intrinsic(callee) == Some(Intrinsic::ByteSwap)
+                    && !matches!(self.ty(result), Type::Int(bits) if bits % 16 == 0)
+                {
+                    self.fail(format!("{at}: bswap must be an even number of bytes"));
                 }
                 if call_returns != result {
                     self.fail(format!(
