@@ -784,6 +784,7 @@ impl Splitter<'_> {
         for (reg, hints) in vrai.hints {
             self.hints.insert(reg, hints);
         }
+        self.ss.env.reclass(self.lis, se.edit().new_regs());
         map
     }
 

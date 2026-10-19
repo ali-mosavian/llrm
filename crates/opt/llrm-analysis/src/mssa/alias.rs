@@ -94,6 +94,9 @@ pub struct AliasQuery<'a> {
     cache_steps: std::cell::Cell<u64>,
     /// The allocas whose address is exposed, found when first asked.
     exposed: std::cell::OnceCell<Rc<llrm_mir::dense::IdSet<llrm_mir::module::ValueId>>>,
+    /// `BasicAA`'s answers for the pointer pairs asked: one `AAQueryInfo` for
+    /// the batch.
+    basic: RefCell<crate::aa::AAQueryInfo>,
     /// `getUnderlyingObject` of each pointer asked: the walk down a GEP chain
     /// was a third of a store-heavy body's cost, asked again at each step.
     bases: RefCell<llrm_support::hash::HashMap<llrm_mir::module::Operand, llrm_mir::module::Operand>>,
@@ -119,6 +122,7 @@ impl<'a> AliasQuery<'a> {
             asked: Default::default(),
             cache_steps: Default::default(),
             exposed: Default::default(),
+            basic: Default::default(),
             bases: Default::default(),
             bases_walked: Default::default(),
         }
@@ -373,7 +377,29 @@ impl<'a> AliasQuery<'a> {
         if self.unreachable_from(one, other) || self.unreachable_from(other, one) {
             return false;
         }
-        memoryssa::may_clobber(self.unit, None, one, other)
+        // The cheap tests first: BasicAA is asked only of what they leave.
+        memoryssa::may_clobber(self.unit, None, one, other) && !self.basic_no_alias(one, other)
+    }
+
+    /// `BasicAA` says the two references, each a pointer and a size, do not
+    /// alias.
+    fn basic_no_alias(
+        &self,
+        one: &MemRef,
+        other: &MemRef,
+    ) -> bool {
+        use crate::aa::{AAResults, LocationSize, MemoryLocation};
+        let (Some(left), Some(right)) = (one.pointer, other.pointer) else { return false };
+        let size = |reference: &MemRef| {
+            if reference.width >= UNBOUNDED_WIDTH {
+                LocationSize::BeforeOrAfterPointer
+            } else {
+                LocationSize::Precise(u64::from(reference.width))
+            }
+        };
+        let (left, right) = (MemoryLocation::new(left, size(one)), MemoryLocation::new(right, size(other)));
+        crate::basicaa::BasicAA::new(self.unit).alias(&left, &right, &mut self.basic.borrow_mut(), None)
+            == crate::aa::AliasResult::NoAlias
     }
 
     /// `MemoryLocation::getWithoutAATags()`: the location with no `!tbaa` type.
