@@ -684,3 +684,29 @@ b3:
     assert_eq!(first, second, "both loads have the same one clobber");
     assert!(view.is_phi(first), "the clobbers diverge, so it is the join's phi");
 }
+
+/// Two inbounds geps off a global and an argument, sharing a variable index,
+/// with the second 4 bytes on: `aliasGEP` puts that past the global, so no
+/// alias. The stand-in's own test said May, so a walk kept a store live
+/// that BasicAA clears.
+#[test]
+fn test_an_alias_question_is_answered_by_basicaa() {
+    use super::alias::{AliasQuery, AliasResult};
+    let parsed = Parsed::new(
+        "define i16 @f(ptr %p, i16 %i) {
+b0:
+  %a = getelementptr inbounds i8, ptr @g, i16 %i
+  %b0 = getelementptr inbounds i8, ptr %p, i16 %i
+  %b = getelementptr inbounds i8, ptr %b0, i16 4
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  ret i16 0
+}
+",
+    );
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let loads: Vec<_> = unit.function.walk().filter_map(|(_, inst)| aa.location_of(inst)).collect();
+    assert_eq!(aa.alias(&loads[0], &loads[1]), AliasResult::No);
+}
