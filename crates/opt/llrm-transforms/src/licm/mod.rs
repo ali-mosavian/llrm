@@ -305,8 +305,8 @@ fn record_edits(
     decisions: &mut Decisions,
     header: BlockId,
     sunk: &[(InstId, sink::Sinking)],
-    hoisted: &[(InstId, BlockId)],
-    reassociated: &[hoist::Reassociation],
+    hoisted: &[hoist::Hoist],
+    reassociated: &[(usize, hoist::Reassociation)],
 ) {
     let count = |inst: InstId, decisions: &mut Decisions| match unit.function.instruction(inst).opcode {
         llrm_mir::opcode::Opcode::Load { .. } => decisions.moved_loads += 1,
@@ -322,12 +322,12 @@ fn record_edits(
             }
         }
     }
-    for &(inst, _) in hoisted {
+    for &hoist::Hoist { inst, .. } in hoisted {
         decisions.hoisted.push(Hoisted { function: unit.id, header, inst });
         count(inst, decisions);
     }
-    for one in reassociated {
-        decisions.reassociated.push(Hoisted { function: unit.id, header, inst: one.bo });
+    for (_, one) in reassociated {
+        decisions.reassociated.push(Hoisted { function: unit.id, header, inst: one.inst() });
     }
 }
 
@@ -611,7 +611,7 @@ fn sink_and_hoist(
     mssa: &mut Mssa,
     aa: &AliasQuery,
     accesses: &Accesses,
-) -> (Vec<(InstId, sink::Sinking)>, Vec<(InstId, BlockId)>, Vec<hoist::Reassociation>) {
+) -> (Vec<(InstId, sink::Sinking)>, Vec<hoist::Hoist>, Vec<(usize, hoist::Reassociation)>) {
     use llrm_analysis::cfg::Around;
     let preheader = ctx.loop_.preheader(unit.function).map(cfg::block);
     let mut flags = Flags::new(
@@ -722,6 +722,10 @@ thread_local! {
 impl FunctionPass for Licm {
     fn name(&self) -> &'static str {
         "licm"
+    }
+
+    fn translation(&self) -> Option<&'static str> {
+        Some("licm")
     }
 
     fn adds_memory_operations(&self) -> bool {

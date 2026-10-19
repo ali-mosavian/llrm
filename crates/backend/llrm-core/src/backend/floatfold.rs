@@ -93,9 +93,10 @@
 
 use std::sync::Arc;
 
-use crate::backend::floatalloc::{_loads_memory, _two_values, cell_of, name_is, semantics};
+use crate::backend::floatalloc::{_loads_memory, _reversed, _two_values, cell_of, name_is, semantics};
+use crate::backend::select;
 use crate::backend::storedhomes::may_write;
-use crate::model::ir::{Loc, Operation};
+use crate::model::ir::{Loc, Mem, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexSet};
@@ -222,6 +223,33 @@ pub fn folded(
         blocks.push(block.with_insns(insns));
     }
     if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
+/// `one`, an arithmetic instruction reading the float `value`, with the cell
+/// `cell` where it spilled as its memory operand, if x87 has that form: the
+/// reload folded (D-RFP2 of the inline spiller). The value is the right
+/// operand, or the left with the operation reversed.
+pub fn read_from_cell(
+    one: &Insn,
+    value: u32,
+    cell: &Mem,
+) -> Option<Insn> {
+    let what = one.what.as_ref().filter(|what| what.op == Operation::FloatArith && what.dests.len() == 1)?;
+    let (name, left, right) = _two_values(Some(what)).filter(|(_, left, right)| left.value != right.value)?;
+    let (cell_is_left, other) = match value {
+        _ if value == right.value => (false, left),
+        _ if value == left.value => (true, right),
+        _ => return None,
+    };
+    let name = if cell_is_left { _reversed(&name) } else { name.as_str() };
+    select::float_memory(name, cell, select::At::bits16(0))?;
+    let fused =
+        semantics(Operation::FloatArith, name, what.dests.clone(), vec![Loc::Held(other), Loc::Mem(cell.clone())]);
+    let mut made = one.clone();
+    made.what = Some(fused);
+    made.uses.retain(|used| *used != value);
+    made.widths.retain(|(used, _)| *used != value);
+    Some(made)
 }
 
 /// The load that defines `value`, if it may be read again at `at` as a memory

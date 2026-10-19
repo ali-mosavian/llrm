@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/deadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/deadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:e0b9f0a244bcf659695db5c02a2d8fe77625402a30bc53a9bbaf6d7d357a179a -->
+<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:99b38a0fd00a266c8de211fa0e51c38949ec6740e1b01643b83a03a131330f11 -->
 
 # deadstore
 
@@ -61,6 +61,14 @@ argument and capture rules; nothing unwinds). Exit: stage 2.
 DEVIATE 5: only stores and constant-length memsets are candidates, and
 `storeIsNoop` knows no `getInitialValueOfAllocation` (it needs `calloc`
 and friends). Exit: stage 2.
+DEVIATE 6: a call that initializes an object keeps the earlier writes to it
+when a pointer into the object also reaches the call through another
+argument (the pin trusts `initializes`: the callee reads before it writes
+through that alias). Exit: none, while a pointer can be passed twice.
+DEVIATE 7: a load through an unknown pointer is taken to read a local that
+is captured anywhere in the function, where BasicAA's `isNotCapturedBefore`
+asks at the instruction; a store a later escape follows stays. Exit:
+basicaa-port's captured-before query in the alias stand-in (10-23).
 
 ## Example
 A local written and never read:

@@ -1,6 +1,7 @@
 """#2329 squashed a stale head and reverted decide's LVI step (a82b332be): the squash must refuse what a bare `gh pr merge` merged."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -134,6 +135,24 @@ def test_an_own_commit_that_deletes_a_file_and_its_tests_is_refused_unless_the_d
     why = ps.refusals(head, "", base="main", cwd=repo)
     assert why and "scev/expand_iv.rs" in why[0] and "whole file" in why[0] and "1 test function" in why[0], why
     assert ps.refusals(head, "Deletes: scev/expand_iv.rs, the old expander", base="main", cwd=repo) == []
+
+
+def test_a_rewritten_generated_page_is_not_a_deletion(tmp_path):
+    """#2760, #2873 and #2925 were refused as 'deletes docs/optimizations/backend/jumps.md' (30-35 lines) for a regenerated page: three PRs sat out of the queue."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sh(repo, "init", "-q", "-b", "main")
+    page = "> Generated from the `//!` header of [`a.rs`](x); edit the header, not this file.\n" + "".join(f"line {i}\n" for i in range(60))
+    hand = "".join(f"line {i}\n" for i in range(60))
+    commit(repo, "gen.md", page, "page")
+    commit(repo, "hand.md", hand, "hand page")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "gen.md").write_text(page.split("\n", 1)[0] + "\nshort\n")
+    (repo / "hand.md").write_text("short\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "docs: rewrite")
+    why = ps.refusals(sh(repo, "rev-parse", "HEAD"), "", base="main", cwd=repo)
+    assert len(why) == 1 and why[0].startswith("hand.md"), why
 
 
 def test_a_squash_that_touches_files_the_pr_never_listed_is_detected_after_landing(tmp_path):
@@ -297,7 +316,7 @@ def test_a_smoke_that_exits_non_zero_without_a_summary_line_names_its_stderr(mon
         returncode, stdout, stderr = 1, "", "stale binaries in /x: llrm-c older than the source\nrun cargo build"
 
     monkeypatch.setattr(ps, "smoke_bins", lambda env=None: "/x")
-    monkeypatch.setattr(ps.subprocess, "run", lambda *a, **k: Done())
+    monkeypatch.setattr(ps, "run_streaming", lambda command, cwd: Done())
     failed, last = ps.smoke_failures()
     assert failed == {"smoke-did-not-finish"} and "stale binaries in /x" in last and "exited 1" in last, last
 
@@ -400,19 +419,133 @@ def test_eight_passing_prs_cost_one_smoke_and_nine_are_refused(monkeypatch):
         ps.merge_batch([str(n) for n in range(1, 10)])
 
 
+def test_the_smoke_stage_lines_reach_the_squash_log_as_they_happen(capsys):
+    """The 16:16 batch logged every stage at 16:23:48: the log was printed at the end. A STAGE line of the smoke is echoed the moment it arrives."""
+    import sys
+
+    child = [sys.executable, "-c", "import sys,time\nprint('12:00:00 STAGE step programs', flush=True)\ntime.sleep(0.3)\nprint('FAILING:')\nprint('PARITY SMOKE PASS x')"]
+    done = ps.run_streaming(child, Path("."))
+    shown = capsys.readouterr().out
+    assert shown.strip() == "12:00:00 STAGE step programs" and done.returncode == 0 and done.stdout.splitlines()[-1] == "PARITY SMOKE PASS x"
+
+
+def test_every_squash_stage_prints_a_flushed_timestamped_line_before_its_work(capsys, monkeypatch):
+    import stages
+
+    stages.stage("build")
+    line = capsys.readouterr().out
+    assert line.strip().endswith(" STAGE build") and line[2] == ":" and line[5] == ":"
+    monkeypatch.setattr(ps, "smoke_bins", lambda env=None: "/x")
+    monkeypatch.setattr(ps, "run_streaming", lambda command, cwd: type("D", (), {"returncode": 0, "stdout": "FAILING:\nPARITY SMOKE PASS x\n", "stderr": ""})())
+    ps.smoke_failures()
+    assert " STAGE smoke" in capsys.readouterr().out
+
+
+class Tree:
+    """A fake dev checkout: `state` is "head" until the merge, then "merged"; each check reports the files the state fails."""
+
+    def __init__(self, head_fmt: set[str], merged_fmt: set[str], ratchets: set[str] = frozenset()):
+        self.state, self.head_fmt, self.merged_fmt, self.ratchets = "head", head_fmt, merged_fmt, ratchets
+
+    def merge(self, head, base, cwd):
+        self.state = "merged"
+        return "deadbeef", ""
+
+    def checks(self):
+        fmt = lambda root: {"fmt": set(self.head_fmt if self.state == "head" else self.merged_fmt)} if (self.head_fmt if self.state == "head" else self.merged_fmt) else {}
+        rat = lambda root: {name: {name} for name in self.ratchets} if self.state == "merged" else {}
+        return [("fmt", fmt), ("ratchets", rat)]
+
+
+def run_precheck(tmp_path, monkeypatch, tree, number="2836", **extra):
+    dev = tmp_path / "wt"
+    dev.mkdir(exist_ok=True)
+    monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
+    monkeypatch.setattr(ps, "ensure_bins", lambda *a, **k: (_ for _ in ()).throw(AssertionError("a dist build")))
+    info = {"headRefOid": f"head{number}", "body": "", "baseRefName": "feat/parity"}
+    return ps.precheck(number, dev=dev, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info=info, cache=tmp_path / f"cache{number}.json", base_sha="base", **extra)
+
+
 def test_precheck_refuses_a_pr_with_a_dense_id_hash_map_without_any_dist_build(tmp_path, monkeypatch):
-    """#2836 added a hash map keyed by a dense id and cost a batch 26 minutes of halving: the seeded-maps ratchet names it in seconds, on a dev checkout, with no dist build."""
+    """#2836 added a hash map keyed by a dense id and cost a batch 26 minutes of halving: the seeded-maps ratchet names it in seconds, with no dist build."""
+    line = run_precheck(tmp_path, monkeypatch, Tree(set(), set(), {"ratchet:seeded_maps"}))
+    assert line.startswith("2836: REFUSED: ratchet:seeded_maps"), line
+    assert run_precheck(tmp_path, monkeypatch, Tree(set(), set()), number="2837") == "2837: PASS"
+
+
+def test_a_red_head_file_refuses_neither_a_clean_pr_nor_the_fix_but_a_new_red_file_is_named(tmp_path, monkeypatch):
+    """precheck refused five PRs for fmt files that feat/parity itself fails (saverestore.rs, flow.rs ...): with any red head file nothing passed, the fixes included."""
+    assert run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, {"a.rs"}), number="1") == "1: PASS"  # head red in A, PR adds none
+    assert run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, set()), number="2") == "2: PASS"  # the PR fixes A
+    line = run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, {"a.rs", "b.rs"}), number="3")  # the PR adds B
+    assert line.startswith("3: REFUSED: fmt") and "b.rs" in line and "a.rs" not in line, line
+
+
+def test_a_precheck_logs_the_seconds_each_check_took(tmp_path, monkeypatch):
+    """A precheck pass took ~16 minutes for 16 PRs and nothing said where: the ratchets, the merge or fmt. One log line per PR now names each."""
+    run_precheck(tmp_path, monkeypatch, Tree(set(), set()), number="7")
+    row = json.loads((tmp_path / "precheck-times.log").read_text().splitlines()[-1])
+    assert row["pr"] == "7" and {"merge", "fmt", "ratchets", "load"} <= row.keys(), row  # the load average: 150 s of ratchets at load 44 is not 57 s at load 30
+
+
+def test_a_precheck_verdict_is_cached_per_pr_head_and_feat_parity_sha(tmp_path, monkeypatch):
+    """The runner asks about ~40 candidates per cycle: the same (head, base) must not merge and check again, a moved feat/parity must."""
+    tree, merges = Tree(set(), set()), []
+    original = tree.merge
+    tree.merge = lambda head, base, cwd: (merges.append(head), original(head, base, cwd))[1]
     dev = tmp_path / "wt"
     dev.mkdir()
     monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
-    monkeypatch.setattr(ps, "ensure_bins", lambda *a, **k: (_ for _ in ()).throw(AssertionError("a dist build")))
     info = {"headRefOid": "abc", "body": "", "baseRefName": "feat/parity"}
-    merged = lambda head, base, cwd: ("deadbeef", "")
-    nothing = lambda sha, body, base, cwd: []
-    seeded = [("ratchets", lambda root: {"ratchet:seeded_maps": "a HashMap keyed by a dense id in crates/x/src/y.rs"}), ("fmt", lambda root: {})]
-    line = ps.precheck("2836", dev=dev, checks=seeded, merge=merged, deletions=nothing, info=info)
-    assert line.startswith("2836: REFUSED: ratchet:seeded_maps") and "dense id" in line, line
-    assert ps.precheck("2836", dev=dev, checks=[("ratchets", lambda root: {})], merge=merged, deletions=nothing, info=info) == "2836: PASS"
-    assert ps.precheck("2836", dev=dev, checks=seeded, merge=merged, deletions=nothing, info=info, head_failed={"ratchet:seeded_maps"}) == "2836: PASS"
-    conflict = ps.precheck("7", dev=dev, checks=[], merge=lambda head, base, cwd: (None, "conflicts in a.rs"), deletions=nothing, info=info)
-    assert conflict == "7: REFUSED: conflicts in a.rs"
+    args = dict(dev=dev, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info=info, cache=tmp_path / "cache.json")
+    assert ps.precheck("5", base_sha="p1", **args) == "5: PASS" and ps.precheck("5", base_sha="p1", **args) == "5: PASS" and len(merges) == 1
+    assert ps.precheck("5", base_sha="p2", **args) == "5: PASS" and len(merges) == 2
+    assert ps.precheck("9", base_sha="p2", **args) == "9: PASS" and len(merges) == 2  # the verdict is for the head sha, whichever number asks
+
+
+def test_a_fast_batch_leaves_out_the_pr_that_cannot_join_and_keeps_the_rest():
+    """The user's call: merge everything, skip the tests. One PR that conflicts or deletes unnamed code is left out with its reason; it does not fail or halve the batch."""
+    why = {"2": "conflicts with an earlier PR of the batch", "4": "deletes 31 lines"}
+    kept, left_out = ps.fast_merge(["1", "2", "3", "4", "5"], lambda number: why.get(number, ""))
+    assert kept == ["1", "3", "5"] and left_out == why, (kept, left_out)
+
+
+def test_the_precheck_formats_only_the_prs_own_rust_files(tmp_path, monkeypatch):
+    """fmt --check over the whole tree took ~13 s of a ~70 s precheck for a PR that touches a handful of files; the PR side checks only its changed .rs files."""
+    for name, text in {"ok.rs": "fn a() {}\n", "bad.rs": "fn  b( ) {}\n", "notes.md": "x\n"}.items():
+        (tmp_path / name).write_text(text)
+
+    class Done:
+        def __init__(self, out, code=0):
+            self.stdout, self.returncode = out, code
+
+    run = lambda cmd, cwd=None, input=None, **kw: Done("fn b() {}\n" if cmd[-1] == "bad.rs" else input)  # noqa: E731
+    assert ps.fmt_differs(tmp_path, ["ok.rs", "bad.rs", "notes.md", "gone.rs"], run=run) == {"bad.rs"}
+
+    seen = []
+
+    def checks_with_only():
+        def fmt(root, only=None):
+            seen.append(only)
+            return {}
+
+        fmt.takes_only = True
+        return [("fmt", fmt)]
+
+    ps.precheck_items(tmp_path, checks_with_only(), only=["a.rs"])
+    assert seen == [["a.rs"]], seen
+
+
+def test_a_stray_untracked_page_does_not_turn_a_pr_that_adds_it_into_a_conflict(tmp_path):
+    """combine_demanded.md, reassociate.md and reassociate_fneg.md sat untracked in the gate checkout after a docs regeneration; every PR adding them was refused as a 'conflict' for hours."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sh(repo, "init", "-q", "-b", "main")
+    commit(repo, "a.rs", "fn a() {}\n", "base")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    commit(repo, "page.md", "from the pr\n", "pr adds the page")
+    sh(repo, "checkout", "-q", "main")
+    (repo / "page.md").write_text("left by a regeneration\n")  # untracked, the file the PR adds
+    ps.clean_checkout("main", cwd=repo)
+    merge = subprocess.run(["git", "merge", "--no-edit", "-q", "pr"], cwd=repo, capture_output=True, text=True)
+    assert merge.returncode == 0 and (repo / "page.md").read_text() == "from the pr\n", merge.stderr

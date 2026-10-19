@@ -387,6 +387,35 @@ b0:
     assert!(after.contains("ret i16 9"), "{after}");
 }
 
+/// SROA over `n` split-and-promoted structs, best of three, in milliseconds.
+fn split_all(n: usize) -> f64 {
+    let mut body = String::from("define i32 @f(i32 %a) {\nb0:\n");
+    for i in 0..n {
+        body += &format!(
+            "  %s{i} = alloca {{ i32, i32 }}\n  %p{i} = getelementptr {{ i32, i32 }}, ptr %s{i}, i32 0, i32 1\n  store i32 %a, ptr %s{i}\n  store i32 %a, ptr %p{i}\n  %l{i} = load i32, ptr %p{i}\n"
+        );
+    }
+    body += "  ret i32 %a\n}\n";
+    (0..3)
+        .map(|_| {
+            let mut m = module(&body);
+            let start = std::time::Instant::now();
+            managed(&mut m, Sroa);
+            start.elapsed().as_secs_f64() * 1000.0
+        })
+        .fold(f64::MAX, f64::min)
+}
+
+/// The worklists were `Vec`s searched and filtered for every alloca, and the
+/// allocas it deleted a bitset as wide as the largest id: 4x the allocas took
+/// 7.4x as long (d_faces: sroa@646 2.6x on a 1.37x body). LLVM's are
+/// `SetVector`s, `set_subtract` of the few deleted.
+#[test]
+fn test_four_times_the_allocas_take_about_four_times_as_long() {
+    let (small, large) = (split_all(1000), split_all(4000));
+    assert!(large / small < 6.0, "{small:.1} ms for 1000, {large:.1} ms for 4000: {:.2}x", large / small);
+}
+
 /// A load at a variable offset escapes the pointer read-only, so the alloca
 /// stays; the stores at known offsets still reach the loads at known offsets.
 /// The pin's `propagateStoredValuesToLoads` makes a phi of what each path
