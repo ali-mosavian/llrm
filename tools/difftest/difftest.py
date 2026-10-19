@@ -58,14 +58,26 @@ COUNTERPART = {
     "decide": "simplifycfg",
     "trivialunswitch": "loop-mssa(simple-loop-unswitch<no-nontrivial>)",
     "dead": "adce",
+    "bdce": "bdce",
     "tailrec": "tailcallelim",
     "memcpyopt": "memcpyopt",
     "cvp": "correlated-propagation",
+    "instsimplify": "instsimplify",
+    "loopidiom": "loop(loop-idiom)",
+    "loopdeletion": "loop(loop-deletion)",
 }
+
+
+def counterpart(name: str) -> str:
+    """The opt pipeline of a pass key or of a slot of LLVM's order (`sroa@1179` is `sroa`)."""
+    return COUNTERPART[name.split("@")[0]]
 
 
 # The C++ each counterpart is, under llvm/lib at d1106deb71cc: a difference belongs to the function of that file that does the work.
 SOURCE = {
+    "instsimplify": "Transforms/Scalar/InstSimplifyPass.cpp",
+    "loop(loop-idiom)": "Transforms/Scalar/LoopIdiomRecognize.cpp",
+    "loop(loop-deletion)": "Transforms/Scalar/LoopDeletion.cpp",
     "sroa": "Transforms/Scalar/SROA.cpp",
     "mem2reg": "Transforms/Utils/Mem2Reg.cpp",
     "instcombine<no-verify-fixpoint>": "Transforms/InstCombine/InstructionCombining.cpp",
@@ -81,6 +93,7 @@ SOURCE = {
     "simplifycfg": "Transforms/Utils/SimplifyCFG.cpp",
     "loop-mssa(simple-loop-unswitch<no-nontrivial>)": "Transforms/Scalar/SimpleLoopUnswitch.cpp",
     "adce": "Transforms/Scalar/ADCE.cpp",
+    "bdce": "Transforms/Scalar/BDCE.cpp",
     "tailcallelim": "Transforms/Scalar/TailRecursionElimination.cpp",
     "memcpyopt": "Transforms/Scalar/MemCpyOptimizer.cpp",
     "correlated-propagation": "Transforms/Scalar/CorrelatedValuePropagation.cpp",
@@ -303,11 +316,22 @@ def dump_pairs(directory: Path, name: str) -> list[tuple[dict, Path]]:
     out = []
     for body in sorted(p for p in directory.iterdir() if p.is_dir()):
         steps = [(int(m[1]), int(m[4]), m[3], f) for f in body.glob("*.ll") if (m := STEP.match(f.name))]
+        base, _, at = name.partition("@")
         for number, slot, step, here in steps:
             before = [(abs(s - slot), f) for n, s, _, f in steps if n == number - 1]
-            if step == name and before:
+            if step == base and (not at or slot == int(at)) and before:
                 out.append(({"config": directory.name, "fn": body.name, "pass": name, "run": number, "file": str(min(before)[1])}, here))
     return out
+
+
+def input_pairs(directory: Path, name: str) -> list[tuple[dict, None]]:
+    """(the row of every run of `name` in `llrm-c --dump DIR` made with LLRM_DUMP_INPUTS, None): <body>/NNNN-in-<pass>@<slot>.ll is the body a run
+    was about to get, whether the run then changed it or not, so llrm declining where LLVM acts is seen too. There is no answer file: llrm-pass makes it."""
+    return [
+        ({"config": directory.name, "fn": body.name, "pass": name, "run": int(f.name.split("-")[0]), "file": str(f)}, None)
+        for body in sorted(p for p in directory.iterdir() if p.is_dir())
+        for f in sorted(body.glob(f"*-in-{name}.ll"))
+    ]
 
 
 def level_of(config: str) -> str:
@@ -341,18 +365,26 @@ def licm_counts(text: str) -> dict[str, collections.Counter]:
 def isolated(replay: Path, row: dict, source: Path) -> str:
     """llrm's answer to the input alone: `llrm-pass` runs the one pass PASS once on `source`."""
     try:
-        done = subprocess.run([str(replay), level_of(row["config"]), row["pass"], str(source)], capture_output=True, text=True)
+        order = ["--order"] if "@" in row["pass"] else []
+        done = subprocess.run([str(replay), level_of(row["config"]), *order, row["pass"], str(source)], capture_output=True, text=True)
     except OSError as error:
         raise RuntimeError(f"{replay}: {error}") from error
     if done.returncode:
         raise RuntimeError("llrm-pass " + row["pass"] + ": " + (done.stderr.strip().splitlines() or ["failed"])[0])
+    if order:
+        KINDS[row["pass"]] = next((line.split("slot ", 1)[1] for line in done.stderr.splitlines() if "slot " in line), "?")
     return done.stdout
+
+
+KINDS: dict[str, str] = {}  # slot -> what llrm-pass said stands in it ("sroa@1179 Early Translated (LLVM: sroa<modify-cfg>)")
 
 
 def premise(changed: int, functions: int, differing: int = 0) -> str:
     """"ok", or why the comparison proves nothing: it must be able to give more than one answer on these inputs. It can when LLVM changes some
     function and leaves some alone, or when it and llrm disagree somewhere (`differing`). If LLVM changed none, or all, of the functions and
     agrees everywhere, agreement shows nothing about llrm's pass."""
+    if functions == 0:
+        return "PREMISE FAILED: no function was compared, so nothing was shown"
     if functions >= 2 and differing == 0 and changed == 0:
         return f"PREMISE FAILED: LLVM changed none of {functions} functions and agrees everywhere: the reference never acted, so agreement proves nothing"
     if functions >= 2 and differing == 0 and changed == functions:
@@ -363,12 +395,12 @@ def premise(changed: int, functions: int, differing: int = 0) -> str:
 def analyse(todo: list[tuple[dict, Path]], root: Path, name: str, jobs: int = 8, replay: Path | None = None) -> dict:
     """The report of pass `name` over `todo`. With `replay` (llrm-pass) llrm's answer is the pass run alone on the input; without, the next step's
     input, which is the pass's answer only if nothing but the pass ran between (the report counts, with `replay`, where the two differ)."""
-    passes = COUNTERPART[name]
+    passes = counterpart(name)
 
     def one(item: tuple[dict, Path]) -> tuple[dict, dict, bool]:
         row, answer = item
         source = Path(row["file"]) if Path(row["file"]).is_absolute() else root / row["file"]
-        proxy = answer.read_text()
+        proxy = answer.read_text() if answer else None
         try:
             ours = isolated(replay, row, source) if replay else proxy
         except RuntimeError as error:
@@ -389,9 +421,10 @@ def analyse(todo: list[tuple[dict, Path]], root: Path, name: str, jobs: int = 8,
     return {
         "pass": name,
         "counterpart": passes,
+        "slot": KINDS.get(name),
         "source": source_link(passes),
         "answer": "the pass run alone (llrm-pass)" if replay else "next-input proxy",
-        "proxy_equals_isolated": sum(1 for _, c, same in done if same and "error" not in c) if replay else None,
+        "proxy_equals_isolated": sum(1 for _, c, same in done if same and "error" not in c) if replay and all(answer for _, answer in todo) else None,
         "inputs": len(todo),
         "parse_failures": len(failures),
         "first_failures": [{"file": r["file"], "error": e} for r, e in failures[:5]],
@@ -448,6 +481,13 @@ def main() -> int:
     dumps.add_argument("--json", type=Path)
     dumps.add_argument("--allow-env", nargs="*", default=[], metavar="NAME", help="the LLRM_CHECK_*/LLRM_EXP_* switch under test; any other in the environment is refused")
     dumps.add_argument("--llrm-pass", type=Path, help="the llrm-pass of the tree that made the dumps")
+    inputs = sub.add_parser("inputs", help="the pass or slot on the inputs `llrm-c --dump DIR` made with LLRM_DUMP_INPUTS=1: every run, changed or not")
+    inputs.add_argument("pass_name", metavar="PASS")
+    inputs.add_argument("directory", type=Path, nargs="+")
+    inputs.add_argument("--limit", type=int, default=0)
+    inputs.add_argument("--json", type=Path)
+    inputs.add_argument("--allow-env", nargs="*", default=[], metavar="NAME", help="the LLRM_CHECK_*/LLRM_EXP_* switch under test; any other in the environment is refused")
+    inputs.add_argument("--llrm-pass", type=Path, required=True, help="llrm-pass: llrm's answer is the pass run alone on each input")
     licm = sub.add_parser("licm", help="the LICM remarks of opt on FILE, per function")
     licm.add_argument("input", type=Path)
     pair = sub.add_parser("pair")
@@ -462,15 +502,15 @@ def main() -> int:
         return 0
     if args.command != "pair":
         envguard.require_clean("difftest", allow=args.allow_env)
-    if args.pass_name not in COUNTERPART:
+    if args.pass_name.split("@")[0] not in COUNTERPART:
         print(f"difftest: {args.pass_name} has no counterpart in LLVM; the passes with one: {' '.join(sorted(COUNTERPART))}", file=sys.stderr)
         return 2
     if args.command == "pair":
-        result = compare(args.input.read_text(), args.llrm_out.read_text(), COUNTERPART[args.pass_name])
+        result = compare(args.input.read_text(), args.llrm_out.read_text(), counterpart(args.pass_name))
         print(json.dumps(result, indent=1))
         return 0
     root = args.inputs if args.command == "run" else Path("/")
-    todo = pairs(relabelled(manifest(root, args.config), args.pass_name, args.inputs_of), args.pass_name, root) if args.command == "run" else [x for d in args.directory for x in dump_pairs(d, args.pass_name)]
+    todo = pairs(relabelled(manifest(root, args.config), args.pass_name, args.inputs_of), args.pass_name, root) if args.command == "run" else [x for d in args.directory for x in (input_pairs if args.command == "inputs" else dump_pairs)(d, args.pass_name)]
     if args.limit:
         todo = todo[: args.limit]
     report = analyse(todo, root, args.pass_name, replay=args.llrm_pass)

@@ -30,7 +30,7 @@ thread_local! {
 impl Function {
     /// Parents and use lists from the arenas, after reading.
     pub(crate) fn index(&mut self) {
-        self.value_uses = vec![Vec::new(); self.values.len()];
+        self.value_uses.reset(self.values.len());
         self.block_uses = vec![Vec::new(); self.blocks.len()];
         self.parent = vec![None; self.instructions.len()];
         self.erased = vec![false; self.instructions.len()];
@@ -41,20 +41,10 @@ impl Function {
         }
         for inst in 0..self.instructions.len() {
             let operands = self.instructions[inst].operands.clone();
+            self.value_uses.slots(inst as u32, operands.len());
             for (index, operand) in operands.into_iter().enumerate() {
                 self.add_use(operand, Use { user: InstId(inst as u32), index: index as u32 });
             }
-        }
-    }
-
-    fn uses_of(
-        &mut self,
-        operand: Operand,
-    ) -> Option<&mut Vec<Use>> {
-        match operand {
-            Operand::Value(value) => Some(&mut self.value_uses[value.0 as usize]),
-            Operand::Block(block) => Some(&mut self.block_uses[block.0 as usize]),
-            Operand::Constant(_) => None,
         }
     }
 
@@ -63,8 +53,10 @@ impl Function {
         operand: Operand,
         at: Use,
     ) {
-        if let Some(uses) = self.uses_of(operand) {
-            uses.push(at);
+        match operand {
+            Operand::Value(value) => self.value_uses.link(value.0, at),
+            Operand::Block(block) => self.block_uses[block.0 as usize].push(at),
+            Operand::Constant(_) => {}
         }
     }
 
@@ -73,9 +65,14 @@ impl Function {
         operand: Operand,
         at: Use,
     ) {
-        if let Some(uses) = self.uses_of(operand) {
-            USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
-            uses.retain(|one| *one != at);
+        match operand {
+            Operand::Value(value) => self.value_uses.unlink(value.0, at),
+            Operand::Block(block) => {
+                let uses = &mut self.block_uses[block.0 as usize];
+                USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
+                uses.retain(|one| *one != at);
+            }
+            Operand::Constant(_) => {}
         }
     }
 
@@ -99,9 +96,10 @@ impl Function {
         }
         let mut problems = Vec::new();
         for (at, expected) in values.iter().enumerate() {
-            let kept: BTreeSet<Use> = self.value_uses[at].iter().copied().collect();
-            if kept != *expected || kept.len() != self.value_uses[at].len() {
-                problems.push(format!("value {at}: kept {:?}, operands say {expected:?}", self.value_uses[at]));
+            let list = self.value_uses.users(at as u32).to_vec();
+            let kept: BTreeSet<Use> = list.iter().copied().collect();
+            if kept != *expected || kept.len() != list.len() {
+                problems.push(format!("value {at}: kept {list:?}, operands say {expected:?}"));
             }
         }
         for (at, expected) in blocks.iter().enumerate() {
@@ -188,9 +186,10 @@ impl Function {
             let value = ValueId(self.values.len() as u32);
             let name = name.map(|one| self.unique_name(one));
             self.values.push(ValueData { ty, name, def: ValueDef::Instruction(id) });
-            self.value_uses.push(Vec::new());
+            self.value_uses.push_value();
             value
         });
+        self.value_uses.slots(id.0, operands.len());
         for (index, &operand) in operands.iter().enumerate() {
             self.add_use(operand, Use { user: id, index: index as u32 });
         }
@@ -480,21 +479,24 @@ impl Function {
             // scanned once for all the places `inst` names it, not
             // once for each, which was N^2 for the one value
             // N inputs repeat.
-            let mut places = crate::hash::HashMap::<Operand, Vec<u32>>::default();
+            let mut places = crate::hash::HashMap::<BlockId, Vec<u32>>::default();
             for (index, operand) in old.into_iter().enumerate() {
-                places.entry(operand).or_default().push(index as u32);
-            }
-            for (operand, indexes) in places {
-                if let Some(uses) = self.uses_of(operand) {
-                    USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
-                    uses.retain(|one| one.user != inst || indexes.binary_search(&one.index).is_err());
+                match operand {
+                    Operand::Block(block) => places.entry(block).or_default().push(index as u32),
+                    _ => self.remove_use(operand, Use { user: inst, index: index as u32 }),
                 }
+            }
+            for (block, indexes) in places {
+                let uses = &mut self.block_uses[block.0 as usize];
+                USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
+                uses.retain(|one| one.user != inst || indexes.binary_search(&one.index).is_err());
             }
         } else {
             for (index, operand) in old.into_iter().enumerate() {
                 self.remove_use(operand, Use { user: inst, index: index as u32 });
             }
         }
+        self.value_uses.slots(inst.0, operands.len());
         for (index, &operand) in operands.iter().enumerate() {
             self.add_use(operand, Use { user: inst, index: index as u32 });
         }
@@ -588,9 +590,9 @@ impl Function {
             self.retarget_debug_records(value, with);
             // Every use goes: the list is taken, not scanned for each of its
             // uses (a value of U uses read U^2 entries).
-            let uses = std::mem::take(&mut self.value_uses[value.0 as usize]);
             self.log(Change::Substituted { from: value, to: with });
-            for one in uses {
+            while let Some(one) = self.value_uses.head(value.0) {
+                self.value_uses.unlink(value.0, one);
                 self.instructions[one.user.0 as usize].operands[one.index as usize] = with;
                 self.add_use(with, one);
                 self.log(Change::Operand { inst: one.user, index: one.index, was: Operand::Value(value) });
@@ -733,31 +735,30 @@ impl Function {
                 return Err(format!("instruction {}'s result still has a user, {}", inst.0, user.user.0));
             }
         }
-        // Each operand's uses are filtered once, not once for each use of it
-        // that goes: a value used by k of the instructions was O(k) a use.
-        let mut operands: Vec<Operand> = Vec::new();
-        let mut seen_values = crate::dense::IdSet::<ValueId>::new();
+        // A value's uses unlink one by one; a block's list is filtered once,
+        // not once for each use of it that goes.
+        let mut operands: Vec<BlockId> = Vec::new();
         let mut seen_blocks = crate::dense::IdSet::<BlockId>::new();
         for &inst in &insts {
-            for &operand in &self.instructions[inst.0 as usize].operands {
-                let first = match operand {
-                    Operand::Value(value) => seen_values.insert(value),
-                    Operand::Block(block) => seen_blocks.insert(block),
-                    Operand::Constant(_) => false,
-                };
-                if first {
-                    operands.push(operand);
+            for (index, &operand) in self.instructions[inst.0 as usize].operands.iter().enumerate() {
+                match operand {
+                    Operand::Value(value) => self.value_uses.unlink(value.0, Use { user: inst, index: index as u32 }),
+                    Operand::Block(block) => {
+                        if seen_blocks.insert(block) {
+                            operands.push(block);
+                        }
+                    }
+                    Operand::Constant(_) => {}
                 }
             }
             if let Some(result) = self.instruction(inst).result {
                 self.forget_debug_value(result);
             }
         }
-        for operand in operands {
-            if let Some(uses) = self.uses_of(operand) {
-                USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
-                uses.retain(|one| !gone.contains(&one.user));
-            }
+        for block in operands {
+            let uses = &mut self.block_uses[block.0 as usize];
+            USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
+            uses.retain(|one| !gone.contains(&one.user));
         }
         let mut blocks: Vec<BlockId> = insts.iter().filter_map(|&inst| self.parent(inst)).collect();
         blocks.sort_unstable();
@@ -855,7 +856,7 @@ impl Function {
             .map(|&ty| {
                 let value = ValueId(self.values.len() as u32);
                 self.values.push(ValueData { ty, name: None, def: ValueDef::Argument(0) });
-                self.value_uses.push(Vec::new());
+                self.value_uses.push_value();
                 value
             })
             .collect();
@@ -953,6 +954,34 @@ impl Function {
             return;
         };
         *align = Some(bytes);
+        self.log(Change::Rewritten(inst));
+    }
+
+    /// `Instruction::dropPoisonGeneratingAnnotations`: the flags, metadata and
+    /// call attributes of `inst` that make its result poison when the
+    /// operands it was proved for change. `ctlz`, `cttz` and `abs` have no
+    /// MIR spelling, so their poison-on-zero operand is not here.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Instruction.h#L614>
+    pub fn drop_poison_generating_annotations(
+        &mut self,
+        inst: InstId,
+    ) {
+        use crate::opcode::Attribute;
+        let poison_attribute = |attr: &Attribute| match attr {
+            Attribute::Range { .. } => true,
+            Attribute::Flag(name) => name == "nonnull",
+            Attribute::Int(name, _) => name == "align",
+            _ => false,
+        };
+        let instruction = &mut self.instructions[inst.0 as usize];
+        instruction.flags = instruction.flags.without(Flags::POISON_GENERATING);
+        instruction.metadata.retain(|(kind, _)| !matches!(kind.as_str(), "range" | "nonnull" | "align" | "nofpclass"));
+        if let Opcode::Call(info) | Opcode::Invoke(info) = &mut instruction.opcode {
+            info.return_attrs.retain(|attr| !poison_attribute(attr));
+            for attrs in &mut info.argument_attrs {
+                attrs.retain(|attr| !poison_attribute(attr));
+            }
+        }
         self.log(Change::Rewritten(inst));
     }
 
@@ -1102,7 +1131,7 @@ impl Function {
         self.layout.clear();
         self.debug_records.clear();
         self.erased.fill(true);
-        self.value_uses.iter_mut().for_each(Vec::clear);
+        self.value_uses.clear_all();
         self.block_uses.iter_mut().for_each(Vec::clear);
     }
 
@@ -1114,7 +1143,7 @@ impl Function {
     /// input per edge, so one call drops one input.
     pub fn predecessor_removed(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         block: BlockId,
         predecessor: BlockId,
         keep_one_input_phis: bool,

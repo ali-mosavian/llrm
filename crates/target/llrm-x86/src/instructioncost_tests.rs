@@ -46,7 +46,7 @@ fn test_every_instruction_costs_what_the_pinned_opt_says() {
         let inst = function
             .layout()
             .iter()
-            .flat_map(|&block| function.block(block).instructions().iter().copied())
+            .flat_map(|&block| function.block(block).iter())
             .nth(*index)
             .unwrap_or_else(|| panic!("@{name} has no instruction {index}"));
         let cost = instruction_cost(&x86, &module.context, &layout, &module.globals, function, inst, kind_of(kind));

@@ -124,10 +124,9 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loopsimplify@764", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@764", Simplify, "lcssa", Old, "lcssa-port"),
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
-    entry("hoist@724", Simplify, "licm<no-allowspeculation>", Old, "licm-port"),
-    entry("loopmotion@724", Simplify, "licm<no-allowspeculation>", Old, "licm-port"),
-    entry("hoist@730", Simplify, "licm<allowspeculation>", Old, "licm-port"),
-    entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial>", Old, "loop-passes-port"),
+    entry("licm@724", Simplify, "licm<no-allowspeculation>", Translated, ""),
+    entry("licm@730", Simplify, "licm<allowspeculation>", Translated, ""),
+    entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial>", Translated, ""),
     entry("decide@766", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("phiopt@766", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("fold@768", Simplify, "instcombine", Old, "instcombine-port"),
@@ -137,6 +136,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loopidiom@737", Simplify, "loop-idiom", Translated, ""),
     entry("loopidioms@737", Simplify, "loop-idiom", Old, "loop-idiom-port (the pricing, noncountable half)"),
     entry("indvars@738", Simplify, "indvars", Old, "scev-port"),
+    entry("loopdeletion@749", Simplify, "loop-deletion", Translated, ""),
     entry("unroll@753", Simplify, "loop-unroll-full", Translated, ""),
     entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
     entry("inferspace@787", Simplify, "infer-address-spaces (target)", Old, ""),
@@ -155,8 +155,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("dse@820", Simplify, "dse", Old, "backend-slopes (after memcpyopt)"),
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@823", Simplify, "lcssa", Old, "lcssa-port"),
-    entry("hoist@823", Simplify, "licm<allowspeculation>", Old, "licm-port"),
-    entry("loopmotion@823", Simplify, "licm<allowspeculation>", Old, "licm-port"),
+    entry("licm@823", Simplify, "licm<allowspeculation>", Translated, ""),
     entry("decide@832", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("phiopt@832", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("fold@837", Simplify, "instcombine", Old, "instcombine-port"),
@@ -286,6 +285,16 @@ pub const RUN_COUNTS_OPEN: &[&str] = &[
     "loopsimplify@764,772,823 and lcssa: one pair per loop-pass adaptor",
     "-O3 reruns a body's whole list after `ipa-cp.` and `ipa-deadargs.` (d_faces: _d_draw_faces runs the 52 steps three times, 17 gvn runs over 12 bodies against -O2's 12): LLVM runs IPSCCP and deadargelim before the function pipelines, so a body is not run twice (cgscc-poc's single pass-list run per SCC visit)",
 ];
+
+/// The phase and kind of the slot named `slot` (`sroa@1179`), if the registry
+/// has it as a function list's slot: what `llrm-pass --order` reports before it
+/// runs.
+pub fn describe(slot: &str) -> Option<(Phase, SlotKind, &'static str)> {
+    REGISTRY
+        .iter()
+        .find(|one| one.slot == slot && !matches!(one.phase, Phase::Module | Phase::Backend))
+        .map(|one| (one.phase, one.kind, one.llvm))
+}
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`); the rounds name
 /// their passes without a slot.

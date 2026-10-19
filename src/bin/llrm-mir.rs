@@ -84,6 +84,27 @@ fn main() -> ExitCode {
         })
         .is_some()
     };
+    let simple_loop_unswitch = {
+        let at = arguments.iter().position(|one| one == "--simple-loop-unswitch");
+        at.inspect(|&at| {
+            arguments.remove(at);
+        })
+        .is_some()
+    };
+    let loop_deletion = {
+        let at = arguments.iter().position(|one| one == "--loop-deletion");
+        at.inspect(|&at| {
+            arguments.remove(at);
+        })
+        .is_some()
+    };
+    let unroll_full_os = {
+        let at = arguments.iter().position(|one| one == "--unroll-full-os");
+        at.inspect(|&at| {
+            arguments.remove(at);
+        })
+        .is_some()
+    };
     let unroll_full = {
         let at = arguments.iter().position(|one| one == "--unroll-full");
         at.inspect(|&at| {
@@ -184,11 +205,31 @@ fn main() -> ExitCode {
                 print!("{}", llrm_mir::print::module(&module));
                 return ExitCode::SUCCESS;
             }
-            if unroll_full {
+            if simple_loop_unswitch {
+                let mut manager = llrm_mir::passes::PassManager::default();
+                manager.add(llrm_transforms::simpleloopunswitch::SimpleLoopUnswitch);
+                if let Err(error) = manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)) {
+                    eprintln!("{path}: {error}");
+                    return ExitCode::FAILURE;
+                }
+                print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
+            }
+            if loop_deletion {
+                let mut manager = llrm_mir::passes::PassManager::default();
+                manager.add(llrm_transforms::loopdeletion::LoopDeletion);
+                if let Err(error) = manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)) {
+                    eprintln!("{path}: {error}");
+                    return ExitCode::FAILURE;
+                }
+                print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
+            }
+            if unroll_full || unroll_full_os {
                 let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu");
                 let options = llrm_transforms::loopunrollpass::Options {
                     opt_level: 2,
-                    opt_size: false,
+                    opt_size: unroll_full_os,
                     min_size: false,
                     only_when_forced: false,
                     prepare_for_lto: false,

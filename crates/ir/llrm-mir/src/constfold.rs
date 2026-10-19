@@ -16,7 +16,7 @@
 //! `fptosi`, `fptoui`, `sitofp`, `uitofp`) are folded at the nearest-even
 //! rounding `APFloat` uses; an `x86_fp80` constant is held as the nearest
 //! double, so its folds are the double's (DEVIATE: the 64-bit significand).
-//! DEVIATE: no `undef` (MIR has none), no vectors, no floating-point arithmetic
+//! DEVIATE: no vectors, no floating-point arithmetic
 //! (`FAdd`...: `ConstantFoldBinaryInstruction`'s FP cases), no constant
 //! expressions; an operation with `nuw`/`nsw`/`exact` is not folded
 //! (LLVM's `ConstantExpr::get(Opc, L, R, Flags)` makes it poison on overflow;
@@ -61,7 +61,7 @@ pub(crate) fn is_null_value(
 
 /// `Constant::getNullValue`.
 pub fn null_value(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> ConstantId {
     let kind = match context.types.get(ty) {
@@ -81,16 +81,31 @@ fn is_poison(
 }
 
 fn poison(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> ConstantId {
     context.constant(Constant { ty, kind: ConstantKind::Poison })
 }
 
+/// `isa<UndefValue>(C) && !isa<PoisonValue>(C)`: the callers test poison first.
+fn is_undef(
+    context: &Context,
+    id: ConstantId,
+) -> bool {
+    context.get(id).kind == ConstantKind::Undef
+}
+
+fn undef(
+    context: &Context,
+    ty: TypeId,
+) -> ConstantId {
+    context.constant(Constant { ty, kind: ConstantKind::Undef })
+}
+
 /// `ConstantFoldBinaryInstruction`
 /// ([ConstantFold.cpp:637](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L637)).
 pub fn binary(
-    context: &mut Context,
+    context: &Context,
     op: BinaryOp,
     c1: ConstantId,
     c2: ConstantId,
@@ -123,6 +138,9 @@ pub fn binary(
     // Binary operations propagate poison.
     if is_poison(context, c1) || is_poison(context, c2) {
         return Some(poison(context, ty));
+    }
+    if is_undef(context, c1) || is_undef(context, c2) {
+        return Some(binary_with_undef(context, op, c1, c2, ty, width));
     }
     // A number on the right is an absorber (`X * 0`, `X & 0`, `X | -1`) or
     // makes `X / 0`, `X % 0` poison and `X % 1` zero whatever `X` is. A number
@@ -192,6 +210,45 @@ pub fn binary(
     Some(context.constant(Constant { ty, kind: ConstantKind::Int(folded & mask(width)) }))
 }
 
+/// The `HasScalarUndefOrScalableVectorUndef` switch of
+/// `ConstantFoldBinaryInstruction`
+/// ([ConstantFold.cpp:659](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantFold.cpp#L659)):
+/// each operation by what its undef operand may be chosen as. The
+/// `FSub`..`FRem` cases are DEVIATE: `binary` folds integers only.
+fn binary_with_undef(
+    context: &Context,
+    op: BinaryOp,
+    c1: ConstantId,
+    c2: ConstantId,
+    ty: TypeId,
+    width: u32,
+) -> ConstantId {
+    let (u1, u2) = (is_undef(context, c1), is_undef(context, c2));
+    let null = |context: &Context| context.constant(Constant { ty, kind: ConstantKind::Int(0) });
+    match op {
+        BinaryOp::Xor if u1 && u2 => null(context),
+        BinaryOp::Xor | BinaryOp::Add | BinaryOp::Sub => undef(context, ty),
+        BinaryOp::And if u1 && u2 => c1,
+        BinaryOp::And => null(context),
+        BinaryOp::Mul if u1 && u2 => c1,
+        BinaryOp::Mul => {
+            // X * undef is undef for odd X, else 0.
+            let odd = number(context, c1).or_else(|| number(context, c2)).is_some_and(|(x, _)| x & 1 == 1);
+            if odd { undef(context, ty) } else { null(context) }
+        }
+        BinaryOp::SDiv | BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SRem => {
+            // X / undef and X / 0 are poison.
+            if u2 || number(context, c2).is_some_and(|(y, _)| y == 0) { poison(context, ty) } else { null(context) }
+        }
+        BinaryOp::Or if u1 && u2 => c1,
+        BinaryOp::Or => context.constant(Constant { ty, kind: ConstantKind::Int(mask(width)) }),
+        // The pin's `Shl` comment says undef but returns poison.
+        BinaryOp::LShr | BinaryOp::AShr | BinaryOp::Shl if u2 => poison(context, ty),
+        BinaryOp::LShr | BinaryOp::AShr | BinaryOp::Shl => null(context),
+        _ => unreachable!("an integer operation"),
+    }
+}
+
 /// A floating constant's value as a double and its kind: `Float` bits are IEEE
 /// single in the low 32, `Double` IEEE double, `X86Fp80` the double nearest its
 /// value (MIR holds an 80-bit constant that way), and a zero is +0.0.
@@ -218,7 +275,7 @@ fn float_number(
 /// `APFloat::convert` does (an `X86Fp80` constant is never folded: it is held
 /// as the nearest double).
 fn float_constant(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
     kind: FloatKind,
     value: f64,
@@ -234,13 +291,21 @@ fn float_constant(
 /// ([ConstantFold.cpp:163](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L163)):
 /// integer casts, and the casts between integers and floats of a constant.
 pub fn cast(
-    context: &mut Context,
+    context: &Context,
     op: CastOp,
     c: ConstantId,
     to: TypeId,
 ) -> Option<ConstantId> {
     if is_poison(context, c) {
         return Some(poison(context, to));
+    }
+    if is_undef(context, c) {
+        // zext, sext and [us]itofp of undef are 0: the result is bounded.
+        let bounded = matches!(
+            op,
+            CastOp::ZExt | CastOp::SExt | CastOp::UIToFP | CastOp::SIToFP
+        );
+        return Some(if bounded { null_value(context, to) } else { undef(context, to) });
     }
     if is_null_value(context, c) && op != CastOp::AddrSpaceCast {
         return Some(null_value(context, to));
@@ -322,7 +387,7 @@ pub fn cast(
 /// ([ConstantFold.cpp:1135](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L1135))
 /// for a caller that has no module: a global is a pointer nothing is known of.
 pub fn compare(
-    context: &mut Context,
+    context: &Context,
     predicate: IntPredicate,
     c1: ConstantId,
     c2: ConstantId,
@@ -471,11 +536,11 @@ fn evaluate_icmp_relation(
 
 /// `ConstantFoldCompareInstruction`
 /// ([ConstantFold.cpp:1135](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L1135))
-/// of the module whose `globals` the constants name. DEVIATE: no `undef`,
+/// of the module whose `globals` the constants name. DEVIATE: no
 /// vectors, floating point (`FCmpInst::compare`), and `i1` equality, which
 /// the C++ makes an `xor` expression (#2252).
 pub fn compare_in(
-    context: &mut Context,
+    context: &Context,
     globals: &[GlobalValue],
     predicate: IntPredicate,
     c1: ConstantId,
@@ -484,6 +549,19 @@ pub fn compare_in(
     let i1 = context.types.int(1);
     if is_poison(context, c1) || is_poison(context, c2) {
         return Some(poison(context, i1));
+    }
+    if is_undef(context, c1) || is_undef(context, c2) {
+        // Equality, or both undef: undef; else the answer for the undef equal
+        // to X.
+        if matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) || c1 == c2 {
+            return Some(undef(context, i1));
+        }
+        let true_when_equal =
+            matches!(
+                predicate,
+                IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle
+            );
+        return Some(context.constant(Constant { ty: i1, kind: ConstantKind::Int(u128::from(true_when_equal)) }));
     }
     // `X uge 0` is true and `X ult 0` false, whatever X is.
     if is_null_value(context, c2) && matches!(predicate, IntPredicate::Uge | IntPredicate::Ult) {
@@ -530,9 +608,10 @@ pub fn compare_in(
 
 /// `ConstantFoldSelectInstruction`
 /// ([ConstantFold.cpp:295](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L295)):
-/// a condition that is a number picks an arm, a poison one is poison.
+/// a condition that is a number picks an arm, a poison one is poison, an undef
+/// one is the false arm unless the true arm is undef.
 pub fn select(
-    context: &mut Context,
+    context: &Context,
     condition: ConstantId,
     if_true: ConstantId,
     if_false: ConstantId,
@@ -541,8 +620,47 @@ pub fn select(
         let ty = context.get(if_true).ty;
         return Some(poison(context, ty));
     }
-    let (bits, _) = number(context, condition)?;
-    Some(if bits & 1 == 1 { if_true } else { if_false })
+    if is_undef(context, condition) {
+        return Some(if is_undef(context, if_true) { if_true } else { if_false });
+    }
+    if let Some((bits, _)) = number(context, condition) {
+        return Some(if bits & 1 == 1 { if_true } else { if_false });
+    }
+    if if_true == if_false {
+        return Some(if_true);
+    }
+    if is_poison(context, if_true) {
+        return Some(if_false);
+    }
+    if is_poison(context, if_false) {
+        return Some(if_true);
+    }
+    // An undef arm gives the other arm if that cannot be poison.
+    if is_undef(context, if_true) && not_poison(context, if_false) {
+        return Some(if_false);
+    }
+    if is_undef(context, if_false) && not_poison(context, if_true) {
+        return Some(if_true);
+    }
+    None
+}
+
+/// The `NotPoison` lambda of `ConstantFoldSelectInstruction`: what is known no
+/// poison, as a number, a global, a null or a float.
+fn not_poison(
+    context: &Context,
+    id: ConstantId,
+) -> bool {
+    let constant = context.get(id);
+    match &constant.kind {
+        ConstantKind::Poison | ConstantKind::Expr(_) => false,
+        ConstantKind::Int(_) | ConstantKind::Float(_) | ConstantKind::Null | ConstantKind::Global(_) => true,
+        ConstantKind::Aggregate(members) if matches!(context.types.get(constant.ty), Type::Vector { .. }) => members
+            .iter()
+            .all(|&one| !is_poison(context, one) && !matches!(context.get(one).kind, ConstantKind::Expr(_))),
+        ConstantKind::Zero => matches!(context.types.get(constant.ty), Type::Vector { .. }),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -551,7 +669,7 @@ mod tests {
     use crate::context::{ConstantExpr, GlobalId};
 
     fn unknown(
-        context: &mut Context,
+        context: &Context,
         width: u32,
     ) -> ConstantId {
         let ptr = context.types.ptr(0);
@@ -564,7 +682,7 @@ mod tests {
     }
 
     fn number(
-        context: &mut Context,
+        context: &Context,
         width: u32,
         value: u128,
     ) -> ConstantId {
@@ -617,6 +735,128 @@ mod tests {
 }
 
 #[cfg(test)]
+mod undef_tests {
+    use super::*;
+
+    fn int(
+        context: &mut Context,
+        value: u128,
+    ) -> ConstantId {
+        let ty = context.types.int(16);
+        context.constant(Constant { ty, kind: ConstantKind::Int(value) })
+    }
+
+    fn undef(context: &mut Context) -> ConstantId {
+        let ty = context.types.int(16);
+        context.constant(Constant { ty, kind: ConstantKind::Undef })
+    }
+
+    fn kind(
+        context: &Context,
+        id: Option<ConstantId>,
+    ) -> ConstantKind {
+        context.get(id.expect("folded")).kind.clone()
+    }
+
+    /// Old: an operation on an `undef` constant was not folded at all
+    /// (`undef & 5` stayed an instruction). The pin folds each by what the
+    /// undef may be: `undef & X` is 0, `undef | X` is -1, `undef + X` undef,
+    /// `X / undef` poison (ConstantFold.cpp#L670).
+    #[test]
+    fn a_binary_operation_on_undef_folds_as_the_pin_does() {
+        let mut context = Context::new();
+        let (u, five, two, three, zero) = (
+            undef(&mut context),
+            int(&mut context, 5),
+            int(&mut context, 2),
+            int(&mut context, 3),
+            int(&mut context, 0),
+        );
+        let mut fold = |op, a, b| {
+            let folded = binary(&mut context, op, a, b);
+            kind(&context, folded)
+        };
+        assert_eq!(fold(BinaryOp::Add, u, five), ConstantKind::Undef);
+        assert_eq!(fold(BinaryOp::Sub, five, u), ConstantKind::Undef);
+        assert_eq!(fold(BinaryOp::Xor, u, five), ConstantKind::Undef);
+        assert_eq!(fold(BinaryOp::Xor, u, u), ConstantKind::Int(0), "undef ^ undef");
+        assert_eq!(fold(BinaryOp::And, u, five), ConstantKind::Int(0));
+        assert_eq!(fold(BinaryOp::And, u, u), ConstantKind::Undef);
+        assert_eq!(fold(BinaryOp::Or, five, u), ConstantKind::Int(0xffff));
+        assert_eq!(fold(BinaryOp::Or, u, u), ConstantKind::Undef);
+        assert_eq!(fold(BinaryOp::Mul, u, three), ConstantKind::Undef, "X * undef, X odd");
+        assert_eq!(fold(BinaryOp::Mul, u, two), ConstantKind::Int(0), "X * undef, X even");
+        assert_eq!(fold(BinaryOp::UDiv, five, u), ConstantKind::Poison);
+        assert_eq!(fold(BinaryOp::SRem, five, u), ConstantKind::Poison);
+        assert_eq!(fold(BinaryOp::UDiv, u, five), ConstantKind::Int(0));
+        assert_eq!(fold(BinaryOp::URem, u, zero), ConstantKind::Poison, "undef % 0");
+        assert_eq!(fold(BinaryOp::Shl, five, u), ConstantKind::Poison);
+        assert_eq!(fold(BinaryOp::LShr, five, u), ConstantKind::Poison);
+        assert_eq!(fold(BinaryOp::Shl, u, five), ConstantKind::Int(0));
+        assert_eq!(fold(BinaryOp::AShr, u, five), ConstantKind::Int(0));
+    }
+
+    /// `zext undef` and `sext undef` are 0 (the top bits are known), `trunc
+    /// undef` undef (ConstantFold.cpp#L163).
+    #[test]
+    fn a_cast_of_undef_is_zero_when_the_top_bits_are_known() {
+        let mut context = Context::new();
+        let (u8t, i32t) = (context.types.int(8), context.types.int(32));
+        let u = context.constant(Constant { ty: u8t, kind: ConstantKind::Undef });
+        let zext = cast(&mut context, CastOp::ZExt, u, i32t);
+        let sext = cast(&mut context, CastOp::SExt, u, i32t);
+        let u16 = undef(&mut context);
+        let trunc = cast(&mut context, CastOp::Trunc, u16, u8t);
+        assert_eq!(kind(&context, zext), ConstantKind::Int(0));
+        assert_eq!(kind(&context, sext), ConstantKind::Int(0));
+        assert_eq!(kind(&context, trunc), ConstantKind::Undef);
+        assert_eq!(context.get(trunc.unwrap()).ty, u8t);
+    }
+
+    /// `icmp eq undef, X` is undef, any other predicate the answer for the
+    /// undef equal to X: `ult` false, `ule` true (ConstantFold.cpp#L1135).
+    #[test]
+    fn a_comparison_with_undef_is_undef_for_equality_else_as_if_equal() {
+        let mut context = Context::new();
+        let (u, five) = (undef(&mut context), int(&mut context, 5));
+        let mut run = |predicate, a, b| {
+            let folded = compare_in(&mut context, &[], predicate, a, b);
+            kind(&context, folded)
+        };
+        assert_eq!(run(IntPredicate::Eq, u, five), ConstantKind::Undef);
+        assert_eq!(run(IntPredicate::Ne, five, u), ConstantKind::Undef);
+        assert_eq!(run(IntPredicate::Ult, u, five), ConstantKind::Int(0));
+        assert_eq!(run(IntPredicate::Ule, u, five), ConstantKind::Int(1));
+        assert_eq!(run(IntPredicate::Slt, u, u), ConstantKind::Undef, "both undef");
+    }
+
+    /// `select undef, a, b` is b (a if a is undef); with a condition that is
+    /// no number, an undef arm gives the other arm unless that may be poison
+    /// (ConstantFold.cpp#L295).
+    #[test]
+    fn a_select_with_undef_picks_the_arm_the_pin_does() {
+        let mut context = Context::new();
+        let (i1, i16t, ptr) = (context.types.int(1), context.types.int(16), context.types.ptr(0));
+        let (u, five, six) = (undef(&mut context), int(&mut context, 5), int(&mut context, 6));
+        let poisoned = poison(&mut context, i16t);
+        let undef_condition = context.constant(Constant { ty: i1, kind: ConstantKind::Undef });
+        assert_eq!(select(&mut context, undef_condition, five, six), Some(six));
+        assert_eq!(select(&mut context, undef_condition, u, six), Some(u));
+        let global = context.constant(Constant { ty: ptr, kind: ConstantKind::Global(crate::context::GlobalId(0)) });
+        let unknown = context.constant(Constant {
+            ty: i1,
+            kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value: global }),
+        });
+        assert_eq!(select(&mut context, unknown, five, five), Some(five));
+        assert_eq!(select(&mut context, unknown, u, five), Some(five));
+        assert_eq!(select(&mut context, unknown, five, u), Some(five));
+        assert_eq!(select(&mut context, unknown, poisoned, six), Some(six));
+        assert_eq!(select(&mut context, unknown, u, poisoned), Some(u), "a poison arm gives the other");
+        assert_eq!(select(&mut context, unknown, u, unknown), None, "an expression may be poison");
+    }
+}
+
+#[cfg(test)]
 mod relation_tests {
     use super::*;
     use crate::context::GlobalId;
@@ -642,7 +882,7 @@ mod relation_tests {
     }
 
     fn global(
-        context: &mut Context,
+        context: &Context,
         at: u32,
     ) -> ConstantId {
         let ptr = context.types.ptr(0);

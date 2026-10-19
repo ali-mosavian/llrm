@@ -229,7 +229,8 @@ impl Initializer<'_> {
                 Type::Float(FloatKind::X86Fp80) => self.bytes(&llrm_mir::types::x87_extended(*bits)),
                 _ => self.bytes(&bits.to_le_bytes()[..size]),
             },
-            ConstantKind::Null | ConstantKind::Zero => {
+            // An undef initializer is any bytes: zero.
+            ConstantKind::Null | ConstantKind::Zero | ConstantKind::Undef => {
                 self.bytes(&vec![0; self.layout.alloc_size(types, constant.ty) as usize])
             }
             ConstantKind::Bytes(bytes) => self.bytes(bytes),
@@ -252,7 +253,7 @@ impl Initializer<'_> {
                 }
             },
             ConstantKind::Global(_) | ConstantKind::Expr(_) => self.address(id)?,
-            ConstantKind::Poison | ConstantKind::Undef => return Err("a poison initializer".to_owned()),
+            ConstantKind::Poison => return Err("a poison initializer".to_owned()),
         }
         Ok(())
     }

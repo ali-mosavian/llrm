@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """The per-merge tests of the integration branch feat/parity: the touched crates' fastest unit tests, a few fast run tests and a compile smoke, 10 s of CPU in all.
+First, untimed, `cargo check --workspace --all-targets` of the merged tree.
 
     tools/parity_smoke.py [--bin DIR] [--base REF] [--rank CRATE...]
 
@@ -35,7 +36,7 @@ import llrmbin  # noqa: E402
 SELECTION = HERE / "parity_smoke.toml"
 BUDGET = 10.0
 CARGO_OVERHEAD = 0.3  # cargo's own CPU to find the test binary up to date, per crate
-MAX_CRATES = 5  # a merge touching more is tested in the 5 crates with most changed files: each crate costs its cargo start before any test
+MAX_CRATES = 3  # a merge touching more is tested in the 3 crates with most changed files: each crate costs its cargo start before any test
 UNIT_FLOOR = 3.0  # the seconds the fixed steps always leave for unit tests
 ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "COALESCE", "REPLAY", "INTERN", "SKIPPED", "STALE")
 PROGRAM = ROOT / "bench" / "bintree"
@@ -69,6 +70,16 @@ def run_cut(command: list[str], seconds: float, cwd: Path) -> tuple[int | None, 
         _charged[0] += seconds
         return None, ""
     return child.returncode, out
+
+
+def workspace_check(root: Path = ROOT) -> str:
+    """"" when the whole workspace, tests and benches included, compiles; else the first errors. Built before the clock starts, like the unit tests: two halves
+    that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke feat/parity's head for every build)."""
+    done = subprocess.run(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"], cwd=root, capture_output=True, text=True)
+    if done.returncode == 0:
+        return ""
+    errors = [line for line in done.stderr.splitlines() if "error" in line]
+    return " / ".join(errors[:3])[:300] or "cargo check failed"
 
 
 def selection() -> dict:
@@ -224,7 +235,7 @@ def unit_step(package: str, allowance: float):
     return step
 
 
-FIXED = [("programs", programs, 0.5), ("sc", sc, 0.8), ("d_faces", d_faces, 2.0), ("qc_d_faces", qc_d_faces, 1.0), ("run", run_cases, 2.5)]  # (name, step, declared seconds)
+FIXED = [("programs", programs, 0.3), ("sc", sc, 0.8), ("d_faces", d_faces, 1.8), ("qc_d_faces", qc_d_faces, 1.0), ("run", run_cases, 3.6)]  # (name, step, declared seconds)
 
 
 def fixed_cost() -> float:
@@ -293,6 +304,9 @@ def main() -> int:
         for package in args.rank:
             rank(package)
         return 0
+    if broken := workspace_check():
+        print(f"PARITY SMOKE FAIL the workspace does not compile: {broken}")
+        return 1
     packages = touched(args.base)
     for package in packages:  # built first, untimed
         subprocess.run(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"], cwd=ROOT, capture_output=True)
