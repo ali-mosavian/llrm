@@ -25,4 +25,4 @@ N/A.
 | backend globals | an undef initializer is zero bytes | DONE |
 | InstCombine, IndVars `hasConcreteDef`, FunctionAttrs return-null, MemCpyOpt `isZeroSize`, GlobalOpt undef initializers, SCCP | the passes or functions are not ported | N/A until ported |
 | LICM, LSR | no undef arm that MIR has | N/A |
-| isel, legalize | undef lowers as any value: zero | DONE (#2532) |
+| isel, legalize | undef lowers as any value: zero; `freeze undef` selected as a constant | DONE (#2532, guard test) |

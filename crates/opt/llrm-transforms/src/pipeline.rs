@@ -154,9 +154,9 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fixednarrow, floatloop,
-    fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, jumpthread, lcssa, loopdeletion,
-    loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit,
+    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
+    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, jumpthread, lcssa,
+    loopdeletion, loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit,
     loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simpleloopunswitch,
     simplifycfg, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
@@ -579,6 +579,14 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
 
+/// Under LLVM's order the translated LICM does the moving of code out of and
+/// into loops, in its three slots: the passes after the fixed point that
+/// stood in for MachineLICM and gcc's `pass_sink_code` (`hoist` again) have no counterpart
+/// there, and run only without the order or the LICM.
+pub fn llvm_motion(applied: &Applied) -> bool {
+    applied.options.llvm_order && applied.options.licm
+}
+
 /// Translations that have not joined the pipeline yet: `llrm-pass` and
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
@@ -822,7 +830,7 @@ pub(crate) fn llvm_order(
                 slot("adce@815", Box::new(adce::Adce)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
                 slot("merge@818", Box::new(loopidioms::Merge { size })),
-                slot("dse@820", Box::new(dse::Dse)),
+                slot("dse@820", Box::new(deadstore::DeadStoreElimination)),
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
             list.extend([
@@ -1058,7 +1066,7 @@ pub fn recorded(
     }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
-    if !guarded && applied.options.wanted("hoist") {
+    if !guarded && applied.options.wanted("hoist") && !llvm_motion(applied) {
         manager.add(crate::licm::Licm { apply: true, speculate: true });
     }
     // After hoist, which would move a constant `gep` out of its loop.

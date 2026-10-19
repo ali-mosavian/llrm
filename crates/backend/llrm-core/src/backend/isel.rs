@@ -4880,6 +4880,39 @@ impl Selector<'_, '_, '_> {
             }
             CastOp::FPToSI => self.float_to_integer(operand, "fisttp", result, to, false, at, out)?,
             CastOp::FPToUI => self.float_to_integer(operand, "fisttp", result, to, true, at, out)?,
+            // The same bits through a stack temporary: x87 has no move
+            // between a float register and an integer one.
+            CastOp::BitCast if self.is_float(from) && matches!(self.size(from)?, 4 | 8) => {
+                let size = self.size(from)? as u32;
+                let held = self.float(operand, at, out)?;
+                let cell = self.float_stored(held, "fstp", size, at, out);
+                let into = Held { value: self.value(result), width: self.width(to)? };
+                out.push(insn(
+                    at,
+                    semantics(
+                        Operation::Move,
+                        "mov",
+                        vec![Loc::Held(into)],
+                        vec![Loc::Mem(Self::memory(regs, cell, size))],
+                    ),
+                ));
+            }
+            CastOp::BitCast if self.is_float(to) && matches!(self.size(to)?, 4 | 8) => {
+                let size = self.size(to)? as u32;
+                let held = self.held(operand, from, at, out)?;
+                let cell = self.temporary(i64::from(size));
+                out.push(insn(
+                    at,
+                    semantics(
+                        Operation::Move,
+                        "mov",
+                        vec![Loc::Mem(Self::memory(regs, cell, size))],
+                        vec![Loc::Held(held)],
+                    ),
+                ));
+                let into = Held { value: self.value(result), width: FLOAT };
+                self.float_loaded(into, "fld", cell, size, false, at, out);
+            }
             _ => return refuse(format!("{op:?} of a float")),
         }
         Ok(())
