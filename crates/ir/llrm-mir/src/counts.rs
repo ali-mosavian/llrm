@@ -256,6 +256,17 @@ pub fn callers() -> Vec<String> {
         .collect()
 }
 
+/// Readers of a block's instruction slice, as `tools/block_list/known.txt`
+/// lists them at build time; `tests/block_list_ratchet.rs` holds the count
+/// down.
+fn block_list_readers() -> usize {
+    include_str!("../../../../tools/block_list/known.txt")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.rsplit_once(' ')?.1.parse::<usize>().ok())
+        .sum()
+}
+
 /// The counts as `LLRM_DEBUG=counts` prints them.
 pub fn lines() -> Vec<String> {
     let mut out: Vec<String> = NAMES
@@ -268,6 +279,7 @@ pub fn lines() -> Vec<String> {
         ANALYSES.with(|rows| rows.borrow().iter().map(|row| row.2).sum::<u64>()),
     );
     out.push(format!("[counts] pass_runs {runs}"));
+    out.push(format!("[counts] block_list_readers {}", block_list_readers()));
     out.push(format!("[counts] analysis_computations {computed}"));
     PASSES.with(|rows| {
         let mut rows: Vec<_> = rows.borrow().iter().map(|row| (row.name, row.runs, row.instructions)).collect();
@@ -358,5 +370,14 @@ mod tests {
             analysis("probe-split", false);
         }
         assert!(super::callers().contains(&"[counts] callers probe-split 1 joined 2 old".to_owned()));
+    }
+}
+
+#[cfg(test)]
+mod block_list_tests {
+    #[test]
+    fn test_the_counts_print_the_block_list_readers() {
+        let line = super::lines().into_iter().find(|line| line.starts_with("[counts] block_list_readers ")).unwrap();
+        assert!(line.rsplit(' ').next().unwrap().parse::<usize>().unwrap() > 0, "{line}");
     }
 }

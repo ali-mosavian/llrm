@@ -407,15 +407,12 @@ impl View<'_> {
         if pretested && !loopshape::header_quiet(self.context, self.outer, function, &shape) {
             return refused("a header that runs once more than the body touches memory");
         }
-        let defined =
-            shape.loop_.body.iter().flat_map(|&at| function.block(cfg::block(at)).iter());
+        let defined = shape.loop_.body.iter().flat_map(|&at| function.block(cfg::block(at)).iter());
         if defined.into_iter().any(|inst| loopshape::read_outside(function, &shape, inst)) {
             return refused("a value of the loop is read outside it");
         }
         let mut position = IdMap::new();
-        for (at, inst) in
-            order.iter().flat_map(|&block| function.block(block).iter()).enumerate()
-        {
+        for (at, inst) in order.iter().flat_map(|&block| function.block(block).iter()).enumerate() {
             position.insert(inst, at);
         }
         let mut roots = Roots::default();

@@ -96,7 +96,7 @@ fn is_undef(
 }
 
 fn undef(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> ConstantId {
     context.constant(Constant { ty, kind: ConstantKind::Undef })
@@ -216,7 +216,7 @@ pub fn binary(
 /// each operation by what its undef operand may be chosen as. The
 /// `FSub`..`FRem` cases are DEVIATE: `binary` folds integers only.
 fn binary_with_undef(
-    context: &mut Context,
+    context: &Context,
     op: BinaryOp,
     c1: ConstantId,
     c2: ConstantId,
@@ -224,7 +224,7 @@ fn binary_with_undef(
     width: u32,
 ) -> ConstantId {
     let (u1, u2) = (is_undef(context, c1), is_undef(context, c2));
-    let null = |context: &mut Context| context.constant(Constant { ty, kind: ConstantKind::Int(0) });
+    let null = |context: &Context| context.constant(Constant { ty, kind: ConstantKind::Int(0) });
     match op {
         BinaryOp::Xor if u1 && u2 => null(context),
         BinaryOp::Xor | BinaryOp::Add | BinaryOp::Sub => undef(context, ty),

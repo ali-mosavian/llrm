@@ -514,6 +514,11 @@ fn bare(
     analyses: &mut ModuleAnalyses,
     id: GlobalId,
 ) {
+    assert!(
+        !llrm_support::debug::verifying() || reference_counts(module).get(&id).copied().unwrap_or(0) == 0,
+        "@{} is bared with a call to it standing",
+        module.global(id).name.as_deref().unwrap_or_default()
+    );
     let Some(mut stub) = module.global(id).function().map(llrm_mir::module::Function::declaration) else { return };
     let void = module.context.types.void();
     let entry = stub.create_block(None);
@@ -1332,8 +1337,10 @@ pub fn optimized_with<E: From<String>>(
                         specialised,
                         reoptimised,
                     )?;
+                    // The copies it spliced in carry calls `live` has not seen.
                     if stayed {
                         changed = true;
+                        live = reference_counts(module);
                     } else {
                         let body = module.global(id).function().expect("a procedure");
                         for (_, inst) in body.walk() {
@@ -1359,6 +1366,7 @@ pub fn optimized_with<E: From<String>>(
                             reoptimised,
                         )? {
                             changed = true;
+                            live = reference_counts(module);
                         }
                     }
                 }
