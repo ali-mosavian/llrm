@@ -22,10 +22,15 @@
 //! DEVIATE 2: a leaf that is an `invoke` result keeps no reusable negate (the
 //! insertion point after its definition is in another block).
 //!
-//! Complexity: `NegateValue` visits the whole one-use add tree under the value
-//! it negates, as upstream does, so a chain of n *right*-nested subtracts
-//! (`a0 - (a1 - (a2 - ...))`, each broken up in turn over the tree the last
-//! made) takes O(n^2) steps; a left-nested chain takes O(n).
+//! Complexity (not a DEVIATE): `NegateValue` recurses into both operands of
+//! every one-use add under the value it negates
+//! ([:840-:862](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/Reassociate.cpp#L840)),
+//! and `ShouldBreakUpSubtract` breaks up a subtract whose operand is such an
+//! add
+//! ([:1093-:1099](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/Reassociate.cpp#L1093)),
+//! so in a chain of n right-nested subtracts (`a0 - (a1 - (a2 - ...))`) each
+//! break-up negates the tree the last one made: O(n^2), upstream's. A
+//! left-nested chain takes O(n) (`reassociate_tests.rs` times it).
 //!
 //! # Used by
 //! `crate::reassociate_tree` (`lower_negate_to_multiply`) and
