@@ -14,11 +14,9 @@
 //! DEVIATE 1: `foldVectorBinop` is not translated: MIR has no vector
 //! operations.
 //!
-//! DEVIATE 2 (temporary): steps that call a helper another family owns are
-//! left out and named where they stood: `foldBinopWithPhiOperands` (phi
-//! family), `SimplifyDemandedInstructionBits` (`loop-products-slope`),
-//! `FoldOpIntoSelect` and `foldBinOpIntoSelectOrPhi` (select and phi family).
-//! Each is a `// DEVIATE 2:` comment at its place in the order.
+//! DEVIATE 2 (temporary): `SimplifyDemandedInstructionBits`
+//! (`loop-products-slope`) is left out, named where it stood in a `// DEVIATE
+//! 2:` comment.
 //!
 //! DEVIATE 3 (temporary): the folds that build an intrinsic call (`bswap`) are
 //! left out until the Builder can declare an intrinsic (`combine_build`
@@ -627,7 +625,10 @@ fn common_shift_transforms(
     c: &mut Combiner,
     inst: InstId,
 ) -> Option<Visit> {
-    // DEVIATE 2: foldBinopWithPhiOperands.
+    let found = c.fold_binop_with_phi_operands(inst);
+    if !matches!(found, Visit::None) {
+        return Some(found);
+    }
     let (op, op0, op1, flags) = shift_parts(c, inst);
     let ty = c.type_of(op0);
     let w = c.context.types.int_bits(ty).expect("an integer");
@@ -643,7 +644,15 @@ fn common_shift_transforms(
     }
 
     // DEVIATE 2: SimplifyDemandedInstructionBits.
-    // DEVIATE 2: FoldOpIntoSelect of a constant shifted by a select.
+    // Try to fold a constant and a select into the select's arguments.
+    if matches!(op0, Operand::Constant(_))
+        && let Some(select) = c.definition_of(op1).filter(|&def| c.function.instruction(def).opcode == Opcode::Select)
+    {
+        let found = c.fold_op_into_select(inst, select, false, false);
+        if !matches!(found, Visit::None) {
+            return Some(found);
+        }
+    }
 
     if pattern::imm_constant(&query(c, Some(inst)), op1)
         && let Some(res) = fold_shift_by_constant(c, op0, op1, inst)
@@ -1135,7 +1144,10 @@ fn fold_shift_by_constant(
         }
     }
 
-    // DEVIATE 2: foldBinOpIntoSelectOrPhi.
+    let found = c.fold_bin_op_into_select_or_phi(inst);
+    if !matches!(found, Visit::None) {
+        return Some(found);
+    }
 
     if !has_one_use(c, op0) {
         return None;

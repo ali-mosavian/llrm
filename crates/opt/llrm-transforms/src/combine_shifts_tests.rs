@@ -896,3 +896,49 @@ fn lshr_by_the_cttz_of_a_shifted_power_of_two_is_a_shift_by_the_amount() {
         "  %b = shl nuw i32 1, %y\n  %c = call i32 @llvm.cttz.i32(i32 %b, i1 false)\n  %0 = shl nuw i32 1, %x\n  %1 = lshr i32 %0, %y\n  ret i32 %1\n",
     );
 }
+
+/// A shift of a select by a constant folds into both arms
+/// (`foldBinOpIntoSelectOrPhi`).
+#[test]
+fn a_select_shifted_by_a_constant_is_a_select_of_shifts() {
+    let out = combined(
+        "define i16 @f(i1 %c) {\nb0:\n  %s = select i1 %c, i16 3, i16 5\n  %r = shl i16 %s, 2\n  ret i16 %r\n}\n",
+    );
+    assert!(out.contains("select i1 %c, i16 12, i16 20"), "{out}");
+}
+
+/// A constant shifted by a select of amounts folds into both arms
+/// (`FoldOpIntoSelect`).
+#[test]
+fn a_constant_shifted_by_a_select_is_a_select_of_shifts() {
+    let out = combined(
+        "define i16 @f(i1 %c) {\nb0:\n  %s = select i1 %c, i16 1, i16 3\n  %r = shl i16 1, %s\n  ret i16 %r\n}\n",
+    );
+    assert!(out.contains("select i1 %c, i16 2, i16 8"), "{out}");
+}
+
+/// Two phis shifted by each other: a constant pair for one predecessor folds
+/// and the shift moves to the other (`foldBinopWithPhiOperands`).
+#[test]
+fn a_shift_of_two_phis_with_a_constant_pair_moves_to_the_other_predecessor() {
+    let out = combined(
+        "define i16 @f(i1 %c, i16 %i, i16 %j) {
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %m
+
+b:
+  br label %m
+
+m:
+  %p = phi i16 [ 3, %a ], [ %i, %b ]
+  %q = phi i16 [ 1, %a ], [ %j, %b ]
+  %r = shl i16 %p, %q
+  ret i16 %r
+}
+",
+    );
+    assert!(out.contains("shl i16 %i, %j") && out.contains("[ 6, %a ]"), "{out}");
+}
