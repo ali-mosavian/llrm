@@ -4785,6 +4785,43 @@ fn test_a_function_without_a_copy_runs_copy_propagation_zero_times() {
     assert!(machinecp::runs() - before >= 1, "copy propagation did not run on a body with a copy");
 }
 
+/// Every block was walked twice and its effects worked out for each of its
+/// instructions, copies or none: 9.8 M instructions of the 77 M of `d_faces`'
+/// peephole went to blocks that hold no copy. Only a block with a copy is
+/// walked.
+#[test]
+fn test_copy_propagation_walks_only_the_blocks_that_hold_a_copy() {
+    let add = |at| {
+        Arc::new(insn(
+            at,
+            Some((at, at)),
+            Some(sem(Operation::Binary, "add", vec![rl(RegId::CX, 2)], vec![rl(RegId::CX, 2), rl(RegId::DX, 2)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let copy = Arc::new(insn(
+        0,
+        Some((0, 0)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    ));
+    let blocks = (1..=5)
+        .map(|at| {
+            block(
+                at,
+                if at == 3 { vec![Arc::clone(&copy), add(at)] } else { vec![add(at)] },
+                if at < 5 { vec![at + 1] } else { vec![] },
+            )
+        })
+        .collect::<Vec<_>>();
+    let input = body("copies", 1, crate::model::lir::shared(blocks));
+    let before = machinecp::walks();
+    machinecp::propagated(&input);
+    assert_eq!(machinecp::walks() - before, 1, "five blocks, one with a copy");
+}
+
 /// The lanes of a register follow the description: a high byte is lane 1 of its
 /// root, the stack pointer and what the file omits have none.
 #[test]
