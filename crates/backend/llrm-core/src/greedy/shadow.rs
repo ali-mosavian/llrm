@@ -274,6 +274,58 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         crate::backend::coalesce::_copy(insn).is_some()
     }
 
+    fn is_pure_def(
+        &self,
+        insn: &Insn,
+    ) -> bool {
+        super::inlinespiller::remat_shape(insn) && insn.uses.is_empty()
+    }
+
+    /// The definition of `parent` (a literal, address or load that reads no register) as a
+    /// definition of `to`: `rematerializeAt`.
+    fn rematerialize(
+        &self,
+        lis: &LiveIntervals,
+        to: u32,
+        parent: u32,
+        beside: Option<&Insn>,
+    ) -> Option<Arc<Insn>> {
+        use crate::model::ir::{Held, Loc, Semantics};
+        if !self.tables.remat.borrow().contains(&parent) {
+            return None;
+        }
+        let mut def = None;
+        for operand in lis.operands(parent) {
+            if operand.is_def {
+                if def.is_some_and(|seen| seen != operand.instr) {
+                    return None;
+                }
+                def = Some(operand.instr);
+            }
+        }
+        let def = Arc::clone(lis.instr(def?));
+        if !super::inlinespiller::remat_shape(&def) || !def.uses.is_empty() {
+            return None;
+        }
+        let what = def.what.clone()?;
+        let Loc::Held(defined) = what.dests[0] else { return None };
+        self.tables.widths.borrow_mut().insert(to, defined.width);
+        self.tables.remat.borrow_mut().insert(to);
+        let (at, covers) = beside.map_or((0, None), |b| {
+            let start = b.covers.map_or(b.at, |c| c.0);
+            (b.at, Some((start, start)))
+        });
+        Some(Arc::new(Insn {
+            at,
+            covers,
+            defines: vec![to],
+            what: Some(Semantics { dests: vec![Loc::Held(Held { value: to, width: defined.width })], ..what }),
+            spill_reload: true,
+            rematerialized: true,
+            ..(*def).clone()
+        }))
+    }
+
     /// A move of `from` into `to`, as wide as the widest access of `from`
     /// (a value a spill made is in no table: its instructions say).
     fn build_copy(
