@@ -25,7 +25,7 @@
 //! nor removed; its writes end the copies they touch.
 //!
 //! # Runs
-//! At the start of `FloatAlloc`, under `LLRM_GREEDY_RFP`.
+//! At the start of `FloatAlloc`, under RFP.
 //!
 //! # Example
 //! The listing above: the store reads `fp1`, the copy is dead and gone.

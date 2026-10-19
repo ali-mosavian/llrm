@@ -549,7 +549,7 @@ mod tests {
         }
     }
 
-    /// Under `LLRM_GREEDY_RFP` an x87 operand is `FP0`..`FP6` after allocation;
+    /// Under RFP an x87 operand is `FP0`..`FP6` after allocation;
     /// the check named it "not a register this target has" and refused every
     /// float function (`LLRM_VERIFY=1`, tests/run/c/float_in_place_update.c).
     #[test]

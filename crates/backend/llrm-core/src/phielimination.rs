@@ -22,12 +22,6 @@
 //! DEVIATE P1 (no number): a phi with an edge from outside the body is left
 //! alone, as before. Fact: LLVM's phis list only blocks of their function.
 //!
-//! DEVIATE P4 (exit: the x87 pair after allocation, plan step 4): a phi of an
-//! x87 value is left for `phielim`'s own lowering. Fact: `FloatAssign` and
-//! `FloatAlloc` run before the coalescer here, where LLVM's FPS runs after
-//! register allocation, so a copy of an x87 value costs an `fld` and an `fstp`
-//! that nothing joins away.
-//!
 //! DEVIATE P5 (no number): a phi that reads another phi's result of its own
 //! block on an edge, and that other phi, are left for `phielim`'s parallel
 //! copy (see `entangled_phis`). Fact: with per-phi registers a loop-carried
@@ -183,7 +177,6 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             *preds.entry(to).or_insert(0) += 1;
         }
     }
-    let floating = crate::backend::ssaspill::floating(body);
     let entangled = entangled_phis(body);
     for block in &body.blocks {
         let mut stays = Vec::new();
@@ -193,10 +186,7 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             && body.blocks.iter().filter(|one| one.succ.contains(&block.at)).all(|one| one.succ.len() >= 2);
         let mut lowered_phis: HashMap<Vec<(i64, u32)>, u32> = HashMap::default();
         for phi in block.phis.iter() {
-            if phi.incoming.iter().any(|(pre, _)| !at_of.contains_key(pre))
-                || floating.contains(&phi.result)
-                || entangled.contains(&phi.result)
-            {
+            if phi.incoming.iter().any(|(pre, _)| !at_of.contains_key(pre)) || entangled.contains(&phi.result) {
                 stays.push(phi.clone());
                 continue;
             }

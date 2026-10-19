@@ -1824,38 +1824,40 @@ fn greedy_check(
     }
 }
 
-/// Whether greedy allocates the x87 values into FP0..FP6 (`LLRM_GREEDY_RFP`):
-/// off until the stackifier reads the assignment (backend-slopes), then on
-/// with floatassign gone.
+/// Whether greedy allocates the x87 values into FP0..FP6 and the stackifier
+/// follows it, as the pin does: on unless `LLRM_NO_RFP` (the old floatassign
+/// route, until it is deleted).
 pub fn rfp_on() -> bool {
-    #[cfg(test)]
-    if RFP_ON.with(std::cell::Cell::get) {
-        return true;
+    if let Some(forced) = RFP_ON.with(std::cell::Cell::get) {
+        return forced;
     }
-    llrm_support::env_flag!("LLRM_GREEDY_RFP")
+    !llrm_support::env_flag!("LLRM_NO_RFP")
 }
 
-#[cfg(test)]
 thread_local! {
-    static RFP_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static RFP_ON: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-/// `LLRM_GREEDY_RFP` for the life of the value, on this thread: for tests.
-#[cfg(test)]
+/// The RFP route forced on or off for the life of the value, on this thread:
+/// for tests, including those of other crates.
 pub struct RfpOn;
 
-#[cfg(test)]
 impl RfpOn {
     pub fn set() -> Self {
-        RFP_ON.with(|one| one.set(true));
+        RFP_ON.with(|one| one.set(Some(true)));
+        Self
+    }
+
+    /// The old route: floatassign before allocation.
+    pub fn off() -> Self {
+        RFP_ON.with(|one| one.set(Some(false)));
         Self
     }
 }
 
-#[cfg(test)]
 impl Drop for RfpOn {
     fn drop(&mut self) {
-        RFP_ON.with(|one| one.set(false));
+        RFP_ON.with(|one| one.set(None));
     }
 }
 

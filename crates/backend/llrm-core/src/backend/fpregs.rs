@@ -1,7 +1,7 @@
 //! The x87 registers FP0..FP6 as the values the stackifier tracks.
 //!
 //! # How it works
-//! Under `LLRM_GREEDY_RFP` the allocator leaves each x87 operand in
+//! Under RFP the allocator leaves each x87 operand in
 //! `FP0`..`FP6` (`Loc::Reg`), as `X86FloatingPoint` finds it. `fpstack` follows
 //! values, not registers, so each definition of a register here is a fresh
 //! value and each read the value last defined. A register live across a block

@@ -1,12 +1,12 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/fpregs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/fpregs.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/fpregs.rs sha256:5674f8af26ddf96853b52dc392df0a79a27c4c5d3c798dd55cef1e5cd717720f -->
+<!-- src: crates/backend/llrm-core/src/backend/fpregs.rs sha256:bc2809c10936a5d128c863465937e11bf38bd7fae76163ec379df6d4cc1752e1 -->
 
 # fpregs
 
 The x87 registers FP0..FP6 as the values the stackifier tracks.
 
 ## How it works
-Under `LLRM_GREEDY_RFP` the allocator leaves each x87 operand in
+Under RFP the allocator leaves each x87 operand in
 `FP0`..`FP6` (`Loc::Reg`), as `X86FloatingPoint` finds it. `fpstack` follows
 values, not registers, so each definition of a register here is a fresh
 value and each read the value last defined. A register live across a block

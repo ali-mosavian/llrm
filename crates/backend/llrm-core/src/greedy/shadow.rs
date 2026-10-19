@@ -664,7 +664,7 @@ pub fn decide_with_split(
         })
         .collect();
     let tables = Rc::new(Tables::default());
-    // Under `LLRM_GREEDY_RFP` the x87 values take FP0..FP6 (LLVM's RFP
+    // Under RFP the x87 values take FP0..FP6 (LLVM's RFP
     // classes); a stack position an instruction names is the stackifier's.
     let floats = if crate::backend::allocate::rfp_on() {
         crate::backend::floatassign::_floating_values(body)
@@ -831,7 +831,7 @@ mod tests {
     use crate::liveness::slotindex::SlotIndexes;
     use crate::model::lir::{Block, LirBlock};
 
-    /// Under `LLRM_GREEDY_RFP` an x87 value takes one of FP0..FP6 or is
+    /// Under RFP an x87 value takes one of FP0..FP6 or is
     /// spilled: nine live at once over seven registers, two at least go to
     /// memory. A value that lived in an x87 register over an instruction that
     /// names a stack position (the stack must be empty there) would be lost.

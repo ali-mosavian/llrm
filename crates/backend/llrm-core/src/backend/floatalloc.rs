@@ -537,7 +537,7 @@ pub(super) fn _truncating(
     let chopped_id = loaded_id + 1;
     let loaded = Held { value: loaded_id, width: 2 };
     let chopped = Held { value: chopped_id, width: 2 };
-    // Under `LLRM_GREEDY_RFP` the registers are allocated by now: no value is
+    // Under RFP the registers are allocated by now: no value is
     // left to hold the word, so it goes through memory alone.
     let through_memory = super::allocate::rfp_on();
 

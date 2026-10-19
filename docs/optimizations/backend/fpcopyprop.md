@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/fpcopyprop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/fpcopyprop.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/fpcopyprop.rs sha256:1dba4611686d14b736ac04ce2a48a8a78ed57d0f387ce27b9041cb42e401b55a -->
+<!-- src: crates/backend/llrm-core/src/backend/fpcopyprop.rs sha256:d26231bd328d099b58583a003cd50964a11481bdaa85eafa86f1b2ce2ddb7a4b -->
 
 # fpcopyprop
 
@@ -30,7 +30,7 @@ DEVIATE 2: a copy in a group (a phi's parallel copy) is neither rewritten
 nor removed; its writes end the copies they touch.
 
 ## Runs
-At the start of `FloatAlloc`, under `LLRM_GREEDY_RFP`.
+At the start of `FloatAlloc`, under RFP.
 
 ## Example
 The listing above: the store reads `fp1`, the copy is dead and gone.
