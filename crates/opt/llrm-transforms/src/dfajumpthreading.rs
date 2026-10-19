@@ -7,15 +7,18 @@
 //! # How it works
 //! A translation of LLVM `d1106deb71cc` `DFAJumpThreading.cpp`, one Rust
 //! function per C++ function, each linking its line; the plan and the stages
-//! are `docs/architecture/dfajumpthreading-translation.md`. This is stage S1.
-//! [`mainswitch`] decides whether a `switch` is a candidate (`MainSwitch`):
-//! its condition is a `phi` in a loop and what flows into it is constants or
-//! values nothing predicts. [`paths`] enumerates the paths that set the state
-//! to a constant (`AllSwitchPaths`), bounded by the pin's three caps.
-//! [`transform`] decides whether copying is legal and profitable and does it
-//! (`TransformDFA`): the blocks of each path from the determinator on are
-//! cloned per exit value, the predecessors are redirected to the clones, and
-//! SSA is restored.
+//! are `docs/architecture/dfajumpthreading-translation.md`. This is stages S1
+//! and S2. [`mainswitch`] decides whether a `switch` is a candidate
+//! (`MainSwitch`): its condition is a `phi` in a loop and what flows into it is
+//! constants, `select`s that can be unfolded or values nothing predicts.
+//! [`unfold`] turns those `select`s into control flow (a work list), so each
+//! value of the state is set on a path of its own; the pin counts that as a
+//! change even when nothing is threaded after it. [`paths`] enumerates the
+//! paths that set the state to a constant (`AllSwitchPaths`), bounded by the
+//! pin's three caps. [`transform`] decides whether copying is legal and
+//! profitable and does it (`TransformDFA`): the blocks of each path from the
+//! determinator on are cloned per exit value, the predecessors are redirected
+//! to the clones, and SSA is restored.
 //!
 //! ```text
 //!   p1: s = 1 --\                       p1: s = 1 --> sw.jt1: br c1
@@ -23,10 +26,8 @@
 //!                     sw: switch s      det, sw stay for the paths nobody decided
 //! ```
 //!
-//! DEVIATE (DF1..DF3; DF5 is a parity note):
-//! - DF1. A `select` in the use-def chain of the state rejects the switch
-//!   (`isCandidate` would accept it and `unfold` it into control flow):
-//!   `unfold` is stage S2.
+//! DEVIATE (DF2..DF4; DF1, a `select` in the chain rejecting the switch, was
+//! closed by S2; DF5 is a parity note):
 //! - DF2. No `DomTreeUpdater`: the pass returns `none()` when it threaded
 //!   anything and the manager rebuilds the dominator tree and the loop info
 //!   (the pin keeps the dominator tree, and the loop info unless it cloned);
@@ -36,6 +37,10 @@
 //! - DF3. A path through a block that starts with a `landingpad` is not
 //!   threaded: the copy would be a second pad, and the one module handler
 //!   (`ehprepare`) cannot choose between two (J10 of `jumpthreading.rs`).
+//! - DF4. The loop info is rebuilt after the `select`s are unfolded (the pin
+//!   adds the new blocks to the loop of the start block): `LoopInfo` has no
+//!   `addBasicBlockToLoop` (T3, S3). Once per switch with `select`s, linear in
+//!   the function. No `!prof` or debug location is carried to the new branches.
 //! - DF5 (parity, not a deviation). `x_switch` m16 -O2/-O3 is +17 B (320 vs
 //!   303) and 70 vs 63 asm lines: the pass threads the state cycle and peels
 //!   two iterations, as `opt -passes=dfa-jump-threading` does on the same
@@ -67,11 +72,13 @@
 mod mainswitch;
 mod paths;
 mod transform;
+mod unfold;
 
 use std::rc::Rc;
 
 use llrm_mir::codemetrics::Query as CostQuery;
 use llrm_mir::context::ConstantKind;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand};
@@ -191,7 +198,7 @@ impl FunctionPass for DfaJumpThreading {
             options: &self.options,
             for_size: self.for_size,
         };
-        if run.run_impl(&loops) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if run.run_impl(loops) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -217,7 +224,7 @@ impl Run<'_, '_> {
     /// anything changed.
     fn run_impl(
         &mut self,
-        loops: &LoopInfo,
+        mut loops: Rc<LoopInfo>,
     ) -> bool {
         // Skipping due to the 'minsize' attribute (`hasOptSize`).
         if self.for_size
@@ -234,23 +241,31 @@ impl Run<'_, '_> {
         // For the time being limit this optimization to occurring once in a
         // function since it can change the CFG significantly: the first switch
         // with threading paths.
+        let mut unfolded = false;
         let mut threadable = None;
         for bb in self.function().layout().to_vec() {
             let Some(term) = self.function().terminator(bb) else { continue };
             if self.function().instruction(term).opcode != Opcode::Switch {
                 continue;
             }
-            let Some(switch) = mainswitch::MainSwitch::of(self.function(), loops, self.options, term) else {
+            let Some(main) = mainswitch::MainSwitch::of(self.function(), &loops, self.options, term) else {
                 continue;
             };
+            if !main.selects.is_empty() {
+                unfold::unfold_select_instrs(&mut self.unit.function, &main.selects);
+                unfolded = true;
+                // DF4: the unfolded blocks are in the loop of the `select`'s
+                // block; the loop info is rebuilt, not updated.
+                loops = Rc::new(LoopInfo::analyze(self.function(), || DomTree::of(self.function())));
+            }
             let outermost = loops.get_loop_for(bb).expect("a candidate is in a loop").get_outermost_loop();
-            let found = paths::find(self.function(), &*self.unit.context, loops, self.options, switch, outermost);
+            let found = paths::find(self.function(), &*self.unit.context, &loops, self.options, main.switch, outermost);
             if !found.paths.is_empty() {
                 threadable = Some(found);
                 break;
             }
         }
-        let Some(found) = threadable else { return false };
+        let Some(found) = threadable else { return unfolded };
 
         let assumes =
             AssumptionCache::of(&*self.unit.context, &self.globals, self.unit.metadata, self.function()).assumes;
@@ -259,7 +274,8 @@ impl Run<'_, '_> {
         let callees = self.callees;
         let effects_free = |inst: InstId| llrm_mir::memory::only_value(context, callees, function, inst);
         let eph = llrm_mir::codemetrics::collect_ephemeral_values(function, &effects_free, &assumes, &|_| true);
-        transform::TransformDfa { run: self, paths: found, eph }.run()
+        // The transform may refuse: the unfolding stays.
+        transform::TransformDfa { run: self, paths: found, eph }.run() || unfolded
     }
 
     /// What `CodeMetrics` reads besides the block.

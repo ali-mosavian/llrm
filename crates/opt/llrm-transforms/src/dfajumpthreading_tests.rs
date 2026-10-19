@@ -105,42 +105,6 @@ fn test_the_path_search_grows_linearly_with_the_states() {
     assert!(large * 10 <= small * 45, "{small} steps at 8 states, {large} at 32");
 }
 
-/// A `select` in the chain that makes the state is DF1: the pin unfolds a
-/// valid one into control flow and threads; the switch is left alone here
-/// until stage S2.
-#[test]
-fn test_a_select_that_could_be_unfolded_is_left_alone_until_stage_s2() {
-    let text = "define i32 @f(i1 %c, i32 %n) {
-entry:
-  br label %loop
-
-loop:
-  %state = phi i32 [ 0, %entry ], [ %sel, %pre ]
-  %i = phi i32 [ 0, %entry ], [ %i.next, %pre ]
-  switch i32 %state, label %done [
-    i32 0, label %case0
-    i32 1, label %case1
-  ]
-
-case0:
-  br label %pre
-
-case1:
-  br label %pre
-
-pre:
-  %sel = select i1 %c, i32 1, i32 0
-  %i.next = add i32 %i, 1
-  br label %loop
-
-done:
-  ret i32 %i
-}
-";
-    let before = llrm_mir::print::module(&parsed(text));
-    assert_eq!(run(text), before);
-}
-
 /// With the pass off, or in a function the pin skips for its size, nothing is
 /// done to a machine that is threaded otherwise.
 #[test]
@@ -211,6 +175,56 @@ done:
     let after = run(text);
     assert_eq!(after.matches("landingpad").count(), 1, "{after}");
     assert!(!after.contains(".jt"), "{after}");
+}
+
+/// A loop of `k` cases, each setting the next state with a `select` of its
+/// own, in its own block.
+fn select_cases(k: usize) -> String {
+    let params: Vec<String> = (0..k).map(|n| format!("i1 %c{n}")).collect();
+    let mut text = format!(
+        "define i32 @f(i32 %n, {}) {{\nentry:\n  br label %loop\n\nloop:\n  %state = phi i32 [ 0, %entry ], [ %next, %latch ]\n  %i = phi i32 [ 0, %entry ], [ %i.next, %latch ]\n  %go = icmp slt i32 %i, %n\n  br i1 %go, label %dispatch, label %done\n\ndispatch:\n  switch i32 %state, label %case.default [\n",
+        params.join(", ")
+    );
+    for v in 0..k {
+        text.push_str(&format!("    i32 {v}, label %case{v}\n"));
+    }
+    text.push_str("  ]\n\n");
+    for v in 0..k {
+        text.push_str(&format!(
+            "case{v}:\n  %pick{v} = select i1 %c{v}, i32 {}, i32 {}\n  br label %latch\n\n",
+            (v + 1) % k,
+            (v + 2) % k
+        ));
+    }
+    text.push_str("case.default:\n  br label %latch\n\nlatch:\n  %next = phi i32 ");
+    let arms: Vec<String> = (0..k).map(|v| format!("[ %pick{v}, %case{v} ]")).collect();
+    text.push_str(&arms.join(", "));
+    text.push_str(", [ 0, %case.default ]\n  %i.next = add i32 %i, 1\n  br label %loop\n\ndone:\n  ret i32 %i\n}\n");
+    text
+}
+
+/// The `select`s of the state are unfolded one work list step each, a block
+/// each: the blocks made grow with their number, not with its square. (The
+/// pin's work list has no cap.) Threading is off, so the count is the
+/// unfolding's.
+#[test]
+fn test_unfolding_selects_makes_blocks_in_proportion_to_their_number() {
+    let unfold_only = DfaJumpThreadingOptions { cost_threshold: 0, ..DfaJumpThreadingOptions::default() };
+    let made = |k: usize| run_with(&select_cases(k), unfold_only.clone()).matches(".si.unfold.false:").count();
+    let (small, large) = (made(4), made(16));
+    assert_eq!(small, 4, "a block for each select of the state");
+    assert!(large * 10 <= small * 45, "{small} at 4 selects, {large} at 16");
+}
+
+/// A `select` of the state is unfolded into control flow even when nothing is
+/// threaded afterwards (DF1 closed): the pin counts the unfolding as a change.
+#[test]
+fn test_a_select_is_unfolded_when_the_copying_is_refused() {
+    let text = fixture("select_over_cost");
+    let after = run(&text);
+    assert!(after.contains("si.unfold"), "{after}");
+    assert!(!after.contains(".jt"), "nothing is threaded: {after}");
+    assert_ne!(after, llrm_mir::print::module(&parsed(&text)));
 }
 
 /// -Os: the pin skips a function that has `optsize` (`hasOptSize`), which

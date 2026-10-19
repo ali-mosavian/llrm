@@ -848,6 +848,22 @@ fn a_block_moved_after_another_stands_right_behind_it() {
     assert_eq!(f.layout(), &[layout[2], layout[1], layout[0]]);
 }
 
+/// A block created with `InsertBefore` stands right in front of its block in
+/// the layout: DFAJumpThreading's unfolded blocks come out in the pin's order.
+#[test]
+fn a_block_inserted_before_another_stands_right_in_front_of_it() {
+    let mut module = module("define void @f() {\na:\n  br label %b\nb:\n  br label %c\nc:\n  ret void\n}\n");
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    let fresh = f.create_block(None);
+    f.insert_block_before(fresh, layout[2]).expect("placed");
+    assert_eq!(f.layout(), &[layout[0], layout[1], fresh, layout[2]]);
+    let first = f.create_block(None);
+    f.insert_block_before(first, layout[0]).expect("placed");
+    assert_eq!(f.layout()[0], first);
+    assert!(f.insert_block_before(first, layout[1]).is_err(), "a placed block is not placed again");
+}
+
 /// LLVM's `hasOneUse`, `hasNUses` and `hasNUsesOrMore` on a value with 0, 1, 2
 /// and 3 uses: the counts are read from the list at its boundaries, `len` is
 /// not there.

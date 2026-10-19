@@ -176,7 +176,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "dfajumpthreading@806",
         Simplify,
         "dfa-jump-threading",
-        "criterion: the S1 shapes of docs/architecture/dfajumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=dfa-jump-threading) does; exit: S2 (select unfolding, DF1) and S3 (SSAUpdaterBulk, loop-info update) landed, and the switch half of the old jumpthread.rs deleted; on by default, LLRM_NO_DFAJUMPTHREADING turns it off",
+        "criterion: the S1 and S2 shapes of docs/architecture/dfajumpthreading-translation.md (state machines, unfolded selects) thread as tools/difftest/difftest.py (opt -passes=dfa-jump-threading) does; exit: S3 (loop-info update, DF4) landed, and the switch half of the old jumpthread.rs deleted; on by default, LLRM_NO_DFAJUMPTHREADING turns it off",
     ),
     partial(
         "jumpthreading@809",
