@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 122 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 125 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -11,6 +11,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | adce | Aggressive dead code elimination: a translation of LLVM's ADCE (`ADCE.cpp` at d1106deb71cc). | LLVM runs it after SCCP, BDCE and before MemCpyOpt (slot 35). Not in llrm's | [adce](adce.md) |
 | addresssink | Comparison and address sinking, so isel sees one form: LLVM's CodeGenPrepare `sinkCmpExpression` and address sinking, and GVNSink's merge of equal arms. | Once, last of the function passes before `spares` and `homes`, after | [addresssink](addresssink.md) |
 | algebraic | Algebraic identities over integer values, as LLVM's InstCombine and, for a loop-carried operand, Reassociate. | `algebraic` runs once in each pass of the fixed point, after `indvars` and | [algebraic](algebraic.md) |
+| alwaysundef | Whether passing a constant into a phi is undefined behavior at a use of the phi: SimplifyCFG's `passingValueIsAlwaysUndefined`. |  | [alwaysundef](alwaysundef.md) |
 | argpromotion | Argument promotion (LLVM's ArgumentPromotion): a pointer parameter a function only reads at fixed offsets is replaced by the fields read. | In the interprocedural step, once, after its inlining loop and before | [argpromotion](argpromotion.md) |
 | availableexternally | LLVM's EliminateAvailableExternally: a body held only to inline from becomes a declaration again once inlining is done. | A program pass. At -O1 and above it runs after the interprocedural step and | [availableexternally](availableexternally.md) |
 | bdce | Bit-tracking dead code elimination: a translation of LLVM's BDCE (`BDCE.cpp` at d1106deb71cc). | LLVM runs it after SCCP, before ADCE (slot 34 of the pipeline). Not in | [bdce](bdce.md) |
@@ -24,6 +25,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_addsub | InstCombine's `visitAdd` and the helpers it calls, from [`InstCombineAddSub.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp) at d1106deb71cc. | `combine::visit`, once the add family's slot is flipped. | [combine_addsub](combine_addsub.md) |
 | combine_build | `InstCombiner::Builder`: the `IRBuilder` over `InstSimplifyFolder` that InstCombine's `visit*` functions build new instructions with. | `combine_addsub` and the families after it. | [combine_build](combine_build.md) |
 | combine_compares | InstCombine's `visitICmpInst` and the helpers it calls, from [`InstCombineCompares.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp) at d1106deb71cc. | `combine::visit`, once the compares slot is flipped. | [combine_compares](combine_compares.md) |
+| combine_loadstore | InstCombine's stores: the store that cannot matter is erased, the one that cannot execute stores poison. | `combine` (its `visit`). | [combine_loadstore](combine_loadstore.md) |
 | combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
 | combine_shared | What InstCombine's integer `visit*` functions share from `InstructionCombining.cpp`: the complexity order that puts constants on the right, and the reassociation of an associative or commutative operation. | `combine_addsub` (`visitAdd`, `visitSub`) and the families after it. | [combine_shared](combine_shared.md) |
 | combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
@@ -121,6 +123,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], [`crate::unswitch`] share: equal calls, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `equal_calls` on each function it numbers; | [transform](transform.md) |
 | trivialunswitch | A branch in a loop's header on a loop-invariant condition, one side of which leaves the loop, is decided in the preheader instead of on every trip. | In the function pipeline's fixed point, after `loopmotion` and before | [trivialunswitch](trivialunswitch.md) |
 | twoentryphi | A two-entry phi that a branch chooses between becomes a `select`, the arms' cheap code hoisted into the branch's block: the `foldTwoEntryPHINode` step of SimplifyCFG. |  | [twoentryphi](twoentryphi.md) |
+| undefpred | A predecessor that gives a block a value that is undefined behavior to use there stops reaching it: SimplifyCFG's `removeUndefIntroducingPredecessor`. |  | [undefpred](undefpred.md) |
 | unroll | Full unrolling of a loop with an exact trip count of at least two: its trips become one straight line in the latch and the loop is gone. | In the pipeline's fixed point, after each round of scalar passes and when | [unroll](unroll.md) |
 | unroll_jam | Unroll-and-jam: the outer loop of a two-loop nest is unrolled by N and the N copies of the inner loop are fused into one, so what the outer iterations share is used by all N in one pass of the inner loop. | Once per body, after `unswitch`, so an invariant guard is out of the | [unroll_jam](unroll_jam.md) |
 | unswitch | A loop with an invariant branch in its body becomes two loops, one per way the condition goes, chosen by one test before them. | Once per body, after the fixed point and the peel rounds settle and before | [unswitch](unswitch.md) |

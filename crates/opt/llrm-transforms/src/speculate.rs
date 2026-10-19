@@ -7,7 +7,7 @@
 //! |---|---|---|
 //! | [`speculativelyExecuteBB`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3244) | `executed` | MIRROR; D1, D2, D3 |
 //! | [`validateAndCostRequiredSelects`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3130) | `selects_priced` | MIRROR; D4 |
-//! | [`passingValueIsAlwaysUndefined`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9094) | `passing_value_always_undefined` | partly; D5 |
+//! | [`passingValueIsAlwaysUndefined`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9094) | [`alwaysundef::always_undefined`](crate::alwaysundef) | MIRROR |
 //! | `phi-node-folding-threshold` (2) | `THRESHOLD` | MIRROR |
 //!
 //! The call sites are in
@@ -25,12 +25,6 @@
 //!   the rest, as in [`twoentryphi`](crate::twoentryphi) (D4 there).
 //! - D4. No constant expressions in function bodies: LLVM's price of one is not
 //!   needed.
-//! - D5. Only the uses LLVM lists that need no attribute are tested: a load or
-//!   store through the value, a call of it, a division by it. The look through
-//!   a `getelementptr`, the `noundef`/`nonnull` return and argument rules and
-//!   `llvm.assume` are not ported; the MIR has no `NullPointerIsDefined`, so a
-//!   null pointer is undefined. What stands between the phi and the use must be
-//!   no call (`isGuaranteedToTransferExecutionToSuccessor`).
 //!
 //! # Example
 //! The arm's one cheap instruction runs before the branch and the phi becomes a
@@ -43,89 +37,18 @@
 //! ; becomes, in entry: %t = add i32 %x, 1 ; %p = select i1 %c, i32 %t, i32 %x
 //! ```
 
-use llrm_mir::context::{ConstantKind, Context};
+use llrm_mir::context::Context;
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::instructioncost::instruction_cost;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{BinaryOp, Opcode};
+use llrm_mir::opcode::Opcode;
 use llrm_mir::tti::{CmpSel, Cost, CostKind, Ty};
 
 use crate::twoentryphi::{Speculation, metadata_dropped};
 
 /// `phi-node-folding-threshold`, in `TCC_Basic`.
 const THRESHOLD: i64 = 2;
-
-/// `value`, an input of `phi`, makes the program undefined where it reaches
-/// a use in the phi's block.
-pub(crate) fn passing_value_always_undefined(
-    context: &Context,
-    function: &Function,
-    value: Operand,
-    phi: InstId,
-) -> bool {
-    let Operand::Constant(id) = value else { return false };
-    // A null, a zero or a poison.
-    let null = matches!(
-        context.get(id).kind,
-        ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison | ConstantKind::Undef | ConstantKind::Int(0)
-    );
-    if !null {
-        return false;
-    }
-    let result = function.instruction(phi).result.expect("a phi's value");
-    if function.users(result).is_empty() {
-        return false;
-    }
-    let block = function.parent(phi).expect("a placed phi");
-    // The first use in the block after the phi.
-    let user = function
-        .users(result)
-        .iter()
-        .filter(|one| function.parent(one.user) == Some(block) && one.user != phi)
-        .filter(|one| function.comes_before(phi, one.user))
-        .min_by(|a, b| {
-            if a.user == b.user {
-                std::cmp::Ordering::Equal
-            } else if function.comes_before(a.user, b.user) {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Greater
-            }
-        });
-    let Some(user) = user else { return false };
-    // The block's earlier uses decide first: LLVM's `find_if` stops at the
-    // first use in use-list order, which is also the first that is not a
-    // mismatch.
-    let (inst, index) = (user.user, user.index as usize);
-    if !matches!(
-        function.instruction(inst).opcode,
-        Opcode::GetElementPtr { .. }
-            | Opcode::Ret
-            | Opcode::Load { .. }
-            | Opcode::Store { .. }
-            | Opcode::Call(_)
-            | Opcode::Invoke(_)
-            | Opcode::Binary(BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem)
-    ) {
-        return false;
-    }
-    let mut between = function.iter_after(phi).take_while(|&one| one != inst);
-    if between.any(|one| matches!(
-        function.instruction(one).opcode,
-        Opcode::Call(_) | Opcode::Invoke(_)
-    )) {
-        return false;
-    }
-    let operation = function.instruction(inst);
-    match &operation.opcode {
-        Opcode::Load { volatile, .. } => !volatile,
-        Opcode::Store { volatile, .. } => !volatile && index == 1,
-        Opcode::Call(_) | Opcode::Invoke(_) => index == operation.operands.len() - 1,
-        Opcode::Binary(_) => index == 1,
-        _ => false,
-    }
-}
 
 /// The cost of the selects `end`'s phis need once `then` runs early, or None
 /// where a phi cannot be a select.
@@ -148,8 +71,8 @@ fn selects_priced(
         }
         let ty = Ty::of(&context.types, function.instruction(phi).ty)?;
         cost = cost + spec.tti.cmp_sel_cost(CmpSel::Select, ty, CostKind::SizeAndLatency);
-        if passing_value_always_undefined(context, function, original, phi)
-            || passing_value_always_undefined(context, function, speculated, phi)
+        if crate::alwaysundef::always_undefined(context, spec, function, original, phi, false)
+            || crate::alwaysundef::always_undefined(context, spec, function, speculated, phi, false)
         {
             return None;
         }
