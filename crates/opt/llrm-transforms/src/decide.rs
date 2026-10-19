@@ -574,7 +574,7 @@ pub fn _phi_threaded(
         let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
             continue;
         };
-        let reads_only = function.users(condition).len() == 1;
+        let reads_only = function.users(condition).has_one_use();
         let is_phi = function.instruction(phi).opcode == Opcode::Phi;
         if headers.contains(&cfg::id(block))
             || branch.opcode != Opcode::Br

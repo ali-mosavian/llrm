@@ -162,7 +162,7 @@ fn folds_into_users(
 ) -> bool {
     let users = function.users(value);
     // One reader: a load read twice is held in a register, not read twice.
-    users.len() == 1
+    users.has_one_use()
         && users.iter().all(|user| {
             let one = function.instruction(user.user);
             function.parent(user.user) == Some(block)

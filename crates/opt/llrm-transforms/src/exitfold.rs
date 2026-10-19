@@ -736,7 +736,7 @@ fn _tested(
     };
     let (_, compare) = unit.defining(Operand::Value(condition))?;
     let (Opcode::ICmp(predicate), [one, other]) = (&compare.opcode, &compare.operands[..]) else { return None };
-    if function.users(condition).len() != 1 || matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
+    if !function.users(condition).has_one_use() || matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
         return None;
     }
     let stays = cfg::id(yes) != exit.exit;

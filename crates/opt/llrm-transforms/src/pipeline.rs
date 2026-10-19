@@ -581,8 +581,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
 
 /// Under LLVM's order the translated LICM does the moving of code out of and
 /// into loops, in its three slots: the passes after the fixed point that
-/// stood in for MachineLICM and gcc's `pass_sink_code` (`hoist` again) have no counterpart
-/// there, and run only without the order or the LICM.
+/// stood in for MachineLICM and gcc's `pass_sink_code` (`hoist` again) have no
+/// counterpart there, and run only without the order or the LICM.
 pub fn llvm_motion(applied: &Applied) -> bool {
     applied.options.llvm_order && applied.options.licm
 }
@@ -955,8 +955,18 @@ pub fn recorded(
     if applied.options.llvm_order {
         manager.hold::<GlobalsAA>();
     }
-    for stage in function_stages(applied) {
+    for (at, stage) in function_stages(applied).into_iter().enumerate() {
         manager.add(stage);
+        // LLVM's IPSCCP and DeadArgumentElimination run after the early
+        // function pipeline, before the Simplify list.
+        if at == 0 && applied.options.llvm_order {
+            manager.add_program(crate::walk::ModuleIpo {
+                inline: applied.options.inline,
+                ranges: applied.options.ipa_ranges,
+            });
+            // A program pass abandons it.
+            manager.hold::<GlobalsAA>();
+        }
     }
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.

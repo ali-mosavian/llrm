@@ -248,7 +248,7 @@ fn control(
         _ => return Err("the test is not of the counter and a bound"),
     };
     let result = function.instruction(test).result.expect("a compare's value");
-    if function.users(result).len() != 1 || function.instruction(branch).operands[0] != Operand::Value(result) {
+    if !function.users(result).has_one_use() || function.instruction(branch).operands[0] != Operand::Value(result) {
         return Err("the test is read by more than the branch");
     }
     let mut start = None;
@@ -279,7 +279,7 @@ fn control(
     if !matches!(step, Operand::Constant(_)) {
         return Err("the step is not constant");
     }
-    if function.users(next).len() != 1 {
+    if !function.users(next).has_one_use() {
         return Err("the next counter is read by more than the counter");
     }
     Ok(Control { phi, counter, start, predicate, bound, test, branch, next: step_inst, step_at, step })

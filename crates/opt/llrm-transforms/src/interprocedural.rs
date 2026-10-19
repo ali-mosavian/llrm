@@ -158,6 +158,7 @@
 
 use std::collections::BTreeSet;
 
+use llrm_analysis::aa::ModRefInfo;
 use llrm_analysis::alias::{self, Procedure};
 use llrm_analysis::cfg::Shape;
 use llrm_analysis::functionattrs;
@@ -208,7 +209,7 @@ fn reporting<T>(
 
 /// `reporting`, and where each body it changed was before: what a stage that
 /// vouches for its edit (`Settled::vouch`) says it from.
-fn reporting_marked<T>(
+pub(crate) fn reporting_marked<T>(
     module: &mut Module,
     modules: &mut ModuleAnalyses,
     edit: impl FnOnce(&mut Module) -> T,
@@ -232,7 +233,7 @@ fn reporting_marked<T>(
 /// The edits `bodies` had since `before` are ones the pipeline's passes need
 /// not look at again: each is a call that names another function that says the
 /// same, or one that takes fewer arguments (`Settled`).
-fn vouched(
+pub(crate) fn vouched(
     module: &Module,
     bodies: impl IntoIterator<Item = GlobalId>,
     before: &llrm_support::hash::IndexMap<GlobalId, llrm_mir::module::Mark>,
@@ -429,7 +430,7 @@ fn defined(program: &Program) -> impl Iterator<Item = Defined> + '_ {
 }
 
 /// Defined procedures of module `at`, in module order.
-fn procedures(
+pub(crate) fn procedures(
     program: &Program,
     at: usize,
 ) -> Vec<GlobalId> {
@@ -578,7 +579,7 @@ fn calls_of(
 
 /// Defined procedures no outside code calls: every caller is in the program,
 /// and a call through a pointer is not one, so none has its address taken.
-fn unexported(program: &Program) -> BTreeSet<Defined> {
+pub(crate) fn unexported(program: &Program) -> BTreeSet<Defined> {
     let addressed: BTreeSet<Defined> = program
         .modules
         .iter()
@@ -1042,7 +1043,7 @@ fn together_trial<E: From<String>>(
 
 /// Module `at`'s procedures every caller of which is in the module: no
 /// outside code, and no other module, calls them.
-fn private(
+pub(crate) fn private(
     program: &Program,
     at: usize,
 ) -> BTreeSet<GlobalId> {
@@ -1932,7 +1933,58 @@ pub fn stamped(
             changed.push(id);
         }
     }
+    if llrm_support::env_set("LLRM_SHADOW_GMR") {
+        shadow_globalsmodref(module, known);
+    }
     Ok(changed)
+}
+
+/// Shadow of `globalsmodref::compute` against alias's summaries: for each
+/// body both describe and each tracked global, one line per disagreement, and
+/// the counts.
+fn shadow_globalsmodref(
+    module: &Module,
+    known: &llrm_support::hash::IndexMap<String, llrm_analysis::alias::Summary>,
+) {
+    use llrm_analysis::memory::{Key, MemoryKind};
+    let found = llrm_analysis::globalsmodref::compute(module);
+    let tracked: Vec<GlobalId> = (0..module.globals.len() as u32)
+        .map(GlobalId)
+        .filter(|&id| found.is_non_address_taken(id) && module.global(id).function().is_none())
+        .collect();
+    let (mut same, mut looser, mut tighter, mut compared) = (0_usize, 0_usize, 0_usize, 0_usize);
+    for (id, global, _) in module.functions() {
+        let Some(name) = global.name.as_ref() else { continue };
+        let (Some(info), Some(summary)) = (found.function_info(id), known.get(name)) else { continue };
+        compared += 1;
+        for &g in &tracked {
+            let touches = |slices: &llrm_analysis::sliceset::SliceSet| {
+                slices.iter().any(|one| one.object.kind == MemoryKind::Global && one.object.key == Key::Global(g.0))
+            };
+            // A tracked global is reached by name alone: unknown accesses
+            // do not count.
+            let (reads, writes) = (touches(&summary.reads), touches(&summary.writes));
+            let theirs = info.mod_ref_for_global(g);
+            let mine = match (reads, writes) {
+                (false, false) => ModRefInfo::NoModRef,
+                (true, false) => ModRefInfo::Ref,
+                (false, true) => ModRefInfo::Mod,
+                (true, true) => ModRefInfo::ModRef,
+            };
+            if theirs == mine {
+                same += 1;
+            } else if theirs.union(mine) == theirs {
+                looser += 1;
+            } else {
+                tighter += 1;
+                eprintln!(
+                    "shadow-gmr tighter @{name} {:?}: globalsmodref {theirs:?} summary {mine:?}",
+                    module.global(g).name
+                );
+            }
+        }
+    }
+    eprintln!("shadow-gmr compared {compared} bodies: same {same} looser {looser} tighter {tighter}");
 }
 
 /// The procedure `id`, with the context its types and constants live in.
