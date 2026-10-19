@@ -2894,6 +2894,31 @@ impl Selector<'_, '_, '_> {
         self.layout.pointer(0).bits / 8
     }
 
+    /// A far pointer constant that is a number: selector:offset as one
+    /// dword. A plain address constant, or a segment's selector widened to a
+    /// far pointer (`addrspacecast (ptr addrspace(2) inttoptr N to ptr addrspace(1))`,
+    /// `N:0`).
+    fn far_number(
+        &self,
+        id: llrm_mir::context::ConstantId,
+    ) -> Option<i64> {
+        if let Some(bits) = crate::backend::globals::absolute(self.module, &self.layout, id) {
+            return Some(bits);
+        }
+        let context = &self.module.context;
+        let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) =
+            &context.get(id).kind
+        else {
+            return None;
+        };
+        let Type::Pointer(from) = self.types().get(context.get(*value).ty) else { return None };
+        if !self.spaces.is_segment(Some(*from)) {
+            return None;
+        }
+        let selector = crate::backend::globals::absolute(self.module, &self.layout, *value)?;
+        Some((selector & 0xFFFF) << 16)
+    }
+
     /// `ptrtoint (ptr C to iN)` of a near pointer constant, N the pointer's
     /// width, is that address: the pointer constant, which a link-time
     /// address is. Any other operand is itself.
@@ -3066,6 +3091,18 @@ impl Selector<'_, '_, '_> {
             );
             out.push(insn(at, what));
             return Ok(held);
+        }
+        // `ptrtoint` of a far pointer constant: its two words, joined.
+        if let Operand::Constant(id) = operand
+            && let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::PtrToInt, value }) =
+                self.module.context.get(id).kind.clone()
+            && self.is_far(self.module.context.get(value).ty)
+            && width == 4
+        {
+            let (offset, selector) = self.far(Operand::Constant(value), at, out)?;
+            let joined = Held { value: self.fresh(), width };
+            self.joined(joined, offset, selector, at, out);
+            return Ok(joined);
         }
         let operand = self.through_ptrtoint(operand);
         let pointer = match operand {
@@ -3281,7 +3318,7 @@ impl Selector<'_, '_, '_> {
         // An address no global owns, far: its selector:offset number, in two
         // registers.
         if self.is_far(self.module.context.get(id).ty)
-            && let Some(bits) = crate::backend::globals::absolute(self.module, &self.layout, id)
+            && let Some(bits) = self.far_number(id)
         {
             let Some(block) = self.current else { return refuse("a far constant outside a block") };
             let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
@@ -4681,7 +4718,7 @@ impl Selector<'_, '_, '_> {
             .constant(operand, 4)
             .or_else(
                 || match operand {
-                    Operand::Constant(id) => crate::backend::globals::absolute(self.module, &self.layout, id),
+                    Operand::Constant(id) => self.far_number(id),
                     _ => None,
                 },
             );

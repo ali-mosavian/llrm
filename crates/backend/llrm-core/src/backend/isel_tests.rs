@@ -5715,6 +5715,7 @@ define i16 @f(i16 %i) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    println!("LIST3 {got:?}");
-    assert!(!got.is_empty());
+    // DGROUP:offset joined into the dword; -18432 is the selector 0xB800 in `pushw`.
+    let has = |text: &str| got.iter().any(|one| one == text);
+    assert!(has("mov ax, DGROUP") && has("mov bx, offset g") && has("shl eax, 16") && has("pushw 47104"), "{got:?}");
 }
