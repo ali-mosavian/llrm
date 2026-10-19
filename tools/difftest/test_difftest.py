@@ -256,3 +256,24 @@ def test_llrm_only_attributes_reach_opt_as_strings():
     """A bare `threeway` on a declaration made opt refuse 9 QCport modules: "expected top-level entity"."""
     text = 'declare i16 @_strcmp(ptr, ptr) addrspace(1) threeway nearcode\n@s = constant [8 x i8] c"threeway"\n'
     assert difftest.normalise(text) == 'declare i16 @_strcmp(ptr, ptr) addrspace(1) "threeway" "nearcode"\n@s = constant [8 x i8] c"threeway"\n'
+
+
+def test_every_opt_command_line_carries_llrms_triple_and_cpu(monkeypatch):
+    """inlinediff priced 30 i32 GEPs at 5 each with opt's host default, 370 vs 215 at i486: a dump has no `target triple`, so opt costs for x86-64 unless told."""
+    import inlinediff
+
+    seen = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "", ""
+
+    monkeypatch.setattr(difftest.subprocess, "run", lambda command, *a, **k: (seen.append(list(command)), Done())[1])
+    monkeypatch.setattr(inlinediff.subprocess, "run", lambda command, *a, **k: (seen.append(list(command)), Done())[1])
+    difftest.opt("sroa", "")
+    inlinediff.llvm_verdicts("", "inline", None)
+    difftest.licm_counts("")
+    assert len(seen) == 3 and all("-mtriple=i486-unknown-linux-gnu" in c and "-mcpu=i486" in c for c in seen), seen
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m16")
+    seen.clear()
+    difftest.opt("sroa", "")
+    assert "-mtriple=i386-unknown-linux-gnu" in seen[0] and "-mcpu=i386" in seen[0]

@@ -129,8 +129,18 @@ def normalise(text: str) -> str:
     return "".join(out)
 
 
+# The target opt costs for: a dump carries no `target triple`, so opt used its host default (x86-64) and every TTI-dependent answer (unroll, LSR, inline cost, SimplifyCFG
+# speculation, LoopIdiom ...) was priced for the wrong machine (30 i32 GEPs cost 5 each at i386/i486, not the x86-64 figure: inline cost 370 vs 215).
+TARGETS = {"m32": ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"], "m16": ["-mtriple=i386-unknown-linux-gnu", "-mcpu=i386"]}
+
+
+def target_args() -> list[str]:
+    """`-mtriple`/`-mcpu` of llrm's target (LLRM_DIFFTEST_TARGET m32 (default) or m16). The datalayout is the triple's default: m16's 16-bit pointers are NOT modelled."""
+    return TARGETS[os.environ.get("LLRM_DIFFTEST_TARGET", "m32")]
+
+
 def opt(passes: str, text: str) -> subprocess.CompletedProcess:
-    return subprocess.run([str(LLVM_BIN / "opt"), f"-passes={passes}", "-S", "-"], input=text, capture_output=True, text=True)
+    return subprocess.run([str(LLVM_BIN / "opt"), *target_args(), f"-passes={passes}", "-S", "-"], input=text, capture_output=True, text=True)
 
 
 def functions(text: str) -> dict[str, list[str]]:
@@ -356,7 +366,7 @@ def licm_counts(text: str) -> dict[str, collections.Counter]:
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "remarks.yaml"
         done = subprocess.run(
-            [str(LLVM_BIN / "opt"), "-passes=loop-mssa(licm)", "-disable-output", f"-pass-remarks-output={out}", "-"], input=normalise(text), capture_output=True, text=True
+            [str(LLVM_BIN / "opt"), *target_args(), "-passes=loop-mssa(licm)", "-disable-output", f"-pass-remarks-output={out}", "-"], input=normalise(text), capture_output=True, text=True
         )
         if done.returncode:
             raise RuntimeError("opt licm: " + (done.stderr.strip().splitlines() or ["failed"])[0])
