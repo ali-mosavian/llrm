@@ -11,6 +11,7 @@ import subprocess, sys, glob
 from pathlib import Path
 
 PINNED = Path.home() / "scratch/llvm-build/bin/opt"
+TARGET = ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"]  # llrm's m32 target: a dump has no `target triple`, and opt costs for x86-64 without one
 COMMIT = "24.0.0git"
 ROOT = Path(__file__).resolve().parent.parent
 LLRM = ROOT / "target/release/llrm-mir"
@@ -30,7 +31,7 @@ def main():
     loops = nested = 0
     bad = []
     for f in files:
-        want = run([str(PINNED), "-passes=print<loops>", "-disable-output", f])
+        want = run([str(PINNED), *TARGET, "-passes=print<loops>", "-disable-output", f])
         got = run([str(LLRM), "--loops", f])
         if want.returncode or got.returncode:
             missing += 1
