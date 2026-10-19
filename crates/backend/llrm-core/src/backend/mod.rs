@@ -211,6 +211,7 @@ pub mod phielim;
 pub mod pointers;
 pub mod postings;
 pub mod postrasink;
+pub mod precse;
 pub mod pressuresink;
 pub mod prologue;
 pub mod regthrash;

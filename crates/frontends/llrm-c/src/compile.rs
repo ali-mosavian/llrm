@@ -2440,11 +2440,12 @@ mod tests {
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
         let calls: Vec<usize> =
             body.iter().enumerate().filter(|(_, one)| **one == "call far ptr _animate").map(|(at, _)| at).collect();
-        // `s`, by the address passed to `animate`: `lea ax, [bp-N]`.
+        // `s`, by the address passed to `animate`: `lea r, [bp-N]`, made once
+        // for both calls.
         let base: i64 = body[..calls[1]]
             .iter()
             .rev()
-            .find_map(|one| one.strip_prefix("lea ax, [bp-")?.strip_suffix(']')?.parse().ok())
+            .find_map(|one| one.strip_prefix("lea ")?.split_once(", [bp-")?.1.strip_suffix(']')?.parse().ok())
             .expect("&s");
         // Every byte the stores between the calls write, by frame offset.
         let mut written = std::collections::BTreeSet::new();
@@ -2479,6 +2480,9 @@ mod tests {
         let built = super::selected(&text, "indexread", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_test proc").expect("_test");
+        if std::env::var_os("SHOWASM").is_some() {
+            eprintln!("{}", &asm[from..]);
+        }
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
         let stored: Vec<&&str> = body
             .iter()

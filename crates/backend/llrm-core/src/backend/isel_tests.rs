@@ -6018,3 +6018,47 @@ b4:
         .expect("the premise: the zero is made");
     assert!(zero > test, "the zero is made before the test: {got:?}");
 }
+
+/// A sum computed again in a block its first computation dominates is read
+/// from the first (MachineCSE); the second `add` was emitted.
+#[test]
+fn test_a_repeated_sum_is_computed_once() {
+    let text = "declare void @use(i32) addrspace(1)
+declare i32 @g() addrspace(1)
+define void @f(i1 %c) addrspace(1) {
+entry:
+  %a = call addrspace(1) i32 @g()
+  %b = call addrspace(1) i32 @g()
+  %x = add i32 %a, %b
+  call addrspace(1) void @use(i32 %x)
+  br i1 %c, label %more, label %done
+more:
+  %y = add i32 %a, %b
+  call addrspace(1) void @use(i32 %y)
+  br label %done
+done:
+  ret void
+}
+";
+    let got = listing(text, "f");
+    let adds = got.iter().filter(|line| line.starts_with("add e")).count();
+    assert_eq!(adds, 1, "{got:?}");
+}
+
+/// `cdq` writes `edx`, which `idiv` then clobbers: two divides of one value
+/// each sign-extend it. Sharing the first `cdq` kept its result live across
+/// the first divide and spilled (div_constants_long.c grew 554 bytes at -Os).
+#[test]
+fn test_divides_of_one_value_each_extend_it() {
+    let text = "define i32 @f(i32 %a, i32 %b, i32 %c) addrspace(1) {
+entry:
+  %x = sdiv i32 %a, %b
+  %y = sdiv i32 %a, %c
+  %r = add i32 %x, %y
+  ret i32 %r
+}
+";
+    let got = listing(text, "f");
+    let cdqs = got.iter().filter(|line| line.as_str() == "cdq").count();
+    assert_eq!(cdqs, 2, "{got:?}");
+}

@@ -111,7 +111,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@99"), "{why}");
     let why = parity::check_backend(
-        &["machinesink@4", "floatalloc@8", "coalesce@10", "jumps@17", "allocate@11", "unknown@1"],
+        &["machinecse@4", "machinesink@4", "floatalloc@8", "coalesce@10", "jumps@17", "allocate@11", "unknown@1"],
         &[],
     )
     .unwrap_err();
@@ -132,9 +132,9 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
     // jumps@17, allocate@11 (greedy by default under LLVM's order) and
     // merge@818 (MemCpyOpt's memsets), dse@820 (stage 1) and the two
     // jumpthreading slots (stage S1), indvars@738, coalesce@10, decide@1178
-    // (SimplifyCfg, #2907) and machinesink@4.
-    assert_eq!(count.partial, 10);
-    assert!(parity::report().contains("jumps@17") && parity::report().contains("10 partial"));
+    // (SimplifyCfg, #2907) machinesink@4 and machinecse@4.
+    assert_eq!(count.partial, 11);
+    assert!(parity::report().contains("jumps@17") && parity::report().contains("11 partial"));
 }
 
 /// A Partial slot without its criterion and exit says what is done and not what
