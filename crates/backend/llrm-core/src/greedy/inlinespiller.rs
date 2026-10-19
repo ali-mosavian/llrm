@@ -361,14 +361,18 @@ impl<'a> InlineSpiller<'a> {
         members: &[InstrKey],
     ) -> Option<Vec<u32>> {
         let old: Vec<Arc<Insn>> = members.iter().map(|key| Arc::clone(lis.instr(*key))).collect();
-        if let Some(folded) = self.fold_into_copy(lis, reg, block, members, &old) {
-            return Some(folded);
-        }
         // An x87 value (FP0..FP6) spills in floatassign's format, `fstp` and
-        // `fld` of a qword cell, and folds into nothing.
-        let float = self.tables.orders.borrow().get(&reg).is_some_and(|order| order.first() == Some(&RegId::MM0));
+        // `fld` of a qword cell, and folds into nothing: a copy folded to a
+        // store would be a `mov` the stackifier has no rule for.
+        // A piece made by an edit has no order of its own yet: its x87 width
+        // says what it is.
+        let float = self.tables.orders.borrow().get(&reg).is_some_and(|order| order.first() == Some(&RegId::MM0))
+            || crate::backend::allocate::rfp_on() && widest_operand(&old, reg) == Some(10);
         if float {
             return self.spill_float_unit(lis, reg, block, members, &old);
+        }
+        if let Some(folded) = self.fold_into_copy(lis, reg, block, members, &old) {
+            return Some(folded);
         }
         let width = self.tables.widths.borrow().get(&reg).copied().unwrap_or(0);
         let width = if width > 0 { width } else { widest_operand(&old, reg)? };
