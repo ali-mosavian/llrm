@@ -7,6 +7,20 @@
 //! ([`Frame`]); it changes nothing. [`run`] answers with the [`Placement`] the
 //! procedure's prologue and epilogue go to, or none where the entry is as good.
 //!
+//! # Example
+//! A procedure that returns at once when its argument is 0 and otherwise calls
+//! itself (`hanoi`). Only block 1 needs the frame, and it dominates and is
+//! post-dominated by itself, so the procedure is set up and taken back there:
+//!
+//! ```text
+//!   0: test; je 2          save: 1
+//!   1: call hanoi          restore: 1
+//!   2: ret                 (the entry and the return pay nothing)
+//! ```
+//!
+//! This is `run` over that graph with block 1 as the only block that touches
+//! the frame (`test_a_call_on_one_path_is_wrapped_there_and_not_at_the_entry`).
+//!
 //! DEVIATE 1: no EH pads, funclets or `INLINEASM_BR` targets: LIR has none, so
 //! their arms are absent.
 //! DEVIATE 2: `postShrinkWrapping` does not make the split block, it names it

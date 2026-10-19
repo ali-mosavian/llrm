@@ -9,7 +9,7 @@ mod instructioncost_tests;
 /// `x86.instr`'s reader. Dependency-free but `llrm-lir`, so a build script can
 /// include it with `#[path]`.
 pub mod lowering;
-pub mod parse;
+pub use llrm_instr as parse;
 pub mod select;
 pub mod tti;
 #[cfg(test)]

@@ -431,9 +431,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-instr"
+version = "0.1.0"
+dependencies = [
+ "llrm-lir",
+]
+
+[[package]]
 name = "llrm-iselgen"
 version = "0.1.0"
 dependencies = [
+ "llrm-instr",
  "llrm-lir",
  "llrm-peepgen",
  "llrm-support",
@@ -508,6 +516,7 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "llrm-instr",
  "llrm-lir",
  "llrm-support",
  "serde",
@@ -602,6 +611,7 @@ name = "llrm-x86"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-instr",
  "llrm-lir",
  "llrm-mir",
  "llrm-support",
