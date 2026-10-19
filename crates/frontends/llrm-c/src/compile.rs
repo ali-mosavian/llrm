@@ -2521,6 +2521,10 @@ mod tests {
     /// which nothing writes, is read again instead.
     #[test]
     fn test_a_float_argument_is_read_from_its_own_cell() {
+        // RFP-3, a row loss under RFP: greedy spills the argument to a slot of
+        // its own across the call (`sub sp, 20`), where floatassign
+        // re-read its cell.
+        let _old = llrm_core::backend::allocate::RfpOn::off();
         let text =
             std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/paramremat.cgs")).unwrap();
         let options = llrm_core::driver::Options {

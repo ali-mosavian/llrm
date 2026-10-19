@@ -2101,7 +2101,7 @@ pub fn assigned(
 }
 
 /// The legalization half of `assigned`, which greedy's RFP allocation
-/// (`LLRM_GREEDY_RFP`) leaves to run before it: an integer `fild` reads goes
+/// (RFP) leaves to run before it: an integer `fild` reads goes
 /// through a cell, a float-to-integer store lands in one, and later loads of a
 /// cell nothing wrote since are the first load's value. LLVM lowers the first
 /// two in instruction selection.
@@ -2260,7 +2260,7 @@ fn _sequenced(body: &LirBody) -> LirBody {
     body.with_blocks(blocks)
 }
 
-/// `prepared` as a machine phase: floatassign's slot under `LLRM_GREEDY_RFP`.
+/// `prepared` as a machine phase: floatassign's slot under RFP.
 pub struct FloatPrep {
     pub frame: Option<Rc<RefCell<Frame>>>,
     pub pool: Option<Rc<RefCell<Pool>>>,
