@@ -6179,3 +6179,32 @@ entry:
     let got = listing_on("486", text, "f");
     assert!(!got.is_empty(), "{got:?}");
 }
+
+/// An address with no register operand is made where it is read, not shared:
+/// the add after the call wrote over the shared `lea`, a two-def value the
+/// allocator could not remake, and grep -O2 -m32 ran 21.9% more instructions.
+#[test]
+fn test_an_address_is_made_again_after_a_call() {
+    let text = "declare void @use(ptr) addrspace(1)
+@h = global ptr null
+define void @f(i32 %n) addrspace(1) {
+entry:
+  %buf = alloca [64 x i8]
+  call addrspace(1) void @use(ptr %buf)
+  %p = getelementptr i8, ptr %buf, i32 %n
+  store ptr %p, ptr @h
+  ret void
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let addresses = |body: &crate::model::lir::LirBody| {
+        body.blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Address))
+            .count()
+    };
+    assert_eq!(addresses(&body), 2, "the premise: the frame address is made twice");
+    let shared = crate::backend::precse::shared(&body, &crate::backend::classes::RegisterClasses::m16());
+    assert_eq!(addresses(&shared), 2);
+}
