@@ -414,7 +414,7 @@ pub fn run(
             }
             let built = graph.as_mut().expect("a graph");
             let ($mssa, $accesses) = (&mut built.mssa, &built.accesses);
-            let $aa = AliasQuery::new(&memory, $accesses).with_exposed(std::rc::Rc::clone(&exposed));
+            let $aa = AliasQuery::new(&memory, $accesses);
             // The function stands as the edits so far left it: nothing is
             // simulated.
             let state = State::default();
@@ -722,6 +722,10 @@ thread_local! {
 impl FunctionPass for Licm {
     fn name(&self) -> &'static str {
         "licm"
+    }
+
+    fn translation(&self) -> Option<&'static str> {
+        Some("licm")
     }
 
     fn adds_memory_operations(&self) -> bool {

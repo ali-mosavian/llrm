@@ -195,8 +195,9 @@ struct BodySplitEnv {
     number: crate::support::hash::HashMap<i64, usize>,
     registers: Regs,
     sets: Option<Rc<crate::backend::regclass::Sets>>,
-    /// The values fixed to a register: their class is that register.
-    pinned: crate::support::hash::HashSet<u32>,
+    /// The values fixed to a register, and the registers a split made of them:
+    /// their class is that register.
+    pinned: std::cell::RefCell<crate::support::hash::HashSet<u32>>,
 }
 
 impl BodySplitEnv {
@@ -216,7 +217,7 @@ impl BodySplitEnv {
             number,
             registers,
             sets,
-            pinned,
+            pinned: std::cell::RefCell::new(pinned),
         }
     }
 }
@@ -260,6 +261,10 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         if let Some(order) = order {
             self.tables.orders.borrow_mut().entry(new).or_insert(order);
         }
+        let fixed = self.pinned.borrow().contains(&from);
+        if fixed {
+            self.pinned.borrow_mut().insert(new);
+        }
     }
 
     /// `LiveRangeEdit::calculateRegClassAndHint`'s `recomputeRegClass`: a
@@ -276,7 +281,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
             let Some(current) = self.tables.orders.borrow().get(&reg).cloned() else { continue };
             // A pinned value, and one with a class of its own kind (the x87
             // stack), keep theirs.
-            if self.pinned.contains(&reg) || !current.iter().all(|one| sets.available.contains(one)) {
+            if self.pinned.borrow().contains(&reg) || !current.iter().all(|one| sets.available.contains(one)) {
                 continue;
             }
             let mut seen = crate::support::hash::HashSet::default();
@@ -350,33 +355,27 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         super::inlinespiller::remat_shape(insn) && insn.uses.is_empty()
     }
 
-    /// The definition of `parent` (a literal, address or load that reads no
+    /// `def` (a literal, address or load that reads no
     /// register) as a definition of `to`: `rematerializeAt`.
     fn rematerialize(
         &self,
-        lis: &LiveIntervals,
+        def: &Insn,
         to: u32,
         parent: u32,
         beside: Option<&Insn>,
     ) -> Option<Arc<Insn>> {
-        use crate::model::ir::{Held, Loc, Semantics};
-        if !self.tables.remat.borrow().contains(&parent) {
-            return None;
-        }
-        let mut def = None;
-        for operand in lis.operands(parent) {
-            if operand.is_def {
-                if def.is_some_and(|seen| seen != operand.instr) {
-                    return None;
-                }
-                def = Some(operand.instr);
-            }
-        }
-        let def = Arc::clone(lis.instr(def?));
-        if !super::inlinespiller::remat_shape(&def) || !def.uses.is_empty() {
+        use crate::model::ir::{Held, Loc, Operation, Semantics};
+        if !super::inlinespiller::remat_shape(def) || !def.uses.is_empty() {
             return None;
         }
         let what = def.what.clone()?;
+        // A literal or address is rematerializable per definition, as
+        // `isTriviallyReMaterializable` asks of `RM.OrigMI`; a load only when
+        // the register's facts say its cell holds (D-I).
+        let load = what.op == Operation::Move && matches!(what.sources[0], Loc::Mem(_));
+        if load && !self.tables.remat.borrow().contains(&parent) {
+            return None;
+        }
         let Loc::Held(defined) = what.dests[0] else { return None };
         self.tables.widths.borrow_mut().insert(to, defined.width);
         self.tables.remat.borrow_mut().insert(to);
@@ -391,7 +390,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
             what: Some(Semantics { dests: vec![Loc::Held(Held { value: to, width: defined.width })], ..what }),
             spill_reload: true,
             rematerialized: true,
-            ..(*def).clone()
+            ..def.clone()
         }))
     }
 
@@ -1166,5 +1165,66 @@ mod tests {
             BodySplitEnv::new(&body, Rc::clone(&tables), Regs(&llrm_x86_m16::REGISTER_INFO), None, Default::default());
         env.note_split_from(&lis, 7, 1);
         assert_eq!(tables.widths.borrow().get(&7), Some(&4), "the clone is as wide as its parent");
+    }
+
+    /// A phi value defined by a literal on one edge and an add on the other
+    /// is not rematerializable as a register, but its literal definition is:
+    /// a split copied it instead, and fib -O3 -m32 kept `xor ebx, ebx` in the
+    /// loop header to store ebx on the exit edge where LLVM stores `0`.
+    #[test]
+    fn test_a_split_remakes_a_literal_definition_of_a_register_defined_twice() {
+        use crate::greedy::splitkit::SplitEnv as _;
+        use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Semantics};
+        let held = |value| Loc::Held(Held { value, width: 4 });
+        let literal = Semantics {
+            name: Some("mov".to_owned()),
+            dests: vec![held(1)],
+            sources: vec![Loc::Imm(Imm { value: 0, width: 4, address: None })],
+            ..Semantics::new(Operation::Move)
+        };
+        let add = Semantics {
+            name: Some("add".to_owned()),
+            dests: vec![held(1)],
+            sources: vec![held(1), held(2)],
+            ..Semantics::new(Operation::Binary)
+        };
+        let zero = Insn::new(0, None, Some(literal), vec![1], vec![]);
+        let insns = vec![Arc::new(zero.clone()), Arc::new(Insn::new(1, None, Some(add), vec![1], vec![1, 2]))];
+        let body = LirBody::new(
+            "phi",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let tables = Rc::new(Tables::default());
+        let env =
+            BodySplitEnv::new(&body, Rc::clone(&tables), Regs(&llrm_x86_m16::REGISTER_INFO), None, Default::default());
+        let made = env.rematerialize(&zero, 7, 1, None).expect("the literal is made again");
+        assert_eq!(made.defines, [7]);
+        assert!(matches!(made.what.as_ref().unwrap().sources[..], [Loc::Imm(Imm { value: 0, .. })]));
+        // A load still needs the register's facts (D-I): nothing says the cell
+        // is unchanged at the split.
+        let load = Semantics {
+            name: Some("mov".to_owned()),
+            dests: vec![held(1)],
+            sources: vec![Loc::Mem(Mem {
+                addr: None,
+                width: 4,
+                through: RegId::EBP,
+                offset: -4,
+                disp_width: 1,
+                base: None,
+                stack_argument: false,
+                selector: None,
+                index: None,
+                scale: 1,
+                index_through: RegId::EBP,
+                exact: false,
+            })],
+            ..Semantics::new(Operation::Move)
+        };
+        let load = Insn::new(0, None, Some(load), vec![1], vec![]);
+        assert!(env.rematerialize(&load, 8, 1, None).is_none());
     }
 }

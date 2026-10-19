@@ -1426,7 +1426,7 @@ fn test_a_branch_taken_to_the_next_block_then_a_jump_is_one_opposite_branch() {
         IndexMap::default(),
         IndexMap::default(),
     );
-    let got = inverted(&body);
+    let got = inverted(&body, false);
     let names: Vec<(String, Option<i64>)> = got.blocks[0]
         .insns
         .iter()
@@ -1457,7 +1457,7 @@ fn test_a_three_way_block_keeps_its_jump() {
         IndexMap::default(),
         IndexMap::default(),
     );
-    assert_eq!(inverted(&body).blocks[0].insns.len(), 4);
+    assert_eq!(inverted(&body, false).blocks[0].insns.len(), 4);
 }
 
 /// `threaded` restarted its scan at the first block after every change: a
@@ -1488,21 +1488,6 @@ fn test_threading_a_chain_of_removable_jumps_visits_blocks_a_few_times_not_n_tim
     assert_eq!(jumps.count(), 0, "premise: every jump to the next block goes");
     let visits = result.facts.0.counted("jump-visits");
     assert!(visits <= 3 * (count as usize + 1), "{visits} block visits for {count} removable jumps");
-}
-
-/// The ends of a block's real instructions, by name.
-fn named(block: &LirBlock) -> Vec<String> {
-    block.insns.iter().filter_map(|one| one.what.as_ref()).map(|what| what.name.clone().unwrap_or_default()).collect()
-}
-
-fn with_odds(
-    mut made: LirBody,
-    edges: &[(i64, i64, f64)],
-) -> LirBody {
-    for &(from, to, chance) in edges {
-        made.odds.taken.insert((from, to), (chance * crate::model::lir::BlockOdds::CERTAIN) as u32);
-    }
-    made
 }
 
 /// x_adler's loop: the latch `jne top; jmp exit` with a short return as the
@@ -1592,7 +1577,7 @@ fn test_a_loop_block_with_neither_way_next_branches_back_conditionally() {
     let certain = crate::model::lir::BlockOdds::CERTAIN;
     looped.odds.taken.insert((5, 5), (certain * 31.0 / 32.0).round() as u32);
     looped.odds.taken.insert((5, 20), (certain / 32.0).round() as u32);
-    let result = inverted(&looped);
+    let result = inverted(&looped, false);
     let names: Vec<(String, Option<i64>)> = result.blocks[1]
         .insns
         .iter()
@@ -1617,7 +1602,7 @@ fn test_the_likelier_way_stays_the_conditional_jump() {
     let certain = crate::model::lir::BlockOdds::CERTAIN;
     looped.odds.taken.insert((5, 5), (certain * 31.0 / 32.0).round() as u32);
     looped.odds.taken.insert((5, 20), (certain / 32.0).round() as u32);
-    let result = inverted(&looped);
+    let result = inverted(&looped, false);
     let names: Vec<(String, Option<i64>)> = result.blocks[1]
         .insns
         .iter()
@@ -1625,6 +1610,63 @@ fn test_the_likelier_way_stays_the_conditional_jump() {
         .map(|what| (what.name.clone().unwrap_or_default(), what.target))
         .collect();
     assert_eq!(names, [("cmp".to_owned(), None), ("jne".to_owned(), Some(5)), ("jmp".to_owned(), Some(20))]);
+}
+
+/// `optimizeBranches` makes the likelier way of a two-way branch the
+/// conditional jump, but not for size, which keeps the condition as it was
+/// (uniform instructions for folding).
+#[test]
+fn test_for_size_a_two_way_branch_keeps_its_condition() {
+    let mut source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "jne", 30), _jump(3, 20)], vec![30, 20]).into(),
+            block(10, vec![_move(10, cx()), _return(11)], vec![]).into(),
+            block(20, vec![_return(20)], vec![]).into(),
+            block(30, vec![_move(30, bx()), _return(31)], vec![]).into(),
+        ],
+    );
+    let certain = crate::model::lir::BlockOdds::CERTAIN;
+    source.odds.taken.insert((1, 30), (certain / 8.0).round() as u32);
+    source.odds.taken.insert((1, 20), (certain * 7.0 / 8.0).round() as u32);
+    let branch = |size: bool| {
+        let result = inverted(&source, size);
+        let what =
+            result.blocks[0].insns.iter().filter_map(|one| one.what.as_ref()).find(|what| what.op == Operation::Branch);
+        what.map(|what| (what.name.clone().unwrap_or_default(), what.target)).unwrap()
+    };
+    assert_eq!(branch(false), ("je".to_owned(), Some(20)), "the likelier way is the jump");
+    assert_eq!(branch(true), ("jne".to_owned(), Some(30)), "size keeps the condition");
+}
+
+/// `alignBlocks`: a block of a loop that nothing falls into starts at the
+/// target's loop alignment; the one the loop falls through to, hot, does not;
+/// nothing is aligned for size or where the target aligns no loop (m16).
+#[test]
+fn test_a_loop_block_nothing_falls_into_is_aligned() {
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0)), _jump(2, 3)], vec![3]).into(),
+            block(8, vec![_move(8, bx())], vec![3]).into(),
+            block(3, vec![_compare(3), _branch(4, "jl", 8), _jump(5, 17)], vec![8, 17]).into(),
+            block(17, vec![_return(17)], vec![]).into(),
+        ],
+    );
+    let m16 = cpu::profile("486").unwrap();
+    assert_eq!(m16.loop_alignment, 0, "the test profiles are m16's");
+    let mut on = m16.clone();
+    on.loop_alignment = 4;
+    let on = &on;
+    let align =
+        |one: &cpu::Profile| aligned(&source, one).blocks.iter().map(|one| (one.at, one.align)).collect::<Vec<_>>();
+    assert_eq!(align(on), [(1, 0), (8, 4), (3, 0), (17, 0)]);
+    let mut size = on.clone();
+    size.size = true;
+    assert!(align(&size).iter().all(|(_, align)| *align == 0), "size aligns nothing");
+    assert!(align(m16).iter().all(|(_, align)| *align == 0), "m16 aligns nothing");
 }
 
 /// A table jump's index to a block that only jumps goes to where it jumps: the
@@ -1753,4 +1795,23 @@ fn a_dispatch_of_many_arms_places_each_block_once() {
     seen.sort_unstable();
     seen.dedup();
     assert_eq!(seen.len(), placed_body.blocks.len(), "a block placed twice");
+}
+
+/// Finding the blocks on a cycle looked through every block for each block that
+/// is a component alone: 1600 diamonds spent 247 M of 304 M instructions of
+/// the tail merge there, the merge's cost growing 3.4x for a doubled body. The
+/// scan is once per body; a self-loop and a two-block cycle are still found.
+#[test]
+fn test_the_blocks_on_a_cycle_are_found_without_a_scan_per_block() {
+    use super::tailmerge::{SELF_LOOP_SCANS, cyclic_blocks};
+    let n = 400;
+    let mut blocks: Vec<LirBlock> = (0..n).map(|at| block(at, vec![_jump(at, at + 1)], vec![at + 1])).collect();
+    blocks.push(block(n, vec![_branch(n, "je", n), _jump(n + 1, n + 2)], vec![n, n + 2]));
+    blocks.push(block(n + 2, vec![_return(n + 2)], vec![]));
+    SELF_LOOP_SCANS.with(|one| one.set(0));
+    let blocks: Vec<crate::model::lir::Block> = blocks.into_iter().map(crate::model::lir::Block::from).collect();
+    let found = cyclic_blocks(&blocks);
+    let scans = SELF_LOOP_SCANS.with(|one| one.get());
+    assert!(scans <= 4 * blocks.len(), "{scans} scans for {} blocks", blocks.len());
+    assert_eq!(found.into_iter().collect::<Vec<_>>(), vec![n]);
 }

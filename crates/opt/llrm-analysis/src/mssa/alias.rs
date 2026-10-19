@@ -92,8 +92,9 @@ pub struct AliasQuery<'a> {
     /// Entries of the cache looked at to answer the questions: one a question,
     /// for the test that holds the cost linear.
     cache_steps: std::cell::Cell<u64>,
-    /// The allocas whose address is exposed, found when first asked.
-    exposed: std::cell::OnceCell<Rc<llrm_mir::dense::IdSet<llrm_mir::module::ValueId>>>,
+    /// `BasicAA`'s answers for the pointer pairs asked: one `AAQueryInfo` for
+    /// the batch.
+    basic: RefCell<crate::aa::AAQueryInfo>,
     /// `getUnderlyingObject` of each pointer asked: the walk down a GEP chain
     /// was a third of a store-heavy body's cost, asked again at each step.
     bases: RefCell<llrm_support::hash::HashMap<llrm_mir::module::Operand, llrm_mir::module::Operand>>,
@@ -118,20 +119,10 @@ impl<'a> AliasQuery<'a> {
             cache: Default::default(),
             asked: Default::default(),
             cache_steps: Default::default(),
-            exposed: Default::default(),
+            basic: Default::default(),
             bases: Default::default(),
             bases_walked: Default::default(),
         }
-    }
-
-    /// The allocas whose address is exposed, where the caller has them already
-    /// (exposure does not change as instructions move between blocks).
-    pub fn with_exposed(
-        self,
-        exposed: Rc<llrm_mir::dense::IdSet<llrm_mir::module::ValueId>>,
-    ) -> Self {
-        let _ = self.exposed.set(exposed);
-        self
     }
 
     /// The walks down a pointer's GEP chain made so far.
@@ -214,10 +205,9 @@ impl<'a> AliasQuery<'a> {
         }
         self.asked.set((asked + 1, worked + 1));
         let writes = self.accesses.writes(def);
-        // A write to anything does not reach an alloca no one holds the address
-        // of.
-        let found = if writes.is_none() && self.in_unexposed_alloca(&loc.reference) {
-            false
+        // A def whose writes the lists do not name is asked of BasicAA.
+        let found = if writes.is_none() {
+            self.unknown_call_mod_ref(def, loc).writes
         } else {
             memoryssa::changes(&loc.effective, false, writes, |written| self.may_overlap(&loc.effective, written))
         };
@@ -290,18 +280,42 @@ impl<'a> AliasQuery<'a> {
         identified.then_some(base)
     }
 
-    /// Whether `reference` is in an alloca whose address is never exposed:
-    /// nothing a call does by unknown means reaches it.
-    fn in_unexposed_alloca(
+    /// What a call whose accesses the lists do not name may do to `loc`:
+    /// `getModRefInfo(Call, Loc)`, which reads the call's attributes, the
+    /// arguments that may alias the location and whether the location's object
+    /// is captured before the call. Anything where it has no pointer.
+    fn unknown_call_mod_ref(
         &self,
-        reference: &MemRef,
+        call: InstId,
+        loc: &Location,
+    ) -> ModRef {
+        use crate::aa::{AAResults, LocationSize, MemoryLocation};
+        let anything = ModRef { reads: true, writes: true };
+        let (Opcode::Call(_) | Opcode::Invoke(_)) = self.unit.function.instruction(call).opcode else {
+            return anything;
+        };
+        let Some(pointer) = loc.reference.pointer else { return anything };
+        let size = if loc.effective.width >= UNBOUNDED_WIDTH {
+            LocationSize::BeforeOrAfterPointer
+        } else {
+            LocationSize::Precise(u64::from(loc.effective.width))
+        };
+        let found = crate::basicaa::BasicAA::new(self.unit).get_mod_ref_info(
+            call,
+            Some(&MemoryLocation::new(pointer, size)),
+            &mut self.basic.borrow_mut(),
+        );
+        ModRef { reads: found.is_ref_set(), writes: found.is_mod_set() }
+    }
+
+    /// Whether the address of the alloca `alloca` may be captured, a return
+    /// included (`PointerMayBeCaptured`), remembered in the batch.
+    fn captured(
+        &self,
+        alloca: llrm_mir::module::ValueId,
     ) -> bool {
-        use llrm_mir::module::Operand;
-        let Some(Operand::Value(alloca)) = self.identified_object(reference) else { return false };
-        !self
-            .exposed
-            .get_or_init(|| Rc::new(crate::memory::exposed_frames(self.unit).into_iter().collect()))
-            .contains(&alloca)
+        crate::basicaa::BasicAA::new(self.unit)
+            .is_captured(llrm_mir::module::Operand::Value(alloca), &mut self.basic.borrow_mut())
     }
 
     /// Whether `pointer` is derived only from objects other than the alloca
@@ -348,9 +362,7 @@ impl<'a> AliasQuery<'a> {
     ) -> bool {
         use llrm_mir::module::Operand;
         let Some(Operand::Value(alloca)) = self.identified_object(local) else { return false };
-        let exposed =
-            self.exposed.get_or_init(|| Rc::new(crate::memory::exposed_frames(self.unit).into_iter().collect()));
-        if exposed.contains(&alloca) {
+        if self.captured(alloca) {
             return false;
         }
         other.pointer.is_some_and(|pointer| self.derived_from_elsewhere(pointer, alloca, 0))
@@ -373,7 +385,29 @@ impl<'a> AliasQuery<'a> {
         if self.unreachable_from(one, other) || self.unreachable_from(other, one) {
             return false;
         }
-        memoryssa::may_clobber(self.unit, None, one, other)
+        // The cheap tests first: BasicAA is asked only of what they leave.
+        memoryssa::may_clobber(self.unit, None, one, other) && !self.basic_no_alias(one, other)
+    }
+
+    /// `BasicAA` says the two references, each a pointer and a size, do not
+    /// alias.
+    fn basic_no_alias(
+        &self,
+        one: &MemRef,
+        other: &MemRef,
+    ) -> bool {
+        use crate::aa::{AAResults, LocationSize, MemoryLocation};
+        let (Some(left), Some(right)) = (one.pointer, other.pointer) else { return false };
+        let size = |reference: &MemRef| {
+            if reference.width >= UNBOUNDED_WIDTH {
+                LocationSize::BeforeOrAfterPointer
+            } else {
+                LocationSize::Precise(u64::from(reference.width))
+            }
+        };
+        let (left, right) = (MemoryLocation::new(left, size(one)), MemoryLocation::new(right, size(other)));
+        crate::basicaa::BasicAA::new(self.unit).alias(&left, &right, &mut self.basic.borrow_mut(), None)
+            == crate::aa::AliasResult::NoAlias
     }
 
     /// `MemoryLocation::getWithoutAATags()`: the location with no `!tbaa` type.
@@ -425,11 +459,14 @@ impl<'a> AliasQuery<'a> {
         inst: InstId,
         loc: &Location,
     ) -> ModRef {
-        let touches = |list: Option<&[MemRef]>| match list {
-            None => !self.in_unexposed_alloca(&loc.reference),
-            Some(list) => list.iter().any(|one| self.may_overlap(one, &loc.effective)),
-        };
-        ModRef { reads: touches(self.accesses.reads(inst)), writes: touches(self.accesses.writes(inst)) }
+        let touches =
+            |list: Option<&[MemRef]>| list.map(|list| list.iter().any(|one| self.may_overlap(one, &loc.effective)));
+        let (reads, writes) = (touches(self.accesses.reads(inst)), touches(self.accesses.writes(inst)));
+        if reads.is_some() && writes.is_some() {
+            return ModRef { reads: reads.unwrap_or(false), writes: writes.unwrap_or(false) };
+        }
+        let unknown = self.unknown_call_mod_ref(inst, loc);
+        ModRef { reads: reads.unwrap_or(unknown.reads), writes: writes.unwrap_or(unknown.writes) }
     }
 
     /// `AA.getMemoryEffects(CB)`: whether the call may read and may write

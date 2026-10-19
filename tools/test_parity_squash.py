@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import parity_squash as ps  # noqa: E402
 
@@ -132,6 +134,24 @@ def test_an_own_commit_that_deletes_a_file_and_its_tests_is_refused_unless_the_d
     why = ps.refusals(head, "", base="main", cwd=repo)
     assert why and "scev/expand_iv.rs" in why[0] and "whole file" in why[0] and "1 test function" in why[0], why
     assert ps.refusals(head, "Deletes: scev/expand_iv.rs, the old expander", base="main", cwd=repo) == []
+
+
+def test_a_rewritten_generated_page_is_not_a_deletion(tmp_path):
+    """#2760, #2873 and #2925 were refused as 'deletes docs/optimizations/backend/jumps.md' (30-35 lines) for a regenerated page: three PRs sat out of the queue."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sh(repo, "init", "-q", "-b", "main")
+    page = "> Generated from the `//!` header of [`a.rs`](x); edit the header, not this file.\n" + "".join(f"line {i}\n" for i in range(60))
+    hand = "".join(f"line {i}\n" for i in range(60))
+    commit(repo, "gen.md", page, "page")
+    commit(repo, "hand.md", hand, "hand page")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "gen.md").write_text(page.split("\n", 1)[0] + "\nshort\n")
+    (repo / "hand.md").write_text("short\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "docs: rewrite")
+    why = ps.refusals(sh(repo, "rev-parse", "HEAD"), "", base="main", cwd=repo)
+    assert len(why) == 1 and why[0].startswith("hand.md"), why
 
 
 def test_a_squash_that_touches_files_the_pr_never_listed_is_detected_after_landing(tmp_path):
@@ -323,3 +343,131 @@ def test_a_refusal_after_a_rebuild_names_the_newest_source_the_oldest_binary_and
     why = ps.ensure_bins(build=lambda: Failed())
     assert "oldest binary llrm-qb" in why and "newest source crates/a/src/x.rs" in why and "70 s later" in why, why
     assert "the rebuild exited 101" in why and "could not compile `llrm-nib`" in why, why
+
+
+GENERATOR = """import sys
+from pathlib import Path
+root = Path(__file__).resolve().parents[2]
+pages = sorted(p.stem for p in (root / "docs/optimizations/passes").glob("page_*.md"))
+want = "".join(f"- {name}\\n" for name in ["a", *pages])
+index = root / "docs/optimizations/passes/readme.md"
+if "--sync" in sys.argv:
+    index.write_text(want)
+elif "--check" in sys.argv and index.read_text() != want:
+    print("stale index"); sys.exit(1)
+"""
+
+
+def generated_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "r"
+    (repo / "tools/docsbuild").mkdir(parents=True)
+    (repo / "docs/optimizations/passes").mkdir(parents=True)
+    sh(repo, "init", "-q", "-b", "main")
+    (repo / "tools/docsbuild/build.py").write_text(GENERATOR)
+    (repo / "docs/optimizations/passes/readme.md").write_text("- a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    return repo
+
+
+def test_two_prs_that_each_add_a_page_merge_by_regenerating_the_index(tmp_path):
+    """Both PRs rewrote the generated index at the same line: git conflicted, a human merged generated text, and #2790, the LSR stack and indvars waited on it."""
+    repo = generated_repo(tmp_path)
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "docs/optimizations/passes/page_c.md").write_text("# c\n")
+    (repo / "docs/optimizations/passes/readme.md").write_text("- a\n- page_c\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "c")
+    head = sh(repo, "rev-parse", "HEAD")
+    sh(repo, "checkout", "-q", "main")
+    (repo / "docs/optimizations/passes/page_b.md").write_text("# b\n")
+    (repo / "docs/optimizations/passes/readme.md").write_text("- a\n- page_b\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "b")
+    sha, why = ps.merged_result(head, base="main", cwd=repo)
+    assert why == "" and sha, why
+    assert (repo / "docs/optimizations/passes/readme.md").read_text() == "- a\n- page_b\n- page_c\n"
+    assert sh(repo, "status", "--porcelain") == ""
+
+
+def test_a_conflict_in_a_file_nothing_generates_is_still_refused(tmp_path):
+    repo = generated_repo(tmp_path)
+    (repo / "x.rs").write_text("fn x() {}\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "x")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "x.rs").write_text("fn x() { 1 }\n")
+    sh(repo, "commit", "-qam", "pr x")
+    head = sh(repo, "rev-parse", "HEAD")
+    sh(repo, "checkout", "-q", "main")
+    (repo / "x.rs").write_text("fn x() { 2 }\n")
+    sh(repo, "commit", "-qam", "main x")
+    sha, why = ps.merged_result(head, base="main", cwd=repo)
+    assert sha is None and "x.rs" in why
+
+
+def test_eight_passing_prs_cost_one_smoke_and_nine_are_refused(monkeypatch):
+    """Batches of four took 12-16 minutes each with ~38 PRs ready: eight PRs ride one smoke, and a failing eight is halved to its bad PR in three more."""
+    landed, tested = [], []
+    ps.batch([str(n) for n in range(1, 9)], lambda group: (tested.append(group), True)[1], landed.append, lambda pr: None)
+    assert landed == [str(n) for n in range(1, 9)] and len(tested) == 1
+    landed, refused, tested = [], [], []
+    ps.batch([str(n) for n in range(1, 9)], lambda group: (tested.append(group), "6" not in group)[1], landed.append, refused.append)
+    assert refused == ["6"] and landed == ["1", "2", "3", "4", "5", "7", "8"] and len(tested) == 7
+    with pytest.raises(SystemExit, match="at most 8"):
+        ps.merge_batch([str(n) for n in range(1, 10)])
+
+
+class Tree:
+    """A fake dev checkout: `state` is "head" until the merge, then "merged"; each check reports the files the state fails."""
+
+    def __init__(self, head_fmt: set[str], merged_fmt: set[str], ratchets: set[str] = frozenset()):
+        self.state, self.head_fmt, self.merged_fmt, self.ratchets = "head", head_fmt, merged_fmt, ratchets
+
+    def merge(self, head, base, cwd):
+        self.state = "merged"
+        return "deadbeef", ""
+
+    def checks(self):
+        fmt = lambda root: {"fmt": set(self.head_fmt if self.state == "head" else self.merged_fmt)} if (self.head_fmt if self.state == "head" else self.merged_fmt) else {}
+        rat = lambda root: {name: {name} for name in self.ratchets} if self.state == "merged" else {}
+        return [("fmt", fmt), ("ratchets", rat)]
+
+
+def run_precheck(tmp_path, monkeypatch, tree, number="2836", **extra):
+    dev = tmp_path / "wt"
+    dev.mkdir(exist_ok=True)
+    monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
+    monkeypatch.setattr(ps, "ensure_bins", lambda *a, **k: (_ for _ in ()).throw(AssertionError("a dist build")))
+    info = {"headRefOid": f"head{number}", "body": "", "baseRefName": "feat/parity"}
+    return ps.precheck(number, dev=dev, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info=info, cache=tmp_path / f"cache{number}.json", base_sha="base", **extra)
+
+
+def test_precheck_refuses_a_pr_with_a_dense_id_hash_map_without_any_dist_build(tmp_path, monkeypatch):
+    """#2836 added a hash map keyed by a dense id and cost a batch 26 minutes of halving: the seeded-maps ratchet names it in seconds, with no dist build."""
+    line = run_precheck(tmp_path, monkeypatch, Tree(set(), set(), {"ratchet:seeded_maps"}))
+    assert line.startswith("2836: REFUSED: ratchet:seeded_maps"), line
+    assert run_precheck(tmp_path, monkeypatch, Tree(set(), set()), number="2837") == "2837: PASS"
+
+
+def test_a_red_head_file_refuses_neither_a_clean_pr_nor_the_fix_but_a_new_red_file_is_named(tmp_path, monkeypatch):
+    """precheck refused five PRs for fmt files that feat/parity itself fails (saverestore.rs, flow.rs ...): with any red head file nothing passed, the fixes included."""
+    assert run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, {"a.rs"}), number="1") == "1: PASS"  # head red in A, PR adds none
+    assert run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, set()), number="2") == "2: PASS"  # the PR fixes A
+    line = run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, {"a.rs", "b.rs"}), number="3")  # the PR adds B
+    assert line.startswith("3: REFUSED: fmt") and "b.rs" in line and "a.rs" not in line, line
+
+
+def test_a_precheck_verdict_is_cached_per_pr_head_and_feat_parity_sha(tmp_path, monkeypatch):
+    """The runner asks about ~40 candidates per cycle: the same (head, base) must not merge and check again, a moved feat/parity must."""
+    tree, merges = Tree(set(), set()), []
+    original = tree.merge
+    tree.merge = lambda head, base, cwd: (merges.append(head), original(head, base, cwd))[1]
+    dev = tmp_path / "wt"
+    dev.mkdir()
+    monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
+    info = {"headRefOid": "abc", "body": "", "baseRefName": "feat/parity"}
+    args = dict(dev=dev, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info=info, cache=tmp_path / "cache.json")
+    assert ps.precheck("5", base_sha="p1", **args) == "5: PASS" and ps.precheck("5", base_sha="p1", **args) == "5: PASS" and len(merges) == 1
+    assert ps.precheck("5", base_sha="p2", **args) == "5: PASS" and len(merges) == 2
+    assert ps.precheck("9", base_sha="p2", **args) == "9: PASS" and len(merges) == 2  # the verdict is for the head sha, whichever number asks

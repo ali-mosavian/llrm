@@ -589,7 +589,7 @@ fn get_indexed_offset_in_type(
 /// `GEPOperator::accumulateConstantOffset`
 /// ([Operator.cpp:141](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Operator.cpp#L141)),
 /// the offset modulo 2^`width`.
-fn accumulate_constant_offset(
+pub fn accumulate_constant_offset(
     context: &Context,
     layout: &DataLayout,
     source: TypeId,
@@ -781,7 +781,7 @@ pub fn is_constant_offset_from_global(
 
 /// `CastInst::getCastOpcode`-free half of `isEliminableCastPair`
 /// ([Instructions.cpp:2884](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L2884)).
-fn is_eliminable_cast_pair(
+pub fn is_eliminable_cast_pair(
     context: &Context,
     layout: &DataLayout,
     first: CastOp,
