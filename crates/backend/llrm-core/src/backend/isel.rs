@@ -153,7 +153,7 @@ use std::sync::Arc;
 use llrm_analysis::cfg;
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::ranges::{self, Facts};
-use llrm_lir::registers::RegId;
+use llrm_lir::registers::{RegId, STACK};
 use llrm_lir::registers::Regs;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
@@ -3302,7 +3302,7 @@ impl Selector<'_, '_, '_> {
         let width = self.address_bytes();
         let value = self.function.instruction(inst).result.expect("a saved stack pointer");
         let saved = Held { value: self.value(value), width };
-        let sp = Loc::Reg(Reg { register: RegId::SP, width });
+        let sp = Loc::Reg(Reg { register: STACK, width });
         out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(saved)], vec![sp])));
         Ok(())
     }
@@ -3318,7 +3318,7 @@ impl Selector<'_, '_, '_> {
         let width = self.address_bytes();
         let ty = self.function.operand_type(&self.module.context, arguments[0]).expect("a typed pointer");
         let saved = self.held(arguments[0], ty, at, out)?;
-        let sp = Loc::Reg(Reg { register: RegId::SP, width });
+        let sp = Loc::Reg(Reg { register: STACK, width });
         out.push(insn(at, semantics(Operation::Move, "mov", vec![sp], vec![Loc::Held(saved)])));
         Ok(())
     }
