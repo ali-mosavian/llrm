@@ -166,7 +166,13 @@ impl Placer {
             exit: None,
             blocks: blocks.to_vec(),
             dead: vec![false; n],
-            dup_size: if size { 1 } else if aggressive { TAIL_DUPLICATION_AGGRESSIVE } else { TAIL_DUPLICATION },
+            dup_size: if size {
+                1
+            } else if aggressive {
+                TAIL_DUPLICATION_AGGRESSIVE
+            } else {
+                TAIL_DUPLICATION
+            },
             rerouted: Vec::new(),
         }
     }

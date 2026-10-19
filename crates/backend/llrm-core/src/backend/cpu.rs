@@ -426,7 +426,10 @@ fn _profile(
 /// passes hold them.
 static _MADE: LazyLock<
     std::sync::Mutex<
-        crate::support::hash::HashMap<(&'static str, String, bool, bool, bool, bool, bool, bool, bool), &'static Profile>,
+        crate::support::hash::HashMap<
+            (&'static str, String, bool, bool, bool, bool, bool, bool, bool),
+            &'static Profile,
+        >,
     >,
 > = LazyLock::new(Default::default);
 

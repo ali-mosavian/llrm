@@ -323,9 +323,7 @@ fn do_initial_match(
     }
 
     // Handle a multiplication by -1 (negation) if it didn't fold.
-    if matches!(se.node(s).kind, llrm_analysis::scev::expr::Kind::Mul(_))
-        && se.match_all_ones(se.operands(s)[0].scev)
-    {
+    if matches!(se.node(s).kind, llrm_analysis::scev::expr::Kind::Mul(_)) && se.match_all_ones(se.operands(s)[0].scev) {
         let rest: Vec<Use> = se.operands(s)[1..].to_vec();
         let new_mul = se.get_mul_expr(cx, rest, Flags::default(), 0).scev;
 
