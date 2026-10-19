@@ -361,6 +361,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::ICmp(_) => &[visit_icmp],
         Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
         Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],
+        Opcode::Select => &[|c, inst| c.visit_select(inst)],
         _ => &[],
     }
 }

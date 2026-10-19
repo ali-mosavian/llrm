@@ -105,6 +105,7 @@ pub mod combine_phi;
 pub mod combine_select;
 pub mod combine_shared;
 pub mod combine_sink;
+pub mod combine_visit_select;
 #[cfg(test)]
 mod combine_sink_tests;
 pub mod condstores;
