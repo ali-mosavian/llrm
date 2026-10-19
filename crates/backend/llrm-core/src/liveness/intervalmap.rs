@@ -31,6 +31,18 @@ pub fn searches() -> usize {
     SEARCHES.with(std::cell::Cell::get)
 }
 
+#[cfg(test)]
+thread_local! {
+    static COMPARES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The stops `find` has compared on this thread, for a test that one find is
+/// one search.
+#[cfg(test)]
+pub fn compares() -> usize {
+    COMPARES.with(std::cell::Cell::get)
+}
+
 /// One entry: `[start, stop)` held by `value`.
 #[derive(Clone, Copy)]
 pub struct Entry<V> {
@@ -154,25 +166,21 @@ impl<V: Copy> IntervalMap<V> {
     }
 
     /// `find(x)`: the first entry whose stop is after `x`, the one holding it
-    /// or the first after the hole it is in.
+    /// or the first after the hole it is in (one search on the stops, as
+    /// `IntervalMap::find`'s `safeFind(stopLess)`; the entries are
+    /// disjoint, so their stops are in order too).
     pub fn find(
         &self,
         x: &SlotIndex,
     ) -> Option<Pos> {
-        let (leaf, at) = self.lower_bound(x);
-        // The entry starting at `x` holds it; else the one before may.
-        let here = self.pos_of((leaf, at));
-        if here.is_some_and(|pos| self.at(pos).start == *x) {
-            return here;
-        }
-        let before = match here {
-            Some(pos) => self.prev(Some(pos)),
-            None => self.prev(None),
+        let stops_by = |entry: &Entry<V>| {
+            #[cfg(test)]
+            COMPARES.with(|n| n.set(n.get() + 1));
+            entry.stop <= *x
         };
-        match before {
-            Some(pos) if self.at(pos).stop > *x => Some(pos),
-            _ => here,
-        }
+        let leaf = self.leaves.partition_point(|leaf| leaf.last().is_some_and(stops_by));
+        let at = self.leaves.get(leaf)?.partition_point(stops_by);
+        Some(Pos { leaf: leaf as u32, at: at as u32 })
     }
 
     /// `advanceTo(x)`: the first entry at or after `pos` whose stop is after
@@ -321,5 +329,29 @@ mod tests {
         }
         assert_eq!(map.iter().map(|e| e.start).collect::<Vec<_>>(), model.keys().copied().collect::<Vec<_>>());
         assert_eq!(map.prev(None).map(|p| map.at(p).start), model.keys().next_back().copied());
+    }
+
+    /// `find` was a search on the starts, then a step back and two compares
+    /// more (333 instructions a call on d_faces); it is one search on the
+    /// stops: the leaf, then the entry in it.
+    #[test]
+    fn test_a_find_is_one_search_on_the_stops() {
+        let at = indexes();
+        let mut map = IntervalMap::<u32>::default();
+        for i in 0..250 {
+            map.insert(Entry { start: at[2 * i], stop: at[2 * i + 1], value: i as u32 });
+        }
+        let leaves = map.leaves.len();
+        let bound =
+            (usize::BITS - leaves.leading_zeros()) as usize + (usize::BITS - (LEAF + 1).leading_zeros()) as usize;
+        for x in [at[0], at[301], at[302], at[499]] {
+            let (before, starts) = (compares(), searches());
+            let found = map.find(&x);
+            let spent = compares() - before;
+            assert_eq!(searches() - starts, 0, "a find searched the starts");
+            assert!(spent <= bound, "{spent} compares to find ({bound} allowed for {leaves} leaves)");
+            assert_eq!(found.map(|p| map.at(p).stop > x), Some(true).filter(|_| found.is_some()));
+        }
+        assert!(map.find(&at[501]).is_none(), "past the last stop");
     }
 }
