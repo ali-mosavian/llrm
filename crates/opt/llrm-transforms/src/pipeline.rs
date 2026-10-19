@@ -598,7 +598,11 @@ pub fn llvm_motion(applied: &Applied) -> bool {
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
 fn translated() -> Vec<Box<dyn FunctionPass>> {
-    vec![Box::new(crate::cvp::Cvp), Box::new(crate::jumpthreading::JumpThreading::from_env())]
+    vec![
+        Box::new(crate::cvp::Cvp),
+        Box::new(crate::jumpthreading::JumpThreading::from_env()),
+        Box::new(crate::tailcallelim::TailCallElim),
+    ]
 }
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`).
@@ -616,6 +620,10 @@ struct Slot {
 impl FunctionPass for Slot {
     fn name(&self) -> &'static str {
         self.name
+    }
+
+    fn translations(&self) -> Vec<&'static str> {
+        self.inner.translations()
     }
 
     fn adds_memory_operations(&self) -> bool {
@@ -650,6 +658,10 @@ impl FunctionPass for Together {
 
     fn parts(&self) -> Vec<&'static str> {
         self.parts.iter().flat_map(|part| part.parts()).collect()
+    }
+
+    fn translations(&self) -> Vec<&'static str> {
+        self.parts.iter().flat_map(|part| part.translations()).collect()
     }
 
     fn adds_memory_operations(&self) -> bool {
@@ -942,6 +954,7 @@ pub fn recorded(
     manager.without_loop_intervals = !applied.options.loop_intervals;
     manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
+    manager.dump_inputs = llrm_support::env_flag!("LLRM_DUMP_INPUTS");
     if !applied.options.optimize {
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
@@ -1309,6 +1322,8 @@ impl Fixed {
         quiet.options.llvm_order = true;
         let mut one = Self::linear(&quiet, phase);
         one.passes.retain(|pass| pass.name() == slot);
+        // A slot is the one pass: -O3's peeler ran in its place.
+        one.peelers.clear();
         one.only = true;
         one
     }
@@ -1328,6 +1343,7 @@ impl Fixed {
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
         let level = if applied.options.pre { crate::parity::Level::O2 } else { crate::parity::Level::O1 };
+        let held = linear.passes.iter().map(|one| (one.name(), one.translations())).collect::<Vec<_>>();
         let checked = crate::parity::check_phase_with(
             phase,
             &built,
@@ -1335,6 +1351,7 @@ impl Fixed {
             applied.options.sroa,
             applied.options.mem2reg,
             applied.options.rotating(),
+            &held,
         );
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
@@ -1569,6 +1586,10 @@ impl Fixed {
 }
 
 impl FunctionPass for Fixed {
+    fn dumps_inputs_itself(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "pipeline"
     }

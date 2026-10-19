@@ -193,7 +193,8 @@ pub fn machine_with<'a>(
         // must be, and none of those is.
         let slot_of = |class: &str| SLOTS.iter().find(|(one, _)| *one == class).map_or("unknown", |(_, slot)| *slot);
         let built: Vec<&str> = phases.iter().map(|phase| slot_of(phase.class_name())).collect();
-        let off: Vec<&str> = if target.optimized { Vec::new() } else { UNOPTIMIZED.iter().map(|one| slot_of(one)).collect() };
+        let off: Vec<&str> =
+            if target.optimized { Vec::new() } else { UNOPTIMIZED.iter().map(|one| slot_of(one)).collect() };
         llrm_transforms::parity::check_backend(&built, &off)?;
     }
     Ok(phases)

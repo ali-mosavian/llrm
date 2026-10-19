@@ -1234,9 +1234,14 @@ fn _overlap(
     bytes: &BigInt,
     descending: bool,
 ) -> Option<How> {
+    // Two objects (or a `restrict`, or two `!tbaa` types) are apart in every
+    // trip. `regions::overlapping` is not asked: for two accesses off one index
+    // it answers about one trip (a constant 7 past a one-byte cell is apart),
+    // where the ranges of all the trips overlap.
     let references = unit.annotated().ok();
     if let Some((read, written)) = references.as_ref().and_then(|found| found.get(&load).zip(found.get(&store)))
-        && !llrm_analysis::regions::overlapping(read, written, None, None, unit.program).unwrap_or(true)
+        && (llrm_analysis::regions::typed_apart(read, written)
+            || !llrm_analysis::regions::may_alias(read, written, None, None, unit.program).unwrap_or(true))
     {
         return Some(How::Apart);
     }
