@@ -1563,3 +1563,50 @@ pub fn can_replace_pointers_if_equal(
 
     is_pointer_always_replaceable(context, layout, declarations, sizes, function, from, to)
 }
+
+/// `changeToUnreachable`
+/// ([Local.cpp:2543](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2543)):
+/// `inst` and what follows it in its block become an `unreachable`; the
+/// successors lose one phi input for each edge. Returns how many instructions
+/// went. DEVIATE: no `DomTreeUpdater`, `MemorySSAUpdater` (the caller
+/// rebuilds), and `PreserveLCSSA` is false.
+pub fn change_to_unreachable(
+    context: &Context,
+    function: &mut Function,
+    inst: InstId,
+) -> usize {
+    let block = function.parent(inst).expect("a placed instruction");
+    // Loop over all of the successors, removing BB's entry from any PHI nodes.
+    let successors: Vec<BlockId> = function
+        .terminator(block)
+        .map(|term| {
+            function
+                .instruction(term)
+                .operands
+                .iter()
+                .filter_map(|one| if let Operand::Block(to) = one { Some(*to) } else { None })
+                .collect()
+        })
+        .unwrap_or_default();
+    for successor in successors {
+        function.predecessor_removed(context, successor, block, false);
+    }
+    // The terminator's type is `void`.
+    let void = function.instruction(function.terminator(block).expect("a terminated block")).ty;
+    let unreachable = function.create_instruction(Opcode::Unreachable, void, Vec::new(), Flags::default(), None);
+    function.insert(unreachable, Position::Before(inst)).expect("a placed block");
+    // All instructions after this are dead.
+    let rest: Vec<InstId> = function.iter_block(block).skip_while(|&one| one != inst).collect();
+    let removed = rest.len();
+    for dead in rest {
+        if let Some(result) = function.instruction(dead).result
+            && !function.users(result).is_empty()
+        {
+            let ty = function.instruction(dead).ty;
+            let poison = context.constant(Constant { ty, kind: ConstantKind::Poison });
+            function.replace_all_uses_with(result, Operand::Constant(poison));
+        }
+        function.erase(dead).expect("its uses were replaced");
+    }
+    removed
+}
