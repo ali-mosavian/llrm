@@ -852,3 +852,136 @@ b3:
     assert!(block_of(&stated, "b2").iter().all(|line| !line.contains("load i16, ptr @g")), "{stated}");
     assert!(block_of(&stated, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{stated}");
 }
+
+/// A GEP the target folds into the loop's load, also read by an exit phi: LLVM
+/// copies it into the exit and keeps it in the loop. llrm left the exit phi
+/// reading the loop's pointer, where `opt -passes=licm` re-forms the address
+/// there from the index (five bodies at the i486 target).
+#[test]
+fn test_a_gep_folded_into_a_load_is_copied_into_the_exit() {
+    struct I486(llrm_mir::target::Neutral);
+    impl llrm_mir::target::Machine for I486 {
+        fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+            Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap()))
+        }
+
+        fn foreign_span(
+            &self,
+            selectors: (i64, i64),
+            offsets: (i64, i64),
+            width: i64,
+        ) -> Option<(i64, i64)> {
+            self.0.foreign_span(selectors, offsets, width)
+        }
+
+        fn spaces(&self) -> llrm_mir::spaces::Spaces {
+            self.0.spaces()
+        }
+
+        fn costs(&self) -> llrm_mir::target::OperationCosts {
+            self.0.costs()
+        }
+
+        fn registers(&self) -> i64 {
+            self.0.registers()
+        }
+
+        fn call_registers(&self) -> i64 {
+            self.0.call_registers()
+        }
+
+        fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+            self.0.address_forms()
+        }
+    }
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+
+define i32 @f(ptr %p, i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b1 ]
+  %a = getelementptr i32, ptr %p, i32 %i
+  %v = load i32, ptr %a
+  %i1 = add i32 %i, %v
+  %c = icmp eq i32 %v, 0
+  br i1 %c, label %b2, label %b1
+
+b2:
+  %e = phi ptr [ %a, %b1 ]
+  store i32 %n, ptr %e
+  ret i32 0
+}
+";
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(I486(llrm_mir::target::Neutral))).unwrap();
+    let after = crate::testing::printed(&module);
+    assert!(!after.contains("phi ptr"), "{after}");
+    assert!(after.contains("%a = getelementptr"), "{after}");
+}
+
+/// `(LV + a) + 1` with `a` invariant: `LV + (a + 1)`, the sum made in the
+/// preheader. llrm left the add in the loop, where `opt -passes=licm` hoists
+/// it (matmul at the i486 target). Flags: `nuw` kept only if both had it, `nsw`
+/// only with `nuw`; `bo0` with another user stays.
+#[test]
+fn test_an_invariant_operand_of_a_chained_add_is_reassociated_out() {
+    let text = |first: &str, second: &str, extra: &str| {
+        format!(
+            "define i16 @f(i16 %n, i16 %a) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = add {first} i16 %i, %a
+  %y = add {second} i16 %x, 1
+  {extra}
+  %i1 = add i16 %i, %y
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        )
+    };
+    let after = licm_printed(&text("nsw", "nsw", ""));
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = add i16 %a, 1")), "{after}");
+    let body = block_of(&after, "b1");
+    assert!(body.iter().any(|line| line.contains("%y.reass = add i16 %i, %invariant.op")), "{after}");
+    assert!(body.iter().all(|line| !line.contains("%x = ")), "{after}");
+    let after = licm_printed(&text("nuw nsw", "nuw nsw", ""));
+    assert!(after.contains("%y.reass = add nuw nsw i16 %i,"), "{after}");
+    let after = licm_printed(&text("nuw", "", ""));
+    assert!(after.contains("%y.reass = add i16 %i,"), "{after}");
+    let after = licm_printed(&text("nsw", "nsw", "%z = add i16 %x, 2"));
+    assert!(!after.contains("reass"), "{after}");
+    // A chain: the reassociations of one loop read nothing an earlier one
+    // erased. Reading it looped SCEV forever in `qb-pressx`.
+    let chain = "define i16 @f(i16 %n, i16 %a, i16 %b, i16 %c, i16 %d) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %p = add i16 %i, %a
+  %q = add i16 %p, %b
+  %r = add i16 %q, %c
+  %s = add i16 %r, %d
+  %i1 = add i16 %i, %s
+  %k = icmp slt i16 %i1, %n
+  br i1 %k, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+";
+    let after = licm_printed(chain);
+    assert!(block_of(&after, "b1").iter().filter(|line| line.contains(".reass =")).count() <= 1, "{after}");
+}

@@ -520,30 +520,44 @@ fn strip_offsets(
     let mut offset = Some(0_i64);
     for _ in 0..DEPTH {
         // A GEP or an address-space cast, an instruction or a constant.
-        let (source, operands): (Option<TypeId>, Vec<Operand>) = match at {
+        let made: Vec<Operand>;
+        let (source, operands): (Option<TypeId>, &[Operand]) = match at {
             Operand::Value(value) => {
                 let ValueDef::Instruction(inst) = function.value(value).def else { break };
                 let instruction = function.instruction(inst);
                 match instruction.opcode {
-                    Opcode::GetElementPtr { source } => (Some(source), instruction.operands.clone()),
-                    Opcode::Cast(CastOp::AddrSpaceCast) => (None, instruction.operands.clone()),
+                    Opcode::GetElementPtr { source } => (Some(source), &instruction.operands),
+                    Opcode::Cast(CastOp::AddrSpaceCast) => (None, &instruction.operands),
                     _ => break,
                 }
             }
             Operand::Constant(id) => match &context.get(id).kind {
                 ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => {
-                    (Some(*source), operands.iter().map(|&one| Operand::Constant(one)).collect())
+                    made = operands.iter().map(|&one| Operand::Constant(one)).collect();
+                    (Some(*source), &made)
                 }
                 ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) => {
-                    (None, vec![Operand::Constant(*value)])
+                    made = vec![Operand::Constant(*value)];
+                    (None, &made)
                 }
                 _ => break,
             },
             Operand::Block(_) => break,
         };
         if let Some(source) = source {
-            let indices: Vec<Option<i128>> = operands[1..].iter().map(|&one| int(one)).collect();
-            let (constant, variable) = layout.collect_offset(&context.types, source, &indices);
+            // Most GEPs have a few indices: no allocation for them.
+            let mut small = [None; 4];
+            let spill: Vec<Option<i128>>;
+            let indices: &[Option<i128>] = if operands.len() - 1 <= small.len() {
+                for (slot, &one) in small.iter_mut().zip(&operands[1..]) {
+                    *slot = int(one);
+                }
+                &small[..operands.len() - 1]
+            } else {
+                spill = operands[1..].iter().map(|&one| int(one)).collect();
+                &spill
+            };
+            let (constant, variable) = layout.collect_offset(&context.types, source, indices);
             if stop_at_variable && !variable.is_empty() {
                 break;
             }

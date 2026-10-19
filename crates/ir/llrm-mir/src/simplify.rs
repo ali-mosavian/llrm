@@ -8,7 +8,8 @@
 //! `MaxRecurse` (`RecursionLimit` is 3). A result is an existing operand or a
 //! constant; the function is never changed.
 //!
-//! MIRROR: `simplifyInstruction`'s dispatch; `simplifyAddInst`,
+//! MIRROR: `simplifyInstruction`'s dispatch; the floating functions of
+//! `simplify_fp.rs`; `simplifyAddInst`,
 //! `simplifySubInst`, `simplifyMulInst`, `simplifyDivRem`, `simplifyShift` and
 //! the shift, and/or/xor functions, `simplifyAssociativeBinOp`,
 //! `simplifyLogicOfAddSub`, `simplifySelectInst`, `simplifyCastInst`,
@@ -28,7 +29,10 @@
 //!    `ConstantKind::Float` holds 64 bits, so an extended constant is held as
 //!    the nearest double (`constfold.rs`): #2251. Whether MIR carries fp80 per
 //!    target is a separate decision.
-//! 3. Floating-point folds, `bitcast (uitofp X)` included: #2246.
+//! 3. Floating-point folds: `simplify_fp.rs` has `fneg` and the five binary
+//!    operations; `simplifyFMAFMul`'s `computeKnownFPClass` of a value, `FMA`,
+//!    `FCmp`, `AndOrOfFCmps`, `Ldexp`, constrained calls and `bitcast (uitofp
+//!    X)` remain: #2246.
 //! 4. Loads, pointer compares, `addrspacecast`: #2247.
 //! 5. `simplifyICmpWithIntrinsicOnLHS`, the call arm of
 //!    `simplifyWithOpsReplaced`, the floating-point intrinsics: #2248, #2246.
@@ -310,6 +314,7 @@ impl Query<'_> {
             globals: self.globals,
             dt: self.analyses.map(FunctionAnalyses::dominator_tree),
             assumptions: self.analyses.map(FunctionAnalyses::assumption_cache),
+            dom_conditions: self.analyses.and_then(FunctionAnalyses::dom_conditions),
             cxt: self.cxt,
             ..ValueQuery::bare(self.context, self.function, self.layout)
         }
@@ -2867,7 +2872,9 @@ fn simplify_binop_flags(
         BinaryOp::And => simplify_and(q, lhs, rhs, max_recurse),
         BinaryOp::Or => simplify_or(q, lhs, rhs, max_recurse),
         BinaryOp::Xor => simplify_xor(q, lhs, rhs, max_recurse),
-        _ => None,
+        BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem => {
+            fp::simplify_fp_binop(q, opcode, lhs, rhs, flags)
+        }
     }
 }
 
@@ -3126,10 +3133,19 @@ fn simplify_icmp(
     if let Some(v) = simplify_icmp_with_min_max(q, pred, lhs, rhs, max_recurse) {
         return Some(v);
     }
+    if let Some(v) = simplify_icmp_with_intrinsic_on_lhs(q, pred, lhs, rhs) {
+        return Some(v);
+    }
+    if let Some(v) = simplify_icmp_with_intrinsic_on_lhs(q, swapped(pred), rhs, lhs) {
+        return Some(v);
+    }
     if let Some(v) = simplify_icmp_using_monotonic_values(q, pred, lhs, rhs) {
         return Some(v);
     }
     if let Some(v) = simplify_icmp_using_monotonic_values(q, swapped(pred), rhs, lhs) {
+        return Some(v);
+    }
+    if let Some(v) = simplify_icmp_with_dominating_assume(q, pred, lhs, rhs) {
         return Some(v);
     }
     if let Some(cxt) = q.cxt
@@ -3148,6 +3164,85 @@ fn simplify_icmp(
         return thread_cmp_over_phi(q, pred, lhs, rhs, max_recurse);
     }
     None
+}
+
+/// `simplifyICmpWithDominatingAssume`
+/// ([:3811](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3811)):
+/// an `llvm.assume` valid at the context instruction implies the compare.
+fn simplify_icmp_with_dominating_assume(
+    q: &mut Query,
+    pred: IntPredicate,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    // Gracefully handle instructions that have not been inserted yet.
+    let (Some(analyses), Some(cxt)) = (q.analyses, q.cxt) else { return None };
+    let tracking = q.tracking();
+    let found = [lhs, rhs]
+        .into_iter()
+        .find_map(
+            |base| analyses
+                .assumption_cache()
+                .assumptions_for(base)
+                .iter()
+                .find_map(
+                    |&assume| {
+                        let condition = q.function.instruction(assume).operands[0];
+                        let implied = conditions::is_implied_condition_cmp(
+                            &tracking,
+                            condition,
+                            pattern::CmpPredicate::new(pred),
+                            pattern::Side::of(&tracking, lhs),
+                            pattern::Side::of(&tracking, rhs),
+                            true,
+                            0,
+                        )?;
+                        conditions::is_valid_assume_for_context(&tracking, assume, cxt, false).then_some(implied)
+                    },
+                ),
+        )?;
+    let i1 = q.context.types.int(1);
+    Some(q.int(i1, u128::from(found)))
+}
+
+/// `simplifyICmpWithIntrinsicOnLHS`
+/// ([:3835](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3835)).
+fn simplify_icmp_with_intrinsic_on_lhs(
+    q: &mut Query,
+    pred: IntPredicate,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    let tracking = q.tracking();
+    let (inst, _) = tracking.instruction_of(lhs)?;
+    let id = pattern::call_intrinsic(&tracking, inst)?;
+    let [x, y, _] = q.function.instruction(inst).operands[..] else { return None };
+    let i1 = q.context.types.int(1);
+    match id {
+        // uadd.sat(X, Y) uge X + Y
+        pattern::IntrinsicId::UaddSat => {
+            let sum = q.binary_of(rhs, BinaryOp::Add).is_some_and(|(a, b, _)| (a == x && b == y) || (a == y && b == x));
+            if sum && pred == IntPredicate::Uge {
+                return Some(q.int(i1, 1));
+            }
+            if sum && pred == IntPredicate::Ult {
+                return Some(q.int(i1, 0));
+            }
+            None
+        }
+        // usub.sat(X, Y) ule X - Y
+        pattern::IntrinsicId::UsubSat => {
+            let difference = q.binary_of(rhs, BinaryOp::Sub).is_some_and(|(a, b, _)| a == x && b == y);
+            if difference && pred == IntPredicate::Ule {
+                return Some(q.int(i1, 1));
+            }
+            if difference && pred == IntPredicate::Ugt {
+                return Some(q.int(i1, 0));
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// `CmpInst::getInversePredicate`.
@@ -3751,7 +3846,6 @@ fn simplify_icmp_of_extensions(
 
 /// `getUnsignedMonotonicValues`
 /// ([:3170](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3170)).
-/// DEVIATE: `uadd.sat` / `usub.sat` are intrinsics.
 fn unsigned_monotonic_values(
     q: &Query,
     result: &mut Vec<Operand>,
@@ -3767,6 +3861,25 @@ fn unsigned_monotonic_values(
         return;
     }
     let depth = depth + 1;
+    // m_Intrinsic<uadd_sat>(X, Y) like the or; m_Intrinsic<usub_sat>(X) as the
+    // and's first operand.
+    let saturating = {
+        let tracking = q.tracking();
+        let call = tracking
+            .instruction_of(v)
+            .and_then(|(inst, _)| pattern::call_intrinsic(&tracking, inst).map(|id| (inst, id)));
+        call.map(|(inst, id)| (id, q.function.instruction(inst).operands.to_vec()))
+    };
+    match saturating {
+        Some((pattern::IntrinsicId::UaddSat, args)) if greater_eq => {
+            unsigned_monotonic_values(q, result, args[0], greater_eq, depth);
+            unsigned_monotonic_values(q, result, args[1], greater_eq, depth);
+        }
+        Some((pattern::IntrinsicId::UsubSat, args)) if !greater_eq => {
+            unsigned_monotonic_values(q, result, args[0], greater_eq, depth);
+        }
+        _ => {}
+    }
     let Some((op, x, y, flags)) = q.binary(v) else { return };
     if greater_eq {
         if op == BinaryOp::Or {
@@ -4154,6 +4267,7 @@ fn simplify_instruction_with_operands(
             let [lhs, rhs] = operands[..] else { return None };
             simplify_binop_flags(q, *op, lhs, rhs, flags, max_recurse)
         }
+        Opcode::FNeg => fp::simplify_fneg(q, operands[0]),
         Opcode::ICmp(pred) => {
             let [lhs, rhs] = operands[..] else { return None };
             simplify_icmp(q, *pred, lhs, rhs, max_recurse)
@@ -4279,6 +4393,9 @@ mod calls;
 
 #[path = "simplify_select.rs"]
 mod select;
+
+#[path = "simplify_fp.rs"]
+mod fp;
 
 #[cfg(test)]
 #[path = "simplify_tests.rs"]

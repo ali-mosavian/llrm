@@ -432,7 +432,15 @@ fn found(
         };
         let mut paths = Vec::new();
         let mut spent = copied;
+        let mut seen = IdSet::new();
         for (value, from) in arms(function, phi) {
+            // A switch with two cases to one block gives its phi two inputs
+            // from the same predecessor: one way in, as LLVM's
+            // `UniqueBlocks` takes it
+            // (DFAJumpThreading.cpp#L618-L623 at d1106deb71cc).
+            if !seen.insert(from) {
+                continue;
+            }
             // The constant on each way in, and the blocks copied ahead of the
             // chain.
             let ways = resolved(function, &unit, value, from, 4);
