@@ -144,3 +144,49 @@ fn a_returned_local_keeps_its_stores() {
         "{after}"
     );
 }
+
+/// A store to a local whose address escaped, and then `lifetime.end`: nothing
+/// reads it again and the end sweep spares it (it is visible to the callee's
+/// holder), but the terminator kills it (`isMemTerminator`).
+#[test]
+fn a_store_before_lifetime_end_goes() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @keep(ptr)\ndeclare void @llvm.lifetime.end.p0(i64, ptr)\n\ndefine void @f(i32 %x) addrspace(1) {{\nb0:\n  %a = alloca i32\n  call void @keep(ptr %a)\n  store i32 %x, ptr %a\n  call void @llvm.lifetime.end.p0(i64 4, ptr %a)\n  ret void\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(!after.contains("store i32 %x"), "{after}");
+}
+
+/// `lifetime.end` on an alloca the function returns (QB's B$FMID shape) ends
+/// nothing: the caller reads what was stored. The marker was wrong, and a DSE
+/// that trusted it removed the stores (#2625).
+#[test]
+fn a_lifetime_end_on_a_returned_alloca_kills_nothing() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @llvm.lifetime.end.p0(i64, ptr)\n\ndefine ptr @f(i32 %x) addrspace(1) {{\nb0:\n  %a = alloca i32\n  store i32 %x, ptr %a\n  call void @llvm.lifetime.end.p0(i64 4, ptr %a)\n  ret ptr %a\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(after.contains("store i32 %x"), "{after}");
+}
+
+/// A store the next call overwrites before reading, by the `initializes` of
+/// the callee's parameter, is dead (`getInitializesArgMemLoc`).
+#[test]
+fn a_store_before_a_call_that_initializes_it_goes() {
+    let mut module = parsed(&format!(
+        "{DOS}@g = global i32 0\n\ndeclare void @init(ptr initializes((0, 4)) %p) memory(argmem: write) nounwind\n\ndefine i32 @f(i32 %x) addrspace(1) {{\nb0:\n  store i32 %x, ptr @g\n  call void @init(ptr @g)\n  %r = load i32, ptr @g\n  ret i32 %r\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(!after.contains("store i32 %x"), "{after}");
+}
+
+/// A store over the head of a memset leaves its tail, which a load reads: the
+/// memset went, and the load at byte 6 read an undefined byte.
+#[test]
+fn a_memset_whose_tail_is_read_stays() {
+    let after = eliminated(
+        "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n\ndefine i16 @f(i16 %x) {\nb0:\n  %s = alloca [8 x i8]\n  call void @llvm.memset.p0.i16(ptr %s, i8 0, i16 8, i1 false)\n  store i16 %x, ptr %s\n  %s6 = getelementptr inbounds i8, ptr %s, i16 6\n  %v = load i16, ptr %s6\n  %w = load i16, ptr %s\n  %r = add i16 %v, %w\n  ret i16 %r\n}\n",
+        &[&[7]],
+    );
+    assert!(after.contains("i8 0, i16 6"), "{after}");
+}

@@ -86,7 +86,7 @@ use crate::backend::floatalloc::{
     _float_copy, _floating, _reversed, _terminators, _two_values, inserted, name_is, semantics, st, unlowered, unnamed,
 };
 use crate::backend::floatassign;
-use crate::backend::floatregions::{Raised, boundary};
+use crate::backend::floatregions::{Raised, clears_stack};
 use crate::backend::spillplacement;
 use crate::model::ir::{Held, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Block, Insn, LirBody};
@@ -424,7 +424,26 @@ impl Fps<'_> {
     ) -> Result<(), Raised> {
         let one = Arc::clone(&block.insns[step.positions[0]]);
         self.one = Some(Arc::clone(&one));
-        let what = one.what.clone().expect("a floating instruction has semantics");
+        let mut what = one.what.clone().expect("a floating instruction has semantics");
+        // A float copied to or from a memory cell (a spilled phi copy) is a
+        // store or a load of it.
+        if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
+            let floating = |loc: &Loc| matches!(loc, Loc::Held(held) if held.width == 10);
+            match (what.dests.as_slice(), what.sources.as_slice()) {
+                ([Loc::Mem(_)], [source]) if floating(source) => {
+                    what = Semantics { op: Operation::FloatStore, name: Some("fstp".to_owned()), ..what };
+                }
+                ([dest], [Loc::Mem(_)]) if floating(dest) => {
+                    what = Semantics { op: Operation::FloatLoad, name: Some("fld".to_owned()), ..what };
+                }
+                _ => {}
+            }
+            if one.what.as_ref() != Some(&what) {
+                let mut changed = (*one).clone();
+                changed.what = Some(what.clone());
+                self.one = Some(Arc::new(changed));
+            }
+        }
         let held = |args: &[Loc]| -> Vec<u32> {
             args.iter()
                 .filter_map(|arg| match arg {
@@ -484,11 +503,13 @@ impl Fps<'_> {
             self.handle_one_arg_fprw(step, kept.value, Semantics { dests: vec![st(0)], sources, ..what }, results[0])?;
         } else {
             return Err(unlowered(&format!(
-                "floating instruction has no conversion rule: {:?} {:?} of {} operands, {} results",
+                "floating instruction has no conversion rule: {:?} {:?} of {} operands, {} results ({:?} <- {:?})",
                 what.op,
                 what.name,
                 operands.len(),
-                results.len()
+                results.len(),
+                what.dests,
+                what.sources
             )));
         }
         // A result nothing reads is popped where it is defined.
@@ -1092,7 +1113,7 @@ pub(super) fn converted(
                 if one.uses.iter().chain(&one.defines).any(|value| floating.contains(value)) {
                     return Err(unlowered("floating value used by an unmodelled instruction"));
                 }
-                if boundary(regs, one) {
+                if clears_stack(regs, one) {
                     fps.one = Some(Arc::clone(one));
                     // `handleCall`: nothing may be on the stack across it.
                     if !fps.values.is_empty() {

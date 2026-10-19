@@ -45,12 +45,14 @@
 //! (`alias::captured`, a `ret` and a store of it included); `dead_on_return`
 //! and byval arguments (stage 3), and non-alloca objects with no capture
 //! (malloc) are absent. Exit: stage 3.
-//! DEVIATE 4: memory terminators (`lifetime.end`, `free`), the `initializes`
-//! attribute, `tryFoldIntoCalloc` and
+//! DEVIATE 4: `free` as a memory terminator (`lifetime.end` is in),
+//! `tryFoldIntoCalloc` and
 //! `eliminateRedundantStoresViaDominatingConditions` are stage 2 and 3. Partial
 //! overwrites (`isPartialOverwrite`, `IOLs`,
 //! `tryToMergePartialOverlappingStores`, `tryToShorten` of memsets) and
-//! `eliminateRedundantStoresOfExistingValues` are in. Exit: stage 2.
+//! `eliminateRedundantStoresOfExistingValues` are in, and a call's
+//! `initializes` (`Accesses::fills`, which holds `getInitializesArgMemLoc`'s
+//! argument and capture rules; nothing unwinds). Exit: stage 2.
 //! DEVIATE 5: only stores and constant-length memsets are candidates, and
 //! `storeIsNoop` knows no `getInitialValueOfAllocation` (it needs `calloc`
 //! and friends). Exit: stage 2.
@@ -250,6 +252,8 @@ struct Dse<'a> {
     shortened: IdMap<InstId, (i64, i64)>,
     /// Per alloca value, whether its address is captured (a `ret` included).
     captured: std::cell::RefCell<HashMap<u32, bool>>,
+    /// Per alloca value, whether its address leaves the function's scope.
+    leaves: std::cell::RefCell<HashMap<u32, bool>>,
 }
 
 impl<'a> Dse<'a> {
@@ -286,6 +290,7 @@ impl<'a> Dse<'a> {
             overlap_order: Vec::new(),
             shortened: IdMap::new(),
             captured: Default::default(),
+            leaves: Default::default(),
         };
         // Post-order numbers, and the defs that could kill.
         for (number, block) in post_order_of(function).into_iter().enumerate() {
@@ -294,7 +299,7 @@ impl<'a> Dse<'a> {
                 let Some(access) = state.mssa.get_memory_access(inst) else { continue };
                 if state.mssa.access(access).kind == Kind::Def
                     && state.mem_defs.len() < DEFS_PER_BLOCK_LIMIT
-                    && state.loc_for_write(inst).is_some()
+                    && (state.killing_loc(inst).is_some() || !state.accesses.fills(inst).is_empty())
                 {
                     state.mem_defs.push(access);
                 }
@@ -377,8 +382,104 @@ impl<'a> Dse<'a> {
         if let Some(&(length, skip)) = self.shortened.get(&inst) {
             reference.disp += skip;
             reference.width = length as u32;
+            // The destination is still the old address: a walk that reads
+            // `pointer` would see the bytes where they were.
+            if skip != 0 {
+                reference.pointer = None;
+            }
         }
         Some(self.aa.location_for(&reference, false))
+    }
+
+    /// `getLocForTerminator`: the bytes an `llvm.lifetime.end` ends.
+    fn terminated(
+        &self,
+        inst: InstId,
+    ) -> Option<Rc<Location>> {
+        let pointer = memory::lifetime(self.context, self.callees, self.function, inst)?;
+        let callee = memory::callee(self.context, self.function, inst)?;
+        let name = self.aa.unit().globals.get(callee.0 as usize)?.name.as_deref()?;
+        if !name.starts_with("llvm.lifetime.end") {
+            return None;
+        }
+        // The pin trusts the markers; ours may sit on an object the caller
+        // gets (a returned or stored alloca), which no end terminates.
+        let unit = self.aa.unit();
+        if let (Operand::Value(alloca), _) =
+            llrm_mir::valuetracking::underlying(unit.context, unit.layout, self.function, pointer)
+            && self.address_leaves(alloca)
+        {
+            return None;
+        }
+        let size = self.aa.unit().int_constant(self.function.instruction(inst).operands[0])?;
+        let width = u32::try_from(size).ok().filter(|&one| one > 0)?;
+        let at = llrm_analysis::memory::MemRef::at(self.aa.unit(), pointer, width);
+        // The provenance the accesses annotated, as for a memset.
+        let provenance = match self.accesses.writes(inst) {
+            Some([written]) => written.provenance.clone(),
+            _ => at.provenance.clone(),
+        };
+        Some(self.aa.location_for(&llrm_analysis::memory::MemRef { provenance, ..at }, false))
+    }
+
+    /// Whether the address of `alloca` is returned, stored to memory or made an
+    /// integer: it outlives the marker's scope.
+    fn address_leaves(
+        &self,
+        alloca: llrm_mir::module::ValueId,
+    ) -> bool {
+        if let Some(&known) = self.leaves.borrow().get(&alloca.0) {
+            return known;
+        }
+        let mut work = vec![alloca];
+        let mut seen = vec![alloca];
+        let mut leaves = false;
+        'walk: while let Some(value) = work.pop() {
+            for one in self.function.users(value) {
+                let user = self.function.instruction(one.user);
+                match &user.opcode {
+                    Opcode::Ret | Opcode::Cast(llrm_mir::opcode::CastOp::PtrToInt) => {
+                        leaves = true;
+                        break 'walk;
+                    }
+                    Opcode::Store { .. } if one.index == 0 => {
+                        leaves = true;
+                        break 'walk;
+                    }
+                    Opcode::GetElementPtr { .. }
+                    | Opcode::Cast(llrm_mir::opcode::CastOp::AddrSpaceCast | llrm_mir::opcode::CastOp::BitCast)
+                    | Opcode::Phi
+                    | Opcode::Select => {
+                        if let Some(derived) = user.result.filter(|derived| !seen.contains(derived)) {
+                            seen.push(derived);
+                            work.push(derived);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        self.leaves.borrow_mut().insert(alloca.0, leaves);
+        leaves
+    }
+
+    /// `getLocForInst`: what a def writes, or the bytes it terminates.
+    fn killing_loc(
+        &self,
+        inst: InstId,
+    ) -> Option<Rc<Location>> {
+        self.loc_for_write(inst).or_else(|| self.terminated(inst))
+    }
+
+    /// `isMemTerminator`: `term` ends the object `loc` is in, all of `loc`.
+    fn is_mem_terminator(
+        &mut self,
+        loc: &Location,
+        access: InstId,
+        term: InstId,
+    ) -> bool {
+        let Some(term_loc) = self.terminated(term) else { return false };
+        self.same_object(loc, &term_loc) && self.is_overwrite(term, access, &term_loc, loc) == Overwrite::Complete
     }
 
     /// `isRemovable`: not a volatile store or memset.
@@ -460,14 +561,6 @@ impl<'a> Dse<'a> {
         *self.captured.borrow_mut().entry(alloca).or_insert_with(|| {
             llrm_mir::alias::captured(self.context, self.callees, self.function, llrm_mir::module::ValueId(alloca))
         }) == false
-    }
-
-    /// `isInvisibleToCallerOnUnwind`: nothing unwinds, so the same.
-    fn invisible_on_unwind(
-        &self,
-        loc: &Location,
-    ) -> bool {
-        self.invisible_after_return(loc)
     }
 
     // ---- loops --------------------------------------------------------------
@@ -722,11 +815,13 @@ impl<'a> Dse<'a> {
         scan_limit: &mut u32,
         walker_step_limit: &mut u32,
         partial_limit: &mut u32,
+        init: bool,
     ) -> Found {
         if *scan_limit == 0 || *walker_step_limit == 0 {
             return None;
         }
         let killing_inst = self.inst_of(killing_def);
+        let is_term = self.terminated(killing_inst).is_some();
         let mut current = start_access;
         // Only optimize the defining access of the killing def when directly
         // starting at it; the defining access must only access the location.
@@ -795,6 +890,16 @@ impl<'a> Dse<'a> {
                 current = self.mssa.access(current).defining.expect("a defining access");
                 continue;
             }
+            if is_term {
+                // The killing def ends an object: the next candidate is
+                // checked if this one writes another.
+                if !self.is_mem_terminator(&loc, current_inst, killing_inst) {
+                    can_optimize = false;
+                    current = self.mssa.access(current).defining.expect("a defining access");
+                    continue;
+                }
+                break;
+            }
             let result = self.is_overwrite(killing_inst, current_inst, killing_loc, &loc);
             if can_optimize {
                 if Some(current) != self.mssa.access(killing_def).defining
@@ -855,13 +960,20 @@ impl<'a> Dse<'a> {
             if killing_defs.iter().any(|&inst| self.instruction_dominates(inst, use_inst)) {
                 continue;
             }
+            // A terminator ends the dead def's object and what follows it.
+            if self.is_mem_terminator(&maybe_dead_loc, maybe_dead_inst, use_inst) {
+                continue;
+            }
             if self.is_noop_intrinsic(use_inst) {
                 self.push_mem_uses(use_access, &mut work, &mut visited);
                 continue;
             }
             // Uses which may read the original def mean it cannot be
             // eliminated.
-            if self.is_read_clobber(&maybe_dead_loc, use_inst) {
+            // A call that initializes the object reads it only after writing:
+            // its own read is no read of the dead def.
+            let own_read = init && use_inst == killing_inst && self.same_object(killing_loc, &maybe_dead_loc);
+            if self.is_read_clobber(&maybe_dead_loc, use_inst) && !own_read {
                 return None;
             }
             // If the walk comes back to the original access (and the pointer is
@@ -1257,6 +1369,7 @@ impl<'a> Dse<'a> {
         &mut self,
         killing_def: AccessId,
         killing_loc: Rc<Location>,
+        init: bool,
     ) -> (bool, bool) {
         let mut changed = false;
         let mut scan_limit = SCAN_LIMIT;
@@ -1279,6 +1392,7 @@ impl<'a> Dse<'a> {
                 &mut scan_limit,
                 &mut walker_step_limit,
                 &mut partial_limit,
+                init,
             ) else {
                 continue;
             };
@@ -1301,6 +1415,14 @@ impl<'a> Dse<'a> {
             let defining = self.mssa.access(dead_access).defining.expect("a defining access");
             if !to_check.contains(&defining) {
                 to_check.push(defining);
+            }
+            if self.terminated(killing_inst).is_some() {
+                // A terminator kills what is written to the object it ends.
+                if self.same_object(&killing_loc, &dead_loc) {
+                    self.delete_dead_instruction(dead_inst, Some(&mut deleted));
+                    changed = true;
+                }
+                continue;
             }
             let (mut result, killing_off, dead_off) =
                 self.is_overwrite_at(killing_inst, dead_inst, &killing_loc, &dead_loc);
@@ -1483,12 +1605,23 @@ impl<'a> Dse<'a> {
                 continue;
             }
             let killing_inst = self.inst_of(killing_def);
-            let Some(killing_loc) = self.loc_for_write(killing_inst) else { continue };
-            let (did, deleted_killing) = self.eliminate_dead_defs_of(killing_def, Rc::clone(&killing_loc));
-            changed |= did;
-            if !deleted_killing && self.store_is_noop(killing_def) {
-                self.delete_dead_instruction(killing_inst, None);
-                changed = true;
+            // `getLocForInst`: what it writes (or terminates), then what the
+            // call fills before it reads (`initializes`).
+            let mut locations: Vec<(Rc<Location>, bool)> =
+                self.killing_loc(killing_inst).into_iter().map(|loc| (loc, false)).collect();
+            let fills: Vec<llrm_analysis::memory::MemRef> = self.accesses.fills(killing_inst).to_vec();
+            locations.extend(fills.iter().map(|fill| (self.aa.location_for(fill, false), true)));
+            for (killing_loc, init) in locations {
+                let (did, deleted_killing) = self.eliminate_dead_defs_of(killing_def, Rc::clone(&killing_loc), init);
+                changed |= did;
+                if deleted_killing {
+                    break;
+                }
+                if !init && self.store_is_noop(killing_def) {
+                    self.delete_dead_instruction(killing_inst, None);
+                    changed = true;
+                    break;
+                }
             }
         }
         changed |= self.remove_partially_overlapped_stores();

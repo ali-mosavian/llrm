@@ -2077,28 +2077,30 @@ impl Selector<'_, '_, '_> {
         Ok(body)
     }
 
-    /// `branchprob`'s probabilities over the LIR blocks each MIR block
-    /// became: a branch takes its MIR edges', shared out among the
-    /// successors it has.
+    /// `BranchProbabilityInfo` over the LIR blocks each MIR block became
+    /// (`MachineBranchProbabilityInfo` from the IR's, as SelectionDAG builds
+    /// it): a branch takes its MIR edges', shared out among the successors it
+    /// has.
     fn odds(
         &self,
         made: &IndexMap<BlockId, Vec<Block>>,
         block_at: &IndexMap<BlockId, i64>,
     ) -> BlockOdds {
-        let estimated = llrm_analysis::branchprob::estimated(
-            &self.module.context,
-            &self.module.metadata,
-            &self.module.globals,
+        let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+            llrm_analysis::bpi::Module {
+                context: &self.module.context,
+                declarations: &self.module.globals,
+                metadata: &self.module.metadata,
+                layout: &self.layout,
+            },
             self.function,
-            &self.shape,
-            &std::collections::BTreeMap::new(),
         );
         let mut odds = BlockOdds::default();
         for (block, chain) in made {
             let taken: IndexMap<i64, f64> = self
                 .successors(*block)
                 .into_iter()
-                .filter_map(|to| Some((block_at[&to], estimated.probability(cfg::id(*block), cfg::id(to))?)))
+                .map(|to| (block_at[&to], bpi.get_edge_probability_to(self.function, *block, to).to_f64()))
                 .collect();
             // An edge within the chain, as a switch's compares make, carries
             // what the block's own MIR edges do not.
@@ -2199,9 +2201,26 @@ impl Selector<'_, '_, '_> {
         if let Some(only) = function.users(result).only()
             && function.terminator(block) == Some(only.user)
             && function.instruction(only.user).opcode == Opcode::Br
+            // A call's flags are read where the call leaves them: a compare
+            // with anything between it and the branch is not fused.
+            && (function.next_in_block(inst) == Some(only.user) || !self.reads_call_flags(inst))
         {
             self.fused.insert(inst);
         }
+    }
+
+    /// Whether the comparison `inst` reads the flags a call returns.
+    fn reads_call_flags(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        let function = self.function;
+        let Some(&Operand::Value(value)) = function.instruction(inst).operands.first() else { return false };
+        let ValueDef::Instruction(call) = function.value(value).def else { return false };
+        let Some(&Operand::Constant(callee)) = function.instruction(call).operands.last() else { return false };
+        let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return false };
+        let name = self.module.global(global).name.as_deref().unwrap_or_default();
+        llrm_qbruntime::flags_result(name.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(name))
     }
 
     /// A dword load read only through its words is those words loaded, as
@@ -2925,8 +2944,8 @@ impl Selector<'_, '_, '_> {
 
     /// A far pointer constant that is a number: selector:offset as one
     /// dword. A plain address constant, or a segment's selector widened to a
-    /// far pointer (`addrspacecast (ptr addrspace(2) inttoptr N to ptr addrspace(1))`,
-    /// `N:0`).
+    /// far pointer (`addrspacecast (ptr addrspace(2) inttoptr N to ptr
+    /// addrspace(1))`, `N:0`).
     fn far_number(
         &self,
         id: llrm_mir::context::ConstantId,
@@ -2935,6 +2954,17 @@ impl Selector<'_, '_, '_> {
             return Some(bits);
         }
         let context = &self.module.context;
+        // A constant offset from one wraps within the segment.
+        if let ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr { source, operands, .. }) =
+            &context.get(id).kind
+        {
+            let base = self.far_number(operands[0])?;
+            let moved =
+                crate::backend::globals::constant_offset(self.module, &self.layout, *source, &operands[1..]).ok()?;
+            let Type::Pointer(space) = *self.types().get(context.get(id).ty) else { return None };
+            let wrap = (1i64 << self.layout.offset_bits(space)) - 1;
+            return Some(base & !wrap | (base + moved) & wrap);
+        }
         let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) =
             &context.get(id).kind
         else {
@@ -3055,9 +3085,7 @@ impl Selector<'_, '_, '_> {
         operand: Operand,
     ) -> Result<Option<[Loc; 2]>, Unselected> {
         if let Some(bits) = self.constant(operand, 4) {
-            return Ok(Some(
-                dword_halves(bits).map(|value| Loc::Imm(Imm { value, width: 2, address: None })),
-            ));
+            return Ok(Some(dword_halves(bits).map(|value| Loc::Imm(Imm { value, width: 2, address: None }))));
         }
         let Operand::Value(value) = operand else { return Ok(None) };
         let ValueDef::Instruction(inst) = self.function.value(value).def else { return Ok(None) };
@@ -5222,6 +5250,18 @@ impl Selector<'_, '_, '_> {
                 _ => None,
             };
             if let ([whole], Some(dword)) = (&convention.returns[..], made_of) {
+                one.requires = vec![(dword, *whole)];
+                one.uses = vec![dword.value];
+                out.push(Arc::new(one));
+                return Ok(());
+            }
+            // A constant is the dword it is: one move.
+            if let ([whole], Operand::Constant(id)) = (&convention.returns[..], value)
+                && let Some(number) = self.far_number(id)
+            {
+                let dword = self.fresh_held(4);
+                let word = Loc::Imm(Imm { value: number, width: 4, address: None });
+                out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(dword)], vec![word])));
                 one.requires = vec![(dword, *whole)];
                 one.uses = vec![dword.value];
                 out.push(Arc::new(one));

@@ -705,6 +705,28 @@ impl Selector<'_, '_, '_> {
         )
     }
 
+    /// Whether a `getelementptr` takes the root's result: the address reads the
+    /// sum's parts, not the sum, so a load covered by the sum is never
+    /// selected.
+    pub fn is_indexing(
+        &self,
+        m: &Match,
+    ) -> bool {
+        let function = self.function;
+        function
+            .instruction(m.inst)
+            .result
+            .is_some_and(
+                |result| function
+                    .users(result)
+                    .iter()
+                    .any(|one| matches!(
+                        function.instruction(one.user).opcode,
+                        Opcode::GetElementPtr { .. }
+                    )),
+            )
+    }
+
     pub fn is_nonvolatile(
         &self,
         _: &Match,

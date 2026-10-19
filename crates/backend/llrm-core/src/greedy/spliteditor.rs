@@ -19,9 +19,10 @@
 //!   result     |--o--c1 o  o c2--|   c1: open <- parent, c2: complement <- parent
 //! ```
 //!
-//! DEVIATE D-SE1: no rematerialization in `defFromParent`
-//! (`canRematerializeAt`, `rematerializeAt`, `rematWillIncreaseRestriction`),
-//! as D-E1 of `LiveRangeEdit`; every definition is a copy.
+//! DEVIATE D-SE1: `defFromParent` rematerializes only a definition that reads
+//! no register (a literal, address or load of a cell); `allUsesAvailableAt` and
+//! `rematWillIncreaseRestriction` are not translated, as D-E1 of
+//! `LiveRangeEdit`.
 //!
 //! DEVIATE D-SE2: no sub-ranges or lane masks (`addDeadDef`'s sub-range
 //! branches, `buildSingleSubRegCopy`, `getLiveLaneMaskAt`, the
@@ -191,6 +192,9 @@ pub struct SplitEditor<'d> {
     pub reg_assign: RegAssignMap,
     /// (register index, parent value id) -> the value defining it there.
     values: HashMap<(usize, u32), ValueForce>,
+    /// The parent values made again where a copy would have been
+    /// (`Edit->didRematerialize`).
+    rematted: HashSet<u32>,
     /// `LICalc[2]`: the second serves the registers after the complement in the
     /// spill modes.
     lical: [LiveIntervalCalc; 2],
@@ -211,6 +215,7 @@ impl<'d> SplitEditor<'d> {
             spill_mode: ComplementSpillMode::Partition,
             reg_assign: RegAssignMap::default(),
             values: HashMap::default(),
+            rematted: HashSet::default(),
             lical: [LiveIntervalCalc::new(), LiveIntervalCalc::new()],
         }
     }
@@ -229,6 +234,7 @@ impl<'d> SplitEditor<'d> {
         self.open_idx = 0;
         self.reg_assign.clear();
         self.values.clear();
+        self.rematted.clear();
         // Reset the LiveIntervalCalc instances needed for this spill mode.
         self.lical[0].calc.reset(lis.cfg.len());
         if sm != ComplementSpillMode::Partition {
@@ -338,7 +344,14 @@ impl<'d> SplitEditor<'d> {
             Some(k) => Some(Arc::clone(cx.lis.instr(k))),
             None => cx.lis.block_insns(mbb).last().cloned(),
         };
-        let copy = cx.env.build_copy(cx.lis, to, from, beside.as_deref());
+        let remade = cx.env.rematerialize(cx.lis, to, from, beside.as_deref());
+        let copy = match remade {
+            Some(made) => {
+                self.rematted.insert(parent_vni.id());
+                made
+            }
+            None => cx.env.build_copy(cx.lis, to, from, beside.as_deref()),
+        };
         let def = cx.lis.insert_instr_before_at(mbb, before, copy, late).get_reg_slot(false);
         self.def_value(cx, reg_idx, parent_vni, def, false)
     }
@@ -382,12 +395,8 @@ impl<'d> SplitEditor<'d> {
         let mi = cx.lis.indexes.get_instruction_from_index(idx).expect("called with an invalid index");
         let mbb = cx.lis.indexes.get_mbb_from_index(idx);
         let at = cx.lis.indexes.get_instruction_index(mi);
-        let first = cx
-            .lis
-            .block_insns(mbb)
-            .iter()
-            .find(|i| cx.lis.indexes.get_instruction_index(i.id()) == at)
-            .expect("an instruction of the block");
+        let first =
+            cx.lis.block_insns(mbb).get(cx.lis.partition_at(mbb, &at, false)).expect("an instruction of the block");
         (mbb, first.id())
     }
 
@@ -399,12 +408,7 @@ impl<'d> SplitEditor<'d> {
         mi: InstrKey,
     ) -> Option<InstrKey> {
         let at = cx.lis.indexes.get_instruction_index(mi);
-        cx.lis
-            .block_insns(mbb)
-            .iter()
-            .skip_while(|i| cx.lis.indexes.get_instruction_index(i.id()) != at)
-            .find(|i| cx.lis.indexes.get_instruction_index(i.id()) != at)
-            .map(|i| i.id())
+        cx.lis.block_insns(mbb).get(cx.lis.partition_at(mbb, &at, true)).map(|i| i.id())
     }
 
     /// `enterIntvBefore`
@@ -1414,9 +1418,8 @@ impl<'d> SplitEditor<'d> {
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1484>).
     ///
     /// DEVIATE D-SE6: `eliminateDeadDefs` is not translated (D-E1); only the
-    /// copies this editor made whose value nothing reads are erased. The fact:
-    /// without rematerialization (D-SE1) the instructions that lose every use
-    /// here are the editor's own copies.
+    /// copies this editor made and the pure definitions whose value nothing
+    /// reads are erased.
     fn delete_remat_victims(
         &mut self,
         cx: &mut SplitCx,
@@ -1432,6 +1435,20 @@ impl<'d> SplitEditor<'d> {
                 let mi = cx.lis.defining_instr(&vni.def(), reg);
                 if cx.env.is_copy_like(cx.lis.instr(mi)) && cx.lis.instr(mi).defines.len() == 1 {
                     dead.push(mi);
+                }
+            }
+        }
+        // A definition rematerialized elsewhere leaves the original with no
+        // reader.
+        for reg in self.regs() {
+            let operands = cx.lis.operands(reg);
+            if operands.is_empty() || operands.iter().any(|op| !op.is_def) {
+                continue;
+            }
+            for op in operands {
+                let one = cx.lis.instr(op.instr);
+                if cx.env.is_pure_def(one) && one.defines == [reg] && !dead.contains(&op.instr) {
+                    dead.push(op.instr);
                 }
             }
         }
@@ -1485,6 +1502,13 @@ impl<'d> SplitEditor<'d> {
             }
             let reg_idx = self.reg_assign.lookup(pvni.def()) as usize;
             self.def_value(cx, reg_idx, pvni, pvni.def(), true);
+            // Force rematted values to be recomputed everywhere. The new live
+            // ranges may be truncated.
+            if self.rematted.contains(&pvni.id()) {
+                for i in 0..self.edit().size() {
+                    self.force_recompute(cx, i, pvni);
+                }
+            }
         }
 
         // Hoist back-copies to the complement interval when in spill mode.

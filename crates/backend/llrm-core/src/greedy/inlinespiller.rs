@@ -134,20 +134,22 @@ impl<'a> InlineSpiller<'a> {
         lis: &LiveIntervals,
         reg: u32,
     ) -> Vec<(usize, Vec<InstrKey>)> {
-        let mut keys: Vec<InstrKey> = Vec::new();
-        for operand in lis.operands(reg) {
-            if !keys.contains(&operand.instr) {
-                keys.push(operand.instr);
-            }
-        }
+        let mut seen: crate::support::hash::HashSet<InstrKey> = Default::default();
+        let keys: Vec<InstrKey> =
+            lis.operands(reg).iter().map(|operand| operand.instr).filter(|key| seen.insert(*key)).collect();
+        let mut covered: crate::support::hash::HashSet<InstrKey> = Default::default();
         let mut units: Vec<(usize, Vec<InstrKey>)> = Vec::new();
         for key in keys {
-            if units.iter().any(|(_, members)| members.contains(&key)) {
+            if covered.contains(&key) {
                 continue;
             }
-            let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
+            let index = lis.indexes.get_instruction_index(key);
+            let block = lis.indexes.get_mbb_from_index(&index);
             let insns = lis.block_insns(block);
-            let at = insns.iter().position(|one| one.id() == key).expect("in its block");
+            // The block is in slot order: the run sharing `key`'s index starts
+            // here.
+            let first = lis.partition_at(block, &index, false);
+            let at = first + insns[first..].iter().position(|one| one.id() == key).expect("in its block");
             let members = match insns[at].group {
                 None => vec![key],
                 Some(group) => {
@@ -161,6 +163,7 @@ impl<'a> InlineSpiller<'a> {
                     insns[from..=to].iter().map(|one| one.id()).collect()
                 }
             };
+            covered.extend(members.iter().copied());
             units.push((block, members));
         }
         units
@@ -358,14 +361,18 @@ impl<'a> InlineSpiller<'a> {
         members: &[InstrKey],
     ) -> Option<Vec<u32>> {
         let old: Vec<Arc<Insn>> = members.iter().map(|key| Arc::clone(lis.instr(*key))).collect();
-        if let Some(folded) = self.fold_into_copy(lis, reg, block, members, &old) {
-            return Some(folded);
-        }
         // An x87 value (FP0..FP6) spills in floatassign's format, `fstp` and
-        // `fld` of a qword cell, and folds into nothing.
-        let float = self.tables.orders.borrow().get(&reg).is_some_and(|order| order.first() == Some(&RegId::MM0));
+        // `fld` of a qword cell, and folds into nothing: a copy folded to a
+        // store would be a `mov` the stackifier has no rule for.
+        // A piece made by an edit has no order of its own yet: its x87 width
+        // says what it is.
+        let float = self.tables.orders.borrow().get(&reg).is_some_and(|order| order.first() == Some(&RegId::MM0))
+            || crate::backend::allocate::rfp_on() && widest_operand(&old, reg) == Some(10);
         if float {
             return self.spill_float_unit(lis, reg, block, members, &old);
+        }
+        if let Some(folded) = self.fold_into_copy(lis, reg, block, members, &old) {
+            return Some(folded);
         }
         let width = self.tables.widths.borrow().get(&reg).copied().unwrap_or(0);
         let width = if width > 0 { width } else { widest_operand(&old, reg)? };
@@ -423,8 +430,13 @@ impl<'a> InlineSpiller<'a> {
             .flat_map(|one| one.requires.iter().chain(&one.delivers))
             .find(|(held, _)| held.value == new)
             .map(|(_, register)| crate::model::ir::root(*register));
-        let mut order: Vec<RegId> = (self.order_of)(reg).into_iter().map(crate::model::ir::root).collect();
-        order.dedup();
+        // The class of the value it stands for, which a split may have changed.
+        let held = self.tables.orders.borrow().get(&reg).cloned();
+        let mut order: Vec<RegId> = held.unwrap_or_else(|| {
+            let mut order: Vec<RegId> = (self.order_of)(reg).into_iter().map(crate::model::ir::root).collect();
+            order.dedup();
+            order
+        });
         if let Some(only) = pinned {
             order = vec![only];
         }

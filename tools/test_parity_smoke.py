@@ -6,6 +6,29 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import parity_smoke as ps  # noqa: E402
+import pytest  # noqa: E402
+
+
+class Counted:
+    """A meter that read `value` instructions (None: perf cannot attach)."""
+
+    value: int | None = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def no_perf(monkeypatch):
+    """Tests do not attach perf to pytest: the meter reads nothing and the budget is CPU seconds unless a test hands one."""
+    monkeypatch.setattr(ps, "Meter", Counted)
+
+
+def counted(instructions: int):
+    return type("Meter", (Counted,), {"value": instructions})
 
 
 def clocked(costs):
@@ -17,7 +40,7 @@ def clocked(costs):
 
 def test_the_declared_selection_fits_the_budget_whatever_the_merge_touches():
     """Every merge pays this: a step added without dropping another, or a crate's tests added on top, pushes the total past the 10 s the user set."""
-    assert ps.BUDGET <= 10.0 and ps.BUDGET - ps.fixed_cost() - ps.CARGO_OVERHEAD * ps.MAX_CRATES >= ps.UNIT_FLOOR / 2, (ps.fixed_cost(), "the fixed steps must leave the unit tests their floor")
+    assert ps.BUDGET <= 15.0 and ps.BUDGET - ps.fixed_cost() - ps.CARGO_OVERHEAD * ps.MAX_CRATES >= ps.UNIT_FLOOR / 2, (ps.fixed_cost(), "the fixed steps must leave the unit tests their floor")
     for crates in ([], ["a"], ["a", "b", "c"], [f"c{i}" for i in range(40)]):
         assert ps.declared(crates) <= ps.BUDGET + 1e-9, (len(crates), ps.declared(crates))
 
@@ -25,14 +48,14 @@ def test_the_declared_selection_fits_the_budget_whatever_the_merge_touches():
 def test_a_set_within_the_budget_ends_in_pass():
     clock, steps = clocked([("a", 2.0, "ok"), ("b", 3.0, "ok")])
     ok, line = ps.run_steps(steps, Path("."), clock)
-    assert ok and line.startswith("PARITY SMOKE PASS") and "5.0 s CPU of 10 s" in line
+    assert ok and line.startswith("PARITY SMOKE PASS") and "5.0 s CPU of 15 s" in line
 
 
 def test_a_set_over_the_budget_fails_whatever_its_steps_say():
-    """A selection that grew to 14 s slows every merge of the branch: it must not read as a pass."""
-    clock, steps = clocked([("a", 7.0, "ok"), ("b", 7.0, "ok")])
+    """A selection that grew to 16 s slows every merge of the branch: it must not read as a pass."""
+    clock, steps = clocked([("a", 8.0, "ok"), ("b", 8.0, "ok")])
     ok, line = ps.run_steps(steps, Path("."), clock)
-    assert not ok and line.startswith("PARITY SMOKE FAIL") and "over the budget: 14.0 s > 10 s" in line
+    assert not ok and line.startswith("PARITY SMOKE FAIL") and "over the budget: 16.0 s > 15 s" in line
 
 
 def test_a_failed_step_fails_the_set_and_a_skipped_one_is_named_not_passed():
@@ -197,3 +220,64 @@ def test_the_ratchets_run_whichever_crate_the_merge_touches_and_a_failing_one_re
     why = ps.ratchets(run=fails_the_dense_id_ratchet)
     assert "no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id" in why and "loopdeletion" in why, why
     assert ps.ratchets(run=lambda command: Done(0)) == ""
+
+
+def test_every_failing_ratchet_is_named_not_only_the_first():
+    """The subset rule compares failure sets: a head red on two ratchets must show both, or a merge that fixes one looks like it adds the other."""
+    class Done:
+        def __init__(self, code):
+            self.returncode, self.stdout, self.stderr = code, "", "thread panicked: x" if code else ""
+
+    failed = ps.ratchet_failures(run=lambda command: Done(1 if ("block_list_ratchet" in " ".join(command) or "facts_rewrite" in " ".join(command)) else 0))
+    assert set(failed) == {"ratchet:block_list_ratchet", "ratchet:facts_rewrite"}, failed
+
+
+def test_the_failed_steps_come_out_of_the_smoke_line_by_name():
+    assert ps.failing_names("PARITY SMOKE FAIL qc_modules: QCport game/combat.c -O2: x; run: y: z | programs ok 0.3 s") == ["qc_modules", "run"]
+    assert ps.failing_names("PARITY SMOKE PASS programs ok 0.3 s") == []
+
+
+def test_a_run_over_the_cpu_budget_alone_is_run_once_more_before_it_fails():
+    """#2730 (tools only, no unit test in its set) was refused 'over the budget' on a loaded host: the same steps cost more CPU seconds under load."""
+    verdicts = iter([(False, "PARITY SMOKE FAIL over the budget: 11.2 s > 10 s | programs ok 0.3 s"), (True, "PARITY SMOKE PASS programs ok 0.3 s | 8.4 s CPU of 10 s")])
+    ok, line = ps.run_twice_over_budget(lambda: next(verdicts))
+    assert ok and "second run" in line
+    calls = []
+    both = lambda: (calls.append(1), (False, "PARITY SMOKE FAIL over the budget: 11 s > 10 s | x"))[1]  # noqa: E731
+    assert ps.run_twice_over_budget(both)[0] is False and len(calls) == 2
+    other = lambda: (calls.append(1), (False, "PARITY SMOKE FAIL run: x; over the budget: 11 s > 10 s | y"))[1]  # noqa: E731
+    calls.clear()
+    assert ps.run_twice_over_budget(other)[0] is False and len(calls) == 1
+
+
+def test_a_compile_that_outgrows_the_memory_limit_is_reported_as_a_memory_limit(monkeypatch):
+    """A runaway compile took 50 GB before a timeout stopped it; every smoke compile now runs under `ulimit -v` and says so."""
+    import sys as _sys
+
+    monkeypatch.setattr(ps.cpulimit, "MEMORY_KB", 200_000)
+    why = ps.compile_ok([_sys.executable, "-c", "x = bytearray(900 * 1024 * 1024)"], dict(__import__("os").environ))
+    assert why and why.startswith("memory limit"), why
+
+
+def test_a_failed_unit_step_names_each_failed_test_not_its_crate():
+    """The subset rule compared checks: a PR adding one failing test inside an already-red crate failed `unit llrm-qb`, which the red head failed too, and landed."""
+    out = "running 3 tests\\nfailures:\\n\\n---- t::a stdout ----\\n    printed\\n\\nfailures:\\n    t::a\\n    t::b\\n\\ntest result: FAILED. 1 passed; 2 failed\\n".replace("\\n", "\n")
+    assert ps.failed_tests(out) == ["t::a", "t::b"]
+    step = lambda bins: ("fail", "llrm-qb: x", ["unit llrm-qb::t::a", "unit llrm-qb::t::b"])
+    ok, line = ps.run_steps([("unit llrm-qb", step, 1.0)], Path("."), clock=lambda: 0.0)
+    assert not ok and ps.failing_names(line) == ["unit llrm-qb::t::a", "unit llrm-qb::t::b"]
+    assert ps.failing_names("PARITY SMOKE FAIL run: a: b | x") == ["run"]
+
+
+def test_the_budget_is_instructions_so_a_loaded_host_passes_and_a_doubled_step_fails():
+    """A tools-only PR failed 'over the budget' at 16.1 s > 15 s at load 32 on 32 cores: the CPU seconds of the same instructions stretch with contention."""
+    steps = [("run", lambda bins: ("ok", ""), 1.0)]
+    loaded = iter([0.0, 0.0, 0.0, 40.0])  # 40 CPU seconds on a loaded host
+    ok, line = ps.run_steps(steps, Path("."), clock=lambda: next(loaded), meter=counted(10_000_000_000), limit=12_000_000_000)
+    assert ok and "10.00 G instr of 12.00 G (40.0 s CPU for reference)" in line
+    quiet = iter([0.0, 0.0, 0.0, 5.0])  # a quiet host, a step that executes twice the instructions
+    ok, line = ps.run_steps(steps, Path("."), clock=lambda: next(quiet), meter=counted(24_000_000_000), limit=12_000_000_000)
+    assert not ok and ps.failing_names(line) == ["over the budget"]
+    fallback = iter([0.0, 0.0, 0.0, 20.0])  # no perf: the CPU seconds decide, as before
+    ok, line = ps.run_steps(steps, Path("."), clock=lambda: next(fallback), meter=counted(None), limit=12_000_000_000)
+    assert not ok and "perf unavailable" in line

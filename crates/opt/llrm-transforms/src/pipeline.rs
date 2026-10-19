@@ -468,6 +468,12 @@ impl Options {
         self.for_size
     }
 
+    /// Whether the code generator may grow code for speed: -O3 and -Omax
+    /// (`CodeGenOptLevel::Aggressive`).
+    pub fn aggressive_codegen(&self) -> bool {
+        self.limits.target_percent >= 200
+    }
+
     /// -Oz: no loop is copied.
     pub fn min_size() -> Self {
         Self { unroll: false, peel: false, ..Self::size() }
@@ -567,6 +573,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(indvars::IndVars {
             exit_values: false,
             unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
+            lftr: indvars::lftr_default(),
         }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size(), llvm: false }),
         Box::new(dead::Dead),
@@ -591,7 +598,7 @@ pub fn llvm_motion(applied: &Applied) -> bool {
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
 fn translated() -> Vec<Box<dyn FunctionPass>> {
-    vec![Box::new(crate::cvp::Cvp), Box::new(crate::jumpthreading::JumpThreading)]
+    vec![Box::new(crate::cvp::Cvp), Box::new(crate::jumpthreading::JumpThreading::from_env())]
 }
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`).
@@ -756,7 +763,7 @@ pub(crate) fn llvm_order(
         Phase::Simplify => {
             let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
             list.extend([
-                slot("jumpthreading@668", Box::new(crate::jumpthreading::JumpThreading)),
+                slot("jumpthreading@668", Box::new(crate::jumpthreading::JumpThreading::from_env())),
                 slot("cvp@669", Box::new(crate::cvp::Cvp)),
                 decide("decide@675"),
                 phiopt("phiopt@675"),
@@ -784,6 +791,8 @@ pub(crate) fn llvm_order(
                 licm("licm@724", !rotating),
             ]);
             if rotating {
+                // DEVIATE (D10 R7): the pin duplicates headers at -Os; `size`
+                // is -Os and -Oz.
                 list.push(slot(
                     "rotate@728",
                     Box::new(looprotate::LoopRotate { duplicate_headers: applied.options.copy_headers && !size }),
@@ -807,6 +816,7 @@ pub(crate) fn llvm_order(
                     Box::new(indvars::IndVars {
                         exit_values: false,
                         unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
+                        lftr: indvars::lftr_default(),
                     }),
                 ),
                 slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
@@ -827,7 +837,7 @@ pub(crate) fn llvm_order(
                 slot("bdce@797", Box::new(bdce::Bdce)),
                 fold("fold@801"),
                 dead("dead@801"),
-                slot("jumpthreading@809", Box::new(crate::jumpthreading::JumpThreading)),
+                slot("jumpthreading@809", Box::new(crate::jumpthreading::JumpThreading::from_env())),
                 decide("decide@809"),
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("adce@815", Box::new(adce::Adce)),
@@ -1139,7 +1149,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(algebraic::Algebraic { size: false, llvm: false }));
     // A counted exit's values are numbers where the copy made its test the one
     // that leaves.
-    passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None }));
+    passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None, lftr: indvars::lftr_default() }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
         passes.push(Box::new(crate::licm::Licm { apply: true, speculate: true }));

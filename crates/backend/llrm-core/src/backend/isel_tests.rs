@@ -95,7 +95,7 @@ fn listing_float_store(
     name: &str,
 ) -> Vec<String> {
     let profile =
-        crate::backend::cpu::tuned_optimizing(&llrm_x86_m16::M16, "486", false, true, false, true, true, true)
+        crate::backend::cpu::tuned_optimizing(&llrm_x86_m16::M16, "486", false, true, false, true, true, true, false)
             .expect("the 486 profile");
     let module = assemble::assembled(
         &parsed(text),
@@ -182,7 +182,6 @@ done:
             "mov bx, word ptr [bp+6]",
             "xor ax, ax",
             "xor cx, cx",
-            "L0_1:",
             "cmp cx, bx",
             "jge L0_8",
             "L0_5:",
@@ -293,6 +292,21 @@ fn test_what_is_not_selected_yet_is_refused() {
     )] {
         let text = format!("define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  {body}\n}}\n");
         assert_eq!(selected(&text, "f").err(), Some(Unselected(why.to_owned())), "{body}");
+    }
+}
+
+/// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop` verify but have no lowering yet:
+/// a program that calls one stops with a named refusal, not a wrong result.
+#[test]
+fn a_bit_count_intrinsic_is_refused_until_it_is_lowered() {
+    for (name, parameters, arguments) in
+        [("ctlz", ", i1", ", i1 false"), ("cttz", ", i1", ", i1 false"), ("ctpop", "", "")]
+    {
+        let text = format!(
+            "declare i16 @llvm.{name}.i16(i16{parameters})\n\
+             define i16 @f(i16 %a) addrspace(1) {{\n  %r = call i16 @llvm.{name}.i16(i16 %a{arguments})\n  ret i16 %r\n}}\n"
+        );
+        assert_eq!(selected(&text, "f").err(), Some(Unselected(format!("@llvm.{name}.i16"))), "{name}");
     }
 }
 
@@ -549,12 +563,12 @@ other:
             "mov ax, 10",
             "pop bp",
             "retf",
-            "L0_3:",
-            "mov ax, 50",
-            "pop bp",
-            "retf",
             "L0_4:",
             "xor ax, ax",
+            "pop bp",
+            "retf",
+            "L0_3:",
+            "mov ax, 50",
             "pop bp",
             "retf",
         ]
@@ -1323,15 +1337,15 @@ small:
             "fcomp qword ptr [bp-24]",
             "fnstsw ax",
             "sahf",
-            "ja L1_8",
-            "L1_10:",
-            "xor ax, ax",
-            "leave",
-            "retf",
+            "jbe L1_10",
             "L1_8:",
             "fld qword ptr [bp-32]",
             "fistp word ptr [bp-2]",
             "mov ax, word ptr [bp-2]",
+            "leave",
+            "retf",
+            "L1_10:",
+            "xor ax, ax",
             "leave",
             "retf",
         ]
@@ -1625,6 +1639,30 @@ other:
     let call = got.iter().position(|line| line == "call far ptr B$SCMP").expect("the call");
     // Either polarity: the branch reads the call's flags, no compare between.
     assert!(got[call + 1].starts_with("jg ") || got[call + 1].starts_with("jle "), "{got:?}");
+}
+
+/// A loop rotated left the counter's increment between B$SCMP's compare and
+/// the branch: the compare was fused, the flags no longer reached it and the
+/// function was refused (qbdemo at every level).
+#[test]
+fn test_a_flags_result_compare_with_an_add_before_the_branch_still_selects() {
+    let text = "declare cc1000 i16 @llrm.qb.B$SCMP(ptr, ptr) addrspace(1)
+define i16 @f(ptr %a, ptr %b, i16 %n) addrspace(1) {
+entry:
+  %s = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
+  %c = icmp sgt i16 %s, 0
+  %m = add i16 %n, 1
+  br i1 %c, label %greater, label %other
+greater:
+  ret i16 %m
+other:
+  ret i16 0
+}
+";
+    let got = listing(text, "f");
+    let call = got.iter().position(|line| line == "call far ptr B$SCMP").expect("the call");
+    // The flags are taken before the add can disturb them.
+    assert!(got[call + 1].starts_with("set") || got[call + 1].starts_with("j"), "{got:?}");
 }
 
 /// A float function no x87 instruction is stays one operation on st(0),
@@ -5648,6 +5686,27 @@ done:
     assert!(got.iter().any(|line| line.contains("g[")), "the premise: the cell is read: {got:?}");
 }
 
+/// The sum a `getelementptr` takes as its index is read by the address, in its
+/// parts: folding the load into the sum left the load unselected and its value
+/// read ("value is read but never defined", `liverangecalc` "a unique value");
+/// `dynsz.bas`, `bintree.bas` and 4 more m16 BASIC programs did not compile.
+#[test]
+fn test_a_load_added_into_an_address_index_is_still_selected() {
+    let text = "@g = global i16 5
+@d = global ptr addrspace(1) null
+define i16 @f(i16 %i) addrspace(1) {
+  %v = load i16, ptr @g
+  %s = add i16 %v, %i
+  %t = load ptr addrspace(1), ptr @d
+  %p = getelementptr i8, ptr addrspace(1) %t, i16 %s
+  %x = load i16, ptr addrspace(1) %p
+  ret i16 %x
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.contains("ptr g")), "the premise: the cell is read: {got:?}");
+}
+
 /// A store to the cell between the load and its reader: the load keeps the old
 /// value, so it stays where it was made.
 #[test]
@@ -5815,8 +5874,21 @@ define i16 @f() addrspace(1) {
     assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
 }
 
-/// More constant-expression operands (alias/farstruct.c, textfill): the dword of
-/// a far pointer to near data (`ptrtoint (addrspacecast @g)`), and a segment
+/// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
+/// address of no global": 13 llrm-qb tests failed to assemble a POKE.
+#[test]
+fn test_a_gep_off_a_segment_constant_is_a_far_number() {
+    let text = "define i8 @f() addrspace(1) {
+  %v = load i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 -24576 to ptr addrspace(2)) to ptr addrspace(1)), i16 1)
+  ret i8 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov bx, 1".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
+}
+
+/// More constant-expression operands (alias/farstruct.c, textfill): the dword
+/// of a far pointer to near data (`ptrtoint (addrspacecast @g)`), and a segment
 /// constant widened to far (`addrspacecast (inttoptr N to ptr addrspace(2))`),
 /// which is `N:0`. Both were refused, "an address of no global".
 #[test]
@@ -5832,7 +5904,23 @@ define i16 @f(i16 %i) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    // DGROUP:offset joined into the dword; -18432 is the selector 0xB800 in `pushw`.
+    // DGROUP:offset joined into the dword; -18432 is the selector 0xB800 in
+    // `pushw`.
     let has = |text: &str| got.iter().any(|one| one == text);
     assert!(has("mov ax, DGROUP") && has("mov bx, offset g") && has("shl eax, 16") && has("pushw 47104"), "{got:?}");
+}
+
+/// A branch's LIR odds are `BranchProbabilityInfo`'s: `p == null` is the
+/// pointer heuristic's 12 in 32, to the bit `opt -passes='print<branch-prob>'`
+/// prints (0x30000000 and 0x50000000). They were `branchprob`'s GCC estimates.
+#[test]
+fn test_a_branchs_odds_are_llvms_branch_probabilities() {
+    let text = "declare void @use(i16) addrspace(1)\n\
+        define void @f(ptr %p) addrspace(1) {\nentry:\n  %c = icmp eq ptr %p, null\n  br i1 %c, label %yes, label %no\n\
+        yes:\n  call addrspace(1) void @use(i16 1)\n  br label %no\n\
+        no:\n  ret void\n}\n";
+    let body = selected(text, "f").expect("selects").body;
+    let mut taken: Vec<u32> = body.odds.taken.values().copied().collect();
+    taken.sort();
+    assert_eq!(taken, vec![0x3000_0000, 0x5000_0000], "{:?}", body.odds.taken);
 }

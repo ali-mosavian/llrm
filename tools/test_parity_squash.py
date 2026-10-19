@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import parity_squash as ps  # noqa: E402
 
@@ -212,3 +214,187 @@ def test_a_second_landing_waits_for_the_first_one_to_release_the_lock(tmp_path):
             pass
     with ps.land_lock(lock, wait=False):
         pass
+
+
+def test_a_failing_pr_in_four_is_isolated_and_the_other_three_land():
+    """One smoke on the combined tree; when it fails the set is halved: 1+2 pass and land, 3 fails alone and is refused, 4 is tested on top and lands."""
+    landed, refused, tested = [], [], []
+
+    def passes(group):
+        tested.append(list(group))
+        return "3" not in group
+
+    ps.batch(["1", "2", "3", "4"], passes, landed.append, refused.append)
+    assert landed == ["1", "2", "4"] and refused == ["3"], (landed, refused)
+    assert tested[0] == ["1", "2", "3", "4"] and ["1", "2"] in tested and ["3"] in tested and ["4"] in tested
+
+
+def test_four_passing_prs_cost_one_test_and_land_in_order():
+    landed, tested = [], []
+    ps.batch(["1", "2", "3", "4"], lambda group: (tested.append(group), True)[1], landed.append, lambda pr: None)
+    assert landed == ["1", "2", "3", "4"] and len(tested) == 1
+
+
+def test_a_fix_for_a_red_head_is_accepted_and_a_new_failure_is_refused():
+    """The gate deadlocked on a red head: the fix for it failed the same checks the head did, so it could not land. The merged tree may fail a SUBSET of the head's failures."""
+    red = {"ratchet:block_list_ratchet", "qc_modules"}
+    assert ps.subset_refusals(red, {"qc_modules"}, fixes=True) == []
+    assert ps.subset_refusals(red, set(), fixes=True) == []
+    why = ps.subset_refusals(red, {"qc_modules", "run"}, fixes=False)
+    assert why and "run" in why[0] and "ratchet:block_list_ratchet" in why[0] and "qc_modules" in why[0], why
+    assert ps.subset_refusals(set(), {"run"}, fixes=False)
+
+
+def test_an_equal_failure_set_lands_only_without_the_fixes_claim():
+    red = {"qc_modules"}
+    assert ps.subset_refusals(red, set(red), fixes=False) == []
+    assert ps.subset_refusals(red, set(red), fixes=True)
+    assert ps.claims_fix("Fixes red: the ratchet\n") and ps.claims_fix("TL;DR\nFixes a red head\n") and not ps.claims_fix("This fixes reds nothing")
+
+
+def test_the_head_failure_set_is_computed_once_per_sha_and_never_guessed(tmp_path):
+    import pytest
+
+    calls = []
+    assert ps.head_failures("abc", lambda: (calls.append(1), {"x"})[1], tmp_path) == {"x"}
+    assert ps.head_failures("abc", lambda: (calls.append(1), {"y"})[1], tmp_path) == {"x"} and len(calls) == 1
+    with pytest.raises(SystemExit, match="no failure set is cached"):
+        ps.head_failures("other", None, tmp_path)
+
+
+def test_a_feat_parity_commit_absent_from_the_landing_log_is_listed(tmp_path):
+    """Direct pushes bypassed the lock; the log is what every landing writes, so a commit with no line in it is a landing that did not go through the squash."""
+    log = tmp_path / "landed.log"
+    ps.log_landed("aaaaaaa1111", "2700", "gate-ok", log)
+    ps.log_landed("bbbbbbb2222", "2701", "gate-ok", log)
+    assert ps.unlogged(log, ["aaaaaaa", "ccccccc", "bbbbbbb"]) == ["ccccccc"]
+    assert ps.unlogged(tmp_path / "none.log", ["ddddddd"]) == ["ddddddd"]
+
+
+def test_bins_older_than_the_merged_tree_are_rebuilt_or_named_not_an_empty_refusal(tmp_path, monkeypatch):
+    """The merge rewrote files after the binaries were built: the smoke exited non-zero with an empty last line and the tool printed 'the fast set fails' with no reason."""
+    import llrmbin
+
+    stale = [["llrm-c"]]
+    monkeypatch.setattr(llrmbin, "stale_binaries", lambda directory, repo=None: stale[0])
+    monkeypatch.setattr(ps, "smoke_bins", lambda env=None: str(tmp_path))
+    built = []
+
+    def fresh():
+        built.append(1)
+        stale[0] = []
+
+    assert ps.ensure_bins(build=fresh) == "" and built == [1]
+    stale[0] = ["llrm-c", "llrm-qb"]
+    why = ps.ensure_bins(build=lambda: built.append(2))
+    assert "still older" in why and "llrm-c, llrm-qb" in why, why
+    stale[0] = []
+    assert ps.ensure_bins(build=lambda: built.append(3)) == "" and 3 not in built
+
+
+def test_a_smoke_that_exits_non_zero_without_a_summary_line_names_its_stderr(monkeypatch):
+    class Done:
+        returncode, stdout, stderr = 1, "", "stale binaries in /x: llrm-c older than the source\nrun cargo build"
+
+    monkeypatch.setattr(ps, "smoke_bins", lambda env=None: "/x")
+    monkeypatch.setattr(ps.subprocess, "run", lambda *a, **k: Done())
+    failed, last = ps.smoke_failures()
+    assert failed == {"smoke-did-not-finish"} and "stale binaries in /x" in last and "exited 1" in last, last
+
+
+def test_a_new_failing_test_inside_a_red_crate_is_refused_and_one_the_head_fails_too_is_not():
+    """Head red in llrm-qb (test_a); a PR adds test_b that fails: the check-level rule saw `unit llrm-qb` fail on both sides and landed it."""
+    head = {"unit llrm-qb::test_a"}
+    merged = {"unit llrm-qb::test_a", "unit llrm-qb::test_b"}
+    on_head = lambda crate, tests: {t for t in tests if t == "test_a"}  # test_b passes on the head
+    assert ps.subset_refusals(ps.head_expanded(head, merged, on_head), merged, False) != []
+    assert ps.subset_refusals(ps.head_expanded(head, merged, lambda crate, tests: set(tests)), merged, False) == []  # the head fails test_b too
+
+
+def test_a_refusal_after_a_rebuild_names_the_newest_source_the_oldest_binary_and_a_failed_build(monkeypatch):
+    """#2764 was refused "binaries still older than the merged tree after a rebuild" with nothing to say whether the build failed or a source was newer."""
+    import llrmbin
+
+    monkeypatch.setattr(ps, "smoke_bins", lambda env=None: "/x")
+    monkeypatch.setattr(llrmbin, "stale_binaries", lambda directory, cwd=None: ["llrm-c", "llrm-qb"])
+    monkeypatch.setattr(llrmbin, "stale_found", lambda directory, repo=None: [("llrm-c", 100.0, "crates/a/src/x.rs", 160.0), ("llrm-qb", 90.0, "crates/b/src/y.rs", 130.0)])
+
+    class Failed:
+        returncode, stderr, stdout = 101, "error[E0425]: cannot find type\nerror: could not compile `llrm-nib`", ""
+
+    why = ps.ensure_bins(build=lambda: Failed())
+    assert "oldest binary llrm-qb" in why and "newest source crates/a/src/x.rs" in why and "70 s later" in why, why
+    assert "the rebuild exited 101" in why and "could not compile `llrm-nib`" in why, why
+
+
+GENERATOR = """import sys
+from pathlib import Path
+root = Path(__file__).resolve().parents[2]
+pages = sorted(p.stem for p in (root / "docs/optimizations/passes").glob("page_*.md"))
+want = "".join(f"- {name}\\n" for name in ["a", *pages])
+index = root / "docs/optimizations/passes/readme.md"
+if "--sync" in sys.argv:
+    index.write_text(want)
+elif "--check" in sys.argv and index.read_text() != want:
+    print("stale index"); sys.exit(1)
+"""
+
+
+def generated_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "r"
+    (repo / "tools/docsbuild").mkdir(parents=True)
+    (repo / "docs/optimizations/passes").mkdir(parents=True)
+    sh(repo, "init", "-q", "-b", "main")
+    (repo / "tools/docsbuild/build.py").write_text(GENERATOR)
+    (repo / "docs/optimizations/passes/readme.md").write_text("- a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    return repo
+
+
+def test_two_prs_that_each_add_a_page_merge_by_regenerating_the_index(tmp_path):
+    """Both PRs rewrote the generated index at the same line: git conflicted, a human merged generated text, and #2790, the LSR stack and indvars waited on it."""
+    repo = generated_repo(tmp_path)
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "docs/optimizations/passes/page_c.md").write_text("# c\n")
+    (repo / "docs/optimizations/passes/readme.md").write_text("- a\n- page_c\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "c")
+    head = sh(repo, "rev-parse", "HEAD")
+    sh(repo, "checkout", "-q", "main")
+    (repo / "docs/optimizations/passes/page_b.md").write_text("# b\n")
+    (repo / "docs/optimizations/passes/readme.md").write_text("- a\n- page_b\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "b")
+    sha, why = ps.merged_result(head, base="main", cwd=repo)
+    assert why == "" and sha, why
+    assert (repo / "docs/optimizations/passes/readme.md").read_text() == "- a\n- page_b\n- page_c\n"
+    assert sh(repo, "status", "--porcelain") == ""
+
+
+def test_a_conflict_in_a_file_nothing_generates_is_still_refused(tmp_path):
+    repo = generated_repo(tmp_path)
+    (repo / "x.rs").write_text("fn x() {}\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "x")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "x.rs").write_text("fn x() { 1 }\n")
+    sh(repo, "commit", "-qam", "pr x")
+    head = sh(repo, "rev-parse", "HEAD")
+    sh(repo, "checkout", "-q", "main")
+    (repo / "x.rs").write_text("fn x() { 2 }\n")
+    sh(repo, "commit", "-qam", "main x")
+    sha, why = ps.merged_result(head, base="main", cwd=repo)
+    assert sha is None and "x.rs" in why
+
+
+def test_eight_passing_prs_cost_one_smoke_and_nine_are_refused(monkeypatch):
+    """Batches of four took 12-16 minutes each with ~38 PRs ready: eight PRs ride one smoke, and a failing eight is halved to its bad PR in three more."""
+    landed, tested = [], []
+    ps.batch([str(n) for n in range(1, 9)], lambda group: (tested.append(group), True)[1], landed.append, lambda pr: None)
+    assert landed == [str(n) for n in range(1, 9)] and len(tested) == 1
+    landed, refused, tested = [], [], []
+    ps.batch([str(n) for n in range(1, 9)], lambda group: (tested.append(group), "6" not in group)[1], landed.append, refused.append)
+    assert refused == ["6"] and landed == ["1", "2", "3", "4", "5", "7", "8"] and len(tested) == 7
+    with pytest.raises(SystemExit, match="at most 8"):
+        ps.merge_batch([str(n) for n in range(1, 10)])

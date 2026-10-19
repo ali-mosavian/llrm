@@ -189,13 +189,8 @@ b2:
         "define i16 @f(i16 %x) {
 b0:
   %cond = icmp eq i16 %x, 1
-  br i1 %cond, label %b1, label %b2
-
-b1:
-  ret i16 10
-
-b2:
-  ret i16 20
+  %0 = select i1 %cond, i16 10, i16 20
+  ret i16 %0
 }
 ",
         &[&[1], &[2], &[3]],
@@ -232,9 +227,12 @@ b0:
     );
 }
 
+/// The two returns are one (`tailMergeBlocksWithSimilarFunctionTerminators`),
+/// and the two-entry phi of constants it makes a select.
 #[test]
-fn test_a_branch_on_a_value_is_left_alone() {
-    let text = "define i16 @f(i16 %x) {
+fn test_a_branch_on_a_value_whose_arms_return_constants_is_a_select() {
+    check(
+        "define i16 @f(i16 %x) {
 b0:
   %c = icmp eq i16 %x, 1
   br i1 %c, label %b1, label %b2
@@ -245,8 +243,16 @@ b1:
 b2:
   ret i16 20
 }
-";
-    check(text, text, &[&[1], &[2]]);
+",
+        "define i16 @f(i16 %x) {
+b0:
+  %c = icmp eq i16 %x, 1
+  %0 = select i1 %c, i16 10, i16 20
+  ret i16 %0
+}
+",
+        &[&[1], &[2]],
+    );
 }
 
 /// The jump that closes a loop keeps its `!llvm.loop` (it is the loop's one
@@ -642,6 +648,7 @@ b2:
 /// With `SpeculateBlocks` off no select forms: only the empty arm goes.
 #[test]
 fn test_without_speculate_blocks_no_select_forms() {
+    // The arms differ, so `hoistCommonCodeFromSuccessors` has nothing to share.
     let text = "define i16 @f(i16 %a, i16 %b, i1 %c) {
 b0:
   br i1 %c, label %b1, label %b2
@@ -650,10 +657,11 @@ b1:
   br label %b3
 
 b2:
+  %d = mul i16 %b, 3
   br label %b3
 
 b3:
-  %m = phi i16 [ %a, %b1 ], [ %b, %b2 ]
+  %m = phi i16 [ %a, %b1 ], [ %d, %b2 ]
   ret i16 %m
 }
 ";
@@ -662,10 +670,11 @@ b0:
   br i1 %c, label %b3, label %b2
 
 b2:
+  %d = mul i16 %b, 3
   br label %b3
 
 b3:
-  %m = phi i16 [ %b, %b2 ], [ %a, %b0 ]
+  %m = phi i16 [ %d, %b2 ], [ %a, %b0 ]
   ret i16 %m
 }
 ";
