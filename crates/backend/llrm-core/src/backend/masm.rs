@@ -1851,7 +1851,7 @@ pub fn _instruction(
             }
         }
         Operation::Move | Operation::Address => vec![format!("{name} {}, {}", dests[0], sources[0])],
-        Operation::Binary => vec![format!("{name} {}, {}", dests[0], sources[1])],
+        Operation::Binary | Operation::Select => vec![format!("{name} {}, {}", dests[0], sources[1])],
         Operation::Unary => vec![format!("{name} {}", dests[0])],
         Operation::Compare if name.starts_with('f') => {
             let memory: Vec<&String> = sources

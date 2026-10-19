@@ -2125,6 +2125,20 @@ pub fn emit_in(
         }
         return None;
     }
+    // A conditional move: the first source is the destination, the second replaces it when the condition holds.
+    if op == Operation::Select && dests.len() == 1 && sources.len() == 2 {
+        let into = reg_of(&dests[0])?;
+        let width = width_of(into)?;
+        let code = _code(&format!("{}_R{}_RM{}", name.to_uppercase(), width * 8, width * 8))?;
+        return match &sources[1] {
+            Loc::Reg(from) => _assemble(&raised(create_reg_reg(code, into, from.register)), at, true),
+            Loc::Mem(cell) => {
+                let (built, relocated) = operand_of(cell, at.bits)?;
+                _assemble(&raised(create_reg_mem(code, into, built)), at, relocated)
+            }
+            _ => None,
+        };
+    }
     if op == Operation::Binary && SHIFTS.contains(&name) && dests.len() == 1 && sources.len() == 2 {
         let count = imm_of(&sources[1]);
         let by_cl = _cl(reg_of(&sources[1]));

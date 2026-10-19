@@ -103,3 +103,12 @@ fn a_quadword_push_of_a_constant() {
     assert_eq!(bytes(&push(0)), [0x6a, 0x00]);
     assert_eq!(bytes(&push(0x1234)), [0x68, 0x34, 0x12, 0x00, 0x00]);
 }
+
+#[test]
+fn a_conditional_move_names_its_condition() {
+    // cmovl %ecx,%eax; cmovne %rdx,%rax; cmovae %r9,%r8
+    let cmov = |name, into, from, width| sem(Operation::Select, Some(name), vec![rg(into, width)], vec![rg(into, width), rg(from, width)], None, false);
+    assert_eq!(bytes(&cmov("cmovl", RegId::EAX, RegId::ECX, 4)), [0x0f, 0x4c, 0xc1]);
+    assert_eq!(bytes(&cmov("cmovne", RegId::RAX, RegId::RDX, 8)), [0x48, 0x0f, 0x45, 0xc2]);
+    assert_eq!(bytes(&cmov("cmovae", RegId::R8, RegId::R9, 8)), [0x4d, 0x0f, 0x43, 0xc1]);
+}

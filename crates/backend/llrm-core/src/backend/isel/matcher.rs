@@ -1422,6 +1422,44 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// `select c, a, b` as a conditional move: the flags of `c`, made here, then `cmov` of `a` over `b` into the
+    /// result (X86's `CMOV`; the compare of a comparison nothing else reads is its flags, and any other condition is
+    /// tested).
+    pub fn hook_select(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(m.inst);
+        let [condition, yes, no] = instruction.operands[..] else { return refuse("a select of three operands") };
+        let ty = instruction.ty;
+        let width = self.width(ty)?;
+        let code = match condition {
+            Operand::Value(value) if self.fused_compare(value).is_some() => {
+                let compare = self.fused_compare(value).expect("a fused comparison");
+                match self.compare(compare, m.at, out)? {
+                    Test::One(code) => code,
+                    _ => return refuse("a select on a float comparison"),
+                }
+            }
+            _ => {
+                let bit_ty = self.function.operand_type(&self.module.context, condition).expect("a typed condition");
+                let held = self.held(condition, bit_ty, m.at, out)?;
+                let test = semantics(Operation::Compare, "test", vec![], vec![Loc::Held(held), Loc::Held(held)]);
+                out.push(insn(m.at, test));
+                "jne"
+            }
+        };
+        let (no, yes) = (self.held(no, ty, m.at, out)?, self.held(yes, ty, m.at, out)?);
+        let result = Held { value: self.value(instruction.result.expect("a select's value")), width };
+        let name = format!("cmov{}", &code[1..]);
+        out.push(insn(
+            m.at,
+            semantics(Operation::Select, &name, vec![Loc::Held(result)], vec![Loc::Held(no), Loc::Held(yes)]),
+        ));
+        Ok(())
+    }
+
     /// Whether an `alloca` takes its bytes from the stack when it runs (an
     /// element count that is a value).
     pub fn is_dynamic(

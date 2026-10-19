@@ -326,6 +326,9 @@ pub static ANY_MEMORY: LazyLock<Vec<Mem>> = LazyLock::new(|| vec![Mem::new(None,
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Operation {
     Move,
+    /// A conditional move: the second source replaces the first, which is tied to the destination, when the
+    /// flags hold the condition the name states (`cmovl`).
+    Select,
     Exchange,
     Address,
     Binary,
@@ -358,8 +361,9 @@ pub enum Operation {
 }
 
 impl Operation {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 30] = [
         Self::Move,
+        Self::Select,
         Self::Exchange,
         Self::Address,
         Self::Binary,
@@ -398,6 +402,7 @@ impl Operation {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Move => "move",
+            Self::Select => "select",
             Self::Exchange => "xchg",
             Self::Address => "addr",
             Self::Binary => "binary",
@@ -829,6 +834,7 @@ impl Operation {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Move => "MOVE",
+            Self::Select => "SELECT",
             Self::Exchange => "EXCHANGE",
             Self::Address => "ADDRESS",
             Self::Binary => "BINARY",

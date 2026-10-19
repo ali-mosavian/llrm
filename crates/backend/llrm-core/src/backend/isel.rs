@@ -2286,6 +2286,16 @@ impl Selector<'_, '_, '_> {
             _ => return,
         }
         let result = instruction.result.expect("a comparison's value");
+        // A conditional move reads the flags where it stands: its comparison is made there.
+        if let Some(only) = function.users(result).only()
+            && function.instruction(only.user).opcode == Opcode::Select
+            && function.instruction(only.user).operands.first() == Some(&Operand::Value(result))
+            && function.parent(only.user) == Some(block)
+            && matches!(instruction.opcode, Opcode::ICmp(_))
+        {
+            self.fused.insert(inst);
+            return;
+        }
         if let Some(only) = function.users(result).only()
             && function.terminator(block) == Some(only.user)
             && function.instruction(only.user).opcode == Opcode::Br

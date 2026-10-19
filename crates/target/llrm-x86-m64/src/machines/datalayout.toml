@@ -12,8 +12,9 @@ tti = "X86"
 # LLVM syntax, as the pin's clang prints it for x86_64-linux-gnu. i64 is native; long double is 80 bits.
 datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 
-# `select` becomes a branch and a phi before selection: the conditional move (`cmov`, which every x86-64 has) is not selected yet.
-expand = ["select"]
+# A `select` of a byte (`cmov` has no 8-bit form) or of a float (no SSE yet) becomes a branch and a phi before selection;
+# the others are `cmov`.
+expand = ["select.i1", "select.i8", "select.float", "select.double", "select.x86_fp80"]
 
 # X86TargetLowering::isTypeDesirableForOp: a word operation costs an operand-size prefix and, read as a
 # dword after, an extension.

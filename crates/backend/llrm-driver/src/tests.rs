@@ -376,3 +376,19 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
         listing.lines().map(str::trim).find_map(|line| line.strip_prefix("sub rsp, ")?.parse().ok()).expect("a frame");
     assert!(reserved >= 64, "{reserved} bytes for eight quadwords\n{listing}");
 }
+
+/// A `select` was expanded into a branch diamond (`cmp; jl; mov; jmp`). It is
+/// one `cmov` on the compare's condition, or on `test` for a plain `i1`.
+#[test]
+fn a_select_is_one_conditional_move() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @min(i32 %a, i32 %b) {\n  %c = icmp slt i32 %a, %b\n  %r = select i1 %c, i32 %a, i32 %b\n  ret i32 %r\n}\n\
+                define i64 @pick(i1 %c, i64 %a, i64 %b) {\n  %r = select i1 %c, i64 %a, i64 %b\n  ret i64 %r\n}\n";
+    for (name, cmov) in [("min", "cmovl"), ("pick", "cmovne")] {
+        let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, name).unwrap();
+        let listing = llrm_core::backend::masm::text(&built).unwrap();
+        assert!(listing.lines().any(|line| line.trim().starts_with(cmov)), "{name}: {cmov}\n{listing}");
+        assert!(!listing.lines().any(|line| line.trim().starts_with('j')), "{name}: no branch\n{listing}");
+    }
+}

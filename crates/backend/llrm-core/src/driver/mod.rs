@@ -396,7 +396,8 @@ pub fn optimized(
     }
     timed("mir odd widths", || program.modules.iter_mut().try_for_each(crate::backend::legalize::promoted))?;
     timed("mir min max", || program.modules.iter_mut().try_for_each(crate::backend::selects::minmax_expanded))?;
-    if options.arch.expands("select") {
+    let layout = options.arch.layout();
+    if layout.expands_some("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
         let pricing = crate::backend::selects::Pricing {
             target: Some(program.target.clone()),
@@ -404,7 +405,9 @@ pub fn optimized(
             tti: &*tti,
         };
         timed("mir selects", || {
-            program.modules.iter_mut().try_for_each(|module| crate::backend::selects::lowered(module, &pricing))
+            program.modules.iter_mut().try_for_each(|module| {
+                crate::backend::selects::lowered(module, &pricing, &|ty| layout.expands_for("select", ty))
+            })
         })?;
     }
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {
