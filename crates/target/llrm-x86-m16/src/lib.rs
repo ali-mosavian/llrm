@@ -89,6 +89,10 @@ impl llrm_target::Target for M16 {
         instructions::TEXT.clone()
     }
 
+    fn dialect(&self) -> &'static llrm_instr::Dialect {
+        llrm_x86::instructions::dialect()
+    }
+
     fn operand_bytes(&self) -> i64 {
         2
     }
@@ -102,6 +106,11 @@ impl llrm_target::Target for M16 {
     /// code size (user decision 2026-10-18). Only segments are aligned, as
     /// their definitions require.
     fn pref_function_alignment(&self) -> u8 {
+        0
+    }
+
+    /// DEVIATE E2-1: no loop is aligned (the pin's is 16 bytes).
+    fn pref_loop_alignment(&self) -> u8 {
         0
     }
 
@@ -259,9 +268,10 @@ mod tests {
     }
 
     #[test]
-    fn test_m16_aligns_no_function() {
+    fn test_m16_aligns_no_function_or_loop() {
         use llrm_target::Target;
         assert_eq!(super::M16.pref_function_alignment(), 0);
+        assert_eq!(super::M16.pref_loop_alignment(), 0);
     }
 
     /// gcc's by-pieces ratios of a constant memset where its algorithm is `rep

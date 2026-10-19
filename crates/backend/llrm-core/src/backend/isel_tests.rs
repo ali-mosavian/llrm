@@ -310,6 +310,19 @@ fn a_bit_count_intrinsic_is_refused_until_it_is_lowered() {
     }
 }
 
+/// `llvm.scmp` and `llvm.ucmp` verify but have no lowering yet: a program that
+/// calls one stops with a named refusal, not a wrong result.
+#[test]
+fn a_compare_intrinsic_is_refused_until_it_is_lowered() {
+    for name in ["scmp", "ucmp"] {
+        let text = format!(
+            "declare i16 @llvm.{name}.i16.i16(i16, i16)\n\
+             define i16 @f(i16 %a, i16 %b) addrspace(1) {{\n  %r = call i16 @llvm.{name}.i16.i16(i16 %a, i16 %b)\n  ret i16 %r\n}}\n"
+        );
+        assert_eq!(selected(&text, "f").err(), Some(Unselected(format!("@llvm.{name}.i16.i16"))), "{name}");
+    }
+}
+
 /// `llvm.stacksave` reads the stack pointer and `llvm.stackrestore` writes it
 /// from a pointer.
 #[test]
@@ -875,6 +888,34 @@ define i16 @f() addrspace(1) {
     assert!(!listing(text, "f").iter().any(|one| one.starts_with("rep")), "{moves:?}");
 }
 
+/// A fill or copy through a huge pointer is the inline routine that ends each
+/// run where the offset wraps (`isel/huge.rs`), not one `rep` through es:di,
+/// which wraps at 64K: an 80000-byte fill of a huge array was `rep stosd` of
+/// 20000 dwords from offset 0. A near operand beside a huge one is its offset
+/// and DGROUP.
+#[test]
+fn test_a_fill_or_copy_through_a_huge_pointer_is_the_run_splitting_routine() {
+    let fill = "declare void @llvm.memset.p3.i32(ptr addrspace(3), i8, i32, i1)
+define void @f(ptr addrspace(3) %p, i32 %n) addrspace(1) {
+  call void @llvm.memset.p3.i32(ptr addrspace(3) %p, i8 7, i32 80000, i1 false)
+  call void @llvm.memset.p3.i32(ptr addrspace(3) %p, i8 7, i32 %n, i1 false)
+  ret void
+}
+";
+    let copy = "declare void @llvm.memcpy.p3.p0.i32(ptr addrspace(3), ptr, i32, i1)
+define void @f(ptr addrspace(3) %p) addrspace(1) {
+  %a = alloca [64 x i8]
+  call void @llvm.memcpy.p3.p0.i32(ptr addrspace(3) %p, ptr %a, i32 70000, i1 false)
+  ret void
+}
+";
+    for text in [fill, copy] {
+        let lines = listing(text, "f");
+        assert!(lines.iter().any(|one| one.starts_with("db ")), "the routine's bytes: {lines:?}");
+        assert!(!lines.iter().any(|one| one.starts_with("rep")), "no rep through es:di: {lines:?}");
+    }
+}
+
 /// A pattern fill of a word or dword is `rep stosw` or `rep stosd` of its
 /// cells; two cells are stores. Its count in cells is never doubled.
 #[test]
@@ -1051,11 +1092,12 @@ define i16 @f() addrspace(1) {{
             "push di",
             "L0_0:",
             "lea di, [bp-8]",
+            // The segment is loaded from `ss` itself (MachineCopyPropagation):
+            // the same 16 instructions, the selector in a segment register from
+            // the start.
+            "mov es, ss",
             "mov eax, 16843009",
             "mov cx, 1",
-            // The segment is loaded from `ss` itself (MachineCopyPropagation),
-            // after the counts: the same 16 instructions as before.
-            "mov es, ss",
             "rep stosd",
             "stosw",
             "stosb",
@@ -1161,6 +1203,7 @@ define i16 @f() addrspace(1) {
 /// from the pool in its narrowest exact format, as LLVM's does.
 #[test]
 fn test_a_constant_condition_and_a_float_constant_select() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "define i16 @f() addrspace(1) {
 b1:
   br i1 true, label %b2, label %b3
@@ -1296,6 +1339,7 @@ define ptr addrspace(1) @f(ptr addrspace(1) %p, i16 %i) addrspace(1) {
 /// through memory, and an ordered compare is fcom, sahf and ja.
 #[test]
 fn test_floats_are_x87_values() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "@k = internal global double 1.5
 @out = internal global float 0.0
 declare cc1000 void @show(float) addrspace(1)
@@ -1417,6 +1461,7 @@ define double @f(double %x) addrspace(1) {
 /// fptosi is fisttp; fptoui, which x87 cannot store, is a dword's low word.
 #[test]
 fn test_a_float_to_an_integer_is_stored_toward_zero() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "define i16 @f(double %x) addrspace(1) {
   %s = fptosi double %x to i16
   %u = fptoui double %x to i16
@@ -1571,6 +1616,7 @@ fn test_a_far_pointer_as_a_word_is_its_offset() {
 /// equal with PF set, so oeq is `sete` and `setnp`, une `setne` or `setp`.
 #[test]
 fn test_float_equality_is_equal_and_ordered() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "define i1 @eq(double %a, double %b) addrspace(1) {
   %c = fcmp oeq double %a, %b
   ret i1 %c
@@ -1596,6 +1642,7 @@ define i1 @ne(double %a, double %b) addrspace(1) {
 /// was refused.
 #[test]
 fn test_float_unordered_predicates_are_below() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "define i1 @ult(double %a, double %b) addrspace(1) {
   %c = fcmp ult double %a, %b
   ret i1 %c
@@ -1895,6 +1942,7 @@ fn test_a_volatile_load_is_not_an_x87_operand() {
 /// fptosi, lrint and fptrunc each went through a frame temporary.
 #[test]
 fn test_a_conversion_only_a_store_reads_is_stored_by_x87() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "@b = internal global i16 0
 @o = internal global float 0.0
 declare i16 @llvm.lrint.i16.f64(double)
@@ -3340,6 +3388,7 @@ fn test_a_byval_parameter_is_the_address_of_its_bytes_in_the_frame() {
 /// isel's calls listed nothing, and floatassign read the cell again.
 #[test]
 fn test_a_float_in_a_cell_a_call_may_write_is_not_read_again_after_it() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "@out = internal global double 0.0
 declare void @g(ptr) addrspace(1)
 define void @f(double %a) addrspace(1) {
@@ -3988,6 +4037,7 @@ b2:
 /// frame where one cell served them all.
 #[test]
 fn test_stack_temporaries_share_one_cell() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "declare void @g(double) addrspace(1)
 define void @f(double %a, double %b) addrspace(1) {
   %x = fadd double %a, %b
@@ -5935,6 +5985,21 @@ define i16 @f() addrspace(1) {
     assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
 }
 
+/// `ptrtoint` of a far global's GEP to a word is its offset: `at < messages +
+/// sizeof messages` (runtime/qb/error.c at -O2) was refused, "an address of no
+/// global".
+#[test]
+fn test_ptrtoint_of_a_far_global_to_a_word_is_its_offset() {
+    let text = "@messages = internal addrspace(1) global [8 x i8] zeroinitializer
+define i1 @f(i16 %x) addrspace(1) {
+  %c = icmp ult i16 %x, ptrtoint (ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) @messages, i16 8) to i16)
+  ret i1 %c
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov ax, offset messages".to_owned()) && got.contains(&"add ax, 8".to_owned()), "{got:?}");
+}
+
 /// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
 /// address of no global": 13 llrm-qb tests failed to assemble a POKE.
 #[test]
@@ -5945,7 +6010,7 @@ fn test_a_gep_off_a_segment_constant_is_a_far_number() {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov bx, 1".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov al, byte ptr es:[1]".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
 }
 
 /// More constant-expression operands (alias/farstruct.c, textfill): the dword
@@ -5984,4 +6049,60 @@ fn test_a_branchs_odds_are_llvms_branch_probabilities() {
     let mut taken: Vec<u32> = body.odds.taken.values().copied().collect();
     taken.sort();
     assert_eq!(taken, vec![0x3000_0000, 0x5000_0000], "{:?}", body.odds.taken);
+}
+
+/// A store through a far constant whose offset half is zero (`POKE` into
+/// segment `&HA000`): the address is `es:[index]`. The offset was a register
+/// loaded with 0 (`xor bx, bx` every trip of qbdemo's loop) used as the base,
+/// which LLVM's `matchAddress` folds into the displacement.
+#[test]
+fn test_a_far_constant_with_a_zero_offset_is_no_base_register() {
+    let text = "define void @f(i16 %i) addrspace(1) {
+  %p = getelementptr i8, ptr addrspace(1) inttoptr (i32 -1610612736 to ptr addrspace(1)), i16 %i
+  store i8 1, ptr addrspace(1) %p
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.contains("40960")), "the premise: the selector is set: {got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("xor ") || line.ends_with(", 0")), "{got:?}");
+}
+
+/// A dword constant returned in a word pair: DX is its high word as a
+/// constant. It was a shift of the register that holds the whole
+/// (`mov edx, 42; shr edx, 16` for a high word of 0).
+#[test]
+fn test_a_dword_constant_returned_in_a_word_pair_is_a_word_each() {
+    let text = "define cc1000 i32 @f() addrspace(1) {
+  ret i32 70000
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line == "mov ax, 4464"), "the premise: the low word: {got:?}");
+    assert!(got.iter().any(|line| line == "mov dx, 1"), "the high word is its own constant: {got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("shr ")), "{got:?}");
+}
+
+/// IndVars' closed form of a sum over an early-exit loop is built one bit wider
+/// than its counter (`n(n-1)/2` in i33, as the pin builds it): lcexit.bas at
+/// -O2 stopped with "@__main: a i33 value" once SimplifyCFG's slots ran.
+/// The odd width, and the `llvm.umin` call on it, are legalized in the pin.
+#[test]
+fn test_a_closed_form_sum_in_an_odd_width_assembles() {
+    let text =
+        "declare i33 @llvm.umin.i33(i33, i33) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+define i32 @f(i16 %n) addrspace(1) {
+entry:
+  %a = zext i16 %n to i33
+  %m = call i33 @llvm.umin.i33(i33 %a, i33 9)
+  %d = add nsw i16 %n, -1
+  %e = zext i16 %d to i33
+  %p = mul i33 %m, %e
+  %h = lshr i33 %p, 1
+  %r = trunc i33 %h to i32
+  ret i32 %r
+}
+";
+    let got = listing_on("486", text, "f");
+    assert!(!got.is_empty(), "{got:?}");
 }
