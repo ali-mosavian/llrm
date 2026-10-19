@@ -2632,11 +2632,8 @@ impl State<'_, '_> {
         keep_one_input_phis: bool,
     ) {
         let function = &*self.unit.function;
-        let phis: Vec<InstId> = function
-            .block(block)
-            .iter()
-            .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-            .collect();
+        let phis: Vec<InstId> =
+            function.block(block).iter().take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect();
         // Return early if there are no PHI nodes to update.
         let Some(&front) = phis.first() else { return };
 
