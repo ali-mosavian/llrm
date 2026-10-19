@@ -12,6 +12,9 @@ pub mod machine;
 pub mod mc;
 pub mod mfunc;
 pub mod regalloc;
+pub mod tti;
+#[cfg(test)]
+mod tti_tests;
 
 use llrm_lir::registers::{RegId, Row};
 
