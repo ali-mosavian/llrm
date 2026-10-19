@@ -212,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 33] = [
+        const CHECKED: [&str; 34] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -286,6 +286,10 @@ mod tests {
             // `(x + c1) + c2` and keeps `nuw`/`nsw` only if both adds had
             // them, and `c1 + c2` did not overflow.
             "loopunrollpass.rs",
+            // DemandedBits.cpp's `determineLiveOperandBits` reads an
+            // add's/sub's/mul's `nsw`/`nuw` to see one more high bit live;
+            // it never drops one.
+            "demandedbits.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
