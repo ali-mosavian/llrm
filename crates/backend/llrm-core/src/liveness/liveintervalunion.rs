@@ -31,6 +31,7 @@
 //! `liveregmatrix`.
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Range;
 use std::ops::Bound;
 
 use super::liverange::LiveRange;
@@ -90,12 +91,50 @@ impl LiveIntervalUnion {
         &self,
         x: &SlotIndex,
     ) -> Option<SlotIndex> {
+        #[cfg(test)]
+        tests::SEARCHES.with(|n| n.set(n.get() + 1));
         if let Some((start, (stop, _))) = self.segments.range(..=x.clone()).next_back() {
             if stop > x {
                 return Some(start.clone());
             }
         }
         self.segments.range((Bound::Excluded(x.clone()), Bound::Unbounded)).next().map(|(start, _)| start.clone())
+    }
+
+    /// An iterator over the entries from the one starting at `key`.
+    fn from(
+        &self,
+        key: &SlotIndex,
+    ) -> Range<'_, SlotIndex, (SlotIndex, VReg)> {
+        #[cfg(test)]
+        tests::SEARCHES.with(|n| n.set(n.get() + 1));
+        self.segments.range(key..)
+    }
+
+    /// `const_iterator::advanceTo(x)` (IntervalMap.h#L1495): moves `union_i`
+    /// to the first entry with a stop after `x` and returns it, searching from
+    /// the current position.
+    ///
+    /// DEVIATE (container, as above): `treeAdvanceTo` (IntervalMap.h#L1534)
+    /// stays on the current leaf when `x` is in it and climbs the path
+    /// otherwise; here the iterator steps through at most a leaf's worth of
+    /// entries before `find` searches from the root.
+    fn advance_to<'a>(
+        &'a self,
+        union_i: &mut Range<'a, SlotIndex, (SlotIndex, VReg)>,
+        x: &SlotIndex,
+    ) -> Option<(SlotIndex, SlotIndex, VReg)> {
+        // `IntervalMap`'s `LeafSize` for 8-byte keys and values: 3 cache lines
+        // over 24 bytes an entry.
+        const LEAF_SIZE: usize = 8;
+        for (start, &(stop, reg)) in union_i.by_ref().take(LEAF_SIZE) {
+            if stop > *x {
+                return Some((*start, stop, reg));
+            }
+        }
+        let key = self.find(x)?;
+        *union_i = self.from(&key);
+        union_i.next().map(|(start, &(stop, reg))| (*start, stop, reg))
     }
 
     /// The entry after the one starting at `key`.
@@ -366,12 +405,17 @@ impl Query {
         }
         let lr_end = lr.segments.len();
         let mut recent_reg: Option<VReg> = None;
-        while let Some(key) = self.live_union_i.clone() {
+        // `LiveUnionI` as an iterator over the map from its key: `++` is a
+        // step, not a search from the root.
+        let Some(key) = self.live_union_i else {
+            self.seen_all_interferences = true;
+            return self.interfering_vregs.len();
+        };
+        let mut union_i = union.from(&key);
+        let mut current = union_i.next().map(|(start, &(stop, reg))| (*start, stop, reg));
+        while let Some((first, first_stop, first_reg)) = current {
             assert!(self.lri != lr_end, "Reached end of LR");
-            let (mut ustart, mut ustop, mut ureg) = {
-                let (stop, reg) = union.segments[&key].clone();
-                (key, stop, reg)
-            };
+            let (mut ustart, mut ustop, mut ureg) = (first, first_stop, first_reg);
             // Check for overlapping interference.
             while lr.segments[self.lri].start < ustop && lr.segments[self.lri].end > ustart {
                 // This is an overlap, record the interfering register.
@@ -384,9 +428,8 @@ impl Query {
                     }
                 }
                 // This LiveUnion segment is no longer interesting.
-                match union.next(&ustart) {
-                    Some(next) => {
-                        let (stop, reg) = union.segments[&next].clone();
+                match union_i.next() {
+                    Some((&next, &(stop, reg))) => {
                         ustart = next;
                         ustop = stop;
                         ureg = reg;
@@ -398,7 +441,7 @@ impl Query {
                     }
                 }
             }
-            self.live_union_i = Some(ustart.clone());
+            self.live_union_i = Some(ustart);
             // The iterators are now not overlapping, LiveUnionI has been
             // advanced beyond LRI.
             assert!(lr.segments[self.lri].end <= ustart, "Expected non-overlap");
@@ -408,11 +451,13 @@ impl Query {
                 break;
             }
             // Detect overlap, handle above.
+            current = Some((ustart, ustop, ureg));
             if lr.segments[self.lri].start < ustop {
                 continue;
             }
             // Still not overlapping. Catch up LiveUnionI.
-            self.live_union_i = union.find(&lr.segments[self.lri].start);
+            current = union.advance_to(&mut union_i, &lr.segments[self.lri].start);
+            self.live_union_i = current.map(|(start, ..)| start);
         }
         self.seen_all_interferences = true;
         self.interfering_vregs.len()
@@ -421,6 +466,7 @@ impl Query {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
@@ -429,6 +475,11 @@ mod tests {
     use crate::liveness::slotindex::SlotIndexes;
     use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+
+    thread_local! {
+        /// Searches of the union from its root: `find` and `from`.
+        pub(super) static SEARCHES: Cell<usize> = const { Cell::new(0) };
+    }
 
     fn indexes() -> Vec<SlotIndex> {
         let insns: Vec<Arc<Insn>> = (0..300).map(|_| Arc::new(Insn::new(0, None, None, vec![], vec![]))).collect();
@@ -527,6 +578,25 @@ mod tests {
             hits += usize::from(!want.is_empty());
         }
         assert!(hits > 60 && hits < 299, "premise: some ranges interfere and some do not ({hits})");
+    }
+
+    /// A range threading between a register's segments catches up a step at a
+    /// time, as `advanceTo` does; a search from the root per gap cost 7.0 M
+    /// instructions where LLVM's walk costs 0.76 M (d_faces, -O2 m32).
+    #[test]
+    fn test_a_query_steps_through_nearby_segments_instead_of_searching() {
+        let at = indexes();
+        let mut union = LiveIntervalUnion::new();
+        let held: Vec<(usize, usize)> = (0..60).map(|k| (4 * k + 1, 4 * k + 2)).collect();
+        union.unify(1, &range(&held, &at));
+        let probe: Vec<(usize, usize)> = (0..60).map(|k| (4 * k + 2, 4 * k + 3)).collect();
+        let lr = range(&probe, &at);
+        let mut q = Query::new();
+        q.init(1, 1, 0, &union);
+        SEARCHES.with(|n| n.set(0));
+        assert!(!q.check_interference(&lr, &union));
+        let searches = SEARCHES.with(Cell::get);
+        assert!(searches <= 3, "{searches} searches for 60 gaps");
     }
 
     #[test]
