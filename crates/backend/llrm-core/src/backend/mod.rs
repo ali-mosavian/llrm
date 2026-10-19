@@ -215,6 +215,7 @@ pub mod relayout;
 pub mod rmw;
 pub mod schedule;
 pub mod selects;
+pub mod saverestore;
 pub mod shrinkwrap;
 pub mod slots;
 pub mod stackusage;

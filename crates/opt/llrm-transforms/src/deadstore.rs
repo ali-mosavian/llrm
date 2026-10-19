@@ -382,6 +382,11 @@ impl<'a> Dse<'a> {
         if let Some(&(length, skip)) = self.shortened.get(&inst) {
             reference.disp += skip;
             reference.width = length as u32;
+            // The destination is still the old address: a walk that reads
+            // `pointer` would see the bytes where they were.
+            if skip != 0 {
+                reference.pointer = None;
+            }
         }
         Some(self.aa.location_for(&reference, false))
     }
