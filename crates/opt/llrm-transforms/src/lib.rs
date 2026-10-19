@@ -249,6 +249,7 @@ pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
 pub mod twoentryphi;
+pub mod uncondicmp;
 pub mod unroll;
 pub mod unroll_jam;
 pub mod unswitch;
