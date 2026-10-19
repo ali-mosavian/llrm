@@ -23,8 +23,9 @@
 //!
 //! DEVIATE 1: a floating value is a value number, not `FP0`..`FP6`: the stack
 //! model keeps the numbers in `values`, top first, and a scratch register is a
-//! fresh number. More than `float_stack` live values at once is refused where
-//! LLVM's `pushReg` is fatal.
+//! fresh number. Registers become values first (`fpregs`). More than
+//! `float_stack` live values at once is refused where LLVM's `pushReg` is
+//! fatal.
 //!
 //! DEVIATE 2: LLVM has no simultaneous copies at this stage (`PHIElimination`
 //! writes them one at a time through temporaries); a group of phi copies here
@@ -1023,6 +1024,8 @@ pub(super) fn converted(
     body: &LirBody,
     classes: &RegisterClasses,
 ) -> Result<LirBody, Raised> {
+    let valued = crate::backend::fpregs::valued(body);
+    let body = valued.as_ref().unwrap_or(body);
     let regs = body.regs();
     let floating = floatassign::_floating_values(body);
     if floating.is_empty() {
