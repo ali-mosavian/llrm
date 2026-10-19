@@ -121,7 +121,7 @@ pub fn removed_with(module: &mut Module) -> (Vec<GlobalId>, BTreeSet<GlobalId>) 
                         function.value(value).def,
                         llrm_mir::module::ValueDef::Instruction(_)
                     )
-                    && function.users(value).len() == 1
+                    && function.users(value).has_one_use()
                 {
                     unsound.insert(caller);
                 }

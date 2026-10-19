@@ -4065,7 +4065,7 @@ impl Selector<'_, '_, '_> {
         else {
             return None;
         };
-        (self.width(instruction.ty).ok()? >= width && self.function.users(value).len() == 1)
+        (self.width(instruction.ty).ok()? >= width && self.function.users(value).has_one_use())
             .then_some((*first, *second, value))
     }
 
@@ -4091,7 +4091,7 @@ impl Selector<'_, '_, '_> {
             };
             let Some(constant) = self.constant(*by, own) else { break };
             // An add something else reads is made anyway: the address uses it.
-            if own < width || self.function.users(value).len() != 1 {
+            if own < width || !self.function.users(value).has_one_use() {
                 break;
             }
             total += if *kind == BinaryOp::Add { constant } else { -constant };

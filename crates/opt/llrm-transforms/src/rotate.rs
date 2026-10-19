@@ -576,7 +576,7 @@ pub(crate) fn _rotate(
         let mut updater = SsaUpdater::new(function.value(value).ty, function.value(value).name.clone().as_deref());
         updater.add_available_value(shape.preheader, starts[index]);
         updater.add_available_value(shape.latch, latest(nexts[index]));
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             let user = function.instruction(one.user);
             let at = match (user.opcode == Opcode::Phi).then(|| user.operands[one.index as usize + 1]) {
                 Some(Operand::Block(from)) => from,
@@ -598,7 +598,7 @@ pub(crate) fn _rotate(
         let mut updater = SsaUpdater::new(function.value(value).ty, function.value(value).name.clone().as_deref());
         updater.add_available_value(shape.preheader, copy);
         updater.add_available_value(shape.header, Operand::Value(value));
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             if function.parent(one.user) != Some(shape.header) {
                 updater.rewrite_use(context, function, one);
             }
