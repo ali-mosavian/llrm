@@ -89,6 +89,10 @@ impl llrm_target::Target for M16 {
         instructions::TEXT.clone()
     }
 
+    fn dialect(&self) -> &'static llrm_instr::Dialect {
+        llrm_x86::instructions::dialect()
+    }
+
     fn operand_bytes(&self) -> i64 {
         2
     }

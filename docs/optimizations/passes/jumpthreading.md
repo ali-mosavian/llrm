@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/jumpthreading.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/jumpthreading.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/jumpthreading.rs sha256:7a9bf509d8fe4ae46e6bad63b063f34f9d8296853d72d40c4b41fff558cd2466 -->
+<!-- src: crates/opt/llrm-transforms/src/jumpthreading.rs sha256:59fd09854c2df341d22625dc5cb8cdfce3adab4c5fa701d78bbd5027bfc02fa8 -->
 
 # jumpthreading
 
@@ -43,9 +43,9 @@ the finished pass):
 - J4. `DomTreeUpdater` is not used: the pass returns `none()` when it
   changed anything and the manager rebuilds the dominator tree. The
   reachable set at the start is a walk from the entry.
-- J5. The sweep visits the blocks of the layout as it stood when the sweep
-  began; a block made during it is met by the next sweep (LLVM's list
-  iterator meets one placed after the current block in the same sweep).
+- J5. The sweep walks the live layout as LLVM walks its block list: a block
+  placed after the current one is met in the same sweep, and the walk finds
+  its place again by position (`next_in_layout`) when a block is removed.
 - J6. `fcmp` is not looked through (`CmpInst` is integer compares only); MIR
   has no vectors.
 - J7. Debug records are not retargeted (`DbgVariableRecord`s in `updateSSA`
