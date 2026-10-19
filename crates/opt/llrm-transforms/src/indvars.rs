@@ -172,6 +172,8 @@ pub struct IndVars {
     /// `max_unroll_iterations`, 0 for any number), none where it is off: a
     /// signed counter of such a loop is left for it until `exit_values`.
     pub unrolls: Option<i64>,
+    /// Whether LFTR runs: only where loop-rotate has run before (D22).
+    pub lftr: bool,
 }
 
 impl FunctionPass for IndVars {
@@ -255,7 +257,8 @@ impl FunctionPass for IndVars {
         if folded {
             standing.reshaped();
         }
-        let tested = crate::lftr::enabled()
+        let tested = self.lftr
+            && crate::lftr::enabled()
             && crate::lftr::replaced(unit.context, unit.layout, unit.function, unit.declared, &outer);
         if tested {
             standing.changed();
