@@ -277,8 +277,8 @@ fn terminator_hoisted(
                     continue;
                 }
                 if !conditional
-                    || crate::speculate::passing_value_always_undefined(context, function, value, phi)
-                    || crate::speculate::passing_value_always_undefined(context, function, other_value, phi)
+                    || crate::alwaysundef::always_undefined(context, spec, function, value, phi, false)
+                    || crate::alwaysundef::always_undefined(context, spec, function, other_value, phi, false)
                 {
                     return false;
                 }

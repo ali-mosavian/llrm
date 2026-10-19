@@ -76,6 +76,7 @@
 pub mod adce;
 pub mod addresssink;
 pub mod algebraic;
+pub mod alwaysundef;
 pub mod argpromotion;
 #[cfg(test)]
 mod argpromotion_tests;
@@ -98,6 +99,7 @@ pub mod combine_casts;
 #[cfg(test)]
 mod combine_casts_tests;
 pub mod combine_compares;
+pub mod combine_demanded;
 pub mod combine_gep;
 pub mod combine_gep_index;
 pub mod combine_gep_merge;
@@ -154,6 +156,7 @@ mod gvn_load_tests;
 mod gvn_scalar_tests;
 pub mod hoistcommon;
 pub mod homes;
+pub mod icmpchain;
 pub mod indvars;
 pub mod inferspace;
 #[cfg(test)]
@@ -175,6 +178,7 @@ pub mod jumpthread;
 pub mod jumpthreading;
 #[cfg(test)]
 mod jumpthreading_tests;
+pub mod knownpred;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod lftr;
@@ -227,6 +231,16 @@ pub mod ports;
 pub mod predicateinfo;
 pub mod profit;
 pub mod promote;
+pub mod reassociate;
+pub mod reassociate_fneg;
+pub mod reassociate_forms;
+pub mod reassociate_fp;
+pub mod reassociate_inst;
+pub mod reassociate_negate;
+pub mod reassociate_optimize;
+pub mod reassociate_pairs;
+pub mod reassociate_rank;
+pub mod reassociate_tree;
 pub mod rotate;
 pub mod sccp;
 pub mod sccpsolver;
@@ -242,6 +256,7 @@ pub mod splitcopy;
 pub mod sroa;
 pub mod switchcg;
 pub mod switchlower;
+pub mod tailcallelim;
 pub mod tailmerge;
 pub mod tailrec;
 #[cfg(test)]
@@ -249,6 +264,7 @@ pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
 pub mod twoentryphi;
+pub mod undefpred;
 pub mod unroll;
 pub mod unroll_jam;
 pub mod unswitch;

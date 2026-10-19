@@ -141,7 +141,7 @@ pub fn selected(
             Loc::Mem(one) => Some(one.width),
             Loc::Imm(one) => Some(one.width),
             Loc::Held(one) => Some(one.width),
-            Loc::Address(_) => None,
+            Loc::Address(_) | Loc::Field(_) => None,
         };
         if matches!(other, Loc::Mem(_)) || other_width != Some(width) {
             continue;

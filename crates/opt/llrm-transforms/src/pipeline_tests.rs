@@ -1452,6 +1452,7 @@ fn test_sroa_and_mem2reg_are_on_by_default_and_the_registry_calls_their_slots_tr
                 applied.options.mem2reg,
                 applied.options.rotating(),
                 &[],
+                &[],
             );
             assert_eq!(checked, Ok(()), "{phase:?} sroa {} mem2reg {}", applied.options.sroa, applied.options.mem2reg);
         }
@@ -1504,6 +1505,25 @@ fn test_llvm_order_keeps_a_loop_computing_the_same() {
     let after = interpret::run(&module, "f", vec![interpret::Val::Int { bits: 6, width: 16 }], FUEL);
     assert_eq!(format!("{before:?}"), format!("{after:?}"));
     assert!(!llrm_mir::print::module(&module).contains("alloca"), "an alloca is left");
+}
+
+/// Turning a pass off (`unroll: false`) left its Translated slot out of the
+/// order, and the parity check panicked ("slot unroll@753 is Translated and
+/// not run in Simplify") in the sixteen nib tests that build such options.
+#[test]
+fn test_a_switched_off_pass_does_not_fail_the_slot_check() {
+    let text = "define i16 @f(i16 %n) {\nb0:\n  ret i16 %n\n}\n";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied {
+        options: pipeline::Options { llvm_order: true, unroll: false, ..Default::default() },
+        ..Applied::default()
+    };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap_or_else(|error| panic!("{error}"));
 }
 
 /// #2194, x_hanoi2's `mv`: the loop `tailrec` makes of the second call has the
@@ -2303,4 +2323,92 @@ out:
     ] {
         assert!(entry_branches(options), "{level}: the slot did not unswitch the header test");
     }
+}
+
+/// `ret` took `frame` in, and `selftest` was then given the body `ret` had
+/// before, with its calls to `frame`, which had no body left: the load of
+/// `b.draw` was folded past them and `selftest` returned 0, not 1.
+#[test]
+fn an_inlined_body_is_spliced_as_it_is_after_it_took_its_own_callees_in() {
+    let mut module = llrm_analysis::testing::parsed(
+        r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
+
+define internal cc 1005 void @"_frame@3"(ptr addrspace(1) nocapture %0, i16 %1) memory(readwrite, inaccessiblemem: none) willreturn nounwind norecurse {
+b1:
+  %2 = icmp ne i16 %1, 0
+  br i1 %2, label %b3, label %b2
+
+b2:
+  %3 = load i16, ptr addrspace(1) %0, !tbaa !9
+  %4 = and i16 %3, -3
+  store i16 %4, ptr addrspace(1) %0, !tbaa !9
+  br label %b4
+
+b3:
+  %5 = load i16, ptr addrspace(1) %0, !tbaa !9
+  %6 = or i16 %5, 2
+  store i16 %6, ptr addrspace(1) %0, !tbaa !9
+  br label %b4
+
+b4:
+  ret void
+}
+
+define internal cc 1005 void @"_ret@3"(ptr addrspace(1) nocapture %0, ptr addrspace(1) nocapture %1) memory(readwrite, inaccessiblemem: none) willreturn nounwind norecurse {
+b1:
+  store i16 3, ptr addrspace(1) %0, !tbaa !9
+  call cc 1005 void @"_frame@3"(ptr addrspace(1) %1, i16 0)
+  call cc 1005 void @"_frame@3"(ptr addrspace(1) %1, i16 0)
+  ret void
+}
+
+define internal cc 1005 range(i16 0, 2) i16 @"_selftest@3"() memory(readwrite, inaccessiblemem: none) willreturn nounwind norecurse {
+b1:
+  %0 = alloca [2 x i8]
+  %1 = alloca [2 x i8]
+  store i16 1, ptr %1, !tbaa !9
+  %2 = addrspacecast ptr %1 to ptr addrspace(1)
+  call cc 1005 void @"_frame@3"(ptr addrspace(1) %2, i16 -1)
+  %3 = addrspacecast ptr %0 to ptr addrspace(1)
+  call cc 1005 void @"_ret@3"(ptr addrspace(1) %3, ptr addrspace(1) %2)
+  %4 = load i16, ptr %0, !tbaa !9
+  %5 = icmp eq i16 %4, 3
+  %6 = load i16, ptr %1
+  %7 = icmp eq i16 %6, 1
+  %or.cond = select i1 %5, i1 %7, i1 false
+  br i1 %or.cond, label %b5, label %b3
+
+b3:
+  %8 = phi i16 [ 1, %b5 ], [ 0, %b1 ]
+  ret i16 %8
+
+b5:
+  br label %b3
+}
+
+define i16 @_main() addrspace(1) {
+b1:
+  %0 = call cc 1005 i16 @"_selftest@3"()
+  %1 = sext i16 %0 to i32
+  %2 = call cc 1005 addrspace(1) i16 @"_report@3"(i32 %1)
+  ret i16 0
+}
+
+declare cc 1005 i16 @"_report@3"(i32) addrspace(1)
+
+!5 = !{!"Simple C/C++ TBAA"}
+!6 = !{!"omnipotent char", !5, i64 0}
+!8 = !{!"int2", !6, i64 0}
+!9 = !{!8, !8, i64 0}
+"#,
+    );
+    let applied = Applied { options: pipeline::Options::size(), ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("_main".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let printed = llrm_mir::print::module(&module);
+    assert!(printed.contains("@\"_report@3\"(i32 1)"), "selftest returned 0, not 1:\n{printed}");
 }

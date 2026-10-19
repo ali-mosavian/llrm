@@ -129,9 +129,9 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
     // jumps@17, allocate@11 (greedy by default under LLVM's order) and
     // merge@818 (MemCpyOpt's memsets), dse@820 (stage 1) and the two
     // jumpthreading slots (stage S1), indvars@738, coalesce@10, and
-    // decide@1178, decide@690 and decide@832 (SimplifyCfg).
-    assert_eq!(count.partial, 11);
-    assert!(parity::report().contains("jumps@17") && parity::report().contains("11 partial"));
+    // decide@1178, decide@1244, decide@690 and decide@832 (SimplifyCfg).
+    assert_eq!(count.partial, 12);
+    assert!(parity::report().contains("jumps@17") && parity::report().contains("12 partial"));
 }
 
 /// A Partial slot without its criterion and exit says what is done and not what
@@ -403,6 +403,7 @@ fn test_no_old_slot_of_the_built_lists_runs_a_translated_pass() {
                 on.options.sroa,
                 on.options.mem2reg,
                 on.options.rotating(),
+                &[],
                 &held,
             );
             assert_eq!(checked, Ok(()), "{phase:?} {level:?}");
