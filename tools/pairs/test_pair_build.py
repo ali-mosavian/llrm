@@ -16,6 +16,7 @@ def run(scratch: Path, worktree: Path, sha: str, log: Path) -> None:
         echo "$CARGO_TARGET_DIR" >> {log}
         mkdir -p $CARGO_TARGET_DIR/dist $CARGO_TARGET_DIR/deps
         for b in llrm-c llrm-qb llrm-nib nibfront; do echo $b > $CARGO_TARGET_DIR/dist/$b; done
+        for t in jwasm jwlink dosbox-x; do echo $t > $CARGO_TARGET_DIR/dist/$t; done
         chmod +x $CARGO_TARGET_DIR/dist/*; echo "llrm-c: src.rs" > $CARGO_TARGET_DIR/dist/llrm-c.d
         head -c 1000 /dev/zero > $CARGO_TARGET_DIR/deps/big.rlib
         """))
@@ -33,7 +34,7 @@ def test_a_pair_leaves_only_the_binaries_per_sha_and_two_pairs_on_one_worktree_s
     run(tmp_path, worktree, "bbb222", log)
     for sha in ("aaa111", "bbb222"):
         left = sorted(p.relative_to(tmp_path / f"sbp-{sha}").as_posix() for p in (tmp_path / f"sbp-{sha}").rglob("*") if p.is_file())
-        assert left == ["dist/llrm-c", "dist/llrm-c.d", "dist/llrm-nib", "dist/llrm-qb", "dist/nibfront", "ok"], (sha, left)
+        assert left == ["dist/dosbox-x", "dist/jwasm", "dist/jwlink", "dist/llrm-c", "dist/llrm-c.d", "dist/llrm-nib", "dist/llrm-qb", "dist/nibfront", "ok"], (sha, left)
     targets = set(log.read_text().split())
     assert targets == {str(tmp_path / "tgt-dist-wt-head10")}, targets
     run(tmp_path, worktree, "aaa111", log)  # built already: no second build
