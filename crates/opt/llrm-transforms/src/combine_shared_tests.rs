@@ -2,7 +2,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::InstId;
 use llrm_mir::opcode::Opcode;
 
-use super::simplify_associative_or_commutative;
+use super::{should_change_type, simplify_associative_or_commutative};
 use crate::combine::{Combiner, Visit, combine_with};
 use crate::testing::{parsed, printed};
 
@@ -122,4 +122,17 @@ fn constants_either_side_of_a_zext_fold_together() {
     let text = "define i16 @f(i8 %x) {\nb0:\n  %a = and i8 %x, 15\n  %z = zext i8 %a to i16\n  %r = and i16 %z, 255\n  ret i16 %r\n}\n";
     let want = "define i16 @f(i8 %x) {\nb0:\n  %z = zext i8 %x to i16\n  %r = and i16 %z, 15\n  ret i16 %r\n}\n";
     assert_eq!(combined(text), want);
+}
+
+/// `shouldChangeType`: shrink to a desirable width, never from a legal or
+/// desirable width to an illegal one, never grow when both are illegal.
+#[test]
+fn should_change_type_follows_the_native_widths() {
+    let layout = DataLayout::parse("e-n16:32").expect("parses");
+    assert!(should_change_type(&layout, 32, 8), "shrink to i8");
+    assert!(should_change_type(&layout, 17, 16), "illegal to legal");
+    assert!(!should_change_type(&layout, 16, 17), "legal to illegal");
+    assert!(!should_change_type(&layout, 32, 64), "i64 is not native here");
+    assert!(!should_change_type(&layout, 17, 33), "both illegal: no growth");
+    assert!(should_change_type(&layout, 33, 17), "both illegal: shrink");
 }
