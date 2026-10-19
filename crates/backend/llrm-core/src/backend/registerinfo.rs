@@ -129,7 +129,8 @@ mod tests {
     /// are on their way out (row 11).
     #[test]
     fn the_description_says_what_the_hand_tables_say() {
-        for (register, width) in llrm_x86::registers::WIDTHS.iter() {
+        // The tables name long mode's registers too, which m16's file does not list.
+        for (register, width) in llrm_x86::registers::WIDTHS.iter().filter(|(register, _)| known(**register)) {
             assert_eq!(bytes(*register), Some(*width), "{register:?}");
             assert_eq!(root(*register), crate::model::ir::root(*register), "{register:?}");
             assert_eq!(
@@ -138,8 +139,8 @@ mod tests {
                 "{register:?}"
             );
         }
-        for (root_register, views) in llrm_x86::registers::AT_WIDTH.iter() {
-            for (width, register) in views {
+        for (root_register, views) in llrm_x86::registers::AT_WIDTH.iter().filter(|(root, _)| known(**root)) {
+            for (width, register) in views.iter().filter(|(_, register)| known(**register)) {
                 assert_eq!(view(*root_register, *width as u32 * 8), Some(*register), "{root_register:?} at {width}");
             }
         }
