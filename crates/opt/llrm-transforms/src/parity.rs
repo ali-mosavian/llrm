@@ -208,7 +208,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "machinesink@4",
         Backend,
         "machine-sink",
-        "criterion: hanoi, x_switch_* and mandel keep a phi constant off the path that does not read it (docs/architecture/jt-row-losses.md); exit: store and load sinking along critical edges (hasStoreBetween), SinkAndFold, the pressure test of isProfitableToSinkTo",
+        "criterion: hanoi, x_switch_* and mandel keep a phi constant off the path that does not read it; exit: store and load sinking along critical edges (hasStoreBetween), SinkAndFold, the pressure test of isProfitableToSinkTo",
     ),
     entry("phielim@4", Backend, "phi-node-elimination", Old, "lir-cleanup-poc"),
     entry(
