@@ -37,6 +37,7 @@ def main():
     c.run(c.CLANG, "-target", c.TRIPLE, "-O2", "-ffreestanding", "-fno-builtin", "-c", "-o", runtime, c.CRATE / "tests/rt/rt.c")
     sums = {name: 0 for name in ["ours", "llc"] + [n for n, _ in OFF]}
     sizes = dict(sums)
+    changed = dict(sums)  # programs whose asm differs from the baseline llc's: 0 means the flag did nothing
     for source in sorted(Path(sys.argv[1] if len(sys.argv) > 1 else c.CRATE / "tests/programs").glob("*.c")):
         work = Path(tempfile.mkdtemp())
         ir = work / "p.ll"
@@ -46,9 +47,13 @@ def main():
             c.run(c.LLC, "--no-opt", "-o", work / "ours.o", ir)
         except SystemExit:
             continue  # the reader lacks a construct; skipped for every column
+        base_text = c.run(c.BUILD / "bin/llc", "-mtriple=" + c.TRIPLE, "-O2", "-o", "-", ir)
         variants = {"ours": None, "llc": []} | {n: flags for n, flags in OFF}
         for name, flags in variants.items():
             if flags is not None:
+                text = c.run(c.BUILD / "bin/llc", "-mtriple=" + c.TRIPLE, "-O2", *flags, "-o", "-", ir)
+                base = base_text if name != "llc" else text
+                changed[name] += text != base
                 c.run(c.BUILD / "bin/llc", "-mtriple=" + c.TRIPLE, "-O2", *flags, "-filetype=obj", "-o", work / f"{name[:8]}.o", ir)
             obj = work / ("ours.o" if flags is None else f"{name[:8]}.o")
             exe = work / f"{name[:8]}.exe"
@@ -57,9 +62,9 @@ def main():
             sums[name] += count
             sizes[name] += c.code_bytes(exe)
     base = sums["llc"]
-    print(f"{'llc without':22} {'executed':>10} {'vs llc':>7} {'bytes':>7}")
+    print(f"{'llc without':22} {'executed':>10} {'vs llc':>7} {'bytes':>7} {'asm differs':>11}")
     for name, total in sorted(sums.items(), key=lambda kv: kv[1]):
-        print(f"{name:22} {total:10} {total / base:7.3f} {sizes[name]:7}")
+        print(f"{name:22} {total:10} {total / base:7.3f} {sizes[name]:7} {changed[name]:11}")
 
 
 if __name__ == "__main__":
