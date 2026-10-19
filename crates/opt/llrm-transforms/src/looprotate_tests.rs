@@ -3,7 +3,7 @@
 use llrm_mir::module::Module;
 use llrm_x86::tti::X86;
 
-use super::{Options, rotate_function};
+use super::{Options, rotate_function, rotate_function_knowing};
 use crate::testing::{parsed, printed, results};
 
 /// The loops of @f rotated with the pass's own options (header limit 16,
@@ -169,4 +169,40 @@ fn test_the_slot_gets_its_cost_model_from_the_target() {
     let generic = super::target_tti(neutral.target());
     assert_eq!(generic.cf_instr_cost(true, llrm_mir::tti::CostKind::CodeSize), llrm_mir::tti::Cost::FREE);
     assert_eq!(generic.cf_instr_cost(false, llrm_mir::tti::CostKind::CodeSize), llrm_mir::tti::Cost::BASIC);
+}
+
+/// A callee made after the pass manager's snapshot of the globals (a clone an
+/// earlier pass of the run created) indexed past it: `looprotate.rs:860`
+/// "index out of bounds" on jpeg_single and jpeg_fixed at -Os with rotate on.
+#[test]
+fn test_a_callee_made_after_the_globals_snapshot_does_not_panic_the_rotation() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %v = call i16 @late(i16 %i)
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %i
+}
+
+declare i16 @late(i16)
+",
+    );
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::lcssa::closed(function).expect("closes");
+    let tti = X86::of_cpu("i486").expect("a cpu");
+    let options = Options { max_header_size: 16, rotation_only: false, is_util_mode: false, prepare_for_lto: false };
+    let known = module.functions().position(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f") + 1;
+    assert!(rotate_function_knowing(&mut module, "f", &tti, options, known).expect("rotates"), "{}", printed(&module));
 }

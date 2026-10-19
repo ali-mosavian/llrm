@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import parity_squash as ps  # noqa: E402
 
@@ -384,3 +386,15 @@ def test_a_conflict_in_a_file_nothing_generates_is_still_refused(tmp_path):
     sh(repo, "commit", "-qam", "main x")
     sha, why = ps.merged_result(head, base="main", cwd=repo)
     assert sha is None and "x.rs" in why
+
+
+def test_eight_passing_prs_cost_one_smoke_and_nine_are_refused(monkeypatch):
+    """Batches of four took 12-16 minutes each with ~38 PRs ready: eight PRs ride one smoke, and a failing eight is halved to its bad PR in three more."""
+    landed, tested = [], []
+    ps.batch([str(n) for n in range(1, 9)], lambda group: (tested.append(group), True)[1], landed.append, lambda pr: None)
+    assert landed == [str(n) for n in range(1, 9)] and len(tested) == 1
+    landed, refused, tested = [], [], []
+    ps.batch([str(n) for n in range(1, 9)], lambda group: (tested.append(group), "6" not in group)[1], landed.append, refused.append)
+    assert refused == ["6"] and landed == ["1", "2", "3", "4", "5", "7", "8"] and len(tested) == 7
+    with pytest.raises(SystemExit, match="at most 8"):
+        ps.merge_batch([str(n) for n in range(1, 10)])

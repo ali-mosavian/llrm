@@ -1,6 +1,7 @@
 """Every cargo that parity_smoke and prepush spawn runs under buildslot; BUILDSLOT_BYPASS=1 is the landing script's way out."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -47,3 +48,25 @@ def test_prepush_runs_its_cargo_steps_under_buildslot(monkeypatch):
     monkeypatch.setattr(prepush.subprocess, "run", lambda command, *a, **k: (seen.append(command), Done())[1])
     prepush.run_all({"test x": "cargo test --release -q --test x", "fmt": "python3 tools/fmt.sh"}, {}, jobs=1)
     assert any(isinstance(c, str) and "buildslot cargo test" in c for c in seen) and "python3 tools/fmt.sh" in seen, seen
+
+
+def test_the_landing_runs_cargo_unslotted_with_no_bypass_in_the_callers_env_and_others_stay_slotted(monkeypatch):
+    """Batches of the gate took ~22 minutes, mostly waiting for a slot behind other sessions' builds: the runner shells never set BUILDSLOT_BYPASS."""
+    monkeypatch.delenv("BUILDSLOT_BYPASS", raising=False)
+    monkeypatch.delenv(bs.LANDING, raising=False)
+    monkeypatch.setattr(bs, "tool", lambda: "/x/buildslot")
+    assert bs.slotted(["cargo", "build"]) == ["/x/buildslot", "cargo", "build"]
+    with bs.landing():
+        assert bs.slotted(["cargo", "build"]) == ["cargo", "build"]
+        assert bs.slotted("cargo test && cargo check") == "cargo test && cargo check"
+        assert os.environ[bs.LANDING] == "1"  # the smoke it starts inherits it
+    assert bs.slotted(["cargo", "build"]) == ["/x/buildslot", "cargo", "build"]
+
+
+def test_parity_squash_main_runs_every_command_inside_the_landing(monkeypatch):
+    import parity_squash
+
+    seen = []
+    monkeypatch.setattr(parity_squash, "dispatch", lambda: seen.append(os.environ.get(bs.LANDING)) or 0)
+    monkeypatch.delenv(bs.LANDING, raising=False)
+    assert parity_squash.main() == 0 and seen == ["1"] and bs.LANDING not in os.environ
