@@ -1153,8 +1153,11 @@ fn unmarked_allocas(
         if Some(block) != entry || layout.alloc_size(&context.types, allocated) == 0 {
             continue;
         }
-        let markers = lifetime_markers(context, declared, address_space).0;
         let pointer = body.instruction(inst).result.map(Operand::Value);
+        if pointer.is_none_or(|one| outlives_the_copy(body, one)) {
+            continue;
+        }
+        let markers = lifetime_markers(context, declared, address_space).0;
         let marked = body
             .walk()
             .any(
@@ -1166,6 +1169,39 @@ fn unmarked_allocas(
         }
     }
     Lifetimes { allocas, entry: made.entry, returns: made.returns.clone() }
+}
+
+/// Whether the object at `pointer` may be read after the body returns: its
+/// address, or one derived from it, is returned or stored as a value.
+///
+/// DEVIATE 2: `InsertLifetime` marks every static alloca, as returning or
+/// keeping a local's address is undefined in C. Fact: QB's runtime bodies,
+/// copied only, return their own allocas (`B$FMID`'s view); ending the view at
+/// the return made the read through it undef. Exit: none while such bodies
+/// return locals.
+fn outlives_the_copy(
+    body: &Function,
+    pointer: Operand,
+) -> bool {
+    let Operand::Value(object) = pointer else { return false };
+    let mut pending = vec![object];
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(value) = pending.pop() {
+        if !seen.insert(value) {
+            continue;
+        }
+        for one in body.users(value) {
+            let instruction = body.instruction(one.user);
+            match (&instruction.opcode, one.index) {
+                (Opcode::Ret, _) | (Opcode::Store { .. }, 0) => return true,
+                (Opcode::GetElementPtr { .. } | Opcode::Cast(_) | Opcode::Phi | Opcode::Select, _) => {
+                    pending.extend(instruction.result);
+                }
+                _ => {}
+            }
+        }
+    }
+    false
 }
 
 /// `InlineFunction`'s `InsertLifetime`: each alloca of `lifetimes` begins at
