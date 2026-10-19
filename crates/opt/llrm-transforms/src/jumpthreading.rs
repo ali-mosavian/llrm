@@ -26,7 +26,7 @@
 //!       br i1 %c, t, e
 //! ```
 //!
-//! DEVIATE (J1..J11; stage S4 is not ported yet, which is not a deviation of
+//! DEVIATE (J1..J12; stage S4 is not ported yet, which is not a deviation of
 //! the finished pass):
 //! - J1. No `indirectbr` or `blockaddress` in MIR: `processBlock`'s
 //!   `IndirectBrInst` arm, `hasAddressTakenAndUsed` and the block-address
@@ -56,6 +56,10 @@
 //! - J11. `LVI->getConstantOnEdge` answers that are not integers are dropped
 //!   (`known_from_lattice`), where `evaluateOnPredecessorEdge` would pass a
 //!   pointer constant on to `ConstantFoldCompareInstOperands`.
+//! - J12. Switched on, `recpow.c` m16 -O2 compiles 86.39 -> 102.59 M
+//!   instructions:u (A/A repeatable): the pass is about 1 M of the 5.35 M extra
+//!   work, the rest is a bigger body the old clocks inliner (`ipa-recursive.`,
+//!   `ipa-peel.`) chooses to inline. Exit: W2's `inlinecost::decide` lands.
 //! - Not yet ported (later stage): `simplifyPartiallyRedundantLoad`.
 //!
 //! # Example
@@ -121,14 +125,15 @@ const PHI_DUPLICATE_THRESHOLD: u32 = 76;
 const IMPLICATION_SEARCH_THRESHOLD: u32 = 3;
 
 /// Off by default since it runs away on `runtime/qb/datetime.c` -Os (the peel
-/// loop never settles); `LLRM_JUMPTHREADING` turns it on.
+/// loop never settles, #2739); on by default again, `LLRM_NO_JUMPTHREADING`
+/// (set) turns it off.
 pub struct JumpThreading {
     pub enabled: bool,
 }
 
 impl JumpThreading {
     pub fn from_env() -> Self {
-        Self { enabled: llrm_support::env_flag!("LLRM_JUMPTHREADING") }
+        Self { enabled: !llrm_support::env_flag!("LLRM_NO_JUMPTHREADING") }
     }
 }
 
