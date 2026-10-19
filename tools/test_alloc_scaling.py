@@ -79,6 +79,22 @@ def test_a_split_finds_its_instruction_by_index_not_by_walking_the_block():
     assert run["regalloc base"] < 125, f"mem N=800 -O2: regalloc base cost {run['regalloc base']} Minstr (125 allowed; 143.8 before): {run}"
 
 
+def test_a_spill_lists_the_units_of_a_register_in_time_linear_in_its_operands():
+    """`InlineSpiller::units` deduplicated the instructions of a register with `contains` on a list and searched the units made so
+    far for each: `regalloc base` on the ladder's `mem` cost 259.7 / 586.4 Minstr at N=1600 / 3200 (2.26x per doubling; 2.09x now)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "ladder"))
+    import gen
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    cost = {}
+    with tempfile.TemporaryDirectory() as work:
+        for n in (1600, 3200):
+            source = Path(work) / f"mem{n}.c"
+            source.write_text(gen.generate("mem", n))
+            cost[n] = steps(compiler, source, "-O2", "-mabi=sysv", "-fno-inline-functions")["regalloc base"]
+    grown = cost[3200] / cost[1600]
+    assert grown < 2.15, f"mem -O2: twice the size cost regalloc base {grown:.2f}x as much (2.15 allowed; 2.26 before): {cost}"
+
+
 def test_a_rewrite_finds_what_it_changed_by_pointer_not_by_looking_up_every_instruction():
     """`facts intervals` and `intervals homes` hashed every instruction of an edited block, old and new, at each of a function's
     ~430 rewrites to find the few that changed: 380 + 71 Minstr became 625 + 74 on `cells` at N=224 (one block, ~900 spills),
