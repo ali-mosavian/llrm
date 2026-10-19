@@ -339,7 +339,7 @@ const LOOP: &str = "fn sum(n: i16, step: i16) -> i16:
     return total
 
 fn main() -> i16:
-    print(sum(3, 4) + sum(5, 6))
+    print(sum(3, 4) + sum(5, 6) + sum(1000, 7))
     return 0
 ";
 
