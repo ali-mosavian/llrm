@@ -204,7 +204,9 @@ impl ProgramPass for Walk {
                 .flat_map(|(members, _)| members)
                 .filter(|id| wanted.contains(id))
                 .collect();
+            let remarks = llrm_support::env_flag!("LLRM_INLINE_REMARKS");
             for id in order {
+                let mut decided = remarks.then(Vec::new);
                 let constant = crate::inlinecost::sites(
                     module,
                     &program.layout,
@@ -216,7 +218,7 @@ impl ProgramPass for Walk {
                     size,
                     self.inline.limit == 0,
                     program.target.tti().as_deref(),
-                    None,
+                    decided.as_mut(),
                 );
                 let mut declared = declared(&mut modules[at], module);
                 let (context, function) = function_mut(module, id);
@@ -234,6 +236,11 @@ impl ProgramPass for Walk {
                     Some(&constant),
                     &mut declared,
                 )? > 0;
+                for (call, callee, cost) in decided.iter().flatten() {
+                    let name = |id: GlobalId| module.global(id).name.as_deref().unwrap_or("?");
+                    let gone = module.global(id).function().is_some_and(|one| one.parent(*call).is_none());
+                    eprintln!("{}", crate::inlinecost::remark(name(id), name(*callee), cost, gone));
+                }
                 if declared.place(module)? > 0 {
                     modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                 }
