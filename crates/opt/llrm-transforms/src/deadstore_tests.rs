@@ -139,5 +139,8 @@ fn a_returned_local_keeps_its_stores() {
         "{DOS}define ptr @f(i8 %x) addrspace(1) {{\nb0:\n  %slot = alloca i8\n  %view = alloca [4 x i8]\n  store i8 %x, ptr %slot\n  store i16 1, ptr %view\n  %p = getelementptr i8, ptr %view, i16 2\n  store ptr %slot, ptr %p\n  ret ptr %view\n}}\n"
     ));
     let after = managed(&mut module, DeadStoreElimination);
-    assert!(after.contains("store i8 %x") && after.contains("store i16 1") && after.contains("store ptr %slot"), "{after}");
+    assert!(
+        after.contains("store i8 %x") && after.contains("store i16 1") && after.contains("store ptr %slot"),
+        "{after}"
+    );
 }

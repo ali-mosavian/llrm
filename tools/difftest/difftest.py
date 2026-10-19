@@ -63,6 +63,7 @@ COUNTERPART = {
     "tailrec": "tailcallelim",
     "memcpyopt": "memcpyopt",
     "cvp": "correlated-propagation",
+    "jumpthreading": "jump-threading",
     "instsimplify": "instsimplify",
     "loopidiom": "loop(loop-idiom)",
     "loopdeletion": "loop(loop-deletion)",
@@ -99,6 +100,7 @@ SOURCE = {
     "tailcallelim": "Transforms/Scalar/TailRecursionElimination.cpp",
     "memcpyopt": "Transforms/Scalar/MemCpyOptimizer.cpp",
     "correlated-propagation": "Transforms/Scalar/CorrelatedValuePropagation.cpp",
+    "jump-threading": "Transforms/Scalar/JumpThreading.cpp",
 }
 LLVM_COMMIT = "d1106deb71cc"
 
@@ -136,7 +138,7 @@ def functions(text: str) -> dict[str, list[str]]:
     current = None
     for line in text.splitlines():
         if line.startswith("define "):
-            named = re.search(r'@(?:"([^"]+)"|([\w.$-]+))\(', line)  # m16 quotes its decorated names: @"_f@3"
+            named = re.search(r'@(?:"([^"]+)"|([\w.$-]+))\(', line)  # a 16-bit target quotes its decorated names: @"_f@3"
             current = named[1] or named[2]
             found[current] = []
         if current is not None:

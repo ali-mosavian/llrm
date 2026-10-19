@@ -4,7 +4,7 @@ architecture-order: 276
 ---
 # JumpThreading as a translation of LLVM's: the plan
 
-TL;DR: `JumpThreading.cpp` (3,314 lines, pin `d1106deb71cc`) is translated into a new `jumpthreading.rs` on `LazyValueInfo` and `DomTreeUpdater`; the first slice (about 900 lines) is the driver, constant folding of terminators and `threadEdge` over a known-constant `phi`/LVI condition. Missing: `FindAvailableLoadedValue`, `SplitBlockPredecessors`, `cloneBasicBlock`'s value map, `TryToSimplifyUncondBranchFromEmptyBlock`, `DeleteDeadBlock`. Nothing here is built yet; every claim about the repo is from a grep at `33d100e5f`.
+TL;DR: `JumpThreading.cpp` (3,314 lines, pin `d1106deb71cc`) is translated into a new `jumpthreading.rs` on `LazyValueInfo` and `DomTreeUpdater`; the first slice (about 900 lines) is the driver, constant folding of terminators and `threadEdge` over a known-constant `phi`/LVI condition. Missing: `FindAvailableLoadedValue`, `SplitBlockPredecessors`, `cloneBasicBlock`'s value map, `TryToSimplifyUncondBranchFromEmptyBlock`, `DeleteDeadBlock`. S1 is built (`jumpthreading.rs`, slots `jumpthreading@668` and `@809`, Partial); see section 6.
 
 Rule for the code: each Rust function is a translation of the C++ function named in its comment (permalink at the pin); anything not translated is a numbered DEVIATE (J1, J2, ...) in the module header.
 
@@ -58,7 +58,7 @@ Preserved: LVI and the dominator tree (`PreservedAnalyses` keeps both through `p
 
 | stage | what | oracle | size |
 |---|---|---|---|
-| S1 | driver, `findLoopHeaders`, `processBlock` (fold terminator, `getKnownConstant`, LVI predicate), `processThreadableEdges`, `threadEdge`, `splitBlockPreds`, `cloneInstructions`, `updateSSA`, merge-into-only-pred, dead-block delete | `tools/jumpthreading_oracle.py` against `opt -passes=jump-threading` on the corpus, as `unrollfull_oracle.py` does: functions after cleanup identical, a control without the pass differs | about 900 lines |
+| S1 | driver, `findLoopHeaders`, `processBlock` (fold terminator, `getKnownConstant`, LVI predicate), `processThreadableEdges`, `threadEdge`, `splitBlockPreds`, `cloneInstructions`, `updateSSA`, merge-into-only-pred, dead-block delete | `tools/difftest/difftest.py` (`jumpthreading` against `opt -passes=jump-threading`, as for `cvp`): functions identical, a control where the reference never acts reads PREMISE FAILED | about 900 lines |
 | S2 | `processBranchOnPHI/XOR`, select unfolding, two-block threading, `duplicateCondBranchOnPHIIntoPred` | same | about 600 |
 | S3 | `processImpliedCondition` | same | about 100 |
 | S4 | partially redundant loads (needs `FindAvailableLoadedValue`), guards, profile (J2, J3) | same; guards and profile only where an input has them | about 600 |
@@ -66,3 +66,7 @@ Preserved: LVI and the dominator tree (`PreservedAnalyses` keeps both through `p
 A slice joins when its oracle shows 0 functions differing; a difference is classified as a numbered DEVIATE or fixed.
 
 Fail-first tests for S1, one per shape, each seen failing with the shape's code stubbed: (1) a `br` on a `phi` of constants in the block is threaded from each constant predecessor; (2) a condition LVI proves on one edge is threaded from that edge only; (3) a block over the 6-instruction limit is not copied, 3 with `minsize`; (4) a loop header is not threaded across; (5) a copied value used below gets one `phi` from `SsaUpdater`; (6) `thread_edge` leaves LVI answering as a new LVI does; (7) an empty predecessor-less block is deleted.
+
+## 6. State of S1
+
+`jumpthreading.rs` ports S1; the slots run before `decide@675`/`decide@809`, which keep their threading until S2 to S4 close. Switch: `LLRM_NO_JUMPTHREADING`. Seven fixtures in `tests/jumpthreading` read identical to `opt` through `difftest.py pair`. On ten `decide` inputs of `d_faces -O2` six are identical (three unchanged by both) and four differ: `10/0046` is a branch on a `phi` defined in the single predecessor (read in the diff: `maybethreadThroughTwoBasicBlocks`, S2); `11/0046` and `11/0067` have the same opcode difference; `11/0004` has six loads `opt` removes (`simplifyPartiallyRedundantLoad`, S4 by its histogram). Only the first is read; the S2/S4 attributions of the other three are open until those stages run. Deviations J1 to J9 are in the module header.
