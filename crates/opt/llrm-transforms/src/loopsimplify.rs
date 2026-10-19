@@ -141,7 +141,7 @@
 //! In [`crate::pipeline`]'s per-body fixed point, after `tailrec` and before
 //! `lcssa`; again after the header copy of `-ftree-ch`, where it
 //! re-simplifies the loops that copy made; [`simplified`] is called by
-//! [`crate::lsr`] after it guards a loop. On at every level above -O0.
+//! [`crate::lsr_pass`] after it guards a loop. On at every level above -O0.
 //!
 //! # Keeps
 //! Nothing where it changes a body; it reads only the CFG's structure.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/profit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/profit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/profit.rs sha256:1ea7081cb9b5cf38bdc2c959589b3697d3fb599ab07c57a53c282e60a91f8770 -->
+<!-- src: crates/opt/llrm-transforms/src/profit.rs sha256:83cf7bad5bb22f853e6ebeaa5a06870e0e0158af016d5ecf540473e9f2e6a329 -->
 
 # profit
 
@@ -82,7 +82,7 @@ From unit test `an_unpriced_instruction_makes_the_body_unpriced` in
 `proven_trips`, the frequency models and `UNIT`, `UNKNOWN_TRIPS`.
 
 ## Used by
-Each of [`crate::lsr`](lsr.md), [`crate::hoist`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/licm/hoist.rs), [`crate::gvn`](gvn.md),
+Each of [`crate::lsr_pass`](lsr_pass.md), [`crate::hoist`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/licm/hoist.rs), [`crate::gvn`](gvn.md),
 [`crate::unswitch`](unswitch.md), [`crate::unroll`](unroll.md), [`crate::peel`](peel.md),
 [`crate::loopidioms`](loopidioms.md), [`crate::window`](window.md), [`crate::gepoffset`](gepoffset.md),
 [`crate::indvars`](indvars.md), [`crate::tailrec`](tailrec.md), [`crate::ipacp`](ipacp.md), [`crate::inline`](inline.md)

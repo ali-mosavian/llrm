@@ -182,7 +182,6 @@ pub mod loopsplit;
 pub mod loopunroll;
 pub mod loopunrollpass;
 pub mod loopversion;
-pub mod lsr;
 pub mod lsr_chain;
 pub mod lsr_collect;
 #[cfg(test)]
@@ -207,7 +206,6 @@ pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
 pub mod mergestores;
-pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;

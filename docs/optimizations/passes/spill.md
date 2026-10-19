@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/spill.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/spill.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/spill.rs sha256:d8caf6f903f3a8984ef977758f16a8ca0b082aee506d6b4f877047bd0f71455e -->
+<!-- src: crates/opt/llrm-transforms/src/spill.rs sha256:4a54c89ec43a3c02c238b159f945cad00a2b244c11a6cffdf6daf023c037f002 -->
 
 # spill
 
@@ -108,7 +108,7 @@ functions `spilled`, `spilled_in` and `forecast` over `Point`s, and the
 
 ## Used by
 [`crate::profit`](profit.md) (`spill_forecast`, `weighted`) prices every motion with
-it; [`crate::lsr`](lsr.md), [`crate::gvn`](gvn.md) (partial redundancy elimination),
+it; [`crate::lsr_pass`](lsr_pass.md), [`crate::gvn`](gvn.md) (partial redundancy elimination),
 [`crate::hoist`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/licm/hoist.rs), [`crate::addresssink`](addresssink.md) and [`crate::tailrec`](tailrec.md) ask it
 directly when they weigh a rewrite against register pressure. Not a pass:
 it runs only inside those.

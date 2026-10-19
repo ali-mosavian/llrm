@@ -157,8 +157,8 @@ use crate::{
     adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, jumpthread, lcssa,
     loopdeletion, loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit,
-    loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp,
-    simpleloopunswitch, simplifycfg, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    loopunrollpass, loopversion, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp, simpleloopunswitch,
+    simplifycfg, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -1059,15 +1059,7 @@ pub fn recorded(
     }
     // Each loop's counters chosen once, on the loop the passes above leave.
     if applied.options.wanted("lsr") {
-        // `LLRM_EXP_LSR`: LLVM's loop strength reduction in its place.
-        if crate::lsr_pass::enabled() {
-            manager.add(crate::lsr_pass::LoopStrengthReduce);
-        } else {
-            manager.add(lsr::Lsr {
-                size: applied.options.prefers_size(),
-                bounds: if applied.options.searches_all() { lsr::Bounds::NONE } else { lsr::Bounds::GCC },
-            });
-        }
+        manager.add(crate::lsr_pass::LoopStrengthReduce);
         // What the counters it chose leave behind (a bound subtracted from a
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.
