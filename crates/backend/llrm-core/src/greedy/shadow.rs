@@ -457,9 +457,7 @@ pub fn decide_with(
     inputs: &ShadowInputs,
     mode: Mode<'_>,
 ) -> Option<Decided> {
-    // Off until the miscompiles it caused at -O2 -m16 (bintree, algebra, loop,
-    // branch, memory, recpow) are fixed: `LLRM_SPLIT=1` turns it on.
-    decide_with_split(inputs, mode, llrm_support::env_flag!("LLRM_SPLIT") && !llrm_support::env_flag!("LLRM_NO_SPLIT"))
+    decide_with_split(inputs, mode, !llrm_support::env_flag!("LLRM_NO_SPLIT"))
 }
 
 /// `decide_with`, with live range splitting (`trySplit`) chosen.
@@ -878,11 +876,11 @@ mod tests {
         );
     }
 
-    /// Splitting is opt-in (`LLRM_SPLIT=1`): by default a value that does not
-    /// fit is spilled whole, as before `trySplit`, which miscompiled ~20
-    /// programs at -O2 -m16 (bintree.c printed 165553 for 5736113).
+    /// Splitting is on by default (`LLRM_NO_SPLIT=1` turns it off): the
+    /// default allocation of the body that only splitting can improve is the
+    /// split one.
     #[test]
-    fn test_live_range_splitting_is_off_by_default() {
+    fn test_live_range_splitting_is_on_by_default() {
         let insn = |defines: &[u32], uses: &[u32]| Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()));
         let blocks: Vec<Block> = [
             (0, vec![insn(&[1], &[]), insn(&[], &[1]), insn(&[], &[1])]),
@@ -898,7 +896,7 @@ mod tests {
             Block::from(b)
         })
         .collect();
-        let body = LirBody::new("off", 0, blocks, IndexMap::default(), IndexMap::default());
+        let body = LirBody::new("on", 0, blocks, IndexMap::default(), IndexMap::default());
         let order = |_: u32| vec![RegId::EAX, RegId::EBX];
         let inputs = ShadowInputs {
             body: &body,
@@ -909,10 +907,10 @@ mod tests {
             data: None,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
-        let split = decide_with_split(&inputs, Mode::Simple, true).expect("premise: splitting changes this body");
+        let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
         assert!(split.report.reloads < plain.report.reloads, "premise: the split body reloads less");
         let default = decide_with(&inputs, Mode::Simple).expect("allocated");
-        assert_eq!(default.report.reloads, plain.report.reloads, "the default is not split");
+        assert_eq!(default.report.reloads, split.report.reloads, "the default is the split one");
     }
 
     /// A register made by a split is a clone of its parent (`createFrom`): as

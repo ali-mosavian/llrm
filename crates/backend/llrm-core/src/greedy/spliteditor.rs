@@ -877,7 +877,9 @@ impl<'d> SplitEditor<'d> {
 
         for c in copies {
             let def = c.def();
-            let mi = cx.lis.indexes.get_instruction_from_index(&def).expect("No instruction for back-copy");
+            // The copy that defines the complement: a parallel copy shares one
+            // index, and the index names its first member.
+            let mi = cx.lis.defining_instr(&def, li_reg);
             let mbb = cx.lis.indexes.get_mbb_from_index(&def);
             let insns = cx.lis.block_insns(mbb);
             let at = insns.iter().position(|i| i.id() == mi).expect("an instruction of the block");
@@ -1426,8 +1428,7 @@ impl<'d> SplitEditor<'d> {
                 if s.end != vni.def().get_dead_slot() || vni.is_phi_def() {
                     continue;
                 }
-                let mi =
-                    cx.lis.indexes.get_instruction_from_index(&vni.def()).expect("Missing instruction for dead def");
+                let mi = cx.lis.defining_instr(&vni.def(), reg);
                 if cx.env.is_copy_like(cx.lis.instr(mi)) && cx.lis.instr(mi).defines.len() == 1 {
                     dead.push(mi);
                 }
