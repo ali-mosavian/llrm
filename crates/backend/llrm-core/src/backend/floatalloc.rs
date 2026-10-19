@@ -537,7 +537,7 @@ pub(super) fn _truncating(
     let chopped_id = loaded_id + 1;
     let loaded = Held { value: loaded_id, width: 2 };
     let chopped = Held { value: chopped_id, width: 2 };
-    // Under `LLRM_GREEDY_RFP` the registers are allocated by now: no value is
+    // Under RFP the registers are allocated by now: no value is
     // left to hold the word, so it goes through memory alone.
     let through_memory = super::allocate::rfp_on();
 
@@ -724,7 +724,8 @@ impl LIRTransform for FloatAlloc {
         body: LirBody,
     ) -> Result<LirBody, String> {
         let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
-        crate::backend::fpstack::converted(&body, &self.classes)
+        let propagated = if super::allocate::rfp_on() { crate::backend::fpcopyprop::propagated(&body) } else { None };
+        crate::backend::fpstack::converted(propagated.as_ref().unwrap_or(&body), &self.classes)
             .and_then(|converted| _truncating(&converted, frame.as_deref_mut()))
             .map_err(|error| error.to_string())
     }

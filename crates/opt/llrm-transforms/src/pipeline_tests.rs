@@ -1452,6 +1452,7 @@ fn test_sroa_and_mem2reg_are_on_by_default_and_the_registry_calls_their_slots_tr
                 applied.options.mem2reg,
                 applied.options.rotating(),
                 &[],
+                &[],
             );
             assert_eq!(checked, Ok(()), "{phase:?} sroa {} mem2reg {}", applied.options.sroa, applied.options.mem2reg);
         }
@@ -1504,6 +1505,25 @@ fn test_llvm_order_keeps_a_loop_computing_the_same() {
     let after = interpret::run(&module, "f", vec![interpret::Val::Int { bits: 6, width: 16 }], FUEL);
     assert_eq!(format!("{before:?}"), format!("{after:?}"));
     assert!(!llrm_mir::print::module(&module).contains("alloca"), "an alloca is left");
+}
+
+/// Turning a pass off (`unroll: false`) left its Translated slot out of the
+/// order, and the parity check panicked ("slot unroll@753 is Translated and
+/// not run in Simplify") in the sixteen nib tests that build such options.
+#[test]
+fn test_a_switched_off_pass_does_not_fail_the_slot_check() {
+    let text = "define i16 @f(i16 %n) {\nb0:\n  ret i16 %n\n}\n";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied {
+        options: pipeline::Options { llvm_order: true, unroll: false, ..Default::default() },
+        ..Applied::default()
+    };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap_or_else(|error| panic!("{error}"));
 }
 
 /// #2194, x_hanoi2's `mv`: the loop `tailrec` makes of the second call has the

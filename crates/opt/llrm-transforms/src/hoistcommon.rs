@@ -168,16 +168,27 @@ pub(crate) fn mmra(
     function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "mmra").map(|&(_, value)| value)
 }
 
-/// The same operation and type, whatever the operands: two calls need only
-/// attribute lists that intersect (`isSameOperationAs` with
+/// The same operation and type, and operands of the same types: two calls need
+/// only attribute lists that intersect (`isSameOperationAs` with
 /// `CompareUsingIntersectedAttrs`).
 pub(crate) fn same_operation(
+    context: &Context,
     function: &Function,
     first: InstId,
     second: InstId,
 ) -> bool {
     let (one, two) = (function.instruction(first), function.instruction(second));
     if one.ty != two.ty || one.operands.len() != two.operands.len() {
+        return false;
+    }
+    // The operands' types are the same too: a store of an `i8` is not a store
+    // of an `i16`.
+    if one
+        .operands
+        .iter()
+        .zip(&two.operands)
+        .any(|(&a, &b)| function.operand_type(context, a) != function.operand_type(context, b))
+    {
         return false;
     }
     match (&one.opcode, &two.opcode) {
@@ -266,8 +277,8 @@ fn terminator_hoisted(
                     continue;
                 }
                 if !conditional
-                    || crate::speculate::passing_value_always_undefined(context, function, value, phi)
-                    || crate::speculate::passing_value_always_undefined(context, function, other_value, phi)
+                    || crate::alwaysundef::always_undefined(context, spec, function, value, phi, false)
+                    || crate::alwaysundef::always_undefined(context, spec, function, other_value, phi, false)
                 {
                     return false;
                 }

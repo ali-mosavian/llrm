@@ -770,7 +770,10 @@ pub(crate) fn llvm_order(
             }),
             fold("fold@1242"),
             dead("dead@1242"),
-            decide("decide@1244"),
+            // `SimplifyCFGOptions().convertSwitchRangeToICmp(true)`
+            // (PassBuilderPipelines.cpp#L1245): the option is read by
+            // `simplifySwitch`, not translated yet, so these are the defaults.
+            simplify_cfg("decide@1244"),
             phiopt("phiopt@1244"),
         ],
         // InstSimplifyPass, PassBuilderPipelines.cpp#L1662: the last function
@@ -788,6 +791,7 @@ pub(crate) fn llvm_order(
                 slot("tailrec@688", Box::new(tailrec::TailRecursion)),
                 decide("decide@690"),
                 phiopt("phiopt@690"),
+                slot("reassociate@696", Box::new(crate::reassociate::Reassociate)),
                 slot("algebraic@696", Box::new(algebraic::Algebraic { size, llvm: true })),
             ]);
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
@@ -1343,6 +1347,11 @@ impl Fixed {
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
         let level = if applied.options.pre { crate::parity::Level::O2 } else { crate::parity::Level::O1 };
+        let off = crate::parity::REGISTRY
+            .iter()
+            .filter(|one| one.phase == phase && !applied.options.wanted(one.slot))
+            .map(|one| one.slot)
+            .collect::<Vec<_>>();
         let held = linear.passes.iter().map(|one| (one.name(), one.translations())).collect::<Vec<_>>();
         let checked = crate::parity::check_phase_with(
             phase,
@@ -1351,6 +1360,7 @@ impl Fixed {
             applied.options.sroa,
             applied.options.mem2reg,
             applied.options.rotating(),
+            &off,
             &held,
         );
         debug_assert!(checked.is_ok(), "{checked:?}");
