@@ -4,13 +4,13 @@
 use std::collections::BTreeSet;
 
 use crate::context::{Constant, ConstantKind, Context};
-use crate::uselist::Held;
 use crate::module::{
     Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, NameIndex, Names,
     Operand, Use, ValueData, ValueDef, ValueId,
 };
 use crate::opcode::{Flags, Opcode};
 use crate::types::{Type, TypeId};
+use crate::uselist::Held;
 
 /// Where an instruction goes: before or after another, or at a block's end.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
