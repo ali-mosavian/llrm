@@ -86,6 +86,11 @@ pub enum Intrinsic {
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
+    /// `llvm.stacksave`: the stack pointer, to give back to `stackrestore`.
+    StackSave,
+    /// `llvm.stackrestore`: the stack pointer `stacksave` returned made the
+    /// stack pointer again, releasing what was allocated since.
+    StackRestore,
     /// Inline machine code, laid down where it is called: its name carries
     /// the bytes, and each argument is a frame place whose displacement it
     /// reads at a byte offset the name gives. It answers what it leaves in
@@ -349,7 +354,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 39] = [
+const TABLE: [Spec; 41] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -473,6 +478,22 @@ const TABLE: [Spec; 39] = [
     Spec {
         name: "llvm.va_start",
         intrinsic: Intrinsic::VaStart,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.stacksave",
+        intrinsic: Intrinsic::StackSave,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.stackrestore",
+        intrinsic: Intrinsic::StackRestore,
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
         parameters: &[Slot::Any(0)],

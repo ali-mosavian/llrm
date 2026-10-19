@@ -319,6 +319,32 @@ fn a_bswap_is_refused_until_it_is_lowered() {
     assert_eq!(selected(text, "f").err(), Some(Unselected("@llvm.bswap.i16".to_owned())));
 }
 
+/// `llvm.stacksave` reads the stack pointer and `llvm.stackrestore` writes it
+/// from a pointer.
+#[test]
+fn a_stacksave_reads_the_stack_pointer_and_a_stackrestore_writes_it() {
+    let text = "declare ptr @llvm.stacksave.p0()\n\
+                declare void @llvm.stackrestore.p0(ptr)\n\
+                define ptr @save() addrspace(1) {\n  %s = call ptr @llvm.stacksave.p0()\n  ret ptr %s\n}\n\
+                define void @restore(ptr %p) addrspace(1) {\n  call void @llvm.stackrestore.p0(ptr %p)\n  ret void\n}\n";
+    assert_eq!(listing(text, "save"), ["L0_0:", "mov ax, sp", "retf"]);
+    // The epilogue sets SP from the frame register again: SP is not where the
+    // prologue left it.
+    assert_eq!(
+        listing(text, "restore"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "L1_0:",
+            "mov ax, word ptr [bp+6]",
+            "mov sp, ax",
+            "lea sp, word ptr [bp]",
+            "pop bp",
+            "retf"
+        ]
+    );
+}
+
 /// CVP narrows a `udiv` to i8 and expands a `urem` through a `freeze`; both
 /// were refused ("a byte division", "freeze") and stopped vid.c and screen.c.
 #[test]
@@ -3567,6 +3593,41 @@ entry:
   %x = icmp eq i16 %a, 0
   %y = icmp slt i16 %b, 5
   %c = {join} i1 %x, %y
+  br i1 %c, label %yes, label %no
+yes:
+  call addrspace(1) void @g()
+  ret void
+no:
+  ret void
+}}
+"
+        );
+        let got = listing_on("386", &text, "f");
+        assert!(
+            !got.iter().any(|line| line.starts_with("set") || line.starts_with("and") || line.starts_with("or ")),
+            "{join}: {got:?}"
+        );
+        let branches: Vec<&String> =
+            got.iter().filter(|line| line.starts_with('j') && !line.starts_with("jmp")).collect();
+        assert_eq!(branches.len(), 2, "{join}: {got:?}");
+    }
+}
+
+/// The `select` form of the same `and` and `or` (`select %x, true, %y`,
+/// `select %x, %y, false`) is split too. The middle end makes it where the
+/// second compare may be poison, as every C parameter's is: rectwo's
+/// `n == 0 || m == 0` kept `sete; test; jne; test; jne` where clang has two
+/// compare-and-branch pairs (+314 bytes at m16).
+#[test]
+fn test_a_branch_on_the_select_form_of_two_compares_branches_on_each() {
+    for join in ["select i1 %x, i1 true, i1 %y", "select i1 %x, i1 %y, i1 false"] {
+        let text = format!(
+            "declare void @g() addrspace(1)
+define void @f(i16 %a, i16 %b) addrspace(1) {{
+entry:
+  %x = icmp eq i16 %a, 0
+  %y = icmp slt i16 %b, 5
+  %c = {join}
   br i1 %c, label %yes, label %no
 yes:
   call addrspace(1) void @g()
