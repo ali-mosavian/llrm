@@ -42,7 +42,8 @@
 //! will.
 //!
 //! # See also
-//! LLVM: [`InstructionWorklist.h`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/InstructionWorklist.h).
+//! LLVM:
+//! [`InstructionWorklist.h`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/InstructionWorklist.h).
 
 use llrm_mir::module::InstId;
 use llrm_support::hash::HashMap;
