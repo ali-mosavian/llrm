@@ -127,30 +127,64 @@ impl Selector<'_> {
         if let Operand::Constant(id) = callee_operand
             && let llrm_mir::ConstantKind::Global(global) = self.module.context.get(id).kind
             && let Some(name) = self.module.global(global).name.clone()
-            && let Some(done) = self.intrinsic(&name, instruction, arguments)?
+            && name.starts_with("llvm.")
         {
-            return Ok(done);
+            return self.intrinsic(&name, instruction, arguments);
         }
-        let (returns, parameters, variadic) = {
+        let (returns, fixed, _) = {
             let (r, p, v) = self.module.signature(info.function_type);
             (r, p.len(), v)
         };
-        let _ = variadic;
-        let mut assigner = Assigner::new(self.platform);
-        let mut uses = Vec::new();
-        let mut stores: Vec<(Place, Val, Scalar)> = Vec::new();
+        let mut values = Vec::new();
         for (position, &argument) in arguments.iter().enumerate() {
             let ty = self.operand_type(argument)?;
             let scalar = self.scalar(ty)?;
             let attrs = info.argument_attrs.get(position).cloned().unwrap_or_default();
             let src = self.src(argument)?;
             let value = self.argument_value(scalar, src, &attrs)?;
-            let place = assigner.assign(scalar, position < parameters);
-            stores.push((place, value, scalar));
+            values.push((value, scalar, position < fixed));
         }
-        // The stack arguments are stored first: they use scratch registers the
-        // register arguments' copies must not be between.
-        for (place, value, scalar) in &stores {
+        // The callee: a symbol, or a register.
+        let callee = match callee_operand {
+            Operand::Constant(id) => match self.module.context.get(id).kind {
+                llrm_mir::ConstantKind::Global(global) => {
+                    if let GlobalKind::Variable(_) = self.module.global(global).kind {
+                        return refuse("a call to a variable");
+                    }
+                    Callee::Symbol(self.symbol(global)?)
+                }
+                _ => return refuse("a call through a constant expression"),
+            },
+            other => {
+                let g = self.operand_g(other)?;
+                Callee::Register(g.reg)
+            }
+        };
+        let result = self.emit_call(callee, values, returns)?;
+        if let (Some(value), Some(result_id)) = (result, instruction.result) {
+            self.vals.insert(result_id, value);
+        }
+        Ok(())
+    }
+
+    /// A call of `callee` with `arguments` (each with its class and whether the
+    /// callee names its parameter) returning type `returns`; the result in a
+    /// new register.
+    pub(crate) fn emit_call(
+        &mut self,
+        callee: Callee,
+        arguments: Vec<(Val, Scalar, bool)>,
+        returns: llrm_mir::TypeId,
+    ) -> Selected<Option<Val>> {
+        let mut assigner = Assigner::new(self.platform);
+        let mut uses = Vec::new();
+        let mut stores: Vec<(Place, Val)> = Vec::new();
+        for (value, scalar, fixed) in arguments {
+            let place = assigner.assign(scalar, fixed);
+            stores.push((place, value));
+        }
+        // The stack arguments are stored first.
+        for (place, value) in &stores {
             if let Place::Stack { offset, size } = *place {
                 let addr = Addr::Offset { base: Gpr::R31, imm: offset as i64 };
                 match value {
@@ -174,11 +208,10 @@ impl Selector<'_> {
                         self.inst(Inst::Store { mem: Memory::Fp { bytes: size as u8, reg: *reg }, addr })
                     }
                 }
-                let _ = scalar;
             }
         }
         self.mf.outgoing = self.mf.outgoing.max(assigner.stack_bytes().next_multiple_of(16));
-        for (place, value, _) in &stores {
+        for (place, value) in &stores {
             match (place, value) {
                 (Place::Gpr(number), Val::Int(g)) => {
                     self.emit(Op::Copy { dst: Reg::Gpr(Gpr(*number)), src: Reg::Gpr(g.reg) });
@@ -197,24 +230,7 @@ impl Selector<'_> {
                 _ => return refuse("an argument in the wrong register class"),
             }
         }
-        // The callee: a symbol, or a register.
-        let callee = match callee_operand {
-            Operand::Constant(id) => match self.module.context.get(id).kind {
-                llrm_mir::ConstantKind::Global(global) => {
-                    if let GlobalKind::Variable(_) = self.module.global(global).kind {
-                        return refuse("a call to a variable");
-                    }
-                    Callee::Symbol(self.symbol(global)?)
-                }
-                _ => return refuse("a call through a constant expression"),
-            },
-            other => {
-                let g = self.operand_g(other)?;
-                Callee::Register(g.reg)
-            }
-        };
         self.mf.calls = true;
-        let mut defs = Vec::new();
         let result_register = if self.types().is_void(returns) {
             None
         } else {
@@ -225,25 +241,21 @@ impl Selector<'_> {
                 Place::Stack { .. } => unreachable!("a result is in a register"),
             })
         };
-        defs.extend(result_register);
-        self.emit(Op::Call { callee, uses, defs });
-        if let (Some(register), Some(result)) = (result_register, instruction.result) {
-            let value = self.fresh(returns)?;
-            let dst = match (&value, register) {
-                (Val::Int(g), _) => Reg::Gpr(g.reg),
-                (Val::Ptr(AddrExpr { base: Base::Reg(reg), .. }), _) => Reg::Gpr(*reg),
-                (Val::Float { reg, .. }, _) => Reg::Fpr(*reg),
-                _ => return refuse("a call result that is not a register"),
-            };
-            self.emit(Op::Copy { dst, src: register });
-            // A result narrower than 32 bits is as the callee left it.
-            let value = match value {
-                Val::Int(g) => Val::Int(G { known: Known::Nothing, ..g }),
-                other => other,
-            };
-            self.vals.insert(result, value);
-        }
-        Ok(())
+        self.emit(Op::Call { callee, uses, defs: result_register.into_iter().collect() });
+        let Some(register) = result_register else { return Ok(None) };
+        let value = self.fresh(returns)?;
+        let dst = match &value {
+            Val::Int(g) => Reg::Gpr(g.reg),
+            Val::Ptr(AddrExpr { base: Base::Reg(reg), .. }) => Reg::Gpr(*reg),
+            Val::Float { reg, .. } => Reg::Fpr(*reg),
+            _ => return refuse("a call result that is not a register"),
+        };
+        self.emit(Op::Copy { dst, src: register });
+        // A result narrower than 32 bits is as the callee left it.
+        Ok(Some(match value {
+            Val::Int(g) => Val::Int(G { known: Known::Nothing, ..g }),
+            other => other,
+        }))
     }
 
     pub(super) fn ret(
@@ -278,23 +290,26 @@ impl Selector<'_> {
         Ok(())
     }
 
-    /// A call the selector makes inline or drops, by the callee's name; `None`
-    /// to call it.
+    /// A call of an `llvm.` intrinsic: made inline, a library call, or dropped.
     fn intrinsic(
         &mut self,
         name: &str,
         instruction: &Instruction,
         arguments: &[Operand],
-    ) -> Selected<Option<()>> {
+    ) -> Selected<()> {
         let result = instruction.result;
-        let base = name.strip_prefix("llvm.").map(|rest| rest.split('.').next().unwrap_or(rest));
+        let base = name.strip_prefix("llvm.").map(|rest| rest.split('.').next().unwrap_or(rest)).unwrap_or("");
         match base {
-            Some("lifetime" | "assume" | "dbg" | "donothing" | "invariant") => Ok(Some(())),
-            Some("trap") => {
-                self.inst(Inst::Brk { imm16: 1 });
-                Ok(Some(()))
+            "lifetime" | "assume" | "dbg" | "donothing" | "invariant" => Ok(()),
+            "expect" => {
+                let value = self.src(arguments[0])?;
+                self.define(result, value)
             }
-            Some("smax" | "smin" | "umax" | "umin") => {
+            "trap" => {
+                self.inst(Inst::Brk { imm16: 1 });
+                Ok(())
+            }
+            "smax" | "smin" | "umax" | "umin" => {
                 let signed = name.contains(".s");
                 let max = name.contains("max");
                 let ty = self.operand_type(arguments[0])?;
@@ -317,11 +332,152 @@ impl Selector<'_> {
                     cond,
                 });
                 let known = if bits <= 32 { Known::Hi32Zero } else { Known::Nothing };
-                self.define(result, Src::Val(Val::Int(G { reg: rd, bits, known })))?;
-                Ok(Some(()))
+                self.define(result, Src::Val(Val::Int(G { reg: rd, bits, known })))
             }
-            _ => Ok(None),
+            "fmuladd" | "fma" => {
+                let (a, b, c) =
+                    (self.float_arg(arguments[0])?, self.float_arg(arguments[1])?, self.float_arg(arguments[2])?);
+                let rd = self.mf.fpr();
+                self.inst(Inst::FpFused { op: FpFused::Madd, size: a.1, rd, rn: a.0, rm: b.0, ra: c.0 });
+                self.define(result, Src::Val(Val::Float { reg: rd, size: a.1 }))
+            }
+            "fabs" | "sqrt" | "floor" | "ceil" | "trunc" | "round" | "rint" | "nearbyint" | "roundeven" => {
+                let (rn, size) = self.float_arg(arguments[0])?;
+                let op = match base {
+                    "fabs" => FpUnary::Abs,
+                    "sqrt" => FpUnary::Sqrt,
+                    "floor" => FpUnary::Rint(Rounding::Down),
+                    "ceil" => FpUnary::Rint(Rounding::Up),
+                    "trunc" => FpUnary::Rint(Rounding::Zero),
+                    "round" => FpUnary::Rint(Rounding::Away),
+                    "rint" => FpUnary::Rint(Rounding::Exact),
+                    "nearbyint" => FpUnary::Rint(Rounding::Current),
+                    _ => FpUnary::Rint(Rounding::Nearest),
+                };
+                let rd = self.mf.fpr();
+                self.inst(Inst::FpUnary { op, size, rd, rn });
+                self.define(result, Src::Val(Val::Float { reg: rd, size }))
+            }
+            "bswap" | "bitreverse" | "ctlz" | "cttz" | "abs" => self.bit_intrinsic(base, instruction, arguments),
+            "memcpy" | "memmove" | "memset" => {
+                // The last argument is the volatile flag; the call is
+                // `memcpy(dst, src, n)`.
+                let mut values = Vec::new();
+                for (position, &argument) in arguments[..3].iter().enumerate() {
+                    let ty = self.operand_type(argument)?;
+                    let scalar = self.scalar(ty)?;
+                    let src = self.src(argument)?;
+                    let value = self.argument_value(scalar, src, &[])?;
+                    // A memset's value is an int; its length is 64 bits.
+                    let _ = position;
+                    values.push((value, scalar, true));
+                }
+                let void = self.types().void();
+                let callee = Callee::Symbol(match self.platform.underscore() {
+                    true => format!("_{base}"),
+                    false => base.to_owned(),
+                });
+                self.emit_call(callee, values, void)?;
+                Ok(())
+            }
+            _ => refuse(format!("the intrinsic {name}")),
         }
+    }
+
+    fn float_arg(
+        &mut self,
+        operand: Operand,
+    ) -> Selected<(Vreg, FpSize)> {
+        let src = self.src(operand)?;
+        match self.materialize(src)? {
+            Val::Float { reg, size } => Ok((reg, size)),
+            _ => refuse("a float argument that is an integer"),
+        }
+    }
+
+    /// `bswap`, `bitreverse`, `ctlz`, `cttz` and `abs` of an integer.
+    fn bit_intrinsic(
+        &mut self,
+        base: &str,
+        instruction: &Instruction,
+        arguments: &[Operand],
+    ) -> Selected<()> {
+        let ty = self.operand_type(arguments[0])?;
+        let Some(bits) = self.types().int_bits(ty) else { return refuse("a bit intrinsic of a non-integer") };
+        if !matches!(bits, 16 | 32 | 64) && base != "abs" && base != "ctlz" && base != "cttz" {
+            return refuse(format!("{base} of i{bits}"));
+        }
+        let width = super::val::width_of(bits);
+        let g = self.operand_g(arguments[0])?;
+        let rd = self.mf.gpr();
+        let known = if bits <= 32 { Known::Hi32Zero } else { Known::Nothing };
+        match base {
+            "abs" => {
+                let g = self.extended(g, Known::Sign);
+                self.inst(Inst::AddSubImm {
+                    op: AddSub { subtract: true, set_flags: true },
+                    width,
+                    rd: Gpr::R31,
+                    rn: g.reg,
+                    imm12: 0,
+                    shift12: false,
+                });
+                // cneg rd, g, lt = csneg rd, g, g, ge
+                self.inst(Inst::CondSelect { op: Select::Csneg, width, rd, rn: g.reg, rm: g.reg, cond: Cond::Ge });
+            }
+            "bswap" => {
+                self.inst(Inst::OneSource { op: Unary::Rev, width, rd, rn: g.reg });
+                if bits == 16 {
+                    // The 32-bit reverse puts the bytes in the high half.
+                    self.inst(Inst::BitfieldMove {
+                        op: Bitfield::Ubfm,
+                        width: Width::W,
+                        rd,
+                        rn: rd,
+                        immr: 16,
+                        imms: 31,
+                    });
+                }
+            }
+            "bitreverse" => self.inst(Inst::OneSource { op: Unary::Rbit, width, rd, rn: g.reg }),
+            "ctlz" => {
+                let g = self.extended(g, Known::Zero);
+                self.inst(Inst::OneSource { op: Unary::Clz, width, rd, rn: g.reg });
+                if bits < width.bits() {
+                    // The leading zeros of the register count the padding.
+                    self.inst(Inst::AddSubImm {
+                        op: AddSub { subtract: true, set_flags: false },
+                        width,
+                        rd,
+                        rn: rd,
+                        imm12: (width.bits() - bits) as u16,
+                        shift12: false,
+                    });
+                }
+            }
+            _ => {
+                // cttz: reverse the bits, count the leading zeros.
+                let reversed = self.mf.gpr();
+                self.inst(Inst::OneSource { op: Unary::Rbit, width, rd: reversed, rn: g.reg });
+                self.inst(Inst::OneSource { op: Unary::Clz, width, rd, rn: reversed });
+                if bits < width.bits() {
+                    // A zero argument counts the register's width; the type's
+                    // is `bits`.
+                    self.inst(Inst::AddSubImm {
+                        op: AddSub { subtract: true, set_flags: true },
+                        width,
+                        rd: Gpr::R31,
+                        rn: rd,
+                        imm12: bits as u16,
+                        shift12: false,
+                    });
+                    let limit = self.mf.gpr();
+                    self.load_immediate(limit, bits, u64::from(bits));
+                    self.inst(Inst::CondSelect { op: Select::Csel, width, rd, rn: limit, rm: rd, cond: Cond::Hi });
+                }
+            }
+        }
+        self.define(instruction.result, Src::Val(Val::Int(G { reg: rd, bits, known })))
     }
 }
 

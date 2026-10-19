@@ -18,9 +18,12 @@ impl Selector<'_> {
         align: Option<u64>,
     ) -> Selected<()> {
         // A static alloca: a constant count of one.
-        let count = match self.src(instruction.operands[0])? {
-            Src::Int { value, .. } => value as u64,
-            _ => return refuse("a dynamic alloca"),
+        let count = match instruction.operands.first() {
+            None => 1,
+            Some(operand) => match self.src(*operand)? {
+                Src::Int { value, .. } => value as u64,
+                _ => return refuse("a dynamic alloca"),
+            },
         };
         let size = self.layout.alloc_size(self.types(), allocated) * count;
         let align = align.unwrap_or(0).max(self.layout.align(self.types(), allocated)).max(1);

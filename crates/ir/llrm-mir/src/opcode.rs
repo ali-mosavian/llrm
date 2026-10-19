@@ -175,7 +175,7 @@ pub const BINARY: [(BinaryOp, &str); 18] = [
     (BinaryOp::FRem, "frem"),
 ];
 
-pub const CAST: [(CastOp, &str); 14] = [
+pub const CAST: [(CastOp, &str); 15] = [
     (CastOp::Trunc, "trunc"),
     (CastOp::ZExt, "zext"),
     (CastOp::SExt, "sext"),
@@ -187,6 +187,11 @@ pub const CAST: [(CastOp, &str); 14] = [
     (CastOp::UIToFP, "uitofp"),
     (CastOp::SIToFP, "sitofp"),
     (CastOp::PtrToInt, "ptrtoint"),
+    // Newer LLVM's `ptrtoaddr`: the address of a pointer as an integer, read as
+    // `ptrtoint` (the same where pointer and address have one width); written
+    // as
+    // `ptrtoint`, the first spelling of the operation.
+    (CastOp::PtrToInt, "ptrtoaddr"),
     (CastOp::IntToPtr, "inttoptr"),
     (CastOp::BitCast, "bitcast"),
     (CastOp::AddrSpaceCast, "addrspacecast"),
@@ -435,10 +440,11 @@ pub const FLAG_ATTRIBUTES: [&str; 44] = [
     "zeroext",
 ];
 
-/// Attributes a front end states for the target's sake that no pass here reads
-/// (stack protection, unwind tables), kept as flags; `uwtable` may carry its
+/// Attributes the pin's clang states that no pass here reads (stack protection,
+/// unwind tables, `dead_on_return`...), kept as flags; `uwtable` may carry its
 /// kind in parentheses (`uwtable(sync)`).
-pub const TARGET_FLAG_ATTRIBUTES: [&str; 4] = ["ssp", "sspreq", "sspstrong", "uwtable"];
+pub const TARGET_FLAG_ATTRIBUTES: [&str; 7] =
+    ["dead_on_return", "nocreateundeforpoison", "nofreeobj", "ssp", "sspreq", "sspstrong", "uwtable"];
 
 pub const INT_ATTRIBUTES: [&str; 4] = ["align", "alignstack", "dereferenceable", "dereferenceable_or_null"];
 

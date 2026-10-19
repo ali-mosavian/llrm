@@ -104,3 +104,38 @@ fn recursion() {
 fn globals_and_strings() {
     compare("globals");
 }
+
+#[test]
+fn integer_arithmetic_of_every_width() {
+    compare("arith");
+}
+
+#[test]
+fn pointers_arrays_and_strings() {
+    compare("pointers");
+}
+
+#[test]
+fn structs_by_value_and_by_pointer() {
+    compare("structs");
+}
+
+#[test]
+fn switches() {
+    compare("switches");
+}
+
+#[test]
+fn floating_point() {
+    compare("floats");
+}
+
+#[test]
+fn many_arguments_and_function_pointers() {
+    compare("manyargs");
+}
+
+#[test]
+fn small_algorithms() {
+    compare("algos");
+}
