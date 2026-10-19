@@ -101,6 +101,7 @@ pub mod combine_shared;
 pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
+pub mod condstores;
 pub mod congruentiv;
 pub mod constraintelim;
 #[cfg(test)]
