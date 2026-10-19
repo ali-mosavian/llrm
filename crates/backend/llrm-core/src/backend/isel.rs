@@ -3251,14 +3251,43 @@ impl Selector<'_, '_, '_> {
             return refuse("va_start with no parameter before the variadic arguments");
         };
         self.unsealed = true;
-        // The list holds a near data pointer.
-        let width = self.layout.pointer(self.spaces.data).bits / 8;
+        let width = self.va_list_bytes();
         let held = Held { value: self.fresh(), width };
         out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1, home: None }, held)));
         let list = self.pointer(arguments[0])?;
         out.push(insn(
             at,
             semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(regs, list, width))], vec![Loc::Held(held)]),
+        ));
+        Ok(())
+    }
+
+    /// The bytes a `va_list` takes: a near data pointer.
+    fn va_list_bytes(&self) -> u32 {
+        self.layout.pointer(self.spaces.data).bits / 8
+    }
+
+    /// `llvm.va_copy`: the list read from the second argument's address
+    /// stored at the first's, as `TargetLowering::expandVACopy` does for a list
+    /// that is a pointer.
+    fn va_copy(
+        &mut self,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let regs = self.regs();
+        let width = self.va_list_bytes();
+        let held = Held { value: self.fresh(), width };
+        let from = self.pointer(arguments[1])?;
+        out.push(insn(
+            at,
+            semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(Self::memory(regs, from, width))]),
+        ));
+        let to = self.pointer(arguments[0])?;
+        out.push(insn(
+            at,
+            semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(regs, to, width))], vec![Loc::Held(held)]),
         ));
         Ok(())
     }
@@ -5545,6 +5574,9 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::PtrDiff) => self.pointer_difference(inst, arguments, at, out),
                 Some(Intrinsic::Window) => self.window(inst, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
+                // A list that is a pointer owns nothing to release.
+                Some(Intrinsic::VaEnd) => Ok(()),
+                Some(Intrinsic::VaCopy) => self.va_copy(arguments, at, out),
                 Some(Intrinsic::StackSave) => self.stack_save(inst, at, out),
                 Some(Intrinsic::StackRestore) => self.stack_restore(arguments, at, out),
                 // Where a local's bytes are live: read by the frame layout, no
