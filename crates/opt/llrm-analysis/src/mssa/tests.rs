@@ -822,12 +822,18 @@ b0:
     let aa = AliasQuery::new(&unit, &accesses);
     let insts: Vec<_> = unit.function.walk().map(|(_, inst)| inst).collect();
     let is_call = |&&inst: &&llrm_mir::module::InstId| {
-        matches!(unit.function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Call(_))
+        matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Call(_)
+        )
     };
     let calls: Vec<_> = insts.iter().filter(is_call).copied().collect();
     let store = *insts
         .iter()
-        .find(|&&inst| matches!(unit.function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Store { .. }))
+        .find(|&&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ))
         .expect("the store");
     let loc = aa.location_of(store).expect("a location");
     // Premise: both calls are unknown to the access lists.
