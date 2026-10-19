@@ -18,6 +18,8 @@ pub struct Dialect {
     pub conditions: Vec<(String, u32)>,
     /// Rows have a last column naming the assembler's code.
     pub assembler_column: bool,
+    /// The flags an arithmetic instruction writes: what a rule's `any` reads.
+    pub arithmetic: Vec<String>,
 }
 
 impl Dialect {
@@ -78,6 +80,10 @@ impl Dialect {
                 one.as_integer().and_then(|bits| u32::try_from(bits).ok()).ok_or("dialect.toml: a width is no number")
             })
             .collect::<Result<_, _>>()?;
+        let arithmetic = strings("arithmetic").unwrap_or_default();
+        if let Some(missing) = arithmetic.iter().find(|name| !flags.iter().any(|(one, _)| one == *name)) {
+            return Err(format!("dialect.toml: `arithmetic` names no flag `{missing}`"));
+        }
         Ok(Self {
             file: table.get("file").and_then(toml::Value::as_str).ok_or("dialect.toml: no `file`")?.to_owned(),
             registers: strings("registers")?,
@@ -85,14 +91,20 @@ impl Dialect {
             flags,
             conditions,
             assembler_column: table.get("assembler_column").and_then(toml::Value::as_bool).unwrap_or(false),
+            arithmetic,
         })
     }
 
-    fn flag(
+    pub fn flag(
         &self,
         name: &str,
     ) -> Option<u32> {
         self.flags.iter().find(|(one, _)| one == name).map(|(_, bit)| *bit)
+    }
+
+    /// The bits of the flags an arithmetic instruction writes.
+    pub fn arithmetic_mask(&self) -> u32 {
+        self.arithmetic.iter().filter_map(|name| self.flag(name)).fold(0, |all, bit| all | bit)
     }
 }
 
