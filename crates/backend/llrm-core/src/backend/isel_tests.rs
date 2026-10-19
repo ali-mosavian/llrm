@@ -5674,6 +5674,7 @@ no:
 }
 ";
     assert!(!listing(text, "f").is_empty());
+}
 
 /// `freeze undef` and a bare `undef` operand are selected as any value: a
 /// constant, no register read and no refusal (an `undef` constant had no
