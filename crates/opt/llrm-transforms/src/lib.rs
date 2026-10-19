@@ -96,6 +96,7 @@ pub mod combine_addsub;
 pub mod combine_build;
 pub mod combine_compares;
 pub mod combine_gep;
+pub mod combine_gep_merge;
 pub mod combine_phi;
 pub mod combine_select;
 pub mod combine_shared;

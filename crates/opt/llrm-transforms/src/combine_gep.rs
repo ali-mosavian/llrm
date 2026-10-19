@@ -4,8 +4,8 @@
 //! [`InstCombinerImpl::visitGetElementPtrInst`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L3321)
 //! and `emitGEPOffset`
 //! ([Local.cpp:22](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/Local.cpp#L22))
-//! at d1106deb71cc, up to the one-index rewrites (:3513); the rest follows in
-//! later PRs.
+//! at d1106deb71cc, up to the one-index rewrites (:3513), with `visitGEPOfGEP`
+//! in `combine_gep_merge.rs`; the rest follows in later PRs.
 //!
 //! MIRROR: indices over a zero-size type become zero, an index is cast to the
 //! layout's index type, a GEP of constants is a byte `ptradd`, a GEP whose
@@ -24,7 +24,7 @@
 //! `MadeIRChange` and goes on.
 //!
 //! # Not yet translated
-//! `foldGEPOfPhi`, `visitGEPOfGEP`, the single-index rewrites (:3513-3640), the
+//! `foldGEPOfPhi`, the single-index rewrites (:3513-3640), the
 //! derived `inbounds`/`nuw` (:3641-3680), `foldSelectGEP` and the `srem` form.
 //!
 //! # Example
@@ -43,7 +43,7 @@ use crate::combine::{Combiner, Visit};
 
 /// What an index of a `getelementptr` steps over (`gep_type_iterator`).
 #[derive(Clone, Copy)]
-enum Step {
+pub(crate) enum Step {
     /// A struct: the index is a constant field number.
     Struct(TypeId),
     /// A sequence: the index scales by the size of its element.
@@ -51,26 +51,81 @@ enum Step {
 }
 
 /// The parts of a `getelementptr`.
-struct Gep {
-    source: TypeId,
-    ptr: Operand,
-    indices: Vec<Operand>,
-    flags: Flags,
-    ty: TypeId,
+pub(crate) struct Gep {
+    pub source: TypeId,
+    pub ptr: Operand,
+    pub indices: Vec<Operand>,
+    pub flags: Flags,
+    pub ty: TypeId,
 }
 
-/// `GEPOperator::hasNoUnsignedSignedWrap`: `nusw`, which `inbounds` implies.
-fn has_nusw(flags: Flags) -> bool {
-    flags.contains(Flags::NUSW) || flags.contains(Flags::INBOUNDS)
+/// `GEPNoWrapFlags`: `inbounds` implies `nusw`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GepFlags {
+    pub in_bounds: bool,
+    pub nusw: bool,
+    pub nuw: bool,
 }
 
-/// `GEPOperator::hasNoUnsignedWrap`.
-fn has_nuw(flags: Flags) -> bool {
-    flags.contains(Flags::NUW)
+impl GepFlags {
+    pub(crate) const ALL: GepFlags = GepFlags { in_bounds: true, nusw: true, nuw: true };
+
+    pub(crate) fn of(flags: Flags) -> Self {
+        let in_bounds = flags.contains(Flags::INBOUNDS);
+        GepFlags { in_bounds, nusw: in_bounds || flags.contains(Flags::NUSW), nuw: flags.contains(Flags::NUW) }
+    }
+
+    /// The instruction's flags; `inbounds` is not also spelled `nusw`.
+    pub(crate) fn flags(self) -> Flags {
+        let mut flags = Flags::default();
+        if self.in_bounds {
+            flags.insert(Flags::INBOUNDS);
+        } else if self.nusw {
+            flags.insert(Flags::NUSW);
+        }
+        if self.nuw {
+            flags.insert(Flags::NUW);
+        }
+        flags
+    }
+
+    fn and(
+        self,
+        other: GepFlags,
+    ) -> GepFlags {
+        GepFlags {
+            in_bounds: self.in_bounds && other.in_bounds,
+            nusw: self.nusw && other.nusw,
+            nuw: self.nuw && other.nuw,
+        }
+    }
+
+    /// Given `(gep (gep p, x), y)`, the flags of `(gep p, x+y)`: without
+    /// `inbounds` `nusw` needs `x + y` not to wrap.
+    pub(crate) fn intersect_for_offset_add(
+        self,
+        other: GepFlags,
+    ) -> GepFlags {
+        let mut common = self.and(other);
+        if !common.in_bounds {
+            common.nusw = false;
+        }
+        common
+    }
+
+    /// Given `(gep (gep p, x), y)`, the flags of `(gep (gep p, y), x)`: only
+    /// with `nuw` do `inbounds` and `nusw` survive.
+    pub(crate) fn intersect_for_reassociate(
+        self,
+        other: GepFlags,
+    ) -> GepFlags {
+        let common = self.and(other);
+        if common.nuw { common } else { GepFlags::default() }
+    }
 }
 
 impl Combiner<'_> {
-    fn gep_of(
+    pub(crate) fn gep_of(
         &self,
         inst: InstId,
     ) -> Option<Gep> {
@@ -81,7 +136,7 @@ impl Combiner<'_> {
     }
 
     /// The value of a constant integer operand.
-    fn constant_int(
+    pub(crate) fn constant_int(
         &self,
         v: Operand,
     ) -> Option<u128> {
@@ -93,7 +148,7 @@ impl Combiner<'_> {
         }
     }
 
-    fn is_zero_constant(
+    pub(crate) fn is_zero_constant(
         &self,
         v: Operand,
     ) -> bool {
@@ -101,7 +156,7 @@ impl Combiner<'_> {
     }
 
     /// `DL.getIndexType(PtrTy)`.
-    fn index_type(
+    pub(crate) fn index_type(
         &self,
         ptr_ty: TypeId,
     ) -> TypeId {
@@ -113,7 +168,7 @@ impl Combiner<'_> {
     }
 
     /// `DL.getTypeAllocSize(ty)`.
-    fn alloc_size(
+    pub(crate) fn alloc_size(
         &self,
         ty: TypeId,
     ) -> u64 {
@@ -122,7 +177,7 @@ impl Combiner<'_> {
 
     /// What each index steps over; `None` if a struct's index is not a
     /// constant that names a field.
-    fn steps(
+    pub(crate) fn steps(
         &self,
         source: TypeId,
         indices: &[Operand],
@@ -150,7 +205,7 @@ impl Combiner<'_> {
 
     /// `GetElementPtrInst::getIndexedType(source, indices)`: the type the
     /// indices reach.
-    fn indexed_type(
+    pub(crate) fn indexed_type(
         &self,
         source: TypeId,
         indices: &[Operand],
@@ -208,11 +263,12 @@ impl Combiner<'_> {
         let Gep { source, indices, flags, ty, .. } = self.gep_of(gep).expect("a getelementptr");
         let int_ty = self.index_type(ty);
         // nusw implies nsw for the offset arithmetic.
+        let gep_flags = GepFlags::of(flags);
         let mut wrap = Flags::default();
-        if has_nusw(flags) && !no_assumptions {
+        if gep_flags.nusw && !no_assumptions {
             wrap.insert(Flags::NSW);
         }
-        if has_nuw(flags) && !no_assumptions {
+        if gep_flags.nuw && !no_assumptions {
             wrap.insert(Flags::NUW);
         }
         let steps = self.steps(source, &indices).expect("a well-formed getelementptr");
@@ -297,7 +353,7 @@ impl Combiner<'_> {
             )
     }
 
-    fn definition_of(
+    pub(crate) fn definition_of(
         &self,
         v: Operand,
     ) -> Option<InstId> {
@@ -332,17 +388,17 @@ impl Combiner<'_> {
                 let narrower = self.context.types.int_bits(from) < self.context.types.int_bits(index_ty);
                 current = if narrower {
                     // sext, or zext nneg where the GEP cannot wrap either way
-                    if has_nuw(flags) && has_nusw(flags) {
+                    if GepFlags::of(flags).nuw && GepFlags::of(flags).nusw {
                         self.create_cast(inst, CastOp::ZExt, current, index_ty, Flags::NNEG)
                     } else {
                         self.create_cast(inst, CastOp::SExt, current, index_ty, Flags::default())
                     }
                 } else {
                     let mut wrap = Flags::default();
-                    if has_nuw(flags) {
+                    if GepFlags::of(flags).nuw {
                         wrap.insert(Flags::NUW);
                     }
-                    if has_nusw(flags) {
+                    if GepFlags::of(flags).nusw {
                         wrap.insert(Flags::NSW);
                     }
                     self.create_cast(inst, CastOp::Trunc, current, index_ty, wrap)
@@ -433,6 +489,15 @@ impl Combiner<'_> {
                 if scale == 1 { byte } else { self.context.types.intern(Type::Array { element: byte, count: scale }) };
             self.function.set_opcode(inst, Opcode::GetElementPtr { source: new_source });
             return Visit::Changed;
+        }
+
+        // A GEP of a GEP.
+        if let Some(src) = self.definition_of(ptr).filter(|&def| self.gep_of(def).is_some()) {
+            let gep = Gep { source, ptr, indices, flags, ty };
+            let found = self.visit_gep_of_gep(inst, &gep, src);
+            if !matches!(found, Visit::None) {
+                return found;
+            }
         }
         Visit::None
     }

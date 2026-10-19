@@ -20,10 +20,10 @@ fn visit(
     }
 }
 
-/// The body of `@f(ptr %b, i64 %i, i64 %j)` after `visitGetElementPtrInst`
-/// alone, through the driver.
+/// The body of `@f(ptr %b, i64 %i, i64 %j, i1 %c)` after
+/// `visitGetElementPtrInst` alone, through the driver.
 fn combined(body: &str) -> String {
-    let text = format!("define ptr @f(ptr %b, i64 %i, i64 %j) {{\nb0:\n{body}  ret ptr %p\n}}\n");
+    let text = format!("define ptr @f(ptr %b, i64 %i, i64 %j, i1 %c) {{\nb0:\n{body}  ret ptr %p\n}}\n");
     let mut module = parsed(&text);
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
@@ -103,5 +103,57 @@ fn two_non_zero_indices_are_split() {
     assert_eq!(
         combined("  %p = getelementptr { [2 x i16], [2 x i16] }, ptr %b, i64 %i, i32 1, i64 %j\n"),
         "  %0 = getelementptr [8 x i8], ptr %b, i64 %i\n  %1 = getelementptr i8, ptr %0, i64 4\n  %2 = getelementptr [2 x i8], ptr %1, i64 %j\n"
+    );
+}
+
+/// Two GEPs of constants are one offset.
+#[test]
+fn a_gep_of_a_constant_gep_is_one_offset() {
+    assert_eq!(
+        combined("  %q = getelementptr i32, ptr %b, i64 2\n  %p = getelementptr i32, ptr %q, i64 3\n"),
+        "  %0 = getelementptr i8, ptr %b, i64 20\n"
+    );
+}
+
+/// Two variable indices whose sum does not simplify stay two GEPs.
+#[test]
+fn a_gep_of_a_gep_with_a_variable_sum_is_left() {
+    assert_eq!(
+        combined("  %q = getelementptr i32, ptr %b, i64 %i\n  %p = getelementptr i32, ptr %q, i64 %j\n"),
+        "  %q = getelementptr [4 x i8], ptr %b, i64 %i\n  %p = getelementptr [4 x i8], ptr %q, i64 %j\n"
+    );
+}
+
+/// `gep T, (gep i8, b, C1), (x + C2)` moves `C2 * sizeof(T)` into the byte
+/// offset.
+#[test]
+fn a_constant_added_to_the_index_joins_the_byte_offset() {
+    assert_eq!(
+        combined(
+            "  %q = getelementptr i8, ptr %b, i64 16\n  %x = add i64 %i, 3\n  %p = getelementptr i32, ptr %q, i64 %x\n"
+        ),
+        "  %0 = getelementptr i8, ptr %b, i64 28\n  %1 = getelementptr [4 x i8], ptr %0, i64 %i\n"
+    );
+}
+
+/// A constant offset through a select index is a select of offsets.
+#[test]
+fn a_select_index_after_a_constant_offset_is_a_select_of_offsets() {
+    assert_eq!(
+        combined(
+            "  %q = getelementptr i8, ptr %b, i64 4\n  %s = select i1 %c, i64 1, i64 2\n  %p = getelementptr i8, ptr %q, i64 %s\n"
+        ),
+        "  %0 = select i1 %c, i64 5, i64 6\n  %1 = getelementptr i8, ptr %b, i64 %0\n"
+    );
+}
+
+/// Constant offsets on both sides of a variable one are added.
+#[test]
+fn constant_offsets_across_a_variable_one_are_added() {
+    assert_eq!(
+        combined(
+            "  %a = getelementptr i8, ptr %b, i64 4\n  %x = getelementptr i8, ptr %a, i64 %i\n  %p = getelementptr i8, ptr %x, i64 8\n"
+        ),
+        "  %x = getelementptr i8, ptr %b, i64 %i\n  %0 = getelementptr i8, ptr %x, i64 12\n"
     );
 }
