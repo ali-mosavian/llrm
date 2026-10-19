@@ -11,6 +11,7 @@ iced-x86 = { workspace = true }
 [dependencies]
 toml = { workspace = true }
 iced-x86 = { workspace = true }
+llrm-instr = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-target = { workspace = true }
