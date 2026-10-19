@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/memcpyopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/memcpyopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:c60aa9e93c0ec5642dac64901b59edf83cddeb07350f9fa135aa014fb815a07b -->
+<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:d43c4fef13bcf56cbf078c52a59668f99e38420deab3a7a9fbf5f729eea0258a -->
 
 # memcpyopt
 
@@ -23,6 +23,9 @@ destination walks up to decides what it can become:
 - a copy of memory nothing wrote (a fresh alloca) is gone
   (`hasUndefContents`);
 - a memmove whose ranges cannot meet is a memcpy (`processMemMove`).
+
+## Example
+A copy of a copy reads the first source:
 
 ```text
  call memcpy(%b, %a, 16)           call memcpy(%b, %a, 16)
