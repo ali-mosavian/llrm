@@ -6015,3 +6015,27 @@ fn test_a_dword_constant_returned_in_a_word_pair_is_a_word_each() {
     assert!(got.iter().any(|line| line == "mov dx, 1"), "the high word is its own constant: {got:?}");
     assert!(!got.iter().any(|line| line.starts_with("shr ")), "{got:?}");
 }
+
+/// IndVars' closed form of a sum over an early-exit loop is built one bit wider
+/// than its counter (`n(n-1)/2` in i33, as the pin builds it): lcexit.bas at
+/// -O2 stopped with "@__main: a i33 value" once SimplifyCFG's slots ran.
+/// The odd width, and the `llvm.umin` call on it, are legalized in the pin.
+#[test]
+fn test_a_closed_form_sum_in_an_odd_width_assembles() {
+    let text =
+        "declare i33 @llvm.umin.i33(i33, i33) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+define i32 @f(i16 %n) addrspace(1) {
+entry:
+  %a = zext i16 %n to i33
+  %m = call i33 @llvm.umin.i33(i33 %a, i33 9)
+  %d = add nsw i16 %n, -1
+  %e = zext i16 %d to i33
+  %p = mul i33 %m, %e
+  %h = lshr i33 %p, 1
+  %r = trunc i33 %h to i32
+  ret i32 %r
+}
+";
+    let got = listing_on("486", text, "f");
+    assert!(!got.is_empty(), "{got:?}");
+}
