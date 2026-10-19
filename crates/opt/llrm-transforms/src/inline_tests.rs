@@ -1638,7 +1638,8 @@ fn test_each_copys_alloca_is_bounded_by_lifetime_markers() {
     declared.place(&mut module).unwrap();
     let text = printed(&module);
     let main = &text[text.find("define void @main").unwrap()..];
-    let lines: Vec<&str> = main.lines().map(str::trim).filter(|one| one.starts_with("call") || one.contains("alloca")).collect();
+    let lines: Vec<&str> =
+        main.lines().map(str::trim).filter(|one| one.starts_with("call") || one.contains("alloca")).collect();
     let starts = lines.iter().filter(|one| one.contains("@llvm.lifetime.start.p0(i64 100, ptr")).count();
     let ends = lines.iter().filter(|one| one.contains("@llvm.lifetime.end.p0(i64 100, ptr")).count();
     assert_eq!((starts, ends), (2, 2), "{main}");

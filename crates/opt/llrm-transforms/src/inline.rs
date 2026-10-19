@@ -1155,10 +1155,12 @@ fn unmarked_allocas(
         }
         let markers = lifetime_markers(context, declared, address_space).0;
         let pointer = body.instruction(inst).result.map(Operand::Value);
-        let marked = body.walk().any(|(_, one)| {
-            callee(context, body, one).is_some_and(|id| markers.contains(&id))
-                && body.instruction(one).operands.get(1).copied() == pointer
-        });
+        let marked = body
+            .walk()
+            .any(
+                |(_, one)| callee(context, body, one).is_some_and(|id| markers.contains(&id))
+                    && body.instruction(one).operands.get(1).copied() == pointer,
+            );
         if !marked {
             allocas.push(copy);
         }
@@ -1186,10 +1188,8 @@ fn insert_lifetimes(
         let size = Operand::Constant(context.int(i64_ty, layout.alloc_size(&context.types, allocated) as i128));
         let pointer = Operand::Value(function.instruction(alloca).result.expect("an alloca's value"));
         let marker = |context: &Context, function: &mut Function, id: GlobalId| {
-            let target = context.constant(llrm_mir::context::Constant {
-                ty: context.types.ptr(0),
-                kind: ConstantKind::Global(id),
-            });
+            let target = context
+                .constant(llrm_mir::context::Constant { ty: context.types.ptr(0), kind: ConstantKind::Global(id) });
             let info = CallInfo {
                 function_type: ty,
                 calling_convention: 0,
