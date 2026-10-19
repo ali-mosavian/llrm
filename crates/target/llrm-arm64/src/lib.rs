@@ -2,6 +2,7 @@
 
 pub mod cc;
 pub mod data;
+pub mod divconst;
 pub mod driver;
 pub mod emit;
 pub mod expand_imm;

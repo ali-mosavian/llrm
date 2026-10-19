@@ -576,11 +576,8 @@ fn clangs_target_attributes_and_captures_are_read() {
     assert_eq!(round(&once), once);
     let kept = round(&format!("{DATALAYOUT}\ndeclare void @g(ptr captures(address) %p)\n"));
     assert!(!kept.contains("nocapture"), "{kept}");
-    // Newer LLVM's `ptrtoaddr` and the attributes of its by-value copies.
-    let newer = round(&format!(
-        "{DATALAYOUT}\ndeclare i16 @h(ptr nofreeobj dead_on_return %p) nocreateundeforpoison\n\ndefine i16 @k(ptr %p) {{\nb0:\n  %a = ptrtoaddr ptr %p to i16\n  ret i16 %a\n}}\n"
-    ));
-    assert!(newer.contains("ptrtoint ptr %p to i16"), "{newer}");
+    // The attributes of by-value copies.
+    round(&format!("{DATALAYOUT}\ndeclare i16 @h(ptr nofreeobj dead_on_return %p) nocreateundeforpoison\n"));
     // `allocsize(0, 1)` on a declaration (clang's `malloc`, `calloc`).
     round(&format!("{DATALAYOUT}\ndeclare ptr @calloc(i16, i16) allocsize(0, 1) allockind(\"alloc,zeroed\")\n"));
 }

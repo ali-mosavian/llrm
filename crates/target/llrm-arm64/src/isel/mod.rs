@@ -14,9 +14,10 @@ mod int;
 mod mem;
 mod val;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::{
     BlockId, ConstantId, ConstantKind, Function, GlobalId, InstId, Module, Opcode, Operand, Type, TypeId, ValueDef,
     ValueId,
@@ -52,14 +53,14 @@ pub struct Selector<'a> {
     pub(crate) layout: &'a DataLayout,
     pub(crate) platform: Platform,
     pub(crate) mf: MFunc,
-    pub(crate) vals: HashMap<ValueId, Val>,
+    pub(crate) vals: IdMap<ValueId, Val>,
     /// The blocks in reverse post-order: the order they are selected and laid
     /// out in.
     order: Vec<BlockId>,
-    index: HashMap<BlockId, usize>,
-    uses: HashMap<ValueId, usize>,
+    index: IdMap<BlockId, usize>,
+    uses: IdMap<ValueId, usize>,
     /// Comparisons selected where their reader is.
-    pub(crate) fused: HashSet<InstId>,
+    pub(crate) fused: IdSet<InstId>,
     /// The block being filled.
     pub(crate) current: usize,
     /// A variadic function's register save areas and where its unnamed
@@ -92,11 +93,11 @@ impl<'a> Selector<'a> {
     ) -> Self {
         let order = reverse_post_order(function);
         let index = order.iter().enumerate().map(|(at, block)| (*block, at)).collect();
-        let mut uses: HashMap<ValueId, usize> = HashMap::new();
+        let mut uses: IdMap<ValueId, usize> = IdMap::new();
         for (_, inst) in function.walk() {
             for operand in &function.instruction(inst).operands {
                 if let Operand::Value(value) = operand {
-                    *uses.entry(*value).or_default() += 1;
+                    *uses.get_or_insert_with(*value, || 0) += 1;
                 }
             }
         }
@@ -108,11 +109,11 @@ impl<'a> Selector<'a> {
             layout,
             platform,
             mf,
-            vals: HashMap::new(),
+            vals: IdMap::new(),
             order,
             index,
             uses,
-            fused: HashSet::new(),
+            fused: IdSet::new(),
             current: 0,
             va: None,
         }
