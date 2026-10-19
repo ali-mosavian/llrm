@@ -76,6 +76,7 @@
 pub mod adce;
 pub mod addresssink;
 pub mod algebraic;
+pub mod alwaysundef;
 pub mod argpromotion;
 #[cfg(test)]
 mod argpromotion_tests;
@@ -155,6 +156,7 @@ mod gvn_load_tests;
 mod gvn_scalar_tests;
 pub mod hoistcommon;
 pub mod homes;
+pub mod icmpchain;
 pub mod indvars;
 pub mod inferspace;
 #[cfg(test)]
@@ -176,6 +178,7 @@ pub mod jumpthread;
 pub mod jumpthreading;
 #[cfg(test)]
 mod jumpthreading_tests;
+pub mod knownpred;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod lftr;
@@ -261,6 +264,7 @@ pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
 pub mod twoentryphi;
+pub mod undefpred;
 pub mod unroll;
 pub mod unroll_jam;
 pub mod unswitch;
