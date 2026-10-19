@@ -212,6 +212,11 @@ fn a_declaration_takes_the_attributes_intrinsics_td_gives_its_intrinsic() {
         "declare void @llvm.va_start.p0(ptr) nocallback nofree nosync nounwind willreturn\n"
     );
     assert_eq!(
+        print("declare void @llvm.va_end.p0(ptr)\ndeclare void @llvm.va_copy.p0.p0(ptr, ptr)\n"),
+        "declare void @llvm.va_end.p0(ptr) nocallback nofree nosync nounwind willreturn\n\n\
+         declare void @llvm.va_copy.p0.p0(ptr, ptr) nocallback nofree nosync nounwind willreturn\n"
+    );
+    assert_eq!(
         print("declare i64 @llvm.x86.sse42.crc32.64.64(i64, i64)\n"),
         "declare i64 @llvm.x86.sse42.crc32.64.64(i64, i64) nocallback nofree nosync nounwind willreturn memory(none)\n"
     );

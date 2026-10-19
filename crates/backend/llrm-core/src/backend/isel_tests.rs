@@ -310,6 +310,37 @@ fn a_bit_count_intrinsic_is_refused_until_it_is_lowered() {
     }
 }
 
+/// A variadic function that starts a list, copies it and ends both: the copy
+/// is the pointer the first list holds, moved to the second.
+#[test]
+fn a_va_copy_moves_the_list_pointer_and_a_va_end_is_no_code() {
+    let text = "declare void @llvm.va_start.p0(ptr)\n\
+                declare void @llvm.va_copy.p0.p0(ptr, ptr)\n\
+                declare void @llvm.va_end.p0(ptr)\n\
+                define i16 @f(i16 %n, ...) addrspace(1) {\n  %a = alloca ptr\n  %b = alloca ptr\n  \
+                call void @llvm.va_start.p0(ptr %a)\n  call void @llvm.va_copy.p0.p0(ptr %b, ptr %a)\n  \
+                call void @llvm.va_end.p0(ptr %a)\n  call void @llvm.va_end.p0(ptr %b)\n  ret i16 %n\n}\n";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 4",
+            "L0_0:",
+            // va_start: the first list holds the address of the variadic
+            // arguments.
+            "lea ax, [bp+8]",
+            "mov word ptr [bp-2], ax",
+            // va_copy: the second list holds the same pointer; va_end is no
+            // code.
+            "mov word ptr [bp-4], ax",
+            "mov ax, word ptr [bp+6]",
+            "leave",
+            "retf",
+        ]
+    );
+}
+
 /// CVP narrows a `udiv` to i8 and expands a `urem` through a `freeze`; both
 /// were refused ("a byte division", "freeze") and stopped vid.c and screen.c.
 #[test]
