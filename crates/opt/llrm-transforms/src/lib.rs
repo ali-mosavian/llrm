@@ -258,7 +258,6 @@ pub mod switchcg;
 pub mod switchlower;
 pub mod tailcallelim;
 pub mod tailmerge;
-pub mod tailcallelim;
 #[cfg(test)]
 pub mod testing;
 pub mod transform;
