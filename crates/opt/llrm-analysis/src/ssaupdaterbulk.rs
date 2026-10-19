@@ -44,6 +44,7 @@ use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::idf;
+use llrm_mir::loopinfo::inverse_children;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, Use};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::types::TypeId;
@@ -161,7 +162,10 @@ impl SsaUpdaterBulk {
             for &block in &idf_blocks {
                 let phi = function.block(block).first().expect("the phi just made");
                 let mut operands = Vec::new();
-                for pred in function.predecessors(block) {
+                // `for (BasicBlock *Pred : predecessors(BB))`: one input per
+                // edge, so a switch with two cases to this
+                // block gives it two.
+                for pred in inverse_children(function, block) {
                     let value = compute_value(context, function, dt, &mut infos, rewrite.ty, pred, true);
                     operands.extend([value, Operand::Block(pred)]);
                 }
@@ -335,5 +339,49 @@ b4:
         let llrm_mir::module::ValueDef::Instruction(user) = user else { panic!("%u is an instruction") };
         assert_eq!(function.instruction(user).operands[0], Operand::Value(phi_value), "the use reads the phi");
         assert_eq!(function.instruction(phi).operands.len(), 4, "an input for each of the two predecessors");
+    }
+
+    /// `rewrite_all_uses` gave a phi one input for each predecessor block,
+    /// where the pin gives one for each edge: a switch with two cases to
+    /// the block left the phi an input short (DFAJumpThreading on x_switch
+    /// -O2 m16 then grew a 3 GB allocation in SCEV/liveness over the
+    /// malformed phi).
+    #[test]
+    fn test_a_phi_has_an_input_for_each_edge_of_a_switch_into_its_block() {
+        let mut module = parsed(
+            "define i32 @f(i32 %a) {
+b0:
+  %v = add i32 %a, 1
+  switch i32 %a, label %b1 [
+    i32 0, label %b4
+    i32 1, label %b4
+  ]
+b1:
+  %v1 = add i32 %a, 2
+  br label %b4
+b4:
+  %u = add i32 %v, 0
+  ret i32 %u
+}
+",
+        );
+        let (context, function) = module.function_mut("f").expect("f");
+        let (b0, b1, b4) = (block(function, "b0"), block(function, "b1"), block(function, "b4"));
+        let (v, v1) = (value(function, "v"), value(function, "v1"));
+        let use_of_v = function.users(v).iter().copied().next().expect("the use in %u");
+        let ty = function.value(v).ty;
+
+        let mut bulk = SsaUpdaterBulk::new();
+        let var = bulk.add_variable(Some("v"), ty);
+        bulk.add_available_value(var, b0, Operand::Value(v));
+        bulk.add_available_value(var, b1, Operand::Value(v1));
+        bulk.add_use(var, use_of_v);
+        let dt = DomTree::of(function);
+        let mut phis = Vec::new();
+        bulk.rewrite_all_uses(context, function, &dt, Some(&mut phis));
+
+        assert_eq!(phis.len(), 1);
+        assert_eq!(function.parent(phis[0]), Some(b4));
+        assert_eq!(function.instruction(phis[0]).operands.len(), 6, "an input for each of the three edges");
     }
 }

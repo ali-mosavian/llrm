@@ -961,6 +961,7 @@ pub fn recorded(
     manager.without_loop_intervals = !applied.options.loop_intervals;
     manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
+    manager.dump_inputs = llrm_support::env_flag!("LLRM_DUMP_INPUTS");
     if !applied.options.optimize {
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
@@ -1592,6 +1593,10 @@ impl Fixed {
 }
 
 impl FunctionPass for Fixed {
+    fn dumps_inputs_itself(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "pipeline"
     }
