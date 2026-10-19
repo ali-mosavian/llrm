@@ -15,7 +15,7 @@ fn names(
 fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
-    // The rotate slot is Old while `LLRM_NO_ROTATE` is set, as in the
+    // The rotate slot is Old unless `LLRM_ROTATE` is set, as in the
     // pipeline's own check.
     let rotate = pipeline::Options::default().rotate_slot;
     let mut registry: Vec<Entry> = parity::REGISTRY
@@ -34,7 +34,7 @@ fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
     assert!(why.contains("ghost@999"), "{why}");
     registry.pop();
     let without: Vec<_> = built.iter().copied().filter(|one| *one != "earlycse@649").collect();
-    // The rotate slot is Old while `LLRM_NO_ROTATE` is set, as in the
+    // The rotate slot is Old unless `LLRM_ROTATE` is set, as in the
     // pipeline's own check.
     let rotate = pipeline::Options::default().rotate_slot;
     let registry: Vec<Entry> = parity::REGISTRY
