@@ -6,6 +6,29 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import parity_smoke as ps  # noqa: E402
+import pytest  # noqa: E402
+
+
+class Counted:
+    """A meter that read `value` instructions (None: perf cannot attach)."""
+
+    value: int | None = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def no_perf(monkeypatch):
+    """Tests do not attach perf to pytest: the meter reads nothing and the budget is CPU seconds unless a test hands one."""
+    monkeypatch.setattr(ps, "Meter", Counted)
+
+
+def counted(instructions: int):
+    return type("Meter", (Counted,), {"value": instructions})
 
 
 def clocked(costs):
@@ -234,3 +257,27 @@ def test_a_compile_that_outgrows_the_memory_limit_is_reported_as_a_memory_limit(
     monkeypatch.setattr(ps.cpulimit, "MEMORY_KB", 200_000)
     why = ps.compile_ok([_sys.executable, "-c", "x = bytearray(900 * 1024 * 1024)"], dict(__import__("os").environ))
     assert why and why.startswith("memory limit"), why
+
+
+def test_a_failed_unit_step_names_each_failed_test_not_its_crate():
+    """The subset rule compared checks: a PR adding one failing test inside an already-red crate failed `unit llrm-qb`, which the red head failed too, and landed."""
+    out = "running 3 tests\\nfailures:\\n\\n---- t::a stdout ----\\n    printed\\n\\nfailures:\\n    t::a\\n    t::b\\n\\ntest result: FAILED. 1 passed; 2 failed\\n".replace("\\n", "\n")
+    assert ps.failed_tests(out) == ["t::a", "t::b"]
+    step = lambda bins: ("fail", "llrm-qb: x", ["unit llrm-qb::t::a", "unit llrm-qb::t::b"])
+    ok, line = ps.run_steps([("unit llrm-qb", step, 1.0)], Path("."), clock=lambda: 0.0)
+    assert not ok and ps.failing_names(line) == ["unit llrm-qb::t::a", "unit llrm-qb::t::b"]
+    assert ps.failing_names("PARITY SMOKE FAIL run: a: b | x") == ["run"]
+
+
+def test_the_budget_is_instructions_so_a_loaded_host_passes_and_a_doubled_step_fails():
+    """A tools-only PR failed 'over the budget' at 16.1 s > 15 s at load 32 on 32 cores: the CPU seconds of the same instructions stretch with contention."""
+    steps = [("run", lambda bins: ("ok", ""), 1.0)]
+    loaded = iter([0.0, 0.0, 0.0, 40.0])  # 40 CPU seconds on a loaded host
+    ok, line = ps.run_steps(steps, Path("."), clock=lambda: next(loaded), meter=counted(10_000_000_000), limit=12_000_000_000)
+    assert ok and "10.00 G instr of 12.00 G (40.0 s CPU for reference)" in line
+    quiet = iter([0.0, 0.0, 0.0, 5.0])  # a quiet host, a step that executes twice the instructions
+    ok, line = ps.run_steps(steps, Path("."), clock=lambda: next(quiet), meter=counted(24_000_000_000), limit=12_000_000_000)
+    assert not ok and ps.failing_names(line) == ["over the budget"]
+    fallback = iter([0.0, 0.0, 0.0, 20.0])  # no perf: the CPU seconds decide, as before
+    ok, line = ps.run_steps(steps, Path("."), clock=lambda: next(fallback), meter=counted(None), limit=12_000_000_000)
+    assert not ok and "perf unavailable" in line
