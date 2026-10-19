@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/alwaysundef.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/alwaysundef.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/alwaysundef.rs sha256:85ac96a6d4531315033b1c7caccd56d20858f70d20ca152bd594bb98c28e0f98 -->
+<!-- src: crates/opt/llrm-transforms/src/alwaysundef.rs sha256:3fa1186b07d040823e116f93fb06499cc97d711baeb5812c05bff489b0195e58 -->
 
 # alwaysundef
 
@@ -14,6 +14,9 @@ it, returns it from a `noundef` function or passes it to a `noundef`
 parameter; a use through a `getelementptr` from the pointer is looked
 through. `removeUndefIntroducingPredecessor` and the folds that would make
 a select of the phi ask it, to make the undefined control flow go instead.
+
+## Example
+A null the block loads through makes its way in undefined:
 
 ```text
   b1: br b3                       b1: unreachable

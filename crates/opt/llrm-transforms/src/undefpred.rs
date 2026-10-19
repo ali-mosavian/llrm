@@ -10,6 +10,9 @@
 //! where both targets are the block); a `switch` sends the cases that reach
 //! the block to a new block that is `unreachable`. One predecessor per call.
 //!
+//! # Example
+//! The way in that gives the null is cut:
+//!
 //! ```text
 //!   b1: br b3                       b1: unreachable
 //!   b2: br b3                       b2: br b3

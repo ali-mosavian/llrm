@@ -10,6 +10,9 @@
 //! through. `removeUndefIntroducingPredecessor` and the folds that would make
 //! a select of the phi ask it, to make the undefined control flow go instead.
 //!
+//! # Example
+//! A null the block loads through makes its way in undefined:
+//!
 //! ```text
 //!   b1: br b3                       b1: unreachable
 //!   b3: %p = phi ptr [ null, b1 ], [ %q, b2 ]   (b1's edge is gone)

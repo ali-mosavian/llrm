@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/undefpred.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/undefpred.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/undefpred.rs sha256:d50349e636cca9221f95ea96ca083113e0e5f631d7ff6427a523e19bace7d6bc -->
+<!-- src: crates/opt/llrm-transforms/src/undefpred.rs sha256:0c5dd7d95c2ac8b43113c7ada94213f111b2ac82fa362477e926fb90e229b555 -->
 
 # undefpred
 
@@ -14,6 +14,9 @@ that gives it ends differently: a jump becomes `unreachable`; a
 conditional branch becomes a jump to its other target (or `unreachable`
 where both targets are the block); a `switch` sends the cases that reach
 the block to a new block that is `unreachable`. One predecessor per call.
+
+## Example
+The way in that gives the null is cut:
 
 ```text
   b1: br b3                       b1: unreachable
