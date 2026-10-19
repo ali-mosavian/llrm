@@ -6176,6 +6176,14 @@ entry:
   ret i32 %r
 }
 ";
-    let got = listing_on("486", text, "f");
+    // The driver legalizes and lowers selects before selection, as the pin's
+    // DAG does.
+    let mut module = llrm_mir::parse::module(text).expect("parses");
+    crate::backend::legalize::legalized(&mut module).expect("legalizes");
+    let layout = llrm_mir::datalayout::DataLayout::parse(&llrm_target::Target::layout(&llrm_x86_m16::M16).datalayout)
+        .expect("a datalayout");
+    let pricing = crate::backend::selects::Pricing { target: None, layout: &layout, tti: &llrm_mir::tti::Basic };
+    crate::backend::selects::lowered(&mut module, &pricing).expect("lowers selects");
+    let got = listing_on("486", &llrm_mir::print::module(&module), "f");
     assert!(!got.is_empty(), "{got:?}");
 }
