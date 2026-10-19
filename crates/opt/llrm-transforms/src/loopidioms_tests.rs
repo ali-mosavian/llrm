@@ -774,9 +774,8 @@ fn a_pair_of_constants_is_one_store_tuned_for_size_where_the_bytes_are_fewer() {
         let (layout, outer) =
             (layout(&module), Outer::of(&module, Some(std::rc::Rc::new(llrm_x86_m16::Dos::default()))));
         let callees = llrm_mir::memory::callees(&module);
-        let mut declared = Declared::of(&module);
         let (context, function) = module.function_mut("f").expect("@f");
-        super::merged(context, &layout, &callees, function, &outer, &mut declared, size);
+        crate::mergestores::merged_constants(context, &layout, &callees, function, &outer, size);
         let after = printed(&module);
         assert_eq!(results(&module, BYTES), results(&before, BYTES), "{after}");
         after.matches("store").count()
@@ -849,4 +848,15 @@ fn a_loop_of_two_adjacent_fills_is_one_memset_of_both() {
 fn a_loop_of_two_fills_with_a_gap_is_not_one_memset() {
     let (text, changed) = fill(&two_fills(30, "-1", "-1", "%i"), CELLS);
     assert!(changed && text.matches("call void @llvm.memset").count() == 2, "{text}");
+}
+
+/// A loop of `undef` byte stores is a memset of `undef`, not poison
+/// (`isBytewiseValue` answers `UndefValue`). A guard: it also passes with
+/// `byte_operand` giving poison, so the arm is reached another way.
+#[test]
+fn a_loop_of_undef_bytes_is_a_memset_of_undef() {
+    let body = "  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i\n  store i8 undef, ptr %p\n";
+    let (text, changed) = fill(&looped("i8", "%n", body, "%e"), TRIPS);
+    assert!(changed);
+    assert!(text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 undef, i16 %1, i1 false)"), "{text}");
 }

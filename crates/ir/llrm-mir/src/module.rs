@@ -67,7 +67,7 @@ pub struct ValueData {
     pub def: ValueDef,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Instruction {
     pub opcode: Opcode,
     /// The result's type; `void` when there is none.
@@ -76,20 +76,131 @@ pub struct Instruction {
     pub flags: Flags,
     pub result: Option<ValueId>,
     pub metadata: Vec<(String, MetadataId)>,
+    /// The previous and next instruction in its block, as an id + 1 (0: none):
+    /// the block list's links, beside the payload they lead to so that a walk
+    /// reads one record per instruction. Not part of what the instruction is.
+    #[doc(hidden)]
+    pub link: (u32, u32),
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+/// Two instructions are equal by what they are, not by where they stand.
+impl PartialEq for Instruction {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.opcode == other.opcode
+            && self.ty == other.ty
+            && self.operands == other.operands
+            && self.flags == other.flags
+            && self.result == other.result
+            && self.metadata == other.metadata
+    }
+}
+
+/// A basic block. Its instructions are a doubly linked list through the
+/// function's `link` arena (LLVM's `simple_ilist`): the block holds the first,
+/// the last and the count, so an insert, an erase or a move at a known
+/// instruction is O(1). Read it with `Function::iter_block`, `first`, `last`
+/// and `next_in_block`; no `Vec` of it is kept.
+#[derive(Clone, Debug, Default)]
 pub struct Block {
     pub name: Option<String>,
-    pub(crate) instructions: Vec<InstId>,
+    /// The first and last instruction, as an id + 1 (0: none).
+    pub(crate) head: u32,
+    pub(crate) tail: u32,
+    pub(crate) len: u32,
     pub(crate) erased: bool,
     /// In the function's layout.
     pub(crate) placed: bool,
 }
 
+/// Two blocks are equal by what they hold, not by whether their view is built.
+impl PartialEq for Block {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.name == other.name
+            && self.head == other.head
+            && self.tail == other.tail
+            && self.len == other.len
+            && self.erased == other.erased
+            && self.placed == other.placed
+    }
+}
+
 impl Block {
-    pub fn instructions(&self) -> &[InstId] {
-        &self.instructions
+    /// `BasicBlock::front`.
+    pub fn first(&self) -> Option<InstId> {
+        (self.head != 0).then(|| InstId(self.head - 1))
+    }
+
+    /// `BasicBlock::back`.
+    pub fn last(&self) -> Option<InstId> {
+        (self.tail != 0).then(|| InstId(self.tail - 1))
+    }
+
+    /// `BasicBlock::size`.
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    /// `BasicBlock::empty`.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+/// Each instruction's place in its block, numbered lazily like LLVM's
+/// `Instruction::Order` (`BasicBlock::renumberInstructions`): an edit of a
+/// block invalidates it, the next ask renumbers the block once. Not part of
+/// what a function is: a copy starts with none and two functions compare equal
+/// whatever they hold.
+#[derive(Default)]
+pub(crate) struct OrderCache(pub(crate) std::cell::RefCell<OrderNumbers>);
+
+#[derive(Default)]
+pub(crate) struct OrderNumbers {
+    /// By instruction.
+    pub(crate) at: Vec<u32>,
+    /// By block: whether the numbers of its instructions are true.
+    pub(crate) valid: Vec<bool>,
+}
+
+impl OrderCache {
+    pub(crate) fn invalidate(
+        &self,
+        block: BlockId,
+    ) {
+        let mut numbers = self.0.borrow_mut();
+        if let Some(one) = numbers.valid.get_mut(block.0 as usize) {
+            *one = false;
+        }
+    }
+}
+
+impl Clone for OrderCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl std::fmt::Debug for OrderCache {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        out.write_str("OrderCache")
+    }
+}
+
+impl PartialEq for OrderCache {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
     }
 }
 
@@ -317,8 +428,10 @@ pub struct Function {
     pub(crate) blocks: Vec<Block>,
     /// The blocks in order, entry first; empty for a declaration.
     pub(crate) layout: Vec<BlockId>,
-    pub(crate) value_uses: Vec<Vec<Use>>,
-    pub(crate) block_uses: Vec<Vec<Use>>,
+    pub(crate) uses: crate::uselist::UseLists,
+    /// Each instruction's (previous, next) in its block, as an id + 1 (0:
+    /// none): the block lists' links.
+    pub(crate) order: OrderCache,
     pub(crate) changes: ChangeLog,
     /// How many edits of each kind the function has had: no part of what it is.
     pub(crate) epochs: crate::touched::Epochs,
@@ -381,8 +494,8 @@ impl Function {
             erased: Vec::new(),
             blocks: Vec::new(),
             layout: Vec::new(),
-            value_uses: Vec::new(),
-            block_uses: Vec::new(),
+            uses: Default::default(),
+            order: OrderCache::default(),
             changes: ChangeLog::default(),
             epochs: crate::touched::Epochs::default(),
             taken: 0,
@@ -395,6 +508,7 @@ impl Function {
     }
 
     /// An operand's type; a block has none.
+    #[inline]
     pub fn operand_type(
         &self,
         context: &Context,
@@ -421,7 +535,7 @@ impl Function {
         for &parameter in &self.parameters {
             out.parameters.push(ValueId(out.values.len() as u32));
             out.values.push(ValueData { name: None, ..self.value(parameter).clone() });
-            out.value_uses.push(Vec::new());
+            out.uses.push_value();
         }
         out
     }
@@ -482,7 +596,7 @@ impl Function {
     pub fn positions(&self) -> Vec<u32> {
         let mut positions = vec![0; self.instructions.len()];
         for &block in self.layout() {
-            for (index, inst) in self.block(block).instructions().iter().enumerate() {
+            for (index, inst) in self.iter_block(block).enumerate() {
                 positions[inst.0 as usize] = index as u32;
             }
         }
@@ -501,6 +615,81 @@ impl Function {
         id: BlockId,
     ) -> &Block {
         &self.blocks[id.0 as usize]
+    }
+
+    /// `BasicBlock::begin` to `end`: a cursor over the links.
+    pub fn iter_block(
+        &self,
+        id: BlockId,
+    ) -> impl Iterator<Item = InstId> + '_ {
+        let mut at = self.blocks[id.0 as usize].head;
+        std::iter::from_fn(move || {
+            (at != 0).then(|| {
+                let inst = InstId(at - 1);
+                at = self.instructions[inst.0 as usize].link.1;
+                inst
+            })
+        })
+    }
+
+    /// `inst`'s number in its block, the block renumbered if an edit made its
+    /// numbers false.
+    fn number_of(
+        &self,
+        inst: InstId,
+    ) -> Option<(BlockId, u32)> {
+        let block = self.parent(inst)?;
+        let mut numbers = self.order.0.borrow_mut();
+        if numbers.valid.len() < self.blocks.len() {
+            numbers.valid.resize(self.blocks.len(), false);
+        }
+        if numbers.at.len() < self.instructions.len() {
+            numbers.at.resize(self.instructions.len(), 0);
+        }
+        if !numbers.valid[block.0 as usize] {
+            for (at, one) in self.iter_block(block).enumerate() {
+                numbers.at[one.0 as usize] = at as u32;
+            }
+            numbers.valid[block.0 as usize] = true;
+        }
+        Some((block, numbers.at[inst.0 as usize]))
+    }
+
+    /// `Instruction::getNextNode`: what follows `inst` in its block.
+    pub fn next_in_block(
+        &self,
+        inst: InstId,
+    ) -> Option<InstId> {
+        self.parent(inst)?;
+        match self.instructions[inst.0 as usize].link.1 {
+            0 => None,
+            n => Some(InstId(n - 1)),
+        }
+    }
+
+    /// `Instruction::getPrevNode`: what stands before `inst` in its block.
+    pub fn prev_in_block(
+        &self,
+        inst: InstId,
+    ) -> Option<InstId> {
+        self.parent(inst)?;
+        match self.instructions[inst.0 as usize].link.0 {
+            0 => None,
+            n => Some(InstId(n - 1)),
+        }
+    }
+
+    /// `Instruction::comesBefore`: whether `a` stands before `b` in their one
+    /// block (false for two in different blocks, or one that is not placed).
+    pub fn comes_before(
+        &self,
+        a: InstId,
+        b: InstId,
+    ) -> bool {
+        match (self.number_of(a), self.number_of(b)) {
+            (Some((x, i)), Some((y, j))) => x == y && i < j,
+            _ => false,
+        }
     }
 
     pub fn layout(&self) -> &[BlockId] {
@@ -542,23 +731,23 @@ impl Function {
     pub fn users(
         &self,
         value: ValueId,
-    ) -> &[Use] {
-        &self.value_uses[value.0 as usize]
+    ) -> crate::uselist::Users<'_> {
+        self.uses.users(crate::uselist::Held::Value(value.0))
     }
 
     /// The operand slots naming `block`: terminators' and phis'.
     pub fn block_users(
         &self,
         block: BlockId,
-    ) -> &[Use] {
-        &self.block_uses[block.0 as usize]
+    ) -> crate::uselist::Users<'_> {
+        self.uses.users(crate::uselist::Held::Block(block.0))
     }
 
     pub fn terminator(
         &self,
         block: BlockId,
     ) -> Option<InstId> {
-        self.block(block).instructions.last().copied().filter(|&last| self.instruction(last).opcode.is_terminator())
+        self.blocks[block.0 as usize].last().filter(|&last| self.instruction(last).opcode.is_terminator())
     }
 
     /// The blocks `block`'s terminator names, in operand order, once each.
@@ -599,7 +788,7 @@ impl Function {
         block: BlockId,
     ) -> crate::blocklist::BlockList {
         let users = self.block_users(block);
-        if users.len() > SCAN {
+        if users.has_n_uses_or_more(SCAN + 1) {
             return self.parents_once(users);
         }
         let mut out = crate::blocklist::BlockList::new();
@@ -619,7 +808,7 @@ impl Function {
     #[cold]
     fn parents_once(
         &self,
-        users: &[Use],
+        users: crate::uselist::Users<'_>,
     ) -> crate::blocklist::BlockList {
         let mut seen = crate::dense::IdSet::<u32>::new();
         users
@@ -632,7 +821,7 @@ impl Function {
 
     /// Instructions in layout order, with their block.
     pub fn walk(&self) -> impl Iterator<Item = (BlockId, InstId)> + '_ {
-        self.layout.iter().flat_map(move |&block| self.block(block).instructions.iter().map(move |&one| (block, one)))
+        self.layout.iter().flat_map(move |&block| self.iter_block(block).map(move |one| (block, one)))
     }
 
     /// The log of changes since the last `take_changes`. They stay in the log,
@@ -784,6 +973,9 @@ pub enum UnnamedAddr {
 pub struct GlobalVariable {
     pub ty: TypeId,
     pub constant: bool,
+    /// `externally_initialized`: the initializer may change before the program
+    /// runs.
+    pub externally_initialized: bool,
     pub initializer: Option<ConstantId>,
     pub align: Option<u64>,
 }

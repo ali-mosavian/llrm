@@ -2,9 +2,9 @@
 //! locals never live together can share a frame slot.
 //!
 //! # How it works
-//! A local is tracked only if it is an `alloca` with a marker and nothing but
-//! loads, stores and pointer arithmetic on it (and its markers) touch it. Any
-//! other local is live throughout and shares with none.
+//! A local is tracked only if it is an `alloca` with a marker; every use of it
+//! but its markers (pointer arithmetic followed) must fall inside its
+//! lifetime. Any other local is live throughout and shares with none.
 //!
 //! A forward fixed point finds, for each block, the tracked locals live on
 //! entry: a local is live at a block start if it is live at the end of any
@@ -56,8 +56,11 @@ pub struct Marker {
     pub starts: bool,
 }
 
-/// `object`'s accesses, or none where it is used any other way: stored as a
-/// value, passed on, compared. Pointer arithmetic on it is followed.
+/// The instructions that use `object` other than its markers, pointer
+/// arithmetic on it followed: a load, a store, a call it is passed to. The
+/// markers are trusted for what the code does not show, as LLVM's
+/// StackColoring trusts them (`-protect-from-escaped-allocas` off): a pointer
+/// to the object is not used past its end.
 fn accesses(
     function: &Function,
     object: ValueId,
@@ -70,9 +73,8 @@ fn accesses(
             let instruction = function.instruction(one.user);
             match (&instruction.opcode, one.index) {
                 _ if marker(one.user).is_some() => {}
-                (Opcode::Load { .. }, 0) | (Opcode::Store { .. }, 1) => found.push(one.user),
                 (Opcode::GetElementPtr { .. }, 0) => pending.push(instruction.result?),
-                _ => return None,
+                _ => found.push(one.user),
             }
         }
     }
@@ -89,7 +91,7 @@ pub fn intervals(
     let in_layout: BTreeSet<BlockId> = layout.iter().copied().collect();
     let mut tracked: BTreeMap<ValueId, Vec<InstId>> = BTreeMap::new();
     for &block in layout {
-        for &inst in function.block(block).instructions() {
+        for inst in function.iter_block(block) {
             if let Some(Marker { object, .. }) = marker(inst)
                 && matches!(
                     function.value(object).def,
@@ -120,7 +122,7 @@ pub fn intervals(
         let mut changed = false;
         for &block in layout {
             let mut state = entering[&block].clone();
-            for &inst in function.block(block).instructions() {
+            for inst in function.iter_block(block) {
                 step(&mut state, inst);
             }
             for successor in function.successors(block).into_iter().filter(|one| in_layout.contains(one)) {
@@ -138,7 +140,7 @@ pub fn intervals(
     let mut violated: BTreeSet<ValueId> = BTreeSet::new();
     for &block in layout {
         let mut state = entering[&block].clone();
-        for &inst in function.block(block).instructions() {
+        for inst in function.iter_block(block) {
             let at = positions[&inst];
             // Live at a marker that starts it, though it enters the state
             // after.

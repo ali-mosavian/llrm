@@ -173,7 +173,7 @@ fn ssa_reaching(
     let mut by_block: IdMap<i64, Vec<Event>> = IdMap::new();
     for block in &graph {
         let events = by_block.get_or_insert_with(block.at, Vec::new);
-        for &inst in function.block(cfg::block(block.at)).instructions() {
+        for inst in function.iter_block(cfg::block(block.at)) {
             let op = function.instruction(inst);
             match op.opcode {
                 Opcode::Load { .. } => {
@@ -277,7 +277,7 @@ fn ssa_reaching(
     let successors: IdMap<i64, &cfg::Successors> = graph.iter().map(|block| (block.at, &block.succ)).collect();
     let mut children: IdMap<i64, Vec<i64>> = IdMap::new();
     for block in &graph {
-        if let Some(parent) = dominance.immediate(block.at) {
+        if let Some(parent) = dominance.immediate(unit.function, block.at) {
             children.get_or_insert_with(parent, Vec::new).push(block.at);
         }
     }

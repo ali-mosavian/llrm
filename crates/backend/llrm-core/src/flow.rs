@@ -60,6 +60,28 @@ pub fn machine<'a>(
 /// The phases -O0 leaves out: each only makes code better.
 const UNOPTIMIZED: [&str; 5] = ["Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink"];
 
+/// The parity registry's slot of each machine phase, by class name.
+const SLOTS: [(&str, &str); 18] = [
+    ("FarIndirectCalls", "farcall@1"),
+    ("SharedConstants", "phiconst@2"),
+    ("SsaSpill", "ssaspill@3"),
+    ("PhiElimination", "phielim@4"),
+    ("PressureSink", "pressuresink@5"),
+    ("FloatFold", "floatfold@6"),
+    ("FloatAssign", "floatassign@7"),
+    ("FloatPrep", "floatassign@7"),
+    ("FloatAlloc", "floatalloc@8"),
+    ("TwoAddress", "twoaddr@9"),
+    ("Coalescer", "coalesce@10"),
+    ("RegAlloc", "allocate@11"),
+    ("ParallelCopy", "parcopy@12"),
+    ("Prologue", "prologue@13"),
+    ("Peephole", "peephole@14"),
+    ("LoopSlots", "loopslots@15"),
+    ("Scheduler", "schedule@16"),
+    ("ControlFlow", "jumps@17"),
+];
+
 /// `machine`, its peephole made of the rules `rules` holds; the spiller, where
 /// `spilling` names a run, reports to it.
 #[allow(clippy::too_many_arguments)]
@@ -107,10 +129,19 @@ pub fn machine_with<'a>(
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
         // After phi elimination: a phi's copies are where the stack shuffles.
-        Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
+        if crate::backend::allocate::rfp_on() {
+            Box::new(floatassign::FloatPrep {
+                frame: frame.clone(),
+                pool,
+                basic_semantics,
+                status_word: classes.status_word(),
+            }) as Box<dyn LIRTransform + 'a>
+        } else {
+            Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target })
+        },
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
         Box::new(twoaddr::TwoAddress),
-        Box::new(coalesce::Coalescer::new(None, segments, classes)),
+        Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
         Box::new(allocate::RegAlloc::new(
             Some(&pinned),
             frame.clone(),
@@ -147,6 +178,24 @@ pub fn machine_with<'a>(
     // -O0: gcc and clang improve nothing after selection and allocation.
     if !target.optimized {
         phases.retain(|phase| !UNOPTIMIZED.contains(&phase.class_name()));
+    }
+    // Under `LLRM_GREEDY_RFP` the stackifier runs after allocation, on the FP
+    // registers greedy assigned, as X86FloatingPoint does.
+    if crate::backend::allocate::rfp_on()
+        && let Some(fps) = phases.iter().position(|phase| phase.class_name() == "FloatAlloc")
+    {
+        let moved = phases.remove(fps);
+        let after = phases.iter().position(|phase| phase.class_name() == "RegAlloc").map_or(phases.len(), |at| at + 1);
+        phases.insert(after, moved);
+    }
+    if cfg!(debug_assertions) {
+        // At -O0 the optional phases are not run; a slot that is Translated
+        // must be, and none of those is.
+        let slot_of = |class: &str| SLOTS.iter().find(|(one, _)| *one == class).map_or("unknown", |(_, slot)| *slot);
+        let built: Vec<&str> = phases.iter().map(|phase| slot_of(phase.class_name())).collect();
+        let off: Vec<&str> =
+            if target.optimized { Vec::new() } else { UNOPTIMIZED.iter().map(|one| slot_of(one)).collect() };
+        llrm_transforms::parity::check_backend(&built, &off)?;
     }
     Ok(phases)
 }
@@ -346,6 +395,28 @@ mod tests {
 
     /// jumps deleted a block holding only a source `jmp`, and its three
     /// bytes had no owner; nothing noticed.
+    /// Under `LLRM_GREEDY_RFP` floatassign's slot keeps its legalization only
+    /// and the stackifier runs after allocation, on the FP registers greedy
+    /// assigned (X86FloatingPoint's place); without it the order is as ever.
+    #[test]
+    fn test_the_stackifier_runs_after_allocation_under_rfp() {
+        let names = || -> Vec<&'static str> {
+            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN, false)
+                .expect("phases")
+                .iter()
+                .map(|phase| phase.class_name())
+                .collect()
+        };
+        let at = |names: &[&str], one: &str| names.iter().position(|name| *name == one);
+        let before = names();
+        assert!(at(&before, "FloatAlloc") < at(&before, "RegAlloc") && at(&before, "FloatAssign").is_some());
+        let _rfp = crate::backend::allocate::RfpOn::set();
+        let after = names();
+        assert_eq!(at(&after, "FloatAssign"), None);
+        assert_eq!(at(&after, "FloatPrep"), at(&before, "FloatAssign"));
+        assert_eq!(at(&after, "FloatAlloc"), at(&after, "RegAlloc").map(|one| one + 1), "{after:?}");
+    }
+
     #[test]
     fn test_a_phase_that_loses_source_bytes_is_malformed() {
         let jump = ir::Semantics { name: Some("jmp".into()), target: Some(1), ..ir::Semantics::new(Operation::Jump) };

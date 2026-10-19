@@ -235,14 +235,13 @@ pub fn cold(
     function: &Function,
     terminal_calls: &BTreeSet<InstId>,
 ) -> BTreeSet<i64> {
+    llrm_mir::counts::bump(llrm_mir::counts::Event::ColdScans);
     let blocks = cfg::graph(function);
     let marked = |at: i64| {
         function
-            .block(cfg::block(at))
-            .instructions()
-            .iter()
+            .iter_block(cfg::block(at))
             .any(
-                |&inst| matches!(
+                |inst| matches!(
                     function.instruction(inst).opcode,
                     Opcode::Call(_) | Opcode::Invoke(_)
                 )
@@ -269,8 +268,9 @@ fn _ends_cold(
     terminal_calls: &BTreeSet<InstId>,
     found: &BTreeSet<i64>,
 ) -> bool {
-    let instructions = function.block(cfg::block(block.at)).instructions();
-    if instructions.iter().any(|inst| terminal_calls.contains(inst)) || _stops(function, block.at) {
+    if function.iter_block(cfg::block(block.at)).any(|inst| terminal_calls.contains(&inst))
+        || _stops(function, block.at)
+    {
         return true;
     }
     !block.succ.is_empty() && block.succ.iter().all(|at| found.contains(at))
@@ -324,7 +324,7 @@ pub fn _cannot_return(
         if !visited.insert(at) {
             continue;
         }
-        if function.block(cfg::block(at)).instructions().iter().any(|inst| terminal_calls.contains(inst)) {
+        if function.iter_block(cfg::block(at)).any(|inst| terminal_calls.contains(&inst)) {
             continue;
         }
         if _returns(function, at) {
@@ -345,14 +345,14 @@ pub fn _cannot_return(
 /// Already-truncated blocks are unchanged, making it safe to use at the
 /// no-return fixed point boundary.
 pub fn after_terminal_calls(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     terminal_calls: &BTreeSet<InstId>,
 ) -> bool {
     let void = context.types.void();
     let mut changed = false;
     for block in function.layout().to_vec() {
-        let instructions = function.block(block).instructions().to_vec();
+        let instructions = function.iter_block(block).collect::<Vec<_>>();
         let cut = instructions
             .iter()
             .position(

@@ -366,7 +366,7 @@ fn unrolled(
                 continue;
             };
             let block = cfg::block(at);
-            for &inst in function.block(block).instructions() {
+            for inst in function.iter_block(block) {
                 let op = function.instruction(inst);
                 if op.opcode != Opcode::Phi {
                     continue;
@@ -392,7 +392,7 @@ fn unrolled(
                 };
                 changed.push(result);
             }
-            for &inst in function.block(block).instructions() {
+            for inst in function.iter_block(block) {
                 let op = function.instruction(inst);
                 if op.opcode == Opcode::Phi {
                     continue;

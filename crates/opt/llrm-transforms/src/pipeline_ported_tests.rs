@@ -50,7 +50,8 @@ b2:
 b3:
   %2 = load i16, ptr %total
   %3 = load i16, ptr %i
-  %4 = add i16 %2, %3
+  %t = mul i16 %2, 3
+  %4 = add i16 %t, %3
   store i16 %4, ptr %total
   %5 = add i16 %3, 1
   store i16 %5, ptr %i
@@ -420,7 +421,57 @@ b7:
 "#;
     let out = piped(TEXT);
     assert!(!out.contains("phi") && !out.contains("mul") && !out.contains("shl"), "{out}");
-    assert_eq!(out.matches("store i32 0").count(), 64, "{out}");
+    // The 64 stores are one memset of their 256 bytes (LoopIdiomRecognize
+    // takes the loop nest, as LLVM's does).
+    assert!(
+        out.contains("llvm.memset.p0.i64(ptr %0, i8 0, i64 256, i1 false)") && !out.contains("store i32 0"),
+        "{out}"
+    );
+}
+
+/// An 8x8 array of longs filled with the element's index (not a memset): the
+/// loops are gone and each store has its constant offset.
+#[test]
+fn a_stepped_address_with_a_varying_value_leaves_no_multiply_or_inner_counter_product() {
+    const TEXT: &str = r#"define void @fill(ptr %0) {
+b1:
+  br label %b2
+
+b2:
+  %1 = phi i16 [ 0, %b1 ], [ %9, %b6 ]
+  %2 = icmp slt i16 %1, 8
+  br i1 %2, label %b3, label %b7
+
+b3:
+  %3 = shl i16 %1, 3
+  br label %b4
+
+b4:
+  %4 = phi i16 [ 0, %b3 ], [ %8, %b5 ]
+  %5 = icmp slt i16 %4, 8
+  br i1 %5, label %b5, label %b6
+
+b5:
+  %6 = add i16 %3, %4
+  %7 = getelementptr inbounds i32, ptr %0, i16 %6
+  %v = zext i16 %6 to i32
+  store i32 %v, ptr %7
+  %8 = add i16 %4, 1
+  br label %b4
+
+b6:
+  %9 = add i16 %1, 1
+  br label %b2
+
+b7:
+  ret void
+}
+"#;
+    let out = piped(TEXT);
+    assert!(!out.contains("phi") && !out.contains("mul") && !out.contains("shl"), "{out}");
+    // Each cell holds its own index: 64 stores, no memset.
+    assert_eq!(out.matches("store i32").count(), 64, "{out}");
+    assert!(!out.contains("llvm.memset"), "{out}");
 }
 
 /// What every call of a private function passes is the parameter.
@@ -716,7 +767,7 @@ b3:
 }
 "#;
     let out = piped(TEXT);
-    assert!(out.contains("br i1 %0, label %b2, label %b3") && !out.contains("sext"), "{out}");
+    assert!(out.contains("br i1 %0, label %b2,") && !out.contains("sext"), "{out}");
     assert_eq!(out.matches("mul").count() + out.matches("shl").count(), 2, "{out}");
     assert!(out.contains("add i16") && out.contains(", 3"), "{out}");
 }

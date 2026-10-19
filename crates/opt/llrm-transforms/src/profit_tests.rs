@@ -6,8 +6,8 @@ use llrm_analysis::cfg;
 use llrm_support::hash::IndexMap;
 
 use super::{
-    _frequencies, _loop_products, OperationCosts, UNKNOWN_TRIPS, operation, proven_trips, spill_forecast, r#static,
-    weighted,
+    _frequencies, _loop_products, OperationCosts, UNKNOWN_TRIPS, operation, proven_trips, proven_trips_using,
+    spill_forecast, r#static, weighted,
 };
 
 fn risk(
@@ -136,7 +136,7 @@ fn a_loop_induction_counts_is_weighted_by_its_count() {
             &layout,
             function(&module),
         ));
-        let trips = proven_trips(&unit, &llrm_analysis::consts::known(&unit));
+        let trips = proven_trips(&unit);
         let callees = llrm_mir::memory::callees(&module);
         (
             trips.len(),
@@ -481,29 +481,60 @@ fn test_a_forecast_asks_whether_a_value_is_folded_once_however_many_sites_it_is_
     );
 }
 
-/// @f as `depth` loops nested, each counting with a phi of its own.
-fn nest(depth: usize) -> String {
-    let mut text = "define void @f(i16 %n) {\nb0:\n  br label %h0\n\n".to_string();
-    for k in 0..depth {
-        let from = if k == 0 { "b0".to_string() } else { format!("h{}", k - 1) };
-        let next = if k + 1 == depth { format!("l{k}") } else { format!("h{}", k + 1) };
-        text += &format!("h{k}:\n  %i{k} = phi i16 [ 0, %{from} ], [ %n{k}, %l{k} ]\n  br label %{next}\n\n");
+/// `getSmallConstantTripCount` counts the header's runs, one more than the
+/// latch's where the header leaves: the first cut of the ScalarEvolution
+/// `proven_trips` weighed a pretested loop (`i < 12` step 3: 4 trips) as 5.
+#[test]
+fn a_loop_the_header_leaves_is_weighted_by_its_latch_runs_by_both_engines() {
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let trips = |text: &str, scev: bool| {
+        let module = module(text);
+        let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::of(
+            &module,
+            &layout,
+            function(&module),
+        ));
+        proven_trips_using(&unit, scev)
+    };
+    let pretested = "define void @f(i16 %n) {\nb0:\n  br label %head\nhead:\n  %i = phi i16 [ 0, %b0 ], [ %next, %body ]\n  \
+                     %more = icmp slt i16 %i, 12\n  br i1 %more, label %body, label %out\nbody:\n  %next = add nsw i16 %i, 3\n  \
+                     br label %head\nout:\n  ret void\n}\n";
+    let posttested = COUNTED.replace("icmp ult i16 %next, %n", "icmp ult i16 %next, 3");
+    for text in [pretested, posttested.as_str()] {
+        assert_eq!(trips(text, true), trips(text, false), "{text}");
     }
-    for k in (0..depth).rev() {
-        let out = if k == 0 { "out".to_string() } else { format!("l{}", k - 1) };
+    assert_eq!(trips(pretested, true).values().copied().collect::<Vec<_>>(), [4]);
+}
+
+/// A nest of 24 loops whose trips are unknown (ten each) once panicked the
+/// products in a debug build and wrapped in a release one: `count * factor` and
+/// `count * here / trip` passed `i64`'s end by the nineteenth. A weight past it
+/// is the largest frequency, as `BlockFrequency` saturates.
+#[test]
+fn a_nest_of_loops_past_the_end_of_i64_saturates_its_weights() {
+    const DEPTH: usize = 24;
+    let mut text = String::from("define void @f(i16 %n) {\nb0:\n  br label %h0\n\n");
+    for k in 0..DEPTH {
+        let before = if k == 0 { "b0".to_owned() } else { format!("h{}", k - 1) };
+        text += &format!("h{k}:\n  %i{k} = phi i16 [ 0, %{before} ], [ %n{k}, %l{k} ]\n");
+        text += &if k + 1 < DEPTH { format!("  br label %h{}\n\n", k + 1) } else { format!("  br label %l{k}\n\n") };
+    }
+    for k in (0..DEPTH).rev() {
+        let out = if k == 0 { "out".to_owned() } else { format!("l{}", k - 1) };
         text += &format!(
             "l{k}:\n  %n{k} = add i16 %i{k}, 1\n  %c{k} = icmp ult i16 %n{k}, %n\n  br i1 %c{k}, label %h{k}, label %{out}\n\n"
         );
     }
-    text + "out:\n  ret void\n}\n"
-}
-
-/// 40 nested loops weighed 32^40 a block: `weighted` and the spill forecast
-/// overflowed i64, a panic in a debug build and a wrapped price in a release
-/// one, which hoist then judged motions by.
-#[test]
-fn a_deep_nest_saturates_its_price_instead_of_overflowing() {
-    let deep = work(&nest(40), &[]).expect("a price");
-    assert!(deep >= work(&nest(8), &[]).expect("a price"), "{deep}");
-    assert!(risk(&nest(40), 1).expect("a forecast") >= 0);
+    text += "out:\n  ret void\n}\n";
+    let module = module(&text);
+    let f = function(&module);
+    let products = _loop_products(f, None).expect("products");
+    let named = |name: &str| {
+        cfg::id(*f.layout().iter().find(|&&one| f.block(one).name.as_deref() == Some(name)).expect("a block"))
+    };
+    assert_eq!(products[&named("h0")], 10);
+    assert_eq!(products[&named(&format!("h{}", DEPTH - 1))], i64::MAX);
+    let by_branch = super::_loop_products_by_branch(&module.context, &module.metadata, &module.globals, f, None)
+        .expect("products by branch");
+    assert!(by_branch[&named(&format!("h{}", DEPTH - 1))] >= 1_000_000_000_000_000_000, "{by_branch:?}");
 }

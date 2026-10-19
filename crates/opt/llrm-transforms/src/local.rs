@@ -84,7 +84,7 @@ use llrm_analysis::effects::{self, Declarations};
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::Fact;
 use llrm_mir::intrinsics::Intrinsic;
@@ -177,7 +177,7 @@ fn intrinsic_of(
     Intrinsic::named(declarations.get(global.0 as usize)?.name.as_deref()?)
 }
 
-fn is_lifetime(
+pub(crate) fn is_lifetime(
     context: &Context,
     declarations: &Declarations,
     function: &Function,
@@ -201,8 +201,7 @@ fn comes_before(
 ) -> bool {
     let block = function.parent(this).expect("instructions without BB parents have no order");
     assert_eq!(function.parent(other), Some(block), "cross-BB instruction order comparison");
-    let list = function.block(block).instructions();
-    list.iter().position(|one| *one == this) < list.iter().position(|one| *one == other)
+    function.comes_before(this, other)
 }
 
 /// `DominatorTree::dominates(const BasicBlock *, const Use &)`
@@ -210,7 +209,7 @@ fn comes_before(
 /// whether `block` dominates the use, a phi's at the end of its incoming
 /// block.
 pub fn dominates_block_use(
-    tree: &DominatorTree,
+    tree: &DomTree,
     function: &Function,
     block: BlockId,
     at: Use,
@@ -230,7 +229,7 @@ pub fn dominates_block_use(
 /// ([Dominators.cpp:162](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L162)):
 /// whether the edge dominates `use_block`.
 pub fn dominates_edge_block(
-    tree: &DominatorTree,
+    tree: &DomTree,
     function: &Function,
     edge: BasicBlockEdge,
     use_block: BlockId,
@@ -270,7 +269,7 @@ pub fn dominates_edge_block(
 /// whether the edge dominates the use, a phi's at the end of its incoming
 /// block.
 pub fn dominates_edge_use(
-    tree: &DominatorTree,
+    tree: &DomTree,
     function: &Function,
     edge: BasicBlockEdge,
     at: Use,
@@ -291,7 +290,7 @@ pub fn dominates_edge_use(
 /// for an instruction: whether `def` dominates the use, a phi's at the end of
 /// its incoming block.
 pub fn dominates_instruction_use(
-    tree: &DominatorTree,
+    tree: &DomTree,
     function: &Function,
     def: InstId,
     at: Use,
@@ -343,7 +342,7 @@ fn replace_dominated_uses_with_template(
     debug_assert_eq!(function.value(from).ty, type_of(context, function, to));
     let mut count = 0;
     // `fake_use` users are not skipped: DEVIATE 6.
-    for at in function.users(from).to_vec() {
+    for at in function.users(from).snapshot() {
         if !should_replace(&*function, at) {
             continue;
         }
@@ -362,7 +361,7 @@ pub fn replace_dominated_uses_with_edge(
     function: &mut Function,
     from: ValueId,
     to: Operand,
-    tree: &DominatorTree,
+    tree: &DomTree,
     root: BasicBlockEdge,
 ) -> usize {
     let dominates = |function: &Function, at: Use| dominates_edge_use(tree, function, root, at);
@@ -378,7 +377,7 @@ pub fn replace_dominated_uses_with_block(
     function: &mut Function,
     from: ValueId,
     to: Operand,
-    tree: &DominatorTree,
+    tree: &DomTree,
     block: BlockId,
 ) -> usize {
     let dominates = |function: &Function, at: Use| dominates_block_use(tree, function, block, at);
@@ -394,7 +393,7 @@ pub fn replace_dominated_uses_with_instruction(
     function: &mut Function,
     from: ValueId,
     to: Operand,
-    tree: &DominatorTree,
+    tree: &DomTree,
     root: InstId,
 ) -> usize {
     let dominates = |function: &Function, at: Use| dominates_instruction_use(tree, function, root, at);
@@ -409,7 +408,7 @@ pub fn replace_dominated_uses_with_if_edge(
     function: &mut Function,
     from: ValueId,
     to: Operand,
-    tree: &DominatorTree,
+    tree: &DomTree,
     root: BasicBlockEdge,
     should_replace: impl Fn(&Function, Use, Operand) -> bool,
 ) -> usize {
@@ -426,7 +425,7 @@ pub fn replace_dominated_uses_with_if_block(
     function: &mut Function,
     from: ValueId,
     to: Operand,
-    tree: &DominatorTree,
+    tree: &DomTree,
     block: BlockId,
     should_replace: impl Fn(&Function, Use, Operand) -> bool,
 ) -> usize {
@@ -444,7 +443,7 @@ pub fn replace_dominated_uses_with_if_instruction(
     function: &mut Function,
     from: ValueId,
     to: Operand,
-    tree: &DominatorTree,
+    tree: &DomTree,
     root: InstId,
     should_replace: impl Fn(&Function, Use, Operand) -> bool,
 ) -> usize {
@@ -488,9 +487,29 @@ fn may_throw(
     }
 }
 
+/// `isGuaranteedToTransferExecutionToSuccessor`
+/// ([ValueTracking.cpp:7951](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7951)):
+/// the instruction returns to the one after it and does not unwind. DEVIATE: a
+/// volatile access and a call that is not `willreturn`/`nounwind` are not; MIR
+/// has no other source.
+pub(crate) fn is_guaranteed_to_transfer_execution_to_successor(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    if matches!(
+        function.instruction(inst).opcode,
+        Opcode::Unreachable | Opcode::Resume
+    ) {
+        return false;
+    }
+    will_return(context, declarations, function, inst) && !may_throw(context, declarations, function, inst)
+}
+
 /// `Instruction::mayHaveSideEffects`
 /// ([Instruction.cpp:1358](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L1358)).
-fn may_have_side_effects(
+pub(crate) fn may_have_side_effects(
     context: &Context,
     callees: &Callees,
     declarations: &Declarations,
@@ -725,7 +744,7 @@ pub fn eliminate_duplicate_phi_nodes_and_erase(
 /// ([BasicBlockUtils.cpp:195](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L195)):
 /// each phi of `bb` is its first incoming value, or poison if that is itself.
 pub fn fold_single_entry_phi_nodes(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     bb: BlockId,
 ) -> bool {
@@ -752,7 +771,7 @@ pub fn fold_single_entry_phi_nodes(
 /// a conditional branch to `bb` and another block, and then branches to where
 /// `bb` jumped. Whether it merged. DEVIATE 15, 16.
 pub fn merge_block_into_predecessor(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     bb: BlockId,
     predecessor_with_two_successors: bool,
@@ -817,7 +836,7 @@ pub fn merge_block_into_predecessor(
     let sti = function.terminator(bb).expect("a block ends in a terminator");
 
     // Move all definitions in the successor to the predecessor...
-    let moved: Vec<InstId> = function.block(bb).instructions().iter().copied().filter(|one| *one != sti).collect();
+    let moved: Vec<InstId> = function.iter_block(bb).filter(|one| *one != sti).collect();
     for inst in moved {
         function.move_to(inst, Position::Before(pti)).expect("a placed instruction");
     }
@@ -1159,7 +1178,7 @@ fn attribute_set_intersect_with(
 /// ([Attributes.cpp:1885](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Attributes.cpp#L1885)),
 /// of two calls' lists: the function, return and argument sets, one by one.
 #[allow(clippy::type_complexity)]
-fn attribute_list_intersect_with(
+pub(crate) fn attribute_list_intersect_with(
     this: (&[Attribute], &[Attribute], &[Vec<Attribute>]),
     other: (&[Attribute], &[Attribute], &[Vec<Attribute>]),
 ) -> Option<(Vec<Attribute>, Vec<Attribute>, Vec<Vec<Attribute>>)> {
@@ -1563,4 +1582,51 @@ pub fn can_replace_pointers_if_equal(
     }
 
     is_pointer_always_replaceable(context, layout, declarations, sizes, function, from, to)
+}
+
+/// `changeToUnreachable`
+/// ([Local.cpp:2543](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2543)):
+/// `inst` and what follows it in its block become an `unreachable`; the
+/// successors lose one phi input for each edge. Returns how many instructions
+/// went. DEVIATE: no `DomTreeUpdater`, `MemorySSAUpdater` (the caller
+/// rebuilds), and `PreserveLCSSA` is false.
+pub fn change_to_unreachable(
+    context: &Context,
+    function: &mut Function,
+    inst: InstId,
+) -> usize {
+    let block = function.parent(inst).expect("a placed instruction");
+    // Loop over all of the successors, removing BB's entry from any PHI nodes.
+    let successors: Vec<BlockId> = function
+        .terminator(block)
+        .map(|term| {
+            function
+                .instruction(term)
+                .operands
+                .iter()
+                .filter_map(|one| if let Operand::Block(to) = one { Some(*to) } else { None })
+                .collect()
+        })
+        .unwrap_or_default();
+    for successor in successors {
+        function.predecessor_removed(context, successor, block, false);
+    }
+    // The terminator's type is `void`.
+    let void = function.instruction(function.terminator(block).expect("a terminated block")).ty;
+    let unreachable = function.create_instruction(Opcode::Unreachable, void, Vec::new(), Flags::default(), None);
+    function.insert(unreachable, Position::Before(inst)).expect("a placed block");
+    // All instructions after this are dead.
+    let rest: Vec<InstId> = function.iter_block(block).skip_while(|&one| one != inst).collect();
+    let removed = rest.len();
+    for dead in rest {
+        if let Some(result) = function.instruction(dead).result
+            && !function.users(result).is_empty()
+        {
+            let ty = function.instruction(dead).ty;
+            let poison = context.constant(Constant { ty, kind: ConstantKind::Poison });
+            function.replace_all_uses_with(result, Operand::Constant(poison));
+        }
+        function.erase(dead).expect("its uses were replaced");
+    }
+    removed
 }

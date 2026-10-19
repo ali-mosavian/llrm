@@ -363,7 +363,7 @@ Code generation (`llc -O2`, i486; the same passes at -O1 less a few):
 | 61 | shrink-wrap, prolog-epilog, machine-latecleanup | `shrink-wrap`, frame code | old | lir-cleanup-poc |
 | 62 | branch-folder, tailduplication, block-placement, post-RA scheduler | `jumps` | old | lir-cleanup-poc (jumps-tailmerge) |
 | 63 | execution-domain, break-false-deps, fixup-bw, fixup-leas | none | missing | lir-cleanup-poc (map) |
-| 64 | asm printer, MC object streamer | `assemble`, object write, omf | old | backend-slopes (emission, ranked last) |
+| 64 | asm printer, MC object streamer | `assemble`, object write, omf | old | backend-two (emission, rows E1 to E8 in [emission-survey.md](emission-survey.md)); E1 global alignment first |
 | 65 | `X86FrameLowering::hasFP` (frame-pointer decision) | `without_frame_register`; interim [#2274] (framefree block lookup slope fix) | old | backend-slopes (the translation replaces `without_frame_register`) |
 
 Count: of 65 slots, 4 are translated (2, 3, 6, 58), all off by default; 2 are partly translated (11: `InlineCost`; 49: LoopInfo); 4 are n/a; the other 55 are old or missing, every one with an owner (24 of them assigned by kind from the former gap list). The default pipeline runs none of the translated slots.
@@ -1242,6 +1242,8 @@ Checklist: the shared list.
 ## 4. Cross-step guards
 
 **Translate, do not paraphrase.** Every LLVM-mirroring pass or file is a translation of LLVM's C++ at `d1106deb71cc`, read from a local checkout and not from memory or docs. The Rust follows the C++ structure: its functions, worklists, caps and thresholds with the `cl::opt` defaults, and the order of the checks. Each function carries a one-line permalink comment. Anything not translated is a `DEVIATE` with the reason and a number in the PR; the PR's `LLVM structure` line names files and lines; review reads the two side by side.
+
+**Translate into idiomatic Rust.** Translating from language A to B is always into idiomatic B, not a straight copy. For LLVM's C++ into Rust: keep what must mirror (the algorithm, the order of checks, the worklists, caps and thresholds with their `cl::opt` defaults, the permalinks, the numbered DEVIATEs), written as Rust: ownership and borrowing instead of raw-pointer emulation, enums plus `match` instead of opcode-switch ladders or kind fields, iterators and closures instead of index loops, `Option`/`Result` instead of null or sentinel values, no getter/setter boilerplate, no C++ class hierarchies emulated with trait objects where an enum fits, Rust naming. Reviews check it; existing translations become idiomatic when their owner next touches the file, without a churn wave; an urgent file goes to oversight.
 
 **Mirror LLVM's structure by default.** Every design page and every structural PR carries a `LLVM structure` line: LLVM's structure (name and permalink at `d1106deb71cc`), ours, and `MIRROR` or `DEVIATE` with the reason. The default is to mirror. A deviation needs a reason (our MIR or LIR differs; output would change and the rows rule applies; measured not better) and a number. The mapping so far:
 

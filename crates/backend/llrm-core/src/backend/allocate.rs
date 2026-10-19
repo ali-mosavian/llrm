@@ -404,6 +404,16 @@ pub fn live(body: &LirBody) -> (Live, Live) {
     (rows.sets(true), rows.sets(false))
 }
 
+/// `live` for the values `keep` names only: no other value is numbered,
+/// followed or put in a set.
+pub fn live_among(
+    body: &LirBody,
+    keep: impl Fn(u32) -> bool,
+) -> (Live, Live) {
+    let rows = live_rows_by(body, keep);
+    (rows.sets(true), rows.sets(false))
+}
+
 /// What is live at each block's entry and exit as the fixed point leaves it:
 /// rows of bits, which a reader that only walks the values need not turn into
 /// sets.
@@ -1574,6 +1584,337 @@ pub fn rewritten(
     _allocated(body, pinned, unspillable, protected, None, cpu, segments, classes, Some((frame, splitting)))
 }
 
+thread_local! {
+    /// How many allocations the translated greedy allocator made, and in how
+    /// many it fell back to this one (a range it could not place).
+    static GREEDY_RUNS: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0)) };
+}
+
+/// `rewritten` by the translated greedy allocator (`crate::greedy`): it decides
+/// which values to spill and where the rest go; the spill code is written by
+/// this module's emitter (`spiller::spilled_from`) and the new, short values
+/// are placed in the next round. Falls back to `rewritten` where the greedy
+/// allocator cannot place a range.
+pub fn greedy_rewritten(
+    body: &LirBody,
+    pinned: Option<&IndexMap<u32, RegId>>,
+    unspillable: Option<&BTreeSet<u32>>,
+    protected: Option<&BTreeSet<u32>>,
+    cpu: ProfileOrName<'_>,
+    segments: &Segments,
+    classes: &RegisterClasses,
+    frame: &mut Frame,
+    splitting: bool,
+) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
+    const ROUNDS: usize = 24;
+    let profile = targets::profile(cpu.clone()).map_err(Error::Value)?;
+    let none = IndexMap::default();
+    let pins = pinned.unwrap_or(&none);
+    let empty = BTreeSet::new();
+    let mut unspill: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
+    unspill.extend(protected.unwrap_or(&empty).iter().copied());
+    let mut current = body.clone();
+    let mut spilled_all: BTreeSet<u32> = BTreeSet::new();
+    let mut floor = splitkit::_next_value(&current);
+    // The spills are written into the function as the allocation goes
+    // (`InlineSpiller`); the rounds below are the fallback.
+    if !llrm_support::env_flag!("LLRM_GREEDY_ROUNDS") && body.blocks.iter().all(|block| block.phis.is_empty()) {
+        let kept = frame.saved();
+        // The classes are all the greedy allocator reads of `Facts`, as
+        // `MachineRegisterInfo::getRegClass` is all `RAGreedy` reads of isel.
+        let confined = crate::backend::regclass::classes(&current, &empty, segments, classes);
+        let sets = crate::backend::regclass::Sets::of(classes);
+        let inputs = crate::greedy::shadow::ShadowInputs {
+            body: &current,
+            registers: classes.registers,
+            order: &|value| target::order(confined.get(&value), segments, classes),
+            pins,
+            unspillable: &unspill,
+            data: Some(segments.data),
+            sets: Some(&sets),
+        };
+        let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame, classes };
+        let decided = crate::greedy::shadow::decide_with(&inputs, mode);
+        if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
+            if let Some(d) = &decided {
+                eprintln!(
+                    "greedy-inline {}: failed {} spill_failed {}",
+                    body.name, d.report.stats.failed, d.spill_failed
+                );
+            }
+        }
+        if let (Some(d), true) = (&decided, std::env::var("LLRM_EDITED_DUMP").is_ok_and(|n| n == body.name)) {
+            if let Some(edited) = &d.edited {
+                for (b, block) in edited.blocks.iter().enumerate() {
+                    for (at, one) in block.insns.iter().enumerate() {
+                        eprintln!(
+                            "ED b{b}[{at}] #{} d{:?} u{:?} g{:?} {:?}",
+                            one.id(),
+                            one.defines,
+                            one.uses,
+                            one.group,
+                            one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources))
+                        );
+                    }
+                }
+            }
+        }
+        if let Some(decided) = decided {
+            if decided.report.stats.failed == 0 && !decided.spill_failed {
+                if let Some(edited) = decided.edited {
+                    if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
+                        let r = &decided.report;
+                        eprintln!(
+                            "greedy-inline {}: values {} dequeued {} assigned {} evicted {} waited {} spilled {} new {} last-chance {} reloads {} stores {} folded {}",
+                            body.name,
+                            r.values,
+                            r.stats.dequeued,
+                            r.stats.assigned,
+                            r.stats.evicted,
+                            r.stats.waited,
+                            r.stats.spilled_ranges,
+                            r.stats.new_queued,
+                            r.stats.last_chance,
+                            r.reloads,
+                            r.stores,
+                            r.folded
+                        );
+                    }
+                    GREEDY_RUNS.with(|runs| runs.set((runs.get().0 + 1, runs.get().1, runs.get().2)));
+                    let r#where: IndexMap<u32, RegId> = decided.placed.into_iter().collect();
+                    if llrm_support::env_flag!("LLRM_GREEDY_CHECK") {
+                        let facts = Facts::of(
+                            &edited,
+                            profile,
+                            segments,
+                            classes,
+                            &unspill,
+                            &empty,
+                            &Frequency::of(&edited),
+                            None,
+                            None,
+                        );
+                        greedy_check(&edited, &facts, &r#where, classes);
+                    }
+                    return Ok((
+                        Assignment {
+                            r#where,
+                            spilled: BTreeSet::new(),
+                            cost: 0.0,
+                            optimal: false,
+                            why: "llvm greedy".to_owned(),
+                        },
+                        edited,
+                        decided.spilled.into_iter().collect(),
+                    ));
+                }
+            }
+        }
+        if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
+            eprintln!("greedy-inline {}: left for the rounds", body.name);
+        }
+        frame.restore(&kept);
+    }
+    for _round in 0..ROUNDS {
+        if current.blocks.iter().any(|block| !block.phis.is_empty()) {
+            break;
+        }
+        let facts =
+            Facts::of(&current, profile, segments, classes, &unspill, &empty, &Frequency::of(&current), None, None);
+        let sets = crate::backend::regclass::Sets::of(classes);
+        let inputs = crate::greedy::shadow::ShadowInputs {
+            body: &current,
+            registers: classes.registers,
+            order: &|value| target::order(facts.confined.get(&value), segments, classes),
+            pins,
+            unspillable: &unspill,
+            data: Some(segments.data),
+            sets: Some(&sets),
+        };
+        let Some(decided) = crate::greedy::shadow::decide(&inputs, true) else { break };
+        if decided.report.stats.failed > 0 {
+            break;
+        }
+        let to_spill: BTreeSet<u32> = decided.spilled.iter().copied().collect();
+        if to_spill.is_empty() {
+            GREEDY_RUNS.with(|runs| runs.set((runs.get().0 + 1, runs.get().1, runs.get().2)));
+            let r#where: IndexMap<u32, RegId> = decided.placed.into_iter().collect();
+            if llrm_support::env_flag!("LLRM_GREEDY_CHECK") {
+                greedy_check(&current, &facts, &r#where, classes);
+            }
+            return Ok((
+                Assignment {
+                    r#where,
+                    spilled: BTreeSet::new(),
+                    cost: 0.0,
+                    optimal: false,
+                    why: "llvm greedy".to_owned(),
+                },
+                current,
+                spilled_all,
+            ));
+        }
+        let (moved, made) = spiller::spilled_from(&current, &to_spill, Some(frame), floor, classes)?;
+        floor = floor.max(splitkit::_next_value(&moved));
+        unspill.extend(made);
+        spilled_all.extend(to_spill);
+        current = moved;
+    }
+    GREEDY_RUNS.with(|runs| runs.set((runs.get().0, runs.get().1 + 1, runs.get().2)));
+    if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
+        eprintln!("greedy fallback: {}", body.name);
+    }
+    rewritten(body, pinned, unspillable, protected, cpu, segments, classes, frame, splitting)
+}
+
+/// Reports on stderr every pair of values placed in registers that overlap
+/// while both are live, and every value live across a point that destroys its
+/// register.
+fn greedy_check(
+    body: &LirBody,
+    facts: &Facts,
+    placed: &IndexMap<u32, RegId>,
+    classes: &RegisterClasses,
+) {
+    let info = crate::greedy::virtregmap::RegisterInfo::new(classes.registers);
+    use crate::backend::live::Ranges as _;
+    let live = |value: u32| facts.live.range(value);
+    for one in body.insns() {
+        for (held, register) in one.requires.iter().chain(&one.delivers) {
+            if placed.get(&held.value).is_some_and(|got| _whole(*got) != _whole(*register)) {
+                eprintln!(
+                    "greedy-check {}: v{} must be in {} but is in {}",
+                    body.name,
+                    held.value,
+                    register.repr(),
+                    placed[&held.value].repr()
+                );
+            }
+        }
+    }
+    for one in body.insns() {
+        for value in one.defines.iter().chain(&one.uses) {
+            if !placed.contains_key(value) && !body.inputs.contains(value) {
+                eprintln!(
+                    "greedy-check {}: v{value} is named by #{} and has no register: {:?}",
+                    body.name,
+                    one.id(),
+                    one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources))
+                );
+            }
+        }
+    }
+    let values: Vec<(&u32, &RegId)> = placed.iter().collect();
+    for (at, (a, ra)) in values.iter().enumerate() {
+        let Some(ia) = live(**a) else { continue };
+        let width = facts.widths.get(*a).copied().unwrap_or(4);
+        if _clobbered(ia, **ra, &facts.masks, width) {
+            eprintln!("greedy-check {}: v{a} in {} is live across a point that destroys it", body.name, ra.repr());
+        }
+        for (b, rb) in &values[at + 1..] {
+            if info.overlaps(**ra, **rb) && live(**b).is_some_and(|ib| ia.overlaps(ib)) {
+                eprintln!(
+                    "greedy-check {}: v{a} in {} and v{b} in {} are live together",
+                    body.name,
+                    ra.repr(),
+                    rb.repr()
+                );
+            }
+        }
+    }
+}
+
+/// Whether greedy allocates the x87 values into FP0..FP6 (`LLRM_GREEDY_RFP`):
+/// off until the stackifier reads the assignment (backend-slopes), then on
+/// with floatassign gone.
+pub fn rfp_on() -> bool {
+    #[cfg(test)]
+    if RFP_ON.with(std::cell::Cell::get) {
+        return true;
+    }
+    llrm_support::env_flag!("LLRM_GREEDY_RFP")
+}
+
+#[cfg(test)]
+thread_local! {
+    static RFP_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `LLRM_GREEDY_RFP` for the life of the value, on this thread: for tests.
+#[cfg(test)]
+pub struct RfpOn;
+
+#[cfg(test)]
+impl RfpOn {
+    pub fn set() -> Self {
+        RFP_ON.with(|one| one.set(true));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for RfpOn {
+    fn drop(&mut self) {
+        RFP_ON.with(|one| one.set(false));
+    }
+}
+
+/// The RFP registers FP0..FP6 (`class::RFP`), in allocation order.
+pub const RFP: [RegId; 7] = [RegId::MM0, RegId::MM1, RegId::MM2, RegId::MM3, RegId::MM4, RegId::MM5, RegId::MM6];
+
+/// Whether the translated greedy allocator allocates: by default, the allocate
+/// slot of LLVM's order being greedy's; `LLRM_NO_LLVM_ORDER` turns it off
+/// unless `LLRM_GREEDY` is set, and `LLRM_NO_GREEDY` alone, under the order.
+pub fn greedy_on() -> bool {
+    #[cfg(test)]
+    if OLD_ALLOCATOR.with(std::cell::Cell::get) {
+        return false;
+    }
+    llrm_support::env_flag!("LLRM_GREEDY")
+        || !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER") && !llrm_support::env_flag!("LLRM_NO_GREEDY")
+}
+
+#[cfg(test)]
+thread_local! {
+    static OLD_ALLOCATOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The old allocator on this thread until dropped: for the tests of its
+/// mechanics (last resort, trial search, rebuilds), which greedy does not have
+/// and which are deleted with it.
+#[cfg(test)]
+pub struct OldAllocator;
+
+#[cfg(test)]
+impl OldAllocator {
+    pub fn pinned() -> Self {
+        OLD_ALLOCATOR.with(|old| old.set(true));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for OldAllocator {
+    fn drop(&mut self) {
+        OLD_ALLOCATOR.with(|old| old.set(false));
+    }
+}
+
+thread_local! {
+    static FACTS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times `Facts::of` has run on this thread.
+#[cfg(test)]
+fn facts_built() -> usize {
+    FACTS_BUILT.with(std::cell::Cell::get)
+}
+
+/// (allocations the greedy allocator made, allocations it left to this one).
+pub fn greedy_runs() -> (usize, usize) {
+    GREEDY_RUNS.with(|runs| (runs.get().0, runs.get().1))
+}
+
 /// What the allocator knows of a body, recomputed whenever it rewrites it.
 struct Facts {
     index: Arc<Indexes>,
@@ -1642,6 +1983,7 @@ impl Facts {
             old_epoch = Some(one.epoch);
             gone_slots = one.gone;
         }
+        FACTS_BUILT.with(|count| count.set(count.get() + 1));
         let same_numbering = |index: &Indexes| old_epoch == Some(index.epoch);
         let _span = llrm_support::debug::span("regalloc facts");
         let index = llrm_support::debug::timed("facts slots", || {
@@ -2003,6 +2345,39 @@ fn _allocated(
         Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body), None, None);
     if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments, classes) {
         return Err(Unplaced(why).into());
+    }
+    if llrm_support::env_flag!("LLRM_SHADOW_GREEDY") {
+        let none = IndexMap::default();
+        let pins = pinned.unwrap_or(&none);
+        let sets = crate::backend::regclass::Sets::of(classes);
+        let inputs = crate::greedy::shadow::ShadowInputs {
+            body: &body,
+            registers: classes.registers,
+            order: &|value| target::order(facts.confined.get(&value), segments, classes),
+            pins,
+            unspillable: &unspillable,
+            data: Some(segments.data),
+            sets: Some(&sets),
+        };
+        if let Some(report) = crate::greedy::shadow::run(&inputs) {
+            eprintln!(
+                "shadow-greedy {}: values {} dequeued {} assigned {} evicted {} waited {} spilled {} new {} last-chance {} failed {} reloads {} stores {} folded {} sig {:x}",
+                body.name,
+                report.values,
+                report.stats.dequeued,
+                report.stats.assigned,
+                report.stats.evicted,
+                report.stats.waited,
+                report.stats.spilled_ranges,
+                report.stats.new_queued,
+                report.stats.last_chance,
+                report.stats.failed,
+                report.reloads,
+                report.stores,
+                report.folded,
+                report.signature
+            );
+        }
     }
     // Every value this allocation has known: a new one is numbered above them.
     let mut floor = splitkit::_next_value(&body);
@@ -2867,7 +3242,7 @@ pub fn _widest(body: &LirBody) -> IndexMap<u32, u32> {
 }
 
 /// Each (value, width) an instruction names.
-fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_ {
+pub(crate) fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_ {
     one.what
         .iter()
         .flat_map(|what| what.dests.iter().chain(&what.sources))
@@ -4008,7 +4383,14 @@ impl RegAlloc {
             // Each spill gets a slot of its own; they are shared once, over the
             // allocation kept (`spiller::slots_colored`).
             frame.borrow_mut().defer_colours = true;
-            let allocated = rewritten(
+            let allocate = if greedy_on()
+                && std::env::var("LLRM_GREEDY_ONLY").map_or(true, |only| only.split(',').any(|n| n == candidate.name))
+            {
+                greedy_rewritten
+            } else {
+                rewritten
+            };
+            let allocated = allocate(
                 candidate,
                 Some(&pins),
                 Some(unspillable),
@@ -4037,7 +4419,9 @@ impl RegAlloc {
         let spilled = best.spilled.clone();
         let base_stats = LAST_STATS.with(std::cell::Cell::get);
         BASE_SPLITS.with(|splits| splits.set(base_stats.0));
-        if !spilled.is_empty() && cpu.search {
+        // LLVM allocates each function once: the translated allocator runs no
+        // search over other shapes of the body.
+        if !spilled.is_empty() && cpu.search && !greedy_on() {
             // Other shapes of the same body, which the base allocation's spills
             // suggest: each is kept only if its output is cheaper.
             let building = llrm_support::debug::span("regalloc candidates");
@@ -4841,6 +5225,8 @@ pub fn applied(
             succ: block.succ.clone(),
             phis: block.phis.clone(),
             cold: block.cold,
+            align: block.align,
+            max_skip: block.max_skip,
         })
         .collect::<Vec<_>>();
     if let Some(error) = failed.into_inner() {
@@ -5048,6 +5434,11 @@ fn _settled(
     let Some(register) = held.get(&value.value) else {
         return Err(Unplaced(format!("value#{} at width {} has no register", value.value, value.width)));
     };
+    // An x87 value is placed in FP0..FP6 but stays a value: the stackifier
+    // puts it on the stack and its operands become st(i).
+    if regs.in_class(*register, llrm_lir::registers::class::RFP) {
+        return Ok(place);
+    }
     Ok(Loc::Reg(Reg { register: regs.named(*register, i64::from(value.width)), width: value.width }))
 }
 
@@ -5065,7 +5456,7 @@ mod tests {
 
     use super::*;
     use crate::analysis::intervals::Segment;
-    use crate::backend::regalloc_input::{before_regalloc, through};
+    use crate::backend::regalloc_input::through;
     use crate::backend::{parcopy, select, verify};
     use crate::model::ir::Imm;
     use crate::support::hash::IndexMap;
@@ -5226,6 +5617,27 @@ mod tests {
             "premise: the body spills, so candidates run"
         );
         assert_eq!(spiller::folded_read_scans() - before, 1);
+    }
+
+    /// The greedy allocator reads only the register classes of `Facts`, but
+    /// built all of it, the old allocator's liveness included, for every body:
+    /// 11.3 M of 1977 M instructions on d_faces.
+    #[test]
+    fn test_the_greedy_allocator_builds_no_facts_of_the_old_one() {
+        let insns: Vec<Insn> = vec![
+            _mov(1, 2, 4),
+            Insn::new(
+                8,
+                Some((8, 9)),
+                Some(semantics(Operation::Binary, "add", vec![held(1, 2)], vec![held(1, 2), held(1, 2)])),
+                vec![1],
+                vec![1],
+            ),
+        ];
+        let (runs, built) = (greedy_runs().0, facts_built());
+        _through_regalloc(_one_block(insns), &[]);
+        assert_eq!(greedy_runs().0 - runs, 1, "premise: the greedy allocator placed the body");
+        assert_eq!(facts_built() - built, 0);
     }
 
     fn _one_block(insns: Vec<Insn>) -> LirBody {
@@ -6498,7 +6910,19 @@ mod tests {
     /// again, a new value every pass, and compilation did not finish (#104).
     #[test]
     fn test_a_reload_stretched_by_a_parallel_copy_is_not_spilled_again() {
-        let (body, phases) = before_regalloc("walks10.ll", "_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum", "386");
+        // Without the coalescer: the loop's parallel copy is what the allocator
+        // is handed to stress, and a coalescer that joins its copies (LLVM's
+        // does) leaves none.
+        let (body, phases) = crate::backend::phielim::with_old_lowering(|| {
+            crate::backend::regalloc_input::before_phase_skipping(
+                crate::backend::regalloc_input::Calls::C,
+                "walks10.ll",
+                "_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum",
+                "386",
+                "RegAlloc",
+                &["Coalescer"],
+            )
+        });
         let longest =
             body.blocks.iter().map(|one| one.insns.iter().filter(|insn| insn.group.is_some()).count()).max().unwrap();
         assert!(longest >= 5, "premise: a parallel copy of {longest} insns stretches what is live across it");

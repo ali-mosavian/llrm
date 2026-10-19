@@ -14,6 +14,10 @@ flat=lambda P:{f"{p}/{v}":r for p,vs in P.items() for v,r in vs.items()}
 line,bad=rowcheck.census({'base':flat(base),'main':flat(main)})
 # Printed first; a failed or missing row stops the table unless --allow-failed.
 head=rowcheck.require(line,bad,'--allow-failed' in sys.argv)+[rowcheck.compiler_premise(W+n) for n in ('base','main')]
+# --allow-failed prints the failed rows; their programs stay out of every table and geomean (a wrong-output row's counters are the wrong program's).
+for one in bad:
+    if 'failed in' in one:
+        base.pop(one.split('/')[0],None); main.pop(one.split('/')[0],None)
 LV=('O1','O2','O3','Os'); L=lambda l:'llrm' if l=='O2' else 'llrm'+l
 def ref(P,p,l,k): return max(1,min(P[p]['gcc'+l][k],P[p]['clang'+l][k]))
 def gm(xs): return math.exp(sum(math.log(x) for x in xs)/len(xs))
@@ -41,12 +45,17 @@ for l in LV:
     out.append(f"-{l}: newly below (better): {nb or 'none'}; newly above (worse): {na or 'none'}")
 # d_faces
 def dl(n): return [json.loads(l) for l in open(W+f'df-{n}.json') if l.startswith('{')]
-db,dm=dl('base'),dl('main'); key=lambda r:(r['variant'])
-out.append("\nd_faces executed, llrm variants (base -> main): "+("IDENTICAL on every counter" if {key(r):(r['ins'],r['mem'],r['misaligned'],r['clocks'],r['code']) for r in db}=={key(r):(r['ins'],r['mem'],r['misaligned'],r['clocks'],r['code']) for r in dm} else "DIFFERENT"))
-D={r['variant']:r for r in dm}
-for l in LV:
-    v=L(l); best=min(D['gcc'+l]['clocks'],D['clang'+l]['clocks']); b={r['variant']:r for r in db}[v]
-    out.append(f"  -{l}: clocks base {b['clocks']} main {D[v]['clocks']}; min(gcc,clang) {best}; ratio {D[v]['clocks']/best:.3f}; code {D[v]['code']} (gcc {D['gcc'+l]['code']}, clang {D['clang'+l]['code']})")
+gone=[n for n in ("base","main") if not os.path.exists(W+f"df-{n}.json")]
+if gone:  # the d_faces compile failed on that side: a named line, not a traceback that drops the whole report
+    why=lambda n: (open(W+f"df-{n}.log").read().strip().splitlines() or ["no log"])[-1][:120] if os.path.exists(W+f"df-{n}.log") else "no log"
+    out.append("\nd_faces: NOT MEASURED, no result on "+", ".join(f"{n} ({why(n)})" for n in gone))
+else:
+    db,dm=dl('base'),dl('main'); key=lambda r:(r['variant'])
+    out.append("\nd_faces executed, llrm variants (base -> main): "+("IDENTICAL on every counter" if {key(r):(r['ins'],r['mem'],r['misaligned'],r['clocks'],r['code']) for r in db}=={key(r):(r['ins'],r['mem'],r['misaligned'],r['clocks'],r['code']) for r in dm} else "DIFFERENT"))
+    D={r['variant']:r for r in dm}
+    for l in LV:
+        v=L(l); best=min(D['gcc'+l]['clocks'],D['clang'+l]['clocks']); b={r['variant']:r for r in db}[v]
+        out.append(f"  -{l}: clocks base {b['clocks']} main {D[v]['clocks']}; min(gcc,clang) {best}; ratio {D[v]['clocks']/best:.3f}; code {D[v]['code']} (gcc {D['gcc'+l]['code']}, clang {D['clang'+l]['code']})")
 # qcport
 q=json.load(open(W+'qcport.json')); Q={}
 for n,m,l,t in q: Q.setdefault(l,{}).setdefault(m,{})[n]=t

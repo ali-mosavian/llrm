@@ -205,7 +205,7 @@ fn sweep(
 /// address that object.
 pub fn attribute(
     function: &mut Function,
-    context: &mut Context,
+    context: &Context,
     objects: &Objects,
     spaces: &llrm_mir::spaces::Spaces,
 ) {

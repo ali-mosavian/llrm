@@ -238,6 +238,8 @@ impl<'m> Machine<'m> {
             },
             ConstantKind::Null => Val::Ptr(0),
             ConstantKind::Poison => Val::Poison,
+            // Any value is a legal undef; the interpreter picks zero.
+            ConstantKind::Undef => self.zero(constant.ty),
             ConstantKind::Zero => self.zero(constant.ty),
             ConstantKind::Aggregate(members) => {
                 Val::Aggregate(members.iter().map(|&one| self.constant(one)).collect::<Run<_>>()?)
@@ -416,6 +418,15 @@ impl<'m> Machine<'m> {
                     _ => Val::Poison,
                 }
             }
+            Intrinsic::BitCount(count) => {
+                let Val::Int { bits, width } = argument(0) else { return Ok(Val::Poison) };
+                // A zero is poison where the second argument says so.
+                let zero_is_poison = count.has_zero_poison_flag() && matches!(argument(1), Val::Int { bits: 1, .. });
+                if bits == 0 && zero_is_poison {
+                    return Ok(Val::Poison);
+                }
+                Val::Int { bits: count.apply(bits, width), width }
+            }
             Intrinsic::Fixed { divide } => {
                 let (Val::Int { bits: a, width }, Val::Int { bits: b, .. }, Val::Int { bits: scale, .. }) =
                     (argument(0), argument(1), argument(2))
@@ -522,6 +533,7 @@ impl<'m> Machine<'m> {
             Intrinsic::Window | Intrinsic::Restrict => argument(0),
             Intrinsic::PortIn | Intrinsic::PortOut => return unsupported("an I/O port"),
             Intrinsic::VaStart => return unsupported("a variadic argument list"),
+            Intrinsic::StackSave | Intrinsic::StackRestore => return unsupported("a stack pointer"),
             Intrinsic::Code => return unsupported("inline code"),
             Intrinsic::Asm => return unsupported("inline assembly"),
         })
@@ -705,10 +717,9 @@ impl<'m> Machine<'m> {
         let mut block = function.entry().expect("a body");
         let mut came_from: Option<BlockId> = None;
         loop {
-            let list = function.block(block).instructions();
             // Phis read together, along the edge taken.
             let mut chosen = Vec::new();
-            for &inst in list.iter().take_while(|&&one| function.instruction(one).opcode == Opcode::Phi) {
+            for inst in function.iter_block(block).take_while(|&one| function.instruction(one).opcode == Opcode::Phi) {
                 let instruction = function.instruction(inst);
                 let from = came_from.expect("the entry has no phis");
                 let pair = instruction
@@ -720,7 +731,7 @@ impl<'m> Machine<'m> {
             }
             values.extend(chosen);
             let mut next = None;
-            for &inst in list.iter().skip_while(|&&one| function.instruction(one).opcode == Opcode::Phi) {
+            for inst in function.iter_block(block).skip_while(|&one| function.instruction(one).opcode == Opcode::Phi) {
                 self.fuel = self.fuel.checked_sub(1).ok_or(Trap::OutOfFuel)?;
                 let instruction = function.instruction(inst);
                 let ops = &instruction.operands;

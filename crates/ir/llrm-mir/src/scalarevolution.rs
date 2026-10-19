@@ -4,7 +4,7 @@
 //! of such. Arithmetic wraps, so each holds modulo its width.
 
 use crate::context::{ConstantKind, Context};
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::hash::HashMap;
 use crate::loopinfo::{Loop, LoopInfo};
 use crate::module::{BlockId, Function, Operand, ValueDef, ValueId};
@@ -68,10 +68,8 @@ impl Evolution {
     ) -> usize {
         let Some(inside) = loops.get_loop_for(header) else { return 0 };
         function
-            .block(header)
-            .instructions()
-            .iter()
-            .map(|&inst| function.instruction(inst))
+            .iter_block(header)
+            .map(|inst| function.instruction(inst))
             .filter(|one| one.opcode == Opcode::Phi)
             .filter_map(|phi| phi.result.map(|value| (phi, value)))
             .filter(|&(phi, value)| match self.of(value) {
@@ -318,7 +316,7 @@ pub struct Counted {
 pub fn counted(
     context: &Context,
     function: &Function,
-    tree: &DominatorTree,
+    tree: &DomTree,
     evolution: &Evolution,
     one: Loop<'_>,
 ) -> Option<Counted> {

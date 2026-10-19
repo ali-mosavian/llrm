@@ -22,7 +22,7 @@ fn int(
 #[test]
 fn the_datalayout_places_fields_and_far_pointers_as_stated() {
     let layout = DataLayout::parse(LAYOUT).expect("parses");
-    let mut types = Types::default();
+    let types = Types::default();
     let (i16, i32) = (types.int(16), types.int(32));
     let pair = types.intern(Type::Struct { fields: vec![i16, i32], packed: false });
     assert_eq!(layout.struct_layout(&types, pair), (6, vec![0, 2]), "i32 aligned to 2 bytes");
@@ -224,6 +224,39 @@ fn fixed_point_intrinsics_are_their_expansions() {
     }
 }
 
+/// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop` count as the machine integers
+/// do: a zero has as many zeros as the type has bits, and is poison where the
+/// second argument of the first two says so.
+#[test]
+fn bit_count_intrinsics_count_what_the_machine_integers_do() {
+    let call = |name: &str, width: u32, value: u32, flag: bool| {
+        let (parameters, arguments) =
+            if name == "ctpop" { (String::new(), String::new()) } else { (", i1".to_owned(), format!(", i1 {flag}")) };
+        result(&format!(
+            "declare i{width} @llvm.{name}.i{width}(i{width}{parameters})\n\
+             define i{width} @f() {{\n  %r = call i{width} @llvm.{name}.i{width}(i{width} {value}{arguments})\n  ret i{width} %r\n}}\n"
+        ))
+    };
+    for value in [0_u32, 1, 2, 3, 0x80, 0x1234, 0x7fff, 0x8000, 0xffff] {
+        let narrow = value as u16;
+        assert_eq!(call("ctpop", 16, value, false), int(u128::from(narrow.count_ones()), 16));
+        for wide in [value, value << 8 | 1, u32::MAX] {
+            assert_eq!(call("ctpop", 32, wide, false), int(u128::from(wide.count_ones()), 32));
+        }
+        if value == 0 {
+            assert_eq!(call("ctlz", 16, 0, false), int(16, 16));
+            assert_eq!(call("cttz", 16, 0, false), int(16, 16));
+            assert_eq!(call("ctlz", 16, 0, true), Ok(Val::Poison));
+            assert_eq!(call("cttz", 16, 0, true), Ok(Val::Poison));
+        } else {
+            for flag in [false, true] {
+                assert_eq!(call("ctlz", 16, value, flag), int(u128::from(narrow.leading_zeros()), 16));
+                assert_eq!(call("cttz", 16, value, flag), int(u128::from(narrow.trailing_zeros()), 16));
+            }
+        }
+    }
+}
+
 #[test]
 fn near_memory_stays_below_64k_whatever_is_far() {
     // Globals were laid out in order, allocas after them, so a far array
@@ -400,4 +433,11 @@ fn a_value_outside_its_stated_range_is_reported() {
     // Unchecked, the promise is not looked at.
     let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n{parameter}")).unwrap();
     assert_eq!(crate::interpret::run(&module, "g", vec![small(5)], 100), Ok(small(5)));
+}
+
+/// An `undef` operand reads as some value: the interpreter picks zero, so
+/// `undef + 5` is 5 and not poison.
+#[test]
+fn undef_reads_as_a_value_not_poison() {
+    assert_eq!(result("define i16 @f() {\nentry:\n  %a = add i16 undef, 5\n  ret i16 %a\n}\n"), int(5, 16));
 }

@@ -3,7 +3,7 @@
 
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::memory;
 use llrm_mir::module::{BlockId, InstId, Module, Operand, Use, ValueId};
 use llrm_mir::types::Type;
@@ -345,9 +345,9 @@ fn a_noundef_replacement_that_stays_keeps_its_range() {
 
 // ---- the dominator tree queries and replaceDominatedUsesWith
 
-fn tree_of(module: &Module) -> DominatorTree {
+fn tree_of(module: &Module) -> DomTree {
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-    DominatorTree::new(function)
+    DomTree::of(function)
 }
 
 fn block(
@@ -1359,4 +1359,43 @@ b1:
     assert!(merged);
     assert_eq!(lines(&body(&after), "br"), Vec::<String>::new());
     assert_eq!(results(&after, &[&[1, 1], &[1, 2]]), results(&before, &[&[1, 1], &[1, 2]]));
+}
+
+/// `changeToUnreachable`: the instruction and what follows it in its block go,
+/// the block ends in `unreachable`, uses of what went are poison, and the
+/// successor's phi loses its input from the block.
+#[test]
+fn test_change_to_unreachable_cuts_the_block_and_the_successors_phi() {
+    let mut module = parsed(
+        "define i16 @f(i1 %c, i16 %x) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %d = add i16 %x, 1
+  br label %b2
+
+b2:
+  %p = phi i16 [ %x, %b0 ], [ %d, %b1 ]
+  ret i16 %p
+}
+",
+    );
+    let at = inst(&module, "d");
+    let (context, function) = module.function_mut("f").expect("@f");
+    assert_eq!(change_to_unreachable(context, function, at), 2);
+    assert_eq!(
+        printed(&module),
+        "define i16 @f(i1 %c, i16 %x) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  unreachable
+
+b2:
+  ret i16 %x
+}
+"
+    );
 }

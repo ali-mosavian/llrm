@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 95 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 99 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -18,11 +18,10 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 95 documented,
 | callregs | Which registers a runtime call destroys or keeps, read from its contract, so the allocator knows what may stay live across it. | `isel.rs`, `isel/wide.rs`, `isel/unwind.rs` (the clobber sets of a call | [callregs](callregs.md) |
 | cfi | Reads call frame information back from emitted code. | `debuginfo.rs`, under `-g`. | [cfi](cfi.md) |
 | classes | What the selected target says about its registers, for the allocator and the passes around it. | `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller | [classes](classes.md) |
-| coalesce | Removes a copy whose two values can share a register. | Once per function, in the machine phases after `twoaddr` and before | [coalesce](coalesce.md) |
+| coalesce | Removes a copy whose two values can share a register: the phase that runs LLVM's `RegisterCoalescer` ([`crate::coalescer`]), and the interference graph `twoaddr` and the spiller read. | Once per function, in the machine phases after `twoaddr` and before | [coalesce](coalesce.md) |
 | comparefold | Fold a one-use load into the comparison that reads it, as a memory operand. | Per block, inside isel's cross-instruction selection | [comparefold](comparefold.md) |
 | constpool | Readonly constants the machine phases put in memory, one datum per distinct bytes. | `isel.rs`, for each float constant it loads, and `floatassign.rs`: an | [constpool](constpool.md) |
 | constrain | Give each value a register is required for a value of its own, live across that instruction alone, copied in and out. | Register allocation (`allocate.rs`), which calls `distinct_roles`, | [constrain](constrain.md) |
-| copyprop | Forward and remove register-to-register copies after allocation. | Inside the peephole phase, after register thrashing and frame copies. | [copyprop](copyprop.md) |
 | copysink | Move a register copy out of a loop to its exit when only code after the loop reads it. | Inside the peephole phase, after copy propagation and extension | [copysink](copysink.md) |
 | cpu | One immutable description of a code-generation tuning target: a CPU's prices and a target's registers, address forms and cost model. | The driver (`driver/mod.rs`, `Options::cpu`) builds it from the machine's | [cpu](cpu.md) |
 | datagroup | Make the data segment register a fourth selector register where the stack lives in the data group. | Register allocation (`allocate.rs`): `names_data_segment` before it, | [datagroup](datagroup.md) |
@@ -39,16 +38,19 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 95 documented,
 | floatfold | A float load that only one arithmetic instruction reads becomes that instruction's memory operand: `fld [m]; faddp` is `fadd [m]`. | Machine phase after `pressuresink` and before `floatassign`, once per | [floatfold](floatfold.md) |
 | floatregions | Where the x87 stack cannot reach, and the error type the x87 allocator raises. | `floatassign`, `floatalloc`, `pressuresink`. | [floatregions](floatregions.md) |
 | fpconvert | Rewrites a float converted to an unsigned 64-bit integer as signed conversions and a select, in MIR before instruction selection. | `mir fp to unsigned` in `driver::optimized`, after `ehprepare` and before | [fpconvert](fpconvert.md) |
+| fpstack | The x87 stackifier: flat floating values in stack form, as LLVM's `X86FloatingPoint` does it. | As the body of `floatalloc` (slot `floatalloc@8`), after `floatassign`, once | [fpstack](fpstack.md) |
 | frame | The stack frame of one function body: where each spill slot, temporary and selector-made stack object lives, and how many bytes the prologue reserves. | `lir frame` in `assemble::staged`, once per function after selection and | [frame](frame.md) |
 | framefree | Decides, before allocation, whether a function can do without its frame register, which is then one more value register. | In `assemble::staged`, after isel and before `frame::of`, once per function. | [framefree](framefree.md) |
 | globals | Turns a MIR module's globals into assembler symbols and data: names, and each initializer's bytes with a relocation for every address in it. | `global names` and the data loop in `assemble::assembled_by`, once per | [globals](globals.md) |
 | hintwalk | The register each value is wanted in because of the copies that lead to it from a pinned value, kept up to date by what a rewrite names. | `HintWalk`: `fresh`, `update`, `wanted`. | [hintwalk](hintwalk.md) |
 | incremental | A dataflow answer over a body's blocks, held between asks and brought up to date from the blocks that changed. | `liveness`, `upperzero` and `peephole` (flag liveness). | [incremental](incremental.md) |
 | inline_asm | Names the QB runtime's registers for inline assembly operands and clobbers. | `abi/qb.rs` and the nib frontend (`llrm-nib` `semantic/assembly.rs`). | [inline_asm](inline_asm.md) |
+| intbits | Integers of a given width held in an `i64`: the masks and wraps that stay defined at eight bytes, where `1 << 64` is not. |  | [intbits](intbits.md) |
 | isel | Instruction selection: one MIR function becomes LIR over virtual registers, as LLVM's SelectionDAG makes MachineInstrs. | First of the staged phases in `assemble::staged`, once per function and | [isel](isel.md) |
 | jumps | Orders the blocks of an allocated body and removes the jumps and blocks the order makes redundant; merges and copies tails. | `ControlFlow` is the last machine phase, because this physical order | [jumps](jumps.md) |
 | lanes | A set of register and flag lanes, as a 128-bit mask. | `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`, | [lanes](lanes.md) |
 | layout | The pairs of branch conditions that are each other's inverse. | `jumps`, to invert a branch when it makes the other successor the | [layout](layout.md) |
+| legalize | Promotes the integers of an odd width (i2..i63 but 8, 16 and 32) to the next machine width, in MIR before instruction selection. | Once per module in `driver::optimized`, after `minmax_expanded` and before | [legalize](legalize.md) |
 | lifetimes | Where a block local's bytes are live, from its lifetime markers, so that locals never live together can share a frame slot. | `isel` takes the intervals in its own instruction numbering; `slots` then | [lifetimes](lifetimes.md) |
 | lirtext | LIR as text, one stage at a time: what `ISEL_DUMP` prints after each machine phase. | `assemble` after each machine phase when `ISEL_DUMP` is set; the register | [lirtext](lirtext.md) |
 | live | The live intervals the allocator holds of the body it is rewriting, and the spill weight each value gets from them. | `allocate` builds and edits it; `spiller`, `splitkit`, `regclass` and | [live](live.md) |
@@ -56,6 +58,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 95 documented,
 | liveunion | Answers which values already hold a register where an interval lies, so the allocator can test an assignment without visiting every holder. | `allocate` and `splitkit`. | [liveunion](liveunion.md) |
 | loopslots | Moves a loop's spill slots, and its loop-invariant reloads, into the registers the loop leaves free. | After `peephole` (spill traffic is final), before `schedule`. Always on; | [loopslots](loopslots.md) |
 | lower_int64 | The contract of an inline routine the compiler places where an operation has no instruction (`llrm_x86::helpers`): what it reads and what it changes. | `isel/wide` (64-bit arithmetic helpers) and `isel/unwind`. | [lower_int64](lower_int64.md) |
+| machinecp | Forward and backward copy propagation inside a block, and dead-copy removal: LLVM's `MachineCopyPropagation`. | In the peephole phase, where `copyprop` ran (it and `regthrash`'s rename | [machinecp](machinecp.md) |
 | machinecse | Removes a repeated pure register computation after allocation, by value numbering the byte lanes each instruction reads and writes. | A peephole sub-pass, once per `peephole` run, after `sharedstores` and | [machinecse](machinecse.md) |
 | machinedce | Removes a pure allocated instruction whose whole result is dead. | The last body rewrite of `peephole` before `popped_arguments`, and | [machinedce](machinedce.md) |
 | masm | The assembly-level module: allocated LIR with its frame sequences written out, as the items `objbuild` encodes and the jwasm source `-S` prints. | Once per procedure after the machine phases. `cleaned_returns` runs in | [masm](masm.md) |
@@ -80,6 +83,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 95 documented,
 | regthrash | Renames a definition's register so that a copy after it is a copy of a register to itself. | First sub-pass of [`crate::backend::peephole`](peephole.md), gated on a register copy | [regthrash](regthrash.md) |
 | relayout | Lays a function's frame out a second time, with a hole for the spill slots, by moving each frame cell of the first layout. | In `machined_once` (`assemble.rs`), after the first layout is chosen, unless | [relayout](relayout.md) |
 | rmw | Selects a private load, update and store of one cell as a single memory-destination instruction, before register allocation. | During instruction selection, in the combining step of `isel/combined.rs`, | [rmw](rmw.md) |
+| saverestore | Where a procedure's frame and kept registers are set up and taken back: one Save block and one Restore block, from `ShrinkWrapImpl` in llvm/lib/CodeGen/ShrinkWrap.cpp at d1106deb71cc. |  | [saverestore](saverestore.md) |
 | schedule | Reorders independent register-and-immediate instructions after allocation so a consumer does not wait on its producer's latency. | Once per body, the machine phase after `loopslots` and before `jumps` | [schedule](schedule.md) |
 | selects | Turns each MIR `select` into a branch around an empty block and a phi, where the target has no conditional move. | Once per program in `driver::optimized`, after `fpconvert` and before the | [selects](selects.md) |
 | sharedstores | At -Os, a run of stores of one literal becomes the literal loaded once into a dead register, then register stores. | A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after | [sharedstores](sharedstores.md) |

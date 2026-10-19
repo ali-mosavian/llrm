@@ -123,7 +123,7 @@ use llrm_analysis::pointerfacts::offsets;
 use llrm_mir::callgraph::{CallGraph, direct_calls, direct_only};
 use llrm_mir::context::GlobalId;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::Facts;
 use llrm_mir::loopinfo::LoopInfo;
@@ -283,10 +283,7 @@ fn planned(
     // holds.
     let entry = function.entry()?;
     let early: BTreeSet<InstId> = function
-        .block(entry)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(entry)
         .take_while(|&inst| {
             !matches!(
                 function.instruction(inst).opcode,
@@ -339,7 +336,7 @@ fn hoistable(
 ) -> bool {
     let Some(function) = module.global(caller).function() else { return false };
     let Some(block) = function.parent(inst) else { return false };
-    let loops = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let loops = LoopInfo::analyze(function, || DomTree::of(function));
     let Some(held) = loops.get_loop_for(block) else { return false };
     match function.instruction(inst).operands[parameter] {
         Operand::Value(value) => match function.value(value).def {

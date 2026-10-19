@@ -111,7 +111,7 @@ fn test_unsupported_group_is_atomic() {
             "entry" => target = cfg::id(function.entry().expect("an entry")),
             "missing-source" => sources = BTreeSet::from([999]),
             "bad-phi" => {
-                let phi = function.block(cfg::block(target)).instructions()[0];
+                let phi = function.block(cfg::block(target)).first().expect("a block with an instruction");
                 let operands = function.instruction(phi).operands[4..].to_vec();
                 function.set_operands(phi, operands);
             }

@@ -394,6 +394,10 @@ pub struct Frequencies {
     taken: std::collections::BTreeMap<(i64, i64), f64>,
     /// The blocks and their edges these were worked out on.
     edges: Vec<(BlockId, Vec<BlockId>)>,
+    /// The cold blocks of the function: a function of its edges and calls,
+    /// which `update` leaves as they were, so not found again for each loop
+    /// lsr changes (a nest of N loops scanned the function N times).
+    cold: std::collections::BTreeSet<i64>,
 }
 
 thread_local! {
@@ -428,11 +432,12 @@ impl Analysis for Products {
             .with_registers(&registers)
             .with_shape(&shape)
             .with_counted(&counted);
-        let trips = profit::proven_trips(&view, &registers);
+        let trips = profit::proven_trips(&view);
         let (by_block, taken) =
             profit::_products_with_odds_in(view.context, view.metadata, &outer.globals, function, &shape, Some(&trips))
                 .map_or((None, Default::default()), |(by_block, taken)| (Some(by_block), taken));
-        Frequencies { by_block, trips, taken, edges: _graph(function) }
+        let cold = llrm_analysis::branchprob::cold_blocks(context, &outer.globals, function);
+        Frequencies { by_block, trips, taken, edges: _graph(function), cold }
     }
 
     /// They are worked out from the blocks and their edges, the loops, the
@@ -467,19 +472,20 @@ impl Analysis for Products {
             .with_registers(&registers)
             .with_shape(&shape)
             .with_counted(&counted);
-        let trips = profit::proven_trips(&view, &registers);
+        let trips = profit::proven_trips(&view);
         if trips != previous.trips {
             return None;
         }
         let weighed = reach.conditions.iter().collect::<Vec<_>>();
         let by_header = profit::counted_by_header(&shape, Some(&trips))?;
-        let taken = llrm_analysis::branchprob::taken_from(
+        let taken = llrm_analysis::branchprob::taken_cold(
             view.context,
             view.metadata,
             &outer.globals,
             function,
             &shape,
             &by_header,
+            &previous.cold,
             &weighed,
         );
         let wanted = weighed.iter().map(|&at| cfg::id(at)).collect::<BTreeSet<_>>();
@@ -489,6 +495,7 @@ impl Analysis for Products {
             trips,
             taken: previous.taken.clone(),
             edges: previous.edges.clone(),
+            cold: previous.cold.clone(),
         })
     }
 }
@@ -687,7 +694,7 @@ fn _function_price(
         &outer.globals,
         unit.function,
         &shape,
-        Some(&profit::proven_trips(&view, &facts)),
+        Some(&profit::proven_trips(&view)),
     )?;
     profit::motion_price(unit.context, unit.layout, outer, unit.function, &target.costs, target.room, &frequencies)
 }
@@ -1293,10 +1300,9 @@ fn _stepped_before_test(
         // The step is made before the compare, on every path to it.
         let (stepped_in, compared_in) = (function.parent(made)?, block);
         let before = if stepped_in == compared_in {
-            let all = function.block(block).instructions();
-            all.iter().position(|one| *one == made)? < all.iter().position(|one| *one == compare)?
+            function.comes_before(made, compare)
         } else {
-            view.shape().dominance.dominates(cfg::id(stepped_in), at)
+            view.shape().dominance.dominates(function, cfg::id(stepped_in), at)
         };
         // The counter is read by the step, the compare and its phi alone.
         let readers = function.users(read);
@@ -1344,6 +1350,17 @@ fn _read_after_step(
             _ => {}
         }
     }
+    // A compare written before the step in its block now reads it: moved
+    // behind it, to the end of the block (its only reader is the branch).
+    let function = &mut *unit.function;
+    if let ValueDef::Instruction(made) = function.value(rewrite.step).def
+        && function.parent(made) == function.parent(rewrite.compare)
+        && function.comes_before(rewrite.compare, made)
+    {
+        let block = function.parent(made).expect("a placed step");
+        let branch = function.terminator(block).expect("a terminated block");
+        function.move_to(rewrite.compare, Position::Before(branch)).expect("a placed compare");
+    }
 }
 
 /// The loop's counted exit, where its compare is read only by its branch.
@@ -1388,13 +1405,15 @@ fn _steps_before_test(
     let ValueDef::Instruction(made) = function.value(step).def else { return false };
     let (here, there) = (function.parent(made), function.parent(proof.branch));
     here == there
-        && function.block(here.expect("a placed step")).instructions().iter().position(|&one| one == made)
-            < function.block(there.expect("a placed branch")).instructions().iter().position(|&one| one == proof.branch)
+        && function.iter_block(here.expect("a placed step")).position(|one| one == made)
+            < function.iter_block(there.expect("a placed branch")).position(|one| one == proof.branch)
         || here != there
             && here.is_some_and(|step| {
                 function
                     .parent(proof.branch)
-                    .is_some_and(|test| cfg::Shape::of(function).dominance.dominates(cfg::id(step), cfg::id(test)))
+                    .is_some_and(
+                        |test| cfg::Shape::of(function).dominance.dominates(function, cfg::id(step), cfg::id(test)),
+                    )
             })
 }
 
@@ -1409,7 +1428,7 @@ fn _live_anyway(
 ) -> BTreeSet<ValueId> {
     let mut live = BTreeSet::new();
     for &at in &loop_.body {
-        for &inst in function.block(cfg::block(at)).instructions() {
+        for inst in function.iter_block(cfg::block(at)) {
             if users.web.contains(&inst) || exit.is_some_and(|exit| exit.proof.compare == inst) {
                 continue;
             }
@@ -2997,7 +3016,7 @@ fn _applied(
         let start = expander.value(context, function, one.of.pointer, &one.of.start, ty);
         let step = expander.int(context, function, &one.of.step);
         let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), Some("lsr.iv"));
-        let first = function.block(plan.header).instructions()[0];
+        let first = function.block(plan.header).first().expect("a block with an instruction");
         function.insert(phi, Position::Before(first)).expect("a header");
         let value = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
         let opcode = if one.of.pointer.is_some() {
@@ -3044,7 +3063,7 @@ fn _applied(
                             })
                             .ty;
                         let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), None);
-                        let first = function.block(block).instructions()[0];
+                        let first = function.block(block).first().expect("a block with an instruction");
                         function.insert(phi, Position::Before(first)).expect("an exit");
                         function.set_operands(
                             phi,
@@ -3056,10 +3075,7 @@ fn _applied(
                     }
                 };
                 let after = function
-                    .block(block)
-                    .instructions()
-                    .iter()
-                    .copied()
+                    .iter_block(block)
                     .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
                     .expect("a terminator");
                 (Position::Before(after), register)
@@ -3069,8 +3085,7 @@ fn _applied(
         let value = if fit.next {
             // The step goes before its first reader in the latch.
             if let (Some(step), Place::Before(reader)) = (stepping[*index], site.at) {
-                let order = function.block(plan.latch).instructions();
-                if order.iter().position(|&one| one == reader) < order.iter().position(|&one| one == step) {
+                if function.comes_before(reader, step) {
                     function.move_to(step, Position::Before(reader)).expect("a placed reader");
                 }
             }
@@ -3113,9 +3128,7 @@ fn _applied(
     // already ahead of the branch stays, where its readers need it.
     if let (true, Some(next)) = (proof.posttested, stepping[*index]) {
         let block = function.parent(branch).expect("a placed branch");
-        let order = function.block(block).instructions();
-        let ahead = function.parent(next) == Some(block)
-            && order.iter().position(|&one| one == next) < order.iter().position(|&one| one == branch);
+        let ahead = function.parent(next) == Some(block) && function.comes_before(next, branch);
         if !ahead {
             function.move_to(next, Position::Before(branch)).expect("a placed branch");
         }
@@ -3162,10 +3175,14 @@ fn _after_step(
     let Place::Before(reader) = site.at else { return None };
     let Operand::Value(stepped) = stepped else { return None };
     let ValueDef::Instruction(step) = function.value(stepped).def else { return None };
-    let order = function.block(latch).instructions();
-    let (step_at, reader_at) =
-        (order.iter().position(|&one| one == step)?, order.iter().position(|&one| one == reader)?);
-    if site.one.kind != UseKind::Address || fit.trip.is_some() || fit.k == BigInt::from(0) || step_at > reader_at {
+    if function.parent(step) != Some(latch) || function.parent(reader) != Some(latch) {
+        return None;
+    }
+    if site.one.kind != UseKind::Address
+        || fit.trip.is_some()
+        || fit.k == BigInt::from(0)
+        || function.comes_before(reader, step)
+    {
         return None;
     }
     let by = candidate.of.step.known()?;
@@ -3240,27 +3257,25 @@ fn _realized(
         // At the block's top, or after the register where the block steps it.
         let at = match shared {
             Some(block) => {
-                let order = function.block(block).instructions();
                 let defined = match register {
                     Operand::Value(value) => match function.value(value).def {
-                        ValueDef::Instruction(def) => order
-                            .iter()
-                            .position(|&one| one == def)
-                            .filter(|_| function.instruction(def).opcode != Opcode::Phi),
+                        ValueDef::Instruction(def) => Some(def)
+                            .filter(|&def| function.parent(def) == Some(block))
+                            .filter(|&def| function.instruction(def).opcode != Opcode::Phi),
                         _ => None,
                     },
                     _ => None,
                 };
                 let first = defined.map_or_else(
                     || {
-                        order
-                            .iter()
-                            .position(|&one| function.instruction(one).opcode != Opcode::Phi)
+                        function
+                            .iter_block(block)
+                            .find(|&one| function.instruction(one).opcode != Opcode::Phi)
                             .expect("a terminator")
                     },
-                    |def| def + 1,
+                    |def| function.next_in_block(def).expect("a terminator follows"),
                 );
-                Position::Before(order[first])
+                Position::Before(first)
             }
             None => at,
         };
