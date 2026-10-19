@@ -1715,8 +1715,9 @@ impl Selector<'_, '_, '_> {
         let mut align_of = IndexMap::<usize, i64>::default();
         for &block in layout {
             for inst in function.iter_block(block) {
-                if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
-                    let size = self.layout.alloc_size(self.types(), allocated) as i64;
+                if let (&Opcode::Alloca { allocated, .. }, Some(size)) =
+                    (&function.instruction(inst).opcode, self.alloca_bytes(inst))
+                {
                     let align = natural_align(&self.module.context.types, &self.layout, allocated)
                         .max(size & size.wrapping_neg())
                         .min(kept.max(i64::from(self.arch.stack_slot_bytes())))
@@ -1759,8 +1760,9 @@ impl Selector<'_, '_, '_> {
             for inst in function.iter_block(block) {
                 self.ats.insert(inst, at);
                 at += 1;
-                if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
-                    let size = self.layout.alloc_size(self.types(), allocated) as i64;
+                if let (Opcode::Alloca { .. }, Some(size)) =
+                    (&function.instruction(inst).opcode, self.alloca_bytes(inst))
+                {
                     let disp = homes[&group_of[&inst]];
                     let address = function.instruction(inst).result.expect("an address");
                     self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1, home: Some(disp) });
@@ -2460,6 +2462,22 @@ impl Selector<'_, '_, '_> {
         Some(crate::backend::lifetimes::Marker { object, starts })
     }
 
+    /// The bytes an `alloca` reserves in the frame; none where its element
+    /// count is a value, which is the stack's to make room for when it runs
+    /// (`hook_dynamic_alloca`).
+    fn alloca_bytes(
+        &self,
+        inst: InstId,
+    ) -> Option<i64> {
+        let instruction = self.function.instruction(inst);
+        let Opcode::Alloca { allocated, .. } = instruction.opcode else { return None };
+        let element = self.layout.alloc_size(self.types(), allocated) as i64;
+        match instruction.operands.first() {
+            None => Some(element),
+            Some(&count) => self.constant(count, 8).map(|count| element * count.max(0)),
+        }
+    }
+
     /// Each alloca's frame slot, and each slot's bytes: locals never live
     /// together, by their lifetime markers, share one. A local with no markers
     /// has a slot of its own.
@@ -2484,10 +2502,7 @@ impl Selector<'_, '_, '_> {
         let allocas: Vec<(InstId, i64)> = positions
             .keys()
             .filter_map(|&inst| match function.instruction(inst).opcode {
-                Opcode::Alloca { allocated, .. } => {
-                    let size = self.layout.alloc_size(self.types(), allocated) as i64;
-                    Some((inst, size + size % 2))
-                }
+                Opcode::Alloca { .. } => self.alloca_bytes(inst).map(|size| (inst, size + size % 2)),
                 _ => None,
             })
             .collect();
@@ -5562,6 +5577,22 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::Window) => self.window(inst, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
                 Some(Intrinsic::VaEnd) => Ok(()),
+                // The stack pointer as a value, and set to one.
+                Some(Intrinsic::StackSave) => {
+                    let width = self.address_bytes();
+                    let stack = Loc::Reg(llrm_lir::Reg { register: self.arch.stack_pointer(), width });
+                    let result = Held { value: self.value(instruction.result.expect("a value")), width };
+                    out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![stack])));
+                    Ok(())
+                }
+                Some(Intrinsic::StackRestore) => {
+                    let width = self.address_bytes();
+                    let stack = Loc::Reg(llrm_lir::Reg { register: self.arch.stack_pointer(), width });
+                    let ty = function.operand_type(&self.module.context, arguments[0]).expect("a typed argument");
+                    let held = self.held(arguments[0], ty, at, out)?;
+                    out.push(insn(at, semantics(Operation::Move, "mov", vec![stack], vec![Loc::Held(held)])));
+                    Ok(())
+                }
                 Some(Intrinsic::VaCopy) => self.va_copy(arguments, at, out),
                 // Where a local's bytes are live: read by the frame layout, no
                 // code.

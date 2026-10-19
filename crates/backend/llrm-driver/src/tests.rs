@@ -346,3 +346,33 @@ fn va_start_saves_the_unnamed_argument_registers_and_fills_the_list() {
         listing.lines().any(|line| line.trim().starts_with("mov qword ptr") && line.trim().ends_with("rdi"));
     assert!(!rdi_saved, "the named argument is not saved\n{listing}");
 }
+
+/// An `alloca` whose element count is a value took a static slot of one
+/// element: `alloca i32, i64 %n` was `lea rdi, [rsp+12]`, four bytes for `n` of
+/// them. It lowers the stack pointer when it runs and keeps the frame register.
+#[test]
+fn an_alloca_with_a_variable_count_lowers_the_stack_pointer() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr)\n\
+                define void @f(i64 %n) {\n  %p = alloca i32, i64 %n, align 16\n  call void @use(ptr %p)\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    assert!(lines.iter().any(|line| line.starts_with("sub rsp, r")), "the run-time size is subtracted\n{listing}");
+    assert!(lines.contains(&"push rbp") && lines.contains(&"leave"), "the frame register is kept\n{listing}");
+}
+
+/// A constant count above one reserved one element's bytes.
+#[test]
+fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr)\n\
+                define void @f() {\n  %p = alloca i64, i32 8, align 8\n  call void @use(ptr %p)\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let reserved: i64 =
+        listing.lines().map(str::trim).find_map(|line| line.strip_prefix("sub rsp, ")?.parse().ok()).expect("a frame");
+    assert!(reserved >= 64, "{reserved} bytes for eight quadwords\n{listing}");
+}

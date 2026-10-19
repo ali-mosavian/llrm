@@ -86,6 +86,10 @@ pub enum Intrinsic {
     VaStart,
     /// `llvm.va_end`: the list is finished with; no code.
     VaEnd,
+    /// `llvm.stacksave`: the stack pointer, as a value.
+    StackSave,
+    /// `llvm.stackrestore`: the stack pointer set to a value `stacksave` made.
+    StackRestore,
     /// `llvm.va_copy`: the second list copied into the first.
     VaCopy,
     /// Inline machine code, laid down where it is called: its name carries
@@ -349,7 +353,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 40] = [
+const TABLE: [Spec; 42] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -472,6 +476,22 @@ const TABLE: [Spec; 40] = [
     Spec {
         name: "llvm.va_start",
         intrinsic: Intrinsic::VaStart,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.stacksave",
+        intrinsic: Intrinsic::StackSave,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.stackrestore",
+        intrinsic: Intrinsic::StackRestore,
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
         parameters: &[Slot::Any(0)],

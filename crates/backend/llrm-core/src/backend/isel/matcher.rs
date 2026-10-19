@@ -1422,6 +1422,57 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// Whether an `alloca` takes its bytes from the stack when it runs (an
+    /// element count that is a value).
+    pub fn is_dynamic(
+        &self,
+        m: &Match,
+    ) -> bool {
+        self.alloca_bytes(m.inst).is_none()
+    }
+
+    /// `alloca T, %n`: the stack pointer lowered by `n * sizeof T` rounded up
+    /// to the stack's alignment (and to the alloca's, where that is more),
+    /// the new stack pointer being the address (X86's
+    /// `LowerDYNAMIC_STACKALLOC`).
+    pub fn hook_dynamic_alloca(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(m.inst);
+        let Opcode::Alloca { allocated, align, .. } = instruction.opcode else { unreachable!("an alloca") };
+        let element = self.layout.alloc_size(self.types(), allocated) as i64;
+        let count = instruction.operands[0];
+        let ty = self.function.operand_type(&self.module.context, count).expect("a typed count");
+        let width = self.address_bytes();
+        let held = self.held(count, ty, m.at, out)?;
+        let count = self.extended(held, width, false, m.at, out);
+        let at = m.at;
+        let stack = Loc::Reg(llrm_lir::Reg { register: self.arch.stack_pointer(), width });
+        let step = |this: &mut Self, name: &str, op: Operation, from: Held, with: i64, out: &mut Vec<Arc<Insn>>| {
+            let into = this.fresh_held(width);
+            let what = Imm { value: with, width, address: None };
+            out.push(insn(at, semantics(op, name, vec![Loc::Held(into)], vec![Loc::Held(from), Loc::Imm(what)])));
+            into
+        };
+        let bytes = if element.count_ones() == 1 {
+            step(self, "shl", Operation::Binary, count, i64::from(element.trailing_zeros()), out)
+        } else {
+            step(self, "imul", Operation::Multiply, count, element, out)
+        };
+        let keep = self.arch.stack_alignment().max(align.map_or(1, |align| align as i64));
+        let padded = step(self, "add", Operation::Binary, bytes, keep - 1, out);
+        let rounded = step(self, "and", Operation::Binary, padded, -keep, out);
+        out.push(insn(
+            at,
+            semantics(Operation::Binary, "sub", vec![stack.clone()], vec![stack.clone(), Loc::Held(rounded)]),
+        ));
+        let result = Held { value: self.value(instruction.result.expect("an address")), width };
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![stack])));
+        Ok(())
+    }
+
     /// An aggregate with one field replaced: the fields of the aggregate it is
     /// made of, each in a register, and the new one. An undefined aggregate
     /// has fields nothing set, loaded as zero (a field that is never read is

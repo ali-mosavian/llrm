@@ -744,7 +744,7 @@ fn parts(
     let (bp, sp) = (reg(FRAME), reg(STACK));
     // Inline code that moves SP (`alloca`) leaves the saved registers below an
     // unknown distance: SP is set from the frame register first.
-    let moved = !omit && framed && moves_stack(&procedure.body);
+    let moved = !omit && framed && !saved.is_empty() && moves_stack(&procedure.body);
     let mut leave: Vec<Semantics> = Vec::new();
     if moved {
         let below = reserve + slot * saved.len() as i64;
@@ -1446,7 +1446,7 @@ fn addressed_pass(
                         // Only `add sp, n` and `sub sp, n` are understood.
                         let amount = match (&what.dests[..], &what.sources[..]) {
                             ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Imm(ir::Imm { value, address: None, .. })])
-                                if dest.register == STACK && source.register == STACK =>
+                                if ir::root(dest.register) == ir::root(STACK) && ir::root(source.register) == ir::root(STACK) =>
                             {
                                 *value
                             }
@@ -1489,7 +1489,10 @@ fn width_of(place: &Loc) -> Option<i64> {
 }
 
 fn writes_stack_pointer(place: &Loc) -> bool {
-    matches!(place, Loc::Reg(one) if one.register == STACK)
+    matches!(
+        place,
+        Loc::Reg(one) if ir::root(one.register) == ir::root(STACK)
+    )
 }
 
 /// `place` with a frame cell addressed through the stack pointer; none where it
@@ -1749,6 +1752,10 @@ impl crate::analysis::facts::Fact for BodyRoots {
                     found.disturbed.insert(disturbed);
                 }
                 let Some(what) = &one.what else { continue };
+                // An instruction that writes the stack pointer itself (a
+                // dynamic `alloca`, `stackrestore`).
+                found.moves_stack |=
+                    what.dests.iter().any(|place| matches!(place, Loc::Reg(reg) if root(reg.register) == stack));
                 for r#where in what.dests.iter().chain(&what.sources) {
                     if let Loc::Reg(ir::Reg { register, .. }) = r#where {
                         found.plain.insert(root(*register));
