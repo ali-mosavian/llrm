@@ -106,6 +106,18 @@ impl ScalarEvolution {
         Some(normalized)
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolutionNormalization.cpp#L108
+    /// `normalizeForPostIncUseIf`: `s` with the add recurrences `pred` accepts
+    /// normalized. `pred` sees each recurrence once per visit.
+    pub fn normalize_for_post_inc_use_if(
+        &mut self,
+        cx: &Cx,
+        s: Scev,
+        pred: &dyn Fn(&ScalarEvolution, Scev) -> bool,
+    ) -> Scev {
+        self.normalize_denormalize(cx, s, Transform::Normalize, pred, &mut HashMap::default())
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolutionNormalization.cpp#L119
     /// `denormalizeForPostIncUse`.
     pub fn denormalize_for_post_inc_use(
