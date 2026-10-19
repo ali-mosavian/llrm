@@ -22,6 +22,13 @@
 //! the destination's interval made again, where C++ calls
 //! `LiveRangeEdit::eliminateDeadDefs`. Exit: that function translated.
 //!
+//! DEVIATE C10 (no number): `reMaterializeDef` in a build for size makes a copy
+//! of a constant again only where the source has no other reader, so its own
+//! move goes. Fact: elsewhere it replaced a 2-byte copy with a 3 to 5 byte
+//! move and cost 40 of 813 sources +1,383 bytes (`regparm3_matrix_*` up to
+//! +89) for -0.8% executed instructions. Exit: the allocator gives the constant
+//! back as a copy where its register is wanted.
+//!
 //! DEVIATE C6 (no number): `updateRegDefsUses` sets no `undef` flags: an
 //! instruction here has none, and a read of no live value is a bug of the
 //! caller that `shrink_to_uses` skips.
@@ -36,7 +43,7 @@
 use std::sync::Arc;
 
 use super::joinvals::JoinVals;
-use super::pair::{CoalescerEnv, CoalescerPair};
+use super::pair::{CoalescerEnv, CoalescerPair, full_copy};
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::slotindex::InstrKey;
 use crate::support::hash::{HashMap, HashSet};
@@ -149,6 +156,11 @@ pub fn join_copy(
     }
     let result = join_virt_regs(lis, state, &cp);
     if result != JoinResult::Joined {
+        // Coalescing failed. Try rematerializing the definition of the source
+        // if it is cheap.
+        if re_materialize_def(lis, env, state, copy) {
+            return JoinResult::Joined;
+        }
         return result;
     }
     // CopyMI has been erased by joinVirtRegs at this point. Remove it from
@@ -237,4 +249,48 @@ fn update_reg_defs_uses(
         lis.rewrite_instr(block, key, renamed);
         state.moved.insert(key, new);
     }
+}
+
+/// `reMaterializeDef`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L1298>):
+/// the copy of a value an immediate move defines becomes that move into the
+/// copy's own value, and the source loses a read. Whether it did.
+fn re_materialize_def(
+    lis: &mut LiveIntervals,
+    env: &dyn CoalescerEnv,
+    state: &mut State,
+    copy: InstrKey,
+) -> bool {
+    let copy_insn = Arc::clone(lis.instr(copy));
+    let Some((dst, src)) = full_copy(&copy_insn) else { return false };
+    let at = lis.indexes.get_instruction_index(copy);
+    let Some(value) = lis.interval(src.value).query(&at).value_in().filter(|vn| !vn.is_phi_def() && !vn.is_unused())
+    else {
+        return false;
+    };
+    let def = lis.defining_instr(&value.def(), src.value);
+    let def_insn = Arc::clone(lis.instr(def));
+    if !env.rematerializable(&def_insn) {
+        return false;
+    }
+    // DEVIATE C10: in a build for size the copy (2 bytes) becomes the move
+    // (3 to 5) and pays for itself only where the source's own move goes.
+    if env.tuned_for_size() && lis.operands(src.value).len() > 2 {
+        return false;
+    }
+    let block = lis.indexes.get_mbb_from_index(&at);
+    // The copy's value is defined at the copy's index; the new instruction
+    // takes that index over.
+    lis.rewrite_instr(block, copy, def_insn.renamed(&|v| if v == src.value { dst.value } else { v }));
+    state.erased.insert(copy);
+    // The source interval can become smaller because we removed a use, and
+    // its definition may now be dead.
+    let mut dead = lis.shrink_to_uses(src.value).1;
+    while let Some(key) = dead.pop() {
+        if lis.all_defs_are_dead(key) {
+            state.erased.insert(key);
+            dead.extend(lis.erase_dead_def(key));
+        }
+    }
+    true
 }

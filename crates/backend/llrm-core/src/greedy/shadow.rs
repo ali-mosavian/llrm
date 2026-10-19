@@ -359,7 +359,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
     /// register) as a definition of `to`: `rematerializeAt`.
     fn rematerialize(
         &self,
-        lis: &LiveIntervals,
+        def: &Insn,
         to: u32,
         parent: u32,
         beside: Option<&Insn>,
@@ -368,17 +368,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         if !self.tables.remat.borrow().contains(&parent) {
             return None;
         }
-        let mut def = None;
-        for operand in lis.operands(parent) {
-            if operand.is_def {
-                if def.is_some_and(|seen| seen != operand.instr) {
-                    return None;
-                }
-                def = Some(operand.instr);
-            }
-        }
-        let def = Arc::clone(lis.instr(def?));
-        if !super::inlinespiller::remat_shape(&def) || !def.uses.is_empty() {
+        if !super::inlinespiller::remat_shape(def) || !def.uses.is_empty() {
             return None;
         }
         let what = def.what.clone()?;
@@ -396,7 +386,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
             what: Some(Semantics { dests: vec![Loc::Held(Held { value: to, width: defined.width })], ..what }),
             spill_reload: true,
             rematerialized: true,
-            ..(*def).clone()
+            ..def.clone()
         }))
     }
 

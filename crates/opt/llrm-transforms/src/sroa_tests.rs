@@ -415,3 +415,72 @@ fn test_four_times_the_allocas_take_about_four_times_as_long() {
     let (small, large) = (split_all(1000), split_all(4000));
     assert!(large / small < 6.0, "{small:.1} ms for 1000, {large:.1} ms for 4000: {:.2}x", large / small);
 }
+
+/// A load at a variable offset escapes the pointer read-only, so the alloca
+/// stays; the stores at known offsets still reach the loads at known offsets.
+/// The pin's `propagateStoredValuesToLoads` makes a phi of what each path
+/// stores. Without it the loads stayed (bench_fpbench, 11% slower once the old
+/// promotion went: its float arrays are read in a loop by index).
+#[test]
+fn test_stores_reach_the_known_offset_loads_of_an_alloca_read_at_an_unknown_one() {
+    let after = sroa(
+        "define float @f(float %a, i1 %c, i32 %i) {
+b0:
+  %s = alloca [8 x i8]
+  store float %a, ptr %s
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store float 2.000000e+00, ptr %s
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %v = load float, ptr %s
+  %q = getelementptr inbounds i32, ptr %s, i32 %i
+  %w = load float, ptr %q
+  %r = fadd float %v, %w
+  ret float %r
+}
+",
+    );
+    assert!(after.contains("phi float"), "{after}");
+    assert!(after.contains("[ 2.000000e+00, %b1 ]") && after.contains("[ %a, %b2 ]"), "{after}");
+    assert!(!after.contains("load float, ptr %s"), "{after}");
+    // The alloca, the stores and the load at the unknown offset stay.
+    assert!(after.contains("alloca") && after.contains("store float %a, ptr %s"), "{after}");
+    assert!(after.contains("load float, ptr %q"), "{after}");
+}
+
+/// A slice of another type or range in the partition ends the promotion: an
+/// `i32` and a `float` at one offset are not made into a phi.
+#[test]
+fn test_loads_and_stores_of_two_types_at_one_offset_are_not_forwarded() {
+    let after = sroa(
+        "define float @f(float %a, i32 %b, i1 %c, i32 %i) {
+b0:
+  %s = alloca [8 x i8]
+  store float %a, ptr %s
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i32 %b, ptr %s
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %v = load float, ptr %s
+  %q = getelementptr inbounds i32, ptr %s, i32 %i
+  %w = load float, ptr %q
+  %r = fadd float %v, %w
+  ret float %r
+}
+",
+    );
+    assert!(!after.contains("phi"), "{after}");
+    assert!(after.contains("load float, ptr %s"), "{after}");
+}
