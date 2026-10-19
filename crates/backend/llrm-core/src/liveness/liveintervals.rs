@@ -422,12 +422,38 @@ impl LiveIntervals {
         (a == b).then_some(a)
     }
 
+    /// The position in `block` of the first instruction whose index is `at`
+    /// or later (`strict`: later than `at`). The block is in slot order.
+    pub fn partition_at(
+        &self,
+        block: usize,
+        at: &SlotIndex,
+        strict: bool,
+    ) -> usize {
+        self.blocks[block].partition_point(|one| {
+            let here = self.indexes.get_instruction_index(one.id());
+            if strict { here <= *at } else { here < *at }
+        })
+    }
+
     fn position_of(
         &self,
         block: usize,
         key: InstrKey,
     ) -> usize {
-        self.blocks[block].iter().position(|one| one.id() == key).expect("an instruction of the block")
+        // The block is in slot order, so the instruction is found by bisection
+        // (LLVM's list gives the position for free); a parallel copy shares
+        // one index, so the run of equal ones is searched.
+        let at = self.indexes.get_instruction_index(key);
+        let insns = &self.blocks[block];
+        let first = insns.partition_point(|one| self.indexes.get_instruction_index(one.id()) < at);
+        insns[first..]
+            .iter()
+            .take_while(|one| self.indexes.get_instruction_index(one.id()) == at)
+            .position(|one| one.id() == key)
+            .map(|run| first + run)
+            .or_else(|| insns.iter().position(|one| one.id() == key))
+            .expect("an instruction of the block")
     }
 
     /// `insertMachineInstrInMaps` for an instruction put immediately before

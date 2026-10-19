@@ -21,6 +21,9 @@
 //! successor is the same list of instructions, so nothing is skipped and the
 //! successors empty out.
 //!
+//! # Example
+//! The instructions both arms open with run once, before the branch:
+//!
 //! ```text
 //!   b0: br %c, b1, b2            b0: %t = add %x, 1
 //!   b1: %t1 = add %x, 1                br %j

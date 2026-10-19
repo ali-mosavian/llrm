@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/branchtocommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/branchtocommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/branchtocommon.rs sha256:2abb5af583a69a8308900811e1722d62aab5aeab9656040ebdcd12b5e26f30c4 -->
+<!-- src: crates/opt/llrm-transforms/src/branchtocommon.rs sha256:c7fd7daa61a8e91d3e075612e2deebf453e3b788358238428097537fe508db3a -->
 
 # branchtocommon
 
@@ -17,6 +17,9 @@ or `and`, to the other target of `BB`. The join is a plain operation where
 `BB`'s condition being poison implies `P`'s is, a `select` otherwise. At
 most one instruction besides the condition is copied, and the join with
 the inversion `P` may need costs two at most.
+
+## Example
+The block's comparison runs in the predecessor:
 
 ```text
   p:  br %a, bb, x                 p:  %b = icmp ...

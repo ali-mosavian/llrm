@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 114 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 117 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -37,6 +37,8 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | earlycse | LLVM's EarlyCSE with MemorySSA (`early-cse<memssa>`): one walk down the dominator tree, scoped tables of what is available, and a generation count that memory operations advance. | [`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`), | [earlycse](earlycse.md) |
 | edges | Edge surgery on conditional branches: a new block on one arm of a `br i1`, holding the operations that belong to that edge and not to either arm's block. | Not a pass: a library. `split` is called by `rotate` and | [edges](edges.md) |
 | exitfold | Exits their counts decide, folded: LLVM IndVarSimplify's `optimizeLoopExits`, with its exit-test hoisting and exit predication. | Step 2 of [`crate::indvars`](indvars.md), so on whenever `indvars` is, in the fixed | [exitfold](exitfold.md) |
+| exitopt | A loop's exits are folded by what ScalarEvolution knows of their counts. | Not wired in: [`crate::indvars`](indvars.md) will run `optimized` before | [exitopt](exitopt.md) |
+| exitpredicate | A read-only loop's exits are rewritten to tests on the loop's trip count made before it. | Not wired in: [`crate::indvars`](indvars.md) will run `predicated` after | [exitpredicate](exitpredicate.md) |
 | exitsink | An add, subtract or extension in a loop that only exit phis read, moved to those exits: LLVM's LICM sinking an instruction only used outside the loop. | Step 4 of [`crate::indvars`](indvars.md): on whenever `indvars` is, in the fixed point | [exitsink](exitsink.md) |
 | exitvalues | A value a loop computes and the code after it reads becomes an expression of the loop's trip count, written where the loop is left. | [`crate::indvars`](indvars.md), first of its steps. It replaced indvars' own | [exitvalues](exitvalues.md) |
 | expand | Values placed from their sums (LLVM's `SCEVExpander`): a `Scev` is built from its terms, each scaled and added once, before one instruction. | [`crate::lsr`](lsr.md) and [`crate::exitfold`](exitfold.md), while they rewrite a loop, and | [expand](expand.md) |
@@ -80,6 +82,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | loopunrollpass | `LoopFullUnrollPass`: a loop whose trip count is known and small enough, or whose unrolled form simplifies enough, is copied out completely. |  | [loopunrollpass](loopunrollpass.md) |
 | loopversion | Loop versioning: a loop is copied for what is true of it only at run time, and the copy is entered behind a test of that. | Once per body, after `unswitch`, `split`, `fuse` and `distribute` and | [loopversion](loopversion.md) |
 | lsr | Strength reduction: replaces a loop's induction variables, and the address arithmetic built from them, with the cheapest set of counters the target can address, so the loop carries few registers and no multiply (LLVM's LoopStrengthReduce, gcc's ivopts). | Once per body, after the interprocedural step and `fixednarrow`, before | [lsr](lsr.md) |
+| lsr_formula | The data of LLVM's loop strength reduction: `Immediate`, `RegUseTracker` and `Formula` (LoopStrengthReduce.cpp at `d1106deb71cc`, l.212-793). | Nothing runs it yet: stage 1 of the translation of LSR (the old pass in | [lsr_formula](lsr_formula.md) |
 | mem2reg | `mem2reg`: an alloca read and written only by direct loads and stores becomes SSA values and phis, and its loads, stores and the alloca go. | [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when | [mem2reg](mem2reg.md) |
 | memcpyopt | MemCpyOpt on MemorySSA: LLVM's `MemCpyOptPass` apart from the memset merging of `processStore` and `processMemSet`, which [`crate::memcpyoptimizer`] does (stage 1). | In the slot of `memcpyopt@818`. | [memcpyopt](memcpyopt.md) |
 | memcpyoptimizer | Adjacent stores of one repeated byte become a `llvm.memset`: LLVM's `MemCpyOptPass`, stage 1 (`runImpl`, `iterateOnFunction`, `processStore`, `processMemSet`, `tryMergingIntoMemset`, `MemsetRanges`). | In the slot of `merge@818`, where `loopidioms::Merge` ran. | [memcpyoptimizer](memcpyoptimizer.md) |
@@ -110,7 +113,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | switchlower | A switch lowered as LLVM's SelectionDAG lowers one: the likeliest range peeled off, jump tables and bit tests for what is dense, and a balanced tree of range tests over the rest. | As two passes: `switchconv` (gcc's `pass_convert_switch`, -O2 and up), | [switchlower](switchlower.md) |
 | tailmerge | The blocks that end the function with the same terminator become one block each: SimplifyCFG's `tailMergeBlocksWithSimilarFunctionTerminators`. |  | [tailmerge](tailmerge.md) |
 | tailrec | A call a function makes to itself as the last thing it does becomes a branch to its own entry with the arguments rewritten. | In the function pipeline after `gvn::EqualCalls`, so two equal calls are | [tailrec](tailrec.md) |
-| transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], [`crate::unswitch`] and [`crate::loopexit`] share: value reuse, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `subexpressions`, `equal_calls` and `forwarded` on each | [transform](transform.md) |
+| transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], [`crate::unswitch`] and [`crate::loopexit`] share: equal calls, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `equal_calls` on each function it numbers; | [transform](transform.md) |
 | trivialunswitch | A branch in a loop's header on a loop-invariant condition, one side of which leaves the loop, is decided in the preheader instead of on every trip. | In the function pipeline's fixed point, after `loopmotion` and before | [trivialunswitch](trivialunswitch.md) |
 | twoentryphi | A two-entry phi that a branch chooses between becomes a `select`, the arms' cheap code hoisted into the branch's block: the `foldTwoEntryPHINode` step of SimplifyCFG. |  | [twoentryphi](twoentryphi.md) |
 | unroll | Full unrolling of a loop with an exact trip count of at least two: its trips become one straight line in the latch and the loop is gone. | In the pipeline's fixed point, after each round of scalar passes and when | [unroll](unroll.md) |

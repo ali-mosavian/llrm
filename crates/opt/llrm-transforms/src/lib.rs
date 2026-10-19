@@ -118,6 +118,8 @@ pub mod dse;
 pub mod earlycse;
 pub mod edges;
 pub mod exitfold;
+pub mod exitopt;
+pub mod exitpredicate;
 pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;
@@ -179,6 +181,9 @@ pub mod loopunroll;
 pub mod loopunrollpass;
 pub mod loopversion;
 pub mod lsr;
+pub mod lsr_formula;
+#[cfg(test)]
+mod lsr_formula_tests;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;

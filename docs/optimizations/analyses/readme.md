@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 57 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 58 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -12,9 +12,10 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 57 documented, 0 undoc
 | aliassets | `AliasSetTracker` (LLVM `AliasSetTracker.cpp`, `d1106deb71cc`): the locations an analysis asks of, grouped into sets that may alias, with whether each set's locations all must alias. |  | [aliassets](aliassets.md) |
 | argumentattrs | `nocapture`, `readonly`, `writeonly` and `readnone` of the pointer parameters of one call-graph SCC, as `addArgumentAttrs` infers them (FunctionAttrs.cpp:1238). | `functionattrs::post_order` once per SCC, callees first. | [argumentattrs](argumentattrs.md) |
 | assumptions | What each block assumes, as LLVM's AssumptionCache: the conditions of the `llvm.assume` calls in it. | The assumed conditions per block. Consumers: [`crate::guards`](guards.md) turns them | [assumptions](assumptions.md) |
-| avail | Available loads and dead stores, as LLVM's GVN load forwarding and DSE find them through MemoryDependence. | `forwardable_walk`, `dead_stores`, `dead_stores_escaping`, and the | [avail](avail.md) |
+| avail | Dead stores, and the cells loads and stores name, as LLVM's DSE finds them. | `dead_stores`, `dead_stores_escaping`, and the accessors `loaded_into`, | [avail](avail.md) |
 | basicaa | BasicAA, a translation of `BasicAliasAnalysis.cpp` at d1106deb71cc behind the interface of [`crate::aa`] (stage S1/S2 of docs/architecture/basicaa-port.md). | `BasicAA`, an [`crate::aa::AAResults`](aa.md). No client reads it yet. | [basicaa](basicaa.md) |
 | blockfreq | `BlockFrequencyInfo` of a MIR function: LLVM's `BlockFrequencyInfoImpl` (`llrm_mir::blockfrequency`) over `branchprob`'s edge probabilities, as `BlockFrequencyInfoWrapperPass` runs it over `BranchProbabilityInfo`. | `inlinecost` (cold and hot call sites, D1). | [blockfreq](blockfreq.md) |
+| bpi | `BranchProbabilityInfo` of a MIR function: LLVM's static branch probabilities, translated from llvm/lib/Analysis/BranchProbabilityInfo.cpp at d1106deb71cc. | `blockfreq` (`BlockFrequencyInfo`'s edge probabilities, once its callers | [bpi](bpi.md) |
 | branchprob | Static branch probabilities and block frequencies, as LLVM's `BranchProbabilityInfo` and `BlockFrequencyInfo` estimate them when no profile says otherwise. | `Odds { taken, frequency, by }` from `estimated`, `propagated` and | [branchprob](branchprob.md) |
 | capturecheck | # How it works `LLRM_CHECK_CAPTURES`: the frame objects the pointer facts say never escape, checked against LLVM's capture tracking read straight off the uses, with no fact followed: a pointer is captured when any use of it, or of what is made of it by a gep, a cast, a phi or a select (every arm), stores it, returns it, turns it into an integer or passes it where the callee keeps no copy is not promised. | The check behind `LLRM_CHECK_CAPTURES`. | [capturecheck](capturecheck.md) |
 | capturetracking | `CaptureTracking.cpp` at d1106deb71cc: which components of a pointer a use of it keeps (`DetermineUseCaptureKind`), and the walk over the uses of a value that asks a tracker about each (`PointerMayBeCaptured`). | `CaptureComponents`, `UseCaptureInfo`, `CaptureTracker`, | [capturetracking](capturetracking.md) |
