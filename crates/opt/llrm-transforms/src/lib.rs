@@ -87,6 +87,7 @@ pub mod calleepop;
 #[cfg(test)]
 mod calleepop_tests;
 pub mod candidate;
+pub mod canonexit;
 pub mod canonical;
 pub mod cfg;
 pub mod combine;
@@ -154,6 +155,7 @@ pub mod jumpthreading;
 mod jumpthreading_tests;
 pub mod lcssa;
 pub mod lcssamerges;
+pub mod lftr;
 pub mod licm;
 pub mod local;
 #[cfg(test)]
