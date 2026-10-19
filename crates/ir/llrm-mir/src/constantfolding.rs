@@ -26,9 +26,6 @@
 //!    enumerates none of them.
 //!
 //! OWED (MIR can represent it; each has an issue and its exit):
-//! 4. GEP `nuw`/`nusw` on a constant expression: `ConstantExpr::GetElementPtr`
-//!    keeps `inbounds` only. Exit: add the flags to it, the parser and the
-//!    printer (#2261).
 //! 5. The constant expressions `add`, `sub`, `xor`, `select`: `ConstantExpr`
 //!    has GEP and cast only, so a fold that would make one (L1463) gives none,
 //!    as does the `(sub 0, V)` arm (L1658). Exit: add the variants (#2262).
@@ -466,7 +463,13 @@ pub fn constant_fold_get_element_ptr(
     operands.extend_from_slice(indices);
     context.constant(Constant {
         ty,
-        kind: ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds: nw & IN_BOUNDS != 0, operands }),
+        kind: ConstantKind::Expr(ConstantExpr::GetElementPtr {
+            source,
+            inbounds: nw & IN_BOUNDS != 0,
+            nusw: nw & (IN_BOUNDS | NUSW) != 0,
+            nuw: nw & NUW != 0,
+            operands,
+        }),
     })
 }
 
@@ -648,7 +651,7 @@ fn strip_and_accumulate_constant_offsets(
     let mut value = c;
     loop {
         match expr(context, value) {
-            Some(ConstantExpr::GetElementPtr { source, inbounds, operands }) => {
+            Some(ConstantExpr::GetElementPtr { source, inbounds, operands, .. }) => {
                 if !allow_non_inbounds && !inbounds {
                     return value;
                 }
@@ -1484,8 +1487,10 @@ fn symbolically_evaluate_gep(
     let mut offset = get_indexed_offset_in_type(context, layout, source, &ops[1..]) as u128 & wrap;
     let mut nw = nw;
     let mut overflow = false;
-    while let Some(ConstantExpr::GetElementPtr { source: nested_source, inbounds, operands }) = expr(context, ptr) {
-        nw &= if inbounds { IN_BOUNDS | NUSW } else { 0 };
+    while let Some(ConstantExpr::GetElementPtr { source: nested_source, inbounds, nusw, nuw, operands }) =
+        expr(context, ptr)
+    {
+        nw &= u8::from(inbounds) * IN_BOUNDS | u8::from(nusw) * NUSW | u8::from(nuw) * NUW;
         let nested = &operands[1..];
         if nested.iter().any(|&one| as_int(context, one).is_none()) {
             break;
@@ -1695,10 +1700,16 @@ fn constant_fold_constant_impl(
     let dest = ty_of(context, c);
     let (opcode, flags) = match ce {
         ConstantExpr::Cast { op, .. } => (Opcode::Cast(op), Flags::default()),
-        ConstantExpr::GetElementPtr { source, inbounds, .. } => {
+        ConstantExpr::GetElementPtr { source, inbounds, nusw, nuw, .. } => {
             let mut flags = Flags::default();
             if inbounds {
                 flags.insert(Flags::INBOUNDS);
+            }
+            if nusw {
+                flags.insert(Flags::NUSW);
+            }
+            if nuw {
+                flags.insert(Flags::NUW);
             }
             (Opcode::GetElementPtr { source }, flags)
         }

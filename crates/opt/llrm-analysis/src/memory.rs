@@ -2389,7 +2389,7 @@ fn step(
             ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
                 through(Operand::Constant(*value))
             }
-            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands }) => {
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands, .. }) => {
                 let indices = operands[1..]
                     .iter()
                     .map(|&one| {
