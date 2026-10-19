@@ -62,7 +62,8 @@ fn inline_with(
         call,
         threshold,
     );
-    let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)), base: 0 };
+    let by =
+        Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)), base: 0, limits: true };
     let mut changed = false;
     while expand_once(module, caller, &by, &available) {
         changed = true;
@@ -105,7 +106,7 @@ fn assert_the_one_scan_is_the_repeated_one(
         1,
         threshold,
     );
-    let by = Caller { layout: &layout, recursive: false, base: 0 };
+    let by = Caller { layout: &layout, recursive: false, base: 0, limits: true };
     while expand_once(&mut many, "main", &by, &available) {}
     let mut declared = llrm_mir::passes::Declared::of(&one);
     let (context, function) = one.function_mut("main").unwrap();
@@ -1175,7 +1176,7 @@ fn a_routine_that_frees_a_temporary_is_not_inlined_at_a_call_of_one() {
     );
     assert!(available.contains_key(&id(&module, "first")), "the premise: the body is a candidate");
     for (caller, inlined) in [("temporary", false), ("owned", true)] {
-        let by = Caller { layout: &layout, recursive: false, base: 0 };
+        let by = Caller { layout: &layout, recursive: false, base: 0, limits: true };
         assert_eq!(expand_once(&mut module, caller, &by, &available), inlined, "{caller}\n{}", printed(&module));
     }
 }
@@ -1219,7 +1220,7 @@ fn test_the_last_calls_into_a_large_caller_stop_where_it_has_doubled() {
         8,
         Threshold::default(),
     );
-    let by = Caller { layout: &layout, recursive: false, base: original };
+    let by = Caller { layout: &layout, recursive: false, base: original, limits: true };
     while expand_once(&mut module, "main", &by, &available) {}
     let after = operations(module.global(id(&module, "main")).function().unwrap());
     let calls_left = module
@@ -1386,7 +1387,7 @@ b1:
             2,
             Threshold::default(),
         );
-        let by = Caller { layout: &layout, recursive: false, base: 0 };
+        let by = Caller { layout: &layout, recursive: false, base: 0, limits: true };
         while expand_once(&mut module, "main", &by, &available) {}
         !printed(&module).contains("call ")
     };
@@ -1546,4 +1547,66 @@ fn a_noipa_routine_is_never_inlined() {
     assert!(inline_into(&mut plain, "main", 1), "premise: the small private routine inlines");
     let mut marked = parsed(&text("noipa"));
     assert!(!inline_into(&mut marked, "main", 1), "{}", printed(&marked));
+}
+
+/// A site LLVM's `InlineCost` admits is copied however large the caller
+/// grows: gcc's growth limit refused 168 of QCport's sites `opt -passes=inline`
+/// inlined, after llrm had decided to inline them.
+#[test]
+fn test_a_site_llvm_decided_is_copied_past_gccs_growth_limit() {
+    let chain = |n: usize, from: &str| -> String {
+        (0..n)
+            .map(|at| {
+                format!(
+                    "  %t{at} = add i16 {}, {at}\n",
+                    if at == 0 { from.to_owned() } else { format!("%t{}", at - 1) }
+                )
+            })
+            .collect()
+    };
+    let calls: String = (0..200).map(|at| format!("  %r{at} = call i16 @c(i16 %y)\n")).collect();
+    let text = format!(
+        "define internal i16 @c(i16 %x) {{\nb0:\n{}  ret i16 %t19\n}}\n\n\
+         define i16 @main(i16 %x) {{\nb0:\n{}  %y = add i16 %t2799, 1\n{calls}  ret i16 %r0\n}}\n",
+        chain(20, "%x"),
+        chain(2800, "%x")
+    );
+    let calls_left = |limits: bool| {
+        let mut module = parsed(&text);
+        let layout = DataLayout::default();
+        let main = id(&module, "main");
+        let decided = crate::inlinecost::sites(
+            &module,
+            &layout,
+            main,
+            &call_counts(&module),
+            &BTreeSet::new(),
+            &recursive(&module),
+            crate::inlinecost::InlineParams::from_level(2),
+            crate::inlinecost::CallerSize::Speed,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(decided.len(), 200, "the premise: LLVM's cost admits every site");
+        let by = Caller {
+            layout: &layout,
+            recursive: false,
+            base: semantic_count(module.global(main).function().unwrap()),
+            limits,
+        };
+        let mut declared = llrm_mir::passes::Declared::of(&module);
+        let (context, function) = module.function_mut("main").unwrap();
+        expanded_all(context, function, &by, &IndexMap::default(), Some(&decided), &mut declared).unwrap();
+        let function = module.global(main).function().unwrap();
+        function
+            .walk()
+            .filter(|&(_, inst)| matches!(
+                function.instruction(inst).opcode,
+                llrm_mir::opcode::Opcode::Call(_)
+            ))
+            .count()
+    };
+    assert!(calls_left(true) > 0, "the premise: gcc's growth limit refuses some");
+    assert_eq!(calls_left(false), 0);
 }
