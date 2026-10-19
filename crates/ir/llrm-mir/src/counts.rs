@@ -233,7 +233,8 @@ pub fn analysed(name: &str) -> (u64, u64) {
 /// `callers <analysis> <n> joined <m> old`: the computations of each analysis
 /// charged to translated slots and to the others (a pass outside the pipeline's
 /// slots counts as old). An analysis with no old caller is deletable once the
-/// old slots are gone. Empty unless a slot joined.
+/// old slots are gone. Ends with `callers-total <n> joined <m> old <k> analyses
+/// with old callers`, summed from the rows. Empty unless a slot joined.
 pub fn callers() -> Vec<String> {
     if JOINED.with(|joined| joined.borrow().is_empty()) {
         return Vec::new();
@@ -250,10 +251,15 @@ pub fn callers() -> Vec<String> {
             }
         }
     });
-    by_analysis
+    let mut lines: Vec<String> = by_analysis
         .iter()
         .map(|(name, (joined, old))| format!("[counts] callers {name} {joined} joined {old} old"))
-        .collect()
+        .collect();
+    let joined: u64 = by_analysis.values().map(|row| row.0).sum();
+    let old: u64 = by_analysis.values().map(|row| row.1).sum();
+    let open = by_analysis.values().filter(|row| row.1 > 0).count();
+    lines.push(format!("[counts] callers-total {joined} joined {old} old {open} analyses with old callers"));
+    lines
 }
 
 /// Readers of a block's instruction slice, as `tools/block_list/known.txt`
@@ -370,6 +376,27 @@ mod tests {
             analysis("probe-split", false);
         }
         assert!(super::callers().contains(&"[counts] callers probe-split 1 joined 2 old".to_owned()));
+    }
+
+    /// Totals were summed from the printed rows with awk, which a two-word
+    /// analysis name shifted by a field: the sum was off and unchecked.
+    #[test]
+    fn test_callers_total_sums_the_rows_with_a_two_word_name() {
+        per_pass();
+        super::joined(["probe-joined"]);
+        {
+            let _one = pass_run("probe-joined", 1);
+            analysis("two word", false);
+        }
+        {
+            let _two = pass_run("probe-old", 1);
+            analysis("two word", false);
+            analysis("single", false);
+        }
+        assert_eq!(
+            super::callers().last().map(String::as_str),
+            Some("[counts] callers-total 1 joined 2 old 2 analyses with old callers")
+        );
     }
 }
 
