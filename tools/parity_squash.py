@@ -112,6 +112,56 @@ def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT) ->
     return why
 
 
+PRECHECK_DIR = Path(os.environ.get("PRECHECK_DIR", Path.home() / "scratch/precheck"))  # a persistent dev checkout + target dir: no dist build, seconds per PR after the first
+
+
+def precheck_checks(dev: Path, target: Path):
+    """The cheap static checks of the gate, each `(name, root -> {failing name: why})`, run on the dev checkout against the persistent dev target."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import parity_smoke  # noqa: PLC0415
+    from buildslot import slotted  # noqa: PLC0415
+
+    env = {**os.environ, "CARGO_TARGET_DIR": str(target)}
+
+    def ratchets(root: Path) -> dict[str, str]:
+        return parity_smoke.ratchet_failures(root, run=lambda command: subprocess.run(slotted(command), cwd=root, env=env, capture_output=True, text=True))
+
+    def fmt(root: Path) -> dict[str, str]:
+        done = subprocess.run(["tools/fmt.sh", "--check"], cwd=root, env=env, capture_output=True, text=True)
+        files = [line.strip() for line in done.stdout.splitlines() if line.strip() and "would change" not in line]
+        return {"fmt": ", ".join(files[:6]) or "fmt --check failed"} if done.returncode else {}
+
+    def docs(root: Path) -> dict[str, str]:
+        return parity_smoke.docs_failures(root) if hasattr(parity_smoke, "docs_failures") else {}
+
+    return [("ratchets", ratchets), ("fmt", fmt), ("docs", docs)]
+
+
+def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHECK_DIR / "target", checks=None, merge=None, deletions=None, info=None, head_failed: set[str] | None = None) -> str:
+    """`N: PASS`, or `N: REFUSED: <names>` after merging PR N's head with feat/parity in the dev checkout and running the cheap static checks (ratchets, fmt, docs, the
+    deletion rule) there: seconds, no dist build. #2836 cost a batch 26 minutes of halving for a failure these checks name. Failures the head already has do not refuse."""
+    info = info or json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
+    if info["baseRefName"] != "feat/parity":
+        return f"{number}: REFUSED: targets {info['baseRefName']}, not feat/parity"
+    if not dev.exists():
+        dev.parent.mkdir(parents=True, exist_ok=True)
+        git("fetch", "-q", "origin", "feat/parity")
+        git("worktree", "add", "-q", "--detach", str(dev), BASE)
+    git("fetch", "-q", "origin", info["headRefOid"], cwd=dev)
+    sha, why = (merge or merged_result)(info["headRefOid"], BASE, dev)
+    if sha is None:
+        return f"{number}: REFUSED: {why}"
+    failed: dict[str, str] = {}
+    for _, check in checks if checks is not None else precheck_checks(dev, target):
+        failed.update(check(dev))
+    if problems := (deletions or refusals)(sha, info["body"] or "", BASE, dev):
+        failed["deletes"] = "; ".join(problems)
+    new = {name: reason for name, reason in failed.items() if name not in (head_failed or set())}
+    if not new:
+        return f"{number}: PASS"
+    return f"{number}: REFUSED: {', '.join(sorted(new))} ({'; '.join(f'{k}: {v[:120]}' for k, v in sorted(new.items()))})"
+
+
 def audit(since: str, cwd: Path = ROOT) -> list[tuple[str, str, str]]:
     """(sha, subject, finding) for each first-parent squash since `since` that deletes a file, a test or more than LIMIT lines of a file without a `Deletes:`/`Reverts:` line
     naming it in its PR's description. Own commits count: the guard is on the squash's net diff, not on who touched the file."""
@@ -427,6 +477,12 @@ def smoke_failures(known: dict[str, str] | None = None) -> tuple[set[str], str]:
     return {n for n in names.split(",") if n}, (lines or [""])[-1]
 
 
+def head_failures_cached() -> set[str]:
+    """The cached failure set of the current head, or none known (then every failure refuses)."""
+    file = HEAD_FAILURES / f"{git('rev-parse', BASE).strip()}.json"
+    return set(json.loads(file.read_text())) if file.exists() else set()
+
+
 def head_failures(sha: str, compute=None, cache: Path = HEAD_FAILURES) -> set[str]:
     """The failing checks of the fast set on the head `sha`, computed once per sha (`compute()` on a checkout of it with ITS binaries; `head-failures` stores it)."""
     file = cache / f"{sha}.json"
@@ -547,6 +603,10 @@ def dispatch() -> int:
         for sha in missing:
             print(f"UNLOGGED {sha} {git('log', '-1', '--format=%an: %s', sha).strip()[:90]}")
         return 1 if missing else 0
+    if len(sys.argv) >= 3 and sys.argv[1] == "precheck":
+        line = precheck(sys.argv[2], head_failed=head_failures_cached())
+        print(line)
+        return 0 if line.endswith("PASS") else 1
     if len(sys.argv) >= 3 and sys.argv[1] == "merge-batch":
         numbers = [a for a in sys.argv[2:] if not a.startswith("--") and a.isdigit()]
         rest = sys.argv[2:]
