@@ -415,6 +415,12 @@ pub trait Target {
         0
     }
 
+    /// `TargetLowering::getPrefLoopAlignment` as a power of two (X86: 16
+    /// bytes, 4); 0: loops are not aligned.
+    fn pref_loop_alignment(&self) -> u8 {
+        0
+    }
+
     /// `X86AsmBackend::getMaximumNopSize`: the longest single no-operation
     /// the padding of this target's code may use.
     fn max_nop_bytes(&self) -> u8 {

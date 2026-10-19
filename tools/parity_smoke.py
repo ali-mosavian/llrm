@@ -27,6 +27,7 @@ import sys
 import tempfile
 import time
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -169,14 +170,20 @@ def ratchet_name(command: list[str]) -> str:
     return command[-1]
 
 
+RATCHET_WORKERS = 4  # cargo's build lock serializes the compiles; the links and the runs overlap
+
+
 def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[str, str]:
-    """name -> why, for EVERY ratchet that fails on the tree in `root` (the subset rule compares whole failure sets, not the first failure)."""
+    """name -> why, for EVERY ratchet that fails on the tree in `root` (the subset rule compares whole failure sets, not the first failure).
+    The commands run RATCHET_WORKERS at a time (10 in a row cost ~45 s of every precheck); the result is in command order."""
     run = run or (lambda command: subprocess.run(slotted(command), cwd=root, capture_output=True, text=True))
+    commands = ratchet_commands(tiers)
+    with ThreadPoolExecutor(max_workers=RATCHET_WORKERS) as pool:
+        done = list(pool.map(run, commands))
     failed = {}
-    for command in ratchet_commands(tiers):
-        done = run(command)
-        if done.returncode:
-            lines = [line for line in (done.stdout + done.stderr).splitlines() if "panicked" in line or "FAILED" in line or "error" in line]
+    for command, result in zip(commands, done):
+        if result.returncode:
+            lines = [line for line in (result.stdout + result.stderr).splitlines() if "panicked" in line or "FAILED" in line or "error" in line]
             failed[f"ratchet:{ratchet_name(command)}"] = " / ".join(lines[:2])[:240] or "failed"
     return failed
 

@@ -5,7 +5,7 @@
 //! reads and writes.
 
 use llrm_lir::registers::RegId;
-use llrm_lir::{Loc, Operation, Reg, Semantics};
+use llrm_lir::{FieldKind, Loc, Operation, Reg, Semantics};
 
 use crate::select;
 
@@ -103,7 +103,7 @@ fn used(
                 None => return false,
                 found => found,
             },
-            Loc::Imm(_) | Loc::Held(_) => continue,
+            Loc::Imm(_) | Loc::Held(_) | Loc::Field(_) => continue,
         };
         if let Some((operand, _)) = address {
             add(reads, RegId::from(operand.base));
@@ -147,6 +147,11 @@ fn kind_of(place: &Loc) -> char {
         Loc::Mem(_) => 'm',
         Loc::Imm(_) => 'i',
         Loc::Address(_) => 'a',
+        Loc::Field(one) => match one.kind {
+            FieldKind::Shift => 'h',
+            FieldKind::Condition => 'c',
+            FieldKind::Extend => 'e',
+        },
     }
 }
 

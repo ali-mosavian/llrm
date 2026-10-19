@@ -3197,12 +3197,17 @@ impl Selector<'_, '_, '_> {
             && let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::PtrToInt, value }) =
                 self.module.context.get(id).kind.clone()
             && self.is_far(self.module.context.get(value).ty)
-            && width == 4
         {
             let (offset, selector) = self.far(Operand::Constant(value), at, out)?;
-            let joined = Held { value: self.fresh(), width };
-            self.joined(joined, offset, selector, at, out);
-            return Ok(joined);
+            // Narrower than the pair, the integer is its offset word.
+            if width == offset.width {
+                return Ok(offset);
+            }
+            if width == 4 {
+                let joined = Held { value: self.fresh(), width };
+                self.joined(joined, offset, selector, at, out);
+                return Ok(joined);
+            }
         }
         let operand = self.through_ptrtoint(operand);
         let pointer = match operand {
