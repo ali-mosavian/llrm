@@ -440,15 +440,10 @@ pub struct Function {
     pub(crate) blocks: Vec<Block>,
     /// The blocks in order, entry first; empty for a declaration.
     pub(crate) layout: Vec<BlockId>,
-<<<<<<< HEAD
-    pub(crate) value_uses: crate::uselist::UseLists,
-    pub(crate) block_uses: Vec<Vec<Use>>,
+    pub(crate) uses: crate::uselist::UseLists,
     /// Each instruction's (previous, next) in its block, as an id + 1 (0:
     /// none): the block lists' links.
     pub(crate) link: Vec<(u32, u32)>,
-=======
-    pub(crate) uses: crate::uselist::UseLists,
->>>>>>> origin/feat/parity
     pub(crate) order: OrderCache,
     pub(crate) changes: ChangeLog,
     /// How many edits of each kind the function has had: no part of what it is.
@@ -512,13 +507,8 @@ impl Function {
             erased: Vec::new(),
             blocks: Vec::new(),
             layout: Vec::new(),
-<<<<<<< HEAD
-            value_uses: Default::default(),
-            block_uses: Vec::new(),
-            link: Vec::new(),
-=======
             uses: Default::default(),
->>>>>>> origin/feat/parity
+            link: Vec::new(),
             order: OrderCache::default(),
             changes: ChangeLog::default(),
             epochs: crate::touched::Epochs::default(),

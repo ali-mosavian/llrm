@@ -1114,13 +1114,8 @@ impl Function {
     ) -> BlockId {
         let id = BlockId(self.blocks.len() as u32);
         let name = name.map(|one| self.unique_name(one));
-<<<<<<< HEAD
         self.blocks.push(Block { name, erased: false, placed: false, ..Block::default() });
-        self.block_uses.push(Vec::new());
-=======
-        self.blocks.push(Block { name, instructions: Vec::new(), erased: false, placed: false });
         self.uses.push_block();
->>>>>>> origin/feat/parity
         self.log(Change::BlockCreated(id));
         id
     }
