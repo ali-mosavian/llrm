@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/condstores.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/condstores.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/condstores.rs sha256:07d25dcc5cc101f5d51cf2dc6e47b3eadeb6a720cead811eacfb77290d3bca3d -->
+<!-- src: crates/opt/llrm-transforms/src/condstores.rs sha256:dae883cfed510f8c448552761c5e062bec8d728e04ac495e7590c4ecbe7dc6fd -->
 
 # condstores
 
@@ -16,6 +16,9 @@ side has that one store and nothing else touches memory on the way, and
 the arms are cheap enough to be if-converted afterwards, both stores go,
 and one store runs in a new block entered from `post`'s start when either
 store would have run. The value stored is a phi in `post` of the two.
+
+## Example
+Two stores of `%g` become one after both conditions:
 
 ```text
   p: br %a, pt, pf        pt: store 1, %g     q: br %b, qt, qf      post:
