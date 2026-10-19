@@ -169,6 +169,7 @@ pub mod jumpthread;
 pub mod jumpthreading;
 #[cfg(test)]
 mod jumpthreading_tests;
+pub mod knownpred;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod lftr;
