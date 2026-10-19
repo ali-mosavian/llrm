@@ -33,6 +33,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
+import xfail  # noqa: E402
 
 sys.path.insert(0, str(HERE / "dosbatch"))
 import cpulimit  # noqa: E402
@@ -363,10 +364,17 @@ def unit_step(package: str, allowance: float):
         code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT)
         if code is None:
             return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
-        if code:
+        listed = xfail.load()
+        failed = {f"unit {package}::{test}" for test in failed_tests(output)}
+        ran = {f"unit {package}::{name}" for name in names} if names else {one for one in listed if one.startswith(f"unit {package}::")}
+        unexpected, expected, passing = xfail.classify(failed, ran, listed)
+        if passing:
+            return "fail", f"{package}: listed in xfail.toml but passes (remove the entry): {', '.join(sorted(passing))}"[:300], sorted(f"xpass {one[5:]}" for one in passing)
+        if code and (unexpected or not failed):
             lines = [line for line in output.splitlines() if "FAILED" in line or "panicked" in line or "error" in line]
-            return "fail", f"{package}: {' / '.join(lines[:3])[:300] or 'cargo test failed'}", [f"unit {package}::{test}" for test in failed_tests(output)]
-        return "ok", f"{package}: {len(names) or 'all'} tests"
+            return "fail", f"{package}: {' / '.join(lines[:3])[:300] or 'cargo test failed'}", sorted(unexpected)
+        note = f", {len(expected)} expected failures (xfail.toml)" if expected else ""
+        return "ok", f"{package}: {len(names) or 'all'} tests{note}"
     return step
 
 

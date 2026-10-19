@@ -122,6 +122,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     }
     let frontend = super::Frontend {
         debug: flags.debug,
+        float_store: flags.float_store,
         checked_stack: flags.sanitize.stack,
         unchecked_bounds,
         warn_target_width,

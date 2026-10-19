@@ -2720,9 +2720,20 @@ impl Selector<'_, '_, '_> {
             .then_some(def)
         };
         let join = only_in_block(condition, inst)?;
-        let conjunction = match function.instruction(join).opcode {
-            Opcode::Binary(BinaryOp::And) => true,
-            Opcode::Binary(BinaryOp::Or) => false,
+        // `m_LogicalAnd` and `m_LogicalOr`: the two operands that are compared,
+        // for an `and` or `or` of them or for the `select` form of either.
+        let operands = &function.instruction(join).operands;
+        let one = |operand: Operand, value: u128| {
+            matches!(
+                operand,
+                Operand::Constant(id) if self.module.context.get(id).kind == ConstantKind::Int(value)
+            )
+        };
+        let (conjunction, first, second) = match function.instruction(join).opcode {
+            Opcode::Binary(BinaryOp::And) => (true, operands[0], operands[1]),
+            Opcode::Binary(BinaryOp::Or) => (false, operands[0], operands[1]),
+            Opcode::Select if one(operands[1], 1) => (false, operands[0], operands[2]),
+            Opcode::Select if one(operands[2], 0) => (true, operands[0], operands[1]),
             _ => return None,
         };
         let compare = |operand: Operand| -> Option<InstId> {
@@ -2750,8 +2761,7 @@ impl Selector<'_, '_, '_> {
                 );
             (matches!(compared.opcode, Opcode::ICmp(_)) && narrow && !called).then_some(def)
         };
-        let operands = &function.instruction(join).operands;
-        Some((conjunction, join, compare(operands[0])?, compare(operands[1])?))
+        Some((conjunction, join, compare(first)?, compare(second)?))
     }
 
     /// A branch on two compares as a compare and a branch each: the first
@@ -5314,6 +5324,25 @@ impl Selector<'_, '_, '_> {
                 _ => return refuse("a far result the convention has no registers for"),
             }
         } else if let Some(&value) = operands.first() {
+            // A constant in a register pair is a half each: the second is its
+            // high half, not a shift of the register that holds the whole.
+            if let ([low, high], Operand::Constant(id)) = (&convention.returns[..], value)
+                && let Ok(whole) = self.width(type_of(value))
+                && whole % 2 == 0
+                && let ConstantKind::Int(bits) = self.module.context.get(id).kind
+            {
+                let half = whole / 2;
+                let (shift, mask) = (8 * half, (1i128 << (8 * half)) - 1);
+                let word = |part: i128| Loc::Imm(Imm { value: (part & mask) as i64, width: half, address: None });
+                let (low_word, high_word) = (self.fresh_held(half), self.fresh_held(half));
+                for (into, part) in [(low_word, bits as i128), (high_word, (bits >> shift) as i128)] {
+                    out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![word(part)])));
+                }
+                one.requires = vec![(low_word, *low), (high_word, *high)];
+                one.uses = vec![low_word.value, high_word.value];
+                out.push(Arc::new(one));
+                return Ok(());
+            }
             let held = self.held(value, type_of(value), at, out)?;
             one.requires = match convention.returns[..] {
                 [register] => vec![(held, register)],
