@@ -212,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 40] = [
+        const CHECKED: [&str; 41] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -264,6 +264,10 @@ mod tests {
             // reads the flags the operation has and adds the ones the
             // no-wrap proofs give (`willNotOverflow`); it never drops one.
             "how_many.rs",
+            // IndVarSimplify.cpp's `linearFunctionTestReplace` clears the
+            // increment's `nuw`/`nsw` that SCEV did not prove for its
+            // post-inc add recurrence; it never adds one.
+            "lftr.rs",
             // PHITransAddr.cpp's `translateSubExpr` reads an add's
             // `nsw`/`nuw` for `simplifyAddInst`, and `insertTranslatedSubExpr`
             // copies a GEP's no-wrap flags to the GEP it makes.
