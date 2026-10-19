@@ -133,3 +133,36 @@ b3:
     assert!(after.contains("phi i32"), "{after}");
     assert!(after.contains("= trunc nuw nsw i32"), "{after}");
 }
+
+/// histo-O2 `pipeline.body`: the `int` index `%i` and the `short` counter
+/// `%j` the loop tests run side by side; `%i` is `sext` of `%j`'s next value.
+/// The narrow counter stayed, with the `sext` and an `slt i16` test, where
+/// `opt` has one `i32` counter and `icmp ne i32 %i.next, 4096`.
+#[test]
+fn test_a_narrow_counter_beside_its_own_sign_extension_is_not_kept() {
+    let after = widened(
+        "target datalayout = \"e-p:32:32-n8:16:32\"
+
+define i32 @f() {
+b0:
+  %buf = alloca [4096 x i8]
+  br label %b1
+
+b1:
+  %i = phi i32 [ %w, %b1 ], [ 0, %b0 ]
+  %j = phi i16 [ %next, %b1 ], [ 0, %b0 ]
+  %p = getelementptr inbounds i8, ptr %buf, i32 %i
+  store i8 1, ptr %p
+  %next = add i16 %j, 1
+  %w = sext i16 %next to i32
+  %go = icmp slt i16 %next, 4096
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i32 0
+}
+",
+    );
+    assert!(!after.contains("phi i16"), "{after}");
+    assert!(!after.contains("sext i16"), "{after}");
+}
