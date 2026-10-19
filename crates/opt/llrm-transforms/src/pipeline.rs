@@ -574,7 +574,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(peel::Peel { limits: limits() }),
         Box::new(loopidioms::LoopIdioms { size: applied.options.prefers_size() }),
         Box::new(loopidioms::Merge { size: applied.options.prefers_size() }),
-        Box::new(memcpyopt::MemCpyOpt { size: applied.options.prefers_size() }),
+        Box::new(memcpyopt::MemCpyOpt),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
@@ -831,7 +831,7 @@ pub(crate) fn llvm_order(
                 decide("decide@809"),
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("adce@815", Box::new(adce::Adce)),
-                slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
+                slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt)),
                 slot("merge@818", Box::new(loopidioms::Merge { size })),
                 slot("dse@820", Box::new(deadstore::DeadStoreElimination)),
             ]);

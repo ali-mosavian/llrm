@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 106 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 107 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -55,6 +55,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | interprocedural | The whole-program step run once every body has reached its own fixed point: states what each body does, inlines, carries constants across direct calls, drops dead pure calls and the tails of calls that never return, and sends each changed body back through its pipeline. | A `ProgramPass` after the per-body fixed point and before `globaldce`, | [interprocedural](interprocedural.md) |
 | ipacp | Copies a function for the constants its callers pass and redirects those calls to the copy, so the copy's loops and branches fold on values the original cannot assume: GCC's `ipa-cp` cloning. | In [`crate::interprocedural`](../analyses/interprocedural.md)'s constants loop, after constant arguments are | [ipacp](ipacp.md) |
 | jumpthread | Threads a path through a branch or switch that the way into it decides: the blocks between the deciding value and the test are copied for that path, which jumps straight to its target and does not run the test. | After the loop passes and `rotate`, before the last `hoist`. Switch state | [jumpthread](jumpthread.md) |
+| jumpthreading | Jump threading: a block that ends in a branch or switch on a condition some of its predecessors decide is bypassed for those predecessors, which jump straight to the target; as LLVM's `jump-threading`. | `pipeline` (`jumpthreading@668`, `jumpthreading@809`), the `Partial` | [jumpthreading](jumpthreading.md) |
 | lcssa | Puts every natural loop in loop-closed SSA form, so loop passes can change a loop without rewriting the readers of its values elsewhere. | In every body's pipeline after `loopsimplify`, unless `lcssa` is turned off, | [lcssa](lcssa.md) |
 | lcssamerges | Close a loop with several exits: a phi at each exit, merged by phis where the exits' paths join. | Called from [`crate::lcssa`](lcssa.md) for each multi-exit loop, so wherever `lcssa` | [lcssamerges](lcssamerges.md) |
 | local | The utilities GVN calls on a CSE: patching the surviving instruction, replacing the uses a dominator tree allows, dead and duplicate-phi cleanup, block merging, and the pointer-equality replacement checks. | Nothing yet; `gvn` is the caller this is for. | [local](local.md) |
@@ -75,7 +76,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | loopversion | Loop versioning: a loop is copied for what is true of it only at run time, and the copy is entered behind a test of that. | Once per body, after `unswitch`, `split`, `fuse` and `distribute` and | [loopversion](loopversion.md) |
 | lsr | Strength reduction: replaces a loop's induction variables, and the address arithmetic built from them, with the cheapest set of counters the target can address, so the loop carries few registers and no multiply (LLVM's LoopStrengthReduce, gcc's ivopts). | Once per body, after the interprocedural step and `fixednarrow`, before | [lsr](lsr.md) |
 | mem2reg | `mem2reg`: an alloca read and written only by direct loads and stores becomes SSA values and phis, and its loads, stores and the alloca go. | [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when | [mem2reg](mem2reg.md) |
-| memcpyopt | Loads and stores that copy adjacent bytes become one `llvm.memcpy` (LLVM's MemCpyOpt, which makes a call of the stores that copy a struct; gcc has no such pass and leaves them to the by-pieces expansion). | After the function fixed point, beside `Merge` (no pass asks a memcpy what | [memcpyopt](memcpyopt.md) |
+| memcpyopt | MemCpyOpt on MemorySSA: LLVM's `MemCpyOptPass` apart from the memset merging of `processStore` and `processMemSet`, which [`crate::memcpyoptimizer`] does (stage 1). | In the slot of `memcpyopt@818`. | [memcpyopt](memcpyopt.md) |
 | memcpyoptimizer | Adjacent stores of one repeated byte become a `llvm.memset`: LLVM's `MemCpyOptPass`, stage 1 (`runImpl`, `iterateOnFunction`, `processStore`, `processMemSet`, `tryMergingIntoMemset`, `MemsetRanges`). | In the slot of `merge@818`, where `loopidioms::Merge` ran. | [memcpyoptimizer](memcpyoptimizer.md) |
 | mergestores | Adjacent stores become wider ones: LLVM's `DAGCombiner::mergeConsecutiveStores` for stores of constants (`tryStoreMergeOfConstants`, `merged_constants`) and of loaded values (`tryStoreMergeOfLoads`, `merged_copies`). | In `loopidioms::Merge`, after the scalar passes have settled. | [mergestores](mergestores.md) |
 | mirror | Turns an index that only some trips step into a pointer that steps with it, so a target whose addresses take no scale `k` does not shift the index on every access of `base + k * i`. | Not a pass: [`crate::lsr`](lsr.md) calls `found` and `applied` on each loop before | [mirror](mirror.md) |

@@ -43,12 +43,12 @@
 //! # Used by
 //! `RAGreedy::trySplit` and its region, block and local splits.
 
-use llrm_support::hash::{HashMap, HashSet};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_mir::blockfrequency::frequency::BlockFrequency;
+use llrm_support::hash::{HashMap, HashSet};
 
 use super::liverangeedit::LiveRangeEdit;
 use super::splitkit::{BlockInfo, SplitAnalysis, SplitEnv, first_insert_instr};
