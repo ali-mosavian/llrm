@@ -1,11 +1,16 @@
 //! The arm64 target. Its descriptions are the files beside this one.
 
 pub mod cc;
+pub mod data;
 pub mod driver;
+pub mod emit;
 pub mod expand_imm;
+pub mod frame;
+pub mod isel;
 pub mod machine;
 pub mod mc;
 pub mod mfunc;
+pub mod regalloc;
 
 use llrm_lir::registers::{RegId, Row};
 

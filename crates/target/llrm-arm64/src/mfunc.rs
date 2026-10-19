@@ -176,6 +176,10 @@ impl MFunc {
     }
 }
 
+/// The frame object that stands for the caller's outgoing argument area: an
+/// `Addr::Slot` of it is `offset` bytes above the frame record.
+pub const INCOMING_ARGUMENTS: u32 = u32::MAX;
+
 /// The label of the `n`th block of `function`: local to the object.
 pub fn block_label(
     function: &str,

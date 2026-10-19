@@ -427,6 +427,26 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
     Ok(Encoded { word, fixup })
 }
 
+/// `word` with the pc-relative field of `kind` filled for a target `offset`
+/// bytes from the instruction (a label of the same function).
+pub fn resolve(
+    word: u32,
+    kind: FixupKind,
+    offset: i64,
+) -> Result<u32, Error> {
+    Ok(word
+        | match kind {
+            FixupKind::Branch26 => pc_field("a branch offset", offset, 26, 2)?,
+            FixupKind::Branch19 => pc_field("a branch offset", offset, 19, 2)? << 5,
+            FixupKind::Branch14 => pc_field("a test-branch offset", offset, 14, 2)? << 5,
+            FixupKind::Adr21 => {
+                let value = pc_field("an adr offset", offset, 21, 0)?;
+                (value & 3) << 29 | (value >> 2) << 5
+            }
+            other => return error(format!("{other:?} is not a pc-relative label field")),
+        })
+}
+
 /// `Rn` and `Rd`, fields 9:5 and 4:0.
 fn place(
     rn: Gpr,

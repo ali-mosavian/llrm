@@ -505,3 +505,13 @@ fn a_loop_the_header_leaves_is_weighted_by_its_latch_runs_by_both_engines() {
     }
     assert_eq!(trips(pretested, true).values().copied().collect::<Vec<_>>(), [4]);
 }
+
+/// A block weighted 10^8, scaled by edge odds of the order of 2^47 (`UNIT`),
+/// multiplied past 2^63: debug builds panicked ("attempt to multiply with
+/// overflow", compiling `fib` through LSR's `Products`), release builds
+/// wrapped to a wrong weight.
+#[test]
+fn a_block_weight_scaled_by_the_odds_does_not_overflow() {
+    let scaled = super::scaled(100_000_000, 211_516_977_285_368, 218_340_105_584_896);
+    assert!((96_800_000..96_900_000).contains(&scaled), "{scaled}");
+}

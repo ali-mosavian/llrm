@@ -67,3 +67,85 @@ pub fn program(
 pub fn optimized(program: &mut Program) -> Result<(), String> {
     llrm_transforms::pipeline::applied(program, &Applied::default())
 }
+
+/// Every defined function of `program`'s one module, selected, allocated and
+/// lowered.
+pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String> {
+    let module = &program.modules[0];
+    let platform = platform_of_machine(program);
+    let mut out = Vec::new();
+    for (id, global, function) in module.functions() {
+        if function.is_declaration() {
+            continue;
+        }
+        let name = global.name.clone().ok_or("an unnamed function")?;
+        let mut machine =
+            crate::isel::select(module, id, &program.layout, platform).map_err(|why| format!("@{name}: {why}"))?;
+        let allocation = crate::regalloc::allocate(&mut machine);
+        let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
+        out.push(crate::emit::Function {
+            symbol: crate::data::symbol_name(platform, &name),
+            public: !matches!(
+                global.linkage,
+                llrm_mir::Linkage::Internal | llrm_mir::Linkage::Private
+            ),
+            blocks,
+        });
+    }
+    Ok(out)
+}
+
+fn platform_of_machine(program: &Program) -> Platform {
+    // The machine is the one `program` was made with; its datalayout names the
+    // platform.
+    match program.modules[0].datalayout.as_deref() {
+        Some(text) if text == Platform::Linux.datalayout() => Platform::Linux,
+        _ => Platform::Darwin,
+    }
+}
+
+/// `text`, LLVM IR for `platform`, as an object: through the mid-end and the
+/// backend.
+pub fn object(
+    text: &str,
+    platform: Platform,
+    name: &str,
+) -> Result<llrm_object::Object, String> {
+    let mut program = program(text, platform)?;
+    optimized(&mut program)?;
+    let lowered = functions(&program)?;
+    crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)
+}
+
+/// The assembly of the lowered functions, one instruction a line.
+pub fn assembly(
+    text: &str,
+    platform: Platform,
+) -> Result<String, String> {
+    let mut program = program(text, platform)?;
+    optimized(&mut program)?;
+    let mut out = String::new();
+    for function in functions(&program)? {
+        out.push_str(&format!("{}:\n", function.symbol));
+        for block in &function.blocks {
+            out.push_str(&format!("{}:\n", block.label));
+            for inst in &block.insts {
+                out.push_str(&format!("\t{inst}\n"));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The object file for `platform`: Mach-O or ELF.
+pub fn object_file(
+    text: &str,
+    platform: Platform,
+    name: &str,
+) -> Result<Vec<u8>, String> {
+    let object = object(text, platform, name)?;
+    match platform {
+        Platform::Darwin => llrm_macho::write(&object).map_err(|error| error.to_string()),
+        Platform::Linux => llrm_elf_arm64::write(&object).map_err(|error| error.to_string()),
+    }
+}

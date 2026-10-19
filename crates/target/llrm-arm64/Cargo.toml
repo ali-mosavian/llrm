@@ -11,7 +11,16 @@ llrm-object = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-transforms = { workspace = true }
 llrm-support = { workspace = true }
+llrm-macho = { workspace = true }
+llrm-elf-arm64 = { workspace = true }
 
 [build-dependencies]
 llrm-lir = { workspace = true }
 llrm-target = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[bin]]
+name = "llrm-arm64-llc"
+path = "src/bin/llc.rs"

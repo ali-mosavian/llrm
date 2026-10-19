@@ -566,6 +566,16 @@ pub fn _loop_products_by_branch_in(
     _products_with_odds_in(context, metadata, globals, function, shape, trips).map(|(weight, _)| weight)
 }
 
+/// `count * here / trip`: the product of a block's weight and an edge's odds,
+/// both on the odds' scale (`UNIT`), is past 64 bits for a weight of 10^8.
+fn scaled(
+    count: i64,
+    here: i64,
+    trip: i64,
+) -> i64 {
+    (i128::from(count) * i128::from(here) / i128::from(trip)) as i64
+}
+
 /// `_loop_products_by_branch_in`, and the odds of each edge it came from.
 pub fn _products_with_odds_in(
     context: &Context,
@@ -585,7 +595,7 @@ pub fn _products_with_odds_in(
         let trip: i64 = innermost.latches.iter().map(|latch| odds.get(latch).copied().unwrap_or(UNIT)).sum();
         let here = odds.get(at).copied().unwrap_or(UNIT);
         if here < trip {
-            *count = (*count * here / trip).max(1);
+            *count = scaled(*count, here, trip).max(1);
         }
     }
     Some((weight, taken))
