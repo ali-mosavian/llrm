@@ -77,12 +77,20 @@ match on it. This is the arm64 spike's `RegId`/`Flag`/opcode change: do not star
 fact: keep, cite). `parcopy.rs`, `frequency.rs`, `shrinkwrap.rs` "cycle" hits are graph
 cycles, not machine facts.
 
-## F. Decoder
+## F. iced-x86 types in generic crates
 
-`iced_x86` in `peephole.rs`, `arrival.rs`, `valuetrack.rs`, `verify.rs`, `cfi.rs`,
-`peep/guards.rs`, `postrasink.rs`: flags and flow control come from x86 decoding in shared code.
-Belongs in: an `Encoding` interface of the target (flag effects, flow kind) that these passes
-call.
+The x86 decoder's types are the register and flag vocabulary of the whole tree, not only of the
+passes. Generic crates hold none.
+
+| crate / file | iced types | belongs in |
+|---|---|---|
+| `llrm-lir/src/registers.rs`, `flag.rs`, `build.rs` | `Register` (the `RegId` payload), `RflagsBits` (the `Flag` payload) | per-target `RegId`/`Flag` (arm64-spike's generification) |
+| `llrm-target/src/registers.rs` | `Register` as the id type | same |
+| `llrm-support/src/{pyset,pyrepr,lib}.rs` | `Register` (hash, repr), `Code`, `Decoder` | the target crates; support keeps no x86 |
+| `llrm-core`: `peephole.rs` (5), `postrasink.rs` (2), `verify.rs`, `valuetrack.rs`, `target.rs`, `regthrash.rs`, `registerinfo.rs`, `peep/guards.rs`, `cfi.rs`, `arrival.rs` | `Register`, `RflagsBits`, `Decoder`, `Instruction`, `InstructionInfoFactory`, `Code`, `FlowControl`, `Mnemonic`, `OpKind`, `OpAccess` | a target `Encoding` interface: flag effects, flow kind, operand access, decode |
+| `llrm-peepgen/src/table.rs`, `llrm-iselgen/src/build.rs` | `Code`/`Register` tables | generator input read from the target description |
+
+One inventory with arm64-spike: this section is the list its `RegId`/`Flag` change closes.
 
 ## Ratchet gaps (the fail-first for each move)
 
