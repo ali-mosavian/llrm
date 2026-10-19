@@ -306,6 +306,9 @@ impl ModuleAnalysis for Summaries {
         module: &Module,
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
+        if llrm_support::env_flag!("LLRM_ATTR_SUMMARIES") {
+            return Ok(crate::attrsummary::summaries(module));
+        }
         let globals_held = analyses.get::<GlobalsAA>(module);
         let globals = Result::as_ref(&*globals_held).map_err(String::clone)?;
         let program = Rc::clone(analyses.program());
