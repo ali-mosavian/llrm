@@ -233,7 +233,7 @@ fn family_of(
                 geps.push((gep, y));
             }
             let Some(base) = base else { continue };
-            if geps.len() != function.users(scaled).len() {
+            if !function.users(scaled).has_n_uses(geps.len()) {
                 continue;
             }
             match families.iter_mut().find(|one| one.base == base && one.k == k) {

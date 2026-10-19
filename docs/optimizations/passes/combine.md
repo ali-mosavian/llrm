@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine.rs sha256:fc851a0ad18c0983297d49a1c62b0a69e89acc77502efd30fd85bf664eb4ea75 -->
+<!-- src: crates/opt/llrm-transforms/src/combine.rs sha256:61c7e390de88d476f0f111e1d7202b707d9db33e922392f25c9f41ae665038c4 -->
 
 # combine
 
@@ -15,10 +15,9 @@ a user, over
 [`InstructionWorklist`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/Transforms/Utils/InstructionWorklist.h).
 `visit` is [`llrm_mir::simplify::simplify_instruction_in`](https://github.com/ali-mosavian/llrm/blob/main/crates/ir/llrm-mir/src/simplify.rs).
 
-MIRROR: the worklist (a stack, a map from instruction to slot, a deferred
-set); the seed in reverse reverse-post-order after folding and deleting the
-dead as it walks; the live-successor handling of a constant branch (the phi
-inputs of a dead edge become poison); the pop, delete-if-dead, visit,
+MIRROR: the seed in reverse reverse-post-order after folding and deleting
+the dead as it walks; the live-successor handling of a constant branch (the
+phi inputs of a dead edge become poison); the pop, delete-if-dead, visit,
 replace-all-uses, `pushUsersToWorkList`, erase sequence.
 
 DEVIATE, with the reason: code sinking (`tryToSinkInstruction`) is not made

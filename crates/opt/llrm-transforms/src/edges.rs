@@ -43,7 +43,7 @@
 //! ; ...
 //! ```
 //!
-//! After `loadjoins` inserts the missing load on the `b2`-to-`b3` edge:
+//! After load PRE inserts the missing load on the `b2`-to-`b3` edge:
 //!
 //! ```mir
 //! b2:
@@ -62,10 +62,10 @@
 //! not in `b2`.
 //!
 //! From unit test `test_missing_conditional_edge_gets_its_own_load_block` in
-//! `loadjoins_tests.rs`.
+//! `gvn_load_tests.rs`.
 //!
 //! # Runs
-//! Not a pass: a library. `split` is called by `loadjoins`, `rotate` and
+//! Not a pass: a library. `split` is called by `rotate` and
 //! `unswitch`; `phis` and `retarget` by most of the CFG-rewriting passes.
 
 use llrm_mir::context::Context;
