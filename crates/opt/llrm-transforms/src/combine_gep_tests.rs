@@ -157,3 +157,60 @@ fn constant_offsets_across_a_variable_one_are_added() {
         "  %x = getelementptr i8, ptr %b, i64 %i\n  %0 = getelementptr i8, ptr %x, i64 12\n"
     );
 }
+
+/// `@f` of `text` after `visitGetElementPtrInst` alone.
+fn combined_function(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    printed(&module)
+}
+
+const GEPS_IN_A_PHI: &str = "define ptr @f(ptr %base, i1 %c, i64 %i, i64 %jj, i64 %k) {
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  %x = getelementptr i32, ptr %base, i64 %i
+  br label %m
+
+b:
+  %y = getelementptr i32, ptr %base, i64 %jj
+  br label %m
+
+m:
+  %p = phi ptr [ %x, %a ], [ %y, %b ]
+  %r = getelementptr i32, ptr %p, i64 %k
+  ret ptr %r
+}
+";
+
+/// A GEP of a phi of GEPs that differ in one index: one GEP of a phi of
+/// that index.
+#[test]
+fn geps_in_a_phi_differing_in_one_index_become_a_phi_of_the_index() {
+    let out = combined_function(GEPS_IN_A_PHI);
+    assert!(out.contains("phi i64 [ %i, %a ], [ %jj, %b ]"), "{out}");
+    assert!(out.contains("getelementptr [4 x i8], ptr %base, i64 %"), "{out}");
+    assert!(!out.contains("phi ptr"), "{out}");
+}
+
+/// The phi has another user: the new phi would not replace it, so nothing.
+#[test]
+fn a_phi_of_geps_with_another_user_is_left() {
+    let text = GEPS_IN_A_PHI.replace("  ret ptr %r", "  store ptr %p, ptr %base\n  ret ptr %r");
+    let out = combined_function(&text);
+    assert!(out.contains("phi ptr [ %x, %a ], [ %y, %b ]"), "{out}");
+}
+
+/// GEPs that differ in two operands are not folded.
+#[test]
+fn geps_in_a_phi_differing_in_two_operands_are_left() {
+    let text = GEPS_IN_A_PHI
+        .replace("%y = getelementptr i32, ptr %base, i64 %jj", "%y = getelementptr i32, ptr %k2, i64 %jj")
+        .replace("ptr %base, i1 %c", "ptr %base, ptr %k2, i1 %c");
+    let out = combined_function(&text);
+    assert!(out.contains("phi ptr [ %x, %a ], [ %y, %b ]"), "{out}");
+}

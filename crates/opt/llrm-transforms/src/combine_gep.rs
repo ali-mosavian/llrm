@@ -89,7 +89,7 @@ impl GepFlags {
         flags
     }
 
-    fn and(
+    pub(crate) fn and(
         self,
         other: GepFlags,
     ) -> GepFlags {
@@ -488,6 +488,15 @@ impl Combiner<'_> {
             let new_source =
                 if scale == 1 { byte } else { self.context.types.intern(Type::Array { element: byte, count: scale }) };
             self.function.set_opcode(inst, Opcode::GetElementPtr { source: new_source });
+            return Visit::Changed;
+        }
+
+        // A GEP of a phi of GEPs: the phi is replaced by one GEP and a phi of
+        // the index they differ in.
+        if let Some(phi) = self.definition_of(ptr).filter(|&def| self.function.instruction(def).opcode == Opcode::Phi)
+            && let Some(new_ptr) = self.fold_gep_of_phi(inst, phi)
+        {
+            crate::combine_shared::replace_operand(self, inst, 0, new_ptr);
             return Visit::Changed;
         }
 
