@@ -2291,6 +2291,12 @@ pub trait FunctionPass {
     fn adds_memory_operations(&self) -> bool {
         true
     }
+
+    /// The pass dumps the bodies it is run over itself (the pipeline does, per
+    /// function), so the manager dumps none.
+    fn dumps_inputs_itself(&self) -> bool {
+        false
+    }
     /// The parts of a function the pass looks at (`footprint`). A pass that
     /// found nothing to do is not run again until an edit reaches one of
     /// them: gcc's `TODO_*` flags and LLVM's preserved analyses say the
@@ -2364,6 +2370,9 @@ pub struct PassManager {
     pub verify_invalidation: bool,
     /// A directory each pass's output is written to, as `NN-pass.ll`.
     pub dump: Option<std::path::PathBuf>,
+    /// `LLRM_DUMP_INPUTS`: the module each pass is about to run over is dumped
+    /// too, as `NNNN-in-pass.ll` with a line in `manifest.txt`.
+    pub dump_inputs: bool,
     /// How many pass runs happen, a module pass's one and a function
     /// pass's one per function, as LLVM's `-opt-bisect-limit`: each run is
     /// named on stderr, and those past the limit are skipped.
@@ -2500,6 +2509,11 @@ impl PassManager {
                     );
                     running
                 }) {
+                    if self.dump_inputs {
+                        for (at, module) in program.modules.iter().enumerate() {
+                            before(&dumps[at], start, name, module)?;
+                        }
+                    }
                     let _running = crate::counts::pass_run(name, 0);
                     spanned(name, || pass.run(program, analyses))?;
                 }
@@ -2566,11 +2580,16 @@ impl PassManager {
             eprintln!("BISECT: {}running pass ({runs}) {name} on {unit}", if running { "" } else { "NOT " });
             running
         };
+        let inputs = self.dump_inputs;
         let mut frozen: Vec<Kind> = Vec::new();
         let mut held: Vec<Kind> = Vec::new();
         for (number, pass) in self.passes.iter_mut().enumerate().skip(passes.start).take(passes.len()) {
             let name = pass.name();
             PASS.with(|p| p.set(name));
+            let dumped_by_itself = matches!(pass, Pass::Function(one) if one.dumps_inputs_itself());
+            if inputs && !dumped_by_itself && !matches!(pass, Pass::Freeze(_) | Pass::Hold(_)) {
+                before(dump, number, name, module)?;
+            }
             let pass = match pass {
                 Pass::Function(pass) => pass,
                 Pass::Program(_) => unreachable!("a program pass runs over every module"),
@@ -2767,6 +2786,35 @@ impl ProgramPass for PassManager {
     ) -> Result<(), String> {
         self.managed(program, analyses).map(|_| ())
     }
+}
+
+/// `LLRM_DUMP_INPUTS`: the module pass `number` is about to run over, as
+/// `NNNN-in-pass.ll`, with a line in `manifest.txt` (pass, number, file,
+/// instructions), as the pipeline's `input` writes for a function.
+fn before(
+    dump: &Option<std::path::PathBuf>,
+    number: usize,
+    name: &str,
+    module: &Module,
+) -> Result<(), String> {
+    let Some(directory) = dump else { return Ok(()) };
+    let file = format!("{:04}-in-{name}.ll", number + 1);
+    let instructions: usize = module
+        .globals
+        .iter()
+        .map(|global| match &global.kind {
+            GlobalKind::Function(function) => function.walk().count(),
+            _ => 0,
+        })
+        .sum();
+    let line = format!("{name} {} {file} {instructions}\n", number + 1);
+    std::fs::create_dir_all(directory)
+        .and_then(|()| std::fs::write(directory.join(&file), crate::print::module(module)))
+        .and_then(|()| {
+            let mut out = std::fs::OpenOptions::new().create(true).append(true).open(directory.join("manifest.txt"))?;
+            std::io::Write::write_all(&mut out, line.as_bytes())
+        })
+        .map_err(|error| error.to_string())
 }
 
 /// The dump and the verifier after pass `number`.
