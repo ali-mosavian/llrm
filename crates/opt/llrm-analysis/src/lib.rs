@@ -22,8 +22,8 @@
 //! - Memory: [`memory`] (objects, slices, `MemRef`, `Unit`), [`pointerfacts`],
 //!   [`regions`], [`alias`] (points-to, summaries), [`effects`],
 //!   [`frameescape`], [`globalsaa`], [`sliceset`] and [`cellmap`] (containers),
-//!   [`memoryssa`], [`avail`] (forwardable loads, dead stores), [`observers`]
-//!   (cells nothing outside can read).
+//!   [`memoryssa`], [`avail`] (dead stores), [`observers`] (cells nothing
+//!   outside can read).
 //! - Calls and control: [`interprocedural`], [`noreturn`],
 //!   [`parameter_ranges`], [`branchprob`] (static frequencies).
 //! - [`manager`] caches the facts that are expensive or asked repeatedly.

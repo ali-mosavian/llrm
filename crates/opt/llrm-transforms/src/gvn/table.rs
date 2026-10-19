@@ -268,8 +268,8 @@ pub struct ValueTable {
     value_numbering: Numbering,
     expression_numbering: HashMap<Expression, u32>,
     next_expr_number: u32,
-    /// Whether `expressions` are kept for `phi_translate`, which scalar PRE
-    /// (a later stage) is the only user of.
+    /// Whether `expressions` are kept for `phi_translate`, which PRE is the
+    /// only user of.
     pub translating: bool,
     expressions: Vec<Expression>,
     expr_idx: Vec<u32>,

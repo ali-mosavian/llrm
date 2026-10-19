@@ -5,8 +5,8 @@ use llrm_analysis::mssa::alias::AliasQuery;
 use llrm_analysis::mssa::{AccessId, Kind, Mssa};
 use llrm_mir::context::ConstantKind;
 use llrm_mir::facts::Facts;
-use llrm_mir::module::{BlockId, Function, InstId, Operand};
-use llrm_mir::opcode::{Attribute, BinaryOp, Opcode};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::opcode::{Attribute, BinaryOp, Flags as Wrap, Opcode};
 use llrm_mir::passes::{self, Outer};
 
 use super::{Flags, LoopCtx, LoopSafety, calls};
@@ -40,7 +40,9 @@ fn loop_blocks_rpo(ctx: &LoopCtx) -> Vec<BlockId> {
 /// the instructions it hoists to `preheader`. Not built (L1): the
 /// reciprocal of an `fdiv` (MIR has no `arcp`), `hoistInsertPastInsert`
 /// (no vectors), the invariant-start and guard intrinsics, and
-/// `hoistArithmetics`.
+/// `hoistArithmetics` but `hoistBOAssociation` (and that only for integers:
+/// a float add or multiply needs `reassoc` and `nsz`, and the intersection of
+/// the two fast-math flags).
 #[allow(clippy::too_many_arguments)]
 pub fn hoist_region(
     unit: &passes::Unit,
@@ -51,8 +53,9 @@ pub fn hoist_region(
     aa: &AliasQuery,
     flags: &mut Flags,
     safety: &LoopSafety,
-) -> Vec<(InstId, BlockId)> {
+) -> (Vec<(InstId, BlockId)>, Vec<Reassociation>) {
     let mut found = Vec::new();
+    let mut reassociated = Vec::new();
     for block in loop_blocks_rpo(ctx) {
         // Only the contents of a block outside the subloops: those have been
         // processed.
@@ -73,10 +76,117 @@ pub fn hoist_region(
             {
                 ctx.state.moved.borrow_mut().insert(inst, preheader);
                 found.push((inst, preheader));
+            // Try to reassociate instructions so that part of computations can
+            // be done out of loop.
+            } else if let Some(one) = hoist_bo_association(unit, ctx, inst) {
+                ctx.state.gone.borrow_mut().insert(inst);
+                ctx.state.gone.borrow_mut().insert(one.bo0);
+                reassociated.push(one);
             }
         }
     }
-    found
+    (found, reassociated)
+}
+
+/// Whether `inst` could be a [`hoist_bo_association`]'s `bo`: an operation it
+/// handles with an operand the same operation defines.
+pub fn may_reassociate(
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    let bo = function.instruction(inst);
+    matches!(
+        bo.opcode,
+        Opcode::Binary(BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
+    )
+        && bo.operands.iter().any(|&operand| {
+            let Operand::Value(value) = operand else { return false };
+            matches!(
+                function.value(value).def,
+                ValueDef::Instruction(def) if function.instruction(def).opcode == bo.opcode
+            )
+        })
+}
+
+/// What [`hoist_bo_association`] decides: `bo` becomes `lv op (c1 op c2)`, the
+/// inner `c1 op c2` made in the preheader, and `bo0` goes.
+#[derive(Clone, Debug)]
+pub struct Reassociation {
+    pub bo: InstId,
+    pub bo0: InstId,
+    pub op: BinaryOp,
+    pub lv: Operand,
+    pub c1: Operand,
+    pub c2: Operand,
+    /// The flags both the new instructions get (`OverflowTracking`).
+    pub flags: Wrap,
+}
+
+/// [`hoistBOAssociation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2686):
+/// `(LV op C1) op C2` and its commuted forms, the integer `add`, `mul`, `and`,
+/// `or` and `xor`. DEVIATE: an instruction another reassociation of the loop
+/// has replaced, or one reading a value it erased, is left alone, where LLVM
+/// would reassociate the new one in turn (the next round of the pipeline
+/// does).
+fn hoist_bo_association(
+    unit: &passes::Unit,
+    ctx: &LoopCtx,
+    inst: InstId,
+) -> Option<Reassociation> {
+    let function = &*unit.function;
+    let bo = function.instruction(inst);
+    let Opcode::Binary(op) = bo.opcode else { return None };
+    if !matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor
+    ) {
+        return None;
+    }
+    let in_rhs = ctx.is_loop_invariant(bo.operands[0]);
+    let Operand::Value(inner) = bo.operands[usize::from(in_rhs)] else { return None };
+    let ValueDef::Instruction(bo0_inst) = function.value(inner).def else { return None };
+    let bo0 = function.instruction(bo0_inst);
+    // `hasNUsesOrMore(2)` for an integer: `bo` is its only user.
+    if bo0.opcode != bo.opcode
+        || function.users(inner).iter().count() >= 2
+        || ctx.state.gone.borrow().contains(&bo0_inst)
+    {
+        return None;
+    }
+    let (mut lv, mut c1) = (bo0.operands[0], bo0.operands[1]);
+    let c2 = bo.operands[usize::from(!in_rhs)];
+    if ctx.is_loop_invariant(lv) && !ctx.is_loop_invariant(c1) {
+        std::mem::swap(&mut lv, &mut c1);
+    }
+    if ctx.is_loop_invariant(lv) || !ctx.is_loop_invariant(c1) || !ctx.is_loop_invariant(c2) {
+        return None;
+    }
+    // A value an earlier reassociation of the loop has erased is not read.
+    let erased = |operand: Operand| match operand {
+        Operand::Value(value) => match function.value(value).def {
+            ValueDef::Instruction(def) => ctx.state.gone.borrow().contains(&def),
+            ValueDef::Argument(_) => false,
+        },
+        _ => false,
+    };
+    if erased(lv) || erased(c1) || erased(c2) {
+        return None;
+    }
+    // `OverflowTracking` with `AllKnownNonNegative` and `AllKnownNonZero` off,
+    // `applyFlags` after `dropPoisonGeneratingFlags`.
+    let both = |flag: Wrap| bo.flags.contains(flag) && bo0.flags.contains(flag);
+    let mut flags = Wrap::default();
+    match op {
+        BinaryOp::Add if both(Wrap::NUW) => {
+            flags.insert(Wrap::NUW);
+            if both(Wrap::NSW) {
+                flags.insert(Wrap::NSW);
+            }
+        }
+        BinaryOp::Or if both(Wrap::DISJOINT) => flags.insert(Wrap::DISJOINT),
+        _ => {}
+    }
+    Some(Reassociation { bo: inst, bo0: bo0_inst, op, lv, c1, c2, flags })
 }
 
 /// [`isSafeToExecuteUnconditionally`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1507)
