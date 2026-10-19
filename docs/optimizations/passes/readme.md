@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 101 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 103 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -81,6 +81,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | peel | Whole-loop peeling: clone every iteration of a loop with a known trip count ahead of it, priced before anything is cloned, and let Fold, Decide and Dead prove the residual loop unreachable. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point `Fixed`, after the scalar | [peel](peel.md) |
 | phiopt | A phi of two constants that a branch chooses between becomes arithmetic of the branch's condition, where that costs no more than the branch. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `decide`. On at every | [phiopt](phiopt.md) |
 | ports | Each I/O port call narrowed to the memory its device reaches, as the target describes the port. | Twice: once over every body before the per-body pipeline, so a caller's | [ports](ports.md) |
+| predicateinfo | PredicateInfo: what a branch, switch or assume says about a value where it holds, as a copy of the value that only the code it holds for reads. |  | [predicateinfo](predicateinfo.md) |
 | profit | Machine-neutral profitability shared by the MIR transforms: what an instruction, a block and a function cost under a target's prices, how often each block runs, and what registers cost past the target's. | Each of [`crate::lsr`](lsr.md), [`crate::hoist`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/licm/hoist.rs), [`crate::gvn`](gvn.md), | [profit](profit.md) |
 | promote | Write-through promotion: a load of a cell that a store left its value in on every path becomes that value, a phi where paths join. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point: `Sroa` at the boundaries of | [promote](promote.md) |
 | rotate | Loop rotation: a loop proven to run at least once is entered at its body, not its test; a loop that is not proven is entered behind a copy of its test (gcc's `-ftree-ch`). | Twice in [`crate::pipeline`](pipeline.md), outside the per-body fixed point. `copy` runs | [rotate](rotate.md) |
