@@ -21,7 +21,7 @@ macro_rules! cases {
     };
 }
 
-cases!(gep, load, loadbe, cast, icmp, intrinsic, misc, deviate, regress);
+cases!(gep, load, loadbe, cast, icmp, fcmp, intrinsic, misc, deviate, regress);
 
 fn answer(line: &str) -> &str {
     line.splitn(4, ' ').nth(3).expect("four fields")

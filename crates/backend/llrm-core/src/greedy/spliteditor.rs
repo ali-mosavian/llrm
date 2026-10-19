@@ -404,6 +404,20 @@ impl<'d> SplitEditor<'d> {
         (mbb, first.id())
     }
 
+    /// A pseudo-op that names the x87 value a call left in ST0.
+    fn takes_call_result(one: &crate::model::lir::Insn) -> bool {
+        use crate::model::ir::{Loc, Operation};
+        one.what
+            .as_ref()
+            .is_some_and(
+                |what| what.op == Operation::FloatLoad
+                    && what.name.as_deref().is_none_or(str::is_empty)
+                    && what.sources.is_empty()
+                    && !what.dests.is_empty()
+                    && what.dests.iter().all(|place| matches!(place, Loc::Held(held) if held.width == 10)),
+            )
+    }
+
     /// The instruction after `mi` in `mbb`, None at the end (`std::next`),
     /// after every member of a parallel copy that shares its index.
     fn next_instr(
@@ -445,7 +459,16 @@ impl<'d> SplitEditor<'d> {
             return idx;
         };
         let (mbb, mi) = Self::instr_at(cx, &idx);
-        let next = Self::next_instr(cx, mbb, mi);
+        let mut next = Self::next_instr(cx, mbb, mi);
+        // DEVIATE S-RFP1 (RFP-5): a copy after a call goes after the pseudo-ops
+        // that take its x87 results, which `X86FloatingPoint` finds right
+        // after the call (a `fld` between them left the result under it).
+        // Exit: the x87 results copied out of ST0 by the call's lowering.
+        if cx.lis.instr(mi).what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Call) {
+            while let Some(key) = next.filter(|key| Self::takes_call_result(cx.lis.instr(*key))) {
+                next = Self::next_instr(cx, mbb, key);
+            }
+        }
         self.def_from_parent(cx, self.open_idx, &parent_vni, idx, mbb, next).def()
     }
 
@@ -1438,7 +1461,12 @@ impl<'d> SplitEditor<'d> {
                     continue;
                 }
                 let mi = cx.lis.defining_instr(&vni.def(), reg);
-                if cx.env.is_copy_like(cx.lis.instr(mi)) && cx.lis.instr(mi).defines.len() == 1 {
+                // `allDefsAreDead`, and `eliminateDeadDef`'s `isSafeToMove`: a
+                // copy, or a definition made again here (a literal, an address,
+                // a load of a cell that holds).
+                let one = cx.lis.instr(mi);
+                if (cx.env.is_copy_like(one) || cx.env.is_pure_def(one)) && one.defines.len() == 1 && marked.insert(mi)
+                {
                     dead.push(mi);
                 }
             }
@@ -1651,6 +1679,13 @@ mod tests {
             false
         }
 
+        fn is_pure_def(
+            &self,
+            insn: &Insn,
+        ) -> bool {
+            insn.what.as_ref().is_some_and(|w| matches!(w.sources.as_slice(), [Loc::Imm(_)]))
+        }
+
         fn build_copy(
             &self,
             _lis: &LiveIntervals,
@@ -1805,6 +1840,54 @@ mod tests {
             r.insert(e0, e1, 2);
         }));
         assert!(result.is_err());
+    }
+
+    /// A definition a split made again that nothing reads is erased
+    /// (`deleteRematVictims`: `allDefsAreDead`, then `eliminateDeadDefs`),
+    /// not only a dead copy: a remade x87 load stayed as `fld [bp+6]; fstp
+    /// st(0)` at the entry of paramremat's `summed`.
+    #[test]
+    fn a_dead_remade_definition_is_erased() {
+        use crate::model::ir::Imm;
+        let literal = |value: i64| {
+            let what = Semantics {
+                name: Some("mov".to_owned()),
+                dests: vec![Loc::Held(Held { value: 2, width: 2 })],
+                sources: vec![Loc::Imm(Imm { value, width: 2, address: None })],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(0, None, Some(what), vec![2], vec![]))
+        };
+        let insns = vec![insn(&[1], &[]), literal(7), literal(8), insn(&[], &[2]), insn(&[], &[1])];
+        let body = LirBody::new(
+            "dead",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        let mut vrm = VirtRegMap::new();
+        let mut sa = SplitAnalysis::new(1);
+        let li = lis.interval_rc(1);
+        sa.analyze(&lis, &Env, li);
+        let mut delegate = NoDelegate;
+        let mut ed = SplitEditor::new();
+        ed.reset(&lis, LiveRangeEdit::new(1, &mut delegate), ComplementSpillMode::Partition);
+        ed.edit_mut().create_from(&mut lis, &mut vrm, 2, 1);
+        // The register the split made, its interval held as `finish` leaves it.
+        lis.interval_rc(2);
+        let mut cx = SplitCx { lis: &mut lis, vrm: &mut vrm, sa: &mut sa, env: &Env, mbfi: None };
+        ed.delete_remat_victims(&mut cx);
+        let left: Vec<i64> = lis
+            .block_insns(0)
+            .iter()
+            .filter_map(|one| match one.what.as_ref()?.sources.as_slice() {
+                [Loc::Imm(imm)] => Some(imm.value),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(left, [8], "the dead `mov 7` is erased, the read `mov 8` kept");
     }
 
     /// After `finish` no instruction names the parent, every operand names the

@@ -113,3 +113,19 @@ fn reassociation_needs_reassoc_and_nsz() {
     check("  %r = frem nnan float 0.0, %x\n", Some("0.0"));
     check("  %r = frem nnan float -0.0, %x\n", Some("-0.0"));
 }
+
+/// `fcmp olt double C1, C2` stayed an instruction through the whole O2
+/// pipeline (zz_f): InstSimplify had no `fcmp` case, so nothing ever asked
+/// the constant folder. A NaN is unordered, an undef is chosen to be one.
+#[test]
+fn a_compare_of_constants_folds() {
+    check("  %r = fcmp olt float 1.0, 2.0\n", Some("Int(1)"));
+    check("  %r = fcmp ogt float 1.0, 2.0\n", Some("Int(0)"));
+    check("  %r = fcmp olt float 1.0, 0x7FF8000000000000\n", Some("Int(0)"));
+    check("  %r = fcmp ult float 1.0, 0x7FF8000000000000\n", Some("Int(1)"));
+    check("  %r = fcmp ult float %x, undef\n", Some("Int(1)"));
+    check("  %r = fcmp olt float %x, undef\n", Some("Int(0)"));
+    check("  %r = fcmp olt float %x, poison\n", Some("poison"));
+    check("  %r = fcmp true float %x, %y\n", Some("Int(1)"));
+    check("  %r = fcmp olt float %x, %y\n", None);
+}

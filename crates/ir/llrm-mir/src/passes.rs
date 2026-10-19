@@ -729,23 +729,6 @@ impl Analysis for Loops {
     }
 }
 
-/// LLVM's `ScalarEvolutionAnalysis`, of add recurrences alone.
-pub struct ScalarEvolution;
-
-impl Analysis for ScalarEvolution {
-    type Result = crate::scalarevolution::Evolution;
-    const READS_OUTER: bool = false;
-    const NAME: &'static str = "scalar-evolution";
-    fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> crate::scalarevolution::Evolution {
-        crate::scalarevolution::Evolution::new(context, function, &analyses.get::<Loops>(context, layout, function))
-    }
-}
-
 /// Which analyses a pass left true. MIRROR: LLVM's `PreservedAnalyses`
 /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Analysis.h#L109):
 /// a pass that changed something names what it kept, and the manager drops the

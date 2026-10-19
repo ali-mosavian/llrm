@@ -41,7 +41,6 @@ The 52 `Old` slots of the parity registry, ranked by what replacing each saves o
 | 27 | `loopsimplify@764` | loopsimplify-port | [LoopSimplify.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopSimplify.cpp) | 0.7 | 0.7 | 0 | 0.7 |
 | 28 | `floatloop@724` | licm-port | [LICM.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp) | 0.0 | 0.4 | 1 | 0.2 |
 | 29 | `inferspace@787` | unowned | [InferAddressSpaces.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/InferAddressSpaces.cpp) | 0.1 | 0.1 | 0 | 0.1 |
-| 30 | `tailrec@688` | tailcallelim-port | [TailRecursionElimination.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/TailRecursionElimination.cpp) | 0.1 | 0.1 | 0 | 0.1 |
 | 31 | `phiopt@832` | simplifycfg-port | [SimplifyCFG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp) | 0.0 | 0.0 | 0 | 0.0 |
 | 32 | `phiopt@766` | simplifycfg-port | [SimplifyCFG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp) | 0.0 | 0.0 | 0 | 0.0 |
 | 33 | `phiopt@690` | simplifycfg-port | [SimplifyCFG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp) | 0.0 | 0.0 | 0 | 0.0 |
