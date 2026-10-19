@@ -83,6 +83,7 @@ pub mod availableexternally;
 #[cfg(test)]
 mod availableexternally_tests;
 pub mod bdce;
+pub mod branchtocommon;
 pub mod calleepop;
 #[cfg(test)]
 mod calleepop_tests;
