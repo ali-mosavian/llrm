@@ -15,6 +15,7 @@ corpus must hold each shape the translation claims (REQUIRED). Prints
 on any failure or a missing side.
 """
 import collections
+import targetdesc
 import glob
 import re
 import subprocess
@@ -26,7 +27,7 @@ REQUIRED = {
     "lcssa_used_outside", "three_exits",
 }
 PINNED = Path.home() / "scratch/llvm-build/bin/opt"
-TARGET = ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"]  # llrm's m32 target: a dump has no `target triple`, and opt costs for x86-64 without one
+TARGET = targetdesc.triple_cpu()  # llrm's default target (crates/target/*/datalayout.toml): a dump has no `target triple`, and opt costs for x86-64 without one
 COMMIT = "24.0.0git"
 ROOT = Path(__file__).resolve().parent.parent
 LLRM = ROOT / "target/debug/llrm-mir"

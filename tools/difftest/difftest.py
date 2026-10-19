@@ -30,6 +30,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 import envguard  # noqa: E402
+import targetdesc  # noqa: E402
 
 INPUTS = Path(os.environ.get("LLRM_DIFFTEST_INPUTS") or Path.home() / "scratch/replay/inputs")
 PINNED_BIN = Path.home() / "scratch/llvm-build/bin"  # LLVM 24.0.0git d1106deb71cc, the reference of every comparison
@@ -139,26 +140,19 @@ def normalise(text: str) -> str:
 
 
 # The target opt costs for: a dump carries no `target triple`, so opt used its host default (x86-64) and every TTI-dependent answer (unroll, LSR, inline cost, SimplifyCFG
-# speculation, LoopIdiom ...) was priced for the wrong machine (30 i32 GEPs cost 5 each at i386/i486, not the x86-64 figure: inline cost 370 vs 215). Nor does it carry a
-# datalayout: opt used the triple's 32-bit pointers, where m16 has 16-bit near pointers (`--data-layout` below, read from the target's own datalayout.toml, not copied).
-TARGETS = {"m32": ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"], "m16": ["-mtriple=i386-unknown-linux-gnu", "-mcpu=i386"], "host": []}  # host: opt's default, to restate an old claim
-
-
+# speculation, LoopIdiom ...) was priced for the wrong machine (30 i32 GEPs cost 5 each there, not the x86-64 figure: inline cost 370 vs 215). Nor does it carry a
+# datalayout: opt used the triple's 32-bit pointers, where a 16-bit target has 16-bit near pointers (`--data-layout` below, read from the target's own datalayout.toml, not copied).
 def datalayout(mode: int) -> str:
-    """LLVM's datalayout string of the target whose `datalayout.toml` says `mode = N` (crates/target/*/src/machines/)."""
-    import tomllib
-
-    for path in sorted((HERE.parents[1] / "crates/target").glob("*/src/machines/datalayout.toml")):
-        data = tomllib.loads(path.read_text())
-        if data.get("mode") == mode:
-            return data["datalayout"]
+    """LLVM's datalayout string of the target whose `datalayout.toml` says `mode = N`."""
+    for one in targetdesc.targets().values():
+        if one["mode"] == mode:
+            return one["datalayout"]
     raise SystemExit(f"no datalayout.toml with mode = {mode}")
 
 
 def target_args() -> list[str]:
-    """`-mtriple`, `-mcpu` and `--data-layout` of llrm's target (LLRM_DIFFTEST_TARGET m32 (default) or m16)."""
-    which = os.environ.get("LLRM_DIFFTEST_TARGET", "m32")
-    return [*TARGETS[which], f"--data-layout={datalayout(int(which[1:]))}"] if which != "host" else []
+    """`-mtriple`, `-mcpu` and `--data-layout` of llrm's target (LLRM_DIFFTEST_TARGET: its `m<mode>`, or `host`)."""
+    return targetdesc.opt_args()
 
 
 def opt(passes: str, text: str) -> subprocess.CompletedProcess:
@@ -435,7 +429,7 @@ def isolated(replay: Path, row: dict, source: Path) -> str:
     """llrm's answer to the input alone: `llrm-pass` runs the one pass PASS once on `source`."""
     try:
         order = ["--order"] if "@" in row["pass"] else []
-        mode = os.environ.get("LLRM_DIFFTEST_TARGET", "m32")
+        mode = targetdesc.default()
         layout = ["--mode", mode[1:]] if mode != "host" else []
         done = subprocess.run([str(replay), level_of(row["config"]), *layout, *order, row["pass"], str(source)], capture_output=True, text=True)
     except OSError as error:
@@ -462,15 +456,16 @@ SEEN: set[str] = set()  # the target line llrm-pass printed, one per distinct an
 
 def llrm_target(stderr: str, mode: str) -> str:
     """The `target ...` line llrm-pass printed, refused unless it is the machine of `mode`: Neutral priced unroll/licm/rotate/indvars/loopidiom with unit costs
-    against opt at i486 (matmul unrolled to 36 blocks, opt's 216), and every count taken that way was an instrument number."""
+    against opt priced for the target (matmul unrolled to 36 blocks, opt's 216), and every count taken that way was an instrument number."""
     line = next((l.split("target ", 1)[1] for l in stderr.splitlines() if l.startswith("llrm-pass: target ")), None)
     if mode == "host":
         return line or "neutral"
     want = f"x86-{mode}"
     if line is None or not line.startswith(want + " cpu "):
         raise SystemExit(f"difftest: llrm side is not {want} ({line or 'llrm-pass named no target'}): no count is emitted from a Neutral machine")
-    if mode == "m32" and " tti X86 " not in line:
-        raise SystemExit(f"difftest: llrm side {line} has no X86 TTI at m32")
+    tti = targetdesc.targets()[mode].get("tti", "none")
+    if f" tti {tti} " not in line:
+        raise SystemExit(f"difftest: llrm side {line} does not price with TTI {tti}")
     return line
 
 

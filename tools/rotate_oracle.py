@@ -14,6 +14,7 @@ corpus must hold each shape the translation claims (REQUIRED). Prints
 on any failure or a missing side.
 """
 import glob
+import targetdesc
 import re
 import struct
 import subprocess
@@ -28,7 +29,7 @@ REQUIRED = {
     "weights_exit_heavy", "weights_zero_exit", "weights_never", "loop_id_malformed", "join_latch", "three_blocks_body", "select_in_header",
 }
 PINNED = Path.home() / "scratch/llvm-build/bin/opt"
-TARGET = ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"]  # llrm's m32 target: a dump has no `target triple`, and opt costs for x86-64 without one
+TARGET = targetdesc.triple_cpu()  # llrm's default target (crates/target/*/datalayout.toml): a dump has no `target triple`, and opt costs for x86-64 without one
 COMMIT = "24.0.0git"
 ROOT = Path(__file__).resolve().parent.parent
 LLRM = ROOT / "target/debug/llrm-mir"

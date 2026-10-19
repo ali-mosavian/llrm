@@ -402,7 +402,11 @@ pub trait Tti {
         has_base_reg: bool,
         scale: i64,
     ) -> Cost {
-        if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) { Cost::FREE } else { Cost::INVALID }
+        if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) {
+            Cost::FREE
+        } else {
+            Cost::INVALID
+        }
     }
 
     /// `isLSRCostLess`: registers first, then the add-recurrence cost, the IV

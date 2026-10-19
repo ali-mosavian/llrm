@@ -8,10 +8,11 @@ Exit 1 if any file fails or is missing a side. The pinned opt is named in
 one place (`llvmpin` once it lands on main); a different version is refused.
 """
 import subprocess, sys, glob
+import targetdesc
 from pathlib import Path
 
 PINNED = Path.home() / "scratch/llvm-build/bin/opt"
-TARGET = ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"]  # llrm's m32 target: a dump has no `target triple`, and opt costs for x86-64 without one
+TARGET = targetdesc.triple_cpu()  # llrm's default target (crates/target/*/datalayout.toml): a dump has no `target triple`, and opt costs for x86-64 without one
 COMMIT = "24.0.0git"
 ROOT = Path(__file__).resolve().parent.parent
 LLRM = ROOT / "target/release/llrm-mir"

@@ -14,7 +14,19 @@ def test_every_oracle_opt_or_llc_command_carries_a_triple():
     """inlinediff priced 30 GEPs at 5 each with opt's host default (370 vs 215 at i486); the unroll, rotate and loops oracles had the same hole."""
     for name in ORACLES:
         text = (TOOLS / name).read_text()
-        assert "mtriple" in text, f"{name}: no -mtriple anywhere"
+        assert "mtriple" in text or "targetdesc" in text, f"{name}: no -mtriple anywhere"
         for number, line in enumerate(text.splitlines(), 1):
             if re.search(r'\[str\(PINNED\),|\[f?"\{?LLVM_BUILD', line) and not any(e in line for e in EXEMPT):
                 assert "TARGET" in line or "mtriple" in line or "LLC" in line, f"{name}:{number}: {line.strip()[:120]}"
+
+
+def test_the_triple_and_cpu_come_from_the_targets_description_and_the_default_is_the_widest(monkeypatch):
+    """Four oracles and difftest each held the same i486 triple literal, and the target_facts ratchet refused the merge: one reader of datalayout.toml."""
+    import targetdesc
+
+    monkeypatch.delenv("LLRM_DIFFTEST_TARGET", raising=False)
+    assert set(targetdesc.targets()) == {"m16", "m32"} and targetdesc.default() == "m32"
+    assert targetdesc.triple_cpu() == ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"]
+    assert targetdesc.opt_args("m16")[:2] == ["-mtriple=i386-unknown-linux-gnu", "-mcpu=i386"] and "--data-layout=e-p:16:16" in targetdesc.opt_args("m16")[2]
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "host")
+    assert targetdesc.opt_args() == []
