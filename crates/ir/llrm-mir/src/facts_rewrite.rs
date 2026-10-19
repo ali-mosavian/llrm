@@ -335,6 +335,13 @@ mod tests {
             // to give the replacement the flags the operands prove, and drop
             // the rest.
             "combine_muldivrem.rs",
+            // InstCombineCasts.cpp's `visitTrunc`, `visitZExt` and `visitSExt`
+            // read a trunc's, a zext's and a sext's `nuw`/`nsw`/`nneg`
+            // (`hasNoUnsignedWrap`, `hasNoSignedWrap`, `hasNonNeg`) and give
+            // the replacement the flags the narrower or wider operation
+            // proves; `narrowBinOp` keeps an add's or sub's flags only where
+            // they still hold.
+            "combine_casts.rs",
             // MemCpyOptimizer.cpp's `CreateInBoundsPtrAdd` makes an inbounds
             // GEP; it reads no flag.
             "memcpyopt.rs",
