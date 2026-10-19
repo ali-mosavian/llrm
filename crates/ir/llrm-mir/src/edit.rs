@@ -607,6 +607,17 @@ impl Function {
         self.values[to.0 as usize].name = name;
     }
 
+    /// Replaces an instruction's opcode in place (a `getelementptr`'s source
+    /// type, say); operands and users stay.
+    pub fn set_opcode(
+        &mut self,
+        inst: InstId,
+        opcode: Opcode,
+    ) {
+        self.instructions[inst.0 as usize].opcode = opcode;
+        self.log(Change::Rewritten(inst));
+    }
+
     /// Replaces an instruction's flags.
     pub fn set_flags(
         &mut self,
