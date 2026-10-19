@@ -857,7 +857,10 @@ fn assume_calls(
         .flat_map(|&block| function.iter_block(block))
         .filter(|&inst| {
             llrm_mir::memory::callee(run.context, function, inst)
-                .is_some_and(|callee| run.globals[callee.0 as usize].name.as_deref() == Some("llvm.assume"))
+                // A callee made after the pass manager's snapshot of the
+                // globals is not the `llvm.assume` declared with the module.
+                .and_then(|callee| run.globals.get(callee.0 as usize))
+                .is_some_and(|callee| callee.name.as_deref() == Some("llvm.assume"))
         })
         .collect()
 }
@@ -996,11 +999,24 @@ pub fn rotate_function(
     tti: &dyn Tti,
     options: Options,
 ) -> Result<bool, String> {
+    rotate_function_knowing(module, name, tti, options, module.globals.len())
+}
+
+/// `rotate_function` with the globals the pass manager's snapshot holds: the
+/// first `known`. A global made after the snapshot is a callee it cannot name.
+pub fn rotate_function_knowing(
+    module: &mut llrm_mir::module::Module,
+    name: &str,
+    tti: &dyn Tti,
+    options: Options,
+    known: usize,
+) -> Result<bool, String> {
     let layout =
         DataLayout::parse(module.datalayout.as_deref().unwrap_or("e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128"))?;
     let callees = llrm_mir::memory::callees(module);
     let mut declared = Declared::of(module);
-    let globals = module.globals.clone();
+    let mut globals = module.globals.clone();
+    globals.truncate(known);
     let metadata = module.metadata.clone();
     let id = module
         .functions()

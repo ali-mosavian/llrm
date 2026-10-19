@@ -4,3 +4,7 @@
 [[known]]
 match = "an instruction with a value"
 issue = 2531
+
+[[known]]
+match = "@TOP: ptrtoint"
+issue = 2672

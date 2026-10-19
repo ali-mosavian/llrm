@@ -195,8 +195,9 @@ struct BodySplitEnv {
     number: crate::support::hash::HashMap<i64, usize>,
     registers: Regs,
     sets: Option<Rc<crate::backend::regclass::Sets>>,
-    /// The values fixed to a register: their class is that register.
-    pinned: crate::support::hash::HashSet<u32>,
+    /// The values fixed to a register, and the registers a split made of them:
+    /// their class is that register.
+    pinned: std::cell::RefCell<crate::support::hash::HashSet<u32>>,
 }
 
 impl BodySplitEnv {
@@ -216,7 +217,7 @@ impl BodySplitEnv {
             number,
             registers,
             sets,
-            pinned,
+            pinned: std::cell::RefCell::new(pinned),
         }
     }
 }
@@ -260,6 +261,10 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         if let Some(order) = order {
             self.tables.orders.borrow_mut().entry(new).or_insert(order);
         }
+        let fixed = self.pinned.borrow().contains(&from);
+        if fixed {
+            self.pinned.borrow_mut().insert(new);
+        }
     }
 
     /// `LiveRangeEdit::calculateRegClassAndHint`'s `recomputeRegClass`: a
@@ -276,7 +281,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
             let Some(current) = self.tables.orders.borrow().get(&reg).cloned() else { continue };
             // A pinned value, and one with a class of its own kind (the x87
             // stack), keep theirs.
-            if self.pinned.contains(&reg) || !current.iter().all(|one| sets.available.contains(one)) {
+            if self.pinned.borrow().contains(&reg) || !current.iter().all(|one| sets.available.contains(one)) {
                 continue;
             }
             let mut seen = crate::support::hash::HashSet::default();
