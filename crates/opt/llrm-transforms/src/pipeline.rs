@@ -770,11 +770,18 @@ pub(crate) fn llvm_order(
             decide("decide@1244"),
             phiopt("phiopt@1244"),
         ],
-        // The Late stage follows the Simplify list and its unroll-and-jam, in
-        // LLVM's order: L1438 (a nest this slot rewrote would not be jammed,
-        // so it is not at the end of the Simplify list), InstSimplifyPass
-        // (PassBuilderPipelines.cpp#L1662, the last function pass of
-        // `OptimizePM`, after LoopSink) and L2376.
+        // The Late stage follows the Simplify list and its unroll-and-jam:
+        // L1438, InstSimplifyPass (PassBuilderPipelines.cpp#L1662, the last
+        // function pass of `OptimizePM`, after LoopSink) and L2376.
+        // DEVIATE LS1: the jam is not in the pin's default pipeline
+        // (`enable-unroll-and-jam` is false, L222); at the pin, if enabled,
+        // L1438 comes first, then the jam at L1474. llrm runs the jam first
+        // because its matcher needs the pre-L1438 nest: `needCanonicalLoops
+        // (false)` merges the blocks it matches (a testing outer header, a
+        // chain `pre` and `post`; hoist and sink alone leave them), and
+        // `only_o3_jams_a_nest_that_sweeps_the_same_cells` fails with the slot
+        // at the end of the Simplify list. Exit: the matcher accepts the
+        // L1438 form, no date.
         Phase::Late => vec![
             // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1438:
             // the extra sinking can create larger blocks, so loops need
