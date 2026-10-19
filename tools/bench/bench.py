@@ -145,7 +145,7 @@ def variants(directory: Path) -> list[Variant]:
     out = []
     for language, suffix in LANGUAGES.items():
         source = directory / f"{directory.name}{suffix}"
-        if source.exists() and (ONLY is None or language in ONLY or directory == STARTUP):
+        if source.exists() and (ONLY is None or language in ONLY):
             head = run_tests.header(source)
             region = settings["region"].get(language) or settings["region"]["bas"]  # our BASIC is the same kernel
             out.append(Variant(name, language, source, region, None if language in OURS_BASIC else head.get("known"), head.get("dialect", "qb45").split()[0],
