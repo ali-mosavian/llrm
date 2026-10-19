@@ -329,6 +329,12 @@ mod tests {
             "combine_gep_index.rs",
             "combine_gep_merge.rs",
             "combine_gep_phi.rs",
+            // InstCombineShifts.cpp reads a shift's `nuw`/`nsw`/`exact` and the
+            // flags of the add, sub and mul it looks through (`visitShl`,
+            // `visitLShr`, `visitAShr`, `setShiftFlags`) to give the
+            // replacement the flags the operands prove; `getShiftedValue`
+            // drops an add's flags when it shifts the add left.
+            "combine_shifts.rs",
             // InstCombineMulDivRem.cpp's `visitMul` and its helpers read the
             // `nuw`/`nsw` of a multiply and of the add, sub and shift it looks
             // through (`hasNoUnsignedWrap`, `hasNoSignedWrap`, `foldMulOp...`)
