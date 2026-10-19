@@ -234,6 +234,21 @@ fn the_x86_model_makes_a_scaled_address_and_a_narrow_trunc_free() {
     assert_eq!(generic - target, 5, "generic {generic}, x86 {target}");
 }
 
+/// m16 priced every instruction with the generic rules (`Machine::tti` was
+/// none): a scaled address cost 5 more per use than the i386 X86 model LLVM
+/// prices `-code16` with, so a callee the walk inlines under it was refused.
+#[test]
+fn test_m16_prices_a_scaled_address_with_the_x86_model() {
+    use llrm_mir::target::Machine;
+    let gep = format!(
+        "{GLOBAL}define internal i32 @callee(ptr %p, i32 %i) {{\nb0:\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  ret i32 %v\n}}\n\ndefine i32 @f(ptr %a, i32 %j) {{\nb0:\n  %r = call i32 @callee(ptr %a, i32 %j)\n  %s = call i32 @callee(ptr %a, i32 %r)\n  ret i32 %s\n}}\n"
+    );
+    let m16 = llrm_x86_m16::Dos::default().tti();
+    let generic = priced_with(&gep, 0, false, CallerSize::Speed, None).0;
+    let target = priced_with(&gep, 0, false, CallerSize::Speed, m16.as_deref()).0;
+    assert_eq!(generic - target, 5, "generic {generic}, m16 {target}");
+}
+
 #[test]
 fn test_a_decided_site_is_remarked_as_opt_remarks_it() {
     let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0 };
