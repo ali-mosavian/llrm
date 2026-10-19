@@ -154,6 +154,7 @@ pub mod jumpthreading;
 mod jumpthreading_tests;
 pub mod lcssa;
 pub mod lcssamerges;
+pub mod lftr;
 pub mod licm;
 pub mod local;
 #[cfg(test)]
