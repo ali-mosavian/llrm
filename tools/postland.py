@@ -264,7 +264,10 @@ def once(sha: str | None = None) -> str:
     listed = xfail.load()
     before = set(state["heads"].get(previous, [])) if previous else set()
     rows = []
-    for failure in sorted(new_failures(failing, before, listed)):
+    pending = sorted(new_failures(failing, before, listed))
+    HOME.mkdir(parents=True, exist_ok=True)
+    (HOME / f"{sha[:9]}.md").write_text(report(sha, previous or sha, [{"failure": one, "commit": None, "pr": None, "owner": "bisect pending", "repro": repro(one)} for one in pending], covered))
+    for failure in pending:
         commits = first_parent(previous, sha) if previous else []
         found = culprit([one for one, _ in commits], lambda one: probe(failure, one)) if commits else None
         subject = dict(commits).get(found, "") if found else ""
