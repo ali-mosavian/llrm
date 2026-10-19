@@ -61,7 +61,7 @@ fn ours(module: &mut Module) {
     let mut manager = PassManager::default();
     manager.add(llrm_transforms::promote::Sroa);
     manager.add(llrm_transforms::promote::Promote);
-    manager.add(llrm_transforms::dse::Dse);
+    manager.add(llrm_transforms::deadstore::DeadStoreElimination);
     manager.add(llrm_transforms::dead::Dead);
     manager.run_module(module, Rc::new(llrm_mir::target::Neutral)).expect("the pipeline runs");
 }

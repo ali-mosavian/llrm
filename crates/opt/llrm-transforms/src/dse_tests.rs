@@ -4,7 +4,7 @@
 use llrm_analysis::manager::Summaries;
 use llrm_mir::passes::PassManager;
 
-use super::Dse;
+use crate::deadstore::DeadStoreElimination as Dse;
 use crate::promote::Promote;
 use crate::testing::{parsed, printed, results};
 
