@@ -234,3 +234,16 @@ def test_a_compile_that_outgrows_the_memory_limit_is_reported_as_a_memory_limit(
     monkeypatch.setattr(ps.cpulimit, "MEMORY_KB", 200_000)
     why = ps.compile_ok([_sys.executable, "-c", "x = bytearray(900 * 1024 * 1024)"], dict(__import__("os").environ))
     assert why and why.startswith("memory limit"), why
+
+
+def test_the_fmt_and_docs_scans_are_ratchets_of_the_smoke():
+    """fmt and `# Example` went red on feat/parity in files of many owners and no merge noticed: the smoke ran neither."""
+    commands = [" ".join(c) for c in ps.ratchet_commands()]
+    assert "tools/fmt.sh --check" in commands and "python3 tools/docsbuild/build.py --check" in commands
+
+    class Done:
+        def __init__(self, code):
+            self.returncode, self.stdout, self.stderr = code, "", "error: x" if code else ""
+
+    failed = ps.ratchet_failures(run=lambda command: Done(1 if "fmt.sh" in " ".join(command) else 0))
+    assert set(failed) == {"ratchet:fmt"}, failed

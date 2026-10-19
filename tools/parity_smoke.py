@@ -90,11 +90,15 @@ TIERS = ROOT / "tools/gate/tiers.toml"
 EXTRA_RATCHETS = (["cargo", "test", "-q", "--test", "block_list_ratchet"], ["cargo", "test", "-q", "-p", "llrm-mir", "--lib", "facts_rewrite"])
 
 
+# The two source scans of the formatting and docs gates; not cargo, so not slotted.
+SCRIPT_RATCHETS = {"fmt": ["tools/fmt.sh", "--check"], "docs": ["python3", "tools/docsbuild/build.py", "--check"]}
+
+
 def ratchet_commands(tiers: Path = TIERS) -> list[list[str]]:
     """Every source-scan test of the gate (tools/gate/tiers.toml `[[scan]]`) and the two that list readers (block list, facts_rewrite), as cargo commands. A test
     that counts what a crate's files read fails on a diff in ANOTHER crate: a reader added in llrm-transforms never ran llrm-mir's ratchets (loopdeletion +3,
     simpleloopunswitch +5 slipped in), because the smoke ran only the touched crates' unit tests."""
-    commands = [list(c) for c in EXTRA_RATCHETS]
+    commands = [list(c) for c in EXTRA_RATCHETS] + [list(c) for c in SCRIPT_RATCHETS.values()]
     for scan in tomllib.loads(tiers.read_text()).get("scan", []):
         if "lib" in scan:
             commands.append(["cargo", "test", "-q", "-p", scan["package"], "--lib", "--", scan["lib"]])
@@ -117,6 +121,9 @@ def ratchets(root: Path = ROOT, tiers: Path = TIERS, run=None) -> str:
 
 
 def ratchet_name(command: list[str]) -> str:
+    for name, one in SCRIPT_RATCHETS.items():
+        if command == one:
+            return name
     """The name a ratchet is listed by in a failure set: the test (`--test NAME`, or the lib filter after `--`), else the filter word."""
     if "--test" in command:
         return command[command.index("--test") + 1]
