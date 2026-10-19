@@ -186,3 +186,18 @@ e:
     let mut env = Env::new(&mut module.context, globals, &module.metadata, function, &layout, &assumptions);
     assert_eq!(lvi.get_predicate_at(&mut env, IntPredicate::Eq, p, b, compare, true), Some(false));
 }
+
+/// `predecessors(BB)` was reversed once for the oldest-first use list and
+/// stayed reversed when the list became LLVM's: it listed oldest first, and
+/// LVI met a block's incoming values in the other order than `opt`'s.
+#[test]
+fn predecessors_run_newest_first_as_llvm_walks_a_use_list() {
+    let mut module = parse::module(
+        "define void @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %end\nb:\n  br label %end\nend:\n  ret void\n}\n",
+    )
+    .expect("parses");
+    let function = &*module.function_mut("f").expect("@f").1;
+    let layout = function.layout().to_vec();
+    let end = *layout.last().expect("end");
+    assert_eq!(crate::lazyvalueinfo::predecessors(function, end), [layout[2], layout[1]]);
+}
