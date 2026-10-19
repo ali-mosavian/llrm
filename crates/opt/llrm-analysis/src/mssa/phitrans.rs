@@ -383,7 +383,7 @@ impl PhiTransAddr {
                     )
             }
             Opcode::GetElementPtr { source } => {
-                let (ty, operands) = (instruction.ty, instruction.operands.clone());
+                let (ty, operands, flags) = (instruction.ty, instruction.operands.clone(), instruction.flags);
                 let mut translated = Vec::with_capacity(operands.len());
                 let mut any_changed = false;
                 for &operand in &operands {
@@ -396,7 +396,7 @@ impl PhiTransAddr {
                 }
                 // `gep x, 0` is x.
                 if let Some(simplified) =
-                    simplify_gep_operands(env.context, env.layout, function, translated[0], &translated[1..])
+                    simplify_gep_operands(env.context, env.layout, function, source, translated[0], &translated[1..], flags)
                 {
                     for &operand in &translated {
                         remove_inst_inputs(function, operand, &mut self.inputs);
