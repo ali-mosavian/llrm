@@ -208,7 +208,7 @@ fn prepare(
                 continue;
             }
         }
-        for inst in function.block(block).iter().collect::<Vec<_>>() {
+        for inst in function.iter_block(block).collect::<Vec<_>>() {
             if function.parent(inst).is_none() {
                 continue;
             }
@@ -285,7 +285,7 @@ fn handle_only_live_successor(
     if Some(dead) == live || !dead_edges.insert((block, dead)) {
         return;
     }
-    for phi in function.block(dead).iter().collect::<Vec<_>>() {
+    for phi in function.iter_block(dead).collect::<Vec<_>>() {
         if function.instruction(phi).opcode != Opcode::Phi {
             break;
         }
