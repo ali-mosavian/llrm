@@ -170,7 +170,7 @@ fn kept_when_stores_move() -> PreservedAnalyses {
 /// Each loop's unobserved stores moved to the front of its one exit;
 /// whether any moved.
 pub fn sunk_stores(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     callees: &Callees,
     function: &mut Function,
@@ -198,7 +198,7 @@ pub fn sunk_stores(
         let inside = loop_
             .body
             .iter()
-            .flat_map(|&at| function.block(cfg::block(at)).instructions().to_vec())
+            .flat_map(|&at| function.block(cfg::block(at)).iter().collect::<Vec<_>>())
             .collect::<Vec<_>>();
         let refused = |inst: InstId| match function.instruction(inst).opcode {
             Opcode::Store { volatile, .. } => volatile,
@@ -270,12 +270,13 @@ fn _moved(
         ValueDef::Argument(_) => None,
     };
     let address_values = |value: ValueId| {
-        defined_in(value).is_none_or(|at| !loop_.body.contains(&at) && dominators.dominates(at, loop_.header))
+        defined_in(value)
+            .is_none_or(|at| !loop_.body.contains(&at) && dominators.dominates(unit.function, at, loop_.header))
     };
     // What a moved store reads must reach the exit, whose one way in is
     // `source`.
     let reaches = |operand: Operand| match operand {
-        Operand::Value(value) => defined_in(value).is_none_or(|at| dominators.dominates(at, source)),
+        Operand::Value(value) => defined_in(value).is_none_or(|at| dominators.dominates(unit.function, at, source)),
         _ => true,
     };
     // What the loop's accesses reach, found by object: asked of each store.
@@ -287,7 +288,7 @@ fn _moved(
     }
     let unobserved = |inst: InstId| _unobserved(unit, inst, &index, references, &address_values);
     let mut moved = Vec::new();
-    for &inst in function.block(cfg::block(source)).instructions() {
+    for inst in function.block(cfg::block(source)).iter() {
         if unobserved(inst) && function.instruction(inst).operands.iter().all(|&one| reaches(one)) {
             moved.push((inst, None));
         }

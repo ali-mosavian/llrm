@@ -191,7 +191,7 @@ pub fn forwardable_walk(
         .function
         .layout()
         .iter()
-        .flat_map(|&block| unit.function.block(block).instructions().to_vec())
+        .flat_map(|&block| unit.function.block(block).iter().collect::<Vec<_>>())
         .filter(|inst| want.contains(inst) && loaded_into(unit, accesses, *inst).is_some())
         .collect();
     if missing.is_empty() { Vec::new() } else { memory_providers(unit, accesses, &missing) }
@@ -686,7 +686,7 @@ impl Solve<'_, '_> {
         let stored = &self.stored;
         let mut found = Vec::new();
         let mut overwritten = overwritten.clone();
-        for &inst in unit.function.block(cfg::block(block)).instructions().iter().rev() {
+        for inst in unit.function.block(cfg::block(block)).iter().rev() {
             let opcode = &unit.function.instruction(inst).opcode;
             let call = matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_));
             // Nothing can read a private cell but by its name: not a call,
@@ -1184,12 +1184,7 @@ fn memory_providers(
         .layout()
         .iter()
         .flat_map(|&block| {
-            function
-                .block(block)
-                .instructions()
-                .iter()
-                .enumerate()
-                .map(move |(index, &inst)| (inst, (cfg::id(block), index)))
+            function.block(block).iter().enumerate().map(move |(index, inst)| (inst, (cfg::id(block), index)))
         })
         .collect();
     let loads: Vec<(InstId, (MemRef, ValueId))> =
@@ -1201,7 +1196,7 @@ fn memory_providers(
     }
     let available = |source: InstId, site: InstId| -> bool {
         let ((source_block, source_index), (block, index)) = (places[&source], places[&site]);
-        dominance.dominates(source_block, block) && (source_block != block || source_index < index)
+        dominance.dominates(unit.function, source_block, block) && (source_block != block || source_index < index)
     };
 
     // Whether `value` is defined where `site` can read it.
@@ -1238,7 +1233,7 @@ fn memory_providers(
     // that dominate a site are found from its block upward, nearest first,
     // where every load of the same bytes was taken and sorted for each site
     // (9.5 M candidates for 7,000 sites at N=1024).
-    let tree = shape.dominance.tree();
+    let tree = shape.dominance.tree(unit.function);
     let nearest = crate::nearest::Nearest::of(
         tree,
         loads

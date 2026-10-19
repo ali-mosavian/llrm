@@ -12,7 +12,7 @@ use llrm_lir::registers::RegId;
 
 use super::*;
 use crate::backend::frame::Frame;
-use crate::backend::{copyprop, parcopy, prologue, spillforward, verify};
+use crate::backend::{machinecp, parcopy, prologue, spillforward, verify};
 use crate::model::ir::Addr;
 use crate::support::hash::HashMap;
 use crate::support::hash::IndexMap;
@@ -369,7 +369,7 @@ fn test_forwarded_register_copy_retains_its_virtual_definition() {
         vec![block(1, vec![Arc::new(establish), Arc::new(define), Arc::new(consume)], vec![]).into()],
     );
 
-    let done = copyprop::forwarded(&input);
+    let done = machinecp::propagated(&input);
 
     assert!(verify::verify(&done, false).is_empty());
     assert_eq!(
@@ -2629,70 +2629,6 @@ fn moved(
 }
 
 #[test]
-fn test_copy_at_join_requires_agreement_on_every_path() {
-    // An AX=BX copy survived a diamond despite unchanged contents; writing AH
-    // must keep it. "conditional" is not ported: it hangs a decoded node on
-    // `Insn.op`, which a `mir::Op` cannot carry.
-    for reverse_order in [false, true] {
-        for change in ["none", "other", "partial", "source", "unknown", "loop"] {
-            let (dest, source) = (rl(RegId::AX, 2), rl(RegId::BX, 2));
-            let (first, last) = (moved(0, dest.clone(), source.clone()), moved(30, dest, source));
-            let branch =
-                insn(1, Some((1, 1)), Some(semt(Operation::Branch, "je", vec![], vec![], Some(20))), vec![], vec![]);
-            let mut middle = vec![];
-            if ["other", "partial", "source", "loop"].contains(&change) {
-                let register = match change {
-                    "other" => RegId::CX,
-                    "partial" | "loop" => RegId::AH,
-                    _ => RegId::BX,
-                };
-                let width = if register == RegId::AH { 1 } else { 2 };
-                middle.push(Arc::new(moved(20, rl(register, width), im(7, width))));
-            }
-            if change == "unknown" {
-                middle.push(Arc::new(Insn { at: 20, what: None, ..last.clone() }));
-            }
-            let mut blocks = vec![
-                block(0, vec![Arc::new(first), Arc::new(branch)], vec![10, 20]),
-                block(10, vec![], vec![30]),
-                block(20, middle, vec![30]),
-                block(30, vec![Arc::new(last.clone())], if change == "loop" { vec![20, 40] } else { vec![] }),
-            ];
-            if change == "loop" {
-                blocks.push(block(40, vec![], vec![]));
-            }
-            if reverse_order {
-                blocks.reverse();
-            }
-            let result = transform(body("copies", 0, crate::model::lir::shared(blocks)));
-            assert_eq!(
-                result.insns().iter().any(|one| one.at == 30 && one.what == last.what),
-                !["none", "other"].contains(&change),
-                "{change} {reverse_order}"
-            );
-        }
-    }
-}
-
-#[test]
-fn test_high_byte_write_keeps_low_byte_copy_available() {
-    // Writing AH does not invalidate a known AL=BL relation across a block
-    // edge.
-    let first = moved(0, rl(RegId::AX, 2), rl(RegId::BX, 2));
-    let high = moved(1, rl(RegId::AH, 1), im(7, 1));
-    let low = moved(10, rl(RegId::AL, 1), rl(RegId::BL, 1));
-    let result = transform(body(
-        "lanes",
-        0,
-        vec![
-            block(0, vec![Arc::new(first), Arc::new(high)], vec![10]).into(),
-            block(10, vec![Arc::new(low.clone())], vec![]).into(),
-        ],
-    ));
-    assert!(!result.insns().iter().any(|one| one.at == 10 && one.what == low.what));
-}
-
-#[test]
 fn test_copy_source_is_forwarded_to_an_explicit_use() {
     // ls_face_key spent `mov bx,ax` only to compare BX; the loop paid one
     // instruction each trip.
@@ -2720,47 +2656,6 @@ fn test_copy_source_is_forwarded_to_an_explicit_use() {
 }
 
 #[test]
-fn test_copy_forwarding_across_a_join_requires_every_lane_on_every_path() {
-    // A reaching copy crosses a diamond only while neither full nor partial
-    // register is clobbered.
-    for changed in [None, Some(RegId::AX), Some(RegId::AH), Some(RegId::BX), Some(RegId::BH)] {
-        let (ax, bx) = (rl(RegId::AX, 2), rl(RegId::BX, 2));
-        let copied = moved(0, bx.clone(), ax.clone());
-        let branch =
-            insn(1, Some((1, 1)), Some(semt(Operation::Branch, "je", vec![], vec![], Some(20))), vec![], vec![]);
-        let mut middle = vec![];
-        if let Some(changed) = changed {
-            let width = if [RegId::AH, RegId::BH].contains(&changed) { 1 } else { 2 };
-            middle.push(Arc::new(moved(20, rl(changed, width), im(7, width))));
-        }
-        let compared = insn(
-            30,
-            Some((30, 30)),
-            Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(116, 2)])),
-            vec![],
-            vec![],
-        );
-        let result = transform(body(
-            "join",
-            0,
-            vec![
-                block(0, vec![Arc::new(copied), Arc::new(branch)], vec![10, 20]).into(),
-                block(10, vec![], vec![30]).into(),
-                block(20, middle, vec![30]).into(),
-                block(30, vec![Arc::new(compared.clone())], vec![]).into(),
-            ],
-        ));
-        let actual = result
-            .insns()
-            .iter()
-            .find(|one| one.at == compared.at)
-            .map(|one| one.what.as_ref().unwrap().sources[0].clone())
-            .unwrap();
-        assert_eq!(actual, if changed.is_none() { ax } else { bx }, "{changed:?}");
-    }
-}
-
-#[test]
 fn test_copy_forwarding_does_not_rename_a_fixed_register_use() {
     // GCC/LLVM both recheck constraints: CWD still reads AX even when AX is a
     // copy of BX.
@@ -2771,29 +2666,6 @@ fn test_copy_forwarding_does_not_rename_a_fixed_register_use() {
         transform(body("fixed", 0, vec![block(0, vec![Arc::new(copied), Arc::new(fixed.clone())], vec![]).into()]));
     let found = result.insns().iter().find(|one| one.at == fixed.at).unwrap().what.as_ref().unwrap().sources[0].clone();
     assert_eq!(found, ax);
-}
-
-#[test]
-fn test_copy_forwarding_maps_matching_subregister_lanes() {
-    // An AX=BX fact forwards AL to BL after AH changes; the surviving low-byte
-    // fact is sufficient.
-    let copied = moved(0, rl(RegId::AX, 2), rl(RegId::BX, 2));
-    let high = moved(1, rl(RegId::AH, 1), im(7, 1));
-    let compared = insn(
-        2,
-        Some((2, 2)),
-        Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::AL, 1), im(3, 1)])),
-        vec![],
-        vec![],
-    );
-    let result = transform(body(
-        "subregister",
-        0,
-        vec![block(0, vec![Arc::new(copied), Arc::new(high), Arc::new(compared.clone())], vec![]).into()],
-    ));
-    let found =
-        result.insns().iter().find(|one| one.at == compared.at).unwrap().what.as_ref().unwrap().sources[0].clone();
-    assert_eq!(found, rl(RegId::BL, 1));
 }
 
 // ------------------------------------------------------------
@@ -3538,6 +3410,52 @@ fn test_dword_fixed_register_argument_keeps_all_value_lanes_live() {
     let input = body("wide-fixed-argument", 1, vec![block(1, vec![Arc::new(source), Arc::new(call)], vec![]).into()]);
 
     assert_eq!(narrowed_moves(rules(), &input), input);
+}
+
+#[test]
+fn test_dword_copy_read_after_a_call_that_may_clobber_its_upper_half_stays_wide() {
+    // regparm3_matrix_4 at -O2: `mov edi,eax` became `mov di,ax` because the
+    // call between it and `mov eax,edi; shrd eax,ebx,20` may clobber EDI's
+    // upper half, and the shift then read a stale one.
+    let (eax, ebx, edi) = (rl(RegId::EAX, 4), rl(RegId::EBX, 4), rl(RegId::EDI, 4));
+    let copy =
+        insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![edi.clone()], vec![eax.clone()])), vec![1], vec![]);
+    let call = Insn {
+        clobbers: [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX].into(),
+        clobbers_high: [RegId::ESI, RegId::EDI].into(),
+        ..insn(5, Some((5, 5)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+    };
+    let read = insn(2, Some((2, 2)), Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![edi])), vec![2], vec![1]);
+    let shift = insn(
+        3,
+        Some((3, 3)),
+        Some(sem(Operation::Funnel, "shrd", vec![eax.clone()], vec![eax.clone(), ebx, im(20, 1)])),
+        vec![3],
+        vec![2, 4],
+    );
+    let finish = Insn {
+        requires: vec![(Held { value: 3, width: 4 }, RegId::EAX)],
+        reads_complete: true,
+        ..insn(4, Some((4, 4)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![3])
+    };
+    let input = body(
+        "wide-copy-shrd",
+        1,
+        vec![
+            block(1, vec![Arc::new(copy), Arc::new(call), Arc::new(read), Arc::new(shift), Arc::new(finish)], vec![])
+                .into(),
+        ],
+    );
+
+    assert_eq!(narrowed_moves(rules(), &input), input);
+
+    // Premise: with nothing reading EDI after it, the same copy is narrowed.
+    let ret = Insn {
+        reads_complete: true,
+        ..insn(6, Some((6, 6)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])
+    };
+    let unread = body("narrow-copy", 1, vec![block(1, vec![input.insns()[0].clone(), Arc::new(ret)], vec![]).into()]);
+    assert_ne!(narrowed_moves(rules(), &unread), unread);
 }
 
 fn extract_parts(
@@ -4422,7 +4340,7 @@ fn test_a_copy_is_forwarded_into_the_address_that_reads_it() {
         vec![],
         vec![],
     ));
-    let made = copyprop::forwarded(&flat_body(vec![copy, store]));
+    let made = machinecp::propagated(&flat_body(vec![copy, store]));
     let Some(Loc::Mem(cell)) = made.insns()[1].what.as_ref().map(|what| what.dests[0].clone()) else {
         panic!("a store")
     };
@@ -4458,7 +4376,7 @@ fn test_a_copy_is_not_forwarded_past_a_write_of_its_source() {
         vec![],
         vec![],
     ));
-    let made = copyprop::forwarded(&flat_body(vec![copy, bump, store]));
+    let made = machinecp::propagated(&flat_body(vec![copy, bump, store]));
     let Some(Loc::Mem(cell)) = made.insns()[2].what.as_ref().map(|what| what.dests[0].clone()) else {
         panic!("a store")
     };
@@ -4502,8 +4420,8 @@ fn through_of_the_read(body: &LirBody) -> RegId {
 /// body was for.
 #[test]
 fn test_a_body_is_encoded_in_its_own_mode() {
-    assert_eq!(through_of_the_read(&copyprop::forwarded(&read_through_a_copy(32))), RegId::ECX);
-    assert_eq!(through_of_the_read(&copyprop::forwarded(&read_through_a_copy(16))), RegId::EBX);
+    assert_eq!(through_of_the_read(&machinecp::propagated(&read_through_a_copy(32))), RegId::ECX);
+    assert_eq!(through_of_the_read(&machinecp::propagated(&read_through_a_copy(16))), RegId::EBX);
 }
 
 // ----------------------------------------------------------------- what a jump
@@ -4830,12 +4748,12 @@ fn test_copy_propagation_works_a_block_again_only_when_a_parent_changed() {
     list.push(block(blocks + 1, vec![], vec![]));
     let input = body("loop", 1, crate::model::lir::shared(list));
     crate::analysis::dataflow::WORKED.with(|count| count.set(0));
-    crate::backend::copyprop::forwarded(&input);
+    crate::backend::machinecp::propagated(&input);
     let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
     assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
 }
 
-/// Every sub-pass walked every function's whole body, `copyprop` and
+/// Every sub-pass walked every function's whole body, `machinecp` and
 /// `regthrash` among them, found no copy in most and changed nothing: two
 /// thirds of the peephole's time went to passes that found nothing. A body with
 /// no copy is not given to copy propagation.
@@ -4859,12 +4777,49 @@ fn test_a_function_without_a_copy_runs_copy_propagation_zero_times() {
             vec![],
         ))
     };
-    let before = copyprop::runs();
+    let before = machinecp::runs();
     transform(one_block(vec![add(0, RegId::CX, RegId::DX), add(1, RegId::BX, RegId::CX)]));
-    assert_eq!(copyprop::runs() - before, 0, "copy propagation ran on a body with no copy");
-    let before = copyprop::runs();
+    assert_eq!(machinecp::runs() - before, 0, "copy propagation ran on a body with no copy");
+    let before = machinecp::runs();
     transform(one_block(vec![copy(0, RegId::AX, RegId::BX), add(1, RegId::CX, RegId::AX)]));
-    assert!(copyprop::runs() - before >= 1, "copy propagation did not run on a body with a copy");
+    assert!(machinecp::runs() - before >= 1, "copy propagation did not run on a body with a copy");
+}
+
+/// Every block was walked twice and its effects worked out for each of its
+/// instructions, copies or none: 9.8 M instructions of the 77 M of `d_faces`'
+/// peephole went to blocks that hold no copy. Only a block with a copy is
+/// walked.
+#[test]
+fn test_copy_propagation_walks_only_the_blocks_that_hold_a_copy() {
+    let add = |at| {
+        Arc::new(insn(
+            at,
+            Some((at, at)),
+            Some(sem(Operation::Binary, "add", vec![rl(RegId::CX, 2)], vec![rl(RegId::CX, 2), rl(RegId::DX, 2)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let copy = Arc::new(insn(
+        0,
+        Some((0, 0)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    ));
+    let blocks = (1..=5)
+        .map(|at| {
+            block(
+                at,
+                if at == 3 { vec![Arc::clone(&copy), add(at)] } else { vec![add(at)] },
+                if at < 5 { vec![at + 1] } else { vec![] },
+            )
+        })
+        .collect::<Vec<_>>();
+    let input = body("copies", 1, crate::model::lir::shared(blocks));
+    let before = machinecp::walks();
+    machinecp::propagated(&input);
+    assert_eq!(machinecp::walks() - before, 1, "five blocks, one with a copy");
 }
 
 /// The lanes of a register follow the description: a high byte is lane 1 of its

@@ -1161,14 +1161,25 @@ impl<'a> Unit<'a> {
         layout: &'a DataLayout,
         function: &'a Function,
     ) -> Self {
+        Self::over(&module.context, layout, &module.metadata, &module.globals, function)
+    }
+
+    /// [`Unit::of`] for a caller that holds the module's parts, not the module.
+    pub fn over(
+        context: &'a Context,
+        layout: &'a DataLayout,
+        metadata: &'a [MetadataNode],
+        globals: &'a [GlobalValue],
+        function: &'a Function,
+    ) -> Self {
         Self {
             program: None,
             spaces: llrm_mir::spaces::Spaces::FLAT,
-            context: &module.context,
+            context,
             layout,
-            metadata: &module.metadata,
+            metadata,
             tbaa: None,
-            globals: &module.globals,
+            globals,
             function,
             globals_aa: None,
             references: None,

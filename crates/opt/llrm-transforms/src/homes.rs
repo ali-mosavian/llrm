@@ -264,7 +264,7 @@ impl<'a> Scan<'a> {
         let overlaps = |cell: &MemRef, inst: InstId| self.overlaps(cell, inst);
         let mut held = Vec::new();
         for &block in function.layout() {
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 let phi = function.instruction(inst);
                 let (Opcode::Phi, Some(result)) = (&phi.opcode, phi.result) else { continue };
                 let inputs: Vec<(Operand, BlockId)> = phi
@@ -390,7 +390,7 @@ fn survives(
     at: BlockId,
 ) -> bool {
     let home = function.parent(store).expect("a placed store");
-    if !dominance.dominates(cfg::id(home), cfg::id(at)) {
+    if !dominance.dominates(function, cfg::id(home), cfg::id(at)) {
         return false;
     }
     let after = |block: BlockId, from: Option<InstId>| {
@@ -470,7 +470,7 @@ pub(crate) fn homed_scanning(
     };
     let mut homes = Vec::new();
     for &block in function.layout() {
-        for &inst in function.block(block).instructions() {
+        for inst in function.block(block).iter() {
             let phi = function.instruction(inst);
             let (Opcode::Phi, Some(result)) = (&phi.opcode, phi.result) else { continue };
             let inputs: Vec<(Operand, BlockId)> = phi
@@ -543,7 +543,7 @@ fn survives_scanning(
     at: BlockId,
 ) -> bool {
     let home = function.parent(store).expect("a placed store");
-    if !dominance.dominates(cfg::id(home), cfg::id(at)) {
+    if !dominance.dominates(function, cfg::id(home), cfg::id(at)) {
         return false;
     }
     let after = |block: BlockId, from: Option<InstId>| {

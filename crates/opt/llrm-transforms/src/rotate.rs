@@ -246,9 +246,9 @@ struct Forest {
 }
 
 impl Forest {
-    /// The shape of `function` as it stands: its dominance afresh (cheap) and
-    /// the loops held, made from `fresh` the first time; `fresh` holds it
-    /// too, so that what it derives next does not derive it again.
+    /// The shape of `function` as it stands: its dominance, queued (see below),
+    /// and the loops held, made from `fresh` the first time; `fresh` holds
+    /// it too, so that what it derives next does not derive it again.
     /// Give it back with `keep` once `fresh` is dropped.
     fn shape(
         &mut self,
@@ -263,9 +263,14 @@ impl Forest {
             None => fresh.get::<cfg::Shape>(context, layout, function).loops.clone(),
         };
         let shape = std::rc::Rc::new(cfg::Shape {
-            // The manager's, brought up to date from the edges the rotations
-            // changed.
-            dominance: cfg::Dominance::new(analyses.get::<llrm_mir::passes::Dominators>(context, layout, function)),
+            // The manager's, as it was true: the edges the rotations change
+            // queue in the log (a lazy `DomTreeUpdater`) and the first reader
+            // applies them, so a rotation nobody asks the tree after costs
+            // none.
+            dominance: match analyses.held::<llrm_mir::passes::Dominators>() {
+                Some((tree, mark)) => cfg::Dominance::pending(tree, mark),
+                None => cfg::Dominance::new(analyses.get::<llrm_mir::passes::Dominators>(context, layout, function)),
+            },
             loops,
             reaching: Default::default(),
         });
@@ -510,7 +515,7 @@ fn _shape_of(
 /// where the guard sends it to `first` and skipped to the exit otherwise
 /// (`true`: the guard is true on the way out).
 pub(crate) fn _rotate(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     shape: &Shape,
     guard: Option<(Operand, bool)>,
@@ -613,7 +618,7 @@ pub(crate) fn _rotate(
 
 /// The first proven loop not in `done` entered at its body; whether one was.
 fn rotated(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
@@ -655,7 +660,7 @@ fn rotated(
 /// the last loop pass finds it. Comparing a build with and without `-ftree-ch`
 /// shows a loop whose symbolic count the copy lost.
 fn census(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     id: Option<llrm_mir::context::GlobalId>,

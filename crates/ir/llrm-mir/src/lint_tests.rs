@@ -70,3 +70,10 @@ fn a_value_read_whole_after_only_part_of_it_was_stored_is_found() {
     );
     assert_eq!(findings(&some_bytes), Vec::<String>::new(), "a read of the part that was stored");
 }
+
+/// `undef` is any value, not poison: the lint reported `poison` constants
+/// only, and must not report an `undef` one.
+#[test]
+fn an_undef_constant_is_no_poison() {
+    assert_eq!(findings("define i16 @f() {\nentry:\n  ret i16 undef\n}\n"), Vec::<String>::new());
+}

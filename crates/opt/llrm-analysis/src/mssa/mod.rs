@@ -9,13 +9,19 @@
 
 pub mod alias;
 pub mod build;
+pub mod edit;
+pub mod phitrans;
 pub mod shadow;
+pub mod updater;
 pub mod verify;
+pub mod view;
 pub mod walker;
 
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+#[cfg(test)]
+mod updater_tests;
 
 use std::cell::RefCell;
 
@@ -72,6 +78,9 @@ pub struct MemoryAccess {
     pub optimized_slot: u32,
     /// `MemoryDef::getID` and `MemoryPhi::getID`.
     pub id: u32,
+    /// Removed from the graph (`delete MA`): its place in the arena stays, in
+    /// no list.
+    pub dead: bool,
 }
 
 /// `AccessList` and `DefsList` of one block
@@ -83,6 +92,7 @@ pub struct BlockAccesses {
 }
 
 /// [`MemorySSA`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/MemorySSA.h#L702).
+#[derive(Clone)]
 pub struct Mssa {
     pub(crate) accesses: Vec<MemoryAccess>,
     /// `PerBlockAccesses` and `PerBlockDefs`.
@@ -151,7 +161,7 @@ impl Mssa {
         &self,
         block: BlockId,
     ) -> Option<&[AccessId]> {
-        self.per_block.get(&block).map(|lists| lists.accesses.as_slice())
+        self.per_block.get(&block).map(|lists| lists.accesses.as_slice()).filter(|list| !list.is_empty())
     }
 
     /// `getBlockDefs`.
@@ -338,7 +348,7 @@ impl Mssa {
         }
         let (a, b) = (self.access(dominator).block, self.access(dominatee).block);
         if a != b {
-            return self.dominance.dominates(crate::cfg::id(a), crate::cfg::id(b));
+            return self.dominance.dominates_resolved(crate::cfg::id(a), crate::cfg::id(b));
         }
         self.locally_dominates(dominator, dominatee)
     }
@@ -360,7 +370,7 @@ impl Mssa {
             if use_block != self.access(dominator).block {
                 return self
                     .dominance
-                    .dominates(crate::cfg::id(self.access(dominator).block), crate::cfg::id(use_block));
+                    .dominates_resolved(crate::cfg::id(self.access(dominator).block), crate::cfg::id(use_block));
             }
             // If the use block and the def block are the same, compare locally.
             return self.locally_dominates(dominator, user_access.incoming[at].1);

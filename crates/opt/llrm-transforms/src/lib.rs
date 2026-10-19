@@ -89,9 +89,15 @@ mod calleepop_tests;
 pub mod candidate;
 pub mod canonical;
 pub mod cfg;
+pub mod constraintelim;
+#[cfg(test)]
+mod constraintelim_tests;
 #[cfg(test)]
 mod corpus_tests;
 pub mod counting;
+pub mod cvp;
+#[cfg(test)]
+mod cvp_tests;
 pub mod dead;
 pub mod deadargs;
 #[cfg(test)]
@@ -102,6 +108,7 @@ pub mod earlycse;
 pub mod edges;
 pub mod exitfold;
 pub mod exitsink;
+pub mod exitvalues;
 pub mod expand;
 pub mod fixednarrow;
 pub mod floatfold;
@@ -114,6 +121,8 @@ mod globaldce_tests;
 pub mod globalopt;
 pub mod gvn;
 #[cfg(test)]
+mod gvn_load_tests;
+#[cfg(test)]
 mod gvn_scalar_tests;
 pub mod hoist;
 pub mod homes;
@@ -125,30 +134,39 @@ pub mod inline;
 pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;
+pub mod instsimplify;
 pub mod interprocedural;
 pub mod ipacp;
 pub mod jumpthread;
 pub mod lcssa;
 pub mod lcssamerges;
+pub mod licm;
 pub mod loadjoins;
 pub mod local;
 #[cfg(test)]
 mod local_tests;
 pub mod loopclone;
+pub mod loopdeletion;
 pub mod loopdistribute;
 pub mod loopexit;
 pub mod loopfuse;
+pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;
 pub mod loopmotion;
 pub mod loopnest;
+pub mod looprotate;
 pub mod loopshape;
 pub mod loopsimplify;
 pub mod loopsplit;
+pub mod loopunroll;
+pub mod loopunrollpass;
 pub mod loopversion;
 pub mod lsr;
 pub mod mem2reg;
 pub mod memcpyopt;
+pub mod memcpyoptimizer;
+pub mod mergestores;
 pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
@@ -166,22 +184,32 @@ pub mod profit;
 pub mod promote;
 pub mod rotate;
 pub mod settled;
+pub mod simpleloopunswitch;
 pub mod simplifycfg;
+pub mod simplifyindvar;
 pub mod sink;
 pub mod spares;
+pub mod speculate;
 pub mod spill;
 pub mod splitcopy;
+pub mod sroa;
+pub mod switchcg;
 pub mod switchlower;
 pub mod tailrec;
 #[cfg(test)]
 pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
+pub mod twoentryphi;
 pub mod unroll;
 pub mod unroll_jam;
 pub mod unswitch;
 pub mod versionalias;
 pub mod versionstride;
+pub mod vncoercion;
+#[cfg(test)]
+mod vncoercion_tests;
+pub mod widen;
 pub mod window;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called

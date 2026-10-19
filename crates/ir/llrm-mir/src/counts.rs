@@ -49,11 +49,16 @@ pub enum Event {
     ExposedFrames,
     /// The live rows of a body solved.
     LiveRows,
+    /// The cold blocks of a function found.
+    ColdScans,
+    /// A body hashed for the fixed point's cycle history
+    /// (`print::fingerprint`).
+    Fingerprints,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 12] = [
+const NAMES: [&str; 14] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -66,6 +71,8 @@ const NAMES: [&str; 12] = [
     "knowns_worked_out",
     "exposed_frames_found",
     "live_rows_solved",
+    "cold_scans",
+    "fingerprints",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -82,7 +89,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 12] = const { [const { Cell::new(0) }; 12] };
+    static EVENTS: [Cell<u64>; 14] = const { [const { Cell::new(0) }; 14] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
@@ -136,7 +143,7 @@ pub fn pass_run_over(
     if !PER_PASS.load(Ordering::Relaxed) {
         return Running(None);
     }
-    pass_run(name, function.layout().iter().map(|&block| function.block(block).instructions().len()).sum())
+    pass_run(name, function.layout().iter().map(|&block| function.block(block).len()).sum())
 }
 
 /// Charges the analyses computed to the pass that was running before.
@@ -249,6 +256,17 @@ pub fn callers() -> Vec<String> {
         .collect()
 }
 
+/// Readers of a block's instruction slice, as `tools/block_list/known.txt`
+/// lists them at build time; `tests/block_list_ratchet.rs` holds the count
+/// down.
+fn block_list_readers() -> usize {
+    include_str!("../../../../tools/block_list/known.txt")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.rsplit_once(' ')?.1.parse::<usize>().ok())
+        .sum()
+}
+
 /// The counts as `LLRM_DEBUG=counts` prints them.
 pub fn lines() -> Vec<String> {
     let mut out: Vec<String> = NAMES
@@ -261,6 +279,7 @@ pub fn lines() -> Vec<String> {
         ANALYSES.with(|rows| rows.borrow().iter().map(|row| row.2).sum::<u64>()),
     );
     out.push(format!("[counts] pass_runs {runs}"));
+    out.push(format!("[counts] block_list_readers {}", block_list_readers()));
     out.push(format!("[counts] analysis_computations {computed}"));
     PASSES.with(|rows| {
         let mut rows: Vec<_> = rows.borrow().iter().map(|row| (row.name, row.runs, row.instructions)).collect();
@@ -351,5 +370,14 @@ mod tests {
             analysis("probe-split", false);
         }
         assert!(super::callers().contains(&"[counts] callers probe-split 1 joined 2 old".to_owned()));
+    }
+}
+
+#[cfg(test)]
+mod block_list_tests {
+    #[test]
+    fn test_the_counts_print_the_block_list_readers() {
+        let line = super::lines().into_iter().find(|line| line.starts_with("[counts] block_list_readers ")).unwrap();
+        assert!(line.rsplit(' ').next().unwrap().parse::<usize>().unwrap() > 0, "{line}");
     }
 }

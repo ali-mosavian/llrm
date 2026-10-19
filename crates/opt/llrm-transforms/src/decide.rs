@@ -76,8 +76,16 @@
 //! at -O0. `jumpthread` is the separate pass that threads a state variable's
 //! edges.
 //!
+//! # ScalarEvolution
+//! A branch the other engines leave is asked of ScalarEvolution
+//! (`isKnownPredicateAt` at the branch, then its inverse), then of the `guards`
+//! engine for what it cannot prove (the partition index: not an add
+//! recurrence). `LLRM_NO_SCEV_DECIDE` asks the `guards` engine alone.
+//!
 //! # Needs
-//! `consts`, `constant_cycles`, `ranges`, `guards`, `induction`, points-to
+//! `consts`, `constant_cycles`, LazyValueInfo (a branch the dominating
+//! branches, assumes and `!range`s settle), `ranges` (the counted loops' facts,
+//! until indvars decides them as LLVM does), `guards`, `induction`, points-to
 //! (`pointers`), the CFG shape.
 //!
 //! # Keeps
@@ -101,17 +109,30 @@ use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::ranges;
+use llrm_analysis::scev::analysis::LazyScevView;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::footprint::Footprint;
+use llrm_mir::lazyvalueinfo::{Env, LazyValueInfo};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
+use llrm_mir::valuelattice::LatticeConstant;
+use llrm_mir::valuetracking::AssumptionCache;
 use llrm_support::hash::IndexMap;
 
 use crate::edges;
 use crate::transform;
+
+/// Read once: `decide` asks ScalarEvolution (`isKnownPredicateAt`) what the
+/// guards over a branch prove, then the old guard engine for what it cannot
+/// (the partition index, `PARTITION_CHECK`: not an add recurrence, so LLVM
+/// drops it only in the loop passes). `LLRM_NO_SCEV_DECIDE` asks the old
+/// engine alone.
+fn scev_enabled() -> bool {
+    !llrm_support::env_flag!("LLRM_NO_SCEV_DECIDE")
+}
 
 /// `decided`, then its chains merged, as the old Decide.
 pub struct Decide;
@@ -133,7 +154,7 @@ impl FunctionPass for Decide {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let decided = _decided(unit.context, unit.layout, unit.function, analyses)
+        let decided = _decided(unit.context, unit.layout, unit.function, analyses, scev_enabled())
             .unwrap_or_else(|error| panic!("decide: {error}"));
         if decided | crate::cfg::merged(unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -147,7 +168,18 @@ pub fn decided(
     function: &mut Function,
     outer: &Outer,
 ) -> Result<bool, String> {
-    _decided(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())))
+    decided_using(context, layout, function, outer, scev_enabled())
+}
+
+/// [`decided`], asking ScalarEvolution (`scev`) or the old guard engine.
+pub fn decided_using(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    scev: bool,
+) -> Result<bool, String> {
+    _decided(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), scev)
 }
 
 /// `decided`, `analyses` holding what is known of `function`.
@@ -156,6 +188,7 @@ fn _decided(
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
+    use_scev: bool,
 ) -> Result<bool, String> {
     let threaded = _threaded(context, function) | _phi_threaded(context, function)?;
     if threaded {
@@ -168,7 +201,10 @@ fn _decided(
     let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
     let held =
         Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
-    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), &registers)?;
+    let outer = std::rc::Rc::clone(analyses.outer());
+    let settled = _settled(context, layout, function, &outer);
+    let scev = LazyScevView::new(analyses);
+    let decisions = _decisions(&held.unit(context, layout, function, &outer), &registers, &settled, &scev, use_scev)?;
     if decisions.is_empty() {
         return Ok(threaded);
     }
@@ -185,6 +221,9 @@ fn _decided(
 fn _decisions(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
+    settled: &llrm_mir::dense::IdMap<BlockId, bool>,
+    scev: &LazyScevView,
+    use_scev: bool,
 ) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
     // Points-to only for a pointer compared with null, as LLVM asks
@@ -244,6 +283,9 @@ fn _decisions(
         };
         let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
         if answer.is_none() {
+            answer = settled.get(&block).copied();
+        }
+        if answer.is_none() {
             let scope = scoped.scope(unit, cfg::id(block));
             let mut possible = Vec::new();
             for target in function.successors(block) {
@@ -256,16 +298,59 @@ fn _decisions(
             }
         }
         if answer.is_none() {
-            answer = _implied(unit, block, last);
+            answer = if use_scev {
+                _implied_by_scev(unit, scev, last).or_else(|| _implied_by_guards(unit, block, last))
+            } else {
+                _implied_by_guards(unit, block, last)
+            };
         }
         out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
     }
     Ok(out)
 }
 
+/// The conditional branches LazyValueInfo settles: the compare a branch is on
+/// holds or fails at it, from the branches that dominate it, the assumes and
+/// the `!range`s, as `JumpThreading`'s `processBranchOnCompare` asks
+/// (`getPredicateAt(Pred, LHS, RHS, Terminator)`); a condition that is no
+/// compare is asked as a constant (`getConstant`).
+fn _settled(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &Function,
+    outer: &Outer,
+) -> llrm_mir::dense::IdMap<BlockId, bool> {
+    let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+    let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
+    let mut lvi = LazyValueInfo::new();
+    let mut settled = llrm_mir::dense::IdMap::default();
+    for &block in function.layout() {
+        let Some(last) = function.terminator(block) else { continue };
+        let branch = function.instruction(last);
+        if branch.opcode != Opcode::Br || branch.operands.len() != 3 {
+            continue;
+        }
+        let answer = match transform::_comparison(function, block, last) {
+            Some(compare) => {
+                let compare = function.instruction(compare);
+                let Opcode::ICmp(predicate) = compare.opcode else { continue };
+                lvi.get_predicate_at_values(&mut env, predicate, compare.operands[0], compare.operands[1], last, true)
+            }
+            None => match lvi.get_constant(&mut env, branch.operands[0], last) {
+                Some(LatticeConstant::Int { bits, .. }) => Some(bits & 1 == 1),
+                _ => None,
+            },
+        };
+        if let Some(answer) = answer {
+            settled.insert(block, answer);
+        }
+    }
+    settled
+}
+
 /// Whether the compare `last` branches on holds or fails there, by what the
 /// guards over `block` and the loops holding it prove of its two sides.
-fn _implied(
+fn _implied_by_guards(
     unit: &Unit,
     block: BlockId,
     last: InstId,
@@ -283,6 +368,28 @@ fn _implied(
         return Some(true);
     }
     given.holds(unit, predicate.inverse(), &left, &right).then_some(false)
+}
+
+/// Whether the compare `last` branches on holds or fails there, by what
+/// ScalarEvolution proves of its two sides at `last` (`isKnownPredicateAt`,
+/// which reads the guards over its block and the loops holding it).
+fn _implied_by_scev(
+    unit: &Unit,
+    scev: &LazyScevView,
+    last: InstId,
+) -> Option<bool> {
+    let function = unit.function;
+    let Some(Operand::Value(condition)) = function.instruction(last).operands.first().copied() else { return None };
+    let (_, compare) = unit.defining(Operand::Value(condition))?;
+    let (Opcode::ICmp(predicate), [left, right]) = (&compare.opcode, &compare.operands[..]) else { return None };
+    unit.int_bits(*left)?;
+    scev.ask(unit.context, unit.layout, function, |scev, cx| {
+        let (left, right) = (scev.get_scev(cx, *left), scev.get_scev(cx, *right));
+        if scev.is_known_predicate_at(cx, *predicate, left, right, Some(last)) {
+            return Some(true);
+        }
+        scev.is_known_predicate_at(cx, predicate.inverse(), left, right, Some(last)).then_some(false)
+    })
 }
 
 /// `last`, a terminator, replaced by a jump to `target`.
@@ -423,7 +530,7 @@ pub fn _executable_successors(
 /// it: false where `from` is the branch's false side, true where it is the true
 /// side (LLVM JumpThreading's `getKnownConstant` of an edge).
 fn known_on_edge(
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     value: ValueId,
     from: BlockId,
@@ -452,13 +559,13 @@ fn known_on_edge(
 /// constant leads: LLVM JumpThreading's `ProcessBranchOnPHI`. A loop's
 /// header keeps its edges. Whether anything changed.
 pub fn _phi_threaded(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
 ) -> Result<bool, String> {
     let headers = cfg::Shape::of(function).loops.iter().map(|one| one.header).collect::<BTreeSet<_>>();
     let mut changed = false;
     for block in function.layout().to_vec() {
-        let instructions = function.block(block).instructions().to_vec();
+        let instructions = function.block(block).iter().collect::<Vec<_>>();
         let [phi, last] = instructions[..] else { continue };
         let branch = function.instruction(last);
         let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
@@ -512,18 +619,11 @@ pub fn _phi_threaded(
     Ok(changed)
 }
 
-/// Blocks holding only a jump bypassed, where what they jump to has no
-/// phis to tell the edges apart. Whether anything changed.
-///
-/// Loop-simplify form keeps a loop's one entry edge, its one back edge and
-/// its dedicated exits as blocks of their own.
-pub fn _threaded(
-    context: &mut Context,
-    function: &mut Function,
-) -> bool {
-    if function.entry().is_none() {
-        return false;
-    }
+/// The blocks that hold a loop's simple form up: a jump alone in the block
+/// before the header (its one entry), the one latch, or an exit block only the
+/// loop reaches. A pass that takes them out meets `loopsimplify` putting them
+/// back, round after round.
+pub(crate) fn loop_form_blocks(function: &Function) -> BTreeSet<i64> {
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let known = graph.iter().map(|block| (block.at, &block.succ)).collect::<BTreeMap<_, _>>();
@@ -547,24 +647,40 @@ pub fn _threaded(
         {
             loop_edges.insert(latch);
         }
-        loop_edges.extend(
-            graph
-                .iter()
-                .filter(|block| {
-                    let parents = predecessors.get(&block.at).unwrap_or(none);
-                    !loop_.body.contains(&block.at)
-                        && !parents.is_empty()
-                        && parents.iter().all(|at| loop_.body.contains(at))
-                        && block.succ.len() == 1
-                        && !loop_.body.contains(&block.succ[0])
-                })
-                .map(|block| block.at),
-        );
+        // Only a successor of the body can have all its predecessors in it.
+        for &inside in &loop_.body {
+            for &exit in known[&inside].iter() {
+                let parents = predecessors.get(&exit).unwrap_or(none);
+                if !loop_.body.contains(&exit)
+                    && parents.iter().all(|at| loop_.body.contains(at))
+                    && known[&exit].len() == 1
+                    && !loop_.body.contains(&known[&exit][0])
+                {
+                    loop_edges.insert(exit);
+                }
+            }
+        }
     }
+    loop_edges
+}
+
+/// Blocks holding only a jump bypassed, where what they jump to has no
+/// phis to tell the edges apart. Whether anything changed.
+///
+/// Loop-simplify form keeps a loop's one entry edge, its one back edge and
+/// its dedicated exits as blocks of their own.
+pub fn _threaded(
+    context: &Context,
+    function: &mut Function,
+) -> bool {
+    if function.entry().is_none() {
+        return false;
+    }
+    let loop_edges = loop_form_blocks(function);
     let mut redirects = BTreeMap::new();
     for &block in function.layout() {
         let at = cfg::id(block);
-        let [only] = function.block(block).instructions()[..] else {
+        let [only] = function.block(block).iter().collect::<Vec<_>>()[..] else {
             continue;
         };
         let instruction = function.instruction(only);

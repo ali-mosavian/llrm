@@ -167,6 +167,12 @@ thread_local! {
     pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+// `Frequency::of` asked, for a test that greedy does not ask it.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static OF_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn tick() {
     #[cfg(test)]
     SCANNED.with(|one| one.set(one.get() + 1));
@@ -178,6 +184,8 @@ impl Frequency {
     /// for every body of that shape: a rewrite that only inserts
     /// instructions (a spill, a reload) asks the same question again and again.
     pub fn of(body: &LirBody) -> Arc<Self> {
+        #[cfg(test)]
+        OF_CALLS.with(|one| one.set(one.get() + 1));
         if body.frequencies.is_some() {
             if let Some(kept) = body.facts.0.get::<Carried>(body).as_ref() {
                 return Arc::clone(kept);

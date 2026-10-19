@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/indvars.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/indvars.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:31a998825f3f0ff7ba8f0432818637d99187a679891c511bca75663c77186f35 -->
+<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:0ff526ed5c504d42c0ebce558586f414047e408c86401677559c4f04a54aa879 -->
 
 # indvars
 
@@ -13,13 +13,13 @@ loop keeps, and which ends it, is `lsr`'s.
 One run is these steps, each followed by a refresh of what is known where it
 changed the body.
 
+0. `exitvalues::rewritten`: a value read after a loop becomes an expression
+   of the loop's count where the loop is left (`rewriteLoopExitValues`,
+   ScalarEvolution's exit values, from every exit of the loop, a rotated
+   loop's latch included); `LLRM_NO_SCEV_EXITVALUES` turns it off.
 1. `loopexit::evaluated`: values after a counted loop computed from its
    trips.
 2. `exitfold::folded`: exits their counts decide are folded.
-3. `exit_values` (only with `exit_values: true`): a counted exit's phi
-   values that are affine in the counters, with constant starts and steps,
-   become numbers. A counter stepped and then tested (`i + 1 < 32`) leaves
-   as 32, so the exit no longer keeps the old counter alive past its step.
 4. `exitsink::sunk`: final updates only exit phis read move to the exits.
 5. `widened`: a counter read through `zext` (or, where it is signed and
    tested by `slt`, `sext`) to the address's index width, where `induction`

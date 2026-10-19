@@ -516,21 +516,39 @@ b2:
 /// Descriptor addresses encoded as zero must not become the same value.
 #[test]
 fn test_cse_keeps_distinct_linker_addresses() {
-    for other in ["@b", "null"] {
-        kept(&format!(
-            "@a = global i16 0
+    kept(
+        "@a = global i16 0
 @b = global i16 0
 
-define i16 @f() {{
+define i16 @f() {
 b0:
   %first = ptrtoint ptr @a to i16
-  %second = ptrtoint ptr {other} to i16
+  %second = ptrtoint ptr @b to i16
   %r = add i16 %first, %second
   ret i16 %r
-}}
-"
-        ));
-    }
+}
+",
+    );
+}
+
+/// `ptrtoint ptr null` is the number 0 (ConstantFolding casts a null pointer to
+/// a null), so `a + 0` is `a`; `@a`'s address stays what it was.
+#[test]
+fn test_the_address_of_null_is_the_number_zero() {
+    let (text, _) = numbered(
+        "@a = global i16 0
+
+define i16 @f() {
+b0:
+  %first = ptrtoint ptr @a to i16
+  %second = ptrtoint ptr null to i16
+  %r = add i16 %first, %second
+  ret i16 %r
+}
+",
+        &[],
+    );
+    assert!(!text.contains("add i16") && text.contains("ptrtoint ptr @a"), "{text}");
 }
 
 #[test]
@@ -550,7 +568,8 @@ b0:
     );
     assert!(changed);
     assert!(!text.contains("%duplicate"), "{text}");
-    assert!(text.contains("%r = load i16, ptr %first"), "{text}");
+    // The load of the stored bytes is the stored value.
+    assert!(text.contains("ret i16 %x"), "{text}");
 }
 
 /// An address took its cell for a read, so no two addresses of one descriptor

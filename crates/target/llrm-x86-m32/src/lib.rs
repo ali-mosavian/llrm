@@ -209,6 +209,16 @@ impl llrm_target::Target for M32 {
         TIMINGS.default_cpu().expect("timings.times states a default CPU")
     }
 
+    /// X86ISelLowering.cpp: `setPrefFunctionAlignment(Align(16))`.
+    fn pref_function_alignment(&self) -> u8 {
+        4
+    }
+
+    /// The i486 and Pentium have no `nopl` (`FeatureNOPL`): one byte.
+    fn max_nop_bytes(&self) -> u8 {
+        1
+    }
+
     fn cpu_table(
         &self,
         name: &str,
@@ -237,7 +247,17 @@ impl llrm_target::Target for M32 {
     }
 
     fn cost_model(&self) -> CostModel {
-        |prices| llrm_target::described_by_size(prices, Some(OPCOSTS.size_costs()))
+        |prices| {
+            llrm_target::described_with(
+                prices,
+                Some(OPCOSTS.size_costs()),
+                // Every CPU the target accepts (i486, pentium) prices alike:
+                // the x87 tables.
+                llrm_x86::tti::X86::of_cpu("i486")
+                    .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
+                Some(std::rc::Rc::new(llrm_x86::lowering::X86)),
+            )
+        }
     }
 
     fn results(
@@ -253,6 +273,19 @@ mod tests {
     /// gcc's by-pieces ratios of a constant memset, read from the description:
     /// `i486_cost` and `pentium_cost` (x86-tune-costs.h, gcc 13.4.0), and the
     /// size table every CPU takes.
+    /// Greedy allocates the x87 values into the RFP registers FP0..FP6, LLVM's
+    /// seven (FP7 is the stackifier's scratch); they are no stack position,
+    /// so the float stack stays eight deep.
+    #[test]
+    fn test_seven_rfp_registers_and_an_eight_deep_float_stack() {
+        use llrm_target::Target;
+        let file = llrm_target::registers::parse(&M32.registers_text()).unwrap();
+        let rfp: Vec<&str> = file.iter().filter(|one| one.is("rfp")).map(|one| one.name.as_str()).collect();
+        assert_eq!(rfp, ["mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "mm6"]);
+        assert!(file.iter().filter(|one| one.is("rfp")).all(|one| !one.is("x87") && !one.is("gpr")));
+        assert_eq!(M32.float_stack(), 8);
+    }
+
     #[test]
     fn test_the_memset_ratios_are_gccs_per_cpu() {
         let (i486, p5) = (TIMINGS.cpu("486").expect("a 486"), TIMINGS.cpu("P5").expect("a P5"));
@@ -310,6 +343,37 @@ mod tests {
         assert!(!model.port_touches_memory((0x3DA, 0x3DA)), "the VGA status register");
         assert!(model.port_touches_memory((0x0B, 0x0B)), "the 8237's mode register may start a transfer");
         assert!(model.port_touches_memory((0x300, 0x300)), "a port the platform does not list");
+    }
+
+    /// The flat 32-bit target hands a pass that translates LLVM's the x87 X86
+    /// cost model (`Machine::tti`): i486 and pentium price alike there.
+    #[test]
+    fn test_m32_states_llvms_cost_model_for_the_passes_that_translate_it() {
+        use llrm_mir::tti::{ArithOp, Cost, CostKind, OperandInfo, Ty};
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout().spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M32.flat_ports(),
+        };
+        let tti = (M32.cost_model())(&prices).tti().expect("m32 states its cost model");
+        let divide = tti.arithmetic_cost(
+            ArithOp::SDiv,
+            Ty::Int(32),
+            CostKind::RecipThroughput,
+            OperandInfo::ANY,
+            OperandInfo::ANY,
+        );
+        assert_eq!(divide, Cost::of(25));
     }
 
     /// -Os on m32 priced in clocks: the description had no byte table, so

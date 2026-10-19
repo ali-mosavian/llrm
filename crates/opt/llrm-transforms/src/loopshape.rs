@@ -59,7 +59,7 @@ pub fn quiet(
         .loop_
         .body
         .iter()
-        .flat_map(|&at| function.block(cfg::block(at)).instructions().iter().copied())
+        .flat_map(|&at| function.block(cfg::block(at)).iter())
         .all(
             |inst| {
                 let opcode = &function.instruction(inst).opcode;
@@ -83,9 +83,7 @@ pub fn header_quiet(
 ) -> bool {
     function
         .block(shape.header)
-        .instructions()
         .iter()
-        .copied()
         .all(
             |inst| {
                 let opcode = &function.instruction(inst).opcode;

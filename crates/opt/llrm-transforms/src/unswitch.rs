@@ -207,7 +207,7 @@ pub fn optimized(
 /// `function` with its first loop that has a pure invariant condition
 /// specialized into a copy for each way the condition goes, or `None`.
 pub fn specialized(
-    context: &mut Context,
+    context: &Context,
     function: &Function,
 ) -> Result<Option<Function>, String> {
     let mut closed = function.clone();
@@ -246,7 +246,7 @@ pub fn specialized(
             if closed.instruction(compare).operands.iter().any(|operand| match operand {
                 Operand::Value(value) => owners
                     .get(value)
-                    .is_some_and(|&owner| loop_.body.contains(&owner) || !dominance.dominates(owner, entry)),
+                    .is_some_and(|&owner| loop_.body.contains(&owner) || !dominance.dominates(function, owner, entry)),
                 _ => false,
             }) {
                 continue;

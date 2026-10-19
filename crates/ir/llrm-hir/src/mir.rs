@@ -245,6 +245,19 @@ fn value_type(
     })
 }
 
+/// The type a pointer step of `size` bytes steps over: an integer where the
+/// size is one, else an array of bytes.
+fn element_type(
+    types: &mut Types,
+    size: i64,
+) -> TypeId {
+    let byte = types.int(8);
+    match size {
+        1 | 2 | 4 | 8 => types.int(8 * size as u32),
+        _ => types.intern(Type::Array { element: byte, count: size as u64 }),
+    }
+}
+
 /// A HIR type's MIR type in memory: bytes where it is no value.
 fn stored_type(
     types: &mut Types,
@@ -1060,7 +1073,13 @@ fn declare_data(
     };
     // An external one has no type to lay out, and is constant as declared.
     let constant = object.readonly && (ty.is_some() || object.linkage == model::DataLinkage::External);
-    let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant, initializer: None, align: None };
+    let variable = GlobalVariable {
+        externally_initialized: false,
+        ty: ty.unwrap_or(bytes),
+        constant,
+        initializer: None,
+        align: None,
+    };
     let global = add_unique(module, &object.name, |module, name| module.add_variable(name, variable.clone(), linkage));
     module.globals[global.0 as usize].address_space = data_space(spaces, object.address);
     global
@@ -1548,7 +1567,8 @@ fn declare_outside(
     for place in &function.places {
         if !matches!(place.storage, Storage::Local | Storage::Parameter) && !tables.data.contains_key(&place.symbol) {
             let ty = stored_type(&mut module.context.types, &tables.spaces, tables.types[&place.r#type])?;
-            let variable = GlobalVariable { ty, constant: false, initializer: None, align: None };
+            let variable =
+                GlobalVariable { externally_initialized: false, ty, constant: false, initializer: None, align: None };
             let global = add_unique(module, &place.name, |module, name| {
                 module.add_variable(name, variable.clone(), Linkage::External)
             });
@@ -3138,8 +3158,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             // At the pointer's index width: 16 bits for a far pointer, which
             // moves the offset alone; 32 for a huge one, which carries.
             Op::PtrOffset => {
-                let [pointer, displacement] = self.operands(instruction)?[..] else {
-                    return Err("ptr_offset without two operands".to_owned());
+                let operands = self.operands(instruction)?;
+                let (pointer, displacement) = match operands[..] {
+                    [pointer, displacement] | [pointer, displacement, _] => (pointer, displacement),
+                    _ => return Err("ptr_offset without two operands".to_owned()),
                 };
                 let signed = self.operand_hir_type(&instruction.operands[1]).signed != Some(false);
                 let space = match self.b.context.types.get(self.b.type_of(pointer)) {
@@ -3148,9 +3170,17 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 };
                 let index = self.b.context.types.int(self.tables.layout.pointer(space).index_bits);
                 let displacement = self.convert(displacement, signed, index)?;
-                let byte = self.b.context.types.int(8);
+                // A third operand is the element size in bytes, and the
+                // displacement counts elements: clang's `a[i]`.
+                let element = match instruction.operands.get(2) {
+                    Some(Operand::Constant(model::Constant { value: Number::Int(size), .. })) => {
+                        element_type(&mut self.b.context.types, *size)
+                    }
+                    Some(_) => return Err("a ptr_offset scale that is no constant".to_owned()),
+                    None => self.b.context.types.int(8),
+                };
                 let flags = self.stated_flags(instruction);
-                let result = self.b.gep(byte, pointer, &[displacement], flags, "");
+                let result = self.b.gep(element, pointer, &[displacement], flags, "");
                 self.define(instruction, result);
             }
             Op::PtrDiff => {
