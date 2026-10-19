@@ -29,7 +29,7 @@ fn metrics(
     let assumes: Vec<_> = function
         .layout()
         .iter()
-        .flat_map(|&one| function.block(one).iter())
+        .flat_map(|&one| function.iter_block(one))
         .filter(|&inst| {
             llrm_mir::memory::callee(&module.context, function, inst)
                 .is_some_and(|callee| module.global(callee).name.as_deref() == Some("llvm.assume"))

@@ -107,12 +107,6 @@ impl Context {
         id
     }
 
-    /// How many constants are interned: an id from `index` this size on is made
-    /// after the count was taken.
-    pub fn constant_count(&self) -> usize {
-        self.constants.len()
-    }
-
     #[inline]
     pub fn get(
         &self,

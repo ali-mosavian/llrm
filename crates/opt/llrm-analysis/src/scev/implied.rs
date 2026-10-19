@@ -134,7 +134,7 @@ impl ScalarEvolution {
             let query = cx.query(None);
             let mut found = Vec::new();
             for &block in cx.function.layout() {
-                for inst in cx.function.block(block).iter() {
+                for inst in cx.function.iter_block(block) {
                     if call_intrinsic(&query, inst) == Some(IntrinsicId::ExperimentalGuard) {
                         found.push(inst);
                     }

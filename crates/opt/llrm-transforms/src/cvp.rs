@@ -1997,7 +1997,7 @@ impl State<'_, '_> {
         let mut next = Some(entry);
         while let Some(bb) = next.take() {
             let mut bb_changed = false;
-            for ii in self.unit.function.block(bb).iter().collect::<Vec<_>>() {
+            for ii in self.unit.function.iter_block(bb).collect::<Vec<_>>() {
                 if self.unit.function.is_erased(ii) {
                     continue;
                 }
@@ -2399,8 +2399,7 @@ impl State<'_, '_> {
     ) -> bool {
         let function = &*self.unit.function;
         function
-            .block(self.default_dest(switch))
-            .iter()
+            .iter_block(self.default_dest(switch))
             .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
             .is_some_and(|inst| function.instruction(inst).opcode == Opcode::Unreachable)
     }
@@ -2573,8 +2572,7 @@ impl State<'_, '_> {
     ) {
         let function = &*self.unit.function;
         let phis: Vec<(InstId, Operand)> = function
-            .block(block)
-            .iter()
+            .iter_block(block)
             .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
             .map(|phi| (phi, Operand::Value(self.result(phi))))
             .collect();

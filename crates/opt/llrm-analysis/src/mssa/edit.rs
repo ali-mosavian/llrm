@@ -272,9 +272,12 @@ impl Mssa {
         block: BlockId,
         after: Option<InstId>,
     ) -> Where {
-        let instructions = function.block(block);
-        let start = after.map_or(0, |inst| instructions.iter().position(|one| one == inst).map_or(0, |at| at + 1));
-        for inst in instructions.iter().skip(start) {
+        let rest: Box<dyn Iterator<Item = InstId> + '_> =
+            match after.filter(|&inst| function.parent(inst) == Some(block)) {
+                Some(inst) => Box::new(function.iter_after(inst)),
+                None => Box::new(function.iter_block(block)),
+            };
+        for inst in rest {
             if let Some(access) = self.get_memory_access(inst)
                 && self.accesses[access as usize].block == block
                 && !self.accesses[access as usize].dead
