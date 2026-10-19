@@ -138,6 +138,97 @@ pub fn verify(
     out
 }
 
+/// After allocation, what the machine form reads: no register lane is read
+/// before every path to it has written it, unless the entry delivers it (an
+/// argument), the function preserves it (its epilogue reads it) or it is
+/// machine state (stack, frame and segment registers; flags are not checked).
+/// The checks of [`_values`] are of virtual values, which the machine form does
+/// not have (MachineVerifier: "Using an undefined physical register").
+pub fn physical(
+    body: &LirBody,
+    preserved: &BTreeSet<RegId>,
+) -> Vec<String> {
+    use crate::backend::lanes::Lanes;
+    use crate::backend::liveness;
+    use crate::backend::peephole::_lanes;
+    use crate::support::hash::IndexMap;
+    let regs = body.regs();
+    let machine_state = |register: RegId| register.is_segment_register() || regs.is_frame(register) || regs.is_stack(register);
+    let mut entering = Lanes::new();
+    for block in body.blocks.iter().filter(|block| block.at == body.entry) {
+        for (_, register) in block.insns.iter().flat_map(|one| one.delivers.iter()) {
+            entering = entering.or(&_lanes(regs, *register));
+        }
+    }
+    for register in regs.integer_registers().iter().copied().chain(regs.segments()) {
+        if preserved.contains(&register.full_register()) || machine_state(register) {
+            entering = entering.or(&_lanes(regs, register));
+        }
+    }
+    let everything = liveness::_universe(regs);
+    let effects: IndexMap<i64, Vec<Option<liveness::Effect>>> =
+        body.blocks.iter().map(|block| (block.at, liveness::_effects(regs, body.bits, block))).collect();
+    // Forward, must: a lane is defined on entry to a block when it is defined
+    // at the end of every predecessor. Walked to a fixed point from "all".
+    let preds = {
+        let mut preds: IndexMap<i64, Vec<i64>> = body.blocks.iter().map(|block| (block.at, Vec::new())).collect();
+        for block in &body.blocks {
+            for next in block.succ.iter().filter(|next| preds.contains_key(*next)).copied().collect::<Vec<_>>() {
+                preds[&next].push(block.at);
+            }
+        }
+        preds
+    };
+    let walked = |at: i64, defined: Lanes, complaint: &mut Lanes| -> Lanes {
+        let mut defined = defined;
+        for effect in &effects[&at] {
+            match effect {
+                // An instruction nothing is known of may write anything.
+                None => defined = everything,
+                Some(effect) => {
+                    *complaint = complaint.or(&effect.reads.minus(&defined));
+                    defined = defined.or(&effect.writes);
+                }
+            }
+        }
+        defined
+    };
+    let mut out_of: IndexMap<i64, Lanes> = body.blocks.iter().map(|block| (block.at, everything)).collect();
+    loop {
+        let mut changed = false;
+        for block in &body.blocks {
+            let defined = if block.at == body.entry {
+                entering
+            } else {
+                preds[&block.at].iter().fold(everything, |all, pred| all.and(&out_of[pred]))
+            };
+            let after = walked(block.at, defined, &mut Lanes::new());
+            if after != out_of[&block.at] {
+                out_of.insert(block.at, after);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut complaint = Lanes::new();
+    for block in &body.blocks {
+        let defined = if block.at == body.entry {
+            entering
+        } else {
+            preds[&block.at].iter().fold(everything, |all, pred| all.and(&out_of[pred]))
+        };
+        walked(block.at, defined, &mut complaint);
+    }
+    let seen: BTreeSet<RegId> = complaint.iter().map(|&(register, _)| register).filter(|register| *register != RegId::None).collect();
+    if seen.is_empty() {
+        return Vec::new();
+    }
+    let names: Vec<String> = seen.iter().map(|one| regs.name(*one).unwrap_or("?").to_owned()).collect();
+    vec![format!("{} reads {} before every path writes it, and the entry does not deliver it", body.name, names.join(", "))]
+}
+
 /// Once instruction selection has tagged them, every frame cell names the slot
 /// it lies in: a phase that makes a cell from a displacement alone leaves the
 /// frame layout unable to move it.

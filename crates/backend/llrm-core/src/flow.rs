@@ -207,9 +207,13 @@ pub fn verified(
     body: LirBody,
     stage: &str,
     in_ssa: bool,
+    allocated: Option<&std::collections::BTreeSet<RegId>>,
     spaces: &llrm_mir::spaces::Spaces,
 ) -> Result<LirBody, Malformed> {
-    let complaints = verify::verify_for(&body, in_ssa, spaces);
+    let mut complaints = verify::verify_for(&body, in_ssa, spaces);
+    if let Some(arguments) = allocated {
+        complaints.extend(verify::physical(&body, arguments));
+    }
     if let Some(first) = complaints.first() {
         return Err(Malformed(format!("{stage}: {first}")));
     }
@@ -228,6 +232,7 @@ pub fn checked(
     body: LirBody,
     phase: &mut dyn LIRTransform,
     in_ssa: bool,
+    allocated: Option<&std::collections::BTreeSet<RegId>>,
     classes: &crate::backend::classes::RegisterClasses,
     segments: &Segments,
     arch: &dyn llrm_target::Target,
@@ -244,7 +249,7 @@ pub fn checked(
     transformed.facts.0.end_phase();
     let body = if verifying {
         crate::support::debug::timed("lir verify", || {
-            verified(transformed, &stage, in_ssa, &arch.layout().spaces.roles)
+            verified(transformed, &stage, in_ssa, allocated, &arch.layout().spaces.roles)
         })
         .map_err(Checked::Malformed)?
     } else {
