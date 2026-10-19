@@ -24,17 +24,17 @@
 //!    type (`vncoercion`); where several blocks serve it, a phi (`SsaUpdater`)
 //!    merges them. A load with an unavailable block is left for step 4. Equal
 //!    calls that touch no memory (`transform::equal_calls`) are one after it.
-//! 3. Join PRE (`joined`). An expression every predecessor of a join already
-//!    computes becomes a phi of those values. With `pre`, a predecessor that
-//!    lacks it gets the computation inserted before its unconditional `br`, if
-//!    no loop is entered or left by the edge and the operands are available
-//!    there. Divisions (which may trap on a path that did not divide), loads
-//!    and floating expressions are never inserted here.
-//! 4. Load PRE (`pass::loadpre`: `performLoadPRE`, `performLoopLoadPRE`). With
+//! 3. Load PRE (`pass::loadpre`: `performLoadPRE`, `performLoopLoadPRE`). With
 //!    `pre`, a load that is available on all but one of the ways into its block
 //!    is loaded on that way too (an edge into the block with several ways out
 //!    is split), and becomes a phi; a loop header's load of an address the loop
 //!    does not change is loaded in the preheader and after the one clobber.
+//! 4. Scalar PRE (`pass::scalarpre`: `performPRE`). With `pre`, an expression
+//!    that all but one predecessor of a join computes (none of them over a back
+//!    edge) is computed in that one too, before its terminator, and a phi takes
+//!    its place; an edge with several ways out is split first and the pass
+//!    tries again. Compares, GEPs, loads and instructions with effects are
+//!    left; so is any that could trap and may follow an exit.
 //!
 //! A volatile access is never numbered. Floats are numbered like integers; a
 //! value serves a read only of its own type, so a float store reaches a float
@@ -124,21 +124,13 @@
 //! Tests: `gvn_tests.rs`, `gvn_load_tests.rs`. Levels:
 //! `docs/reference/levels.md`. LLVM `GVN.cpp`; gcc `tree-ssa-pre.cc`.
 
-use std::collections::BTreeMap;
-
-use llrm_analysis::graph::loops::{self, Loop};
-use llrm_analysis::{cfg, ssa};
-use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, Opcode};
+use llrm_mir::module::{Function, InstId};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
-use llrm_support::hash::IndexMap;
 
 pub mod pass;
 pub mod table;
 
-use crate::lcssa::{arms, from_arms, place_phi};
-use crate::{edges, transform};
+use crate::transform;
 
 /// The single value-reuse pass: scalar GVN, load elimination and PRE.
 /// Without `pre` it only eliminates what is redundant on every path
@@ -192,15 +184,12 @@ impl FunctionPass for Gvn {
                     .preserve::<llrm_analysis::cfg::Shape>(),
             );
         }
-        match optimized(unit, self.pre, scalar || called) {
-            Ok((true, numbering_changed_cfg))
-                if cfg_changed || numbering_changed_cfg || unit.function.layout().len() != blocks =>
-            {
-                PreservedAnalyses::none()
-            }
-            Ok((true, _)) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
-            Ok((false, _)) => PreservedAnalyses::all(),
-            Err(error) => panic!("gvn: {error}"),
+        if cfg_changed || unit.function.layout().len() != blocks {
+            PreservedAnalyses::none()
+        } else if scalar || called {
+            PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+        } else {
+            PreservedAnalyses::all()
         }
     }
 }
@@ -241,240 +230,6 @@ impl FunctionPass for EqualCalls {
             Err(error) => panic!("equalcalls: {error}"),
         }
     }
-}
-
-/// Complete join PRE after the numbering; whether anything changed, and
-/// whether the CFG did. `numbered` says the numbering changed something.
-pub fn optimized(
-    unit: &mut Unit,
-    pre: bool,
-    numbered: bool,
-) -> Result<(bool, bool), String> {
-    // PRE may add work to a previously missing path.  Do that only after
-    // local numbering has stabilized.
-    let combined = joined(unit.function, pre && !numbered)?;
-    Ok((numbered || combined, false))
-}
-
-/// Translate simultaneously: an incoming phi value belongs to the prior edge.
-fn _on_edge(
-    function: &Function,
-    op: &Instruction,
-    phis: &[InstId],
-    predecessor: BlockId,
-) -> Option<Instruction> {
-    let incoming = phis
-        .iter()
-        .map(|&phi| {
-            let value = arms(function, phi).into_iter().find(|&(_, at)| at == predecessor).map(|(value, _)| value);
-            (function.instruction(phi).result.expect("a phi's value"), value)
-        })
-        .collect::<IndexMap<_, _>>();
-    let mut operands = Vec::new();
-    for &operand in &op.operands {
-        match operand {
-            Operand::Value(value) if incoming.contains_key(&value) => operands.push(incoming[&value]?),
-            _ => operands.push(operand),
-        }
-    }
-    Some(Instruction { operands, ..op.clone() })
-}
-
-/// Insert only on an unconditional edge, with available scalar inputs:
-/// before which instruction.
-fn _insertion(
-    function: &Function,
-    op: &Instruction,
-    parent: BlockId,
-    join: BlockId,
-    definitions: &IndexMap<ValueId, (i64, i64)>,
-    dominance: &cfg::Dominance,
-    natural_loops: &[Loop],
-) -> Option<InstId> {
-    let (parent_at, join_at) = (cfg::id(parent), cfg::id(join));
-    if function.successors(parent) != [join]
-        || dominance.dominates(function, join_at, parent_at)
-        || natural_loops.iter().any(|loop_| loop_.body.contains(&parent_at) != loop_.body.contains(&join_at))
-        || op.operands.iter().any(|operand| !matches!(operand, Operand::Value(_) | Operand::Constant(_)))
-    {
-        return None;
-    }
-    let cut = function.terminator(parent)?;
-    if function.instruction(cut).opcode != Opcode::Br || function.instruction(cut).operands.len() != 1 {
-        return None;
-    }
-    let cut_index = function.iter_block(parent).position(|one| one == cut)? as i64;
-    for operand in &op.operands {
-        let Operand::Value(value) = operand else {
-            continue;
-        };
-        let (at, index) = *definitions.get(value)?;
-        if !dominance.dominates(function, at, parent_at) || (at == parent_at && index >= cut_index) {
-            return None;
-        }
-    }
-    Some(cut)
-}
-
-/// Eliminate scalar redundancy without adding execution to any path;
-/// whether anything changed.
-///
-/// A phi combines independently dominating providers. Missing providers may
-/// be inserted on unconditional incoming edges, but only when another edge
-/// already supplies the result. Memory and floating expressions stay out.
-pub fn joined(
-    function: &mut Function,
-    insert: bool,
-) -> Result<bool, String> {
-    let graph = cfg::graph(function);
-    let predecessors = loops::predecessors(&graph);
-    if !predecessors.values().any(|parents| parents.len() > 1) {
-        return Ok(false);
-    }
-    let Some(entry) = function.entry() else {
-        return Ok(false);
-    };
-    let shape = cfg::Shape::of(function);
-    let dominance = &shape.dominance;
-    let depths = dominance.depths(function);
-    let natural_loops = shape.loops;
-
-    let key = |op: &Instruction| {
-        op.result?;
-        if matches!(
-            op.opcode,
-            Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) | Opcode::Load { .. }
-        ) || transform::_floating(&op.opcode)
-        {
-            return None;
-        }
-        transform::_computation(op, &BTreeMap::new())
-    };
-
-    let mut expressions = IndexMap::<_, Vec<(i64, usize, ValueId)>>::default();
-    let mut definitions = IndexMap::<ValueId, (i64, i64)>::default();
-    definitions.extend(function.parameters().iter().map(|&value| (value, (cfg::id(entry), -1))));
-    for &block in function.layout() {
-        for (index, inst) in function.iter_block(block).enumerate() {
-            let op = function.instruction(inst);
-            let Some(result) = op.result else {
-                continue;
-            };
-            let index = if op.opcode == Opcode::Phi { -1 } else { index as i64 };
-            definitions.insert(result, (cfg::id(block), index));
-            if let Some(expression) = key(op) {
-                expressions.entry(expression).or_default().push((cfg::id(block), index as usize, result));
-            }
-        }
-    }
-
-    let mut changed = false;
-    let mut replacements = BTreeMap::<ValueId, Operand>::new();
-    let mut erased = Vec::new();
-    for block in function.layout().to_vec() {
-        let at = cfg::id(block);
-        let parents = &predecessors[&at];
-        if block == entry || parents.len() < 2 {
-            continue;
-        }
-        for inst in function.iter_block(block).collect::<Vec<_>>() {
-            let op = function.instruction(inst).clone();
-            if op.opcode == Opcode::Phi {
-                continue;
-            }
-            let expression = key(&op);
-            let mut incoming = Vec::<(Operand, BlockId)>::new();
-            let mut missing = Vec::<(BlockId, InstId, Instruction)>::new();
-            if expression.is_some() {
-                for &parent in parents {
-                    let parent = cfg::block(parent);
-                    let substituted = Instruction {
-                        operands: ssa::substituted(&op, &replacements).map_err(|error| error.to_string())?,
-                        ..op.clone()
-                    };
-                    let translated = _on_edge(function, &substituted, &edges::phis(function, block), parent);
-                    let edge_expression = translated.as_ref().and_then(key);
-                    let candidates = edge_expression
-                        .as_ref()
-                        .and_then(|edge| expressions.get(edge))
-                        .into_iter()
-                        .flatten()
-                        .filter(|(provider, _, _)| {
-                            *provider != at
-                                && dominance.dominates(function, *provider, cfg::id(parent))
-                                && !dominance.dominates(function, at, *provider)
-                                && natural_loops
-                                    .iter()
-                                    .all(|loop_| !loop_.body.contains(provider) || loop_.body.contains(&at))
-                        })
-                        .collect::<Vec<_>>();
-                    if candidates.is_empty() {
-                        if !insert {
-                            break;
-                        }
-                        let cut = match (&edge_expression, &translated) {
-                            (Some(_), Some(translated)) => {
-                                _insertion(function, translated, parent, block, &definitions, dominance, &natural_loops)
-                            }
-                            _ => None,
-                        };
-                        let Some(cut) = cut else {
-                            break;
-                        };
-                        missing.push((parent, cut, translated.expect("an edge expression has a translation")));
-                        continue;
-                    }
-                    // Python's `max` keeps the first of equal keys.
-                    let mut best = candidates[0];
-                    for item in &candidates[1..] {
-                        if (depths[&item.0], item.1) > (depths[&best.0], best.1) {
-                            best = item;
-                        }
-                    }
-                    incoming.push((Operand::Value(best.2), parent));
-                }
-            }
-            if incoming.is_empty() || incoming.len() + missing.len() != parents.len() {
-                continue;
-            }
-            let result = op.result.expect("key needs a result");
-            let name = function.value(result).name.clone();
-            for (parent, cut, translated) in missing {
-                let made = function.create_instruction(
-                    translated.opcode,
-                    translated.ty,
-                    translated.operands,
-                    translated.flags,
-                    name.as_ref().map(|name| format!("{name}.pre")).as_deref(),
-                );
-                function.insert(made, Position::Before(cut))?;
-                incoming
-                    .push((Operand::Value(function.instruction(made).result.expect("an expression's value")), parent));
-            }
-            let phi = function.create_instruction(
-                Opcode::Phi,
-                op.ty,
-                from_arms(&incoming),
-                Default::default(),
-                name.as_ref().map(|name| format!("{name}.pre-phi")).as_deref(),
-            );
-            place_phi(function, block, phi)?;
-            replacements.insert(result, Operand::Value(function.instruction(phi).result.expect("a phi's value")));
-            erased.push(inst);
-            changed = true;
-        }
-    }
-    if !changed {
-        return Ok(false);
-    }
-    // A provider replaced in turn reaches each phi naming it through this.
-    for (&value, &with) in &replacements {
-        function.replace_value(value, with);
-    }
-    for inst in erased {
-        function.erase(inst)?;
-    }
-    Ok(true)
 }
 
 #[cfg(test)]

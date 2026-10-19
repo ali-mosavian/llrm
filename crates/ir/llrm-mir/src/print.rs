@@ -798,11 +798,11 @@ impl Printer<'_> {
                 _ if ids.is_empty() => "{}".to_owned(),
                 _ => format!("{{ {} }}", members(ids)),
             },
-            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands }) => {
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nusw, nuw, operands }) => {
                 let rest: Vec<String> = operands.iter().map(|&one| self.typed_constant(one)).collect();
                 format!(
                     "getelementptr {}({}, {})",
-                    if *inbounds { "inbounds " } else { "" },
+                    gep_flag_words(*inbounds, *nusw, *nuw),
                     self.ty(*source),
                     rest.join(", ")
                 )
@@ -828,4 +828,22 @@ impl Printer<'_> {
             .collect::<Vec<_>>()
             .join(", ")
     }
+}
+
+/// The flag words of a constant GEP, each followed by a space.
+pub(crate) fn gep_flag_words(
+    inbounds: bool,
+    nusw: bool,
+    nuw: bool,
+) -> String {
+    let mut words = String::new();
+    if inbounds {
+        words.push_str("inbounds ");
+    } else if nusw {
+        words.push_str("nusw ");
+    }
+    if nuw {
+        words.push_str("nuw ");
+    }
+    words
 }

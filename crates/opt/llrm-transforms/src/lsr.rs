@@ -1340,6 +1340,17 @@ fn _read_after_step(
             _ => {}
         }
     }
+    // A compare written before the step in its block now reads it: moved
+    // behind it, to the end of the block (its only reader is the branch).
+    let function = &mut *unit.function;
+    if let ValueDef::Instruction(made) = function.value(rewrite.step).def
+        && function.parent(made) == function.parent(rewrite.compare)
+        && function.comes_before(rewrite.compare, made)
+    {
+        let block = function.parent(made).expect("a placed step");
+        let branch = function.terminator(block).expect("a terminated block");
+        function.move_to(rewrite.compare, Position::Before(branch)).expect("a placed compare");
+    }
 }
 
 /// The loop's counted exit, where its compare is read only by its branch.

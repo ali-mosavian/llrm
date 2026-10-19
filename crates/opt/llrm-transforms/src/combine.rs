@@ -266,6 +266,8 @@ pub struct Env<'a> {
     pub globals: &'a [GlobalValue],
     pub layout: &'a DataLayout,
     pub analyses: FunctionAnalyses,
+    /// `BackEdges`, computed on the first ask (`computeBackEdges`).
+    pub back_edges: std::cell::OnceCell<std::collections::BTreeSet<(BlockId, BlockId)>>,
 }
 
 /// `InstCombinerImpl`: the function being combined, the worklist, and the
@@ -278,6 +280,18 @@ pub struct Combiner<'a> {
 }
 
 impl Combiner<'_> {
+    /// `isBackEdge` (InstCombiner.h:393).
+    pub fn is_back_edge(
+        &self,
+        from: BlockId,
+        to: BlockId,
+    ) -> bool {
+        self.env
+            .back_edges
+            .get_or_init(|| llrm_analysis::cfgwalk::find_function_backedges(self.function).into_iter().collect())
+            .contains(&(from, to))
+    }
+
     /// `Worklist.add`.
     pub fn add_to_worklist(
         &mut self,
@@ -425,7 +439,7 @@ pub(crate) fn combine_with(
     // InstCombine's `SQ.DC`: what the branches dominating an instruction say.
     let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function)
         .with_dom_conditions_of(context, globals, metadata, function);
-    let env = Env { globals, layout, analyses };
+    let env = Env { globals, layout, analyses, back_edges: Default::default() };
     let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default() };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
     changed |= drain(&mut c, visit);

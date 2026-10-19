@@ -53,7 +53,6 @@ crates/opt/llrm-transforms/src/lcssa.rs	3
 crates/opt/llrm-transforms/src/lcssamerges.rs	1
 crates/opt/llrm-transforms/src/loadjoins.rs	3
 crates/opt/llrm-transforms/src/loopclone.rs	1
-crates/opt/llrm-transforms/src/loopexit.rs	15
 crates/opt/llrm-transforms/src/loopmotion.rs	3
 crates/opt/llrm-transforms/src/lsr.rs	10
 crates/opt/llrm-transforms/src/profit.rs	1
