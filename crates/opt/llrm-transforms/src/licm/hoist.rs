@@ -53,7 +53,7 @@ pub fn hoist_region(
     aa: &AliasQuery,
     flags: &mut Flags,
     safety: &LoopSafety,
-) -> (Vec<(InstId, BlockId)>, Vec<(usize, Reassociation)>) {
+) -> (Vec<Hoist>, Vec<(usize, Reassociation)>) {
     let mut found = Vec::new();
     let mut reassociated = Vec::new();
     for block in loop_blocks_rpo(ctx) {
@@ -75,7 +75,7 @@ pub fn hoist_region(
                 && is_safe_to_execute_unconditionally(unit, outer, ctx, safety, preheader, inst)
             {
                 ctx.state.moved.borrow_mut().insert(inst, preheader);
-                found.push((inst, preheader));
+                found.push(Hoist { inst, preheader, guaranteed: safety.is_guaranteed_to_execute(inst) });
             // Try to reassociate instructions so that part of computations can
             // be done out of loop.
             } else if let Some(one) = hoist_gep(unit, ctx, inst).or_else(|| hoist_bo_association(unit, ctx, inst)) {
@@ -87,6 +87,16 @@ pub fn hoist_region(
         }
     }
     (found, reassociated)
+}
+
+/// An instruction `hoist_region` moves to `preheader`, and whether it was
+/// guaranteed to execute in the loop (`LICM.cpp:1478`: a call that was not has
+/// its UB-implying attributes dropped).
+#[derive(Clone, Copy, Debug)]
+pub struct Hoist {
+    pub inst: InstId,
+    pub preheader: BlockId,
+    pub guaranteed: bool,
 }
 
 /// Whether `inst` could be a [`hoist_bo_association`]'s `bo`: an operation it
@@ -303,7 +313,7 @@ pub fn is_safe_to_speculatively_execute(
     outer: &Outer,
     inst: InstId,
 ) -> bool {
-    is_safe_to_speculatively_execute_in(unit.context, unit.layout, unit.function, outer, inst)
+    is_safe_to_speculatively_execute_with(unit.context, unit.layout, unit.function, outer, inst, true)
 }
 
 /// [`is_safe_to_speculatively_execute`] of the parts of a unit, for a caller
@@ -314,6 +324,21 @@ pub fn is_safe_to_speculatively_execute_in(
     function: &Function,
     outer: &Outer,
     inst: InstId,
+) -> bool {
+    is_safe_to_speculatively_execute_with(context, layout, function, outer, inst, false)
+}
+
+/// [`is_safe_to_speculatively_execute_in`] with `IgnoreUBImplyingAttrs`
+/// (`ValueTracking.h:590`: true by default, as `LICM.cpp:1513` asks). A caller
+/// that moves a call with it drops the attributes
+/// (`Function::drop_ub_implying_attrs`) where the call may not run.
+pub fn is_safe_to_speculatively_execute_with(
+    context: &llrm_mir::context::Context,
+    layout: &llrm_mir::datalayout::DataLayout,
+    function: &Function,
+    outer: &Outer,
+    inst: InstId,
+    ignore_ub_implying_attrs: bool,
 ) -> bool {
     let instruction = function.instruction(inst);
     let constant_int = |operand: Operand| match operand {
@@ -361,24 +386,15 @@ pub fn is_safe_to_speculatively_execute_in(
             // Since the operands may be changed after hoisting, undefined
             // behavior may be triggered by some UB-implying attributes.
             let implies_ub = |attrs: &Vec<Attribute>| {
-                attrs
-                    .iter()
-                    .any(
-                        |attr| match attr {
-                            Attribute::Flag(_) => Fact::of_attribute(attr) == Some(Fact::NoUndef),
-                            Attribute::Int(name, _) => name.starts_with("dereferenceable"),
-                            Attribute::Range { .. } => true,
-                            _ => false,
-                        },
-                    )
+                Facts::of(attrs).iter().any(Fact::implies_ub)
+                    || attrs.iter().any(|attr| {
+                        matches!(
+                            attr,
+                            Attribute::Int(name, _) if name == "dereferenceable_or_null"
+                        )
+                    })
             };
-            let states_fact = |attrs: &Vec<Attribute>| {
-                let facts = Facts::of(attrs);
-                facts.non_null() || facts.align().is_some()
-            };
-            !(implies_ub(&info.return_attrs)
-                || states_fact(&info.return_attrs)
-                || info.argument_attrs.iter().any(|attrs| implies_ub(attrs) || states_fact(attrs)))
+            ignore_ub_implying_attrs || !(implies_ub(&info.return_attrs) || info.argument_attrs.iter().any(implies_ub))
         }
         Opcode::Alloca { .. }
         | Opcode::Invoke(_)

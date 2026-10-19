@@ -652,8 +652,13 @@ fn _function(
                 invalid!("{prefix}: only an asm instruction carries inline code");
             }
             if let Some(asm) = &instruction.asm {
-                if asm.inputs.len() != operand_types.len() || asm.outputs.len() != result_types.len() {
+                // The addresses of the symbols its code names come first.
+                if asm.inputs.len() + asm.fixups.len() != operand_types.len() || asm.outputs.len() != result_types.len()
+                {
                     invalid!("{prefix}: asm {} names a register for each operand and result", instruction.id);
+                }
+                if asm.fixups.iter().any(|one| one.at < 0 || one.at as usize + 2 > asm.code.len()) {
+                    invalid!("{prefix}: asm {} names a symbol outside its code", instruction.id);
                 }
                 // A register is a whole of 16 bits (real mode) or 32 (a flat
                 // target's e-register), which the code
@@ -661,7 +666,12 @@ fn _function(
                 // narrows or widens a part.
                 let word = |one: &i64| matches!(types[one].width, 2 | 4) && types[one].kind == model::TypeKind::Integer;
                 let near = |one: &i64| matches!(types[one].width, 2 | 4) && types[one].kind == model::TypeKind::Pointer;
-                if !operand_types.iter().all(|one| word(one) || near(one)) || !result_types.iter().all(word) {
+                let any_pointer = |one: &i64| types[one].kind == model::TypeKind::Pointer;
+                let (symbols, registers) = operand_types.split_at(asm.fixups.len());
+                if !symbols.iter().all(any_pointer)
+                    || !registers.iter().all(|one| word(one) || near(one))
+                    || !result_types.iter().all(word)
+                {
                     invalid!("{prefix}: asm {} moves only 16-bit or 32-bit integers and near pointers", instruction.id);
                 }
             }
