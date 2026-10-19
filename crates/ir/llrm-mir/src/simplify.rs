@@ -51,6 +51,7 @@
 
 use crate::constantrange::ConstantRange;
 use crate::constantrange::PreferredRangeType;
+use crate::constantfolding;
 use crate::constfold;
 use crate::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
 use crate::datalayout::DataLayout;
@@ -3896,8 +3897,10 @@ fn simplify_icmp_with_zero(
 /// expressions.
 fn simplify_gep(
     q: &mut Query,
+    source: TypeId,
     ptr: Operand,
     indices: &[Operand],
+    flags: Flags,
 ) -> Option<Operand> {
     if indices.is_empty() {
         return Some(ptr);
@@ -3916,7 +3919,18 @@ fn simplify_gep(
         let ty = q.ty(ptr);
         return Some(q.undef(ty));
     }
-    None
+    // Check to see if this is constant foldable.
+    let ptr_c = q.constant(ptr)?;
+    let indices_c = indices.iter().map(|&index| q.constant(index)).collect::<Option<Vec<_>>>()?;
+    let nw = constantfolding::nw_of_flags(flags);
+    let env = constantfolding::Env { globals: q.globals, layout: q.layout };
+    let folded = match constantfolding::constant_expr_get_gep_with_layout(
+        q.context, q.layout, source, ptr_c, &indices_c, nw,
+    ) {
+        Some(expr) => constantfolding::constant_fold_constant(q.context, env, expr),
+        None => constantfolding::constant_fold_get_element_ptr(q.context, source, ptr_c, &indices_c, nw),
+    };
+    Some(Operand::Constant(folded))
 }
 
 /// `simplifyInstruction`
@@ -3989,7 +4003,7 @@ fn simplify_instruction_with_operands(
         Opcode::Cast(op) => simplify_cast(q, *op, operands[0], instruction.ty, max_recurse),
         Opcode::Phi => simplify_phi(q, inst),
         Opcode::Freeze => simplify_freeze(q, operands[0]),
-        Opcode::GetElementPtr { .. } => simplify_gep(q, operands[0], &operands[1..]),
+        Opcode::GetElementPtr { source } => simplify_gep(q, *source, operands[0], &operands[1..], flags),
         _ => None,
     }
 }
@@ -4040,11 +4054,13 @@ pub fn simplify_gep_operands(
     context: &mut Context,
     layout: &DataLayout,
     function: &Function,
+    source: TypeId,
     ptr: Operand,
     indices: &[Operand],
+    flags: Flags,
 ) -> Option<Operand> {
     let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None, can_use_undef: true };
-    simplify_gep(&mut q, ptr, indices)
+    simplify_gep(&mut q, source, ptr, indices, flags)
 }
 
 /// `simplifySelectInst` for operands.
