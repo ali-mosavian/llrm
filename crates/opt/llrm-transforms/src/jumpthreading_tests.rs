@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
+use llrm_mir::interpret::Val;
 use llrm_mir::target::Neutral;
 
 use crate::jumpthreading::{JumpThreading, JumpThreadingOptions};
@@ -296,4 +297,43 @@ fn the_options_default_to_the_pins_values_and_a_lowered_limit_blocks_the_thread(
     assert!(run_with(text, options).contains(".thread"), "2 instructions thread at 6");
     let strict = JumpThreadingOptions { bb_dup_threshold: 0, ..options };
     assert!(!run_with(text, strict).contains(".thread"), "2 instructions are over 0");
+}
+
+fn int(bits: u128) -> Val {
+    Val::Int { bits, width: 32 }
+}
+
+/// `f(arguments)` of fixture `name`, interpreted before and after the pass.
+fn value_before_and_after(
+    name: &str,
+    arguments: &[Val],
+) -> (Val, Val) {
+    let text = fixture(name);
+    let ran = |module: &llrm_mir::module::Module| {
+        llrm_mir::interpret::run(module, "f", arguments.to_vec(), 1_000_000).expect("the function runs")
+    };
+    let before = ran(&parsed(&text));
+    (before, ran(&parsed(&run(&text))))
+}
+
+/// c/logical_value.c -O2/-Os and c/compare_to_int64.c -O2 printed wrong
+/// values (#2886): `single_predecessor` was `getUniquePredecessor`, so a
+/// block reached twice from one conditional branch (`br %c, %t, %t`, as
+/// merging an empty block into its successor leaves) counted as having a
+/// single predecessor, `processImpliedCondition` took the branch's
+/// condition as true on that edge, and `f(0)` returned 1.
+#[test]
+fn a_branch_to_one_block_twice_does_not_imply_its_condition() {
+    for a in [0, 1] {
+        let (before, after) = value_before_and_after("branch_to_one_block_twice", &[int(a)]);
+        assert_eq!(after, before, "f({a})");
+    }
+}
+
+/// The same fault in c/logical_value.c's -O2 main: three phis on one
+/// condition. The sum printed was 30921, not 30192.
+#[test]
+fn three_phis_on_one_condition_keep_each_paths_value_after_threading() {
+    let (before, after) = value_before_and_after("logical_value_chain", &[]);
+    assert_eq!(after, before);
 }
