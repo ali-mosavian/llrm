@@ -440,7 +440,7 @@ fn analyze_loop_unroll_cost(
         // Prepare for the iteration by collecting any simplified entry or
         // backedge inputs.
         let mut simplified_input_values: Vec<(llrm_mir::module::ValueId, Operand)> = Vec::new();
-        for inst in run.function.block(header).iter() {
+        for inst in run.function.iter_block(header) {
             let operation = run.function.instruction(inst);
             if operation.opcode != Opcode::Phi {
                 break;
@@ -482,7 +482,7 @@ fn analyze_loop_unroll_cost(
 
             // Visit all instructions of the block and try to simplify them. The
             // IR is not changed, only optimization opportunities are counted.
-            for inst in run.function.block(bb).iter().collect::<Vec<_>>() {
+            for inst in run.function.iter_block(bb).collect::<Vec<_>>() {
                 // These will not get into the final code: do not even try
                 // calculating their cost.
                 if eph.contains(&inst) {
@@ -660,7 +660,7 @@ fn analyze_loop_unroll_cost(
     }
 
     while let Some((exiting_bb, exit_bb)) = exit_worklist.pop() {
-        for &inst in run.function.block(exit_bb).iter().collect::<Vec<_>>().iter() {
+        for &inst in run.function.iter_block(exit_bb).collect::<Vec<_>>().iter() {
             let operation = run.function.instruction(inst);
             if operation.opcode != Opcode::Phi {
                 break;
@@ -1136,8 +1136,7 @@ fn try_to_unroll_loop(
         .iter()
         .any(
             |&block| run.function
-                .block(block)
-                .iter()
+                .iter_block(block)
                 .any(
                     |inst| match call_target(run, inst) {
                         Some(Some(callee)) if (callee.0 as usize) < run.globals.len() => {
@@ -1208,7 +1207,7 @@ fn try_to_unroll_loop(
     if !uce.can_unroll() {
         if llrm_support::debug::enabled("unroll") {
             for &block in lp.get_blocks() {
-                for inst in run.function.block(block).iter() {
+                for inst in run.function.iter_block(block) {
                     let cost = instruction_cost(
                         run.tti,
                         run.context,
@@ -1367,7 +1366,7 @@ fn simplify_loop_after_unroll(
 ) {
     for &block in blocks {
         let mut dead: Vec<InstId> = Vec::new();
-        for inst in run.function.block(block).iter().collect::<Vec<_>>() {
+        for inst in run.function.iter_block(block).collect::<Vec<_>>() {
             if run.function.is_erased(inst) {
                 continue;
             }
