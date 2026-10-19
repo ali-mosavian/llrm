@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 
 use crate::context::{Constant, ConstantKind, Context};
+use crate::uselist::Held;
 use crate::module::{
     Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, NameIndex, Names,
     Operand, Use, ValueData, ValueDef, ValueId,
@@ -30,8 +31,7 @@ thread_local! {
 impl Function {
     /// Parents and use lists from the arenas, after reading.
     pub(crate) fn index(&mut self) {
-        self.value_uses.reset(self.values.len());
-        self.block_uses = vec![Vec::new(); self.blocks.len()];
+        self.uses.reset(self.values.len(), self.blocks.len());
         self.parent = vec![None; self.instructions.len()];
         self.erased = vec![false; self.instructions.len()];
         for &block in &self.layout.clone() {
@@ -41,7 +41,7 @@ impl Function {
         }
         for inst in 0..self.instructions.len() {
             let operands = self.instructions[inst].operands.clone();
-            self.value_uses.slots(inst as u32, operands.len());
+            self.uses.slots(inst as u32, operands.len());
             for (index, operand) in operands.into_iter().enumerate() {
                 self.add_use(operand, Use { user: InstId(inst as u32), index: index as u32 });
             }
@@ -53,10 +53,8 @@ impl Function {
         operand: Operand,
         at: Use,
     ) {
-        match operand {
-            Operand::Value(value) => self.value_uses.link(value.0, at),
-            Operand::Block(block) => self.block_uses[block.0 as usize].push(at),
-            Operand::Constant(_) => {}
+        if let Some(held) = Held::of(operand) {
+            self.uses.link(held, at);
         }
     }
 
@@ -65,14 +63,8 @@ impl Function {
         operand: Operand,
         at: Use,
     ) {
-        match operand {
-            Operand::Value(value) => self.value_uses.unlink(value.0, at),
-            Operand::Block(block) => {
-                let uses = &mut self.block_uses[block.0 as usize];
-                USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
-                uses.retain(|one| *one != at);
-            }
-            Operand::Constant(_) => {}
+        if let Some(held) = Held::of(operand) {
+            self.uses.unlink(held, at);
         }
     }
 
@@ -96,16 +88,17 @@ impl Function {
         }
         let mut problems = Vec::new();
         for (at, expected) in values.iter().enumerate() {
-            let list = self.value_uses.users(at as u32).to_vec();
+            let list = self.uses.users(Held::Value(at as u32)).to_vec();
             let kept: BTreeSet<Use> = list.iter().copied().collect();
             if kept != *expected || kept.len() != list.len() {
                 problems.push(format!("value {at}: kept {list:?}, operands say {expected:?}"));
             }
         }
         for (at, expected) in blocks.iter().enumerate() {
-            let kept: BTreeSet<Use> = self.block_uses[at].iter().copied().collect();
-            if kept != *expected || kept.len() != self.block_uses[at].len() {
-                problems.push(format!("block {at}: kept {:?}, operands say {expected:?}", self.block_uses[at]));
+            let list = self.uses.users(Held::Block(at as u32)).to_vec();
+            let kept: BTreeSet<Use> = list.iter().copied().collect();
+            if kept != *expected || kept.len() != list.len() {
+                problems.push(format!("block {at}: kept {list:?}, operands say {expected:?}"));
             }
         }
         problems
@@ -186,10 +179,10 @@ impl Function {
             let value = ValueId(self.values.len() as u32);
             let name = name.map(|one| self.unique_name(one));
             self.values.push(ValueData { ty, name, def: ValueDef::Instruction(id) });
-            self.value_uses.push_value();
+            self.uses.push_value();
             value
         });
-        self.value_uses.slots(id.0, operands.len());
+        self.uses.slots(id.0, operands.len());
         for (index, &operand) in operands.iter().enumerate() {
             self.add_use(operand, Use { user: id, index: index as u32 });
         }
@@ -256,14 +249,16 @@ impl Function {
         // A phi that names the block as where its value comes from is a use of
         // it too, but no way in. (An erase has already taken its own
         // use of the block away.)
-        let entries: Vec<InstId> = self
+        // Two entries decide it: a list of N was walked whole for each erase.
+        let mut entries = self
             .block_users(target)
             .iter()
             .map(|one| one.user)
-            .filter(|&one| self.instruction(one).opcode != Opcode::Phi)
-            .collect();
-        if !entries.is_empty() && entries != [inst] {
-            return None;
+            .filter(|&one| self.instruction(one).opcode != Opcode::Phi);
+        match (entries.next(), entries.next()) {
+            (None, _) => {}
+            (Some(only), None) if only == inst => {}
+            _ => return None,
         }
         self.block(target).instructions().iter().copied().find(|&one| self.instruction(one).opcode != Opcode::Phi)
     }
@@ -474,29 +469,10 @@ impl Function {
     ) {
         let old = std::mem::take(&mut self.instructions[inst.0 as usize].operands);
         let was: Box<[Operand]> = old.as_slice().into();
-        if old.len() > 4 {
-            // A phi of N inputs names a few values and N blocks: each list is
-            // scanned once for all the places `inst` names it, not
-            // once for each, which was N^2 for the one value
-            // N inputs repeat.
-            let mut places = crate::hash::HashMap::<BlockId, Vec<u32>>::default();
-            for (index, operand) in old.into_iter().enumerate() {
-                match operand {
-                    Operand::Block(block) => places.entry(block).or_default().push(index as u32),
-                    _ => self.remove_use(operand, Use { user: inst, index: index as u32 }),
-                }
-            }
-            for (block, indexes) in places {
-                let uses = &mut self.block_uses[block.0 as usize];
-                USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
-                uses.retain(|one| one.user != inst || indexes.binary_search(&one.index).is_err());
-            }
-        } else {
-            for (index, operand) in old.into_iter().enumerate() {
-                self.remove_use(operand, Use { user: inst, index: index as u32 });
-            }
+        for (index, operand) in old.into_iter().enumerate() {
+            self.remove_use(operand, Use { user: inst, index: index as u32 });
         }
-        self.value_uses.slots(inst.0, operands.len());
+        self.uses.slots(inst.0, operands.len());
         for (index, &operand) in operands.iter().enumerate() {
             self.add_use(operand, Use { user: inst, index: index as u32 });
         }
@@ -553,16 +529,6 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
-    fn replace_uses(
-        &mut self,
-        uses: Vec<Use>,
-        with: Operand,
-    ) {
-        for one in uses {
-            self.set_operand(one.user, one.index as usize, with);
-        }
-    }
-
     /// Every use of `value` now reads `with`. A record that names `value` still
     /// does: a pass that rewrites the uses of a value (to rebuild a loop
     /// around it, say) is not saying that the variable it was made of is
@@ -573,7 +539,11 @@ impl Function {
         with: Operand,
     ) {
         if with != Operand::Value(value) {
-            self.replace_uses(self.users(value).to_vec(), with);
+            // As LLVM's `Value::doRAUW`: each use moves from the head, so the
+            // list is not copied.
+            while let Some(one) = self.uses.head(Held::Value(value.0)) {
+                self.set_operand(one.user, one.index as usize, with);
+            }
         }
     }
 
@@ -591,8 +561,8 @@ impl Function {
             // Every use goes: the list is taken, not scanned for each of its
             // uses (a value of U uses read U^2 entries).
             self.log(Change::Substituted { from: value, to: with });
-            while let Some(one) = self.value_uses.head(value.0) {
-                self.value_uses.unlink(value.0, one);
+            while let Some(one) = self.uses.head(Held::Value(value.0)) {
+                self.uses.unlink(Held::Value(value.0), one);
                 self.instructions[one.user.0 as usize].operands[one.index as usize] = with;
                 self.add_use(with, one);
                 self.log(Change::Operand { inst: one.user, index: one.index, was: Operand::Value(value) });
@@ -683,7 +653,9 @@ impl Function {
         with: BlockId,
     ) {
         if with != block {
-            self.replace_uses(self.block_users(block).to_vec(), Operand::Block(with));
+            while let Some(one) = self.uses.head(Held::Block(block.0)) {
+                self.set_operand(one.user, one.index as usize, Operand::Block(with));
+            }
         }
     }
 
@@ -735,30 +707,15 @@ impl Function {
                 return Err(format!("instruction {}'s result still has a user, {}", inst.0, user.user.0));
             }
         }
-        // A value's uses unlink one by one; a block's list is filtered once,
-        // not once for each use of it that goes.
-        let mut operands: Vec<BlockId> = Vec::new();
-        let mut seen_blocks = crate::dense::IdSet::<BlockId>::new();
         for &inst in &insts {
             for (index, &operand) in self.instructions[inst.0 as usize].operands.iter().enumerate() {
-                match operand {
-                    Operand::Value(value) => self.value_uses.unlink(value.0, Use { user: inst, index: index as u32 }),
-                    Operand::Block(block) => {
-                        if seen_blocks.insert(block) {
-                            operands.push(block);
-                        }
-                    }
-                    Operand::Constant(_) => {}
+                if let Some(held) = Held::of(operand) {
+                    self.uses.unlink(held, Use { user: inst, index: index as u32 });
                 }
             }
             if let Some(result) = self.instruction(inst).result {
                 self.forget_debug_value(result);
             }
-        }
-        for block in operands {
-            let uses = &mut self.block_uses[block.0 as usize];
-            USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
-            uses.retain(|one| !gone.contains(&one.user));
         }
         let mut blocks: Vec<BlockId> = insts.iter().filter_map(|&inst| self.parent(inst)).collect();
         blocks.sort_unstable();
@@ -856,7 +813,7 @@ impl Function {
             .map(|&ty| {
                 let value = ValueId(self.values.len() as u32);
                 self.values.push(ValueData { ty, name: None, def: ValueDef::Argument(0) });
-                self.value_uses.push_value();
+                self.uses.push_value();
                 value
             })
             .collect();
@@ -1086,7 +1043,7 @@ impl Function {
         let id = BlockId(self.blocks.len() as u32);
         let name = name.map(|one| self.unique_name(one));
         self.blocks.push(Block { name, instructions: Vec::new(), erased: false, placed: false });
-        self.block_uses.push(Vec::new());
+        self.uses.push_block();
         self.log(Change::BlockCreated(id));
         id
     }
@@ -1131,8 +1088,7 @@ impl Function {
         self.layout.clear();
         self.debug_records.clear();
         self.erased.fill(true);
-        self.value_uses.clear_all();
-        self.block_uses.iter_mut().for_each(Vec::clear);
+        self.uses.clear_all();
     }
 
     /// One edge from `predecessor` into `block` gone: its phis lose one input
@@ -1261,14 +1217,4 @@ thread_local! {
 /// does not scan k times n.
 pub fn instructions_scanned() -> usize {
     SCANNED.with(std::cell::Cell::get)
-}
-
-thread_local! {
-    pub(crate) static USES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many use-list entries this thread has looked over to remove uses, for a
-/// test that a pass does not scan a long list once per use it removes.
-pub fn uses_scanned() -> usize {
-    USES_SCANNED.with(std::cell::Cell::get)
 }
