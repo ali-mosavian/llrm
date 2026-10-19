@@ -2138,10 +2138,12 @@ fn _compares_clobber(
     word: RegId,
 ) -> LirBody {
     let compares = |one: &Insn| {
-        one.what.as_ref().is_some_and(|what| {
-            what.op == Operation::Compare
-                && what.sources.iter().any(|source| matches!(source, Loc::Held(held) if held.width == 10))
-        })
+        one.what
+            .as_ref()
+            .is_some_and(
+                |what| what.op == Operation::Compare
+                    && what.sources.iter().any(|source| matches!(source, Loc::Held(held) if held.width == 10)),
+            )
     };
     if !body.insns().iter().any(|one| compares(one)) {
         return body.clone();
@@ -2233,9 +2235,7 @@ fn _sequenced(body: &LirBody) -> LirBody {
                     Arc::new(made)
                 };
                 while !pending.is_empty() {
-                    let ready = pending
-                        .iter()
-                        .position(|(_, d, _)| !pending.iter().any(|(_, _, source)| source == d));
+                    let ready = pending.iter().position(|(_, d, _)| !pending.iter().any(|(_, _, source)| source == d));
                     if let Some(at) = ready {
                         let (model, d, s) = pending.remove(at);
                         insns.push(copy_of(&model, d, s));

@@ -185,9 +185,9 @@ pub mod lsr_collect;
 #[cfg(test)]
 mod lsr_collect_tests;
 pub mod lsr_formula;
-pub mod lsr_use;
 #[cfg(test)]
 mod lsr_formula_tests;
+pub mod lsr_use;
 #[cfg(test)]
 mod lsr_use_tests;
 pub mod mem2reg;
