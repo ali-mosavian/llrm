@@ -352,7 +352,11 @@ fn test_qb_long_function_boundary_uses_the_legacy_dx_ax_pair() {
 
     let internal = listing(&parsed(&fixture("bare-function.bas")));
     let answer = between(&internal, "ANSWER proc far", "ANSWER endp");
-    assert!(answer.contains("shld edx, eax, 16"), "{internal}");
+    // The copy of the constant for DX is made again from the constant
+    // (reMaterializeDef), so DX takes the high word of 42 with a shift of its
+    // own where it took it from EAX with `shld`: AX holds the low word and DX
+    // the high one either way.
+    assert!(answer.contains("mov ax, 42\n    mov edx, 42\n    shr edx, 16\n"), "{internal}");
 }
 
 /// SYS_PARSE_ARGS exhausted string space when a native shell preceded B$ENRA.
