@@ -90,6 +90,7 @@ pub mod candidate;
 pub mod canonical;
 pub mod cfg;
 pub mod combine;
+pub mod combine_shared;
 pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
