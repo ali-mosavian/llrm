@@ -220,7 +220,7 @@ impl GvnPass<'_> {
         for phi in to_remove.iter() {
             self.remove_instruction(phi);
         }
-        for inst in self.function.block(block).iter().collect::<Vec<_>>() {
+        for inst in self.function.iter_block(block).collect::<Vec<_>>() {
             if self.function.is_erased(inst) {
                 continue;
             }

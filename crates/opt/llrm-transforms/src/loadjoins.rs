@@ -257,7 +257,7 @@ fn insertable(
     {
         return false;
     }
-    if function.block(join).iter().take(index).any(|prior| {
+    if function.iter_block(join).take(index).any(|prior| {
         !only_value(unit.context, callees, function, prior)
             || matches!(function.instruction(prior).opcode, Opcode::Load { .. })
     }) {
@@ -295,7 +295,7 @@ fn planned(
         .layout()
         .iter()
         .flat_map(|&block| {
-            function.block(block).iter().enumerate().map(move |(index, inst)| (inst, (cfg::id(block), index)))
+            function.iter_block(block).enumerate().map(move |(index, inst)| (inst, (cfg::id(block), index)))
         })
         .collect();
     let providers: Vec<(InstId, MemRef, Operand)> = memory
@@ -327,7 +327,7 @@ fn planned(
             continue;
         }
         let join = cfg::block(block.at);
-        for (index, load) in function.block(join).iter().enumerate() {
+        for (index, load) in function.iter_block(join).enumerate() {
             let Some((reference, result)) = loaded_into(unit, accesses, load) else {
                 continue;
             };
