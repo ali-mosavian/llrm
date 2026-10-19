@@ -2,12 +2,13 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 97 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 105 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
+| adce | Aggressive dead code elimination: a translation of LLVM's ADCE (`ADCE.cpp` at d1106deb71cc). | LLVM runs it after SCCP, BDCE and before MemCpyOpt (slot 35). Not in llrm's | [adce](adce.md) |
 | addresssink | Comparison and address sinking, so isel sees one form: LLVM's CodeGenPrepare `sinkCmpExpression` and address sinking, and GVNSink's merge of equal arms. | Once, last of the function passes before `spares` and `homes`, after | [addresssink](addresssink.md) |
 | algebraic | Algebraic identities over integer values, as LLVM's InstCombine and, for a loop-carried operand, Reassociate. | `algebraic` runs once in each pass of the fixed point, after `indvars` and | [algebraic](algebraic.md) |
 | argpromotion | Argument promotion (LLVM's ArgumentPromotion): a pointer parameter a function only reads at fixed offsets is replaced by the fields read. | In the interprocedural step, once, after its inlining loop and before | [argpromotion](argpromotion.md) |
@@ -17,11 +18,14 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | candidate | Trying a rewrite on a copy of the body: the copy is cleaned by the pipeline's own passes and replaces the body only if it is better. | `adopted`, `priced`, `priced_at`, `frequencies`, `Pricing`, `Gain`, | [candidate](candidate.md) |
 | canonical | Canonical forms, as LLVM's InstCombine puts them: compares with the constant on the right, no neutral terms, and a zero test at the width of what it tests, so that every later pass matches one shape of each. | Not a step of the fixed point on its own: `fold` runs `compares` and | [canonical](canonical.md) |
 | cfg | Control-flow cleanup: a block that jumps unconditionally to a block only it reaches takes that block's instructions (LLVM's SimplifyCFG `MergeBlockIntoPredecessor`). | A library function, called by `decide` after it decides branches and by | [cfg](cfg.md) |
+| combine | One worklist over a function's instructions: each is visited, simplified to a value it equals when its operands say so, and what read it is visited again. | `fold` (its number step). | [combine](combine.md) |
+| combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
 | constraintelim | `constraint-elimination`: conditions the dominating branches, assumes and memory accesses already decide become constants, by Fourier-Motzkin elimination on a system of linear constraints over the values compared. | Nothing yet: `difference` and `guards::Given::holds` move here. | [constraintelim](constraintelim.md) |
 | counting | What a counted-loop rewrite places before the loop: its seeds, skip test and exit values (LLVM's SCEVExpander, as IndVarSimplify and LoopRotate use it). | [`crate::loopidioms`](loopidioms.md), [`crate::loopexit`](loopexit.md), [`crate::window`](window.md) and | [counting](counting.md) |
 | cvp | Correlated value propagation: a value is replaced, narrowed or given a flag when the branches and ranges around it prove the fact, as LLVM's `correlated-propagation`. | Alone, through `llrm-pass cvp`; not in the pipeline. `tools/difftest` | [cvp](cvp.md) |
 | dead | Instructions nothing needs, removed: LLVM's ADCE and DCE. | Once per pass of the function fixed point, after `algebraic`, and again | [dead](dead.md) |
 | deadargs | Dead argument elimination (LLVM's DeadArgumentElimination): a parameter nothing reads goes, and with it the argument at every call. | In the interprocedural step, after the callers' arguments have been | [deadargs](deadargs.md) |
+| deadstore | Dead store elimination: LLVM's `DSEPass`, stage 1 (`DSEState`, `eliminateDeadDefs`, `getDomMemoryDef`, `eliminateDeadWritesAtEndOfFunction`, `storeIsNoop`). | In the slot of `dse@820` (LLVM's order); the older `dse.rs` runs elsewhere. | [deadstore](deadstore.md) |
 | decide | Branches whose way is known, decided: LLVM's JumpThreading and SimplifyCFG on known conditions. | Once per pass of the function fixed point, after `fold` and `ports` and | [decide](decide.md) |
 | dse | Dead store elimination: LLVM's DSE. | Once per pass of the function fixed point, after `trivialunswitch` and | [dse](dse.md) |
 | earlycse | LLVM's EarlyCSE with MemorySSA (`early-cse<memssa>`): one walk down the dominator tree, scoped tables of what is available, and a generation count that memory operations advance. | [`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`), | [earlycse](earlycse.md) |
@@ -45,6 +49,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | inline | Whole-module MIR inlining: chooses the calls worth replacing by a copy of the callee's body, and makes the copies. | Library of [`crate::interprocedural`](../analyses/interprocedural.md), which runs it once every body has | [inline](inline.md) |
 | inlinecost | LLVM's inline cost: what inlining one call site costs, and the threshold it is held to, translated from `InlineCost.cpp` and `InlineAdvisor.cpp`. | Off by default. With `LLRM_EXP_INLINECOST` the interprocedural stage prints | [inlinecost](inlinecost.md) |
 | instsimplify | InstSimplify as a pass: every instruction that equals one of its operands, or a constant, is replaced by it, and what that leaves dead goes. |  | [instsimplify](instsimplify.md) |
+| instworklist | The instruction worklist of InstCombine and the passes that drive a simplifier to a fixed point. | Not a pass: a data structure. Nothing uses it yet; `instsimplify`'s driver | [instworklist](instworklist.md) |
 | interprocedural | The whole-program step run once every body has reached its own fixed point: states what each body does, inlines, carries constants across direct calls, drops dead pure calls and the tails of calls that never return, and sends each changed body back through its pipeline. | A `ProgramPass` after the per-body fixed point and before `globaldce`, | [interprocedural](interprocedural.md) |
 | ipacp | Copies a function for the constants its callers pass and redirects those calls to the copy, so the copy's loops and branches fold on values the original cannot assume: GCC's `ipa-cp` cloning. | In [`crate::interprocedural`](../analyses/interprocedural.md)'s constants loop, after constant arguments are | [ipacp](ipacp.md) |
 | jumpthread | Threads a path through a branch or switch that the way into it decides: the blocks between the deciding value and the test are copied for that path, which jumps straight to its target and does not run the test. | After the loop passes and `rotate`, before the last `hoist`. Switch state | [jumpthread](jumpthread.md) |
@@ -82,6 +87,8 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | profit | Machine-neutral profitability shared by the MIR transforms: what an instruction, a block and a function cost under a target's prices, how often each block runs, and what registers cost past the target's. | Each of [`crate::lsr`](lsr.md), [`crate::hoist`](hoist.md), [`crate::gvn`](gvn.md), | [profit](profit.md) |
 | promote | Write-through promotion: a load of a cell that a store left its value in on every path becomes that value, a phi where paths join. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point: `Sroa` at the boundaries of | [promote](promote.md) |
 | rotate | Loop rotation: a loop proven to run at least once is entered at its body, not its test; a loop that is not proven is entered behind a copy of its test (gcc's `-ftree-ch`). | Twice in [`crate::pipeline`](pipeline.md), outside the per-body fixed point. `copy` runs | [rotate](rotate.md) |
+| sccp | Sparse conditional constant propagation. |  | [sccp](sccp.md) |
+| sccpsolver | Sparse conditional constant propagation: the solver. |  | [sccpsolver](sccpsolver.md) |
 | settled | What each pass found nothing to do on, kept from one run of the pipeline over a body to the next: a body goes through its pipeline again only where something a pass read of it has changed. | `Settled` (the records, held by the module's `Context`) and `slice`. | [settled](settled.md) |
 | simpleloopunswitch | `SimpleLoopUnswitch<trivial>`: a branch or switch in a loop on a loop-invariant condition, one side of which leaves the loop, is decided before the loop instead of on every trip. |  | [simpleloopunswitch](simpleloopunswitch.md) |
 | simplifycfg | A terminator on a constant becomes a jump, the blocks nothing reaches go, and what that leaves is merged: LLVM's `SimplifyCFGPass` and the `ConstantFoldTerminator`, `removeUnreachableBlocks` and `BasicBlock::removePredecessor` it is made of. | Once per round of the function fixed point, before `decide`: the branches | [simplifycfg](simplifycfg.md) |

@@ -729,6 +729,24 @@ impl Selector<'_, '_, '_> {
         })
     }
 
+    /// Whether `load` reads a local: an alloca, or a GEP from one.
+    pub fn is_local(
+        &self,
+        _: &Match,
+        load: Operand,
+    ) -> bool {
+        let Some(load) = self.definition(load) else { return false };
+        let mut at = self.function.instruction(load).operands[0];
+        while let Some(inst) = self.definition(at) {
+            match self.function.instruction(inst).opcode {
+                Opcode::Alloca { .. } => return true,
+                Opcode::GetElementPtr { .. } => at = self.function.instruction(inst).operands[0],
+                _ => return false,
+            }
+        }
+        false
+    }
+
     /// Whether two pointer operands compute one address: the same value, or
     /// two GEPs of the same type from the same address with the same indices.
     fn same_address(

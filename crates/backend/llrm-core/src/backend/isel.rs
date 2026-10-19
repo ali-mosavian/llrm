@@ -1663,7 +1663,7 @@ impl Selector<'_, '_, '_> {
         let kept = self.callee_facts.stack_alignment(self.arch, name);
         let mut align_of = IndexMap::<usize, i64>::default();
         for &block in layout {
-            for inst in function.block(block).iter() {
+            for inst in function.iter_block(block) {
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
                     let align = natural_align(&self.module.context.types, &self.layout, allocated)
@@ -1705,7 +1705,7 @@ impl Selector<'_, '_, '_> {
         }
         for &block in layout {
             block_at.insert(block, at);
-            for inst in function.block(block).iter() {
+            for inst in function.iter_block(block) {
                 self.ats.insert(inst, at);
                 at += 1;
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
@@ -1913,7 +1913,7 @@ impl Selector<'_, '_, '_> {
             );
         }
         for &block in layout {
-            for inst in function.block(block).iter() {
+            for inst in function.iter_block(block) {
                 self.fuse(block, inst);
                 self.covered_by_pattern(inst, &block_at, convention);
                 self.narrowed(inst);
@@ -1952,7 +1952,7 @@ impl Selector<'_, '_, '_> {
             let blocks = made.entry(block).or_default();
             let mut insns = if block == entry { std::mem::take(&mut prologue) } else { Vec::new() };
             let mut phis = Vec::new();
-            for inst in function.block(block).iter() {
+            for inst in function.iter_block(block) {
                 let instruction = function.instruction(inst);
                 if instruction.opcode == Opcode::Phi && (self.is_far(instruction.ty) || self.is_wide(instruction.ty)) {
                     let result = instruction.result.expect("a phi's value");
@@ -2340,7 +2340,7 @@ impl Selector<'_, '_, '_> {
         let function = self.function;
         let positions: IndexMap<InstId, i64> = layout
             .iter()
-            .flat_map(|&block| function.block(block).iter())
+            .flat_map(|&block| function.iter_block(block))
             .enumerate()
             .map(|(at, inst)| (inst, at as i64))
             .collect();
@@ -2415,7 +2415,7 @@ impl Selector<'_, '_, '_> {
         block: BlockId,
     ) -> Result<(), Unselected> {
         let function = self.function;
-        for inst in function.block(block).iter() {
+        for inst in function.iter_block(block) {
             let instruction = function.instruction(inst);
             if instruction.opcode != Opcode::Phi {
                 break;
@@ -2601,7 +2601,7 @@ impl Selector<'_, '_, '_> {
         let mut out = BTreeSet::new();
         let Some(&entry) = function.layout().first() else { return out };
         let order: IndexMap<InstId, usize> =
-            function.block(entry).iter().enumerate().map(|(index, inst)| (inst, index)).collect();
+            function.iter_block(entry).enumerate().map(|(index, inst)| (inst, index)).collect();
         for (&inst, &index) in &order {
             let Some(local) = self.zero_write(inst) else { continue };
             if function.users(local).iter().all(|one| {
@@ -4880,6 +4880,39 @@ impl Selector<'_, '_, '_> {
             }
             CastOp::FPToSI => self.float_to_integer(operand, "fisttp", result, to, false, at, out)?,
             CastOp::FPToUI => self.float_to_integer(operand, "fisttp", result, to, true, at, out)?,
+            // The same bits through a stack temporary: x87 has no move
+            // between a float register and an integer one.
+            CastOp::BitCast if self.is_float(from) && matches!(self.size(from)?, 4 | 8) => {
+                let size = self.size(from)? as u32;
+                let held = self.float(operand, at, out)?;
+                let cell = self.float_stored(held, "fstp", size, at, out);
+                let into = Held { value: self.value(result), width: self.width(to)? };
+                out.push(insn(
+                    at,
+                    semantics(
+                        Operation::Move,
+                        "mov",
+                        vec![Loc::Held(into)],
+                        vec![Loc::Mem(Self::memory(regs, cell, size))],
+                    ),
+                ));
+            }
+            CastOp::BitCast if self.is_float(to) && matches!(self.size(to)?, 4 | 8) => {
+                let size = self.size(to)? as u32;
+                let held = self.held(operand, from, at, out)?;
+                let cell = self.temporary(i64::from(size));
+                out.push(insn(
+                    at,
+                    semantics(
+                        Operation::Move,
+                        "mov",
+                        vec![Loc::Mem(Self::memory(regs, cell, size))],
+                        vec![Loc::Held(held)],
+                    ),
+                ));
+                let into = Held { value: self.value(result), width: FLOAT };
+                self.float_loaded(into, "fld", cell, size, false, at, out);
+            }
             _ => return refuse(format!("{op:?} of a float")),
         }
         Ok(())

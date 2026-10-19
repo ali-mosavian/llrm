@@ -364,7 +364,7 @@ fn time_saved(
             if !reached.contains(&block) {
                 continue;
             }
-            for inst in body.block(block).iter() {
+            for inst in body.iter_block(block) {
                 let instruction = body.instruction(inst);
                 let Some(defined) = consts::_defined(&unit, inst) else { continue };
                 if varying.contains(&defined) || matches!(instruction.opcode, Opcode::Br | Opcode::Ret) {

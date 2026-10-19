@@ -78,43 +78,57 @@ pub struct Instruction {
     pub metadata: Vec<(String, MetadataId)>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+/// A basic block. Its instructions are a doubly linked list through the
+/// function's `link` arena (LLVM's `simple_ilist`): the block holds the first,
+/// the last and the count, so an insert, an erase or a move at a known
+/// instruction is O(1). Read it with `Function::iter_block`, `first`, `last`
+/// and `next_in_block`; no `Vec` of it is kept.
+#[derive(Clone, Debug, Default)]
 pub struct Block {
     pub name: Option<String>,
-    pub(crate) instructions: Vec<InstId>,
+    /// The first and last instruction, as an id + 1 (0: none).
+    pub(crate) head: u32,
+    pub(crate) tail: u32,
+    pub(crate) len: u32,
     pub(crate) erased: bool,
     /// In the function's layout.
     pub(crate) placed: bool,
 }
 
+/// Two blocks are equal by what they hold, not by whether their view is built.
+impl PartialEq for Block {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.name == other.name
+            && self.head == other.head
+            && self.tail == other.tail
+            && self.len == other.len
+            && self.erased == other.erased
+            && self.placed == other.placed
+    }
+}
+
 impl Block {
-    pub fn instructions(&self) -> &[InstId] {
-        &self.instructions
-    }
-
-    /// `BasicBlock::begin` to `end`: the instructions in order.
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = InstId> + ExactSizeIterator + '_ {
-        self.instructions.iter().copied()
-    }
-
     /// `BasicBlock::front`.
     pub fn first(&self) -> Option<InstId> {
-        self.instructions.first().copied()
+        (self.head != 0).then(|| InstId(self.head - 1))
     }
 
     /// `BasicBlock::back`.
     pub fn last(&self) -> Option<InstId> {
-        self.instructions.last().copied()
+        (self.tail != 0).then(|| InstId(self.tail - 1))
     }
 
     /// `BasicBlock::size`.
     pub fn len(&self) -> usize {
-        self.instructions.len()
+        self.len as usize
     }
 
     /// `BasicBlock::empty`.
     pub fn is_empty(&self) -> bool {
-        self.instructions.is_empty()
+        self.len == 0
     }
 }
 
@@ -395,6 +409,9 @@ pub struct Function {
     /// The blocks in order, entry first; empty for a declaration.
     pub(crate) layout: Vec<BlockId>,
     pub(crate) uses: crate::uselist::UseLists,
+    /// Each instruction's (previous, next) in its block, as an id + 1 (0:
+    /// none): the block lists' links.
+    pub(crate) link: Vec<(u32, u32)>,
     pub(crate) order: OrderCache,
     pub(crate) changes: ChangeLog,
     /// How many edits of each kind the function has had: no part of what it is.
@@ -459,6 +476,7 @@ impl Function {
             blocks: Vec::new(),
             layout: Vec::new(),
             uses: Default::default(),
+            link: Vec::new(),
             order: OrderCache::default(),
             changes: ChangeLog::default(),
             epochs: crate::touched::Epochs::default(),
@@ -560,7 +578,7 @@ impl Function {
     pub fn positions(&self) -> Vec<u32> {
         let mut positions = vec![0; self.instructions.len()];
         for &block in self.layout() {
-            for (index, inst) in self.block(block).instructions().iter().enumerate() {
+            for (index, inst) in self.iter_block(block).enumerate() {
                 positions[inst.0 as usize] = index as u32;
             }
         }
@@ -581,6 +599,21 @@ impl Function {
         &self.blocks[id.0 as usize]
     }
 
+    /// `BasicBlock::begin` to `end`: a cursor over the links.
+    pub fn iter_block(
+        &self,
+        id: BlockId,
+    ) -> impl Iterator<Item = InstId> + '_ {
+        let mut at = self.blocks[id.0 as usize].head;
+        std::iter::from_fn(move || {
+            (at != 0).then(|| {
+                let inst = InstId(at - 1);
+                at = self.link[inst.0 as usize].1;
+                inst
+            })
+        })
+    }
+
     /// `inst`'s number in its block, the block renumbered if an edit made its
     /// numbers false.
     fn number_of(
@@ -596,7 +629,7 @@ impl Function {
             numbers.at.resize(self.instructions.len(), 0);
         }
         if !numbers.valid[block.0 as usize] {
-            for (at, &one) in self.blocks[block.0 as usize].instructions.iter().enumerate() {
+            for (at, one) in self.iter_block(block).enumerate() {
                 numbers.at[one.0 as usize] = at as u32;
             }
             numbers.valid[block.0 as usize] = true;
@@ -609,8 +642,11 @@ impl Function {
         &self,
         inst: InstId,
     ) -> Option<InstId> {
-        let (block, at) = self.number_of(inst)?;
-        self.blocks[block.0 as usize].instructions.get(at as usize + 1).copied()
+        self.parent(inst)?;
+        match self.link[inst.0 as usize].1 {
+            0 => None,
+            n => Some(InstId(n - 1)),
+        }
     }
 
     /// `Instruction::getPrevNode`: what stands before `inst` in its block.
@@ -618,8 +654,11 @@ impl Function {
         &self,
         inst: InstId,
     ) -> Option<InstId> {
-        let (block, at) = self.number_of(inst)?;
-        self.blocks[block.0 as usize].instructions.get((at as usize).checked_sub(1)?).copied()
+        self.parent(inst)?;
+        match self.link[inst.0 as usize].0 {
+            0 => None,
+            n => Some(InstId(n - 1)),
+        }
     }
 
     /// `Instruction::comesBefore`: whether `a` stands before `b` in their one
@@ -690,7 +729,7 @@ impl Function {
         &self,
         block: BlockId,
     ) -> Option<InstId> {
-        self.block(block).instructions.last().copied().filter(|&last| self.instruction(last).opcode.is_terminator())
+        self.blocks[block.0 as usize].last().filter(|&last| self.instruction(last).opcode.is_terminator())
     }
 
     /// The blocks `block`'s terminator names, in operand order, once each.
@@ -764,7 +803,7 @@ impl Function {
 
     /// Instructions in layout order, with their block.
     pub fn walk(&self) -> impl Iterator<Item = (BlockId, InstId)> + '_ {
-        self.layout.iter().flat_map(move |&block| self.block(block).instructions.iter().map(move |&one| (block, one)))
+        self.layout.iter().flat_map(move |&block| self.iter_block(block).map(move |one| (block, one)))
     }
 
     /// The log of changes since the last `take_changes`. They stay in the log,

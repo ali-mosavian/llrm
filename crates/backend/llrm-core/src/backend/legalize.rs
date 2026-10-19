@@ -22,6 +22,15 @@
 //!
 //! # See also
 //! LLVM's `DAGTypeLegalizer::PromoteIntegerResult` and `PromoteIntegerOperand`.
+//!
+//! # Example
+//! An `i33` operation is made on `i64`; a shift right first zeroes the high
+//! bits:
+//!
+//! ```text
+//! %a = add i33 %x, %y     ; add i64
+//! %d = lshr i33 %a, 1     ; and i64 %a, 0x1ffffffff, then lshr i64 by 1
+//! ```
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::Position;

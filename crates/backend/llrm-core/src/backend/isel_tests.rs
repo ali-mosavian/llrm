@@ -182,12 +182,12 @@ done:
             "mov bx, word ptr [bp+6]",
             "xor ax, ax",
             "xor cx, cx",
+            "L0_1:",
             "cmp cx, bx",
             "jge L0_8",
             "L0_5:",
             "add ax, cx",
             "inc cx",
-            "L0_1:",
             "cmp cx, bx",
             "jl L0_5",
             "L0_8:",
@@ -272,13 +272,13 @@ no:
             "mov bp, sp",
             "L0_0:",
             "cmp word ptr [bp+6], 5",
-            "jl L0_2",
-            "L0_3:",
-            "mov ax, 2",
-            "pop bp",
-            "retf",
+            "jge L0_3",
             "L0_2:",
             "mov ax, 1",
+            "pop bp",
+            "retf",
+            "L0_3:",
+            "mov ax, 2",
             "pop bp",
             "retf",
         ]
@@ -544,17 +544,17 @@ other:
             "je L0_3",
             "L0_6:",
             "cmp ax, 9",
-            "je L0_1",
-            "L0_4:",
-            "xor ax, ax",
-            "pop bp",
-            "retf",
+            "jne L0_4",
             "L0_1:",
             "mov ax, 10",
             "pop bp",
             "retf",
             "L0_3:",
             "mov ax, 50",
+            "pop bp",
+            "retf",
+            "L0_4:",
+            "xor ax, ax",
             "pop bp",
             "retf",
         ]
@@ -615,13 +615,13 @@ no:
             "sete dl",
             "movzx bx, dl",
             "and cl, dl",
-            "jne L0_6",
-            "L0_8:",
-            "xor ax, ax",
-            "pop bp",
-            "retf",
+            "je L0_8",
             "L0_6:",
             "add ax, bx",
+            "pop bp",
+            "retf",
+            "L0_8:",
+            "xor ax, ax",
             "pop bp",
             "retf",
         ]
@@ -2010,7 +2010,7 @@ fn test_a_load_only_a_comparison_reads_is_its_operand() {
     };
     assert_eq!(
         compared("%v = load i16, ptr %p", "sgt i16 %v, 5"),
-        ["mov bx, word ptr [bp+6]", "cmp word ptr [bx], 5", "jg L0_3"]
+        ["mov bx, word ptr [bp+6]", "cmp word ptr [bx], 5", "jle L0_4"]
     );
     assert_eq!(
         compared("%v = load i8, ptr %p\n  %w = zext i8 %v to i16", "eq i16 %w, 0"),
@@ -2885,6 +2885,26 @@ fn test_an_i64_to_a_float_is_filds_qword() {
             && got[..fild].iter().any(|line| line.starts_with("xor e")),
         "{got:?}"
     );
+}
+
+/// A float's bits are an integer's through a stack temporary (SROA turns a
+/// double stored and read as an i32 into `bitcast double to i64`; isel refused
+/// "BitCast to an i64" and "BitCast of a float", 48 of 260 QCport compiles).
+#[test]
+fn test_a_float_bitcast_to_an_integer_goes_through_the_stack() {
+    let text = |from: &str, to: &str| {
+        inner(&format!(
+            "define {to} @f({from} %x) addrspace(1) {{\n  %b = bitcast {from} %x to {to}\n  ret {to} %b\n}}\n"
+        ))
+    };
+    let single = text("float", "i32");
+    assert!(single.iter().any(|line| line.starts_with("fstp dword ptr [bp-")), "{single:?}");
+    let double = text("double", "i64");
+    assert!(double.iter().any(|line| line.starts_with("fstp qword ptr [bp-")), "{double:?}");
+    let back = text("i32", "float");
+    assert!(back.iter().any(|line| line.starts_with("fld dword ptr [bp-")), "{back:?}");
+    let back = text("i64", "double");
+    assert!(back.iter().any(|line| line.starts_with("fld qword ptr [bp-")), "{back:?}");
 }
 
 /// A zeroed array descriptor was `mov dword ptr [bp-n], 0` each, 8 bytes each:
@@ -3993,7 +4013,7 @@ fn test_dbg_lines_become_linnum() {
     let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {\n  %s = sub i16 %a, %b, !dbg !0\n  %t = add i16 %s, 3, !dbg !1\n  ret i16 %t, !dbg !1\n}\n!0 = !{i32 7}\n!1 = !{i32 8}\n";
     let module = parsed(text);
     let (_, _, function) = module.functions().next().expect("f");
-    let instructions = function.layout().iter().flat_map(|&block| function.block(block).iter());
+    let instructions = function.layout().iter().flat_map(|&block| function.iter_block(block));
     let attached =
         instructions.filter(|&one| function.instruction(one).metadata.iter().any(|(kind, _)| kind == "dbg")).count();
     assert_eq!(attached, 3, "the fixture carries its lines");
@@ -5654,4 +5674,23 @@ no:
 }
 ";
     assert!(!listing(text, "f").is_empty());
+
+/// `freeze undef` and a bare `undef` operand are selected as any value: a
+/// constant, no register read and no refusal (an `undef` constant had no
+/// case in the selector before #2532).
+#[test]
+fn test_freeze_of_undef_and_an_undef_operand_are_selected_as_a_constant() {
+    for (ty, body) in [
+        ("i16", "%f = freeze i16 undef\n  ret i16 %f"),
+        ("i32", "%f = freeze i32 undef\n  ret i32 %f"),
+        ("i16", "%f = add i16 undef, 5\n  ret i16 %f"),
+        ("i32", "%a = add i32 undef, 5\n  %f = freeze i32 %a\n  ret i32 %f"),
+    ] {
+        let text = format!("define {ty} @f() addrspace(1) {{\n  {body}\n}}\n");
+        let got = listing(&text, "f");
+        assert!(
+            !got.is_empty() && got.iter().all(|one| !one.contains("undef") && !one.contains("[")),
+            "{body}: {got:?}"
+        );
+    }
 }

@@ -505,14 +505,14 @@ impl<'a> View<'a> {
         let function = self.function;
         let read_outside = |one: &Canonical, inst: InstId| loopshape::read_outside(function, one, inst);
         let all = |one: &Canonical| {
-            one.loop_.body.iter().flat_map(|&at| function.block(cfg::block(at)).iter()).collect::<Vec<_>>()
+            one.loop_.body.iter().flat_map(|&at| function.iter_block(cfg::block(at))).collect::<Vec<_>>()
         };
         if all(first).into_iter().any(|inst| read_outside(first, inst)) {
             return None;
         }
         if pretested {
             let header_work =
-                function.block(second.header).iter().filter(|&inst| function.instruction(inst).opcode != Opcode::Phi);
+                function.iter_block(second.header).filter(|&inst| function.instruction(inst).opcode != Opcode::Phi);
             if header_work.into_iter().any(|inst| read_outside(second, inst)) {
                 return None;
             }
@@ -546,7 +546,7 @@ impl<'a> View<'a> {
         };
         let mut listed = Vec::new();
         for &block in &blocks {
-            for inst in function.block(block).iter() {
+            for inst in function.iter_block(block) {
                 let op = function.instruction(inst);
                 if op.opcode == Opcode::Phi {
                     return None;
@@ -661,7 +661,7 @@ fn phis_of(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function.block(block).iter().take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
+    function.iter_block(block).take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
 }
 
 /// The non-phi, non-terminator instructions of `block`.
@@ -670,8 +670,7 @@ fn work(
     block: BlockId,
 ) -> Vec<InstId> {
     function
-        .block(block)
-        .iter()
+        .iter_block(block)
         .filter(|&inst| {
             let opcode = &function.instruction(inst).opcode;
             *opcode != Opcode::Phi && !opcode.is_terminator()
@@ -721,8 +720,7 @@ fn fused(
         // The second's header work runs ahead of its body; its test is the
         // first's.
         let ahead = function
-            .block(body)
-            .iter()
+            .iter_block(body)
             .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
             .ok_or("a terminated body")?;
         for inst in work(function, second.header) {

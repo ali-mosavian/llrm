@@ -35,7 +35,7 @@ impl Function {
         self.parent = vec![None; self.instructions.len()];
         self.erased = vec![false; self.instructions.len()];
         for &block in &self.layout.clone() {
-            for &inst in &self.blocks[block.0 as usize].instructions.clone() {
+            for inst in self.iter_block(block).collect::<Vec<_>>() {
                 self.parent[inst.0 as usize] = Some(block);
             }
         }
@@ -88,14 +88,14 @@ impl Function {
         }
         let mut problems = Vec::new();
         for (at, expected) in values.iter().enumerate() {
-            let list = self.uses.users(Held::Value(at as u32)).to_vec();
+            let list = self.uses.users(Held::Value(at as u32)).iter().copied().collect::<Vec<_>>();
             let kept: BTreeSet<Use> = list.iter().copied().collect();
             if kept != *expected || kept.len() != list.len() {
                 problems.push(format!("value {at}: kept {list:?}, operands say {expected:?}"));
             }
         }
         for (at, expected) in blocks.iter().enumerate() {
-            let list = self.uses.users(Held::Block(at as u32)).to_vec();
+            let list = self.uses.users(Held::Block(at as u32)).iter().copied().collect::<Vec<_>>();
             let kept: BTreeSet<Use> = list.iter().copied().collect();
             if kept != *expected || kept.len() != list.len() {
                 problems.push(format!("block {at}: kept {list:?}, operands say {expected:?}"));
@@ -187,38 +187,107 @@ impl Function {
             self.add_use(operand, Use { user: id, index: index as u32 });
         }
         self.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata: Vec::new() });
+        self.link.push((0, 0));
         self.parent.push(None);
         self.erased.push(false);
         id
     }
 
-    fn slot(
+    /// The instruction after `inst` in its list.
+    fn next_raw(
         &self,
+        inst: InstId,
+    ) -> Option<InstId> {
+        match self.link[inst.0 as usize].1 {
+            0 => None,
+            n => Some(InstId(n - 1)),
+        }
+    }
+
+    /// Links `inst` last in `block`'s list.
+    pub(crate) fn link_last(
+        &mut self,
+        block: BlockId,
+        inst: InstId,
+    ) {
+        let b = &mut self.blocks[block.0 as usize];
+        let id = inst.0 + 1;
+        self.link[inst.0 as usize] = (b.tail, 0);
+        if b.tail != 0 {
+            self.link[(b.tail - 1) as usize].1 = id;
+        } else {
+            b.head = id;
+        }
+        b.tail = id;
+        b.len += 1;
+    }
+
+    /// Links `inst` before `next` in `block`'s list.
+    fn link_before(
+        &mut self,
+        block: BlockId,
+        inst: InstId,
+        next: InstId,
+    ) {
+        let id = inst.0 + 1;
+        let prev = self.link[next.0 as usize].0;
+        self.link[inst.0 as usize] = (prev, next.0 + 1);
+        self.link[next.0 as usize].0 = id;
+        let b = &mut self.blocks[block.0 as usize];
+        if prev != 0 {
+            self.link[(prev - 1) as usize].1 = id;
+        } else {
+            b.head = id;
+        }
+        b.len += 1;
+    }
+
+    /// Takes `inst` out of `block`'s list.
+    fn unlink(
+        &mut self,
+        block: BlockId,
+        inst: InstId,
+    ) {
+        let (prev, next) = self.link[inst.0 as usize];
+        let b = &mut self.blocks[block.0 as usize];
+        if prev != 0 {
+            self.link[(prev - 1) as usize].1 = next;
+        } else {
+            b.head = next;
+        }
+        if next != 0 {
+            self.link[(next - 1) as usize].0 = prev;
+        } else {
+            b.tail = prev;
+        }
+        self.link[inst.0 as usize] = (0, 0);
+        b.len -= 1;
+    }
+
+    /// Links `inst` at `position`; the block and what follows it.
+    fn link_at(
+        &mut self,
+        inst: InstId,
         position: Position,
-    ) -> Result<(BlockId, usize), String> {
-        match position {
-            Position::End(block) => Ok((block, self.block(block).instructions.len())),
+    ) -> Result<(BlockId, Option<InstId>), String> {
+        let (block, next) = match position {
+            Position::End(block) => (block, None),
+            Position::Before(next) => {
+                (self.parent(next).ok_or_else(|| format!("instruction {} is not placed", next.0))?, Some(next))
+            }
             Position::After(prev) => {
                 let block = self.parent(prev).ok_or_else(|| format!("instruction {} is not placed", prev.0))?;
-                let at = self
-                    .block(block)
-                    .instructions
-                    .iter()
-                    .position(|one| *one == prev)
-                    .expect("a parent holds its instruction");
-                Ok((block, at + 1))
+                (block, self.next_raw(prev))
             }
-            Position::Before(next) => {
-                let block = self.parent(next).ok_or_else(|| format!("instruction {} is not placed", next.0))?;
-                let at = self
-                    .block(block)
-                    .instructions
-                    .iter()
-                    .position(|one| *one == next)
-                    .expect("a parent holds its instruction");
-                Ok((block, at))
-            }
+        };
+        if self.blocks[block.0 as usize].erased {
+            return Err(format!("block {} is erased", block.0));
         }
+        match next {
+            Some(next) => self.link_before(block, inst, next),
+            None => self.link_last(block, inst),
+        }
+        Ok((block, next))
     }
 
     /// What stood before `from` now stands before `to`, ahead of what stood
@@ -260,7 +329,7 @@ impl Function {
             (Some(only), None) if only == inst => {}
             _ => return None,
         }
-        self.block(target).instructions().iter().copied().find(|&one| self.instruction(one).opcode != Opcode::Phi)
+        self.iter_block(target).find(|&one| self.instruction(one).opcode != Opcode::Phi)
     }
 
     /// Takes `inst` out of its block. What was said before it is said before
@@ -273,12 +342,9 @@ impl Function {
         moving: bool,
     ) -> Option<(BlockId, Option<InstId>)> {
         let block = self.parent(inst)?;
-        let list = &self.blocks[block.0 as usize].instructions;
-        SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
-        let at = list.iter().position(|one| *one == inst).expect("an instruction is in its parent");
-        let next = list.get(at + 1).copied();
+        let next = self.next_raw(inst);
         self.settle_records(inst, next, moving);
-        self.blocks[block.0 as usize].instructions.remove(at);
+        self.unlink(block, inst);
         self.order.invalidate(block);
         self.parent[inst.0 as usize] = None;
         Some((block, next))
@@ -324,19 +390,8 @@ impl Function {
         inst: InstId,
         position: Position,
     ) -> Result<(BlockId, Option<InstId>), String> {
-        let (block, at) = self.slot(position)?;
-        if self.block(block).erased {
-            return Err(format!("block {} is erased", block.0));
-        }
-        self.blocks[block.0 as usize].instructions.insert(at, inst);
+        let (block, next) = self.link_at(inst, position)?;
         self.parent[inst.0 as usize] = Some(block);
-        // What follows is what the position named: scanning the block for it
-        // made each append linear (#992).
-        let next = match position {
-            Position::End(_) => None,
-            Position::Before(next) => Some(next),
-            Position::After(_) => self.blocks[block.0 as usize].instructions.get(at + 1).copied(),
-        };
         self.order.invalidate(block);
         Ok((block, next))
     }
@@ -382,9 +437,7 @@ impl Function {
     ) -> Result<(), String> {
         for &inst in run {
             let block_from = self.parent(inst).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
-            let list = &mut self.blocks[block_from.0 as usize].instructions;
-            let at = list.iter().position(|one| *one == inst).expect("an instruction is in its parent");
-            list.remove(at);
+            self.unlink(block_from, inst);
             self.order.invalidate(block_from);
             self.parent[inst.0 as usize] = None;
             let (to, next) = self.attach(inst, Position::End(block))?;
@@ -422,22 +475,36 @@ impl Function {
         let mut blocks = froms.clone();
         blocks.sort_unstable();
         blocks.dedup();
+        for &inst in run {
+            let from = self.parent(inst).expect("placed");
+            self.unlink(from, inst);
+        }
         for &block in &blocks {
-            let list = &mut self.blocks[block.0 as usize].instructions;
-            SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
-            list.retain(|one| !moving.contains(one));
             self.order.invalidate(block);
         }
         for &inst in run {
             self.parent[inst.0 as usize] = None;
         }
-        // The place is found with the run out of the way: its index, once.
-        let (to, at) = self.slot(position)?;
+        // The place is found with the run out of the way.
+        let (to, next) = match position {
+            Position::End(block) => (block, None),
+            Position::Before(one) => {
+                (self.parent(one).ok_or_else(|| format!("instruction {} is not placed", one.0))?, Some(one))
+            }
+            Position::After(one) => {
+                let block = self.parent(one).ok_or_else(|| format!("instruction {} is not placed", one.0))?;
+                (block, self.next_raw(one))
+            }
+        };
         if self.blocks[to.0 as usize].erased {
             return Err(format!("block {} is erased", to.0));
         }
-        let next = self.blocks[to.0 as usize].instructions.get(at).copied();
-        self.blocks[to.0 as usize].instructions.splice(at..at, run.iter().copied());
+        for &inst in run {
+            match next {
+                Some(next) => self.link_before(to, inst, next),
+                None => self.link_last(to, inst),
+            }
+        }
         self.order.invalidate(to);
         for (&inst, &from) in run.iter().zip(&froms) {
             self.parent[inst.0 as usize] = Some(to);
@@ -517,6 +584,17 @@ impl Function {
         let Opcode::ICmp(held) = &mut self.instructions[inst.0 as usize].opcode else { panic!("an icmp") };
         *held = predicate;
         self.log(Change::Rewritten(inst));
+    }
+
+    /// `Value::takeName`: `to` is named what `from` was, which goes unnamed;
+    /// the name stays taken in the function.
+    pub fn take_name(
+        &mut self,
+        from: ValueId,
+        to: ValueId,
+    ) {
+        let name = self.values[from.0 as usize].name.take();
+        self.values[to.0 as usize].name = name;
     }
 
     /// Replaces an instruction's flags.
@@ -671,7 +749,11 @@ impl Function {
         if let Some(result) = self.instruction(inst).result
             && !self.users(result).is_empty()
         {
-            return Err(format!("instruction {}'s result still has {} users", inst.0, self.users(result).len()));
+            return Err(format!(
+                "instruction {}'s result still has {} users",
+                inst.0,
+                self.users(result).iter().count()
+            ));
         }
         let operands = self.instructions[inst.0 as usize].operands.clone();
         for (index, operand) in operands.into_iter().enumerate() {
@@ -721,18 +803,20 @@ impl Function {
         blocks.sort_unstable();
         blocks.dedup();
         for block in blocks {
-            let list = self.blocks[block.0 as usize].instructions.clone();
-            SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
+            let mut at = self.blocks[block.0 as usize].tail;
             let mut next = None;
-            for &inst in list.iter().rev() {
+            while at != 0 {
+                let inst = InstId(at - 1);
+                let before = self.link[inst.0 as usize].0;
                 if gone.contains(&inst) {
                     self.settle_records(inst, next, false);
                     self.log(Change::Erased { inst, block, next });
+                    self.unlink(block, inst);
                 } else {
                     next = Some(inst);
                 }
+                at = before;
             }
-            self.blocks[block.0 as usize].instructions.retain(|one| !gone.contains(one));
             self.order.invalidate(block);
         }
         for inst in insts {
@@ -1035,6 +1119,50 @@ impl Function {
         copy
     }
 
+    /// `CloneBasicBlock(BB, VMap)`
+    /// ([CloneFunction.cpp:40](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/CloneFunction.cpp#L40)):
+    /// a copy of `block` in the layout nowhere yet, its instructions copied in
+    /// order. `map` gets `block` and each result of the original (not the
+    /// `void` ones) with the copy's. The copies still read the original's
+    /// values: `remap_instruction` rewrites them.
+    pub fn clone_block(
+        &mut self,
+        block: BlockId,
+        map: &mut ValueMap,
+    ) -> BlockId {
+        let copy = self.create_block(None);
+        map.blocks.insert(block, copy);
+        for inst in self.iter_block(block).collect::<Vec<_>>() {
+            let duplicate = self.clone_instruction(inst);
+            self.insert(duplicate, Position::End(copy)).expect("a new block takes its instructions");
+            if let (Some(from), Some(to)) = (self.instruction(inst).result, self.instruction(duplicate).result) {
+                map.values.insert(from, Operand::Value(to));
+            }
+        }
+        copy
+    }
+
+    /// `RemapInstruction(I, VMap)`
+    /// ([ValueMapper.cpp:1014](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ValueMapper.cpp#L1014)):
+    /// the operands `map` has an entry for are replaced; the rest stay.
+    pub fn remap_instruction(
+        &mut self,
+        inst: InstId,
+        map: &ValueMap,
+    ) {
+        let operands = self
+            .instruction(inst)
+            .operands
+            .iter()
+            .map(|&one| match one {
+                Operand::Value(value) => map.values.get(&value).copied().unwrap_or(one),
+                Operand::Block(block) => map.blocks.get(&block).map_or(one, |&copy| Operand::Block(copy)),
+                Operand::Constant(_) => one,
+            })
+            .collect();
+        self.set_operands(inst, operands);
+    }
+
     /// A new, empty block, in the layout nowhere yet.
     pub fn create_block(
         &mut self,
@@ -1042,7 +1170,7 @@ impl Function {
     ) -> BlockId {
         let id = BlockId(self.blocks.len() as u32);
         let name = name.map(|one| self.unique_name(one));
-        self.blocks.push(Block { name, instructions: Vec::new(), erased: false, placed: false });
+        self.blocks.push(Block { name, erased: false, placed: false, ..Block::default() });
         self.uses.push_block();
         self.log(Change::BlockCreated(id));
         id
@@ -1076,7 +1204,7 @@ impl Function {
     /// `deleteBody`.
     pub fn delete_body(&mut self) {
         for block in self.layout.clone() {
-            for inst in self.block(block).instructions.clone() {
+            for inst in self.iter_block(block).collect::<Vec<_>>() {
                 let (block, next) = self.detach(inst, false).expect("a placed instruction");
                 self.log(Change::Erased { inst, block, next });
             }
@@ -1092,11 +1220,11 @@ impl Function {
     }
 
     /// One edge from `predecessor` into `block` gone: its phis lose one input
-    /// from it. Unless `keep_one_input_phis`, a phi left with one value (or
-    /// none) is replaced by it (or by poison). LLVM's
-    /// [`BasicBlock::removePredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/BasicBlock.cpp#L446),
-    /// with `PHINode::hasConstantValue` (L468). MIRROR, except a phi has one
-    /// input per edge, so one call drops one input.
+    /// from it. Unless `keep_one_input_phis`, a phi left with no input is
+    /// replaced by poison, and one whose inputs are all alike by that value.
+    /// LLVM's
+    /// [`BasicBlock::removePredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/BasicBlock.cpp#L446).
+    /// MIRROR, one call drops one input.
     pub fn predecessor_removed(
         &mut self,
         context: &Context,
@@ -1104,57 +1232,87 @@ impl Function {
         predecessor: BlockId,
         keep_one_input_phis: bool,
     ) {
-        let phis: Vec<InstId> = self
-            .block(block)
-            .instructions()
-            .iter()
-            .copied()
-            .take_while(|&one| self.instruction(one).opcode == Opcode::Phi)
-            .collect();
+        let phis: Vec<InstId> =
+            self.iter_block(block).take_while(|&one| self.instruction(one).opcode == Opcode::Phi).collect();
+        // Return early if there are no PHI nodes to update.
+        let Some(&front) = phis.first() else { return };
+        let num_preds = self.instruction(front).operands.len() / 2;
         for phi in phis {
-            let mut operands = self.instruction(phi).operands.clone();
-            let Some(at) = operands.chunks(2).position(|pair| pair[1] == Operand::Block(predecessor)) else {
-                continue;
-            };
-            operands.drain(2 * at..2 * at + 2);
-            let result = self.instruction(phi).result.expect("a phi's value");
-            let emptied = operands.is_empty();
-            self.set_operands(phi, operands);
+            self.remove_incoming_value(context, phi, predecessor, !keep_one_input_phis);
             if keep_one_input_phis {
                 continue;
             }
-            let only = if emptied {
-                let poison = context.constant(Constant { ty: self.value(result).ty, kind: ConstantKind::Poison });
-                Some(Operand::Constant(poison))
-            } else {
-                self.phi_constant_value(phi)
-            };
-            if let Some(only) = only {
-                self.replace_value(result, only);
+            // With a single predecessor, removeIncomingValue erased the phi.
+            if num_preds == 1 {
+                continue;
+            }
+            if let Some(constant) = self.phi_constant_value(context, phi) {
+                self.replace_value(self.instruction(phi).result.expect("a phi's value"), constant);
                 self.set_operands(phi, Vec::new());
                 self.erase(phi).expect("a phi nothing reads");
             }
         }
     }
 
-    /// The one value all of `phi`'s inputs are, itself not counted: LLVM's
-    /// `PHINode::hasConstantValue`.
+    /// `PHINode::removeIncomingValue(BB, DeletePHIIfEmpty)`: the last input
+    /// takes the removed one's place. Whether an input from `predecessor` was
+    /// there.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L148>
+    pub fn remove_incoming_value(
+        &mut self,
+        context: &Context,
+        phi: InstId,
+        predecessor: BlockId,
+        delete_phi_if_empty: bool,
+    ) -> bool {
+        let mut operands = self.instruction(phi).operands.clone();
+        let Some(at) = operands.chunks(2).position(|pair| pair[1] == Operand::Block(predecessor)) else {
+            return false;
+        };
+        let last = operands.len() / 2 - 1;
+        if at != last {
+            operands[2 * at] = operands[2 * last];
+            operands[2 * at + 1] = operands[2 * last + 1];
+        }
+        operands.truncate(2 * last);
+        let emptied = operands.is_empty();
+        self.set_operands(phi, operands);
+        if emptied && delete_phi_if_empty {
+            let result = self.instruction(phi).result.expect("a phi's value");
+            let poison = context.constant(Constant { ty: self.value(result).ty, kind: ConstantKind::Poison });
+            self.replace_value(result, Operand::Constant(poison));
+            self.erase(phi).expect("a phi nothing reads");
+        }
+        true
+    }
+
+    /// `PHINode::hasConstantValue`: the one value all of `phi`'s inputs are
+    /// but itself (poison if it has only itself).
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L212>
     fn phi_constant_value(
         &self,
+        context: &Context,
         phi: InstId,
     ) -> Option<Operand> {
-        let result = Operand::Value(self.instruction(phi).result.expect("a phi's value"));
-        let mut only = None;
-        for pair in self.instruction(phi).operands.chunks(2) {
-            if pair[0] == result {
-                continue;
+        let result = self.instruction(phi).result.expect("a phi's value");
+        let this = Operand::Value(result);
+        let mut inputs = self.instruction(phi).operands.chunks(2).map(|pair| pair[0]);
+        let mut only = inputs.next()?;
+        for value in inputs {
+            if value != only && value != this {
+                if only != this {
+                    return None;
+                }
+                only = value;
             }
-            if only.is_some_and(|one| one != pair[0]) {
-                return None;
-            }
-            only = Some(pair[0]);
         }
-        only
+        if only == this {
+            let poison = context.constant(Constant { ty: self.value(result).ty, kind: ConstantKind::Poison });
+            return Some(Operand::Constant(poison));
+        }
+        Some(only)
     }
 
     /// Removes an empty block nothing names.
@@ -1172,7 +1330,7 @@ impl Function {
         blocks: &[BlockId],
     ) -> Result<(), String> {
         for &block in blocks {
-            if !self.block(block).instructions.is_empty() {
+            if !self.blocks[block.0 as usize].is_empty() {
                 return Err(format!("block {} still holds instructions", block.0));
             }
             if !self.block_users(block).is_empty() {
@@ -1206,15 +1364,9 @@ pub fn layout_scanned() -> usize {
     LAYOUT_SCANNED.with(std::cell::Cell::get)
 }
 
-thread_local! {
-    /// Instructions of a block looked over to take instructions out of it: the
-    /// cost of erasing, which was a scan of the block per instruction erased.
-    pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many instructions of a block this thread has looked over to take
-/// instructions out of it, for a test that a pass erasing k of a block's n
-/// does not scan k times n.
-pub fn instructions_scanned() -> usize {
-    SCANNED.with(std::cell::Cell::get)
+/// `ValueToValueMapTy`: what `clone_block` copied, original to copy.
+#[derive(Default)]
+pub struct ValueMap {
+    pub values: crate::dense::IdMap<ValueId, Operand>,
+    pub blocks: crate::dense::IdMap<BlockId, BlockId>,
 }

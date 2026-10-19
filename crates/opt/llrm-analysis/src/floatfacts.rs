@@ -799,22 +799,20 @@ fn _exits<'s>(
         if *successors[&preheader] != [loop_.header] {
             continue;
         }
-        let instructions = |at: i64| function.block(cfg::block(at));
-        if instructions(latch).iter().any(|inst| function.instruction(inst).opcode == Opcode::Phi) {
+        let instructions = |at: i64| function.iter_block(cfg::block(at));
+        if instructions(latch).any(|inst| function.instruction(inst).opcode == Opcode::Phi) {
             continue;
         }
-        let references = instructions(latch).iter().filter_map(|inst| MemRef::of(unit, inst)).collect::<Vec<_>>();
+        let references = instructions(latch).filter_map(|inst| MemRef::of(unit, inst)).collect::<Vec<_>>();
         let mut stored = Vec::<MemRef>::new();
-        for reference in
-            instructions(latch).iter().filter(|&inst| stores(inst)).filter_map(|inst| MemRef::of(unit, inst))
-        {
+        for reference in instructions(latch).filter(|&inst| stores(inst)).filter_map(|inst| MemRef::of(unit, inst)) {
             if !stored.contains(&reference) {
                 stored.push(reference);
             }
         }
         // An overlap Rust cannot represent may overlap.
         if stored.is_empty()
-            || instructions(loop_.header).iter().any(|inst| {
+            || instructions(loop_.header).any(|inst| {
                 let op = function.instruction(inst);
                 !matches!(
                     op.opcode,
@@ -846,7 +844,7 @@ fn _exits<'s>(
         let initial = consts::_kills(before, last, integers, calls, None, None, false, &mut asked);
         let Some(after) = repeated(
             unit,
-            &instructions(latch).iter().collect::<Vec<_>>(),
+            &instructions(latch).collect::<Vec<_>>(),
             &count,
             &initial,
             Some(integers),
