@@ -13,6 +13,9 @@
 //! Each column is then one instruction at the start of the block, its
 //! differing operands phis (`sink_last_instruction`).
 //!
+//! # Example
+//! The add both arms end with runs once in the join:
+//!
 //! ```text
 //!   a: %x = add %p, 1 ; br e         a: br e
 //!   b: %y = add %q, 1 ; br e   ==>   b: br e

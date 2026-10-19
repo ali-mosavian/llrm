@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sinkcommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sinkcommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:b5ed9bada2b143a7f1bafa9bd02e5e1f5a01fcd14435567a073c7e55e7210f6b -->
+<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:12fb97c6f4dae2cf9c43a5f3f6b9ebc34d1de5957b82e00c6d6a7f5d2a224e88 -->
 
 # sinkcommon
 
@@ -17,6 +17,9 @@ do are first given a block of their own to sink into (`.sink.split`), and
 that only when a column holds something that cannot be run speculatively.
 Each column is then one instruction at the start of the block, its
 differing operands phis (`sink_last_instruction`).
+
+## Example
+The add both arms end with runs once in the join:
 
 ```text
   a: %x = add %p, 1 ; br e         a: br e
