@@ -30,9 +30,10 @@ fn check(
     body: &str,
     after: &str,
 ) {
-    let decls = "declare i16 @llvm.umax.i16(i16, i16)\n";
-    let text = format!("{decls}define i1 @f({params}) {{\nb0:\n{body}}}\n");
-    let want = format!("{decls}define i1 @f({params}) {{\nb0:\n{after}}}\n");
+    let decl = "declare i16 @llvm.umax.i16(i16, i16)\n";
+    let printed_decl = "declare i16 @llvm.umax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n\n";
+    let text = format!("{decl}define i1 @f({params}) {{\nb0:\n{body}}}\n");
+    let want = format!("{printed_decl}define i1 @f({params}) {{\nb0:\n{after}}}\n");
     assert_eq!(combined(&text), want);
 }
 
@@ -88,13 +89,14 @@ fn a_signed_compare_of_non_negative_values_is_unsigned() {
     );
 }
 
-/// `foldICmpWithZero`: `(x | 1) * y == 0` is `y == 0` (`opt`: `icmp eq i16 %y, 0`).
+/// `foldICmpWithZero`: `(x | 1) * y == 0` is `y == 0` (`opt`: `icmp eq i16 %y,
+/// 0`).
 #[test]
 fn a_product_with_an_odd_factor_is_zero_when_the_other_is() {
     check(
         "i16 %x, i16 %y",
         "  %o = or i16 %x, 1\n  %m = mul i16 %o, %y\n  %r = icmp eq i16 %m, 0\n  ret i1 %r\n",
-        "  %o = or i16 %x, 1\n  %m = mul i16 %o, %y\n  %0 = icmp eq i16 %y, 0\n  ret i1 %0\n",
+        "  %0 = icmp eq i16 %y, 0\n  ret i1 %0\n",
     );
 }
 
@@ -105,7 +107,7 @@ fn compares_that_are_sign_tests() {
     check(
         "i16 %x",
         "  %m = call i16 @llvm.umax.i16(i16 %x, i16 5)\n  %n = xor i16 %x, -1\n  %r = icmp ugt i16 %m, %n\n  ret i1 %r\n",
-        "  %m = call i16 @llvm.umax.i16(i16 %x, i16 5)\n  %n = xor i16 %x, -1\n  %0 = icmp slt i16 %x, 0\n  ret i1 %0\n",
+        "  %m = call i16 @llvm.umax.i16(i16 %x, i16 5)\n  %0 = icmp slt i16 %x, 0\n  ret i1 %0\n",
     );
     check("i16 %x", "  %r = icmp ugt i16 %x, 32767\n  ret i1 %r\n", "  %0 = icmp slt i16 %x, 0\n  ret i1 %0\n");
     check("i16 %x", "  %r = icmp ult i16 %x, 32768\n  ret i1 %r\n", "  %0 = icmp sgt i16 %x, -1\n  ret i1 %0\n");

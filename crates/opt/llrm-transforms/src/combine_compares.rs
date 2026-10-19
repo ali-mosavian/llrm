@@ -36,11 +36,11 @@
 //! `combine::visit`, once the compares slot is flipped.
 //!
 //! # How it works
-//! `visit_icmp` orders the operands (the more complex first), asks InstSimplify,
-//! and then rewrites the compare to a canonical or cheaper one: a non-strict
-//! predicate against a constant becomes the strict one (`x <= 5` is `x < 6`),
-//! a compare the known bits decide or reduce (`A <u B` where `max(A) == min(B)`
-//! is `A != B`) is rewritten.
+//! `visit_icmp` orders the operands (the more complex first), asks
+//! InstSimplify, and then rewrites the compare to a canonical or cheaper one: a
+//! non-strict predicate against a constant becomes the strict one (`x <= 5` is
+//! `x < 6`), a compare the known bits decide or reduce (`A <u B` where `max(A)
+//! == min(B)` is `A != B`) is rewritten.
 //!
 //! # Example
 //! `x u<= 5` is `x u< 6`:
@@ -62,7 +62,10 @@ use crate::combine_shared::{get_complexity, query};
 
 /// `ICmpInst::isSigned`.
 fn is_signed(pred: IntPredicate) -> bool {
-    matches!(pred, IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle)
+    matches!(
+        pred,
+        IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+    )
 }
 
 /// `ICmpInst::getUnsignedPredicate`.
@@ -249,7 +252,8 @@ fn canonicalize_cmp_with_constant(
     Some(new_icmp(c, inst, new_pred, op0, new))
 }
 
-/// The bits `a pred b` compares: `ICmpInst::compare(KnownBits, KnownBits, Pred)`.
+/// The bits `a pred b` compares: `ICmpInst::compare(KnownBits, KnownBits,
+/// Pred)`.
 fn compare_known(
     pred: IntPredicate,
     a: &KnownBits,
@@ -364,8 +368,8 @@ fn fold_icmp_using_known_bits(
                         let value = c.int(c.type_of(op1), sub(cmp_c, 1));
                         return Some(new_icmp(c, inst, IntPredicate::Eq, op0, value));
                     }
-                    // X <u C --> X == 0, if the number of zero bits in the bottom of X
-                    // exceeds the log2 of C.
+                    // X <u C --> X == 0, if the number of zero bits in the
+                    // bottom of X exceeds the log2 of C.
                     if known0.count_min_trailing_zeros() >= ceil_log2(cmp_c, width) {
                         let zero = c.int(c.type_of(op1), 0);
                         return Some(new_icmp(c, inst, IntPredicate::Eq, op0, zero));
@@ -382,8 +386,8 @@ fn fold_icmp_using_known_bits(
                         let value = c.int(c.type_of(op1), add(cmp_c, 1));
                         return Some(new_icmp(c, inst, IntPredicate::Eq, op0, value));
                     }
-                    // X >u C --> X != 0, if the number of zero bits in the bottom of X
-                    // exceeds the log2 of C.
+                    // X >u C --> X != 0, if the number of zero bits in the
+                    // bottom of X exceeds the log2 of C.
                     if known0.count_min_trailing_zeros() >= 128 - cmp_c.leading_zeros() {
                         let zero = c.int(c.type_of(op1), 0);
                         return Some(new_icmp(c, inst, IntPredicate::Ne, op0, zero));
@@ -419,9 +423,9 @@ fn fold_icmp_using_known_bits(
     // simplify this comparison. For example, (x&4) < 8 is always true.
     match pred {
         IntPredicate::Eq | IntPredicate::Ne => {
-            // If all bits are known zero except for one, then we know at most one bit
-            // is set. If the comparison is against zero, then this is a check to see if
-            // *that* bit is set.
+            // If all bits are known zero except for one, then we know at most
+            // one bit is set. If the comparison is against zero,
+            // then this is a check to see if *that* bit is set.
             let op0_known_zero_inverted = !known0.zero & mask(width);
             if known1.is_zero() {
                 // If the LHS is an AND with the same constant, look through it.
@@ -438,8 +442,9 @@ fn fold_icmp_using_known_bits(
                     let c2_pow2 = ((c2 & !(c1 - 1)).wrapping_add(c1)) & mask(width);
                     if c2_pow2.is_power_of_two() {
                         // iff (C1 is pow2) & ((C2 & ~(C1-1)) + C1) is pow2):
-                        // ((C1 << X) & C2) == 0 -> X >= (Log2(C2+C1) - Log2(C1))
-                        // ((C1 << X) & C2) != 0 -> X  < (Log2(C2+C1) - Log2(C1))
+                        // ((C1 << X) & C2) == 0 -> X >= (Log2(C2+C1) -
+                        // Log2(C1)) ((C1 << X) & C2) !=
+                        // 0 -> X  < (Log2(C2+C1) - Log2(C1))
                         let log2_c2 = c2_pow2.trailing_zeros();
                         let x_ty = c.type_of(x);
                         let cmp = c.int(x_ty, u128::from(log2_c2 - log2_c1));
@@ -510,12 +515,14 @@ fn fold_icmp_with_zero(
     if pred == IntPredicate::Sgt {
         let min = {
             let q = query(c, Some(inst));
-            let call = q.instruction_of(op0).and_then(|(call, _)| {
-                (pattern::call_intrinsic(&q, call) == Some(pattern::IntrinsicId::Smin)).then(|| {
-                    let operands = &c.function.instruction(call).operands;
-                    (operands[0], operands[1])
-                })
-            });
+            let call = q
+                .instruction_of(op0)
+                .and_then(
+                    |(call, _)| (pattern::call_intrinsic(&q, call) == Some(pattern::IntrinsicId::Smin)).then(|| {
+                        let operands = &c.function.instruction(call).operands;
+                        (operands[0], operands[1])
+                    }),
+                );
             call.map(|(a, b)| (a, b, known::is_known_positive(&q, a, 0), known::is_known_positive(&q, b, 0)))
         };
         if let Some((a, b, a_positive, b_positive)) = min {
@@ -530,8 +537,8 @@ fn fold_icmp_with_zero(
     if !equality {
         return None;
     }
-    // Given: icmp eq/ne (urem %x, %y), 0. Iff %x has 0 or 1 bits set, and %y has
-    // at least 2 bits set, omit 'urem': icmp eq/ne %x, 0
+    // Given: icmp eq/ne (urem %x, %y), 0. Iff %x has 0 or 1 bits set, and %y
+    // has at least 2 bits set, omit 'urem': icmp eq/ne %x, 0
     if let Some((x, y, _)) = binary_of(c, op0, BinaryOp::URem) {
         let (xk, yk) = {
             let q = query(c, Some(inst));
@@ -541,8 +548,8 @@ fn fold_icmp_with_zero(
             return Some(new_icmp(c, inst, pred, x, op1));
         }
     }
-    // (icmp eq/ne (mul X Y)) -> (icmp eq/ne X/Y) if we know about whether X/Y are
-    // odd/non-zero/there is no overflow.
+    // (icmp eq/ne (mul X Y)) -> (icmp eq/ne X/Y) if we know about whether X/Y
+    // are odd/non-zero/there is no overflow.
     if let Some((x, y, flags)) = binary_of(c, op0, BinaryOp::Mul) {
         let q = query(c, Some(inst));
         let xk = known::compute_known_bits(&q, x, 0);
