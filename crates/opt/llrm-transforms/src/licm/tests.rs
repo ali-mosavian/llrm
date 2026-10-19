@@ -565,6 +565,59 @@ fn test_a_store_after_the_exit_test_leaves_the_value_of_the_last_trip() {
     assert!(block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
 }
 
+/// A slot stored in an outer loop and read in an inner one through a pointer
+/// that joins its address with a pointer loaded from memory: the read may be of
+/// the slot, so it is not promoted. LICM took `*s = 1` out of the loop and the
+/// read saw the slot unwritten (`phi_slot_unknown_arm`, bench bintree bq32
+/// printed 2158 for 5736113, once LoopRotate put the inlined loop in this
+/// form).
+#[test]
+fn test_a_slot_read_through_a_join_with_a_loaded_pointer_is_not_promoted() {
+    let text = "@tbl = internal global [64 x i8] zeroinitializer
+@t = internal constant ptr @tbl
+
+define i16 @f(i16 %n) {
+b1:
+  %a = alloca i16
+  %t = load volatile ptr, ptr @t
+  br label %outer
+
+outer:
+  %i = phi i16 [ 0, %b1 ], [ %i1, %latch ]
+  %c = icmp sgt i16 %i, 1
+  br i1 %c, label %set, label %latch
+
+set:
+  store i16 1, ptr %a
+  br label %inner
+
+inner:
+  %p = phi ptr [ %a, %set ], [ %q, %inner ]
+  %v = load i16, ptr %p
+  %q = getelementptr i8, ptr %t, i16 %v
+  %z = load i16, ptr %q
+  %d = icmp eq i16 %z, 0
+  br i1 %d, label %done, label %inner
+
+done:
+  %w = phi ptr [ %q, %inner ]
+  store i16 %i, ptr %w
+  br label %latch
+
+latch:
+  %i1 = add i16 %i, 1
+  %e = icmp slt i16 %i1, %n
+  br i1 %e, label %outer, label %exit
+
+exit:
+  ret i16 0
+}
+";
+    let mut module = parsed(text);
+    let after = crate::testing::managed(&mut module, Licm { apply: true, speculate: false });
+    assert!(after.contains("store i16 1, ptr %a"), "the slot's store left the loop: {after}");
+}
+
 /// A promoted store with no load before the loop takes `UndefValue` on the
 /// preheader edge, as LLVM's `SSA.AddAvailableValue(Preheader, UndefValue)`;
 /// with poison a later fold was free to pick the arm (loopidioms'
