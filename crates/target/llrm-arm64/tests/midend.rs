@@ -34,3 +34,16 @@ fn a_wide_constant_is_built_outside_the_loop_that_uses_it() {
     let inside: Vec<&&str> = lines[start..=back].iter().filter(|l| l.starts_with("movk") || l.starts_with("movz")).collect();
     assert!(inside.is_empty(), "constant rebuilt in the loop: {inside:?}\n{asm}");
 }
+
+/// An access to a global array at a variable index added the index to the
+/// array's address in a register first (`add x9, x8, x10` then `ldrb [x9]`)
+/// instead of using the register-offset form: an extra instruction per access.
+#[test]
+fn a_global_array_is_indexed_in_the_access() {
+    let asm = driver::assembly(include_str!("data/global_index.ll"), Platform::Darwin, true).expect("lowers");
+    let loads: Vec<&str> = asm.lines().map(str::trim).filter(|l| l.starts_with("ldr")).collect();
+    // Premise: both loads are there.
+    assert_eq!(loads.len(), 2, "{asm}");
+    assert!(loads.iter().all(|l| l.contains(", x") && l.contains(']') && l.matches(',').count() >= 2), "{asm}");
+    assert!(!asm.lines().any(|l| l.trim().starts_with("add") && l.contains("lsl #2")), "{asm}");
+}
