@@ -350,10 +350,8 @@ fn main() -> i16:
 /// `total = step * n` (its exit value) and deletes the loop, as ours now does:
 /// `n` was then read on a path that skips the loop, and its second range came
 /// from that skip path of the old shape. `total * step + 1` is not an affine
-/// recurrence, so the loop stays in both. Which register holds `n` after the
-/// copy, and that its range follows the copy, are not asserted: how the model
-/// follows a register copy is a separate open question of the range model
-/// (`crates/backend/llrm-core/src/backend/debuginfo.rs`).
+/// recurrence, so the loop stays in both. Which register holds `n` is
+/// incidental and not asserted.
 #[test]
 fn a_register_parameter_kept_across_a_loop_has_its_place_and_one_that_moves_has_its_ranges() {
     use llrm_object::debug::Location;
