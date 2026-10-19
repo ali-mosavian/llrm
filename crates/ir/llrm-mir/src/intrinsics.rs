@@ -43,6 +43,11 @@ pub enum Intrinsic {
     },
     /// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop`.
     BitCount(BitCount),
+    /// `llvm.scmp` and `llvm.ucmp`: -1, 0 or 1 as the first argument is less
+    /// than, equal to or greater than the second, in the result's integer type.
+    Compare {
+        signed: bool,
+    },
     FMulAdd,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
     Unary(FloatFunction),
@@ -339,13 +344,27 @@ const fn bit_count(
     arithmetic(name, Intrinsic::BitCount(count), Slot::Any(0), parameters, Kind::Int)
 }
 
+const fn compare(
+    name: &'static str,
+    signed: bool,
+) -> Spec {
+    Spec {
+        name,
+        intrinsic: Intrinsic::Compare { signed },
+        overloads: &[Kind::Int, Kind::Int],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(1), Slot::Any(1)],
+        own: None,
+    }
+}
+
 const FIXED: &[Slot] = &[Slot::Any(0), Slot::Any(0), Slot::Int(32)];
 
 const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 38] = [
+const TABLE: [Spec; 40] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -359,6 +378,8 @@ const TABLE: [Spec; 38] = [
     bit_count("llvm.ctlz", BitCount::LeadingZeros),
     bit_count("llvm.cttz", BitCount::TrailingZeros),
     bit_count("llvm.ctpop", BitCount::Population),
+    compare("llvm.scmp", true),
+    compare("llvm.ucmp", false),
     arithmetic("llvm.smul.fix", Intrinsic::Fixed { divide: false }, Slot::Any(0), FIXED, Kind::Int),
     Spec {
         name: "llvm.sdiv.fix",
