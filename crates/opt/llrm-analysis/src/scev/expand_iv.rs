@@ -1359,10 +1359,16 @@ impl Run<'_> {
             let Some(&orig_ref) = expr_to_iv.get(&expr) else {
                 expr_to_iv.insert(expr, phi);
                 if let (MirType::Int(_), Some(tti)) = (self.context.types.get(phi_ty), tti) {
-                    let (from, to) = (
-                        self.scev_ty_of(Operand::Value(result)),
-                        self.scev_ty_of(Operand::Value(self.result_phi(narrowest))),
-                    );
+                    // `isTruncateFree` is false to a type that is not an
+                    // integer: the narrowest phi may be a float.
+                    let narrowest_result = Operand::Value(self.result_phi(narrowest));
+                    if !matches!(
+                        self.context.types.get(self.ty_of_operand(narrowest_result)),
+                        MirType::Int(_)
+                    ) {
+                        continue;
+                    }
+                    let (from, to) = (self.scev_ty_of(Operand::Value(result)), self.scev_ty_of(narrowest_result));
                     let (Ty::Int(from_bits), Ty::Int(to_bits)) = (from, to) else { continue };
                     if tti.is_truncate_free(llrm_mir::tti::Ty::Int(from_bits), llrm_mir::tti::Ty::Int(to_bits))
                         && matches!(self.se.node(expr).kind, Kind::AddRec(..))

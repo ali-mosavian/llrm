@@ -98,3 +98,30 @@ exit:
     );
     assert!(!changed, "{after}");
 }
+
+/// fpbench / nbody_single at -O2 m32: a float phi is the last of the header's
+/// phis, and the narrowest-type query of the truncation map read its type as
+/// a SCEVable one ("a SCEVable type, not Float"). The truncate is not free to
+/// a float.
+#[test]
+fn test_a_float_phi_in_the_header_does_not_panic_and_is_left() {
+    let (changed, after) = replaced(
+        "define float @f(ptr %p, i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %inc, %loop ]
+  %s = phi float [ 0.0, %entry ], [ %s2, %loop ]
+  %a = getelementptr float, ptr %p, i32 %i
+  %v = load float, ptr %a
+  %s2 = fadd float %s, %v
+  %inc = add i32 %i, 1
+  %c = icmp ne i32 %inc, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  ret float %s2
+}
+",
+    );
+    assert!(!changed, "{after}");
+}
