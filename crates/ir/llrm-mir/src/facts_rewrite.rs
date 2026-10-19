@@ -212,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 41] = [
+        const CHECKED: &[&str] = &[
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -302,6 +302,10 @@ mod tests {
             // not-null, and `visitCastInst` a `trunc`'s no-wrap kind for the
             // result range, where LLVM does.
             "sccpsolver.rs",
+            // InstCombineCompares.cpp's `foldICmpWithZero` reads a multiply's
+            // `nuw`/`nsw` (`BO0->hasNoUnsignedWrap()`) to drop it from an
+            // equality with zero; it never drops one.
+            "combine_compares.rs",
             // PredicateInfo.cpp's `m_NUWTrunc(m_Value(Op0))` in
             // `processBranch`, `processAssume` and `getConstraint`.
             "predicateinfo.rs",

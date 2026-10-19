@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/jumpthreading.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/jumpthreading.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/jumpthreading.rs sha256:5c583160f5fcbf2b96b17ec7e3152f5238778be549907b9a6931b94472524da7 -->
+<!-- src: crates/opt/llrm-transforms/src/jumpthreading.rs sha256:77dd2012219d9506f89f02f0693d81fffc0a6ec8ab6e017dff25bc29a6de9f99 -->
 
 # jumpthreading
 
@@ -52,6 +52,9 @@ of the finished pass):
   scopes to clone (`cloneNoAliasScopes`), no source atoms.
 - J9. LVI is the pass's own `LazyValueInfo` (as `Cvp`'s), not the one
   function analysis the manager would share between the passes.
+- J10. A block that starts with a `landingpad` is not threaded: the copy
+  would be a second pad, and the one module handler (`ehprepare`) cannot
+  choose between two.
 - Not yet ported (later stages): `tryToUnfoldSelect*`, `processBranchOnPHI`,
   `processBranchOnXOR`, `maybethreadThroughTwoBasicBlocks`,
   `duplicateCondBranchOnPHIIntoPred`, `processImpliedCondition`,
