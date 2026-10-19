@@ -121,7 +121,8 @@ fn the_loops_recurrence_is_the_scaled_register() {
     with_loop(|cx, se, a, b, header| {
         let one = se.get_constant_of_type(cx, Ty::Int(32), 1);
         let ar = recurrence(se, cx, b, one, header);
-        let mut f = Formula { base_regs: vec![ar], scaled_reg: Some(a), scale: 1, has_base_reg: true, ..Formula::default() };
+        let mut f =
+            Formula { base_regs: vec![ar], scaled_reg: Some(a), scale: 1, has_base_reg: true, ..Formula::default() };
         assert!(!f.is_canonical(se, header));
         f.canonicalize(se, header);
         assert_eq!((f.base_regs.clone(), f.scaled_reg), (vec![a], Some(ar)));
@@ -141,12 +142,8 @@ fn an_initial_match_keeps_invariants_together_and_a_loop_value_apart() {
         whole.initial_match(se, cx, ar, header);
         assert_eq!((whole.base_regs.clone(), whole.scaled_reg, whole.has_base_reg), (vec![ar], None, true));
 
-        let next = cx
-            .function
-            .walk()
-            .filter_map(|(_, inst)| cx.function.instruction(inst).result)
-            .nth(1)
-            .expect("%next");
+        let next =
+            cx.function.walk().filter_map(|(_, inst)| cx.function.instruction(inst).result).nth(1).expect("%next");
         let next = se.get_unknown(cx, Operand::Value(next));
         let sum = se.get_add_expr(cx, vec![Use::of(a), Use::of(next)], Flags::default(), 0).scev;
         let mut f = Formula::default();
@@ -158,7 +155,8 @@ fn an_initial_match_keeps_invariants_together_and_a_loop_value_apart() {
 #[test]
 fn a_formula_counts_down_to_zero_only_with_one_register_and_a_negative_step() {
     with_loop(|cx, se, _, b, header| {
-        let (zero, minus_one) = (se.get_constant_of_type(cx, Ty::Int(32), 0), se.get_constant_of_type(cx, Ty::Int(32), -1));
+        let (zero, minus_one) =
+            (se.get_constant_of_type(cx, Ty::Int(32), 0), se.get_constant_of_type(cx, Ty::Int(32), -1));
         let down = recurrence(se, cx, b, minus_one, header);
         let plus_one = se.get_constant_of_type(cx, Ty::Int(32), 1);
         let up = recurrence(se, cx, b, plus_one, header);
