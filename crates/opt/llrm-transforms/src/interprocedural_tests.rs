@@ -495,7 +495,7 @@ fn a_body_is_stamped_with_what_its_summary_says_as_llvm_states_it() {
             "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn nounwind norecurse {",
             "define internal void @hides(ptr %p) {",
             "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn nounwind norecurse {",
-            "define i16 @f(i16 %a) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse {",
+            "define i16 @f(i16 %a) memory(readwrite, argmem: write, inaccessiblemem: none) willreturn nounwind norecurse {",
         ],
         "{text}"
     );

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/functionattrs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/functionattrs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/functionattrs.rs sha256:1ad291dc546bc18e62567286c7d69eea00d0bcbf4391325879afdbab70b14467 -->
+<!-- src: crates/opt/llrm-analysis/src/functionattrs.rs sha256:522ca881e4f8b801c8f1a1ce9da0033b2b43d921e46eb4cdaee910917a666936 -->
 
 # functionattrs
 
@@ -53,10 +53,11 @@ From unit test `test_a_body_over_norecurse_callees_is_stamped_all_three` in
   F4: no `writable` argument attribute to drop (MIR has none).
 
 ## Runs
-`interprocedural::stamped` once per SCC, callees first, for the four flags.
-`infer_memory` is not wired yet: `LLRM_SHADOW_MEMORY=1` compares
-`stamp_memory`'s result with `stamped`'s `memory(...)` and prints one line
-per body that differs.
+`interprocedural::stamped` calls `post_order` once per SCC, callees first:
+`memory(...)`, the pointer parameters' attributes, then the four flags.
+DEVIATE F1: `willreturn` also where a loop's trip count is proved or the
+language promises each loop ends, in a function that does nothing
+observable (`will_return_by_loops`).
 
 ## See also
 LLVM `FunctionAttrs.cpp` (`addNoRecurseAttrs`, `addNoReturnAttrs`,
