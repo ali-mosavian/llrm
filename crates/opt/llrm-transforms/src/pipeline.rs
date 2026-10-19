@@ -230,8 +230,8 @@ pub struct Options {
     /// turns it off.
     pub llvm_order: bool,
     /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
-    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; off by
-    /// default (it miscompiles, #2585), `LLRM_ROTATE` turns it on. Not run
+    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on by
+    /// default, `LLRM_NO_ROTATE` turns it off. Not run
     /// where `unroll_jam` is (see [`Options::rotating`]).
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
@@ -670,9 +670,9 @@ impl FunctionPass for Together {
     }
 }
 
-/// `LLRM_ROTATE`, read once: set, the rotate slot of [`llvm_order`] runs.
+/// `LLRM_NO_ROTATE`, read once: set, the rotate slot of [`llvm_order`] is off.
 fn rotate_default() -> bool {
-    llrm_support::env_flag!("LLRM_ROTATE")
+    !llrm_support::env_flag!("LLRM_NO_ROTATE")
 }
 
 /// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by

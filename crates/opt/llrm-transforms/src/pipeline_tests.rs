@@ -2188,16 +2188,14 @@ fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
     assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
 }
 
-/// LoopRotate is off by default (it miscompiled with the passes after it,
-/// #2585; `LLRM_ROTATE` turns it on), and off where unroll-and-jam runs, whose
+/// LoopRotate is on by default (`LLRM_NO_ROTATE` turns it off; it was off
+/// while #2585 was open), and off where unroll-and-jam runs, whose
 /// nests are the header-tested form (RJ1).
 #[test]
 fn test_the_rotate_slot_is_off_by_default_and_off_where_unroll_jam_is() {
-    // Off until #2585 is fixed (`LLRM_ROTATE` sets it); the option still gates
-    // the slot.
     let on = pipeline::Options { rotate_slot: true, ..pipeline::Options::default() };
     assert!(on.rotating());
-    assert_eq!(pipeline::Options::default().rotating(), std::env::var_os("LLRM_ROTATE").is_some());
+    assert_eq!(pipeline::Options::default().rotating(), std::env::var_os("LLRM_NO_ROTATE").is_none());
     assert!(!pipeline::Options { unroll_jam: true, ..on }.rotating());
     assert!(!pipeline::Options::speed().rotating());
     assert!(!pipeline::Options::aggressive().rotating());
