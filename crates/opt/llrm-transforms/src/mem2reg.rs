@@ -95,6 +95,10 @@ impl FunctionPass for Mem2Reg {
         "mem2reg"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("mem2reg")
+    }
+
     fn reads(&self) -> llrm_mir::footprint::Footprint {
         llrm_mir::footprint::Footprint::MEMORY | llrm_mir::footprint::Footprint::STRUCTURE
     }

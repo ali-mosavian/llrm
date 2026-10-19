@@ -281,3 +281,21 @@ def test_the_budget_is_instructions_so_a_loaded_host_passes_and_a_doubled_step_f
     fallback = iter([0.0, 0.0, 0.0, 20.0])  # no perf: the CPU seconds decide, as before
     ok, line = ps.run_steps(steps, Path("."), clock=lambda: next(fallback), meter=counted(None), limit=12_000_000_000)
     assert not ok and "perf unavailable" in line
+
+
+def test_the_ratchets_run_side_by_side_and_report_in_command_order():
+    """A precheck spent ~45 s of its ~70 s running ten cargo test ratchets one after another; four at a time they overlap their links and runs."""
+    import threading
+
+    gate = threading.Barrier(2, timeout=5)  # a serial runner never reaches 2 parties: the barrier breaks (10 ratchets: pairs)
+
+    class Done:
+        def __init__(self, code):
+            self.returncode, self.stdout, self.stderr = code, "", ""
+
+    def run(command):
+        gate.wait()
+        return Done(1 if "facts_rewrite" in " ".join(command) else 0)
+
+    failed = ps.ratchet_failures(run=run)
+    assert list(failed) == ["ratchet:facts_rewrite"], failed
