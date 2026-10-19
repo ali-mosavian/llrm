@@ -41,6 +41,8 @@ pub enum Intrinsic {
     Fixed {
         divide: bool,
     },
+    /// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop`.
+    BitCount(BitCount),
     FMulAdd,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
     Unary(FloatFunction),
@@ -82,6 +84,11 @@ pub enum Intrinsic {
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
+    /// `llvm.stacksave`: the stack pointer, to give back to `stackrestore`.
+    StackSave,
+    /// `llvm.stackrestore`: the stack pointer `stacksave` returned made the
+    /// stack pointer again, releasing what was allocated since.
+    StackRestore,
     /// Inline machine code, laid down where it is called: its name carries
     /// the bytes, and each argument is a frame place whose displacement it
     /// reads at a byte offset the name gives. It answers what it leaves in
@@ -184,6 +191,35 @@ pub fn asm(name: &str) -> Option<AsmBlock> {
         _ => return None,
     };
     Some(AsmBlock { code, inputs: list(inputs), outputs: list(outputs), clobbers: list(clobbers), memory })
+}
+
+/// What `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop` count.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BitCount {
+    LeadingZeros,
+    TrailingZeros,
+    Population,
+}
+
+impl BitCount {
+    /// The count in the `width`-bit `bits`; a zero has `width` zeros.
+    pub fn apply(
+        self,
+        bits: u128,
+        width: u32,
+    ) -> u128 {
+        u128::from(match self {
+            Self::LeadingZeros => crate::apint::countl_zero(bits, width),
+            Self::TrailingZeros => crate::apint::countr_zero(bits, width),
+            Self::Population => bits.count_ones(),
+        })
+    }
+
+    /// Whether a zero argument is poison where the intrinsic's second
+    /// argument says so: the two zero counts have one, `ctpop` has none.
+    pub fn has_zero_poison_flag(self) -> bool {
+        self != Self::Population
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -299,13 +335,22 @@ const fn min_max(
     arithmetic(name, Intrinsic::MinMax { signed, max }, Slot::Any(0), INTS, Kind::Int)
 }
 
+const fn bit_count(
+    name: &'static str,
+    count: BitCount,
+) -> Spec {
+    let parameters: &[Slot] =
+        if matches!(count, BitCount::Population) { &[Slot::Any(0)] } else { &[Slot::Any(0), Slot::Int(1)] };
+    arithmetic(name, Intrinsic::BitCount(count), Slot::Any(0), parameters, Kind::Int)
+}
+
 const FIXED: &[Slot] = &[Slot::Any(0), Slot::Any(0), Slot::Int(32)];
 
 const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 35] = [
+const TABLE: [Spec; 40] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -316,6 +361,9 @@ const TABLE: [Spec; 35] = [
     min_max("llvm.smin", true, false),
     min_max("llvm.umax", false, true),
     min_max("llvm.umin", false, false),
+    bit_count("llvm.ctlz", BitCount::LeadingZeros),
+    bit_count("llvm.cttz", BitCount::TrailingZeros),
+    bit_count("llvm.ctpop", BitCount::Population),
     arithmetic("llvm.smul.fix", Intrinsic::Fixed { divide: false }, Slot::Any(0), FIXED, Kind::Int),
     Spec {
         name: "llvm.sdiv.fix",
@@ -425,6 +473,22 @@ const TABLE: [Spec; 35] = [
     Spec {
         name: "llvm.va_start",
         intrinsic: Intrinsic::VaStart,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.stacksave",
+        intrinsic: Intrinsic::StackSave,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.stackrestore",
+        intrinsic: Intrinsic::StackRestore,
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
         parameters: &[Slot::Any(0)],
