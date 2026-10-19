@@ -2,7 +2,7 @@
 """The one way to squash a pull request into feat/parity: a bare `gh pr merge` merged stale heads that reverted other PRs' work (#2329 reverted decide's LVI step).
 
     [PARITY_BIN=DIR] tools/parity_squash.py merge PR [--known-red STEP=ISSUE]...   under /tmp/land.lock (land.sh's): merge feat/parity into the PR head here (not pushed), refuse or run the fast set on THAT, then `gh pr merge --squash --match-head-commit`
-    tools/parity_squash.py merge-batch N1..N4 [--known-red STEP=ISSUE]...   up to four ready PRs: ONE fast set on the base with all merged in; on failure halve (the passing half lands first)
+    tools/parity_squash.py merge-batch N1..N8 [--known-red STEP=ISSUE]...   up to eight ready PRs: ONE fast set on the base with all merged in; on failure halve (the passing half lands first)
     tools/parity_squash.py audit [SINCE] every squash on origin/feat/parity since SINCE (default 96468410e): what it deleted without a Deletes:/Reverts: line in its PR's description
 
 Subset rule: the fast set runs on the head (origin/feat/parity, failure set cached per sha by `head-failures`) AND on the merged tree; the merged tree may fail only checks the head fails, and strictly fewer
@@ -289,8 +289,11 @@ def run_smoke(known: dict[str, str] | None = None) -> tuple[bool, str]:
     return smoke.returncode == 0, (smoke.stdout.strip().splitlines() or [""])[-1]
 
 
+MAX_BATCH = 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
+
+
 def batch(prs: list, passes, land, refuse) -> None:
-    """Land `prs` (up to four, ready, in order) with ONE test of the combined tree. `passes(prs)` merges them all into the base and runs the fast set; when it fails the
+    """Land `prs` (up to MAX_BATCH, ready, in order) with ONE test of the combined tree. `passes(prs)` merges them all into the base and runs the fast set; when it fails the
     set is halved (2+2, then singles): the passing half lands, then the other half is tested on top of what landed. `refuse(pr)` names a PR that fails alone."""
     if not prs:
         return
@@ -307,8 +310,10 @@ def batch(prs: list, passes, land, refuse) -> None:
 
 
 def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
-    """`parity_squash.py merge-batch N1..N4`: the PRs in order, one smoke on the base with all of them merged in, each squashed with its head lease."""
+    """`parity_squash.py merge-batch N1..N8`: the PRs in order, one smoke on the base with all of them merged in, each squashed with its head lease."""
     known = known or {}
+    if len(numbers) > MAX_BATCH:
+        raise SystemExit(f"merge-batch takes at most {MAX_BATCH} PRs per smoke, got {len(numbers)}: split the queue")
     infos = {}
     for number in numbers:
         info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
@@ -324,6 +329,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         for number in group:
             git("fetch", "-q", "origin", infos[number]["headRefOid"])
             merge = subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True, text=True)
+            if merge.returncode and (conflicts := git("diff", "--name-only", "--diff-filter=U").split()) and not regenerate(conflicts):
+                continue  # only generated docs conflicted: regenerated and committed
             if merge.returncode:
                 subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
                 print(f"#{number}: does not merge with the others: {merge.stdout.strip()[:120] or merge.stderr.strip()[:120]}")
@@ -515,6 +522,15 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
 
 
 def main() -> int:
+    """The landing commands run at the landing's build priority (`buildslot.landing`); the others (audit, unlogged) start no cargo."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from buildslot import landing  # noqa: PLC0415
+
+    with landing():
+        return dispatch()
+
+
+def dispatch() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "merge":
         rest = sys.argv[3:]
         return merge(sys.argv[2], parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))

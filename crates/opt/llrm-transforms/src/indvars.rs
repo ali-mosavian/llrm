@@ -204,9 +204,13 @@ impl FunctionPass for IndVars {
         // What is known without memory is the manager's until a step changes
         // the body.
         let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
-        // Only a `sext` of a counter asks what the loops bound.
-        let widens =
-            unit.function.walk().any(|(_, inst)| unit.function.instruction(inst).opcode == Opcode::Cast(CastOp::SExt));
+        // Only the old widening, for a `sext` of a counter, asks what the loops
+        // bound; `simplifyAndExtend` reads ScalarEvolution's ranges.
+        let widens = !crate::simplifyindvar::widening_enabled()
+            && unit
+                .function
+                .walk()
+                .any(|(_, inst)| unit.function.instruction(inst).opcode == Opcode::Cast(CastOp::SExt));
         let bounded =
             widens.then(|| analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function));
         let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);

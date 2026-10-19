@@ -295,6 +295,21 @@ fn test_what_is_not_selected_yet_is_refused() {
     }
 }
 
+/// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop` verify but have no lowering yet:
+/// a program that calls one stops with a named refusal, not a wrong result.
+#[test]
+fn a_bit_count_intrinsic_is_refused_until_it_is_lowered() {
+    for (name, parameters, arguments) in
+        [("ctlz", ", i1", ", i1 false"), ("cttz", ", i1", ", i1 false"), ("ctpop", "", "")]
+    {
+        let text = format!(
+            "declare i16 @llvm.{name}.i16(i16{parameters})\n\
+             define i16 @f(i16 %a) addrspace(1) {{\n  %r = call i16 @llvm.{name}.i16(i16 %a{arguments})\n  ret i16 %r\n}}\n"
+        );
+        assert_eq!(selected(&text, "f").err(), Some(Unselected(format!("@llvm.{name}.i16"))), "{name}");
+    }
+}
+
 /// CVP narrows a `udiv` to i8 and expands a `urem` through a `freeze`; both
 /// were refused ("a byte division", "freeze") and stopped vid.c and screen.c.
 #[test]
