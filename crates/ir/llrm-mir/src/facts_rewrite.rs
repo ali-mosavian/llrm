@@ -212,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 37] = [
+        const CHECKED: [&str; 40] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -298,6 +298,18 @@ mod tests {
             // not-null, and `visitCastInst` a `trunc`'s no-wrap kind for the
             // result range, where LLVM does.
             "sccpsolver.rs",
+            // PredicateInfo.cpp's `m_NUWTrunc(m_Value(Op0))` in
+            // `processBranch`, `processAssume` and `getConstraint`.
+            "predicateinfo.rs",
+            // InstructionCombining.cpp's `SimplifyAssociativeOrCommutative`
+            // reads `nuw`/`nsw` (`hasNoUnsignedWrap`, `maintainNoSignedWrap`)
+            // to set them on the reassociated operation only when both
+            // operations had them, and drops the rest.
+            "combine_shared.rs",
+            // InstCombineAddSub.cpp's `visitAdd` and its helpers read an add's
+            // and a sub's `nsw`/`nuw` where LLVM does, to give the
+            // replacement the flags the operands prove.
+            "combine_addsub.rs",
             // MemCpyOptimizer.cpp's `CreateInBoundsPtrAdd` makes an inbounds
             // GEP; it reads no flag.
             "memcpyopt.rs",

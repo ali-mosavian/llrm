@@ -60,7 +60,8 @@ fn test_the_built_lists_satisfy_the_registry_at_every_level() {
         let on = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
         for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify] {
             let built = names(&on, phase);
-            assert_eq!(parity::check_phase(phase, &built), Ok(()), "{phase:?}");
+            let level = if on.options.pre { parity::Level::O2 } else { parity::Level::O1 };
+            assert_eq!(parity::check_phase_at(phase, &built, level), Ok(()), "{phase:?}");
         }
     }
 }
@@ -120,9 +121,10 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
     assert!(parity::joined_slots(parity::REGISTRY, &built).all(|one| one != "jumps@17"));
     let count = parity::tally(parity::REGISTRY);
     // jumps@17, allocate@11 (greedy by default under LLVM's order) and
-    // merge@818 (MemCpyOpt's memsets) and dse@820 (stage 1).
-    assert_eq!(count.partial, 4);
-    assert!(parity::report().contains("jumps@17") && parity::report().contains("4 partial"));
+    // merge@818 (MemCpyOpt's memsets), dse@820 (stage 1) and the two
+    // jumpthreading slots (stage S1).
+    assert_eq!(count.partial, 6);
+    assert!(parity::report().contains("jumps@17") && parity::report().contains("6 partial"));
 }
 
 /// A Partial slot without its criterion and exit says what is done and not what

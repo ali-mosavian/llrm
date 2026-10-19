@@ -90,6 +90,9 @@ pub mod candidate;
 pub mod canonical;
 pub mod cfg;
 pub mod combine;
+pub mod combine_addsub;
+pub mod combine_build;
+pub mod combine_shared;
 pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
@@ -145,6 +148,9 @@ mod instworklist_tests;
 pub mod interprocedural;
 pub mod ipacp;
 pub mod jumpthread;
+pub mod jumpthreading;
+#[cfg(test)]
+mod jumpthreading_tests;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod licm;
@@ -185,6 +191,7 @@ pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
 pub mod ports;
+pub mod predicateinfo;
 pub mod profit;
 pub mod promote;
 pub mod rotate;

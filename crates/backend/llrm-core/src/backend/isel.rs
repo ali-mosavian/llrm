@@ -2894,6 +2894,28 @@ impl Selector<'_, '_, '_> {
         self.layout.pointer(0).bits / 8
     }
 
+    /// `ptrtoint (ptr C to iN)` of a near pointer constant, N the pointer's
+    /// width, is that address: the pointer constant, which a link-time
+    /// address is. Any other operand is itself.
+    fn through_ptrtoint(
+        &self,
+        operand: Operand,
+    ) -> Operand {
+        let Operand::Constant(id) = operand else { return operand };
+        let context = &self.module.context;
+        let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::PtrToInt, value }) =
+            &context.get(id).kind
+        else {
+            return operand;
+        };
+        let near = matches!(self.types().get(context.get(*value).ty), Type::Pointer(0));
+        if near && self.types().int_bits(context.get(id).ty) == Some(self.address_bytes() * 8) {
+            Operand::Constant(*value)
+        } else {
+            operand
+        }
+    }
+
     fn fresh_held(
         &mut self,
         width: u32,
@@ -2941,7 +2963,7 @@ impl Selector<'_, '_, '_> {
         if let Some(value) = self.constant(operand, width) {
             return Ok(Loc::Imm(Imm { value, width, address: None }));
         }
-        if let Some(symbol) = self.symbol(operand)? {
+        if let Some(symbol) = self.symbol(self.through_ptrtoint(operand))? {
             return Ok(symbol);
         }
         Ok(Loc::Held(self.held(operand, ty, at, out)?))
@@ -3045,6 +3067,7 @@ impl Selector<'_, '_, '_> {
             out.push(insn(at, what));
             return Ok(held);
         }
+        let operand = self.through_ptrtoint(operand);
         let pointer = match operand {
             Operand::Value(value) => self.folded(value)?,
             _ => Some(self.global(operand)?),
@@ -3255,6 +3278,20 @@ impl Selector<'_, '_, '_> {
         operand: Operand,
     ) -> Result<Pointer, Unselected> {
         let Operand::Constant(id) = operand else { unreachable!("a constant") };
+        // An address no global owns, far: its selector:offset number, in two
+        // registers.
+        if self.is_far(self.module.context.get(id).ty)
+            && let Some(bits) = crate::backend::globals::absolute(self.module, &self.layout, id)
+        {
+            let Some(block) = self.current else { return refuse("a far constant outside a block") };
+            let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
+            let (base, selector) = (self.fresh_held(2), self.fresh_held(2));
+            for (into, value) in [(base, bits & 0xFFFF), (selector, (bits >> 16) & 0xFFFF)] {
+                let word = Loc::Imm(Imm { value, width: 2, address: None });
+                self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![word])));
+            }
+            return Ok(Pointer::Far { selector, base: Some(base), index: None, scale: 1, offset: 0 });
+        }
         // An address no global owns, near: its number, read as a direct
         // address.
         if let Some(offset) = crate::backend::globals::absolute(self.module, &self.layout, id)
@@ -4639,7 +4676,16 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(Held, Held), Unselected> {
         // A numeric constant, null among them: selector:offset as one dword.
-        if let Some(bits) = self.constant(operand, 4) {
+        // An `inttoptr` constant is one as well.
+        let numeric = self
+            .constant(operand, 4)
+            .or_else(
+                || match operand {
+                    Operand::Constant(id) => crate::backend::globals::absolute(self.module, &self.layout, id),
+                    _ => None,
+                },
+            );
+        if let Some(bits) = numeric {
             let halves = [bits & 0xFFFF, (bits >> 16) & 0xFFFF].map(|value| {
                 let held = self.fresh_held(2);
                 let word = Loc::Imm(Imm { value, width: 2, address: None });

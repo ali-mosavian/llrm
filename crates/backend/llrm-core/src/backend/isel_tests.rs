@@ -5609,6 +5609,25 @@ fn test_freeze_of_undef_and_an_undef_operand_are_selected_as_a_constant() {
     }
 }
 
+/// Markers bound a local whose address a call is given, as LLVM's
+/// StackColoring trusts them: refusing such locals left every inlined copy's
+/// buffer a slot of its own (QCport's `_menu_draw`: 3548 bytes, not 266).
+#[test]
+fn test_locals_passed_to_a_call_with_disjoint_lifetimes_share_a_frame_slot() {
+    let passed = |markers: bool| {
+        scopes(markers, false)
+            .replace(
+                "define i16 @f(i16 %a, i16 %c) addrspace(1) {",
+                "declare void @use(ptr)\ndefine i16 @f(i16 %a, i16 %c) addrspace(1) {",
+            )
+            .replace("  store volatile i16 %a, ptr %p\n", "  store volatile i16 %a, ptr %p\n  call void @use(ptr %p)\n")
+            .replace("  store volatile i16 %c, ptr %q\n", "  store volatile i16 %c, ptr %q\n  call void @use(ptr %q)\n")
+    };
+    assert!(passed(true).contains("@use(ptr %q)"), "the premise: both are passed on");
+    // One 16-byte local fewer than without markers.
+    assert_eq!(frame_bytes(&passed(true)), frame_bytes(&passed(false)) - 16);
+}
+
 /// Old: `addrspacecast (ptr @g to ptr addrspace(1))` as an operand (what
 /// `simplifyCastInst` makes of the cast since #2614) was refused, "a far
 /// constant", and 39 qb programs did not compile. It is DGROUP:offset.
@@ -5622,4 +5641,59 @@ define i16 @f() addrspace(1) {
 ";
     let got = listing(text, "f");
     assert!(got.iter().any(|one| one.contains("DGROUP")), "{got:?}");
+}
+
+/// Markers are trusted for what the code does not show (#2656), not for what
+/// it does: a local whose address is stored and passed on, then read after its
+/// end, keeps its own slot.
+#[test]
+fn test_an_escaped_local_read_past_its_end_shares_no_slot() {
+    let text = scopes(true, false)
+        .replace(
+            "define i16 @f(i16 %a, i16 %c) addrspace(1) {",
+            "@kept = global ptr null\ndeclare void @use(ptr)\ndefine i16 @f(i16 %a, i16 %c) addrspace(1) {",
+        )
+        .replace(
+            "  store volatile i16 %a, ptr %p\n",
+            "  store volatile i16 %a, ptr %p\n  store ptr %p, ptr @kept\n  call void @use(ptr %p)\n",
+        )
+        .replace("  ret i16 %v\n", "  %again = load volatile i16, ptr %p\n  ret i16 %again\n");
+    assert!(text.contains("store ptr %p, ptr @kept") && text.contains("%again"), "the premise");
+    let unmarked = text.replace("call void @llvm.lifetime", "; call void @llvm.lifetime");
+    assert!(!unmarked.contains("\n  call void @llvm.lifetime"), "the premise: the baseline has no markers");
+    let read_in_time = text.replace("  %again = load volatile i16, ptr %p\n  ret i16 %again\n", "  ret i16 %v\n");
+    assert!(frame_bytes(&read_in_time) < frame_bytes(&unmarked), "the premise: read in time, they share");
+    assert_eq!(frame_bytes(&text), frame_bytes(&unmarked));
+}
+
+/// Constant expressions as operands, the shapes `simplifyCastInst` and the GEP
+/// fold make since #2614/#2610: each was refused, "an address of no global".
+/// `ptrtoint` of a global (and of a GEP off one) is its link-time address; a
+/// far `inttoptr` constant is a selector:offset pair, whether stored or read
+/// through.
+#[test]
+fn test_ptrtoint_of_a_global_is_its_address_as_an_operand() {
+    let text = "@g = internal global [8 x i16] zeroinitializer
+define i16 @f(i16 %x) addrspace(1) {
+  %a = sub i16 %x, ptrtoint (ptr @g to i16)
+  %b = sub i16 ptrtoint (ptr getelementptr inbounds (i8, ptr @g, i16 6) to i16), %a
+  ret i16 %b
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"sub bx, offset g".to_owned()) && got.contains(&"mov ax, offset g+6".to_owned()), "{got:?}");
+}
+
+#[test]
+fn test_a_far_inttoptr_constant_is_a_number_as_a_value_and_as_an_address() {
+    let text = "@slot = internal global ptr addrspace(1) null
+define i16 @f() addrspace(1) {
+  store ptr addrspace(1) inttoptr (i32 1342177280 to ptr addrspace(1)), ptr @slot
+  %v = load i16, ptr addrspace(1) inttoptr (i32 1358954496 to ptr addrspace(1))
+  ret i16 %v
+}
+";
+    let got = listing(text, "f");
+    // 1342177280 is 0x5000:0000 stored, 1358954496 is 0x5100:0000 read through.
+    assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
 }

@@ -63,6 +63,7 @@ COUNTERPART = {
     "tailrec": "tailcallelim",
     "memcpyopt": "memcpyopt",
     "cvp": "correlated-propagation",
+    "jumpthreading": "jump-threading",
     "instsimplify": "instsimplify",
     "loopidiom": "loop(loop-idiom)",
     "loopdeletion": "loop(loop-deletion)",
@@ -99,6 +100,7 @@ SOURCE = {
     "tailcallelim": "Transforms/Scalar/TailRecursionElimination.cpp",
     "memcpyopt": "Transforms/Scalar/MemCpyOptimizer.cpp",
     "correlated-propagation": "Transforms/Scalar/CorrelatedValuePropagation.cpp",
+    "jump-threading": "Transforms/Scalar/JumpThreading.cpp",
 }
 LLVM_COMMIT = "d1106deb71cc"
 

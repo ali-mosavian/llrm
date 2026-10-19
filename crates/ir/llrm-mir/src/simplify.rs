@@ -4026,6 +4026,24 @@ pub fn simplify_binop_operands(
     simplify_binop_flags(&mut q, opcode, lhs, rhs, flags, RECURSION_LIMIT)
 }
 
+/// `simplifyBinOp(Opcode, LHS, RHS, SQ.getWithInstruction(&cxt))` for a caller
+/// that has a module (its callees, dominator tree and assumptions) and the
+/// instruction it asks at.
+pub fn simplify_binop_at(
+    context: &Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+    analyses: Option<&FunctionAnalyses>,
+    function: &Function,
+    cxt: InstId,
+    opcode: BinaryOp,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: true };
+    simplify_binop_flags(&mut q, opcode, lhs, rhs, Flags::default(), RECURSION_LIMIT)
+}
+
 /// `simplifyICmpInst` for operands.
 pub fn simplify_icmp_operands(
     context: &Context,
