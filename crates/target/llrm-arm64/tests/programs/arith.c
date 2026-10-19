@@ -11,7 +11,7 @@ int main(void) {
   for (int i = -3; i < 4; i++) {
     for (int j = -2; j < 3; j++) {
       printf("%d %d %d ", a32(i * 1000, j * 77), (int)u32((unsigned)i * 999u, (unsigned)j), (int)a64(i * 100000000L, j * 3));
-      printf("%lu %d %d %d %d\n", u64((unsigned long)i * 123456789ul, (unsigned long)(j + 5)), c8((char)i, (char)j), uc8((unsigned char)(i * 50), (unsigned char)(j * 30)), s16((short)(i * 1000), (short)(j * 200)));
+      printf("%lu %d %d %d\n", u64((unsigned long)i * 123456789ul, (unsigned long)(j + 5)), c8((char)i, (char)j), uc8((unsigned char)(i * 50), (unsigned char)(j * 30)), s16((short)(i * 1000), (short)(j * 200)));
       printf("%d\n", us16((unsigned short)(i * 4000), (unsigned short)(j * 5000)));
     }
   }

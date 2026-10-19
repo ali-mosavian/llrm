@@ -139,3 +139,33 @@ fn many_arguments_and_function_pointers() {
 fn small_algorithms() {
     compare("algos");
 }
+
+/// Every program as the Darwin target builds it is an object the pinned
+/// `llvm-objdump` reads whole: each word of its code is an instruction, and
+/// the relocations name symbols the object defines or imports.
+#[test]
+fn darwin_objects_disassemble_without_unknown_words() {
+    let build = build();
+    let objdump = build.join("bin/llvm-objdump");
+    if !objdump.exists() {
+        eprintln!("skipped: no pinned LLVM with AArch64");
+        return;
+    }
+    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let llc = Path::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"));
+    let scratch = tempfile::tempdir().unwrap();
+    let mut checked = 0;
+    for entry in std::fs::read_dir(here.join("tests/darwin")).unwrap() {
+        let ir = entry.unwrap().path();
+        if ir.extension().is_none_or(|one| one != "ll") {
+            continue;
+        }
+        let object = scratch.path().join("p.o");
+        run(Command::new(llc).arg("-o").arg(&object).arg(&ir));
+        let listing = run(Command::new(&objdump).args(["-d", "-r"]).arg(&object));
+        assert!(listing.contains("mach-o arm64"), "{}: {listing}", ir.display());
+        assert!(!listing.contains("<unknown>") && !listing.contains(".long"), "{}: {listing}", ir.display());
+        checked += 1;
+    }
+    assert!(checked >= 10, "only {checked} programs");
+}
