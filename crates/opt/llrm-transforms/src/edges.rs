@@ -277,6 +277,28 @@ pub fn split_block_at(
     new
 }
 
+/// SimplifyCFG's `addPredecessorToBlock(Succ, NewPred, ExistPred)`
+/// ([L1224](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L420)):
+/// each phi of `block` gets an input from `new_pred`, the one it has from
+/// `existing_pred`.
+pub fn predecessor_added(
+    function: &mut Function,
+    block: BlockId,
+    new_pred: BlockId,
+    existing_pred: BlockId,
+) {
+    for phi in phis(function, block) {
+        let mut incoming = arms(function, phi);
+        let value = incoming
+            .iter()
+            .find(|&&(_, from)| from == existing_pred)
+            .expect("an input from the existing predecessor")
+            .0;
+        incoming.push((value, new_pred));
+        function.set_operands(phi, from_arms(&incoming));
+    }
+}
+
 /// `SplitBlockPredecessors(BB, Preds)`
 /// ([BasicBlockUtils.cpp:1400](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L1400),
 /// body `SplitBlockPredecessorsImpl`): a new block that `preds` jump to
