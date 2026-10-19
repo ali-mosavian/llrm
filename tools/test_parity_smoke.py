@@ -281,3 +281,15 @@ def test_the_budget_is_instructions_so_a_loaded_host_passes_and_a_doubled_step_f
     fallback = iter([0.0, 0.0, 0.0, 20.0])  # no perf: the CPU seconds decide, as before
     ok, line = ps.run_steps(steps, Path("."), clock=lambda: next(fallback), meter=counted(None), limit=12_000_000_000)
     assert not ok and "perf unavailable" in line
+
+
+def test_a_header_change_without_the_docs_sync_is_refused_with_the_page_named():
+    """jumps.rs landed without `docsbuild --sync`; every docs-touching PR after it was refused with no page named."""
+    class Done:
+        def __init__(self, out, code):
+            self.stdout, self.stderr, self.returncode = out, "", code
+
+    stale = "1 problem(s)\ngenerated docs are out of date; run python3 tools/docsbuild/build.py --sync\n  docs/optimizations/backend/jumps.md\n  docs/optimizations/passes/readme.md\n"
+    failed = ps.docs_failures(run=lambda command: Done(stale, 1))
+    assert set(failed) == {"ratchet:docs"} and "docs/optimizations/backend/jumps.md" in failed["ratchet:docs"] and "--sync" in failed["ratchet:docs"], failed
+    assert ps.docs_failures(run=lambda command: Done("ok\n", 0)) == {}

@@ -180,6 +180,19 @@ def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[s
     return failed
 
 
+def docs_failures(root: Path = ROOT, run=None) -> dict[str, str]:
+    """`ratchet:docs` -> the generated pages that are out of date (or the figure problem) on the tree in `root`; none when `docsbuild --check` is clean. A header change
+    that landed without `docsbuild --sync` (jumps.rs) refused every docs-touching PR after it (#2757, #2763, #2857, #2836) with nothing naming the page."""
+    run = run or (lambda command: subprocess.run(command, cwd=root, capture_output=True, text=True))
+    done = run([sys.executable, "tools/docsbuild/build.py", "--check"])
+    if not done.returncode:
+        return {}
+    lines = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip()]
+    pages = [line for line in lines if line.startswith("docs/")]
+    why = f"out of date: {', '.join(pages)}; run python3 tools/docsbuild/build.py --sync" if pages else " / ".join(lines[:2])
+    return {"ratchet:docs": why[:300]}
+
+
 def failing_names(line: str) -> list[str]:
     """The failed step names of a `PARITY SMOKE FAIL name: detail; name: detail | ...` line; a unit step names each failed test (`unit llrm-qb::test_x`)."""
     if not line.startswith("PARITY SMOKE FAIL "):
@@ -465,7 +478,7 @@ def main() -> int:
     if broken := workspace_check():
         failing.append("workspace")
         pre.append(f"workspace: {broken}")
-    for name, why in ratchet_failures().items():
+    for name, why in {**ratchet_failures(), **docs_failures()}.items():
         failing.append(name)
         pre.append(f"{name}: {why}")
     packages = touched(args.base)
