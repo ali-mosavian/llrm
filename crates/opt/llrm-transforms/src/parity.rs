@@ -246,8 +246,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
 /// One analysis of the parity pipeline.
 #[derive(Clone, Copy, Debug)]
 pub struct AnalysisEntry {
-    /// The manager's key for it (`Analysis::NAME`).
+    /// The manager's key for it (`Analysis::NAME`): the name
+    /// `LLRM_DEBUG=counts` prints.
     pub key: &'static str,
+    /// The Rust type that implements it, which `tools/old_analysis_callers.py`
+    /// looks for in the sources.
+    pub symbol: &'static str,
     /// LLVM's analysis.
     pub llvm: &'static str,
     pub kind: SlotKind,
@@ -257,6 +261,20 @@ pub struct AnalysisEntry {
     pub deps: &'static [&'static str],
     /// What lets it join.
     pub oracle: &'static str,
+    /// For a row that is not Translated: what takes its place and who owns that
+    /// ("none: DEVIATE or delete candidate" where LLVM has no counterpart).
+    pub replaced_by: &'static str,
+}
+
+/// An analysis of llrm's own that LLVM's counterpart (`llvm`, or "none")
+/// replaces once `replaced_by` lands.
+const fn old_analysis(
+    key: &'static str,
+    symbol: &'static str,
+    llvm: &'static str,
+    replaced_by: &'static str,
+) -> AnalysisEntry {
+    AnalysisEntry { key, symbol, llvm, kind: Old, off: false, deps: &[], oracle: "", replaced_by }
 }
 
 /// The analyses with a translation or a stand-in the registry follows. The
@@ -264,28 +282,232 @@ pub struct AnalysisEntry {
 pub const ANALYSES: &[AnalysisEntry] = &[
     AnalysisEntry {
         key: "dominators",
+        symbol: "Dominators",
         llvm: "DominatorTreeAnalysis",
         kind: Translated,
         off: false,
         deps: &[],
         oracle: "tools/llvmport/domcompare.py: DomTree against the pinned LLVM on the corpus (#2292)",
+        replaced_by: "",
     },
     AnalysisEntry {
         key: "loops",
+        symbol: "Loops",
         llvm: "LoopAnalysis",
         kind: Translated,
         off: false,
         deps: &["dominators"],
         oracle: "tools/loops_oracle.py: print<loops> of opt at the pin",
+        replaced_by: "",
     },
     AnalysisEntry {
         key: "mssa",
+        symbol: "MemorySsa",
         llvm: "MemorySSAAnalysis",
         kind: Translated,
         off: false,
         deps: &["aa"],
         oracle: "shadow_mssa equality on dumped pass inputs",
+        replaced_by: "",
     },
+    AnalysisEntry {
+        key: "scev",
+        symbol: "Scevs",
+        llvm: "ScalarEvolutionAnalysis",
+        kind: Translated,
+        off: false,
+        deps: &["dominators", "loops", "assumes"],
+        oracle: "tools/scev/golden.py: expressions against the text the pinned LLVM prints",
+        replaced_by: "",
+    },
+    AnalysisEntry {
+        key: "assumes",
+        symbol: "Assumes",
+        llvm: "AssumptionAnalysis",
+        kind: Translated,
+        off: false,
+        deps: &[],
+        oracle: "the llvm.assume calls of the function (scev/analysis.rs)",
+        replaced_by: "",
+    },
+    AnalysisEntry {
+        key: "lvi",
+        symbol: "LviCache",
+        llvm: "LazyValueAnalysis",
+        kind: Translated,
+        off: false,
+        deps: &["dominators", "assumes"],
+        oracle: "tools/llvmport/lvi_dump.cpp: LazyValueInfo of the pinned LLVM (#2344, #2551)",
+        replaced_by: "",
+    },
+    AnalysisEntry {
+        key: "branch-probabilities",
+        symbol: "BranchProbabilityInfo",
+        llvm: "BranchProbabilityAnalysis",
+        kind: Translated,
+        off: false,
+        deps: &["dominators", "loops"],
+        oracle: "print<branch-prob> of opt at the pin, edge for edge on QCport (#2704)",
+        replaced_by: "",
+    },
+    AnalysisEntry {
+        key: "block-frequencies",
+        symbol: "BlockFrequencies",
+        llvm: "BlockFrequencyAnalysis",
+        kind: Partial,
+        off: false,
+        deps: &["loops"],
+        oracle: "blockfreq_golden.ll",
+        replaced_by: "BlockFrequencyInfoImpl is translated; its edge probabilities are still branchprob::estimated (D1b), exit: read branch-probabilities",
+    },
+    // The rest are llrm's own analyses. Their callers count as old callers.
+    old_analysis(
+        "scalar-evolution",
+        "ScalarEvolution",
+        "ScalarEvolutionAnalysis",
+        "scev (add recurrences alone; passes.rs): its callers move to scev",
+    ),
+    old_analysis(
+        "assumptions",
+        "AssumptionCache",
+        "AssumptionAnalysis",
+        "assumes: two analyses stand for one LLVM analysis; callers move to assumes",
+    ),
+    old_analysis(
+        "demanded",
+        "DemandedBits",
+        "DemandedBitsAnalysis",
+        "InstCombine SimplifyDemandedBits translation (instcombine-port); deletes it with algebraic::_unread_bits",
+    ),
+    old_analysis(
+        "globals-aa",
+        "GlobalsAA",
+        "GlobalsAA (GlobalsModRef.cpp)",
+        "globalsmodref.rs (funcattrs-port, #2636), caching on top (parity-pipeline)",
+    ),
+    old_analysis(
+        "summaries",
+        "Summaries",
+        "FunctionAttrs memory effects + GlobalsModRef FunctionInfo",
+        "funcattrs-port (FunctionAttrs inference) and globalsmodref FunctionInfo",
+    ),
+    old_analysis(
+        "summaries from the log",
+        "counted(\"summaries from the log\")",
+        "none",
+        "with summaries: funcattrs-port",
+    ),
+    old_analysis("summaries updated", "counted(\"summaries updated\")", "none", "with summaries: funcattrs-port"),
+    old_analysis("callee-effects", "CalleeEffects", "none", "none: DEVIATE or delete candidate (passes.rs)"),
+    old_analysis(
+        "callbacks",
+        "Callbacks",
+        "none",
+        "none: DEVIATE or delete candidate (effects of calling back into the module)",
+    ),
+    old_analysis(
+        "call-graph",
+        "CallGraphAnalysis",
+        "CallGraphAnalysis",
+        "no oracle yet: its doc names the LLVM analysis, unproven",
+    ),
+    old_analysis(
+        "call-registers",
+        "CallRegisters",
+        "none",
+        "none: backend facts in a mid-end analysis (callgraph / regalloc owner)",
+    ),
+    old_analysis(
+        "global-sizes",
+        "GlobalSizes",
+        "none",
+        "none: DEVIATE or delete candidate (DataLayout / GlobalVariable sizes are read directly at the pin)",
+    ),
+    old_analysis(
+        "type-ancestry",
+        "TypeAncestry",
+        "none",
+        "none: DEVIATE; TypeBasedAA is the pin's counterpart (not translated)",
+    ),
+    old_analysis("declarations", "Declarations", "none", "none: DEVIATE or delete candidate"),
+    old_analysis(
+        "callees",
+        "counted(\"callees\")",
+        "none",
+        "none: DEVIATE or delete candidate (a scan of the body's callees, memory.rs)",
+    ),
+    old_analysis(
+        "declared names",
+        "counted(\"declared names\")",
+        "none",
+        "none: DEVIATE or delete candidate (the name table of declarations, passes.rs)",
+    ),
+    old_analysis("shape", "Shape", "none", "bundle of dominators, loops and reaching; goes with its callers"),
+    old_analysis(
+        "exposed-frames",
+        "ExposedFrames",
+        "CaptureTracking (PointerMayBeCaptured)",
+        "capturetracking.rs is translated; callers move to it (frameescape::exposed_allocas goes)",
+    ),
+    old_analysis(
+        "registers",
+        "Registers",
+        "ScalarEvolution add recurrences",
+        "scev (indvars chain, scev-createscev-2239)",
+    ),
+    old_analysis("followers", "Followers", "ScalarEvolution add recurrences", "scev (induction::followers_all goes)"),
+    old_analysis("counted", "Counted", "ScalarEvolution trip counts", "scev (induction::counted_all goes)"),
+    old_analysis(
+        "dominated-edges",
+        "DominatedEdges",
+        "LazyValueInfo / ConstraintElimination",
+        "LVI and CVP callers; ranges::dominated_edges goes (vt-constantfolding)",
+    ),
+    old_analysis(
+        "bounded",
+        "Bounded",
+        "LazyValueInfo / ScalarEvolution getRange",
+        "LVI and SCEV getRange; ranges::bounded goes (vt-constantfolding, scev-createscev-2239)",
+    ),
+    old_analysis(
+        "pointer-values",
+        "PointerValues",
+        "BasicAA + CaptureTracking",
+        "basicaa-port (aa.rs): alias::point_values goes",
+    ),
+    old_analysis("points-to", "Pointers", "BasicAA", "basicaa-port (aa.rs): alias::pointers goes"),
+    old_analysis("annotated", "Annotated", "MemoryLocation", "basicaa-port: references.rs MemoryLocation callers"),
+    old_analysis("call-effects", "CallEffects", "AAResults::getModRefInfo", "basicaa-port with GlobalsModRef"),
+    old_analysis("writes", "Writes", "AAResults::getModRefInfo", "basicaa-port with GlobalsModRef"),
+    old_analysis("plain-accesses", "PlainAccesses", "MemorySSA", "mssa (memoryssa-port)"),
+    old_analysis("accesses", "Accesses", "MemorySSA", "mssa (memoryssa-port)"),
+    old_analysis("through-memory", "ThroughMemory", "MemorySSA + GVN value numbering", "mssa and the GVN translation"),
+    old_analysis(
+        "float-facts",
+        "FloatFacts",
+        "ValueTracking (computeKnownFPClass) + MemorySSA",
+        "vt-constantfolding (floating-point InstSimplify) and mssa",
+    ),
+    old_analysis("table-loads", "TableLoads", "none", "none: DEVIATE or delete candidate (consts::is_table_load)"),
+    old_analysis(
+        "terminal-sites",
+        "TerminalSites",
+        "none",
+        "none: DEVIATE or delete candidate (noreturn::terminal_sites)",
+    ),
+    old_analysis("published", "Published", "none", "none: DEVIATE or delete candidate (observers.rs)"),
+    old_analysis(
+        "loop-products",
+        "Products",
+        "none",
+        "none: lsr's own prices; block-frequencies once lsr is translated",
+    ),
+    old_analysis(
+        "pressure",
+        "Pressure",
+        "RegisterPressure / LiveIntervals",
+        "the backend live-interval translation (regalloc owner)",
+    ),
 ];
 
 /// What is still open in the parity pipeline's use of the manager. A pass that
@@ -467,9 +689,27 @@ pub(crate) fn check_phase_with(
 }
 
 /// [`check_phase`] for the machine phases `llc` runs: `built` is the slot of
-/// each phase of `flow::machine_with` that runs.
-pub fn check_backend(built: &[&str]) -> Result<(), String> {
-    check_phase(Phase::Backend, built)
+/// each phase of `flow::machine_with` that runs, and `off` the slots the
+/// options leave out (-O0 drops the optional phases).
+pub fn check_backend(
+    built: &[&str],
+    off: &[&str],
+) -> Result<(), String> {
+    check_without(REGISTRY, Phase::Backend, built, off)?;
+    llrm_mir::counts::joined(joined_slots(REGISTRY, built));
+    Ok(())
+}
+
+impl SlotKind {
+    /// The word the `[parity]` lines print.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Translated => "translated",
+            Partial => "partial",
+            Old => "old",
+            Missing => "missing",
+        }
+    }
 }
 
 /// How many slots are in each state; Partial is counted apart from Translated.
@@ -527,6 +767,7 @@ pub(crate) fn tally_lines_of(
         ));
     }
     out.push(line("analyses", count(analyses.iter().map(|one| one.kind))));
+    out.extend(analyses.iter().map(|one| format!("[parity] analysis {} {} {}", one.key, one.kind.name(), one.symbol)));
     out
 }
 
