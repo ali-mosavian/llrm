@@ -642,25 +642,10 @@ fn can_prove_exit_on_first_iteration(
     !is_live_edge(&live_edges, latch, header)
 }
 
-/// `BasicBlock::removePredecessor(pred, KeepOneInputPHIs)`: the phis of
-/// `block` lose the arm of one edge from `pred`.
-fn remove_predecessor(
-    function: &mut Function,
-    block: BlockId,
-    pred: BlockId,
-) {
-    for phi in crate::edges::phis(function, block) {
-        let mut incoming = arms(function, phi);
-        if let Some(at) = incoming.iter().position(|&(_, from)| from == pred) {
-            incoming.remove(at);
-            function.set_operands(phi, from_arms(&incoming));
-        }
-    }
-}
-
 /// `changeToUnreachable(term, PreserveLCSSA)`: the block ends in `unreachable`
 /// and its successors lose their phi arms from it.
 fn change_to_unreachable(
+    context: &Context,
     function: &mut Function,
     term: InstId,
 ) {
@@ -676,7 +661,7 @@ fn change_to_unreachable(
     function.insert(unreachable, Position::Before(term)).expect("a placed block");
     function.erase(term).expect("the terminator had no users");
     for succ in successors {
-        remove_predecessor(function, succ, block);
+        function.predecessor_removed(context, succ, block, true);
     }
 }
 
@@ -692,14 +677,14 @@ fn break_loop_backedge(
     let end = run.function.instruction(term);
     let void = end.ty;
     if end.opcode == Opcode::Br && end.operands.len() == 1 {
-        change_to_unreachable(run.function, term);
+        change_to_unreachable(&*run.context, run.function, term);
     } else if end.opcode == Opcode::Br && end.operands.len() == 3 && lp.is_loop_exiting(run.function, latch) {
         // Conditional latch/exit - note that latch can be shared by inner and
         // outer loop so the other target doesn't need to an exit.
         let Operand::Block(first) = end.operands[1] else { unreachable!("a branch's target") };
         let Operand::Block(second) = end.operands[2] else { unreachable!("a branch's target") };
         let exit = if lp.contains(first) { second } else { first };
-        remove_predecessor(run.function, header, latch);
+        run.function.predecessor_removed(&*run.context, header, latch, true);
         let jump =
             run.function.create_instruction(Opcode::Br, void, vec![Operand::Block(exit)], Flags::default(), None);
         run.function.insert(jump, Position::Before(term)).expect("a placed block");

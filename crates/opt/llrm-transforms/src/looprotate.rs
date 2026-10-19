@@ -824,7 +824,7 @@ fn rotate_loop(
     } else {
         // The conditional branch can be folded, which makes things simpler.
         // The first step is to remove the extra edge to the exit block.
-        remove_predecessor(run, exit, orig_preheader);
+        run.function.predecessor_removed(&*run.context, exit, orig_preheader, true);
         let void = run.function.instruction(guard).ty;
         let jump =
             run.function.create_instruction(Opcode::Br, void, vec![Operand::Block(new_header)], Flags::default(), None);
@@ -843,19 +843,6 @@ fn rotate_loop(
         orig_header
     };
     Some(latch)
-}
-
-/// `BasicBlock::removePredecessor(pred, KeepOneInputPHIs = true)`: `block`'s
-/// phis forget their input from `pred`.
-fn remove_predecessor(
-    run: &mut Run,
-    block: BlockId,
-    pred: BlockId,
-) {
-    for phi in edges::phis(run.function, block) {
-        let kept = arms(run.function, phi).into_iter().filter(|&(_, from)| from != pred).collect::<Vec<_>>();
-        run.function.set_operands(phi, from_arms(&kept));
-    }
 }
 
 /// The `llvm.assume` calls of the loop (`AssumptionCache::assumptions` less

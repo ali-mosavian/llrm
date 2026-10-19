@@ -294,52 +294,6 @@ fn has_side_effects(
     crate::local::may_have_side_effects(run.context, run.callees, run.globals, run.function, inst)
 }
 
-/// `BasicBlock::removePredecessor(pred)`: `block`'s phis lose the input of one
-/// edge from `pred`; a phi left with no input goes, and one whose inputs are
-/// all alike (when the block had several predecessors) is replaced by it.
-fn remove_predecessor(
-    run: &mut Run,
-    block: BlockId,
-    pred: BlockId,
-) {
-    let list = phis(run.function, block);
-    let Some(&front) = list.first() else { return };
-    let num_preds = run.function.instruction(front).operands.len() / 2;
-    for phi in list {
-        let mut incoming = arms(run.function, phi);
-        if let Some(at) = incoming.iter().position(|&(_, from)| from == pred) {
-            incoming.remove(at);
-        }
-        if incoming.is_empty() {
-            run.function.set_operands(phi, Vec::new());
-            run.function.erase(phi).expect("an unused phi");
-            continue;
-        }
-        run.function.set_operands(phi, from_arms(&incoming));
-        if num_preds == 1 {
-            continue;
-        }
-        // `hasConstantValue`.
-        let this = Operand::Value(run.function.instruction(phi).result.expect("a phi's value"));
-        let mut constant = incoming[0].0;
-        let mut alike = true;
-        for &(value, _) in &incoming[1..] {
-            if value != constant && value != this {
-                if constant != this {
-                    alike = false;
-                    break;
-                }
-                constant = value;
-            }
-        }
-        if alike && constant != this {
-            run.function.replace_value(run.function.instruction(phi).result.expect("a phi's value"), constant);
-            run.function.set_operands(phi, Vec::new());
-            run.function.erase(phi).expect("an unused phi");
-        }
-    }
-}
-
 /// `rewritePHINodesForUnswitchedExitBlock`: the exit is the unswitched block;
 /// its phis come from the old preheader with their value on entry.
 fn rewrite_phi_nodes_for_unswitched_exit_block(
@@ -564,7 +518,7 @@ fn unswitch_trivial_branch(
         };
         let max = se.get_backedge_taken_count(&cx, header, ExitCountKind::ConstantMaximum);
         if !se.is_could_not_compute(max) {
-            remove_predecessor(run, latch, parent);
+            run.function.predecessor_removed(&*run.context, latch, parent, false);
             run.function.set_operand(bi, 1 + index, Operand::Block(exit));
             for phi in phis(run.function, exit) {
                 let mut incoming = arms(run.function, phi);
@@ -889,7 +843,7 @@ fn unswitch_trivial_switch(
                 skipped_first = true;
                 continue;
             }
-            keep_one_input_phis_remove(run, common, parent);
+            run.function.predecessor_removed(&*run.context, common, parent, true);
         }
         let jump =
             run.function.create_instruction(Opcode::Br, void, vec![Operand::Block(common)], Flags::default(), None);
@@ -914,21 +868,6 @@ fn unswitch_trivial_switch(
     // to its correct parent if needed.
     let rebuilt = hoist_loop_to_new_parent(run, analyzed, header);
     Step { done: true, rebuilt }
-}
-
-/// `removePredecessor(pred, KeepOneInputPHIs = true)`: one edge's input goes.
-fn keep_one_input_phis_remove(
-    run: &mut Run,
-    block: BlockId,
-    pred: BlockId,
-) {
-    for phi in phis(run.function, block) {
-        let mut incoming = arms(run.function, phi);
-        if let Some(at) = incoming.iter().position(|&(_, from)| from == pred) {
-            incoming.remove(at);
-            run.function.set_operands(phi, from_arms(&incoming));
-        }
-    }
 }
 
 /// `unswitchAllTrivialConditions`: the trivial conditions of the loop headed by
