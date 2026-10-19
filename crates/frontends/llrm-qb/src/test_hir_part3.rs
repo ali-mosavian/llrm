@@ -1960,7 +1960,8 @@ fn test_a_sum_read_after_its_loop_is_copied_out_where_the_loop_ends() {
     // segld's sum is printed after both loops, across a runtime call, so as
     // one value with the loop's it could only live in SI: the loop added into
     // SI and copied back to CX on a split back edge, `mov cx, si` and `jmp`.
-    // The loops are too long to unroll: at segld's 5 by 20 they are folded away.
+    // The loops are too long to unroll: at segld's 5 by 20 they are folded
+    // away.
     let directory = tempfile::TempDir::new().unwrap();
     let basic = written(
         &directory,
