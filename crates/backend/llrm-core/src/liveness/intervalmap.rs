@@ -255,21 +255,16 @@ mod tests {
         insns.iter().map(|i| indexes.get_instruction_index(i.id()).get_reg_slot(false)).collect()
     }
 
-    /// Entries added and removed in an order that splits and empties leaves answer `find`, `before`, `next` and `prev` as a
+    /// Entries added and removed in a fixed order that splits and empties leaves answer `find`, `before`, `next` and `prev` as a
     /// `BTreeMap` of the same entries does.
     #[test]
     fn test_a_row_of_leaves_answers_as_a_btree_map_does() {
         let at = indexes();
         let mut map = IntervalMap::<u32>::default();
         let mut model = BTreeMap::new();
-        let mut seed = 12345u64;
-        let mut roll = |n: usize| {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            ((seed >> 33) as usize) % n
-        };
         for step in 0..3000 {
-            let i = roll(298) * 2;
-            if model.contains_key(&at[i]) && roll(3) != 0 {
+            let i = (step * 37 % 299) * 2;
+            if model.contains_key(&at[i]) && step % 3 != 0 {
                 let pos = map.get(&at[i]).expect("the entry");
                 map.remove(pos);
                 model.remove(&at[i]);
@@ -277,7 +272,7 @@ mod tests {
                 map.insert(Entry { start: at[i], stop: at[i + 1], value: i as u32 });
                 model.insert(at[i], (at[i + 1], i as u32));
             }
-            let x = at[roll(598)];
+            let x = at[step * 101 % 599];
             let want = model
                 .range(..=x)
                 .next_back()
