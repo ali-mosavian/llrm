@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -147,12 +148,15 @@ def precheck_checks(dev: Path, target: Path):
     return [("ratchets", ratchets), ("fmt", fmt), ("docs", docs)]
 
 
-def precheck_items(dev: Path, checks, deletions_of=None) -> dict[str, set[str]]:
-    """Every check's failing items on the checkout in `dev`, merged by check name."""
+def precheck_items(dev: Path, checks, deletions_of=None, seconds: dict[str, float] | None = None) -> dict[str, set[str]]:
+    """Every check's failing items on the checkout in `dev`, merged by check name; `seconds` collects each check's wall time."""
     found: dict[str, set[str]] = {}
-    for _, check in checks:
+    for label, check in checks:
+        started = time.monotonic()
         for name, items in check(dev).items():
             found.setdefault(name, set()).update(items)
+        if seconds is not None:
+            seconds[label] = round(time.monotonic() - started, 1)
     return found
 
 
@@ -196,10 +200,15 @@ def _precheck(number, info, dev, target, checks, merge, deletions, head_failed, 
     git("fetch", "-q", "origin", info["headRefOid"], cwd=dev)
     checks = list(checks) if checks is not None else precheck_checks(dev, target)
     before = precheck_baseline(dev, checks, base_sha, cache)
+    seconds: dict[str, float] = {}
+    started = time.monotonic()
     sha, why = (merge or merged_result)(info["headRefOid"], BASE, dev)
+    seconds["merge"] = round(time.monotonic() - started, 1)
     if sha is None:
         return f"{number}: REFUSED: {why}"
-    after = precheck_items(dev, checks)
+    after = precheck_items(dev, checks, seconds=seconds)
+    with (cache.parent / "precheck-times.log").open("a") as log:  # where a precheck's minutes go, per PR
+        log.write(json.dumps({"pr": number, "at": datetime.datetime.now().strftime("%H:%M:%S"), **seconds}) + "\n")
     if problems := (deletions or refusals)(sha, info["body"] or "", BASE, dev):
         after["deletes"] = {problem.split(":")[0] for problem in problems}
     new = {name: items - before.get(name, set()) for name, items in after.items() if name not in (head_failed or set())}
