@@ -258,7 +258,8 @@ impl FunctionPass for IndVars {
                 &mut standing,
                 if self.exit_values { None } else { self.unrolls },
             );
-        let merged = congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        let merged = twin_phis(unit.function)
+            | congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
         let rewound = rewound_with(
             unit.context,
             unit.layout,
@@ -314,6 +315,49 @@ fn congruent(
     }
     for &(later, first) in &merged {
         function.replace_all_uses_with(later, Operand::Value(first));
+    }
+    !merged.is_empty()
+}
+
+/// Phis of one block whose arms are, for each predecessor, one value or two
+/// pure binary operations of the same operands: the later reads as the first.
+/// DEVIATE (IV1, docs/architecture/loop-passes-port.md): `SCEVExpander::
+/// replaceCongruentIVs` finds them by their recurrences; this is by shape. LoopRotate leaves a counter twice that way, a phi of its
+/// sign-extension stepping by a copy of the counter's own `add`.
+fn twin_phis(function: &mut Function) -> bool {
+    #[derive(Eq, Hash, PartialEq)]
+    enum Arm {
+        Value(Operand),
+        Made(&'static str, Vec<Operand>),
+    }
+    let mut first = IndexMap::default();
+    let mut merged = Vec::new();
+    for (phi, block, _) in llrm_analysis::occurrence::phis(function) {
+        let Some(result) = function.instruction(phi).result else { continue };
+        let mut key = arms(function, phi)
+            .into_iter()
+            .map(|(value, from)| {
+                let made = match value {
+                    Operand::Value(one) => _defining(function, one).map(|inst| function.instruction(inst)),
+                    _ => None,
+                }
+                .filter(|made| matches!(made.opcode, Opcode::Binary(_)));
+                let arm = match made {
+                    Some(made) => Arm::Made(made.opcode.mnemonic(), made.operands.clone()),
+                    None => Arm::Value(value),
+                };
+                (from.0, arm)
+            })
+            .collect::<Vec<_>>();
+        key.sort_by_key(|(from, _)| *from);
+        let ty = function.value(result).ty;
+        let kept = *first.entry((block, ty, key)).or_insert(result);
+        if kept != result {
+            merged.push((result, kept));
+        }
+    }
+    for &(later, kept) in &merged {
+        function.replace_all_uses_with(later, Operand::Value(kept));
     }
     !merged.is_empty()
 }
