@@ -23,8 +23,6 @@ Code: `carried`, `window` and `pointer_difference` in [`isel.rs`](../optimizatio
 
 Built from a counter, each use pays the whole carry (`OperationCosts::carry`); stepped by a constant, the step pays a borrow spread to a mask, cut to the selector's stride and added to it (`carry_step`). So `lsr` walks a huge array with a huge pointer ([lsr](../optimizations/passes/lsr.md)).
 
-A fill, a copy or a move through a huge pointer is one `llvm.memset`, `memset.pattern`, `memcpy` or `memmove` in the huge space (`fill` names nothing about segments), and isel (`isel/huge.rs`) lowers it: a `rep` wraps its 16-bit offset at 64K, so the lowering is an inline routine that ends each run where the offset of either pointer wraps and steps that selector by the stride. The count is 32 bits; a move the passes proved descending is copied from its last byte. DEVIATE: LLVM builds this loop from basic blocks in a custom inserter, here it is machine code with fixed registers until isel can emit blocks (#2284).
-
 `window` ([`window.rs`](../optimizations/passes/window.md)) runs after `lsr`: a counted loop's huge recurrences are split into windows. Inside a window every recurrence is normalized (`llrm.ia16.window`) and the loop runs as many whole trips as the target's window holds (`Machine::huge_window`) on far pointers that never carry; an outer loop walks the windows. The split is priced: a window's setup against the carries it saves.
 
 ```

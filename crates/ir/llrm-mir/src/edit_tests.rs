@@ -848,6 +848,22 @@ fn a_block_moved_after_another_stands_right_behind_it() {
     assert_eq!(f.layout(), &[layout[2], layout[1], layout[0]]);
 }
 
+/// A block created with `InsertBefore` stands right in front of its block in
+/// the layout: DFAJumpThreading's unfolded blocks come out in the pin's order.
+#[test]
+fn a_block_inserted_before_another_stands_right_in_front_of_it() {
+    let mut module = module("define void @f() {\na:\n  br label %b\nb:\n  br label %c\nc:\n  ret void\n}\n");
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    let fresh = f.create_block(None);
+    f.insert_block_before(fresh, layout[2]).expect("placed");
+    assert_eq!(f.layout(), &[layout[0], layout[1], fresh, layout[2]]);
+    let first = f.create_block(None);
+    f.insert_block_before(first, layout[0]).expect("placed");
+    assert_eq!(f.layout()[0], first);
+    assert!(f.insert_block_before(first, layout[1]).is_err(), "a placed block is not placed again");
+}
+
 /// LLVM's `hasOneUse`, `hasNUses` and `hasNUsesOrMore` on a value with 0, 1, 2
 /// and 3 uses: the counts are read from the list at its boundaries, `len` is
 /// not there.
@@ -869,6 +885,23 @@ fn a_use_list_answers_has_n_uses_at_its_boundaries() {
     let (y, _) = named(f, "y");
     f.set_operand(ret, 0, Operand::Value(named(f, "y").1));
     assert!(f.users(named(f, "y").1).has_one_use() && f.users(a).has_n_uses(3), "{y:?}");
+}
+
+/// A copied block was named by the block it was copied from and a suffix; the
+/// name is unique, as a value's is, and the block it is made for has none.
+#[test]
+fn test_set_block_name_names_a_block_apart_from_the_names_held() {
+    let mut module =
+        module("define i16 @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  ret i16 1\nb:\n  ret i16 2\n}\n");
+    let f = function(&mut module);
+    let copy = f.create_block(None);
+    assert_eq!(f.block(copy).name, None);
+    f.set_block_name(copy, "a");
+    assert_eq!(f.block(copy).name.as_deref(), Some("a1"), "`a` is held by a block");
+    let another = f.create_block(None);
+    f.set_block_name(another, "a.jt1");
+    f.set_block_name(f.layout()[1], "a.jt1");
+    assert_ne!(f.block(f.layout()[1]).name.as_deref(), f.block(another).name.as_deref());
 }
 
 /// `BasicBlock::takeName` and `setName`: the block that takes a name is named
