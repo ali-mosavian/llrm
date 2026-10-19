@@ -167,6 +167,14 @@ impl Selector<'_> {
             return Ok(());
         }
         let (lhs, rhs) = (self.src(instruction.operands[0])?, self.src(instruction.operands[1])?);
+        // Division by a constant is shifts and multiplies.
+        if let (BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem, Src::Int { value, .. }) = (op, &rhs)
+        {
+            let g = self.gpr_of(lhs.clone())?;
+            if let Some(found) = self.divide_by_constant(op, bits, g, *value)? {
+                return self.define(result, Src::Val(Val::Int(found)));
+            }
+        }
         let value = match op {
             BinaryOp::Add | BinaryOp::Sub => self.add_sub(op == BinaryOp::Sub, bits, lhs, rhs)?,
             BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => self.logic(op, bits, lhs, rhs)?,

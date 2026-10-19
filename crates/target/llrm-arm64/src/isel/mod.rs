@@ -9,6 +9,7 @@
 mod agg;
 mod call;
 mod control;
+mod divide;
 mod fp;
 mod int;
 mod mem;

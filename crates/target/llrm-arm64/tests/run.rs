@@ -221,3 +221,8 @@ fn darwin_objects_disassemble_without_unknown_words() {
     }
     assert!(checked >= 10, "only {checked} programs");
 }
+
+#[test]
+fn division_and_remainder_by_constants() {
+    compare("division");
+}

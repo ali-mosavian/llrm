@@ -124,6 +124,7 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
         let allocation = crate::regalloc::allocate(&mut machine);
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
         let blocks = crate::layout::fold(blocks);
+        let blocks = crate::pairs::fold(blocks);
         out.push(crate::emit::Function {
             symbol: crate::data::symbol_name(platform, &name),
             public: !matches!(
