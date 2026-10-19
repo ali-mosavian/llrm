@@ -241,6 +241,10 @@ pub struct Options {
     /// [`crate::sroa`], with [`crate::mem2reg`]); on by default,
     /// `LLRM_NO_SROA` turns it off.
     pub sroa: bool,
+    /// The InstCombine slots (`combine@N`) run the translated families
+    /// ([`crate::combine_pass`]); on by default, `LLRM_NO_COMBINE` turns it
+    /// off.
+    pub combine: bool,
     /// The loop-invariant passes are the translated LICM ([`crate::licm`]):
     /// `licm` in the LICM slots and where `hoist` ran; on by default,
     /// `LLRM_NO_LICM` turns it off.
@@ -313,6 +317,7 @@ impl Default for Options {
             interchange: false,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
+            combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
             licm: !llrm_support::env_flag!("LLRM_NO_LICM"),
             copy_headers: true,
             for_size: false,
@@ -715,6 +720,7 @@ pub(crate) fn llvm_order(
     let simplify_cfg_with = |name, options| slot(name, Box::new(simplifycfg::SimplifyCfg { options }));
     let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
     let fold = |name| slot(name, Box::new(fold::Fold));
+    let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
@@ -770,6 +776,7 @@ pub(crate) fn llvm_order(
                     vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)]
                 },
             }),
+            combine("combine@1242"),
             fold("fold@1242"),
             dead("dead@1242"),
             // `SimplifyCFGOptions().convertSwitchRangeToICmp(true)`
@@ -790,6 +797,7 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@675"),
                 phiopt("phiopt@675"),
+                combine("combine@677"),
                 fold("fold@677"),
                 dead("dead@677"),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
@@ -832,6 +840,7 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
                 phiopt("phiopt@766"),
+                combine("combine@768"),
                 fold("fold@768"),
                 dead("dead@768"),
             ]);
@@ -863,6 +872,7 @@ pub(crate) fn llvm_order(
                 slot("gvn@787", Box::new(gvn::Gvn { pre: applied.options.pre })),
                 slot("sccp@792", Box::new(sccp::Sccp)),
                 slot("bdce@797", Box::new(bdce::Bdce)),
+                combine("combine@801"),
                 fold("fold@801"),
                 dead("dead@801"),
                 // DFAJumpThreadingPass, PassBuilderPipelines.cpp#L806.
@@ -891,6 +901,7 @@ pub(crate) fn llvm_order(
                     simplifycfg::Options { hoist_common_insts: true, sink_common_insts: true, ..Default::default() },
                 ),
                 phiopt("phiopt@832"),
+                combine("combine@837"),
                 fold("fold@837"),
                 dead("dead@837"),
             ]);
