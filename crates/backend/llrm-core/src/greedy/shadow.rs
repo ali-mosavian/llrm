@@ -28,6 +28,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use llrm_lir::registers::RegSet;
 use llrm_lir::registers::{RegId, Regs};
 
 use super::greedy::{GreedyEnv, RAGreedy, Stats};
@@ -363,8 +364,13 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
 /// The calls: where registers are destroyed.
 struct CallMasks {
     /// The reg slot of each instruction that destroys registers, ascending
-    /// (`LIS->getRegMaskSlots()`), and the roots it destroys.
-    calls: Vec<(SlotIndex, Vec<RegId>, Vec<RegId>, Vec<RegId>)>,
+    /// (`LIS->getRegMaskSlots()`), and what a value live across it loses:
+    /// a narrow value, a wide one (the high halves too), and the registers it
+    /// reads a value ending at it would lose.
+    calls: Vec<(SlotIndex, RegSet, RegSet, RegSet)>,
+    /// Each block's slots, start and end, and the run of `calls` in it
+    /// (`getRegMaskSlotsInBlock`), in slot order.
+    blocks: Vec<(SlotIndex, SlotIndex, std::ops::Range<usize>)>,
     /// The widest each value is named (bytes): a value wider than 2 loses the
     /// high half of the roots in a call's third list.
     widths: Rc<Tables>,
@@ -380,6 +386,41 @@ pub fn calls_visited() -> usize {
     CALLS_VISITED.with(std::cell::Cell::get)
 }
 
+impl CallMasks {
+    /// The masks of `calls`, each (slot, destroyed, high halves destroyed,
+    /// read): what a narrow and a wide value live across lose is found once.
+    fn of(
+        calls: Vec<(SlotIndex, RegSet, RegSet, RegSet)>,
+        blocks: Vec<(SlotIndex, SlotIndex, std::ops::Range<usize>)>,
+        widths: Rc<Tables>,
+    ) -> Self {
+        let calls = calls
+            .into_iter()
+            .map(|(slot, destroyed, high, read)| {
+                let narrow = destroyed.union(&read);
+                (slot, narrow, narrow.union(&high), read)
+            })
+            .collect();
+        Self { calls, blocks, widths }
+    }
+
+    /// `LiveIntervals::intervalIsInOneMBB`: the run of calls in the one block
+    /// `li` starts and ends in, or none where it spans blocks or starts or
+    /// ends at a block boundary.
+    fn in_one_block(
+        &self,
+        li: &LiveInterval,
+    ) -> Option<std::ops::Range<usize>> {
+        let (start, stop) = (li.begin_index(), li.end_index());
+        if start.is_block() || stop.is_block() || self.blocks.is_empty() {
+            return None;
+        }
+        let at = self.blocks.partition_point(|(begin, ..)| *begin <= start).checked_sub(1)?;
+        let (_, end, run) = &self.blocks[at];
+        (stop.get_prev_slot() < *end).then(|| run.clone())
+    }
+}
+
 impl PhysInterference for CallMasks {
     /// `LiveIntervals::checkRegMaskInterference`: the slots are ascending, so
     /// the calls the range is live across are found by one merge with its
@@ -387,47 +428,49 @@ impl PhysInterference for CallMasks {
     fn reg_mask_clobbered(
         &self,
         li: &LiveInterval,
-    ) -> Option<Vec<RegId>> {
+    ) -> Option<RegSet> {
         if self.calls.is_empty() || li.empty() {
             return None;
         }
-        let mut found: Option<Vec<RegId>> = None;
+        // A range in one block meets only that block's calls
+        // (`intervalIsInOneMBB`, LiveIntervals.cpp#L1007).
+        let calls = match self.in_one_block(li) {
+            Some(run) => &self.calls[run],
+            None => &self.calls[..],
+        };
+        if calls.is_empty() {
+            return None;
+        }
+        let mut found: Option<RegSet> = None;
         // Every allocated value has a width (the table, or the clone it was
         // made from, `note_split_from`); a missing one is the safe side, wide.
         let width = self.widths.widths.borrow().get(&li.reg()).copied();
         let wide = width.is_none_or(|width| width > 2);
-        let mut at = self.calls.partition_point(|(slot, ..)| *slot < li.begin_index());
-        let mut segment = 0usize;
-        while at < self.calls.len() && segment < li.segments.len() {
-            CALLS_VISITED.with(|visited| visited.set(visited.get() + 1));
-            let (slot, destroyed, high, read) = &self.calls[at];
-            if li.segments[segment].end < *slot {
-                segment = li.advance_to(segment, slot);
-                if segment == li.segments.len() {
-                    break;
+        // Per segment, as `checkRegMaskInterference` walks `SlotI`: the calls
+        // at or before its start are crossed by a search (a hole looks at
+        // none), those inside it are lost across, and one at its end takes
+        // what it reads.
+        let mut at = calls.partition_point(|(slot, ..)| *slot < li.begin_index());
+        for s in &li.segments {
+            at += calls[at..].partition_point(|(slot, ..)| *slot <= s.start);
+            while let Some((slot, narrow, wide_lost, _)) = calls.get(at).filter(|(slot, ..)| *slot < s.end) {
+                #[cfg(test)]
+                CALLS_VISITED.with(|visited| visited.set(visited.get() + 1));
+                debug_assert!(s.start < *slot);
+                found.get_or_insert_with(RegSet::default).union_with(if wide { wide_lost } else { narrow });
+                at += 1;
+            }
+            match calls.get(at) {
+                None => break,
+                // An instruction that reads a register it names not (the data
+                // segment) also takes it from a range that ends at it.
+                Some((slot, _, _, read)) if *slot == s.end && !read.is_empty() => {
+                    #[cfg(test)]
+                    CALLS_VISITED.with(|visited| visited.set(visited.get() + 1));
+                    found.get_or_insert_with(RegSet::default).union_with(read);
                 }
+                Some(_) => {}
             }
-            let s = &li.segments[segment];
-            // A call before the segment is across none of the later ones
-            // either: the hole is crossed by a search, not a step per call.
-            if *slot <= s.start {
-                at += self.calls[at..].partition_point(|(slot, ..)| *slot <= s.start);
-                continue;
-            }
-            // Live across: defined before the call, read after it.
-            // An instruction that reads a register it names not (the data
-            // segment) also takes it from a range that ends at it.
-            let across = s.start < *slot && s.end > *slot;
-            if across || (s.start < *slot && s.end == *slot && !read.is_empty()) {
-                let roots = found.get_or_insert_with(Vec::new);
-                let lost = destroyed.iter().chain(high.iter().filter(|_| wide)).filter(|_| across);
-                for r in lost.chain(read) {
-                    if !roots.contains(r) {
-                        roots.push(*r);
-                    }
-                }
-            }
-            at += 1;
         }
         found
     }
@@ -587,9 +630,11 @@ pub fn decide_with_split(
     let env = BodyEnv { orders: Rc::clone(&tables), pins, freq, exiting };
     // The calls.
     let mut calls = Vec::new();
-    for block in &body.blocks {
+    let mut blocks = Vec::with_capacity(body.blocks.len());
+    for (at, block) in body.blocks.iter().enumerate() {
+        let first = calls.len();
         for one in block.insns.iter() {
-            let read: Vec<RegId> = inputs
+            let read: RegSet = inputs
                 .data
                 .filter(|_| crate::backend::target::needs_data_group(one))
                 .map(crate::model::ir::root)
@@ -601,9 +646,8 @@ pub fn decide_with_split(
                 && (one.call.is_some() || one.clobbers.iter().any(|r| inputs.registers.positional(*r)));
             if !one.clobbers.is_empty() || !one.clobbers_high.is_empty() || !read.is_empty() || empties {
                 let slot = lis.indexes.get_instruction_index(one.id()).get_reg_slot(false);
-                let roots = |list: &BTreeSet<RegId>| -> Vec<RegId> {
-                    list.iter().map(|r| crate::model::ir::root(*r)).collect::<BTreeSet<_>>().into_iter().collect()
-                };
+                let roots =
+                    |list: &BTreeSet<RegId>| -> RegSet { list.iter().map(|r| crate::model::ir::root(*r)).collect() };
                 let mut destroyed = roots(&one.clobbers);
                 if empties {
                     destroyed.extend(crate::backend::allocate::RFP);
@@ -611,10 +655,16 @@ pub fn decide_with_split(
                 calls.push((slot, destroyed, roots(&one.clobbers_high), read));
             }
         }
+        let (start, end) = (lis.indexes.get_mbb_start_idx(at), lis.indexes.get_mbb_end_idx(at));
+        debug_assert!(
+            calls[first..].iter().all(|(slot, ..)| start <= *slot && *slot < end),
+            "block {at}'s calls lie in its slots"
+        );
+        blocks.push((start, end, first..calls.len()));
     }
     let matrix = LiveRegMatrix::new(
         RegisterInfo::new(inputs.registers),
-        Box::new(CallMasks { calls, widths: Rc::clone(&tables) }),
+        Box::new(CallMasks::of(calls, blocks, Rc::clone(&tables))),
     );
     let inline = matches!(mode, Mode::Inline { .. });
     // A split edits the function, and a caller that only records what to spill
@@ -819,14 +869,18 @@ mod tests {
         let indexes = SlotIndexes::new(&body);
         let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
         let esi = crate::model::ir::root(RegId::ESI);
-        let masks = CallMasks { calls: vec![(at(5), vec![], vec![esi], vec![])], widths: widths(&[(1, 4), (2, 2)]) };
+        let masks = CallMasks::of(
+            vec![(at(5), RegSet::new(), [esi].into_iter().collect(), RegSet::new())],
+            Vec::new(),
+            widths(&[(1, 4), (2, 2)]),
+        );
         let across = |reg: u32| {
             let mut li = LiveInterval::new(reg, 1.0);
             let v = li.get_next_value(at(2));
             li.add_segment(Segment::new(at(2), at(8), Some(v)));
             li
         };
-        assert_eq!(masks.reg_mask_clobbered(&across(1)), Some(vec![esi]));
+        assert_eq!(masks.reg_mask_clobbered(&across(1)), Some([esi].into_iter().collect()));
         assert!(masks.reg_mask_clobbered(&across(2)).is_none_or(|roots| roots.is_empty()));
     }
 
@@ -847,15 +901,19 @@ mod tests {
         let indexes = SlotIndexes::new(&body);
         let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
         let ds = crate::model::ir::root(RegId::DS);
-        let masks = CallMasks { calls: vec![(at(5), vec![], vec![], vec![ds])], widths: widths(&[]) };
+        let masks = CallMasks::of(
+            vec![(at(5), RegSet::new(), RegSet::new(), [ds].into_iter().collect())],
+            Vec::new(),
+            widths(&[]),
+        );
         let live = |to: usize| {
             let mut li = LiveInterval::new(1, 1.0);
             let v = li.get_next_value(at(2));
             li.add_segment(Segment::new(at(2), at(to), Some(v)));
             li
         };
-        assert_eq!(masks.reg_mask_clobbered(&live(5)), Some(vec![ds]), "ends at the instruction");
-        assert_eq!(masks.reg_mask_clobbered(&live(8)), Some(vec![ds]), "goes on past it");
+        assert_eq!(masks.reg_mask_clobbered(&live(5)), Some([ds].into_iter().collect()), "ends at the instruction");
+        assert_eq!(masks.reg_mask_clobbered(&live(8)), Some([ds].into_iter().collect()), "goes on past it");
         assert!(masks.reg_mask_clobbered(&live(4)).is_none_or(|roots| roots.is_empty()), "ends before it");
     }
 
@@ -876,8 +934,8 @@ mod tests {
         let indexes = SlotIndexes::new(&body);
         let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
         let esi = crate::model::ir::root(RegId::ESI);
-        let calls = (10..1990).map(|n| (at(n), vec![], vec![esi], vec![])).collect();
-        let masks = CallMasks { calls, widths: widths(&[(1, 4)]) };
+        let calls = (10..1990).map(|n| (at(n), RegSet::new(), [esi].into_iter().collect(), RegSet::new())).collect();
+        let masks = CallMasks::of(calls, Vec::new(), widths(&[(1, 4)]));
         let mut li = LiveInterval::new(1, 1.0);
         let v = li.get_next_value(at(2));
         li.add_segment(Segment::new(at(2), at(4), Some(v.clone())));
@@ -886,6 +944,38 @@ mod tests {
         assert!(masks.reg_mask_clobbered(&li).is_none_or(|roots| roots.is_empty()));
         let visited = calls_visited() - before;
         assert!(visited <= 10, "{visited} calls looked at for a range with no call in it");
+    }
+
+    /// `checkRegMaskInterference` looks at the calls inside the segments and
+    /// one at an end, no more: the walk stepped through calls between the
+    /// segments too, one union of three masks each (d_faces: 7.66 M against
+    /// LLVM's 0.78 M for the same 964 ranges).
+    #[test]
+    fn test_only_the_calls_inside_a_range_are_looked_at() {
+        let insns: Vec<Arc<Insn>> = (0..100).map(|_| Arc::new(Insn::new(0, None, None, vec![], vec![]))).collect();
+        let body = LirBody::new(
+            "shadow",
+            0,
+            vec![Block::from(LirBlock::new(0, insns.clone()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let indexes = SlotIndexes::new(&body);
+        let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
+        let esi = crate::model::ir::root(RegId::ESI);
+        let calls = [5, 12, 15, 30, 40, 55, 70]
+            .map(|n| (at(n), [esi].into_iter().collect::<RegSet>(), RegSet::new(), RegSet::new()))
+            .into_iter()
+            .collect();
+        let masks = CallMasks::of(calls, Vec::new(), widths(&[(1, 4)]));
+        let mut li = LiveInterval::new(1, 1.0);
+        let v = li.get_next_value(at(10));
+        li.add_segment(Segment::new(at(10), at(20), Some(v.clone())));
+        li.add_segment(Segment::new(at(50), at(60), Some(v)));
+        let before = calls_visited();
+        assert_eq!(masks.reg_mask_clobbered(&li), Some([esi].into_iter().collect()));
+        // 12, 15 and 55.
+        assert_eq!(calls_visited() - before, 3);
     }
 
     /// A value used before and after a stretch where two others need both
