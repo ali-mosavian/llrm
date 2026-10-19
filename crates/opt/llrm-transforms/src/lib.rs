@@ -97,6 +97,7 @@ pub mod combine_build;
 pub mod combine_compares;
 pub mod combine_loadstore;
 pub mod combine_phi;
+pub mod combine_select;
 pub mod combine_shared;
 pub mod combine_sink;
 #[cfg(test)]

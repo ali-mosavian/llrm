@@ -318,6 +318,10 @@ mod tests {
             // and a sub's `nsw`/`nuw` where LLVM does, to give the
             // replacement the flags the operands prove.
             "combine_addsub.rs",
+            // InstructionCombining.cpp's `foldBinopWithRecurrence` merges the
+            // `nuw`/`nsw` of the three adds (`OverflowTracking`) so the new add
+            // has them only if all had them, and drops the rest.
+            "combine_phi.rs",
             // MemCpyOptimizer.cpp's `CreateInBoundsPtrAdd` makes an inbounds
             // GEP; it reads no flag.
             "memcpyopt.rs",
