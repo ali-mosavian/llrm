@@ -93,6 +93,21 @@ impl<'a> FunctionCompiler<'a> {
         self.value_type(type_id(type_name))
     }
 
+    /// With `-fexcess-precision=standard` an f32 stored to a variable rounds
+    /// to single; x87 otherwise keeps the wider value in its register.
+    pub(super) fn rounded_for_store(
+        &mut self,
+        operand: hir::Operand,
+        type_name: TypeName,
+    ) -> hir::Operand {
+        if !self.float_store || type_name != TypeName::F32 || !matches!(operand, hir::Operand::Value(_)) {
+            return operand;
+        }
+        let rounded = self.value(type_name);
+        self.emit("round", vec![rounded], vec![operand], None);
+        hir::Operand::Value(rounded)
+    }
+
     pub(super) fn value_type(
         &mut self,
         type_id: u32,

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/speculate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/speculate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:caa50c3c6f6516c1afea20ac2745d64456e87fa3db438a828ef2a26957721e36 -->
+<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:2e30b88fe4199cd866c65dd3e92287bfe8087e3b969ec90ea6e0aa100a788e08 -->
 
 # speculate
 
@@ -12,7 +12,7 @@ selects: the `speculativelyExecuteBB` step of SimplifyCFG.
 |---|---|---|
 | [`speculativelyExecuteBB`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3244) | `executed` | MIRROR; D1, D2, D3 |
 | [`validateAndCostRequiredSelects`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3130) | `selects_priced` | MIRROR; D4 |
-| [`passingValueIsAlwaysUndefined`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9094) | `passing_value_always_undefined` | partly; D5 |
+| [`passingValueIsAlwaysUndefined`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9094) | [`alwaysundef::always_undefined`](alwaysundef.md) | MIRROR |
 | `phi-node-folding-threshold` (2) | `THRESHOLD` | MIRROR |
 
 The call sites are in
@@ -32,12 +32,6 @@ more.
   the rest, as in [`twoentryphi`](twoentryphi.md) (D4 there).
 - D4. No constant expressions in function bodies: LLVM's price of one is not
   needed.
-- D5. Only the uses LLVM lists that need no attribute are tested: a load or
-  store through the value, a call of it, a division by it. The look through
-  a `getelementptr`, the `noundef`/`nonnull` return and argument rules and
-  `llvm.assume` are not ported; the MIR has no `NullPointerIsDefined`, so a
-  null pointer is undefined. What stands between the phi and the use must be
-  no call (`isGuaranteedToTransferExecutionToSuccessor`).
 
 - D6. `isSafeToSpeculateStore` finds a writable object only among the
   allocas that are not captured: `isWritableObject` of a global would need
