@@ -151,6 +151,22 @@ def smoke_bins(env: dict | None = None) -> str:
     raise SystemExit(f"PARITY_BIN is unset and {found} lacks {', '.join(n for n in BINARIES if not (found / n).is_file())}: `cargo build --release --bin llrm-c --bin llrm-qb --bin llrm-nib`, or set PARITY_BIN to a directory that has them")
 
 
+def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
+    """"" when the binaries the smoke will use are newer than the tree's sources; else rebuild them (`buildslot cargo build --release --bins`, CARGO_TARGET_DIR from
+    the environment) and check again, and say which are still stale. The merge rewrites files after the binaries were built: llrmbin.stale_binaries then flagged them,
+    the smoke exited non-zero with an empty last line, and the tool printed no reason; nothing landed through the gate for a day."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import llrmbin  # noqa: PLC0415
+    from buildslot import slotted  # noqa: PLC0415
+
+    directory = Path(smoke_bins(env))
+    if not llrmbin.stale_binaries(directory, cwd):
+        return ""
+    (build or (lambda: subprocess.run(slotted(["cargo", "build", "--release", "--bins", "-q"]), cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True)))()
+    still = llrmbin.stale_binaries(directory, cwd)
+    return f"binaries still older than the merged tree after a rebuild: {', '.join(still)} in {directory}" if still else ""
+
+
 SMOKE_STEPS = ("programs", "sc", "d_faces", "qc_d_faces", "qc_modules", "run")
 
 
@@ -284,6 +300,9 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or ""):
                 print(f"#{number}: " + "; ".join(why))
                 return False
+        if stale := ensure_bins():
+            print(f"REFUSED: {stale}")
+            return False
         merged_failed, last = smoke_failures(known)
         print(f"{' '.join('#' + n for n in group)}: {last}")
         why = subset_refusals(head_failures(git("rev-parse", BASE).strip()), merged_failed, any(claims_fix(infos[n]["body"] or "") for n in group))
@@ -331,6 +350,9 @@ def smoke_failures(known: dict[str, str] | None = None) -> tuple[set[str], str]:
         text=True,
     )
     lines = smoke.stdout.strip().splitlines()
+    if smoke.returncode and not any(line.startswith("FAILING:") for line in lines):
+        tail = " / ".join((smoke.stderr.strip().splitlines() or ["no output"])[-3:])[:400]
+        return {"smoke-did-not-finish"}, f"the smoke exited {smoke.returncode} with no summary line; stderr: {tail}"
     names = next((line[len("FAILING:"):].strip() for line in reversed(lines) if line.startswith("FAILING:")), None)
     if names is None:
         names = "smoke-did-not-finish" if smoke.returncode else ""
@@ -388,6 +410,9 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
         return 1
     if why := refusals(merged, info["body"] or ""):
         print("\n".join(f"REFUSED: {w}" for w in why))
+        return 1
+    if stale := ensure_bins():
+        print(f"REFUSED: {stale}")
         return 1
     merged_failed, last = smoke_failures(known)
     print(last)

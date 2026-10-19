@@ -267,3 +267,34 @@ def test_a_feat_parity_commit_absent_from_the_landing_log_is_listed(tmp_path):
     ps.log_landed("bbbbbbb2222", "2701", "gate-ok", log)
     assert ps.unlogged(log, ["aaaaaaa", "ccccccc", "bbbbbbb"]) == ["ccccccc"]
     assert ps.unlogged(tmp_path / "none.log", ["ddddddd"]) == ["ddddddd"]
+
+
+def test_bins_older_than_the_merged_tree_are_rebuilt_or_named_not_an_empty_refusal(tmp_path, monkeypatch):
+    """The merge rewrote files after the binaries were built: the smoke exited non-zero with an empty last line and the tool printed 'the fast set fails' with no reason."""
+    import llrmbin
+
+    stale = [["llrm-c"]]
+    monkeypatch.setattr(llrmbin, "stale_binaries", lambda directory, repo=None: stale[0])
+    monkeypatch.setattr(ps, "smoke_bins", lambda env=None: str(tmp_path))
+    built = []
+
+    def fresh():
+        built.append(1)
+        stale[0] = []
+
+    assert ps.ensure_bins(build=fresh) == "" and built == [1]
+    stale[0] = ["llrm-c", "llrm-qb"]
+    why = ps.ensure_bins(build=lambda: built.append(2))
+    assert "still older" in why and "llrm-c, llrm-qb" in why, why
+    stale[0] = []
+    assert ps.ensure_bins(build=lambda: built.append(3)) == "" and 3 not in built
+
+
+def test_a_smoke_that_exits_non_zero_without_a_summary_line_names_its_stderr(monkeypatch):
+    class Done:
+        returncode, stdout, stderr = 1, "", "stale binaries in /x: llrm-c older than the source\nrun cargo build"
+
+    monkeypatch.setattr(ps, "smoke_bins", lambda env=None: "/x")
+    monkeypatch.setattr(ps.subprocess, "run", lambda *a, **k: Done())
+    failed, last = ps.smoke_failures()
+    assert failed == {"smoke-did-not-finish"} and "stale binaries in /x" in last and "exited 1" in last, last
