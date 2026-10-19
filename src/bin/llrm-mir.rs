@@ -77,6 +77,13 @@ fn main() -> ExitCode {
             spec
         })
     };
+    let uninit = {
+        let at = arguments.iter().position(|one| one == "--uninit");
+        at.inspect(|&at| {
+            arguments.remove(at);
+        })
+        .is_some()
+    };
     let rotate = {
         let at = arguments.iter().position(|one| one == "--rotate");
         at.inspect(|&at| {
@@ -266,6 +273,13 @@ fn main() -> ExitCode {
                 }
                 print!("{}", llrm_mir::print::module(&module));
                 return ExitCode::SUCCESS;
+            }
+            if uninit {
+                let found = llrm_mir::lint::uninit_flow(&module);
+                for one in &found {
+                    println!("uninit: {one}");
+                }
+                return if found.is_empty() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
             }
             if memcpyopt {
                 let mut manager = llrm_mir::passes::PassManager::default();

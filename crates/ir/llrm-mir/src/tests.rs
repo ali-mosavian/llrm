@@ -1093,3 +1093,21 @@ fn undef_is_a_constant_that_round_trips_apart_from_poison() {
     assert!(once.contains("ret i16 undef"), "{once}");
     assert_eq!(round(&once), once);
 }
+
+/// A read-modify-write of a word of which one field was ever stored, the shape
+/// HIR emitted for bitfields (bitfield_long_long): the other bits are never
+/// written, and the result is stored. `lint::uninit_flow` names it; a word
+/// stored whole first is clean.
+#[test]
+fn uninit_flow_finds_a_bitfield_rmw_on_bytes_nothing_stores() {
+    let module = |first: &str| {
+        parse::module(&format!(
+            "{DATALAYOUT}define void @f(i16 %x) {{\nb0:\n  %s = alloca i32\n  {first}\n  %w = load i32, ptr %s\n  %m = and i32 %w, -256\n  %n = or i32 %m, 7\n  store i32 %n, ptr %s\n  ret void\n}}\n"
+        ))
+        .expect("parses")
+    };
+    let partial = crate::lint::uninit_flow(&module("store i8 1, ptr %s"));
+    assert_eq!(partial.len(), 1, "{partial:?}");
+    assert!(partial[0].contains("reaches a store"), "{partial:?}");
+    assert!(crate::lint::uninit_flow(&module("store i32 0, ptr %s")).is_empty());
+}

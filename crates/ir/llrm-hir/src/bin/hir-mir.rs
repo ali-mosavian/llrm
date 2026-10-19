@@ -44,6 +44,14 @@ fn main() -> ExitCode {
             eprintln!("poison: {problem}");
             invalid = true;
         }
+        // A value read from bytes nothing stores reaching a store, a call or
+        // a return: `LLRM_CHECK_UNINIT=1`.
+        if std::env::var_os("LLRM_CHECK_UNINIT").is_some() {
+            for problem in llrm_mir::lint::uninit_flow(&emitted.module) {
+                eprintln!("uninit: {problem}");
+                invalid = true;
+            }
+        }
     }
     if invalid { ExitCode::FAILURE } else { ExitCode::SUCCESS }
 }
