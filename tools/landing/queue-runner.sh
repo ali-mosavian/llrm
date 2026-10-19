@@ -17,6 +17,10 @@ while true; do
   "$HERE/build-queue.sh" > $Q.new && mv $Q.new $Q || echo "build-queue failed, keeping the old queue"
   # size cap: cargo never removes the artifacts of older hashes
   [ "$(du -sk "$T" 2>/dev/null | cut -f1)" -gt "${TARGET_CAP_KB:-41943040}" ] && echo "target over cap: $(PRUNE_LOG=${LAND_TMP:-/tmp/landing}/prune.log "$HERE/prune-target.sh" "$T" --apply)"
+  # every cargo target over 30 GB loses its stale hashes, at most every 10 minutes
+  if [ -z "$(find "${LAND_TMP:-/tmp/landing}/sweep.stamp" -mmin -10 2>/dev/null)" ]; then
+    touch "${LAND_TMP:-/tmp/landing}/sweep.stamp"; "$HERE/sweep-targets.sh" 2>&1 | sed "s/^/$(date +%H:%M) /" >> "${LAND_TMP:-/tmp/landing}/sweep.log"
+  fi
   n=$(head -1 $Q); [ -z "$n" ] && { sleep 20; continue; }
   batch=("$n"); g=$(group "$n")
   if [ -z "$g" ]; then
