@@ -394,10 +394,10 @@ b3:
 }
 
 #[test]
-fn test_a_constant_address_made_by_translation_is_not_available() {
+fn test_a_constant_address_made_by_translation_is_looked_up() {
     // Translating `gep %x, %i` into b0 gives a poison pointer:
-    // `simplifyGEPInst` makes the constant, which the real context does not
-    // hold. DEVIATE 8: the block is Unknown.
+    // `simplifyGEPInst` makes the constant, interned into the real context;
+    // b0 answers for it, it is not Unknown.
     let body = "define i16 @f(ptr %x, i16 %n, i1 %c) {
 b0:
   br i1 %c, label %b1, label %b2
@@ -416,7 +416,7 @@ b2:
     let layout = layout(&module);
     let mut memdep = MemoryDependenceResults::default();
     let got = non_local(&mut memdep, &module, &layout, "v");
-    assert!(got.iter().any(|line| line == "b0:Unknown@none"), "{got:?}");
+    assert!(got.iter().any(|line| line == "b0:NonFuncLocal@constant"), "{got:?}");
 }
 
 #[test]
