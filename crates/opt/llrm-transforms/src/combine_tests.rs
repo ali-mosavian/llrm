@@ -93,3 +93,30 @@ fn a_visit_that_builds_a_replacement_has_it_and_the_users_revisited() {
     assert!(combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit));
     assert_eq!(printed(&module), "define i16 @f(i16 %x) {\nb0:\n  ret i16 0\n}\n");
 }
+
+/// A visit that erases the instruction itself and returns `Erased` was a
+/// change: the driver reported none while the store was gone.
+#[test]
+fn a_visit_that_erases_its_instruction_is_a_change() {
+    use llrm_mir::opcode::Opcode;
+
+    use super::{Combiner, Visit, combine_with};
+
+    fn visit(
+        c: &mut Combiner,
+        inst: llrm_mir::module::InstId,
+    ) -> Visit {
+        if matches!(c.function.instruction(inst).opcode, Opcode::Store { .. }) {
+            c.erase(inst);
+            return Visit::Erased;
+        }
+        Visit::None
+    }
+
+    let mut module = parsed("define void @f(ptr %p) {\nb0:\n  store i16 1, ptr %p\n  ret void\n}\n");
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    assert!(combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit));
+    assert_eq!(printed(&module), "define void @f(ptr %p) {\nb0:\n  ret void\n}\n");
+}
