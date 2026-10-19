@@ -403,6 +403,9 @@ pub trait Target {
     /// `x86.instr`'s format.
     fn forms_text(&self) -> String;
 
+    /// What the reader of `forms_text` must know of this target's family.
+    fn dialect(&self) -> &'static llrm_instr::Dialect;
+
     /// The operand size an instruction has without a size prefix, in bytes.
     fn operand_bytes(&self) -> i64;
 
