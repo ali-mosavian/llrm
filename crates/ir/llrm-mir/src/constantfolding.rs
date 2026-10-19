@@ -440,6 +440,18 @@ pub fn constant_expr_get_cast(
     None
 }
 
+/// Whether a GEP index is itself a constant expression (`ptrtoint @h`).
+/// DEVIATE: such a GEP stays an instruction; folded it is an address no
+/// relocation can say (`@g + @h`). Fact: the object writer has no sum of two
+/// symbols (8 QB tests failed to assemble). Exit: isel lowers a constant GEP
+/// with a link-time index to an add.
+pub fn has_link_time_index(
+    context: &Context,
+    indices: &[ConstantId],
+) -> bool {
+    indices.iter().any(|&index| matches!(context.get(index).kind, ConstantKind::Expr(_)))
+}
+
 /// `ConstantFoldGetElementPtr`
 /// ([ConstantFold.cpp:1349](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantFold.cpp#L1349))
 /// and the expression `ConstantExpr::getGetElementPtr` makes otherwise
@@ -1568,6 +1580,9 @@ fn constant_fold_inst_operands_impl(
         }
         Opcode::Cast(op) => constant_fold_cast_operand(context, env.layout, *op, ops[0], dest),
         Opcode::GetElementPtr { source } => {
+            if has_link_time_index(context, &ops[1..]) {
+                return None;
+            }
             let nw = nw_of_flags(flags);
             if let Some(c) = symbolically_evaluate_gep(context, env, *source, nw, dest, ops) {
                 return Some(c);

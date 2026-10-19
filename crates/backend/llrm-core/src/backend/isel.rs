@@ -2954,6 +2954,15 @@ impl Selector<'_, '_, '_> {
             return Some(bits);
         }
         let context = &self.module.context;
+        // A constant offset from such a number, within its 64K segment.
+        if let ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr { source, operands, .. }) =
+            &context.get(id).kind
+        {
+            let base = self.far_number(operands[0])?;
+            let offset = crate::backend::globals::constant_offset(self.module, &self.layout, *source, &operands[1..]).ok()?;
+            let moved = (base & 0xffff) + offset;
+            return (0..=0xffff).contains(&moved).then_some(base - (base & 0xffff) + moved);
+        }
         let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) =
             &context.get(id).kind
         else {
@@ -3368,11 +3377,17 @@ impl Selector<'_, '_, '_> {
         {
             let Some(block) = self.current else { return refuse("a far constant outside a block") };
             let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
-            let (base, selector) = (self.fresh_held(2), self.fresh_held(2));
-            for (into, value) in [base, selector].into_iter().zip(dword_halves(bits)) {
-                let word = Loc::Imm(Imm { value, width: 2, address: None });
-                self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![word])));
+            let [low, high] = dword_halves(bits);
+            let selector = self.fresh_held(2);
+            let word = Loc::Imm(Imm { value: high, width: 2, address: None });
+            self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(selector)], vec![word])));
+            // The offset is a displacement while it fits one: `es:[108]`.
+            if low <= 0x7fff {
+                return Ok(Pointer::Far { selector, base: None, index: None, scale: 1, offset: low });
             }
+            let base = self.fresh_held(2);
+            let word = Loc::Imm(Imm { value: low, width: 2, address: None });
+            self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(base)], vec![word])));
             return Ok(Pointer::Far { selector, base: Some(base), index: None, scale: 1, offset: 0 });
         }
         // An address no global owns, near: its number, read as a direct
