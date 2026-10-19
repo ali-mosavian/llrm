@@ -7,6 +7,7 @@ use llrm_mir::{Attribute, CallInfo, GlobalKind, InstId, Instruction, Opcode, Ope
 use super::val::{AddrExpr, Base, G, Known, Val};
 use super::{Selected, Selector, Src, refuse};
 use crate::cc::{Assigner, Place, Scalar};
+use crate::machine::Platform;
 use crate::mc::inst::*;
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, Op};
@@ -18,67 +19,123 @@ fn has_flag(
     attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == name))
 }
 
+/// Where the register save areas of a variadic function lie and where its
+/// variadic arguments begin, for `va_start`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VaInfo {
+    /// Linux: the frame objects the unnamed `x` and `q` argument registers are
+    /// saved in, with their sizes.
+    gr_slot: Option<(u32, u64)>,
+    vr_slot: Option<(u32, u64)>,
+    /// The bytes of stack the named arguments take.
+    named_stack: u64,
+}
+
+fn is_sret(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|one| matches!(one, Attribute::Type(name, _) if name == "sret"))
+}
+
 impl Selector<'_> {
+    /// Where the convention puts the scalars of a value of type `ty`.
+    fn places_of(
+        &mut self,
+        assigner: &mut Assigner,
+        ty: llrm_mir::TypeId,
+        fixed: bool,
+    ) -> Selected<Vec<Place>> {
+        let leaves = self.leaf_types(ty)?;
+        let scalars = leaves.iter().map(|leaf| self.scalar(*leaf)).collect::<Selected<Vec<_>>>()?;
+        if !self.is_aggregate(ty) {
+            return Ok(vec![assigner.assign(scalars[0], fixed)]);
+        }
+        let homogeneous = scalars.windows(2).all(|pair| pair[0] == pair[1]);
+        if homogeneous && !scalars.is_empty() && (fixed || self.platform == Platform::Linux) {
+            let size = self.layout.alloc_size(self.types(), leaves[0]);
+            let align = self.layout.align(self.types(), ty).min(16);
+            return Ok(assigner.assign_block(scalars[0], scalars.len(), size, align));
+        }
+        Ok(scalars.into_iter().map(|scalar| assigner.assign(scalar, fixed)).collect())
+    }
+
+    /// `leaf`, a scalar in the register `place` holds on entry, copied into its
+    /// own.
+    fn copy_in(
+        &mut self,
+        place: Place,
+        leaf: &Val,
+        scalar: Scalar,
+    ) -> Selected<()> {
+        match (place, leaf) {
+            (Place::Gpr(number), Val::Int(g)) => {
+                // `mov w, w` for a value narrower than 64 bits: it also clears
+                // the bits above the 32nd, which the caller
+                // leaves undefined.
+                let source = Gpr(number);
+                if scalar == Scalar::I32 {
+                    self.inst(Inst::LogicShifted {
+                        op: Logic::Orr,
+                        invert: false,
+                        width: Width::W,
+                        rd: g.reg,
+                        rn: Gpr::R31,
+                        rm: source,
+                        shift: Shift::Lsl,
+                        amount: 0,
+                    });
+                } else {
+                    self.emit(Op::Copy { dst: Reg::Gpr(g.reg), src: Reg::Gpr(source) });
+                }
+            }
+            (Place::Gpr(number), Val::Ptr(AddrExpr { base: Base::Reg(reg), .. })) => {
+                self.emit(Op::Copy { dst: Reg::Gpr(*reg), src: Reg::Gpr(Gpr(number)) });
+            }
+            (Place::Fpr(number), Val::Float { reg, .. }) => {
+                self.emit(Op::Copy { dst: Reg::Fpr(*reg), src: Reg::Fpr(Vreg(number)) });
+            }
+            (Place::Stack { offset, size }, _) => {
+                let addr = Addr::Slot { slot: INCOMING_ARGUMENTS, offset: offset as i64 };
+                match leaf {
+                    Val::Int(g) => self.inst(Inst::Load {
+                        mem: Memory::Int {
+                            width: if size == 8 { Width::X } else { Width::W },
+                            bytes: size as u8,
+                            sign: false,
+                            reg: g.reg,
+                        },
+                        addr,
+                    }),
+                    Val::Ptr(AddrExpr { base: Base::Reg(reg), .. }) => self.inst(Inst::Load {
+                        mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: *reg },
+                        addr,
+                    }),
+                    Val::Float { reg, .. } => {
+                        self.inst(Inst::Load { mem: Memory::Fp { bytes: size as u8, reg: *reg }, addr })
+                    }
+                    _ => return refuse("a parameter that is not a register"),
+                }
+            }
+            _ => return refuse("a parameter in the wrong register class"),
+        }
+        Ok(())
+    }
+
     /// The incoming arguments, copied into virtual registers at the entry.
     pub(super) fn parameters(&mut self) -> Selected<()> {
         let mut assigner = Assigner::new(self.platform);
         let parameters: Vec<_> = self.function.parameters().to_vec();
         for (position, &parameter) in parameters.iter().enumerate() {
             let ty = self.function.value(parameter).ty;
-            let scalar = self.scalar(ty)?;
             let attrs = self.function.parameter_attrs.get(position).cloned().unwrap_or_default();
-            let place = assigner.assign(scalar, true);
-            let value = self.fresh(ty)?;
-            match (place, &value) {
-                (Place::Gpr(number), Val::Int(g)) => {
-                    // `mov w, w` for a value narrower than 64 bits: it also
-                    // clears the bits above the 32nd, which
-                    // the caller leaves undefined.
-                    let source = Gpr(number);
-                    if scalar == Scalar::I32 {
-                        self.inst(Inst::LogicShifted {
-                            op: Logic::Orr,
-                            invert: false,
-                            width: Width::W,
-                            rd: g.reg,
-                            rn: Gpr::R31,
-                            rm: source,
-                            shift: Shift::Lsl,
-                            amount: 0,
-                        });
-                    } else {
-                        self.emit(Op::Copy { dst: Reg::Gpr(g.reg), src: Reg::Gpr(source) });
-                    }
-                }
-                (Place::Gpr(number), Val::Ptr(AddrExpr { base: Base::Reg(reg), .. })) => {
-                    self.emit(Op::Copy { dst: Reg::Gpr(*reg), src: Reg::Gpr(Gpr(number)) });
-                }
-                (Place::Fpr(number), Val::Float { reg, .. }) => {
-                    self.emit(Op::Copy { dst: Reg::Fpr(*reg), src: Reg::Fpr(Vreg(number)) });
-                }
-                (Place::Stack { offset, size }, _) => {
-                    let addr = Addr::Slot { slot: INCOMING_ARGUMENTS, offset: offset as i64 };
-                    match &value {
-                        Val::Int(g) => self.inst(Inst::Load {
-                            mem: Memory::Int {
-                                width: if size == 8 { Width::X } else { Width::W },
-                                bytes: size as u8,
-                                sign: false,
-                                reg: g.reg,
-                            },
-                            addr,
-                        }),
-                        Val::Ptr(AddrExpr { base: Base::Reg(reg), .. }) => self.inst(Inst::Load {
-                            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: *reg },
-                            addr,
-                        }),
-                        Val::Float { reg, .. } => {
-                            self.inst(Inst::Load { mem: Memory::Fp { bytes: size as u8, reg: *reg }, addr })
-                        }
-                        Val::Ptr(_) => return refuse("a pointer parameter that is not a register"),
-                    }
-                }
-                _ => return refuse("a parameter in the wrong register class"),
+            let places = if is_sret(&attrs) {
+                vec![Place::Gpr(Assigner::RESULT_POINTER)]
+            } else {
+                self.places_of(&mut assigner, ty, true)?
+            };
+            let mut value = self.fresh(ty)?;
+            let leaf_types = self.leaf_types(ty)?;
+            for ((place, leaf), leaf_type) in places.iter().zip(value.leaves_mut()).zip(leaf_types) {
+                let scalar = self.scalar(leaf_type)?;
+                self.copy_in(*place, leaf, scalar)?;
             }
             // What the attributes promise of its extension.
             let value = match value {
@@ -88,14 +145,52 @@ impl Selector<'_> {
             };
             self.vals.insert(parameter, value);
         }
+        if self.module.signature(self.function.ty).2 {
+            self.variadic_entry(&assigner)?;
+        }
         Ok(())
     }
 
-    /// `value` as the 32- or 64-bit register of the convention's `scalar`,
-    /// extended as the attributes ask.
+    /// A variadic function's entry: on Linux the unnamed argument registers are
+    /// saved where `va_arg` finds them.
+    fn variadic_entry(
+        &mut self,
+        assigner: &Assigner,
+    ) -> Selected<()> {
+        let mut info = VaInfo { gr_slot: None, vr_slot: None, named_stack: assigner.stack_bytes() };
+        if self.platform == Platform::Linux {
+            let (gprs, fprs) = assigner.registers_used();
+            let gr_size = u64::from(8 - gprs) * 8;
+            let vr_size = u64::from(8 - fprs) * 16;
+            if gr_size > 0 {
+                let slot = self.mf.slot(gr_size, 8);
+                for (at, number) in (gprs..8).enumerate() {
+                    self.inst(Inst::Store {
+                        mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(number) },
+                        addr: Addr::Slot { slot, offset: at as i64 * 8 },
+                    });
+                }
+                info.gr_slot = Some((slot, gr_size));
+            }
+            if vr_size > 0 {
+                let slot = self.mf.slot(vr_size, 16);
+                for (at, number) in (fprs..8).enumerate() {
+                    self.inst(Inst::Store {
+                        mem: Memory::Fp { bytes: 16, reg: Vreg(number) },
+                        addr: Addr::Slot { slot, offset: at as i64 * 16 },
+                    });
+                }
+                info.vr_slot = Some((slot, vr_size));
+            }
+        }
+        self.va = Some(info);
+        Ok(())
+    }
+
+    /// The values of `argument`'s scalars for the registers, extended as the
+    /// attributes ask.
     fn argument_value(
         &mut self,
-        scalar: Scalar,
         src: Src,
         attrs: &[Attribute],
     ) -> Selected<Val> {
@@ -109,7 +204,6 @@ impl Selector<'_> {
                 } else {
                     g
                 };
-                let _ = scalar;
                 Val::Int(g)
             }
             other => other,
@@ -135,14 +229,19 @@ impl Selector<'_> {
             let (r, p, v) = self.module.signature(info.function_type);
             (r, p.len(), v)
         };
-        let mut values = Vec::new();
+        let mut assigner = Assigner::new(self.platform);
+        let mut passed = Vec::new();
         for (position, &argument) in arguments.iter().enumerate() {
             let ty = self.operand_type(argument)?;
-            let scalar = self.scalar(ty)?;
             let attrs = info.argument_attrs.get(position).cloned().unwrap_or_default();
             let src = self.src(argument)?;
-            let value = self.argument_value(scalar, src, &attrs)?;
-            values.push((value, scalar, position < fixed));
+            let value = self.argument_value(src, &attrs)?;
+            let places = if is_sret(&attrs) {
+                vec![Place::Gpr(Assigner::RESULT_POINTER)]
+            } else {
+                self.places_of(&mut assigner, ty, position < fixed)?
+            };
+            passed.push((value, places));
         }
         // The callee: a symbol, or a register.
         let callee = match callee_operand {
@@ -160,102 +259,127 @@ impl Selector<'_> {
                 Callee::Register(g.reg)
             }
         };
-        let result = self.emit_call(callee, values, returns)?;
+        let result = self.emit_call(callee, passed, assigner.stack_bytes(), returns)?;
         if let (Some(value), Some(result_id)) = (result, instruction.result) {
             self.vals.insert(result_id, value);
         }
         Ok(())
     }
 
-    /// A call of `callee` with `arguments` (each with its class and whether the
-    /// callee names its parameter) returning type `returns`; the result in a
-    /// new register.
+    /// `leaf` moved to the register or stack slot `place`; the register it
+    /// needs held through the call, if one.
+    fn copy_out(
+        &mut self,
+        place: Place,
+        leaf: &Val,
+        uses: &mut Vec<Reg>,
+    ) -> Selected<()> {
+        match (place, leaf) {
+            (Place::Gpr(number), Val::Int(g)) => {
+                self.emit(Op::Copy { dst: Reg::Gpr(Gpr(number)), src: Reg::Gpr(g.reg) });
+                uses.push(Reg::Gpr(Gpr(number)));
+            }
+            (Place::Gpr(number), Val::Ptr(address)) => {
+                let reg = self.pointer_register(address)?;
+                self.emit(Op::Copy { dst: Reg::Gpr(Gpr(number)), src: Reg::Gpr(reg) });
+                uses.push(Reg::Gpr(Gpr(number)));
+            }
+            (Place::Fpr(number), Val::Float { reg, .. }) => {
+                self.emit(Op::Copy { dst: Reg::Fpr(Vreg(number)), src: Reg::Fpr(*reg) });
+                uses.push(Reg::Fpr(Vreg(number)));
+            }
+            (Place::Stack { .. }, _) => {}
+            _ => return refuse("an argument in the wrong register class"),
+        }
+        Ok(())
+    }
+
+    fn store_outgoing(
+        &mut self,
+        place: Place,
+        leaf: &Val,
+    ) -> Selected<()> {
+        let Place::Stack { offset, size } = place else { return Ok(()) };
+        let addr = Addr::Offset { base: Gpr::R31, imm: offset as i64 };
+        match leaf {
+            Val::Int(g) => self.inst(Inst::Store {
+                mem: Memory::Int {
+                    width: if size == 8 { Width::X } else { Width::W },
+                    bytes: size as u8,
+                    sign: false,
+                    reg: g.reg,
+                },
+                addr,
+            }),
+            Val::Ptr(address) => {
+                let reg = self.pointer_register(address)?;
+                self.inst(Inst::Store { mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg }, addr });
+            }
+            Val::Float { reg, .. } => self.inst(Inst::Store { mem: Memory::Fp { bytes: size as u8, reg: *reg }, addr }),
+            Val::Agg(_) => return refuse("an aggregate leaf"),
+        }
+        Ok(())
+    }
+
+    /// A call of `callee` with `passed` (each argument's value and the places
+    /// of its scalars) and `stack` bytes of stack arguments, returning type
+    /// `returns`; the result in new registers.
     pub(crate) fn emit_call(
         &mut self,
         callee: Callee,
-        arguments: Vec<(Val, Scalar, bool)>,
+        passed: Vec<(Val, Vec<Place>)>,
+        stack: u64,
         returns: llrm_mir::TypeId,
     ) -> Selected<Option<Val>> {
-        let mut assigner = Assigner::new(self.platform);
         let mut uses = Vec::new();
-        let mut stores: Vec<(Place, Val)> = Vec::new();
-        for (value, scalar, fixed) in arguments {
-            let place = assigner.assign(scalar, fixed);
-            stores.push((place, value));
-        }
         // The stack arguments are stored first.
-        for (place, value) in &stores {
-            if let Place::Stack { offset, size } = *place {
-                let addr = Addr::Offset { base: Gpr::R31, imm: offset as i64 };
-                match value {
-                    Val::Int(g) => self.inst(Inst::Store {
-                        mem: Memory::Int {
-                            width: if size == 8 { Width::X } else { Width::W },
-                            bytes: size as u8,
-                            sign: false,
-                            reg: g.reg,
-                        },
-                        addr,
-                    }),
-                    Val::Ptr(address) => {
-                        let reg = self.pointer_register(address)?;
-                        self.inst(Inst::Store {
-                            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg },
-                            addr,
-                        });
-                    }
-                    Val::Float { reg, .. } => {
-                        self.inst(Inst::Store { mem: Memory::Fp { bytes: size as u8, reg: *reg }, addr })
-                    }
-                }
+        for (value, places) in &passed {
+            for (place, leaf) in places.iter().zip(value.leaves()) {
+                self.store_outgoing(*place, leaf)?;
             }
         }
-        self.mf.outgoing = self.mf.outgoing.max(assigner.stack_bytes().next_multiple_of(16));
-        for (place, value) in &stores {
-            match (place, value) {
-                (Place::Gpr(number), Val::Int(g)) => {
-                    self.emit(Op::Copy { dst: Reg::Gpr(Gpr(*number)), src: Reg::Gpr(g.reg) });
-                    uses.push(Reg::Gpr(Gpr(*number)));
-                }
-                (Place::Gpr(number), Val::Ptr(address)) => {
-                    let reg = self.pointer_register(address)?;
-                    self.emit(Op::Copy { dst: Reg::Gpr(Gpr(*number)), src: Reg::Gpr(reg) });
-                    uses.push(Reg::Gpr(Gpr(*number)));
-                }
-                (Place::Fpr(number), Val::Float { reg, .. }) => {
-                    self.emit(Op::Copy { dst: Reg::Fpr(Vreg(*number)), src: Reg::Fpr(*reg) });
-                    uses.push(Reg::Fpr(Vreg(*number)));
-                }
-                (Place::Stack { .. }, _) => {}
-                _ => return refuse("an argument in the wrong register class"),
+        self.mf.outgoing = self.mf.outgoing.max(stack.next_multiple_of(16));
+        for (value, places) in &passed {
+            for (place, leaf) in places.iter().zip(value.leaves()) {
+                self.copy_out(*place, leaf, &mut uses)?;
             }
         }
         self.mf.calls = true;
-        let result_register = if self.types().is_void(returns) {
-            None
+        let (result_places, defs) = if self.types().is_void(returns) {
+            (Vec::new(), Vec::new())
         } else {
-            let scalar = self.scalar(returns)?;
-            Some(match crate::cc::result(scalar) {
-                Place::Gpr(number) => Reg::Gpr(Gpr(number)),
-                Place::Fpr(number) => Reg::Fpr(Vreg(number)),
-                Place::Stack { .. } => unreachable!("a result is in a register"),
-            })
+            let places = self.places_of(&mut Assigner::new(self.platform), returns, true)?;
+            let defs = places
+                .iter()
+                .map(|place| match place {
+                    Place::Gpr(number) => Ok(Reg::Gpr(Gpr(*number))),
+                    Place::Fpr(number) => Ok(Reg::Fpr(Vreg(*number))),
+                    Place::Stack { .. } => refuse("a result that does not fit the registers"),
+                })
+                .collect::<Selected<Vec<_>>>()?;
+            (places, defs)
         };
-        self.emit(Op::Call { callee, uses, defs: result_register.into_iter().collect() });
-        let Some(register) = result_register else { return Ok(None) };
-        let value = self.fresh(returns)?;
-        let dst = match &value {
-            Val::Int(g) => Reg::Gpr(g.reg),
-            Val::Ptr(AddrExpr { base: Base::Reg(reg), .. }) => Reg::Gpr(*reg),
-            Val::Float { reg, .. } => Reg::Fpr(*reg),
-            _ => return refuse("a call result that is not a register"),
-        };
-        self.emit(Op::Copy { dst, src: register });
-        // A result narrower than 32 bits is as the callee left it.
-        Ok(Some(match value {
-            Val::Int(g) => Val::Int(G { known: Known::Nothing, ..g }),
-            other => other,
-        }))
+        self.emit(Op::Call { callee, uses, defs: defs.clone() });
+        if result_places.is_empty() {
+            return Ok(None);
+        }
+        let mut value = self.fresh(returns)?;
+        let leaf_types = self.leaf_types(returns)?;
+        for ((register, leaf), leaf_type) in defs.iter().zip(value.leaves_mut()).zip(leaf_types) {
+            let _ = leaf_type;
+            let dst = match leaf {
+                Val::Int(g) => {
+                    // A result narrower than 32 bits is as the callee left it.
+                    g.known = Known::Nothing;
+                    Reg::Gpr(g.reg)
+                }
+                Val::Ptr(AddrExpr { base: Base::Reg(reg), .. }) => Reg::Gpr(*reg),
+                Val::Float { reg, .. } => Reg::Fpr(*reg),
+                _ => return refuse("a call result that is not a register"),
+            };
+            self.emit(Op::Copy { dst, src: *register });
+        }
+        Ok(Some(value))
     }
 
     pub(super) fn ret(
@@ -265,25 +389,12 @@ impl Selector<'_> {
         let mut uses = Vec::new();
         if let Some(&operand) = instruction.operands.first() {
             let ty = self.operand_type(operand)?;
-            let scalar = self.scalar(ty)?;
             let src = self.src(operand)?;
             let attrs = self.function.return_attrs.clone();
-            let value = self.argument_value(scalar, src, &attrs)?;
-            match (crate::cc::result(scalar), value) {
-                (Place::Gpr(number), Val::Int(g)) => {
-                    self.emit(Op::Copy { dst: Reg::Gpr(Gpr(number)), src: Reg::Gpr(g.reg) });
-                    uses.push(Reg::Gpr(Gpr(number)));
-                }
-                (Place::Gpr(number), Val::Ptr(address)) => {
-                    let reg = self.pointer_register(&address)?;
-                    self.emit(Op::Copy { dst: Reg::Gpr(Gpr(number)), src: Reg::Gpr(reg) });
-                    uses.push(Reg::Gpr(Gpr(number)));
-                }
-                (Place::Fpr(number), Val::Float { reg, .. }) => {
-                    self.emit(Op::Copy { dst: Reg::Fpr(Vreg(number)), src: Reg::Fpr(reg) });
-                    uses.push(Reg::Fpr(Vreg(number)));
-                }
-                _ => return refuse("a result in the wrong register class"),
+            let value = self.argument_value(src, &attrs)?;
+            let places = self.places_of(&mut Assigner::new(self.platform), ty, true)?;
+            for (place, leaf) in places.iter().zip(value.leaves()) {
+                self.copy_out(*place, leaf, &mut uses)?;
             }
         }
         self.emit(Op::Return { uses });
@@ -362,26 +473,101 @@ impl Selector<'_> {
             "memcpy" | "memmove" | "memset" => {
                 // The last argument is the volatile flag; the call is
                 // `memcpy(dst, src, n)`.
-                let mut values = Vec::new();
-                for (position, &argument) in arguments[..3].iter().enumerate() {
+                let mut assigner = Assigner::new(self.platform);
+                let mut passed = Vec::new();
+                for &argument in &arguments[..3] {
                     let ty = self.operand_type(argument)?;
-                    let scalar = self.scalar(ty)?;
                     let src = self.src(argument)?;
-                    let value = self.argument_value(scalar, src, &[])?;
-                    // A memset's value is an int; its length is 64 bits.
-                    let _ = position;
-                    values.push((value, scalar, true));
+                    let value = self.argument_value(src, &[])?;
+                    let places = self.places_of(&mut assigner, ty, true)?;
+                    passed.push((value, places));
                 }
                 let void = self.types().void();
                 let callee = Callee::Symbol(match self.platform.underscore() {
                     true => format!("_{base}"),
                     false => base.to_owned(),
                 });
-                self.emit_call(callee, values, void)?;
+                self.emit_call(callee, passed, assigner.stack_bytes(), void)?;
                 Ok(())
             }
+            "va_start" => self.va_start(arguments[0]),
+            "va_end" => Ok(()),
+            "va_copy" => self.va_copy(arguments[0], arguments[1]),
             _ => refuse(format!("the intrinsic {name}")),
         }
+    }
+
+    /// `va_start(ap)`: Darwin's list is a pointer to the first unnamed stack
+    /// argument; AAPCS64's is five fields (`stack`, `gr_top`, `vr_top`,
+    /// `gr_offs`, `vr_offs`) over the register save areas.
+    fn va_start(
+        &mut self,
+        list: Operand,
+    ) -> Selected<()> {
+        let Some(info) = self.va else { return refuse("va_start in a function that is not variadic") };
+        let list = match self.src(list)? {
+            Src::Val(Val::Ptr(address)) => address,
+            _ => return refuse("a va_list that is not an address"),
+        };
+        let stack = self.mf.gpr();
+        self.emit(Op::FrameAddress { dst: stack, slot: INCOMING_ARGUMENTS, offset: info.named_stack as i64 });
+        let store = |this: &mut Self, reg: Gpr, bytes: u8, offset: i64| -> Selected<()> {
+            let at = AddrExpr { offset: list.offset + offset, ..list.clone() };
+            let addr = this.addressing(&at, bytes)?;
+            this.inst(Inst::Store {
+                mem: Memory::Int { width: if bytes == 8 { Width::X } else { Width::W }, bytes, sign: false, reg },
+                addr,
+            });
+            Ok(())
+        };
+        store(self, stack, 8, 0)?;
+        if self.platform == Platform::Linux {
+            let top = |this: &mut Self, area: Option<(u32, u64)>, offset: i64| -> Selected<u64> {
+                let reg = this.mf.gpr();
+                let size = match area {
+                    Some((slot, size)) => {
+                        this.emit(Op::FrameAddress { dst: reg, slot, offset: size as i64 });
+                        size
+                    }
+                    None => {
+                        this.load_immediate(reg, 64, 0);
+                        0
+                    }
+                };
+                store(this, reg, 8, offset)?;
+                Ok(size)
+            };
+            let gr = top(self, info.gr_slot, 8)?;
+            let vr = top(self, info.vr_slot, 16)?;
+            for (offset, size) in [(24, gr), (28, vr)] {
+                let reg = self.mf.gpr();
+                self.load_immediate(reg, 32, (-(size as i64)) as u64);
+                store(self, reg, 4, offset)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `va_copy(to, from)`: the list's bytes.
+    fn va_copy(
+        &mut self,
+        to: Operand,
+        from: Operand,
+    ) -> Selected<()> {
+        let bytes: u64 = if self.platform == Platform::Linux { 32 } else { 8 };
+        let (Src::Val(Val::Ptr(to)), Src::Val(Val::Ptr(from))) = (self.src(to)?, self.src(from)?) else {
+            return refuse("a va_list that is not an address");
+        };
+        for offset in (0..bytes).step_by(8) {
+            let source = AddrExpr { offset: from.offset + offset as i64, ..from.clone() };
+            let target = AddrExpr { offset: to.offset + offset as i64, ..to.clone() };
+            let reg = self.mf.gpr();
+            let addr = self.addressing(&source, 8)?;
+            self.inst(Inst::Load { mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg }, addr });
+            let addr = self.addressing(&target, 8)?;
+            self.inst(Inst::Store { mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg }, addr });
+        }
+        Ok(())
     }
 
     fn float_arg(

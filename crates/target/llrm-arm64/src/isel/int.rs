@@ -162,7 +162,8 @@ impl Selector<'_> {
         let width = width_of(bits);
         if op == BinaryOp::And && instruction.result.is_some_and(|result| self.tested_by_compare(result)) {
             // A `tst` reads the operands where the comparison is.
-            self.fused.insert(super::value_def(self.function, instruction.result.expect("checked")).expect("an instruction"));
+            self.fused
+                .insert(super::value_def(self.function, instruction.result.expect("checked")).expect("an instruction"));
             return Ok(());
         }
         let (lhs, rhs) = (self.src(instruction.operands[0])?, self.src(instruction.operands[1])?);
@@ -648,7 +649,10 @@ impl Selector<'_> {
         &self,
         operand: Operand,
     ) -> bool {
-        matches!(operand, Operand::Constant(id) if matches!(self.module.context.get(id).kind, llrm_mir::ConstantKind::Int(0) | llrm_mir::ConstantKind::Zero | llrm_mir::ConstantKind::Null))
+        matches!(
+            operand,
+            Operand::Constant(id) if matches!(self.module.context.get(id).kind, llrm_mir::ConstantKind::Int(0) | llrm_mir::ConstantKind::Zero | llrm_mir::ConstantKind::Null)
+        )
     }
 
     /// Whether the `and` `value` is read only by a comparison with zero whose
@@ -667,7 +671,12 @@ impl Selector<'_> {
         let eligible = matches!(
             reader.opcode,
             llrm_mir::Opcode::ICmp(
-                IntPredicate::Eq | IntPredicate::Ne | IntPredicate::Slt | IntPredicate::Sge | IntPredicate::Sgt | IntPredicate::Sle
+                IntPredicate::Eq
+                    | IntPredicate::Ne
+                    | IntPredicate::Slt
+                    | IntPredicate::Sge
+                    | IntPredicate::Sgt
+                    | IntPredicate::Sle
             )
         );
         eligible
@@ -684,8 +693,9 @@ impl Selector<'_> {
         value: llrm_mir::ValueId,
     ) -> Option<Instruction> {
         let inst = super::value_def(self.function, value)?;
-        (self.fused.contains(&inst) && self.function.instruction(inst).opcode == llrm_mir::Opcode::Binary(BinaryOp::And))
-            .then(|| self.function.instruction(inst).clone())
+        (self.fused.contains(&inst)
+            && self.function.instruction(inst).opcode == llrm_mir::Opcode::Binary(BinaryOp::And))
+        .then(|| self.function.instruction(inst).clone())
     }
 
     /// `tst a, b`: the flags of `a & b`.
@@ -703,7 +713,13 @@ impl Selector<'_> {
         if let Src::Int { value, .. } = right
             && immediate::logical(value as u64 & mask(bits), width.bits()).is_some()
         {
-            self.inst(Inst::LogicImm { op: Logic::Ands, width, rd: Gpr::R31, rn: first.reg, imm: value as u64 & mask(bits) });
+            self.inst(Inst::LogicImm {
+                op: Logic::Ands,
+                width,
+                rd: Gpr::R31,
+                rn: first.reg,
+                imm: value as u64 & mask(bits),
+            });
             return Ok(());
         }
         let second = self.gpr_of(right)?;
@@ -757,9 +773,14 @@ impl Selector<'_> {
         let cond = self.condition(instruction.operands[0])?;
         let (a, b) = (self.src(instruction.operands[1])?, self.src(instruction.operands[2])?);
         let value = match (&a, &b) {
-            (Src::Float { .. } | Src::Val(Val::Float { .. }), _) | (_, Src::Float { .. } | Src::Val(Val::Float { .. })) => {
-                let Val::Float { reg: a, size } = self.materialize(a)? else { return refuse("a select of mixed classes") };
-                let Val::Float { reg: b, .. } = self.materialize(b)? else { return refuse("a select of mixed classes") };
+            (Src::Float { .. } | Src::Val(Val::Float { .. }), _)
+            | (_, Src::Float { .. } | Src::Val(Val::Float { .. })) => {
+                let Val::Float { reg: a, size } = self.materialize(a)? else {
+                    return refuse("a select of mixed classes");
+                };
+                let Val::Float { reg: b, .. } = self.materialize(b)? else {
+                    return refuse("a select of mixed classes");
+                };
                 let rd = self.mf.fpr();
                 self.inst(Inst::FpSelect { size, rd, rn: a, rm: b, cond });
                 Val::Float { reg: rd, size }
@@ -781,11 +802,25 @@ impl Selector<'_> {
                 };
                 match (constant(&a), constant(&b)) {
                     // cset / csetm: the flags choose between 1 or -1 and 0.
-                    (Some(1), Some(0)) => self.inst(Inst::CondSelect { op: Select::Csinc, width, rd, rn: Gpr::R31, rm: Gpr::R31, cond: cond.inverted() }),
-                    (Some(0), Some(1)) => self.inst(Inst::CondSelect { op: Select::Csinc, width, rd, rn: Gpr::R31, rm: Gpr::R31, cond }),
-                    (Some(all), Some(0)) if all == ones => {
-                        self.inst(Inst::CondSelect { op: Select::Csinv, width, rd, rn: Gpr::R31, rm: Gpr::R31, cond: cond.inverted() })
+                    (Some(1), Some(0)) => self.inst(Inst::CondSelect {
+                        op: Select::Csinc,
+                        width,
+                        rd,
+                        rn: Gpr::R31,
+                        rm: Gpr::R31,
+                        cond: cond.inverted(),
+                    }),
+                    (Some(0), Some(1)) => {
+                        self.inst(Inst::CondSelect { op: Select::Csinc, width, rd, rn: Gpr::R31, rm: Gpr::R31, cond })
                     }
+                    (Some(all), Some(0)) if all == ones => self.inst(Inst::CondSelect {
+                        op: Select::Csinv,
+                        width,
+                        rd,
+                        rn: Gpr::R31,
+                        rm: Gpr::R31,
+                        cond: cond.inverted(),
+                    }),
                     (Some(0), Some(all)) if all == ones => {
                         self.inst(Inst::CondSelect { op: Select::Csinv, width, rd, rn: Gpr::R31, rm: Gpr::R31, cond })
                     }

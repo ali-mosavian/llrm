@@ -45,7 +45,8 @@ pub struct Allocation {
 }
 
 /// A register's live ranges: half-open `[start, end)` over operation points
-/// (an operation `i` reads at `2i` and writes at `2i + 1`), disjoint and sorted.
+/// (an operation `i` reads at `2i` and writes at `2i + 1`), disjoint and
+/// sorted.
 #[derive(Clone, Debug, Default)]
 struct Ranges(Vec<(u32, u32)>);
 
@@ -151,8 +152,8 @@ fn analyse(function: &MFunc) -> (HashMap<Reg, Ranges>, Vec<u32>, HashMap<Reg, f6
             }
         }
     }
-    // How deeply nested in loops a block is: a back edge `b -> h` (h at or before
-    // b) makes the blocks h..=b one level deeper.
+    // How deeply nested in loops a block is: a back edge `b -> h` (h at or
+    // before b) makes the blocks h..=b one level deeper.
     let mut depth = vec![0u32; function.blocks.len()];
     for (at, targets) in successors.iter().enumerate() {
         for &target in targets {
@@ -227,8 +228,9 @@ fn successors_of(
 }
 
 /// Joins the virtual registers a copy connects whose live ranges do not
-/// overlap, so the copy disappears (the register coalescer, `RegisterCoalescer`,
-/// for the copies phi elimination leaves): the registers are renamed in place.
+/// overlap, so the copy disappears (the register coalescer,
+/// `RegisterCoalescer`, for the copies phi elimination leaves): the registers
+/// are renamed in place.
 fn coalesce(function: &mut MFunc) {
     let (ranges, _, weight) = analyse(function);
     let mut ranges = ranges;
@@ -302,9 +304,9 @@ fn coalesce(function: &mut MFunc) {
 pub fn allocate(function: &mut MFunc) -> Allocation {
     coalesce(function);
     let (ranges, calls, weight) = analyse(function);
-    // What each physical register holds: its own live ranges (arguments, results)
-    // and, once a virtual register is given it, that one's; a call destroys every
-    // caller-saved register at its point.
+    // What each physical register holds: its own live ranges (arguments,
+    // results) and, once a virtual register is given it, that one's; a call
+    // destroys every caller-saved register at its point.
     let mut occupied: HashMap<Reg, Ranges> = HashMap::new();
     for (register, live) in ranges.iter().filter(|(register, _)| !register.is_virtual()) {
         occupied.entry(*register).or_default().extend(live);

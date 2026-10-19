@@ -48,6 +48,12 @@ impl Assigner {
         Self { platform, next_gpr: 0, next_fpr: 0, stack: 0 }
     }
 
+    /// How many general-purpose and floating-point argument registers the
+    /// arguments assigned so far have used.
+    pub fn registers_used(&self) -> (u32, u32) {
+        (self.next_gpr, self.next_fpr)
+    }
+
     /// The bytes of stack the arguments assigned so far take.
     pub fn stack_bytes(&self) -> u64 {
         self.stack
@@ -95,6 +101,47 @@ impl Assigner {
             Scalar::I64 | Scalar::F64 => self.stack_slot(8, 8),
         }
     }
+}
+
+impl Assigner {
+    /// The places of the `members` of one array or homogeneous aggregate, which
+    /// travel together (`CC_AArch64_Custom_Block`): in consecutive registers if
+    /// the file has that many left, else every register of the class is marked
+    /// used and the members lie contiguously on the stack, each `size` bytes,
+    /// the block aligned to `align` (the Darwin PCS lets a block be aligned
+    /// as its element is; AAPCS aligns it to 8 at least).
+    pub fn assign_block(
+        &mut self,
+        member: Scalar,
+        count: usize,
+        size: u64,
+        align: u64,
+    ) -> Vec<Place> {
+        let count_u32 = count as u32;
+        match member {
+            Scalar::I32 | Scalar::I64 if self.next_gpr + count_u32 <= ARGUMENT_REGISTERS => {
+                let first = self.next_gpr;
+                self.next_gpr += count_u32;
+                return (first..first + count_u32).map(Place::Gpr).collect();
+            }
+            Scalar::F32 | Scalar::F64 if self.next_fpr + count_u32 <= ARGUMENT_REGISTERS => {
+                let first = self.next_fpr;
+                self.next_fpr += count_u32;
+                return (first..first + count_u32).map(Place::Fpr).collect();
+            }
+            Scalar::I32 | Scalar::I64 => self.next_gpr = ARGUMENT_REGISTERS,
+            Scalar::F32 | Scalar::F64 => self.next_fpr = ARGUMENT_REGISTERS,
+        }
+        let align = if self.platform == Platform::Darwin { align } else { align.max(8) };
+        self.stack = self.stack.next_multiple_of(align);
+        let places = (0..count as u64).map(|at| Place::Stack { offset: self.stack + at * size, size }).collect();
+        self.stack += count as u64 * size;
+        places
+    }
+
+    /// The register a pointer to the result of a function returning a large
+    /// aggregate (`sret`) is passed in.
+    pub const RESULT_POINTER: u32 = 8;
 }
 
 /// The register a result of type `value` comes back in: `RetCC_AArch64_AAPCS`

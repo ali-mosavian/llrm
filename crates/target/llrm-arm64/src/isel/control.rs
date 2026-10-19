@@ -196,7 +196,8 @@ impl Selector<'_> {
             let (left, right) = (compare.operands[0], compare.operands[1]);
             let bits = self.types().int_bits(self.operand_type(left)?).unwrap_or(64);
             if self.is_zero_constant(right) && bits <= 64 {
-                // An `and` left for a `tst`: one bit is `tbz`, any other mask the flags.
+                // An `and` left for a `tst`: one bit is `tbz`, any other mask
+                // the flags.
                 if let Operand::Value(masked) = left
                     && let Some(and) = self.fused_and(masked)
                 {

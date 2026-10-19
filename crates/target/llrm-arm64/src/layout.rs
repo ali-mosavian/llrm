@@ -1,8 +1,9 @@
 //! Block layout after register assignment: the blocks that only branch are
 //! threaded through, unreachable blocks dropped, the blocks placed so a branch
 //! falls through where it can, and the branches that then jump to the next
-//! block removed (LLVM's `BranchFolder` and `MachineBlockPlacement`, simplified:
-//! no frequencies, so a chain follows the first successor that is not placed).
+//! block removed (LLVM's `BranchFolder` and `MachineBlockPlacement`,
+//! simplified: no frequencies, so a chain follows the first successor that is
+//! not placed).
 
 use std::collections::{HashMap, HashSet};
 
@@ -42,7 +43,9 @@ fn forwards(blocks: &[Lowered]) -> HashMap<String, String> {
     let direct: HashMap<&str, &str> = blocks
         .iter()
         .filter_map(|block| match block.insts.as_slice() {
-            [Inst::Branch { link: false, target: Target::Label(label) }] => Some((block.label.as_str(), label.as_str())),
+            [Inst::Branch { link: false, target: Target::Label(label) }] => {
+                Some((block.label.as_str(), label.as_str()))
+            }
             _ => None,
         })
         .collect();
@@ -134,8 +137,10 @@ pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
             insts.pop();
         }
         if insts.len() >= 2
-            && let (Some(Inst::BranchCond { cond, target: Target::Label(over) }), Some(Inst::Branch { link: false, target: Target::Label(go) })) =
-                (insts.get(insts.len() - 2), insts.last())
+            && let (
+                Some(Inst::BranchCond { cond, target: Target::Label(over) }),
+                Some(Inst::Branch { link: false, target: Target::Label(go) }),
+            ) = (insts.get(insts.len() - 2), insts.last())
             && Some(over) == next.as_ref()
         {
             let (cond, go) = (cond.inverted(), go.clone());

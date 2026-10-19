@@ -80,6 +80,28 @@ impl AddrExpr {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Val {
     Int(G),
-    Float { reg: Vreg, size: FpSize },
+    Float {
+        reg: Vreg,
+        size: FpSize,
+    },
     Ptr(AddrExpr),
+    /// An array or struct held member by member, each in registers of its own.
+    Agg(Vec<Val>),
+}
+
+impl Val {
+    /// The scalars of the value in order, an aggregate's members flattened.
+    pub fn leaves(&self) -> Vec<&Val> {
+        match self {
+            Val::Agg(members) => members.iter().flat_map(Val::leaves).collect(),
+            scalar => vec![scalar],
+        }
+    }
+
+    pub fn leaves_mut(&mut self) -> Vec<&mut Val> {
+        match self {
+            Val::Agg(members) => members.iter_mut().flat_map(Val::leaves_mut).collect(),
+            scalar => vec![scalar],
+        }
+    }
 }

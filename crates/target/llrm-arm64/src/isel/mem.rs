@@ -244,11 +244,20 @@ impl Selector<'_> {
         &mut self,
         instruction: &Instruction,
     ) -> Selected<()> {
-        let ty = instruction.ty;
-        let (bytes, float) = self.access(ty)?;
         let address = self.pointer_operand(instruction.operands[0])?;
-        let addr = self.addressing(&address, bytes)?;
-        let value = if float {
+        let value = self.load_typed(instruction.ty, &address)?;
+        self.define(instruction.result, Src::Val(value))
+    }
+
+    /// A scalar of type `ty` read from `address`.
+    pub(crate) fn load_scalar(
+        &mut self,
+        ty: TypeId,
+        address: &AddrExpr,
+    ) -> Selected<Val> {
+        let (bytes, float) = self.access(ty)?;
+        let addr = self.addressing(address, bytes)?;
+        Ok(if float {
             let reg = self.mf.fpr();
             self.inst(Inst::Load { mem: Memory::Fp { bytes, reg }, addr });
             Val::Float { reg, size: if bytes == 4 { FpSize::S } else { FpSize::D } }
@@ -271,8 +280,7 @@ impl Selector<'_> {
                 };
                 Val::Int(G { reg, bits, known })
             }
-        };
-        self.define(instruction.result, Src::Val(value))
+        })
     }
 
     pub(super) fn store(
@@ -281,9 +289,32 @@ impl Selector<'_> {
     ) -> Selected<()> {
         let stored = instruction.operands[0];
         let ty = self.operand_type(stored)?;
-        let (bytes, float) = self.access(ty)?;
         let value = self.src(stored)?;
         let address = self.pointer_operand(instruction.operands[1])?;
+        if self.is_aggregate(ty) {
+            let Src::Val(value) = value else { return refuse("a constant aggregate stored") };
+            return self.store_typed(ty, &value, &address);
+        }
+        self.store_scalar_src(ty, value, &address)
+    }
+
+    /// A scalar value, held in registers, written to `address`.
+    pub(crate) fn store_scalar(
+        &mut self,
+        ty: TypeId,
+        value: Val,
+        address: &AddrExpr,
+    ) -> Selected<()> {
+        self.store_scalar_src(ty, Src::Val(value), address)
+    }
+
+    fn store_scalar_src(
+        &mut self,
+        ty: TypeId,
+        value: Src,
+        address: &AddrExpr,
+    ) -> Selected<()> {
+        let (bytes, float) = self.access(ty)?;
         let mem = if float {
             let Val::Float { reg, .. } = self.materialize(value)? else { return refuse("a float store of an integer") };
             Memory::Fp { bytes, reg }
@@ -295,7 +326,7 @@ impl Selector<'_> {
             };
             Memory::Int { width: if bytes == 8 { Width::X } else { Width::W }, bytes, sign: false, reg }
         };
-        let addr = self.addressing(&address, bytes)?;
+        let addr = self.addressing(address, bytes)?;
         self.inst(Inst::Store { mem, addr });
         Ok(())
     }

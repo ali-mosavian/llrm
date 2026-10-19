@@ -6,6 +6,7 @@
 //! compare and branch); a comparison only a branch or select reads is selected
 //! where it is read.
 
+mod agg;
 mod call;
 mod control;
 mod fp;
@@ -61,6 +62,9 @@ pub struct Selector<'a> {
     pub(crate) fused: HashSet<InstId>,
     /// The block being filled.
     pub(crate) current: usize,
+    /// A variadic function's register save areas and where its unnamed
+    /// arguments begin.
+    pub(crate) va: Option<call::VaInfo>,
 }
 
 /// `function` of `module` selected for `platform`.
@@ -110,6 +114,7 @@ impl<'a> Selector<'a> {
             uses,
             fused: HashSet::new(),
             current: 0,
+            va: None,
         }
     }
 
@@ -205,6 +210,37 @@ impl<'a> Selector<'a> {
             Type::Pointer(_) => Val::Ptr(AddrExpr::of(Base::Reg(self.mf.gpr()))),
             Type::Float(llrm_mir::FloatKind::Float) => Val::Float { reg: self.mf.fpr(), size: FpSize::S },
             Type::Float(llrm_mir::FloatKind::Double) => Val::Float { reg: self.mf.fpr(), size: FpSize::D },
+            Type::Array { element, count } if count <= 64 => {
+                let members = (0..count).map(|_| self.fresh(element)).collect::<Selected<Vec<_>>>()?;
+                Val::Agg(members)
+            }
+            Type::Struct { .. } | Type::Named(_) => {
+                let fields = self.types().fields(ty).ok_or("an opaque struct")?.to_vec();
+                Val::Agg(fields.into_iter().map(|field| self.fresh(field)).collect::<Selected<Vec<_>>>()?)
+            }
+            other => return refuse(format!("a value of type {other:?}")),
+        })
+    }
+
+    /// The scalar types an aggregate (or a scalar) is made of, in order.
+    pub(crate) fn leaf_types(
+        &self,
+        ty: TypeId,
+    ) -> Selected<Vec<TypeId>> {
+        Ok(match self.ty(ty).clone() {
+            Type::Array { element, count } if count <= 64 => {
+                let leaf = self.leaf_types(element)?;
+                (0..count).flat_map(|_| leaf.clone()).collect()
+            }
+            Type::Struct { .. } | Type::Named(_) => {
+                let fields = self.types().fields(ty).ok_or("an opaque struct")?.to_vec();
+                let mut out = Vec::new();
+                for field in fields {
+                    out.extend(self.leaf_types(field)?);
+                }
+                out
+            }
+            Type::Int(_) | Type::Pointer(_) | Type::Float(_) => vec![ty],
             other => return refuse(format!("a value of type {other:?}")),
         })
     }
@@ -264,6 +300,35 @@ impl<'a> Selector<'a> {
             }
             (ConstantKind::Zero | ConstantKind::Undef | ConstantKind::Poison, Type::Float(kind)) => {
                 Ok(Src::Float { size: if kind == llrm_mir::FloatKind::Float { FpSize::S } else { FpSize::D }, bits: 0 })
+            }
+            (ConstantKind::Aggregate(members), Type::Array { .. } | Type::Struct { .. } | Type::Named(_)) => {
+                let fields = match self.ty(ty) {
+                    Type::Array { element, count } => vec![*element; *count as usize],
+                    _ => self.types().fields(ty).ok_or("an opaque struct")?.to_vec(),
+                };
+                let mut out = Vec::new();
+                for (member, _) in members.iter().zip(fields) {
+                    let src = self.constant(*member)?;
+                    out.push(self.materialize(src)?);
+                }
+                Ok(Src::Val(Val::Agg(out)))
+            }
+            (
+                ConstantKind::Zero | ConstantKind::Undef | ConstantKind::Poison,
+                Type::Array { .. } | Type::Struct { .. } | Type::Named(_),
+            ) => {
+                let mut value = self.fresh(ty)?;
+                for leaf in value.leaves_mut() {
+                    let zero = match leaf {
+                        Val::Int(g) => Src::Int { bits: g.bits, value: 0 },
+                        Val::Ptr(_) => Src::Int { bits: 64, value: 0 },
+                        Val::Float { size, .. } => Src::Float { size: *size, bits: 0 },
+                        Val::Agg(_) => unreachable!("leaves are scalars"),
+                    };
+                    let made = self.materialize(zero)?;
+                    *leaf = made;
+                }
+                Ok(Src::Val(value))
             }
             (ConstantKind::Global(global), _) => {
                 let got = self.needs_got(*global);
@@ -357,6 +422,8 @@ impl<'a> Selector<'a> {
             Opcode::FCmp(predicate) => self.fcmp_value(*predicate, &instruction),
             Opcode::FNeg => self.fneg(&instruction),
             Opcode::Select => self.select(&instruction),
+            Opcode::ExtractValue(path) => self.extract_value(&instruction, path),
+            Opcode::InsertValue(path) => self.insert_value(&instruction, path),
             Opcode::Freeze => {
                 let value = self.src(instruction.operands[0])?;
                 self.define(result, value)
@@ -460,6 +527,7 @@ impl<'a> Selector<'a> {
                 Ok(G { reg, bits: 64, known: Known::Nothing })
             }
             Val::Float { .. } => refuse("a float used as an integer"),
+            Val::Agg(_) => refuse("an aggregate used as an integer"),
         }
     }
 
@@ -536,7 +604,7 @@ impl Selector<'_> {
             Val::Int(g) => Some(Reg::Gpr(g.reg)),
             Val::Float { reg, .. } => Some(Reg::Fpr(*reg)),
             Val::Ptr(AddrExpr { base: Base::Reg(reg), offset: 0, index: None }) => Some(Reg::Gpr(*reg)),
-            Val::Ptr(_) => None,
+            Val::Ptr(_) | Val::Agg(_) => None,
         }
     }
 }
