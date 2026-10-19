@@ -48,7 +48,8 @@ def test_the_known_file_parses_and_names_issue_numbers():
 
 def test_the_front_end_compiles_cover_nib_and_basic_at_both_machines_and_all_levels():
     """The smoke's `programs` step caught a Nib -m32 panic (#2531) that no QCport module compiles."""
-    assert len(q.EXTRA) == 2 * 2 * len(q.LEVELS) and {t for t, *_ in q.EXTRA} == {"llrm-nib", "llrm-qb"} and {m for _, _, m, _ in q.EXTRA} == {"-m16", "-m32"}
+    benches = [j for j in q.extra_jobs() if j[1].parent.name == "bintree"]
+    assert len(benches) == 2 * 2 * len(q.LEVELS) and {t for t, *_ in benches} == {"llrm-nib", "llrm-qb"} and {m for _, _, m, _ in benches} == {"-m16", "-m32"}
 
 
 def test_a_panic_is_keyed_by_its_place_and_message_not_by_rusts_backtrace_note():
@@ -69,3 +70,14 @@ def test_a_commit_that_does_not_build_is_passed_over_not_a_crash():
 
     assert q.first_bad(commits, bad) == "c15"
     assert q.first_bad(commits, lambda c: None if c in unbuildable else int(c[1:]) >= 10) == "c13"
+
+
+def test_the_sweep_compiles_the_basic_corpus_at_m32_which_tests_run_never_does(tmp_path):
+    """ownf_local_pds71 and ownf_local_vbdos failed at -m32 with `@TOP: ptrtoint` (140 compiles in a full-corpus run) while tests/run, BASIC on m16 only, reported 0 fail."""
+    corpus = tmp_path / "tests/run/qb"
+    corpus.mkdir(parents=True)
+    (corpus / "flat.bas").write_text("PRINT 1\n")
+    (corpus / "huge.bas").write_text("' targets: x86-m16\nPRINT 2\n")
+    jobs = q.extra_jobs(tmp_path)
+    assert [(s.name, m, l) for t, s, m, l in jobs if s.parent == corpus] == [("flat.bas", "-m32", "-O1"), ("flat.bas", "-m32", "-O2")]
+    assert {t for t, *_ in jobs} == {"llrm-nib", "llrm-qb"}
