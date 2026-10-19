@@ -1773,3 +1773,16 @@ fn test_the_blocks_on_a_cycle_are_found_without_a_scan_per_block() {
     assert!(scans <= 4 * blocks.len(), "{scans} scans for {} blocks", blocks.len());
     assert_eq!(found.into_iter().collect::<Vec<_>>(), vec![n]);
 }
+
+/// Placement worked out the frequencies of the body again, as `over` over the
+/// blocks it was given, though the body's own answer stood in its facts: 68 M
+/// of 380 M instructions of `jumps` at 1600 diamonds. It asks `Frequency::of`.
+#[test]
+fn test_placement_reads_the_frequencies_the_body_already_has() {
+    let made = diamond_joined(0.5, vec![_return(30)]);
+    Frequency::of(&made);
+    crate::analysis::frequency::WORKED.with(|one| one.set(0));
+    placed(&made).unwrap();
+    let worked = crate::analysis::frequency::WORKED.with(|one| one.get());
+    assert_eq!(worked, 0, "{worked} frequency runs for frequencies the body had");
+}
