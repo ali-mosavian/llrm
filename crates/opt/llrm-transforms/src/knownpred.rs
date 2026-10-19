@@ -9,6 +9,7 @@
 //! holds a copy of what the branching block computes, folded on the constant,
 //! and that block jumps to the arm.
 //!
+//! # Example
 //! ```text
 //!   b0: br i1 %c1, b1, b2                b0: br i1 %c1, b1, b3
 //!   b1: %c = ...; br b2                  b1: %c = ...; br b2
