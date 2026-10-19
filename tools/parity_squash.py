@@ -162,9 +162,14 @@ def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
     directory = Path(smoke_bins(env))
     if not llrmbin.stale_binaries(directory, cwd):
         return ""
-    (build or (lambda: subprocess.run(slotted(["cargo", "build", "--release", "--bins", "-q"]), cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True)))()
+    built = (build or (lambda: subprocess.run(slotted(["cargo", "build", "--release", "--bins", "-q"]), cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True)))()
     still = llrmbin.stale_binaries(directory, cwd)
-    return f"binaries still older than the merged tree after a rebuild: {', '.join(still)} in {directory}" if still else ""
+    if not still:
+        return ""
+    # A stale binary after a rebuild is a build that failed (its exit code and last lines) or one that left the binaries older than a source: say which.
+    ran = f"; the rebuild exited {built.returncode}: {' / '.join((built.stderr or built.stdout or '').strip().splitlines()[-3:])[:300]}" if getattr(built, "returncode", 0) else ""
+    detail = llrmbin.stale_detail(directory, cwd)
+    return f"binaries still older than the merged tree after a rebuild: {', '.join(still)} in {directory}{'; ' + detail if detail else ''}{ran}"
 
 
 SMOKE_STEPS = ("programs", "sc", "d_faces", "qc_d_faces", "qc_modules", "run")
@@ -215,15 +220,41 @@ def land_lock(path: str = LAND_LOCK, wait: bool = True):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+GENERATED = ("docs/optimizations/passes/", "docs/optimizations/analyses/", "docs/optimizations/backend/", "docs/architecture/readme.md")  # what tools/docsbuild/build.py --sync writes
+
+
+def regenerate(conflicts: list[str], cwd: Path = ROOT) -> str:
+    """"" when every conflicted path is generated and `build.py --sync --force` on the merged tree made it current (then `--check` agrees) and the merge was committed;
+    else why not. Two PRs that each add a page both rewrite the index: a hand merge of generated text is what blocked the decide flip, the LSR stack and indvars."""
+    if not conflicts or not all(path.startswith(GENERATED) for path in conflicts):
+        return "conflicts in files nothing generates: " + ", ".join(path for path in conflicts if not path.startswith(GENERATED))
+    for path in conflicts:
+        git("checkout", "--ours", "--", path, cwd=cwd)
+    build = [sys.executable, "tools/docsbuild/build.py"]
+    for flags in (["--sync", "--force"], ["--check"]):
+        done = subprocess.run([*build, *flags], cwd=cwd, capture_output=True, text=True)
+        if done.returncode:
+            return f"docsbuild {' '.join(flags)} failed on the merged tree: {(done.stdout + done.stderr).strip().splitlines()[-1:] or ['no output']}"
+    git("add", "-A", "docs", cwd=cwd)
+    done = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "commit", "-q", "--no-edit"], cwd=cwd, capture_output=True, text=True)
+    return "" if done.returncode == 0 else f"committing the regenerated merge failed: {done.stderr.strip()[:200]}"
+
+
 def merged_result(head: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str | None, str]:
     """(sha, "") of `head` with `base` merged into it, checked out detached in `cwd` and not pushed; (None, why) when `base` conflicts. When `head` already
     contains `base` the result is `head` itself. The squash lands on whatever feat/parity is at the call: the tests must run on this result, not on a head that
-    compiled beside a base that has since moved (#2544 and #2564 each compiled; together the head did not build for three hours)."""
+    compiled beside a base that has since moved (#2544 and #2564 each compiled; together the head did not build for three hours). A conflict only in generated
+    files is resolved by regenerating them (`regenerate`)."""
     git("checkout", "-q", "--detach", head, cwd=cwd)
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
         merged = subprocess.run(["git", "merge", "--no-edit", "-q", base], cwd=cwd, capture_output=True, text=True)
         if merged.returncode:
             conflicts = git("diff", "--name-only", "--diff-filter=U", cwd=cwd).split()
+            if conflicts and all(path.startswith(GENERATED) for path in conflicts):
+                if not (why := regenerate(conflicts, cwd)):
+                    return git("rev-parse", "HEAD", cwd=cwd).strip(), ""
+                subprocess.run(["git", "merge", "--abort"], cwd=cwd, capture_output=True)
+                return None, f"merging {base} into the PR head conflicts in {', '.join(conflicts)} (generated) and regenerating failed: {why}"
             subprocess.run(["git", "merge", "--abort"], cwd=cwd, capture_output=True)
             return None, f"merging {base} into the PR head conflicts in {', '.join(conflicts) or 'the tree'}"
     return git("rev-parse", "HEAD", cwd=cwd).strip(), ""

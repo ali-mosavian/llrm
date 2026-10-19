@@ -145,6 +145,9 @@ pub struct Profile {
     /// and clang's nothing is improved after selection and allocation
     /// (`flow::machine_with`).
     pub optimized: bool,
+    /// `CodeGenOptLevel::Aggressive` (-O3): tail duplication in placement
+    /// copies blocks of four instructions, not two.
+    pub aggressive: bool,
     /// `-fexcess-precision=standard` (`-ffloat-store`): a float conversion
     /// rounds to its type, where otherwise x87 keeps the wider value in its
     /// register, as gcc's `-fexcess-precision=fast` does.
@@ -294,6 +297,7 @@ impl Profile {
             search: true,
             routes: true,
             optimized: true,
+            aggressive: false,
             float_store: false,
             exhaustive: false,
             model: arch.cost_model(),
@@ -422,7 +426,10 @@ fn _profile(
 /// passes hold them.
 static _MADE: LazyLock<
     std::sync::Mutex<
-        crate::support::hash::HashMap<(&'static str, String, bool, bool, bool, bool, bool, bool), &'static Profile>,
+        crate::support::hash::HashMap<
+            (&'static str, String, bool, bool, bool, bool, bool, bool, bool),
+            &'static Profile,
+        >,
     >,
 > = LazyLock::new(Default::default);
 
@@ -477,7 +484,7 @@ pub fn tuned_routing(
     exhaustive: bool,
     routes: bool,
 ) -> Result<&'static Profile, String> {
-    tuned_optimizing(arch, name, size, search, exhaustive, routes, true, false)
+    tuned_optimizing(arch, name, size, search, exhaustive, routes, true, false, false)
 }
 
 /// `tuned_routing`, the backend's optional phases left out where not
@@ -491,12 +498,13 @@ pub fn tuned_optimizing(
     routes: bool,
     optimized: bool,
     float_store: bool,
+    aggressive: bool,
 ) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
     }
     let mut made = _MADE.lock().expect("the profiles are not poisoned");
-    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes, optimized, float_store);
+    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes, optimized, float_store, aggressive);
     if let Some(&one) = made.get(&key) {
         return Ok(one);
     }
@@ -507,6 +515,7 @@ pub fn tuned_optimizing(
         routes,
         optimized,
         float_store,
+        aggressive,
         ..(_profile(arch, name)).expect("every listed CPU has a profile")
     }));
     made.insert(key, one);
@@ -679,7 +688,7 @@ mod tests {
     }
 
     /// The target every frontend lowers to states its LLVM cost model: the
-    /// flat 32-bit target's, none for real mode. `tti` was not forwarded, so
+    /// flat 32-bit target's and real mode's. `tti` was not forwarded, so
     /// `LLRM_EXP_INLINEDECIDE` priced with the generic rules whatever the
     /// target said (the rows with and without the model were the same run).
     #[test]
@@ -693,7 +702,7 @@ mod tests {
         };
         let flat: &'static Profile = Box::leak(Box::new(Profile::new(&llrm_x86_m32::M32, "486", 1, true, 1, 0)));
         assert!(crate::abi::qb::LoweredTarget::of(flat, abi()).tti().is_some());
-        assert!(crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi()).tti().is_none());
+        assert!(crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi()).tti().is_some());
     }
 
     /// The target every frontend lowers to states X86's `TargetLowering`

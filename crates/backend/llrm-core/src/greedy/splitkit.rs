@@ -91,11 +91,44 @@ pub trait SplitEnv {
         reg: u32,
     ) -> bool;
 
+    /// `recomputeRegClass` of the registers an edit made, once their
+    /// instructions are in place.
+    fn reclass(
+        &self,
+        _lis: &LiveIntervals,
+        _regs: &[u32],
+    ) {
+    }
+
+    /// A definition that is only a definition, so nothing is lost by erasing it
+    /// when nothing reads what it writes (`MI->isSafeToMove` and no side
+    /// effects, of `eliminateDeadDefs`).
+    fn is_pure_def(
+        &self,
+        _insn: &Insn,
+    ) -> bool {
+        false
+    }
+
     /// `TII.isCopyInstr(MI) || MI.isSubregToReg()`.
     fn is_copy_like(
         &self,
         insn: &Insn,
     ) -> bool;
+
+    /// `LiveRangeEdit::canRematerializeAt` and `rematerializeAt`: the
+    /// definition of `parent` made again as a definition of `to`, beside
+    /// `beside` (as `build_copy`), or None when it cannot be (not
+    /// rematerializable, or it reads a register).
+    fn rematerialize(
+        &self,
+        _lis: &LiveIntervals,
+        _to: u32,
+        _parent: u32,
+        _beside: Option<&Insn>,
+    ) -> Option<Arc<Insn>> {
+        None
+    }
 
     /// `BuildMI(MBB, I, DebugLoc(), TII.get(TII.getLiveRangeSplitOpcode(
     /// FromReg, MF)), ToReg).addReg(FromReg)`: a move of `from` into `to`.
