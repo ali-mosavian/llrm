@@ -35,7 +35,7 @@ for k in range(N):
         r=random.random()
         if r<0.65: return '%'+random.choice(names)
         return str(random.choice(leaves(ty)))
-    op=random.choice(['cmpmix','cmpmix','cmpmix','icmp','icmp','icmp','add','sub','mul','and','or','xor','shl','lshr','ashr','udiv','sdiv','urem','srem','icmp','select','zext','trunc','sext','phi'])
+    op=random.choice(['cmpmix','cmpmix','cmpmix','icmp','icmp','icmp','add','sub','mul','and','or','xor','shl','lshr','ashr','udiv','sdiv','urem','srem','icmp','select','zext','trunc','sext','phi','icall','icall','icall','icall'])
     flags=''
     if op in ('add','sub','mul','shl'): flags=random.choice(['','','nuw ','nsw ','nuw nsw '])
     if op in ('udiv','sdiv','lshr','ashr'): flags=random.choice(['','','exact '])
@@ -74,6 +74,16 @@ for k in range(N):
         t=f'trunc {ty} {a if a.startswith("%") else "%x"} to {narrow}'; rty=narrow
     elif op=='phi':
         t=f'phi {ty} [ {a}, %p1 ], [ {b}, %p2 ]'
+    elif op=='icall':
+        name=random.choice(['smax','smin','umax','umin','uadd.sat','usub.sat','sadd.sat','ssub.sat','abs','cttz','ctlz','ctpop','bitreverse','bswap','scmp','ucmp','fshl','fshr','smul.fix'])
+        if name=='bswap' and ty=='i8': name='ctpop'
+        flag=random.choice(['true','false'])
+        if name in ('abs','cttz','ctlz'): t=f'call {ty} @llvm.{name}.{ty}({ty} {a}, i1 {flag})'
+        elif name in ('ctpop','bitreverse','bswap'): t=f'call {ty} @llvm.{name}.{ty}({ty} {a})'
+        elif name in ('scmp','ucmp'): t=f'call i8 @llvm.{name}.i8.{ty}({ty} {a}, {ty} {b})'; rty='i8'
+        elif name in ('fshl','fshr'): t=f'call {ty} @llvm.{name}.{ty}({ty} {a}, {ty} {b}, {ty} {random.choice(["%x","%y"]+[str(random.choice(leaves(ty)))])})'
+        elif name=='smul.fix': t=f'call {ty} @llvm.smul.fix.{ty}({ty} {a}, {ty} {b}, i32 {random.choice([0,1,2,3])})'
+        else: t=f'call {ty} @llvm.{name}.{ty}({ty} {a}, {ty} {b})'
     else:
         t=f'{op} {flags}{ty} {a}, {b}'
     # second layer: sometimes wrap an extension pair/compare of ext
@@ -87,4 +97,11 @@ for k in range(N):
         text=f'define void @f{k}({ty} %x, {ty} %y, i1 %c) {{\nb0:\n{pre_text}{sink}  %t = {t}\n  store volatile {rty} %t, ptr @g_{rty}\n  ret void\n}}\n'
     cases.append(text)
 hdr=''.join(f'@g_{t} = global {t} 0\n' for t in ['i1','i8','i16','i32','i64'])+''.join(f'declare {t} @llvm.{n}.{t}({t}, {t})\n' for t in ['i8','i16','i32'] for n in ('smax','smin','umax','umin'))
+hdr+=''.join(f'declare {t} @llvm.{n}.{t}({t}, {t})\n' for t in ['i8','i16','i32'] for n in ('uadd.sat','usub.sat','sadd.sat','ssub.sat'))
+hdr+=''.join(f'declare {t} @llvm.{n}.{t}({t}, i1)\n' for t in ['i8','i16','i32'] for n in ('abs','cttz','ctlz'))
+hdr+=''.join(f'declare {t} @llvm.{n}.{t}({t})\n' for t in ['i8','i16','i32'] for n in ('ctpop','bitreverse'))
+hdr+=''.join(f'declare {t} @llvm.bswap.{t}({t})\n' for t in ['i16','i32'])
+hdr+=''.join(f'declare i8 @llvm.{n}.i8.{t}({t}, {t})\n' for t in ['i8','i16','i32'] for n in ('scmp','ucmp'))
+hdr+=''.join(f'declare {t} @llvm.{n}.{t}({t}, {t}, {t})\n' for t in ['i8','i16','i32'] for n in ('fshl','fshr'))
+hdr+=''.join(f'declare {t} @llvm.smul.fix.{t}({t}, {t}, i32 immarg)\n' for t in ['i8','i16','i32'])
 open(sys.argv[3] if len(sys.argv)>3 else 'simplify_cases.ll','w').write(hdr+'\n'.join(cases))
