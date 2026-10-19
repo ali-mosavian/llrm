@@ -21,6 +21,13 @@
 //! DEVIATE 3: a value id is never reused, so the pair map has no stale-key
 //! check (`PairMapValue::isValid`).
 //!
+//! DEVIATE 4: MIR has no constant `sub`: `NegateValue` of a constant
+//! expression is a `sub 0, C` instruction (see `reassociate_negate`). Exit: a
+//! constant `sub` in MIR.
+//!
+//! DEVIATE 5: a constant has no use list, so the negates of one are kept in
+//! `constant_negates`, to find the one `NegateValue` reuses.
+//!
 //! # How it works
 //! The files are split by job: `reassociate_rank` (ranks),
 //! `reassociate_tree` (linearize and rewrite a tree), `reassociate_optimize`

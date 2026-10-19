@@ -22,6 +22,13 @@
 //! DEVIATE 2: a leaf that is an `invoke` result keeps no reusable negate (the
 //! insertion point after its definition is in another block).
 //!
+//! DEVIATE 4 (of `reassociate.rs`): MIR has no constant `sub`, so
+//! `ConstantExpr::getNeg` of a constant expression (`ptrtoint (ptr @g to i32)`)
+//! is a `sub 0, C` instruction before the instruction negated, not a constant
+//! operand. It is used by the add that replaced the subtract (bench row
+//! x_strlen: the pin prints the constant `sub (i32 0, ptrtoint ...)` there).
+//! Exit: a constant `sub` in MIR.
+//!
 //! Complexity (not a DEVIATE): `NegateValue` recurses into both operands of
 //! every one-use add under the value it negates
 //! ([:840-:862](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/Reassociate.cpp#L840)),

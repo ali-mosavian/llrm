@@ -675,3 +675,31 @@ fn test_many_small_expressions_take_linear_steps() {
         format!("define i32 @f(i32 %a0, i32 %a1) {{\nb0:\n{body}{sum}  ret i32 %t{n}\n}}\n")
     });
 }
+
+/// bench row x_strlen: LLVM's `NegateValue` of `ptrtoint (ptr @g to i32)` is
+/// the constant `sub (i32 0, ptrtoint ...)`; MIR has no constant `sub`, so it
+/// is an instruction (DEVIATE 4), used by the add and not left over.
+#[test]
+fn test_the_negate_of_a_constant_expression_is_an_instruction_the_add_uses() {
+    check_text(
+        "@g = global i32 0
+
+define i32 @f(i32 %x, i32 %y) {
+b0:
+  %a = sub i32 %x, ptrtoint (ptr @g to i32)
+  %b = add i32 %a, %y
+  ret i32 %b
+}
+",
+        "@g = global i32 0
+
+define i32 @f(i32 %x, i32 %y) {
+b0:
+  %0 = sub i32 0, ptrtoint (ptr @g to i32)
+  %a = add i32 %x, %0
+  %b = add i32 %a, %y
+  ret i32 %b
+}
+",
+    );
+}
