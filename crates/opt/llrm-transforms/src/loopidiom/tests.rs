@@ -383,6 +383,10 @@ fn test_a_loop_that_reads_what_it_wrote_is_not_a_memmove() {
 fn test_a_loop_that_shifts_a_buffer_the_safe_way_is_a_memmove() {
     let after = pass_output(&shift_loop(1, 0, false));
     assert!(after.contains("llvm.memmove"), "{after}");
+    // llrm's code generator lowers a memmove only with its direction stated:
+    // `llrm-c` stopped with "a memmove whose direction no pass proved".
+    assert!(after.contains("!llrm.forward"), "{after}");
     let after = pass_output(&shift_loop(0, 1, true));
     assert!(after.contains("llvm.memmove"), "{after}");
+    assert!(after.contains("!llrm.backward"), "{after}");
 }
