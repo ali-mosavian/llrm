@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/jumpthreading.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/jumpthreading.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/jumpthreading.rs sha256:77dd2012219d9506f89f02f0693d81fffc0a6ec8ab6e017dff25bc29a6de9f99 -->
+<!-- src: crates/opt/llrm-transforms/src/jumpthreading.rs sha256:7809f5695471241902369fb73cd8014110e02161e4fb634d20dd9a42c83d69e7 -->
 
 # jumpthreading
 
@@ -9,11 +9,14 @@ straight to the target; as LLVM's `jump-threading`.
 
 ## How it works
 A translation of LLVM `d1106deb71cc` `JumpThreading.cpp`, one Rust function
-per C++ function, each linking its line. This is stage S1 of
+per C++ function, each linking its line. This is stages S1 to S3 of
 `docs/architecture/jumpthreading-translation.md`: `runImpl`,
 `findLoopHeaders`, `processBlock`, `computeValueKnownInPredecessors`,
 `processThreadableEdges`, `tryThreadEdge`, `threadEdge`, `splitBlockPreds`,
-`cloneInstructions`, `updateSSA` and `maybeMergeBasicBlockIntoOnlyPred`.
+`cloneInstructions`, `updateSSA`, `maybeMergeBasicBlockIntoOnlyPred`,
+`processBranchOnPHI`/`XOR`, `duplicateCondBranchOnPHIIntoPred`,
+`maybethreadThroughTwoBasicBlocks`, the select unfolding and
+`processImpliedCondition`.
 For each block the pass folds a terminator whose condition is a constant,
 asks what the condition is on each edge into the block (a `phi` of
 constants, `LazyValueInfo` on the edge, a compare of a `phi`, `and`/`or` of
@@ -28,8 +31,8 @@ that target and the predecessors jump to the copy.
       br i1 %c, t, e
 ```
 
-DEVIATE (J1..J9; stages S2-S4 are not ported yet, which is not a deviation
-of the finished pass):
+DEVIATE (J1..J11; stage S4 is not ported yet, which is not a deviation of
+the finished pass):
 - J1. No `indirectbr` or `blockaddress` in MIR: `processBlock`'s
   `IndirectBrInst` arm, `hasAddressTakenAndUsed` and the block-address
   preference of `getKnownConstant` are absent.
@@ -55,10 +58,10 @@ of the finished pass):
 - J10. A block that starts with a `landingpad` is not threaded: the copy
   would be a second pad, and the one module handler (`ehprepare`) cannot
   choose between two.
-- Not yet ported (later stages): `tryToUnfoldSelect*`, `processBranchOnPHI`,
-  `processBranchOnXOR`, `maybethreadThroughTwoBasicBlocks`,
-  `duplicateCondBranchOnPHIIntoPred`, `processImpliedCondition`,
-  `simplifyPartiallyRedundantLoad`.
+- J11. `LVI->getConstantOnEdge` answers that are not integers are dropped
+  (`known_from_lattice`), where `evaluateOnPredecessorEdge` would pass a
+  pointer constant on to `ConstantFoldCompareInstOperands`.
+- Not yet ported (later stage): `simplifyPartiallyRedundantLoad`.
 
 ## Example
 `%c` is `true` from `p1`, so `p1` skips `b`:

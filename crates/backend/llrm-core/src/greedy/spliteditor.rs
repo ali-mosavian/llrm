@@ -382,7 +382,8 @@ impl<'d> SplitEditor<'d> {
         let mi = cx.lis.indexes.get_instruction_from_index(idx).expect("called with an invalid index");
         let mbb = cx.lis.indexes.get_mbb_from_index(idx);
         let at = cx.lis.indexes.get_instruction_index(mi);
-        let first = cx.lis.block_insns(mbb).get(cx.lis.partition_at(mbb, &at, false)).expect("an instruction of the block");
+        let first =
+            cx.lis.block_insns(mbb).get(cx.lis.partition_at(mbb, &at, false)).expect("an instruction of the block");
         (mbb, first.id())
     }
 
