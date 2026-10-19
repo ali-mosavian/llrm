@@ -162,6 +162,31 @@ mod tests {
         Loc::Imm(Imm { value, width: 4, address: None })
     }
 
+    /// `block` at eight bytes.
+    fn quad(insns: Vec<Arc<Insn>>) -> Vec<Arc<Insn>> {
+        let wide = |place: &Loc| match place {
+            Loc::Held(one) => Loc::Held(Held { width: 8, ..*one }),
+            Loc::Imm(one) => Loc::Imm(Imm { width: 8, ..*one }),
+            other => other.clone(),
+        };
+        insns
+            .iter()
+            .map(|one| {
+                let what = one
+                    .what
+                    .as_ref()
+                    .map(
+                        |what| Semantics {
+                            dests: what.dests.iter().map(wide).collect(),
+                            sources: what.sources.iter().map(wide).collect(),
+                            ..what.clone()
+                        },
+                    );
+                Arc::new(Insn { what, ..(**one).clone() })
+            })
+            .collect()
+    }
+
     /// `j1 := j op k; (what is between); cmp j, 1; branch`.
     fn block(
         op: &str,
@@ -200,6 +225,14 @@ mod tests {
     fn test_the_step_of_a_compared_value_takes_the_compares_place() {
         assert_eq!(names(&selected(&block("sub", 1, "jle", false))), ["sub", "jle"]);
         assert_eq!(names(&selected(&block("add", -1, "jl", false))), ["add", "jl"]);
+    }
+
+    /// A compare of a quadword shifted 1 by 64 to wrap its constant, and
+    /// panicked in a debug build.
+    #[test]
+    fn a_quadword_step_is_the_compare_too() {
+        assert_eq!(names(&selected(&quad(block("sub", 1, "jle", false)))), ["sub", "jle"]);
+        assert_eq!(names(&selected(&quad(block("add", -1, "jl", false)))), ["add", "jl"]);
     }
 
     #[test]

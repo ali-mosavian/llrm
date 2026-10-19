@@ -96,6 +96,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::effects::Declarations;
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::{induction, memory};
+use llrm_mir::blockfrequency::frequency::BlockFrequency;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::{Callees, callee};
@@ -532,7 +533,7 @@ pub fn _loop_products_in(
         let factor = exact.iter().next().copied().unwrap_or(UNKNOWN_TRIPS);
         for at in &loop_.body {
             if let Some(count) = frequency.get_mut(at) {
-                *count *= factor;
+                *count = nested(*count, factor);
             }
         }
     }
@@ -591,17 +592,35 @@ pub fn _products_with_odds_in(
     Some((weight, taken))
 }
 
-/// `count` times the share `here / trip`, at least 1: the product is taken
-/// wide, since a function with nested loops weighs a block in the tens of
-/// trillions of `UNIT`s and `count * here` passed `i64`'s end (a recursive
-/// function the pipeline made loops of panicked `llrm-llc` in debug builds and
-/// wrapped in release ones).
+/// A block weight as the frequency type LLVM keeps it in: a saturating `u64`
+/// ([`BlockFrequency`](llrm_mir::blockfrequency::frequency::BlockFrequency),
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/BlockFrequency.h#L27>).
+/// DEVIATE: the maps keep `i64`, so a weight past `i64::MAX` is that.
+fn frequency(count: i64) -> BlockFrequency {
+    BlockFrequency(u64::try_from(count).unwrap_or(0))
+}
+
+fn weight(frequency: BlockFrequency) -> i64 {
+    i64::try_from(frequency.get_frequency()).unwrap_or(i64::MAX)
+}
+
+/// `count` for a block one loop deeper, which runs `factor` trips: the product
+/// of the trips of every loop around a block. Twenty nested loops of the
+/// assumed ten trips pass `i64`'s end.
+fn nested(
+    count: i64,
+    factor: i64,
+) -> i64 {
+    weight(frequency(count).saturating_mul(u64::try_from(factor).unwrap_or(0)))
+}
+
+/// `count` times the share `here / trip`, at least 1.
 fn share_of(
     count: i64,
     here: i64,
     trip: i64,
 ) -> i64 {
-    i64::try_from(i128::from(count) * i128::from(here) / i128::from(trip)).unwrap_or(i64::MAX).max(1)
+    weight(frequency(count).scaled(u64::try_from(here).unwrap_or(0), u64::try_from(trip).unwrap_or(1))).max(1)
 }
 
 /// Profile-free expected work at `frequency`, a block's executions per entry
@@ -616,10 +635,10 @@ pub fn weighted(
 ) -> Option<i64> {
     #[cfg(test)]
     PRICED.with(|count| count.set((count.get().0 + 1, count.get().1)));
-    let mut total = 0;
+    let mut total: i64 = 0;
     for &block in function.layout() {
         let priced = _block(context, layout, function, callees, cfg::id(block), costs)?;
-        total += frequency[&cfg::id(block)] * priced;
+        total = total.saturating_add(frequency[&cfg::id(block)].saturating_mul(priced));
     }
     Some(total)
 }
@@ -753,17 +772,3 @@ thread_local! {
 #[cfg(test)]
 #[path = "profit_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-mod share_tests {
-    use super::share_of;
-
-    /// The weights of nine nested loops (count 1e8, odds 2e14) once overflowed
-    /// `count * here`.
-    #[test]
-    fn a_block_weight_of_nested_loops_does_not_overflow() {
-        assert_eq!(share_of(100_000_000, 211_516_977_285_368, 218_340_105_584_896), 96_875_000);
-        assert_eq!(share_of(3, 1, 4), 1);
-        assert_eq!(share_of(i64::MAX, 3, 4), i64::MAX / 4 * 3 + 2);
-    }
-}

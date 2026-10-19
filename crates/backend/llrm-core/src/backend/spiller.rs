@@ -2753,6 +2753,12 @@ thread_local! {
     static FOLDED_READ_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many values `_stable_loads_from` has been asked about.
+    static STABLE_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// How many bodies `_folded_reads` has read on this thread.
 pub fn folded_read_scans() -> usize {
     FOLDED_READ_SCANS.with(std::cell::Cell::get)
@@ -2769,6 +2775,23 @@ pub fn _folded_reads(
     values: &BTreeSet<u32>,
 ) -> BTreeSet<u32> {
     FOLDED_READ_SCANS.with(|count| count.set(count.get() + 1));
+    // Only a value one instruction reads and a `mov` from memory defines can
+    // qualify: the stable-load search, which reads every occurrence of what it
+    // is asked, runs on those alone.
+    let mut reads: IndexMap<u32, usize> = IndexMap::default();
+    let mut loaded: BTreeSet<u32> = BTreeSet::new();
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        for value in one.uses.iter().filter(|value| values.contains(*value)) {
+            *reads.entry(*value).or_default() += 1;
+        }
+        if let Some(what) = &one.what {
+            if what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Mem(_)]) {
+                loaded.extend(one.defines.iter().filter(|value| values.contains(*value)));
+            }
+        }
+    }
+    let values: BTreeSet<u32> = loaded.into_iter().filter(|value| reads.get(value) == Some(&1)).collect();
+    let values = &values;
     let stable = _stable_loads(body, values);
     if stable.is_empty() {
         return BTreeSet::new();
@@ -2877,6 +2900,8 @@ fn _stable_loads_from(
     copies: &IndexMap<u32, u32>,
     postings: Option<&Postings>,
 ) -> IndexMap<u32, Mem> {
+    #[cfg(test)]
+    STABLE_ASKED.with(|count| count.set(count.get() + values.len()));
     if values.is_empty() {
         return IndexMap::default();
     }
@@ -6609,6 +6634,32 @@ mod tests {
         let asked = super::KEEPS.with(std::cell::Cell::get) - before;
         assert_eq!(stable.len(), 1, "the load of a cell nothing writes is stable");
         assert!(asked <= 2 * 43, "{asked} questions of `_keeps` for a body of 43 instructions");
+    }
+
+    /// `_folded_reads` asked the stable-load search about every value of the
+    /// body, though only a load with one reader can fold: 2.9 M of 1959 M
+    /// instructions on d_faces.
+    #[test]
+    fn test_folded_reads_ask_only_about_loads_read_once() {
+        let cell = Loc::Mem(mem(Addr::new(Space::Frame, -2), 2, RegId::BP, -2, 1));
+        let load = insn(0, (0, 1), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![cell]), &[1], &[]);
+        let mut insns = vec![Arc::new(load)];
+        for at in 1..=40_u32 {
+            let what =
+                semantics(Operation::Binary, "add", vec![held(100 + at, 2)], vec![held(100 + at - 1, 2), imm(1, 2)]);
+            insns.push(Arc::new(insn(i64::from(at) * 10, (0, 1), what, &[100 + at], &[100 + at - 1])));
+        }
+        let used = insn(1000, (1000, 1001), semantics(Operation::Push, "push", vec![], vec![held(1, 2)]), &[], &[1]);
+        insns.push(Arc::new(used));
+        let blocks = vec![LirBlock::new(0, insns)];
+        let body =
+            LirBody::new("chain", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
+        let values: BTreeSet<u32> = std::iter::once(1).chain(100..=140).collect();
+        let before = super::STABLE_ASKED.with(std::cell::Cell::get);
+        let folded = super::_folded_reads(&body, &values);
+        let asked = super::STABLE_ASKED.with(std::cell::Cell::get) - before;
+        assert_eq!(folded, set(&[1]), "premise: the pushed load folds");
+        assert_eq!(asked, 1, "the stable-load search was asked about {asked} values");
     }
 
     /// A function with n values loaded from the frame asked of every

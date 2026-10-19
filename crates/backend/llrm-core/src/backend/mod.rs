@@ -214,6 +214,7 @@ pub mod prologue;
 pub mod regthrash;
 pub mod relayout;
 pub mod rmw;
+pub mod saverestore;
 pub mod schedule;
 pub mod selects;
 pub mod shrinkwrap;
