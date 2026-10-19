@@ -29,6 +29,10 @@ pub mod evaluate;
 pub mod exit_limit;
 pub mod exit_value;
 pub mod expand;
+pub mod expand_cost;
+#[cfg(test)]
+mod expand_cost_tests;
+pub mod expand_iv;
 #[cfg(test)]
 mod expand_tests;
 pub mod expander;
@@ -42,6 +46,7 @@ mod guards_tests;
 pub mod how_many;
 pub mod implied;
 pub mod minmax;
+pub mod normalize;
 pub mod pattern;
 pub mod poison;
 pub mod predicate;
@@ -573,6 +578,7 @@ pub fn value_id(
     use llrm_mir::module::GlobalKind;
     match v {
         Operand::Constant(id) => match &cx.context.get(id).kind {
+            K::Undef => 0,
             K::Poison => 1,
             K::Zero => 2,
             K::Bytes(_) => 3,

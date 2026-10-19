@@ -71,7 +71,7 @@ fn test_the_whole_module_step_scans_the_callees_after_a_change_not_for_every_que
                     edits.set(edits.get() + 1);
                     Ok(())
                 },
-                &mut |_, _, function| Ok(function),
+                &mut |module, _, function| Ok((function, llrm_mir::passes::Declared::of(module))),
                 &mut |_, _, _| Ok(()),
             )
             .unwrap();

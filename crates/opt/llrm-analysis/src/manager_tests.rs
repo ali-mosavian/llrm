@@ -12,7 +12,8 @@ use llrm_mir::target::{Machine, Neutral};
 use llrm_support::hash::IndexMap;
 
 use super::{
-    Annotated, CallEffects, DominatedEdges, GlobalsAA, Pointers, Registers, Summaries, TableLoads, ThroughMemory,
+    Annotated, CallEffects, DominatedEdges, GlobalsAA, MemorySsa, Pointers, Registers, Summaries, TableLoads,
+    ThroughMemory,
 };
 use crate::alias::{self, Procedure};
 use crate::cfg::Shape;
@@ -825,7 +826,7 @@ fn test_erasing_a_dead_pointer_load_does_not_work_the_call_effects_out_again() {
     llrm_mir::passes::trace_recomputes(true);
     analyses.get::<CallEffects>(context, &layout, f);
     let entry = f.entry().expect("an entry");
-    let load = f.block(entry).instructions()[0];
+    let load = f.block(entry).first().expect("a block with an instruction");
     f.erase(load).expect("an unused load");
     analyses.invalidate(f, &PreservedAnalyses::none());
     analyses.get::<CallEffects>(context, &layout, f);
@@ -1438,7 +1439,7 @@ b0:
         let before = analyses.get::<super::ExposedFrames>(context, &layout, function);
         assert_eq!(before.len(), 1, "%c is stored");
         // The store of %b's value to %b's address now stores %b's address.
-        let store = function.block(function.layout()[0]).instructions()[4];
+        let store = function.block(function.layout()[0]).iter().nth(4).unwrap();
         let b = Operand::Value(value(function, "b"));
         function.set_operand(store, 0, b);
         analyses.invalidate(function, &PreservedAnalyses::none());
@@ -1536,4 +1537,33 @@ fn a_gep_that_differs_in_inbounds_is_not_read_alike_and_an_equal_one_is() {
     let (plain, bounded, again) = (value(f, "plain"), value(f, "bounded"), value(f, "again"));
     assert!(!super::decomposes_alike(f, plain, bounded), "an inbounds gep was read like a plain one");
     assert!(super::decomposes_alike(f, plain, again), "two equal geps were read apart");
+}
+
+/// The graph of a body is made once per body state and shared: the asks of
+/// EarlyCSE and LICM in a row made it again each (the manager had no MemorySSA
+/// analysis), and an edit that drops the analyses has it made again.
+#[test]
+fn test_the_memory_graph_is_made_once_per_body_state() {
+    let mut module = parsed(&format!("{DOS}{TWO}"));
+    let graphs = Rc::new(RefCell::new(Vec::new()));
+    let ask_graph = |graphs: &Rc<RefCell<Vec<_>>>| {
+        let graphs = Rc::clone(graphs);
+        step(
+            move |unit, analyses| {
+                let graph = analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function);
+                graphs.borrow_mut().push((graph, ()));
+            },
+            PreservedAnalyses::all(),
+        )
+    };
+    let mut passes = PassManager::default();
+    passes.add(ask_graph(&graphs));
+    passes.add(ask_graph(&graphs));
+    passes.add(redirect(PreservedAnalyses::none()));
+    passes.add(ask_graph(&graphs));
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    let graphs = graphs.take();
+    let graph = |at: usize| &graphs[at].0;
+    assert!(Rc::ptr_eq(graph(0), graph(1)), "two asks of one body state made two graphs");
+    assert!(!Rc::ptr_eq(graph(1), graph(2)), "an edit left the old graph");
 }

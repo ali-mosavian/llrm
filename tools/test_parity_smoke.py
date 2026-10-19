@@ -111,3 +111,67 @@ def test_a_known_red_step_is_the_only_one_skipped():
     steps = [(name, lambda _b, name=name: (ran.append(name), ("ok", name))[1], 1.0) for name in ("programs", "sc", "d_faces")]
     ok, line = ps.run_steps(steps, Path("."), clock=lambda: 0.0, known_red=frozenset({"sc"}))
     assert ran == ["programs", "d_faces"] and ok and "sc skipped" in line and "sc: known red, not run" in line
+
+
+def fake_qcport(tmp_path, fail_level=None):
+    """A QCport tree with render/d_faces.c and a stand-in llrm-c that fails the verifier at `fail_level` on d_faces.c only (stdout of the level it saw is kept)."""
+    import stat
+
+    (tmp_path / "src/render").mkdir(parents=True)
+    (tmp_path / "src/render/d_faces.c").write_text("int x;\n")
+    (tmp_path / "inc").mkdir()
+    seen = tmp_path / "levels"
+    compiler = tmp_path / "llrm-c"
+    compiler.write_text(f"#!/bin/sh\necho \"$1\" >> {seen}\ncase \"$*\" in *d_faces.c*) [ \"$1\" = \"{fail_level}\" ] && {{ echo 'llrm-c: @_d_draw_faces@3: block 964 leaves for (964) with no instruction choosing' >&2; exit 1; }};; esac\nexit 0\n")
+    compiler.chmod(compiler.stat().st_mode | stat.S_IXUSR)
+    return seen
+
+
+def test_qcports_own_d_faces_is_compiled_at_all_four_levels_and_a_verifier_failure_at_one_fails_the_step(tmp_path, monkeypatch):
+    """The flat d_faces of the unicorn step passed on 3858c5195 while QCport's d_faces.c failed the verifier at -O2/-O3: the smoke did not compile what QCport builds."""
+    seen = fake_qcport(tmp_path, fail_level="-O2")
+    monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
+    monkeypatch.setenv("QCPORT_INC", str(tmp_path / "inc"))
+    verdict, detail = ps.qc_d_faces(tmp_path)
+    assert verdict == "fail" and "-O2" in detail and "no instruction choosing" in detail, detail
+    assert seen.read_text().split() == ["-O1", "-O2"]
+    seen.unlink()
+    monkeypatch.setattr(ps, "compile_ok", ps.compile_ok)
+    seen2 = fake_qcport(tmp_path / "ok")
+    monkeypatch.setenv("QCPORT", str(tmp_path / "ok/src"))
+    monkeypatch.setenv("QCPORT_INC", str(tmp_path / "ok/inc"))
+    assert ps.qc_d_faces(tmp_path / "ok")[0] == "ok" and seen2.read_text().split() == ["-O1", "-O2", "-O3", "-Os"]
+
+
+def test_two_halves_that_each_compile_but_not_together_fail_the_workspace_check(tmp_path):
+    """#2544 (a fold calling `undef(context, ..)`) and #2564 (`undef` taking `&mut Context`, then `&Context`) each compiled; merged, feat/parity did not build
+    for three hours. The smoke built only the touched crates' unit tests and passed."""
+    (tmp_path / "Cargo.toml").write_text('[workspace]\nmembers = ["lib", "app"]\nresolver = "2"\n')
+    (tmp_path / "lib/src").mkdir(parents=True)
+    (tmp_path / "lib/Cargo.toml").write_text('[package]\nname = "lib"\nversion = "0.0.0"\nedition = "2021"\n')
+    (tmp_path / "lib/src/lib.rs").write_text("pub struct Context;\npub fn undef(_context: &mut Context) {}\n")
+    (tmp_path / "app/src").mkdir(parents=True)
+    (tmp_path / "app/Cargo.toml").write_text('[package]\nname = "app"\nversion = "0.0.0"\nedition = "2021"\n[dependencies]\nlib = { path = "../lib" }\n')
+    (tmp_path / "app/src/lib.rs").write_text("pub fn fold(context: &lib::Context) { lib::undef(context); }\n")
+    assert ps.workspace_check(tmp_path) != ""
+    (tmp_path / "app/src/lib.rs").write_text("pub fn fold(context: &mut lib::Context) { lib::undef(context); }\n")
+    assert ps.workspace_check(tmp_path) == ""
+
+
+def test_a_qcport_module_that_fails_at_o2_fails_the_step_whatever_d_faces_does(tmp_path, monkeypatch):
+    """#2586: `BitCast of a float` killed 48 of 260 QCport compiles (combat, mathlib, d_sprite, snd ...) and the smoke passed: its QCport steps were sc.c -O1 and d_faces."""
+    import stat
+
+    for module in ps.QC_MODULES:
+        (tmp_path / "src" / module).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "src" / module).write_text("int x;\n")
+    (tmp_path / "inc").mkdir()
+    compiler = tmp_path / "llrm-c"
+    compiler.write_text("#!/bin/sh\ncase \"$*\" in *sound/snd.c*) echo 'llrm-c: @_snd_frame@3: BitCast of a float' >&2; exit 1;; esac\nexit 0\n")
+    compiler.chmod(compiler.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
+    monkeypatch.setenv("QCPORT_INC", str(tmp_path / "inc"))
+    verdict, detail = ps.qc_modules(tmp_path)
+    assert verdict == "fail" and "sound/snd.c" in detail and "BitCast of a float" in detail, detail
+    compiler.write_text("#!/bin/sh\nexit 0\n")
+    assert ps.qc_modules(tmp_path)[0] == "ok"

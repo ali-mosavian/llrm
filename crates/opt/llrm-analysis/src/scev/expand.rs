@@ -67,7 +67,7 @@ impl Run<'_> {
         }
     }
 
-    fn ir_ty(
+    pub(super) fn ir_ty(
         &mut self,
         ty: Ty,
     ) -> TypeId {
@@ -77,7 +77,7 @@ impl Run<'_> {
         }
     }
 
-    fn ty_of_operand(
+    pub(super) fn ty_of_operand(
         &self,
         v: Operand,
     ) -> TypeId {
@@ -88,7 +88,7 @@ impl Run<'_> {
         }
     }
 
-    fn is_pointer(
+    pub(super) fn is_pointer(
         &self,
         v: Operand,
     ) -> bool {
@@ -98,7 +98,7 @@ impl Run<'_> {
         )
     }
 
-    fn constant(
+    pub(super) fn constant(
         &mut self,
         ty: TypeId,
         value: i128,
@@ -115,7 +115,7 @@ impl Run<'_> {
 
     /// `rememberInstruction` and the builder's insert: `inst` goes before the
     /// insert point.
-    fn emit(
+    pub(super) fn emit(
         &mut self,
         opcode: Opcode,
         ty: TypeId,
@@ -125,12 +125,12 @@ impl Run<'_> {
         let at = self.x.insert_point.expect("an insert point");
         let inst = self.function.create_instruction(opcode, ty, operands, flags, None);
         self.function.insert(inst, Position::Before(at)).expect("a placed position");
-        self.x.inserted.push(inst);
+        self.x.remember(inst);
         Operand::Value(self.function.instruction(inst).result.expect("a value"))
     }
 
     /// `Builder.CreateCast`, folded as `InstSimplifyFolder` does.
-    fn create_cast(
+    pub(super) fn create_cast(
         &mut self,
         op: CastOp,
         v: Operand,
@@ -177,31 +177,32 @@ impl Run<'_> {
 
     /// The instruction after the last of `inst`'s block's phis that follows
     /// `inst`, past what this expander inserted: `findInsertPointAfter`.
-    fn find_insert_point_after(
+    pub(super) fn find_insert_point_after(
         &self,
         inst: InstId,
         must_dominate: InstId,
     ) -> InstId {
         let block = self.function.parent(inst).expect("a placed instruction");
-        let all = self.function.block(block).instructions();
-        let at = all.iter().position(|&one| one == inst).expect("in its block");
-        let mut at = at + 1;
-        while matches!(self.function.instruction(all[at]).opcode, Opcode::Phi) {
-            at += 1;
-        }
-        while all[at] != must_dominate && self.x.inserted.contains(&all[at]) {
-            at += 1;
-        }
-        all[at]
+        self.function
+            .block(block)
+            .iter()
+            .skip_while(|&one| one != inst)
+            .skip(1)
+            .skip_while(|&one| matches!(self.function.instruction(one).opcode, Opcode::Phi))
+            .find(|&one| one == must_dominate || !self.x.is_inserted_instruction(&one))
+            .expect("in its block")
     }
 
     /// `getFirstInsertionPt` of `block`.
-    fn first_insertion_pt(
+    pub(super) fn first_insertion_pt(
         &self,
         block: BlockId,
     ) -> InstId {
-        let all = self.function.block(block).instructions();
-        *all.iter().find(|&&one| !matches!(self.function.instruction(one).opcode, Opcode::Phi)).expect("a terminator")
+        self.function
+            .block(block)
+            .iter()
+            .find(|&one| !matches!(self.function.instruction(one).opcode, Opcode::Phi))
+            .expect("a terminator")
     }
 
     /// Whether `v` is defined outside the loop with header `header`:
@@ -274,9 +275,8 @@ impl Run<'_> {
         // Scan the six instructions before the insert point for this binop.
         let ip = self.x.insert_point.expect("an insert point");
         let block = self.function.parent(ip).expect("a placed insert point");
-        let all = self.function.block(block).instructions();
-        let here = all.iter().position(|&one| one == ip).expect("in its block");
-        for &before in all[..here].iter().rev().take(6) {
+        let before_ip = self.function.block(block).iter().rev().skip_while(|&one| one != ip).skip(1).take(6);
+        for before in before_ip {
             let one = self.function.instruction(before);
             let overflowing = matches!(
                 op,
@@ -349,9 +349,10 @@ impl Run<'_> {
             ValueDef::Argument(_) => {
                 // After the casts of other arguments at the start of the entry.
                 let entry = self.function.entry().expect("an entry");
-                let all = self.function.block(entry).instructions();
-                *all.iter()
-                    .find(|&&one| {
+                self.function
+                    .block(entry)
+                    .iter()
+                    .find(|&one| {
                         let inst = self.function.instruction(one);
                         let argument_cast = matches!(inst.opcode, Opcode::Cast(CastOp::BitCast))
                             && matches!(
@@ -382,9 +383,9 @@ impl Run<'_> {
                     continue;
                 }
                 // At or before the insert point, and not the builder's own.
-                let all = self.function.block(block.expect("placed")).instructions();
-                let at = all.iter().position(|&i| i == ip).expect("in its block");
-                let found = all.iter().position(|&i| i == user.user).expect("in its block");
+                let all = self.function.block(block.expect("placed"));
+                let at = all.iter().position(|i| i == ip).expect("in its block");
+                let found = all.iter().position(|i| i == user.user).expect("in its block");
                 if found <= at && Some(user.user) != self.x.insert_point {
                     return Operand::Value(one.result.expect("a value"));
                 }
@@ -399,7 +400,7 @@ impl Run<'_> {
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L303
     /// `expandAddToGEP`: `base + sum(offsets)` as an `i8` GEP.
-    fn expand_add_to_gep(
+    pub(super) fn expand_add_to_gep(
         &mut self,
         offsets: Vec<Scev>,
         base: Operand,
@@ -422,9 +423,8 @@ impl Run<'_> {
         // Scan the six instructions before the insert point for this GEP.
         let ip = self.x.insert_point.expect("an insert point");
         let block = self.function.parent(ip).expect("placed");
-        let all = self.function.block(block).instructions();
-        let here = all.iter().position(|&one| one == ip).expect("in its block");
-        for &before in all[..here].iter().rev().take(6) {
+        let before_ip = self.function.block(block).iter().rev().skip_while(|&one| one != ip).skip(1).take(6);
+        for before in before_ip {
             let one = self.function.instruction(before);
             if one.opcode == gep && one.operands == [base, idx] && one.flags.is_empty() {
                 return Operand::Value(one.result.expect("a value"));
@@ -606,11 +606,9 @@ impl Run<'_> {
                 if computable {
                     at = self.first_insertion_pt(l.expect("a loop"));
                 }
-                while at != here && self.x.inserted.contains(&at) {
+                while at != here && self.x.is_inserted_instruction(&at) {
                     let block = self.function.parent(at).expect("placed");
-                    let all = self.function.block(block).instructions();
-                    let next = all.iter().position(|&one| one == at).expect("in its block") + 1;
-                    at = all[next];
+                    at = self.function.block(block).iter().skip_while(|&one| one != at).nth(1).expect("in its block");
                 }
                 break;
             }
@@ -673,12 +671,12 @@ impl Run<'_> {
             Kind::UMin(ops) => self.expand_min_max(s, &ops, false),
             Kind::SMin(ops) => self.expand_min_max(s, &ops, false),
             Kind::SequentialUMin(ops) => self.expand_min_max(s, &ops, true),
-            Kind::AddRec(..) => todo!("S6 round 2: visitAddRecExpr"),
+            Kind::AddRec(ops, header) => self.visit_add_rec(s, &ops, header),
             Kind::CouldNotCompute => unreachable!("Attempt to use a SCEVCouldNotCompute object!"),
         }
     }
 
-    fn scev_ir_ty(
+    pub(super) fn scev_ir_ty(
         &mut self,
         s: Scev,
     ) -> TypeId {

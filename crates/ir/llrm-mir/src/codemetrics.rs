@@ -177,7 +177,7 @@ impl CodeMetrics {
         eph: &IdSet<InstId>,
         prepare_for_lto: bool,
     ) {
-        for &inst in function.block(block).instructions() {
+        for inst in function.block(block).iter() {
             // Skip ephemeral values.
             if eph.contains(&inst) {
                 continue;
@@ -186,8 +186,10 @@ impl CodeMetrics {
             if let Opcode::Call(call) | Opcode::Invoke(call) = &operation.opcode {
                 let callee = crate::memory::callee(q.context, function, inst);
                 let no_inline = flag(&call.attrs, "noinline");
-                if let Some(callee) = callee {
-                    let global = &q.globals[callee.0 as usize];
+                // A callee a pass has declared and the module's globals do not
+                // hold yet is an external call.
+                if let Some((callee, global)) = callee.and_then(|id| q.globals.get(id.0 as usize).map(|one| (id, one)))
+                {
                     // A function that is internal and has a single use is
                     // extremely likely to be inlined later.
                     let internal = matches!(global.linkage, Linkage::Internal | Linkage::Private);
@@ -205,10 +207,11 @@ impl CodeMetrics {
                 } else if prepare_for_lto && !no_inline {
                     self.num_inline_candidates += 1;
                 }
-                let callee_attrs: &[Attribute] = match callee.map(|id| &q.globals[id.0 as usize].kind) {
-                    Some(GlobalKind::Function(function)) => &function.attrs,
-                    _ => &[],
-                };
+                let callee_attrs: &[Attribute] =
+                    match callee.and_then(|id| q.globals.get(id.0 as usize)).map(|one| &one.kind) {
+                        Some(GlobalKind::Function(function)) => &function.attrs,
+                        _ => &[],
+                    };
                 if self.convergence == Convergence::None
                     && (flag(&call.attrs, "convergent") || flag(callee_attrs, "convergent"))
                 {

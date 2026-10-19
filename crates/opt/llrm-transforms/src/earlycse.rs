@@ -16,13 +16,13 @@
 //!   only writes memory (`memory::of`, which counts every location including
 //!   `inaccessiblemem`) is numbered unless it is an `llvm.`/`llrm.` marker.
 //! - DEVIATE a GEP's constant offset is taken for byte GEPs only.
-//! - DEVIATE MemorySSA is the manager's, built once for the function as it was
-//!   and not updated (`MSSAUpdater`); an erased store stays a def in it, which
-//!   is only conservative. Erasures wait for the end of the walk so that what
-//!   it asks about still exists.
-//! - DEVIATE the clobber walk is `MemorySSA::clobbers` over the instruction's
-//!   `MemRef`: a set of nearest defs, each of which must dominate the earlier
-//!   access, where LLVM's walker answers one.
+//! - DEVIATE MemorySSA is the translated `Mssa`, built once for the function as
+//!   it was and not updated (`MSSAUpdater`); an erased store stays a def in it,
+//!   which is only conservative. Erasures wait for the end of the walk so that
+//!   what it asks about still exists.
+//! - the clobbering access is `llrm_analysis::mssa::view::Translated`'s: one
+//!   access, the `MemoryPhi` where the nearest clobbers diverge, as LLVM's
+//!   walker answers.
 //! - DEVIATE (call walker) the clobbering access of a call is its defining
 //!   access, not LLVM's call-vs-call query (the walker asks the modref of the
 //!   call against each def): any write between two calls blocks the CSE, which
@@ -69,8 +69,13 @@
 //! under `Options::llvm_order`, on by default (`LLRM_NO_LLVM_ORDER` turns it
 //! off).
 
+use std::rc::Rc;
+
+use llrm_analysis::manager::{MemorySsa, MssaGraph};
 use llrm_analysis::memory::Unit as View;
-use llrm_analysis::memoryssa::{self, Accesses, MemorySSA};
+use llrm_analysis::memoryssa::Accesses;
+use llrm_analysis::mssa::view::Translated;
+use llrm_analysis::mssa::{Mssa, shadow};
 use llrm_mir::context::Context;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::memory;
@@ -216,12 +221,12 @@ pub trait MemorySsaView {
         &self,
         inst: InstId,
     ) -> Option<usize>;
-    /// The accesses `getClobberingMemoryAccess(inst)` answers: LLVM's walker
-    /// answers one, the manager's walk a set of nearest defs.
+    /// `getClobberingMemoryAccess(inst)`: the one access that clobbers, the
+    /// `MemoryPhi` where the nearest clobbers diverge.
     fn clobbering_access(
         &self,
         inst: InstId,
-    ) -> Vec<usize>;
+    ) -> Option<usize>;
     /// `inst`'s access's defining access.
     fn defining_access(
         &self,
@@ -233,43 +238,40 @@ pub trait MemorySsaView {
         ahead: usize,
         access: usize,
     ) -> bool;
-    /// `removeMemoryAccess(inst)`: the manager's graph is not updated.
+    /// `removeMemoryAccess(inst)`, before `inst` is erased from `function`.
     fn remove_memory_access(
         &mut self,
+        _function: &Function,
         _inst: InstId,
     ) {
     }
+    /// The graph as the removals left it, where the view holds one.
+    fn into_mssa(self: Box<Self>) -> Option<Mssa> {
+        None
+    }
 }
 
-/// The manager's MemorySSA (`llrm_analysis::memoryssa`) as that view.
-struct Manager<'a> {
-    mssa: MemorySSA<'a>,
-    accesses: &'a Accesses,
-}
-
-impl MemorySsaView for Manager<'_> {
+/// The translated MemorySSA (`llrm_analysis::mssa`) as that view.
+impl MemorySsaView for Translated<'_> {
     fn memory_access(
         &self,
         inst: InstId,
     ) -> Option<usize> {
-        self.mssa.sites.get(&inst).map(|access| access.id)
+        Translated::memory_access(self, inst).map(|access| access as usize)
     }
 
     fn clobbering_access(
         &self,
         inst: InstId,
-    ) -> Vec<usize> {
-        match self.accesses.references.get(&inst) {
-            Some(memory) => self.mssa.clobbers(inst, memory).into_iter().collect(),
-            None => self.defining_access(inst).into_iter().collect(),
-        }
+    ) -> Option<usize> {
+        Translated::clobbering_access(self, inst).map(|access| access as usize)
     }
 
     fn defining_access(
         &self,
         inst: InstId,
     ) -> Option<usize> {
-        self.mssa.sites.get(&inst).and_then(|access| access.defining)
+        Translated::defining_access(self, inst).map(|access| access as usize)
     }
 
     fn dominates(
@@ -277,7 +279,19 @@ impl MemorySsaView for Manager<'_> {
         ahead: usize,
         access: usize,
     ) -> bool {
-        self.mssa.dominates(ahead, access)
+        Translated::dominates(self, ahead as u32, access as u32)
+    }
+
+    fn remove_memory_access(
+        &mut self,
+        function: &Function,
+        inst: InstId,
+    ) {
+        Translated::remove_memory_access(self, function, inst);
+    }
+
+    fn into_mssa(self: Box<Self>) -> Option<Mssa> {
+        Some(Translated::into_mssa(*self))
     }
 }
 
@@ -644,13 +658,13 @@ impl Walk<'_> {
         let (Some(earlier_access), Some(_)) = (self.mssa.memory_access(earlier), self.mssa.memory_access(later)) else {
             return true;
         };
-        let later_defs: Vec<usize> = if self.clobber_counter < MSSA_OPT_CAP {
+        let later_def = if self.clobber_counter < MSSA_OPT_CAP {
             self.clobber_counter += 1;
             self.mssa.clobbering_access(later)
         } else {
-            self.mssa.defining_access(later).into_iter().collect()
+            self.mssa.defining_access(later)
         };
-        later_defs.iter().all(|&def| self.mssa.dominates(def, earlier_access))
+        later_def.is_some_and(|def| self.mssa.dominates(def, earlier_access))
     }
 
     /// `EarlyCSE::getOrCreateResult` without target intrinsics: the load, or
@@ -876,7 +890,7 @@ impl Walk<'_> {
         // The last non-volatile store seen, for as long as nothing reads
         // memory.
         let mut last_store: Option<InstId> = None;
-        for inst in self.function.block(block).instructions().to_vec() {
+        for inst in self.function.block(block).iter().collect::<Vec<_>>() {
             if self.function.is_erased(inst) {
                 continue;
             }
@@ -1157,14 +1171,24 @@ impl FunctionPass for EarlyCse {
         // follow.
         let before = unit.function.fork();
         let frozen = unit.context.clone();
-        let view = View::within(&frozen, unit.layout, &before, &outer);
+        let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+        let view = View::within(&frozen, unit.layout, &before, &outer).with_shape(&shape);
         let simplifier = FunctionAnalyses::of(&frozen, view.globals, view.metadata, view.layout, &before);
-        let mssa = memoryssa::built(&view, &accesses);
+        let shape = view.shape();
+        // The manager's graph of this body, cloned: the removals below update
+        // the clone, which is put back (`MemorySSAUpdater`, as EarlyCSE.cpp
+        // keeps MemorySSA through `PA.preserve<MemorySSAAnalysis>()`).
+        let held = analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function);
+        let (mssa, kept_accesses) = match &*held {
+            Ok(held) => (held.mssa.clone(), Some(Rc::clone(&held.accesses))),
+            Err(_) => (Mssa::build(&before, &shape.dominance, &shadow::effect_of(&accesses, &before)), None),
+        };
+        let translated = Translated::new(&view, &accesses, mssa);
         let mut walk = Walk {
             context: unit.context,
             function: unit.function,
             view: &view,
-            mssa: Box::new(Manager { mssa, accesses: &accesses }),
+            mssa: Box::new(translated),
             callees: outer.callees(),
             tree: &tree,
             analyses: &simplifier,
@@ -1182,10 +1206,19 @@ impl FunctionPass for EarlyCse {
         let function = walk.function;
         for inst in gone.into_iter().rev() {
             if !function.is_erased(inst) {
+                walk.mssa.remove_memory_access(function, inst);
                 function.erase(inst).unwrap_or_else(|error| panic!("earlycse: {error}"));
             }
         }
-        if changed { PreservedAnalyses::none().preserve::<Dominators>() } else { PreservedAnalyses::all() }
+        if !changed {
+            return PreservedAnalyses::all();
+        }
+        let mut preserved = PreservedAnalyses::none().preserve::<Dominators>();
+        if let (Some(updated), Some(accesses)) = (walk.mssa.into_mssa(), kept_accesses) {
+            analyses.replace::<MemorySsa>(&*function, Ok(Rc::new(MssaGraph { mssa: updated, accesses })));
+            preserved = preserved.preserve_updated::<MemorySsa>();
+        }
+        preserved
     }
 }
 

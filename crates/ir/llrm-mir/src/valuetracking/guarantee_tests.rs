@@ -20,7 +20,7 @@ fn dump(text: &str) -> String {
         let name = global.name.clone().unwrap_or_default();
         let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(&module, function);
-        let entry_first = function.block(function.entry().expect("an entry")).instructions().first().copied();
+        let entry_first = function.block(function.entry().expect("an entry")).first();
         let mut values: Vec<(Operand, _)> =
             function.parameters().iter().map(|p| (Operand::Value(*p), entry_first)).collect();
         for (_, inst) in function.walk() {
@@ -154,4 +154,14 @@ exit:
     assert!(every(adds[0]));
     assert!(!every(adds[1]));
     assert!(!every(adds[2]));
+}
+
+/// Old: an `undef` constant was taken for a value that may be neither: `add
+/// undef, 1` and a phi over `undef` answered as LLVM's
+/// `isGuaranteedNotToBePoison` and `isGuaranteedNotToBeUndef` do not
+/// (poison-only 1, undef 0).
+#[test]
+fn test_undef_is_not_guaranteed_undef_free_as_llvm_says() {
+    let text = include_str!("../../tests/vt/guarantee/undef.ll");
+    assert_eq!(dump(text), include_str!("../../tests/vt/guarantee/undef.expected"));
 }

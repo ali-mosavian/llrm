@@ -32,7 +32,7 @@ fn replacing_every_use_lets_the_definition_go() {
     let f = function(&mut module);
     let (x, value) = named(f, "x");
     let (y, _) = named(f, "y");
-    assert_eq!(f.users(value), [Use { user: y, index: 0 }]);
+    assert_eq!(f.users(value).to_vec(), [Use { user: y, index: 0 }]);
     assert_eq!(f.erase(x), Err(format!("instruction {}'s result still has 1 users", x.0)));
     let a = f.parameters()[0];
     f.replace_all_uses_with(value, Operand::Value(a));
@@ -397,7 +397,7 @@ fn adds(n: usize) -> String {
 }
 
 #[test]
-fn erasing_many_instructions_scans_their_block_once_not_once_each() {
+fn erasing_instructions_scans_no_block_one_at_a_time_or_together() {
     // Each erase looked its instruction up in the block and shifted the rest:
     // 200 of 400 cost 200 scans of the block. On a 2048-statement function
     // the lookups were 7.5% of the whole compile, growing fourfold a doubling.
@@ -412,38 +412,91 @@ fn erasing_many_instructions_scans_their_block_once_not_once_each() {
             gone.iter().rev().for_each(|&one| f.erase(one).expect("unused"));
         }
         assert!(f.check_uses().is_empty());
-        (print::module(&module), crate::edit::SCANNED.with(|scanned| scanned.get()))
+        let scans = crate::edit::SCANNED.with(|scanned| scanned.get());
+        (print::module(&module), scans)
     };
     let (one_by_one, many_scans) = erase(false);
     let (together, few_scans) = erase(true);
     assert_eq!(together, one_by_one);
-    assert!(few_scans <= 2 * 401, "{few_scans} instructions scanned erasing 200 of 400");
-    assert!(many_scans > few_scans * 10, "the one-by-one scans no longer show the cost: {many_scans}");
+    // The block is a linked list: an erase scans nothing, one at a time or
+    // together.
+    assert_eq!(few_scans, 0, "{few_scans} instructions scanned erasing 200 of 400");
+    assert_eq!(many_scans, 0, "{many_scans} instructions scanned erasing 200 of 400 one by one");
 }
 
 /// Each use an erased instruction made was looked for in its operand's list of
-/// uses: 200 adds of one parameter that go were 200 scans of up to 400 uses,
-/// and `mir gvn` on `straight` spent a third of its time there at N=16384.
+/// uses: 200 adds of one parameter that go were 200 scans of up to 400 uses
+/// (`Function::erase` x3.8 a doubling on the diamond ladder). A use unlinks
+/// through its own links, so no entry of a value's list is read.
 #[test]
-fn erasing_many_users_of_one_value_filters_its_uses_once() {
+fn erasing_users_of_one_value_reads_none_of_its_other_uses() {
     let erase = |batch: bool| {
         let mut module = module(&adds(400));
         let f = function(&mut module);
         let gone: Vec<InstId> = (0..400).step_by(2).map(|i| named(f, &format!("x{i}")).0).collect();
-        crate::edit::USES_SCANNED.with(|scanned| scanned.set(0));
+        crate::uselist::WALKED.with(|walked| walked.set(0));
         if batch {
             f.erase_all(&gone).expect("unused");
         } else {
             gone.iter().rev().for_each(|&one| f.erase(one).expect("unused"));
         }
+        let walked = crate::uselist::WALKED.with(|walked| walked.get());
         assert!(f.check_uses().is_empty());
-        (print::module(&module), crate::edit::USES_SCANNED.with(|scanned| scanned.get()))
+        (print::module(&module), walked)
     };
     let (one_by_one, many_scans) = erase(false);
     let (together, few_scans) = erase(true);
     assert_eq!(together, one_by_one);
-    assert!(few_scans <= 2 * 401, "{few_scans} uses scanned erasing 200 of 400 users of one value");
-    assert!(many_scans > few_scans * 10, "the one-by-one scans no longer show the cost: {many_scans}");
+    assert_eq!((many_scans, few_scans), (0, 0), "list entries read erasing 200 of 400 users of one value");
+}
+
+fn branches(n: usize) -> String {
+    let body: String = (0..n).map(|i| format!("b{i}:\n  br label %end\n")).collect();
+    format!("define void @f() {{\nentry:\n  br label %end\n{body}end:\n  ret void\n}}\n")
+}
+
+/// The terminators naming one block were looked for in its list of uses, as
+/// the values' were: 200 branches to `%end` that go were 200 scans of up to
+/// 400 uses. A block's uses unlink through their own links too.
+#[test]
+fn erasing_branches_to_one_block_reads_none_of_its_other_uses() {
+    let mut module = module(&branches(400));
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    let gone: Vec<InstId> = (0..400).step_by(2).map(|i| f.terminator(layout[1 + i]).expect("a branch")).collect();
+    crate::uselist::WALKED.with(|walked| walked.set(0));
+    gone.iter().rev().for_each(|&one| f.erase(one).expect("unused"));
+    let walked = crate::uselist::WALKED.with(|walked| walked.get());
+    assert!(f.check_uses().is_empty());
+    // `sole_successor_start` looks at two entries of the list, never the whole.
+    assert!(walked <= 2 * 200, "{walked} list entries read erasing 200 of 400 branches to one block");
+}
+
+/// A block is a `Value` in LLVM and its predecessors are its use list, the
+/// newest use first: `predecessors` ran oldest first.
+#[test]
+fn predecessors_run_newest_first() {
+    let mut module = module(&branches(3));
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    let end = *layout.last().expect("the end block");
+    assert_eq!(f.predecessors(end).iter().copied().collect::<Vec<_>>(), [layout[3], layout[2], layout[1], layout[0]]);
+}
+
+/// LLVM's `Value::addUse` puts the new use at the head: `users()` runs newest
+/// first, where it ran oldest first, and `replace_all_uses_with` follows it.
+#[test]
+fn users_run_newest_first() {
+    let mut module = module(
+        "define i16 @f(i16 %a) {\nentry:\n  %p = add i16 %a, 1\n  %q = add i16 %a, 2\n  %r = add i16 %a, 3\n  ret i16 %r\n}\n",
+    );
+    let f = function(&mut module);
+    let (p, _) = named(f, "p");
+    let (q, _) = named(f, "q");
+    let (r, _) = named(f, "r");
+    let a = f.parameters()[0];
+    let users: Vec<InstId> = f.users(a).iter().map(|one| one.user).collect();
+    assert_eq!(users, [r, q, p], "the parameter's users, newest first");
 }
 
 #[test]
@@ -617,10 +670,10 @@ fn an_instruction_goes_after_another() {
     assert_eq!(f.block(f.entry().unwrap()).iter().take(2).collect::<Vec<_>>(), [y, x]);
 }
 
-/// A run moved as one is the run moved one by one, and costs a rewrite of the
-/// block, not one per instruction.
+/// A run moved as one is the run moved one by one; the block is a list, so
+/// neither scans it.
 #[test]
-fn a_run_spliced_is_the_run_moved_one_by_one_in_a_scan_of_the_block() {
+fn a_run_spliced_is_the_run_moved_one_by_one_and_neither_scans_the_block() {
     let run = |together: bool| {
         let mut module = module(&adds(400));
         let f = function(&mut module);
@@ -634,13 +687,15 @@ fn a_run_spliced_is_the_run_moved_one_by_one_in_a_scan_of_the_block() {
             moved.iter().for_each(|&one| f.move_to(one, Position::Before(ret)).expect("moved"));
         }
         assert!(f.check_uses().is_empty());
-        (print::module(&module), crate::edit::SCANNED.with(|scanned| scanned.get()))
+        let scans = crate::edit::SCANNED.with(|scanned| scanned.get());
+        (print::module(&module), scans)
     };
     let (one_by_one, many) = run(false);
     let (together, few) = run(true);
     assert_eq!(together, one_by_one);
-    assert!(few <= 2 * 401, "{few} instructions scanned splicing 100 of 400");
-    assert!(many > few * 10, "the one-by-one scans no longer show the cost: {many}");
+    // The block is a linked list: neither way scans it.
+    assert_eq!(few, 0, "{few} instructions scanned splicing 100 of 400");
+    assert_eq!(many, 0, "{many} instructions scanned moving 100 of 400 one by one");
 }
 
 /// Erasing several empty blocks at once leaves the others in order, and a

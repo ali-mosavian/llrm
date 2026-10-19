@@ -111,7 +111,7 @@ fn expand(
         FloatKind::Float => u64::from((value as f32).to_bits()),
         _ => value.to_bits(),
     };
-    let mut constant = |value: f64| {
+    let constant = |value: f64| {
         Operand::Constant(context.constant(Constant { ty: float, kind: ConstantKind::Float(bits(value)) }))
     };
     let (zero, limit) = (constant(0.0), constant(9_223_372_036_854_775_808.0));

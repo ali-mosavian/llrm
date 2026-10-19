@@ -201,8 +201,8 @@ fn comes_before(
 ) -> bool {
     let block = function.parent(this).expect("instructions without BB parents have no order");
     assert_eq!(function.parent(other), Some(block), "cross-BB instruction order comparison");
-    let list = function.block(block).instructions();
-    list.iter().position(|one| *one == this) < list.iter().position(|one| *one == other)
+    let list = function.block(block);
+    list.iter().position(|one| one == this) < list.iter().position(|one| one == other)
 }
 
 /// `DominatorTree::dominates(const BasicBlock *, const Use &)`
@@ -490,7 +490,7 @@ fn may_throw(
 
 /// `Instruction::mayHaveSideEffects`
 /// ([Instruction.cpp:1358](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L1358)).
-fn may_have_side_effects(
+pub(crate) fn may_have_side_effects(
     context: &Context,
     callees: &Callees,
     declarations: &Declarations,
@@ -725,7 +725,7 @@ pub fn eliminate_duplicate_phi_nodes_and_erase(
 /// ([BasicBlockUtils.cpp:195](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L195)):
 /// each phi of `bb` is its first incoming value, or poison if that is itself.
 pub fn fold_single_entry_phi_nodes(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     bb: BlockId,
 ) -> bool {
@@ -752,7 +752,7 @@ pub fn fold_single_entry_phi_nodes(
 /// a conditional branch to `bb` and another block, and then branches to where
 /// `bb` jumped. Whether it merged. DEVIATE 15, 16.
 pub fn merge_block_into_predecessor(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     bb: BlockId,
     predecessor_with_two_successors: bool,
@@ -817,7 +817,7 @@ pub fn merge_block_into_predecessor(
     let sti = function.terminator(bb).expect("a block ends in a terminator");
 
     // Move all definitions in the successor to the predecessor...
-    let moved: Vec<InstId> = function.block(bb).instructions().iter().copied().filter(|one| *one != sti).collect();
+    let moved: Vec<InstId> = function.block(bb).iter().filter(|one| *one != sti).collect();
     for inst in moved {
         function.move_to(inst, Position::Before(pti)).expect("a placed instruction");
     }

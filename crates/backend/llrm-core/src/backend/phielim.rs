@@ -68,6 +68,14 @@
 //! The new block's label is above every physical offset (`(entry + 1) << 32`),
 //! in a namespace of its own per body entry.
 //!
+//! `LLRM_PHIELIM_LLVM=1` lowers the phis that are not x87 by the translation of
+//! LLVM's `PHIElimination` ([`crate::phielimination`]) first, and this pass the
+//! rest. Off by default: it leaves a cycle of loop-carried values to be broken
+//! by copies through a register, where the parallel copy here breaks it with an
+//! `xchg`, and the i64 Fibonacci loop
+//! (`test_an_i64_is_a_dword_pair_through_phis_calls_and_returns`)
+//! spills a dword with it.
+//!
 //! `unsplit` undoes a split whose copies coalescing removed: a block of only a
 //! jump is bypassed, so the jump is not taken on every pass. The peephole calls
 //! it first.
@@ -200,8 +208,26 @@ impl LIRTransform for PhiElimination {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
+        if !OLD_LOWERING.with(std::cell::Cell::get) && !llrm_support::env_flag!("LLRM_NO_PHIELIM_LLVM") {
+            let lowered = crate::phielimination::lowered(&body)?;
+            return eliminated_priced(&lowered, self.prices);
+        }
         eliminated_priced(&body, self.prices)
     }
+}
+
+thread_local! {
+    static OLD_LOWERING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `work` with every phi lowered by this pass's own parallel copies, on this
+/// thread: for a test of what takes parallel copies (the allocator's and
+/// `parcopy`'s) and needs some.
+pub fn with_old_lowering<R>(work: impl FnOnce() -> R) -> R {
+    let before = OLD_LOWERING.with(|flag| flag.replace(true));
+    let out = work();
+    OLD_LOWERING.with(|flag| flag.set(before));
+    out
 }
 
 /// What `_split_edges` places on one edge: phi `(result, value)` pairs, or
@@ -212,7 +238,7 @@ pub enum Split {
     Selected(Vec<Arc<Insn>>),
 }
 
-fn move_of(
+pub(crate) fn move_of(
     into: Held,
     out_of: Held,
 ) -> Semantics {
@@ -989,7 +1015,7 @@ fn _renamed_phi(
     })
 }
 
-fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
+pub(crate) fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for block in &body.blocks {
         for op in &block.insns {
@@ -1028,7 +1054,7 @@ fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
 ///
 /// Placed on the predecessor's last instruction's address and claiming none
 /// of its bytes.
-fn _copy(
+pub(crate) fn _copy(
     where_: &LirBlock,
     into: u32,
     out_of: u32,
@@ -1063,7 +1089,7 @@ pub(crate) fn _nothing(
 }
 
 /// The copies at the end of the block, but ahead of what leaves it.
-fn _before_the_terminator(
+pub(crate) fn _before_the_terminator(
     block: &LirBlock,
     added: &[Arc<Insn>],
 ) -> Vec<Arc<Insn>> {

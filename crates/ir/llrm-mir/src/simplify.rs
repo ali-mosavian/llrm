@@ -12,33 +12,32 @@
 //! `simplifySubInst`, `simplifyMulInst`, `simplifyDivRem`, `simplifyShift` and
 //! the shift, and/or/xor functions, `simplifyAssociativeBinOp`,
 //! `simplifyLogicOfAddSub`, `simplifySelectInst`, `simplifyCastInst`,
-//! `simplifyPHINode`, and the compare-of-self, bool and zero parts of
-//! `simplifyICmpInst`.
+//! `simplifyPHINode`, the `undef` arms of each, and the compare-of-self, bool
+//! and zero parts of `simplifyICmpInst`.
 //!
 //! `nsw`/`nuw`/`exact` are read from the instruction (`IIQ.UseInstrInfo`).
 //!
 //! DEVIATE, permanent (MIR lacks the construct):
-//! 1. `undef`: MIR has `poison` and `freeze` (#2202).
-//! 2. Vectors: `extractelement`, `insertelement`, `shufflevector`,
+//! 1. Vectors: `extractelement`, `insertelement`, `shufflevector`,
 //!    `simplifyIdentityInterleave`, `simplifySVEIntReduction`. MIR types
 //!    vectors but has no lane operation and nothing produces a vector value
 //!    (#2201).
 //!
 //! OWED, each with an issue and its exit condition:
-//! 3. `x86_fp80` constants: MIR has the type (`FloatKind::X86Fp80`) but
+//! 2. `x86_fp80` constants: MIR has the type (`FloatKind::X86Fp80`) but
 //!    `ConstantKind::Float` holds 64 bits, so an extended constant is held as
 //!    the nearest double (`constfold.rs`): #2251. Whether MIR carries fp80 per
 //!    target is a separate decision.
-//! 4. Floating-point folds, `bitcast (uitofp X)` included: #2246.
-//! 5. Loads, pointer compares, `addrspacecast`: #2247.
-//! 6. Calls and intrinsics, `simplifyICmpWithIntrinsicOnLHS`, the call arm of
+//! 3. Floating-point folds, `bitcast (uitofp X)` included: #2246.
+//! 4. Loads, pointer compares, `addrspacecast`: #2247.
+//! 5. Calls and intrinsics, `simplifyICmpWithIntrinsicOnLHS`, the call arm of
 //!    `simplifyWithOpsReplaced`: #2248. Only the `llvm.smax` family is folded,
 //!    matched by `simplify_instruction_in`, whose caller passes the globals.
-//! 7. `simplifySelectWithICmpCond`, `simplifySelectBitTest`/`WithBitTest`,
+//! 6. `simplifySelectWithICmpCond`, `simplifySelectBitTest`/`WithBitTest`,
 //!    `simplifySelectWithEquivalence`, `simplifyCmpSelOfMaxMin`,
 //!    `simplifyICmpWithDominatingAssume`: #2249.
-//! 8. `extractvalue`, `insertvalue`, `freeze`: #2250.
-//! 9. GEP and cast constant expressions, wrap-flag poison folds in
+//! 7. `extractvalue`, `insertvalue`: #2250.
+//! 8. GEP and cast constant expressions, wrap-flag poison folds in
 //!    `constfold.rs`: #2252.
 //!
 //! # Used by
@@ -79,6 +78,8 @@ struct Query<'a> {
     analyses: Option<&'a FunctionAnalyses>,
     /// `SQ.CxtI`: the instruction the query is asked at.
     cxt: Option<InstId>,
+    /// `SQ.CanUseUndef`: false in `getWithoutUndef()`.
+    can_use_undef: bool,
 }
 
 impl Query<'_> {
@@ -129,6 +130,28 @@ impl Query<'_> {
         operand: Operand,
     ) -> bool {
         self.constant(operand).is_some_and(|id| self.context.get(id).kind == ConstantKind::Poison)
+    }
+
+    /// `SimplifyQuery::isUndefValue`: `m_Undef`, which poison matches too.
+    fn is_undef(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        self.can_use_undef
+            && self
+                .constant(operand)
+                .is_some_and(|id| matches!(
+                    self.context.get(id).kind,
+                    ConstantKind::Undef | ConstantKind::Poison
+                ))
+    }
+
+    /// `UndefValue::get`.
+    fn undef(
+        &mut self,
+        ty: TypeId,
+    ) -> Operand {
+        Operand::Constant(self.context.constant(Constant { ty, kind: ConstantKind::Undef }))
     }
 
     /// `m_Zero`.
@@ -503,9 +526,13 @@ fn expand_bin_op(
     max_recurse: u32,
 ) -> Option<Operand> {
     let (b0, b1, _) = q.binary_of(v, opcode_to_expand)?;
-    // Evaluate the expression "B0 op OtherOp" and "B1 op OtherOp".
-    let l = simplify_binop(q, opcode, b0, other_op, max_recurse)?;
-    let r = simplify_binop(q, opcode, b1, other_op, max_recurse)?;
+    // Evaluate the expression "B0 op OtherOp" and "B1 op OtherOp",
+    // `Q.getWithoutUndef()`.
+    let could_use_undef = std::mem::replace(&mut q.can_use_undef, false);
+    let l = simplify_binop(q, opcode, b0, other_op, max_recurse);
+    let r = l.and_then(|_| simplify_binop(q, opcode, b1, other_op, max_recurse));
+    q.can_use_undef = could_use_undef;
+    let (l, r) = (l?, r?);
     // Does "(B0 op OtherOp) expand (B1 op OtherOp)" equal B?
     if (l == b0 && r == b1) || (is_commutative(opcode_to_expand) && l == b1 && r == b0) {
         return Some(v);
@@ -560,6 +587,13 @@ fn thread_bin_op_over_select(
     // If they simplified to the same value, then return the common value. If
     // they both failed to simplify then return null.
     if tv == fv {
+        return tv;
+    }
+    // If one branch simplified to undef, return the other one.
+    if tv.is_some_and(|one| q.is_undef(one)) {
+        return fv;
+    }
+    if fv.is_some_and(|one| q.is_undef(one)) {
         return tv;
     }
     // If applying the operation did not change the true and false select
@@ -1393,6 +1427,10 @@ fn simplify_add(
     if q.is_poison(op1) {
         return Some(op1);
     }
+    // X + undef -> undef
+    if q.is_undef(op1) {
+        return Some(op1);
+    }
     // X + 0 -> X
     if q.is_zero(op1) {
         return Some(op0);
@@ -1458,6 +1496,11 @@ fn simplify_sub(
     if q.is_poison(op0) || q.is_poison(op1) {
         let ty = q.ty(op0);
         return Some(q.poison(ty));
+    }
+    // X - undef -> undef; undef - X -> undef
+    if q.is_undef(op0) || q.is_undef(op1) {
+        let ty = q.ty(op0);
+        return Some(q.undef(ty));
     }
     // X - 0 -> X
     if q.is_zero(op1) {
@@ -1578,8 +1621,8 @@ fn simplify_mul(
     if q.is_poison(op1) {
         return Some(op1);
     }
-    // X * 0 -> 0
-    if q.is_zero(op1) {
+    // X * undef -> 0; X * 0 -> 0
+    if q.is_undef(op1) || q.is_zero(op1) {
         let ty = q.ty(op0);
         return Some(q.null(ty));
     }
@@ -1643,7 +1686,8 @@ fn simplify_div_rem(
     let is_div = matches!(opcode, BinaryOp::SDiv | BinaryOp::UDiv);
     let is_signed = matches!(opcode, BinaryOp::SDiv | BinaryOp::SRem);
     let ty = q.ty(op0);
-    if q.is_poison(op1) {
+    // X / undef -> poison; X % undef -> poison
+    if q.is_undef(op1) || q.is_poison(op1) {
         return Some(q.poison(ty));
     }
     // X / 0 -> poison
@@ -1653,6 +1697,10 @@ fn simplify_div_rem(
     // poison / X -> poison
     if q.is_poison(op0) {
         return Some(op0);
+    }
+    // undef / X -> 0; undef % X -> 0
+    if q.is_undef(op0) {
+        return Some(q.null(ty));
     }
     // 0 / X -> 0
     if q.is_zero(op0) {
@@ -1900,10 +1948,9 @@ fn simplify_shift(
     {
         return Some(op0);
     }
-    // Shift amount of the width or more is poison.
-    if let Some((amount, width)) = q.number(op1)
-        && amount >= u128::from(width)
-    {
+    // `isPoisonShift`: a shift by undef may shift by the width; so may one by
+    // the width or more.
+    if q.is_undef(op1) || q.number(op1).is_some_and(|(amount, width)| amount >= u128::from(width)) {
         let ty = q.ty(op0);
         return Some(q.poison(ty));
     }
@@ -1966,6 +2013,11 @@ fn simplify_right_shift(
         let ty = q.ty(op0);
         return Some(q.null(ty));
     }
+    // undef >> X -> 0; undef >> X -> undef (if it's exact)
+    if q.is_undef(op0) {
+        let ty = q.ty(op0);
+        return Some(if is_exact { op0 } else { q.null(ty) });
+    }
     // The low bit cannot be shifted out of an exact shift if it is set.
     if is_exact && q.known(op0).one & 1 == 1 {
         return Some(op0);
@@ -1987,6 +2039,10 @@ fn simplify_shl(
         return Some(v);
     }
     let ty = q.ty(op0);
+    // undef << X -> 0; undef << X -> undef if it's NSW/NUW
+    if q.is_undef(op0) {
+        return Some(if is_nsw || is_nuw { op0 } else { q.null(ty) });
+    }
     // (X >>exact Y) << Y -> X
     if let Some((shr, x, amount, flags)) = q.binary(op0)
         && matches!(shr, BinaryOp::LShr | BinaryOp::AShr)
@@ -2186,6 +2242,11 @@ fn simplify_and(
     // X & poison -> poison
     if q.is_poison(op1) {
         return Some(op1);
+    }
+    // X & undef -> 0
+    if q.is_undef(op1) {
+        let ty = q.ty(op0);
+        return Some(q.null(ty));
     }
     // X & X = X
     if op0 == op1 {
@@ -2400,8 +2461,8 @@ fn simplify_or(
     if q.is_poison(op1) {
         return Some(op1);
     }
-    // X | -1 = -1
-    if q.is_all_ones(op1) {
+    // X | undef -> -1; X | -1 = -1
+    if q.is_undef(op1) || q.is_all_ones(op1) {
         let ty = q.ty(op0);
         return Some(q.all_ones(ty));
     }
@@ -2537,6 +2598,10 @@ fn simplify_xor(
     if q.is_poison(op1) {
         return Some(op1);
     }
+    // A ^ undef -> undef
+    if q.is_undef(op1) {
+        return Some(op1);
+    }
     // A ^ 0 = A
     if q.is_zero(op1) {
         return Some(op0);
@@ -2668,6 +2733,7 @@ fn simplify_phi(
     let ty = q.function.instruction(phi).ty;
     let mut common: Option<Operand> = None;
     let mut has_poison = false;
+    let mut has_undef = false;
     for incoming in q.function.instruction(phi).operands.iter().step_by(2).copied().collect::<Vec<_>>() {
         if Some(incoming) == result {
             continue;
@@ -2676,19 +2742,42 @@ fn simplify_phi(
             has_poison = true;
             continue;
         }
+        if q.is_undef(incoming) {
+            // Remember that we saw an undef value, but otherwise ignore them.
+            has_undef = true;
+            continue;
+        }
         if common.is_some_and(|one| one != incoming) {
             return None;
         }
         common = Some(incoming);
     }
-    let Some(common) = common else { return Some(q.poison(ty)) };
+    // Every incoming value was undef, poison or the phi itself.
+    let Some(common) = common else { return Some(if has_undef { q.undef(ty) } else { q.poison(ty) }) };
     // If we have a PHI node like phi(X, poison, X), where X is defined by some
     // instruction, we cannot return X as the result of the PHI node unless it
     // dominates the PHI block.
-    if has_poison && !q.value_dominates_phi(common, phi) {
+    if (has_poison || has_undef) && !q.value_dominates_phi(common, phi) {
+        return None;
+    }
+    // Make sure we do not replace an undef value with poison.
+    if has_undef && !guarantee::is_guaranteed_not_to_be_poison(&q.tracking(), common, 0) {
         return None;
     }
     Some(common)
+}
+
+/// `simplifyFreezeInst`
+/// ([:7690](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/InstructionSimplify.cpp#L7690)).
+fn simplify_freeze(
+    q: &mut Query,
+    op0: Operand,
+) -> Option<Operand> {
+    // Use a utility function defined in ValueTracking.
+    if guarantee::is_guaranteed_not_to_be_undef_or_poison(&q.tracking(), op0, 0) {
+        return Some(op0);
+    }
+    None
 }
 
 /// `simplifyCastInst`
@@ -2742,6 +2831,10 @@ fn simplify_select(
             let ty = q.ty(true_val);
             return Some(q.poison(ty));
         }
+        // select undef, X, Y -> X or Y
+        if q.is_undef(cond) {
+            return Some(if q.constant(false_val).is_some() { false_val } else { true_val });
+        }
         if q.is_one(cond) {
             return Some(true_val);
         }
@@ -2790,11 +2883,12 @@ fn simplify_select(
             return Some(q.null(ty));
         }
     }
-    // select ?, poison, X -> X; select ?, X, poison -> X
-    if q.is_poison(true_val) {
+    // select ?, poison, X -> X; select ?, undef, X -> X if X is no poison
+    // unless the condition is; and the mirror.
+    if q.is_poison(true_val) || (q.is_undef(true_val) && guarantee::implies_poison(&q.tracking(), false_val, cond)) {
         return Some(false_val);
     }
-    if q.is_poison(false_val) {
+    if q.is_poison(false_val) || (q.is_undef(false_val) && guarantee::implies_poison(&q.tracking(), true_val, cond)) {
         return Some(true_val);
     }
     if let Some(cxt) = q.cxt
@@ -2830,8 +2924,13 @@ fn simplify_icmp(
     if q.is_poison(rhs) {
         return Some(q.poison(i1));
     }
-    // icmp X, X -> isTrueWhenEqual(Pred)
-    if lhs == rhs {
+    // icmp eq/ne X, undef -> undef: the undef can be chosen to pass or fail.
+    if q.is_undef(rhs) && is_equality(pred) {
+        return Some(q.undef(i1));
+    }
+    // icmp X, X -> isTrueWhenEqual(Pred); icmp X, undef likewise, undef could
+    // be X.
+    if lhs == rhs || q.is_undef(rhs) {
         let holds = matches!(
             pred,
             IntPredicate::Eq | IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle
@@ -3812,6 +3911,11 @@ fn simplify_gep(
         let ty = q.ty(ptr);
         return Some(q.poison(ty));
     }
+    // getelementptr undef, idx -> undef
+    if q.is_undef(ptr) {
+        let ty = q.ty(ptr);
+        return Some(q.undef(ty));
+    }
     None
 }
 
@@ -3824,7 +3928,10 @@ pub fn simplify_instruction(
     function: &Function,
     inst: InstId,
 ) -> Option<Operand> {
-    simplify_instruction_with(Query { context, function, layout, globals: &[], analyses: None, cxt: None }, inst)
+    simplify_instruction_with(
+        Query { context, function, layout, globals: &[], analyses: None, cxt: None, can_use_undef: true },
+        inst,
+    )
 }
 
 /// `simplifyInstruction` for a module's function: `globals` name the callees,
@@ -3838,7 +3945,10 @@ pub fn simplify_instruction_in(
     function: &Function,
     inst: InstId,
 ) -> Option<Operand> {
-    simplify_instruction_with(Query { context, function, layout, globals, analyses, cxt: None }, inst)
+    simplify_instruction_with(
+        Query { context, function, layout, globals, analyses, cxt: None, can_use_undef: true },
+        inst,
+    )
 }
 
 fn simplify_instruction_with(
@@ -3878,6 +3988,7 @@ fn simplify_instruction_with_operands(
         }
         Opcode::Cast(op) => simplify_cast(q, *op, operands[0], instruction.ty, max_recurse),
         Opcode::Phi => simplify_phi(q, inst),
+        Opcode::Freeze => simplify_freeze(q, operands[0]),
         Opcode::GetElementPtr { .. } => simplify_gep(q, operands[0], &operands[1..]),
         _ => None,
     }
@@ -3894,7 +4005,7 @@ pub fn simplify_binop_operands(
     lhs: Operand,
     rhs: Operand,
 ) -> Option<Operand> {
-    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None };
+    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None, can_use_undef: true };
     simplify_binop_flags(&mut q, opcode, lhs, rhs, flags, RECURSION_LIMIT)
 }
 
@@ -3907,7 +4018,7 @@ pub fn simplify_icmp_operands(
     lhs: Operand,
     rhs: Operand,
 ) -> Option<Operand> {
-    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None };
+    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None, can_use_undef: true };
     simplify_icmp(&mut q, predicate, lhs, rhs, RECURSION_LIMIT)
 }
 
@@ -3920,8 +4031,20 @@ pub fn simplify_cast_operand(
     value: Operand,
     to: TypeId,
 ) -> Option<Operand> {
-    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None };
+    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None, can_use_undef: true };
     simplify_cast(&mut q, op, value, to, RECURSION_LIMIT)
+}
+
+/// `simplifyGEPInst` for operands.
+pub fn simplify_gep_operands(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &Function,
+    ptr: Operand,
+    indices: &[Operand],
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None, can_use_undef: true };
+    simplify_gep(&mut q, ptr, indices)
 }
 
 /// `simplifySelectInst` for operands.
@@ -3933,7 +4056,7 @@ pub fn simplify_select_operands(
     if_true: Operand,
     if_false: Operand,
 ) -> Option<Operand> {
-    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None };
+    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None, can_use_undef: true };
     simplify_select(&mut q, condition, if_true, if_false)
 }
 

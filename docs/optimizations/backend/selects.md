@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selects.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selects.rs sha256:dc483d5566192eb2c3a59e2a2547f0b6d754109ff20704cdd7bd26c6076964a2 -->
+<!-- src: crates/backend/llrm-core/src/backend/selects.rs sha256:dcab584eb3a7b03eb151810c9da266c3ef29f02fd869530f0c365017cb5c472e -->
 
 # selects
 
@@ -21,6 +21,12 @@ replaces the select's uses:
                                join:   %r = phi [a, taken], [b, block]
                                        rest
 ```
+
+An operand of the select that only the select uses, is safe to execute
+speculatively and costs `TCC_Expensive` or more (a division) moves into the
+block of its own side, so the other path does not run it: CodeGenPrepare's
+`sinkSelectOperand`. A cheap one stays, as in LLVM. Where the target states
+no cost model every instruction costs one, and nothing moves.
 
 The loop is repeated until no select is left in any function, so two selects
 in one block each get their own split. The result is checked by an

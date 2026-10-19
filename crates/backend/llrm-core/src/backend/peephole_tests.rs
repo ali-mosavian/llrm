@@ -3412,6 +3412,52 @@ fn test_dword_fixed_register_argument_keeps_all_value_lanes_live() {
     assert_eq!(narrowed_moves(rules(), &input), input);
 }
 
+#[test]
+fn test_dword_copy_read_after_a_call_that_may_clobber_its_upper_half_stays_wide() {
+    // regparm3_matrix_4 at -O2: `mov edi,eax` became `mov di,ax` because the
+    // call between it and `mov eax,edi; shrd eax,ebx,20` may clobber EDI's
+    // upper half, and the shift then read a stale one.
+    let (eax, ebx, edi) = (rl(RegId::EAX, 4), rl(RegId::EBX, 4), rl(RegId::EDI, 4));
+    let copy =
+        insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![edi.clone()], vec![eax.clone()])), vec![1], vec![]);
+    let call = Insn {
+        clobbers: [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX].into(),
+        clobbers_high: [RegId::ESI, RegId::EDI].into(),
+        ..insn(5, Some((5, 5)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+    };
+    let read = insn(2, Some((2, 2)), Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![edi])), vec![2], vec![1]);
+    let shift = insn(
+        3,
+        Some((3, 3)),
+        Some(sem(Operation::Funnel, "shrd", vec![eax.clone()], vec![eax.clone(), ebx, im(20, 1)])),
+        vec![3],
+        vec![2, 4],
+    );
+    let finish = Insn {
+        requires: vec![(Held { value: 3, width: 4 }, RegId::EAX)],
+        reads_complete: true,
+        ..insn(4, Some((4, 4)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![3])
+    };
+    let input = body(
+        "wide-copy-shrd",
+        1,
+        vec![
+            block(1, vec![Arc::new(copy), Arc::new(call), Arc::new(read), Arc::new(shift), Arc::new(finish)], vec![])
+                .into(),
+        ],
+    );
+
+    assert_eq!(narrowed_moves(rules(), &input), input);
+
+    // Premise: with nothing reading EDI after it, the same copy is narrowed.
+    let ret = Insn {
+        reads_complete: true,
+        ..insn(6, Some((6, 6)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])
+    };
+    let unread = body("narrow-copy", 1, vec![block(1, vec![input.insns()[0].clone(), Arc::new(ret)], vec![]).into()]);
+    assert_ne!(narrowed_moves(rules(), &unread), unread);
+}
+
 fn extract_parts(
     source: Loc,
     high: Loc,
@@ -4737,6 +4783,43 @@ fn test_a_function_without_a_copy_runs_copy_propagation_zero_times() {
     let before = machinecp::runs();
     transform(one_block(vec![copy(0, RegId::AX, RegId::BX), add(1, RegId::CX, RegId::AX)]));
     assert!(machinecp::runs() - before >= 1, "copy propagation did not run on a body with a copy");
+}
+
+/// Every block was walked twice and its effects worked out for each of its
+/// instructions, copies or none: 9.8 M instructions of the 77 M of `d_faces`'
+/// peephole went to blocks that hold no copy. Only a block with a copy is
+/// walked.
+#[test]
+fn test_copy_propagation_walks_only_the_blocks_that_hold_a_copy() {
+    let add = |at| {
+        Arc::new(insn(
+            at,
+            Some((at, at)),
+            Some(sem(Operation::Binary, "add", vec![rl(RegId::CX, 2)], vec![rl(RegId::CX, 2), rl(RegId::DX, 2)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let copy = Arc::new(insn(
+        0,
+        Some((0, 0)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    ));
+    let blocks = (1..=5)
+        .map(|at| {
+            block(
+                at,
+                if at == 3 { vec![Arc::clone(&copy), add(at)] } else { vec![add(at)] },
+                if at < 5 { vec![at + 1] } else { vec![] },
+            )
+        })
+        .collect::<Vec<_>>();
+    let input = body("copies", 1, crate::model::lir::shared(blocks));
+    let before = machinecp::walks();
+    machinecp::propagated(&input);
+    assert_eq!(machinecp::walks() - before, 1, "five blocks, one with a copy");
 }
 
 /// The lanes of a register follow the description: a high byte is lane 1 of its

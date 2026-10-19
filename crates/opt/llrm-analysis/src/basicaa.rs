@@ -259,10 +259,9 @@ impl<'a> BasicAA<'a> {
         &self,
         operand: Operand,
     ) -> bool {
-        self.defining(operand).is_some_and(|one| match &one.opcode {
-            Opcode::Call(info) | Opcode::Invoke(info) => llrm_mir::facts::Facts::of(&info.return_attrs).no_alias(),
-            _ => false,
-        })
+        let Operand::Value(value) = operand else { return false };
+        let llrm_mir::module::ValueDef::Instruction(inst) = self.unit.function.value(value).def else { return false };
+        llrm_mir::memory::returns_noalias(self.unit.context, self.unit.globals, self.unit.function, inst)
     }
 
     /// `isIdentifiedFunctionLocal`.
@@ -820,13 +819,38 @@ impl AAResults for BasicAA<'_> {
         loc: Option<&MemoryLocation>,
         aaqi: &mut AAQueryInfo,
     ) -> ModRefInfo {
-        let is_call = matches!(
-            self.unit.function.instruction(inst).opcode,
-            Opcode::Call(_) | Opcode::Invoke(_)
-        );
-        match loc {
-            Some(loc) if is_call => self.call_mod_ref(inst, loc, aaqi),
-            _ => ModRefInfo::ModRef,
+        // `AAResults::getModRefInfo(Instruction *, Loc)`: by opcode, and
+        // nothing for the rest.
+        match self.unit.function.instruction(inst).opcode {
+            Opcode::Call(_) | Opcode::Invoke(_) => match loc {
+                Some(loc) => self.call_mod_ref(inst, loc, aaqi),
+                None => ModRefInfo::ModRef,
+            },
+            // A load that cannot alias the location neither reads nor writes
+            // it; otherwise it reads. MIR has no atomics to be stronger than
+            // unordered.
+            Opcode::Load { .. } => {
+                if let (Some(loc), Some(own)) = (loc, MemoryLocation::get(self.unit, inst))
+                    && self.alias(&own, loc, aaqi, Some(inst)) == AliasResult::NoAlias
+                {
+                    return ModRefInfo::NoModRef;
+                }
+                ModRefInfo::Ref
+            }
+            // A store that cannot alias the location, or writes to constant
+            // memory, does not modify it; otherwise it writes.
+            Opcode::Store { .. } => {
+                if let (Some(loc), Some(own)) = (loc, MemoryLocation::get(self.unit, inst)) {
+                    if self.alias(&own, loc, aaqi, Some(inst)) == AliasResult::NoAlias {
+                        return ModRefInfo::NoModRef;
+                    }
+                    if self.points_to_constant_memory(loc, aaqi, false) {
+                        return ModRefInfo::NoModRef;
+                    }
+                }
+                ModRefInfo::Mod
+            }
+            _ => ModRefInfo::NoModRef,
         }
     }
 
@@ -888,6 +912,22 @@ mod tests {
             )
         };
         assert_eq!(answer(&body("inbounds"), "a", "b", 4), AliasResult::NoAlias);
+        assert_eq!(answer(&body(""), "a", "b", 4), AliasResult::MayAlias);
+    }
+
+    /// Two results of a callee that states its return `noalias` are distinct
+    /// objects (`CallBase::hasRetAttr` reads the callee's attributes as well as
+    /// the site's); with the attribute dropped they may be one. The pass read
+    /// the site alone, so GVN re-read the second after a store through the
+    /// first.
+    #[test]
+    fn two_results_of_a_callee_returning_noalias_are_no_alias() {
+        let body = |attribute: &str| {
+            format!(
+                "declare {attribute}ptr @make()\ndefine i32 @f() {{\nentry:\n  %a = call ptr @make()\n  %b = call ptr @make()\n  ret i32 0\n}}\n"
+            )
+        };
+        assert_eq!(answer(&body("noalias "), "a", "b", 4), AliasResult::NoAlias);
         assert_eq!(answer(&body(""), "a", "b", 4), AliasResult::MayAlias);
     }
 

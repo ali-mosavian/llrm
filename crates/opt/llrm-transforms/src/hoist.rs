@@ -32,6 +32,10 @@
 //! every block once. The moved function's liveness is the kept one's with the
 //! values the run moved solved again (`profit::spill_forecast_after`;
 //! `LLRM_CHECK_VIEW` holds it to the forecast of the function on its own).
+//! The LLVM order's slots do not price registers (`Hoist::priced` off): LLVM's
+//! LICM has no such model, and a spilled invariant is left to rematerialisation
+//! (x_life -Os ran 1.94x the instructions with the forecast keeping its address
+//! math in the loop).
 //!
 //! A hoisted load is priced by what it saves each trip. A floating load its one
 //! reader takes from memory (x87 `fmul m32`) is not an instruction of the loop
@@ -151,6 +155,10 @@ use crate::profit::{self, OperationCosts};
 pub struct Hoist {
     pub size: bool,
     pub speculate: bool,
+    /// Price the registers a motion lengthens (the spill forecast). LLVM's LICM
+    /// has no such model; the LLVM order runs it off and leaves a spilled
+    /// invariant to the allocator's rematerialisation.
+    pub priced: bool,
 }
 
 impl FunctionPass for Hoist {
@@ -168,7 +176,7 @@ impl FunctionPass for Hoist {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         // Blocks and edges are as they were.
-        if hoisted_with(unit, analyses, self.size, self.speculate) {
+        if hoisted_with(unit, analyses, self.size, self.speculate, self.priced) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()
@@ -186,15 +194,17 @@ pub fn hoisted(
     analyses: &mut Analyses,
     size: bool,
 ) -> bool {
-    hoisted_with(unit, analyses, size, true)
+    hoisted_with(unit, analyses, size, true, true)
 }
 
-/// [`hoisted`] with LICM's `AllowSpeculation` as `speculate`.
+/// [`hoisted`] with LICM's `AllowSpeculation` as `speculate`, and the spill
+/// forecast of the registers a motion holds priced only when `priced`.
 pub fn hoisted_with(
     unit: &mut passes::Unit,
     analyses: &mut Analyses,
     size: bool,
     speculate: bool,
+    priced: bool,
 ) -> bool {
     let graph = cfg::graph(unit.function);
     let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
@@ -222,7 +232,7 @@ pub fn hoisted_with(
     // The registers are priced where the function is in SSA; before that, with
     // scalar slots still in memory, only what a held value costs to release
     // is.
-    let pressure = room.priced() && !_slots_remain(unit);
+    let pressure = priced && room.priced() && !_slots_remain(unit);
     let frequency = (pressure || room.priced() && costs.float_release > 0)
         .then(|| _frequency(unit, analyses, &outer, size))
         .flatten();
@@ -575,7 +585,7 @@ fn _float_working_set(
         if !loop_.body.contains(&cfg::id(block)) {
             continue;
         }
-        let list = function.block(block).instructions();
+        let list = function.block(block).iter().collect::<Vec<_>>();
         let mut ends: Vec<usize> = Vec::new();
         for (at, &inst) in list.iter().enumerate() {
             let one = function.instruction(inst);
@@ -675,7 +685,6 @@ pub(crate) fn _frequency(
             .with_shape(&shape)
             .with_registers(&facts)
             .with_counted(&counted),
-        &facts,
     );
     profit::_frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips))
 }
@@ -717,7 +726,7 @@ pub fn _invariant_run(
         .layout()
         .iter()
         .filter(|&&block| inside(block))
-        .flat_map(|&block| function.block(block).instructions().to_vec())
+        .flat_map(|&block| function.block(block).iter().collect::<Vec<_>>())
         .collect();
     let outside = |value: ValueId| match function.value(value).def {
         ValueDef::Argument(_) => true,
@@ -914,9 +923,9 @@ pub fn _guaranteed(
     if function.successors(cfg::block(into)) != [cfg::block(loop_.header)] {
         return BTreeSet::new();
     }
-    let ends = |at: i64| function.block(cfg::block(at)).instructions().iter().any(|inst| terminal.contains(inst));
+    let ends = |at: i64| function.block(cfg::block(at)).iter().any(|inst| terminal.contains(&inst));
     let before_terminal = |at: i64| {
-        let instructions = function.block(cfg::block(at)).instructions();
+        let instructions = function.block(cfg::block(at)).iter().collect::<Vec<_>>();
         let stop = instructions.iter().position(|inst| terminal.contains(inst)).map_or(instructions.len(), |at| at + 1);
         instructions[..stop].to_vec()
     };
@@ -973,7 +982,7 @@ pub fn _crossed_values(
 
 #[cfg(test)]
 #[path = "hoist_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 /// Whether some instruction of `loop_` could start a run: one of the kinds
 /// `_movable` accepts whose operands are all constants or defined outside the
@@ -995,10 +1004,9 @@ fn _seeded(
         .any(
             |&block| function
                 .block(block)
-                .instructions()
                 .iter()
                 .any(
-                    |&inst| {
+                    |inst| {
                         let op = function.instruction(inst);
                         matches!(
                             op.opcode,

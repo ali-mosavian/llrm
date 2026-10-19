@@ -167,3 +167,299 @@ fn test_a_udiv_is_safe_to_expand_only_by_a_divisor_known_nonzero() {
     }
     assert_eq!(safe, [false, true]);
 }
+
+const LOOP: &str = "define i32 @f(i32 %a, i32 %b, i32 %n) {
+entry:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i2, %h ]
+  %i2 = add i32 %i, 1
+  %c = icmp slt i32 %i2, %n
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret i32 0
+}
+";
+
+/// `build`'s SCEV (given the loop header and the function's arguments)
+/// expanded before `%c` of `LOOP`, in canonical mode or not, and the body
+/// printed.
+fn expanded_in_loop(
+    canonical: bool,
+    build: impl FnOnce(&mut ScalarEvolution, &Cx, llrm_mir::module::BlockId, &[Operand]) -> Scev,
+) -> String {
+    expanded_in_loop_with(canonical, false, build)
+}
+
+/// [`expanded_in_loop`], in post-increment mode for the loop if `post_inc`.
+fn expanded_in_loop_with(
+    canonical: bool,
+    post_inc: bool,
+    build: impl FnOnce(&mut ScalarEvolution, &Cx, llrm_mir::module::BlockId, &[Operand]) -> Scev,
+) -> String {
+    let module = llrm_mir::parse::module(LOOP).expect("a module");
+    let (_, _, original) = module.functions().next().expect("a function");
+    let mut function = original.clone();
+    let mut context = module.context.clone();
+    let layout = DataLayout::default();
+    let tree = DomTree::of(&function);
+    let loops = LoopInfo::analyze(&function, || &tree);
+    let assumptions = AssumptionCache::new(&module, &function);
+    let env = Env {
+        globals: &module.globals,
+        metadata: &module.metadata,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let header = *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("h")).expect("%h");
+    let mut se = ScalarEvolution::new();
+    let arguments: Vec<Operand> = (0..3).map(|at| Operand::Value(function.parameters()[at])).collect();
+    let s = build(&mut se, &env.cx(&context, &function), header, &arguments);
+    let at = function
+        .block(header)
+        .iter()
+        .find(|&one| matches!(function.instruction(one).opcode, Opcode::ICmp(_)))
+        .expect("the compare");
+    let mut expander = Expander::new("t");
+    expander.set_canonical_mode(canonical);
+    if post_inc {
+        expander.set_post_inc(header);
+    }
+    expander.set_insert_point(at);
+    let mut declared = Declared::of(&module);
+    expander.expand_code_for(&env, &mut context, &mut declared, &mut function, &mut se, s, None);
+    llrm_mir::print::body(&context, &function)
+}
+
+fn add_rec(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    header: llrm_mir::module::BlockId,
+    ops: Vec<Scev>,
+) -> Scev {
+    se.get_add_rec_expr(cx, ops.into_iter().map(Use::of).collect(), header, Flags::default()).scev
+}
+
+/// `{0,+,1}` is the loop's own canonical phi: nothing is added.
+#[test]
+fn test_the_unit_recurrence_is_the_existing_canonical_iv() {
+    let text = expanded_in_loop(true, |se, cx, h, _| {
+        let (zero, one) = (constant(se, 32, 0).scev, constant(se, 32, 1).scev);
+        add_rec(se, cx, h, vec![zero, one])
+    });
+    assert_eq!(
+        lines(&text),
+        ["%i = phi i32 [ 0, %entry ], [ %i2, %h ]", "%i2 = add i32 %i, 1", "%c = icmp slt i32 %i2, %n"]
+    );
+}
+
+/// `{%a,+,4}` in canonical mode is `%a + 4 * %i`: no new phi.
+#[test]
+fn test_an_affine_recurrence_is_the_start_plus_the_scaled_canonical_iv() {
+    let text = expanded_in_loop(true, |se, cx, h, args| {
+        let a = unknown(se, cx, args[0]).scev;
+        let four = constant(se, 32, 4).scev;
+        add_rec(se, cx, h, vec![a, four])
+    });
+    assert_eq!(
+        lines(&text),
+        [
+            "%i = phi i32 [ 0, %entry ], [ %i2, %h ]",
+            "%0 = shl i32 %i, 2",
+            "%1 = add i32 %a, %0",
+            "%i2 = add i32 %i, 1",
+            "%c = icmp slt i32 %i2, %n"
+        ]
+    );
+}
+
+/// Not canonical, `{%a,+,%b}` gets its own phi, started in the preheader.
+#[test]
+fn test_a_recurrence_written_literally_has_its_own_phi() {
+    let text = expanded_in_loop(false, |se, cx, h, args| {
+        let a = unknown(se, cx, args[0]).scev;
+        let b = unknown(se, cx, args[1]).scev;
+        add_rec(se, cx, h, vec![a, b])
+    });
+    assert_eq!(
+        lines(&text),
+        [
+            "%0 = phi i32 [ %1, %h ], [ %a, %entry ]",
+            "%i = phi i32 [ 0, %entry ], [ %i2, %h ]",
+            "%i2 = add i32 %i, 1",
+            "%c = icmp slt i32 %i2, %n",
+            "%1 = add i32 %0, %b"
+        ]
+    );
+}
+
+/// In post-inc mode `{%a,+,%b}` is the value after the increment: the phi
+/// starts at the normalized `%a - %b` and the increment does not dominate the
+/// compare, so one is added there.
+#[test]
+fn test_a_post_increment_recurrence_starts_one_step_back() {
+    let text = expanded_in_loop_with(false, true, |se, cx, h, args| {
+        let a = unknown(se, cx, args[0]).scev;
+        let b = unknown(se, cx, args[1]).scev;
+        add_rec(se, cx, h, vec![a, b])
+    });
+    assert_eq!(
+        lines(&text),
+        [
+            "%0 = sub i32 %a, %b",
+            "%1 = phi i32 [ %3, %h ], [ %0, %entry ]",
+            "%i = phi i32 [ 0, %entry ], [ %i2, %h ]",
+            "%2 = add i32 %1, %b",
+            "%i2 = add i32 %i, 1",
+            "%c = icmp slt i32 %i2, %n",
+            "%3 = add i32 %1, %b"
+        ]
+    );
+}
+
+/// `normalizeForPostIncUse` then `denormalizeForPostIncUse` is the identity.
+#[test]
+fn test_normalizing_for_post_inc_is_inverted_by_denormalizing() {
+    expanded_in_loop(false, |se, cx, h, args| {
+        let a = unknown(se, cx, args[0]).scev;
+        let b = unknown(se, cx, args[1]).scev;
+        let chain = add_rec(se, cx, h, vec![a, b, a]);
+        let normalized = se.normalize_for_post_inc_use(cx, chain, &[h], true).expect("invertible");
+        assert_ne!(normalized, chain);
+        assert_eq!(se.denormalize_for_post_inc_use(cx, normalized, &[h]), chain);
+        chain
+    });
+}
+
+/// `hoistIVInc` moves the increment above a use that reads the next value.
+#[test]
+fn test_an_iv_increment_is_hoisted_above_the_use_that_needs_it() {
+    let text = "define i32 @f(i32 %a, i32 %n) {
+entry:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i2, %h ]
+  %u = add i32 %i2, %a
+  %i2 = add i32 %i, 1
+  %c = icmp slt i32 %i2, %n
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret i32 0
+}
+";
+    let module = llrm_mir::parse::module(text).expect("a module");
+    let (_, _, original) = module.functions().next().expect("a function");
+    let mut function = original.clone();
+    let mut context = module.context.clone();
+    let layout = DataLayout::default();
+    let tree = DomTree::of(&function);
+    let loops = LoopInfo::analyze(&function, || &tree);
+    let assumptions = AssumptionCache::new(&module, &function);
+    let env = Env {
+        globals: &module.globals,
+        metadata: &module.metadata,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let header = *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("h")).expect("%h");
+    let named = |function: &llrm_mir::module::Function, name: &str| {
+        function
+            .block(header)
+            .iter()
+            .find(|&one| {
+                function.instruction(one).result.is_some_and(|v| function.value(v).name.as_deref() == Some(name))
+            })
+            .expect("named")
+    };
+    let (inc, user) = (named(&function, "i2"), named(&function, "u"));
+    let mut se = ScalarEvolution::new();
+    let mut expander = Expander::new("t");
+    assert!(expander.hoist_iv_inc(&env, &mut context, &mut function, &mut se, inc, user, false));
+    let after = llrm_mir::print::body(&context, &function);
+    let at = |needle: &str| after.find(needle).expect(needle);
+    assert!(at("%i2 = add i32 %i, 1") < at("%u = add i32 %i2, %a"), "{after}");
+}
+
+/// The increments of a wide and a narrow phi agree on the operation.
+#[test]
+fn test_two_increments_of_one_operation_can_share_flags() {
+    let text = "define void @f(i32 %n) {
+entry:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i2, %h ]
+  %j = phi i32 [ 0, %entry ], [ %j2, %h ]
+  %i2 = add nuw i32 %i, 1
+  %j2 = sub i32 %j, 1
+  %c = icmp slt i32 %i2, %n
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("a module");
+    let (_, _, function) = module.functions().next().expect("a function");
+    let find = |name: &str| {
+        function
+            .layout()
+            .iter()
+            .flat_map(|&b| function.block(b).iter().collect::<Vec<_>>())
+            .find(|&one| {
+                function.instruction(one).result.is_some_and(|v| function.value(v).name.as_deref() == Some(name))
+            })
+            .expect("named")
+    };
+    let (i, j, i2, j2) = (find("i"), find("j"), find("i2"), find("j2"));
+    assert!(Expander::can_reuse_flags_from_original_iv_inc(function, i, i, i2, i2));
+    assert!(!Expander::can_reuse_flags_from_original_iv_inc(function, i, j, i2, j2));
+}
+
+/// `getAllInsertedInstructions` names what an expansion made, in order, and not
+/// the phi it reused.
+#[test]
+fn test_the_inserted_instructions_are_what_the_expansion_made() {
+    let module = llrm_mir::parse::module(BODY).expect("a module");
+    let (_, _, original) = module.functions().next().expect("a function");
+    let mut function = original.clone();
+    let mut context = module.context.clone();
+    let layout = DataLayout::default();
+    let tree = DomTree::of(&function);
+    let loops = LoopInfo::analyze(&function, || &tree);
+    let assumptions = AssumptionCache::new(&module, &function);
+    let env = Env {
+        globals: &module.globals,
+        metadata: &module.metadata,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let mut se = ScalarEvolution::new();
+    let args: Vec<Operand> = (0..3).map(|at| Operand::Value(function.parameters()[at])).collect();
+    let s = {
+        let cx = env.cx(&context, &function);
+        let a = unknown(&mut se, &cx, args[0]);
+        let b = unknown(&mut se, &cx, args[1]);
+        let four = constant(&mut se, 32, 4);
+        let scaled = se.get_mul_expr(&cx, vec![four, b], Flags::default(), 0);
+        se.get_add_expr(&cx, vec![a, scaled], Flags::default(), 0).scev
+    };
+    let ret = function.terminator(function.entry().expect("an entry")).expect("a ret");
+    let mut expander = Expander::new("t");
+    expander.set_insert_point(ret);
+    let mut declared = Declared::of(&module);
+    expander.expand_code_for(&env, &mut context, &mut declared, &mut function, &mut se, s, None);
+    let made = expander.inserted_instructions();
+    assert_eq!(made.len(), 2);
+    assert!(made.iter().all(|one| expander.is_inserted_instruction(one)));
+}

@@ -492,6 +492,7 @@ fn push(
 
 pub mod build;
 pub mod driver;
+pub mod pass;
 pub mod process;
 
 #[cfg(test)]

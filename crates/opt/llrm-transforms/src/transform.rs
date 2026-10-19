@@ -132,9 +132,7 @@ pub fn _comparison(
     };
     function
         .block(block)
-        .instructions()
         .iter()
-        .copied()
         .find(|&one| function.instruction(one).result == Some(condition))
         .filter(|&one| matches!(function.instruction(one).opcode, Opcode::ICmp(_)))
 }
@@ -722,7 +720,7 @@ impl<'f> Crossings<'f> {
                 continue;
             }
             let low = if at == source.0 { source.1 + 1 } else { 0 };
-            let high = if at == destination.0 { destination.1 } else { function.block(at).instructions().len() as i64 };
+            let high = if at == destination.0 { destination.1 } else { function.block(at).len() as i64 };
             if stores_in(at, low, high) {
                 return true;
             }
@@ -1203,7 +1201,7 @@ b2:
                 continue;
             }
             let low = if at == source.0 { source.1 + 1 } else { 0 };
-            let high = if at == destination.0 { destination.1 } else { function.block(at).instructions().len() as i64 };
+            let high = if at == destination.0 { destination.1 } else { function.block(at).len() as i64 };
             if stores_in(at, low, high) {
                 return true;
             }

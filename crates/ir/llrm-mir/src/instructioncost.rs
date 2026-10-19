@@ -23,7 +23,7 @@
 
 use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
-use crate::module::{Function, GlobalValue, InstId, Linkage, Operand};
+use crate::module::{Function, GlobalValue, InstId, Linkage, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Opcode};
 use crate::tti::{ArithOp, CastKind, CmpSel, Cost, CostKind, MemoryOp, OperandInfo, Tti, Ty};
 use crate::types::{Type, TypeId};
@@ -161,6 +161,18 @@ fn gep_cost(
     if tti.is_legal_addressing_mode(base_global, offset as i64, !base_global, scale) { Cost::FREE } else { Cost::BASIC }
 }
 
+/// Whether `pointer` is a GEP with an index that is not a constant.
+fn stores_through_index(
+    function: &Function,
+    pointer: Operand,
+) -> bool {
+    let Operand::Value(value) = pointer else { return false };
+    let ValueDef::Instruction(def) = function.value(value).def else { return false };
+    let gep = function.instruction(def);
+    matches!(gep.opcode, Opcode::GetElementPtr { .. })
+        && !gep.operands[1..].iter().all(|operand| matches!(operand, Operand::Constant(_)))
+}
+
 /// `getInstructionCost(inst, kind)`.
 #[allow(clippy::too_many_arguments)]
 pub fn instruction_cost(
@@ -181,7 +193,7 @@ pub fn instruction_cost(
     match &operation.opcode {
         Opcode::Call(call) | Opcode::Invoke(call) => {
             let arguments = operands.len().saturating_sub(1) as i64;
-            let callee = crate::memory::callee(context, function, inst).map(|id| &globals[id.0 as usize]);
+            let callee = crate::memory::callee(context, function, inst).and_then(|id| globals.get(id.0 as usize));
             let Some(callee) = callee else { return Cost::BASIC * (arguments + 1) };
             let name = callee.name.as_deref();
             if name.is_some_and(|name| name.starts_with("llvm.")) {
@@ -229,11 +241,27 @@ pub fn instruction_cost(
             Some(ty) => tti.arithmetic_cost(ArithOp::FNeg, ty, kind, info(0), OperandInfo::ANY),
             None => Cost::INVALID,
         },
+        // An address space cast between spaces below 256 makes no code on x86.
+        Opcode::Cast(CastOp::AddrSpaceCast) => Cost::FREE,
         Opcode::Cast(op) => match (cast_of(*op), result, modelled(operands[0])) {
-            (Some(op), Some(dst), Some(src)) => tti.cast_cost(op, dst, src, kind),
+            (Some(op), Some(dst), Some(src)) => {
+                let of_load = matches!(
+                    operands[0],
+                    Operand::Value(value) if matches!(function.value(value).def, ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Load { .. }))
+                );
+                if of_load && let Some(cost) = tti.cast_of_load_cost(op, dst, src, kind) {
+                    return cost;
+                }
+                tti.cast_cost(op, dst, src, kind)
+            }
             (None, ..) => Cost::BASIC,
             _ => Cost::INVALID,
         },
+        Opcode::Store { .. }
+            if stores_through_index(function, operands[1]) && tti.indexed_store_cost(kind).is_some() =>
+        {
+            tti.indexed_store_cost(kind).expect("a price")
+        }
         Opcode::Store { .. } => match modelled(operands[0]) {
             Some(ty) => tti.memory_op_cost(MemoryOp::Store, ty, kind, info(0).constant),
             None => Cost::INVALID,
@@ -244,7 +272,7 @@ pub fn instruction_cost(
             // for code size.
             if kind == CostKind::CodeSize
                 && let Some(value) = operation.result
-                && let [only] = function.users(value)
+                && let Some(only) = function.users(value).only()
                 && let Opcode::Cast(CastOp::Trunc) = function.instruction(only.user).opcode
             {
                 loaded = function.instruction(only.user).ty;

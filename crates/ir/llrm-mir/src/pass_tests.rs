@@ -855,7 +855,7 @@ impl FunctionPass for Lies {
         let ty = unit.context.types.int(16);
         let one = unit.context.int(ty, 1);
         let function = &mut *unit.function;
-        let first = function.block(function.entry().unwrap()).instructions()[0];
+        let first = function.block(function.entry().unwrap()).first().expect("a block with an instruction");
         let made = function.create_instruction(
             crate::opcode::Opcode::Binary(crate::opcode::BinaryOp::Add),
             ty,
@@ -1287,4 +1287,75 @@ fn a_result_derived_from_one_held_from_before_the_edit_is_not_kept_as_current() 
     analyses.invalidate(function, &PreservedAnalyses::none());
     analyses.get::<Above>(context, &layout, function);
     assert_eq!(ABOVE_RUNS.get(), 2, "kept as derived from the body as it stands");
+}
+
+/// Asks for `Counted`, edits the function, and says it kept `Counted` by
+/// updating it: it puts the result back when `put_back` (LLVM's pass that
+/// uses `MemorySSAUpdater` and preserves `MemorySSAAnalysis`).
+struct UpdatesCounted {
+    put_back: bool,
+}
+
+impl FunctionPass for UpdatesCounted {
+    fn name(&self) -> &'static str {
+        "updates-counted"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        analyses.get::<Counted>(unit.context, unit.layout, unit.function);
+        let last = *unit.function.layout().last().unwrap();
+        let ret = unit.function.terminator(last).unwrap();
+        unit.function.erase(ret).unwrap();
+        if self.put_back {
+            analyses.replace::<Counted>(unit.function, unit.function.layout().len());
+        }
+        PreservedAnalyses::none().preserve_updated::<Counted>()
+    }
+}
+
+/// A pass that updated an analysis and put it back keeps it for the next pass:
+/// the analysis is built once over the two passes that ask. Without
+/// `replace` the manager would have built it again after the edit.
+#[test]
+fn an_analysis_a_pass_updated_and_put_back_is_not_computed_again() {
+    COMPUTED.set(0);
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(UpdatesCounted { put_back: true });
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(COMPUTED.get(), 1, "the updated result was not kept");
+}
+
+/// A pass that says it kept an analysis by updating it and did not put the
+/// result back left it as old as the edit: the manager computes it again.
+#[test]
+fn an_analysis_a_pass_said_it_updated_and_did_not_put_back_is_computed_again() {
+    COMPUTED.set(0);
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(UpdatesCounted { put_back: false });
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(COMPUTED.get(), 2, "a stale result stood");
+}
+
+/// `LLRM_CHECK_STALE` names the pass that declared it and did not put back.
+#[test]
+fn the_stale_check_names_a_pass_that_declared_an_update_it_did_not_put_back() {
+    crate::passes::check_stale(true);
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(UpdatesCounted { put_back: false });
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = passes.run_module(&mut module(), Rc::new(Neutral));
+    }));
+    crate::passes::check_stale(false);
+    let message = caught.expect_err("the lying pass went unnoticed");
+    let message = message.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(message.contains("updates-counted") && message.contains("replace"), "{message}");
 }

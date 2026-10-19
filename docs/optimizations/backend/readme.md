@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 96 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 97 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -18,7 +18,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 96 documented,
 | callregs | Which registers a runtime call destroys or keeps, read from its contract, so the allocator knows what may stay live across it. | `isel.rs`, `isel/wide.rs`, `isel/unwind.rs` (the clobber sets of a call | [callregs](callregs.md) |
 | cfi | Reads call frame information back from emitted code. | `debuginfo.rs`, under `-g`. | [cfi](cfi.md) |
 | classes | What the selected target says about its registers, for the allocator and the passes around it. | `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller | [classes](classes.md) |
-| coalesce | Removes a copy whose two values can share a register. | Once per function, in the machine phases after `twoaddr` and before | [coalesce](coalesce.md) |
+| coalesce | Removes a copy whose two values can share a register: the phase that runs LLVM's `RegisterCoalescer` ([`crate::coalescer`]), and the interference graph `twoaddr` and the spiller read. | Once per function, in the machine phases after `twoaddr` and before | [coalesce](coalesce.md) |
 | comparefold | Fold a one-use load into the comparison that reads it, as a memory operand. | Per block, inside isel's cross-instruction selection | [comparefold](comparefold.md) |
 | constpool | Readonly constants the machine phases put in memory, one datum per distinct bytes. | `isel.rs`, for each float constant it loads, and `floatassign.rs`: an | [constpool](constpool.md) |
 | constrain | Give each value a register is required for a value of its own, live across that instruction alone, copied in and out. | Register allocation (`allocate.rs`), which calls `distinct_roles`, | [constrain](constrain.md) |
@@ -49,6 +49,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 96 documented,
 | jumps | Orders the blocks of an allocated body and removes the jumps and blocks the order makes redundant; merges and copies tails. | `ControlFlow` is the last machine phase, because this physical order | [jumps](jumps.md) |
 | lanes | A set of register and flag lanes, as a 128-bit mask. | `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`, | [lanes](lanes.md) |
 | layout | The pairs of branch conditions that are each other's inverse. | `jumps`, to invert a branch when it makes the other successor the | [layout](layout.md) |
+| legalize | Promotes the integers of an odd width (i2..i63 but 8, 16 and 32) to the next machine width, in MIR before instruction selection. | Once per module in `driver::optimized`, after `minmax_expanded` and before | [legalize](legalize.md) |
 | lifetimes | Where a block local's bytes are live, from its lifetime markers, so that locals never live together can share a frame slot. | `isel` takes the intervals in its own instruction numbering; `slots` then | [lifetimes](lifetimes.md) |
 | lirtext | LIR as text, one stage at a time: what `ISEL_DUMP` prints after each machine phase. | `assemble` after each machine phase when `ISEL_DUMP` is set; the register | [lirtext](lirtext.md) |
 | live | The live intervals the allocator holds of the body it is rewriting, and the spill weight each value gets from them. | `allocate` builds and edits it; `spiller`, `splitkit`, `regclass` and | [live](live.md) |

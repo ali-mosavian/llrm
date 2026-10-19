@@ -122,7 +122,7 @@ impl Module {
 /// The declaration `@name` of type `ty` is, as `Module::add_function` makes it
 /// and a pass that declares a function sees it before the module has it.
 pub fn function_declaration(
-    context: &mut Context,
+    context: &Context,
     name: &str,
     ty: TypeId,
 ) -> Result<Function, String> {
@@ -134,7 +134,7 @@ pub fn function_declaration(
     for (at, ty) in parameters.into_iter().enumerate() {
         function.parameters.push(ValueId(function.values.len() as u32));
         function.values.push(ValueData { ty, name: None, def: ValueDef::Argument(at as u32) });
-        function.value_uses.push(Vec::new());
+        function.uses.push_value();
         function.parameter_attrs.push(Vec::new());
     }
     intrinsics::declare(&mut function, &context.types, name);
@@ -244,7 +244,7 @@ impl Builder<'_> {
         node: MetadataId,
     ) {
         let block = self.block.expect("a position");
-        let inst = *self.function.block(block).instructions().last().expect("an emitted instruction");
+        let inst = self.function.block(block).last().expect("an emitted instruction");
         self.function.annotate(inst, kind, node);
     }
 
@@ -255,7 +255,7 @@ impl Builder<'_> {
         attr: crate::opcode::Attribute,
     ) {
         let block = self.block.expect("a position");
-        let inst = *self.function.block(block).instructions().last().expect("an emitted call");
+        let inst = self.function.block(block).last().expect("an emitted call");
         self.function.add_argument_attr(inst, index, attr);
     }
 
@@ -390,9 +390,7 @@ impl Builder<'_> {
         let first = self
             .function
             .block(entry)
-            .instructions()
             .iter()
-            .copied()
             .find(|&one| !matches!(self.function.instruction(one).opcode, Opcode::Alloca { .. }));
         let position = first.map_or(Position::End(entry), Position::Before);
         self.function.insert(inst, position).expect("the entry block");

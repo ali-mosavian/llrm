@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """The per-merge tests of the integration branch feat/parity: the touched crates' fastest unit tests, a few fast run tests and a compile smoke, 10 s of CPU in all.
+First, untimed, `cargo check --workspace --all-targets` of the merged tree.
 
     tools/parity_smoke.py [--bin DIR] [--base REF] [--rank CRATE...]
 
@@ -35,8 +36,8 @@ import llrmbin  # noqa: E402
 SELECTION = HERE / "parity_smoke.toml"
 BUDGET = 10.0
 CARGO_OVERHEAD = 0.3  # cargo's own CPU to find the test binary up to date, per crate
-MAX_CRATES = 6  # a merge touching more is tested in the 6 crates with most changed files: each crate costs its cargo start before any test
-UNIT_FLOOR = 3.0  # the seconds the fixed steps always leave for unit tests
+MAX_CRATES = 2  # a merge touching more is tested in the 3 crates with most changed files: each crate costs its cargo start before any test
+UNIT_FLOOR = 2.0  # the seconds the fixed steps always leave for unit tests
 ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "COALESCE", "REPLAY", "INTERN", "SKIPPED", "STALE")
 PROGRAM = ROOT / "bench" / "bintree"
 # d_faces.c as the scoreboard reads it (sha256 prefix), and the six reports `env.c` printed for gcc -O0: an llrm build must print the same.
@@ -69,6 +70,16 @@ def run_cut(command: list[str], seconds: float, cwd: Path) -> tuple[int | None, 
         _charged[0] += seconds
         return None, ""
     return child.returncode, out
+
+
+def workspace_check(root: Path = ROOT) -> str:
+    """"" when the whole workspace, tests and benches included, compiles; else the first errors. Built before the clock starts, like the unit tests: two halves
+    that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke feat/parity's head for every build)."""
+    done = subprocess.run(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"], cwd=root, capture_output=True, text=True)
+    if done.returncode == 0:
+        return ""
+    errors = [line for line in done.stderr.splitlines() if "error" in line]
+    return " / ".join(errors[:3])[:300] or "cargo check failed"
 
 
 def selection() -> dict:
@@ -182,6 +193,38 @@ def d_faces(bins: Path) -> tuple[str, str]:
     return ("ok", "reports equal gcc -O0's") if got == DFACES_REPORTS else ("fail", f"d_faces reports {got}, gcc -O0 printed {DFACES_REPORTS}")
 
 
+def qc_d_faces(bins: Path) -> tuple[str, str]:
+    """QCport's own render/d_faces.c with the flags the QCport build uses (the compiler's default target, QCport's -I dirs), at all four levels: the flat d_faces of the `d_faces` step is another
+    file at one level, and passed on 3858c5195 while this one failed the verifier at -O2/-O3 ('block 964 leaves for ... with no instruction choosing')."""
+    qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
+    include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
+    source = qcport / "render" / "d_faces.c"
+    if not source.is_file() or not include.is_dir():
+        return "skipped", f"no QCport sources ({qcport})"
+    flags = [f for part in ("host", "render", "model", "game", "sound", "ui", "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
+    for level in ("-O1", "-O2", "-O3", "-Os"):
+        if why := compile_ok([str(bins / "llrm-c"), level, *flags, str(source), "-o", os.devnull], os.environ):
+            return "fail", f"QCport d_faces.c {level}: {why}"
+    return "ok", "QCport d_faces.c at 4 levels"
+
+
+QC_MODULES = ("game/combat.c", "host/mathlib.c", "render/d_sprite.c", "sound/snd.c")
+
+
+def qc_modules(bins: Path) -> tuple[str, str]:
+    """Four more QCport modules at -O2 (compile only, the compiler's default target): 48 of 260 QCport compiles died on `BitCast of a float` (#2586) while the smoke
+    passed, because it compiled sc.c at -O1 and one module (d_faces) at four levels, and none of them has that float shape."""
+    qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
+    include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
+    if not (qcport / QC_MODULES[0]).is_file() or not include.is_dir():
+        return "skipped", f"no QCport sources ({qcport})"
+    flags = [f for part in ("host", "render", "model", "game", "sound", "ui", "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
+    for module in QC_MODULES:
+        if why := compile_ok([str(bins / "llrm-c"), "-O2", *flags, str(qcport / module), "-o", os.devnull], os.environ):
+            return "fail", f"QCport {module} -O2: {why}"
+    return "ok", f"{len(QC_MODULES)} QCport modules at -O2"
+
+
 def run_cases(bins: Path) -> tuple[str, str]:
     names = selection().get("run", {}).get("cases", [])
     if not names:
@@ -209,7 +252,7 @@ def unit_step(package: str, allowance: float):
     return step
 
 
-FIXED = [("programs", programs, 1.0), ("sc", sc, 1.0), ("d_faces", d_faces, 2.0), ("run", run_cases, 2.5)]  # (name, step, declared seconds)
+FIXED = [("programs", programs, 0.3), ("sc", sc, 0.8), ("d_faces", d_faces, 1.8), ("qc_d_faces", qc_d_faces, 1.0), ("qc_modules", qc_modules, 0.8), ("run", run_cases, 3.6)]  # (name, step, declared seconds)
 
 
 def fixed_cost() -> float:
@@ -278,6 +321,9 @@ def main() -> int:
         for package in args.rank:
             rank(package)
         return 0
+    if broken := workspace_check():
+        print(f"PARITY SMOKE FAIL the workspace does not compile: {broken}")
+        return 1
     packages = touched(args.base)
     for package in packages:  # built first, untimed
         subprocess.run(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"], cwd=ROOT, capture_output=True)

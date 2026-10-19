@@ -1137,7 +1137,9 @@ fn a_round_follows_an_unroll_that_changed_the_body_past_the_budget() {
     assert_eq!(rounds(2), 3, "a third round runs after the unroll of the second, none after the third");
 }
 
-/// Six sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them,
+/// Sixty sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them
+/// (six sweeps are completely unrolled by `LoopFullUnroll`, which LLVM's order
+/// runs before the jam, and leave no nest to jam),
 /// through the whole pipeline at -O3 with and without unroll-and-jam, and at
 /// -O2: the jam changes the code of -O3 alone, and the nest computes what it
 /// did. Before the pass was in the pipeline the first two were the same text.
@@ -1154,7 +1156,7 @@ b0:
 
 outer:
   %t = phi i16 [ 0, %b0 ], [ %tn, %outerlatch ]
-  %go = icmp slt i16 %t, 6
+  %go = icmp slt i16 %t, 60
   br i1 %go, label %pre, label %done
 
 pre:
@@ -1365,12 +1367,13 @@ entry:
     assert!(!crate::testing::printed(&gone).contains("@twice"), "premise: -O2 inlines it");
 }
 
-/// tile.c's inner sum is 40 trips of one load and one add. gcc's
-/// `max-completely-peel-times` (16) keeps it a loop at -O3, as clang's is not
-/// capped: -Omax completes it (tile -O3 8,159 clocks against clang's 4,236;
-/// -Omax unrolls it).
+/// tile.c's inner sum is 40 trips of one load and one add. LLVM's full unroll
+/// has no cap on the trips: it completes the loop where the unrolled size is
+/// under the threshold, 150 at -O2 and 300 at -O3
+/// (`UnrollThresholdAggressive`). gcc's `max-completely-peel-times` (16) kept
+/// it a loop at -O3 (tile -O3 8,159 clocks against clang's 4,236).
 #[test]
-fn test_a_forty_trip_loop_is_completed_at_omax_and_kept_at_o3() {
+fn test_a_forty_trip_loop_is_completed_where_the_unrolled_size_is_under_the_threshold() {
     let text = "@t = global [40 x i16] zeroinitializer
 
 define i16 @f() {
@@ -1404,7 +1407,8 @@ x:
         .unwrap();
         llrm_mir::print::module(&module).contains("phi i16")
     };
-    assert!(looped(pipeline::Options::speed()), "-O3 keeps 40 trips rolled");
+    assert!(looped(pipeline::Options::standard()), "-O2: 202 over the threshold of 150 keeps 40 trips rolled");
+    assert!(!looped(pipeline::Options::speed()), "-O3: 202 under 300 copies them out");
     assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
 }
 
@@ -1415,9 +1419,42 @@ x:
 fn test_the_llvm_order_is_the_default_and_its_off_switch_is_the_rounds() {
     let on = Applied::default();
     assert!(on.options.llvm_order, "the order is on by default");
-    assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
+    assert_eq!(pipeline::function_stages(&on).len(), 4, "early, cleanup, simplify and late");
     let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
     assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
+}
+
+/// The translated SROA and PromoteMemToReg were switches that defaulted off
+/// (`LLRM_EXP_SROA`, `LLRM_EXP_MEM2REG`) while the registry called their slots
+/// Old: the parity pipeline ran the stand-ins. Now both are on by default, the
+/// registry says Translated, and the explicit off knobs do not fail its check.
+#[test]
+fn test_sroa_and_mem2reg_are_on_by_default_and_the_registry_calls_their_slots_translated() {
+    let on = Applied::default();
+    assert!(on.options.sroa && on.options.mem2reg, "translated SROA and mem2reg are on by default");
+    let kind = |slot: &str| crate::parity::REGISTRY.iter().find(|one| one.slot == slot).map(|one| one.kind);
+    for slot in ["sroa@1179", "promote@1241", "sroa@646", "sroa@776"] {
+        assert_eq!(kind(slot), Some(crate::parity::SlotKind::Translated), "{slot}");
+    }
+    let off = Applied {
+        options: pipeline::Options { sroa: false, mem2reg: false, ..Default::default() },
+        ..Applied::default()
+    };
+    for applied in [&on, &off] {
+        for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
+            let built = pipeline::llvm_order(applied, phase).iter().map(|one| one.name()).collect::<Vec<_>>();
+            let level = crate::parity::Level::O2;
+            let checked = crate::parity::check_phase_with(
+                phase,
+                &built,
+                level,
+                applied.options.sroa,
+                applied.options.mem2reg,
+                applied.options.rotating(),
+            );
+            assert_eq!(checked, Ok(()), "{phase:?} sroa {} mem2reg {}", applied.options.sroa, applied.options.mem2reg);
+        }
+    }
 }
 
 /// With `Options::llvm_order` a body goes through LLVM's early function
@@ -1429,12 +1466,24 @@ fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translat
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
     assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
-    assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
+    assert_eq!(pipeline::function_stages(&on).len(), 4, "early, cleanup, simplify and late");
     let names = |phase| pipeline::llvm_order(&on, phase).iter().map(|one| one.name()).collect::<Vec<_>>();
     let simplify = names(crate::parity::Phase::Simplify);
     let count = |what: &str| simplify.iter().filter(|one| one.split('@').next() == Some(what)).count();
     assert_eq!((count("gvn"), count("dse"), count("earlycse")), (1, 1, 1), "{simplify:?}");
     assert!(names(crate::parity::Phase::Early).contains(&"earlycse@1180"), "{:?}", names(crate::parity::Phase::Early));
+}
+
+/// Old: LLVM's `InstSimplifyPass` (PassBuilderPipelines.cpp#L1662) was Missing
+/// and never ran, so an identity left after the last pass stayed in the body.
+/// Now its slot is Translated and the order ends with it.
+#[test]
+fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
+    assert_eq!(late, ["instsimplify@1662"]);
+    let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
+    assert_eq!(kind, Some(crate::parity::SlotKind::Translated));
 }
 
 /// A body computes the same answer through LLVM's order.
@@ -1500,6 +1549,45 @@ done:
     assert!(without, "premise: without the rotate slot the mul is in the entry block\n{plain}");
     let (with, rotated) = entry_has_mul(true);
     assert!(!with, "the mul is behind the guard, not in the entry block\n{rotated}");
+}
+
+/// The rotate slot is LLVM's `LoopRotate`: a loop whose latch only increments
+/// (`for (i = 0; ; i++)` with the test in the header after a body block) has
+/// the increment folded into the block that exits (`simplifyLoopLatch`) and
+/// is one block, test last. The stand-in `rotate` copies the header and leaves
+/// the latch a block of its own.
+#[test]
+fn test_the_rotate_slot_folds_a_one_increment_latch_into_the_exit_test() {
+    let text = "define i16 @f(i16 %x, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b3 ]
+  %acc = phi i16 [ %x, %b0 ], [ %s, %b3 ]
+  %s = add i16 %acc, %i
+  %go = icmp slt i16 %s, %n
+  br i1 %go, label %b3, label %b2
+
+b3:
+  %next = add i16 %i, 1
+  br label %b1
+
+b2:
+  %r = phi i16 [ %s, %b1 ]
+  ret i16 %r
+}
+";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied {
+        options: pipeline::Options { llvm_order: true, rotate_slot: true, ..Default::default() },
+        ..Applied::default()
+    };
+    let printed = crate::testing::managed(&mut module, pipeline::Fixed::linear(&applied, pipeline::Phase::Simplify));
+    let looped = printed.split("\n\n").find(|one| one.contains("phi i16 [ 0")).expect("the loop block");
+    assert!(looped.contains("add i16 %") && looped.contains("icmp slt") && looped.contains("br i1"), "{printed}");
+    assert_eq!(printed.matches("phi i16 [ 0,").count(), 1, "{printed}");
+    assert!(!printed.contains("b3:"), "the latch is folded into the exit test\n{printed}");
 }
 
 /// `LLRM_DUMP_INPUTS` for the POCs of single passes: a pass that finds nothing
@@ -2077,4 +2165,79 @@ b2:
     fixed.only = false;
     fixed.passes = vec![Box::new(crate::simplifycfg::SimplifyCfg), Box::new(crate::loopsimplify::LoopSimplify)];
     crate::testing::managed(&mut module, fixed);
+}
+/// x_life -Os under the LLVM order: the spill forecast kept the inner loop's
+/// invariant address math (`mul`, `getelementptr`) in the loop, 16 ops where
+/// the old rounds left 11, so `unroll` refused the full unroll and the
+/// program ran 1.94x the instructions (clocks 0.807 to 1.448 of min(gcc,
+/// clang)). The order's LICM slot prices no registers, as LLVM's: run alone on
+/// two inner loops that six registers cannot hold, it moves all six loads.
+#[test]
+fn test_the_llvm_order_hoists_invariants_the_spill_forecast_would_keep() {
+    let applied =
+        Applied { options: pipeline::Options { llvm_order: true, ..pipeline::Options::size() }, ..Applied::default() };
+    let mut module = crate::testing::parsed(&crate::hoist::tests::two_inner_loops());
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.require::<llrm_analysis::manager::Summaries>();
+    let slots = pipeline::llvm_order(&applied, crate::parity::Phase::Simplify);
+    let slot = slots.into_iter().find(|one| one.name() == "licm@730").expect("the speculating LICM slot");
+    manager.add_boxed(slot);
+    manager
+        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap();
+    let printed = crate::testing::printed(&module);
+    let f = &printed[printed.find("define i16 @f(").expect("f")..];
+    let b0 = f[f.find("\nb0:\n").unwrap() + 5..].lines().take_while(|line| line.starts_with("  ")).collect::<Vec<_>>();
+    assert_eq!(b0.iter().filter(|line| line.contains("load")).count(), 6, "{printed}");
+}
+
+/// d_faces -O2: the interprocedural stage ran body 32 again (`_clip_w`) and its
+/// `[runs] body` line named `_d_draw_faces`, the last function the manager's
+/// loop had set. A rerun names the function it runs.
+#[test]
+fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
+    let mut module = llrm_analysis::testing::parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %d = add i16 %x, 1\n  ret i16 %x\n}\n\ndefine i16 @g(i16 %x) {\nb0:\n  ret i16 %x\n}\n",
+    );
+    let mut analyses = llrm_mir::passes::ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_x86_m16::Dos::default()));
+    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
+    fixed.only = false;
+    fixed.passes = vec![Box::new(EraseUnused)];
+    // The manager's loop last set `g`.
+    llrm_mir::passes::set_running_function("g");
+    let (_, lines) = pipeline::capturing_runs(|| {
+        super::rerun(&mut module, &mut analyses, llrm_mir::context::GlobalId(0), &mut fixed).unwrap()
+    });
+    assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
+}
+
+/// LoopRotate is off by default (it miscompiled with the passes after it,
+/// #2585; `LLRM_ROTATE` turns it on), and off where unroll-and-jam runs, whose
+/// nests are the header-tested form (RJ1).
+#[test]
+fn test_the_rotate_slot_is_off_by_default_and_off_where_unroll_jam_is() {
+    // Off until #2585 is fixed (`LLRM_ROTATE` sets it); the option still gates
+    // the slot.
+    let on = pipeline::Options { rotate_slot: true, ..pipeline::Options::default() };
+    assert!(on.rotating());
+    assert_eq!(pipeline::Options::default().rotating(), std::env::var_os("LLRM_ROTATE").is_some());
+    assert!(!pipeline::Options { unroll_jam: true, ..on }.rotating());
+    assert!(!pipeline::Options::speed().rotating());
+    assert!(!pipeline::Options::aggressive().rotating());
+}
+
+/// `llrm-pass --order` could not name a slot of LLVM's order: the oracle ran
+/// only the old pass names, so the translated SROA, promote and EarlyCSE slots
+/// were never compared with `opt`. A slot is selectable when the level builds
+/// it; `gvn@787` is not built at -O1.
+#[test]
+fn test_a_slot_of_the_order_can_be_run_alone_when_the_level_builds_it() {
+    let o2 = Applied::default();
+    for slot in ["sroa@1179", "promote@1241", "earlycse@649", "unroll@753", "instsimplify@1662", "memcpyopt@818"] {
+        assert!(pipeline::slot_built(&o2, slot), "{slot}");
+    }
+    assert!(!pipeline::slot_built(&o2, "sroa@1"), "no such slot");
+    assert!(!pipeline::slot_built(&o2, "gvn"), "a pass name is no slot");
+    let o1 = Applied { options: pipeline::Options { pre: false, ..Default::default() }, ..Applied::default() };
+    assert!(!pipeline::slot_built(&o1, "gvn@787"), "-O1 has no GVN");
 }

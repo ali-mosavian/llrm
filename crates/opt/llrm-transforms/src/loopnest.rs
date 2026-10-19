@@ -107,9 +107,7 @@ pub(crate) fn work(
 ) -> Vec<InstId> {
     function
         .block(block)
-        .instructions()
         .iter()
-        .copied()
         .filter(|&inst| {
             let op = &function.instruction(inst).opcode;
             *op != Opcode::Phi && !op.is_terminator()
@@ -121,13 +119,7 @@ pub(crate) fn phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-        .collect()
+    function.block(block).iter().take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
 }
 
 /// `inner`'s nest in `outer`, where `outer` holds nothing else.
@@ -282,7 +274,7 @@ pub(crate) fn inner_is_invariant(
     }
     // Nothing it computes is read outside it.
     for &at in &nest.inner.body {
-        for &inst in function.block(cfg::block(at)).instructions() {
+        for inst in function.block(cfg::block(at)).iter() {
             if let Some(result) = function.instruction(inst).result {
                 let read_outside = function.users(result).iter().any(|used| {
                     function.parent(used.user).is_some_and(|block| !nest.inner.body.contains(&cfg::id(block)))

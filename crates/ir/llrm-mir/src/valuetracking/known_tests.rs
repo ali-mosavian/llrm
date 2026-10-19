@@ -23,7 +23,7 @@ fn dump(text: &str) -> String {
         let name = global.name.clone().unwrap_or_default();
         let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(&module, function);
-        let first = function.block(function.entry().expect("an entry")).instructions().first().copied();
+        let first = function.block(function.entry().expect("an entry")).first();
         let mut values: Vec<(Operand, Option<InstId>)> =
             function.parameters().iter().map(|parameter| (Operand::Value(*parameter), first)).collect();
         for (_, inst) in function.walk() {
@@ -121,5 +121,15 @@ fn test_intrinsic_call_with_missing_argument_is_unknown() {
     assert_same(
         &dump(text),
         "f 0 kb=???????????????????????????????? nn=0 ng=0\nf 1 kb=???????????????????????????????? nn=0 ng=0\n",
+    );
+}
+
+/// `computeKnownBits` of `undef` says nothing, and a phi whose incoming values
+/// are all undef is skipped, as in LLVM.
+#[test]
+fn test_undef_operands_match_llvm() {
+    assert_same(
+        &dump(include_str!("../../tests/vt/known/undef.ll")),
+        include_str!("../../tests/vt/known/undef.expected"),
     );
 }

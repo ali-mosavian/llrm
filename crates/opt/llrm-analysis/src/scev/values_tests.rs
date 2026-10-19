@@ -120,3 +120,76 @@ fn test_forgetting_a_recurrence_forgets_the_values_that_use_it() {
     assert!(se.get_existing_scev(inc).is_none(), "the post-increment itself");
     assert!(se.get_existing_scev(r).is_none(), "the quotient that uses it");
 }
+
+/// `forgetValue` walks the def-use chain: forgetting the header phi forgets
+/// the increment that reads it and the quotient that reads that, which
+/// `forgetMemoizedResults` of the phi's expression alone leaves (the test
+/// above). Before `forget_value`, `rewriteLoopExitValues` could not tell
+/// ScalarEvolution that an incoming value had changed.
+#[test]
+fn test_forgetting_a_value_forgets_everything_computed_from_it() {
+    use llrm_mir::module::Operand;
+
+    use super::{Cx, ScalarEvolution};
+
+    let text = "define i32 @f(i32 %n) {\n\
+        entry:\n  br label %loop\n\
+        loop:\n\
+          %i = phi i32 [ 0, %entry ], [ %inc, %loop ]\n\
+          %inc = add nuw nsw i32 %i, 1\n\
+          %cmp = icmp ult i32 %inc, %n\n\
+          br i1 %cmp, label %loop, label %exit\n\
+        exit:\n  %r = udiv i32 %inc, 3\n  ret i32 %r\n}\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let (_, _, function) = module.functions().find(|(_, _, function)| !function.layout().is_empty()).expect("a body");
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let tree = llrm_mir::domtree::DomTree::of(function);
+    let loops = llrm_mir::loopinfo::LoopInfo::analyze(function, || &tree);
+    let assumptions = llrm_mir::valuetracking::AssumptionCache::new(&module, function);
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let mut se = ScalarEvolution::new();
+    let value = |name: &str| {
+        let labels = llrm_mir::print::value_labels(function);
+        let (id, _) = labels.iter().find(|(_, label)| label.as_str() == name).expect("a value");
+        Operand::Value(id)
+    };
+    let (i, inc, r) = (value("i"), value("inc"), value("r"));
+    for v in [i, inc, r] {
+        se.get_scev(&cx, v);
+    }
+    se.forget_value(&cx, i);
+    for (name, v) in [("i", i), ("inc", inc), ("r", r)] {
+        assert!(se.get_existing_scev(v).is_none(), "%{name} is computed from %i");
+    }
+}
+
+/// `phi [poison, %i]` where `%i` is a phi of the same block, after it: `%i`
+/// does not dominate the phi (the value it holds on the back edge is the
+/// previous trip's), so the phi is not `%i`. `createSCEV` took it for `%i`'s
+/// recurrence and the exit value of LICM's promoted store was the counter
+/// after the last trip, 8 where the last store was 7.
+#[test]
+fn test_a_phi_of_poison_and_a_later_phi_of_its_block_is_not_that_phi() {
+    let text = "define i32 @f(i32 %n) {\n\
+        entry:\n  br label %loop\n\
+        loop:\n\
+          %a = phi i32 [ poison, %entry ], [ %i, %loop ]\n\
+          %i = phi i32 [ 0, %entry ], [ %inc, %loop ]\n\
+          %inc = add nuw nsw i32 %i, 1\n\
+          %cmp = icmp ult i32 %inc, %n\n\
+          br i1 %cmp, label %loop, label %exit\n\
+        exit:\n  ret i32 %a\n}\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let printed = print_module_values(&module);
+    let a = printed.lines().find(|line| line.starts_with("%a\t")).expect("a line for %a");
+    assert!(!a.contains("{0,+,1}"), "{printed}");
+}

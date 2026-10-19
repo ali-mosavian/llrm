@@ -287,13 +287,64 @@ no:
 
 #[test]
 fn test_what_is_not_selected_yet_is_refused() {
-    for (body, why) in [
-        ("%c = icmp eq i16 %a, 0\n  %d = add i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v", "arithmetic on an i1"),
-        ("%b = trunc i16 %a to i8\n  %v = sdiv i8 %b, 3\n  %w = sext i8 %v to i16\n  ret i16 %w", "a byte division"),
-    ] {
+    for (body, why) in [(
+        "%c = icmp eq i16 %a, 0\n  %d = add i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v",
+        "arithmetic on an i1",
+    )] {
         let text = format!("define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  {body}\n}}\n");
         assert_eq!(selected(&text, "f").err(), Some(Unselected(why.to_owned())), "{body}");
     }
+}
+
+/// CVP narrows a `udiv` to i8 and expands a `urem` through a `freeze`; both
+/// were refused ("a byte division", "freeze") and stopped vid.c and screen.c.
+#[test]
+fn test_a_byte_division_and_a_freeze_are_selected() {
+    for (body, mnemonic) in [
+        ("%b = trunc i16 %a to i8\n  %v = udiv i8 %b, %b\n  %w = zext i8 %v to i16\n  ret i16 %w", "div"),
+        ("%b = trunc i16 %a to i8\n  %v = sdiv i8 %b, 3\n  %w = sext i8 %v to i16\n  ret i16 %w", "idiv"),
+        (
+            "%b = trunc i16 %a to i8\n  %q = sdiv i8 %b, %b\n  %r = srem i8 %b, %b\n  %v = add i8 %q, %r\n  %w = sext i8 %v to i16\n  ret i16 %w",
+            "idiv",
+        ),
+        ("%f = freeze i16 %a\n  %v = udiv i16 %f, %f\n  ret i16 %v", "div"),
+    ] {
+        let text = format!("define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  {body}\n}}\n");
+        let got = listing(&text, "f");
+        assert!(got.iter().any(|one| one.starts_with(mnemonic)), "{body}: {got:?}");
+    }
+}
+
+/// indvars' `n * (n - 1) / 2` in i33 was refused ("a i33 value", #2497):
+/// promoted to i64 first, it is selected.
+#[test]
+fn test_an_odd_width_promoted_is_selected() {
+    let text = "define i32 @f(i32 %n) addrspace(1) {
+  %m = sub i32 %n, 1
+  %x = zext i32 %n to i33
+  %y = zext i32 %m to i33
+  %p = mul i33 %x, %y
+  %h = lshr i33 %p, 1
+  %t = trunc i33 %h to i32
+  ret i32 %t
+}
+";
+    assert_eq!(selected(text, "f").err(), Some(Unselected("a i33 value".to_owned())));
+    let mut module = parsed(text);
+    crate::backend::legalize::promoted(&mut module).unwrap();
+    let got = isel::selected(
+        &module,
+        "f",
+        &qb(),
+        &mut Pool::new(0),
+        crate::backend::cpu::profile("486").expect("a target"),
+        &crate::backend::target::BASIC,
+        isel::m16(),
+        &llrm_x86_m16::M16,
+        false,
+        0,
+    );
+    assert!(got.is_ok(), "{:?}", got.err());
 }
 
 /// A shift counts from cl: the count as a word printed `shl ax, cx`.
@@ -599,9 +650,8 @@ define i32 @f(i16 %a) addrspace(1) {
             "mov bp, sp",
             "L0_0:",
             "mov ax, word ptr [bp+6]",
-            "mov bl, al",
             "push ax",
-            "movzx ax, bl",
+            "movzx ax, al",
             "push ax",
             "call far ptr basic",
             "pushw 5",
@@ -2787,7 +2837,7 @@ done:
     assert_eq!(
         (&got[body + 1..body + 3], steps, &got[body + 5..body + 7]),
         (
-            &["mov cl, byte ptr es:[si]".to_owned(), "mov byte ptr [bx], cl".to_owned()][..],
+            &["mov cl, byte ptr es:[bx]".to_owned(), "mov byte ptr [si], cl".to_owned()][..],
             vec!["inc bx".to_owned(), "inc si".to_owned()],
             &["dec ax".to_owned(), "jne L0_2".to_owned()][..]
         ),
@@ -3943,9 +3993,9 @@ fn test_dbg_lines_become_linnum() {
     let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {\n  %s = sub i16 %a, %b, !dbg !0\n  %t = add i16 %s, 3, !dbg !1\n  ret i16 %t, !dbg !1\n}\n!0 = !{i32 7}\n!1 = !{i32 8}\n";
     let module = parsed(text);
     let (_, _, function) = module.functions().next().expect("f");
-    let instructions = function.layout().iter().flat_map(|&block| function.block(block).instructions());
+    let instructions = function.layout().iter().flat_map(|&block| function.block(block).iter());
     let attached =
-        instructions.filter(|&&one| function.instruction(one).metadata.iter().any(|(kind, _)| kind == "dbg")).count();
+        instructions.filter(|&one| function.instruction(one).metadata.iter().any(|(kind, _)| kind == "dbg")).count();
     assert_eq!(attached, 3, "the fixture carries its lines");
     let mut assembled =
         assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC)
@@ -4139,8 +4189,7 @@ define i16 @f() addrspace(1) {
             "db 0fah",
             "xor ax, ax",
             "db 0cdh,01ah",
-            "mov ax, cx",
-            "add ax, dx",
+            "lea ax, [ecx+edx]",
             "pop bp",
             "retf"
         ]
@@ -4170,8 +4219,8 @@ b:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov ax, word ptr [bp+8]",
             "cmp byte ptr [bp+6], 0",
+            "mov ax, word ptr [bp+8]",
             "je L0_3",
             "L0_1:",
             "mov ax, -4",
@@ -4453,6 +4502,26 @@ fn test_a_narrowing_float_rounds_to_its_targets_width() {
     // -fexcess-precision=fast: no round trip through memory
     assert!(!listing(text, "f").iter().any(|line| line.starts_with("fstp")), "{:?}", listing(text, "f"));
     assert!(!listing(text, "g").iter().any(|line| line.starts_with("fstp dword")), "{:?}", listing(text, "g"));
+}
+
+/// An i64 made a float rounds to the float under `-fexcess-precision=standard`:
+/// LLVM's order makes `sitofp (zext i32)` a `uitofp nneg`, whose unsigned
+/// 64-bit lowering (two `fild qword`, scaled and added) kept the x87's exact
+/// sum, so `4294967295 == 4294967296.0f` was false (int_compared_with_float).
+/// A `nneg` one is a signed `fild qword`; either rounds through a dword.
+#[test]
+fn test_an_unsigned_i64_made_a_float_rounds_to_the_float() {
+    let text = "define float @f(i64 %x) addrspace(1) {\n  %d = uitofp nneg i64 %x to float\n  ret float %d\n}\ndefine float @g(i64 %x) addrspace(1) {\n  %d = uitofp i64 %x to float\n  ret float %d\n}\n";
+    assert!(text.contains("uitofp nneg i64") && text.contains("uitofp i64"), "the shapes that were not rounded");
+    let rounded = |name| listing_float_store(text, name);
+    for name in ["f", "g"] {
+        let got = rounded(name);
+        assert!(got.iter().any(|line| line.starts_with("fstp dword")), "{name}: {got:?}");
+    }
+    // `nneg`: one signed qword read, no scaling by 2^32.
+    let f = rounded("f");
+    assert_eq!(f.iter().filter(|line| line.starts_with("fild qword")).count(), 1, "{f:?}");
+    assert!(!f.iter().any(|line| line.starts_with("fmul")), "{f:?}");
 }
 
 /// A long double is compared from a register: fcom has no 10-byte memory
@@ -5468,4 +5537,34 @@ fn test_a_poison_float_or_address_is_zero() {
 fn test_a_poison_i64_is_two_zero_dwords() {
     let text = "define i64 @f(i64 %a) {\n  %v = add i64 poison, %a\n  ret i64 %v\n}\n";
     assert!(!listing(text, "f").is_empty());
+}
+
+/// A far pointer that is poison (SROA's value for a read of an unwritten
+/// slot, which a returned struct's hidden pointer was) was refused: "an address
+/// of no global: Poison" (regparm3_matrix_22 at -O2). Poison is any value.
+#[test]
+fn test_a_poison_far_pointer_is_selected_as_any_value() {
+    let text = "define ptr addrspace(1) @f() addrspace(1) {
+b0:
+  ret ptr addrspace(1) poison
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line == "retf"), "{got:?}");
+}
+
+/// Old: `@g = global i16 undef` was refused as "a poison initializer". An undef
+/// initializer is any bytes; the data is zero, as a `zeroinitializer` is.
+#[test]
+fn test_an_undef_initializer_is_zero_bytes() {
+    use crate::backend::masm::{Datum, Label};
+    let text = "@u = internal global i16 undef\n@s = internal global { i8, i16 } undef\n";
+    let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
+    let names =
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
+    let datums = |name: &str| {
+        crate::backend::globals::datums(&module, module.named(name).expect("a global"), &names).expect("data")
+    };
+    assert_eq!(datums("u"), [Datum::Label(Label { name: "u".to_owned() }), Datum::Bytes(vec![0, 0])]);
+    assert_eq!(datums("s"), [Datum::Label(Label { name: "s".to_owned() }), Datum::Bytes(vec![0, 0, 0, 0])]);
 }

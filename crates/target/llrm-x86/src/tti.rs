@@ -358,6 +358,27 @@ fn intrinsic_prices() -> &'static std::collections::HashMap<(&'static str, &'sta
 }
 
 impl Tti for X86 {
+    fn cast_of_load_cost(
+        &self,
+        op: CastKind,
+        dst: Ty,
+        src: Ty,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L3805
+        // For a scalar load the extend would be free.
+        (matches!(op, CastKind::SIToFP | CastKind::UIToFP) && matches!(src, Ty::Int(bits) if (2..32).contains(&bits)))
+            .then(|| self.cast_cost(CastKind::SIToFP, dst, Ty::Int(32), kind))
+    }
+
+    fn indexed_store_cost(
+        &self,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L5818
+        (kind != CostKind::RecipThroughput).then(|| Cost::of(2))
+    }
+
     fn intrinsic_cost(
         &self,
         name: &str,

@@ -206,8 +206,90 @@ pub enum ImmUser {
     Unknown,
 }
 
+/// `TTI::UnrollingPreferences`: what the unroller may do, as the target sets
+/// it.
+#[derive(Clone, Debug)]
+pub struct UnrollingPreferences {
+    pub threshold: u32,
+    pub max_percent_threshold_boost: u32,
+    pub opt_size_threshold: u32,
+    pub partial_threshold: u32,
+    pub partial_opt_size_threshold: u32,
+    pub default_unroll_runtime_count: u32,
+    pub max_count: u32,
+    pub max_upper_bound: u32,
+    pub full_unroll_max_count: u32,
+    pub be_insns: u32,
+    pub partial: bool,
+    pub runtime: bool,
+    pub allow_remainder: bool,
+    pub unroll_remainder: bool,
+    pub allow_expensive_trip_count: bool,
+    pub force: bool,
+    pub upper_bound: bool,
+    pub max_iterations_count_to_analyze: u32,
+}
+
 /// The target a cost is for.
 pub trait Tti {
+    /// The cost of an integer-to-float cast whose operand is a load, where the
+    /// target prices it apart (X86: the extension of a narrow integer to i32 is
+    /// free for a load, `FILD` reads it from memory); none: as any cast (T4).
+    fn cast_of_load_cost(
+        &self,
+        op: CastKind,
+        dst: Ty,
+        src: Ty,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (op, dst, src, kind);
+        None
+    }
+
+    /// The cost of a store whose address is a GEP with a non-constant index,
+    /// for a target that prices it apart from other stores (X86: "a store
+    /// with index and scale costs 2 uops", for every kind but throughput);
+    /// none: as any store (T4).
+    fn indexed_store_cost(
+        &self,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = kind;
+        None
+    }
+
+    /// `getSchedModel().LoopMicroOpBufferSize`: the micro-ops the target's loop
+    /// buffer holds; 0 where its scheduling model has none (T11: only the
+    /// models of the cpus the plan page pins are known, and none has one).
+    fn loop_micro_op_buffer_size(&self) -> u32 {
+        0
+    }
+
+    /// `BasicTTIImplBase::getUnrollingPreferences`: partial and runtime
+    /// unrolling up to the loop buffer's size, unless the loop calls something
+    /// that is lowered to a call (`has_calls`).
+    fn get_unrolling_preferences(
+        &self,
+        has_calls: bool,
+        up: &mut UnrollingPreferences,
+    ) {
+        let max_ops = self.loop_micro_op_buffer_size();
+        if max_ops == 0 || has_calls {
+            return;
+        }
+        // Enable runtime and partial unrolling up to the specified size, and
+        // the trip count upper bound.
+        up.partial = true;
+        up.runtime = true;
+        up.upper_bound = true;
+        up.partial_threshold = max_ops;
+        // Avoid unrolling when optimizing for size.
+        up.opt_size_threshold = 0;
+        up.partial_opt_size_threshold = 0;
+        // Instructions optimized when the back edge becomes a fall through.
+        up.be_insns = 2;
+    }
+
     /// `getCmpSelInstrCost`.
     fn cmp_sel_cost(
         &self,
@@ -385,4 +467,97 @@ pub fn is_free_intrinsic(name: &str) -> bool {
         "llrm.noalias.scope.decl",
     ];
     FREE.iter().any(|one| name == *one || name.strip_prefix(one).is_some_and(|rest| rest.starts_with('.')))
+}
+
+/// The generic profile: `TargetTransformInfoImplBase`'s defaults, what a target
+/// with no cost model of its own is priced by (T10): one unit for an operation,
+/// nothing for a `phi` (unless throughput is asked), a constant, or a
+/// truncation; no addressing mode folds.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Basic;
+
+impl Tti for Basic {
+    fn cmp_sel_cost(
+        &self,
+        _: CmpSel,
+        _: Ty,
+        _: CostKind,
+    ) -> Cost {
+        Cost::BASIC
+    }
+
+    fn memory_op_cost(
+        &self,
+        _: MemoryOp,
+        _: Ty,
+        _: CostKind,
+        _: bool,
+    ) -> Cost {
+        Cost::BASIC
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: CostKind,
+    ) -> Cost {
+        if phi && kind != CostKind::RecipThroughput { Cost::FREE } else { Cost::BASIC }
+    }
+
+    fn int_imm_cost(
+        &self,
+        _: i128,
+        _: u32,
+    ) -> Cost {
+        Cost::BASIC
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        _: ImmUser,
+        _: u32,
+        _: i128,
+        _: u32,
+    ) -> Cost {
+        Cost::FREE
+    }
+
+    fn is_truncate_free(
+        &self,
+        _: Ty,
+        _: Ty,
+    ) -> bool {
+        false
+    }
+
+    fn is_legal_addressing_mode(
+        &self,
+        _: bool,
+        _: i64,
+        _: bool,
+        _: i64,
+    ) -> bool {
+        false
+    }
+
+    fn cast_cost(
+        &self,
+        _: CastKind,
+        _: Ty,
+        _: Ty,
+        _: CostKind,
+    ) -> Cost {
+        Cost::BASIC
+    }
+
+    fn arithmetic_cost(
+        &self,
+        _: ArithOp,
+        _: Ty,
+        _: CostKind,
+        _: OperandInfo,
+        _: OperandInfo,
+    ) -> Cost {
+        Cost::BASIC
+    }
 }

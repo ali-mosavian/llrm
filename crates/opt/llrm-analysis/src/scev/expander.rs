@@ -60,10 +60,27 @@ pub struct Expander {
     pub(super) insert_point: Option<InstId>,
     /// `InsertedValues`: what this expander made, in order.
     pub(super) inserted: Vec<InstId>,
+    /// `inserted` as a set, for `isInsertedInstruction`.
+    pub(super) inserted_set: llrm_mir::dense::IdSet<InstId>,
+    /// `OrigFlags`: the flags an instruction had before the expander changed
+    /// them (`rememberFlags`), put back by a cleanup.
+    pub(super) orig_flags: llrm_mir::dense::IdMap<InstId, llrm_mir::opcode::Flags>,
     /// `InsertedExpressions`: a SCEV expanded at an insert point.
     pub(super) expressions: HashMap<(Scev, InstId), Operand>,
     /// `RelevantLoops`.
     pub(super) relevant_loops: HashMap<Scev, Option<BlockId>>,
+    /// `CanonicalMode`: add recurrences are written over one `{0,+,1}` phi.
+    pub(super) canonical_mode: bool,
+    /// `LSRMode`.
+    pub(super) lsr_mode: bool,
+    /// `PostIncLoops`, as the headers.
+    pub(super) post_inc_loops: Vec<BlockId>,
+    /// `IVIncInsertLoop` (its header) and `IVIncInsertPos`.
+    pub(super) iv_inc_insert: Option<(BlockId, InstId)>,
+    /// `InsertedIVs`.
+    pub(super) inserted_ivs: Vec<InstId>,
+    /// `ReusedValues`: found, not made.
+    pub(super) reused: llrm_mir::dense::IdSet<InstId>,
 }
 
 impl Expander {
@@ -74,8 +91,16 @@ impl Expander {
             name,
             insert_point: None,
             inserted: Vec::new(),
+            inserted_set: Default::default(),
+            orig_flags: Default::default(),
             expressions: HashMap::default(),
             relevant_loops: HashMap::default(),
+            canonical_mode: true,
+            lsr_mode: false,
+            post_inc_loops: Vec::new(),
+            iv_inc_insert: None,
+            inserted_ivs: Vec::new(),
+            reused: Default::default(),
         }
     }
 
@@ -86,6 +111,115 @@ impl Expander {
         ip: InstId,
     ) {
         self.insert_point = Some(ip);
+    }
+
+    /// `setCanonicalMode(false)` for LSR: each add recurrence gets its own phi.
+    pub fn set_canonical_mode(
+        &mut self,
+        on: bool,
+    ) {
+        self.canonical_mode = on;
+    }
+
+    /// `enableLSRMode`.
+    pub fn enable_lsr_mode(&mut self) {
+        self.lsr_mode = true;
+    }
+
+    /// `setIVIncInsertPos(L, Pos)`: the increments of `l`'s phis go before
+    /// `pos`.
+    pub fn set_iv_inc_insert_pos(
+        &mut self,
+        l: BlockId,
+        pos: InstId,
+    ) {
+        self.iv_inc_insert = Some((l, pos));
+    }
+
+    /// `setPostInc(L)`.
+    pub fn set_post_inc(
+        &mut self,
+        l: BlockId,
+    ) {
+        if !self.post_inc_loops.contains(&l) {
+            self.post_inc_loops.push(l);
+        }
+    }
+
+    /// `clearPostInc`.
+    pub fn clear_post_inc(&mut self) {
+        self.post_inc_loops.clear();
+    }
+
+    /// `rememberInstruction`.
+    pub(super) fn remember(
+        &mut self,
+        inst: InstId,
+    ) {
+        if self.inserted_set.insert(inst) {
+            self.inserted.push(inst);
+        }
+    }
+
+    /// `isInsertedInstruction`: the expander made `inst` (or reused it as its
+    /// own).
+    pub fn is_inserted_instruction(
+        &self,
+        inst: &InstId,
+    ) -> bool {
+        self.inserted_set.contains(inst)
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L848
+    /// `hoistIVInc(IncV, InsertPos, RecomputePoisonFlags)`: move a simple IV
+    /// increment (and the chain back to its phi) above `insert_pos`, where it
+    /// can be reached from the uses there; false if it cannot be hoisted.
+    pub fn hoist_iv_inc(
+        &mut self,
+        env: &Env,
+        context: &mut Context,
+        function: &mut Function,
+        se: &mut ScalarEvolution,
+        inc: InstId,
+        insert_pos: InstId,
+        recompute_poison_flags: bool,
+    ) -> bool {
+        let mut declared = Declared::default();
+        let mut run = super::expand::Run { x: self, env: *env, context, declared: &mut declared, function, se };
+        run.hoist_iv_inc(inc, insert_pos, recompute_poison_flags)
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L901
+    /// `canReuseFlagsFromOriginalIVInc(OrigPhi, WidePhi, OrigInc, WideInc)`:
+    /// both increments are the same binary operation of their phi.
+    pub fn can_reuse_flags_from_original_iv_inc(
+        function: &Function,
+        orig_phi: InstId,
+        wide_phi: InstId,
+        orig_inc: InstId,
+        wide_inc: InstId,
+    ) -> bool {
+        let reads = |inc: InstId, phi: InstId| {
+            let one = function.instruction(inc);
+            let phi_value = function.instruction(phi).result.map(Operand::Value);
+            matches!(one.opcode, llrm_mir::opcode::Opcode::Binary(_))
+                && one.operands.len() == 2
+                && phi_value.is_some_and(|v| one.operands.contains(&v))
+        };
+        reads(orig_inc, orig_phi)
+            && reads(wide_inc, wide_phi)
+            && function.instruction(orig_inc).opcode == function.instruction(wide_inc).opcode
+    }
+
+    /// `getAllInsertedInstructions`: what the expander made, in order, less
+    /// what it reused.
+    pub fn inserted_instructions(&self) -> Vec<InstId> {
+        self.inserted.iter().copied().filter(|inst| !self.reused.contains(inst)).collect()
+    }
+
+    /// `getInsertedIVs`.
+    pub fn inserted_ivs(&self) -> &[InstId] {
+        &self.inserted_ivs
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/ScalarEvolutionExpander.h#L418
@@ -113,14 +247,14 @@ impl Expander {
             }
             match se.node(s).kind.clone() {
                 Kind::UDiv(l, r) => {
-                    if !se.is_known_non_zero(cx, r.scev) {
+                    if !se.is_known_non_zero(cx, r.scev) || !se.is_guaranteed_not_to_be_poison_scev(cx, r.scev) {
                         return false;
                     }
                     work.extend([l.scev, r.scev]);
                 }
                 Kind::AddRec(ops, header) => {
                     let preheader = cx.loops.get_loop_for(header).and_then(|l| l.get_loop_preheader(cx.function));
-                    if preheader.is_none() && ops.len() != 2 {
+                    if preheader.is_none() && (!self.canonical_mode || ops.len() != 2) {
                         return false;
                     }
                     work.extend(ops.iter().map(|op| op.scev));
@@ -208,16 +342,36 @@ impl ExpanderCleaner {
         self.result_used = true;
     }
 
-    /// `cleanup`.
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L2610
+    /// `cleanup`: unless the result is used, every instruction the expander
+    /// inserted (not those it reused) is erased. They are used only by each
+    /// other, which `erase_all` allows.
     pub fn cleanup(
         self,
-        _expander: &mut Expander,
-        _function: &mut Function,
+        expander: &mut Expander,
+        function: &mut Function,
     ) {
         if self.result_used {
             return;
         }
-        todo!("S6")
+        // Restore the original poison flags.
+        let originals: Vec<_> = expander.orig_flags.iter().map(|(inst, flags)| (inst, *flags)).collect();
+        expander.orig_flags = Default::default();
+        for (inst, flags) in originals {
+            if !function.is_erased(inst) {
+                function.set_flags(inst, flags);
+            }
+        }
+        expander.inserted_set = Default::default();
+        let reused = std::mem::take(&mut expander.reused);
+        let mut inserted = std::mem::take(&mut expander.inserted);
+        expander.expressions.clear();
+        expander.relevant_loops.clear();
+        expander.inserted_ivs.clear();
+        let mut seen = llrm_mir::dense::IdSet::<InstId>::new();
+        inserted.retain(|&inst| !reused.contains(&inst) && seen.insert(inst));
+        inserted.reverse();
+        function.erase_all(&inserted).expect("what the expander inserted is used only by itself");
     }
 }
 

@@ -23,7 +23,7 @@ impl ScalarEvolution {
         s: Scev,
     ) -> Option<InstId> {
         match self.node(s).kind {
-            Kind::AddRec(_, header) => cx.function.block(header).instructions().first().copied(),
+            Kind::AddRec(_, header) => cx.function.block(header).first(),
             Kind::Unknown(Operand::Value(id)) => match cx.function.value(id).def {
                 ValueDef::Instruction(inst) => Some(inst),
                 ValueDef::Argument(_) => None,
@@ -74,7 +74,7 @@ impl ScalarEvolution {
             }
         }
         let entry = cx.function.entry().expect("a function with a body");
-        (bound.unwrap_or_else(|| cx.function.block(entry).instructions()[0]), precise)
+        (bound.unwrap_or_else(|| cx.function.block(entry).first().expect("a block with an instruction")), precise)
     }
 
     /// `DT.dominates(const Instruction *, const Instruction *)`.
@@ -99,12 +99,7 @@ impl ScalarEvolution {
         let function = cx.function;
         let (Some(a_block), Some(b_block)) = (function.parent(a), function.parent(b)) else { return false };
         let position = |block: BlockId, inst: InstId| -> usize {
-            function
-                .block(block)
-                .instructions()
-                .iter()
-                .position(|&one| one == inst)
-                .expect("an instruction of its block")
+            function.block(block).iter().position(|one| one == inst).expect("an instruction of its block")
         };
         if a_block == b_block
             && position(a_block, a) <= position(b_block, b)
@@ -126,7 +121,7 @@ impl ScalarEvolution {
                 &q,
                 a_block,
                 position(a_block, a),
-                function.block(a_block).instructions().len(),
+                function.block(a_block).len(),
                 SCAN_LIMIT,
             )
             && guarantee::is_guaranteed_to_transfer_execution_to_successor_between(
@@ -151,7 +146,7 @@ impl ScalarEvolution {
         l: BlockId,
     ) -> bool {
         let (def_i, _) = self.get_defining_scope_bound(cx, ops);
-        let reach_i = cx.function.block(l).instructions()[0];
+        let reach_i = cx.function.block(l).first().expect("a block with an instruction");
         self.is_guaranteed_to_transfer_execution_to(cx, def_i, reach_i)
     }
 

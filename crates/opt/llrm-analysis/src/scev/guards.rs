@@ -166,7 +166,7 @@ impl LoopGuards {
 
         let mut terms: Vec<(Operand, bool)> = Vec::new();
         // First, collect information from assumptions dominating the loop.
-        let first = cx.function.block(block).instructions().first().copied();
+        let first = cx.function.block(block).first();
         for &assume in &cx.assumptions.assumes {
             let dominates = first.is_some_and(|first| cx.tree.instruction_dominates(cx.function, assume, first));
             if !dominates {
@@ -233,9 +233,7 @@ impl LoopGuards {
             let phis: Vec<_> = cx
                 .function
                 .block(second)
-                .instructions()
                 .iter()
-                .copied()
                 .take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi)
                 .collect();
             for phi in phis {
@@ -679,7 +677,7 @@ fn match_c1_plus_unknown(
 }
 
 /// `containsAddRecurrence`.
-fn contains_add_recurrence(
+pub fn contains_add_recurrence(
     se: &ScalarEvolution,
     s: Scev,
 ) -> bool {

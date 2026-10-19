@@ -105,7 +105,7 @@ impl ScalarEvolution {
                         match cx.function.value(id).def {
                             ValueDef::Argument(_) => {
                                 let entry = cx.function.entry().expect("a function with a body");
-                                ctx_i = cx.function.block(entry).instructions().first().copied();
+                                ctx_i = cx.function.block(entry).first();
                             }
                             ValueDef::Instruction(inst) => ctx_i = Some(inst),
                         }

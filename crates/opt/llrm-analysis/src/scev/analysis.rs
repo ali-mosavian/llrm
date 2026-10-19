@@ -175,9 +175,20 @@ impl ScevSession {
         function: &Function,
         outer: &llrm_mir::passes::Outer,
     ) -> Self {
+        Self::within(context, &outer.globals, &outer.metadata, function)
+    }
+
+    /// [`ScevSession::of`] for a caller that holds the module's globals and
+    /// metadata, not its `Outer` (a memory `Unit`).
+    pub fn within(
+        context: &llrm_mir::context::Context,
+        globals: &[llrm_mir::module::GlobalValue],
+        metadata: &[llrm_mir::module::MetadataNode],
+        function: &Function,
+    ) -> Self {
         let tree = DomTree::of(function);
         let loops = LoopInfo::analyze(function, || &tree);
-        let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+        let assumptions = AssumptionCache::of(context, globals, metadata, function);
         Self { tree, loops, assumptions, scev: ScalarEvolution::new() }
     }
 
@@ -190,10 +201,42 @@ impl ScevSession {
         outer: &llrm_mir::passes::Outer,
         query: impl FnOnce(&mut ScalarEvolution, &Cx) -> R,
     ) -> R {
+        self.ask_within(context, layout, &outer.globals, &outer.metadata, function, query)
+    }
+
+    /// The expressions and the [`Env`] to expand them in, for a pass that
+    /// edits the function between queries (the CFG stays as it was).
+    pub fn split<'a>(
+        &'a mut self,
+        layout: &'a DataLayout,
+        globals: &'a [llrm_mir::module::GlobalValue],
+        metadata: &'a [llrm_mir::module::MetadataNode],
+    ) -> (&'a mut ScalarEvolution, super::expander::Env<'a>) {
+        let env = super::expander::Env {
+            globals,
+            metadata,
+            layout,
+            loops: &self.loops,
+            tree: &self.tree,
+            assumptions: &self.assumptions,
+        };
+        (&mut self.scev, env)
+    }
+
+    /// [`ScevSession::ask`] for a caller that holds the globals and metadata.
+    pub fn ask_within<R>(
+        &mut self,
+        context: &llrm_mir::context::Context,
+        layout: &DataLayout,
+        globals: &[llrm_mir::module::GlobalValue],
+        metadata: &[llrm_mir::module::MetadataNode],
+        function: &Function,
+        query: impl FnOnce(&mut ScalarEvolution, &Cx) -> R,
+    ) -> R {
         let cx = Cx {
             context,
-            globals: &outer.globals,
-            metadata: &outer.metadata,
+            globals,
+            metadata,
             function,
             layout,
             loops: &self.loops,

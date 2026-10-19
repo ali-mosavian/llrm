@@ -182,6 +182,7 @@ mod isel_tests;
 pub mod jumps;
 pub mod lanes;
 pub mod layout;
+pub mod legalize;
 pub mod lifetimes;
 pub mod lirtext;
 pub mod live;
@@ -302,7 +303,7 @@ pub mod verify;
 #[cfg(test)]
 mod pricing_tests;
 #[cfg(test)]
-mod regalloc_fuzz_tests;
+pub(crate) mod regalloc_fuzz_tests;
 #[cfg(test)]
 pub mod regalloc_input;
 #[cfg(test)]

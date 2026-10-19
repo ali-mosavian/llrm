@@ -51,11 +51,23 @@ flowchart TB
 | LLVM (at the pin) | llrm today | end state |
 |---|---|---|
 | [`BasicBlock` holds `simple_ilist<Instruction>`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/ADT/simple_ilist.h#L78) | `Block::instructions: Vec<InstId>` | intrusive list; insert, erase, splice O(1). Plan: [#2322]. MIRROR |
-| [`Use`/`Value::use_list`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Use.h#L42) | operands in `Vec<Operand>`; users found by scans or per-pass maps | intrusive use lists; `replaceAllUsesWith` is O(uses). MIRROR |
+| [`Use`/`Value::use_list`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Use.h#L42) | operands in `Vec<Operand>`; users found by scans or per-pass maps | intrusive use lists; `replaceAllUsesWith` is O(uses). Landed as `uselist.rs` for values and blocks (newest first, O(1) unlink; arena node per operand slot, DEVIATE 1). MIRROR |
 | [`ValueHandle`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/ValueHandle.h#L1) (`WeakTrackingVH`, `AssertingVH`) | none | handles for caches that survive erasure (AssumptionCache, SCEV, MemorySSA). MIRROR |
 | [`User` co-allocated operands](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/User.cpp#L137) | `Vec<Operand>` per instruction | DEVIATE D5 |
+| [`LLVMContext` uniquing tables](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/LLVMContextImpl.h) (`IntConstants`, `FPConstants`, types): `ConstantInt::get(Ctx, ..)` interns through the context's own tables, whoever holds it | `Context::constant`/`int` and `Types::intern` take `&mut self`: 273 functions take `&mut Context`, so a read-only analysis cannot ask for a constant | append-only arena, stable ids, constants never freed; interning through `&self`; no `RefCell` borrow held across a call. Stages below. MIRROR |
 
-Box names for PRs: `IR/ilist`, `IR/uselist`, `IR/handles`.
+Box names for PRs: `IR/ilist`, `IR/uselist`, `IR/handles`, `IR/context-intern`.
+
+`IR/context-intern` stages (owner domtree-port; coordinate with simplify-combine-wiring-2128):
+1. Price: d_faces compile (method M) and the SCEV and LVI hot paths, before.
+2. `Arena<T>`: chunked, append-only, one audited `unsafe` for a `&T` that outlives the table's borrow. `Context::constant`, `int` and `Types::intern` move to `&self`; the hash table's `RefCell` is borrowed for one lookup or insert, never across a call. Existing `&mut` callers compile unchanged. `renumber_globals` and named-struct definition stay `&mut` (module construction).
+3. `&mut Context` to `&Context`, compiler-guided, one crate per PR (mir, analysis, transforms by file family, core, x86-bc). A scan finds 273 such functions, 35 of which only intern or read directly.
+4. Delete the 'not yet interned' workarounds: gvn-ci-2160-2172's DEVIATE for #2500 (PHITransAddr counts a constant not yet interned as unavailable). A grep of the head finds no other; stage 3's errors list any `Option`-returning 'constant if present' helper, recorded here.
+5. Price again, same cases; it ships only if the d_faces compile and the SCEV/LVI paths are within noise.
+
+COST DEBT C1 (stage 2, [#2527](https://github.com/ali-mosavian/llrm/pull/2527)): `&self` interning costs +0.9 to +1.1% instructions:u on the dist build (fat LTO, one CGU), `llrm-c -O2` at the base `3b8d044e2`, min of 3: vid.c 370.9 M to 374.8 M, menu.c 1,357.5 M to 1,372.2 M, d_faces.c 2,350.4 M to 2,371.5 M, d_faces -m32 flat 1,666.8 M to 1,683.1 M; objects byte-identical in size. Instructions only; cycles not claimed. Exit: stage 3 removes the context clones, stage 5 prices the clawback; the debt closes when the dist price is within 0.3%.
+
+COST DEBT C2 (block storage stage B, [#2574](https://github.com/ali-mosavian/llrm/pull/2574)): the block list as an arena linked list costs +0.2 to +0.45% instructions:u on the dist build (fat LTO, one CGU), `llrm-c -O2` at the base `5fbd48fe6`, min of 3: d_faces -m16 2,492.9 M to 2,498.8 M (+0.24%), vid.c 384.1 M to 385.4 M, menu.c 1,640.1 M to 1,645.9 M, queens -m32 99.4 M to 99.6 M, nbody -m32 94.2 M to 94.6 M, jpeg_fixed -m32 1,827.3 M to 1,830.9 M; objects byte-identical (`tools/identity.sh c`: 138 SAME m16, 139 SAME m32). Cause: readers that still call `instructions()` rebuild the cached view after an edit. Instructions only; cycles not claimed. Exit: reader migration to count 0 (uselist-port), the view deleted, the dist price re-taken within 0.1%.
 
 ## 2. Pass and analysis managers
 

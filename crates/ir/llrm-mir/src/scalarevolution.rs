@@ -69,9 +69,8 @@ impl Evolution {
         let Some(inside) = loops.get_loop_for(header) else { return 0 };
         function
             .block(header)
-            .instructions()
             .iter()
-            .map(|&inst| function.instruction(inst))
+            .map(|inst| function.instruction(inst))
             .filter(|one| one.opcode == Opcode::Phi)
             .filter_map(|phi| phi.result.map(|value| (phi, value)))
             .filter(|&(phi, value)| match self.of(value) {

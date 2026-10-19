@@ -39,6 +39,8 @@
 //!   and no coroutines.
 //! - R5 `simplifyInstruction` takes no dominator tree or assumptions: the copy
 //!   sits in a preheader whose analyses the rotation is changing.
+//! - R6 A target with no cost model (`Machine::tti`) is priced by the generic
+//!   profile, `llrm_mir::tti::Basic`: a pass names no target crate.
 //!
 //! # Example
 //! Before:
@@ -96,7 +98,7 @@ use llrm_mir::module::{
     BlockId, Function, GlobalValue, InstId, MetadataId, MetadataNode, MetadataOperand, Operand, ValueDef, ValueId,
 };
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
-use llrm_mir::passes::Declared;
+use llrm_mir::passes::{Analyses, Declared, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::tti::Tti;
 
 use crate::lcssa::{arms, from_arms};
@@ -328,7 +330,7 @@ fn should_speculate_instrs(
     let jump = function.terminator(latch).expect("a terminated latch");
     let mut seen_increment = false;
     let multi_exit_loop = lp.get_exiting_block(function).is_none();
-    for &inst in function.block(latch).instructions() {
+    for inst in function.block(latch).iter() {
         if inst == jump {
             break;
         }
@@ -424,7 +426,7 @@ fn rewrite_uses_of_cloned_instructions(
     value_map: &IdMap<ValueId, Operand>,
 ) {
     // Remove phi entries that are no longer live.
-    let header_instructions = run.function.block(orig_header).instructions().to_vec();
+    let header_instructions = run.function.block(orig_header).iter().collect::<Vec<_>>();
     for &inst in &header_instructions {
         if run.function.instruction(inst).opcode != Opcode::Phi {
             break;
@@ -437,8 +439,7 @@ fn rewrite_uses_of_cloned_instructions(
     // necessary.
     for &inst in &header_instructions {
         let Some(result) = run.function.instruction(inst).result else { continue };
-        // LLVM's use lists begin with the newest use; ours end with it.
-        let uses = run.function.users(result).iter().rev().copied().collect::<Vec<_>>();
+        let uses = run.function.users(result).iter().copied().collect::<Vec<_>>();
         // If there are no uses of the value there is nothing to rewrite.
         if uses.is_empty() {
             continue;
@@ -499,7 +500,7 @@ fn profitable_to_rotate_loop_exiting_latch(
 }
 
 /// `LoopInfo::replacementPreservesLCSSAForm`.
-fn replacement_preserves_lcssa_form(
+pub(crate) fn replacement_preserves_lcssa_form(
     info: &LoopInfo,
     function: &Function,
     from: InstId,
@@ -676,7 +677,7 @@ fn rotate_loop(
     // entry for each instruction. For phis, the value available in the old
     // preheader is just the incoming value from the old preheader.
     let mut value_map = IdMap::<ValueId, Operand>::new();
-    let header_instructions = run.function.block(orig_header).instructions().to_vec();
+    let header_instructions = run.function.block(orig_header).iter().collect::<Vec<_>>();
     let mut rest = 0;
     for &inst in &header_instructions {
         if run.function.instruction(inst).opcode != Opcode::Phi {
@@ -866,7 +867,7 @@ fn assume_calls(
     let function = &*run.function;
     lp.get_blocks()
         .iter()
-        .flat_map(|&block| function.block(block).instructions().iter().copied())
+        .flat_map(|&block| function.block(block).iter())
         .filter(|&inst| {
             llrm_mir::memory::callee(run.context, function, inst)
                 .is_some_and(|callee| run.globals[callee.0 as usize].name.as_deref() == Some("llvm.assume"))
@@ -914,8 +915,8 @@ pub fn process_loop(
     rotated_latch.is_some() || simplified_latch.is_some()
 }
 
-/// `LoopRotatePass` over a function: every loop, innermost first
-/// (`getLoopsInReverseSiblingPreorder`), as the loop pass manager visits them.
+/// `LoopRotatePass` over a function: every loop, each after the loops it holds,
+/// as the loop pass manager visits them.
 ///
 /// `LoopInfo` is made once. A rotation adds blocks to the loops outside the
 /// rotated one and the driver derives it again before it reaches one of them;
@@ -948,6 +949,56 @@ pub fn rotate_loops(run: &mut Run) -> bool {
     }
     run.finish();
     changed
+}
+
+/// `LoopRotatePass`: every loop of the function rotated with header
+/// duplication on (`EnableHeaderDuplication`), whose limit is the pass's
+/// default of 16 header instructions, or none where the function is optimized
+/// for size or `-fno-tree-ch` says so.
+pub struct LoopRotate {
+    pub duplicate_headers: bool,
+}
+
+impl FunctionPass for LoopRotate {
+    fn name(&self) -> &'static str {
+        "looprotate"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let tti = target_tti(outer.target());
+        let options = Options {
+            max_header_size: if self.duplicate_headers { 16 } else { 0 },
+            rotation_only: false,
+            is_util_mode: false,
+            prepare_for_lto: false,
+        };
+        let mut run = Run {
+            context: unit.context,
+            layout: unit.layout,
+            globals: &outer.globals,
+            callees: outer.callees(),
+            this: unit.id,
+            tti: &*tti,
+            function: unit.function,
+            metadata: unit.metadata,
+            declared: unit.declared,
+            options,
+            has_one_live_use: &|_| false,
+            dead: IdSet::new(),
+        };
+        if rotate_loops(&mut run) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
+
+/// The cost model the pass prices headers with: the target's, or the generic
+/// profile where it has none (R6).
+pub fn target_tti(target: &dyn llrm_mir::target::Machine) -> std::rc::Rc<dyn Tti> {
+    target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic))
 }
 
 /// `rotate_loops` over the function `name` of `module`; whether any loop

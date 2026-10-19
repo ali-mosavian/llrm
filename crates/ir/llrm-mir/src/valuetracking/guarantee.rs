@@ -657,6 +657,7 @@ fn is_guaranteed_not_to_be_undef_or_poison_kind(
         let constant = q.context().get(id);
         match &constant.kind {
             ConstantKind::Poison => return !includes_poison(kind),
+            ConstantKind::Undef => return !includes_undef(kind),
             ConstantKind::Int(_) | ConstantKind::Float(_) | ConstantKind::Null | ConstantKind::Global(_) => {
                 return true;
             }
@@ -673,6 +674,9 @@ fn is_guaranteed_not_to_be_undef_or_poison_kind(
         if is_vector_constant(q, v) && !matches!(constant.kind, ConstantKind::Expr(_)) {
             if let ConstantKind::Aggregate(members) = &constant.kind {
                 let members: Vec<_> = members.iter().map(|one| q.context().get(*one)).collect();
+                if includes_undef(kind) && members.iter().any(|one| matches!(one.kind, ConstantKind::Undef)) {
+                    return false;
+                }
                 if includes_poison(kind) && members.iter().any(|one| matches!(one.kind, ConstantKind::Poison)) {
                     return false;
                 }
@@ -945,7 +949,7 @@ pub fn is_guaranteed_to_execute_for_every_iteration(
     if q.block_of(inst) != Some(l.get_header()) {
         return false;
     }
-    for &one in q.function.block(l.get_header()).instructions() {
+    for one in q.function.block(l.get_header()).iter() {
         if one == inst {
             return true;
         }
@@ -1252,7 +1256,7 @@ fn program_undefined_if_undef_or_poison_of(
             .instructions()
             .iter()
             .position(|one| q.function.instruction(*one).opcode != Opcode::Phi)
-            .unwrap_or(q.function.block(block).instructions().len());
+            .unwrap_or(q.function.block(block).len());
     }
     false
 }

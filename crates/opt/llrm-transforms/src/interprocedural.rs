@@ -306,8 +306,13 @@ pub struct Interprocedural {
     pub rate: Option<i64>,
     /// Runs the pipeline over a copy of a callee that is in no module, for the
     /// constants a site passes: what its copy there would come to.
-    pub specialise:
-        Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, llrm_mir::module::Function) -> llrm_mir::module::Function>,
+    pub specialise: Box<
+        dyn FnMut(
+            &mut Module,
+            &mut ModuleAnalyses,
+            llrm_mir::module::Function,
+        ) -> (llrm_mir::module::Function, Declared),
+    >,
     /// Whether what a body's callers pass is stated as a range on its
     /// parameters (gcc's `-fipa-vrp`, -O2 and up).
     pub ranges: bool,
@@ -509,6 +514,11 @@ fn bare(
     analyses: &mut ModuleAnalyses,
     id: GlobalId,
 ) {
+    assert!(
+        !llrm_support::debug::verifying() || reference_counts(module).get(&id).copied().unwrap_or(0) == 0,
+        "@{} is bared with a call to it standing",
+        module.global(id).name.as_deref().unwrap_or_default()
+    );
     let Some(mut stub) = module.global(id).function().map(llrm_mir::module::Function::declaration) else { return };
     let void = module.context.types.void();
     let entry = stub.create_block(None);
@@ -712,12 +722,13 @@ pub(crate) struct Specialisations {
 }
 
 /// Runs the pipeline over a function that is in no module, in `module`'s
-/// context: what a copy specialised for its constants comes to.
+/// context: what a copy specialised for its constants comes to, and the
+/// functions it declared, which the module does not have.
 pub(crate) type Specialiser<'a, E> = &'a mut dyn FnMut(
     &mut Module,
     &mut ModuleAnalyses,
     llrm_mir::module::Function,
-) -> Result<llrm_mir::module::Function, E>;
+) -> Result<(llrm_mir::module::Function, Declared), E>;
 
 impl Specialisations {
     /// `callee`'s bytes (priced by `costs`) with `constants` for its
@@ -742,8 +753,8 @@ impl Specialisations {
                 copy.replace_value(parameter, llrm_mir::module::Operand::Constant(*constant));
             }
         }
-        let copy = specialised(module, modules, copy)?;
-        let size = inline::size_of(module, &callees(modules, module), &copy, costs);
+        let (copy, declared) = specialised(module, modules, copy)?;
+        let size = inline::size_of(module, &callees(modules, module), &copy, Some(&declared), costs);
         self.sizes.insert(key, size);
         Ok(size)
     }
@@ -1326,8 +1337,10 @@ pub fn optimized_with<E: From<String>>(
                         specialised,
                         reoptimised,
                     )?;
+                    // The copies it spliced in carry calls `live` has not seen.
                     if stayed {
                         changed = true;
+                        live = reference_counts(module);
                     } else {
                         let body = module.global(id).function().expect("a procedure");
                         for (_, inst) in body.walk() {
@@ -1353,6 +1366,7 @@ pub fn optimized_with<E: From<String>>(
                             reoptimised,
                         )? {
                             changed = true;
+                            live = reference_counts(module);
                         }
                     }
                 }
@@ -1841,7 +1855,7 @@ pub fn stamped(
     // as they stand when its first member is reached: LLVM stamps an SCC at
     // once.
     let mut inferred: BTreeMap<Vec<GlobalId>, BTreeMap<GlobalId, functionattrs::Inferred>> = BTreeMap::new();
-    let shadow_memory = std::env::var_os("LLRM_SHADOW_MEMORY").is_some();
+    let shadow_memory = llrm_support::env_set("LLRM_SHADOW_MEMORY");
     // Shadow of `functionattrs::stamp_memory`: the same bodies stamped
     // callees first from no memory attribute at all, against what `_narrowed`
     // states; one line per body that differs.
