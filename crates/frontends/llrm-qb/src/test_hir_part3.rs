@@ -1309,7 +1309,11 @@ fn far_selectors_loaded(function: &str) -> Vec<bool> {
         .lines()
         .filter_map(|line| line.trim().strip_prefix("store volatile i8 "))
         .map(|store| {
-            let mut value = pointer.captures_iter(store).last().expect("the address")[1].to_owned();
+            // An address that is a constant expression (a known segment) has
+            // no value to follow: its selector is not loaded.
+            let address = store.rsplit_once(", ptr ").map_or(store, |(_, address)| address);
+            let Some(last) = pointer.captures_iter(address).last() else { return false };
+            let mut value = last[1].to_owned();
             while let Some(defined) = definition(function, &value) {
                 if defined.starts_with("load i16, ptr @b$seg") {
                     return true;
@@ -1430,7 +1434,9 @@ SUB b\r\nPOKE 5, PEEK(4)\r\nEND SUB\r\n";
     assert_eq!(loads, 0, "{optimized}");
     let kept =
         optimized.lines().filter(|line| line.trim().starts_with("store i16 ") && line.contains("ptr @b$seg")).count();
-    assert!(optimized.contains("ptrtoint ptr addrspace(2)") && (1..=2).contains(&kept), "{optimized}");
+    // VARSEG's `ptrtoint` of the array folds into the address of the PEEK and
+    // POKE (`addrspacecast (ptr @"ARR%" ...)`): no cast instruction is left.
+    assert!(optimized.contains("addrspacecast (ptr @\"ARR%\" to ptr addrspace(1))") && (1..=2).contains(&kept), "{optimized}");
 }
 
 #[test]
