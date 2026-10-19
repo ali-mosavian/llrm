@@ -252,9 +252,9 @@ fn test_bdce_stands_between_gvn_and_the_next_fold() {
 /// ADCE stands where LLVM runs it, after jump threading and before MemCpyOpt
 /// (`PassBuilderPipelines.cpp` l.815).
 #[test]
-fn test_adce_stands_between_jump_threading_and_memcpyopt() {
+fn test_adce_stands_between_cvp_and_memcpyopt() {
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} not built"));
-    assert_eq!((at("decide@809") + 1, at("adce@815") + 1), (at("adce@815"), at("memcpyopt@818")));
+    assert_eq!((at("cvp@810") + 1, at("adce@815") + 1), (at("adce@815"), at("memcpyopt@818")));
 }

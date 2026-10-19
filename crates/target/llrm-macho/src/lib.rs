@@ -390,7 +390,8 @@ mod tests {
             name: name.into(),
             binding: Binding::Public,
             definition: Definition::Defined { section, offset },
-            size: 0, group: None,
+            size: 0,
+            group: None,
         }
     }
 
@@ -540,7 +541,8 @@ _flag:  .byte 0
                     name: "local".into(),
                     binding: Binding::Local,
                     definition: Definition::Defined { section: 1, offset: 0 },
-                    size: 0, group: None,
+                    size: 0,
+                    group: None,
                 },
             ],
             omf_groups: Vec::new(),
