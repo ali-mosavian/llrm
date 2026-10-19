@@ -1,10 +1,15 @@
-//! `IntervalMap` as `LiveIntervalUnion` uses it: disjoint entries `[start, stop) -> value` in start order, in leaves of at most
-//! [`LEAF`] entries (llvm/include/llvm/ADT/IntervalMap.h at d1106deb71cc, a B+ tree with the leaves in a row).
+//! `IntervalMap` as `LiveIntervalUnion` uses it: disjoint entries `[start,
+//! stop) -> value` in start order, in leaves of at most [`LEAF`] entries
+//! (llvm/include/llvm/ADT/IntervalMap.h at d1106deb71cc, a B+ tree with the
+//! leaves in a row).
 //!
-//! DEVIATE: one level of leaves in a vector, not a tree. The fact: a union holds the segments of one register unit, hundreds to a few
-//! thousand; a leaf split moves [`LEAF`] entries and the row of leaves is searched by binary search.
+//! DEVIATE: one level of leaves in a vector, not a tree. The fact: a union
+//! holds the segments of one register unit, hundreds to a few thousand; a leaf
+//! split moves [`LEAF`] entries and the row of leaves is searched by binary
+//! search.
 //!
-//! A [`Pos`] is an iterator: `next` and `prev` step in O(1) and `at` reads the entry. It stays valid until the map is changed.
+//! A [`Pos`] is an iterator: `next` and `prev` step in O(1) and `at` reads the
+//! entry. It stays valid until the map is changed.
 //!
 //! # Used by
 //! `LiveIntervalUnion`.
@@ -19,7 +24,8 @@ thread_local! {
     static SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The searches by key made on this thread, for a test that a cursor walking blocks does not search per step.
+/// The searches by key made on this thread, for a test that a cursor walking
+/// blocks does not search per step.
 #[cfg(test)]
 pub fn searches() -> usize {
     SEARCHES.with(std::cell::Cell::get)
@@ -101,7 +107,8 @@ impl<V: Copy> IntervalMap<V> {
         Some(Pos { leaf: leaf as u32, at: (self.leaves[leaf].len() - 1) as u32 })
     }
 
-    /// The first entry whose start is not before `key`, as an insertion place: past the last entry of the last leaf at the end.
+    /// The first entry whose start is not before `key`, as an insertion place:
+    /// past the last entry of the last leaf at the end.
     fn lower_bound(
         &self,
         key: &SlotIndex,
@@ -146,7 +153,8 @@ impl<V: Copy> IntervalMap<V> {
         self.prev(None)
     }
 
-    /// `find(x)`: the first entry whose stop is after `x`, the one holding it or the first after the hole it is in.
+    /// `find(x)`: the first entry whose stop is after `x`, the one holding it
+    /// or the first after the hole it is in.
     pub fn find(
         &self,
         x: &SlotIndex,
@@ -167,7 +175,8 @@ impl<V: Copy> IntervalMap<V> {
         }
     }
 
-    /// `advanceTo(x)`: the first entry at or after `pos` whose stop is after `x`: a few steps, then a search.
+    /// `advanceTo(x)`: the first entry at or after `pos` whose stop is after
+    /// `x`: a few steps, then a search.
     pub fn advance_to(
         &self,
         pos: Option<Pos>,
@@ -200,7 +209,8 @@ impl<V: Copy> IntervalMap<V> {
         }
     }
 
-    /// Removes the entry at `pos`; the iterator that was at it is `pos_after` of the result.
+    /// Removes the entry at `pos`; the iterator that was at it is `pos_after`
+    /// of the result.
     pub fn remove(
         &mut self,
         pos: Pos,
@@ -222,8 +232,10 @@ impl<V: Copy> IntervalMap<V> {
         if leaf < self.leaves.len() && (pos.at as usize) < self.leaves[leaf].len() {
             return Some(pos);
         }
-        // The leaf is gone (its next is here) or the entry was its last (the next leaf's first).
-        let next = if leaf < self.leaves.len() && (pos.at as usize) >= self.leaves[leaf].len() { leaf + 1 } else { leaf };
+        // The leaf is gone (its next is here) or the entry was its last (the
+        // next leaf's first).
+        let next =
+            if leaf < self.leaves.len() && (pos.at as usize) >= self.leaves[leaf].len() { leaf + 1 } else { leaf };
         (next < self.leaves.len()).then_some(Pos { leaf: next as u32, at: 0 })
     }
 
@@ -250,13 +262,20 @@ mod tests {
 
     fn indexes() -> Vec<SlotIndex> {
         let insns: Vec<Arc<Insn>> = (0..600).map(|_| Arc::new(Insn::new(0, None, None, vec![], vec![]))).collect();
-        let body = LirBody::new("m", 0, vec![Block::from(LirBlock::new(0, insns.clone()))], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new(
+            "m",
+            0,
+            vec![Block::from(LirBlock::new(0, insns.clone()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
         let indexes = SlotIndexes::new(&body);
         insns.iter().map(|i| indexes.get_instruction_index(i.id()).get_reg_slot(false)).collect()
     }
 
-    /// Entries added and removed in a fixed order that splits and empties leaves answer `find`, `before`, `next` and `prev` as a
-    /// `BTreeMap` of the same entries does.
+    /// Entries added and removed in a fixed order that splits and empties
+    /// leaves answer `find`, `before`, `next` and `prev` as a `BTreeMap` of
+    /// the same entries does.
     #[test]
     fn test_a_row_of_leaves_answers_as_a_btree_map_does() {
         let at = indexes();
@@ -281,10 +300,23 @@ mod tests {
                 .map(|(start, _)| *start);
             let got = map.find(&x);
             assert_eq!(got.map(|p| map.at(p).start), want, "find at step {step}");
-            assert_eq!(map.before(&x).map(|p| map.at(p).start), model.range(..x).next_back().map(|(s, _)| *s), "before at {step}");
+            assert_eq!(
+                map.before(&x).map(|p| map.at(p).start),
+                model.range(..x).next_back().map(|(s, _)| *s),
+                "before at {step}"
+            );
             if let Some(p) = got {
-                assert_eq!(map.next(p).map(|p| map.at(p).start), model.range((std::ops::Bound::Excluded(map.at(p).start), std::ops::Bound::Unbounded)).next().map(|(s, _)| *s));
-                assert_eq!(map.prev(Some(p)).map(|p| map.at(p).start), model.range(..map.at(p).start).next_back().map(|(s, _)| *s));
+                assert_eq!(
+                    map.next(p).map(|p| map.at(p).start),
+                    model
+                        .range((std::ops::Bound::Excluded(map.at(p).start), std::ops::Bound::Unbounded))
+                        .next()
+                        .map(|(s, _)| *s)
+                );
+                assert_eq!(
+                    map.prev(Some(p)).map(|p| map.at(p).start),
+                    model.range(..map.at(p).start).next_back().map(|(s, _)| *s)
+                );
             }
         }
         assert_eq!(map.iter().map(|e| e.start).collect::<Vec<_>>(), model.keys().copied().collect::<Vec<_>>());

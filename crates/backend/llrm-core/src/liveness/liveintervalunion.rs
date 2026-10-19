@@ -17,9 +17,10 @@
 //!   range   [32,56)                        overlaps %3 and %7
 //! ```
 //!
-//! DEVIATE (container): `IntervalMap` (llvm/include/llvm/ADT/IntervalMap.h) is [`IntervalMap`], a row of leaves; its iterators
-//! (`find`, `advanceTo`, `++`, `--`) are [`Pos`], held by the cache and the query until the union changes. A virtual register is its
-//! number.
+//! DEVIATE (container): `IntervalMap` (llvm/include/llvm/ADT/IntervalMap.h) is
+//! [`IntervalMap`], a row of leaves; its iterators (`find`, `advanceTo`, `++`,
+//! `--`) are [`Pos`], held by the cache and the query until the union changes.
+//! A virtual register is its number.
 //!
 //! # Example
 //! A register with segments `[16,40)` and `[40,48)` is one entry `[16,48)`;
@@ -28,11 +29,10 @@
 //! # Used by
 //! `liveregmatrix`.
 
+pub use super::intervalmap::Pos;
 use super::intervalmap::{Entry, IntervalMap};
 use super::liverange::LiveRange;
 use super::slotindex::SlotIndex;
-
-pub use super::intervalmap::Pos;
 
 /// A virtual register, as `const LiveInterval *` is in C++.
 pub type VReg = u32;
@@ -82,8 +82,9 @@ impl LiveIntervalUnion {
         self.segments.iter().map(|e| (&e.start, &e.stop, e.value))
     }
 
-    /// `IntervalMap::find(x)`: the entry with the first stop after `x`: the one containing it, or the first after the hole it is in.
-    /// None at the end.
+    /// `IntervalMap::find(x)`: the entry with the first stop after `x`: the one
+    /// containing it, or the first after the hole it is in. None at the
+    /// end.
     pub fn find(
         &self,
         x: &SlotIndex,

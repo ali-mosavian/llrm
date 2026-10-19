@@ -173,7 +173,7 @@ impl Entry {
         if self.prev_pos != start {
             if !self.prev_pos.is_valid() || start < self.prev_pos {
                 for rui in &mut self.reg_units {
-                    rui.virt_i = liu(rui.unit).find_entry(&start);
+                    rui.virt_i = liu(rui.unit).find(&start);
                     rui.fixed_i = fixed.fixed_range(rui.unit).map_or(0, |f| f.find(&start));
                 }
             } else {
@@ -552,8 +552,10 @@ mod tests {
         assert_eq!(read(&mut cache, &env, RegId::AX, 2), (true, at[0][5], at[2][3]));
     }
 
-    /// `advanceTo` and `--I` searched the union's `BTreeMap` for each step it made: walking 3 blocks of 9 entries each took 20 searches (d_faces -O2
-    /// m32, `Cursor::move_to_block` 20.0 Minstr against LLVM's 4.0 for `Entry::update`). An iterator held with its stop steps for free.
+    /// `advanceTo` and `--I` searched the union's `BTreeMap` for each step it
+    /// made: walking 3 blocks of 9 entries each took 20 searches (d_faces -O2
+    /// m32, `Cursor::move_to_block` 20.0 Minstr against LLVM's 4.0 for
+    /// `Entry::update`). An iterator held with its stop steps for free.
     #[test]
     fn walking_the_blocks_of_a_union_searches_its_map_a_few_times_per_block() {
         let (indexes, at) = body();
@@ -573,7 +575,10 @@ mod tests {
             assert_eq!((c.first(), c.last()), (at[b][0], at[b][9]));
         }
         let searched = crate::liveness::intervalmap::searches() - before;
-        assert!(searched <= 10, "3 blocks of 9 entries searched the map {searched} times (10 allowed; 20 when the map is a BTreeMap)");
+        assert!(
+            searched <= 10,
+            "3 blocks of 9 entries searched the map {searched} times (10 allowed; 20 when the map is a BTreeMap)"
+        );
     }
 
     /// A stale answer after `unassign` would make a split region think the
