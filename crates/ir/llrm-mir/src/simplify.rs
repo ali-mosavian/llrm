@@ -8,7 +8,8 @@
 //! `MaxRecurse` (`RecursionLimit` is 3). A result is an existing operand or a
 //! constant; the function is never changed.
 //!
-//! MIRROR: `simplifyInstruction`'s dispatch; `simplifyAddInst`,
+//! MIRROR: `simplifyInstruction`'s dispatch; the floating functions of
+//! `simplify_fp.rs`; `simplifyAddInst`,
 //! `simplifySubInst`, `simplifyMulInst`, `simplifyDivRem`, `simplifyShift` and
 //! the shift, and/or/xor functions, `simplifyAssociativeBinOp`,
 //! `simplifyLogicOfAddSub`, `simplifySelectInst`, `simplifyCastInst`,
@@ -28,7 +29,10 @@
 //!    `ConstantKind::Float` holds 64 bits, so an extended constant is held as
 //!    the nearest double (`constfold.rs`): #2251. Whether MIR carries fp80 per
 //!    target is a separate decision.
-//! 3. Floating-point folds, `bitcast (uitofp X)` included: #2246.
+//! 3. Floating-point folds: `simplify_fp.rs` has `fneg` and the five binary
+//!    operations; `simplifyFMAFMul`'s `computeKnownFPClass` of a value, `FMA`,
+//!    `FCmp`, `AndOrOfFCmps`, `Ldexp`, constrained calls and `bitcast (uitofp
+//!    X)` remain: #2246.
 //! 4. Loads, pointer compares, `addrspacecast`: #2247.
 //! 5. `simplifyICmpWithIntrinsicOnLHS`, the call arm of
 //!    `simplifyWithOpsReplaced`, the floating-point intrinsics: #2248, #2246.
@@ -2868,7 +2872,9 @@ fn simplify_binop_flags(
         BinaryOp::And => simplify_and(q, lhs, rhs, max_recurse),
         BinaryOp::Or => simplify_or(q, lhs, rhs, max_recurse),
         BinaryOp::Xor => simplify_xor(q, lhs, rhs, max_recurse),
-        _ => None,
+        BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem => {
+            fp::simplify_fp_binop(q, opcode, lhs, rhs, flags)
+        }
     }
 }
 
@@ -4192,6 +4198,9 @@ fn simplify_gep(
     // Check to see if this is constant foldable.
     let ptr_c = q.constant(ptr)?;
     let indices_c = indices.iter().map(|&index| q.constant(index)).collect::<Option<Vec<_>>>()?;
+    if !constantfolding::integer_indices(q.context, &indices_c) {
+        return None;
+    }
     let nw = constantfolding::nw_of_flags(flags);
     let env = constantfolding::Env { globals: q.globals, layout: q.layout };
     let folded =
@@ -4261,6 +4270,7 @@ fn simplify_instruction_with_operands(
             let [lhs, rhs] = operands[..] else { return None };
             simplify_binop_flags(q, *op, lhs, rhs, flags, max_recurse)
         }
+        Opcode::FNeg => fp::simplify_fneg(q, operands[0]),
         Opcode::ICmp(pred) => {
             let [lhs, rhs] = operands[..] else { return None };
             simplify_icmp(q, *pred, lhs, rhs, max_recurse)
@@ -4309,6 +4319,23 @@ pub fn simplify_binop_at(
 ) -> Option<Operand> {
     let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: true };
     simplify_binop_flags(&mut q, opcode, lhs, rhs, Flags::default(), RECURSION_LIMIT)
+}
+
+/// `simplifyInstructionWithOperands(&I, Ops, SQ.getWithInstruction(&cxt))`:
+/// what `inst` equals with `operands` in place of its own, asked at `cxt`
+/// (none: `SQ` of the data layout alone).
+pub fn simplify_instruction_operands_at(
+    context: &mut Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+    analyses: Option<&FunctionAnalyses>,
+    function: &Function,
+    cxt: Option<InstId>,
+    inst: InstId,
+    operands: &[Operand],
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals, analyses, cxt, can_use_undef: true };
+    simplify_instruction_with_operands(&mut q, inst, operands, RECURSION_LIMIT)
 }
 
 /// `simplifyICmpInst` for operands.
@@ -4369,6 +4396,9 @@ mod calls;
 
 #[path = "simplify_select.rs"]
 mod select;
+
+#[path = "simplify_fp.rs"]
+mod fp;
 
 #[cfg(test)]
 #[path = "simplify_tests.rs"]

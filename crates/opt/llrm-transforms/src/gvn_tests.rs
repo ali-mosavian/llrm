@@ -1,11 +1,12 @@
-//! `joined`'s PRE and the `Gvn` pass, each body MIR text run by llrm-mir's
+//! Scalar PRE and the `Gvn` pass, each body MIR text run by llrm-mir's
 //! interpreter before and after.
 
 use llrm_analysis::manager::Summaries;
 use llrm_mir::passes::PassManager;
 
-use super::{Gvn, joined};
-use crate::testing::{f, parsed, printed, results};
+use super::Gvn;
+use super::pass::run_impl_cfg;
+use crate::testing::{parsed, printed, results};
 
 const INPUTS: &[&[i128]] = &[&[0, 0, 0], &[3, 5, 1], &[-7, 2, 0], &[0x7fff, 1, 1]];
 
@@ -34,15 +35,19 @@ b3:
     )
 }
 
-/// `text` joined: its printed form, and whether anything changed. What
-/// `@f` returns is what it returned before.
+/// `text` run through the scalar pass (`pre` says whether PRE is on): its
+/// printed form, and whether anything changed. What `@f` returns is what it
+/// returned before.
 fn joined_once(
     text: &str,
-    insert: bool,
+    pre: bool,
 ) -> (String, bool) {
     let before = parsed(text);
     let mut module = before.clone();
-    let changed = joined(f(&mut module), insert).unwrap();
+    let layout = llrm_analysis::testing::layout(&module);
+    let outer = llrm_mir::passes::Outer::of(&module, None);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let changed = run_impl_cfg(context, &layout, function, &outer, pre, None).0;
     let text = printed(&module);
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{text}");
     (text, changed)
@@ -50,9 +55,9 @@ fn joined_once(
 
 fn kept(
     text: &str,
-    insert: bool,
+    pre: bool,
 ) {
-    let (after, changed) = joined_once(text, insert);
+    let (after, changed) = joined_once(text, pre);
     assert!(!changed);
     assert_eq!(after, printed(&parsed(text)));
 }
@@ -60,12 +65,9 @@ fn kept(
 #[test]
 fn test_providers_on_every_edge_become_a_phi() {
     let (text, changed) =
-        joined_once(&diamond("  %a = add i16 %x, %y\n", "  %b = add i16 %y, %x\n", "  %r = add i16 %x, %y\n"), false);
+        joined_once(&diamond("  %a = add i16 %x, %y\n", "  %b = add i16 %y, %x\n", "  %r = add i16 %x, %y\n"), true);
     assert!(changed);
-    assert!(
-        text.ends_with("b3:\n  %r.pre-phi = phi i16 [ %a, %b1 ], [ %b, %b2 ]\n  ret i16 %r.pre-phi\n}\n"),
-        "{text}"
-    );
+    assert!(text.contains("%r.pre-phi = phi i16 [ %b, %b2 ], [ %a, %b1 ]\n  ret i16 %r.pre-phi\n}\n"), "{text}");
 }
 
 #[test]
@@ -76,10 +78,11 @@ fn test_a_join_expression_translates_through_its_phis() {
             "  %b = mul i16 %y, 3\n",
             "  %p = phi i16 [ %x, %b1 ], [ %y, %b2 ]\n  %r = mul i16 %p, 3\n",
         ),
-        false,
+        true,
     );
     assert!(changed);
-    assert!(text.contains("  %r.pre-phi = phi i16 [ %a, %b1 ], [ %b, %b2 ]\n  ret i16 %r.pre-phi\n"), "{text}");
+    assert!(text.contains("  %r.pre-phi = phi i16 [ %b, %b2 ], [ %a, %b1 ]\n"), "{text}");
+    assert!(text.contains("  ret i16 %r.pre-phi\n"), "{text}");
 }
 
 #[test]
@@ -95,7 +98,7 @@ fn test_a_missing_provider_is_inserted_on_an_unconditional_edge() {
   br label %b3
 
 b3:
-  %r.pre-phi = phi i16 [ %a, %b1 ], [ %r.pre, %b2 ]
+  %r.pre-phi = phi i16 [ %r.pre, %b2 ], [ %a, %b1 ]
   ret i16 %r.pre-phi
 }
 "
@@ -104,13 +107,61 @@ b3:
     );
 }
 
-/// A divide by %y on the path that did not divide could trap there.
+/// A division is inserted on a path that did not divide: the edge is the
+/// join's only way in from there, so it divides on that path anyway.
 #[test]
-fn test_a_division_is_not_inserted_on_a_path_that_did_not_divide() {
-    let text = diamond("  %a = udiv i16 %x, %y\n", "", "  %r = udiv i16 %x, %y\n");
-    let mut module = parsed(&text);
-    assert!(!joined(f(&mut module), true).unwrap());
-    assert_eq!(printed(&module), printed(&parsed(&text)));
+fn test_a_division_is_inserted_on_an_edge_that_only_leads_to_it() {
+    let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  %d = or i16 %y, 1
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = udiv i16 %x, %d
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %r = udiv i16 %x, %d
+  ret i16 %r
+}
+";
+    let (text, changed) = joined_once(text, true);
+    assert!(changed);
+    assert!(text.contains("b2:\n  %r.pre = udiv i16 %x, %d\n  br label %b3\n"), "{text}");
+}
+
+/// A call that may not return stands before the division in the join: the
+/// division is not always reached, so it is not inserted.
+#[test]
+fn test_a_division_after_a_call_that_may_not_return_is_not_inserted() {
+    let text = "define void @h() {
+b0:
+  ret void
+}
+
+define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  %d = or i16 %y, 1
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = udiv i16 %x, %d
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  call void @h()
+  %r = udiv i16 %x, %d
+  ret i16 %r
+}
+";
+    let (text, _) = joined_once(text, true);
+    assert!(!text.contains("%r.pre"), "{text}");
 }
 
 #[test]
@@ -119,14 +170,59 @@ fn test_no_provider_on_any_edge_leaves_the_join_alone() {
 }
 
 /// `x - y` on one edge and `y - x` on the other: the second edge has no
-/// provider.
+/// provider, so it gets its own copy.
 #[test]
 fn test_an_arm_computing_another_expression_serves_nothing() {
-    kept(&diamond("  %a = sub i16 %x, %y\n", "  %b = sub i16 %y, %x\n", "  %r = sub i16 %x, %y\n"), false);
+    let (text, _) =
+        joined_once(&diamond("  %a = sub i16 %x, %y\n", "  %b = sub i16 %y, %x\n", "  %r = sub i16 %x, %y\n"), true);
+    assert!(text.contains("  %r.pre = sub i16 %x, %y\n"), "{text}");
+    assert!(text.contains("%r.pre-phi = phi i16 [ %r.pre, %b2 ], [ %a, %b1 ]"), "{text}");
 }
 
-/// Inserting on the entry edge would hoist into the preheader what the
-/// latch computes; the latch, dominated by the header, serves nothing.
+/// The edge from b0 to b3 is critical: it is split on one pass, and the copy
+/// goes into the new block on the next.
+#[test]
+fn test_a_critical_edge_is_split_and_then_gets_the_copy() {
+    let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b3
+
+b1:
+  %a = add i16 %x, %y
+  %d = icmp eq i16 %a, 0
+  br i1 %d, label %b2, label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %r = add i16 %x, %y
+  ret i16 %r
+}
+";
+    let (text, changed) = joined_once(text, true);
+    assert!(changed);
+    assert!(text.contains("%r.pre = add i16 %x, %y"), "{text}");
+    assert!(text.contains("%r.pre-phi = phi i16"), "{text}");
+}
+
+/// A compare is never made a phi: the phi would keep the code generator from
+/// sinking it to its branch.
+#[test]
+fn test_a_compare_computed_on_every_edge_is_not_made_a_phi() {
+    let (text, _) = joined_once(
+        &diamond(
+            "  %a = icmp eq i16 %x, %y\n  %a2 = zext i1 %a to i16\n",
+            "  %b = icmp eq i16 %y, %x\n  %b2 = zext i1 %b to i16\n",
+            "  %q = icmp eq i16 %x, %y\n  %r = zext i1 %q to i16\n",
+        ),
+        true,
+    );
+    assert!(!text.contains("%q.pre-phi"), "{text}");
+}
+
+/// Nothing is inserted on the entry edge: the header's other way in is a back
+/// edge, which PRE leaves alone. The latch's repeat is the header's value.
 #[test]
 fn test_a_loop_header_is_not_served_from_its_own_body() {
     let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
@@ -148,7 +244,8 @@ b3:
   ret i16 %r
 }
 ";
-    kept(text, true);
+    let (text, _) = joined_once(text, true);
+    assert!(!text.contains(".pre"), "{text}");
 }
 
 /// Numbering serves the dominated repeat; the join then takes a phi of
@@ -170,7 +267,7 @@ fn test_gvn_numbers_then_joins() {
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let after = printed(&module);
     assert!(after.contains("  %s = add i16 %a, %a\n"), "{after}");
-    assert!(after.contains("  %r.pre-phi = phi i16 [ %a, %b1 ], [ %b, %b2 ]\n  ret i16 %r.pre-phi\n"), "{after}");
+    assert!(after.contains("  %r.pre-phi = phi i16 [ %b, %b2 ], [ %a, %b1 ]\n  ret i16 %r.pre-phi\n"), "{after}");
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS));
 }
 

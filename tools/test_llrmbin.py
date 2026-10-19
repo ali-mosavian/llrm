@@ -129,4 +129,4 @@ def test_a_source_with_a_future_mtime_is_named_as_the_reason_a_binary_stays_stal
     os.utime(src, (future, future))
     assert llrmbin.stale_binaries(release, tmp_path) == ["llrm-c"]
     detail = llrmbin.stale_detail(release, tmp_path)
-    assert detail and str(src) in detail[0] and "FUTURE" in detail[0], detail
+    assert str(src) in detail and "FUTURE" in detail, detail

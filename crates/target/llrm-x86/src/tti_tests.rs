@@ -276,3 +276,33 @@ fn an_mir_type_is_the_cost_models_scalar_or_none() {
         [Some(Ty::Int(32)), Some(Ty::Float), Some(Ty::X87), Some(Ty::Pointer), None]
     );
 }
+
+/// The LSR hooks, read off the pin and UNVERIFIED BY ORACLE (a hook has no
+/// `opt` printer): `isLegalAddImmediate`/`isLegalICmpImmediate` are
+/// `isInt<32>` (X86ISelLowering.cpp L36730-36737); `getScalingFactorCost` is
+/// `AM.Scale != 0` for a legal mode, invalid otherwise (X86TTI.cpp L8045);
+/// `isLSRCostLess` puts `Insns` first (L7202); `canMacroFuseCmp` is
+/// `hasMacroFusion || hasBranchFusion` (L7211), set for `core2` in X86.td and
+/// for no 386-class cpu. Without them LSR priced every scaled mode free, put
+/// registers before instructions and found no immediate legal.
+#[test]
+fn the_x86_lsr_hooks_are_those_of_the_pin() {
+    let (i486, core2) = (X86::of_cpu("i486").unwrap(), X86::of_cpu("core2").unwrap());
+    for imm in [0, -1, i64::from(i32::MIN), i64::from(i32::MAX)] {
+        assert!(i486.is_legal_add_immediate(imm) && i486.is_legal_icmp_immediate(imm), "{imm}");
+    }
+    assert!(!i486.is_legal_add_immediate(i64::from(i32::MAX) + 1));
+    assert!(!i486.is_legal_icmp_immediate(i64::from(i32::MIN) - 1));
+
+    assert_eq!(i486.scaling_factor_cost(false, 0, true, 0), Cost::of(0));
+    assert_eq!(i486.scaling_factor_cost(false, 0, true, 4), Cost::of(1));
+    assert_eq!(i486.scaling_factor_cost(false, 0, true, 3), Cost::INVALID, "3*reg beside a base register");
+
+    let few_insns = LsrCost { insns: 1, num_regs: 9, ..LsrCost::default() };
+    let few_regs = LsrCost { insns: 2, num_regs: 1, ..LsrCost::default() };
+    assert!(i486.is_lsr_cost_less(&few_insns, &few_regs), "instructions first");
+    assert!(!Basic.is_lsr_cost_less(&few_insns, &few_regs), "the generic order puts registers first");
+
+    assert!(!i486.can_macro_fuse_cmp() && core2.can_macro_fuse_cmp());
+    assert_eq!(i486.number_of_gpr_registers(), 8);
+}

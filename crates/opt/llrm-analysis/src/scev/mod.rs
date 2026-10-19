@@ -28,6 +28,8 @@ pub mod eval;
 pub mod evaluate;
 pub mod exit_limit;
 pub mod exit_value;
+#[cfg(test)]
+mod exit_value_tests;
 pub mod expand;
 pub mod expand_cost;
 #[cfg(test)]
@@ -45,6 +47,7 @@ pub mod guards;
 mod guards_tests;
 pub mod how_many;
 pub mod implied;
+pub mod invariant;
 pub mod lcssa_form;
 pub mod minmax;
 pub mod normalize;
