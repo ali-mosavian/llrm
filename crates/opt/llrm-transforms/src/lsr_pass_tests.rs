@@ -287,3 +287,24 @@ fn the_analyses_are_made_once_for_the_loops_of_a_function() {
     assert!(changed, "{after}");
     assert_eq!(crate::lsr_pass::SESSIONS.with(|made| made.get()), 1, "{after}");
 }
+
+/// nib's `zip(a, b)` dot product as the strength stage gets it: three exit
+/// tests of the element index (the bounds checks, not yet merged). `opt
+/// -passes=loop-reduce` (LLVM 20, i386) keeps the element index and writes each
+/// address as a base plus `x << 1`, two phis with the sum; so does this pass,
+/// with `add`s and `icmp`s of that index as before. The zip pin's byte counter
+/// (`add bx, 2`) needs the exits merged upstream first.
+#[test]
+fn a_zip_loop_with_three_element_exits_keeps_the_element_counter_as_opt_does() {
+    let text = include_str!("lsr_zip.ll");
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("dot").expect("@dot");
+    let tti = X86::of_cpu("i486").unwrap();
+    let changed = crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let after = printed(&module);
+    assert!(changed, "{after}");
+    assert_eq!(after.matches(" = phi i").count(), 4, "the element index, the sum and the two joins: {after}");
+    assert_eq!(after.matches("shl i16 %8, 1").count(), 2, "{after}");
+}
