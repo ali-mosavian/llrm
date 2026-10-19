@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 
 use crate::context::{Constant, ConstantKind, Context};
+use crate::hash::HashMap;
 use crate::module::{
     Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, NameIndex, Names,
     Operand, Use, ValueData, ValueDef, ValueId,
@@ -88,14 +89,14 @@ impl Function {
         }
         let mut problems = Vec::new();
         for (at, expected) in values.iter().enumerate() {
-            let list = self.uses.users(Held::Value(at as u32)).to_vec();
+            let list = self.uses.users(Held::Value(at as u32)).iter().copied().collect::<Vec<_>>();
             let kept: BTreeSet<Use> = list.iter().copied().collect();
             if kept != *expected || kept.len() != list.len() {
                 problems.push(format!("value {at}: kept {list:?}, operands say {expected:?}"));
             }
         }
         for (at, expected) in blocks.iter().enumerate() {
-            let list = self.uses.users(Held::Block(at as u32)).to_vec();
+            let list = self.uses.users(Held::Block(at as u32)).iter().copied().collect::<Vec<_>>();
             let kept: BTreeSet<Use> = list.iter().copied().collect();
             if kept != *expected || kept.len() != list.len() {
                 problems.push(format!("block {at}: kept {list:?}, operands say {expected:?}"));
@@ -332,7 +333,7 @@ impl Function {
             (Some(only), None) if only == inst => {}
             _ => return None,
         }
-        self.block(target).instructions().iter().copied().find(|&one| self.instruction(one).opcode != Opcode::Phi)
+        self.block(target).iter().find(|&one| self.instruction(one).opcode != Opcode::Phi)
     }
 
     /// Takes `inst` out of its block. What was said before it is said before
@@ -741,7 +742,11 @@ impl Function {
         if let Some(result) = self.instruction(inst).result
             && !self.users(result).is_empty()
         {
-            return Err(format!("instruction {}'s result still has {} users", inst.0, self.users(result).len()));
+            return Err(format!(
+                "instruction {}'s result still has {} users",
+                inst.0,
+                self.users(result).iter().count()
+            ));
         }
         let operands = self.instructions[inst.0 as usize].operands.clone();
         for (index, operand) in operands.into_iter().enumerate() {
@@ -1107,6 +1112,50 @@ impl Function {
         copy
     }
 
+    /// `CloneBasicBlock(BB, VMap)`
+    /// ([CloneFunction.cpp:40](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/CloneFunction.cpp#L40)):
+    /// a copy of `block` in the layout nowhere yet, its instructions copied in
+    /// order. `map` gets `block` and each result of the original (not the
+    /// `void` ones) with the copy's. The copies still read the original's
+    /// values: `remap_instruction` rewrites them.
+    pub fn clone_block(
+        &mut self,
+        block: BlockId,
+        map: &mut ValueMap,
+    ) -> BlockId {
+        let copy = self.create_block(None);
+        map.blocks.insert(block, copy);
+        for inst in self.iter_block(block).collect::<Vec<_>>() {
+            let duplicate = self.clone_instruction(inst);
+            self.insert(duplicate, Position::End(copy)).expect("a new block takes its instructions");
+            if let (Some(from), Some(to)) = (self.instruction(inst).result, self.instruction(duplicate).result) {
+                map.values.insert(from, Operand::Value(to));
+            }
+        }
+        copy
+    }
+
+    /// `RemapInstruction(I, VMap)`
+    /// ([ValueMapper.cpp:1014](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ValueMapper.cpp#L1014)):
+    /// the operands `map` has an entry for are replaced; the rest stay.
+    pub fn remap_instruction(
+        &mut self,
+        inst: InstId,
+        map: &ValueMap,
+    ) {
+        let operands = self
+            .instruction(inst)
+            .operands
+            .iter()
+            .map(|&one| match one {
+                Operand::Value(value) => map.values.get(&value).copied().unwrap_or(one),
+                Operand::Block(block) => map.blocks.get(&block).map_or(one, |&copy| Operand::Block(copy)),
+                Operand::Constant(_) => one,
+            })
+            .collect();
+        self.set_operands(inst, operands);
+    }
+
     /// A new, empty block, in the layout nowhere yet.
     pub fn create_block(
         &mut self,
@@ -1176,13 +1225,8 @@ impl Function {
         predecessor: BlockId,
         keep_one_input_phis: bool,
     ) {
-        let phis: Vec<InstId> = self
-            .block(block)
-            .instructions()
-            .iter()
-            .copied()
-            .take_while(|&one| self.instruction(one).opcode == Opcode::Phi)
-            .collect();
+        let phis: Vec<InstId> =
+            self.block(block).iter().take_while(|&one| self.instruction(one).opcode == Opcode::Phi).collect();
         for phi in phis {
             let mut operands = self.instruction(phi).operands.clone();
             let Some(at) = operands.chunks(2).position(|pair| pair[1] == Operand::Block(predecessor)) else {
@@ -1289,4 +1333,11 @@ thread_local! {
 /// does not scan k times n.
 pub fn instructions_scanned() -> usize {
     SCANNED.with(std::cell::Cell::get)
+}
+
+/// `ValueToValueMapTy`: what `clone_block` copied, original to copy.
+#[derive(Default)]
+pub struct ValueMap {
+    pub values: HashMap<ValueId, Operand>,
+    pub blocks: HashMap<BlockId, BlockId>,
 }

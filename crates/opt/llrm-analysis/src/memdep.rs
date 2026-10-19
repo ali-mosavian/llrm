@@ -62,7 +62,6 @@
 //! `invalidateCachedPointerInfo`): phi translation interns constants, which
 //! needs `&mut Context` while the alias analysis holds `&Context` (#2500).
 
-use llrm_mir::context::Context;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::intrinsics::Intrinsic;
@@ -371,9 +370,6 @@ pub struct MemoryDependenceResults {
     pred_cache: IdMap<BlockId, Vec<BlockId>>,
     clobber_offsets: IdMap<InstId, i32>,
     default_block_scan_limit: u32,
-    /// The context phi translation interns into (DEVIATE 8), and how many
-    /// constants the real one held when it was copied.
-    scratch: Option<(Context, usize)>,
 }
 
 impl Default for MemoryDependenceResults {
@@ -396,7 +392,6 @@ impl MemoryDependenceResults {
             pred_cache: IdMap::new(),
             clobber_offsets: IdMap::new(),
             default_block_scan_limit,
-            scratch: None,
         }
     }
 
@@ -940,8 +935,7 @@ impl MemoryDependenceResults {
         self.visited[bb.0 as usize].0
     }
 
-    /// Phi translation of `pointer` from `cur` to `pred` on the copy of the
-    /// context (DEVIATE 8).
+    /// Phi translation of `pointer` from `cur` to `pred`.
     fn translate(
         &mut self,
         env: Env,
@@ -950,18 +944,8 @@ impl MemoryDependenceResults {
         pred: BlockId,
     ) -> Option<Operand> {
         let unit = env.unit;
-        let held = unit.context.constant_count();
-        if self.scratch.as_ref().is_none_or(|(_, taken)| *taken != held) {
-            self.scratch = Some((unit.context.clone(), held));
-        }
-        let (scratch, _) = self.scratch.as_mut().expect("a copy");
-        let mut phi = PhiEnv { context: scratch, layout: unit.layout, function: unit.function, dt: Some(env.dt) };
-        let got = pointer.translate_value(&mut phi, cur, pred, false);
-        if matches!(got, Some(Operand::Constant(c)) if c.index() >= held) {
-            pointer.make_unavailable();
-            return None;
-        }
-        got
+        let mut phi = PhiEnv { context: unit.context, layout: unit.layout, function: unit.function, dt: Some(env.dt) };
+        pointer.translate_value(&mut phi, cur, pred, false)
     }
 
     /// `getNonLocalInfoForBlock`
@@ -1245,9 +1229,12 @@ impl MemoryDependenceResults {
                         // A select on a condition has two addresses, one per
                         // side.
                         if let Some(cond) = pred_pointer.select_condition(function) {
-                            let (scratch, _) = self.scratch.as_mut().expect("translation made a copy");
-                            let mut phi =
-                                PhiEnv { context: scratch, layout: env.unit.layout, function, dt: Some(env.dt) };
+                            let mut phi = PhiEnv {
+                                context: env.unit.context,
+                                layout: env.unit.layout,
+                                function,
+                                dt: Some(env.dt),
+                            };
                             let sides: SelectAddrs = pointer.translate_value_select(&mut phi, bb, pred, cond);
                             if let (Some(on_true), Some(on_false)) = sides {
                                 result.push(NonLocalDepResult {

@@ -28,7 +28,7 @@ fn main() {
             let dt = DomTree::of(function);
             let assumptions = AssumptionCache::new(&module, function);
             let mut values: Vec<(Operand, Option<llrm_mir::module::InstId>)> = Vec::new();
-            let entry_first = function.block(function.entry().expect("an entry")).instructions().first().copied();
+            let entry_first = function.block(function.entry().expect("an entry")).first();
             for parameter in function.parameters() {
                 values.push((Operand::Value(*parameter), entry_first));
             }

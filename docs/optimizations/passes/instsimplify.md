@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/instsimplify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/instsimplify.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/instsimplify.rs sha256:a016a17b1b4711b6869456884721c836c69ec176c14ce73da7132ea3cc0f492b -->
+<!-- src: crates/opt/llrm-transforms/src/instsimplify.rs sha256:95cf454211bcc076f31296b1edfc88aa4d6384711f4d79a81dc674537a054c37 -->
 
 # instsimplify
 
@@ -28,3 +28,11 @@ naming it in `llvm_order`.
 
 ## Keeps
 Blocks and edges are unchanged: dominators and loops are preserved.
+
+## Example
+An instruction that equals an operand is replaced by it and then deleted:
+
+```text
+%a = add i32 %x, 0
+%b = mul i32 %a, 2   ; reads %x after the pass
+```
