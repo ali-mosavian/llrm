@@ -3075,7 +3075,12 @@ impl Selector<'_, '_, '_> {
         if let Some(value) = self.constant(operand, width).filter(|&value| width < 8 || i32::try_from(value).is_ok()) {
             return Ok(Loc::Imm(Imm { value, width, address: None }));
         }
-        if let Some(symbol) = self.symbol(self.through_ptrtoint(operand))? {
+        // A symbol is an immediate only where an instruction can hold one: from
+        // the instruction pointer it cannot, and its address is a
+        // register (`lea`).
+        if !self.pc_relative()
+            && let Some(symbol) = self.symbol(self.through_ptrtoint(operand))?
+        {
             return Ok(symbol);
         }
         Ok(Loc::Held(self.held(operand, ty, at, out)?))
