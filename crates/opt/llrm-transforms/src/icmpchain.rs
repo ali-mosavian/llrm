@@ -4,6 +4,7 @@
 //! with `ConstantComparesGatherer`
 //! ([L580](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L580)).
 //!
+//! # Example
 //! ```text
 //!   %a = icmp eq i16 %x, 1                 switch i16 %x, label %f [
 //!   %b = icmp eq i16 %x, 5                   i16 5, label %t

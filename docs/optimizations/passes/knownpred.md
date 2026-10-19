@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/knownpred.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/knownpred.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/knownpred.rs sha256:f8cf6c0a04b1fde67d79442225a83c1a02b52062387cca266649b302ad9d4370 -->
+<!-- src: crates/opt/llrm-transforms/src/knownpred.rs sha256:dd30b0fb2fd930103788aec6830efa4c0f062d76634052fa365bcb8c95cde439 -->
 
 # knownpred
 
@@ -14,6 +14,7 @@ arm that constant chooses: the predecessors are split off to a block that
 holds a copy of what the branching block computes, folded on the constant,
 and that block jumps to the arm.
 
+## Example
 ```text
   b0: br i1 %c1, b1, b2                b0: br i1 %c1, b1, b3
   b1: %c = ...; br b2                  b1: %c = ...; br b2
