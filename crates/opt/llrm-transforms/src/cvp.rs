@@ -125,6 +125,9 @@ impl FunctionPass for Cvp {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        if llrm_support::env_flag!("LLRM_NO_CVP") {
+            return PreservedAnalyses::all();
+        }
         let globals = Rc::clone(&analyses.outer().globals);
         let assumptions = AssumptionCache::of(unit.context, &globals, unit.metadata, unit.function);
         let mut pass = State { unit, analyses, globals, assumptions, lvi: LazyValueInfo::new(), cfg_changed: false };

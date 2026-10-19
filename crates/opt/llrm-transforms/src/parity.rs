@@ -144,9 +144,10 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("sccp@792", Simplify, "sccp", Missing, ""),
     entry("bdce@797", Simplify, "bdce", Translated, ""),
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
-    entry("dead@801", Simplify, "adce", Old, "adce-port"),
+    entry("dead@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
+    entry("adce@815", Simplify, "adce", Translated, ""),
     entry("memcpyopt@818", Simplify, "memcpyopt", Old, "backend-slopes"),
     partial(
         "merge@818",
