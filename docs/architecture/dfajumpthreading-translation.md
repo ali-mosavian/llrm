@@ -45,6 +45,12 @@ It runs once per body after the loop passes (`pipeline.rs`, `wanted("jumpthread"
 
 Retire plan: after S1 is oracle-identical on the corpus kernels that use the switch half (QCport `triggers`/`ent_trig_shot`, the switch programs) the switch code is deleted from `jumpthread.rs` (a `Deletes:` line). The branch half goes with JumpThreading's flip (done). So `jumpthread.rs` is deleted whole after S1–S3 alone; it does not wait for non-trivial `simple-loop-unswitch`.
 
+### No interim shortcut
+
+`JumpThread::run` calls `fold`, `algebraic`, `decide` and `dead` directly after `analyses.invalidate(none)` (`jumpthread.rs:237-245`). Call edges on one binary (d_faces -O2 `-fno-inline-functions`, head `aa14375fc`): 72.74 M inclusive = Decide 29.67 + Fold 28.48 + Algebraic 8.12 + Dead 0.94 + `threaded` 5.41, over 11 calls that change one function (198 to 181 blocks; 43 changed or new, 17 removed).
+
+None of the four passes has a block filter or scope: each runs whole-function fixed-point rounds. Skipping the sandwich changes 20 objects over the corpus (`compile-time-spec.md`). Decision: no shortcut and no preserve-DomTree/loops prototype; the old pass retires with S1–S3. Bench's own split (38.1 M exclusive + 24.6 M nested) did not match these call edges.
+
 ## 5. Staging
 
 - **S1 (about 1,300 lines):** options, `run`, `MainSwitch` without select unfolding, all of `AllSwitchPaths`, `TransformDFA` whole (legality, cost, clones, SSA by DF2), the slot and the oracle `dfajumpthreading` in `tools/difftest` against `opt -passes=dfa-jump-threading`. Fail-first tests: one per stage (a candidate, a path set, the cost refusal, a clone, an outer use).
