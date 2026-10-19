@@ -1545,12 +1545,15 @@ done:
         let printed =
             crate::testing::managed(&mut module, pipeline::Fixed::linear(&applied, pipeline::Phase::Simplify));
         let entry = printed.split("\n\n").find(|one| one.contains("b0:")).expect("the entry block").to_owned();
-        (entry.contains("mul i16"), printed)
+        (entry.contains("mul i16") || entry.contains("shl i16"), printed)
     };
     let (without, plain) = entry_has_mul(false);
-    assert!(without, "premise: without the rotate slot the mul is in the entry block\n{plain}");
+    assert!(
+        without,
+        "premise: without the rotate slot the mul (or the shift it becomes) is in the entry block\n{plain}"
+    );
     let (with, rotated) = entry_has_mul(true);
-    assert!(!with, "the mul is behind the guard, not in the entry block\n{rotated}");
+    assert!(!with, "the mul (or shift) is behind the guard, not in the entry block\n{rotated}");
 }
 
 /// The rotate slot is LLVM's `LoopRotate`: a loop whose latch only increments
