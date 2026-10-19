@@ -127,7 +127,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("hoist@724", Simplify, "licm<no-allowspeculation>", Old, "licm-port"),
     entry("loopmotion@724", Simplify, "licm<no-allowspeculation>", Old, "licm-port"),
     entry("hoist@730", Simplify, "licm<allowspeculation>", Old, "licm-port"),
-    entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial>", Old, "loop-passes-port"),
+    entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial>", Translated, ""),
     entry("decide@766", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("phiopt@766", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("fold@768", Simplify, "instcombine", Old, "instcombine-port"),

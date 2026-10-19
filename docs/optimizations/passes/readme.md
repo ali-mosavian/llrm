@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 96 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 97 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -82,6 +82,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | promote | Write-through promotion: a load of a cell that a store left its value in on every path becomes that value, a phi where paths join. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point: `Sroa` at the boundaries of | [promote](promote.md) |
 | rotate | Loop rotation: a loop proven to run at least once is entered at its body, not its test; a loop that is not proven is entered behind a copy of its test (gcc's `-ftree-ch`). | Twice in [`crate::pipeline`](pipeline.md), outside the per-body fixed point. `copy` runs | [rotate](rotate.md) |
 | settled | What each pass found nothing to do on, kept from one run of the pipeline over a body to the next: a body goes through its pipeline again only where something a pass read of it has changed. | `Settled` (the records, held by the module's `Context`) and `slice`. | [settled](settled.md) |
+| simpleloopunswitch | `SimpleLoopUnswitch<trivial>`: a branch or switch in a loop on a loop-invariant condition, one side of which leaves the loop, is decided before the loop instead of on every trip. |  | [simpleloopunswitch](simpleloopunswitch.md) |
 | simplifycfg | A terminator on a constant becomes a jump, the blocks nothing reaches go, and what that leaves is merged: LLVM's `SimplifyCFGPass` and the `ConstantFoldTerminator`, `removeUnreachableBlocks` and `BasicBlock::removePredecessor` it is made of. | Once per round of the function fixed point, before `decide`: the branches | [simplifycfg](simplifycfg.md) |
 | simplifyindvar | SimplifyIndVar's comparison elimination: a comparison with an induction variable that ScalarEvolution proves true or false is that constant. | Step 0 of [`crate::indvars`](indvars.md), on by default; `LLRM_NO_SCEV_IVCMP` turns it | [simplifyindvar](simplifyindvar.md) |
 | sink | Work moved down to the one place that needs it, so the paths that skip that place no longer run it: gcc's `-ftree-sink` (`pass_sink_code`), LLVM's `Sink` and `MachineSink`. | Last of the function passes before `switchconv`, after `addresssink`; off | [sink](sink.md) |
