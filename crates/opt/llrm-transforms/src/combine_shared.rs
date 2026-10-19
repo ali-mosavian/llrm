@@ -53,10 +53,10 @@ use llrm_mir::context::{ConstantId, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
-use llrm_mir::simplify::simplify_binop_at;
+use llrm_mir::simplify::{simplify_binop_at, simplify_instruction_in};
 use llrm_mir::valuetracking::{Query, pattern};
 
-use crate::combine::{Combiner, handle_use_count_decrement};
+use crate::combine::{Combiner, Visit, handle_use_count_decrement};
 
 /// A ValueTracking query over the body being combined, asked at `cxt`
 /// (`SQ.getWithInstruction`).
@@ -88,6 +88,17 @@ pub fn get_complexity(
         return 2;
     }
     3
+}
+
+/// `simplify*Inst(..., SQ.getWithInstruction(&I))` at the head of a `visit*`:
+/// what the instruction simplifies to, as `replaceInstUsesWith`.
+pub fn simplify_visited(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Option<Visit> {
+    let env = c.env;
+    let found = simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst)?;
+    (Some(found) != c.function.instruction(inst).result.map(Operand::Value)).then_some(Visit::Replace(found))
 }
 
 /// `replaceOperand`: operand `index` of `inst` reads `with`, and what it read
