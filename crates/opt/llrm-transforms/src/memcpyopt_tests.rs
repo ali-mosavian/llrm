@@ -10,12 +10,6 @@ declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
 declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 ";
 
-/// @f after the pass.
-fn after(body: &str) -> String {
-    let mut module = parsed(&format!("{DECLARES}\n{body}"));
-    managed(&mut module, MemCpyOpt)
-}
-
 const GLOBALS: &str = "@a = global [64 x i8] zeroinitializer
 @b = global [64 x i8] zeroinitializer
 @c = global [64 x i8] zeroinitializer
