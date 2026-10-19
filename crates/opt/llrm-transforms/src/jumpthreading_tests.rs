@@ -322,9 +322,7 @@ fn removing_sweep_work(n: u32) -> usize {
         let after = layout.get(at + 1).copied();
         layout.remove(at);
         placed[block.0 as usize] = false;
-        let step = crate::jumpthreading::layout_step(&layout, |one| placed[one.0 as usize], block, at, after);
-        work += step.examined;
-        at = step.next;
+        at = crate::jumpthreading::layout_step(&layout, |one| placed[one.0 as usize], block, at, after, || work += 1);
     }
     work
 }

@@ -103,6 +103,32 @@ Each step is its own PR with "LLVM structure: X; ours: Y; mirror or deviate beca
 | A6 | call CSE in EarlyCSE (llvm-order-poc) | read-only call numbering | waits for #2219 (the unknown callee's footprint omits inaccessible memory) |
 | A7 | delete the tower | `alias.rs` facts, `frameescape.rs`, `llrm-mir/alias.rs` | no caller left |
 
+### 4c. Retiring `MemRef`: the readers
+
+`MemRef::of` (and `point_values`) go when no reader is left. One owner moves every reader, one PR per file, each with bench's M for the step. Fields read are from a grep of `.field` in the file, so a count can include another struct's field.
+
+| reader | `of` calls | fields read | what it does | replacement | reviewer |
+|---|---|---|---|---|---|
+| `references.rs` | 3 | `lineage` | the cache of `MemRef::of` | goes with `MemRef` | none needed |
+| `slotstores.rs` | 3 | root, disp, base, width | cells of stored slots | `Decomposed` (object, offset, index) plus a size | unclaimed |
+| `floatloop.rs` | 3 | pointer, width | two accesses name the same address | `alias() == MustAlias` through `AAQueryInfo` | unclaimed |
+| `floatfacts.rs` | 5 | object | latch stores as cells | `Decomposed` plus a size | unclaimed |
+| `floatbounds.rs` | 1 | disp, base, scale, segment, width | builds a `MemRef` for a cell | `Decomposed`; the segment field is DEVIATE F2 below | unclaimed |
+| `consts.rs` | 4 | root, disp, base, segment, object, space, width, provenance | known values per object cell | `Decomposed`, underlying objects, `unit.space()` | unclaimed |
+| `observers.rs` | 1 | object, width, provenance | which accesses a kind of object reaches | underlying object and captured-before | unclaimed |
+| `induction.rs` | 1 | pointer, space, index_bits, width, inbounds | access stride | the pointer's SCEV | scev-createscev-2239 |
+| `isel.rs` | 1 | typed | which accesses carry `!tbaa` | the access's `AAInfo` | lir-cleanup-port |
+| `manager.rs` | 1 | pointer, root, base, segment, object | holds `IndexMap<InstId, MemRef>` | goes with `Accesses` | none needed |
+| `ranges.rs`, `regions.rs` | 1, 1 | disp, base, scale, width | the old ranges/regions engine | deleted with it | parity-pipeline |
+| `alias.rs` | 7 | all of them | the old points-to tower | deleted with the tower (funcattrs-port's call effects, then A7) | funcattrs-port |
+| `memory.rs` | 5 | all of them | defines `MemRef`, `ObjectRef`, `classes_may_alias` | last; deleted when the rest are gone | none needed |
+
+Fields with no LLVM counterpart, decided (2026-10-24):
+
+- **F1 `typed`, `lineage` (TBAA).** Home: a translation of `TypeBasedAliasAnalysis.cpp` as an `AAResults` provider over `AAInfo::tbaa`, which every load and store already carries (the C front end emits clang's scalar `!tbaa` tree; `llrm_mir::tbaa::Tbaa` is that tree). It needs the aggregate LLVM's `AAResults` has (`addAAResult`: the first answer that is not MayAlias wins, mod/ref intersect), which is the first step. DEVIATE F1: scalar tags only (type, parent, offset 0); LLVM's struct-path tags are not emitted by any front end here. Exit: a front end that emits struct-path tags. `isel.rs` reads `AAInfo::tbaa.is_some()` meanwhile.
+- **F2 `segment`, `selector`, `origin`, `linear` (far pointers and integer addresses).** Home: the datalayout, as LLVM states it: a far pointer is its own address space with pointer size 32 and index width 16 (`pN:32:16:16:16`; the m16 layout already has `p1:32:16:16:16`). The index width is what `GEP`, `ptrtoint` and offset arithmetic wrap at, so they follow the per-address-space paths with no special case, and BasicAA's decomposition uses that index width as at the pin. The selector/offset split of a pair-typed integer (`pair_constant`) becomes a `DataLayout` method beside `is_pair` and `offset_bits`; `Spaces` keeps only which space is far or fixed, and `linear` (one flat address space). DEVIATE F2: LLVM has no segment arithmetic; the split of a pair constant is a target fact stated once, tested at the boundary. No exit: a property of the DOS targets. Acceptance test of the first reader PR that needs it: a far-pointer `GEP` whose offset wraps at 16 bits. Oversight: agreed (2026-10-24).
+- **F3 `provenance`, `object` (object sets).** Home: `getUnderlyingObjects` (ValueTracking), which is not translated; only `getUnderlyingObject` is. Translate it with its lookup depth (`MaxLookup`, 6), and take "is a root an object's own address" from `isIdentifiedObject`. Exit: none; the old sets go with the tower.
+
 ### Item 5: the global-variable cells (S2)
 
 The 4,472 / 16,914 / 9,418 cells of the tables (tags on, BasicAA alone memops, BasicAA alone pointer pairs, with the machine's data layout) have a global on one side; 82% are `aliasGEP`'s inbounds rule, 10% the object-size rule, 8% open. Consumers: the hoist (a load of an internal global past char-tagged stores through a loaded pointer: the 19 `d_faces` -O2 hoists LLVM does and ours does not, 15 in -O1 and 19 in -Os) and GVN's load forwarding and DSE through the same query. Before: 19 hoists missing (memoryssa-port's L1 shadow). After: not measured; the number of those 19 that hoist once S2 is in, rows line first, is the acceptance of S4 and whether these cells are their cause is itself unproven.
