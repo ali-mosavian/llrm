@@ -722,3 +722,26 @@ b0:
     assert!(!reassociated(&mut module));
     assert!(!reassociated(&mut module));
 }
+
+/// A block no path reaches may hold an instruction that reads itself (legal in
+/// LLVM, `Only PHI nodes may reference their own value` is for reachable code).
+/// The block order of the pass included it, the rank walk never ended, and the
+/// test process grew to 158 GB (corpus entry nib-examples-level). Reassociate
+/// walks the blocks a reverse post-order of the entry reaches, as upstream, so
+/// the block is not ranked or visited.
+#[test]
+fn test_an_unreachable_block_that_reads_itself_is_left_alone() {
+    let text = "define i32 @f(i32 %x) {
+b0:
+  ret i32 %x
+
+dead:
+  %a = add nuw nsw i32 %a, 1
+  %b = add i32 %a, %x
+  br label %dead
+}
+";
+    let mut module = parsed(text);
+    assert!(!reassociated(&mut module));
+    assert_eq!(llrm_mir::print::module(&module), llrm_mir::print::module(&parsed(text)));
+}

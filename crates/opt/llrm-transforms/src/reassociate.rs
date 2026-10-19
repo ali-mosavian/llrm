@@ -28,6 +28,13 @@
 //! DEVIATE 5: a constant has no use list, so the negates of one are kept in
 //! `constant_negates`, to find the one `NegateValue` reuses.
 //!
+//! DEVIATE 6: `reassociate` reports a change only if the body differs, not
+//! `MadeChange` (which is also true for an add swapped and swapped back). The
+//! pipeline repeats its body until no pass changes it, so a pass that reports
+//! a no-op never settles it. Exit: the pipeline's rounds compare body
+//! fingerprints themselves (as its cycle history already does), and
+//! `reassociate` returns `MadeChange`.
+//!
 //! # How it works
 //! The files are split by job: `reassociate_rank` (ranks),
 //! `reassociate_tree` (linearize and rewrite a tree), `reassociate_optimize`
@@ -243,6 +250,41 @@ pub fn reassociate(
     digest(function) != before
 }
 
+/// `ReversePostOrderTraversal<Function *>`: the blocks `entry` reaches, each
+/// before its successors but for back edges. (`llrm_support::graph`'s appends
+/// the blocks it cannot reach, which Reassociate must never see: a block no
+/// path reaches may hold an instruction that reads itself.)
+fn reverse_post_order(
+    function: &Function,
+    entry: BlockId,
+) -> Vec<BlockId> {
+    let mut seen = llrm_mir::dense::IdSet::<BlockId>::new();
+    seen.insert(entry);
+    let mut post: Vec<BlockId> = Vec::new();
+    // The first successor is walked first, so a stack of the rest reversed.
+    let successors_of = |block: BlockId| {
+        let mut list: Vec<BlockId> = function.successors(block).into_iter().collect();
+        list.reverse();
+        list
+    };
+    let mut stack: Vec<(BlockId, Vec<BlockId>)> = vec![(entry, successors_of(entry))];
+    while let Some((block, successors)) = stack.last_mut() {
+        match successors.pop() {
+            Some(next) => {
+                if seen.insert(next) {
+                    stack.push((next, successors_of(next)));
+                }
+            }
+            None => {
+                post.push(*block);
+                stack.pop();
+            }
+        }
+    }
+    post.reverse();
+    post
+}
+
 /// A hash of the body: what each instruction is and reads, in order. (Not
 /// `print::fingerprint`, which the pipeline counts as a hashed body.)
 fn digest(function: &Function) -> u64 {
@@ -308,11 +350,7 @@ impl<'a> Reassociator<'a> {
     /// `runImpl`.
     fn run(&mut self) -> bool {
         let Some(entry) = self.function.entry() else { return false };
-        let graph = llrm_analysis::cfg::graph(self.function);
-        let order: Vec<BlockId> = llrm_support::graph::reverse_postorder(&graph, llrm_analysis::cfg::id(entry))
-            .into_iter()
-            .map(llrm_analysis::cfg::block)
-            .collect();
+        let order = reverse_post_order(self.function, entry);
         let pinned = self.pinned_instructions(&order);
         self.ranks = Ranks::build(self.function, &order, |inst| pinned.contains(&inst));
         self.pairs = Pairs::build(self, &order);

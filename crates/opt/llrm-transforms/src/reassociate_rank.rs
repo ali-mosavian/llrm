@@ -35,8 +35,6 @@ pub struct Ranks {
     values: IdMap<ValueId, u32>,
     /// Turns of the operand walk, for the slope test.
     steps: u64,
-    /// The instructions of the walk in progress.
-    walking: llrm_mir::dense::IdSet<ValueId>,
 }
 
 /// One suspended `getRank` call: the instruction, the operand it waits on and
@@ -49,7 +47,7 @@ struct Frame {
 
 impl Ranks {
     pub fn empty() -> Self {
-        Self { blocks: IdMap::new(), values: IdMap::new(), steps: 0, walking: llrm_mir::dense::IdSet::new() }
+        Self { blocks: IdMap::new(), values: IdMap::new(), steps: 0 }
     }
 
     #[cfg(test)]
@@ -117,7 +115,6 @@ impl Ranks {
         let Operand::Value(root) = v else { return 0 };
         let query = Query::bare(context, function, layout);
         let mut stack = vec![Frame { value: root, next: 0, rank: 0 }];
-        self.walking.insert(root);
         loop {
             self.steps += 1;
             let frame = stack.last().expect("a frame");
@@ -142,12 +139,7 @@ impl Ranks {
                         } else {
                             let next = instruction.operands[frame.next];
                             match next {
-                                // An instruction that reads itself through
-                                // others, outside a phi (code no path
-                                // reaches): the walk would never end.
-                                Operand::Value(value) if self.walking.insert(value) => {
-                                    stack.push(Frame { value, next: 0, rank: 0 });
-                                }
+                                Operand::Value(value) => stack.push(Frame { value, next: 0, rank: 0 }),
                                 _ => stack.last_mut().expect("a frame").next += 1,
                             }
                             continue;
@@ -155,9 +147,7 @@ impl Ranks {
                     }
                 }
             };
-            if let Some(done) = stack.pop() {
-                self.walking.remove(&done.value);
-            }
+            stack.pop();
             let Some(parent) = stack.last_mut() else { return rank };
             parent.rank = parent.rank.max(rank);
             parent.next += 1;
