@@ -5648,6 +5648,27 @@ done:
     assert!(got.iter().any(|line| line.contains("g[")), "the premise: the cell is read: {got:?}");
 }
 
+/// The sum a `getelementptr` takes as its index is read by the address, in its
+/// parts: folding the load into the sum left the load unselected and its value
+/// read ("value is read but never defined", `liverangecalc` "a unique value");
+/// `dynsz.bas`, `bintree.bas` and 4 more m16 BASIC programs did not compile.
+#[test]
+fn test_a_load_added_into_an_address_index_is_still_selected() {
+    let text = "@g = global i16 5
+@d = global ptr addrspace(1) null
+define i16 @f(i16 %i) addrspace(1) {
+  %v = load i16, ptr @g
+  %s = add i16 %v, %i
+  %t = load ptr addrspace(1), ptr @d
+  %p = getelementptr i8, ptr addrspace(1) %t, i16 %s
+  %x = load i16, ptr addrspace(1) %p
+  ret i16 %x
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.contains("ptr g")), "the premise: the cell is read: {got:?}");
+}
+
 /// A store to the cell between the load and its reader: the load keeps the old
 /// value, so it stays where it was made.
 #[test]
