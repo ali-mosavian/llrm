@@ -212,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 34] = [
+        const CHECKED: [&str; 36] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -290,6 +290,14 @@ mod tests {
             // add's/sub's/mul's `nsw`/`nuw` to see one more high bit live;
             // it never drops one.
             "demandedbits.rs",
+            // SCCPSolver.cpp's `refineInstruction` reads the wrap flags it is
+            // about to add (`nuw`, `nsw`, `nneg`, a GEP's `nuw`) and never
+            // drops one.
+            "sccp.rs",
+            // `visitGetElementPtrInst` reads a GEP's `nuw`/`inbounds` for
+            // not-null, and `visitCastInst` a `trunc`'s no-wrap kind for the
+            // result range, where LLVM does.
+            "sccpsolver.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

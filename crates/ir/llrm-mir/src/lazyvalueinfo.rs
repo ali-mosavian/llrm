@@ -461,13 +461,13 @@ fn range_intrinsic(id: IntrinsicId) -> Option<RangeIntrinsic> {
 }
 
 /// `ConstantRange` of `!range` metadata of an integer of `width` bits.
-fn constant_range_from_metadata(
-    env: &Env,
+pub fn constant_range_from_metadata(
+    context: &Context,
     node: &MetadataNode,
     width: u32,
 ) -> Option<ConstantRange> {
     let bound = |at: usize| match node.operands.get(at) {
-        Some(MetadataOperand::Constant(id)) => match env.context.get(*id).kind {
+        Some(MetadataOperand::Constant(id)) => match context.get(*id).kind {
             ConstantKind::Int(bits) => Some(bits),
             _ => None,
         },
@@ -495,7 +495,7 @@ fn get_from_range_metadata(
     if from_call || matches!(instruction.opcode, Opcode::Load { .. }) {
         if let Some(ranges) = q.metadata_node(bbi, "range")
             && let Some(Type::Int(width)) = Some(env.context.types.get(instruction.ty))
-            && let Some(range) = constant_range_from_metadata(env, ranges, *width)
+            && let Some(range) = constant_range_from_metadata(env.context, ranges, *width)
         {
             return Lattice::get_range(range, false);
         }
@@ -921,7 +921,7 @@ impl LazyValueInfoImpl {
         let max = Self::max_block_number(env);
         self.the_cache.is_non_null_at_end_of_block(val, bb, max, |bb| {
             let mut non_null_pointers = NonNullPointerSet::default();
-            for i in env.function.block(bb).iter() {
+            for i in env.function.iter_block(bb) {
                 add_non_null_pointers_by_instruction(env, i, &mut non_null_pointers);
             }
             non_null_pointers
@@ -1048,9 +1048,7 @@ impl LazyValueInfoImpl {
         // If guards are not used in the module, don't spend time looking for
         // them
         if self.guard_decl && function.block(bb).first() != Some(bbi) {
-            let instructions = function.block(bb).instructions();
-            let at = instructions.iter().position(|&i| i == bbi).expect("bbi is in its block");
-            for &i in instructions[..at].iter().rev() {
+            for i in std::iter::successors(function.prev_in_block(bbi), |&one| function.prev_in_block(one)) {
                 let q = env.query();
                 if intrinsic_id(&q, i) == Some(IntrinsicId::ExperimentalGuard)
                     && matches!(function.instruction(i).opcode, Opcode::Call(_))
@@ -2213,13 +2211,11 @@ impl LazyValueInfoImpl {
 }
 
 /// `predecessors(BB)`, newest use first as LLVM walks a use list.
-fn predecessors(
+pub(crate) fn predecessors(
     function: &Function,
     bb: BlockId,
 ) -> Vec<BlockId> {
-    let mut preds: Vec<BlockId> = function.predecessors(bb).iter().copied().collect();
-    preds.reverse();
-    preds
+    function.predecessors(bb).iter().copied().collect()
 }
 
 /// `Constant::toConstantRange` of an integer constant.
@@ -3075,7 +3071,7 @@ impl LazyValueInfoImpl {
         let mut out = Vec::new();
         for &bb in function.layout() {
             self.emit_basic_block_start_annot(env, bb, &mut out);
-            for i in function.block(bb).iter() {
+            for i in function.iter_block(bb) {
                 self.emit_instruction_annot(env, dtree, i, &mut out);
             }
         }
@@ -3239,19 +3235,5 @@ fn constant_fold_compare_inst_operands(
     c1: &LatticeConstant,
     c2: &LatticeConstant,
 ) -> Option<bool> {
-    let make = |c: &LatticeConstant| match c {
-        LatticeConstant::Undef => None,
-        LatticeConstant::Int { width, bits } => {
-            let ty = env.context.types.int(*width);
-            Some(env.context.constant(Constant { ty, kind: ConstantKind::Int(*bits) }))
-        }
-        LatticeConstant::Other { ty, kind } => Some(env.context.constant(Constant { ty: *ty, kind: kind.clone() })),
-    };
-    let (a, b) = (make(c1)?, make(c2)?);
-    let folded =
-        crate::constantfolding::constant_fold_compare_inst_operands(env.context, env.globals, env.layout, pred, a, b)?;
-    match env.context.get(folded).kind {
-        ConstantKind::Int(bits) => Some(bits & 1 == 1),
-        _ => None,
-    }
+    crate::valuelattice::fold_compare(env.context, env.globals, env.layout, pred, c1, c2)
 }

@@ -23,7 +23,7 @@ impl ScalarEvolution {
     ) -> String {
         let mut out = String::new();
         for &block in cx.function.layout() {
-            for inst in cx.function.block(block).iter() {
+            for inst in cx.function.iter_block(block) {
                 let instruction = cx.function.instruction(inst);
                 let Some(result) = instruction.result else { continue };
                 if matches!(instruction.opcode, Opcode::ICmp(_) | Opcode::FCmp(_)) {

@@ -8,6 +8,15 @@
 //! referenced by the pointer map, so no set is ever removed. Unknown
 //! instructions (`addUnknown`) are not tracked: LICM adds loads and stores
 //! only.
+//!
+//! # Example
+//! Two stores through pointers that may alias share a set; through pointers
+//! that cannot alias they are two sets:
+//!
+//! ```text
+//! store i32 1, ptr %a
+//! store i32 2, ptr %b   ; one set if %a and %b may alias, two if they do not
+//! ```
 
 use std::rc::Rc;
 

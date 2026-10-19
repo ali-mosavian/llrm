@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/gvn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gvn.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:1860e45ff21f5b4935f700470082c168c3580fb941da30c9c4f7d3235b2ec097 -->
+<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:da2218defe08a8c10d126a9d6980c09c846f369b61d814b9d76be845d8951bcf -->
 
 # gvn
 
@@ -35,11 +35,11 @@ load or a store. `Gvn` is the pass; `EqualCalls` is its call part alone.
    no loop is entered or left by the edge and the operands are available
    there. Divisions (which may trap on a path that did not divide), loads
    and floating expressions are never inserted here.
-4. Load PRE (`pass::loadpre`: `performLoadPRE`, `performLoopLoadPRE`).
-   With `pre`, a load that is available on all but one of the ways into its
-   block is loaded on that way too (an edge into the block with several ways
-   out is split), and becomes a phi; a loop header's load of an address the
-   loop does not change is loaded in the preheader and after the one clobber.
+4. Load PRE (`pass::loadpre`: `performLoadPRE`, `performLoopLoadPRE`). With
+   `pre`, a load that is available on all but one of the ways into its block
+   is loaded on that way too (an edge into the block with several ways out
+   is split), and becomes a phi; a loop header's load of an address the loop
+   does not change is loaded in the preheader and after the one clobber.
 
 A volatile access is never numbered. Floats are numbered like integers; a
 value serves a read only of its own type, so a float store reaches a float

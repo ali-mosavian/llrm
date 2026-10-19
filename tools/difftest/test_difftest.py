@@ -250,3 +250,9 @@ def test_inputs_of_reads_the_runs_of_other_passes_as_the_passes_own():
     got = difftest.relabelled(rows, "bdce", ["fold", "dead"])
     assert [r["pass"] for r in got] == ["bdce", "bdce", "gvn"] and rows[0]["pass"] == "fold"
     assert difftest.relabelled(rows, "bdce", None) == rows
+
+
+def test_llrm_only_attributes_reach_opt_as_strings():
+    """A bare `threeway` on a declaration made opt refuse 9 QCport modules: "expected top-level entity"."""
+    text = 'declare i16 @_strcmp(ptr, ptr) addrspace(1) threeway nearcode\n@s = constant [8 x i8] c"threeway"\n'
+    assert difftest.normalise(text) == 'declare i16 @_strcmp(ptr, ptr) addrspace(1) "threeway" "nearcode"\n@s = constant [8 x i8] c"threeway"\n'

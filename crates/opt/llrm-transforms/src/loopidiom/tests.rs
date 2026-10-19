@@ -43,10 +43,7 @@ fn kinds(
     let mut se = ScalarEvolution::new();
     let idiom = LoopIdiomRecognize::new(options, library);
     function
-        .block(header)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(header)
         .filter(|&inst: &InstId| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
         .map(|inst| idiom.is_legal_store(&cx, &mut se, cur_loop, inst))
         .collect()
@@ -154,10 +151,7 @@ fn same_byte(text: &str) -> Vec<bool> {
         *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("h")).expect("%h");
     let cur_loop = loops.get_loop_for(header).expect("a loop");
     let stores: Vec<InstId> = function
-        .block(header)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(header)
         .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
         .collect();
     let splat = llrm_mir::valuetracking::bytewise::is_bytewise_value(
@@ -333,4 +327,62 @@ fn test_a_loop_that_reads_what_it_fills_is_left_alone() {
     let text = FILL.replace("  store i8 0, ptr %a\n", "  store i8 0, ptr %a\n  %l = load i8, ptr %a\n");
     let after = pass_output(&text);
     assert!(!after.contains("llvm.memset"), "{after}");
+}
+
+/// An in-place copy of `@arr` by `load_at` to `store_at` (offsets from the
+/// counter, in elements), `step` per trip.
+fn shift_loop(
+    load_at: i32,
+    store_at: i32,
+    down: bool,
+) -> String {
+    let (start, step, test) = if down { (99, -1, "icmp sgt i16 %next, -1") } else { (0, 1, "icmp slt i16 %next, 100") };
+    format!(
+        "@arr = global [160 x i16] zeroinitializer
+
+define void @f() {{
+entry:
+  br label %h
+
+h:
+  %i = phi i16 [ {start}, %entry ], [ %next, %h ]
+  %li = add i16 %i, {load_at}
+  %si = add i16 %i, {store_at}
+  %from = getelementptr inbounds i16, ptr @arr, i16 %li
+  %to = getelementptr inbounds i16, ptr @arr, i16 %si
+  %v = load i16, ptr %from
+  store i16 %v, ptr %to
+  %next = add i16 %i, {step}
+  %c = {test}
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret void
+}}
+"
+    )
+}
+
+/// `a[i + 1] = a[i]` going up reads what it wrote: it spreads `a[0]`, which no
+/// memmove does. The check that the store is not ahead of the load had its
+/// sense inverted (`loadAndStoreMayFormMemmove` returned what LLVM's `return
+/// false` condition said), so the loop became a memmove and `llrm-c` stopped
+/// with "a memmove whose direction no pass proved" (tests/run/c/idioms.c, once
+/// LoopRotate was on).
+#[test]
+fn test_a_loop_that_reads_what_it_wrote_is_not_a_memmove() {
+    let after = pass_output(&shift_loop(0, 1, false));
+    assert!(!after.contains("llvm.memmove") && !after.contains("llvm.memcpy"), "{after}");
+    // The same going down: `a[i] = a[i + 1]` from the top.
+    let after = pass_output(&shift_loop(1, 0, true));
+    assert!(!after.contains("llvm.memmove") && !after.contains("llvm.memcpy"), "{after}");
+}
+
+/// A shift whose loads run ahead of its stores is a memmove.
+#[test]
+fn test_a_loop_that_shifts_a_buffer_the_safe_way_is_a_memmove() {
+    let after = pass_output(&shift_loop(1, 0, false));
+    assert!(after.contains("llvm.memmove"), "{after}");
+    let after = pass_output(&shift_loop(0, 1, true));
+    assert!(after.contains("llvm.memmove"), "{after}");
 }

@@ -27,12 +27,11 @@
 //!    `IsSuccessor` assert) is a `debug_assert`.
 //! 6. `std::priority_queue` is a copy of libstdc++'s heap, so ties between
 //!    nodes of one level pop as LLVM's do and children list in LLVM's order.
-//! 7. `Function::successors` and `predecessors` list a block once and
-//!    `predecessors` in MIR's use order, where LLVM's `children` repeat a block
-//!    a switch names twice and walk the use list newest first. A set of nodes
-//!    is the same; only the order of a post-dominator tree's children can
-//!    differ. The test graph lists predecessors newest first, so the golden
-//!    file of the pinned LLVM compares byte for byte.
+//! 7. `Function::successors` and `predecessors` list a block once, where LLVM's
+//!    `children` repeat a block a switch names twice. A set of nodes is the
+//!    same; only the order of a post-dominator tree's children can differ. The
+//!    test graph lists predecessors newest first, so the golden file of the
+//!    pinned LLVM compares byte for byte.
 //!
 //! 8. A `Function` may have no block, where LLVM's has an entry: its tree is
 //!    empty (`DomTree::of`).
@@ -2798,9 +2797,7 @@ impl DomTree {
         if !self.is_reachable(b) {
             return true;
         }
-        SCANS.with(|scans| scans.set(scans.get() + 1));
-        let list = function.block(a).instructions();
-        list.iter().position(|one| *one == def) < list.iter().position(|one| *one == user)
+        function.comes_before(def, user)
     }
 
     /// `instruction_dominates`, where `position` is each instruction's index in

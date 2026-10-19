@@ -204,9 +204,8 @@ fn planned(
     let instruction = function.instruction(branch);
     let [condition, Operand::Block(first), Operand::Block(second)] = instruction.operands[..] else { return None };
     let Operand::Value(value) = condition else { return None };
-    let defined_in = |block: BlockId| {
-        function.block(block).instructions().iter().any(|&one| function.instruction(one).result == Some(value))
-    };
+    let defined_in =
+        |block: BlockId| function.iter_block(block).any(|one| function.instruction(one).result == Some(value));
     if loop_.body.iter().any(|&at| defined_in(cfg::block(at))) {
         return None;
     }
@@ -219,7 +218,7 @@ fn planned(
     // What the header does before the branch is skipped where the loop is never
     // entered: it does nothing but phis and work that cannot trap, and its
     // results leave only through the exit's phis.
-    for inst in function.block(header).iter() {
+    for inst in function.iter_block(header) {
         if inst == branch || function.instruction(inst).opcode == Opcode::Phi {
             continue;
         }
@@ -234,7 +233,7 @@ fn planned(
         _ => false,
     };
     for &at in &loop_.body {
-        for inst in function.block(cfg::block(at)).iter() {
+        for inst in function.iter_block(cfg::block(at)) {
             let Some(result) = function.instruction(inst).result else { continue };
             for one in function.users(result) {
                 let user = one.user;

@@ -193,7 +193,7 @@ pub fn prepared(
         let on = trapping(&module.context, function, &registrations);
         for &block in function.layout() {
             let mut trapped = on[&block];
-            for inst in function.block(block).iter() {
+            for inst in function.iter_block(block) {
                 if trapped
                     && matches!(function.instruction(inst).opcode, Opcode::Call(_))
                     && unwinds(&module.context, &nounwind, function, inst)
@@ -238,8 +238,7 @@ fn trapping(
     let mut pending: Vec<BlockId> = function.layout().to_vec();
     while let Some(block) = pending.pop() {
         let out = function
-            .block(block)
-            .iter()
+            .iter_block(block)
             .fold(on[&block], |trapped, inst| trapping_after(context, function, registrations, inst, trapped));
         for next in function.successors(block) {
             if out && !on[&next] {
@@ -344,7 +343,7 @@ fn landing_pad(
     function: &Function,
     block: BlockId,
 ) -> Option<InstId> {
-    function.block(block).iter().find(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+    function.iter_block(block).find(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
 }
 
 /// What a registration becomes: the runtime's ON ERROR GOTO, B$OEGA with
@@ -612,8 +611,7 @@ fn body_start(
     block: BlockId,
 ) -> Position {
     let found = function
-        .block(block)
-        .iter()
+        .iter_block(block)
         .find(|&one| !matches!(
             function.instruction(one).opcode,
             Opcode::Phi | Opcode::LandingPad { .. }
@@ -629,7 +627,7 @@ fn demote_phis(
     pad: BlockId,
 ) -> Result<(), String> {
     let phis: Vec<InstId> =
-        function.block(pad).iter().filter(|&one| function.instruction(one).opcode == Opcode::Phi).collect();
+        function.iter_block(pad).filter(|&one| function.instruction(one).opcode == Opcode::Phi).collect();
     for phi in phis {
         let instruction = function.instruction(phi).clone();
         let slot = slot(context, function, instruction.ty)?;
@@ -656,7 +654,7 @@ fn live_in(function: &Function) -> BTreeMap<BlockId, BTreeSet<ValueId>> {
     let mut edges: BTreeMap<(BlockId, BlockId), BTreeSet<ValueId>> = BTreeMap::new();
     for &block in function.layout() {
         let (mut used, mut defined) = (BTreeSet::new(), BTreeSet::new());
-        for inst in function.block(block).iter() {
+        for inst in function.iter_block(block) {
             let instruction = function.instruction(inst);
             if instruction.opcode == Opcode::Phi {
                 for pair in instruction.operands.chunks(2) {
@@ -718,8 +716,7 @@ fn demote_live(
             ValueDef::Argument(_) => {
                 let entry = function.entry().expect("a body");
                 let first = function
-                    .block(entry)
-                    .iter()
+                    .iter_block(entry)
                     .find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }));
                 first.map_or(Position::End(entry), Position::Before)
             }
