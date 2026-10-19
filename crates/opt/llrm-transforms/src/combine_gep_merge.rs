@@ -27,7 +27,7 @@ use llrm_mir::valuetracking::pattern;
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_gep::{Gep, GepFlags, Step};
-use crate::combine_shared::{query, replace_operand};
+use crate::combine_shared::{has_one_use, query, replace_operand};
 
 impl Combiner<'_> {
     fn one_user_of(
@@ -35,16 +35,6 @@ impl Combiner<'_> {
         inst: InstId,
     ) -> bool {
         self.function.instruction(inst).result.is_some_and(|result| self.function.users(result).has_one_use())
-    }
-
-    pub(crate) fn operand_has_one_use(
-        &self,
-        v: Operand,
-    ) -> bool {
-        matches!(
-            v,
-            Operand::Value(value) if self.function.users(value).has_one_use()
-        )
     }
 
     /// `GEP.hasAllZeroIndices()`.
@@ -112,7 +102,7 @@ impl Combiner<'_> {
         let mask = if index_bits == 128 { u128::MAX } else { (1u128 << index_bits) - 1 };
         let size = u128::from(self.alloc_size(gep.source));
         let new_offset = size.wrapping_mul(c2).wrapping_add(c1) & mask;
-        if new_offset != 0 && !(self.one_user_of(src) && self.operand_has_one_use(index)) {
+        if new_offset != 0 && !(self.one_user_of(src) && has_one_use(self, index)) {
             return Visit::None;
         }
         let mut flags = GepFlags::default();

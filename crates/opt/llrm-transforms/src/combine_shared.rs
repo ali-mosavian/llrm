@@ -191,7 +191,7 @@ fn binary_operator(
 }
 
 /// `m_OneUse` of a value.
-fn has_one_use(
+pub(crate) fn has_one_use(
     c: &Combiner,
     v: Operand,
 ) -> bool {
