@@ -250,6 +250,8 @@ struct Dse<'a> {
     shortened: IdMap<InstId, (i64, i64)>,
     /// Per alloca value, whether its address is captured (a `ret` included).
     captured: std::cell::RefCell<HashMap<u32, bool>>,
+    /// Per alloca value, whether its address leaves the function's scope.
+    leaves: std::cell::RefCell<HashMap<u32, bool>>,
 }
 
 impl<'a> Dse<'a> {
@@ -286,6 +288,7 @@ impl<'a> Dse<'a> {
             overlap_order: Vec::new(),
             shortened: IdMap::new(),
             captured: Default::default(),
+            leaves: Default::default(),
         };
         // Post-order numbers, and the defs that could kill.
         for (number, block) in post_order_of(function).into_iter().enumerate() {
@@ -392,6 +395,15 @@ impl<'a> Dse<'a> {
         if !name.starts_with("llvm.lifetime.end") {
             return None;
         }
+        // The pin trusts the markers; ours may sit on an object the caller
+        // gets (a returned or stored alloca), which no end terminates.
+        let unit = self.aa.unit();
+        if let (Operand::Value(alloca), _) =
+            llrm_mir::valuetracking::underlying(unit.context, unit.layout, self.function, pointer)
+            && self.address_leaves(alloca)
+        {
+            return None;
+        }
         let size = self.aa.unit().int_constant(self.function.instruction(inst).operands[0])?;
         let width = u32::try_from(size).ok().filter(|&one| one > 0)?;
         let at = llrm_analysis::memory::MemRef::at(self.aa.unit(), pointer, width);
@@ -401,6 +413,47 @@ impl<'a> Dse<'a> {
             _ => at.provenance.clone(),
         };
         Some(self.aa.location_for(&llrm_analysis::memory::MemRef { provenance, ..at }, false))
+    }
+
+    /// Whether the address of `alloca` is returned, stored to memory or made an
+    /// integer: it outlives the marker's scope.
+    fn address_leaves(
+        &self,
+        alloca: llrm_mir::module::ValueId,
+    ) -> bool {
+        if let Some(&known) = self.leaves.borrow().get(&alloca.0) {
+            return known;
+        }
+        let mut work = vec![alloca];
+        let mut seen = vec![alloca];
+        let mut leaves = false;
+        'walk: while let Some(value) = work.pop() {
+            for one in self.function.users(value) {
+                let user = self.function.instruction(one.user);
+                match &user.opcode {
+                    Opcode::Ret | Opcode::Cast(llrm_mir::opcode::CastOp::PtrToInt) => {
+                        leaves = true;
+                        break 'walk;
+                    }
+                    Opcode::Store { .. } if one.index == 0 => {
+                        leaves = true;
+                        break 'walk;
+                    }
+                    Opcode::GetElementPtr { .. }
+                    | Opcode::Cast(llrm_mir::opcode::CastOp::AddrSpaceCast | llrm_mir::opcode::CastOp::BitCast)
+                    | Opcode::Phi
+                    | Opcode::Select => {
+                        if let Some(derived) = user.result.filter(|derived| !seen.contains(derived)) {
+                            seen.push(derived);
+                            work.push(derived);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        self.leaves.borrow_mut().insert(alloca.0, leaves);
+        leaves
     }
 
     /// `getLocForInst`: what a def writes, or the bytes it terminates.

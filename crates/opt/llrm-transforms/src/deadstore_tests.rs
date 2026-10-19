@@ -156,3 +156,15 @@ fn a_store_before_lifetime_end_goes() {
     let after = managed(&mut module, DeadStoreElimination);
     assert!(!after.contains("store i32 %x"), "{after}");
 }
+
+/// `lifetime.end` on an alloca the function returns (QB's B$FMID shape) ends
+/// nothing: the caller reads what was stored. The marker was wrong, and a DSE
+/// that trusted it removed the stores (#2625).
+#[test]
+fn a_lifetime_end_on_a_returned_alloca_kills_nothing() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @llvm.lifetime.end.p0(i64, ptr)\n\ndefine ptr @f(i32 %x) addrspace(1) {{\nb0:\n  %a = alloca i32\n  store i32 %x, ptr %a\n  call void @llvm.lifetime.end.p0(i64 4, ptr %a)\n  ret ptr %a\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(after.contains("store i32 %x"), "{after}");
+}
