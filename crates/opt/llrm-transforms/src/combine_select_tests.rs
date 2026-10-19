@@ -104,3 +104,53 @@ fn a_zext_of_the_condition_is_one_on_the_true_arm_and_zero_on_the_false() {
         "define i16 @f(i1 %c) {\nb0:\n  %0 = select i1 %c, i16 4, i16 4\n  ret i16 %0\n}\n"
     );
 }
+
+/// A select on the right is tried too; the other operand is a number, so one
+/// arm folding is enough and the other gets a copy.
+#[test]
+fn a_select_on_the_right_is_folded_when_one_arm_does() {
+    assert_eq!(
+        combined_either(
+            "define i16 @f(i1 %c, i16 %y) {\nb0:\n  %s = select i1 %c, i16 3, i16 %y\n  %r = add i16 5, %s\n  ret i16 %r\n}\n"
+        ),
+        "define i16 @f(i1 %c, i16 %y) {\nb0:\n  %0 = add i16 5, %y\n  %1 = select i1 %c, i16 8, i16 %0\n  ret i16 %1\n}\n"
+    );
+}
+
+/// The other operand is not a number, so both arms must fold
+/// (`SimplifyBothArms`): one does not, and nothing changes.
+#[test]
+fn both_arms_must_fold_when_the_other_operand_is_not_a_number() {
+    let text = "define i16 @f(i1 %c, i16 %y, i16 %z) {\nb0:\n  %s = select i1 %c, i16 3, i16 %y\n  %r = add i16 %z, %s\n  ret i16 %r\n}\n";
+    assert_eq!(combined_either(text), text);
+}
+
+/// A phi on the left goes to `foldOpIntoPhi`.
+#[test]
+fn a_phi_operand_goes_to_fold_op_into_phi() {
+    let out = combined_either(
+        "define i16 @f(i1 %c) {\nb0:\n  br i1 %c, label %a, label %b\n\na:\n  br label %j\n\nb:\n  br label %j\n\nj:\n  %p = phi i16 [ 1, %a ], [ 2, %b ]\n  %r = add i16 %p, 5\n  ret i16 %r\n}\n",
+    );
+    assert!(out.contains("phi i16 [ 6, %a ], [ 7, %b ]"), "{out}");
+}
+
+/// `visit` that does `foldBinOpIntoSelectOrPhi` of every binary operator.
+fn visit_either(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    if matches!(c.function.instruction(inst).opcode, Opcode::Binary(_)) {
+        c.fold_bin_op_into_select_or_phi(inst)
+    } else {
+        Visit::None
+    }
+}
+
+fn combined_either(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit_either);
+    printed(&module)
+}

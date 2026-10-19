@@ -138,6 +138,28 @@ impl Combiner<'_> {
         Operand::Value(self.function.instruction(clone).result.expect("a value"))
     }
 
+    /// `foldBinOpIntoSelectOrPhi`
+    /// ([:2329](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L2329)):
+    /// the binary operator folded into a select or a phi it reads, operand 0
+    /// first.
+    pub fn fold_bin_op_into_select_or_phi(
+        &mut self,
+        inst: InstId,
+    ) -> Visit {
+        let operands = self.function.instruction(inst).operands.to_vec();
+        let is_constant = |op: Operand| matches!(op, Operand::Constant(_));
+        for index in 0..2 {
+            let Some(def) = self.definition(operands[index]) else { continue };
+            let other_is_constant = is_constant(operands[1 - index]);
+            match self.function.instruction(def).opcode {
+                Opcode::Select => return self.fold_op_into_select(inst, def, false, !other_is_constant),
+                Opcode::Phi => return self.fold_op_into_phi(inst, def, false),
+                _ => {}
+            }
+        }
+        Visit::None
+    }
+
     /// `FoldOpIntoSelect(Op, SI, FoldWithMultiUse, SimplifyBothArms)`.
     pub fn fold_op_into_select(
         &mut self,
