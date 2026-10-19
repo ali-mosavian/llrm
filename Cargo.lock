@@ -236,9 +236,15 @@ dependencies = [
 name = "llrm-arm64"
 version = "0.1.0"
 dependencies = [
+ "llrm-elf-arm64",
  "llrm-lir",
+ "llrm-macho",
+ "llrm-mir",
  "llrm-object",
+ "llrm-support",
  "llrm-target",
+ "llrm-transforms",
+ "tempfile",
 ]
 
 [[package]]

@@ -157,7 +157,7 @@ impl Selector<'_> {
         &mut self,
         assigner: &Assigner,
     ) -> Selected<()> {
-        let mut info = VaInfo { gr_slot: None, vr_slot: None, named_stack: assigner.stack_bytes() };
+        let mut info = VaInfo { gr_slot: None, vr_slot: None, named_stack: assigner.stack_bytes().next_multiple_of(8) };
         if self.platform == Platform::Linux {
             let (gprs, fprs) = assigner.registers_used();
             let gr_size = u64::from(8 - gprs) * 8;
