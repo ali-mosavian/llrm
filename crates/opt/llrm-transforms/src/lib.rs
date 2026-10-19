@@ -205,6 +205,7 @@ pub mod loopunroll;
 pub mod loopunrollpass;
 pub mod loopversion;
 pub mod lsr;
+pub mod lsr_chain;
 pub mod lsr_collect;
 #[cfg(test)]
 mod lsr_collect_tests;
@@ -214,7 +215,13 @@ mod lsr_formula_tests;
 pub mod lsr_generate;
 #[cfg(test)]
 mod lsr_generate_tests;
+pub mod lsr_implement;
 pub mod lsr_narrow;
+pub mod lsr_pass;
+#[cfg(test)]
+mod lsr_pass_tests;
+pub mod lsr_prepare;
+pub mod lsr_solve;
 pub mod lsr_use;
 #[cfg(test)]
 mod lsr_use_tests;
