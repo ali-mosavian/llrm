@@ -4,7 +4,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::mssa::alias::AliasQuery;
 use llrm_analysis::mssa::{AccessId, Kind, Mssa};
 use llrm_mir::context::ConstantKind;
-use llrm_mir::facts::Facts;
+use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags as Wrap, Opcode};
 use llrm_mir::passes::{self, Outer};
@@ -275,7 +275,7 @@ pub fn is_safe_to_speculatively_execute_in(
                     .iter()
                     .any(
                         |attr| match attr {
-                            Attribute::Flag(name) => name == "noundef",
+                            Attribute::Flag(_) => Fact::of_attribute(attr) == Some(Fact::NoUndef),
                             Attribute::Int(name, _) => name.starts_with("dereferenceable"),
                             Attribute::Range { .. } => true,
                             _ => false,
