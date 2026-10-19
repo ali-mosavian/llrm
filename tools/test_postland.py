@@ -53,3 +53,9 @@ def test_failing_tests_are_attributed_to_the_crate_whose_binary_ran_them():
         "     Running unittests src/lib.rs (target/release/deps/llrm_qb-89abcdef)\n\nfailures:\n    t::test_b\n    test_c\n\ntest result: FAILED. 2 failed\n"
     )
     assert postland.by_binary(out) == {"llrm-c": ["compile::tests::test_a"], "llrm-qb": ["t::test_b", "test_c"]}
+
+
+def test_a_failed_run_that_names_no_test_is_a_failure_not_a_pass():
+    """`cargo test -q` printed no `Running` lines, the parse found nothing, and 59 untested landings were reported 'No new failure'."""
+    assert postland.unit_result("error: could not compile `llrm-c`\n", 101) == {"unit workspace::failed-without-a-test-name"}
+    assert postland.unit_result("test result: ok. 3 passed\n", 0) == set()

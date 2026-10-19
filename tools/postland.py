@@ -141,14 +141,21 @@ def by_binary(output: str) -> dict[str, list[str]]:
     return found
 
 
+def unit_result(output: str, code: int) -> set[str]:
+    """The failing `unit crate::test` ids of a workspace test run; a run that failed and named no test (a build error, an output this does not parse) is itself the failure,
+    never a pass: `-q` printed no `Running` line, nothing parsed, and 59 landings read as 'No new failure'."""
+    named = {f"unit {crate}::{test}" for crate, tests in by_binary(output).items() for test in tests}
+    return named or ({"unit workspace::failed-without-a-test-name"} if code else set())
+
+
 def unit_failures(at: Path, name: str | None = None) -> set[str]:
     """`unit <crate>::<test>` for each failing lib test of the workspace (or of one test), in one cargo through buildslot: a crate alone lacks the features the
     root package turns on (llrm-c's `toolchain`: 19 tests failed with "built without the toolchain feature" on a run per crate), a workspace run has them."""
     env = {**os.environ, "CARGO_TARGET_DIR": str(HOME / "target-test"), "CARGO_INCREMENTAL": "0"}
     env.pop("RUSTFLAGS", None)
-    command = [*LOW, "buildslot", "cargo", "test", "--release", "-q", "--workspace", "--lib", "--no-fail-fast", *([name] if name else [])]
+    command = [*LOW, "buildslot", "cargo", "test", "--release", "--workspace", "--lib", "--no-fail-fast", *([name] if name else [])]
     done = subprocess.run(command, cwd=at, env=env, capture_output=True, text=True)
-    return {f"unit {crate}::{test}" for crate, tests in by_binary(done.stdout + done.stderr).items() for test in tests}
+    return unit_result(done.stdout + done.stderr, done.returncode)
 
 
 def probe(failure: str, sha: str) -> bool:
