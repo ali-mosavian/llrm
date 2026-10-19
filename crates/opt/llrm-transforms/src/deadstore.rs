@@ -41,7 +41,8 @@
 //! DEVIATE 2: nothing throws (no unwinding in MIR), so `ThrowingBlocks` is
 //! empty and every local object is invisible on unwind. Exit: when MIR has EH.
 //! DEVIATE 3: an object is invisible after the function returns when it is
-//! a stack or frame object (`isa<AllocaInst>`); `dead_on_return` and byval
+//! a stack or frame object (`isa<AllocaInst>`) whose address is not captured
+//! (`alias::captured`, a `ret` and a store of it included); `dead_on_return` and byval
 //! arguments (stage 3), and non-alloca objects with no capture (malloc) are
 //! absent. Exit: stage 3.
 //! DEVIATE 4: memory terminators (`lifetime.end`, `free`), the `initializes`
@@ -246,6 +247,8 @@ struct Dse<'a> {
     /// The memsets to shorten: the new length, and the bytes taken off the
     /// front.
     shortened: HashMap<InstId, (i64, i64)>,
+    /// Per alloca value, whether its address is captured (a `ret` included).
+    captured: std::cell::RefCell<HashMap<u32, bool>>,
 }
 
 impl<'a> Dse<'a> {
@@ -281,6 +284,7 @@ impl<'a> Dse<'a> {
             merged: HashMap::default(),
             overlap_order: Vec::new(),
             shortened: HashMap::default(),
+            captured: Default::default(),
         };
         // Post-order numbers, and the defs that could kill.
         for (number, block) in post_order_of(function).into_iter().enumerate() {
@@ -440,12 +444,21 @@ impl<'a> Dse<'a> {
         )
     }
 
-    /// `isInvisibleToCallerAfterRet`: a local (an alloca).
+    /// `isInvisibleToCallerAfterRet`: a local (an alloca) whose address is not
+    /// captured, a `ret` of it included (`PointerMayBeCaptured` with
+    /// `ReturnCaptures`).
     fn invisible_after_return(
         &self,
         loc: &Location,
     ) -> bool {
-        self.object_of(loc).is_some_and(|object| matches!(object.kind, MemoryKind::Stack | MemoryKind::Frame))
+        let Some(object) = self.object_of(loc) else { return false };
+        if !matches!(object.kind, MemoryKind::Stack | MemoryKind::Frame) {
+            return false;
+        }
+        let llrm_analysis::memory::Key::Value(alloca) = object.key else { return false };
+        *self.captured.borrow_mut().entry(alloca).or_insert_with(|| {
+            llrm_mir::alias::captured(self.context, self.callees, self.function, llrm_mir::module::ValueId(alloca))
+        }) == false
     }
 
     /// `isInvisibleToCallerOnUnwind`: nothing unwinds, so the same.

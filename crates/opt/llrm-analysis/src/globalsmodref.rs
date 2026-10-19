@@ -471,9 +471,10 @@ impl GlobalsModRef {
         self.function_info(function).map_or_else(MemoryEffects::unknown, |one| MemoryEffects::everywhere(one.mod_ref()))
     }
 
-    /// `getModRefInfo(Call, Loc)` where `Loc` is the global `global`: what the
-    /// direct callee `callee` does to it, with the call's arguments. `Known`
-    /// is `ModRef` where nothing is known.
+    /// `getModRefInfo(Call, Loc)`; `global` is the global that
+    /// `getUnderlyingObject(Loc.Ptr)` reaches, and `argument_may_reach` is
+    /// `getModRefInfoForArgument`, run only when every check passed. `ModRef`
+    /// where nothing is known of `callee`, the direct callee.
     pub fn get_mod_ref_info_for_global(
         &self,
         module: &Module,

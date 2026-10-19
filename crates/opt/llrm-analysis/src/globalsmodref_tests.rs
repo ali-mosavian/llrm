@@ -110,3 +110,34 @@ b0:
     assert!(result.is_non_address_taken(t));
     assert_eq!(result.function_info(f).unwrap().mod_ref_for_global(t), ModRefInfo::Ref);
 }
+
+/// The argument part is asked only after every check passed (a direct callee,
+/// a tracked global, a `FunctionInfo`), as LLVM evaluates it inside the nested
+/// ifs.
+#[test]
+fn the_argument_part_is_not_asked_without_a_callee_or_for_an_address_taken_global() {
+    let (module, result) = found(
+        "@g = internal global i16 0
+@p = internal global ptr null
+
+define void @f() {
+b0:
+  store ptr @g, ptr @p
+  ret void
+}
+",
+    );
+    let (f, g) = (module.named("f").unwrap(), module.named("g").unwrap());
+    let asked = std::cell::Cell::new(0);
+    let ask = || {
+        asked.set(asked.get() + 1);
+        ModRefInfo::NoModRef
+    };
+    assert_eq!(result.get_mod_ref_info_for_global(&module, None, g, ask), ModRefInfo::ModRef);
+    assert_eq!(result.get_mod_ref_info_for_global(&module, Some(f), g, ask), ModRefInfo::ModRef);
+    assert_eq!(asked.get(), 0);
+    let (module, result) = found(CHAIN);
+    let (f, g) = (module.named("f").unwrap(), module.named("g").unwrap());
+    result.get_mod_ref_info_for_global(&module, Some(f), g, ask);
+    assert_eq!(asked.get(), 1);
+}

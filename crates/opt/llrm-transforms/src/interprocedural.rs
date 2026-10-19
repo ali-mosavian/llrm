@@ -209,7 +209,7 @@ fn reporting<T>(
 
 /// `reporting`, and where each body it changed was before: what a stage that
 /// vouches for its edit (`Settled::vouch`) says it from.
-fn reporting_marked<T>(
+pub(crate) fn reporting_marked<T>(
     module: &mut Module,
     modules: &mut ModuleAnalyses,
     edit: impl FnOnce(&mut Module) -> T,
@@ -233,7 +233,7 @@ fn reporting_marked<T>(
 /// The edits `bodies` had since `before` are ones the pipeline's passes need
 /// not look at again: each is a call that names another function that says the
 /// same, or one that takes fewer arguments (`Settled`).
-fn vouched(
+pub(crate) fn vouched(
     module: &Module,
     bodies: impl IntoIterator<Item = GlobalId>,
     before: &llrm_support::hash::IndexMap<GlobalId, llrm_mir::module::Mark>,
@@ -430,7 +430,7 @@ fn defined(program: &Program) -> impl Iterator<Item = Defined> + '_ {
 }
 
 /// Defined procedures of module `at`, in module order.
-fn procedures(
+pub(crate) fn procedures(
     program: &Program,
     at: usize,
 ) -> Vec<GlobalId> {
@@ -579,7 +579,7 @@ fn calls_of(
 
 /// Defined procedures no outside code calls: every caller is in the program,
 /// and a call through a pointer is not one, so none has its address taken.
-fn unexported(program: &Program) -> BTreeSet<Defined> {
+pub(crate) fn unexported(program: &Program) -> BTreeSet<Defined> {
     let addressed: BTreeSet<Defined> = program
         .modules
         .iter()
@@ -1043,7 +1043,7 @@ fn together_trial<E: From<String>>(
 
 /// Module `at`'s procedures every caller of which is in the module: no
 /// outside code, and no other module, calls them.
-fn private(
+pub(crate) fn private(
     program: &Program,
     at: usize,
 ) -> BTreeSet<GlobalId> {
