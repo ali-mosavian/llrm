@@ -30,6 +30,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 import envguard  # noqa: E402
+import targetdesc  # noqa: E402
 
 INPUTS = Path(os.environ.get("LLRM_DIFFTEST_INPUTS") or Path.home() / "scratch/replay/inputs")
 PINNED_BIN = Path.home() / "scratch/llvm-build/bin"  # LLVM 24.0.0git d1106deb71cc, the reference of every comparison
@@ -68,17 +69,26 @@ COUNTERPART = {
     "instsimplify": "instsimplify",
     "loopidiom": "loop(loop-idiom)",
     "loopdeletion": "loop(loop-deletion)",
+    "rotate": "loop-mssa(loop-rotate<header-duplication;no-prepare-for-lto>)",
+    "licm": "loop-mssa(licm<allowspeculation>)",
 }
+
+
+# A slot whose pipeline differs from its pass key's: the first LICM of LPM1 does not speculate (PassBuilderPipelines.cpp#L724).
+SLOT_COUNTERPART = {"licm@724": "loop-mssa(licm<no-allowspeculation>)"}
 
 
 def counterpart(name: str) -> str:
     """The opt pipeline of a pass key or of a slot of LLVM's order (`sroa@1179` is `sroa`)."""
-    return COUNTERPART[name.split("@")[0]]
+    return SLOT_COUNTERPART.get(name) or COUNTERPART[name.split("@")[0]]
 
 
 # The C++ each counterpart is, under llvm/lib at d1106deb71cc: a difference belongs to the function of that file that does the work.
 SOURCE = {
     "instsimplify": "Transforms/Scalar/InstSimplifyPass.cpp",
+    "loop-mssa(loop-rotate<header-duplication;no-prepare-for-lto>)": "Transforms/Scalar/LoopRotation.cpp",
+    "loop-mssa(licm<allowspeculation>)": "Transforms/Scalar/LICM.cpp",
+    "loop-mssa(licm<no-allowspeculation>)": "Transforms/Scalar/LICM.cpp",
     "loop(loop-idiom)": "Transforms/Scalar/LoopIdiomRecognize.cpp",
     "loop(loop-deletion)": "Transforms/Scalar/LoopDeletion.cpp",
     "sroa": "Transforms/Scalar/SROA.cpp",
@@ -129,8 +139,24 @@ def normalise(text: str) -> str:
     return "".join(out)
 
 
+# The target opt costs for: a dump carries no `target triple`, so opt used its host default (x86-64) and every TTI-dependent answer (unroll, LSR, inline cost, SimplifyCFG
+# speculation, LoopIdiom ...) was priced for the wrong machine (30 i32 GEPs cost 5 each there, not the x86-64 figure: inline cost 370 vs 215). Nor does it carry a
+# datalayout: opt used the triple's 32-bit pointers, where a 16-bit target has 16-bit near pointers (`--data-layout` below, read from the target's own datalayout.toml, not copied).
+def datalayout(mode: int) -> str:
+    """LLVM's datalayout string of the target whose `datalayout.toml` says `mode = N`."""
+    for one in targetdesc.targets().values():
+        if one["mode"] == mode:
+            return one["datalayout"]
+    raise SystemExit(f"no datalayout.toml with mode = {mode}")
+
+
+def target_args() -> list[str]:
+    """`-mtriple`, `-mcpu` and `--data-layout` of llrm's target (LLRM_DIFFTEST_TARGET: its `m<mode>`, or `host`)."""
+    return targetdesc.opt_args()
+
+
 def opt(passes: str, text: str) -> subprocess.CompletedProcess:
-    return subprocess.run([str(LLVM_BIN / "opt"), f"-passes={passes}", "-S", "-"], input=text, capture_output=True, text=True)
+    return subprocess.run([str(LLVM_BIN / "opt"), *target_args(), f"-passes={passes}", "-S", "-"], input=text, capture_output=True, text=True)
 
 
 def functions(text: str) -> dict[str, list[str]]:
@@ -289,6 +315,35 @@ def compare(source: str, llrm_out: str, passes: str) -> dict:
     return out
 
 
+def export(todo: list[tuple[dict, Path | None]], name: str, replay: Path, dest: Path) -> int:
+    """For every function whose canonical text differs between llrm's pass and opt's counterpart: `dest/<name>/<config>__<body>/{input,llrm,opt}.ll` and `diff.txt`
+    (llrm's answer, opt's answer at llrm's target, the unified diff of their canonical forms). Owners who cannot run the oracle diagnose from these. Returns the count."""
+    written = 0
+    for row, _ in todo:
+        source = Path(row["file"])
+        try:
+            ours = isolated(replay, row, source)
+        except RuntimeError:
+            continue
+        given = normalise(source.read_text())
+        run = opt(counterpart(name), given)
+        if run.returncode:
+            continue
+        mine, llvm, before = functions(normalise(ours)), functions(run.stdout), functions(given)
+        for fn in sorted(before.keys() | mine.keys() | llvm.keys()):
+            a, b = canonical(mine.get(fn, [])), canonical(llvm.get(fn, []))
+            if a == b:
+                continue
+            out = dest / name / f"{row['config']}__{row['fn']}__{fn}".replace("/", "_")
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "input.ll").write_text("\n".join(before.get(fn, [])) + "\n")
+            (out / "llrm.ll").write_text("\n".join(a) + "\n")
+            (out / "opt.ll").write_text("\n".join(b) + "\n")
+            (out / "diff.txt").write_text("\n".join(difflib.unified_diff(a, b, "llrm", "opt", n=3, lineterm="")) + "\n")
+            written += 1
+    return written
+
+
 def manifest(root: Path, configs: list[str] | None) -> list[dict]:
     rows = []
     for config in sorted(p.name for p in root.iterdir() if (p / "MANIFEST.tsv").is_file()):
@@ -356,7 +411,7 @@ def licm_counts(text: str) -> dict[str, collections.Counter]:
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "remarks.yaml"
         done = subprocess.run(
-            [str(LLVM_BIN / "opt"), "-passes=loop-mssa(licm)", "-disable-output", f"-pass-remarks-output={out}", "-"], input=normalise(text), capture_output=True, text=True
+            [str(LLVM_BIN / "opt"), *target_args(), "-passes=loop-mssa(licm)", "-disable-output", f"-pass-remarks-output={out}", "-"], input=normalise(text), capture_output=True, text=True
         )
         if done.returncode:
             raise RuntimeError("opt licm: " + (done.stderr.strip().splitlines() or ["failed"])[0])
@@ -374,14 +429,48 @@ def isolated(replay: Path, row: dict, source: Path) -> str:
     """llrm's answer to the input alone: `llrm-pass` runs the one pass PASS once on `source`."""
     try:
         order = ["--order"] if "@" in row["pass"] else []
-        done = subprocess.run([str(replay), level_of(row["config"]), *order, row["pass"], str(source)], capture_output=True, text=True)
+        mode = targetdesc.default()
+        layout = ["--mode", mode[1:]] if mode != "host" else []
+        done = subprocess.run([str(replay), level_of(row["config"]), *layout, *order, row["pass"], str(source)], capture_output=True, text=True)
     except OSError as error:
         raise RuntimeError(f"{replay}: {error}") from error
     if done.returncode:
-        raise RuntimeError("llrm-pass " + row["pass"] + ": " + (done.stderr.strip().splitlines() or ["failed"])[0])
+        raise RuntimeError("llrm-pass " + row["pass"] + ": " + failure_line(done.stderr))
+    SEEN.add(llrm_target(done.stderr, mode))
     if order:
         KINDS[row["pass"]] = next((line.split("slot ", 1)[1] for line in done.stderr.splitlines() if "slot " in line), "?")
     return done.stdout
+
+
+def failure_line(stderr: str) -> str:
+    """What llrm-pass failed with: the panic's message or the last line, not the `slot`/`target` header lines it prints first (two panics read as "slot indvars@738 Simplify Old")."""
+    lines = [line for line in stderr.strip().splitlines() if line.strip()]
+    for i, line in enumerate(lines):
+        if "panicked at" in line and i + 1 < len(lines):
+            return f"{line.split('panicked at ', 1)[1].rstrip(':')}: {lines[i + 1].strip()}"
+    return next((line for line in reversed(lines) if not line.startswith("note: run with")), "failed")
+
+
+SEEN: set[str] = set()  # the target line llrm-pass printed, one per distinct answer
+
+
+def llrm_target(stderr: str, mode: str) -> str:
+    """The `target ...` line llrm-pass printed, refused unless it is the machine of `mode`: Neutral priced unroll/licm/rotate/indvars/loopidiom with unit costs
+    against opt priced for the target (matmul unrolled to 36 blocks, opt's 216), and every count taken that way was an instrument number."""
+    line = next((l.split("target ", 1)[1] for l in stderr.splitlines() if l.startswith("llrm-pass: target ")), None)
+    if mode == "host":
+        return line or "neutral"
+    want = f"x86-{mode}"
+    if line is None or not line.startswith(want + " cpu "):
+        raise SystemExit(f"difftest: llrm side is not {want} ({line or 'llrm-pass named no target'}): no count is emitted from a Neutral machine")
+    tti = targetdesc.targets()[mode].get("tti", "none")
+    if f" tti {tti} " not in line:
+        raise SystemExit(f"difftest: llrm side {line} does not price with TTI {tti}")
+    llrm_cpu = line.split(" cpu ", 1)[1].split()[0]
+    opt_cpu = targetdesc.targets()[mode]["llvm_cpu"]
+    if opt_cpu.removeprefix("i") != llrm_cpu.removeprefix("i"):
+        raise SystemExit(f"difftest: llrm prices for cpu {llrm_cpu} but opt is told -mcpu={opt_cpu}: the two sides compare different machines")
+    return line
 
 
 KINDS: dict[str, str] = {}  # slot -> what llrm-pass said stands in it ("sroa@1179 Early Translated (LLVM: sroa<modify-cfg>)")
@@ -496,6 +585,7 @@ def main() -> int:
     inputs.add_argument("--json", type=Path)
     inputs.add_argument("--allow-env", nargs="*", default=[], metavar="NAME", help="the LLRM_CHECK_*/LLRM_EXP_* switch under test; any other in the environment is refused")
     inputs.add_argument("--llrm-pass", type=Path, required=True, help="llrm-pass: llrm's answer is the pass run alone on each input")
+    inputs.add_argument("--export", type=Path, metavar="DIR", help="write input, llrm and opt text and the diff of every differing function under DIR/<slot>/")
     licm = sub.add_parser("licm", help="the LICM remarks of opt on FILE, per function")
     licm.add_argument("input", type=Path)
     pair = sub.add_parser("pair")
@@ -521,9 +611,13 @@ def main() -> int:
     todo = pairs(relabelled(manifest(root, args.config), args.pass_name, args.inputs_of), args.pass_name, root) if args.command == "run" else [x for d in args.directory for x in (input_pairs if args.command == "inputs" else dump_pairs)(d, args.pass_name)]
     if args.limit:
         todo = todo[: args.limit]
+    if getattr(args, "export", None):
+        print(f"exported {export(todo, args.pass_name, args.llrm_pass, args.export)} differing function(s) to {args.export / args.pass_name}")
     report = analyse(todo, root, args.pass_name, replay=args.llrm_pass)
     version = subprocess.run([str(LLVM_BIN / "opt"), "--version"], capture_output=True, text=True).stdout.split("\n")[1].strip()
-    print(f"opt: {LLVM_BIN / 'opt'} ({version})")
+    print(f"opt: {LLVM_BIN / 'opt'} ({version}); target {' '.join(target_args()) or 'host default'}")
+    for seen in sorted(SEEN):
+        print(f"llrm-pass: target {seen}")
     print(table(report))
     if getattr(args, "json", None):
         args.json.write_text(json.dumps(report, indent=1))

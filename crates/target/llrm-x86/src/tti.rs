@@ -362,6 +362,10 @@ fn intrinsic_prices() -> &'static llrm_support::hash::HashMap<(&'static str, &'s
 }
 
 impl Tti for X86 {
+    fn name(&self) -> &'static str {
+        "X86"
+    }
+
     fn cast_of_load_cost(
         &self,
         op: CastKind,
@@ -617,7 +621,16 @@ impl Tti for X86 {
         b: &LsrCost,
     ) -> bool {
         let key = |c: &LsrCost| {
-            (c.insns, c.num_regs, c.add_rec_cost, c.num_iv_muls, c.num_base_adds, c.scale_cost, c.imm_cost, c.setup_cost)
+            (
+                c.insns,
+                c.num_regs,
+                c.add_rec_cost,
+                c.num_iv_muls,
+                c.num_base_adds,
+                c.scale_cost,
+                c.imm_cost,
+                c.setup_cost,
+            )
         };
         key(a) < key(b)
     }

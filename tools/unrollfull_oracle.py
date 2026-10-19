@@ -91,7 +91,7 @@ def shape(body):
 
 def loops_by_function(ir):
     """The loops of each function of a module (the module whole: a body alone does not parse)."""
-    r = run([str(PINNED), "-passes=print<loops>", "-disable-output"], stdin=ir)
+    r = run([str(PINNED), *TARGET, "-passes=print<loops>", "-disable-output"], stdin=ir)
     assert r.returncode == 0, r.stderr[:300]
     counts, current = {}, None
     for line in r.stderr.splitlines():
@@ -108,7 +108,7 @@ def cleaned(ir):
     """`ir` through instcombine, simplifycfg and adce until it stops changing (at most 6 rounds)."""
     last = None
     for _ in range(6):
-        r = run([str(PINNED), "-passes=instcombine<no-verify-fixpoint>,simplifycfg,adce", "-S"], stdin=ir)
+        r = run([str(PINNED), *TARGET, "-passes=instcombine<no-verify-fixpoint>,simplifycfg,adce", "-S"], stdin=ir)
         if r.returncode != 0:
             return None
         ir = r.stdout
