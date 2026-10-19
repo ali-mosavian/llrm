@@ -705,15 +705,26 @@ impl Selector<'_, '_, '_> {
         )
     }
 
-    /// Whether the load fold runs: under `LLRM_TRYFOLD=1`, and in unit tests.
-    /// Off by default since #2663 left the load of an address unselected in m16
-    /// BASIC (`dynsz.bas`: "value is read but never defined").
-    pub fn is_tryfold(
+    /// Whether a `getelementptr` takes the root's result: the address reads the
+    /// sum's parts, not the sum, so a load covered by the sum is never
+    /// selected.
+    pub fn is_indexing(
         &self,
-        _: &Match,
+        m: &Match,
     ) -> bool {
-        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        cfg!(test) || *ON.get_or_init(|| std::env::var_os("LLRM_TRYFOLD").is_some())
+        let function = self.function;
+        function
+            .instruction(m.inst)
+            .result
+            .is_some_and(
+                |result| function
+                    .users(result)
+                    .iter()
+                    .any(|one| matches!(
+                        function.instruction(one.user).opcode,
+                        Opcode::GetElementPtr { .. }
+                    )),
+            )
     }
 
     pub fn is_nonvolatile(
