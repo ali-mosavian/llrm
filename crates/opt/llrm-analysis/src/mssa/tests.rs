@@ -755,3 +755,46 @@ b0:
     let touched = aa.get_mod_ref_info(call, &loc);
     assert!(!touched.is_mod_or_ref(), "{touched:?}");
 }
+
+/// A call that is handed a local's address without capturing it still reaches
+/// the local through its argument. The stand-in asked only whether the address
+/// is captured, so `look(ptr nocapture %a)` was taken to leave the slot alone
+/// and a store before it was dropped: a miscompile (#2887).
+#[test]
+fn test_a_call_reaches_a_local_it_is_handed_without_capturing_it() {
+    use super::alias::AliasQuery;
+    let parsed = Parsed::new(
+        "declare void @look(ptr nocapture)
+define i16 @f() {
+b0:
+  %a = alloca i16
+  store i16 1, ptr %a
+  call void @look(ptr %a)
+  ret i16 0
+}
+",
+    );
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let insts: Vec<_> = unit.function.walk().map(|(_, inst)| inst).collect();
+    let call = *insts
+        .iter()
+        .find(|&&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Call(_)
+        ))
+        .expect("the call");
+    let store = *insts
+        .iter()
+        .find(|&&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ))
+        .expect("the store");
+    let loc = aa.location_of(store).expect("a location");
+    // Premise: the call's effects are unknown to the access lists.
+    assert!(accesses.writes(call).is_none());
+    assert!(aa.get_mod_ref_info(call, &loc).is_mod_or_ref());
+    assert!(aa.mod_set_loc(call, &loc), "the call may write the slot it was handed");
+}
