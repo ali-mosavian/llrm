@@ -299,3 +299,34 @@ b0:
         assert!(!Facts::of(attrs).read_only(), "readonly is replaced by memory(...)");
     }
 }
+
+/// DEVIATE F1: a loop whose trip count is proved returns, where LLVM's
+/// `willreturn` needs a body without back edges; the flags are stated in
+/// `deriveAttrsInPostOrder`'s order. Without F1 the counted loop came out as
+/// `norecurse nounwind` and every caller kept the loop.
+#[test]
+fn post_order_states_willreturn_for_a_counted_loop_after_noreturn_and_before_nounwind() {
+    let mut module = parsed(
+        "define i32 @count() {
+b0:
+  br label %b1
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %n, %b1 ]
+  %n = add i32 %i, 1
+  %more = icmp ult i32 %n, 10
+  br i1 %more, label %b1, label %b2
+b2:
+  ret i32 %n
+}
+",
+    );
+    let id = module.named("count").unwrap();
+    assert_eq!(post_order(&mut module, &DataLayout::default(), Spaces::FLAT, &[id]), [id]);
+    let attrs = &module.global(id).function().unwrap().attrs;
+    let order: Vec<Fact> = attrs
+        .iter()
+        .filter_map(Fact::of_attribute)
+        .filter(|one| matches!(one, Fact::WillReturn | Fact::NoUnwind | Fact::NoRecurse))
+        .collect();
+    assert_eq!(order, [Fact::WillReturn, Fact::NoUnwind, Fact::NoRecurse]);
+}

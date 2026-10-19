@@ -342,7 +342,7 @@ fn replace_dominated_uses_with_template(
     debug_assert_eq!(function.value(from).ty, type_of(context, function, to));
     let mut count = 0;
     // `fake_use` users are not skipped: DEVIATE 6.
-    for at in function.users(from).to_vec() {
+    for at in function.users(from).snapshot() {
         if !should_replace(&*function, at) {
             continue;
         }
@@ -485,6 +485,26 @@ fn may_throw(
         Opcode::Resume | Opcode::Invoke(_) => true,
         _ => false,
     }
+}
+
+/// `isGuaranteedToTransferExecutionToSuccessor`
+/// ([ValueTracking.cpp:7951](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7951)):
+/// the instruction returns to the one after it and does not unwind. DEVIATE: a
+/// volatile access and a call that is not `willreturn`/`nounwind` are not; MIR
+/// has no other source.
+pub(crate) fn is_guaranteed_to_transfer_execution_to_successor(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    if matches!(
+        function.instruction(inst).opcode,
+        Opcode::Unreachable | Opcode::Resume
+    ) {
+        return false;
+    }
+    will_return(context, declarations, function, inst) && !may_throw(context, declarations, function, inst)
 }
 
 /// `Instruction::mayHaveSideEffects`
@@ -1158,7 +1178,7 @@ fn attribute_set_intersect_with(
 /// ([Attributes.cpp:1885](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Attributes.cpp#L1885)),
 /// of two calls' lists: the function, return and argument sets, one by one.
 #[allow(clippy::type_complexity)]
-fn attribute_list_intersect_with(
+pub(crate) fn attribute_list_intersect_with(
     this: (&[Attribute], &[Attribute], &[Vec<Attribute>]),
     other: (&[Attribute], &[Attribute], &[Vec<Attribute>]),
 ) -> Option<(Vec<Attribute>, Vec<Attribute>, Vec<Vec<Attribute>>)> {

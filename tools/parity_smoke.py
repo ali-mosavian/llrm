@@ -4,7 +4,7 @@ First, untimed, `cargo check --workspace --all-targets` of the merged tree and e
 
     tools/parity_smoke.py [--bin DIR] [--base REF] [--rank CRATE...]
 
-The last line is `PARITY SMOKE PASS ...` or `PARITY SMOKE FAIL ...`, with the CPU seconds spent. Build time is not in the 10 s: the unit tests are built first, untimed.
+The last line is `PARITY SMOKE PASS ...` or `PARITY SMOKE FAIL ...`, with the CPU seconds spent. Build time is not in the 15 s: the unit tests are built first, untimed.
 The selection (tools/parity_smoke.toml) is
   units   per crate that `git diff BASE` touches (crates/<group>/<crate>/...): its cheapest unit tests, the ranked list `--rank` writes, cut to the crate's share of
           what the other steps leave; with no ranking yet, all its `--lib` tests, killed at that share (a failure before the cut fails; the cut itself is a note)
@@ -33,8 +33,12 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
 
+sys.path.insert(0, str(HERE / "dosbatch"))
+import cpulimit  # noqa: E402
+from buildslot import slotted  # noqa: E402
+
 SELECTION = HERE / "parity_smoke.toml"
-BUDGET = 10.0
+BUDGET = 15.0  # CPU seconds (user+sys of this process and its children, never wall); the user's rule is a fast set within 10-15 s
 CARGO_OVERHEAD = 0.3  # cargo's own CPU to find the test binary up to date, per crate
 MAX_CRATES = 2  # a merge touching more is tested in the 3 crates with most changed files: each crate costs its cargo start before any test
 UNIT_FLOOR = 2.0  # the seconds the fixed steps always leave for unit tests
@@ -75,7 +79,7 @@ def run_cut(command: list[str], seconds: float, cwd: Path) -> tuple[int | None, 
 def workspace_check(root: Path = ROOT) -> str:
     """"" when the whole workspace, tests and benches included, compiles; else the first errors. Built before the clock starts, like the unit tests: two halves
     that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke feat/parity's head for every build)."""
-    done = subprocess.run(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"], cwd=root, capture_output=True, text=True)
+    done = subprocess.run(slotted(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"]), cwd=root, capture_output=True, text=True)
     if done.returncode == 0:
         return ""
     errors = [line for line in done.stderr.splitlines() if "error" in line]
@@ -103,13 +107,40 @@ def ratchet_commands(tiers: Path = TIERS) -> list[list[str]]:
 
 def ratchets(root: Path = ROOT, tiers: Path = TIERS, run=None) -> str:
     """"" when every ratchet passes on the tree in `root`; else the first that fails. Run before the clock starts, whatever the merge touches."""
-    run = run or (lambda command: subprocess.run(command, cwd=root, capture_output=True, text=True))
+    run = run or (lambda command: subprocess.run(slotted(command), cwd=root, capture_output=True, text=True))
     for command in ratchet_commands(tiers):
         done = run(command)
         if done.returncode:
             lines = [line for line in (done.stdout + done.stderr).splitlines() if "panicked" in line or "FAILED" in line or "error" in line]
             return f"{' '.join(command[1:])}: {' / '.join(lines[:2])[:240] or 'failed'}"
     return ""
+
+
+def ratchet_name(command: list[str]) -> str:
+    """The name a ratchet is listed by in a failure set: the test (`--test NAME`, or the lib filter after `--`), else the filter word."""
+    if "--test" in command:
+        return command[command.index("--test") + 1]
+    return command[-1]
+
+
+def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[str, str]:
+    """name -> why, for EVERY ratchet that fails on the tree in `root` (the subset rule compares whole failure sets, not the first failure)."""
+    run = run or (lambda command: subprocess.run(slotted(command), cwd=root, capture_output=True, text=True))
+    failed = {}
+    for command in ratchet_commands(tiers):
+        done = run(command)
+        if done.returncode:
+            lines = [line for line in (done.stdout + done.stderr).splitlines() if "panicked" in line or "FAILED" in line or "error" in line]
+            failed[f"ratchet:{ratchet_name(command)}"] = " / ".join(lines[:2])[:240] or "failed"
+    return failed
+
+
+def failing_names(line: str) -> list[str]:
+    """The failed step names of a `PARITY SMOKE FAIL name: detail; name: detail | ...` line."""
+    if not line.startswith("PARITY SMOKE FAIL "):
+        return []
+    head = line[len("PARITY SMOKE FAIL "):].split(" | ")[0]
+    return [part.split(":")[0].strip() for part in head.split("; ") if part.strip()]
 
 
 def selection() -> dict:
@@ -174,7 +205,12 @@ def oracle_env() -> dict[str, str]:
 
 def compile_ok(command: list[str], env: dict[str, str]) -> str | None:
     """None where the compile succeeded; else its first line of complaint."""
-    done = subprocess.run(command, capture_output=True, text=True, env=env)
+    try:
+        done = cpulimit.run(command, 300, capture_output=True, text=True, env=env)
+    except cpulimit.MemoryLimit as error:
+        return f"memory limit: {error}"
+    except subprocess.TimeoutExpired:
+        return f"timeout: 300 s of CPU  [{' '.join(command[:3])}]"
     if done.returncode == 0:
         return None
     lines = [line for line in (done.stderr or done.stdout).splitlines() if line.strip()]
@@ -272,7 +308,7 @@ def unit_step(package: str, allowance: float):
         ranking = selection().get("units", {})
         names = unit_tests(package, allowance, {k: [(n, s) for n, s in v.get("tests", [])] for k, v in ranking.items()})
         command = ["cargo", "test", "-q", "--lib", "-p", package] + (["--", "--exact", *names] if names else [])
-        code, output = run_cut(command, allowance + CARGO_OVERHEAD, ROOT)
+        code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT)
         if code is None:
             return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
         if code:
@@ -320,10 +356,20 @@ def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET, known_red: f
     return True, f"PARITY SMOKE PASS {line}"
 
 
+def run_twice_over_budget(run) -> tuple[bool, str]:
+    """`run()` -> (passed, line); when the ONLY failure is the CPU budget it runs once more and takes that verdict: on a host at load 20-60 the CPU seconds of the same
+    steps stretch (cache and hyper-thread contention), and a tools-only PR failed 'over the budget' with no unit test in the set."""
+    ok, line = run()
+    if not ok and failing_names(line) == ["over the budget"]:
+        ok, line = run()
+        line = line.replace("PARITY SMOKE", "PARITY SMOKE (second run, the first was over the budget)", 1)
+    return ok, line
+
+
 def rank(package: str) -> None:
     """Measure `package`'s unit tests once and write the cheapest into parity_smoke.toml (not per merge)."""
     env = {**os.environ, "RUSTC_BOOTSTRAP": "1"}
-    done = subprocess.run(["cargo", "test", "--lib", "-p", package, "--", "-Z", "unstable-options", "--report-time", "--test-threads", "1"], cwd=ROOT, capture_output=True, text=True, env=env)
+    done = subprocess.run(slotted(["cargo", "test", "--lib", "-p", package, "--", "-Z", "unstable-options", "--report-time", "--test-threads", "1"]), cwd=ROOT, capture_output=True, text=True, env=env)
     tests = [(n, s) for n, s in ranked(done.stdout) if s <= 0.5][:40]
     data = selection()
     data.setdefault("units", {})[package] = {"tests": [[n, s] for n, s in tests]}
@@ -351,16 +397,23 @@ def main() -> int:
         for package in args.rank:
             rank(package)
         return 0
+    failing: list[str] = []
+    pre: list[str] = []
     if broken := workspace_check():
-        print(f"PARITY SMOKE FAIL the workspace does not compile: {broken}")
-        return 1
-    if broken := ratchets():
-        print(f"PARITY SMOKE FAIL a ratchet fails on the merged tree: {broken}")
-        return 1
+        failing.append("workspace")
+        pre.append(f"workspace: {broken}")
+    for name, why in ratchet_failures().items():
+        failing.append(name)
+        pre.append(f"{name}: {why}")
     packages = touched(args.base)
     for package in packages:  # built first, untimed
-        subprocess.run(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"], cwd=ROOT, capture_output=True)
-    ok, line = run_steps(plan(packages), args.bin or llrmbin.bin_dir(), known_red=frozenset(args.skip))
+        subprocess.run(slotted(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"]), cwd=ROOT, capture_output=True)
+    ok, line = run_twice_over_budget(lambda: run_steps(plan(packages), args.bin or llrmbin.bin_dir(), known_red=frozenset(args.skip)))
+    failing += failing_names(line.replace("PARITY SMOKE (second run, the first was over the budget)", "PARITY SMOKE"))
+    print(f"FAILING: {','.join(failing)}")
+    if pre:
+        print(f"PARITY SMOKE FAIL {'; '.join(pre)} | {line}")
+        return 1
     print(line)
     return 0 if ok else 1
 

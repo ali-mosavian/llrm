@@ -58,7 +58,7 @@ const THRESHOLD: i64 = 2;
 
 /// `value`, an input of `phi`, makes the program undefined where it reaches
 /// a use in the phi's block.
-fn passing_value_always_undefined(
+pub(crate) fn passing_value_always_undefined(
     context: &Context,
     function: &Function,
     value: Operand,
@@ -225,7 +225,7 @@ pub fn executed(
     }
     for (def, uses) in sinkable.iter() {
         let result = function.instruction(def).result.expect("a value used as an operand");
-        if function.users(result).len() == *uses {
+        if function.users(result).has_n_uses(*uses) {
             speculated += 1;
             if speculated > 1 {
                 return false;

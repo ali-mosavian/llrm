@@ -7,7 +7,7 @@
 //! `docs/architecture/licm-port.md`; the MemorySSA it asks is
 //! `llrm_analysis::mssa`.
 
-mod apply;
+pub(crate) mod apply;
 mod calls;
 pub mod hoist;
 mod promote;
@@ -700,6 +700,7 @@ impl FunctionPass for Licm {
     ) -> PreservedAnalyses {
         let found = if self.apply { run(unit, analyses, self.speculate) } else { decide(unit, analyses) };
         let changed = found_changed(&found);
+        let only_moved = found.sunk.is_empty() && found.erased.is_empty() && found.promoted.is_empty();
         if self.apply && llrm_support::env_flag!("LLRM_DEBUG_LICM") {
             eprintln!(
                 "licm: {} rebuilds of {} instructions, {} hoisted, {} sunk, {} erased, {} promoted",
@@ -726,7 +727,18 @@ impl FunctionPass for Licm {
         });
         if self.apply && changed {
             // Instructions move between blocks; blocks and edges stand.
-            PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+            let kept = PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>();
+            if only_moved {
+                // Instructions moved between blocks and none made or erased:
+                // what the memory accesses are annotated with and what each
+                // call writes stand (rebuilding them was 81% of the cost of a
+                // MemorySSA miss after a LICM edit).
+                kept.preserve::<llrm_analysis::manager::Annotated>()
+                    .preserve::<llrm_analysis::manager::Writes>()
+                    .preserve::<llrm_analysis::manager::PlainAccesses>()
+            } else {
+                kept
+            }
         } else {
             PreservedAnalyses::all()
         }

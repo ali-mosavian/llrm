@@ -954,3 +954,223 @@ fn a_cast_of_a_global_is_a_constant_expression() {
         assert!(folded.as_deref().is_some_and(|one| one.starts_with("Expr(Cast")), "{body}: {folded:?}");
     }
 }
+
+/// `simplifySelectWithICmpCond` and its helpers: a select on a compare, each
+/// rule of `simplifyCmpSelOfMaxMin`, `simplifySelectBitTest`,
+/// `simplifySelectWithEquivalence`, `decomposeBitTest` at its LLVM result.
+#[test]
+fn selects_on_a_compare() {
+    let decls = "declare i16 @llvm.smax.i16(i16, i16)
+declare i16 @llvm.umin.i16(i16, i16)
+declare i16 @llvm.abs.i16(i16, i1)
+declare i16 @llvm.fshl.i16(i16, i16, i16)
+";
+    for (body, expected) in [
+        // (X > Y) ? X : max(X, Y) --> max(X, Y); (X != Y) ? X : max --> X
+        (
+            "  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %k = icmp sgt i16 %x, %y\n  %r = select i1 %k, i16 %x, i16 %m\n",
+            Some("%m"),
+        ),
+        (
+            "  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %k = icmp ne i16 %x, %y\n  %r = select i1 %k, i16 %x, i16 %m\n",
+            Some("%x"),
+        ),
+        (
+            "  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %k = icmp slt i16 %x, %y\n  %r = select i1 %k, i16 %x, i16 %m\n",
+            Some("%x"),
+        ),
+        (
+            "  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %k = icmp slt i16 %x, %y\n  %r = select i1 %k, i16 %m, i16 %x\n",
+            Some("%m"),
+        ),
+        // X > MIN ? X : MIN --> X
+        ("  %k = icmp sgt i16 %x, -32768\n  %r = select i1 %k, i16 %x, i16 -32768\n", Some("%x")),
+        ("  %k = icmp slt i16 %x, 32767\n  %r = select i1 %k, i16 %x, i16 32767\n", Some("%x")),
+        ("  %k = icmp ugt i16 %x, 0\n  %r = select i1 %k, i16 %x, i16 0\n", Some("%x")),
+        ("  %k = icmp sgt i16 %x, 0\n  %r = select i1 %k, i16 %x, i16 0\n", None),
+        // an equality gives the value of one arm
+        ("  %k = icmp eq i16 %x, %y\n  %r = select i1 %k, i16 %x, i16 %y\n", Some("%y")),
+        ("  %k = icmp eq i16 %x, 5\n  %r = select i1 %k, i16 %x, i16 5\n", Some("5")),
+        ("  %k = icmp ne i16 %x, 5\n  %r = select i1 %k, i16 5, i16 %x\n", Some("5")),
+        ("  %k = icmp eq i16 %x, 5\n  %r = select i1 %k, i16 6, i16 %x\n", None),
+        // (X | Y) == 0 implies X == 0
+        ("  %o = or i16 %x, %y\n  %k = icmp eq i16 %o, 0\n  %r = select i1 %k, i16 %x, i16 0\n", Some("0")),
+        ("  %o = and i16 %x, %y\n  %k = icmp eq i16 %o, -1\n  %r = select i1 %k, i16 %y, i16 -1\n", Some("65535")),
+        // bit tests: (X & Y) == 0 ? X & ~Y : X --> X
+        (
+            "  %a = and i16 %x, 3\n  %k = icmp eq i16 %a, 0\n  %m = and i16 %x, -4\n  %r = select i1 %k, i16 %m, i16 %x\n",
+            Some("%x"),
+        ),
+        (
+            "  %a = and i16 %x, 3\n  %k = icmp ne i16 %a, 0\n  %m = and i16 %x, -4\n  %r = select i1 %k, i16 %m, i16 %x\n",
+            Some("%m"),
+        ),
+        (
+            "  %a = and i16 %x, 4\n  %k = icmp ne i16 %a, 0\n  %o = or i16 %x, 4\n  %r = select i1 %k, i16 %x, i16 %o\n",
+            Some("%o"),
+        ),
+        (
+            "  %a = and i16 %x, 4\n  %k = icmp eq i16 %a, 0\n  %o = or i16 %x, 4\n  %r = select i1 %k, i16 %o, i16 %x\n",
+            Some("%o"),
+        ),
+        // the same through a sign test and a truncation
+        ("  %k = icmp slt i16 %x, 0\n  %m = and i16 %x, 32767\n  %r = select i1 %k, i16 %x, i16 %m\n", Some("%x")),
+        ("  %t = trunc i16 %x to i1\n  %o = or i16 %x, 1\n  %r = select i1 %t, i16 %x, i16 %o\n", Some("%o")),
+        // zero-shift guards of rotates and funnel shifts
+        (
+            "  %f = call i16 @llvm.fshl.i16(i16 %x, i16 %x, i16 %y)\n  %k = icmp eq i16 %y, 0\n  %r = select i1 %k, i16 %x, i16 %f\n",
+            Some("%f"),
+        ),
+        (
+            "  %f = call i16 @llvm.fshl.i16(i16 %x, i16 %x, i16 %y)\n  %s = and i16 %y, 15\n  %k = icmp eq i16 %s, 0\n  %r = select i1 %k, i16 %x, i16 %f\n",
+            Some("%f"),
+        ),
+        (
+            "  %f = call i16 @llvm.fshl.i16(i16 %x, i16 %x, i16 %y)\n  %s = urem i16 %y, 16\n  %k = icmp eq i16 %s, 0\n  %r = select i1 %k, i16 %x, i16 %f\n",
+            Some("%f"),
+        ),
+        (
+            "  %f = call i16 @llvm.fshl.i16(i16 %x, i16 %y, i16 %y)\n  %k = icmp eq i16 %y, 0\n  %r = select i1 %k, i16 %x, i16 %f\n",
+            None,
+        ),
+        // X == 0 ? abs(X) : -abs(X) --> -abs(X)
+        (
+            "  %a = call i16 @llvm.abs.i16(i16 %x, i1 false)\n  %n = sub i16 0, %a\n  %k = icmp eq i16 %x, 0\n  %r = select i1 %k, i16 %a, i16 %n\n",
+            Some("%n"),
+        ),
+        (
+            "  %a = call i16 @llvm.abs.i16(i16 %x, i1 false)\n  %n = sub i16 0, %a\n  %k = icmp eq i16 %x, 0\n  %r = select i1 %k, i16 %n, i16 %a\n",
+            Some("%a"),
+        ),
+    ] {
+        assert_eq!(simplified(&format!("{decls}{}", of(body)), "r").as_deref(), expected, "{body}");
+    }
+}
+
+/// `isSelectWithIdenticalPHI`: two phis that differ only by a select between
+/// them are one.
+#[test]
+fn a_select_of_two_phis_that_are_always_equal() {
+    let text = "define i32 @f(i32 %n, i1 %c, i1 %cmp1, i1 %cmp2) {
+entry:
+  br label %loop
+loop:
+  %phi = phi i32 [ 0, %entry ], [ %sel1, %loop ]
+  %id = phi i32 [ 0, %entry ], [ %sel2, %loop ]
+  %to_fold = select i1 %cmp2, i32 %id, i32 %phi
+  %sel1 = select i1 %cmp1, i32 5, i32 %to_fold
+  %sel2 = select i1 %cmp1, i32 5, i32 %id
+  %r = select i1 %c, i32 %phi, i32 %id
+  br i1 %cmp1, label %loop, label %exit
+exit:
+  ret i32 %r
+}
+";
+    assert_eq!(simplified(text, "r").as_deref(), Some("%id"));
+}
+
+/// wrapv_overflow_check.c (#2658): `r = x + y` (nsw) in the entry, tested
+/// `r >= 0` where only `x >= 0` and `y >= 0` hold. LLVM's InstCombine folds it
+/// through the dominating branches (`SQ.DC`); without the cache nothing does.
+#[test]
+fn a_sum_of_two_values_the_branches_say_are_not_negative_is_not_negative() {
+    let text = "define i64 @f(i64 %x, i64 %y) {
+entry:
+  %r = add nsw i64 %x, %y
+  %a = icmp sge i64 %x, 0
+  br i1 %a, label %b3, label %out
+b3:
+  %b = icmp slt i64 %y, 0
+  br i1 %b, label %out, label %b6
+b6:
+  %t = icmp sge i64 %r, 0
+  br i1 %t, label %out, label %out
+out:
+  ret i64 %r
+}
+";
+    let answer = |dominating: bool| {
+        let mut module: Module = parse::module(text).unwrap();
+        let id = module.named("f").expect("@f");
+        let crate::module::GlobalKind::Function(function) = &module.globals[id.0 as usize].kind else { panic!() };
+        let function = function.clone();
+        let inst = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| {
+                function.instruction(inst).result.is_some_and(|r| function.value(r).name.as_deref() == Some("t"))
+            })
+            .expect("%t");
+        let mut analyses = crate::valuetracking::FunctionAnalyses::new(&module, &function);
+        if dominating {
+            analyses = analyses.with_dom_conditions(&module, &function);
+        }
+        simplify::simplify_instruction_in(
+            &mut module.context,
+            &module.globals,
+            &crate::datalayout::DataLayout::default(),
+            Some(&analyses),
+            &function,
+            inst,
+        )
+        .map(|value| {
+            matches!(
+                value,
+                Operand::Constant(id) if module.context.get(id).kind == ConstantKind::Int(1)
+            )
+        })
+    };
+    assert_eq!(answer(false), None);
+    assert_eq!(answer(true), Some(true));
+}
+
+/// `simplifyICmpWithDominatingAssume` and `simplifyICmpWithIntrinsicOnLHS`.
+#[test]
+fn compares_an_assume_or_a_saturating_operation_decides() {
+    let decls = "declare void @llvm.assume(i1)
+declare i16 @llvm.uadd.sat.i16(i16, i16)
+declare i16 @llvm.usub.sat.i16(i16, i16)
+";
+    for (body, expected) in [
+        // x u< 10 is assumed: x u< 20 holds, x u< 5 is not known
+        ("  %a = icmp ult i16 %x, 10\n  call void @llvm.assume(i1 %a)\n  %r = icmp ult i16 %x, 20\n", Some("1")),
+        ("  %a = icmp ult i16 %x, 10\n  call void @llvm.assume(i1 %a)\n  %r = icmp ugt i16 %x, 20\n", Some("0")),
+        ("  %a = icmp ult i16 %x, 10\n  call void @llvm.assume(i1 %a)\n  %r = icmp ult i16 %x, 5\n", None),
+        // an assume later in the block holds at the compare: execution reaches
+        // it
+        ("  %r = icmp ult i16 %x, 20\n  %a = icmp ult i16 %x, 10\n  call void @llvm.assume(i1 %a)\n", Some("1")),
+        // uadd.sat(X, Y) uge X + Y; usub.sat(X, Y) ule X - Y
+        (
+            "  %s = call i16 @llvm.uadd.sat.i16(i16 %x, i16 %y)\n  %t = add i16 %x, %y\n  %r = icmp uge i16 %s, %t\n",
+            Some("1"),
+        ),
+        (
+            "  %s = call i16 @llvm.uadd.sat.i16(i16 %x, i16 %y)\n  %t = add i16 %y, %x\n  %r = icmp ult i16 %s, %t\n",
+            Some("0"),
+        ),
+        (
+            "  %s = call i16 @llvm.usub.sat.i16(i16 %x, i16 %y)\n  %t = sub i16 %x, %y\n  %r = icmp ule i16 %s, %t\n",
+            Some("1"),
+        ),
+        (
+            "  %s = call i16 @llvm.usub.sat.i16(i16 %x, i16 %y)\n  %t = sub i16 %x, %y\n  %r = icmp ugt i16 %s, %t\n",
+            Some("0"),
+        ),
+        (
+            "  %s = call i16 @llvm.usub.sat.i16(i16 %x, i16 %y)\n  %t = sub i16 %y, %x\n  %r = icmp ule i16 %s, %t\n",
+            None,
+        ),
+        // uadd.sat(X, Y) uge X (a monotonic value); X uge usub.sat(X, Y)
+        ("  %s = call i16 @llvm.uadd.sat.i16(i16 %x, i16 %y)\n  %r = icmp uge i16 %s, %x\n", Some("1")),
+        ("  %s = call i16 @llvm.uadd.sat.i16(i16 %x, i16 %y)\n  %r = icmp ult i16 %s, %y\n", Some("0")),
+        ("  %s = call i16 @llvm.usub.sat.i16(i16 %x, i16 %y)\n  %r = icmp uge i16 %x, %s\n", Some("1")),
+        ("  %s = call i16 @llvm.usub.sat.i16(i16 %x, i16 %y)\n  %r = icmp uge i16 %y, %s\n", None),
+        // the swapped form: the intrinsic on the right
+        (
+            "  %s = call i16 @llvm.uadd.sat.i16(i16 %x, i16 %y)\n  %t = add i16 %x, %y\n  %r = icmp ule i16 %t, %s\n",
+            Some("1"),
+        ),
+    ] {
+        assert_eq!(simplified(&format!("{decls}{}", of(body)), "r").as_deref(), expected, "{body}");
+    }
+}

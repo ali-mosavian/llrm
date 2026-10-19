@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/deadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/deadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:0776389167e1d9919581a4316a81e48405e237fe5daf3d197e5b5bea1b101fd7 -->
+<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:1d26532642744d2a24d0278244244608ba04a317bae0d5ff9fe9a6aeeaa49bba -->
 
 # deadstore
 
@@ -46,11 +46,12 @@ none; the model is llrm's.
 DEVIATE 2: nothing throws (no unwinding in MIR), so `ThrowingBlocks` is
 empty and every local object is invisible on unwind. Exit: when MIR has EH.
 DEVIATE 3: an object is invisible after the function returns when it is
-a stack or frame object (`isa<AllocaInst>`); `dead_on_return` and byval
-arguments (stage 3), and non-alloca objects with no capture (malloc) are
-absent. Exit: stage 3.
-DEVIATE 4: memory terminators (`lifetime.end`, `free`), the `initializes`
-attribute, `tryFoldIntoCalloc` and
+a stack or frame object (`isa<AllocaInst>`) whose address is not captured
+(`alias::captured`, a `ret` and a store of it included); `dead_on_return`
+and byval arguments (stage 3), and non-alloca objects with no capture
+(malloc) are absent. Exit: stage 3.
+DEVIATE 4: `free` as a memory terminator (`lifetime.end` is in), the
+`initializes` attribute, `tryFoldIntoCalloc` and
 `eliminateRedundantStoresViaDominatingConditions` are stage 2 and 3. Partial
 overwrites (`isPartialOverwrite`, `IOLs`,
 `tryToMergePartialOverlappingStores`, `tryToShorten` of memsets) and

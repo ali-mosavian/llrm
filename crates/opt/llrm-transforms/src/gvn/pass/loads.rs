@@ -67,7 +67,7 @@ pub(super) struct AvailableValue {
 }
 
 impl AvailableValue {
-    fn get(
+    pub(super) fn get(
         value: Operand,
         offset: u64,
     ) -> Self {
@@ -187,7 +187,7 @@ const KEPT_METADATA: [&str; 6] =
 impl GvnPass<'_> {
     /// `MemoryDependenceResults::getDependency` for `inst`, on the function as
     /// it stands.
-    fn md_get_dependency(
+    pub(super) fn md_get_dependency(
         &mut self,
         inst: InstId,
     ) -> MemDepResult {
@@ -672,7 +672,11 @@ impl GvnPass<'_> {
             self.salvage_and_remove_instruction(load);
             return true;
         }
-        // Step 4: Eliminate partial redundancy: stages 5 and 6 (OWED).
-        false
+        // Step 4: Eliminate partial redundancy (`enable-load-pre`).
+        if !self.pre {
+            return false;
+        }
+        self.perform_loop_load_pre(load, &mut values_per_block, &unavailable_blocks)
+            || self.perform_load_pre(load, &mut values_per_block, &unavailable_blocks)
     }
 }

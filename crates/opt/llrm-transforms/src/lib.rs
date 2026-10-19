@@ -17,7 +17,7 @@
 //!   a["<b>globalopt, ports, Stamp</b><br/><small>(module / program)</small>"]:::mid
 //!   subgraph g_body["PER BODY, REPEATED TO A FIXED POINT"]
 //!     s1["<b>sroa (+ splitcopy)</b><br/><small>at boundaries</small>"]:::mid
-//!     s2["<b>cleanup: fold decide dead</b><br/><small>algebraic phiopt dse gvn<br/>promote inferspace<br/>calls: tailrec<br/>loops: loopsimplify lcssa<br/>hoist loopmotion<br/>trivialunswitch indvars<br/>floatloop fill</small>"]:::mid
+//!     s2["<b>cleanup: fold decide dead</b><br/><small>algebraic phiopt dse gvn<br/>promote inferspace<br/>calls: tailrec<br/>loops: loopsimplify lcssa<br/>licm<br/>trivialunswitch indvars<br/>floatloop fill</small>"]:::mid
 //!     s3["<b>after each round: unroll</b>"]:::mid
 //!     s4["<b>after it settles: peel,</b><br/><small>unswitch, split, fuse, distribute, unroll-jam, merge</small>"]:::mid
 //!   end
@@ -46,7 +46,7 @@
 //! judges a rewrite tried on a copy of the body.
 //!
 //! Scalar and memory: `fold` (with `canonical` and `floatfold`), `decide`,
-//! `dead`, `algebraic`, `phiopt`, `cfg`, `dse`, `gvn` (with `loadjoins`),
+//! `dead`, `algebraic`, `phiopt`, `cfg`, `dse`, `gvn`,
 //! `promote` (`Sroa`, `Promote`, with `splitcopy`), `inferspace`, `jumpthread`,
 //! `gepoffset`, `addresssink`, `fixednarrow`, `ports`.
 //!
@@ -87,9 +87,14 @@ pub mod calleepop;
 #[cfg(test)]
 mod calleepop_tests;
 pub mod candidate;
+pub mod canonexit;
 pub mod canonical;
 pub mod cfg;
 pub mod combine;
+pub mod combine_addsub;
+pub mod combine_build;
+pub mod combine_compares;
+pub mod combine_shared;
 pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
@@ -129,7 +134,7 @@ pub mod gvn;
 mod gvn_load_tests;
 #[cfg(test)]
 mod gvn_scalar_tests;
-pub mod hoist;
+pub mod hoistcommon;
 pub mod homes;
 pub mod indvars;
 pub mod inferspace;
@@ -146,10 +151,13 @@ mod instworklist_tests;
 pub mod interprocedural;
 pub mod ipacp;
 pub mod jumpthread;
+pub mod jumpthreading;
+#[cfg(test)]
+mod jumpthreading_tests;
 pub mod lcssa;
 pub mod lcssamerges;
+pub mod lftr;
 pub mod licm;
-pub mod loadjoins;
 pub mod local;
 #[cfg(test)]
 mod local_tests;
@@ -161,7 +169,6 @@ pub mod loopfuse;
 pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;
-pub mod loopmotion;
 pub mod loopnest;
 pub mod looprotate;
 pub mod loopshape;
@@ -188,6 +195,7 @@ pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
 pub mod ports;
+pub mod predicateinfo;
 pub mod profit;
 pub mod promote;
 pub mod rotate;
@@ -197,7 +205,6 @@ pub mod settled;
 pub mod simpleloopunswitch;
 pub mod simplifycfg;
 pub mod simplifyindvar;
-pub mod sink;
 pub mod spares;
 pub mod speculate;
 pub mod spill;
@@ -205,6 +212,7 @@ pub mod splitcopy;
 pub mod sroa;
 pub mod switchcg;
 pub mod switchlower;
+pub mod tailmerge;
 pub mod tailrec;
 #[cfg(test)]
 pub mod testing;
@@ -219,6 +227,7 @@ pub mod versionstride;
 pub mod vncoercion;
 #[cfg(test)]
 mod vncoercion_tests;
+pub mod walk;
 pub mod widen;
 pub mod window;
 // Not ported, meaning nothing where a value is whole: `wholephis` and

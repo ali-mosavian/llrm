@@ -33,7 +33,7 @@ fn replacing_every_use_lets_the_definition_go() {
     let f = function(&mut module);
     let (x, value) = named(f, "x");
     let (y, _) = named(f, "y");
-    assert_eq!(f.users(value).to_vec(), [Use { user: y, index: 0 }]);
+    assert_eq!(f.users(value).snapshot(), [Use { user: y, index: 0 }]);
     assert_eq!(f.erase(x), Err(format!("instruction {}'s result still has 1 users", x.0)));
     let a = f.parameters()[0];
     f.replace_all_uses_with(value, Operand::Value(a));
@@ -82,7 +82,7 @@ fn a_clone_uses_what_its_original_uses() {
     let (y, _) = named(f, "y");
     let copy = f.clone_instruction(y);
     f.insert(copy, Position::Before(y)).expect("placed");
-    assert_eq!(f.users(value).len(), 2);
+    assert_eq!(f.users(value).iter().count(), 2);
     assert_eq!(f.take_changes()[0], Change::Cloned { from: y, to: copy });
     assert_eq!(f.erase(x), Err(format!("instruction {}'s result still has 2 users", x.0)));
     assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
@@ -561,7 +561,7 @@ fn a_value_replaced_and_a_phi_cleared_leave_the_use_lists_true() {
     let f = function(&mut m);
     let (_, b) = (0, f.parameters()[1]);
     let (_, a) = (0, f.parameters()[0]);
-    assert!(f.users(b).len() > n, "premise: %b is read many times");
+    assert!(f.users(b).has_n_uses_or_more(n + 1), "premise: %b is read many times");
     f.replace_value(b, Operand::Value(a));
     assert!(f.users(b).is_empty());
     assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
@@ -766,4 +766,91 @@ fn a_cloned_block_reads_its_own_values_once_remapped() {
     let (y, _) = named(f, "y");
     assert_eq!(f.instruction(y).operands[0], Operand::Value(x));
     assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
+}
+
+const JOIN: &str = "define i16 @f(i1 %c, i16 %a, i16 %b) {\nentry:\n  br i1 %c, label %p1, label %p2\np1:\n  switch i16 %a, label %join [\n    i16 0, label %p3\n  ]\np2:\n  br label %join\np3:\n  br label %join\njoin:\n  %m = phi i16 [ %a, %p1 ], [ %b, %p2 ], [ 7, %p3 ]\n  ret i16 %m\n}\n";
+
+/// `removeIncomingValue` moves the LAST input into the removed one's slot; the
+/// order-preserving removal left `[%b, %p2], [7, %p3]` where `opt` leaves
+/// `[7, %p3], [%b, %p2]`, so every later phi walk differed from LLVM's.
+#[test]
+fn removing_a_predecessor_moves_the_last_phi_input_into_its_slot() {
+    let mut module = module(JOIN);
+    let (context, f) = module.function_mut("f").expect("@f");
+    let block = |f: &Function, name: &str| {
+        f.layout().iter().copied().find(|&b| f.block(b).name.as_deref() == Some(name)).expect(name)
+    };
+    let (join, p1) = (block(f, "join"), block(f, "p1"));
+    let (m, _) = named(f, "m");
+    f.predecessor_removed(context, join, p1, true);
+    let from: Vec<Operand> = f.instruction(m).operands.chunks(2).map(|pair| pair[1]).collect();
+    assert_eq!(from, vec![Operand::Block(block(f, "p3")), Operand::Block(block(f, "p2"))]);
+}
+
+/// With every other input the phi itself, `hasConstantValue` is poison and
+/// the phi goes; the skip-self version returned nothing and left the phi.
+#[test]
+fn a_phi_left_with_only_itself_becomes_poison() {
+    let text = "define i16 @f(i1 %c, i16 %a) {\nentry:\n  br i1 %c, label %loop, label %out\nloop:\n  %m = phi i16 [ %a, %entry ], [ %m, %loop ], [ %m, %loop ]\n  br i1 %c, label %loop, label %out\nout:\n  ret i16 %a\n}\n";
+    let mut module = module(text);
+    let (context, f) = module.function_mut("f").expect("@f");
+    let loop_block = f.layout().iter().copied().find(|&b| f.block(b).name.as_deref() == Some("loop")).unwrap();
+    let entry = f.entry().unwrap();
+    let (m, _) = named(f, "m");
+    f.predecessor_removed(context, loop_block, entry, false);
+    assert!(f.is_erased(m), "the phi of itself alone is replaced by poison and erased");
+}
+
+/// `setName` on a name a live value holds appends a number; the unnumbered
+/// copy of a cloned instruction would otherwise share its original's name and
+/// print as two definitions of `%x`.
+#[test]
+fn a_name_a_value_holds_gets_a_number_when_set_again() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let (_, x) = named(f, "x");
+    let (copy, _) = named(f, "y");
+    let duplicate = f.clone_instruction(copy);
+    f.insert(duplicate, Position::Before(copy)).expect("placed");
+    let value = f.instruction(duplicate).result.expect("a value");
+    f.set_name(value, "x");
+    assert_eq!(f.value(x).name.as_deref(), Some("x"));
+    assert_eq!(f.value(value).name.as_deref(), Some("x1"));
+}
+
+/// `moveAfter` puts a block right behind another: merging an entry block into
+/// its successor leaves the successor first in the layout, or the function has
+/// no entry.
+#[test]
+fn a_block_moved_after_another_stands_right_behind_it() {
+    let mut module = module("define void @f() {\na:\n  br label %b\nb:\n  br label %c\nc:\n  ret void\n}\n");
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    f.move_block_after(layout[2], layout[0]).expect("placed");
+    assert_eq!(f.layout(), &[layout[0], layout[2], layout[1]]);
+    f.move_block_after(layout[0], layout[1]).expect("placed");
+    assert_eq!(f.layout(), &[layout[2], layout[1], layout[0]]);
+}
+
+/// LLVM's `hasOneUse`, `hasNUses` and `hasNUsesOrMore` on a value with 0, 1, 2
+/// and 3 uses: the counts are read from the list at its boundaries, `len` is
+/// not there.
+#[test]
+fn a_use_list_answers_has_n_uses_at_its_boundaries() {
+    let mut module = module(
+        "define i16 @f(i16 %a) {\nentry:\n  %x = add i16 %a, 1\n  %y = add i16 %a, 2\n  %z = add i16 %a, 3\n  ret i16 %a\n}\n",
+    );
+    let f = function(&mut module);
+    let a = f.parameters()[0];
+    // %a: three adds and the ret.
+    assert!(f.users(a).has_n_uses(4) && !f.users(a).has_n_uses(3) && !f.users(a).has_n_uses(5));
+    assert!(f.users(a).has_n_uses_or_more(4) && !f.users(a).has_n_uses_or_more(5) && f.users(a).has_n_uses_or_more(0));
+    let (_, x) = named(f, "x");
+    assert!(f.users(x).is_empty() && f.users(x).has_n_uses(0) && !f.users(x).has_one_use());
+    assert!(!f.users(x).has_n_uses_or_more(1) && f.users(x).has_n_uses_or_more(0));
+    let ret = f.terminator(f.entry().unwrap()).unwrap();
+    assert!(f.users(a).snapshot().iter().any(|one| one.user == ret));
+    let (y, _) = named(f, "y");
+    f.set_operand(ret, 0, Operand::Value(named(f, "y").1));
+    assert!(f.users(named(f, "y").1).has_one_use() && f.users(a).has_n_uses(3), "{y:?}");
 }

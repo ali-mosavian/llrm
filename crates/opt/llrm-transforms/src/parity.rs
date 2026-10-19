@@ -112,6 +112,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("phiopt@1244", Cleanup, "simplifycfg", Old, "simplifycfg-port"),
     entry("sroa@646", Simplify, "sroa", Translated, "sroa.rs"),
     entry("earlycse@649", Simplify, "early-cse<memssa>", Translated, ""),
+    partial(
+        "jumpthreading@668",
+        Simplify,
+        "jump-threading",
+        "criterion: the S1-S3 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; exit: stage S4 (load PRE, guards, profile) and the old threading of decide@675 gone",
+    ),
     entry("cvp@669", Simplify, "correlated-propagation", Translated, ""),
     entry("decide@675", Simplify, "simplifycfg, jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("phiopt@675", Simplify, "simplifycfg", Old, "simplifycfg-port"),
@@ -145,10 +151,16 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("bdce@797", Simplify, "bdce", Translated, ""),
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@801", Simplify, "instcombine", Old, "instcombine-port"),
+    partial(
+        "jumpthreading@809",
+        Simplify,
+        "jump-threading",
+        "criterion: the S1-S3 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; exit: stage S4 and the old threading of decide@809 gone",
+    ),
     entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
     entry("adce@815", Simplify, "adce", Translated, ""),
-    entry("memcpyopt@818", Simplify, "memcpyopt", Old, "backend-slopes"),
+    entry("memcpyopt@818", Simplify, "memcpyopt", Translated, ""),
     partial(
         "merge@818",
         Simplify,
@@ -159,7 +171,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "dse@820",
         Simplify,
         "dse",
-        "criterion: DSE stage 1 (deadstore.rs) removes what opt -passes=dse does on near pointers (tools/llvmport/dsecompare.py, 9000 cases); exit: stages 2-3 (memory terminators, initializes, calloc folding, dominating conditions)",
+        "criterion: DSE stage 1 (deadstore.rs) removes what opt -passes=dse does on near pointers (tools/llvmport/dsecompare.py, 9000 cases); exit: stages 2-3 (free as a terminator, initializes, calloc folding, dominating conditions)",
     ),
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@823", Simplify, "lcssa", Old, "lcssa-port"),
@@ -279,10 +291,10 @@ impl Level {
     }
 }
 
-/// Registry slots the pin's `default<O1>` does not have (no GVN at -O1:
-/// `buildO1FunctionSimplificationPipeline`), so a Translated one is not
-/// required in a -O1 list.
-pub const ABSENT_AT_O1: &[&str] = &["gvn@787"];
+/// Registry slots the pin's `default<O1>` does not have (no GVN or
+/// JumpThreading at -O1: `buildO1FunctionSimplificationPipeline`), so a
+/// Translated one is not required in a -O1 list.
+pub const ABSENT_AT_O1: &[&str] = &["gvn@787", "jumpthreading@668", "jumpthreading@809"];
 
 /// Run counts LLVM does not match yet, stated and not checked:
 /// `loopsimplify`/`lcssa` run at three unconditional slots per body at every
@@ -290,7 +302,7 @@ pub const ABSENT_AT_O1: &[&str] = &["gvn@787"];
 /// 4/10/10/10).
 pub const RUN_COUNTS_OPEN: &[&str] = &[
     "loopsimplify@764,772,823 and lcssa: one pair per loop-pass adaptor",
-    "-O3 reruns a body's whole list after `ipa-cp.` and `ipa-deadargs.` (d_faces: _d_draw_faces runs the 52 steps three times, 17 gvn runs over 12 bodies against -O2's 12): LLVM runs IPSCCP and deadargelim before the function pipelines, so a body is not run twice (cgscc-poc's single pass-list run per SCC visit)",
+    "-O3 d_faces: one `ipa-range` rerun of the list remains (ranges that appear after cloning and inlining; 11 M); `walk::ModuleIpo` runs ipa-args, ipa-cp, ipa-range and deadargs before the list once",
 ];
 
 /// The phase and kind of the slot named `slot` (`sroa@1179`), if the registry

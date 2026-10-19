@@ -20,8 +20,8 @@
 //! `!dereferenceable` on a load) would not, and answers `false` below. Checked
 //! when this was written, on the passes `llrm_transforms::pipeline` runs:
 //! `hoist`, `loopmotion`, `lsr` (induction steps), `exitsink` (through
-//! `indvars`), `gvn::joined` (insertion on an edge) and `loadjoins` (a load
-//! cloned into predecessors) move or insert an instruction with its flags, and
+//! `indvars`), `gvn::joined` (insertion on an edge) and GVN's load PRE (a load
+//! made in a predecessor) move or insert an instruction with its flags, and
 //! are sound by the argument above; `algebraic` reassociation changes operands
 //! and already clears the flags (`set_flags(.., Flags::default())`). The
 //! optimiser passes `llrm-mir` once had were never run by the compile route
@@ -212,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 34] = [
+        const CHECKED: &[&str] = &[
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -264,6 +264,10 @@ mod tests {
             // reads the flags the operation has and adds the ones the
             // no-wrap proofs give (`willNotOverflow`); it never drops one.
             "how_many.rs",
+            // IndVarSimplify.cpp's `linearFunctionTestReplace` clears the
+            // increment's `nuw`/`nsw` that SCEV did not prove for its
+            // post-inc add recurrence; it never adds one.
+            "lftr.rs",
             // PHITransAddr.cpp's `translateSubExpr` reads an add's
             // `nsw`/`nuw` for `simplifyAddInst`, and `insertTranslatedSubExpr`
             // copies a GEP's no-wrap flags to the GEP it makes.
@@ -290,6 +294,33 @@ mod tests {
             // add's/sub's/mul's `nsw`/`nuw` to see one more high bit live;
             // it never drops one.
             "demandedbits.rs",
+            // SCCPSolver.cpp's `refineInstruction` reads the wrap flags it is
+            // about to add (`nuw`, `nsw`, `nneg`, a GEP's `nuw`) and never
+            // drops one.
+            "sccp.rs",
+            // `visitGetElementPtrInst` reads a GEP's `nuw`/`inbounds` for
+            // not-null, and `visitCastInst` a `trunc`'s no-wrap kind for the
+            // result range, where LLVM does.
+            "sccpsolver.rs",
+            // InstCombineCompares.cpp's `foldICmpWithZero` reads a multiply's
+            // `nuw`/`nsw` (`BO0->hasNoUnsignedWrap()`) to drop it from an
+            // equality with zero; it never drops one.
+            "combine_compares.rs",
+            // PredicateInfo.cpp's `m_NUWTrunc(m_Value(Op0))` in
+            // `processBranch`, `processAssume` and `getConstraint`.
+            "predicateinfo.rs",
+            // InstructionCombining.cpp's `SimplifyAssociativeOrCommutative`
+            // reads `nuw`/`nsw` (`hasNoUnsignedWrap`, `maintainNoSignedWrap`)
+            // to set them on the reassociated operation only when both
+            // operations had them, and drops the rest.
+            "combine_shared.rs",
+            // InstCombineAddSub.cpp's `visitAdd` and its helpers read an add's
+            // and a sub's `nsw`/`nuw` where LLVM does, to give the
+            // replacement the flags the operands prove.
+            "combine_addsub.rs",
+            // MemCpyOptimizer.cpp's `CreateInBoundsPtrAdd` makes an inbounds
+            // GEP; it reads no flag.
+            "memcpyopt.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

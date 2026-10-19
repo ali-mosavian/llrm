@@ -19,7 +19,7 @@ for k in range(N):
     derived+=[('au',f'add nuw {ty} %x, %y'),('as',f'add nsw {ty} %x, %y'),('a1',f'add nuw {ty} %x, 1'),('an1',f'add nsw {ty} %x, 1'),('a2',f'add nsw {ty} %x, 2'),('am',f'add {ty} %x, -1'),
               ('ur',f'urem {ty} %x, %y'),('lx',f'lshr {ty} %x, 2'),('ud',f'udiv {ty} %x, 3'),('ue',f'udiv exact {ty} %x, %y'),('le',f'lshr exact {ty} %x, %y'),('sc',f'sub {ty} 5, %x'),('s6',f'sub {ty} 6, %x'),
               ('s4',f'shl {ty} 4, %x'),('sq',f'shl nuw {ty} 4, %x'),('mu',f'mul {ty} %x, 3'),('um',f'udiv {ty} %mu0, 5'),('sn',f'shl nuw {ty} %x, %y'),('sn2',f'shl nuw {ty} %y, %y'),('o8',f'or {ty} %x, 8'),('o9',f'or {ty} %x, 9'),
-              ('a3',f'and {ty} %x, 3'),('a7',f'and {ty} %x, 7'),('sd',f'sdiv exact {ty} %x, %y'),('ae',f'ashr exact {ty} %x, %y'),('zn',f'sub {ty} 0, %zz')]
+              ('a3',f'and {ty} %x, 3'),('a7',f'and {ty} %x, 7'),('us',f'call {ty} @llvm.uadd.sat.{ty}({ty} %x, {ty} %y)'),('ub',f'call {ty} @llvm.usub.sat.{ty}({ty} %x, {ty} %y)'),('sd',f'sdiv exact {ty} %x, %y'),('ae',f'ashr exact {ty} %x, %y'),('zn',f'sub {ty} 0, %zz')]
     derived=[d for d in derived if '%mu0' not in d[1] and '%zz' not in d[1]]
     use=random.sample(derived,random.randint(0,5))
     # min/max idioms: a compare and the select on it (both kept alive)
@@ -35,13 +35,14 @@ for k in range(N):
         r=random.random()
         if r<0.65: return '%'+random.choice(names)
         return str(random.choice(leaves(ty)))
-    op=random.choice(['cmpmix','cmpmix','cmpmix','icmp','icmp','icmp','add','sub','mul','and','or','xor','shl','lshr','ashr','udiv','sdiv','urem','srem','icmp','select','zext','trunc','sext','phi','icall','icall','icall','icall'])
+    op=random.choice(['cmpmix','cmpmix','cmpmix','icmp','icmp','icmp','add','sub','mul','and','or','xor','shl','lshr','ashr','udiv','sdiv','urem','srem','icmp','select','zext','trunc','sext','phi','icall','icall','icall','icall','selcmp','selcmp','selcmp','selcmp'])
     flags=''
     if op in ('add','sub','mul','shl'): flags=random.choice(['','','nuw ','nsw ','nuw nsw '])
     if op in ('udiv','sdiv','lshr','ashr'): flags=random.choice(['','','exact '])
     a,b=operand(),operand()
     rty=ty
     extra=''
+    selpre=''
     if op=='cmpmix':
         vals=['%'+n for n in names]+['0','0','1','-1']+[str(random.choice(leaves(ty))) for _ in range(3)]
         sub=f'  %dsub = sub {ty} %{random.choice(names)}, %{random.choice(names)}\n'
@@ -74,6 +75,20 @@ for k in range(N):
         t=f'trunc {ty} {a if a.startswith("%") else "%x"} to {narrow}'; rty=narrow
     elif op=='phi':
         t=f'phi {ty} [ {a}, %p1 ], [ {b}, %p2 ]'
+    elif op=='selcmp':
+        pred=random.choice(['eq','ne','ult','ule','ugt','uge','slt','sle','sgt','sge'])
+        l,r=operand(),operand()
+        if not l.startswith('%'): l='%x'
+        pool=[l,r,'%x','%y',str(random.choice(leaves(ty))),'0','-1']
+        pa,pb=random.choice(pool),random.choice(pool)
+        if random.random()<0.3:
+            m=random.choice(['and','or'])
+            c=random.choice([1,3,4,8,255])
+            selpre=f'  %ma = {m} {ty} %x, {c}\n'
+            pa=random.choice(['%ma','%x',pa]); pb=random.choice(['%ma','%x',pb])
+            if random.random()<0.5: l,pred,r='%ma','eq' if random.random()<0.5 else 'ne','0'
+        selpre+=f'  %kk = icmp {pred} {ty} {l}, {r}\n'
+        t=f'select i1 %kk, {ty} {pa}, {ty} {pb}'
     elif op=='icall':
         name=random.choice(['smax','smin','umax','umin','uadd.sat','usub.sat','sadd.sat','ssub.sat','abs','cttz','ctlz','ctpop','bitreverse','bswap','scmp','ucmp','fshl','fshr','smul.fix'])
         if name=='bswap' and ty=='i8': name='ctpop'
@@ -87,7 +102,7 @@ for k in range(N):
     else:
         t=f'{op} {flags}{ty} {a}, {b}'
     # second layer: sometimes wrap an extension pair/compare of ext
-    pre_text=''.join(f'  %{n} = {e}\n' for n,e in use)+mmdefs+extra
+    pre_text=''.join(f'  %{n} = {e}\n' for n,e in use)+mmdefs+extra+selpre
     sinkx=''.join(f'  store volatile i1 %k{k}, ptr @g_i1\n' for k in (1,2)) if extra else ''
     sink=sinkx+''.join(f'  store volatile {ty} %{n}, ptr @g_{ty}\n' for n,_ in use)+mmsink
     if op=='phi':

@@ -23,10 +23,8 @@
 //! ```
 //!
 //! # DEVIATEs
-//! 1. No PredicateInfo: `addPredicateInfo`, `handlePredicate` and
-//!    `removeSSACopies` are absent, so the facts a branch condition gives its
-//!    targets (`ssa.copy`) are not used. Fact: llrm has no PredicateInfo
-//!    translation. Exit: PredicateInfo translation (scalar-cleanup-port, next).
+//! 1. `PredicateInfo` has no operand-bundle assumes ([`crate::predicateinfo`]
+//!    DEVIATE 1); `removeSSACopies` is in [`crate::sccp`].
 //! 2. Nothing interprocedural: `TrackedGlobals`, the argument-tracking set,
 //!    `MustPreserveReturnsInFunctions`, the specialisation entry points and
 //!    `MRVFunctionsTracked` are not translated; `runSCCP` never fills them. The
@@ -53,18 +51,17 @@
 //!   [`llrm_mir::constantfolding`], [`llrm_mir::simplify`]
 //! - Used by: [`crate::sccp`]
 
-use std::collections::{HashMap, HashSet};
-
 use llrm_analysis::occurrence::arms;
 use llrm_mir::constantfolding::{self, Env as FoldEnv};
-use llrm_mir::constantrange::{ConstantRange, NO_SIGNED_WRAP, NO_UNSIGNED_WRAP, RangeIntrinsic};
+use llrm_mir::constantrange::{ConstantRange, NO_SIGNED_WRAP, NO_UNSIGNED_WRAP, PreferredRangeType, RangeIntrinsic};
 use llrm_mir::context::GlobalId;
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
+use llrm_mir::facts::Facts;
 use llrm_mir::lazyvalueinfo::constant_range_from_metadata;
 use llrm_mir::module::{BlockId, Function, InstId, MetadataNode, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuelattice::{LatticeConstant, MergeOptions, ValueLatticeElement};
@@ -72,6 +69,9 @@ use llrm_mir::valuetracking::Query;
 use llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef_or_poison;
 use llrm_mir::valuetracking::nonzero::null_pointer_is_defined;
 use llrm_mir::valuetracking::pattern::{self, IntrinsicId, call_arguments, call_info, called_function};
+use llrm_support::hash::{HashMap, HashSet};
+
+use crate::predicateinfo::{CmpPredicate, PredicateBase, PredicateInfo};
 
 type Lattice = ValueLatticeElement;
 
@@ -113,6 +113,8 @@ pub struct Env<'a> {
     /// `canTrackReturnsInterprocedurally(&F)`: the function's return value is
     /// tracked.
     pub tracks_returns: bool,
+    /// `addPredicateInfo`: the copies made in the function.
+    pub predicates: &'a PredicateInfo,
 }
 
 /// What a visit puts on the lists.
@@ -122,6 +124,7 @@ pub struct Solver<'a> {
     outer: &'a Outer,
     metadata: &'a [MetadataNode],
     function: &'a Function,
+    predicates: &'a PredicateInfo,
     id: Option<GlobalId>,
     /// `BBExecutable`: executable, but maybe not visited yet.
     bb_executable: IdSet<BlockId>,
@@ -143,7 +146,7 @@ pub struct Solver<'a> {
     /// `KnownFeasibleEdges`.
     feasible: HashSet<(BlockId, BlockId)>,
     /// `AdditionalUsers`.
-    additional_users: HashMap<ValueId, Vec<InstId>>,
+    additional_users: IdMap<ValueId, Vec<InstId>>,
 }
 
 impl<'a> Solver<'a> {
@@ -154,7 +157,7 @@ impl<'a> Solver<'a> {
         env: Env<'a>,
         function: &'a Function,
     ) -> Self {
-        let Env { context, layout, outer, metadata, id, tracks_returns } = env;
+        let Env { context, layout, outer, metadata, id, tracks_returns, predicates } = env;
         let returns_value = {
             let Type::Function { returns, .. } = context.types.get(function.ty).clone() else {
                 unreachable!("a function has a function type")
@@ -167,18 +170,19 @@ impl<'a> Solver<'a> {
             outer,
             metadata,
             function,
+            predicates,
             id,
             bb_executable: IdSet::new(),
             bb_visited: IdSet::new(),
             value_state: IdMap::new(),
-            struct_state: HashMap::new(),
+            struct_state: HashMap::default(),
             tracked_return: (returns_value && tracks_returns).then(Lattice::default),
             inst_work: Vec::new(),
             in_work: IdSet::new(),
             current: None,
             bb_work: Vec::new(),
-            feasible: HashSet::new(),
-            additional_users: HashMap::new(),
+            feasible: HashSet::default(),
+            additional_users: IdMap::new(),
         };
         if let Some(entry) = function.entry() {
             solver.mark_block_executable(entry);
@@ -880,6 +884,14 @@ impl<'a> Solver<'a> {
         }
         let operand = instruction.operands[0];
         let source = self.type_of(operand);
+        let predicates = self.predicates;
+        if op == CastOp::BitCast
+            && instruction.ty == source
+            && let Some(predicate) = predicates.predicate_info_for(inst)
+        {
+            self.handle_predicate(inst, operand, predicate);
+            return;
+        }
         let state = self.get_value_state(operand);
         if state.is_unknown_or_undef() {
             return;
@@ -961,7 +973,7 @@ impl<'a> Solver<'a> {
         user: InstId,
     ) {
         if let Operand::Value(value) = value {
-            let users = self.additional_users.entry(value).or_default();
+            let users = self.additional_users.get_or_insert_with(value, Vec::new);
             if !users.contains(&user) {
                 users.push(user);
             }
@@ -1421,6 +1433,75 @@ impl<'a> Solver<'a> {
         // function pass has none (DEVIATE 2).
     }
 
+    /// `handlePredicate`: the copy `inst` of `copy_of` is what `copy_of` is
+    /// where the predicate holds.
+    fn handle_predicate(
+        &mut self,
+        inst: InstId,
+        copy_of: Operand,
+        predicate: &PredicateBase,
+    ) {
+        let result = self.function.instruction(inst).result.expect("a copy has a value");
+        let copy_of_val = self.get_value_state(copy_of);
+        let Some(constraint) = predicate.get_constraint(self.context, self.function) else {
+            self.merge_in_value(result, &copy_of_val, MergeOptions::default());
+            return;
+        };
+        let (pred, other_op) = (constraint.predicate, constraint.other_op);
+        // Wait until OtherOp is resolved.
+        if self.get_value_state(other_op).is_unknown() {
+            self.add_additional_user(other_op, inst);
+            return;
+        }
+        let mut cond_val = self.get_value_state(other_op);
+        let copy_of_ty = self.type_of(copy_of);
+        if cond_val.is_constant_range(true) || copy_of_val.is_constant_range(true) {
+            let bits = self.query().scalar_bits(copy_of);
+            let mut imposed = ConstantRange::full(bits);
+            // Get the range imposed by the condition.
+            if cond_val.is_constant_range(true)
+                && let CmpPredicate::Int(pred) = pred
+            {
+                imposed = ConstantRange::make_allowed_icmp_region(pred, cond_val.get_constant_range(true));
+            }
+            // Combine range info for the original value with the new range
+            // from the condition.
+            let mut copy_of_cr = copy_of_val.as_constant_range(bits, true);
+            // Treat an unresolved input like a full range.
+            if copy_of_cr.is_empty_set() {
+                copy_of_cr = ConstantRange::full(copy_of_cr.width);
+            }
+            let mut new_cr = imposed.intersect_with(&copy_of_cr, PreferredRangeType::Smallest);
+            // If the existing information is != x, do not use the information
+            // from a chained predicate, as the != x information is more likely
+            // to be helpful in practice.
+            if !copy_of_cr.contains_range(&new_cr) && copy_of_cr.get_single_missing_element().is_some() {
+                new_cr = copy_of_cr;
+            }
+            // The new range is based on a branch condition. That guarantees
+            // that neither of the compare operands can be undef in the branch
+            // targets, unless we have conditions that are always true/false.
+            self.add_additional_user(other_op, inst);
+            self.merge_in_value(result, &Lattice::get_range(new_cr, false), MergeOptions::default());
+        } else if pred == CmpPredicate::Int(IntPredicate::Eq) && (cond_val.is_constant() || cond_val.is_not_constant())
+        {
+            // For non-integer values or integer constant expressions, only
+            // propagate equal constants or not-constants.
+            self.add_additional_user(other_op, inst);
+            if self.is_pointer(copy_of_ty) {
+                cond_val.set_may_have_different_provenance(true);
+            }
+            self.merge_in_value(result, &cond_val, MergeOptions::default());
+        } else if pred == CmpPredicate::Int(IntPredicate::Ne) && cond_val.is_constant() {
+            // Propagate inequalities.
+            self.add_additional_user(other_op, inst);
+            let not = Lattice::get_not(cond_val.get_constant());
+            self.merge_in_value(result, &not, MergeOptions::default());
+        } else {
+            self.merge_in_value(result, &copy_of_val, MergeOptions::default());
+        }
+    }
+
     /// `handleCallResult`.
     fn handle_call_result(
         &mut self,
@@ -1843,10 +1924,7 @@ fn param_has_non_null(
     function: &Function,
     index: u32,
 ) -> bool {
-    function
-        .parameter_attrs
-        .get(index as usize)
-        .is_some_and(|attrs| attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == "nonnull")))
+    function.parameter_attrs.get(index as usize).is_some_and(|attrs| Facts::of(attrs).non_null())
 }
 
 /// `CallBase::isReturnNonNull`.
@@ -1854,9 +1932,8 @@ fn call_returns_non_null(
     q: &Query,
     instruction: &llrm_mir::module::Instruction,
 ) -> bool {
-    let has = |attrs: &[Attribute]| attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == "nonnull"));
-    call_info(instruction).is_some_and(|info| has(&info.return_attrs))
-        || called_function(q, instruction).is_some_and(|callee| has(&callee.return_attrs))
+    call_info(instruction).is_some_and(|info| Facts::of(&info.return_attrs).non_null())
+        || called_function(q, instruction).is_some_and(|callee| Facts::of(&callee.return_attrs).non_null())
 }
 
 /// The function a call names.

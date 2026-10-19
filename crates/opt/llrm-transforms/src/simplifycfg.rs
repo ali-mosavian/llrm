@@ -80,8 +80,10 @@
 //! | [`simplifyUncondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8800) | `jump_simplified` | the empty-block half; D2 |
 //! | [`TryToSimplifyUncondBranchFromEmptyBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L1147) | `empty_block_removed` | MIRROR; D6 |
 //! | [`SimplifyCFGOptions::NeedCanonicalLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/SimplifyCFGOptions.h#L29), read at [`simplifyUncondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8812) | `Options::need_canonical_loop` | MIRROR: true by default and at the early slot, cleared at the one after vectorization ([`PassBuilderPipelines.cpp#L1443`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L1443)); D7 |
+//! | [`hoistCommonCodeFromSuccessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L1873), called from `simplifyCondBranch` ([L9016](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9016)) and `simplifySwitch` ([L8647](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8647)) | `branch_hoisted`, `hoistcommon::hoisted`, `Options::hoist_common_insts` | MIRROR for the calls; see that module |
 //! | [`foldTwoEntryPHINode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3834), called from `simplifyOnce` ([L9351](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9351)) under `SpeculateBlocks` | `twoentryphi::folded`, `Options::speculate_blocks` | MIRROR; see that module |
 //! | [`speculativelyExecuteBB`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3244), called from `simplifyCondBranch` ([L9060](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9060)) | `branch_speculated`, `speculate::executed` | MIRROR for the call; see that module |
+//! | [`tailMergeBlocksWithSimilarFunctionTerminators`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L142), called from `simplifyFunctionCFGImpl` after the first `removeUnreachableBlocks` | `tailmerge::merged` | MIRROR; see that module |
 //! | [`FindFunctionBackedges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L236) | `loop_headers` | MIRROR |
 //! | [`removeUnreachableBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2912) and `markAliveBlocks` | `unreachable_removed` | the terminator folding and the deletion; D3 |
 //! | [`ConstantFoldTerminator`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L133) | `terminator_folded` | MIRROR; D4 |
@@ -94,7 +96,6 @@
 //!   blocks that go; LLVM's `WeakVH`s drop them. Nothing reads a deleted
 //!   block's entry.
 //! - D2. Not ported yet, each a later change of this series:
-//!   `tailMergeBlocksWithSimilarFunctionTerminators`,
 //!   `removeUndefIntroducingPredecessor`, `sinkCommonCodeFromPredecessors` (off
 //!   at this slot), and the terminator simplifications `simplifyUncondBranch`
 //!   beyond the empty block (`tryToSimplifyUncondBranchWithICmpInIt`, landing
@@ -182,9 +183,9 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
-use crate::speculate;
 use crate::twoentryphi::{self, Speculation};
 use crate::{cfg, dead, edges, transform};
+use crate::{hoistcommon, speculate, tailmerge};
 
 /// LLVM's `SimplifyCFGPass` at the options of the early function pipeline
 /// slot (`SimplifyCFGOptions()`: `PassBuilderPipelines.cpp`).
@@ -223,11 +224,14 @@ pub struct Options {
     pub need_canonical_loop: bool,
     /// `SpeculateBlocks`: true by default and at every slot.
     pub speculate_blocks: bool,
+    /// `HoistCommonInsts`: hoist the code the arms of a branch share even
+    /// where the arms differ; off, only arms that are the same entirely.
+    pub hoist_common_insts: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { need_canonical_loop: true, speculate_blocks: true }
+        Options { need_canonical_loop: true, speculate_blocks: true, hoist_common_insts: false }
     }
 }
 
@@ -250,8 +254,9 @@ pub fn simplified_with(
 ) -> bool {
     let callees = spec.outer.callees();
     let mut folded = false;
-    let ever = unreachable_removed(context, callees, function, &mut folded)
-        | iteratively_simplified(options, context, spec, function, &mut folded);
+    let mut ever = unreachable_removed(context, callees, function, &mut folded);
+    ever |= tailmerge::merged(context, function);
+    ever |= iteratively_simplified(options, context, spec, function, &mut folded);
     // `iterativelySimplifyCFG` can make a loop dead; the removal and the
     // visits then alternate until neither does anything.
     if !ever {
@@ -327,6 +332,9 @@ fn block_simplified(
     if options.speculate_blocks && function.is_placed(block) && twoentryphi::folded(context, spec, function, block) {
         return true;
     }
+    if function.is_placed(block) && branch_hoisted(options, context, spec, function, block) {
+        return true;
+    }
     if options.speculate_blocks && function.is_placed(block) && branch_speculated(context, spec, function, block) {
         return true;
     }
@@ -334,6 +342,28 @@ fn block_simplified(
         | (function.is_placed(block)
             && !form.contains(&llrm_analysis::cfg::id(block))
             && jump_simplified(context, function, block, headers))
+}
+
+/// The code the two arms of the branch ending `block` share, run before it:
+/// `simplifyCondBranch`'s call of `hoistCommonCodeFromSuccessors`, where both
+/// arms have no other predecessor.
+fn branch_hoisted(
+    options: &Options,
+    context: &Context,
+    spec: &Speculation,
+    function: &mut Function,
+    block: BlockId,
+) -> bool {
+    let Some(last) = function.terminator(block) else { return false };
+    if function.instruction(last).opcode == Opcode::Switch {
+        return hoistcommon::hoisted(context, spec, function, last, !options.hoist_common_insts);
+    }
+    let &[_, Operand::Block(first), Operand::Block(second)] = &function.instruction(last).operands[..] else {
+        return false;
+    };
+    function.predecessors(first).len() == 1
+        && function.predecessors(second).len() == 1
+        && hoistcommon::hoisted(context, spec, function, last, !options.hoist_common_insts)
 }
 
 /// The one-armed `if` ending `block` run before its branch: the speculation
@@ -364,7 +394,7 @@ fn branch_speculated(
 
 /// The back edges' targets, by one walk from the entry: LLVM's
 /// `FindFunctionBackedges`, whose targets are `LoopHeaders`.
-fn loop_headers(function: &Function) -> IdSet<BlockId> {
+pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
     let mut headers = IdSet::new();
     let Some(entry) = function.entry() else { return headers };
     // 0 unseen, 1 on the walk's path, 2 done.
@@ -464,7 +494,7 @@ fn phi_of(
 /// predecessors sent on): LLVM's `TryToSimplifyUncondBranchFromEmptyBlock`.
 /// MIRROR, except that a block keeps its name, and a loop's metadata check
 /// is on any `llvm.loop`.
-fn empty_block_removed(
+pub fn empty_block_removed(
     context: &Context,
     function: &mut Function,
     block: BlockId,
@@ -539,7 +569,7 @@ fn empty_block_removed(
         function.erase_block(block).expect("a block nothing names");
     } else {
         // Everything but the common predecessor now goes to the successor.
-        for one in function.block_users(block).to_vec() {
+        for one in function.block_users(block).snapshot() {
             let parent = function.parent(one.user);
             if function.instruction(one.user).opcode.is_terminator()
                 && parent.is_some_and(|at| at != common.expect("a common predecessor") && predecessors.contains(&at))
@@ -754,7 +784,7 @@ pub fn unreachable_removed(
 /// keeping a one-input phi, since the block it names may go as well), what it
 /// defined replaced by poison, its instructions and then the blocks erased.
 /// LLVM's `DeleteDeadBlocks`.
-fn dead_blocks_deleted(
+pub fn dead_blocks_deleted(
     context: &Context,
     function: &mut Function,
     blocks: &[BlockId],

@@ -43,11 +43,12 @@
 //! # Used by
 //! `RAGreedy::trySplit` and its region, block and local splits.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_mir::blockfrequency::frequency::BlockFrequency;
+use llrm_support::hash::{HashMap, HashSet};
 
 use super::liverangeedit::LiveRangeEdit;
 use super::splitkit::{BlockInfo, SplitAnalysis, SplitEnv, first_insert_instr};
@@ -209,7 +210,7 @@ impl<'d> SplitEditor<'d> {
             open_idx: 0,
             spill_mode: ComplementSpillMode::Partition,
             reg_assign: RegAssignMap::default(),
-            values: HashMap::new(),
+            values: HashMap::default(),
             lical: [LiveIntervalCalc::new(), LiveIntervalCalc::new()],
         }
     }
@@ -351,11 +352,13 @@ impl<'d> SplitEditor<'d> {
     ) -> usize {
         // Create the complement as index 0.
         if self.edit().empty() {
-            self.edit_mut().create_empty_interval(cx.lis, cx.vrm);
+            let new = self.edit_mut().create_empty_interval(cx.lis, cx.vrm);
+            cx.env.note_split_from(cx.lis, new, self.edit().get_reg());
         }
         // Create the open interval.
         self.open_idx = self.edit().size();
-        self.edit_mut().create_empty_interval(cx.lis, cx.vrm);
+        let new = self.edit_mut().create_empty_interval(cx.lis, cx.vrm);
+        cx.env.note_split_from(cx.lis, new, self.edit().get_reg());
         self.open_idx
     }
 
@@ -379,12 +382,8 @@ impl<'d> SplitEditor<'d> {
         let mi = cx.lis.indexes.get_instruction_from_index(idx).expect("called with an invalid index");
         let mbb = cx.lis.indexes.get_mbb_from_index(idx);
         let at = cx.lis.indexes.get_instruction_index(mi);
-        let first = cx
-            .lis
-            .block_insns(mbb)
-            .iter()
-            .find(|i| cx.lis.indexes.get_instruction_index(i.id()) == at)
-            .expect("an instruction of the block");
+        let first =
+            cx.lis.block_insns(mbb).get(cx.lis.partition_at(mbb, &at, false)).expect("an instruction of the block");
         (mbb, first.id())
     }
 
@@ -396,12 +395,7 @@ impl<'d> SplitEditor<'d> {
         mi: InstrKey,
     ) -> Option<InstrKey> {
         let at = cx.lis.indexes.get_instruction_index(mi);
-        cx.lis
-            .block_insns(mbb)
-            .iter()
-            .skip_while(|i| cx.lis.indexes.get_instruction_index(i.id()) != at)
-            .find(|i| cx.lis.indexes.get_instruction_index(i.id()) != at)
-            .map(|i| i.id())
+        cx.lis.block_insns(mbb).get(cx.lis.partition_at(mbb, &at, true)).map(|i| i.id())
     }
 
     /// `enterIntvBefore`
@@ -875,7 +869,9 @@ impl<'d> SplitEditor<'d> {
 
         for c in copies {
             let def = c.def();
-            let mi = cx.lis.indexes.get_instruction_from_index(&def).expect("No instruction for back-copy");
+            // The copy that defines the complement: a parallel copy shares one
+            // index, and the index names its first member.
+            let mi = cx.lis.defining_instr(&def, li_reg);
             let mbb = cx.lis.indexes.get_mbb_from_index(&def);
             let insns = cx.lis.block_insns(mbb);
             let at = insns.iter().position(|i| i.id() == mi).expect("an instruction of the block");
@@ -896,6 +892,7 @@ impl<'d> SplitEditor<'d> {
             if a_stop != def {
                 continue;
             }
+
             // We could hoist back-copy right after another back-copy. As a
             // result the previous instruction is actually dead now. We cannot
             // set its stop to it, which would be the same as start.
@@ -969,7 +966,7 @@ impl<'d> SplitEditor<'d> {
     fn compute_redundant_back_copies(
         &mut self,
         cx: &mut SplitCx,
-        not_to_hoist: &std::collections::HashSet<u32>,
+        not_to_hoist: &HashSet<u32>,
         back_copies: &mut Vec<Vn>,
     ) {
         let li_reg = self.edit().get(0);
@@ -1041,7 +1038,7 @@ impl<'d> SplitEditor<'d> {
         let mut costs: Vec<BlockFrequency> = vec![BlockFrequency(0); nvn];
         // The ParentVNI->id set for which hoisting back-copies are not
         // beneficial for Speed.
-        let mut not_to_hoist: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut not_to_hoist: HashSet<u32> = HashSet::default();
 
         // Find the nearest common dominator for parent values with multiple
         // back-copies.
@@ -1423,19 +1420,21 @@ impl<'d> SplitEditor<'d> {
                 if s.end != vni.def().get_dead_slot() || vni.is_phi_def() {
                     continue;
                 }
-                let mi =
-                    cx.lis.indexes.get_instruction_from_index(&vni.def()).expect("Missing instruction for dead def");
+                let mi = cx.lis.defining_instr(&vni.def(), reg);
                 if cx.env.is_copy_like(cx.lis.instr(mi)) && cx.lis.instr(mi).defines.len() == 1 {
                     dead.push(mi);
                 }
             }
         }
-        for mi in dead {
-            let block = cx.lis.indexes.get_mbb_from_index(&cx.lis.indexes.get_instruction_index(mi));
-            let reg = cx.lis.instr(mi).defines[0];
-            let def = cx.lis.indexes.get_instruction_index(mi).get_reg_slot(false);
-            LiveIntervals::remove_vreg_def_at(cx.lis.interval_mut(reg), &def);
-            cx.lis.remove_instr(block, mi);
+        // `eliminateDeadDefs`: the copy goes and the ranges of what it read are
+        // cut back to their other reads (`shrinkToUses`), else they end at an
+        // index with no instruction.
+        while let Some(mi) = dead.pop() {
+            for def in cx.lis.erase_dead_def(mi) {
+                if cx.env.is_copy_like(cx.lis.instr(def)) && cx.lis.instr(def).defines.len() == 1 {
+                    dead.push(def);
+                }
+            }
         }
     }
 
@@ -1513,6 +1512,7 @@ impl<'d> SplitEditor<'d> {
             for new in split {
                 // The new intervals all map back to i.
                 self.edit_mut().create_from(cx.lis, cx.vrm, new, reg);
+                cx.env.note_split_from(cx.lis, new, reg);
                 map.push(i);
             }
         }
@@ -1568,6 +1568,14 @@ mod tests {
             _block: usize,
         ) -> bool {
             false
+        }
+
+        fn note_split_from(
+            &self,
+            _lis: &LiveIntervals,
+            _new: u32,
+            _from: u32,
+        ) {
         }
 
         fn is_rematerializable(
