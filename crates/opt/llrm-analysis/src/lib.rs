@@ -156,3 +156,4 @@ pub mod ssa;
 pub mod ssaupdater;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod typebasedaa;
