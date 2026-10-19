@@ -2110,7 +2110,7 @@ fn mark_cold(
     function: &mut Function,
     block: BlockId,
 ) {
-    for inst in function.block(block).instructions().to_vec() {
+    for inst in function.block(block).iter().collect::<Vec<_>>() {
         let old = function.instruction(inst).clone();
         let Opcode::Call(mut info) = old.opcode else { continue };
         info.attrs.push(Fact::Cold.carrier());
@@ -2629,9 +2629,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
             _ => Vec::new(),
         };
-        let Some(inst) =
-            self.b.function.block(self.b.current().expect("a placed block")).instructions().last().copied()
-        else {
+        let Some(inst) = self.b.function.block(self.b.current().expect("a placed block")).last() else {
             return;
         };
         for fact in facts {

@@ -513,10 +513,11 @@ b2:
     assert!(text.contains("%r = add i16 %first, %first"), "{text}");
 }
 
-/// Descriptor addresses encoded as zero must not become the same value.
+/// Descriptor addresses encoded as zero must not become the same value: the
+/// casts fold to two constant expressions (`ConstantFoldCastOperand`), not one.
 #[test]
 fn test_cse_keeps_distinct_linker_addresses() {
-    kept(
+    let (text, _) = numbered(
         "@a = global i16 0
 @b = global i16 0
 
@@ -528,7 +529,9 @@ b0:
   ret i16 %r
 }
 ",
+        &[],
     );
+    assert!(text.contains("add i16 ptrtoint (ptr @a to i16), ptrtoint (ptr @b to i16)"), "{text}");
 }
 
 /// `ptrtoint ptr null` is the number 0 (ConstantFolding casts a null pointer to
@@ -548,7 +551,7 @@ b0:
 ",
         &[],
     );
-    assert!(!text.contains("add i16") && text.contains("ptrtoint ptr @a"), "{text}");
+    assert!(!text.contains("add i16") && text.contains("ptrtoint (ptr @a to i16)"), "{text}");
 }
 
 #[test]

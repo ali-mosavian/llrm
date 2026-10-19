@@ -1047,7 +1047,7 @@ impl LazyValueInfoImpl {
 
         // If guards are not used in the module, don't spend time looking for
         // them
-        if self.guard_decl && function.block(bb).instructions().first() != Some(&bbi) {
+        if self.guard_decl && function.block(bb).first() != Some(bbi) {
             let instructions = function.block(bb).instructions();
             let at = instructions.iter().position(|&i| i == bbi).expect("bbi is in its block");
             for &i in instructions[..at].iter().rev() {
@@ -2213,13 +2213,11 @@ impl LazyValueInfoImpl {
 }
 
 /// `predecessors(BB)`, newest use first as LLVM walks a use list.
-fn predecessors(
+pub(crate) fn predecessors(
     function: &Function,
     bb: BlockId,
 ) -> Vec<BlockId> {
-    let mut preds: Vec<BlockId> = function.predecessors(bb).iter().copied().collect();
-    preds.reverse();
-    preds
+    function.predecessors(bb).iter().copied().collect()
 }
 
 /// `Constant::toConstantRange` of an integer constant.
@@ -3160,7 +3158,7 @@ impl LazyValueInfoImpl {
         }
 
         // Print LVI in blocks where `I` is used.
-        for u in result_id.map(|result| function.users(result).to_vec()).unwrap_or_default().iter() {
+        for u in result_id.into_iter().flat_map(|result| function.users(result).iter()) {
             let use_i = function.instruction(u.user);
             let use_bb = function.parent(u.user).expect("a placed user");
             if use_i.opcode != Opcode::Phi || dt.dominates(parent_bb, use_bb) {

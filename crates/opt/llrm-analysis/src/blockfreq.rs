@@ -10,6 +10,15 @@
 //!
 //! # Used by
 //! `inlinecost` (cold and hot call sites, D1).
+//!
+//! # Example
+//! A diamond whose branch weighs 3 to 1 gives the arms 0.75 and 0.25 of the
+//! entry's frequency, and the join the entry's:
+//!
+//! ```text
+//! entry: br i1 %c, label %a, label %b   ; !{branch_weights, 3, 1}
+//! ; entry 1.0, a 0.75, b 0.25, join 1.0
+//! ```
 
 use llrm_mir::blockfrequency::{BlockFrequency, BlockFrequencyInfo, BranchProbability, EdgeProbabilities, FlowGraph};
 use llrm_mir::context::Context;
