@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/speculate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/speculate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:1c7e6fbab79977f7fa3efd89cff6e046ee8ccf48355d4c88931bcda00ed355ac -->
+<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:caa50c3c6f6516c1afea20ac2745d64456e87fa3db438a828ef2a26957721e36 -->
 
 # speculate
 
@@ -21,8 +21,10 @@ behind `SpeculateBlocks`. One instruction at most runs early, and a
 value of the branch's block that only that instruction reads counts as one
 more.
 
-- D1. Stores, loads that fault conditionally and `HoistCondStores` are not
-  ported: a block with a store or a load that may trap is left alone.
+- D1. Loads that fault conditionally (`HoistLoadsStoresWithCondFaulting`, a
+  target option) are not ported: a load runs early only where it is safe to
+  speculate. A store runs early (`HoistCondStores`) with
+  `isSafeToSpeculateStore` (D6).
 - D2. No branch weights or `!unpredictable` (`isProfitableToSpeculate` is
   true), no ephemeral values (no assumption cache), no pseudo probes, no
   `minsize` (costs are `SizeAndLatency`).
@@ -36,6 +38,10 @@ more.
   `llvm.assume` are not ported; the MIR has no `NullPointerIsDefined`, so a
   null pointer is undefined. What stands between the phi and the use must be
   no call (`isGuaranteedToTransferExecutionToSuccessor`).
+
+- D6. `isSafeToSpeculateStore` finds a writable object only among the
+  allocas that are not captured: `isWritableObject` of a global would need
+  `PointerMayBeCaptured` over the module.
 
 ## Example
 The arm's one cheap instruction runs before the branch and the phi becomes a
