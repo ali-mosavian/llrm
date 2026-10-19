@@ -152,7 +152,6 @@ use std::sync::Arc;
 
 use llrm_analysis::cfg;
 use llrm_analysis::memory::{MemRef, Unit};
-use llrm_analysis::ranges::{self, Facts};
 use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 use llrm_mir::datalayout::DataLayout;
@@ -170,6 +169,7 @@ use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
 use crate::backend::peep;
 use crate::backend::target::Segments;
+use crate::backend::valuefacts::{self, Span, ValueFacts};
 use crate::backend::{addressforms, division};
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{
@@ -909,24 +909,22 @@ pub fn selected_with<'c>(
     let unit = unit.with_exposed(&exposed);
     let registers = llrm_analysis::consts::known(&unit);
     let unit = unit.with_registers(&registers);
-    // One solve of the scoped bounds serves the exact offsets and, below, the
-    // dword-indexed accesses.
-    let scoped = ranges::scoped(&unit).map_err(Unselected)?;
-    let exact = ranges::exact_offsets_given(&unit, &scoped).map_err(Unselected)?;
+    // The ranges of the values the selector asks, worked out at the first ask,
+    // serve the exact offsets and, below, the dword-indexed accesses.
+    let table = ValueFacts::new(module, &layout, function);
+    let exact = valuefacts::exact_offsets(&unit, &table);
     let wide = cpu.dword_address_form();
     let secondary = wide.filter(|form| form.before_spill(&cpu.operations));
     let dword_indexed = wide.is_some() && function.walk().any(|(_, inst)| dword_indexed(module, function, inst));
     let (facts, typed) = match secondary.is_some() || dword_indexed {
-        // The bounds are kept either way: a division is priced by its
-        // dividend's.
-        false => (scoped, BTreeSet::new()),
+        false => (table, BTreeSet::new()),
         true => {
             let typed = function
                 .walk()
                 .map(|(_, inst)| inst)
                 .filter(|&inst| MemRef::of(&unit, inst).is_some_and(|one| one.typed.is_some()))
                 .collect();
-            (scoped, typed)
+            (table, typed)
         }
     };
     let mut selector = Selector {
@@ -1553,7 +1551,7 @@ pub struct Selector<'m, 'c, 'p> {
     /// chose that index.
     wide: Option<&'c AddressForm>,
     /// Each block's interval facts, where a scaled index asks them.
-    facts: Facts,
+    facts: ValueFacts<'m>,
     /// The accesses of a typed lvalue.
     typed: BTreeSet<InstId>,
     /// Word values a scaled address reads as dwords, widened where defined.
@@ -4156,17 +4154,14 @@ impl Selector<'_, '_, '_> {
         );
         let proven = exact
             || self.accesses(address).into_iter().all(|access| {
-                let fact = function
-                    .parent(access)
-                    .and_then(|block| self.facts.get(&cfg::id(block)))
-                    .and_then(|known| known.get(&index));
-                let word = |fact: &ranges::Interval| {
+                let fact = self.facts.get(access, index);
+                let word = |fact: &Span| {
                     fact.low.clone() * factor >= i16::MIN.into() && fact.high.clone() * factor <= i16::MAX.into()
                 };
-                let sound = |fact: &ranges::Interval| {
+                let sound = |fact: &Span| {
                     if dword { word(fact) } else { fact.low >= 0.into() && (factor == 1 || word(fact)) }
                 };
-                fact.is_some_and(|fact| fact.width == bits && sound(fact))
+                fact.is_some_and(|fact| fact.width == bits && sound(&fact))
                     && (self.typed.contains(&access) || self.exact.contains(&index))
             });
         if !proven {
@@ -4590,13 +4585,11 @@ impl Selector<'_, '_, '_> {
     }
 
     /// The bits an integer operand needs, from what MIR proves of it
-    /// (`valuetracking`: LLVM's `ComputeNumSignBits`, and the zero half of
-    /// `computeKnownBits`): a multiply that ends early on a short multiplier is
-    /// priced by it.
     /// How many low bits hold the dividend, where known to be fewer than its
     /// width less the sign: the 486's multiply ends early on a short r/m
     /// operand, so a reciprocal is priced by them. From its known bits and,
-    /// at the division, the bounds `scoped` proves of it. None: not proven.
+    /// at the division, a range the middle end proves that needs the whole
+    /// width. None: not proven.
     fn significant_bits(
         &self,
         operand: Operand,
@@ -4605,7 +4598,7 @@ impl Selector<'_, '_, '_> {
     ) -> Option<i64> {
         let context = &self.module.context;
         let width = i64::from(self.function.operand_type(context, operand).and_then(|ty| context.types.int_bits(ty))?);
-        let mut bits = if signed {
+        let bits = if signed {
             width - i64::from(llrm_mir::valuetracking::sign_bits(context, self.function, operand)) + 1
         } else {
             // The leading bits proven zero: the mask's top ones within the
@@ -4613,33 +4606,20 @@ impl Selector<'_, '_, '_> {
             let zero = llrm_mir::valuetracking::known_zero(context, self.function, operand);
             width - i64::from((zero << (128 - width as u32)).leading_ones().min(width as u32))
         };
-        if let Operand::Value(value) = operand {
-            let interval = self
-                .function
-                .parent(at)
-                .and_then(|block| self.facts.get(&cfg::id(block)))
-                .and_then(|known| known.get(&value))
-                .filter(|interval| i64::from(interval.width) == width);
-            if let Some(interval) = interval {
-                let needs = |number: &num_bigint::BigInt| {
-                    let magnitude = if number.sign() == num_bigint::Sign::Minus { -number - 1 } else { number.clone() };
-                    i64::try_from(magnitude.bits()).unwrap_or(width) + i64::from(signed)
-                };
-                let nonnegative = interval.low.sign() != num_bigint::Sign::Minus;
-                if signed || nonnegative {
-                    let (low, high) = (needs(&interval.low.to_big()), needs(&interval.high.to_big()));
-                    // Every value of the range needs the whole width: the
-                    // multiplier is that long, not merely unknown.
-                    if nonnegative && low >= width {
-                        return Some(width);
-                    }
-                    bits = bits.min(low.max(high));
-                }
+        // A range of values that all need the whole width says the multiplier
+        // is that long; a narrower one says no more than not knowing, which is
+        // priced at the early-out minimum, as gcc does.
+        if let Operand::Value(value) = operand
+            && let Some(interval) = self.facts.get(at, value).filter(|interval| i64::from(interval.width) == width)
+        {
+            let low = interval.low.to_big();
+            let needs = i64::try_from(low.bits()).unwrap_or(width) + i64::from(signed);
+            if low.sign() != num_bigint::Sign::Minus && needs >= width {
+                return Some(width);
             }
         }
-        // A bound that says no more than the type's own (not negative, not
-        // above its largest) is not about the length: the values a loop counter
-        // takes run far below `INT_MAX`, and the minimum is gcc's guess.
+        // A count that says no more than the type's own is not about the
+        // length.
         (bits + 1 < width).then_some(bits)
     }
 
