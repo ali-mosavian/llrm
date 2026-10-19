@@ -5582,6 +5582,9 @@ fn test_freeze_of_undef_and_an_undef_operand_are_selected_as_a_constant() {
     ] {
         let text = format!("define {ty} @f() addrspace(1) {{\n  {body}\n}}\n");
         let got = listing(&text, "f");
-        assert!(!got.is_empty() && got.iter().all(|one| !one.contains("undef") && !one.contains("[")), "{body}: {got:?}");
+        assert!(
+            !got.is_empty() && got.iter().all(|one| !one.contains("undef") && !one.contains("[")),
+            "{body}: {got:?}"
+        );
     }
 }
