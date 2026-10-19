@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:7ede9dafde2baabf9a23d656c6517592448a912495658611813db759db3c8ef2 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:600321c99b63cee9821cfc8ab9534dd33e626855a8c3372ca36562cbc599c2fe -->
 
 # pipeline
 
@@ -29,7 +29,7 @@ flowchart TB
   a["<b>A  once, whole module</b><br/><small>globalopt, ports (every body),<br/>stamp</small>"]:::mid
   subgraph g_b["B  EACH BODY, TO A FIXED POINT (FIXED, MIR PIPELINE)"]
     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
-    rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
+    rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
@@ -128,7 +128,7 @@ LLVM counterpart of each limit, is
 
 `pre` makes `gvn` insert on the path that lacks a value; `expensive`
 enables `jumpthread`'s state machines and `copy_headers` its correlated
-branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
+branches; `for_size` prices `hoist`, `algebraic`, `loopidioms`,
 `lsr`, `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals`
 lets alias and branch decisions use the intervals of counted loops. `limits`
 are the copy budgets of `unroll` and `peel`.

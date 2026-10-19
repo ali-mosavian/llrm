@@ -71,8 +71,8 @@
 //! `decide_tests.rs`.
 //!
 //! # Runs
-//! Once per pass of the function fixed point, after `fold` and `ports` and
-//! before `phiopt`. `Options::decide` turns it off (no `-f` flag); nothing runs
+//! Once per pass of the function fixed point, after `fold` and `ports`.
+//! `Options::decide` turns it off (no `-f` flag); nothing runs
 //! at -O0. `jumpthread` is the separate pass that threads a state variable's
 //! edges.
 //!

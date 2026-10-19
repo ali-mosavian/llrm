@@ -24,7 +24,7 @@
 //!   a["<b>A  once, whole module</b><br/><small>globalopt, ports (every body),<br/>stamp</small>"]:::mid
 //!   subgraph g_b["B  EACH BODY, TO A FIXED POINT (FIXED, MIR PIPELINE)"]
 //!     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
-//!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
+//!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
 //!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
@@ -123,7 +123,7 @@
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `expensive`
 //! enables `jumpthread`'s state machines and `copy_headers` its correlated
-//! branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
+//! branches; `for_size` prices `hoist`, `algebraic`, `loopidioms`,
 //! `lsr`, `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals`
 //! lets alias and branch decisions use the intervals of counted loops. `limits`
 //! are the copy budgets of `unroll` and `peel`.
@@ -157,8 +157,8 @@ use crate::{
     adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, jumpthread, lcssa,
     loopdeletion, loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit,
-    loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp,
-    simpleloopunswitch, simplifycfg, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, ports, promote, rotate, sccp, simpleloopunswitch,
+    simplifycfg, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -543,9 +543,6 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // body's values are.
         Box::new(simplifycfg::SimplifyCfg),
         Box::new(decide::Decide),
-        // gcc runs phiopt at -O1 and above (opts.cc:609); it is priced in bytes
-        // at -Os.
-        Box::new(phiopt::PhiOpt { size: applied.options.prefers_size() }),
         // Once the arguments are values rather than frame cells; the loop it
         // makes goes to the loop passes below.
         // Before a call is made a loop: two equal calls are one first, as
@@ -707,7 +704,6 @@ pub(crate) fn llvm_order(
         |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
     let decide = |name| slot(name, Box::new(decide::Decide));
     let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg));
-    let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
     let fold = |name| slot(name, Box::new(fold::Fold));
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
@@ -751,7 +747,7 @@ pub(crate) fn llvm_order(
             // EarlyFPM's `SimplifyCFGPass()` (PassBuilderPipelines.cpp#L1178),
             // at the default options. The slot keeps the name
             // `decide@1178`.
-            vec![simplify_cfg("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
+            vec![simplify_cfg("decide@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
         }
         Phase::Cleanup => vec![
             Box::new(Together {
@@ -767,7 +763,6 @@ pub(crate) fn llvm_order(
             fold("fold@1242"),
             dead("dead@1242"),
             decide("decide@1244"),
-            phiopt("phiopt@1244"),
         ],
         // InstSimplifyPass, PassBuilderPipelines.cpp#L1662: the last function
         // pass of `OptimizePM`, after LoopSink.
@@ -778,12 +773,10 @@ pub(crate) fn llvm_order(
                 slot("jumpthreading@668", Box::new(crate::jumpthreading::JumpThreading::from_env())),
                 slot("cvp@669", Box::new(crate::cvp::Cvp)),
                 decide("decide@675"),
-                phiopt("phiopt@675"),
                 fold("fold@677"),
                 dead("dead@677"),
                 slot("tailrec@688", Box::new(tailrec::TailRecursion)),
                 decide("decide@690"),
-                phiopt("phiopt@690"),
                 slot("algebraic@696", Box::new(algebraic::Algebraic { size, llvm: true })),
             ]);
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
@@ -815,7 +808,6 @@ pub(crate) fn llvm_order(
                 licm("licm@730", true),
                 slot("trivialunswitch@732", Box::new(simpleloopunswitch::SimpleLoopUnswitch)),
                 decide("decide@766"),
-                phiopt("phiopt@766"),
                 fold("fold@768"),
                 dead("dead@768"),
             ]);
@@ -858,13 +850,7 @@ pub(crate) fn llvm_order(
                 slot("dse@820", Box::new(deadstore::DeadStoreElimination)),
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
-            list.extend([
-                licm("licm@823", true),
-                decide("decide@832"),
-                phiopt("phiopt@832"),
-                fold("fold@837"),
-                dead("dead@837"),
-            ]);
+            list.extend([licm("licm@823", true), decide("decide@832"), fold("fold@837"), dead("dead@837")]);
             list
         }
     };
