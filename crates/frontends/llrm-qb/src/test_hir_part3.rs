@@ -2404,15 +2404,14 @@ fn the_pad_goes_to_the_handler_named_last() {
         .copied()
         .find(|&block| {
             main.block(block)
-                .instructions()
                 .iter()
-                .any(|&one| matches!(
+                .any(|one| matches!(
                     main.instruction(one).opcode,
                     llrm_mir::Opcode::LandingPad { .. }
                 ))
         })
         .expect("the pad");
-    let last = *main.block(pad).instructions().last().expect("a terminator");
+    let last = main.block(pad).last().expect("a terminator");
     assert!(
         matches!(main.instruction(last).opcode, llrm_mir::Opcode::Switch),
         "{}",

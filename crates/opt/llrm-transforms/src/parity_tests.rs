@@ -235,3 +235,26 @@ fn test_the_tally_lines_of_the_real_registry_add_up() {
     assert_eq!(by_phase, parity::REGISTRY.len(), "{lines:?}");
     assert!(lines.iter().any(|line| line.starts_with("[parity] analyses ")), "{lines:?}");
 }
+
+/// LLVM runs BDCE after GVN and before the second InstCombine; the joined
+/// slot was missing from the -O2 list, so its output never reached later slots.
+#[test]
+fn test_bdce_stands_between_gvn_and_the_next_fold() {
+    let on = Applied {
+        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
+        ..Applied::default()
+    };
+    let built = names(&on, Phase::Simplify);
+    let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
+    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("fold@801"), "{built:?}");
+}
+
+/// ADCE stands where LLVM runs it, after jump threading and before MemCpyOpt
+/// (`PassBuilderPipelines.cpp` l.815).
+#[test]
+fn test_adce_stands_between_cvp_and_memcpyopt() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let built = names(&on, Phase::Simplify);
+    let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} not built"));
+    assert_eq!((at("cvp@810") + 1, at("adce@815") + 1), (at("adce@815"), at("memcpyopt@818")));
+}

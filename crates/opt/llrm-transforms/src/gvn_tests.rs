@@ -521,7 +521,6 @@ b0:
 /// pointer in the fixed-address space the store cannot change it, so the
 /// second read is the first; through a far pointer it may, and stays.
 #[test]
-#[ignore = "BasicAA lacks it: https://github.com/ali-mosavian/llrm/issues/2555"]
 fn test_a_store_at_a_fixed_address_keeps_a_global_loaded_before() {
     for (space, reloaded) in [(4, false), (1, true)] {
         let text = format!(
@@ -553,7 +552,6 @@ b0:
 /// the fixed-address space the store cannot have changed it, so the second
 /// read is the first; through a far pointer it may have, and stays.
 #[test]
-#[ignore = "BasicAA lacks it: https://github.com/ali-mosavian/llrm/issues/2555"]
 fn test_a_store_to_a_global_keeps_a_fixed_address_read_before() {
     for (space, reloaded) in [(4, false), (1, true)] {
         let text = format!(
@@ -635,7 +633,6 @@ fn numbered(text: &str) -> String {
 /// across one through a far pointer that may be @g. It was a barrier, and
 /// TEXTFILL read its variables again after every POKE (#257).
 #[test]
-#[ignore = "BasicAA lacks it: https://github.com/ali-mosavian/llrm/issues/2555"]
 fn test_a_volatile_store_elsewhere_keeps_a_global_loaded_before() {
     for (store, reloaded) in [("ptr addrspace(4) %dev", false), ("ptr @h", false), ("ptr addrspace(1) %far", true)] {
         let text = format!(
@@ -1024,7 +1021,6 @@ b3:
 /// another so told: a store through one does not change what the other holds,
 /// so a second read of it is the first. Told of one only, the read stays.
 #[test]
-#[ignore = "BasicAA lacks it: https://github.com/ali-mosavian/llrm/issues/2555"]
 fn a_restrict_pointer_is_apart_from_another_the_pass_made_restrict() {
     for (both, reloaded) in [(true, false), (false, true)] {
         let second = if both { "call ptr @llrm.noalias.p0(ptr %q)" } else { "getelementptr i8, ptr %q, i16 0" };
