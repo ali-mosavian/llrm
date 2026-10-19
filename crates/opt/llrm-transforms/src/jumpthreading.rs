@@ -26,8 +26,8 @@
 //!       br i1 %c, t, e
 //! ```
 //!
-//! DEVIATE (J1..J9; stage S4 is not ported yet, which is not a deviation of the
-//! finished pass):
+//! DEVIATE (J1..J11; stage S4 is not ported yet, which is not a deviation of
+//! the finished pass):
 //! - J1. No `indirectbr` or `blockaddress` in MIR: `processBlock`'s
 //!   `IndirectBrInst` arm, `hasAddressTakenAndUsed` and the block-address
 //!   preference of `getKnownConstant` are absent.
@@ -50,7 +50,10 @@
 //!   scopes to clone (`cloneNoAliasScopes`), no source atoms.
 //! - J9. LVI is the pass's own `LazyValueInfo` (as `Cvp`'s), not the one
 //!   function analysis the manager would share between the passes.
-//! - J10. `LVI->getConstantOnEdge` answers that are not integers are dropped
+//! - J10. A block that starts with a `landingpad` is not threaded: the copy
+//!   would be a second pad, and the one module handler (`ehprepare`) cannot
+//!   choose between two.
+//! - J11. `LVI->getConstantOnEdge` answers that are not integers are dropped
 //!   (`known_from_lattice`), where `evaluateOnPredecessorEdge` would pass a
 //!   pointer constant on to `ConstantFoldCompareInstOperands`.
 //! - Not yet ported (later stage): `simplifyPartiallyRedundantLoad`.
@@ -1570,6 +1573,9 @@ impl State<'_, '_> {
         if succ_bb == bb {
             return false;
         }
+        if self.starts_with_landing_pad(bb) {
+            return false;
+        }
         // If threading this would thread across a loop header, don't thread
         // the edge. See the comments above findLoopHeaders for justifications
         // and caveats.
@@ -1583,6 +1589,17 @@ impl State<'_, '_> {
         }
         self.thread_edge(bb, pred_bbs, succ_bb);
         true
+    }
+
+    fn starts_with_landing_pad(
+        &self,
+        bb: BlockId,
+    ) -> bool {
+        let function = self.function();
+        function
+            .iter_block(bb)
+            .find(|&one| function.instruction(one).opcode != Opcode::Phi)
+            .is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
     }
 
     /// `threadEdge`
@@ -2048,17 +2065,6 @@ impl State<'_, '_> {
         matches!(value, Operand::Constant(c) if self.int_bits(c).is_some())
     }
 
-    /// `BB->isEHPad()`.
-    fn is_eh_pad(
-        &self,
-        bb: BlockId,
-    ) -> bool {
-        self.function()
-            .iter_block(bb)
-            .find(|&inst| self.opcode(inst) != Opcode::Phi)
-            .is_some_and(|inst| matches!(self.opcode(inst), Opcode::LandingPad { .. }))
-    }
-
     /// `BasicBlock::Create(.., BB)`: a new block placed right before `before`.
     fn new_block_before(
         &mut self,
@@ -2219,7 +2225,7 @@ impl State<'_, '_> {
         }
 
         // Avoid complication with duplicating EH pads.
-        if self.is_eh_pad(pred_bb) {
+        if self.starts_with_landing_pad(pred_bb) {
             return false;
         }
 
@@ -2384,7 +2390,7 @@ impl State<'_, '_> {
 
         // If this BB is a landing pad, we won't be able to split the edge into
         // it.
-        if self.is_eh_pad(bb) {
+        if self.starts_with_landing_pad(bb) {
             return false;
         }
 

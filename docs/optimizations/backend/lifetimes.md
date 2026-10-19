@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lifetimes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lifetimes.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lifetimes.rs sha256:26dcfeb2a5040e86e5af7d0e7fbcccd684173ec368a674d7382858e8d7ab01a8 -->
+<!-- src: crates/backend/llrm-core/src/backend/lifetimes.rs sha256:50f5c2eaa54d933715214e8f8caa8940a14ef9dfdaab03d9f53166305bcef8b7 -->
 
 # lifetimes
 
@@ -7,9 +7,9 @@ Where a block local's bytes are live, from its lifetime markers, so that
 locals never live together can share a frame slot.
 
 ## How it works
-A local is tracked only if it is an `alloca` with a marker and nothing but
-loads, stores and pointer arithmetic on it (and its markers) touch it. Any
-other local is live throughout and shares with none.
+A local is tracked only if it is an `alloca` with a marker; every use of it
+but its markers (pointer arithmetic followed) must fall inside its
+lifetime. Any other local is live throughout and shares with none.
 
 A forward fixed point finds, for each block, the tracked locals live on
 entry: a local is live at a block start if it is live at the end of any

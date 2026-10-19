@@ -122,7 +122,7 @@ use llrm_support::hash::IndexMap;
 use crate::counting::{self, Seeds};
 use crate::edges;
 use crate::lcssa::{arms, operations};
-use crate::transform::_trivial_phis;
+use crate::transform::_trivial_phis_in;
 
 pub struct LoopExit;
 
@@ -300,7 +300,8 @@ fn _deleted(
     for &inst in work[..work.len() - 1].iter().rev() {
         function.erase(inst)?;
     }
-    _trivial_phis(function)
+    // Only the exit's joins changed; another loop's closing phis stay.
+    _trivial_phis_in(function, &[exit])
 }
 
 /// Sum a linear increment over N iterations using N(N-1)/2, before modular

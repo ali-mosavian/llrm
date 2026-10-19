@@ -203,3 +203,39 @@ fn a_compare_of_a_phi_in_the_block_before_is_evaluated_on_each_edge() {
     assert!(after.contains("pred.thread"), "{after}");
     assert!(after.matches("icmp eq i32 %var, 0").count() == 0, "the compare of %var is gone:\n{after}");
 }
+
+/// A pad whose test one invoke decides was copied for it: two landing pads in
+/// one function, which `ehprepare` refuses ("more than one landing pad"; ten
+/// qb programs, `tests/run/qb/resdiv.bas` among them, did not compile).
+#[test]
+fn a_block_that_starts_with_a_landing_pad_is_not_copied() {
+    let after = run("declare void @f()
+declare i32 @__gxx_personality_v0(...)
+
+define i32 @t(i1 %x) personality ptr @__gxx_personality_v0 {
+entry:
+  br i1 %x, label %a, label %b
+
+a:
+  invoke void @f() to label %ok unwind label %pad
+
+b:
+  invoke void @f() to label %ok unwind label %pad
+
+ok:
+  ret i32 0
+
+pad:
+  %c = phi i1 [ true, %a ], [ false, %b ]
+  %lp = landingpad { ptr, i32 } cleanup
+  br i1 %c, label %t, label %e
+
+t:
+  ret i32 1
+
+e:
+  resume { ptr, i32 } %lp
+}
+");
+    assert_eq!(after.matches("landingpad").count(), 1, "{after}");
+}

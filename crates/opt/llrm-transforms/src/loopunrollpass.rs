@@ -431,7 +431,7 @@ fn analyze_loop_unroll_cost(
     let mut simplified_values = IdMap::<llrm_mir::module::ValueId, Operand>::new();
     let mut unrolled_cost = Cost::FREE;
     let mut rolled_dynamic_cost = Cost::FREE;
-    let mut inst_cost_map = std::collections::HashMap::<(InstId, u32), InstState>::new();
+    let mut inst_cost_map = llrm_support::hash::HashMap::<(InstId, u32), InstState>::default();
     let mut exit_worklist: Vec<(BlockId, BlockId)> = Vec::new();
 
     // Simulate execution of each iteration of the loop counting instructions
@@ -731,7 +731,7 @@ fn add_cost_recursively(
     run: &Run,
     lp: Loop,
     simplified_values: &IdMap<llrm_mir::module::ValueId, Operand>,
-    inst_cost_map: &mut std::collections::HashMap<(InstId, u32), InstState>,
+    inst_cost_map: &mut llrm_support::hash::HashMap<(InstId, u32), InstState>,
     unrolled_cost: &mut Cost,
     kind: CostKind,
     root: InstId,

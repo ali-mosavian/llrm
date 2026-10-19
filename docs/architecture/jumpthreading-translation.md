@@ -69,7 +69,7 @@ Fail-first tests for S1, one per shape, each seen failing with the shape's code 
 
 ## 6. State of S1 to S3
 
-`jumpthreading.rs` ports S1, S2 and S3; the slots run before `decide@675`/`decide@809`, which keep their threading until S4 closes. Switch: `LLRM_NO_JUMPTHREADING`. Fifteen fixtures in `tests/jumpthreading` read identical to `opt` through `difftest.py pair`; each function of S2 and S3 was seen failing a fixture with the function stubbed. Deviations J1 to J9 are in the module header.
+`jumpthreading.rs` ports S1, S2 and S3; the slots run before `decide@675`/`decide@809`, which keep their threading until S4 closes. Switch: `LLRM_NO_JUMPTHREADING`. Fifteen fixtures in `tests/jumpthreading` read identical to `opt` through `difftest.py pair`; each function of S2 and S3 was seen failing a fixture with the function stubbed. Deviations J1 to J11 are in the module header.
 
 The instrument is the slot oracle, not the `decide` inputs the first S1 count used: `difftest.py inputs jumpthreading@668|@809` over `llrm-c -O2 --dump` of `d_faces` (`LLRM_DUMP_INPUTS=1`), 3 functions per slot. After S1 three differed (`668/03`, `809/02`, `809/03`); the `decide` inputs `10/0046`, `11/0046`, `11/0067`, `11/0004` of the first count are not among them and were not rerun. After S3 all changed functions are identical (2 of 2 at each slot).
 

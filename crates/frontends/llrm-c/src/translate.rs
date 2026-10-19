@@ -3761,8 +3761,8 @@ mod tests {
             statement("DBEndBlock", &[]),
             statement("CGControl", &["O_LABEL", "n0", "l2"]),
         ];
-        assert_eq!(super::entered_blocks(&body), std::collections::HashSet::from_iter([1]));
-        assert_eq!(super::entered_blocks(&body[1..]), std::collections::HashSet::default());
+        assert_eq!(super::entered_blocks(&body), llrm_support::hash::HashSet::from_iter([1]));
+        assert_eq!(super::entered_blocks(&body[1..]), llrm_support::hash::HashSet::default());
     }
 
     /// The C library's strcmp is stated a three-way compare: branchprob

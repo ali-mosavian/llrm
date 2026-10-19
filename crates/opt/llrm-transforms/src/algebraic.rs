@@ -119,7 +119,8 @@ use llrm_analysis::consts::{self, Known};
 use llrm_analysis::manager::{DemandedBits, Ranges, Registers};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::num::Num as BigInt;
-use llrm_analysis::{cfg, induction, ranges};
+use llrm_analysis::scev::analysis::LazyScevView;
+use llrm_analysis::{cfg, induction};
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask, signed};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
@@ -958,7 +959,7 @@ fn _nonnegative_sext(
     else {
         return false;
     };
-    if llrm_mir::valuetracking::known_zero(context, function, source) >> (width - 1) & 1 == 0 {
+    if known_zero(context, function, source) >> (width - 1) & 1 == 0 {
         return false;
     }
     _replace(function, inst, Opcode::Cast(CastOp::ZExt), vec![source]);
@@ -1116,7 +1117,7 @@ fn _cast_pair(
     if (inner, outer) == (CastOp::Trunc, CastOp::ZExt) && from <= 128 {
         let kept = bits(middle).unwrap_or(from);
         let dropped = (u128::MAX >> (128 - from)) & !(u128::MAX >> (128 - kept));
-        if llrm_mir::valuetracking::known_zero(context, function, source) & dropped == dropped {
+        if known_zero(context, function, source) & dropped == dropped {
             if to == from {
                 _forward(function, inst, source);
             } else {
@@ -1938,19 +1939,19 @@ fn _redundant_masks(
         }
         true
     });
-    let held = Ranges::of(context, layout, function, analyses, true);
-    let unit = held.unit(context, layout, function, outer);
+    // Then ScalarEvolution's unsigned range: a counted loop's counter.
+    let scev = LazyScevView::new(analyses);
     let made: Vec<(InstId, Operand)> = candidates
         .into_iter()
-        .filter_map(|(block, inst, value, mask, width)| {
-            let interval = ranges::operand_at(&unit, value, cfg::id(block))
-                .ok()
-                .flatten()
-                .filter(|interval| interval.width == width && interval.low.sign() != num_bigint::Sign::Minus)?;
-            let top = u128::try_from(interval.high).ok()?;
+        .filter_map(|(_, inst, value, mask, width)| {
+            let range = scev.ask(context, layout, function, |se, cx| {
+                let s = se.get_scev(cx, value);
+                se.get_unsigned_range(cx, s)
+            });
+            let top = range.get_unsigned_max();
             let reach = if top == 0 { 0 } else { u128::MAX >> (top.leading_zeros()) };
             let all = if width == 128 { u128::MAX } else { (1u128 << width) - 1 };
-            let possible = reach & !llrm_mir::valuetracking::known_zero(context, function, value) & all;
+            let possible = reach & !known_zero(context, function, value) & all;
             (possible & !mask == 0).then_some((inst, value))
         })
         .chain(settled)
@@ -2035,7 +2036,7 @@ fn _unread_bits_once(
         let Some(&bits) = read.get(&result) else { continue };
         let width = context.types.int_bits(instruction.ty).expect("an integer");
         let all = if width == 128 { u128::MAX } else { (1_u128 << width) - 1 };
-        let zero = llrm_mir::valuetracking::known_zero(context, function, Operand::Value(result)) & all;
+        let zero = known_zero(context, function, Operand::Value(result)) & all;
         let (opcode, operands) = (instruction.opcode.clone(), instruction.operands.clone());
         let replacement = if bits & !zero == 0 {
             Some(_constant(context, function, inst, 0))
@@ -2151,10 +2152,11 @@ fn _unsigned_divisions(
         .collect();
     let held = Ranges::of(context, layout, function, analyses, true);
     let unit = held.unit(context, layout, function, outer);
+    let scev = LazyScevView::new(analyses);
     let made: Vec<(InstId, BinaryOp)> = candidates
         .into_iter()
         .zip(non_negative)
-        .filter_map(|((block, inst, width), non_negative)| {
+        .filter_map(|((_, inst, width), non_negative)| {
             let operands = &function.instruction(inst).operands;
             let fact = consts::_operand(&unit, operands[1], facts, None)?;
             let divisor = BigInt::from(consts::masked(&fact.n, width));
@@ -2171,12 +2173,11 @@ fn _unsigned_divisions(
                 && divisor < BigInt::from(1u8) << (width - 1)
                 && (power || !size);
             let proved = non_negative
-                || ranges::operand_at(&unit, operands[0], cfg::id(block))
-                    .ok()
-                    .flatten()
-                    .filter(|interval| interval.width == width)
-                    .is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
-                || llrm_mir::valuetracking::known_zero(context, function, operands[0]) >> (width - 1) & 1 == 1;
+                || scev.ask(context, layout, function, |se, cx| {
+                    let s = se.get_scev(cx, operands[0]);
+                    se.get_signed_range(cx, s).is_all_non_negative()
+                })
+                || known_zero(context, function, operands[0]) >> (width - 1) & 1 == 1;
             let op = if function.instruction(inst).opcode == Opcode::Binary(BinaryOp::SDiv) {
                 BinaryOp::UDiv
             } else {
@@ -2252,3 +2253,17 @@ fn _divisions(
 #[cfg(test)]
 #[path = "algebraic_tests.rs"]
 mod tests;
+
+/// `computeKnownBits(V).Zero` with no context instruction: the zero half of
+/// the ValueTracking translation (the layout is only read for pointer
+/// widths, which the callers' integers do not reach).
+fn known_zero(
+    context: &Context,
+    function: &Function,
+    operand: Operand,
+) -> u128 {
+    thread_local! {
+        static LAYOUT: DataLayout = DataLayout::default();
+    }
+    LAYOUT.with(|layout| known::compute_known_bits(&Query::bare(context, function, layout), operand, 0).zero)
+}

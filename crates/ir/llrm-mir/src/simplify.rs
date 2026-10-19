@@ -35,9 +35,8 @@
 //!    `simplifyCall`'s integer intrinsics are `simplify_calls.rs`; the callee
 //!    is found by name, so `simplify_instruction_in`'s caller passes the
 //!    globals.
-//! 6. `simplifySelectWithICmpCond`, `simplifySelectBitTest`/`WithBitTest`,
-//!    `simplifySelectWithEquivalence`, `simplifyCmpSelOfMaxMin`,
-//!    `simplifyICmpWithDominatingAssume`: #2249.
+//! 6. `simplifyICmpWithDominatingAssume`: #2249; `simplifySelectWithFCmp`:
+//!    #2246. The select-on-compare forms are `simplify_select.rs`.
 //! 7. `extractvalue`, `insertvalue`: #2250.
 //! 8. GEP and cast constant expressions, wrap-flag poison folds in
 //!    `constfold.rs`: #2252.
@@ -311,6 +310,7 @@ impl Query<'_> {
             globals: self.globals,
             dt: self.analyses.map(FunctionAnalyses::dominator_tree),
             assumptions: self.analyses.map(FunctionAnalyses::assumption_cache),
+            dom_conditions: self.analyses.and_then(FunctionAnalyses::dom_conditions),
             cxt: self.cxt,
             ..ValueQuery::bare(self.context, self.function, self.layout)
         }
@@ -898,13 +898,59 @@ fn simplify_with_op_replaced(
     v: Operand,
     op: Operand,
     rep_op: Operand,
+    max_recurse: u32,
+) -> Option<Operand> {
+    simplify_with_ops_replaced(q, v, &[(op, rep_op)], true, max_recurse)
+}
+
+/// `getBinOpIdentity(Opcode, Ty, AllowRHSConstant)`, as a number: the left
+/// identity of a commutative operation, the right one of any.
+fn bin_op_identity(
+    opcode: BinaryOp,
+    rhs: bool,
+    width: u32,
+) -> Option<u128> {
+    match opcode {
+        BinaryOp::Add | BinaryOp::Or | BinaryOp::Xor => Some(0),
+        BinaryOp::Mul => Some(1),
+        BinaryOp::And => Some(mask(width)),
+        BinaryOp::Sub | BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if rhs => Some(0),
+        BinaryOp::UDiv | BinaryOp::SDiv if rhs => Some(1),
+        _ => None,
+    }
+}
+
+/// `getBinOpAbsorber(Opcode, Ty)`, as a number.
+fn bin_op_absorber(
+    opcode: BinaryOp,
+    width: u32,
+) -> Option<u128> {
+    match opcode {
+        BinaryOp::Mul | BinaryOp::And => Some(0),
+        BinaryOp::Or => Some(mask(width)),
+        _ => None,
+    }
+}
+
+/// `simplifyWithOpsReplaced`
+/// ([:4429](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L4429)):
+/// what `v` equals with each `ops.0` in place of `ops.1`, a refinement of it
+/// where `allow_refinement`. DEVIATE: `DropFlags` is always null; a flag that
+/// would be dropped ends the fold. Vector operands are not modelled.
+fn simplify_with_ops_replaced(
+    q: &mut Query,
+    v: Operand,
+    ops: &[(Operand, Operand)],
+    allow_refinement: bool,
     mut max_recurse: u32,
 ) -> Option<Operand> {
-    // We cannot replace a constant, and shouldn't even try.
-    q.constant(op).is_none().then_some(())?;
-    // Trivial replacement.
-    if v == op {
-        return Some(rep_op);
+    for &(op, rep_op) in ops {
+        // We cannot replace a constant, and shouldn't even try.
+        q.constant(op).is_none().then_some(())?;
+        // Trivial replacement.
+        if v == op {
+            return Some(rep_op);
+        }
     }
     if max_recurse == 0 {
         return None;
@@ -919,23 +965,123 @@ fn simplify_with_op_replaced(
     ) {
         return None;
     }
-    // Replace Op with RepOp in instruction operands.
+    let intrinsic = pattern::call_intrinsic(&q.tracking(), inst);
+    if q.tracking().callee_name(inst).is_some_and(|name| name.starts_with("llvm.is.constant")) {
+        return None;
+    }
+    // Replace the ops in the instruction's operands.
     let mut new_ops = Vec::new();
     let mut any_replaced = false;
     for inst_op in q.function.instruction(inst).operands.to_vec() {
-        if let Some(new_inst_op) = simplify_with_op_replaced(q, inst_op, op, rep_op, max_recurse) {
-            new_ops.push(new_inst_op);
-            any_replaced = inst_op != new_inst_op;
-        } else {
-            new_ops.push(inst_op);
+        match simplify_with_ops_replaced(q, inst_op, ops, allow_refinement, max_recurse) {
+            Some(new_inst_op) => {
+                new_ops.push(new_inst_op);
+                any_replaced = inst_op != new_inst_op;
+            }
+            None => new_ops.push(inst_op),
+        }
+        let last = *new_ops.last().expect("an operand");
+        if !q.can_use_undef
+            && q.constant(last)
+                .is_some_and(|id| matches!(
+                    q.context.get(id).kind,
+                    ConstantKind::Undef | ConstantKind::Poison
+                ))
+        {
+            return None;
         }
     }
     if !any_replaced {
         return None;
     }
-    // The simplification may return the original value (when RepOp does not
-    // dominate it): prevent that.
-    simplify_instruction_with_operands(q, inst, &new_ops, max_recurse).filter(|&simplified| simplified != v)
+    let instruction = q.function.instruction(inst);
+    let (opcode, ty, flags) = (instruction.opcode.clone(), instruction.ty, instruction.flags);
+    if !allow_refinement {
+        // Without DropFlags, a fold that needs the flags dropped is no fold.
+        if let Opcode::Binary(binop) = opcode
+            && q.context.types.int_bits(ty).is_some()
+        {
+            let width = q.context.types.int_bits(ty)?;
+            let number = |q: &Query, operand: Operand| q.number(operand).map(|(bits, _)| bits);
+            if bin_op_identity(binop, false, width).is_some_and(|id| number(q, new_ops[0]) == Some(id)) {
+                return Some(new_ops[1]);
+            }
+            if bin_op_identity(binop, true, width).is_some_and(|id| number(q, new_ops[1]) == Some(id)) {
+                return Some(new_ops[0]);
+            }
+            if matches!(binop, BinaryOp::And | BinaryOp::Or) && new_ops[0] == new_ops[1] {
+                if flags.contains(Flags::DISJOINT) {
+                    return None;
+                }
+                return Some(new_ops[0]);
+            }
+            if matches!(binop, BinaryOp::Sub | BinaryOp::Xor)
+                && new_ops[0] == new_ops[1]
+                && ops.iter().any(|&(_, rep)| rep == new_ops[0])
+            {
+                return Some(q.null(ty));
+            }
+            if let Some(absorber) = bin_op_absorber(binop, width)
+                && (number(q, new_ops[0]) == Some(absorber) || number(q, new_ops[1]) == Some(absorber))
+                && let Some(result) = q.function.instruction(inst).result
+                && ops.iter().any(|&(first, _)| guarantee::implies_poison(&q.tracking(), Operand::Value(result), first))
+            {
+                return Some(q.int(ty, absorber));
+            }
+        }
+        if let Some(id) = intrinsic {
+            let annotated = {
+                let Opcode::Call(info) = &q.function.instruction(inst).opcode else { return None };
+                info.return_attrs.iter().any(|one| matches!(one, crate::opcode::Attribute::Range { .. }))
+                    || q.function.instruction(inst).metadata.iter().any(|(kind, _)| kind == "range")
+            };
+            if matches!(id, pattern::IntrinsicId::Scmp | pattern::IntrinsicId::Ucmp) && new_ops[0] == new_ops[1] {
+                if annotated {
+                    return None;
+                }
+                return Some(q.int(ty, 0));
+            }
+            if calls::min_max_identity(id, q.width(new_ops[0])).is_some() {
+                let identity = calls::min_max_identity(id, q.width(new_ops[0]))?;
+                let result = if q.number(new_ops[0]).is_some_and(|(bits, _)| bits == identity) {
+                    Some(new_ops[1])
+                } else if q.number(new_ops[1]).is_some_and(|(bits, _)| bits == identity) {
+                    Some(new_ops[0])
+                } else {
+                    None
+                };
+                if let Some(result) = result {
+                    if annotated {
+                        return None;
+                    }
+                    return Some(result);
+                }
+            }
+        }
+        if matches!(opcode, Opcode::GetElementPtr { .. }) && new_ops.len() == 2 && q.is_zero(new_ops[1]) {
+            return Some(new_ops[0]);
+        }
+    } else {
+        // Prevent self-simplification.
+        return simplify_instruction_with_operands(q, inst, &new_ops, max_recurse)
+            .filter(|&simplified| simplified != v);
+    }
+    let constants = new_ops.iter().map(|&one| q.constant(one)).collect::<Option<Vec<_>>>()?;
+    let abs = intrinsic == Some(pattern::IntrinsicId::Abs);
+    if guarantee::can_create_poison(&q.tracking(), guarantee::Operator::Instruction(inst), true) {
+        let not_min = q.number(new_ops[0]).is_some_and(|(bits, width)| bits != 1u128 << (width - 1));
+        if !(abs && not_min) {
+            return None;
+        }
+    }
+    crate::constantfolding::constant_fold_inst_operands_at(
+        &*q.context,
+        crate::constantfolding::Env { globals: q.globals, layout: q.layout },
+        q.function,
+        inst,
+        &constants,
+    )
+    .map(Operand::Constant)
 }
 
 /// `m_ICmpLike`: the predicate and operands of an `icmp`, or of a `trunc nuw`
@@ -2824,6 +2970,7 @@ fn simplify_select(
     cond: Operand,
     true_val: Operand,
     false_val: Operand,
+    max_recurse: u32,
 ) -> Option<Operand> {
     if let Some(cond_c) = q.constant(cond) {
         if let (Some(t), Some(f)) = (q.constant(true_val), q.constant(false_val))
@@ -2895,10 +3042,24 @@ fn simplify_select(
     if q.is_poison(false_val) || (q.is_undef(false_val) && guarantee::implies_poison(&q.tracking(), true_val, cond)) {
         return Some(true_val);
     }
+    if let Some(v) = select::simplify_select_with_icmp_cond(q, cond, true_val, false_val, max_recurse) {
+        return Some(v);
+    }
+    if let Some(v) = select::simplify_select_with_bit_test(q, cond, true_val, false_val) {
+        return Some(v);
+    }
     if let Some(cxt) = q.cxt
         && let Some(implied) = conditions::is_implied_by_dom_condition_cond(&q.tracking(), cond, cxt)
     {
         return Some(if implied { true_val } else { false_val });
+    }
+    if q.is_phi(true_val) && q.is_phi(false_val) {
+        if select::is_select_with_identical_phi(q, true_val, false_val) {
+            return Some(false_val);
+        }
+        if select::is_select_with_identical_phi(q, false_val, true_val) {
+            return Some(true_val);
+        }
     }
     None
 }
@@ -2966,10 +3127,19 @@ fn simplify_icmp(
     if let Some(v) = simplify_icmp_with_min_max(q, pred, lhs, rhs, max_recurse) {
         return Some(v);
     }
+    if let Some(v) = simplify_icmp_with_intrinsic_on_lhs(q, pred, lhs, rhs) {
+        return Some(v);
+    }
+    if let Some(v) = simplify_icmp_with_intrinsic_on_lhs(q, swapped(pred), rhs, lhs) {
+        return Some(v);
+    }
     if let Some(v) = simplify_icmp_using_monotonic_values(q, pred, lhs, rhs) {
         return Some(v);
     }
     if let Some(v) = simplify_icmp_using_monotonic_values(q, swapped(pred), rhs, lhs) {
+        return Some(v);
+    }
+    if let Some(v) = simplify_icmp_with_dominating_assume(q, pred, lhs, rhs) {
         return Some(v);
     }
     if let Some(cxt) = q.cxt
@@ -2988,6 +3158,85 @@ fn simplify_icmp(
         return thread_cmp_over_phi(q, pred, lhs, rhs, max_recurse);
     }
     None
+}
+
+/// `simplifyICmpWithDominatingAssume`
+/// ([:3811](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3811)):
+/// an `llvm.assume` valid at the context instruction implies the compare.
+fn simplify_icmp_with_dominating_assume(
+    q: &mut Query,
+    pred: IntPredicate,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    // Gracefully handle instructions that have not been inserted yet.
+    let (Some(analyses), Some(cxt)) = (q.analyses, q.cxt) else { return None };
+    let tracking = q.tracking();
+    let found = [lhs, rhs]
+        .into_iter()
+        .find_map(
+            |base| analyses
+                .assumption_cache()
+                .assumptions_for(base)
+                .iter()
+                .find_map(
+                    |&assume| {
+                        let condition = q.function.instruction(assume).operands[0];
+                        let implied = conditions::is_implied_condition_cmp(
+                            &tracking,
+                            condition,
+                            pattern::CmpPredicate::new(pred),
+                            pattern::Side::of(&tracking, lhs),
+                            pattern::Side::of(&tracking, rhs),
+                            true,
+                            0,
+                        )?;
+                        conditions::is_valid_assume_for_context(&tracking, assume, cxt, false).then_some(implied)
+                    },
+                ),
+        )?;
+    let i1 = q.context.types.int(1);
+    Some(q.int(i1, u128::from(found)))
+}
+
+/// `simplifyICmpWithIntrinsicOnLHS`
+/// ([:3835](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3835)).
+fn simplify_icmp_with_intrinsic_on_lhs(
+    q: &mut Query,
+    pred: IntPredicate,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    let tracking = q.tracking();
+    let (inst, _) = tracking.instruction_of(lhs)?;
+    let id = pattern::call_intrinsic(&tracking, inst)?;
+    let [x, y, _] = q.function.instruction(inst).operands[..] else { return None };
+    let i1 = q.context.types.int(1);
+    match id {
+        // uadd.sat(X, Y) uge X + Y
+        pattern::IntrinsicId::UaddSat => {
+            let sum = q.binary_of(rhs, BinaryOp::Add).is_some_and(|(a, b, _)| (a == x && b == y) || (a == y && b == x));
+            if sum && pred == IntPredicate::Uge {
+                return Some(q.int(i1, 1));
+            }
+            if sum && pred == IntPredicate::Ult {
+                return Some(q.int(i1, 0));
+            }
+            None
+        }
+        // usub.sat(X, Y) ule X - Y
+        pattern::IntrinsicId::UsubSat => {
+            let difference = q.binary_of(rhs, BinaryOp::Sub).is_some_and(|(a, b, _)| a == x && b == y);
+            if difference && pred == IntPredicate::Ule {
+                return Some(q.int(i1, 1));
+            }
+            if difference && pred == IntPredicate::Ugt {
+                return Some(q.int(i1, 0));
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// `CmpInst::getInversePredicate`.
@@ -4000,7 +4249,7 @@ fn simplify_instruction_with_operands(
         }
         Opcode::Select => {
             let [cond, a, b] = operands[..] else { return None };
-            simplify_select(q, cond, a, b)
+            simplify_select(q, cond, a, b, max_recurse)
         }
         Opcode::Cast(op) => simplify_cast(q, *op, operands[0], instruction.ty, max_recurse),
         Opcode::Phi => simplify_phi(q, inst),
@@ -4024,6 +4273,24 @@ pub fn simplify_binop_operands(
 ) -> Option<Operand> {
     let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None, can_use_undef: true };
     simplify_binop_flags(&mut q, opcode, lhs, rhs, flags, RECURSION_LIMIT)
+}
+
+/// `simplifyBinOp(Opcode, LHS, RHS, SQ.getWithInstruction(&cxt))` for a caller
+/// that has a module (its callees, dominator tree and assumptions) and the
+/// instruction it asks at.
+pub fn simplify_binop_at(
+    context: &Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+    analyses: Option<&FunctionAnalyses>,
+    function: &Function,
+    cxt: InstId,
+    opcode: BinaryOp,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: true };
+    simplify_binop_flags(&mut q, opcode, lhs, rhs, Flags::default(), RECURSION_LIMIT)
 }
 
 /// `simplifyICmpInst` for operands.
@@ -4076,11 +4343,14 @@ pub fn simplify_select_operands(
     if_false: Operand,
 ) -> Option<Operand> {
     let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None, can_use_undef: true };
-    simplify_select(&mut q, condition, if_true, if_false)
+    simplify_select(&mut q, condition, if_true, if_false, RECURSION_LIMIT)
 }
 
 #[path = "simplify_calls.rs"]
 mod calls;
+
+#[path = "simplify_select.rs"]
+mod select;
 
 #[cfg(test)]
 #[path = "simplify_tests.rs"]

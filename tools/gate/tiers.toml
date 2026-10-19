@@ -138,6 +138,10 @@ file = "tests/seeded_maps.rs"
 step = "integration"
 
 [[scan]]
+file = "tests/no_todo.rs"
+step = "integration"
+
+[[scan]]
 file = "tests/target_facts.rs"
 step = "integration"
 

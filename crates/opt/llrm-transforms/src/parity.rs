@@ -160,7 +160,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
     entry("adce@815", Simplify, "adce", Translated, ""),
-    entry("memcpyopt@818", Simplify, "memcpyopt", Old, "backend-slopes"),
+    entry("memcpyopt@818", Simplify, "memcpyopt", Translated, ""),
     partial(
         "merge@818",
         Simplify,
