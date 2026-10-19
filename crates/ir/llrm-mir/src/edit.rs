@@ -88,14 +88,14 @@ impl Function {
         }
         let mut problems = Vec::new();
         for (at, expected) in values.iter().enumerate() {
-            let list = self.uses.users(Held::Value(at as u32)).to_vec();
+            let list = self.uses.users(Held::Value(at as u32)).iter().copied().collect::<Vec<_>>();
             let kept: BTreeSet<Use> = list.iter().copied().collect();
             if kept != *expected || kept.len() != list.len() {
                 problems.push(format!("value {at}: kept {list:?}, operands say {expected:?}"));
             }
         }
         for (at, expected) in blocks.iter().enumerate() {
-            let list = self.uses.users(Held::Block(at as u32)).to_vec();
+            let list = self.uses.users(Held::Block(at as u32)).iter().copied().collect::<Vec<_>>();
             let kept: BTreeSet<Use> = list.iter().copied().collect();
             if kept != *expected || kept.len() != list.len() {
                 problems.push(format!("block {at}: kept {list:?}, operands say {expected:?}"));
@@ -741,7 +741,7 @@ impl Function {
         if let Some(result) = self.instruction(inst).result
             && !self.users(result).is_empty()
         {
-            return Err(format!("instruction {}'s result still has {} users", inst.0, self.users(result).len()));
+            return Err(format!("instruction {}'s result still has {} users", inst.0, self.users(result).iter().count()));
         }
         let operands = self.instructions[inst.0 as usize].operands.clone();
         for (index, operand) in operands.into_iter().enumerate() {
