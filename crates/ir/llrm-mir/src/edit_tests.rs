@@ -294,6 +294,22 @@ fn moving_an_instruction_leaves_its_records_in_place() {
     assert!(f.debug_records().iter().any(|one| one.before == ret && matches!(one.what, crate::DebugWhat::Value(_))));
 }
 
+/// A branch to its own block, which nothing else enters, has no block to hand
+/// its records to but its own: erased, they were left standing before the
+/// erased branch ("a debug record of !0 stands before instruction N, which is
+/// no longer in the function").
+#[test]
+fn erasing_a_branch_to_its_own_block_leaves_no_record_dangling() {
+    let mut parsed = module(
+        "define i16 @f(i16 %a) {\nentry:\n  ret i16 %a\n\nspin:\n  #dbg_value(i16 %a, !0)\n  br label %spin\n}\n\n!0 = !{!\"v\"}\n",
+    );
+    let f = function(&mut parsed);
+    let spin = f.layout()[1];
+    let jump = f.terminator(spin).expect("a branch");
+    f.erase(jump).expect("a branch defines nothing");
+    assert!(f.debug_records().iter().all(|one| one.before != jump), "{:?}", f.debug_records());
+}
+
 /// A record whose anchor is no longer in the function is the verifier's to
 /// find.
 #[test]
@@ -870,4 +886,19 @@ fn test_set_block_name_names_a_block_apart_from_the_names_held() {
     f.set_block_name(another, "a.jt1");
     f.set_block_name(f.layout()[1], "a.jt1");
     assert_ne!(f.block(f.layout()[1]).name.as_deref(), f.block(another).name.as_deref());
+}
+
+/// `BasicBlock::takeName` and `setName`: the block that takes a name is named
+/// it, the other goes unnamed, and a name in use gets a number appended.
+#[test]
+fn a_block_takes_the_name_of_another_and_a_taken_name_gets_a_number() {
+    let mut parsed = module("define i16 @f(i16 %a) {\nentry:\n  br label %next\n\nnext:\n  ret i16 %a\n}\n");
+    let f = function(&mut parsed);
+    let (entry, next) = (f.layout()[0], f.layout()[1]);
+    let fresh = f.create_block(None);
+    f.take_block_name(entry, fresh);
+    assert_eq!((f.block(entry).name.as_deref(), f.block(fresh).name.as_deref()), (None, Some("entry")));
+    f.set_block_name(entry, "next");
+    assert_eq!(f.block(entry).name.as_deref(), Some("next1"));
+    assert_eq!(f.block(next).name.as_deref(), Some("next"));
 }

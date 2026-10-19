@@ -259,6 +259,29 @@ def test_a_compile_that_outgrows_the_memory_limit_is_reported_as_a_memory_limit(
     assert why and why.startswith("memory limit"), why
 
 
+def test_an_unformatted_file_refuses_a_pr_through_the_prepush_ratchet():
+    """#2732 and #2735 landed with unformatted files: the smoke ran neither fmt nor the docs scans. prepush's failing steps are ratchets of the smoke."""
+    class Done:
+        def __init__(self, out, code):
+            self.stdout, self.stderr, self.returncode = out, "", code
+
+    failed = ps.prepush_failures(run=lambda command: Done("PREPUSH FAIL: fmt, docs\ncovers: fmt, docs", 1))
+    assert set(failed) == {"ratchet:prepush-fmt", "ratchet:prepush-docs"}, failed
+    assert ps.prepush_failures(run=lambda command: Done("PREPUSH PASS\n", 0)) == {}
+    assert set(ps.prepush_failures(run=lambda command: Done("", 2))) == {"ratchet:prepush-did-not-run"}
+
+
+def test_unused_code_fails_the_warnings_check_and_clean_code_passes(tmp_path):
+    """deadstore.rs landed with unused code under -D warnings."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "Cargo.toml").write_text('[package]\nname = "w"\nversion = "0.0.0"\nedition = "2021"\n')
+    (tmp_path / "src/lib.rs").write_text("fn unused() {}\n")
+    why = ps.warnings_check(tmp_path, tmp_path / "t")
+    assert why, "an unused function must fail under -D warnings"
+    (tmp_path / "src/lib.rs").write_text("pub fn used() {}\n")
+    assert ps.warnings_check(tmp_path, tmp_path / "t") == ""
+
+
 def test_a_failed_unit_step_names_each_failed_test_not_its_crate():
     """The subset rule compared checks: a PR adding one failing test inside an already-red crate failed `unit llrm-qb`, which the red head failed too, and landed."""
     out = "running 3 tests\\nfailures:\\n\\n---- t::a stdout ----\\n    printed\\n\\nfailures:\\n    t::a\\n    t::b\\n\\ntest result: FAILED. 1 passed; 2 failed\\n".replace("\\n", "\n")
