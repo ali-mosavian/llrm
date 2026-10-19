@@ -85,6 +85,7 @@
 //! | [`speculativelyExecuteBB`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3244), called from `simplifyCondBranch` ([L9060](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9060)) | `branch_speculated`, `speculate::executed` | MIRROR for the call; see that module |
 //! | [`tailMergeBlocksWithSimilarFunctionTerminators`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L142), called from `simplifyFunctionCFGImpl` after the first `removeUnreachableBlocks` | `tailmerge::merged` | MIRROR; see that module |
 //! | [`sinkCommonCodeFromPredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L2425) and [`simplifyDuplicatePredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8573), called from `simplifyOnce` ([L9336](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9336)) under `SinkCommonInsts` | `sinkcommon::sunk`, `sinkcommon::duplicate_predecessors_merged`, `Options::sink_common_insts` | MIRROR for the calls; see that module |
+//! | [`foldBranchToCommonDest`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4231), called from `simplifyCondBranch` ([L9005](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9005)) under `SpeculateBlocks` | `branchtocommon::folded` | MIRROR for the call; see that module |
 //! | [`FindFunctionBackedges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L236) | `loop_headers` | MIRROR |
 //! | [`removeUnreachableBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2912) and `markAliveBlocks` | `unreachable_removed` | the terminator folding and the deletion; D3 |
 //! | [`ConstantFoldTerminator`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L133) | `terminator_folded` | MIRROR; D4 |
@@ -184,8 +185,8 @@ use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
 use crate::twoentryphi::{self, Speculation};
+use crate::{branchtocommon, hoistcommon, sinkcommon, speculate, tailmerge};
 use crate::{cfg, dead, edges, transform};
-use crate::{hoistcommon, sinkcommon, speculate, tailmerge};
 
 /// LLVM's `SimplifyCFGPass` at the options of the early function pipeline
 /// slot (`SimplifyCFGOptions()`: `PassBuilderPipelines.cpp`).
@@ -347,6 +348,9 @@ fn block_simplified(
         }
     }
     if options.speculate_blocks && function.is_placed(block) && twoentryphi::folded(context, spec, function, block) {
+        return true;
+    }
+    if options.speculate_blocks && function.is_placed(block) && branchtocommon::folded(context, spec, function, block) {
         return true;
     }
     if function.is_placed(block) && branch_hoisted(options, context, spec, function, block) {
