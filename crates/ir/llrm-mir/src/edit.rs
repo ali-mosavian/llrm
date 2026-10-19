@@ -4,7 +4,6 @@
 use std::collections::BTreeSet;
 
 use crate::context::{Constant, ConstantKind, Context};
-use crate::hash::HashMap;
 use crate::module::{
     Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, NameIndex, Names,
     Operand, Use, ValueData, ValueDef, ValueId,
@@ -1333,6 +1332,6 @@ pub fn layout_scanned() -> usize {
 /// `ValueToValueMapTy`: what `clone_block` copied, original to copy.
 #[derive(Default)]
 pub struct ValueMap {
-    pub values: HashMap<ValueId, Operand>,
-    pub blocks: HashMap<BlockId, BlockId>,
+    pub values: crate::dense::IdMap<ValueId, Operand>,
+    pub blocks: crate::dense::IdMap<BlockId, BlockId>,
 }

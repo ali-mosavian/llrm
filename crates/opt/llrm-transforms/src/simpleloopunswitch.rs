@@ -226,9 +226,10 @@ fn replace_loop_invariant_uses(
     replacement: Operand,
 ) {
     let Operand::Value(value) = invariant else { unreachable!("why are we unswitching on a constant?") };
-    for one in run.function.users(value).to_vec() {
-        if lp.contains_instruction(run.function, one.user) {
-            run.function.set_operand(one.user, one.index as usize, replacement);
+    let uses: Vec<_> = run.function.users(value).iter().map(|one| (one.user, one.index)).collect();
+    for (user, index) in uses {
+        if lp.contains_instruction(run.function, user) {
+            run.function.set_operand(user, index as usize, replacement);
         }
     }
 }
