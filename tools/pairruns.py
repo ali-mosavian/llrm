@@ -30,6 +30,9 @@ PREMISE_MAX = 10  # a base failing more programs than this is a broken instrumen
 def compare(base: str, new: str) -> tuple[list[str], list[str]]:
     """(lines for the failures only in `new`, names fixed in `new`). A side that fails more than PREMISE_MAX programs makes the comparison void: one line says so."""
     before, after = failures(base), failures(new)
+    for side, text in (("base", base), ("new", new)):
+        if not re.search(r"^\[\w+\] \d+ programs:", text, re.M):
+            return [f"PREMISE BROKEN: the {side} run printed no group line ({(text.strip().splitlines() or ['empty'])[0][:100]}); nothing ran"], []
     for side, found in (("base", before), ("new", after)):
         if len(found) > PREMISE_MAX:
             first = next(iter(found.items()))
