@@ -806,7 +806,7 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
         Regex::new(r"    lea ([a-z]+), \[bp-\d+\]\n").unwrap().captures(main).unwrap_or_else(|| panic!("{main}"))[1]
             .to_owned();
     assert!(Regex::new(&format!(r"    mov word ptr \[bp-\d+\], {payload}\n")).unwrap().is_match(main), "{main}");
-    assert!(Regex::new(r"    mov [a-z]+, ss\n").unwrap().is_match(main));
+    assert!(Regex::new(r"    mov (?:[a-z]+|word ptr \[bp-\d+\]), ss\n").unwrap().is_match(main), "{main}");
     assert!(main.contains("call _bump"));
     // `bump` is internal and called directly: the view, a stack pointer of one
     // word, is its first argument, in AX, and nothing is pushed or popped.
@@ -1912,7 +1912,7 @@ fn test_a_far_basic_string_is_read_through_its_runtime() {
 #[test]
 /// An interrupt16 handler may interrupt anything: it saves every register,
 /// runs with DGROUP in DS and ES and the direction flag clear, and leaves
-/// by `iret`. Its name is its far address, a `dd` the linker fills.
+/// by `iret`.
 fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
     let source = root().join("examples/ticker.nib");
     let program = parsed(&source);
@@ -1926,7 +1926,8 @@ fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
         "{text}"
     );
     assert_eq!(lines[lines.len() - 6..], ["pop gs", "pop fs", "pop es", "pop ds", "popad", "iret"], "{text}");
-    assert!(text.contains("dd _tick"), "{text}");
+    // Its name is a far address the linker fills, as segment and offset.
+    assert!(text.contains("pushw seg _tick") && text.contains("push offset _tick"), "{text}");
     object_of(&program, "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
         .expect("encodes");
 }
@@ -2624,12 +2625,12 @@ fn test_mir_infers_what_a_nib_function_touches() {
 
 /// A range loop's counter cannot wrap (`nsw`), so its trip count is `n` and
 /// the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
-/// in the loop. Two callers pass different bounds: with one, the bound is a
-/// constant of the body, and the loop (which leaves by its bounds check as
-/// well) is copied out by it.
+/// in the loop. Three callers pass 5, 6 and 1000: with one, or with 5 and 6
+/// (a range IPSCCP knows), the bound is known to the body, and the loop (which
+/// leaves by its bounds check as well) is copied out by it.
 #[test]
 fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
-    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 6))\n    return 0\n";
+    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 6))\n    print(total(a, 1000))\n    return 0\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "trip.nib", source));
     let pipeline =

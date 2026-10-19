@@ -118,8 +118,9 @@ fn nib_inlined_code_keeps_its_lines_and_loses_its_symbols() {
         .map(|(line, _)| line)
         .collect();
     // Optimised, a statement whose code is gone has no line (it kept one while
-    // `-g` kept the stores): `scale`'s 9, `main`'s locals.
-    assert_eq!(lines, [17, 10, 19, 20, 21]);
+    // `-g` kept the stores): `scale`'s 9, `main`'s locals, and the code
+    // of lines 10 and 19, which has no code left.
+    assert_eq!(lines, [17, 20, 21]);
     let shape = cv4info::shape(&object);
     assert!(shape.iter().all(|one| !one.contains("scale")), "{shape:?}");
     assert!(shape.contains(&"PROC main far () -> SHORT".to_owned()), "{shape:?}");
