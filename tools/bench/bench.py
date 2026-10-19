@@ -136,13 +136,16 @@ def benchmarks(selected: list[str]) -> list[Path]:
     return [one for one in found if not selected or one.name in selected or str(one.relative_to(BENCH)) in selected]
 
 
+ONLY: list[str] | None = None  # `--lang`: the languages measured; None: every one the directory has
+
+
 def variants(directory: Path) -> list[Variant]:
     settings = tomllib.loads((directory / "bench.toml").read_text())
     name = directory_name(directory)
     out = []
     for language, suffix in LANGUAGES.items():
         source = directory / f"{directory.name}{suffix}"
-        if source.exists():
+        if source.exists() and (ONLY is None or language in ONLY or directory == STARTUP):
             head = run_tests.header(source)
             region = settings["region"].get(language) or settings["region"]["bas"]  # our BASIC is the same kernel
             out.append(Variant(name, language, source, region, None if language in OURS_BASIC else head.get("known"), head.get("dialect", "qb45").split()[0],
@@ -883,6 +886,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
     parser.add_argument("--opt", nargs="+", default=["O2", "Os"])
+    parser.add_argument("--lang", nargs="+", choices=list(LANGUAGES), help="measure only these languages (a BASIC build failing on the head stops every other language's run)")
     parser.add_argument("--time", action="store_true", help="also the kernel's time in DOSBox from RDTSC, net of start-up; gates the time ratio to each reference")
     parser.add_argument("--references", action="store_true", help="measure Open Watcom and BCC (C) and BC 4.5 (BASIC) again: they must equal the stored ones, or --bless records them")
     parser.add_argument("--bless", action="store_true", help="record the references' counts (with --references): the compiler's own are judged against the base, never recorded")
@@ -894,6 +898,8 @@ def main() -> int:
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
     args = parser.parse_args()
+    global ONLY
+    ONLY = args.lang
     if args.merge:
         return merge(Path(args.merge[0]), int(args.merge[1]), args.opt, args.record)
     if args.shard:
