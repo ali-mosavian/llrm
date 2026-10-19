@@ -394,10 +394,6 @@ pub struct Frequencies {
     taken: std::collections::BTreeMap<(i64, i64), f64>,
     /// The blocks and their edges these were worked out on.
     edges: Vec<(BlockId, Vec<BlockId>)>,
-    /// The cold blocks of the function: a function of its edges and calls,
-    /// which `update` leaves as they were, so not found again for each loop
-    /// lsr changes (a nest of N loops scanned the function N times).
-    cold: std::collections::BTreeSet<i64>,
 }
 
 thread_local! {
@@ -436,8 +432,7 @@ impl Analysis for Products {
         let (by_block, taken) =
             profit::_products_with_odds_in(view.context, view.metadata, &outer.globals, function, &shape, Some(&trips))
                 .map_or((None, Default::default()), |(by_block, taken)| (Some(by_block), taken));
-        let cold = llrm_analysis::branchprob::cold_blocks(context, &outer.globals, function);
-        Frequencies { by_block, trips, taken, edges: _graph(function), cold }
+        Frequencies { by_block, trips, taken, edges: _graph(function) }
     }
 
     /// They are worked out from the blocks and their edges, the loops, the
@@ -478,24 +473,19 @@ impl Analysis for Products {
         }
         let weighed = reach.conditions.iter().collect::<Vec<_>>();
         let by_header = profit::counted_by_header(&shape, Some(&trips))?;
-        let taken = llrm_analysis::branchprob::taken_cold(
-            view.context,
-            view.metadata,
-            &outer.globals,
-            function,
-            &shape,
-            &by_header,
-            &previous.cold,
-            &weighed,
-        );
+        // The odds as `profit` works them out, compared at the branches the
+        // change reached: the same there, the frequencies stand.
+        let taken = profit::_edge_odds(view.context, view.metadata, &outer.globals, function, &shape, &by_header);
         let wanted = weighed.iter().map(|&at| cfg::id(at)).collect::<BTreeSet<_>>();
-        let same = previous.taken.iter().filter(|((from, _), _)| wanted.contains(from)).eq(taken.iter());
+        let reached = |odds: &BTreeMap<(i64, i64), f64>| -> Vec<((i64, i64), f64)> {
+            odds.iter().filter(|((from, _), _)| wanted.contains(from)).map(|(edge, p)| (*edge, *p)).collect()
+        };
+        let same = reached(&previous.taken) == reached(&taken);
         same.then(|| Frequencies {
             by_block: previous.by_block.clone(),
             trips,
             taken: previous.taken.clone(),
             edges: previous.edges.clone(),
-            cold: previous.cold.clone(),
         })
     }
 }

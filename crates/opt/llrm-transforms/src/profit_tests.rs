@@ -505,3 +505,19 @@ fn a_loop_the_header_leaves_is_weighted_by_its_latch_runs_by_both_engines() {
     }
     assert_eq!(trips(pretested, true).values().copied().collect::<Vec<_>>(), [4]);
 }
+
+/// A block behind `p == null` runs 12 times in 32, the pointer heuristic of
+/// `BranchProbabilityInfo` under `BlockFrequencyInfo`: profit's frequencies
+/// were `branchprob`'s GCC estimates (0.3645 of the entry).
+#[test]
+fn test_profits_frequencies_are_llvms() {
+    let text = "declare void @use(i16)\n\
+        define void @f(ptr %p) {\nb0:\n  %c = icmp eq ptr %p, null\n  br i1 %c, label %yes, label %no\n\
+        yes:\n  call void @use(i16 1)\n  br label %no\n\
+        no:\n  ret void\n}\n";
+    let module = module(text);
+    let function = function(&module);
+    let frequencies = _frequencies(&module.context, &module.metadata, &module.globals, function, None).unwrap();
+    let yes = function.layout()[1];
+    assert_eq!(frequencies[&llrm_analysis::cfg::id(yes)], (super::UNIT as f64 * 12.0 / 32.0).round() as i64);
+}
