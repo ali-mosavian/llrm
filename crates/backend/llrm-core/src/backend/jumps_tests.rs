@@ -1490,21 +1490,6 @@ fn test_threading_a_chain_of_removable_jumps_visits_blocks_a_few_times_not_n_tim
     assert!(visits <= 3 * (count as usize + 1), "{visits} block visits for {count} removable jumps");
 }
 
-/// The ends of a block's real instructions, by name.
-fn named(block: &LirBlock) -> Vec<String> {
-    block.insns.iter().filter_map(|one| one.what.as_ref()).map(|what| what.name.clone().unwrap_or_default()).collect()
-}
-
-fn with_odds(
-    mut made: LirBody,
-    edges: &[(i64, i64, f64)],
-) -> LirBody {
-    for &(from, to, chance) in edges {
-        made.odds.taken.insert((from, to), (chance * crate::model::lir::BlockOdds::CERTAIN) as u32);
-    }
-    made
-}
-
 /// x_adler's loop: the latch `jne top; jmp exit` with a short return as the
 /// exit. The copy of the return in the jump's place left the loop's back
 /// branch taken over the copy on every trip (9 clocks a trip, not 7): the

@@ -710,3 +710,48 @@ b0:
     let loads: Vec<_> = unit.function.walk().filter_map(|(_, inst)| aa.location_of(inst)).collect();
     assert_eq!(aa.alias(&loads[0], &loads[1]), AliasResult::No);
 }
+
+/// A call that names no location may touch any alloca whose address is
+/// captured, and none whose address is only compared: the stand-in read the
+/// `icmp` as exposing it, so the call kept a load of the local live (MayModRef,
+/// where CaptureTracking says NoModRef).
+#[test]
+fn test_a_call_does_not_reach_a_local_whose_address_is_only_compared() {
+    use super::alias::AliasQuery;
+    let parsed = Parsed::new(
+        "define i16 @f(ptr %p) {
+b0:
+  %a = alloca i16
+  store i16 1, ptr %a
+  %same = icmp eq ptr %a, %p
+  call void @anything()
+  %x = load i16, ptr %a
+  ret i16 %x
+}
+",
+    );
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let call = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Call(_)
+        ))
+        .expect("the call");
+    let load = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
+        .expect("the load");
+    let loc = aa.location_of(load).expect("a location");
+    let touched = aa.get_mod_ref_info(call, &loc);
+    assert!(!touched.is_mod_or_ref(), "{touched:?}");
+}

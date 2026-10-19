@@ -5456,7 +5456,7 @@ mod tests {
 
     use super::*;
     use crate::analysis::intervals::Segment;
-    use crate::backend::regalloc_input::{before_regalloc, through};
+    use crate::backend::regalloc_input::through;
     use crate::backend::{parcopy, select, verify};
     use crate::model::ir::Imm;
     use crate::support::hash::IndexMap;

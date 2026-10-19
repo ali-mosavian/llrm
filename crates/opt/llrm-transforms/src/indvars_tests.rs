@@ -461,6 +461,41 @@ end:
     );
 }
 
+/// indvars at its defaults asked the old ranges engine for every function with
+/// a `sext` (54.8 M instructions, `ranges::bounded_solved`);
+/// `simplifyAndExtend` reads ScalarEvolution's ranges, so nothing asks.
+#[test]
+fn test_indvars_with_scev_widening_does_not_solve_the_old_bounds() {
+    let mut module = parsed(
+        "define i32 @f(i32 %n) {
+b0:
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %b0 ], [ %in, %l ]
+  %s = phi i32 [ 0, %b0 ], [ %sn, %l ]
+  %c = icmp slt i16 %i, 10
+  br i1 %c, label %l, label %end
+
+l:
+  %w = sext i16 %i to i32
+  %sn = add i32 %s, %w
+  %in = add nsw i16 %i, 1
+  br label %h
+
+end:
+  ret i32 %s
+}
+",
+    );
+    crate::simplifyindvar::tests_forced(true);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::IndVars { exit_values: false, unrolls: None, lftr: true });
+    let before = llrm_analysis::ranges::loops_solved();
+    manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
+    assert_eq!(llrm_analysis::ranges::loops_solved() - before, 0, "indvars solved the old bounds");
+}
+
 /// Each loop indvars widened made it derive what is known of the body again,
 /// from nothing, to look at the next: 13 times at d_faces -O2,
 /// 25 M. The manager brings what it holds up to date from the changes logged:
