@@ -108,7 +108,7 @@ impl Combiner<'_> {
             env.layout,
             Some(&env.analyses),
             self.function,
-            terminator,
+            Some(terminator),
             inst,
             &operands,
         );

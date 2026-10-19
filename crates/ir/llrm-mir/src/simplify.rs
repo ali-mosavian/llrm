@@ -4205,18 +4205,19 @@ pub fn simplify_binop_at(
 }
 
 /// `simplifyInstructionWithOperands(&I, Ops, SQ.getWithInstruction(&cxt))`:
-/// what `inst` equals with `operands` in place of its own, asked at `cxt`.
+/// what `inst` equals with `operands` in place of its own, asked at `cxt` (none:
+/// `SQ` of the data layout alone).
 pub fn simplify_instruction_operands_at(
     context: &mut Context,
     globals: &[GlobalValue],
     layout: &DataLayout,
     analyses: Option<&FunctionAnalyses>,
     function: &Function,
-    cxt: InstId,
+    cxt: Option<InstId>,
     inst: InstId,
     operands: &[Operand],
 ) -> Option<Operand> {
-    let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: true };
+    let mut q = Query { context, function, layout, globals, analyses, cxt, can_use_undef: true };
     simplify_instruction_with_operands(&mut q, inst, operands, RECURSION_LIMIT)
 }
 
