@@ -17,9 +17,6 @@
 //!   L3451-L3637, `rewriteTreeStructuredMerge` L3002,
 //!   `tryCanonicalizeStructToVector` L5460): the targets have no vector
 //!   registers, and `AggregateToVector` is off at -O2.
-//! - `propagateStoredValuesToLoads` (L6200), reached when a pointer only
-//!   escapes read-only (it needs `SSAUpdater` and `LoadAndStorePromoter`): such
-//!   an alloca is left as it is.
 //! - Calls and invokes escape a pointer whatever their attributes
 //!   (`visitCallBase` L1402 looks at read-only, nocapture operands).
 //! - Address-space casts abort; pointers in a space that is a selector and an
@@ -1135,6 +1132,33 @@ fn is_integer_widening_viable(
     whole_alloca_op
 }
 
+/// `BasicLoadAndStorePromoter`
+/// ([L6189](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SROA.cpp#L6189)):
+/// a promotion that keeps the stores and the alloca, and reads an undefined
+/// value where the alloca stands for a store.
+struct BasicPromotion {
+    undef: Operand,
+    alloca: InstId,
+}
+
+impl llrm_analysis::loadstorepromoter::Promotion for BasicPromotion {
+    fn should_delete(
+        &self,
+        function: &Function,
+        inst: InstId,
+    ) -> bool {
+        inst != self.alloca && !matches!(function.instruction(inst).opcode, Opcode::Store { .. })
+    }
+
+    fn value_for_alloca(
+        &self,
+        _context: &Context,
+        _alloca: InstId,
+    ) -> Operand {
+        self.undef
+    }
+}
+
 /// The state of a run: `SROA` (L174).
 struct State<'a, 'b, 'c> {
     unit: &'a mut passes::Unit<'b>,
@@ -1399,6 +1423,106 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         changed
     }
 
+    /// `propagateStoredValuesToLoads`
+    /// ([L6200](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SROA.cpp#L6200)):
+    /// where a pointer into the alloca only escapes read-only (a load at an
+    /// unknown offset), each run of slices with one range and one type of
+    /// plain loads and stores has its loads read the stored values, the
+    /// stores staying. DEVIATE: the pin reports a change whether or not a run
+    /// was promoted; this reports the runs promoted.
+    fn propagate_stored_values_to_loads(
+        &mut self,
+        alloca: InstId,
+        slices: &AllocaSlices,
+    ) -> bool {
+        let mut changed = false;
+        let mut all_same_and_valid = true;
+        let mut partition_ty: Option<TypeId> = None;
+        let mut insts: Vec<InstId> = Vec::new();
+        let (mut begin, mut end) = (0u64, 0u64);
+        for slice in &slices.slices {
+            let Some(used) = slice.used else { continue };
+            let user = used.user;
+            // `isAssumeLikeIntrinsic`: a lifetime marker.
+            if slice.kind == Kind::Lifetime {
+                continue;
+            }
+            if slice.begin >= end {
+                changed |= self.flush_stored_values(alloca, all_same_and_valid, partition_ty, &mut insts);
+                all_same_and_valid = true;
+                partition_ty = None;
+                begin = slice.begin;
+                end = slice.end;
+            } else if slice.begin != begin || slice.end != end {
+                all_same_and_valid = false;
+                end = end.max(slice.end);
+                continue;
+            }
+            let instruction = self.function().instruction(user);
+            let access_ty = match instruction.opcode {
+                Opcode::Load { volatile, .. } => Some((instruction.ty, !volatile)),
+                Opcode::Store { volatile, .. } => {
+                    let ty = self.function().operand_type(self.context(), instruction.operands[0]);
+                    ty.map(|ty| (ty, !volatile))
+                }
+                _ => None,
+            };
+            match access_ty {
+                Some((ty, simple)) => {
+                    // `LoadAndStorePromoter` requires all the types to be the
+                    // same.
+                    if !simple || partition_ty.is_some_and(|seen| seen != ty) {
+                        all_same_and_valid = false;
+                    }
+                    partition_ty = Some(ty);
+                    insts.push(user);
+                }
+                None => all_same_and_valid = false,
+            }
+        }
+        changed | self.flush_stored_values(alloca, all_same_and_valid, partition_ty, &mut insts)
+    }
+
+    /// The `Flush` of `propagateStoredValuesToLoads`: the run of accesses
+    /// `insts`, if all alike, with the alloca as an undefined store, through a
+    /// [`BasicPromotion`].
+    fn flush_stored_values(
+        &mut self,
+        alloca: InstId,
+        all_same_and_valid: bool,
+        partition_ty: Option<TypeId>,
+        insts: &mut Vec<InstId>,
+    ) -> bool {
+        let run = std::mem::take(insts);
+        let (true, Some(ty), Some(&first)) = (all_same_and_valid, partition_ty, run.first()) else { return false };
+        // `SSAUpdater::Initialize` names its phis after the first access's
+        // value.
+        let first_value = match self.function().instruction(first).result {
+            Some(result) => Some(Operand::Value(result)),
+            None => Some(self.function().instruction(first).operands[0]),
+        };
+        let name = match first_value {
+            Some(Operand::Value(value)) => self.function().value(value).name.clone(),
+            _ => None,
+        };
+        let promotion = BasicPromotion {
+            undef: Operand::Constant(self.unit.context.constant(Constant { ty, kind: ConstantKind::Undef })),
+            alloca,
+        };
+        let mut accesses = run;
+        accesses.push(alloca);
+        let mut ssa = llrm_analysis::ssaupdater::SsaUpdater::new(ty, name.as_deref());
+        llrm_analysis::loadstorepromoter::run(
+            self.unit.context,
+            self.unit.layout,
+            self.unit.function,
+            &mut ssa,
+            &accesses,
+            &promotion,
+        );
+        true
+    }
+
     /// `SROA::runOnAlloca`. SROA.cpp#L6281
     fn run_on_alloca(
         &mut self,
@@ -1418,8 +1542,13 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         // First, split any aggregate loads and stores touching this alloca.
         changed |= self.agg_rewrite(alloca);
         let mut slices = build_slices(self.context(), self.unit.layout, &self.globals, self.function(), alloca);
-        if slices.escaped || slices.escaped_read_only {
+        if slices.escaped {
             return changed;
+        }
+        // A pointer that only escapes read-only: the stored values still reach
+        // the loads at known offsets.
+        if slices.escaped_read_only {
+            return changed | self.propagate_stored_values_to_loads(alloca, &slices);
         }
         // Delete all the dead users of this alloca before splitting it.
         for dead in std::mem::take(&mut slices.dead_users) {
