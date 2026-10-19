@@ -1,5 +1,5 @@
 //! `SCEVExpander`'s surface, as signatures (S6 translates the bodies): what
-//! LoopIdiom and LSR call. Every body is `todo!()`.
+//! LoopIdiom and LSR call.
 //!
 //! The expander edits the function and interns constants while it reads SCEVs,
 //! and a [`Cx`] borrows both. So the expander takes `&mut Context` and

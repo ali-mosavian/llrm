@@ -464,9 +464,8 @@ impl Run<'_> {
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L2468
-    /// `fixupLCSSAFormFor`: `v` read at the insert point. MIR code is not
-    /// generally in LCSSA form; a use outside the defining loop needs the
-    /// phis `formLCSSAForInstructions` makes (`llrm-transforms`' `lcssa`).
+    /// `fixupLCSSAFormFor`: `v` read at the insert point, through the LCSSA
+    /// phis `formLCSSAForInstructions` makes where it is read outside its loop.
     pub(super) fn fixup_lcssa_form_for(
         &mut self,
         v: Operand,
@@ -476,13 +475,39 @@ impl Run<'_> {
         let def_loop = self.function.parent(def).and_then(|b| self.env.loops.get_loop_for(b));
         let use_loop = self.function.parent(here).and_then(|b| self.env.loops.get_loop_for(b));
         let Some(def_loop) = def_loop else { return v };
-        if use_loop
-            .as_ref()
-            .is_some_and(|u| u.get_header() == def_loop.get_header() || def_loop.contains(u.get_header()))
-        {
+        if use_loop.is_some_and(|u| u == def_loop) || def_loop.contains_loop(use_loop) {
             return v;
         }
-        todo!("S6: formLCSSAForInstructions for a use outside the defining loop")
+        // A temporary use at the insert point, for the helper to rewrite.
+        let (opcode, to) = if !self.is_pointer(v) {
+            (CastOp::IntToPtr, self.context.types.ptr(0))
+        } else {
+            (CastOp::PtrToInt, self.context.types.int(32))
+        };
+        let user = self.function.create_instruction(Opcode::Cast(opcode), to, vec![v], IrFlags::default(), None);
+        self.function.insert(user, Position::Before(here)).expect("a placed position");
+        let formed = crate::scev::lcssa_form::form_lcssa_for_instructions(
+            self.context,
+            self.env.layout,
+            self.function,
+            self.env.loops,
+            self.env.tree,
+            vec![def],
+        );
+        for &phi in &formed.inserted {
+            self.x.remember(phi);
+        }
+        for &phi in &formed.to_remove {
+            let result = self.function.instruction(phi).result.expect("a phi value");
+            if self.function.users(result).is_empty() {
+                self.function.set_operands(phi, Vec::new());
+                self.function.erase(phi).expect("an unused phi");
+            }
+        }
+        let read = self.function.instruction(user).operands[0];
+        self.function.set_operands(user, Vec::new());
+        self.function.erase(user).expect("the temporary user");
+        read
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L929
