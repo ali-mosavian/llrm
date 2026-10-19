@@ -241,6 +241,10 @@ pub struct Options {
     /// [`crate::sroa`], with [`crate::mem2reg`]); on by default,
     /// `LLRM_NO_SROA` turns it off.
     pub sroa: bool,
+    /// The InstCombine slots (`combine@N`) run the translated families
+    /// ([`crate::combine_pass`]); on by default, `LLRM_NO_COMBINE` turns it
+    /// off.
+    pub combine: bool,
     /// The loop-invariant passes are the translated LICM ([`crate::licm`]):
     /// `licm` in the LICM slots and where `hoist` ran; on by default,
     /// `LLRM_NO_LICM` turns it off.
@@ -313,6 +317,7 @@ impl Default for Options {
             interchange: false,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
+            combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
             licm: !llrm_support::env_flag!("LLRM_NO_LICM"),
             copy_headers: true,
             for_size: false,
@@ -709,7 +714,7 @@ pub(crate) fn llvm_order(
     let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg));
     let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
     let fold = |name| slot(name, Box::new(fold::Fold));
-    let combine = |name| slot(name, Box::new(crate::combine_pass::Combine::from_env()));
+    let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
