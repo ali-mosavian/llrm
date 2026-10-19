@@ -47,6 +47,9 @@
 //!   scopes to clone (`cloneNoAliasScopes`), no source atoms.
 //! - J9. LVI is the pass's own `LazyValueInfo` (as `Cvp`'s), not the one
 //!   function analysis the manager would share between the passes.
+//! - J10. A block that starts with a `landingpad` is not threaded: the copy
+//!   would be a second pad, and the one module handler (`ehprepare`) cannot
+//!   choose between two.
 //! - Not yet ported (later stages): `tryToUnfoldSelect*`, `processBranchOnPHI`,
 //!   `processBranchOnXOR`, `maybethreadThroughTwoBasicBlocks`,
 //!   `duplicateCondBranchOnPHIIntoPred`, `processImpliedCondition`,
@@ -1525,6 +1528,9 @@ impl State<'_, '_> {
         if succ_bb == bb {
             return false;
         }
+        if self.starts_with_landing_pad(bb) {
+            return false;
+        }
         // If threading this would thread across a loop header, don't thread
         // the edge. See the comments above findLoopHeaders for justifications
         // and caveats.
@@ -1538,6 +1544,17 @@ impl State<'_, '_> {
         }
         self.thread_edge(bb, pred_bbs, succ_bb);
         true
+    }
+
+    fn starts_with_landing_pad(
+        &self,
+        bb: BlockId,
+    ) -> bool {
+        let function = self.function();
+        function
+            .iter_block(bb)
+            .find(|&one| function.instruction(one).opcode != Opcode::Phi)
+            .is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
     }
 
     /// `threadEdge`
