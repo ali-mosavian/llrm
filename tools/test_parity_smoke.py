@@ -281,3 +281,11 @@ def test_the_budget_is_instructions_so_a_loaded_host_passes_and_a_doubled_step_f
     fallback = iter([0.0, 0.0, 0.0, 20.0])  # no perf: the CPU seconds decide, as before
     ok, line = ps.run_steps(steps, Path("."), clock=lambda: next(fallback), meter=counted(None), limit=12_000_000_000)
     assert not ok and "perf unavailable" in line
+
+
+def test_each_smoke_step_prints_its_stage_line_before_it_runs(capsys):
+    """The smoke's stage times were only in the final line: a step announces itself, flushed, when it starts."""
+    order = []
+    step = lambda bins: (order.append(capsys.readouterr().out.strip().splitlines()[-1]), ("ok", ""))[1]
+    ps.run_steps([("sc", step, 1.0)], Path("."), clock=lambda: 0.0)
+    assert order and order[0].endswith(" STAGE step sc")

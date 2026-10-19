@@ -33,6 +33,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
+from stages import stage  # noqa: E402
 
 sys.path.insert(0, str(HERE / "dosbatch"))
 import cpulimit  # noqa: E402
@@ -397,6 +398,7 @@ def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET, known_red: f
     with (meter or Meter)() as counted:
         for name, step, _ in steps:
             began = clock()
+            stage(f"step {name}")
             verdict, detail, *tests = ("skipped", "known red, not run") if name in known_red else step(bins)
             parts.append(f"{name} {verdict} {clock() - began:.1f} s")
             if verdict == "fail":

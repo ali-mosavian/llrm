@@ -37,6 +37,10 @@ TEST_RUST = re.compile(r"^-\s*#\[test\]")
 TEST_PY = re.compile(r"^-\s*def (test_\w+)")
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from stages import PREFIX, stage  # noqa: E402
+
+
 def git(*args: str, cwd: Path = ROOT) -> str:
     done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
     if done.returncode:
@@ -159,6 +163,7 @@ def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
     import llrmbin  # noqa: PLC0415
     from buildslot import slotted  # noqa: PLC0415
 
+    stage("build")
     directory = Path(smoke_bins(env))
     if not llrmbin.stale_binaries(directory, cwd):
         return ""
@@ -245,6 +250,7 @@ def merged_result(head: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str | 
     contains `base` the result is `head` itself. The squash lands on whatever feat/parity is at the call: the tests must run on this result, not on a head that
     compiled beside a base that has since moved (#2544 and #2564 each compiled; together the head did not build for three hours). A conflict only in generated
     files is resolved by regenerating them (`regenerate`)."""
+    stage("merge")
     git("checkout", "-q", "--detach", head, cwd=cwd)
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
         merged = subprocess.run(["git", "merge", "--no-edit", "-q", base], cwd=cwd, capture_output=True, text=True)
@@ -350,6 +356,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         return not why
 
     def land(number: str) -> None:
+        stage(f"squash #{number}")
         done = subprocess.run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", infos[number]["headRefOid"], "--subject", infos[number]["title"], "--body", known_red_line(known)])
         (landed if done.returncode == 0 else refused).append(number)
         if done.returncode == 0:
@@ -409,13 +416,29 @@ def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT) -> set[st
     return {name for name in tests if name in set(parity_smoke.failed_tests(done.stdout + done.stderr))}
 
 
+def run_streaming(command: list[str], cwd: Path):
+    """The finished process (.returncode, .stdout, .stderr) with the stage lines of its stdout echoed as they arrive, so the squash's log has the smoke's step times."""
+    import tempfile
+    import types
+
+    with tempfile.TemporaryFile("w+") as err:
+        process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=err, text=True)
+        out = []
+        for line in process.stdout:
+            out.append(line)
+            if f" {PREFIX} " in line:
+                print(line.rstrip(), flush=True)
+        process.wait()
+        err.seek(0)
+        return types.SimpleNamespace(returncode=process.returncode, stdout="".join(out), stderr=err.read())
+
+
 def smoke_failures(known: dict[str, str] | None = None) -> tuple[set[str], str]:
     """(the failing checks, the smoke's last line) of parity_smoke on this checkout: its `FAILING:` line."""
-    smoke = subprocess.run(
+    stage("smoke")
+    smoke = run_streaming(
         ["uv", "run", "-q", "--project", "tools", "python", "tools/parity_smoke.py", "--bin", smoke_bins(), "--base", BASE, *[a for step in (known or {}) for a in ("--skip", step)]],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
+        ROOT,
     )
     lines = smoke.stdout.strip().splitlines()
     if smoke.returncode and not any(line.startswith("FAILING:") for line in lines):
@@ -442,6 +465,7 @@ def head_failures(sha: str, compute=None, cache: Path = HEAD_FAILURES) -> set[st
 
 def log_landed(sha: str, number: str, result: str, path: Path | None = None) -> None:
     """One line per landed squash for the coordinator's log: `<sha> <PR> <gate result> <date>`."""
+    stage(f"log #{number}")
     path = path or LANDED_LOG
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as log:
@@ -459,6 +483,7 @@ def unlogged(log: Path, commits: list[str]) -> list[str]:
 
 def compute_head_failures(known: dict[str, str] | None = None) -> set[str]:
     """The failing checks on the head itself: check origin/feat/parity out, build its binaries when stale, run the smoke. Slow (a build), once per head sha."""
+    stage("head-failures")
     git("checkout", "-q", "--detach", BASE)
     if stale := ensure_bins():
         raise SystemExit(f"the head's own binaries: {stale}")
