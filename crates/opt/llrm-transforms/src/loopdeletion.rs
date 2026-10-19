@@ -918,6 +918,10 @@ impl FunctionPass for LoopDeletion {
         "loopdeletion"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("loop-deletion")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,
