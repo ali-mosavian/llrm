@@ -89,6 +89,71 @@ impl std::fmt::Display for At<'_> {
     }
 }
 
+/// Each phi of `block` has one input per edge into it, and inputs from one
+/// block agree, as LLVM requires. The findings are pushed on `out`, bare (the
+/// verifier prefixes the function). `crate::passes::run_checked` asks it of
+/// every body a pass leaves, so a pass that makes a phi short fails at once
+/// and not as a consumer's runaway allocation (#3016).
+pub fn phi_arity_of(
+    function: &Function,
+    block: BlockId,
+    out: &mut Vec<String>,
+) {
+    let mut edges: HashMap<BlockId, usize> = HashMap::default();
+    for one in function.block_users(block) {
+        let user = function.instruction(one.user);
+        if user.opcode.is_terminator()
+            && let Some(parent) = function.parent(one.user)
+        {
+            *edges.entry(parent).or_default() += 1;
+        }
+    }
+    for inst in function.iter_block(block) {
+        let instruction = function.instruction(inst);
+        if instruction.opcode != Opcode::Phi {
+            continue;
+        }
+        let mut inputs: HashMap<BlockId, Vec<Operand>> = HashMap::default();
+        for pair in instruction.operands.chunks(2) {
+            if let [value, Operand::Block(from)] = pair {
+                inputs.entry(*from).or_default().push(*value);
+            }
+        }
+        let name = BlockName(function, block);
+        for (from, values) in &inputs {
+            if !edges.contains_key(from) {
+                out.push(format!(
+                    "a phi in {name} has an input from {}, which does not branch there",
+                    BlockName(function, *from)
+                ));
+            } else if values.len() != edges[from] {
+                out.push(format!(
+                    "a phi in {name} has {} inputs from {} for {} edges",
+                    values.len(),
+                    BlockName(function, *from),
+                    edges[from]
+                ));
+            } else if values.iter().any(|one| *one != values[0]) {
+                out.push(format!("a phi in {name} has different inputs from {}", BlockName(function, *from)));
+            }
+        }
+        for from in edges.keys() {
+            if !inputs.contains_key(from) {
+                out.push(format!("a phi in {name} has no input from {}", BlockName(function, *from)));
+            }
+        }
+    }
+}
+
+/// [`phi_arity_of`] over every block of `function`.
+pub fn phi_arity(function: &Function) -> Vec<String> {
+    let mut out = Vec::new();
+    for block in function.layout().iter().copied() {
+        phi_arity_of(function, block, &mut out);
+    }
+    out
+}
+
 struct Checker<'a> {
     module: &'a Module,
     context: &'a Context,
@@ -262,50 +327,7 @@ impl Checker<'_> {
         &mut self,
         block: BlockId,
     ) {
-        let mut edges: HashMap<BlockId, usize> = HashMap::default();
-        for one in self.function.block_users(block) {
-            let user = self.function.instruction(one.user);
-            if user.opcode.is_terminator()
-                && let Some(parent) = self.function.parent(one.user)
-            {
-                *edges.entry(parent).or_default() += 1;
-            }
-        }
-        for inst in self.function.iter_block(block) {
-            let instruction = self.function.instruction(inst);
-            if instruction.opcode != Opcode::Phi {
-                continue;
-            }
-            let mut inputs: HashMap<BlockId, Vec<Operand>> = HashMap::default();
-            for pair in instruction.operands.chunks(2) {
-                if let [value, Operand::Block(from)] = pair {
-                    inputs.entry(*from).or_default().push(*value);
-                }
-            }
-            let name = self.block_name(block);
-            for (from, values) in &inputs {
-                if !edges.contains_key(from) {
-                    self.fail(format!(
-                        "a phi in {name} has an input from {}, which does not branch there",
-                        self.block_name(*from)
-                    ));
-                } else if values.len() != edges[from] {
-                    self.fail(format!(
-                        "a phi in {name} has {} inputs from {} for {} edges",
-                        values.len(),
-                        self.block_name(*from),
-                        edges[from]
-                    ));
-                } else if values.iter().any(|one| *one != values[0]) {
-                    self.fail(format!("a phi in {name} has different inputs from {}", self.block_name(*from)));
-                }
-            }
-            for from in edges.keys() {
-                if !inputs.contains_key(from) {
-                    self.fail(format!("a phi in {name} has no input from {}", self.block_name(*from)));
-                }
-            }
-        }
+        phi_arity_of(self.function, block, &mut self.errors);
     }
 
     fn dominance(

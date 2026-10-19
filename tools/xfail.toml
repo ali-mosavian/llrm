@@ -161,3 +161,8 @@ id = "unit llrm-qb::test_hir_part3::test_nested_integer_division_keeps_each_divi
 issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-transforms::jumpthread::tests::test_a_way_in_found_twice_is_copied_once"
+issue = 3018
+owner = "parity-pipeline"
+date = "2026-10-19"
