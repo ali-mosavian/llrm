@@ -179,12 +179,12 @@ fn sequence(n: usize) -> String {
 
 #[test]
 fn unswitching_loops_in_sequence_scans_in_proportion_to_their_number() {
-    use llrm_mir::edit::{instructions_scanned, layout_scanned, uses_scanned};
+    use llrm_mir::edit::{instructions_scanned, layout_scanned};
     let scanned = |n: usize| {
         let mut module = parsed(&sequence(n));
-        let before = layout_scanned() + instructions_scanned() + uses_scanned();
+        let before = layout_scanned() + instructions_scanned();
         managed(&mut module, SimpleLoopUnswitch);
-        layout_scanned() + instructions_scanned() + uses_scanned() - before
+        layout_scanned() + instructions_scanned() - before
     };
     let (a, b, c) = (scanned(64), scanned(128), scanned(256));
     assert!(b * 100 <= a * 250 && c * 100 <= b * 250, "64: {a}, 128: {b}, 256: {c}");

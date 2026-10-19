@@ -616,4 +616,42 @@ exit:
     let mut module = parsed(text);
     let after = crate::testing::managed(&mut module, Licm { apply: true, speculate: false });
     assert!(after.contains("store i16 1, ptr %a"), "the slot's store left the loop: {after}");
+
+/// A promoted store with no load before the loop takes `UndefValue` on the
+/// preheader edge, as LLVM's `SSA.AddAvailableValue(Preheader, UndefValue)`;
+/// with poison a later fold was free to pick the arm (loopidioms'
+/// `phi_slot_unknown_arm` printed 2158 where 5736113 was wanted).
+#[test]
+fn test_a_promoted_store_without_a_load_starts_from_undef_not_poison() {
+    let text = "define void @fill(ptr %p) {
+b1:
+  br label %b2
+
+b2:
+  %0 = phi i16 [ 0, %b1 ], [ %3, %b3 ]
+  %1 = icmp slt i16 %0, 8
+  br i1 %1, label %b4, label %b5
+
+b4:
+  %2 = icmp ult i16 %0, 8
+  br i1 %2, label %b3, label %b6
+
+b3:
+  store i16 %0, ptr %p
+  %3 = add i16 %0, 1
+  br label %b2
+
+b5:
+  ret void
+
+b6:
+  unreachable
+}
+";
+    let mut after = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let after = crate::testing::printed(&after);
+    assert!(after.contains("[ undef, %b1 ]") && !after.contains("poison"), "{after}");
 }

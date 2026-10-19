@@ -10,12 +10,11 @@ thread_local! {
     pub static FORCED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-/// `simplifyAndExtend` is opt-in (`LLRM_SCEV_WIDEN`) until #2531 is fixed: a
-/// run without the variable takes the old path. Its panic at `widen.rs:142`
-/// (a user with no value) stopped every smoke program at -O2 -m32.
+/// `simplifyAndExtend` is on again (#2531, a user with no value, is fixed):
+/// a run without `LLRM_NO_SCEV_WIDEN` takes it.
 #[test]
-fn test_widening_by_scalar_evolution_is_off_unless_asked_for() {
-    assert!(!super::widening_enabled());
+fn test_widening_by_scalar_evolution_is_on_unless_turned_off() {
+    assert!(super::widening_enabled());
 }
 
 fn simplified(text: &str) -> (bool, String) {

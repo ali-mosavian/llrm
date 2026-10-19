@@ -154,8 +154,8 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fixednarrow, floatloop, fold,
-    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdeletion,
+    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fixednarrow, floatloop,
+    fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdeletion,
     loopdistribute, loopfuse, loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit,
     loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simpleloopunswitch,
     simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
@@ -230,9 +230,9 @@ pub struct Options {
     /// turns it off.
     pub llvm_order: bool,
     /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
-    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on by
-    /// default, `LLRM_NO_ROTATE` turns it off. Not run where `unroll_jam` is
-    /// (see [`Options::rotating`]).
+    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; off by
+    /// default (it miscompiles, #2585), `LLRM_ROTATE` turns it on. Not run
+    /// where `unroll_jam` is (see [`Options::rotating`]).
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); on by default, `LLRM_NO_MEM2REG` turns it off.
@@ -591,11 +591,20 @@ fn hoisting(applied: &Applied) -> Box<dyn FunctionPass> {
     }
 }
 
+/// Under LLVM's order the translated LICM does the moving of code out of and
+/// into loops, in its three slots: the passes after the fixed point that
+/// stood in for MachineLICM and gcc's `pass_sink_code` (`hoist` again, `sink`
+/// with its register-pressure forecast) have no counterpart there, and run only
+/// under `LLRM_NO_LICM` or without the order.
+pub fn llvm_motion(applied: &Applied) -> bool {
+    applied.options.llvm_order && applied.options.licm
+}
+
 /// Translations that have not joined the pipeline yet: `llrm-pass` and
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
 fn translated() -> Vec<Box<dyn FunctionPass>> {
-    vec![Box::new(bdce::Bdce), Box::new(crate::cvp::Cvp)]
+    vec![Box::new(crate::cvp::Cvp)]
 }
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`).
@@ -674,10 +683,9 @@ impl FunctionPass for Together {
     }
 }
 
-/// `LLRM_NO_ROTATE`, read once: set, the rotate slot of [`llvm_order`] does
-/// not run.
+/// `LLRM_ROTATE`, read once: set, the rotate slot of [`llvm_order`] runs.
 fn rotate_default() -> bool {
-    !llrm_support::env_flag!("LLRM_NO_ROTATE")
+    llrm_support::env_flag!("LLRM_ROTATE")
 }
 
 /// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by
@@ -832,10 +840,12 @@ pub(crate) fn llvm_order(
                 // -O1 and -Og); rows against clang's -O1 are pending, a loss
                 // there becomes a numbered DEVIATE.
                 slot("gvn@787", Box::new(gvn::Gvn { pre: applied.options.pre })),
+                slot("bdce@797", Box::new(bdce::Bdce)),
                 fold("fold@801"),
                 dead("dead@801"),
                 decide("decide@809"),
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
+                slot("adce@815", Box::new(adce::Adce)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
                 slot("merge@818", Box::new(loopidioms::Merge { size })),
                 slot("dse@820", Box::new(dse::Dse)),
@@ -1074,7 +1084,7 @@ pub fn recorded(
     }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
-    if !guarded && applied.options.wanted("hoist") {
+    if !guarded && applied.options.wanted("hoist") && !llvm_motion(applied) {
         manager.add_boxed(hoisting(applied));
     }
     // After hoist, which would move a constant `gep` out of its loop.
@@ -1089,7 +1099,7 @@ pub fn recorded(
     // After the passes that move work up and out: what is left below a branch
     // that a path skips is moved to where it is needed (gcc's
     // `pass_sink_code`).
-    if applied.options.wanted("sink") {
+    if applied.options.wanted("sink") && !llvm_motion(applied) {
         manager.add(sink::Sink { size: applied.options.prefers_size() });
     }
     // Last of the passes that reshape the body, as gcc's `pass_lower_switch`

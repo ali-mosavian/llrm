@@ -1615,7 +1615,7 @@ pub fn can_convert_to_min_or_max_intrinsic(
                         |(_, select)| select.opcode == Opcode::Select
                             && matches!(
                                 select.operands[0],
-                                Operand::Value(cond) if q.function.users(cond).len() == 1
+                                Operand::Value(cond) if q.function.users(cond).only().is_some()
                             ),
                     );
                 all_cmp_single_use &= one_use;

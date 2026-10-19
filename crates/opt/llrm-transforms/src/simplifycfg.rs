@@ -407,9 +407,7 @@ fn jump_simplified(
     else {
         return false;
     };
-    if function.entry() == Some(block)
-        || function.block(block).len() != edges::phis(function, block).len() + 1
-    {
+    if function.entry() == Some(block) || function.block(block).len() != edges::phis(function, block).len() + 1 {
         return false;
     }
     let canonical = edge_sources(function, block).len() >= 2
@@ -516,10 +514,7 @@ fn empty_block_removed(
 
     if alone {
         function.erase(last).expect("a jump defines nothing");
-        let anchor = function
-            .block(successor)
-            .iter()
-            .find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        let anchor = function.block(successor).iter().find(|&one| function.instruction(one).opcode != Opcode::Phi);
         for inst in function.block(block).instructions().to_vec() {
             function.move_to(inst, anchor.map_or(Position::End(successor), Position::Before)).expect("a placed phi");
         }
@@ -703,10 +698,16 @@ fn values_redirected(
             }
         }
     }
-    // Both undef and poison incoming for one block is invalid: all become undef.
+    // Both undef and poison incoming for one block is invalid: all become
+    // undef.
     let poisons = true_undef
         .iter()
-        .filter(|&&at| matches!(operands[2 * at], Operand::Constant(id) if context.get(id).kind == ConstantKind::Poison))
+        .filter(|&&at| {
+            matches!(
+                operands[2 * at],
+                Operand::Constant(id) if context.get(id).kind == ConstantKind::Poison
+            )
+        })
         .count();
     if poisons != 0 && poisons != true_undef.len() {
         let ty = function.instruction(phi).ty;
