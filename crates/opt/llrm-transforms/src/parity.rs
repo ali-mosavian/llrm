@@ -101,7 +101,12 @@ use SlotKind::{Missing, Old, Partial, Translated};
 /// Every slot of the -O2 function pipeline in `llvm_order` (-O1 builds a
 /// subset), then the slots LLVM has that llrm does not.
 pub(crate) const REGISTRY: &[Entry] = &[
-    entry("decide@1178", Early, "simplifycfg", Old, "simplifycfg-port"),
+    partial(
+        "decide@1178",
+        Early,
+        "simplifycfg",
+        "translated SimplifyCfg at the pin's default options runs here and Decide does not (#2907); untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@1178) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     entry("phiopt@1178", Early, "simplifycfg", Old, "simplifycfg-port"),
     entry("sroa@1179", Early, "sroa<modify-cfg>", Translated, "sroa.rs"),
     entry("earlycse@1180", Early, "early-cse", Translated, ""),
@@ -627,6 +632,32 @@ fn check_without(
     Ok(())
 }
 
+/// A slot the registry calls Old (or Missing) that runs a translated pass
+/// (`FunctionPass::translation`): the row lags the wiring. `held` is each built
+/// slot with the translations it runs.
+pub(crate) fn check_old_slots(
+    registry: &[Entry],
+    held: &[(&str, Vec<&'static str>)],
+) -> Result<(), String> {
+    let lagging: Vec<String> = held
+        .iter()
+        .filter_map(|(slot, translations)| {
+            let row = registry.iter().find(|one| one.slot == *slot)?;
+            let pass = translations.first()?;
+            matches!(row.kind, Old | Missing)
+                .then(|| format!("{slot} ({}) runs the translated {pass}", row.kind.name()))
+        })
+        .collect();
+    if lagging.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "slots the registry calls unfinished run translated passes, mark them Partial or Translated: {}",
+            lagging.join("; ")
+        ))
+    }
+}
+
 /// The Translated slots of `REGISTRY` that `built` runs: a Partial slot is not
 /// one of them, it is never joined.
 pub(crate) fn joined_slots<'a>(
@@ -652,7 +683,7 @@ pub fn check_phase_at(
     built: &[&str],
     level: Level,
 ) -> Result<(), String> {
-    check_phase_with(phase, built, level, true, true, crate::pipeline::Options::default().rotate_slot)
+    check_phase_with(phase, built, level, true, true, crate::pipeline::Options::default().rotate_slot, &[])
 }
 
 /// [`check_phase_at`] with the explicit off switches: the slots whose
@@ -666,6 +697,7 @@ pub(crate) fn check_phase_with(
     sroa: bool,
     mem2reg: bool,
     rotate: bool,
+    held: &[(&str, Vec<&'static str>)],
 ) -> Result<(), String> {
     let absent = if level == Level::O1 { ABSENT_AT_O1 } else { &[] };
     // The translated `loop-rotate` is in the order only with `LLRM_ROTATE`.
@@ -679,6 +711,7 @@ pub(crate) fn check_phase_with(
         })
         .collect();
     check_without(&registry, phase, built, absent)?;
+    check_old_slots(&registry, held)?;
     llrm_mir::counts::joined(joined_slots(&registry, built));
     Ok(())
 }
