@@ -20,8 +20,8 @@
 //! `!dereferenceable` on a load) would not, and answers `false` below. Checked
 //! when this was written, on the passes `llrm_transforms::pipeline` runs:
 //! `hoist`, `loopmotion`, `lsr` (induction steps), `exitsink` (through
-//! `indvars`), `gvn::joined` (insertion on an edge) and `loadjoins` (a load
-//! cloned into predecessors) move or insert an instruction with its flags, and
+//! `indvars`), `gvn::joined` (insertion on an edge) and GVN's load PRE (a load
+//! made in a predecessor) move or insert an instruction with its flags, and
 //! are sound by the argument above; `algebraic` reassociation changes operands
 //! and already clears the flags (`set_flags(.., Flags::default())`). The
 //! optimiser passes `llrm-mir` once had were never run by the compile route

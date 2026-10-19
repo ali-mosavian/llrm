@@ -273,7 +273,7 @@ fn compares_sunk(function: &mut Function) -> bool {
     for (home, compare) in compares {
         let Some(result) = function.instruction(compare).result else { continue };
         let mut made: Vec<(BlockId, Operand)> = Vec::new();
-        for one in function.users(result).to_vec() {
+        for one in function.users(result).snapshot() {
             if function.instruction(one.user).opcode == Opcode::Phi {
                 continue;
             }
@@ -338,14 +338,14 @@ fn masks_sunk(
     for (home, mask) in masks {
         let Some(result) = function.instruction(mask).result else { continue };
         let read_elsewhere = |operand: &Operand| match operand {
-            Operand::Value(value) => function.users(*value).len() > 1,
+            Operand::Value(value) => function.users(*value).has_n_uses_or_more(2),
             _ => true,
         };
         let operands = &function.instruction(mask).operands;
         if !operands.iter().any(|operand| matches!(operand, Operand::Constant(_)) || read_elsewhere(operand)) {
             continue;
         }
-        let users = function.users(result).to_vec();
+        let users = function.users(result).snapshot();
         let against_zero = |user: &llrm_mir::module::Use| {
             let one = function.instruction(user.user);
             matches!(one.opcode, Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne))

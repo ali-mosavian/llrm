@@ -1333,7 +1333,7 @@ impl Function {
                 return Err(format!("block {} still holds instructions", block.0));
             }
             if !self.block_users(block).is_empty() {
-                return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
+                return Err(format!("block {} still has {} users", block.0, self.block_users(block).iter().count()));
             }
         }
         let mut gone = crate::dense::IdSet::<BlockId>::new();

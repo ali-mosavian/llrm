@@ -587,7 +587,7 @@ fn _substituted_exits(
     for (&value, number) in swap {
         let bits = context_bits(context, function.value(value).ty);
         let constant = counting::constant(context, number, bits);
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             let user = function.instruction(one.user);
             let from = if user.opcode == Opcode::Phi {
                 match user.operands[one.index as usize + 1] {

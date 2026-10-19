@@ -444,7 +444,7 @@ fn inferred(
     let values: Vec<ValueId> = narrow.keys().copied().collect();
     for value in values {
         let near_value = narrow[&value];
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             match usage(function, value, one.user, one.index) {
                 Reads::Narrows => {
                     if matches!(

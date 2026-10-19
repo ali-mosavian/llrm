@@ -33,7 +33,7 @@ fn replacing_every_use_lets_the_definition_go() {
     let f = function(&mut module);
     let (x, value) = named(f, "x");
     let (y, _) = named(f, "y");
-    assert_eq!(f.users(value).to_vec(), [Use { user: y, index: 0 }]);
+    assert_eq!(f.users(value).snapshot(), [Use { user: y, index: 0 }]);
     assert_eq!(f.erase(x), Err(format!("instruction {}'s result still has 1 users", x.0)));
     let a = f.parameters()[0];
     f.replace_all_uses_with(value, Operand::Value(a));
@@ -82,7 +82,7 @@ fn a_clone_uses_what_its_original_uses() {
     let (y, _) = named(f, "y");
     let copy = f.clone_instruction(y);
     f.insert(copy, Position::Before(y)).expect("placed");
-    assert_eq!(f.users(value).len(), 2);
+    assert_eq!(f.users(value).iter().count(), 2);
     assert_eq!(f.take_changes()[0], Change::Cloned { from: y, to: copy });
     assert_eq!(f.erase(x), Err(format!("instruction {}'s result still has 2 users", x.0)));
     assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
@@ -561,7 +561,7 @@ fn a_value_replaced_and_a_phi_cleared_leave_the_use_lists_true() {
     let f = function(&mut m);
     let (_, b) = (0, f.parameters()[1]);
     let (_, a) = (0, f.parameters()[0]);
-    assert!(f.users(b).len() > n, "premise: %b is read many times");
+    assert!(f.users(b).has_n_uses_or_more(n + 1), "premise: %b is read many times");
     f.replace_value(b, Operand::Value(a));
     assert!(f.users(b).is_empty());
     assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
@@ -799,4 +799,27 @@ fn a_phi_left_with_only_itself_becomes_poison() {
     let (m, _) = named(f, "m");
     f.predecessor_removed(context, loop_block, entry, false);
     assert!(f.is_erased(m), "the phi of itself alone is replaced by poison and erased");
+}
+
+/// LLVM's `hasOneUse`, `hasNUses` and `hasNUsesOrMore` on a value with 0, 1, 2
+/// and 3 uses: the counts are read from the list at its boundaries, `len` is
+/// not there.
+#[test]
+fn a_use_list_answers_has_n_uses_at_its_boundaries() {
+    let mut module = module(
+        "define i16 @f(i16 %a) {\nentry:\n  %x = add i16 %a, 1\n  %y = add i16 %a, 2\n  %z = add i16 %a, 3\n  ret i16 %a\n}\n",
+    );
+    let f = function(&mut module);
+    let a = f.parameters()[0];
+    // %a: three adds and the ret.
+    assert!(f.users(a).has_n_uses(4) && !f.users(a).has_n_uses(3) && !f.users(a).has_n_uses(5));
+    assert!(f.users(a).has_n_uses_or_more(4) && !f.users(a).has_n_uses_or_more(5) && f.users(a).has_n_uses_or_more(0));
+    let (_, x) = named(f, "x");
+    assert!(f.users(x).is_empty() && f.users(x).has_n_uses(0) && !f.users(x).has_one_use());
+    assert!(!f.users(x).has_n_uses_or_more(1) && f.users(x).has_n_uses_or_more(0));
+    let ret = f.terminator(f.entry().unwrap()).unwrap();
+    assert!(f.users(a).snapshot().iter().any(|one| one.user == ret));
+    let (y, _) = named(f, "y");
+    f.set_operand(ret, 0, Operand::Value(named(f, "y").1));
+    assert!(f.users(named(f, "y").1).has_one_use() && f.users(a).has_n_uses(3), "{y:?}");
 }

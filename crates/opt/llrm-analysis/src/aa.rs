@@ -425,7 +425,7 @@ pub struct AAQueryInfo {
     /// What the implementation memoises of capture questions
     /// (`IsCapturedCache`): here so that a batch drops it, not the
     /// implementation.
-    pub captured: HashMap<u64, bool>,
+    pub captured: HashMap<u64, crate::capturetracking::CaptureResult>,
 }
 
 impl Default for AAQueryInfo {
