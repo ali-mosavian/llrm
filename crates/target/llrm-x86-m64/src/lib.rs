@@ -65,7 +65,7 @@ impl llrm_target::Target for M64 {
     }
 
     fn name(&self) -> &'static str {
-        "x86-64"
+        "x86-m64"
     }
 
     fn machine(&self) -> Machine {
@@ -131,7 +131,8 @@ impl llrm_target::Target for M64 {
 
     /// Flat: no segments, one model.
     fn object(&self) -> llrm_target::object::ObjectFormat {
-        llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml")).expect("x86-64 object.toml parses")
+        llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml"))
+            .expect("x86-64 object.toml parses")
     }
 
     fn return_address_bytes(
@@ -182,7 +183,8 @@ impl llrm_target::Target for M64 {
         4
     }
 
-    /// Every x86-64 has `nopl` (`FeatureNOPL`): X86AsmBackend uses up to ten bytes.
+    /// Every x86-64 has `nopl` (`FeatureNOPL`): X86AsmBackend uses up to ten
+    /// bytes.
     fn max_nop_bytes(&self) -> u8 {
         10
     }
@@ -240,7 +242,8 @@ mod tests {
 
     use super::*;
 
-    /// The roles the description names: RBP frames, RSP is the stack, and SysV keeps rbx, r12-r15 (rbp is the frame).
+    /// The roles the description names: RBP frames, RSP is the stack, and SysV
+    /// keeps rbx, r12-r15 (rbp is the frame).
     #[test]
     fn the_register_file_names_sysv_amd64s_roles() {
         assert_eq!((M64.frame_register(), M64.stack_pointer()), (RegId::RBP, RegId::RSP));
@@ -250,11 +253,15 @@ mod tests {
         assert_eq!(M64.first_argument_offset(false), 16);
     }
 
-    /// The pointer is a quadword and the layout string is the pin's clang's for x86_64-linux-gnu.
+    /// The pointer is a quadword and the layout string is the pin's clang's for
+    /// x86_64-linux-gnu.
     #[test]
     fn the_layout_is_the_pins_clangs() {
         let layout = M64.layout();
         assert_eq!(layout.mode, 64);
-        assert_eq!(layout.datalayout, "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128");
+        assert_eq!(
+            layout.datalayout,
+            "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+        );
     }
 }

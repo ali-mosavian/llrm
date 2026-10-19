@@ -205,7 +205,7 @@ fn width_of(register: RegId) -> Option<i64> {
     crate::registers::WIDTHS.get(&register).copied()
 }
 
-/// Where an instruction goes, and the mode it is encoded in: 16 or 32 bits.
+/// Where an instruction goes, and the mode it is encoded in: 16, 32 or 64 bits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct At {
     pub ip: u64,
@@ -943,7 +943,11 @@ pub fn push_mem(
 /// `<name> target`, a conditional branch to an absolute address.
 /// iced's name of a relative branch's short and near forms in `bits`-bit mode.
 fn relative(at: At) -> (&'static str, &'static str) {
-    if at.bits == 32 { ("REL8_32", "REL32_32") } else { ("REL8_16", "REL16") }
+    match at.bits {
+        64 => ("REL8_64", "REL32_64"),
+        32 => ("REL8_32", "REL32_32"),
+        _ => ("REL8_16", "REL16"),
+    }
 }
 
 pub fn branch(
@@ -1035,12 +1039,17 @@ fn in_mode(
     name: &str,
     at: At,
 ) -> String {
-    if at.bits != 32 {
-        return name.to_owned();
-    }
+    // The word of a mode: 16 bits, a dword flat, a quadword in long mode; `nop`
+    // stays a dword there (`NOPQ` is not what a compiler emits).
+    let word = match at.bits {
+        32 => 'D',
+        64 if name == "NOPW" => 'D',
+        64 => 'Q',
+        _ => return name.to_owned(),
+    };
     match name.split_once("W_") {
-        Some((head, tail)) => format!("{head}D_{tail}"),
-        None if name.ends_with('W') => format!("{}D", &name[..name.len() - 1]),
+        Some((head, tail)) => format!("{head}{word}_{tail}"),
+        None if name.ends_with('W') => format!("{}{word}", &name[..name.len() - 1]),
         None => name.to_owned(),
     }
 }

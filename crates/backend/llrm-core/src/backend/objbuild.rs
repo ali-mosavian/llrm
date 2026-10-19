@@ -1177,7 +1177,11 @@ pub fn object_of(
     }
     Ok(Object {
         name: source.to_owned(),
-        arch: if bits == 32 { Arch::I386 } else { Arch::I8086 },
+        arch: match bits {
+            64 => Arch::X8664,
+            32 => Arch::I386,
+            _ => Arch::I8086,
+        },
         sections,
         symbols: table,
         omf_groups,

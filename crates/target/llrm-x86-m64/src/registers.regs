@@ -75,3 +75,11 @@ sp    16 rsp  0 int  7 13
 spl   8  rsp  0 int  7 327
 # The return address call frame information names (DWARF column 16); no code reaches it as a register.
 rip   64 rip  0 pc  16 -
+# The segment registers exist in 64-bit mode and name no base but FS and GS: the string operations still read
+# DS and ES, and the register file names a data segment. No selector is ever placed in one. DWARF 50-55.
+es    16 es   0 segment,reserved,string_segment  50 25
+cs    16 cs   0 segment,reserved,code_segment  51 26
+ss    16 ss   0 segment,reserved,stack_segment  52 27
+ds    16 ds   0 segment,reserved,data_segment  53 28
+fs    16 fs   0 segment,reserved  54 29
+gs    16 gs   0 segment,reserved  55 30

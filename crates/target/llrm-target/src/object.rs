@@ -77,8 +77,8 @@ impl ObjectFormat {
             .get("bitness")
             .and_then(|one| one.as_integer())
             .and_then(|one| u32::try_from(one).ok())
-            .filter(|one| matches!(one, 16 | 32))
-            .ok_or("bitness is not 16 or 32")?;
+            .filter(|one| matches!(one, 16 | 32 | 64))
+            .ok_or("bitness is not 16, 32 or 64")?;
         let header = value
             .get("header")
             .and_then(|one| one.as_array())
@@ -152,7 +152,7 @@ mod tests {
         };
         assert_eq!(parse("[\"pe\"]", "omf", 32), "formats: \"pe\" is not one of \"omf\", \"elf\", \"macho\", \"coff\"");
         assert_eq!(parse("[\"omf\"]", "elf", 32), "default \"elf\" is not one of formats");
-        assert_eq!(parse("[\"omf\"]", "omf", 24), "bitness is not 16 or 32");
+        assert_eq!(parse("[\"omf\"]", "omf", 24), "bitness is not 16, 32 or 64");
     }
 
     /// A format the target does not list was written as the target's own, or

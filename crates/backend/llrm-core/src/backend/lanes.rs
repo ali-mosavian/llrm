@@ -1,9 +1,10 @@
-//! A set of register and flag lanes, as a 128-bit mask.
+//! A set of register and flag lanes, as a 256-bit mask.
 //!
 //! # How it works
-//! A lane is a byte of a general register root (4 each, 7 roots), a byte of a
-//! segment register (2 each, 6 segments), or a flag bit against
-//! `RegId::None` (32): 72 in all. The table sorts the lanes in `(RegId, u32)`
+//! A lane is a byte of a general register root (4 each, 7 roots of a 32-bit
+//! target; 8 each, 15 roots of x86-64), a byte of a segment register (2 each,
+//! 6 segments), or a flag bit against `RegId::None` (32): 72 in all for a
+//! 32-bit target, 172 for x86-64. The table sorts the lanes in `(RegId, u32)`
 //! order, so flag bit `i` is mask bit `i`, and iteration visits lanes in the
 //! order a `BTreeSet<Lane>` would. Each register records the mask bit of its
 //! byte 0 and its byte count, so a lane's bit is a table lookup.
@@ -56,11 +57,14 @@ static TABLE: LazyLock<Table> = LazyLock::new(|| {
     for root in llrm_x86::registers::ROOTS {
         lanes.extend((0..4).map(|byte| (root, byte)));
     }
+    for root in llrm_x86::registers::ROOTS64 {
+        lanes.extend((0..8).map(|byte| (root, byte)));
+    }
     for segment in llrm_x86::registers::SEGMENTS {
         lanes.extend((0..2).map(|byte| (segment, byte)));
     }
     lanes.sort();
-    assert!(lanes.len() <= 128 && (0..32).all(|bit| lanes[bit as usize] == (RegId::None, bit)));
+    assert!(lanes.len() <= Wide::BITS as usize && (0..32).all(|bit| lanes[bit as usize] == (RegId::None, bit)));
     let (mut first, mut count) = ([0_u8; REGISTERS], [0_u8; REGISTERS]);
     for (bit, (register, _)) in lanes.iter().enumerate() {
         let slot = (*register).index();
@@ -78,27 +82,91 @@ fn bit(lane: &Lane) -> Option<u32> {
     (slot < REGISTERS && lane.1 < u32::from(table.count[slot])).then(|| u32::from(table.first[slot]) + lane.1)
 }
 
+/// A 256-bit mask, low word first: a lane set is a few word operations.
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
-pub struct Lanes(u128);
+struct Wide([u128; 2]);
+
+impl Wide {
+    const BITS: u32 = 256;
+    const ZERO: Self = Self([0; 2]);
+
+    const fn from_low(low: u128) -> Self {
+        Self([low, 0])
+    }
+
+    fn bit(at: u32) -> Self {
+        let mut words = [0; 2];
+        words[(at / 128) as usize] = 1 << (at % 128);
+        Self(words)
+    }
+
+    fn is_zero(self) -> bool {
+        self.0 == [0; 2]
+    }
+
+    fn or(
+        self,
+        other: Self,
+    ) -> Self {
+        Self([self.0[0] | other.0[0], self.0[1] | other.0[1]])
+    }
+
+    fn and(
+        self,
+        other: Self,
+    ) -> Self {
+        Self([self.0[0] & other.0[0], self.0[1] & other.0[1]])
+    }
+
+    fn minus(
+        self,
+        other: Self,
+    ) -> Self {
+        Self([self.0[0] & !other.0[0], self.0[1] & !other.0[1]])
+    }
+
+    fn count(self) -> u32 {
+        self.0[0].count_ones() + self.0[1].count_ones()
+    }
+
+    fn lowest(self) -> Option<u32> {
+        match self.0 {
+            [0, 0] => None,
+            [0, high] => Some(128 + high.trailing_zeros()),
+            [low, _] => Some(low.trailing_zeros()),
+        }
+    }
+
+    fn highest(self) -> Option<u32> {
+        match self.0 {
+            [0, 0] => None,
+            [low, 0] => Some(127 - low.leading_zeros()),
+            [_, high] => Some(255 - high.leading_zeros()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
+pub struct Lanes(Wide);
 
 impl Lanes {
     pub const fn new() -> Self {
-        Self(0)
+        Self(Wide::ZERO)
     }
 
     /// The flag lanes of an rflags mask. `RegId::None` sorts first, so flag
     /// bit `i` is lane bit `i`.
     pub fn flags(mask: u32) -> Self {
-        Self(u128::from(mask))
+        Self(Wide::from_low(u128::from(mask)))
     }
 
     pub fn insert(
         &mut self,
         lane: Lane,
     ) -> bool {
-        let mask = 1 << bit(&lane).unwrap_or_else(|| panic!("{lane:?} is no lane"));
-        let fresh = self.0 & mask == 0;
-        self.0 |= mask;
+        let mask = Wide::bit(bit(&lane).unwrap_or_else(|| panic!("{lane:?} is no lane")));
+        let fresh = self.0.and(mask).is_zero();
+        self.0 = self.0.or(mask);
         fresh
     }
 
@@ -107,8 +175,8 @@ impl Lanes {
         lane: &Lane,
     ) -> bool {
         let Some(bit) = bit(lane) else { return false };
-        let present = self.0 & (1 << bit) != 0;
-        self.0 &= !(1 << bit);
+        let present = !self.0.and(Wide::bit(bit)).is_zero();
+        self.0 = self.0.minus(Wide::bit(bit));
         present
     }
 
@@ -116,29 +184,29 @@ impl Lanes {
         &self,
         lane: &Lane,
     ) -> bool {
-        bit(lane).is_some_and(|bit| self.0 & (1 << bit) != 0)
+        bit(lane).is_some_and(|bit| !self.0.and(Wide::bit(bit)).is_zero())
     }
 
     pub fn clear(&mut self) {
-        self.0 = 0;
+        self.0 = Wide::ZERO;
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0 == 0
+        self.0.is_zero()
     }
 
     pub fn is_subset(
         &self,
         other: &Self,
     ) -> bool {
-        self.0 & !other.0 == 0
+        self.0.minus(other.0).is_zero()
     }
 
     pub fn is_disjoint(
         &self,
         other: &Self,
     ) -> bool {
-        self.0 & other.0 == 0
+        self.0.and(other.0).is_zero()
     }
 
     pub fn iter(&self) -> Iter {
@@ -150,21 +218,21 @@ impl Lanes {
         &self,
         other: &Self,
     ) -> Iter {
-        Iter(self.0 | other.0)
+        Iter(self.0.or(other.0))
     }
 
     pub fn difference(
         &self,
         other: &Self,
     ) -> Iter {
-        Iter(self.0 & !other.0)
+        Iter(self.0.minus(other.0))
     }
 
     pub fn intersection(
         &self,
         other: &Self,
     ) -> Iter {
-        Iter(self.0 & other.0)
+        Iter(self.0.and(other.0))
     }
 
     // The same operations as sets, without an iterator between.
@@ -172,21 +240,21 @@ impl Lanes {
         &self,
         other: &Self,
     ) -> Self {
-        Self(self.0 | other.0)
+        Self(self.0.or(other.0))
     }
 
     pub fn minus(
         &self,
         other: &Self,
     ) -> Self {
-        Self(self.0 & !other.0)
+        Self(self.0.minus(other.0))
     }
 
     pub fn and(
         &self,
         other: &Self,
     ) -> Self {
-        Self(self.0 & other.0)
+        Self(self.0.and(other.0))
     }
 
     pub fn retain(
@@ -203,33 +271,27 @@ impl Lanes {
 
 /// The lanes of a mask, lowest bit first.
 #[derive(Clone)]
-pub struct Iter(u128);
+pub struct Iter(Wide);
 
 impl Iterator for Iter {
     type Item = &'static Lane;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.0 == 0 {
-            return None;
-        }
-        let bit = self.0.trailing_zeros();
-        self.0 &= self.0 - 1;
+        let bit = self.0.lowest()?;
+        self.0 = self.0.minus(Wide::bit(bit));
         Some(&TABLE.lanes[bit as usize])
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let n = self.0.count_ones() as usize;
+        let n = self.0.count() as usize;
         (n, Some(n))
     }
 }
 
 impl DoubleEndedIterator for Iter {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.0 == 0 {
-            return None;
-        }
-        let bit = 127 - self.0.leading_zeros();
-        self.0 &= !(1 << bit);
+        let bit = self.0.highest()?;
+        self.0 = self.0.minus(Wide::bit(bit));
         Some(&TABLE.lanes[bit as usize])
     }
 }

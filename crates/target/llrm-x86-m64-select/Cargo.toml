@@ -1,5 +1,5 @@
 [package]
-name = "llrm-x86-64-select"
+name = "llrm-x86-m64-select"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -11,6 +11,6 @@ fn main() {
     let groups = build::rule_groups(&std::fs::read_to_string(groups_list).expect("peep/groups.list"));
     let family = build::family(Path::new("../llrm-x86"));
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let built = build::target(Path::new("../llrm-x86-64"), &family, &groups, "llrm_core", &out);
+    let built = build::target(Path::new("../llrm-x86-m64"), &family, &groups, "llrm_core", &out);
     std::fs::write(out.join("select.rs"), built.select_source()).unwrap();
 }

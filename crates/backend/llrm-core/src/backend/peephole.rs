@@ -194,8 +194,12 @@ fn reg(
     Reg { register, width }
 }
 
-fn full32(register: RegId) -> RegId {
-    register.full_register32()
+/// The root `register` is a view of, in the target's register file.
+fn full32(
+    regs: Regs,
+    register: RegId,
+) -> RegId {
+    regs.root(register)
 }
 
 pub struct Peephole {
@@ -657,7 +661,7 @@ pub fn _lanes(
         let width = regs.width_of(register).expect("a segment register has a width");
         return (0..width).map(|byte| (register, byte as u32)).collect();
     }
-    let full = full32(register);
+    let full = full32(regs, register);
     if !regs.in_class(full, llrm_lir::registers::class::INT) || regs.is_stack(full) {
         return Lanes::new();
     }
@@ -1150,7 +1154,7 @@ pub fn _moved_by(
             source.map(|one| (one, bit + count - bits))
         }
     };
-    let byte = |register: RegId, bit: usize| (full32(register), u32::try_from(bit / 8).expect("a byte"));
+    let byte = |register: RegId, bit: usize| (full32(regs, register), u32::try_from(bit / 8).expect("a byte"));
     let mut moved = Vec::new();
     for bit in 0..bits {
         if let Some((register, from)) = origin(bit) {
@@ -1642,8 +1646,8 @@ fn _loaded_scaled_add<'a>(
         "lea",
         vec![Loc::Reg(total)],
         vec![Loc::Address(AddressRef {
-            through: full32(total.register),
-            index_through: full32(temporary.register),
+            through: full32(regs, total.register),
+            index_through: full32(regs, temporary.register),
             scale: 1 << amount,
             ..AddressRef::new(None)
         })],
@@ -2126,17 +2130,17 @@ fn _affine_address(
     };
     let (dest, mut terms, mut disp, mut old) = match affine::step(regs, copy, cpu) {
         Some((dest, affine::Step::Copy(source), old)) => {
-            if full32(source.register) == full32(dest.register) {
+            if full32(regs, source.register) == full32(regs, dest.register) {
                 return Ok(None);
             }
-            (dest, vec![(full32(source.register), 1)], 0, old)
+            (dest, vec![(full32(regs, source.register), 1)], 0, old)
         }
         _ => match affine::lea_start(regs, copy, cpu) {
             Some(start) => start,
             None => return Ok(None),
         },
     };
-    let z = full32(dest.register);
+    let z = full32(regs, dest.register);
     let bits = i64::from(dest.width) * 8;
     let wrapped = |value: i64| (value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1));
     let mut best: Option<(usize, AddressRef, i64, bool, Reg)> = None;
@@ -2147,7 +2151,7 @@ fn _affine_address(
         // A step the target ran on the whole register (`promote`) goes on a
         // word chain, and a word step on one so run: what lies above a word
         // is nobody's.
-        if written != dest && !(full32(written.register) == z && written.width != dest.width) {
+        if written != dest && !(full32(regs, written.register) == z && written.width != dest.width) {
             break;
         }
         match step {
@@ -2157,7 +2161,7 @@ fn _affine_address(
                 disp = wrapped(disp * factor);
             }
             affine::Step::AddRegister(other) => {
-                let root = full32(other.register);
+                let root = full32(regs, other.register);
                 match terms.iter_mut().find(|term| term.0 == root) {
                     Some(term) => term.1 += 1,
                     None => terms.push((root, 1)),
@@ -3069,12 +3073,12 @@ pub fn constants(body: &LirBody) -> LirBody {
                 }
             }
             let mut written: HashSet<RegId> =
-                one.clobbers.iter().chain(&one.clobbers_high).map(|register| full32(*register)).collect();
+                one.clobbers.iter().chain(&one.clobbers_high).map(|register| full32(regs, *register)).collect();
             written.extend(what.dests.iter().filter_map(|dest| match dest {
-                Loc::Reg(dest) => Some(full32(dest.register)),
+                Loc::Reg(dest) => Some(full32(regs, dest.register)),
                 _ => None,
             }));
-            held.retain(|dest, _| !written.contains(&full32(dest.register)));
+            held.retain(|dest, _| !written.contains(&full32(regs, dest.register)));
             if let Some((dest, value)) = candidate {
                 if one.clobbers.is_empty() {
                     held.insert(dest, value);
@@ -3117,12 +3121,12 @@ fn extended_constant(
         return None;
     }
     // A byte of the high half (AH) is not the low lane of its register.
-    if regs.named(full32(source.register), i64::from(source.width)) != source.register {
+    if regs.named(full32(regs, source.register), i64::from(source.width)) != source.register {
         return None;
     }
     let value = held
         .iter()
-        .find(|(one, _)| full32(one.register) == full32(source.register) && one.width >= source.width)
+        .find(|(one, _)| full32(regs, one.register) == full32(regs, source.register) && one.width >= source.width)
         .and_then(|(_, known)| if let Known::Value(value) = known { Some(*value) } else { None })?;
     let mask = (1i64 << (source.width * 8)) - 1;
     let low = value & mask;

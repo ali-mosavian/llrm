@@ -14,7 +14,8 @@ convention = "sysv64"
 # vector registers a variadic call uses) and aggregate classification join with the SSE register class;
 # until then a program with either is refused at selection.
 [sysv64]
-cc = "sysv"
+# MIR's `ccc`: C's convention is this one.
+cc = "cdecl"
 slot_bytes = 8
 stack_alignment = 16
 order = "right-to-left"
@@ -37,6 +38,7 @@ aggregate_in_register_bytes = []
 aggregate_pointer = "register"
 aggregate_pointer_register = "rdi"
 aggregate_pointer_returned = "rax"
+aggregate_pointer_popped_by = "caller"
 promotion = "slot"
 wide_slots = 1
 variadic_float = "double"

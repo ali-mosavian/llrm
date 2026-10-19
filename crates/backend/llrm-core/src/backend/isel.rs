@@ -583,7 +583,8 @@ fn saved(
         .flatten()
         .chain(returns.iter().copied().filter(|_| entry.results_clobbered))
         .collect();
-    kept.into_iter().filter(|(whole, _)| !changed.iter().any(|one| one.full_register32() == *whole)).collect()
+    let regs = Regs(arch.registers());
+    kept.into_iter().filter(|(whole, _)| !changed.iter().any(|one| regs.root(*one) == *whole)).collect()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5240,7 +5241,7 @@ impl Selector<'_, '_, '_> {
             let [low_register, high_register] = convention.returns[..] else {
                 return refuse("a wide result the convention has no register pair for");
             };
-            one.requires = vec![(low, low_register.full_register32()), (high, high_register.full_register32())];
+            one.requires = vec![(low, self.regs().root(low_register)), (high, self.regs().root(high_register))];
             one.uses = vec![low.value, high.value];
         } else if let Some(&value) = operands.first().filter(|&&one| self.is_far(type_of(one))) {
             // One register holds both, offset low and selector high: the dword
@@ -5913,7 +5914,7 @@ impl Selector<'_, '_, '_> {
                     .iter()
                     .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
                     .map(|name| llrm_x86::calling::register(name))
-                    .map(|register| if register.is_gpr() { register.full_register32() } else { register })
+                    .map(|register| if register.is_gpr() { self.regs().root(register) } else { register })
                     .chain(unnamed)
                     .collect::<BTreeSet<RegId>>(),
             )
@@ -5928,7 +5929,7 @@ impl Selector<'_, '_, '_> {
                 .iter()
                 .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
                 .map(|name| llrm_x86::calling::register(name))
-                .map(|register| if register.is_gpr() { register.full_register32() } else { register })
+                .map(|register| if register.is_gpr() { self.regs().root(register) } else { register })
                 .collect()
         });
         // Inline code changes what its block declares, which a function that
@@ -5995,14 +5996,14 @@ impl Selector<'_, '_, '_> {
             else {
                 return refuse(format!("@{name}'s wide result"));
             };
-            delivers = vec![(low, low_register.full_register32()), (high, high_register.full_register32())];
+            delivers = vec![(low, self.regs().root(low_register)), (high, self.regs().root(high_register))];
             self.wides.insert(value, (low, high));
         } else if let Some(value) = instruction.result.filter(|_| self.is_far(instruction.ty)) {
             match results(self.arch, self::entry(self.arch, convention, variadic), 4)[..] {
                 [low_register, high_register] => {
                     let (offset, selector) = (self.fresh_held(2), self.fresh_held(2));
                     delivers =
-                        vec![(offset, low_register.full_register32()), (selector, high_register.full_register32())];
+                        vec![(offset, self.regs().root(low_register)), (selector, self.regs().root(high_register))];
                     self.fars.insert(value, (Some(offset), selector));
                 }
                 // One register holds both: the offset low, the selector high,
@@ -6023,7 +6024,7 @@ impl Selector<'_, '_, '_> {
                 // neither upper word reaches the joined value.
                 [low_register, high_register] => {
                     let (low, high) = (self.fresh_held(4), self.fresh_held(4));
-                    delivers = vec![(low, low_register.full_register32()), (high, high_register.full_register32())];
+                    delivers = vec![(low, self.regs().root(low_register)), (high, self.regs().root(high_register))];
                     result = Some((held, low, high));
                 }
                 ref registers => delivers = vec![(held, registers[0])],

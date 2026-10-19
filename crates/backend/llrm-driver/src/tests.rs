@@ -21,8 +21,8 @@ fn no_flag_is_the_default_target() {
 
 #[test]
 fn an_unknown_target_is_refused_with_the_known_ones() {
-    let error = target(&flags(&["-m64"]), Some(&["x86-m16"])).err().unwrap();
-    assert_eq!(error, "no target for -m64; choose -m16, -m32");
+    let error = target(&flags(&["-m128"]), Some(&["x86-m16"])).err().unwrap();
+    assert_eq!(error, "no target for -m128; choose -m16, -m32, -m64");
 }
 
 /// A frontend built for one target does not take another's flag.
@@ -195,7 +195,8 @@ fn a_flat_dword_has_no_operand_size_prefix_in_the_size_prices() {
 #[test]
 fn no_list_lets_any_registered_target_through() {
     assert_eq!(target(&flags(&["-m32"]), None).unwrap().target.name(), "x86-m32");
-    assert!(target(&flags(&["-m64"]), None).err().unwrap().contains("no target for -m64"));
+    assert_eq!(target(&flags(&["-m64"]), None).unwrap().target.name(), "x86-m64");
+    assert!(target(&flags(&["-m128"]), None).err().unwrap().contains("no target for -m128"));
 }
 
 /// The audited multiply and divide bounds of a CPU are its description's: a
@@ -220,4 +221,20 @@ fn the_audited_bounds_come_from_the_targets_timings() {
     assert_eq!(signed_multiply(pentium, 2, true).unwrap(), Some(Clocks { minimum: 11, maximum: 11 }));
     assert_eq!(signed_multiply(pentium, 2, false).unwrap(), Some(Clocks { minimum: 10, maximum: 10 }));
     assert_eq!(signed_multiply(profile(&["-march=k6"]), 4, true).unwrap(), None);
+}
+
+/// LLVM IR for a target is found by its `target triple` and run through the
+/// mid-end as well as the backend: `llrm-llc` once compiled the module as
+/// written (no pipeline), leaving `40 + 2` and a dead stack slot in the code.
+#[test]
+fn llvm_ir_is_found_by_its_triple_and_optimized() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define dso_local i32 @main() {\n  %1 = alloca i32, align 4\n  store i32 0, ptr %1, align 4\n  \
+                %2 = add i32 40, 2\n  ret i32 %2\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&[]), text, "main").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let body: Vec<&str> =
+        listing.lines().map(str::trim).filter(|line| line.starts_with("mov") || *line == "ret").collect();
+    assert_eq!(body, ["mov eax, 42", "ret"], "{listing}");
 }

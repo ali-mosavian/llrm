@@ -113,6 +113,25 @@ pub mod registers {
     /// The general registers a value or an address is held in, the frame
     /// pointer's included, the stack pointer's not.
     pub const ROOTS: [RegId; 7] = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI, RegId::EBP];
+    /// The general registers of x86-64 a value or an address is held in, the
+    /// frame pointer's included, the stack pointer's not.
+    pub const ROOTS64: [RegId; 15] = [
+        RegId::RAX,
+        RegId::RBX,
+        RegId::RCX,
+        RegId::RDX,
+        RegId::RSI,
+        RegId::RDI,
+        RegId::RBP,
+        RegId::R8,
+        RegId::R9,
+        RegId::R10,
+        RegId::R11,
+        RegId::R12,
+        RegId::R13,
+        RegId::R14,
+        RegId::R15,
+    ];
     /// The word view of a dword register, where it has one.
     pub fn word_of(dword: RegId) -> Option<RegId> {
         DWORDS.iter().position(|one| *one == dword).map(|at| WORDS[at])

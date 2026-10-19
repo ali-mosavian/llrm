@@ -39,6 +39,9 @@ pub struct Layout {
     pub mode: u32,
     /// LLVM's datalayout string.
     pub datalayout: String,
+    /// The `target triple` of the LLVM IR this target takes, where it takes
+    /// any.
+    pub llvm_triple: Option<String>,
     pub spaces: AddressSpaces,
     /// The operations (`select`, `fptoui.i64`) the machine has no instruction
     /// for, which the compiler expands before selection: LLVM's
@@ -167,9 +170,11 @@ impl Layout {
                 .and_then(|list| list.iter().map(|one| one.as_str().map(str::to_owned)).collect())
                 .ok_or("promote is not a list of operation names")?,
         };
+        let llvm_triple = value.get("llvm_triple").and_then(|one| one.as_str()).map(str::to_owned);
         Ok(Self {
             mode,
             datalayout,
+            llvm_triple,
             expand,
             promote,
             spaces: AddressSpaces {
@@ -194,6 +199,15 @@ mod tests {
     use super::*;
 
     const FLAT: &str = "mode = 32\ndatalayout = \"e-p:32:32\"\n[spaces]\nnear = 0\nfar = 0\ndata = 0\nstack = 0\n[pointers]\n4 = \"near\"\n";
+
+    /// A target found by the triple a module states needs the triple read from
+    /// its description.
+    #[test]
+    fn a_layout_reads_its_llvm_triple() {
+        let text = format!("llvm_triple = \"x86_64-unknown-linux-gnu\"\n{FLAT}");
+        assert_eq!(Layout::parse(&text).unwrap().llvm_triple.as_deref(), Some("x86_64-unknown-linux-gnu"));
+        assert_eq!(Layout::parse(FLAT).unwrap().llvm_triple, None);
+    }
 
     #[test]
     fn a_flat_layout_has_one_space_and_none_of_the_pair_kinds() {
