@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dfajumpthreading.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dfajumpthreading.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dfajumpthreading.rs sha256:fe0bec83c66f7a5c5cc54b6f6eac1d3407c2dd5be9f45a7296eaca766a073cde -->
+<!-- src: crates/opt/llrm-transforms/src/dfajumpthreading.rs sha256:a3b3d2bb4211be6aa2a2060d2559d1e726dcdecd053f106f1bb2ff2939bf1c3f -->
 
 # dfajumpthreading
 
@@ -32,7 +32,7 @@ to the clones, and SSA is restored.
 ```
 
 DEVIATE (DF2..DF4; DF1, a `select` in the chain rejecting the switch, was
-closed by S2):
+closed by S2; DF5 is a parity note):
 - DF2. No `DomTreeUpdater`: the pass returns `none()` when it threaded
   anything and the manager rebuilds the dominator tree and the loop info
   (the pin keeps the dominator tree, and the loop info unless it cloned);
@@ -46,6 +46,11 @@ closed by S2):
   adds the new blocks to the loop of the start block): `LoopInfo` has no
   `addBasicBlockToLoop` (T3, S3). Once per switch with `select`s, linear in
   the function. No `!prof` or debug location is carried to the new branches.
+- DF5 (parity, not a deviation). `x_switch` m16 -O2/-O3 is +17 B (320 vs
+  303) and 70 vs 63 asm lines: the pass threads the state cycle and peels
+  two iterations, as `opt -passes=dfa-jump-threading` does on the same
+  entering IR (m16 target, identical per `difftest.py dumps`). The source is
+  UB at m16 (`r >> 16` on 16 bits); -Os is identical (size gate).
 
 ## Example
 The state is set to 1 on one path and to 2 on the other, and the `switch`
