@@ -636,6 +636,11 @@ pub(super) enum TypeClass {
     Other,
 }
 
+/// The low and high 16-bit words of a dword constant, as numbers.
+fn dword_halves(bits: i64) -> [i64; 2] {
+    [i64::from(bits as u16), i64::from((bits >> 16) as u16)]
+}
+
 impl TypeClass {
     pub(super) fn of(
         types: &Types,
@@ -2916,7 +2921,7 @@ impl Selector<'_, '_, '_> {
             return None;
         }
         let selector = crate::backend::globals::absolute(self.module, &self.layout, *value)?;
-        Some((selector & 0xFFFF) << 16)
+        Some(i64::from(selector as u16) << 16)
     }
 
     /// `ptrtoint (ptr C to iN)` of a near pointer constant, N the pointer's
@@ -3027,7 +3032,7 @@ impl Selector<'_, '_, '_> {
     ) -> Result<Option<[Loc; 2]>, Unselected> {
         if let Some(bits) = self.constant(operand, 4) {
             return Ok(Some(
-                [bits & 0xFFFF, (bits >> 16) & 0xFFFF].map(|value| Loc::Imm(Imm { value, width: 2, address: None })),
+                dword_halves(bits).map(|value| Loc::Imm(Imm { value, width: 2, address: None })),
             ));
         }
         let Operand::Value(value) = operand else { return Ok(None) };
@@ -3323,7 +3328,7 @@ impl Selector<'_, '_, '_> {
             let Some(block) = self.current else { return refuse("a far constant outside a block") };
             let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
             let (base, selector) = (self.fresh_held(2), self.fresh_held(2));
-            for (into, value) in [(base, bits & 0xFFFF), (selector, (bits >> 16) & 0xFFFF)] {
+            for (into, value) in [base, selector].into_iter().zip(dword_halves(bits)) {
                 let word = Loc::Imm(Imm { value, width: 2, address: None });
                 self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![word])));
             }
@@ -4723,7 +4728,7 @@ impl Selector<'_, '_, '_> {
                 },
             );
         if let Some(bits) = numeric {
-            let halves = [bits & 0xFFFF, (bits >> 16) & 0xFFFF].map(|value| {
+            let halves = dword_halves(bits).map(|value| {
                 let held = self.fresh_held(2);
                 let word = Loc::Imm(Imm { value, width: 2, address: None });
                 out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![word])));
@@ -6793,7 +6798,7 @@ impl Selector<'_, '_, '_> {
         }
         let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
         let second = match self.constant(b, 4) {
-            Some(bits) => [word(bits & 0xFFFF), word((bits >> 16) & 0xFFFF)],
+            Some(bits) => dword_halves(bits).map(word),
             None => {
                 let (offset, selector) = self.far(b, at, out)?;
                 [Loc::Held(offset), Loc::Held(selector)]
@@ -6858,7 +6863,7 @@ impl Selector<'_, '_, '_> {
         let a = words(self, a)?;
         let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
         let b = match self.constant(b, 4) {
-            Some(bits) => [word(bits & 0xFFFF), word((bits >> 16) & 0xFFFF)],
+            Some(bits) => dword_halves(bits).map(word),
             None => words(self, b)?,
         };
         Some(self.words_equal(a, b, predicate, at, out))
