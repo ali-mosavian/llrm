@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/precse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/precse.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:326c9c07ef43f2a10e59a2b24d81dd14c4d41067614b9e2155d9591cdddeb5c7 -->
+<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:1c578801f70edf14007e8c6b27f28e9bfc6b0fc5b49f5799ebdf6fd6f5413ee8 -->
 
 # precse
 
@@ -40,10 +40,12 @@ it was, plus the readers merged in by earlier removals; the pin counts the
 live use lists. Same decisions on a body where one removal does not change
 another's readers.
 
-DEVIATE E3 (no number): a move of a constant is not a candidate. The pin
-shares it and rematerializes it where the allocator would spill; ours
-spills it (compare_to_int64.c -Os 346 to 361 bytes). Exit: the allocator
-rematerializes a spilled constant.
+DEVIATE E3 (no number): an operation with no register operand (a constant,
+the address of a global or a frame cell) is not a candidate. The pin shares
+it and rematerializes it where it is wanted; ours cannot once TwoAddress
+and the coalescer write over it in place: compare_to_int64.c -Os 346 to 361
+bytes, grep -O2 -m32 +21.9% instructions. Exit: the allocator remakes a
+value with two defs.
 
 ## Example
 `v3 := add v1, v2` in a block and `v7 := add v1, v2` in a block it

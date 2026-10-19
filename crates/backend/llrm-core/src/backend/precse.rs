@@ -35,10 +35,12 @@
 //! live use lists. Same decisions on a body where one removal does not change
 //! another's readers.
 //!
-//! DEVIATE E3 (no number): a move of a constant is not a candidate. The pin
-//! shares it and rematerializes it where the allocator would spill; ours
-//! spills it (compare_to_int64.c -Os 346 to 361 bytes). Exit: the allocator
-//! rematerializes a spilled constant.
+//! DEVIATE E3 (no number): an operation with no register operand (a constant,
+//! the address of a global or a frame cell) is not a candidate. The pin shares
+//! it and rematerializes it where it is wanted; ours cannot once TwoAddress
+//! and the coalescer write over it in place: compare_to_int64.c -Os 346 to 361
+//! bytes, grep -O2 -m32 +21.9% instructions. Exit: the allocator remakes a
+//! value with two defs.
 //!
 //! # Example
 //! `v3 := add v1, v2` in a block and `v7 := add v1, v2` in a block it
@@ -104,7 +106,11 @@ fn candidate(
             | Operation::Funnel
     );
     // `MI->isCopyLike()`: a register copy is not a candidate.
-    if what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Held(_) | Loc::Imm(_)]) {
+    if what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Held(_)]) {
+        return false;
+    }
+    // E3: no register operand, so it can be made again where it is wanted.
+    if one.uses.is_empty() {
         return false;
     }
     let held = |place: &Loc| matches!(place, Loc::Held(_) | Loc::Imm(_) | Loc::Address(_));

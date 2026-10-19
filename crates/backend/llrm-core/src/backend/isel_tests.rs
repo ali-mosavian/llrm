@@ -6061,6 +6061,7 @@ entry:
     let got = listing(text, "f");
     let cdqs = got.iter().filter(|line| line.as_str() == "cdq").count();
     assert_eq!(cdqs, 2, "{got:?}");
+}
 
 /// A dword constant returned in a word pair: DX is its high word as a
 /// constant. It was a shift of the register that holds the whole
@@ -6075,4 +6076,33 @@ fn test_a_dword_constant_returned_in_a_word_pair_is_a_word_each() {
     assert!(got.iter().any(|line| line == "mov ax, 4464"), "the premise: the low word: {got:?}");
     assert!(got.iter().any(|line| line == "mov dx, 1"), "the high word is its own constant: {got:?}");
     assert!(!got.iter().any(|line| line.starts_with("shr ")), "{got:?}");
+}
+
+/// An address with no register operand is made where it is read, not shared:
+/// the add after the call wrote over the shared `lea`, a two-def value the
+/// allocator could not remake, and grep -O2 -m32 ran 21.9% more instructions.
+#[test]
+fn test_an_address_is_made_again_after_a_call() {
+    let text = "declare void @use(ptr) addrspace(1)
+@h = global ptr null
+define void @f(i32 %n) addrspace(1) {
+entry:
+  %buf = alloca [64 x i8]
+  call addrspace(1) void @use(ptr %buf)
+  %p = getelementptr i8, ptr %buf, i32 %n
+  store ptr %p, ptr @h
+  ret void
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let addresses = |body: &crate::model::lir::LirBody| {
+        body.blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Address))
+            .count()
+    };
+    assert_eq!(addresses(&body), 2, "the premise: the frame address is made twice");
+    let shared = crate::backend::precse::shared(&body, &crate::backend::classes::RegisterClasses::m16());
+    assert_eq!(addresses(&shared), 2);
 }
