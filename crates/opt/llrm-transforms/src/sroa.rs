@@ -76,6 +76,10 @@ impl FunctionPass for Sroa {
         "sroa-real"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("sroa")
+    }
+
     fn reads(&self) -> llrm_mir::footprint::Footprint {
         llrm_mir::footprint::Footprint::MEMORY | llrm_mir::footprint::Footprint::STRUCTURE
     }
