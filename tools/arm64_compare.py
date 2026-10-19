@@ -165,4 +165,5 @@ def main():
     print(f"geomean per program: code {geomean(ratios[0]):.2f}x, executed {geomean(ratios[1]):.2f}x")
 
 
-main()
+if __name__ == "__main__":
+    main()
