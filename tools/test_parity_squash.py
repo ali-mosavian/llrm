@@ -420,3 +420,21 @@ def test_every_squash_stage_prints_a_flushed_timestamped_line_before_its_work(ca
     monkeypatch.setattr(ps, "run_streaming", lambda command, cwd: type("D", (), {"returncode": 0, "stdout": "FAILING:\nPARITY SMOKE PASS x\n", "stderr": ""})())
     ps.smoke_failures()
     assert " STAGE smoke" in capsys.readouterr().out
+
+
+def test_precheck_refuses_a_pr_with_a_dense_id_hash_map_without_any_dist_build(tmp_path, monkeypatch):
+    """#2836 added a hash map keyed by a dense id and cost a batch 26 minutes of halving: the seeded-maps ratchet names it in seconds, on a dev checkout, with no dist build."""
+    dev = tmp_path / "wt"
+    dev.mkdir()
+    monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
+    monkeypatch.setattr(ps, "ensure_bins", lambda *a, **k: (_ for _ in ()).throw(AssertionError("a dist build")))
+    info = {"headRefOid": "abc", "body": "", "baseRefName": "feat/parity"}
+    merged = lambda head, base, cwd: ("deadbeef", "")
+    nothing = lambda sha, body, base, cwd: []
+    seeded = [("ratchets", lambda root: {"ratchet:seeded_maps": "a HashMap keyed by a dense id in crates/x/src/y.rs"}), ("fmt", lambda root: {})]
+    line = ps.precheck("2836", dev=dev, checks=seeded, merge=merged, deletions=nothing, info=info)
+    assert line.startswith("2836: REFUSED: ratchet:seeded_maps") and "dense id" in line, line
+    assert ps.precheck("2836", dev=dev, checks=[("ratchets", lambda root: {})], merge=merged, deletions=nothing, info=info) == "2836: PASS"
+    assert ps.precheck("2836", dev=dev, checks=seeded, merge=merged, deletions=nothing, info=info, head_failed={"ratchet:seeded_maps"}) == "2836: PASS"
+    conflict = ps.precheck("7", dev=dev, checks=[], merge=lambda head, base, cwd: (None, "conflicts in a.rs"), deletions=nothing, info=info)
+    assert conflict == "7: REFUSED: conflicts in a.rs"
