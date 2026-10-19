@@ -103,6 +103,9 @@ pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
 pub mod combine_loadstore;
+pub mod combine_muldivrem;
+#[cfg(test)]
+mod combine_muldivrem_tests;
 pub mod combine_phi;
 pub mod combine_select;
 pub mod combine_shared;

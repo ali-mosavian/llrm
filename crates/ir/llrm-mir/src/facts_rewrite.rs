@@ -329,6 +329,12 @@ mod tests {
             "combine_gep_index.rs",
             "combine_gep_merge.rs",
             "combine_gep_phi.rs",
+            // InstCombineMulDivRem.cpp's `visitMul` and its helpers read the
+            // `nuw`/`nsw` of a multiply and of the add, sub and shift it looks
+            // through (`hasNoUnsignedWrap`, `hasNoSignedWrap`, `foldMulOp...`)
+            // to give the replacement the flags the operands prove, and drop
+            // the rest.
+            "combine_muldivrem.rs",
             // InstCombineCasts.cpp's `visitTrunc`, `visitZExt` and `visitSExt`
             // read a trunc's, a zext's and a sext's `nuw`/`nsw`/`nneg`
             // (`hasNoUnsignedWrap`, `hasNoSignedWrap`, `hasNonNeg`) and give
