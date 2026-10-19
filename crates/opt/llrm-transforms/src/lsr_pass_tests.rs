@@ -126,4 +126,5 @@ exit:
     let phis = after.matches(" = phi ").count();
     assert!(changed, "{after}");
     assert_eq!(phis, 1, "one induction variable: {after}");
+    assert_eq!(after.matches("add i32 %k, 1").count(), 1, "the compare reuses the increment: {after}");
 }
