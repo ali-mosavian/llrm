@@ -5945,7 +5945,7 @@ fn test_a_gep_off_a_segment_constant_is_a_far_number() {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov bx, 1".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov al, byte ptr es:[1]".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
 }
 
 /// More constant-expression operands (alias/farstruct.c, textfill): the dword
