@@ -1704,11 +1704,7 @@ impl State<'_, '_> {
         &self,
         bb: BlockId,
     ) -> bool {
-        let function = self.function();
-        function
-            .iter_block(bb)
-            .find(|&one| function.instruction(one).opcode != Opcode::Phi)
-            .is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+        crate::edges::starts_with_landing_pad(self.function(), bb)
     }
 
     /// `threadEdge`
