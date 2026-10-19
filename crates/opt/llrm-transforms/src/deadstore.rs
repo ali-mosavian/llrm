@@ -45,8 +45,8 @@
 //! (`alias::captured`, a `ret` and a store of it included); `dead_on_return`
 //! and byval arguments (stage 3), and non-alloca objects with no capture
 //! (malloc) are absent. Exit: stage 3.
-//! DEVIATE 4: memory terminators (`lifetime.end`, `free`), the `initializes`
-//! attribute, `tryFoldIntoCalloc` and
+//! DEVIATE 4: `free` as a memory terminator (`lifetime.end` is in), the
+//! `initializes` attribute, `tryFoldIntoCalloc` and
 //! `eliminateRedundantStoresViaDominatingConditions` are stage 2 and 3. Partial
 //! overwrites (`isPartialOverwrite`, `IOLs`,
 //! `tryToMergePartialOverlappingStores`, `tryToShorten` of memsets) and
