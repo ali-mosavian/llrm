@@ -4,7 +4,7 @@
 //! What tools/difftest compares with LLVM's counterpart: llrm's answer to that
 //! input, not the input of the next step.
 //!
-//! `llrm-pass [-On] --order PASS@SLOT FILE` runs one slot of LLVM's order
+//! `llrm-pass [-On] [--mode 16|32] --order PASS@SLOT FILE` runs one slot of LLVM's order
 //! (`sroa@1179`) the same way, and says on stderr what stands in it.
 
 use std::process::ExitCode;
@@ -31,12 +31,23 @@ fn main() -> ExitCode {
         },
         None => llrm_core::driver::flags::Level::O2,
     };
+    // `--mode N`: the module gets the datalayout of the target whose `datalayout.toml` says `mode = N`, so pointer-width answers (a memset's length type) are the target's.
+    let mut layout = None;
+    if arguments.first().is_some_and(|one| one == "--mode") {
+        let found = arguments.get(1).and_then(|n| n.parse::<u32>().ok()).and_then(|mode| llrm_driver::all().into_iter().find(|one| one.layout().mode == mode));
+        let Some(target) = found else {
+            eprintln!("llrm-pass: --mode N: no target with that mode");
+            return ExitCode::from(2);
+        };
+        layout = Some(target.layout().datalayout.clone());
+        arguments.drain(..2);
+    }
     let ordered = arguments.first().is_some_and(|one| one == "--order");
     if ordered {
         arguments.remove(0);
     }
     let [pass, path] = arguments.as_slice() else {
-        eprintln!("usage: llrm-pass [-O1|-O2|-Os|...] [--order] PASS FILE");
+        eprintln!("usage: llrm-pass [-O1|-O2|-Os|...] [--mode N] [--order] PASS FILE");
         return ExitCode::from(2);
     };
     if ordered {
@@ -68,6 +79,9 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if layout.is_some() {
+        module.datalayout = layout;
+    }
     let applied = Applied { options: level.options(), only: Some(pass.clone()), ..Applied::default() };
     let mut manager = PassManager::default();
     manager.add(Fixed::new(&applied));

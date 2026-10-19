@@ -256,3 +256,21 @@ def test_llrm_only_attributes_reach_opt_as_strings():
     """A bare `threeway` on a declaration made opt refuse 9 QCport modules: "expected top-level entity"."""
     text = 'declare i16 @_strcmp(ptr, ptr) addrspace(1) threeway nearcode\n@s = constant [8 x i8] c"threeway"\n'
     assert difftest.normalise(text) == 'declare i16 @_strcmp(ptr, ptr) addrspace(1) "threeway" "nearcode"\n@s = constant [8 x i8] c"threeway"\n'
+
+
+def test_the_replay_gets_the_targets_layout_so_pointer_width_answers_are_the_targets(monkeypatch, tmp_path):
+    """LoopIdiom formed `memset.p0.i64` where opt at i486 forms `.i32`: llrm-pass ran on the Neutral 64-bit layout and the dumps carry no `target datalayout`."""
+    seen = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "", ""
+
+    monkeypatch.setattr(difftest.subprocess, "run", lambda command, *a, **k: (seen.append(list(command)), Done())[1])
+    src = tmp_path / "x.ll"
+    src.write_text("")
+    difftest.isolated(Path("llrm-pass"), {"config": "c-O2", "pass": "loopidiom@737"}, src)
+    assert "--mode" in seen[0] and seen[0][seen[0].index("--mode") + 1] == "32", seen
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m16")
+    seen.clear()
+    difftest.isolated(Path("llrm-pass"), {"config": "c-O2", "pass": "loopidiom@737"}, src)
+    assert seen[0][seen[0].index("--mode") + 1] == "16"
