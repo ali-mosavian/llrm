@@ -1754,3 +1754,22 @@ fn a_dispatch_of_many_arms_places_each_block_once() {
     seen.dedup();
     assert_eq!(seen.len(), placed_body.blocks.len(), "a block placed twice");
 }
+
+/// Finding the blocks on a cycle looked through every block for each block that
+/// is a component alone: 1600 diamonds spent 247 M of 304 M instructions of
+/// the tail merge there, the merge's cost growing 3.4x for a doubled body. The
+/// scan is once per body; a self-loop and a two-block cycle are still found.
+#[test]
+fn test_the_blocks_on_a_cycle_are_found_without_a_scan_per_block() {
+    use super::tailmerge::{SELF_LOOP_SCANS, cyclic_blocks};
+    let n = 400;
+    let mut blocks: Vec<LirBlock> = (0..n).map(|at| block(at, vec![_jump(at, at + 1)], vec![at + 1])).collect();
+    blocks.push(block(n, vec![_branch(n, "je", n), _jump(n + 1, n + 2)], vec![n, n + 2]));
+    blocks.push(block(n + 2, vec![_return(n + 2)], vec![]));
+    SELF_LOOP_SCANS.with(|one| one.set(0));
+    let blocks: Vec<crate::model::lir::Block> = blocks.into_iter().map(crate::model::lir::Block::from).collect();
+    let found = cyclic_blocks(&blocks);
+    let scans = SELF_LOOP_SCANS.with(|one| one.get());
+    assert!(scans <= 4 * blocks.len(), "{scans} scans for {} blocks", blocks.len());
+    assert_eq!(found.into_iter().collect::<Vec<_>>(), vec![n]);
+}
