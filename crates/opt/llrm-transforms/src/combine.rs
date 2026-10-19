@@ -253,11 +253,13 @@ fn handle_only_live_successor(
 }
 
 /// What `visit` returns, as LLVM's `Instruction *`: null, the instruction
-/// itself (changed in place) or another value that replaces it.
+/// itself (changed in place) or another value that replaces it. `Erased` is
+/// `return eraseInstFromFunction(I)`: the visit erased the instruction itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Visit {
     None,
     Changed,
+    Erased,
     Replace(Operand),
 }
 
@@ -390,6 +392,7 @@ fn drain(
         }
         match visit(c, inst) {
             Visit::None => {}
+            Visit::Erased => changed = true,
             // Changed in place: it and its users are looked at again.
             Visit::Changed => {
                 let result = c.function.instruction(inst).result;
