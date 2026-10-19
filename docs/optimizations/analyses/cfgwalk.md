@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/cfgwalk.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/cfgwalk.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/cfgwalk.rs sha256:6ceca31bb6709f765be38af7de4a7f3439df2ad12d254b92bff771e0b2d18585 -->
+<!-- src: crates/opt/llrm-analysis/src/cfgwalk.rs sha256:152f0797f66955f11845084d242aaeacc8b99d0d917dce091bd95f717fd27c5f -->
 
 # cfgwalk
 
@@ -15,9 +15,12 @@ loop info, and differs from them on irreducible loops.
 a block, skipping blocks the caller's set has seen, which it fills. Both are
 linear.
 
-DEVIATE: LLVM walks a block's predecessors in use-list order, newest use
-first; MIR lists them in use order, oldest first, so the walk takes them
-reversed.
-
 ## Used by
 `adce` in llrm-transforms.
+
+## Example
+In a loop the edge to a block still on the stack is the back edge:
+
+```text
+entry -> head -> body -> head   ; body -> head is the back edge
+```
