@@ -134,6 +134,20 @@ impl FunctionPass for DeadStoreElimination {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
+        // Only a store, or a call that fills bytes, can be dead: a body with
+        // neither builds nothing.
+        let writes = {
+            let probe = View::within(unit.context, unit.layout, unit.function, &outer);
+            unit.function
+                .walk()
+                .any(
+                    |(_, inst)| matches!(unit.function.instruction(inst).opcode, Opcode::Store { .. })
+                        || llrm_analysis::memory::MemRef::filled(&probe, inst).is_some(),
+                )
+        };
+        if !writes {
+            return PreservedAnalyses::all();
+        }
         let accesses = match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
             Ok(accesses) => accesses,
             Err(error) => panic!("dse: {error}"),
