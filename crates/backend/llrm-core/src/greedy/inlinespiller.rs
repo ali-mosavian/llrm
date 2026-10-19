@@ -135,7 +135,8 @@ impl<'a> InlineSpiller<'a> {
         reg: u32,
     ) -> Vec<(usize, Vec<InstrKey>)> {
         let mut seen: crate::support::hash::HashSet<InstrKey> = Default::default();
-        let keys: Vec<InstrKey> = lis.operands(reg).iter().map(|operand| operand.instr).filter(|key| seen.insert(*key)).collect();
+        let keys: Vec<InstrKey> =
+            lis.operands(reg).iter().map(|operand| operand.instr).filter(|key| seen.insert(*key)).collect();
         let mut covered: crate::support::hash::HashSet<InstrKey> = Default::default();
         let mut units: Vec<(usize, Vec<InstrKey>)> = Vec::new();
         for key in keys {
@@ -145,7 +146,8 @@ impl<'a> InlineSpiller<'a> {
             let index = lis.indexes.get_instruction_index(key);
             let block = lis.indexes.get_mbb_from_index(&index);
             let insns = lis.block_insns(block);
-            // The block is in slot order: the run sharing `key`'s index starts here.
+            // The block is in slot order: the run sharing `key`'s index starts
+            // here.
             let first = lis.partition_at(block, &index, false);
             let at = first + insns[first..].iter().position(|one| one.id() == key).expect("in its block");
             let members = match insns[at].group {
