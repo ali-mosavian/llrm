@@ -1132,7 +1132,11 @@ impl Splitter<'_> {
         if crosses_mask {
             let (bstart, bend) = *self.lis.indexes.get_mbb_range(bi.mbb);
             let masks = self.matrix.fixed().reg_mask_range(bstart, bend);
-            let slots: Vec<SlotIndex> = masks.clone().map(|m| self.matrix.fixed().reg_mask_slot(m)).collect();
+            // Only the instructions that destroy registers are regmasks
+            // (`getRegMaskSlotsInBlock`).
+            let fixed = self.matrix.fixed();
+            let slots: Vec<SlotIndex> =
+                masks.clone().filter(|m| fixed.reg_mask_destroys(*m)).map(|m| fixed.reg_mask_slot(m)).collect();
             // Constrain to VirtReg's live range.
             let mut ri = slots.partition_point(|s| *s < uses[0].get_reg_slot(false));
             let re = slots.len();

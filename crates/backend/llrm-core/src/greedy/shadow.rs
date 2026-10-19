@@ -55,8 +55,9 @@ pub struct ShadowInputs<'a> {
     /// The register every unprefixed access reads, which an instruction that
     /// needs the data group reads at once (`target::needs_data_group`).
     pub data: Option<RegId>,
-    /// The sets an operand confines a value to: a register made by a split takes the class its
-    /// own instructions give (`recomputeRegClass`), else its parent's.
+    /// The sets an operand confines a value to: a register made by a split
+    /// takes the class its own instructions give (`recomputeRegClass`),
+    /// else its parent's.
     pub sets: Option<&'a crate::backend::regclass::Sets>,
 }
 
@@ -260,8 +261,9 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         }
     }
 
-    /// `LiveRangeEdit::calculateRegClassAndHint`'s `recomputeRegClass`: a register the split made
-    /// takes the class its own instructions give, which can be wider than its parent's.
+    /// `LiveRangeEdit::calculateRegClassAndHint`'s `recomputeRegClass`: a
+    /// register the split made takes the class its own instructions give,
+    /// which can be wider than its parent's.
     fn reclass(
         &self,
         lis: &LiveIntervals,
@@ -271,7 +273,8 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         let Some(sets) = &self.sets else { return };
         for &reg in regs {
             let Some(current) = self.tables.orders.borrow().get(&reg).cloned() else { continue };
-            // A pinned value, and one with a class of its own kind (the x87 stack), keep theirs.
+            // A pinned value, and one with a class of its own kind (the x87
+            // stack), keep theirs.
             if self.pinned.contains(&reg) || !current.iter().all(|one| sets.available.contains(one)) {
                 continue;
             }
@@ -346,8 +349,8 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         super::inlinespiller::remat_shape(insn) && insn.uses.is_empty()
     }
 
-    /// The definition of `parent` (a literal, address or load that reads no register) as a
-    /// definition of `to`: `rematerializeAt`.
+    /// The definition of `parent` (a literal, address or load that reads no
+    /// register) as a definition of `to`: `rematerializeAt`.
     fn rematerialize(
         &self,
         lis: &LiveIntervals,
@@ -518,6 +521,13 @@ impl PhysInterference for CallMasks {
         i: usize,
     ) -> SlotIndex {
         self.calls[i].0
+    }
+
+    fn reg_mask_destroys(
+        &self,
+        i: usize,
+    ) -> bool {
+        !self.calls[i].1.is_empty() || !self.calls[i].2.is_empty()
     }
 
     /// DEVIATE D-IC2: a call's registers are the roots it destroys plus the
@@ -1069,7 +1079,8 @@ mod tests {
         let lis = LiveIntervals::new(&body);
         // The parent (value 1) is in no table: a spill made it.
         let tables = Rc::new(Tables::default());
-        let env = BodySplitEnv::new(&body, Rc::clone(&tables), Regs(&llrm_x86_m16::REGISTER_INFO), None, Default::default());
+        let env =
+            BodySplitEnv::new(&body, Rc::clone(&tables), Regs(&llrm_x86_m16::REGISTER_INFO), None, Default::default());
         env.note_split_from(&lis, 7, 1);
         assert_eq!(tables.widths.borrow().get(&7), Some(&4), "the clone is as wide as its parent");
     }

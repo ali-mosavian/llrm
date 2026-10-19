@@ -92,6 +92,16 @@ pub trait PhysInterference {
         0..0
     }
 
+    /// Whether regmask number `i` destroys any register: an entry that only
+    /// reads one (the data segment an access takes without naming it) is
+    /// not a regmask operand of the instruction.
+    fn reg_mask_destroys(
+        &self,
+        _i: usize,
+    ) -> bool {
+        true
+    }
+
     /// The slot of regmask number `i`.
     fn reg_mask_slot(
         &self,
