@@ -86,6 +86,18 @@ impl X86 {
         }
     }
 
+    /// The model a target description names (`tti` and `llvm_cpu` of its
+    /// `datalayout.toml`): none for a name no model here has.
+    pub fn described(
+        tti: &str,
+        llvm_cpu: &str,
+    ) -> Option<X86> {
+        match tti {
+            "X86" => X86::of_cpu(llvm_cpu),
+            _ => None,
+        }
+    }
+
     /// The profile of 16-bit code (T6).
     pub fn in_real_mode(
         &self,

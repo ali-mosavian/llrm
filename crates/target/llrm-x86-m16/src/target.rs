@@ -139,7 +139,8 @@ impl Machine for Dos {
             })
             .collect();
         let real = llrm_x86::tti::RealMode { scale_costs, registers: self.registers as u32 };
-        llrm_x86::tti::X86::of_cpu("i486")
+        let layout = crate::layout();
+        llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?)
             .map(|one| std::rc::Rc::new(one.in_real_mode(real)) as std::rc::Rc<dyn llrm_mir::tti::Tti>)
     }
 
