@@ -123,6 +123,9 @@ pub mod deadargs;
 mod deadargs_tests;
 pub mod deadstore;
 pub mod decide;
+pub mod dfajumpthreading;
+#[cfg(test)]
+mod dfajumpthreading_tests;
 pub mod dse;
 pub mod earlycse;
 pub mod edges;

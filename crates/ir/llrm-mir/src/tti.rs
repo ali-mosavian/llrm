@@ -547,6 +547,22 @@ pub trait Tti {
         !(ONE_NODE.contains(&name) || SMALLER.contains(&name) || MORE.contains(&name))
     }
 
+    /// `getEstimatedNumberOfCaseClusters`
+    /// ([BasicTTIImpl.h:584](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L584)):
+    /// the clusters a switch on `cases` (sign-extended values, `index_bits`
+    /// wide) is estimated to lower to, and the size of its jump table where it
+    /// gets one (0: none). The generic answer, [`basic_case_clusters`]; a
+    /// target with its own jump table limits or bit tests overrides it
+    /// (T1).
+    fn estimated_number_of_case_clusters(
+        &self,
+        cases: &[i128],
+        index_bits: u32,
+        for_size: bool,
+    ) -> (u64, u64) {
+        basic_case_clusters(cases, index_bits, for_size)
+    }
+
     /// `getIntrinsicInstrCost` of the call `name(args)` returning `ret`
     /// (none for `void`): invalid where the target has no answer (T7).
     fn intrinsic_cost(
@@ -559,6 +575,29 @@ pub trait Tti {
         let _ = (ret, args, kind);
         if is_free_intrinsic(name) { Cost::FREE } else { Cost::INVALID }
     }
+}
+
+/// `BasicTTIImplBase::getEstimatedNumberOfCaseClusters`, T1: bit tests
+/// (`isSuitableForBitTests`) are not translated; a jump table is allowed with
+/// `getMinimumJumpTableEntries()` = 4, density 10% (40% for size), at most 64K
+/// entries. The clusters, and the jump table's size, if one.
+pub fn basic_case_clusters(
+    cases: &[i128],
+    index_bits: u32,
+    for_size: bool,
+) -> (u64, u64) {
+    let count = cases.len() as u64;
+    let _ = index_bits;
+    if count < 4 {
+        return (count, 0);
+    }
+    let (low, high) = (cases.iter().min().copied().unwrap_or(0), cases.iter().max().copied().unwrap_or(0));
+    let range = (high - low) as u64 + 1;
+    let density = if for_size { 40 } else { 10 };
+    if range <= 1 << 16 && count * 100 >= range * density {
+        return (1, range);
+    }
+    (count, 0)
 }
 
 /// An intrinsic that makes no code: `assume`, `lifetime`, the scope marks of

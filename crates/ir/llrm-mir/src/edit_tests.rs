@@ -854,3 +854,20 @@ fn a_use_list_answers_has_n_uses_at_its_boundaries() {
     f.set_operand(ret, 0, Operand::Value(named(f, "y").1));
     assert!(f.users(named(f, "y").1).has_one_use() && f.users(a).has_n_uses(3), "{y:?}");
 }
+
+/// A copied block was named by the block it was copied from and a suffix; the
+/// name is unique, as a value's is, and the block it is made for has none.
+#[test]
+fn test_set_block_name_names_a_block_apart_from_the_names_held() {
+    let mut module =
+        module("define i16 @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  ret i16 1\nb:\n  ret i16 2\n}\n");
+    let f = function(&mut module);
+    let copy = f.create_block(None);
+    assert_eq!(f.block(copy).name, None);
+    f.set_block_name(copy, "a");
+    assert_eq!(f.block(copy).name.as_deref(), Some("a1"), "`a` is held by a block");
+    let another = f.create_block(None);
+    f.set_block_name(another, "a.jt1");
+    f.set_block_name(f.layout()[1], "a.jt1");
+    assert_ne!(f.block(f.layout()[1]).name.as_deref(), f.block(another).name.as_deref());
+}

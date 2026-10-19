@@ -607,6 +607,17 @@ impl Function {
         self.values[value.0 as usize].name = Some(name);
     }
 
+    /// `BasicBlock::setName`: `block` is named `name`, or `name` with the
+    /// least number appended that nothing live holds.
+    pub fn set_block_name(
+        &mut self,
+        block: BlockId,
+        name: &str,
+    ) {
+        let name = self.unique_name(name);
+        self.blocks[block.0 as usize].name = Some(name);
+    }
+
     /// `Value::takeName`: `to` is named what `from` was, which goes unnamed;
     /// the name stays taken in the function.
     pub fn take_name(

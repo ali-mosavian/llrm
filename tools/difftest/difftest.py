@@ -66,6 +66,7 @@ COUNTERPART = {
     "memcpyopt": "memcpyopt",
     "cvp": "correlated-propagation",
     "jumpthreading": "jump-threading",
+    "dfajumpthreading": "dfa-jump-threading",
     "instsimplify": "instsimplify",
     "loopidiom": "loop(loop-idiom)",
     "loopdeletion": "loop(loop-deletion)",
@@ -112,6 +113,7 @@ SOURCE = {
     "memcpyopt": "Transforms/Scalar/MemCpyOptimizer.cpp",
     "correlated-propagation": "Transforms/Scalar/CorrelatedValuePropagation.cpp",
     "jump-threading": "Transforms/Scalar/JumpThreading.cpp",
+    "dfa-jump-threading": "Transforms/Scalar/DFAJumpThreading.cpp",
 }
 LLVM_COMMIT = "d1106deb71cc"
 

@@ -153,5 +153,6 @@ pub mod sliceset;
 pub mod slotstores;
 pub mod ssa;
 pub mod ssaupdater;
+pub mod ssaupdaterbulk;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
