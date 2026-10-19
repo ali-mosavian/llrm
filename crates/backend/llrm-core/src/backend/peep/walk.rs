@@ -236,7 +236,7 @@ impl<'a> Window<'a> {
             Some(Loc::Mem(_)) => Kind::Mem,
             Some(Loc::Imm(_)) => Kind::Imm,
             Some(Loc::Held(_)) => Kind::Held,
-            Some(Loc::Address(_)) => Kind::Other,
+            Some(Loc::Address(_) | Loc::Field(_)) => Kind::Other,
         }
     }
 
@@ -251,7 +251,7 @@ impl<'a> Window<'a> {
             Loc::Mem(one) => Some(one.width),
             Loc::Imm(one) => Some(one.width),
             Loc::Held(one) => Some(one.width),
-            Loc::Address(_) => None,
+            Loc::Address(_) | Loc::Field(_) => None,
         }
     }
 
