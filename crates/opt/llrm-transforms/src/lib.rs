@@ -183,6 +183,9 @@ pub mod lsr;
 pub mod lsr_formula;
 #[cfg(test)]
 mod lsr_formula_tests;
+pub mod lsr_use;
+#[cfg(test)]
+mod lsr_use_tests;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
@@ -210,6 +213,7 @@ pub mod settled;
 pub mod simpleloopunswitch;
 pub mod simplifycfg;
 pub mod simplifyindvar;
+pub mod sinkcommon;
 pub mod spares;
 pub mod speculate;
 pub mod spill;
