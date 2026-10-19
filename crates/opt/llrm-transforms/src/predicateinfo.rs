@@ -18,6 +18,9 @@
 //! it dominates is found. [`PredicateInfo::predicate_info_for`] tells which
 //! copies are such, and what they say.
 //!
+//! # Example
+//! A use the branch dominates reads a copy that carries the predicate:
+//!
 //! ```text
 //!  b0: %c = icmp ult i32 %x, 10           b0: %c = icmp ult i32 %x, 10
 //!      br i1 %c, b1, b2                       %x.0 = bitcast i32 %x

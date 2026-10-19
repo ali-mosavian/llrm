@@ -19,6 +19,9 @@
 //!   (`hasUndefContents`);
 //! - a memmove whose ranges cannot meet is a memcpy (`processMemMove`).
 //!
+//! # Example
+//! A copy of a copy reads the first source:
+//!
 //! ```text
 //!  call memcpy(%b, %a, 16)           call memcpy(%b, %a, 16)
 //!  call memcpy(%c, %b, 16)    ==>    call memcpy(%c, %a, 16)

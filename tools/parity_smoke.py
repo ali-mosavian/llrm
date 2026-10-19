@@ -4,7 +4,7 @@ First, untimed, `cargo check --workspace --all-targets` of the merged tree and e
 
     tools/parity_smoke.py [--bin DIR] [--base REF] [--rank CRATE...]
 
-The last line is `PARITY SMOKE PASS ...` or `PARITY SMOKE FAIL ...`, with the CPU seconds spent. Build time is not in the 10 s: the unit tests are built first, untimed.
+The last line is `PARITY SMOKE PASS ...` or `PARITY SMOKE FAIL ...`, with the CPU seconds spent. Build time is not in the 15 s: the unit tests are built first, untimed.
 The selection (tools/parity_smoke.toml) is
   units   per crate that `git diff BASE` touches (crates/<group>/<crate>/...): its cheapest unit tests, the ranked list `--rank` writes, cut to the crate's share of
           what the other steps leave; with no ranking yet, all its `--lib` tests, killed at that share (a failure before the cut fails; the cut itself is a note)
@@ -32,10 +32,13 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
+
+sys.path.insert(0, str(HERE / "dosbatch"))
+import cpulimit  # noqa: E402
 from buildslot import slotted  # noqa: E402
 
 SELECTION = HERE / "parity_smoke.toml"
-BUDGET = 10.0
+BUDGET = 15.0  # CPU seconds (user+sys of this process and its children, never wall); the user's rule is a fast set within 10-15 s
 CARGO_OVERHEAD = 0.3  # cargo's own CPU to find the test binary up to date, per crate
 MAX_CRATES = 2  # a merge touching more is tested in the 3 crates with most changed files: each crate costs its cargo start before any test
 UNIT_FLOOR = 2.0  # the seconds the fixed steps always leave for unit tests
@@ -202,7 +205,12 @@ def oracle_env() -> dict[str, str]:
 
 def compile_ok(command: list[str], env: dict[str, str]) -> str | None:
     """None where the compile succeeded; else its first line of complaint."""
-    done = subprocess.run(command, capture_output=True, text=True, env=env)
+    try:
+        done = cpulimit.run(command, 300, capture_output=True, text=True, env=env)
+    except cpulimit.MemoryLimit as error:
+        return f"memory limit: {error}"
+    except subprocess.TimeoutExpired:
+        return f"timeout: 300 s of CPU  [{' '.join(command[:3])}]"
     if done.returncode == 0:
         return None
     lines = [line for line in (done.stderr or done.stdout).splitlines() if line.strip()]
