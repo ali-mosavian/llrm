@@ -465,6 +465,9 @@ pub struct Collection<'a, 'b> {
     /// How many formulae were offered to `insert_formula`: the work generation
     /// did.
     pub insert_attempts: usize,
+    /// The operands that IV chains take over (user and operand index): not
+    /// fixups.
+    pub chain_uses: HashSet<(InstId, usize)>,
 }
 
 impl<'a, 'b> Collection<'a, 'b> {
@@ -494,6 +497,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             changed: false,
             swapped_compares: Vec::new(),
             insert_attempts: 0,
+            chain_uses: HashSet::default(),
         }
     }
 
@@ -766,6 +770,11 @@ impl<'a, 'b> Collection<'a, 'b> {
 
         for u in &users.uses {
             let instruction = cx.function.instruction(u.user);
+            // A user in a profitable chain is the chain's.
+            let at = instruction.operands.iter().position(|&operand| operand == u.operand);
+            if at.is_some_and(|at| self.chain_uses.contains(&(u.user, at))) {
+                continue;
+            }
             let mut kind = Kind::Basic;
             let mut access_ty = MemAccessTy { mem_ty: None, addr_space: 0 };
             if is_address_use(cx, u.user, u.operand) {

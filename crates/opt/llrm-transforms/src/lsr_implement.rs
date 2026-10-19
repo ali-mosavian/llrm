@@ -52,6 +52,8 @@ pub struct Plan {
     pub swapped_compares: Vec<InstId>,
     /// Where the increments of the loop's induction variables go.
     pub iv_inc_insert_pos: InstId,
+    /// The IV chains to generate.
+    pub chains: Vec<crate::lsr_chain::IvChain>,
 }
 
 /// The phis that a fixup of `plan` rewrites, with the incoming edges whose
@@ -640,6 +642,10 @@ impl Implement<'_, '_> {
                 self.changed = true;
             }
         }
+        for chain in &plan.chains {
+            self.generate_iv_chain(chain);
+            self.changed = true;
+        }
     }
 
     /// The increments of the header's simple recurrences move to the point
@@ -732,6 +738,217 @@ impl crate::lsr_collect::Collection<'_, '_> {
             solution,
             swapped_compares: self.swapped_compares,
             iv_inc_insert_pos: self.iv_inc_insert_pos,
+            chains: Vec::new(),
+        }
+    }
+}
+
+impl Implement<'_, '_> {
+    /// `canFoldIVIncExpr`: whether the increment folds into the address mode of
+    /// the user.
+    fn can_fold_iv_inc_expr(
+        &self,
+        inc_expr: Scev,
+        user: InstId,
+        operand: Operand,
+    ) -> bool {
+        let Some(c) = self.se.as_constant(inc_expr) else { return false };
+        if c.significant_bits() > 64 {
+            return false;
+        }
+        let cx = self.env.cx(&*self.context, &*self.function);
+        crate::lsr_collect::is_address_use(&cx, user, operand)
+            && crate::lsr_collect::is_always_foldable(
+                self.tti,
+                Kind::Address,
+                false,
+                crate::lsr_formula::Immediate(c.sext_value() as i64),
+                false,
+            )
+    }
+
+    /// `GenerateIVChain`: an add or subtract for each increment of the chain,
+    /// making the user's operand from the previous user's.
+    pub fn generate_iv_chain(
+        &mut self,
+        chain: &crate::lsr_chain::IvChain,
+    ) {
+        use crate::lsr_chain::{find_iv_operand, wide_operand};
+        // The head's IV operand, which LSR may have replaced.
+        let head = &chain.incs[0];
+        let mut from = 0;
+        let mut found: Option<(usize, Operand)> = None;
+        loop {
+            let at = {
+                let cx = self.env.cx(&*self.context, &*self.function);
+                find_iv_operand(self.se, &cx, self.l, head.user, from)
+            };
+            let Some(at) = at else { break };
+            let operand = self.function.instruction(head.user).operands[at];
+            let src = {
+                let cx = self.env.cx(&*self.context, &*self.function);
+                wide_operand(&cx, operand)
+            };
+            // The operand computes the expression the chain needs.
+            let (own, wide) = {
+                let cx = self.env.cx(&*self.context, &*self.function);
+                (self.se.get_scev(&cx, operand), self.se.get_scev(&cx, src))
+            };
+            if own == head.inc_expr || wide == head.inc_expr {
+                found = Some((at, src));
+                break;
+            }
+            from = at + 1;
+        }
+        // A concealed head: give up on the chain.
+        let Some((_, mut iv_src)) = found else { return };
+
+        let iv_ty = self.operand_ty(iv_src);
+        let int_ty = {
+            let cx = self.env.cx(&*self.context, &*self.function);
+            self.se.get_effective_scev_type(&cx, self.scev_ty(iv_ty))
+        };
+        let mut left_over: Option<Scev> = None;
+        let mut accum = {
+            let cx = self.env.cx(&*self.context, &*self.function);
+            self.se.get_constant_of_type(&cx, int_ty, 0)
+        };
+        let mut bases: Vec<(Scev, Operand)> = vec![(accum, iv_src)];
+        let latch_term = {
+            let cx = self.env.cx(&*self.context, &*self.function);
+            let lp = cx.loops.get_loop_for(self.l).expect("a loop");
+            self.function.terminator(lp.get_loop_latch(self.function).expect("a latch")).expect("a terminator")
+        };
+
+        for inc in chain.rest() {
+            let insert_pt =
+                if self.function.instruction(inc.user).opcode == Opcode::Phi { latch_term } else { inc.user };
+            // What replaces the user's operand: the IV value held in a
+            // register, or a new one.
+            let mut iv_oper = iv_src;
+            if !self.se.match_zero(inc.inc_expr) {
+                // The increment was made by subtracting two narrow values:
+                // signed.
+                let (inc_expr, new_accum) = {
+                    let cx = self.env.cx(&*self.context, &*self.function);
+                    let inc_expr = self.se.get_noop_or_sign_extend(&cx, inc.inc_expr, int_ty);
+                    let new_accum = self
+                        .se
+                        .get_add_expr(&cx, vec![ScevUse::of(accum), ScevUse::of(inc_expr)], Flags::default(), 0)
+                        .scev;
+                    (inc_expr, new_accum)
+                };
+                accum = new_accum;
+                left_over = Some(match left_over {
+                    Some(prev) => {
+                        let cx = self.env.cx(&*self.context, &*self.function);
+                        self.se
+                            .get_add_expr(&cx, vec![ScevUse::of(prev), ScevUse::of(inc_expr)], Flags::default(), 0)
+                            .scev
+                    }
+                    None => inc_expr,
+                });
+            }
+            // A base from which the increment folds into the address mode.
+            let mut found_base = false;
+            for &(map_scev, map_iv_oper) in bases.iter().rev() {
+                let remainder = {
+                    let cx = self.env.cx(&*self.context, &*self.function);
+                    self.se.get_minus_scev(&cx, ScevUse::of(accum), ScevUse::of(map_scev), 0, 0)
+                };
+                if self.can_fold_iv_inc_expr(remainder, inc.user, inc.iv_operand) {
+                    if !self.se.match_zero(remainder) {
+                        self.rewriter.clear_post_inc();
+                        self.rewriter.set_insert_point(insert_pt);
+                        let inc_v = self.expand_code_for(remainder, Some(int_ty));
+                        let (a, b) = (self.unknown(map_iv_oper), self.unknown(inc_v));
+                        let expr = self.add(&[a, b]);
+                        self.rewriter.set_insert_point(insert_pt);
+                        iv_oper = self.expand_code_for(expr, Some(self.scev_ty(iv_ty)));
+                    } else {
+                        iv_oper = map_iv_oper;
+                    }
+                    found_base = true;
+                    break;
+                }
+            }
+            if !found_base && let Some(rest) = left_over.filter(|&rest| !self.se.match_zero(rest)) {
+                // The increment, expanded.
+                self.rewriter.clear_post_inc();
+                self.rewriter.set_insert_point(insert_pt);
+                let inc_v = self.expand_code_for(rest, Some(int_ty));
+                let (a, b) = (self.unknown(iv_src), self.unknown(inc_v));
+                let expr = self.add(&[a, b]);
+                self.rewriter.set_insert_point(insert_pt);
+                iv_oper = self.expand_code_for(expr, Some(self.scev_ty(iv_ty)));
+                // An increment that does not fold is the next IV value.
+                if !self.can_fold_iv_inc_expr(rest, inc.user, inc.iv_operand) {
+                    bases.push((accum, iv_oper));
+                    iv_src = iv_oper;
+                    left_over = None;
+                }
+            }
+            let oper_ty = self.operand_ty(inc.iv_operand);
+            if iv_ty != oper_ty {
+                iv_oper = self.create_cast(iv_oper, oper_ty, insert_pt);
+            }
+            let slots: Vec<usize> = self
+                .function
+                .instruction(inc.user)
+                .operands
+                .iter()
+                .enumerate()
+                .filter(|&(_, &operand)| operand == inc.iv_operand)
+                .map(|(at, _)| at)
+                .collect();
+            for at in slots {
+                self.function.set_operand(inc.user, at, iv_oper);
+            }
+            if let Operand::Value(v) = inc.iv_operand {
+                self.dead.push(v);
+            }
+        }
+
+        // A new, wider phi may also replace its post-inc, when the head's wide
+        // value was found.
+        if self.function.instruction(chain.tail_user()).opcode == Opcode::Phi {
+            let latch_block = self.function.parent(latch_term).expect("a placed terminator");
+            let phis: Vec<InstId> = self
+                .function
+                .iter_block(self.l)
+                .take_while(|&inst| self.function.instruction(inst).opcode == Opcode::Phi)
+                .collect();
+            for phi in phis {
+                let Some(result) = self.function.instruction(phi).result else { continue };
+                if self.function.value(result).ty != iv_ty {
+                    continue;
+                }
+                let Some(slot) = self
+                    .function
+                    .instruction(phi)
+                    .operands
+                    .chunks(2)
+                    .position(|pair| pair[1] == Operand::Block(latch_block))
+                else {
+                    continue;
+                };
+                let post_inc = self.function.instruction(phi).operands[2 * slot];
+                let Operand::Value(post_value) = post_inc else { continue };
+                if !matches!(self.function.value(post_value).def, ValueDef::Instruction(_)) {
+                    continue;
+                }
+                let same = {
+                    let cx = self.env.cx(&*self.context, &*self.function);
+                    self.se.get_scev(&cx, post_inc) == self.se.get_scev(&cx, iv_src)
+                };
+                if !same {
+                    continue;
+                }
+                let post_ty = self.operand_ty(post_inc);
+                let oper = if iv_ty != post_ty { self.create_cast(iv_src, post_ty, latch_term) } else { iv_src };
+                self.function.set_operand(phi, 2 * slot, oper);
+                self.dead.push(post_value);
+            }
         }
     }
 }

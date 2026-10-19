@@ -137,6 +137,7 @@ fn plan_loop(
     env: &ExpandEnv,
     header: BlockId,
     marked: Option<&[InstId]>,
+    stress_chains: bool,
 ) -> Outcome {
     let planned = |plan| Outcome::Planned(plan);
     let cx = env.cx(context, function);
@@ -189,8 +190,15 @@ fn plan_loop(
         }
     }
 
+    // Chains are looked for where the number of registers is what costs.
+    let chains = if tti.is_num_regs_major_cost_of_lsr() {
+        crate::lsr_chain::collect_chains(se, &cx, header, &users, &is_ephemeral, stress_chains)
+    } else {
+        Default::default()
+    };
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
     let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
+    lsr.chain_uses = chains.inc_set.clone();
     lsr.collect_interesting_types_and_factors(se, &users);
     lsr.collect_fixups_and_initial_formulae(se, &users);
     lsr.collect_loop_invariant_fixups_and_formulae(se);
@@ -205,7 +213,9 @@ fn plan_loop(
     if solution.is_empty() {
         return planned(None);
     }
-    planned(Some(lsr.into_plan(solution)))
+    let mut plan = lsr.into_plan(solution);
+    plan.chains = chains.chains;
+    planned(Some(plan))
 }
 
 /// `ReduceLoopStrength` over every loop of `function`, innermost first;
@@ -217,6 +227,20 @@ pub fn reduced(
     declared: &mut Declared,
     outer: &Outer,
     tti: &dyn Tti,
+) -> bool {
+    reduced_with(context, layout, function, declared, outer, tti, false)
+}
+
+/// [`reduced`], with every IV chain made if `stress_chains`
+/// (`-lsr-stress-ivchain`): for tests of the chains' generation.
+pub fn reduced_with(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut Declared,
+    outer: &Outer,
+    tti: &dyn Tti,
+    stress_chains: bool,
 ) -> bool {
     let headers: Vec<BlockId> = {
         let tree = llrm_mir::domtree::DomTree::of(function);
@@ -233,7 +257,18 @@ pub fn reduced(
         for _ in 0..6 {
             let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
             let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
-            let plan = match plan_loop(context, layout, function, outer, tti, se, &env, header, marked.as_deref()) {
+            let plan = match plan_loop(
+                context,
+                layout,
+                function,
+                outer,
+                tti,
+                se,
+                &env,
+                header,
+                marked.as_deref(),
+                stress_chains,
+            ) {
                 Outcome::Planned(None) => break,
                 Outcome::Edit(edits) => {
                     marked = Some(lsr_prepare::apply(function, &context.types, header, &edits));

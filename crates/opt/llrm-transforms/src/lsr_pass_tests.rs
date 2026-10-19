@@ -25,13 +25,24 @@ fn reduced_on(
     cpu: &str,
     inputs: &[&[i128]],
 ) -> (bool, String) {
+    reduced_stressed(prefix, text, cpu, inputs, false)
+}
+
+/// [`reduced_on`], with every IV chain made if `stress`.
+fn reduced_stressed(
+    prefix: &str,
+    text: &str,
+    cpu: &str,
+    inputs: &[&[i128]],
+    stress: bool,
+) -> (bool, String) {
     let mut module = parsed(&format!("{prefix}{text}"));
     let before = module.clone();
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
     let tti = X86::of_cpu(cpu).unwrap();
-    let changed = crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let changed = crate::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &tti, stress);
     let after = printed(&module);
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     (changed, after)
@@ -157,4 +168,79 @@ exit:
     assert!(changed, "{after}");
     assert!(!after.contains("sitofp"), "{after}");
     assert!(after.contains("IV.S."), "{after}");
+}
+
+/// Stores at `i`, `i + x` and `i + 2x`: `opt-20` shares the one counter `i`
+/// and gives each address its own base, with no chain; so do we, and the
+/// interpreter agrees.
+#[test]
+fn stores_a_variable_stride_apart_keep_one_counter() {
+    let (changed, after) = reduced_on(
+        FLAT,
+        "define i32 @f(i32 %n, i32 %x) {
+entry:
+  %buf = alloca [256 x i32]
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %p0 = getelementptr i32, ptr %buf, i32 %i
+  store i32 %i, ptr %p0
+  %j = add i32 %i, %x
+  %p1 = getelementptr i32, ptr %buf, i32 %j
+  store i32 %i, ptr %p1
+  %k = add i32 %j, %x
+  %p2 = getelementptr i32, ptr %buf, i32 %k
+  store i32 %i, ptr %p2
+  %next = add i32 %i, 1
+  %c = icmp eq i32 %next, %n
+  br i1 %c, label %exit, label %loop
+exit:
+  %q = getelementptr i32, ptr %buf, i32 1
+  %v = load i32, ptr %q
+  ret i32 %v
+}
+",
+        "i486",
+        &[&[3, 4], &[5, 7], &[9, 2]],
+    );
+    assert!(changed, "{after}");
+    assert_eq!(after.matches(" = phi ").count(), 1, "{after}");
+}
+
+const STRIDES: &str = "define i32 @f(i32 %n, i32 %x) {
+entry:
+  %buf = alloca [256 x i32]
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %p0 = getelementptr i32, ptr %buf, i32 %i
+  store i32 %i, ptr %p0
+  %j = add i32 %i, %x
+  %p1 = getelementptr i32, ptr %buf, i32 %j
+  store i32 %i, ptr %p1
+  %k = add i32 %j, %x
+  %p2 = getelementptr i32, ptr %buf, i32 %k
+  store i32 %i, ptr %p2
+  %next = add i32 %i, 1
+  %c = icmp eq i32 %next, %n
+  br i1 %c, label %exit, label %loop
+exit:
+  %q = getelementptr i32, ptr %buf, i32 1
+  %v = load i32, ptr %q
+  ret i32 %v
+}
+";
+
+/// With every chain made (`-lsr-stress-ivchain`), the three stores are one
+/// chain: each address is made from the one before by the increment `x`, and
+/// the interpreter agrees with the original on every input.
+#[test]
+fn a_chain_of_stores_a_variable_stride_apart_computes_the_same() {
+    let (_, plain) = reduced_on(FLAT, STRIDES, "i486", &[&[3, 4], &[5, 7], &[9, 2]]);
+    let (changed, chained) = reduced_stressed(FLAT, STRIDES, "i486", &[&[3, 4], &[5, 7], &[9, 2]], true);
+    assert!(changed, "{chained}");
+    assert_ne!(plain, chained, "the chain changes the code");
+    // `p1 = p0 + 4x` and `p2 = p1 + 4x`: the increment is made once.
+    assert_eq!(chained.matches("shl i32 %x, 2").count(), 1, "{chained}");
+    assert_eq!(chained.matches("getelementptr i8, ptr %").count(), 3, "{chained}");
 }

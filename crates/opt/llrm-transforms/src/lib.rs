@@ -183,6 +183,7 @@ pub mod loopunroll;
 pub mod loopunrollpass;
 pub mod loopversion;
 pub mod lsr;
+pub mod lsr_chain;
 pub mod lsr_collect;
 #[cfg(test)]
 mod lsr_collect_tests;

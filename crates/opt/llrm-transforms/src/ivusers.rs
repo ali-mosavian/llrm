@@ -242,6 +242,14 @@ impl IvUsers {
         true
     }
 
+    /// `isIVUserOrOperand`: whether the walk reached `inst`.
+    pub fn is_iv_user_or_operand(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        self.processed.contains(&inst)
+    }
+
     /// `transformToPostInc`: the use of `cond` takes the post-incremented value
     /// of loop `l`.
     pub fn transform_to_post_inc(
