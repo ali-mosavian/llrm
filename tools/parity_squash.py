@@ -2,7 +2,7 @@
 """The one way to squash a pull request into feat/parity: a bare `gh pr merge` merged stale heads that reverted other PRs' work (#2329 reverted decide's LVI step).
 
     [PARITY_BIN=DIR] tools/parity_squash.py merge PR [--known-red STEP=ISSUE]...   under /tmp/land.lock (land.sh's): merge feat/parity into the PR head here (not pushed), refuse or run the fast set on THAT, then `gh pr merge --squash --match-head-commit`
-    tools/parity_squash.py merge-batch N1..N4 [--known-red STEP=ISSUE]...   up to four ready PRs: ONE fast set on the base with all merged in; on failure halve (the passing half lands first)
+    tools/parity_squash.py merge-batch N1..N8 [--known-red STEP=ISSUE]...   up to eight ready PRs: ONE fast set on the base with all merged in; on failure halve (the passing half lands first)
     tools/parity_squash.py audit [SINCE] every squash on origin/feat/parity since SINCE (default 96468410e): what it deleted without a Deletes:/Reverts: line in its PR's description
 
 Subset rule: the fast set runs on the head (origin/feat/parity, failure set cached per sha by `head-failures`) AND on the merged tree; the merged tree may fail only checks the head fails, and strictly fewer
@@ -110,6 +110,56 @@ def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT) ->
             why.append(f"{path}: the squash {what}{f' and {tests} test function(s)' if tests else ''}{' (no commit of this PR touched it)' if path in outside else ''}; "
                        "name the path in a `Deletes:` or `Reverts:` line of the description if that is meant")
     return why
+
+
+PRECHECK_DIR = Path(os.environ.get("PRECHECK_DIR", Path.home() / "scratch/precheck"))  # a persistent dev checkout + target dir: no dist build, seconds per PR after the first
+
+
+def precheck_checks(dev: Path, target: Path):
+    """The cheap static checks of the gate, each `(name, root -> {failing name: why})`, run on the dev checkout against the persistent dev target."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import parity_smoke  # noqa: PLC0415
+    from buildslot import slotted  # noqa: PLC0415
+
+    env = {**os.environ, "CARGO_TARGET_DIR": str(target)}
+
+    def ratchets(root: Path) -> dict[str, str]:
+        return parity_smoke.ratchet_failures(root, run=lambda command: subprocess.run(slotted(command), cwd=root, env=env, capture_output=True, text=True))
+
+    def fmt(root: Path) -> dict[str, str]:
+        done = subprocess.run(["tools/fmt.sh", "--check"], cwd=root, env=env, capture_output=True, text=True)
+        files = [line.strip() for line in done.stdout.splitlines() if line.strip() and "would change" not in line]
+        return {"fmt": ", ".join(files[:6]) or "fmt --check failed"} if done.returncode else {}
+
+    def docs(root: Path) -> dict[str, str]:
+        return parity_smoke.docs_failures(root) if hasattr(parity_smoke, "docs_failures") else {}
+
+    return [("ratchets", ratchets), ("fmt", fmt), ("docs", docs)]
+
+
+def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHECK_DIR / "target", checks=None, merge=None, deletions=None, info=None, head_failed: set[str] | None = None) -> str:
+    """`N: PASS`, or `N: REFUSED: <names>` after merging PR N's head with feat/parity in the dev checkout and running the cheap static checks (ratchets, fmt, docs, the
+    deletion rule) there: seconds, no dist build. #2836 cost a batch 26 minutes of halving for a failure these checks name. Failures the head already has do not refuse."""
+    info = info or json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
+    if info["baseRefName"] != "feat/parity":
+        return f"{number}: REFUSED: targets {info['baseRefName']}, not feat/parity"
+    if not dev.exists():
+        dev.parent.mkdir(parents=True, exist_ok=True)
+        git("fetch", "-q", "origin", "feat/parity")
+        git("worktree", "add", "-q", "--detach", str(dev), BASE)
+    git("fetch", "-q", "origin", info["headRefOid"], cwd=dev)
+    sha, why = (merge or merged_result)(info["headRefOid"], BASE, dev)
+    if sha is None:
+        return f"{number}: REFUSED: {why}"
+    failed: dict[str, str] = {}
+    for _, check in checks if checks is not None else precheck_checks(dev, target):
+        failed.update(check(dev))
+    if problems := (deletions or refusals)(sha, info["body"] or "", BASE, dev):
+        failed["deletes"] = "; ".join(problems)
+    new = {name: reason for name, reason in failed.items() if name not in (head_failed or set())}
+    if not new:
+        return f"{number}: PASS"
+    return f"{number}: REFUSED: {', '.join(sorted(new))} ({'; '.join(f'{k}: {v[:120]}' for k, v in sorted(new.items()))})"
 
 
 def audit(since: str, cwd: Path = ROOT) -> list[tuple[str, str, str]]:
@@ -289,8 +339,11 @@ def run_smoke(known: dict[str, str] | None = None) -> tuple[bool, str]:
     return smoke.returncode == 0, (smoke.stdout.strip().splitlines() or [""])[-1]
 
 
+MAX_BATCH = 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
+
+
 def batch(prs: list, passes, land, refuse) -> None:
-    """Land `prs` (up to four, ready, in order) with ONE test of the combined tree. `passes(prs)` merges them all into the base and runs the fast set; when it fails the
+    """Land `prs` (up to MAX_BATCH, ready, in order) with ONE test of the combined tree. `passes(prs)` merges them all into the base and runs the fast set; when it fails the
     set is halved (2+2, then singles): the passing half lands, then the other half is tested on top of what landed. `refuse(pr)` names a PR that fails alone."""
     if not prs:
         return
@@ -307,8 +360,10 @@ def batch(prs: list, passes, land, refuse) -> None:
 
 
 def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
-    """`parity_squash.py merge-batch N1..N4`: the PRs in order, one smoke on the base with all of them merged in, each squashed with its head lease."""
+    """`parity_squash.py merge-batch N1..N8`: the PRs in order, one smoke on the base with all of them merged in, each squashed with its head lease."""
     known = known or {}
+    if len(numbers) > MAX_BATCH:
+        raise SystemExit(f"merge-batch takes at most {MAX_BATCH} PRs per smoke, got {len(numbers)}: split the queue")
     infos = {}
     for number in numbers:
         info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
@@ -324,6 +379,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         for number in group:
             git("fetch", "-q", "origin", infos[number]["headRefOid"])
             merge = subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True, text=True)
+            if merge.returncode and (conflicts := git("diff", "--name-only", "--diff-filter=U").split()) and not regenerate(conflicts):
+                continue  # only generated docs conflicted: regenerated and committed
             if merge.returncode:
                 subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
                 print(f"#{number}: does not merge with the others: {merge.stdout.strip()[:120] or merge.stderr.strip()[:120]}")
@@ -418,6 +475,12 @@ def smoke_failures(known: dict[str, str] | None = None) -> tuple[set[str], str]:
     if names is None:
         names = "smoke-did-not-finish" if smoke.returncode else ""
     return {n for n in names.split(",") if n}, (lines or [""])[-1]
+
+
+def head_failures_cached() -> set[str]:
+    """The cached failure set of the current head, or none known (then every failure refuses)."""
+    file = HEAD_FAILURES / f"{git('rev-parse', BASE).strip()}.json"
+    return set(json.loads(file.read_text())) if file.exists() else set()
 
 
 def head_failures(sha: str, compute=None, cache: Path = HEAD_FAILURES) -> set[str]:
@@ -515,6 +578,15 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
 
 
 def main() -> int:
+    """The landing commands run at the landing's build priority (`buildslot.landing`); the others (audit, unlogged) start no cargo."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from buildslot import landing  # noqa: PLC0415
+
+    with landing():
+        return dispatch()
+
+
+def dispatch() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "merge":
         rest = sys.argv[3:]
         return merge(sys.argv[2], parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))
@@ -531,6 +603,10 @@ def main() -> int:
         for sha in missing:
             print(f"UNLOGGED {sha} {git('log', '-1', '--format=%an: %s', sha).strip()[:90]}")
         return 1 if missing else 0
+    if len(sys.argv) >= 3 and sys.argv[1] == "precheck":
+        line = precheck(sys.argv[2], head_failed=head_failures_cached())
+        print(line)
+        return 0 if line.endswith("PASS") else 1
     if len(sys.argv) >= 3 and sys.argv[1] == "merge-batch":
         numbers = [a for a in sys.argv[2:] if not a.startswith("--") and a.isdigit()]
         rest = sys.argv[2:]

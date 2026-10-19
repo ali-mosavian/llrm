@@ -26,7 +26,7 @@
 //!       br i1 %c, t, e
 //! ```
 //!
-//! DEVIATE (J1..J11; stage S4 is not ported yet, which is not a deviation of
+//! DEVIATE (J1..J14; stage S4 is not ported yet, which is not a deviation of
 //! the finished pass):
 //! - J1. No `indirectbr` or `blockaddress` in MIR: `processBlock`'s
 //!   `IndirectBrInst` arm, `hasAddressTakenAndUsed` and the block-address
@@ -56,6 +56,35 @@
 //! - J11. `LVI->getConstantOnEdge` answers that are not integers are dropped
 //!   (`known_from_lattice`), where `evaluateOnPredecessorEdge` would pass a
 //!   pointer constant on to `ConstantFoldCompareInstOperands`.
+//! - J12. Switched on, `recpow.c` m16 -O2 compiles 89.26 -> 105.41 M
+//!   instructions:u (+18.1%, A/A repeatable): the pass is about 1 M of the
+//!   extra work, the rest is a bigger body the old clocks inliner
+//!   (`ipa-recursive.`, `ipa-peel.`) chooses to inline. Exit: W2's
+//!   `inlinecost::decide` lands.
+//! - J13. `queens` -O3 runs 96949 -> 123141 clocks (+27%; instructions 78977 ->
+//!   106279, memory ops 12911 -> 25877). Our output equals `opt`'s. A/B on the
+//!   #2828 head, queens -O3 m32: forcing every ipa-cp candidate to clone (a
+//!   throwaway switch skipping the verdict test in `ipacp.rs`) with it on gives
+//!   93729 clocks / 80393 instructions, below the off figure: the clone
+//!   decision is the lever. `_place` is 24 (on) vs 26 (off) in size; the
+//!   call-site frequency per clone level is 9920, 36448, 337548, 3254456,
+//!   31512005 off (about x10 each) and 12124, 13976, 6377, 481, 8 on; the test
+//!   `benefit * 1000 >= EVAL_THRESHOLD (500) * size` fails at the sixth clone
+//!   (benefit 2, 12 needed), so `.6`..`.8` are never made. Our block
+//!   frequencies equal `opt`'s `print<block-freq>` on the same IR, on and off
+//!   (stage 11 and the stage-12 clones): the estimator is not at fault, the
+//!   threaded bodies make the call sites cold. Owner: cycles-queue (ipa-cp
+//!   clone verdict). Exit: W2's `inlinecost::decide` lands.
+//! - J14. `hanoi` -O2 runs 109 -> 114 clocks. Our output equals `opt`. With it
+//!   on, `_hanoi` does `push ecx; mov ecx, eax` before the `n == 0` test, so
+//!   the early return pays frame setup (shrink-wrap) and the constant copy sits
+//!   before the test (pre-RA MachineSink). Exit: the ShrinkWrap port
+//!   (backend-two) and the MachineSink translation (lir-cleanup-port).
+//!
+//! Rows pair, one binary, on against off (feat/parity 846c0c0c6): clocks
+//! geomean llrm/min(gcc,clang) O2 .9149 -> .9161 (+0.1%), O3 .8851 -> .8889
+//! (+0.4%), Os .9280 -> .9333 (+0.6%); 13 rows worse, 16 better. Code bytes m16
+//! -184/-286/-401 (O2/O3/Os), m32 -470/-890/-152.
 //! - Not yet ported (later stage): `simplifyPartiallyRedundantLoad`.
 //!
 //! # Example
@@ -121,14 +150,15 @@ const PHI_DUPLICATE_THRESHOLD: u32 = 76;
 const IMPLICATION_SEARCH_THRESHOLD: u32 = 3;
 
 /// Off by default since it runs away on `runtime/qb/datetime.c` -Os (the peel
-/// loop never settles); `LLRM_JUMPTHREADING` turns it on.
+/// loop never settles, #2739); on by default again, `LLRM_NO_JUMPTHREADING`
+/// (set) turns it off.
 pub struct JumpThreading {
     pub enabled: bool,
 }
 
 impl JumpThreading {
     pub fn from_env() -> Self {
-        Self { enabled: llrm_support::env_flag!("LLRM_JUMPTHREADING") }
+        Self { enabled: !llrm_support::env_flag!("LLRM_NO_JUMPTHREADING") }
     }
 }
 
@@ -307,14 +337,17 @@ impl State<'_, '_> {
             .collect()
     }
 
-    /// `getSinglePredecessor`.
+    /// `getSinglePredecessor`: the block of the one edge into `block`. Two
+    /// edges from one block (`br %c, %t, %t`) are not a single predecessor;
+    /// that is `getUniquePredecessor`.
     fn single_predecessor(
         &self,
         block: BlockId,
     ) -> Option<BlockId> {
-        let edges = self.pred_edges(block);
-        let first = *edges.first()?;
-        edges.iter().all(|&one| one == first).then_some(first)
+        match self.pred_edges(block).as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        }
     }
 
     /// `successors(BB)`: one per edge, in operand order.

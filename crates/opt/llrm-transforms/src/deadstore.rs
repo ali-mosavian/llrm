@@ -482,6 +482,39 @@ impl<'a> Dse<'a> {
         self.same_object(loc, &term_loc) && self.is_overwrite(term, access, &term_loc, loc) == Overwrite::Complete
     }
 
+    /// Whether the call reaches the object of `loc` through its filled
+    /// arguments alone: a pointer into it passed another way (a source
+    /// argument) reads it before the fill.
+    fn reaches_only_through_fills(
+        &self,
+        call: InstId,
+        loc: &Location,
+    ) -> bool {
+        let unit = self.aa.unit();
+        let Some(pointer) = loc.reference.pointer else { return false };
+        let target = llrm_mir::valuetracking::underlying(unit.context, unit.layout, self.function, pointer).0;
+        let reaching = self
+            .function
+            .instruction(call)
+            .operands
+            .iter()
+            .filter(|&&one| {
+                llrm_mir::valuetracking::underlying(unit.context, unit.layout, self.function, one).0 == target
+            })
+            .count();
+        let filled = self
+            .accesses
+            .fills(call)
+            .iter()
+            .filter(|fill| {
+                fill.pointer.is_some_and(|one| {
+                    llrm_mir::valuetracking::underlying(unit.context, unit.layout, self.function, one).0 == target
+                })
+            })
+            .count();
+        reaching <= filled
+    }
+
     /// `isRemovable`: not a volatile store or memset.
     fn is_removable(
         &self,
@@ -972,7 +1005,10 @@ impl<'a> Dse<'a> {
             // eliminated.
             // A call that initializes the object reads it only after writing:
             // its own read is no read of the dead def.
-            let own_read = init && use_inst == killing_inst && self.same_object(killing_loc, &maybe_dead_loc);
+            let own_read = init
+                && use_inst == killing_inst
+                && self.same_object(killing_loc, &maybe_dead_loc)
+                && self.reaches_only_through_fills(use_inst, &maybe_dead_loc);
             if self.is_read_clobber(&maybe_dead_loc, use_inst) && !own_read {
                 return None;
             }
@@ -1079,8 +1115,10 @@ impl<'a> Dse<'a> {
         def: InstId,
         user: InstId,
     ) -> bool {
+        // An instruction does not dominate itself: the killing call's own read
+        // is looked at.
         if def == user {
-            return true;
+            return false;
         }
         let (Some(a), Some(b)) = (self.function.parent(def), self.function.parent(user)) else { return false };
         if a != b {

@@ -698,6 +698,7 @@ pub(crate) fn llvm_order(
     let slot =
         |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
     let decide = |name| slot(name, Box::new(decide::Decide));
+    let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg));
     let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
     let fold = |name| slot(name, Box::new(fold::Fold));
     let dead = |name| slot(name, Box::new(dead::Dead));
@@ -739,7 +740,10 @@ pub(crate) fn llvm_order(
         // themselves.
         Phase::Module | Phase::Backend => Vec::new(),
         Phase::Early => {
-            vec![decide("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
+            // EarlyFPM's `SimplifyCFGPass()` (PassBuilderPipelines.cpp#L1178),
+            // at the default options. The slot keeps the name
+            // `decide@1178`.
+            vec![simplify_cfg("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
         }
         Phase::Cleanup => vec![
             Box::new(Together {
@@ -791,7 +795,8 @@ pub(crate) fn llvm_order(
                 licm("licm@724", !rotating),
             ]);
             if rotating {
-                // DEVIATE (D10 R7): the pin duplicates headers at -Os; `size` is -Os and -Oz.
+                // DEVIATE (D10 R7): the pin duplicates headers at -Os; `size`
+                // is -Os and -Oz.
                 list.push(slot(
                     "rotate@728",
                     Box::new(looprotate::LoopRotate { duplicate_headers: applied.options.copy_headers && !size }),
