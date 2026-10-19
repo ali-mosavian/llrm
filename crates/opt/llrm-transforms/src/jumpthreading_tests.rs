@@ -37,7 +37,7 @@ fn fixtures() -> Vec<PathBuf> {
 fn run(text: &str) -> String {
     let mut module = parsed(text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(JumpThreading);
+    manager.add(JumpThreading { enabled: true });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
     llrm_mir::print::module(&module)
@@ -250,4 +250,11 @@ e:
 fn a_block_placed_after_the_current_one_is_visited_in_the_same_sweep() {
     let after = run(&fixture("new_block_visited"));
     assert!(after.contains("%t3 = phi i16 [ 2, %b50 ]"), "{after}");
+}
+
+/// JumpThreading stage 1 ran away on datetime.c -Os (50 GB in 100 s) while on
+/// by default: unset, the pass is off.
+#[test]
+fn test_jumpthreading_is_off_unless_the_env_asks() {
+    assert_eq!(JumpThreading::from_env().enabled, std::env::var_os("LLRM_JUMPTHREADING").is_some());
 }

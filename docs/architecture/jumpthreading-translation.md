@@ -52,7 +52,7 @@ T = missing translation, a TODO row (section 3). Present and used as they are: L
 
 The pinned list ([slots](parity-pipeline-slots.md)) runs `jump-threading` twice per function at -O2, -Os and -O3 (not -O1), after `early-cse<memssa>` and after `dfa-jump-threading`; 6 runs summed at x_hanoi2, 22 at d_faces, at -O2 and -O3 (run-count tables). Size gate: `jump-threading-threshold` 6, 3 for `minsize` ([L310](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L310)), 76 phis ([`PhiDuplicateThreshold`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L99)); no threading across loop headers.
 
-Preserved: LVI and the dominator tree (`PreservedAnalyses` keeps both through `preserve`; the translation updates them through `DomTreeUpdater` and `LVI::thread_edge`), nothing else. Rule: ON by default under `llvm_order`, the replaced `decide` threading off behind `LLRM_NO_JUMPTHREADING` (presence, never `=0`); old rounds keep `decide` unchanged.
+Preserved: LVI and the dominator tree (`PreservedAnalyses` keeps both through `preserve`; the translation updates them through `DomTreeUpdater` and `LVI::thread_edge`), nothing else. Rule: was ON by default under `llvm_order`, the replaced `decide` threading off behind `LLRM_JUMPTHREADING` (off by default: datetime.c -Os runs away) (presence, never `=0`); old rounds keep `decide` unchanged.
 
 ## 5. Stages and oracles
 
@@ -69,7 +69,7 @@ Fail-first tests for S1, one per shape, each seen failing with the shape's code 
 
 ## 6. State of S1 to S3
 
-`jumpthreading.rs` ports S1, S2 and S3; the slots run before `decide@675`/`decide@809`, which keep their threading until S4 closes. Switch: `LLRM_NO_JUMPTHREADING`. Fifteen fixtures in `tests/jumpthreading` read identical to `opt` through `difftest.py pair`; each function of S2 and S3 was seen failing a fixture with the function stubbed. Deviations J1 to J11 are in the module header.
+`jumpthreading.rs` ports S1, S2 and S3; the slots run before `decide@675`/`decide@809`, which keep their threading until S4 closes. Switch: `LLRM_JUMPTHREADING` (off by default: datetime.c -Os runs away). Fifteen fixtures in `tests/jumpthreading` read identical to `opt` through `difftest.py pair`; each function of S2 and S3 was seen failing a fixture with the function stubbed. Deviations J1 to J11 are in the module header.
 
 The instrument is the slot oracle, not the `decide` inputs the first S1 count used: `difftest.py inputs jumpthreading@668|@809` over `llrm-c -O2 --dump` of `d_faces` (`LLRM_DUMP_INPUTS=1`), 3 functions per slot. After S1 three differed (`668/03`, `809/02`, `809/03`); after S3 all changed functions are identical (2 of 2 at each slot).
 
