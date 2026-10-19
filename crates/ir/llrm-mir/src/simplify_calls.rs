@@ -25,7 +25,7 @@ use super::*;
 use crate::valuetracking::pattern::{IntrinsicId, intrinsic_id_of_name};
 
 /// `Intrinsic::{smax,smin,umax,umin}`: `(signed, max)`.
-fn min_max_kind(id: IntrinsicId) -> Option<(bool, bool)> {
+pub(super) fn min_max_kind(id: IntrinsicId) -> Option<(bool, bool)> {
     match id {
         IntrinsicId::Smax => Some((true, true)),
         IntrinsicId::Smin => Some((true, false)),
@@ -36,7 +36,7 @@ fn min_max_kind(id: IntrinsicId) -> Option<(bool, bool)> {
 }
 
 /// `getInverseMinMaxIntrinsic`.
-fn inverse_min_max(id: IntrinsicId) -> IntrinsicId {
+pub(super) fn inverse_min_max(id: IntrinsicId) -> IntrinsicId {
     match id {
         IntrinsicId::Smax => IntrinsicId::Smin,
         IntrinsicId::Smin => IntrinsicId::Smax,
@@ -46,7 +46,7 @@ fn inverse_min_max(id: IntrinsicId) -> IntrinsicId {
 }
 
 /// `MinMaxIntrinsic::getSaturationPoint(IID, BitWidth)`.
-fn saturation_point(
+pub(super) fn saturation_point(
     id: IntrinsicId,
     width: u32,
 ) -> u128 {
@@ -66,6 +66,15 @@ fn non_strict_predicate(id: IntrinsicId) -> IntPredicate {
         IntrinsicId::Umax => IntPredicate::Uge,
         _ => IntPredicate::Ule,
     }
+}
+
+/// `MinMaxIntrinsic::getIdentity()`: the value that leaves the other operand.
+pub(super) fn min_max_identity(
+    id: IntrinsicId,
+    width: Option<u32>,
+) -> Option<u128> {
+    min_max_kind(id)?;
+    Some(saturation_point(inverse_min_max(id), width?))
 }
 
 /// `ICmpInst::compare(A, B, Pred)` of two integers of `width` bits.
@@ -106,7 +115,7 @@ fn null_value(
 
 /// `m_MaxOrMin(m_Value(X), m_Value(Y))`: a call of `smax`, `smin`, `umax` or
 /// `umin`: its id and arguments.
-fn max_or_min(
+pub(super) fn max_or_min(
     q: &Query,
     v: Operand,
 ) -> Option<(IntrinsicId, Operand, Operand)> {

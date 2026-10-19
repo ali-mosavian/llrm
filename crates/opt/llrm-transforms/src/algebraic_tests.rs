@@ -215,8 +215,10 @@ fn test_shifts_combine_short_of_the_width() {
     let text = unary(16, "  %m = shl i16 %x, 1\n  %r = shl i16 %m, 1\n  ret i16 %r\n");
     assert_eq!(checked(&text, &singles(&edges(16))), unary(16, "  %0 = shl i16 %x, 2\n  ret i16 %0\n"));
     unchanged(&unary(16, "  %m = shl i16 %x, 1\n  %r = shl i16 %m, 1\n  %s = add i16 %m, %r\n  ret i16 %s\n"));
-    // A count past the width is poison, and stays.
-    unchanged(&unary(16, "  %m = shl i16 %x, 16\n  %r = shl i16 %m, 1\n  ret i16 %r\n"));
+    // A count past the width is poison: never combined into one count past the
+    // width (17); ValueTracking knows the result zero, a refinement of it.
+    let (_, after) = simplified(&unary(16, "  %m = shl i16 %x, 16\n  %r = shl i16 %m, 1\n  ret i16 %r\n"));
+    assert!(!bare(&after).contains("17"), "{}", bare(&after));
 }
 
 /// Shifted out entirely is zero, not a shift by the width, which is poison.
@@ -388,7 +390,9 @@ fn test_integer_identities() {
         unary(16, "  ret i16 %x\n")
     );
     unchanged(&unary(16, "  %r = sub i16 0, %x\n  ret i16 %r\n"));
-    unchanged(&unary(16, "  %r = shl i16 0, %x\n  %s = add i16 %r, 1\n  ret i16 %s\n"));
+    // `0 << x` is zero (poison past the width): ValueTracking knows its bits.
+    let (_, after) = simplified(&unary(16, "  %r = shl i16 0, %x\n  %s = add i16 %r, 1\n  ret i16 %s\n"));
+    assert_eq!(bare(&after), unary(16, "  ret i16 1\n"));
 }
 
 #[test]
