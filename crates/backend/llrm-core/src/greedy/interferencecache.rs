@@ -62,8 +62,8 @@ struct RegUnitInfo {
     unit: u32,
     /// The union's tag when this entry last looked.
     virt_tag: u32,
-    /// `VirtI`: the start key of an entry of the union; None at the end.
-    virt_i: Option<SlotIndex>,
+    /// `VirtI`: the (start, stop) of an entry of the union; None at the end.
+    virt_i: Option<(SlotIndex, SlotIndex)>,
     /// `FixedI`: index into the fixed range's segments.
     fixed_i: usize,
 }
@@ -78,23 +78,6 @@ struct Entry {
     prev_pos: SlotIndex,
     reg_units: Vec<RegUnitInfo>,
     blocks: Vec<BlockInterference>,
-}
-
-/// `IntervalMap::const_iterator::advanceTo`: the first entry at or after `at`
-/// whose stop is after `x`. A few steps, then a search.
-fn advance_to(
-    liu: &LiveIntervalUnion,
-    at: Option<SlotIndex>,
-    x: &SlotIndex,
-) -> Option<SlotIndex> {
-    let mut key = at?;
-    for _ in 0..4 {
-        if liu.stop_of(&key) > *x {
-            return Some(key);
-        }
-        key = liu.next(&key)?;
-    }
-    liu.find(x)
 }
 
 impl Entry {
@@ -190,12 +173,12 @@ impl Entry {
         if self.prev_pos != start {
             if !self.prev_pos.is_valid() || start < self.prev_pos {
                 for rui in &mut self.reg_units {
-                    rui.virt_i = liu(rui.unit).find(&start);
+                    rui.virt_i = liu(rui.unit).find_entry(&start);
                     rui.fixed_i = fixed.fixed_range(rui.unit).map_or(0, |f| f.find(&start));
                 }
             } else {
                 for rui in &mut self.reg_units {
-                    rui.virt_i = advance_to(liu(rui.unit), rui.virt_i, &start);
+                    rui.virt_i = liu(rui.unit).advance_entry(rui.virt_i, &start);
                     if let Some(f) = fixed.fixed_range(rui.unit) {
                         if rui.fixed_i != f.segments.len() {
                             rui.fixed_i = f.advance_to(rui.fixed_i, &start);
@@ -215,7 +198,7 @@ impl Entry {
 
             // Check for first interference from virtregs.
             for rui in &self.reg_units {
-                let Some(i) = rui.virt_i else { continue };
+                let Some((i, _)) = rui.virt_i else { continue };
                 if i >= stop {
                     continue;
                 }
@@ -276,14 +259,13 @@ impl Entry {
         // Check for last interference in block.
         for rui in &mut self.reg_units {
             let u = liu(rui.unit);
-            let Some(i) = rui.virt_i else { continue };
-            if i >= stop {
+            let Some(at) = rui.virt_i else { continue };
+            if at.0 >= stop {
                 continue;
             }
-            rui.virt_i = advance_to(u, Some(i), &stop);
-            let backup = rui.virt_i.is_none_or(|k| k >= stop);
-            let at = if backup { u.prev(rui.virt_i.as_ref()) } else { rui.virt_i };
-            let stop_i = u.stop_of(&at.expect("an entry before the end"));
+            let (moved, before) = u.advance_to_last_before(at, &stop);
+            rui.virt_i = moved;
+            let stop_i = before.1;
             if !last.is_valid() || stop_i > last {
                 last = stop_i;
             }
@@ -567,6 +549,35 @@ mod tests {
         assert_eq!(first, at[0][5]);
         assert_eq!(last, at[2][3]);
         assert_eq!(read(&mut cache, &env, RegId::AX, 2), (true, at[0][5], at[2][3]));
+    }
+
+    /// `advanceTo` and `--I` searched the union's map once per step: walking 3
+    /// blocks of 9 entries each took 68 searches (d_faces -O2
+    /// m32, `Cursor::move_to_block` 20.0 Minstr against LLVM's 4.0 for
+    /// `Entry::update`). An iterator held with its stop steps for free.
+    #[test]
+    fn walking_the_blocks_of_a_union_searches_its_map_a_few_times_per_block() {
+        let (indexes, at) = body();
+        let mut m = matrix(Box::new(NoFixed));
+        for b in 0..3 {
+            for i in 0..9 {
+                m.assign(&interval(1 + (b * 9 + i) as u32, at[b][i], at[b][i + 1]), RegId::AX);
+            }
+        }
+        let env = Env { matrix: &m, indexes: &indexes };
+        let mut cache = InterferenceCache::new(3);
+        let mut c = Cursor::new();
+        c.set_phys_reg(&mut cache, &env, Some(RegId::AX));
+        let before = crate::liveness::liveintervalunion::lookups();
+        for b in 0..3 {
+            c.move_to_block(&mut cache, &env, b);
+            assert_eq!((c.first(), c.last()), (at[b][0], at[b][9]));
+        }
+        let searched = crate::liveness::liveintervalunion::lookups() - before;
+        assert!(
+            searched <= 24,
+            "3 blocks of 9 entries searched the map {searched} times (24 allowed; 68 stepping with a search each)"
+        );
     }
 
     /// A stale answer after `unassign` would make a split region think the
