@@ -26,8 +26,12 @@ while true; do
   if [ -z "$g" ]; then
     cand=(); for m in $(sed -n '1,40p' $Q); do [ -z "$(group "$m")" ] && cand+=("$m"); done
     # the cheap static checks (ratchets, fmt, docs, deletions) on each PR merged with feat/parity: a failure never reaches a batch (and never halves it)
-    cand=($(prechecked "${cand[@]:0:${PRECHECK_WINDOW:-16}}"))
-    batch=($(pick_disjoint 8 "${cand[@]}"))
+    if [ "${LAND_FAST:-}" = 1 ]; then  # the user's call: no precheck, no smoke, up to 16 PRs in queue order; merge-batch leaves out the ones that cannot join
+      batch=("${cand[@]:0:16}")
+    else
+      cand=($(prechecked "${cand[@]:0:${PRECHECK_WINDOW:-16}}"))
+      batch=($(pick_disjoint 8 "${cand[@]}"))
+    fi
     [ ${#batch[@]} -eq 0 ] && { sleep 60; continue; }
   fi
   for m in "${batch[@]}"; do sed -i "/^$m\$/d" $Q; done

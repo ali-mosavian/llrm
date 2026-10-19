@@ -479,3 +479,10 @@ def test_a_precheck_verdict_is_cached_per_pr_head_and_feat_parity_sha(tmp_path, 
     assert ps.precheck("5", base_sha="p1", **args) == "5: PASS" and ps.precheck("5", base_sha="p1", **args) == "5: PASS" and len(merges) == 1
     assert ps.precheck("5", base_sha="p2", **args) == "5: PASS" and len(merges) == 2
     assert ps.precheck("9", base_sha="p2", **args) == "9: PASS" and len(merges) == 2  # the verdict is for the head sha, whichever number asks
+
+
+def test_a_fast_batch_leaves_out_the_pr_that_cannot_join_and_keeps_the_rest():
+    """The user's call: merge everything, skip the tests. One PR that conflicts or deletes unnamed code is left out with its reason; it does not fail or halve the batch."""
+    why = {"2": "conflicts with an earlier PR of the batch", "4": "deletes 31 lines"}
+    kept, left_out = ps.fast_merge(["1", "2", "3", "4", "5"], lambda number: why.get(number, ""))
+    assert kept == ["1", "3", "5"] and left_out == why, (kept, left_out)
