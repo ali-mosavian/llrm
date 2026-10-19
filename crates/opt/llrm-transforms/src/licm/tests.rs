@@ -708,3 +708,60 @@ b3:
     assert!(crate::testing::printed(&module).contains("%k = mul"), "premise: the multiply is hoisted");
     assert_eq!(misses - misses_before, 1, "the next ask derived the annotations again");
 }
+
+/// A call that reads and writes `inaccessiblemem` only (a BIOS poll: the
+/// speaker example's `key_pressed`) is not one that `doesNotAccessMemory`: the
+/// bottom-tested loop runs it every trip, and LICM took it out of the loop, so
+/// `wait` never saw a key (examples/speaker.nib never ended, once LoopRotate
+/// made the poll's block one the loop certainly runs).
+#[test]
+fn test_a_call_that_touches_only_inaccessible_memory_stays_in_the_loop() {
+    let text = "declare cc 1005 i32 @now() addrspace(1) nearcode memory(inaccessiblemem: readwrite) nounwind
+declare cc 1005 i8 @key_pressed() addrspace(1) nearcode memory(inaccessiblemem: readwrite) nounwind
+
+define i8 @f(i16 %0) {
+b1:
+  %1 = call cc 1005 addrspace(1) i32 @now()
+  %2 = icmp ne i16 %0, 0
+  br i1 %2, label %13, label %b4
+
+b3:
+  %3 = phi i32 [ %1, %13 ], [ %11, %b10 ]
+  %4 = phi i16 [ %0, %13 ], [ %10, %b10 ]
+  %5 = call cc 1005 addrspace(1) i8 @key_pressed()
+  %6 = icmp ne i8 %5, 0
+  br i1 %6, label %b5, label %b7
+
+b4:
+  ret i8 1
+
+b5:
+  ret i8 0
+
+b7:
+  %7 = call cc 1005 addrspace(1) i32 @now()
+  %8 = icmp ne i32 %7, %3
+  br i1 %8, label %b8, label %b10
+
+b8:
+  %9 = sub nuw i16 %4, 1
+  br label %b10
+
+b10:
+  %10 = phi i16 [ %9, %b8 ], [ %4, %b7 ]
+  %11 = phi i32 [ %7, %b8 ], [ %3, %b7 ]
+  %12 = icmp ne i16 %10, 0
+  br i1 %12, label %b3, label %14
+
+13:
+  br label %b3
+
+14:
+  br label %b4
+}
+";
+    let mut module = parsed(text);
+    let after = crate::testing::managed(&mut module, Licm { apply: true, speculate: true });
+    let header = after.split("\nb3:").nth(1).expect("the loop header").split("\n\n").next().expect("its end");
+    assert!(header.contains("@key_pressed()"), "the poll left the loop: {after}");
+}
