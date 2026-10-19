@@ -39,6 +39,10 @@ use llrm_mir::tti::*;
 pub struct X86 {
     pub sse1: bool,
     pub sse2: bool,
+    /// `TuningMacroFusion` (Sandy Bridge and newer tunings, and `core2`'s as
+    /// X86.td lists it); `branchfusion` is a Bulldozer-and-newer feature none
+    /// of the profiles has.
+    pub macro_fusion: bool,
 }
 
 impl X86 {
@@ -46,9 +50,9 @@ impl X86 {
     pub fn of_cpu(cpu: &str) -> Option<X86> {
         match cpu {
             "i386" | "i486" | "pentium" | "pentiumpro" | "k5" | "k6" | "athlon" => {
-                Some(X86 { sse1: false, sse2: false })
+                Some(X86 { sse1: false, sse2: false, macro_fusion: false })
             }
-            "core2" => Some(X86 { sse1: true, sse2: true }),
+            "core2" => Some(X86 { sse1: true, sse2: true, macro_fusion: true }),
             _ => None,
         }
     }
@@ -572,6 +576,65 @@ impl Tti for X86 {
             3 | 5 | 9 => !has_base_reg,
             _ => false,
         }
+    }
+
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36734
+    /// `isLegalAddImmediate`: a signed 32-bit immediate (a negative one is a
+    /// `sub`).
+    fn is_legal_add_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36730
+    fn is_legal_icmp_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L8045
+    /// `getScalingFactorCost`: a second register in the address is one, a
+    /// plain address nothing; an illegal mode is invalid.
+    fn scaling_factor_cost(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> Cost {
+        if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) {
+            Cost::of(i64::from(scale != 0))
+        } else {
+            Cost::INVALID
+        }
+    }
+
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7202
+    /// `isLSRCostLess`: "instruction number 1st priority".
+    fn is_lsr_cost_less(
+        &self,
+        a: &LsrCost,
+        b: &LsrCost,
+    ) -> bool {
+        let key = |c: &LsrCost| {
+            (c.insns, c.num_regs, c.add_rec_cost, c.num_iv_muls, c.num_base_adds, c.scale_cost, c.imm_cost, c.setup_cost)
+        };
+        key(a) < key(b)
+    }
+
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7211
+    fn can_macro_fuse_cmp(&self) -> bool {
+        self.macro_fusion
+    }
+
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L173
+    /// 32-bit: eight general registers.
+    fn number_of_gpr_registers(&self) -> u32 {
+        8
     }
 
     /// `X86TTIImpl::getCastInstrCost`, scalars:

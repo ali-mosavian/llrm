@@ -146,7 +146,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("unroll@753", Simplify, "loop-unroll-full", Translated, ""),
     entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
     entry("inferspace@787", Simplify, "infer-address-spaces (target)", Old, ""),
-    entry("gvn@787", Simplify, "gvn", Old, "gvn-port"),
+    entry("gvn@787", Simplify, "gvn", Translated, ""),
     entry("sccp@792", Simplify, "sccp", Translated, ""),
     entry("bdce@797", Simplify, "bdce", Translated, ""),
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),

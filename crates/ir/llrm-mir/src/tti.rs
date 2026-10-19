@@ -206,6 +206,28 @@ pub enum ImmUser {
     Unknown,
 }
 
+/// `TTI::LSRCost`: what loop strength reduction compares formulas by.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LsrCost {
+    pub insns: u32,
+    pub num_regs: u32,
+    pub add_rec_cost: u32,
+    pub num_iv_muls: u32,
+    pub num_base_adds: u32,
+    pub imm_cost: u32,
+    pub setup_cost: u32,
+    pub scale_cost: u32,
+}
+
+/// `TTI::MemIndexedMode`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemIndexedMode {
+    PreInc,
+    PreDec,
+    PostInc,
+    PostDec,
+}
+
 /// `TTI::UnrollingPreferences`: what the unroller may do, as the target sets
 /// it.
 #[derive(Clone, Debug)]
@@ -352,6 +374,80 @@ pub trait Tti {
         has_base_reg: bool,
         scale: i64,
     ) -> bool;
+
+    /// `TargetTransformInfoImplBase::isLegalAddImmediate`: none.
+    fn is_legal_add_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        let _ = imm;
+        false
+    }
+
+    /// `TargetTransformInfoImplBase::isLegalICmpImmediate`: none.
+    fn is_legal_icmp_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        let _ = imm;
+        false
+    }
+
+    /// `getScalingFactorCost`: every legal addressing mode is free, the rest
+    /// invalid (`TargetTransformInfoImplBase`'s guess).
+    fn scaling_factor_cost(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> Cost {
+        if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) { Cost::FREE } else { Cost::INVALID }
+    }
+
+    /// `isLSRCostLess`: registers first, then the add-recurrence cost, the IV
+    /// multiplies, the base adds, the scale, the immediates and the setup.
+    fn is_lsr_cost_less(
+        &self,
+        a: &LsrCost,
+        b: &LsrCost,
+    ) -> bool {
+        let key = |c: &LsrCost| {
+            (c.num_regs, c.add_rec_cost, c.num_iv_muls, c.num_base_adds, c.scale_cost, c.imm_cost, c.setup_cost)
+        };
+        key(a) < key(b)
+    }
+
+    /// `isNumRegsMajorCostOfLSR`.
+    fn is_num_regs_major_cost_of_lsr(&self) -> bool {
+        true
+    }
+
+    /// `shouldDropLSRSolutionIfLessProfitable`.
+    fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        false
+    }
+
+    /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.
+    fn can_macro_fuse_cmp(&self) -> bool {
+        false
+    }
+
+    /// `isIndexedLoadLegal` and `isIndexedStoreLegal`: a pre- or post-indexed
+    /// access of the mode.
+    fn is_indexed_access_legal(
+        &self,
+        mode: MemIndexedMode,
+        ty: Ty,
+    ) -> bool {
+        let _ = (mode, ty);
+        false
+    }
+
+    /// `getNumberOfRegisters` of the general-purpose class.
+    fn number_of_gpr_registers(&self) -> u32 {
+        8
+    }
 
     /// `getCastInstrCost`.
     fn cast_cost(

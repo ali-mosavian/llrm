@@ -2544,6 +2544,39 @@ b4:
     assert!(readers(&printed, "%i").iter().all(|line| !line.contains("icmp")), "{printed}");
 }
 
+/// The test of the counter written before its step (LoopRotate's order) was
+/// rewritten to read the step it precedes: "does not dominate" after lsr in
+/// runtime.nib's `floats.compare`, which broke flat_containers and planets.
+#[test]
+fn test_a_latch_test_written_before_the_step_is_moved_after_it() {
+    let text = "define i16 @f(i16 %n, i16 %k) {
+b0:
+  %g = icmp eq i16 %n, 0
+  br i1 %g, label %b4, label %b1
+
+b1:
+  br label %b2
+
+b2:
+  %i = phi i16 [ %n, %b1 ], [ %next, %b2 ]
+  %acc = phi i16 [ 0, %b1 ], [ %sum, %b2 ]
+  %c = icmp eq i16 %i, 1
+  %next = sub nsw i16 %i, 1
+  %mix = add i16 %next, %k
+  %sum = add i16 %acc, %mix
+  br i1 %c, label %b3, label %b2
+
+b3:
+  ret i16 %sum
+
+b4:
+  ret i16 0
+}
+";
+    let printed = same(text, &[&[1, 3], &[2, 3], &[5, -4], &[9, 0]]);
+    assert!(readers(&printed, "%i").iter().all(|line| !line.contains("icmp")), "{printed}");
+}
+
 /// Sixteen loops one after another, each walking `@a` by an index it doubles.
 /// After each loop it changed, `lsr` swept the whole function for dead code:
 /// the function's size times the loops, 29% of `lsr` on the scaling `unrolled`
