@@ -2954,6 +2954,14 @@ impl Selector<'_, '_, '_> {
             return Some(bits);
         }
         let context = &self.module.context;
+        // A constant offset from one wraps within the segment.
+        if let ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr { source, operands, .. }) =
+            &context.get(id).kind
+        {
+            let base = self.far_number(operands[0])?;
+            let moved = crate::backend::globals::constant_offset(self.module, &self.layout, *source, &operands[1..]).ok()?;
+            return Some(base & !0xFFFF | (base + moved) & 0xFFFF);
+        }
         let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) =
             &context.get(id).kind
         else {
