@@ -639,7 +639,6 @@ pub(crate) fn _renamed(
 mod tests {
     //! Port of `tests/test_coalesce.py`.
 
-    use std::collections::BTreeSet;
     use std::sync::Arc;
 
     use llrm_lir::registers::RegId;
@@ -647,7 +646,7 @@ mod tests {
     use super::{_interference, _merged};
     use crate::analysis::intervals;
     use crate::backend::{allocate, cpu::ProfileOrName, select, target};
-    use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
+    use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 

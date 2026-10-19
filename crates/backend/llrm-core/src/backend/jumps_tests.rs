@@ -1490,21 +1490,6 @@ fn test_threading_a_chain_of_removable_jumps_visits_blocks_a_few_times_not_n_tim
     assert!(visits <= 3 * (count as usize + 1), "{visits} block visits for {count} removable jumps");
 }
 
-/// The ends of a block's real instructions, by name.
-fn named(block: &LirBlock) -> Vec<String> {
-    block.insns.iter().filter_map(|one| one.what.as_ref()).map(|what| what.name.clone().unwrap_or_default()).collect()
-}
-
-fn with_odds(
-    mut made: LirBody,
-    edges: &[(i64, i64, f64)],
-) -> LirBody {
-    for &(from, to, chance) in edges {
-        made.odds.taken.insert((from, to), (chance * crate::model::lir::BlockOdds::CERTAIN) as u32);
-    }
-    made
-}
-
 /// x_adler's loop: the latch `jne top; jmp exit` with a short return as the
 /// exit. The copy of the return in the jump's place left the loop's back
 /// branch taken over the copy on every trip (9 clocks a trip, not 7): the
@@ -1753,4 +1738,23 @@ fn a_dispatch_of_many_arms_places_each_block_once() {
     seen.sort_unstable();
     seen.dedup();
     assert_eq!(seen.len(), placed_body.blocks.len(), "a block placed twice");
+}
+
+/// Finding the blocks on a cycle looked through every block for each block that
+/// is a component alone: 1600 diamonds spent 247 M of 304 M instructions of
+/// the tail merge there, the merge's cost growing 3.4x for a doubled body. The
+/// scan is once per body; a self-loop and a two-block cycle are still found.
+#[test]
+fn test_the_blocks_on_a_cycle_are_found_without_a_scan_per_block() {
+    use super::tailmerge::{SELF_LOOP_SCANS, cyclic_blocks};
+    let n = 400;
+    let mut blocks: Vec<LirBlock> = (0..n).map(|at| block(at, vec![_jump(at, at + 1)], vec![at + 1])).collect();
+    blocks.push(block(n, vec![_branch(n, "je", n), _jump(n + 1, n + 2)], vec![n, n + 2]));
+    blocks.push(block(n + 2, vec![_return(n + 2)], vec![]));
+    SELF_LOOP_SCANS.with(|one| one.set(0));
+    let blocks: Vec<crate::model::lir::Block> = blocks.into_iter().map(crate::model::lir::Block::from).collect();
+    let found = cyclic_blocks(&blocks);
+    let scans = SELF_LOOP_SCANS.with(|one| one.get());
+    assert!(scans <= 4 * blocks.len(), "{scans} scans for {} blocks", blocks.len());
+    assert_eq!(found.into_iter().collect::<Vec<_>>(), vec![n]);
 }

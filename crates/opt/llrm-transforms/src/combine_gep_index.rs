@@ -60,16 +60,6 @@ impl Combiner<'_> {
         Some((op, instruction.operands[0], instruction.flags))
     }
 
-    fn has_one_use(
-        &self,
-        v: Operand,
-    ) -> bool {
-        matches!(
-            v,
-            Operand::Value(value) if self.function.users(value).has_one_use()
-        )
-    }
-
     /// The value of the constant integer `v` truncated to its width.
     fn is_specific_int(
         &self,
@@ -148,7 +138,7 @@ pub(crate) fn scaled_single_index(
     }
     // With one use the scale folds into the division: V / C is V / (C /
     // sizeof(T)) when that divides.
-    if !c.has_one_use(index) {
+    if !c.operand_has_one_use(index) {
         return None;
     }
     let (constant, width) = (c.constant_int(divisor)?, c.context.types.int_bits(c.type_of(divisor))?);
@@ -237,7 +227,7 @@ pub(crate) fn split_added_index(
     gep: &Gep,
 ) -> Option<Visit> {
     let index = only_index(gep)?;
-    if !c.has_one_use(index) {
+    if !c.operand_has_one_use(index) {
         return None;
     }
     let nw = GepFlags::of(gep.flags);
@@ -253,7 +243,7 @@ pub(crate) fn split_added_index(
     // sext (add nsw x, C) is gep (gep p, sext x), sext C.
     let (cast, sum, cast_flags) = c.cast_parts(index)?;
     let sext_like = cast == CastOp::SExt || (cast == CastOp::ZExt && cast_flags.contains(Flags::NNEG));
-    if !sext_like || !c.has_one_use(sum) {
+    if !sext_like || !c.operand_has_one_use(sum) {
         return None;
     }
     let (idx1, constant) = pattern::add_like(&q, sum, Flags::NSW)?;
@@ -297,7 +287,7 @@ pub(crate) fn srem_is_urem(
 ) -> Option<Visit> {
     let nw = GepFlags::of(gep.flags);
     let index = only_index(gep)?;
-    if !(nw.in_bounds && nw.nuw) || !c.has_one_use(index) {
+    if !(nw.in_bounds && nw.nuw) || !c.operand_has_one_use(index) {
         return None;
     }
     let (_, BinaryOp::SRem, x, y, _) = c.binary_parts(index)? else { return None };

@@ -37,7 +37,7 @@ impl Combiner<'_> {
         self.function.instruction(inst).result.is_some_and(|result| self.function.users(result).has_one_use())
     }
 
-    fn operand_has_one_use(
+    pub(crate) fn operand_has_one_use(
         &self,
         v: Operand,
     ) -> bool {
