@@ -129,6 +129,18 @@ pub fn source(
     classes: &[&str],
     effects: &str,
 ) -> Result<String, String> {
+    source_with(text, id, id, classes, effects)
+}
+
+/// `source`, for a target whose register constants (`X0`, `SP`) live in its
+/// own module `names` and not on the id type `id`: the target numbers its file.
+pub fn source_with(
+    text: &str,
+    id: &str,
+    names: &str,
+    classes: &[&str],
+    effects: &str,
+) -> Result<String, String> {
     let registers = parse(text)?;
     let mut widths: Vec<u32> = registers.iter().map(|one| one.bits).collect();
     widths.sort_unstable();
@@ -155,7 +167,7 @@ pub fn source(
         }
         let mask = if mask.is_empty() { "0".to_owned() } else { mask.join(" | ") };
         code.push_str(&format!(
-            "    table[{id}::{}.index()] = Some(llrm_lir::registers::Entry {{ id: {id}::{}, name: {:?}, bits: {}, root: {id}::{}, lane: {}, classes: {mask} }});\n",
+            "    table[{names}::{}.index()] = Some(llrm_lir::registers::Entry {{ id: {names}::{}, name: {:?}, bits: {}, root: {names}::{}, lane: {}, classes: {mask} }});\n",
             one.name.to_uppercase(),
             one.name.to_uppercase(),
             one.name,
@@ -168,7 +180,7 @@ pub fn source(
     let role = |class: &str| -> Result<String, String> {
         let roots: Vec<&Register> = registers.iter().filter(|one| one.is(class) && one.root == one.name).collect();
         match roots[..] {
-            [one] => Ok(format!("{id}::{}", one.name.to_uppercase())),
+            [one] => Ok(format!("{names}::{}", one.name.to_uppercase())),
             _ => {
                 Err(format!("registers.regs: {} registers are the root with the class `{class}`, not one", roots.len()))
             }
@@ -176,14 +188,14 @@ pub fn source(
     };
     let loads: Vec<String> = registers
         .iter()
-        .filter_map(|one| one.load.as_ref().map(|load| format!("({id}::{}, {load:?})", one.name.to_uppercase())))
+        .filter_map(|one| one.load.as_ref().map(|load| format!("({names}::{}, {load:?})", one.name.to_uppercase())))
         .collect();
-    let scratch: Vec<String> = scratch(text).iter().map(|name| format!("{id}::{}", name.to_uppercase())).collect();
+    let scratch: Vec<String> = scratch(text).iter().map(|name| format!("{names}::{}", name.to_uppercase())).collect();
     let optional = |class: &str| -> Result<String, String> {
         let roots: Vec<&Register> = registers.iter().filter(|one| one.is(class)).collect();
         match roots[..] {
             [] => Ok("None".to_owned()),
-            [one] => Ok(format!("Some({id}::{})", one.name.to_uppercase())),
+            [one] => Ok(format!("Some({names}::{})", one.name.to_uppercase())),
             _ => Err(format!("registers.regs: {} registers have the class `{class}`, not one", roots.len())),
         }
     };
@@ -230,6 +242,17 @@ mod source_tests {
         .expect("made");
         assert!(made.contains("Reg::EAX.index()"), "{made}");
         assert!(made.contains("llrm_lir::registers::class::GPR | llrm_lir::registers::class::INT"), "{made}");
+    }
+
+    /// A target whose constants are not on the id type (AArch64's `X0` is no
+    /// iced register) names them in its own module; the tables still hold ids.
+    #[test]
+    fn a_target_names_its_constants_in_its_own_module() {
+        let text = "fp 64 fp 0 frame - 29\nsp 64 sp 0 stack - 31\n";
+        let made = super::source_with(text, "Reg", "regs", &CLASSES, "rows").expect("made");
+        assert!(made.contains("regs::FP.index()"), "{made}");
+        assert!(made.contains("&'static [Reg] ="), "{made}");
+        assert!(!made.contains("Reg::FP"), "{made}");
     }
 
     /// Two frame registers (or none) are no role: the table is not made.
