@@ -161,8 +161,3 @@ id = "unit llrm-qb::test_hir_part3::test_nested_integer_division_keeps_each_divi
 issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-core::backend::isel_tests::test_a_closed_form_sum_in_an_odd_width_assembles"
-issue = 3020
-owner = "lir-cleanup-port"
-date = "2026-10-21"
