@@ -1178,7 +1178,7 @@ fn attribute_set_intersect_with(
 /// ([Attributes.cpp:1885](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Attributes.cpp#L1885)),
 /// of two calls' lists: the function, return and argument sets, one by one.
 #[allow(clippy::type_complexity)]
-fn attribute_list_intersect_with(
+pub(crate) fn attribute_list_intersect_with(
     this: (&[Attribute], &[Attribute], &[Vec<Attribute>]),
     other: (&[Attribute], &[Attribute], &[Vec<Attribute>]),
 ) -> Option<(Vec<Attribute>, Vec<Attribute>, Vec<Vec<Attribute>>)> {
