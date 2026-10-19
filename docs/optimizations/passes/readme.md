@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 121 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 122 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -24,6 +24,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_addsub | InstCombine's `visitAdd` and the helpers it calls, from [`InstCombineAddSub.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp) at d1106deb71cc. | `combine::visit`, once the add family's slot is flipped. | [combine_addsub](combine_addsub.md) |
 | combine_build | `InstCombiner::Builder`: the `IRBuilder` over `InstSimplifyFolder` that InstCombine's `visit*` functions build new instructions with. | `combine_addsub` and the families after it. | [combine_build](combine_build.md) |
 | combine_compares | InstCombine's `visitICmpInst` and the helpers it calls, from [`InstCombineCompares.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp) at d1106deb71cc. | `combine::visit`, once the compares slot is flipped. | [combine_compares](combine_compares.md) |
+| combine_muldivrem | InstCombine's `visitMul` and the helpers it calls, from [`InstCombineMulDivRem.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp) at d1106deb71cc. | `combine::visit`, once the mul family's slot is flipped. | [combine_muldivrem](combine_muldivrem.md) |
 | combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
 | combine_shared | What InstCombine's integer `visit*` functions share from `InstructionCombining.cpp`: the complexity order that puts constants on the right, and the reassociation of an associative or commutative operation. | `combine_addsub` (`visitAdd`, `visitSub`) and the families after it. | [combine_shared](combine_shared.md) |
 | combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |

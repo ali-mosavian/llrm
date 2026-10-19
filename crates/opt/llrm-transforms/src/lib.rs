@@ -95,6 +95,9 @@ pub mod combine;
 pub mod combine_addsub;
 pub mod combine_build;
 pub mod combine_compares;
+pub mod combine_muldivrem;
+#[cfg(test)]
+mod combine_muldivrem_tests;
 pub mod combine_phi;
 pub mod combine_shared;
 pub mod combine_sink;
