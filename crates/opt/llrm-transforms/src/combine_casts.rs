@@ -1,13 +1,17 @@
-//! InstCombine's `visitTrunc` and the helpers it calls, from
+//! InstCombine's `visitTrunc`, `visitZExt`, `visitSExt` and the helpers they
+//! call, from
 //! [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp)
 //! at d1106deb71cc.
 //!
 //! [`visit_trunc`] is
-//! [`visitTrunc`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp#L1045):
+//! [`visitTrunc`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp#L1045),
+//! [`visit_zext`] is
+//! [`visitZExt`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp#L1593),
+//! [`visit_sext`] is
+//! [`visitSExt`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp#L1915):
 //! the same steps in the same order, each helper named for the C++ one with
 //! its own permalink. A step that returns `nullptr` there returns `None` here,
-//! one that returns an instruction returns `Some(Visit)`. `visitZExt` and
-//! `visitSExt` follow in their own change.
+//! one that returns an instruction returns `Some(Visit)`.
 //!
 //! MIRROR: the order of the steps and each condition.
 //!
@@ -37,11 +41,11 @@
 //! `combine::visit`, once the casts family's slot is flipped.
 //!
 //! # How it works
-//! `visit_trunc` returns the first step that changes the cast. A tree of
-//! one-use integer operations under the trunc is rebuilt in the narrow type
-//! (`canEvaluateTruncated` asks, `EvaluateInDifferentType` builds), which
-//! removes the trunc; a trunc of a binary operation, a shift or an `i1` test
-//! folds to a narrow operation or a compare.
+//! Each `visit_*` returns the first step that changes the cast. A tree of
+//! one-use integer operations under a cast is rebuilt in the cast's type
+//! (`canEvaluate*` asks, `EvaluateInDifferentType` builds), which removes the
+//! cast; a cast of a cast, of a compare or of a shift pair folds to a mask,
+//! a shift or a compare.
 //!
 //! # Example
 //! `trunc (add (zext x), 1)` is computed in the narrow type:
@@ -54,7 +58,7 @@
 
 use llrm_mir::apfloat;
 use llrm_mir::constantfolding;
-use llrm_mir::context::mask;
+use llrm_mir::context::{mask, signed};
 use llrm_mir::hash::HashMap;
 use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
@@ -129,6 +133,16 @@ fn shr(
     binop(q, v, BinaryOp::LShr).or_else(|| binop(q, v, BinaryOp::AShr))
 }
 
+/// `m_Trunc(m_SpecificType(ty, X))`.
+fn trunc_from(
+    c: &Combiner,
+    q: &Query,
+    v: Operand,
+    ty: TypeId,
+) -> Option<Operand> {
+    pattern::cast(q, v, CastOp::Trunc).map(|(_, _, x)| x).filter(|&x| c.type_of(x) == ty)
+}
+
 /// `m_ZExtOrSExt(m_SpecificType(ty, X))`.
 fn ext_from(
     c: &Combiner,
@@ -141,6 +155,19 @@ fn ext_from(
         .find_map(|op| pattern::cast(q, v, op))
         .map(|(_, _, x)| x)
         .filter(|&x| c.type_of(x) == ty)
+}
+
+/// `m_c_BitwiseLogic(pick, m_Value(Y))`: the operation, what `pick` took from
+/// the operand it matches (tried first on the left), and the other.
+fn bitwise_logic_with(
+    q: &Query,
+    v: Operand,
+    pick: impl Fn(Operand) -> Option<Operand>,
+) -> Option<(BinaryOp, Operand, Operand)> {
+    let (_, instruction) = q.instruction_of(v)?;
+    let Opcode::Binary(op @ (BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)) = instruction.opcode else { return None };
+    let [a, b] = instruction.operands[..] else { return None };
+    pick(a).map(|x| (op, x, b)).or_else(|| pick(b).map(|x| (op, x, a)))
 }
 
 /// `ConstantExpr::getSub` and the like of two constants (DEVIATE 5: none where
@@ -193,6 +220,21 @@ fn int_cast_op(
         std::cmp::Ordering::Less => CastOp::ZExt,
         std::cmp::Ordering::Equal => CastOp::BitCast,
     }
+}
+
+/// `Builder.CreateIntCast(v, ty, is_signed)`.
+fn create_int_cast(
+    c: &mut Combiner,
+    at: InstId,
+    v: Operand,
+    ty: TypeId,
+    is_signed: bool,
+) -> Operand {
+    if c.type_of(v) == ty {
+        return v;
+    }
+    let op = int_cast_op(width(c, v), bits_of(c, ty), is_signed);
+    c.create_cast(at, op, v, ty, Flags::default())
 }
 
 /// What a `visit*` returns for `CastInst::CreateIntegerCast(v, ty, is_signed)`.
@@ -270,6 +312,7 @@ fn can_always_evaluate_in_type(
 #[derive(Clone, Copy)]
 enum Pred {
     Truncated,
+    SExtd,
 }
 
 /// `TypeEvaluationHelper` (:303): what has been decided, and the users of the
@@ -321,6 +364,7 @@ impl Evaluator<'_, '_> {
         }
         let result = match pred {
             Pred::Truncated => self.truncated_pred(i, ty),
+            Pred::SExtd => self.sextd_pred(i, ty),
         };
         self.visited.insert(i, result);
         result
@@ -417,6 +461,30 @@ impl Evaluator<'_, '_> {
             _ => false,
         }
     }
+
+    /// `canEvaluateSExtdPred` (:1870).
+    fn sextd_pred(
+        &mut self,
+        i: InstId,
+        ty: TypeId,
+    ) -> bool {
+        let c = self.c;
+        let inst = c.function.instruction(i);
+        let ops = &inst.operands[..];
+        match inst.opcode {
+            // sext(sext(x)), sext(zext(x)), sext(trunc(x)).
+            Opcode::Cast(CastOp::SExt | CastOp::ZExt | CastOp::Trunc) => true,
+            Opcode::Binary(
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor,
+            ) => self.all(ops, ty, Pred::SExtd),
+            Opcode::Select => self.all(&ops[1..], ty, Pred::SExtd),
+            Opcode::Phi => {
+                let incoming: Vec<Operand> = pattern::phi_incoming(inst).map(|(value, _)| value).collect();
+                self.all(&incoming, ty, Pred::SExtd)
+            }
+            _ => false,
+        }
+    }
 }
 
 /// `canEvaluateTruncated` (:512): `v` can be computed in `ty`, narrower, with
@@ -431,6 +499,90 @@ fn can_evaluate_truncated(
     // Whether all users of the many-use values were visited is asked last,
     // outside the recursion.
     evaluator.can_evaluate(v, ty, Pred::Truncated) && evaluator.all_pending_visited()
+}
+
+/// `canEvaluateSExtd` (:1859): `v` can be returned as `ty`, wider, without a
+/// new cast and with the same low bits.
+fn can_evaluate_sextd(
+    c: &Combiner,
+    v: Operand,
+    ty: TypeId,
+) -> bool {
+    // The context instruction is read by the truncating predicates only.
+    let Some(cxt) = def_of(c, v) else { return can_always_evaluate_in_type(c, v, ty) };
+    let mut evaluator = Evaluator { c, cxt, visited: HashMap::default(), pending: Vec::new() };
+    evaluator.can_evaluate(v, ty, Pred::SExtd) && evaluator.all_pending_visited()
+}
+
+/// `canEvaluateZExtd` (:1469): `v` can be computed in `ty`, wider, with the
+/// same low bits; the number of high bits of `v`'s own width that the result
+/// must clear (`BitsToClear`).
+fn can_evaluate_zextd(
+    c: &Combiner,
+    v: Operand,
+    ty: TypeId,
+    cxt: InstId,
+) -> Option<u32> {
+    if can_always_evaluate_in_type(c, v, ty) {
+        return Some(0);
+    }
+    // One user only, as the predicate answers with two values.
+    let i = def_of(c, v)?;
+    if !shared::has_one_use(c, v) {
+        return None;
+    }
+    let inst = c.function.instruction(i);
+    let ops = &inst.operands[..];
+    let vsize = bits_of(c, inst.ty);
+    match inst.opcode {
+        // zext(zext(x)), zext(sext(x)), zext(trunc(x)).
+        Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc) => Some(0),
+        Opcode::Binary(
+            op @ (BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor),
+        ) => {
+            let to_clear = can_evaluate_zextd(c, ops[0], ty, cxt)?;
+            let other = can_evaluate_zextd(c, ops[1], ty, cxt)?;
+            // These can all be promoted if neither operand has bits to clear.
+            if to_clear == 0 && other == 0 {
+                return Some(0);
+            }
+            // If the operation is an AND/OR/XOR and the bits to clear are zero
+            // in the other side, `to_clear` is ok.
+            if other == 0 && matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) {
+                let high = mask(vsize) & !mask(vsize.saturating_sub(to_clear));
+                if known::masked_value_is_zero(&query(c, Some(cxt)), ops[1], high, 0) {
+                    // If this is an And and all of the bits to clear are known
+                    // zero we can reset them.
+                    return Some(if op == BinaryOp::And { 0 } else { to_clear });
+                }
+            }
+            None
+        }
+        // shl(x, cst) overwrites the upper bits, so the bits to clear shrink.
+        Opcode::Binary(BinaryOp::Shl) => {
+            let shift = pattern::constant_int_u64(&query(c, None), ops[1])?;
+            let to_clear = can_evaluate_zextd(c, ops[0], ty, cxt)?;
+            Some(if shift < u64::from(to_clear) { to_clear - shift as u32 } else { 0 })
+        }
+        // lshr(x, cst): the ultimate `and` clears the bits shifted in.
+        Opcode::Binary(BinaryOp::LShr) => {
+            let shift = pattern::constant_int_u64(&query(c, None), ops[1])?;
+            let to_clear = can_evaluate_zextd(c, ops[0], ty, cxt)?;
+            Some((u64::from(to_clear).wrapping_add(shift) as u32).min(vsize))
+        }
+        Opcode::Select => {
+            let on_true = can_evaluate_zextd(c, ops[1], ty, cxt)?;
+            let on_false = can_evaluate_zextd(c, ops[2], ty, cxt)?;
+            (on_true == on_false).then_some(on_false)
+        }
+        Opcode::Phi => {
+            let mut incoming = pattern::phi_incoming(inst).map(|(value, _)| value);
+            let to_clear = can_evaluate_zextd(c, incoming.next()?, ty, cxt)?;
+            incoming.all(|value| can_evaluate_zextd(c, value, ty, cxt) == Some(to_clear)).then_some(to_clear)
+        }
+        // DEVIATE 1: llvm.vscale.
+        _ => None,
+    }
 }
 
 /// `EvaluateInDifferentTypeImpl` (:38): the instructions that compute `v` in
@@ -972,4 +1124,547 @@ pub fn visit_trunc(
     }
 
     if changed { Visit::Changed } else { Visit::None }
+}
+
+/// `transformZExtICmp` (:1361): `zext (icmp ...)` as bitwise operations.
+fn transform_zext_icmp(
+    c: &mut Combiner,
+    inst: InstId,
+    cmp: InstId,
+) -> Option<Visit> {
+    let Opcode::ICmp(pred) = c.function.instruction(cmp).opcode else { return None };
+    let [op0, op1] = c.function.instruction(cmp).operands[..] else { return None };
+    let zext_ty = c.function.instruction(inst).ty;
+    let op1_const = query(c, Some(inst)).int_constant(op1);
+    // If we are just checking for a icmp eq of a single bit and zext'ing it to
+    // an integer, then shift the bit to the appropriate place and then cast to
+    // integer to avoid the comparison.
+    if let Some((value, _)) = op1_const {
+        // zext (x <s 0) to i32 --> x>>u31 (true if the sign bit is set).
+        if pred == IntPredicate::Slt && value == 0 {
+            let amount = c.int(c.type_of(op0), u128::from(width(c, op0) - 1));
+            let shifted = c.create_binop(inst, BinaryOp::LShr, op0, amount, Flags::default());
+            let result = create_int_cast(c, inst, shifted, zext_ty, false);
+            return Some(Visit::Replace(result));
+        }
+        // zext (X == 0) to i32 --> X^1 iff X has only the low bit set.
+        // zext (X == 0) to i32 --> (X>>1)^1 iff X has only the 2nd bit set.
+        // zext (X != 0) to i32 --> X iff X has only the low bit set.
+        // zext (X != 0) to i32 --> X>>1 iff X has only the 2nd bit set.
+        if value == 0 && matches!(pred, IntPredicate::Eq | IntPredicate::Ne) {
+            // Exactly 1 possible 1? But not the high-bit because that is
+            // canonicalized to this form.
+            let known = known::compute_known_bits(&query(c, Some(inst)), op0, 0);
+            let possible = !known.zero & mask(width(c, op0));
+            if possible.is_power_of_two() {
+                let shift = possible.trailing_zeros();
+                if bits_of(c, zext_ty) != shift + 1
+                    && (c.type_of(op0) == zext_ty || pred == IntPredicate::Ne || shift == 0)
+                {
+                    let mut value = op0;
+                    // Insert the shift to put the result in the low bit.
+                    if shift != 0 {
+                        let amount = c.int(c.type_of(value), u128::from(shift));
+                        value = c.create_binop(inst, BinaryOp::LShr, value, amount, Flags::default());
+                    }
+                    // Toggle the low bit for "X == 0".
+                    if pred == IntPredicate::Eq {
+                        let one = c.int(c.type_of(value), 1);
+                        value = c.create_binop(inst, BinaryOp::Xor, value, one, Flags::default());
+                    }
+                    return Some(Visit::Replace(create_int_cast(c, inst, value, zext_ty, false)));
+                }
+            }
+        }
+    }
+    if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) {
+        // Test if a bit is clear/set using a shifted-one mask:
+        // zext (icmp eq (and X, (1 << ShAmt)), 0) --> and (lshr (not X),
+        // ShAmt), 1 zext (icmp ne (and X, (1 << ShAmt)), 0) --> and
+        // (lshr X, ShAmt), 1
+        let found = {
+            let q = query(c, Some(inst));
+            let cmp_value = value_of(c, cmp);
+            if shared::has_one_use(c, cmp_value) && pattern::zero_int(&q, op1) && shared::has_one_use(c, op0) {
+                pattern::binary(&q, op0, BinaryOp::And).and_then(|(_, _, a, b)| {
+                    let shifted_one = |v: Operand| {
+                        let (one, amount, _) = binop(&q, v, BinaryOp::Shl)?;
+                        pattern::one(&q, one).then_some(amount)
+                    };
+                    let (amount, x, shift) =
+                        shifted_one(a).map(|s| (s, b, a)).or_else(|| shifted_one(b).map(|s| (s, a, b)))?;
+                    Some((amount, x, shift))
+                })
+            } else {
+                None
+            }
+        };
+        if let Some((amount, x, shift)) = found
+            && (zext_ty == c.type_of(op0) || pred != IntPredicate::Eq || shared::has_one_use(c, shift))
+        {
+            let x = if pred == IntPredicate::Eq { c.create_not(inst, x) } else { x };
+            let lshr = c.create_binop(inst, BinaryOp::LShr, x, amount, Flags::default());
+            let one = c.int(c.type_of(x), 1);
+            let and = c.create_binop(inst, BinaryOp::And, lshr, one, Flags::default());
+            return Some(Visit::Replace(create_int_cast(c, inst, and, zext_ty, false)));
+        }
+    }
+    None
+}
+
+/// `InstCombinerImpl::visitZExt` (:1593).
+pub fn visit_zext(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    if too_wide(c, inst) {
+        return Visit::None;
+    }
+    let src = c.function.instruction(inst).operands[0];
+    // If this zero extend is only used by a truncate, let the truncate be
+    // eliminated before we try to optimize this zext.
+    if let Some(result) = c.function.instruction(inst).result
+        && c.function
+            .users(result)
+            .only()
+            .is_some_and(|one| c.function.instruction(one.user).opcode == Opcode::Cast(CastOp::Trunc))
+        && !matches!(src, Operand::Constant(_))
+    {
+        return Visit::None;
+    }
+    // If one of the common conversion will work, do it.
+    if let Some(r) = common_cast_transforms(c, inst) {
+        return r;
+    }
+    // DEVIATE 1: foldExtractionOfVectorDeinterleave.
+    let dest_ty = c.function.instruction(inst).ty;
+    let flags = c.function.instruction(inst).flags;
+    let nneg = flags.contains(Flags::NNEG);
+    let src_ty = c.type_of(src);
+    let (src_w, dest_w) = (bits_of(c, src_ty), bits_of(c, dest_ty));
+
+    // zext nneg bool x -> 0
+    if src_w == 1 && nneg {
+        return Visit::Replace(c.int(dest_ty, 0));
+    }
+
+    // zext nneg means Src is non-negative and we can treat this as an sext.
+    // Evaluating as a signed type means that any constant operands will be
+    // sign-extended instead of zero-extended, so the sign bits in the final
+    // result should be enough that we avoid having to clear the high bits.
+    let evaluate_as_signed = nneg && can_evaluate_sextd(c, src, dest_ty);
+
+    // Try to extend the entire expression tree to the wide destination type.
+    let mut bits_to_clear = 0;
+    let evaluable = should_change_type(c, src_w, dest_w)
+        && (evaluate_as_signed
+            || can_evaluate_zextd(c, src, dest_ty, inst).inspect(|&clear| bits_to_clear = clear).is_some());
+    if evaluable {
+        let res = evaluate_in_different_type(c, src, dest_ty, evaluate_as_signed);
+        let kept = src_w - bits_to_clear;
+        // If the high bits are already filled with zeros, just replace this
+        // cast with the result. If we've evaluated as a signed expression then
+        // instead check that the high bits are the sign bit, which we know is
+        // zero.
+        let filled = {
+            let q = query(c, Some(inst));
+            if evaluate_as_signed {
+                compute_num_sign_bits(&q, res, 0) > dest_w - kept
+            } else {
+                known::masked_value_is_zero(&q, res, mask(dest_w) & !mask(kept), 0)
+            }
+        };
+        if filled {
+            return Visit::Replace(res);
+        }
+        // We need to emit an AND to clear the high bits.
+        let keep = c.int(c.type_of(res), mask(kept));
+        return c.replace_with_binop(inst, BinaryOp::And, res, keep, Flags::default());
+    }
+
+    // If this is a TRUNC followed by a ZEXT then we are dealing with integral
+    // types and if the sizes are just right we can convert this into a logical
+    // 'and' which will be much cheaper than the pair of casts.
+    let trunc_src = {
+        let q = query(c, Some(inst));
+        pattern::cast(&q, src, CastOp::Trunc).map(|(_, _, a)| a)
+    };
+    if let Some(a) = trunc_src {
+        // The intermediate type is smaller than A or C; the relation between A
+        // and C is not known.
+        let (src_size, mid_size, dst_size) = (width(c, a), src_w, dest_w);
+        // If we're actually extending zero bits, then if
+        // SrcSize <  DstSize: zext(a & mask)
+        // SrcSize == DstSize: a & mask
+        // SrcSize  > DstSize: trunc(a) & mask
+        if src_size < dst_size {
+            let and_c = c.int(c.type_of(a), mask(mid_size));
+            let and = c.create_binop(inst, BinaryOp::And, a, and_c, Flags::default());
+            return c.replace_with_new(inst, Opcode::Cast(CastOp::ZExt), dest_ty, vec![and], Flags::default());
+        }
+        if src_size == dst_size {
+            let and_c = c.int(c.type_of(a), mask(mid_size));
+            return c.replace_with_binop(inst, BinaryOp::And, a, and_c, Flags::default());
+        }
+        let trunc = c.create_cast(inst, CastOp::Trunc, a, dest_ty, Flags::default());
+        let and_c = c.int(c.type_of(trunc), mask(mid_size));
+        return c.replace_with_binop(inst, BinaryOp::And, trunc, and_c, Flags::default());
+    }
+
+    if let Some(cmp) = def_of(c, src)
+        && matches!(c.function.instruction(cmp).opcode, Opcode::ICmp(_))
+    {
+        return transform_zext_icmp(c, inst, cmp).unwrap_or(Visit::None);
+    }
+
+    // zext((trunc(X) & C) ^ C) -> ((X & zext(C)) ^ zext(C)).
+    let xor_trunc = {
+        let q = query(c, Some(inst));
+        if shared::has_one_use(c, src) {
+            binop(&q, src, BinaryOp::Xor).and_then(|(and, k, _)| {
+                if !matches!(k, Operand::Constant(_)) || !shared::has_one_use(c, and) {
+                    return None;
+                }
+                let (t, k2, _) = binop(&q, and, BinaryOp::And)?;
+                (k2 == k).then(|| trunc_from(c, &q, t, dest_ty).map(|x| (x, k))).flatten()
+            })
+        } else {
+            None
+        }
+    };
+    if let Some((x, k)) = xor_trunc {
+        let zc = c.create_cast(inst, CastOp::ZExt, k, dest_ty, Flags::default());
+        let and = c.create_binop(inst, BinaryOp::And, x, zc, Flags::default());
+        return c.replace_with_binop(inst, BinaryOp::Xor, and, zc, Flags::default());
+    }
+
+    // zext(sub(0, trunc(X))) -> and(sub(0, X), mask)
+    let neg_trunc = {
+        let q = query(c, Some(inst));
+        binop(&q, src, BinaryOp::Sub)
+            .and_then(|(zero, t, _)| pattern::zero(&q, zero).then(|| trunc_from(c, &q, t, dest_ty)).flatten())
+    };
+    if let Some(x) = neg_trunc {
+        let zero = c.int(dest_ty, 0);
+        let neg = c.create_sub(inst, zero, x);
+        let mask_c = c.int(dest_ty, mask(src_w));
+        return c.replace_with_binop(inst, BinaryOp::And, neg, mask_c, Flags::default());
+    }
+
+    // If we are truncating, masking, and then zexting back to the original
+    // type, that's just a mask. This is not handled by canEvaluateZextd if the
+    // intermediate values have extra uses.
+    // zext (and (trunc X), C) --> and X, (zext C)
+    let and_trunc = {
+        let q = query(c, Some(inst));
+        binop(&q, src, BinaryOp::And).and_then(|(t, k, _)| {
+            if !matches!(k, Operand::Constant(_)) {
+                return None;
+            }
+            trunc_from(c, &q, t, dest_ty).map(|x| (x, k))
+        })
+    };
+    if let Some((x, k)) = and_trunc {
+        let zext_c = c.create_cast(inst, CastOp::ZExt, k, dest_ty, Flags::default());
+        return c.replace_with_binop(inst, BinaryOp::And, x, zext_c, Flags::default());
+    }
+
+    let nuw_trunc = {
+        let q = query(c, Some(inst));
+        if shared::has_one_use(c, src) {
+            bitwise_logic_with(&q, src, |v| {
+                pattern::cast(&q, v, CastOp::Trunc)
+                    .filter(|(_, trunc, _)| trunc.flags.contains(Flags::NUW))
+                    .map(|(_, _, x)| x)
+                    .filter(|&x| c.type_of(x) == dest_ty)
+            })
+        } else {
+            None
+        }
+    };
+    if let Some((op, x, y)) = nuw_trunc {
+        let zext_y = c.create_cast(inst, CastOp::ZExt, y, dest_ty, Flags::default());
+        return c.replace_with_binop(inst, op, x, zext_y, Flags::default());
+    }
+
+    // DEVIATE 1: zext (vscale).
+
+    if !nneg {
+        // If this zero extend is only used by a shift, add nneg flag.
+        let shifted = c
+            .function
+            .instruction(inst)
+            .result
+            .is_some_and(
+                |result| c.function
+                    .users(result)
+                    .only()
+                    .is_some_and(
+                        |one| matches!(
+                            c.function.instruction(one.user).opcode,
+                            Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr)
+                        ) && one.index == 1,
+                    ),
+            );
+        let log2_ceil = 64 - (u64::from(dest_w) - 1).leading_zeros();
+        if shifted && src_w > log2_ceil {
+            set_flag(c, inst, Flags::NNEG);
+            return Visit::Changed;
+        }
+        if known::is_known_non_negative(&query(c, Some(inst)), src, 0) {
+            set_flag(c, inst, Flags::NNEG);
+            return Visit::Changed;
+        }
+    }
+    Visit::None
+}
+
+/// `transformSExtICmp` (:1774): `sext (icmp ...)` as bitwise and integer
+/// operations.
+fn transform_sext_icmp(
+    c: &mut Combiner,
+    inst: InstId,
+    cmp: InstId,
+) -> Option<Visit> {
+    let Opcode::ICmp(pred) = c.function.instruction(cmp).opcode else { return None };
+    let [op0, op1] = c.function.instruction(cmp).operands[..] else { return None };
+    let sext_ty = c.function.instruction(inst).ty;
+    // Don't bother if Op1 isn't of integer type.
+    c.context.types.int_bits(c.type_of(op1))?;
+    if pred == IntPredicate::Slt && pattern::zero_int(&query(c, Some(inst)), op1) {
+        // sext (x <s 0) --> ashr x, 31 (all ones if negative)
+        let amount = c.int(c.type_of(op0), u128::from(width(c, op0) - 1));
+        let shifted = c.create_binop(inst, BinaryOp::AShr, op0, amount, Flags::default());
+        let result = create_int_cast(c, inst, shifted, sext_ty, true);
+        return Some(Visit::Replace(result));
+    }
+    let (value, w) = query(c, Some(inst)).int_constant(op1)?;
+    // If we know that only one bit of the LHS of the icmp can be set and we
+    // have an equality comparison with zero or a power of 2, we can transform
+    // the icmp and sext into bitwise/integer operations.
+    let cmp_value = value_of(c, cmp);
+    if shared::has_one_use(c, cmp_value)
+        && matches!(pred, IntPredicate::Eq | IntPredicate::Ne)
+        && (value == 0 || value.is_power_of_two())
+    {
+        let known = known::compute_known_bits(&query(c, Some(inst)), op0, 0);
+        let possible = !known.zero & mask(w);
+        if possible.is_power_of_two() {
+            // If the icmp tests for a known zero bit we can constant fold it.
+            if value != 0 && value != possible {
+                let folded = if pred == IntPredicate::Ne { c.all_ones(sext_ty) } else { c.int(sext_ty, 0) };
+                return Some(Visit::Replace(folded));
+            }
+            let mut in_value = op0;
+            if (value != 0) == (pred == IntPredicate::Ne) {
+                // sext ((x & 2^n) == 0)   -> (x >> n) - 1
+                // sext ((x & 2^n) != 2^n) -> (x >> n) - 1
+                let shift = possible.trailing_zeros();
+                // Perform a right shift to place the desired bit in the LSB.
+                if shift != 0 {
+                    let amount = c.int(c.type_of(in_value), u128::from(shift));
+                    in_value = c.create_binop(inst, BinaryOp::LShr, in_value, amount, Flags::default());
+                }
+                // At this point "In" is either 1 or 0. Subtract 1 to turn
+                // {1, 0} -> {0, -1}.
+                let ones = c.all_ones(c.type_of(in_value));
+                in_value = c.create_add(inst, in_value, ones);
+            } else {
+                // sext ((x & 2^n) != 0)   -> (x << bitwidth-n) a>> bitwidth-1
+                // sext ((x & 2^n) == 2^n) -> (x << bitwidth-n) a>> bitwidth-1
+                let shift = possible.leading_zeros() - (128 - w);
+                // Perform a left shift to place the desired bit in the MSB.
+                if shift != 0 {
+                    let amount = c.int(c.type_of(in_value), u128::from(shift));
+                    in_value = c.create_shl(inst, in_value, amount);
+                }
+                // Distribute the bit over the whole bit width.
+                let amount = c.int(c.type_of(in_value), u128::from(w - 1));
+                in_value = c.create_binop(inst, BinaryOp::AShr, in_value, amount, Flags::default());
+            }
+            if c.type_of(in_value) == sext_ty {
+                return Some(Visit::Replace(in_value));
+            }
+            return Some(replace_with_int_cast(c, inst, in_value, sext_ty, true, Flags::default()));
+        }
+    }
+    None
+}
+
+/// `InstCombinerImpl::visitSExt` (:1915).
+pub fn visit_sext(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    if too_wide(c, inst) {
+        return Visit::None;
+    }
+    // If this sign extend is only used by a truncate, let the truncate be
+    // eliminated before we try to optimize this sext.
+    if let Some(result) = c.function.instruction(inst).result
+        && c.function
+            .users(result)
+            .only()
+            .is_some_and(|one| c.function.instruction(one.user).opcode == Opcode::Cast(CastOp::Trunc))
+    {
+        return Visit::None;
+    }
+    if let Some(r) = common_cast_transforms(c, inst) {
+        return r;
+    }
+    let src = c.function.instruction(inst).operands[0];
+    let dest_ty = c.function.instruction(inst).ty;
+    let src_ty = c.type_of(src);
+    let (src_bits, dest_bits) = (bits_of(c, src_ty), bits_of(c, dest_ty));
+
+    // If the value being extended is zero or positive, use a zext instead.
+    if known::is_known_non_negative(&query(c, Some(inst)), src, 0) {
+        return c.replace_with_new(inst, Opcode::Cast(CastOp::ZExt), dest_ty, vec![src], Flags::NNEG);
+    }
+
+    // Try to extend the entire expression tree to the wide destination type.
+    // It is not desirable to extend expression in the trunc + sext pattern when
+    // the destination type is narrower than the original (pre-trunc) type.
+    let trunc_src = {
+        let q = query(c, Some(inst));
+        pattern::cast(&q, src, CastOp::Trunc).map(|(_, trunc, x)| (x, trunc.flags.contains(Flags::NSW)))
+    };
+    let should_extend_expression = !trunc_src.is_some_and(|(x, _)| width(c, x) > dest_bits);
+    if should_extend_expression && should_change_type(c, src_bits, dest_bits) && can_evaluate_sextd(c, src, dest_ty) {
+        let res = evaluate_in_different_type(c, src, dest_ty, true);
+        // If the high bits are already filled with sign bit, just replace this
+        // cast with the result.
+        if compute_num_sign_bits(&query(c, Some(inst)), res, 0) > dest_bits - src_bits {
+            return Visit::Replace(res);
+        }
+        // We need to emit a shl + ashr to do the sign extend.
+        let amount = c.int(dest_ty, u128::from(dest_bits - src_bits));
+        let shl = c.create_shl(inst, res, amount);
+        return c.replace_with_binop(inst, BinaryOp::AShr, shl, amount, Flags::default());
+    }
+
+    if let Some((x, has_nsw)) = trunc_src {
+        // If the input has more sign bits than bits truncated, then convert
+        // directly to final type.
+        let x_bits = width(c, x);
+        if has_nsw || compute_num_sign_bits(&query(c, Some(inst)), x, 0) > x_bits - src_bits {
+            let flags = if has_nsw && x_bits > dest_bits { Flags::NSW } else { Flags::default() };
+            return replace_with_int_cast(c, inst, x, dest_ty, true, flags);
+        }
+
+        // If input is a trunc from the destination type, then convert into
+        // shifts.
+        if shared::has_one_use(c, src) && c.type_of(x) == dest_ty {
+            // sext (trunc X) --> ashr (shl X, C), C
+            let amount = c.int(dest_ty, u128::from(dest_bits - src_bits));
+            let shl = c.create_shl(inst, x, amount);
+            return c.replace_with_binop(inst, BinaryOp::AShr, shl, amount, Flags::default());
+        }
+
+        // If we are replacing shifted-in high zero bits with sign bits, convert
+        // the logic shift to arithmetic shift and eliminate the cast to
+        // intermediate type:
+        // sext (trunc (lshr Y, C)) --> sext/trunc (ashr Y, C)
+        let lshr = {
+            let q = query(c, Some(inst));
+            binop(&q, x, BinaryOp::LShr)
+                .filter(|&(_, amount, _)| pattern::apint(&q, amount) == Some((u128::from(x_bits - src_bits), x_bits)))
+        };
+        if shared::has_one_use(c, src)
+            && let Some((y, ..)) = lshr
+        {
+            let amount = c.int(c.type_of(y), u128::from(x_bits - src_bits));
+            let ashr = c.create_binop(inst, BinaryOp::AShr, y, amount, Flags::default());
+            return replace_with_int_cast(c, inst, ashr, dest_ty, true, Flags::default());
+        }
+    }
+
+    if let Some(cmp) = def_of(c, src)
+        && matches!(c.function.instruction(cmp).opcode, Opcode::ICmp(_))
+    {
+        return transform_sext_icmp(c, inst, cmp).unwrap_or(Visit::None);
+    }
+
+    // If the input is a shl/ashr pair of a same constant, then this is a sign
+    // extension from a smaller value. If the source and dest are the same type,
+    // eliminate the trunc and extend and just do shifts. For example, turn:
+    //   %a = trunc i32 %i to i8
+    //   %b = shl i8 %a, C
+    //   %c = ashr i8 %b, C
+    //   %d = sext i8 %c to i32
+    // into:
+    //   %a = shl i32 %i, 32-(8-C)
+    //   %d = ashr i32 %a, 32-(8-C)
+    let shift_pair = {
+        let q = query(c, Some(inst));
+        binop(&q, src, BinaryOp::AShr).and_then(|(shl, ca, _)| {
+            let (inner, ba, _) = binop(&q, shl, BinaryOp::Shl)?;
+            let a = trunc_from(c, &q, inner, dest_ty)?;
+            // BA->isElementWiseEqual(CA), DEVIATE 5: an integer amount.
+            let (amount, w) = q.int_constant(ca)?;
+            (ba == ca).then_some((a, amount, w))
+        })
+    };
+    if let Some((a, amount, w)) = shift_pair {
+        let wide_amount = signed(amount, w) as u128 & mask(dest_bits);
+        let low_bits_left = u128::from(src_bits).wrapping_sub(wide_amount) & mask(dest_bits);
+        let new_amount = u128::from(dest_bits).wrapping_sub(low_bits_left) & mask(dest_bits);
+        let amount_c = c.int(dest_ty, new_amount);
+        let shl = c.create_shl(inst, a, amount_c);
+        return c.replace_with_binop(inst, BinaryOp::AShr, shl, amount_c, Flags::default());
+    }
+
+    // Splatting a bit of constant-index across a value:
+    // sext (ashr (trunc iN X to iM), M-1) to iN --> ashr (shl X, N-M), N-1
+    // If the dest type is different, use a cast (adjust use check).
+    let splat = {
+        let q = query(c, Some(inst));
+        if shared::has_one_use(c, src) {
+            binop(&q, src, BinaryOp::AShr).and_then(|(t, amount, _)| {
+                if pattern::apint(&q, amount) != Some((u128::from(src_bits - 1), src_bits)) {
+                    return None;
+                }
+                pattern::cast(&q, t, CastOp::Trunc).map(|(_, _, x)| (x, t))
+            })
+        } else {
+            None
+        }
+    };
+    if let Some((x, t)) = splat {
+        let x_ty = c.type_of(x);
+        let x_bits = bits_of(c, x_ty);
+        let shl_amount = c.int(x_ty, u128::from(x_bits - src_bits));
+        let ashr_amount = c.int(x_ty, u128::from(x_bits - 1));
+        if x_ty == dest_ty {
+            let shl = c.create_shl(inst, x, shl_amount);
+            return c.replace_with_binop(inst, BinaryOp::AShr, shl, ashr_amount, Flags::default());
+        }
+        if shared::has_one_use(c, t) {
+            let shl = c.create_shl(inst, x, shl_amount);
+            let ashr = c.create_binop(inst, BinaryOp::AShr, shl, ashr_amount, Flags::default());
+            return replace_with_int_cast(c, inst, ashr, dest_ty, true, Flags::default());
+        }
+    }
+
+    // DEVIATE 1: sext (vscale).
+    // DEVIATE 4: sext(scmp(x, y)), sext(ucmp(x, y)).
+
+    let nsw_trunc = {
+        let q = query(c, Some(inst));
+        if shared::has_one_use(c, src) {
+            bitwise_logic_with(&q, src, |v| {
+                pattern::cast(&q, v, CastOp::Trunc)
+                    .filter(|(_, trunc, _)| trunc.flags.contains(Flags::NSW))
+                    .map(|(_, _, x)| x)
+                    .filter(|&x| c.type_of(x) == dest_ty)
+            })
+        } else {
+            None
+        }
+    };
+    if let Some((op, x, y)) = nsw_trunc {
+        let sext_y = c.create_cast(inst, CastOp::SExt, y, dest_ty, Flags::default());
+        return c.replace_with_binop(inst, op, x, sext_y, Flags::default());
+    }
+    Visit::None
 }
