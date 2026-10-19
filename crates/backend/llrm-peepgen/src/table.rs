@@ -2,27 +2,8 @@
 //! mnemonic's LIR operation, operand shapes and fixed registers, and the
 //! flags its forms read and write.
 
-use iced_x86::RflagsBits;
 use indexmap::IndexMap;
 use llrm_instr as parse;
-
-/// The six arithmetic flags.
-pub const ARITHMETIC: u32 =
-    RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
-
-pub const FLAGS: [(&str, u32); 7] = [
-    ("OF", RflagsBits::OF),
-    ("SF", RflagsBits::SF),
-    ("ZF", RflagsBits::ZF),
-    ("AF", RflagsBits::AF),
-    ("CF", RflagsBits::CF),
-    ("PF", RflagsBits::PF),
-    ("DF", RflagsBits::DF),
-];
-
-pub fn flag(name: &str) -> Option<u32> {
-    FLAGS.iter().find(|(one, _)| *one == name).map(|(_, bit)| *bit)
-}
 
 #[derive(Debug)]
 pub struct Shape {
@@ -47,9 +28,20 @@ pub struct Mnem {
 #[derive(Debug)]
 pub struct Table {
     pub mnemonics: IndexMap<String, Mnem>,
+    /// The target's flags by name, and the bits of those an arithmetic
+    /// instruction writes (its dialect's).
+    pub flags: Vec<(String, u32)>,
+    pub arithmetic: u32,
 }
 
 impl Table {
+    pub fn flag(
+        &self,
+        name: &str,
+    ) -> Option<u32> {
+        self.flags.iter().find(|(one, _)| one == name).map(|(_, bit)| *bit)
+    }
+
     /// Each operation, with the shapes of every form of it.
     pub fn shapes_of(
         &self,
@@ -81,8 +73,9 @@ fn operands(list: &[parse::Operand]) -> String {
 pub fn load(
     source: &str,
     file: &str,
+    dialect: &parse::Dialect,
 ) -> Result<Table, String> {
-    let forms = parse::parse(source).map_err(|error| format!("{file}: {error}"))?;
+    let forms = parse::parse(source, dialect).map_err(|error| format!("{file}: {error}"))?;
     let mut mnemonics: IndexMap<String, Mnem> = IndexMap::new();
     for form in forms {
         let op = operation(&form.operation)
@@ -111,5 +104,5 @@ pub fn load(
         entry.reads |= reads;
         entry.writes |= writes;
     }
-    Ok(Table { mnemonics })
+    Ok(Table { mnemonics, flags: dialect.flags.clone(), arithmetic: dialect.arithmetic_mask() })
 }

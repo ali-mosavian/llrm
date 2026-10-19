@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/jumps.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/jumps.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:a4a31eed7ffae55c53918c3eb1579518cb562bfb72cb3e205a2a557000ac2133 -->
+<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:70b81fb1c3bba34e510ee081d6e88a35a2ca9c5a0c1348facf2868bf4d23f9ef -->
 
 # jumps
 
@@ -18,11 +18,10 @@ steps on the body.
    first with their top and exit chosen and rotated, trellises, and a short
    block copied into the blocks that jump to it where that saves taken
    branches. See `docs/architecture/jumps-placement-check.md`.
-3. `threaded` applies local changes until none applies (`_step`): a jump to
-   a block that only jumps goes to its target (`_through`; a loop header
-   with a measured trip count is kept), a jump to the next block is dropped,
-   `jcc L; jmp M` where `L` is next becomes `j!cc M`, and a `jcc` over a
-   block that only jumps is inverted. Unreachable blocks go.
+3. `threaded` is `branchfold` (LLVM's `OptimizeBranches`): a jump to a block
+   that only jumps goes to its target (a loop header with a measured trip
+   count is kept), a jump to the next block is dropped, `jcc L; jmp M` where
+   `L` is next becomes `j!cc M`. Unreachable blocks go.
 4. `tailmerge::merged` (LLVM's `BranchFolder::TailMergeBlocks`) gives the
    blocks that share the last instructions one copy of them, splitting a
    block where no one holds only the tail; `machinedce::eliminated` then
