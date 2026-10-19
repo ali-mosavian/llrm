@@ -372,3 +372,12 @@ def test_a_cpu_llrm_does_not_price_for_is_refused_on_the_opt_side(monkeypatch):
         difftest.llrm_target("llrm-pass: target x86-m16 cpu 486 tti X86 datalayout d\n", "m16")
     monkeypatch.setattr(difftest.targetdesc, "targets", lambda: {"m16": {"mode": 16, "llvm_cpu": "i486", "tti": "X86"}})
     assert difftest.llrm_target("llrm-pass: target x86-m16 cpu 486 tti X86 datalayout d\n", "m16").startswith("x86-m16 cpu 486")
+
+
+def test_a_lifetime_marker_with_the_size_operand_reads_as_the_pins_without_it():
+    """llrm's text gives `llvm.lifetime.start.p0(i64 4, ptr %p)`; opt's reader upgrades it to `(ptr %p)`. The matmul body of decide@1178 differed
+    from `opt -passes=simplifycfg` on those two lines alone."""
+    llrm = ["define void @f() {", "b0:", "  %p = alloca i32", "  call void @llvm.lifetime.start.p0(i64 4, ptr %p)", "  call void @llvm.lifetime.end.p0(i64 4, ptr %p)", "  ret void", "}"]
+    opt = [line.replace("(i64 4, ptr", "(ptr") for line in llrm]
+    assert difftest.canonical(llrm) == difftest.canonical(opt)
+    assert difftest.canonical(["declare void @llvm.lifetime.start.p0(i64, ptr)"]) == difftest.canonical(["declare void @llvm.lifetime.start.p0(ptr)"])
