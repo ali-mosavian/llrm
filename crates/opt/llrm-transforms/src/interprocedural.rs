@@ -158,6 +158,7 @@
 
 use std::collections::BTreeSet;
 
+use llrm_analysis::aa::ModRefInfo;
 use llrm_analysis::alias::{self, Procedure};
 use llrm_analysis::cfg::Shape;
 use llrm_analysis::functionattrs;
@@ -1932,7 +1933,58 @@ pub fn stamped(
             changed.push(id);
         }
     }
+    if llrm_support::env_set("LLRM_SHADOW_GMR") {
+        shadow_globalsmodref(module, known);
+    }
     Ok(changed)
+}
+
+/// Shadow of `globalsmodref::compute` against alias's summaries: for each
+/// body both describe and each tracked global, one line per disagreement, and
+/// the counts.
+fn shadow_globalsmodref(
+    module: &Module,
+    known: &llrm_support::hash::IndexMap<String, llrm_analysis::alias::Summary>,
+) {
+    use llrm_analysis::memory::{Key, MemoryKind};
+    let found = llrm_analysis::globalsmodref::compute(module);
+    let tracked: Vec<GlobalId> = (0..module.globals.len() as u32)
+        .map(GlobalId)
+        .filter(|&id| found.is_non_address_taken(id) && module.global(id).function().is_none())
+        .collect();
+    let (mut same, mut looser, mut tighter, mut compared) = (0_usize, 0_usize, 0_usize, 0_usize);
+    for (id, global, _) in module.functions() {
+        let Some(name) = global.name.as_ref() else { continue };
+        let (Some(info), Some(summary)) = (found.function_info(id), known.get(name)) else { continue };
+        compared += 1;
+        for &g in &tracked {
+            let touches = |slices: &llrm_analysis::sliceset::SliceSet| {
+                slices.iter().any(|one| one.object.kind == MemoryKind::Global && one.object.key == Key::Global(g.0))
+            };
+            // A tracked global is reached by name alone: unknown accesses
+            // do not count.
+            let (reads, writes) = (touches(&summary.reads), touches(&summary.writes));
+            let theirs = info.mod_ref_for_global(g);
+            let mine = match (reads, writes) {
+                (false, false) => ModRefInfo::NoModRef,
+                (true, false) => ModRefInfo::Ref,
+                (false, true) => ModRefInfo::Mod,
+                (true, true) => ModRefInfo::ModRef,
+            };
+            if theirs == mine {
+                same += 1;
+            } else if theirs.union(mine) == theirs {
+                looser += 1;
+            } else {
+                tighter += 1;
+                eprintln!(
+                    "shadow-gmr tighter @{name} {:?}: globalsmodref {theirs:?} summary {mine:?}",
+                    module.global(g).name
+                );
+            }
+        }
+    }
+    eprintln!("shadow-gmr compared {compared} bodies: same {same} looser {looser} tighter {tighter}");
 }
 
 /// The procedure `id`, with the context its types and constants live in.

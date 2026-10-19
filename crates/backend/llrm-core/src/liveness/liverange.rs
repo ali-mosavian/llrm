@@ -41,6 +41,23 @@ use std::rc::Rc;
 
 use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
 
+thread_local! {
+    static VERIFIES: Cell<usize> = const { Cell::new(0) };
+}
+
+/// How many times this thread has verified a range, for a test that a join
+/// does not (LLVM's `assert(verify())` is compiled out of a release build).
+pub fn verifies() -> usize {
+    VERIFIES.with(Cell::get)
+}
+
+/// Whether the ranges are verified after each edit: with
+/// `LLRM_CHECK_LIVEINTERVALS`. The check is linear in the range, so run at
+/// every join it makes the coalescer quadratic.
+fn checking() -> bool {
+    llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS")
+}
+
 /// `VNInfo` (LiveInterval.h#L52): value number information, a value's
 /// definition point.
 pub struct VNInfo {
@@ -1032,8 +1049,10 @@ impl LiveRange {
         rhs_val_no_assignments: &[i32],
         new_vn_info: &mut Vec<Option<Vn>>,
     ) {
-        assert!(self.verify());
-        assert!(other.verify());
+        if checking() {
+            assert!(self.verify());
+            assert!(other.verify());
+        }
         // Determine if any of our values are mapped.  This is uncommon, so we
         // want to avoid the range scan if not.
         let mut must_map_cur_val_nos = false;
@@ -1257,6 +1276,7 @@ impl LiveRange {
 
     /// `verify` (LiveInterval.cpp#L1062): the invariants of a range.
     pub fn verify(&self) -> bool {
+        VERIFIES.with(|count| count.set(count.get() + 1));
         for (at, s) in self.segments.iter().enumerate() {
             if !s.start.is_valid() || !s.end.is_valid() || s.start >= s.end {
                 return false;
@@ -1598,7 +1618,9 @@ impl<'a> LiveRangeUpdater<'a> {
         if self.spills.is_empty() {
             let (w, r) = (self.write_i, self.read_i);
             self.lr().segments.drain(w..r);
-            assert!(self.lr().verify());
+            if checking() {
+                assert!(self.lr().verify());
+            }
             return;
         }
         // Resize the WriteI - ReadI gap to match Spills.
@@ -1616,7 +1638,9 @@ impl<'a> LiveRangeUpdater<'a> {
         }
         self.read_i = self.write_i + spills;
         self.merge_spills();
-        assert!(self.lr().verify());
+        if checking() {
+            assert!(self.lr().verify());
+        }
     }
 }
 

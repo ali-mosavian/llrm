@@ -1106,6 +1106,27 @@ fn a_typed_reference_is_copied_without_allocating() {
     drop((copy, copies));
 }
 
+/// A held access was asked its `!tbaa` name and lineage again at every hit
+/// (9 M instructions on d_faces). Unchanged metadata is not asked twice.
+#[test]
+fn a_held_access_is_not_asked_its_type_again() {
+    let parsed = Parsed::new(&format!(
+        "define void @f(ptr %p) {{\n  store i16 1, ptr %p, !tbaa !5\n  ret void\n}}\n{TYPE_TREE}"
+    ));
+    let store = parsed.all(|op| matches!(op, Opcode::Store { .. }))[0];
+    let tree = llrm_mir::tbaa::Tbaa::of(&parsed.module.metadata);
+    for tree in [None, Some(&tree)] {
+        let unit = Unit { tbaa: tree, ..parsed.unit() };
+        let first = MemRef::of(&unit, store).expect("a store");
+        let before = crate::memory::TYPE_READS.with(std::cell::Cell::get);
+        for _ in 0..20 {
+            assert_eq!(MemRef::of(&unit, store).as_ref(), Some(&first));
+        }
+        let reads = crate::memory::TYPE_READS.with(std::cell::Cell::get) - before;
+        assert_eq!(reads, 0, "a held access was asked its type {reads} times in 20 hits");
+    }
+}
+
 /// A reference of a unit with no type tree was given the names of its type and
 /// every ancestor as new strings, for each reference: 7% of the compile's
 /// allocations (QCport). The names are read once for each type of a module.
