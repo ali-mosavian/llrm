@@ -32,8 +32,9 @@ pub fn generate(
     table_file: &str,
     rules: &str,
     rules_file: &str,
+    dialect: &llrm_instr::Dialect,
 ) -> Result<Generated, String> {
-    let table = table::load(table_source, table_file)?;
+    let table = table::load(table_source, table_file, dialect)?;
     let (program, automata) = compile(&table, rules, rules_file)?;
     let groups = program
         .groups

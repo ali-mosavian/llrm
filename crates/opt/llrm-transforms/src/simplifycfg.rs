@@ -88,6 +88,7 @@
 //! | [`sinkCommonCodeFromPredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L2425) and [`simplifyDuplicatePredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8573), called from `simplifyOnce` ([L9336](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9336)) under `SinkCommonInsts` | `sinkcommon::sunk`, `sinkcommon::duplicate_predecessors_merged`, `Options::sink_common_insts` | MIRROR for the calls; see that module |
 //! | [`foldBranchToCommonDest`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4231), called from `simplifyCondBranch` ([L9005](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9005)) under `SpeculateBlocks` | `branchtocommon::folded` | MIRROR for the call; see that module |
 //! | [`mergeConditionalStores`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4604), called from `simplifyCondBranch` ([L9083](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9083)) and `SimplifyCondBranchToCondBranch` ([L4805](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4805)) | `stores_merged`, `condstores::merged` | MIRROR for the calls, both in `stores_merged` until `SimplifyCondBranchToCondBranch` is ported |
+//! | [`removeUndefIntroducingPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9230), called from `simplifyOnce` ([L9327](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9327)) | `undefpred::removed` | MIRROR; D1 there |
 //! | [`FindFunctionBackedges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L236) | `loop_headers` | MIRROR |
 //! | [`removeUnreachableBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2912) and `markAliveBlocks` | `unreachable_removed` | the terminator folding and the deletion; D3 |
 //! | [`ConstantFoldTerminator`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L133) | `terminator_folded` | MIRROR; D4 |
@@ -99,9 +100,8 @@
 //! - D1. `LoopHeaders` is found once per `iteratively_simplified` and keeps the
 //!   blocks that go; LLVM's `WeakVH`s drop them. Nothing reads a deleted
 //!   block's entry.
-//! - D2. Not ported yet, each a later change of this series:
-//!   `removeUndefIntroducingPredecessor`, and the terminator simplifications
-//!   `simplifyUncondBranch` beyond the empty block
+//! - D2. Not ported yet, each a later change of this series: the terminator
+//!   simplifications `simplifyUncondBranch` beyond the empty block
 //!   (`tryToSimplifyUncondBranchWithICmpInIt`, landing pads: none in the MIR),
 //!   `simplifyCondBranch`, `simplifySwitch`, `simplifyUnreachable`.
 //! - D3. `markAliveBlocks` also turns what follows a call of a `noreturn`
@@ -187,7 +187,7 @@ use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
 use crate::twoentryphi::{self, Speculation};
-use crate::{branchtocommon, condstores, hoistcommon, sinkcommon, speculate, tailmerge, uncondicmp};
+use crate::{branchtocommon, condstores, hoistcommon, sinkcommon, speculate, tailmerge, uncondicmp, undefpred};
 use crate::{cfg, dead, edges, transform};
 
 /// LLVM's `SimplifyCFGPass` at the options of the early function pipeline
@@ -342,6 +342,9 @@ fn block_simplified(
     let mut changed = terminator_folded(context, callees, function, block, true);
     *folded |= changed;
     changed |= transform::duplicate_phis_in(function, block).expect("a phi nothing reads is erased");
+    if undefpred::removed(context, spec, function, block) {
+        return true;
+    }
     changed |= cfg::merged_into_predecessor(function, block);
     if options.sink_common_insts && function.is_placed(block) {
         if sinkcommon::sunk(context, spec, function, block) {

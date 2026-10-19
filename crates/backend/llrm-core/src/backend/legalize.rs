@@ -37,6 +37,14 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, GlobalKind, InstId, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 
+/// `module` with its min and max calls expanded, then its odd widths promoted:
+/// the compare and select of an `llvm.umin.i33` are odd widths too, and made
+/// after the promotion they reached selection ("a i33 value", lcexit.bas).
+pub fn legalized(module: &mut Module) -> Result<(), String> {
+    crate::backend::selects::minmax_expanded(module)?;
+    promoted(module)
+}
+
 /// Every integer of an odd width in `module` made the next machine width.
 pub fn promoted(module: &mut Module) -> Result<(), String> {
     let context = &mut module.context;
@@ -362,6 +370,36 @@ entry:
         let (before, after) = promoted(text);
         assert!(odd_widths_left(&before) && !odd_widths_left(&after), "{}", llrm_mir::print::module(&after));
         same_answers(&before, &after, &[(0, 0), (1, 0), (100, 0), (0xFFFF_FFFF, 0), (0x8000_0000, 0)], "i33 sum");
+    }
+
+    /// indvars' `umin.i33` of a widened trip count was expanded to an `i33`
+    /// compare and select after the promotion had run, and selection refused
+    /// it ("a i33 value", qb/lcexit.bas).
+    #[test]
+    fn test_an_i33_umin_call_is_expanded_and_made_in_i64() {
+        let text = "declare i33 @llvm.umin.i33(i33, i33)
+define i64 @f(i64 %a, i64 %b) {
+entry:
+  %n = trunc i64 %a to i32
+  %x = zext i32 %n to i33
+  %m = call i33 @llvm.umin.i33(i33 %x, i33 9)
+  %t = trunc i33 %m to i32
+  %r = zext i32 %t to i64
+  ret i64 %r
+}
+";
+        let mut module = llrm_mir::parse::module(text).unwrap();
+        super::legalized(&mut module).unwrap();
+        assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{}", llrm_mir::print::module(&module));
+        let printed = llrm_mir::print::module(&module);
+        let body = &printed[printed.find("define").unwrap()..];
+        assert!(!odd_widths_left_in(body), "{body}");
+    }
+
+    fn odd_widths_left_in(printed: &str) -> bool {
+        printed.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| {
+            word.strip_prefix('i').and_then(|n| n.parse::<u32>().ok()).is_some_and(|n| super::promotion(n).is_some())
+        })
     }
 
     /// Every odd width, every operation: the promoted function answers as the
