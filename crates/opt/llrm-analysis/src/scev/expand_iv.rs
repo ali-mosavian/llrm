@@ -1117,3 +1117,302 @@ impl Run<'_> {
         true
     }
 }
+
+impl Run<'_> {
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopInfo.cpp#L1036
+    /// `LoopInfo::replacementPreservesLCSSAForm(From, To)` for an instruction
+    /// `to`.
+    fn replacement_preserves_lcssa_form(
+        &self,
+        from: InstId,
+        to: InstId,
+    ) -> bool {
+        // If both instructions are defined in the same basic block then
+        // replacement cannot break LCSSA form.
+        let (to_bb, from_bb) = (self.function.parent(to).expect("placed"), self.function.parent(from).expect("placed"));
+        if to_bb == from_bb {
+            return true;
+        }
+        // If the instruction is not defined in a loop then it can safely
+        // replace anything.
+        let loops = self.env.loops;
+        let Some(to_loop) = loops.get_loop_for(to_bb) else { return true };
+        // If the replacing instruction is defined in the same loop as the
+        // original instruction, or in a loop that contains it as an inner
+        // loop, then using it as a replacement will not break LCSSA form.
+        loops.get_loop_for(from_bb).is_some_and(|from_loop| to_loop.contains(from_loop.get_header()))
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L1816
+    /// `replaceCongruentIVInc`: the increment of `phi` reads the increment of
+    /// `orig_phi`, where SCEV shows them the same (the two may swap).
+    fn replace_congruent_iv_inc(
+        &mut self,
+        phi: &mut InstId,
+        orig_phi: &mut InstId,
+        header: BlockId,
+        dead: &mut Vec<InstId>,
+    ) {
+        let Some(latch) = self.env.loops.get_loop_for(header).and_then(|l| l.get_loop_latch(self.function)) else {
+            return;
+        };
+        let incoming = |run: &Self, p: InstId| run.incoming_for(p, latch).and_then(|v| run.instruction_of(v));
+        let (Some(mut orig_inc), Some(mut isomorphic_inc)) = (incoming(self, *orig_phi), incoming(self, *phi)) else {
+            return;
+        };
+
+        // If this phi has the same width but is more canonical, replace the
+        // original with it. As part of the "more canonical" determination,
+        // respect a prior decision to use an IV chain.
+        if self.function.value(self.function.instruction(*orig_phi).result.expect("a value")).ty
+            == self.function.value(self.function.instruction(*phi).result.expect("a value")).ty
+        {
+            let chained = false;
+            if !(chained || self.is_expanded_add_rec_expr_phi(*orig_phi, orig_inc, header))
+                && (chained || self.is_expanded_add_rec_expr_phi(*phi, isomorphic_inc, header))
+            {
+                std::mem::swap(orig_phi, phi);
+                std::mem::swap(&mut orig_inc, &mut isomorphic_inc);
+            }
+        }
+
+        // Replacing the congruent phi is sufficient because acyclic
+        // redundancy elimination, CSE/GVN, should handle the rest. However,
+        // once SCEV proves that a phi is congruent, it's often the head of an
+        // IV user cycle that is isomorphic with the original phi. It's worth
+        // eagerly cleaning up the common case of a single IV increment so that
+        // DeleteDeadPHIs can remove cycles that had postinc uses. Because we
+        // may potentially introduce a new use of OrigIV that didn't exist
+        // before at this point, its poison flags need readjustment.
+        let iso_ty = self.scev_ty_of(self.result_of(isomorphic_inc));
+        let (trunc_expr, iso_expr) = {
+            let cx = cx!(self);
+            let orig_expr = self.se.get_scev(&cx, self.result_of(orig_inc));
+            (
+                self.se.get_truncate_or_noop(&cx, orig_expr, iso_ty),
+                self.se.get_scev(&cx, self.result_of(isomorphic_inc)),
+            )
+        };
+        if orig_inc == isomorphic_inc
+            || trunc_expr != iso_expr
+            || !self.replacement_preserves_lcssa_form(isomorphic_inc, orig_inc)
+        {
+            return;
+        }
+
+        let overflowing = |run: &Self, inst: InstId| {
+            matches!(
+                run.function.instruction(inst).opcode,
+                Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl)
+            )
+        };
+        let (mut both_have_nuw, mut both_have_nsw) = (false, false);
+        if overflowing(self, orig_inc) && overflowing(self, isomorphic_inc) {
+            let (a, b) = (self.function.instruction(orig_inc).flags, self.function.instruction(isomorphic_inc).flags);
+            both_have_nuw = a.contains(IrFlags::NUW) && b.contains(IrFlags::NUW);
+            both_have_nsw = a.contains(IrFlags::NSW) && b.contains(IrFlags::NSW);
+        }
+
+        if !self.hoist_iv_inc(orig_inc, isomorphic_inc, true) {
+            return;
+        }
+
+        // We are replacing with a wider increment. If both OrigInc and
+        // IsomorphicInc are NUW/NSW, then we can preserve them on the wider
+        // increment; the narrower IsomorphicInc would wrap before the wider
+        // OrigInc, so the replacement won't make IsomorphicInc's uses more
+        // poisonous.
+        if both_have_nuw || both_have_nsw {
+            let mut f = self.function.instruction(orig_inc).flags;
+            if both_have_nuw {
+                f.insert(IrFlags::NUW);
+            }
+            if both_have_nsw {
+                f.insert(IrFlags::NSW);
+            }
+            self.function.set_flags(orig_inc, f);
+        }
+
+        let mut new_inc = self.result_of(orig_inc);
+        let (orig_ty, iso_ir_ty) = (
+            self.ty_of_operand(new_inc),
+            self.function.value(self.function.instruction(isomorphic_inc).result.expect("a value")).ty,
+        );
+        if orig_ty != iso_ir_ty {
+            let position = if matches!(self.function.instruction(orig_inc).opcode, Opcode::Phi) {
+                Position::Before(self.first_insertion_pt(self.function.parent(orig_inc).expect("placed")))
+            } else {
+                Position::After(orig_inc)
+            };
+            new_inc = self.create_trunc_or_bit_cast(new_inc, iso_ir_ty, position);
+        }
+        let iso_result = self.function.instruction(isomorphic_inc).result.expect("a value");
+        self.function.replace_all_uses_with(iso_result, new_inc);
+        dead.push(isomorphic_inc);
+    }
+
+    /// `IRBuilder::CreateTruncOrBitCast(v, to)` at `position`.
+    fn create_trunc_or_bit_cast(
+        &mut self,
+        v: Operand,
+        to: TypeId,
+        position: Position,
+    ) -> Operand {
+        let from = self.ty_of_operand(v);
+        if from == to {
+            return v;
+        }
+        let narrower = matches!(
+            (self.context.types.get(from), self.context.types.get(to)),
+            (MirType::Int(a), MirType::Int(b)) if a > b
+        );
+        let op = if narrower { CastOp::Trunc } else { CastOp::BitCast };
+        let inst =
+            self.function.create_instruction(Opcode::Cast(op), to, vec![v], IrFlags::default(), Some("indvars.iv"));
+        self.function.insert(inst, position).expect("a placed position");
+        self.result_of(inst)
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L1909
+    /// `replaceCongruentIVs`: congruent phis of the header are replaced by the
+    /// most canonical representative; the number eliminated. The dead phis are
+    /// left in `dead`.
+    pub(super) fn replace_congruent_ivs(
+        &mut self,
+        header: BlockId,
+        dead: &mut Vec<InstId>,
+        tti: Option<&dyn llrm_mir::tti::Tti>,
+    ) -> u32 {
+        // Find integer phis in order of increasing width.
+        let mut phis: Vec<InstId> = self
+            .function
+            .iter_block(header)
+            .take_while(|&inst| matches!(self.function.instruction(inst).opcode, Opcode::Phi))
+            .collect();
+        let width_of = |run: &Self, phi: InstId| match run.context.types.get(run.function.value(run.result_phi(phi)).ty)
+        {
+            MirType::Int(bits) => Some(*bits),
+            _ => None,
+        };
+        if tti.is_some() {
+            // Use stable_sort to preserve order of equivalent PHIs, so the
+            // order of the sorted Phis is the same from run to run on the same
+            // loop. Pointers go at the back, wider integers first.
+            let keys: Vec<(InstId, Option<u32>)> = phis.iter().map(|&phi| (phi, width_of(self, phi))).collect();
+            let mut keys = keys;
+            keys.sort_by(|a, b| match (a.1, b.1) {
+                (Some(x), Some(y)) => y.cmp(&x),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            });
+            phis = keys.into_iter().map(|(phi, _)| phi).collect();
+        }
+        let Some(&narrowest) = phis.last() else { return 0 };
+        let narrowest_ty = self.function.value(self.result_phi(narrowest)).ty;
+
+        let mut num_elim = 0;
+        let mut expr_to_iv: llrm_mir::hash::HashMap<Scev, InstId> = Default::default();
+        // Process phis from wide to narrow. Map wide phis to their truncation
+        // so narrow phis can reuse them.
+        for original in phis {
+            let mut phi = original;
+            let result = self.result_phi(phi);
+            let phi_ty = self.function.value(result).ty;
+
+            // Fold constant phis. They may be congruent to other constant phis
+            // and would confuse the logic below that expects proper IVs.
+            let simplified =
+                llrm_mir::simplify::simplify_instruction(self.context, self.env.layout, self.function, phi).or_else(
+                    || {
+                        if !self.se.is_scevable(self.context.types.get(phi_ty)) {
+                            return None;
+                        }
+                        let cx = cx!(self);
+                        let s = self.se.get_scev(&cx, Operand::Value(result));
+                        let value = self.se.as_constant(s)?;
+                        Some(Operand::Constant(self.context.int(phi_ty, value.zext_value() as i128)))
+                    },
+                );
+            if let Some(v) = simplified {
+                if self.ty_of_operand(v) != phi_ty {
+                    continue;
+                }
+                {
+                    let cx = cx!(self);
+                    self.se.forget_value(&cx, Operand::Value(result));
+                }
+                self.function.replace_all_uses_with(result, v);
+                dead.push(phi);
+                num_elim += 1;
+                continue;
+            }
+
+            if !self.se.is_scevable(self.context.types.get(phi_ty)) {
+                continue;
+            }
+
+            let expr = {
+                let cx = cx!(self);
+                self.se.get_scev(&cx, Operand::Value(result))
+            };
+            let Some(&orig_ref) = expr_to_iv.get(&expr) else {
+                expr_to_iv.insert(expr, phi);
+                if let (MirType::Int(_), Some(tti)) = (self.context.types.get(phi_ty), tti) {
+                    let (from, to) = (
+                        self.scev_ty_of(Operand::Value(result)),
+                        self.scev_ty_of(Operand::Value(self.result_phi(narrowest))),
+                    );
+                    let (Ty::Int(from_bits), Ty::Int(to_bits)) = (from, to) else { continue };
+                    if tti.is_truncate_free(llrm_mir::tti::Ty::Int(from_bits), llrm_mir::tti::Ty::Int(to_bits))
+                        && matches!(self.se.node(expr).kind, Kind::AddRec(..))
+                    {
+                        // Make sure we only rewrite using simple induction
+                        // variables; otherwise, we can make the trip count of
+                        // a loop unanalyzable to SCEV. This phi can be freely
+                        // truncated to the narrowest phi type. Map the
+                        // truncated expression to it so it will be reused for
+                        // narrow types.
+                        let cx = cx!(self);
+                        let trunc = self.se.get_truncate_expr(&cx, Use::of(expr), to, 0);
+                        expr_to_iv.insert(trunc, phi);
+                    }
+                }
+                continue;
+            };
+            let _ = narrowest_ty;
+
+            // Replacing a pointer phi with an integer phi or vice-versa
+            // doesn't make sense.
+            let orig_ty = self.function.value(self.result_phi(orig_ref)).ty;
+            if matches!(self.context.types.get(orig_ty), MirType::Pointer(_))
+                != matches!(self.context.types.get(phi_ty), MirType::Pointer(_))
+            {
+                continue;
+            }
+
+            let mut orig_phi = orig_ref;
+            self.replace_congruent_iv_inc(&mut phi, &mut orig_phi, header, dead);
+            // `OrigPhiRef` is the map's slot: a swap above updated it.
+            expr_to_iv.insert(expr, orig_phi);
+            num_elim += 1;
+            let phi_result = self.result_phi(phi);
+            let phi_ty = self.function.value(phi_result).ty;
+            let mut new_iv = Operand::Value(self.result_phi(orig_phi));
+            if self.ty_of_operand(new_iv) != phi_ty {
+                let position = Position::Before(self.first_insertion_pt(header));
+                new_iv = self.create_trunc_or_bit_cast(new_iv, phi_ty, position);
+            }
+            self.function.replace_all_uses_with(phi_result, new_iv);
+            dead.push(phi);
+        }
+        num_elim
+    }
+
+    fn result_phi(
+        &self,
+        phi: InstId,
+    ) -> llrm_mir::module::ValueId {
+        self.function.instruction(phi).result.expect("a phi has a value")
+    }
+}

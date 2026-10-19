@@ -824,7 +824,7 @@ done:
 
 /// The flat 32-bit target as the driver builds it: widening past 16 bits is
 /// priced by its X86 cost model.
-fn m32() -> Rc<dyn llrm_mir::target::Machine> {
+pub(crate) fn m32() -> Rc<dyn llrm_mir::target::Machine> {
     use llrm_target::Target;
     let prices = llrm_target::CpuPrices {
         costs: Vec::new(),
