@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopidioms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopidioms.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:20a00abb203a0b3e03f90c38e16a8c5d31c002f9f77f82db9bd3157d84eef161 -->
+<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:dece3e699d500dcf0af64ed9d0844cbb96d93f65841c8f40b676e04934d29c4e -->
 
 # loopidioms
 
@@ -34,10 +34,8 @@ these forms:
 The count in bytes must not wrap the index: a byte's trips never do, and
 wider cells need `inbounds` GEPs or the proof's `maximum`. The counter must
 not be wider than the index. A huge pointer, which carries into its
-selector, is taken like any other: the intrinsic carries its address space,
-and instruction selection splits the fill at each 64K segment
-(`isel/huge.rs`; Owner: clib-huge-fill-2256). A volatile access, a call, or
-a value the loop changes keeps the loop.
+selector, is refused. A volatile access, a call, or a value the loop changes
+keeps the loop.
 
 A loop with one fill of constant bytes is rewritten always. A pattern, a
 copy or a loop of several fills is priced (`_pays`, `_cheaper_by`) against
