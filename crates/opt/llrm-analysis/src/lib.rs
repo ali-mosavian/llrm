@@ -95,6 +95,7 @@ pub mod alias;
 pub mod aliassets;
 pub mod argumentattrs;
 pub mod assumptions;
+pub mod attrsummary;
 pub mod avail;
 pub mod basicaa;
 pub mod blockfreq;

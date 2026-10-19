@@ -1935,6 +1935,7 @@ pub fn stamped(
     }
     if llrm_support::env_flag!("LLRM_SHADOW_GMR") {
         shadow_globalsmodref(module, known);
+        shadow_attributes(module, known);
     }
     Ok(changed)
 }
@@ -1985,6 +1986,61 @@ fn shadow_globalsmodref(
         }
     }
     eprintln!("shadow-gmr compared {compared} bodies: same {same} looser {looser} tighter {tighter}");
+}
+
+/// Shadow of the attributes' `memory(...)` against alias's summaries, per body:
+/// the whole-memory read and write, and whether the effect is argument memory
+/// alone. `tighter` is an attribute that states less than the summary found.
+fn shadow_attributes(
+    module: &Module,
+    known: &llrm_support::hash::IndexMap<String, llrm_analysis::alias::Summary>,
+) {
+    use llrm_analysis::aa::{IRMemLocation, MemoryEffects};
+    use llrm_analysis::memory::MemoryKind;
+    let (mut same, mut looser, mut tighter, mut compared) = (0_usize, 0_usize, 0_usize, 0_usize);
+    let (mut argmem_same, mut argmem_looser) = (0_usize, 0_usize);
+    for (_, global, function) in module.functions() {
+        let Some(name) = global.name.as_ref() else { continue };
+        let Some(summary) = known.get(name) else { continue };
+        compared += 1;
+        let me = MemoryEffects::of_attrs(&function.attrs);
+        let reads = !summary.reads.is_empty() || summary.unknown_read;
+        let writes = !summary.writes.is_empty() || summary.unknown_write;
+        let theirs = me.overall();
+        let mine = match (reads, writes) {
+            (false, false) => ModRefInfo::NoModRef,
+            (true, false) => ModRefInfo::Ref,
+            (false, true) => ModRefInfo::Mod,
+            (true, true) => ModRefInfo::ModRef,
+        };
+        if theirs == mine {
+            same += 1;
+        } else if theirs.union(mine) == theirs {
+            looser += 1;
+            eprintln!("shadow-attrs looser @{name}: attrs {theirs:?} summary {mine:?}");
+        } else {
+            tighter += 1;
+            eprintln!("shadow-attrs tighter @{name}: attrs {theirs:?} summary {mine:?}");
+        }
+        let only_arguments = |slices: &llrm_analysis::sliceset::SliceSet| {
+            slices.iter().all(|one| one.object.kind == MemoryKind::Parameter)
+        };
+        let summary_args = !summary.unknown_read
+            && !summary.unknown_write
+            && only_arguments(&summary.reads)
+            && only_arguments(&summary.writes);
+        let attrs_args = me.mod_ref(IRMemLocation::Other).is_no_mod_ref()
+            && me.mod_ref(IRMemLocation::InaccessibleMem).is_no_mod_ref();
+        if summary_args == attrs_args {
+            argmem_same += 1;
+        } else if summary_args {
+            argmem_looser += 1;
+            eprintln!("shadow-attrs argument-only looser @{name}: attrs {me:?}");
+        }
+    }
+    eprintln!(
+        "shadow-attrs compared {compared} bodies: overall same {same} looser {looser} tighter {tighter}; argument-only same {argmem_same} looser {argmem_looser}"
+    );
 }
 
 /// The procedure `id`, with the context its types and constants live in.
