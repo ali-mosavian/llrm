@@ -724,6 +724,10 @@ impl FunctionPass for Licm {
         "licm"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("licm")
+    }
+
     fn adds_memory_operations(&self) -> bool {
         false
     }
