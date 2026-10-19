@@ -476,3 +476,114 @@ impl ExpansionTti for UnitCosts {
         1
     }
 }
+
+/// The target's cost model (`Machine::tti`) as the expansion cost asks it:
+/// `getArithmeticInstrCost` and the rest, in the cost kind of the function
+/// (`hasMinSize`: code size, else reciprocal throughput). A target that
+/// states no cost model prices every instruction `TCC_Basic` ([`UnitCosts`]).
+pub struct MachineCosts {
+    pub tti: Option<std::rc::Rc<dyn llrm_mir::tti::Tti>>,
+    pub minimum_size: bool,
+}
+
+impl MachineCosts {
+    fn kind(&self) -> llrm_mir::tti::CostKind {
+        if self.minimum_size { llrm_mir::tti::CostKind::CodeSize } else { llrm_mir::tti::CostKind::RecipThroughput }
+    }
+
+    fn ty(ty: Ty) -> llrm_mir::tti::Ty {
+        match ty {
+            Ty::Int(bits) => llrm_mir::tti::Ty::Int(bits),
+            Ty::Ptr(_) => llrm_mir::tti::Ty::Pointer,
+        }
+    }
+}
+
+impl ExpansionTti for MachineCosts {
+    fn code_size(&self) -> bool {
+        self.minimum_size
+    }
+
+    fn get_arithmetic_instr_cost(
+        &self,
+        opcode: Opc,
+        ty: Ty,
+    ) -> i64 {
+        use llrm_mir::tti::{ArithOp, OperandInfo};
+        let Some(tti) = &self.tti else { return 1 };
+        let op = match opcode {
+            Opc::Add => ArithOp::Add,
+            Opc::Sub => ArithOp::Sub,
+            Opc::Mul => ArithOp::Mul,
+            Opc::Shl => ArithOp::Shl,
+            Opc::LShr => ArithOp::LShr,
+            Opc::UDiv => ArithOp::UDiv,
+            Opc::Or => ArithOp::Or,
+            _ => return 1,
+        };
+        tti.arithmetic_cost(op, Self::ty(ty), self.kind(), OperandInfo::ANY, OperandInfo::ANY).value
+    }
+
+    fn get_cast_instr_cost(
+        &self,
+        opcode: Opc,
+        to: Ty,
+        from: Ty,
+    ) -> i64 {
+        use llrm_mir::tti::CastKind;
+        let Some(tti) = &self.tti else { return 1 };
+        let op = match opcode {
+            Opc::Trunc => CastKind::Trunc,
+            Opc::ZExt => CastKind::ZExt,
+            Opc::SExt => CastKind::SExt,
+            Opc::PtrToAddr => CastKind::PtrToInt,
+            _ => return 1,
+        };
+        tti.cast_cost(op, Self::ty(to), Self::ty(from), self.kind()).value
+    }
+
+    fn get_cmp_sel_instr_cost(
+        &self,
+        opcode: Opc,
+        ty: Ty,
+    ) -> i64 {
+        use llrm_mir::tti::CmpSel;
+        let Some(tti) = &self.tti else { return 1 };
+        let op = match opcode {
+            Opc::ICmp => CmpSel::ICmp,
+            Opc::Select => CmpSel::Select,
+            _ => return 1,
+        };
+        tti.cmp_sel_cost(op, Self::ty(ty), self.kind()).value
+    }
+
+    fn get_cf_instr_cost_phi(&self) -> i64 {
+        match &self.tti {
+            Some(tti) => tti.cf_instr_cost(true, self.kind()).value,
+            None => 0,
+        }
+    }
+
+    fn get_int_imm_cost_inst(
+        &self,
+        opcode: Opc,
+        index: i32,
+        imm: &Ap,
+        _ty: Ty,
+    ) -> i64 {
+        use llrm_mir::tti::ImmUser;
+        let Some(tti) = &self.tti else { return 1 };
+        let user = match opcode {
+            Opc::Add => ImmUser::Add,
+            Opc::Sub => ImmUser::Sub,
+            Opc::Mul => ImmUser::Mul,
+            Opc::Or => ImmUser::Or,
+            Opc::UDiv => ImmUser::Divide,
+            Opc::Shl | Opc::LShr => ImmUser::Shift,
+            Opc::ICmp => ImmUser::ICmp,
+            Opc::None => ImmUser::Unknown,
+            _ => ImmUser::Other,
+        };
+        tti.int_imm_cost_inst(user, index.max(0) as u32, imm.sext_value(), imm.width).value
+    }
+}

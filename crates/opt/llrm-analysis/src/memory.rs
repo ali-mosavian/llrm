@@ -246,6 +246,13 @@ thread_local! {
     pub static OBJECT_COMPARES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Reads of an access's `!tbaa` name and lineage, for the test that a held
+    /// access is not asked its type again.
+    pub static TYPE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Ord for MemoryObject {
     fn cmp(
         &self,
@@ -1871,7 +1878,9 @@ pub struct MemRef {
 /// The accesses worked out for a version of a function, and which version.
 struct Held {
     key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces),
-    seen: std::rc::Rc<std::cell::RefCell<llrm_support::hash::SparseIdMap<InstId, Option<std::rc::Rc<MemRef>>>>>,
+    seen: std::rc::Rc<
+        std::cell::RefCell<llrm_support::hash::SparseIdMap<InstId, (Option<std::rc::Rc<MemRef>>, Option<u32>)>>,
+    >,
 }
 
 /// The most versions kept: the analyses of one function ask in a run, and a
@@ -1985,7 +1994,19 @@ impl MemRef {
         };
         let mut disp: i128 = 0;
         let mut root = pointer;
+        // A block nothing enters may define a pointer from itself; a chain
+        // longer than 64 starts remembering what it has passed.
+        let mut steps = 0u32;
+        let mut seen = BTreeSet::new();
         loop {
+            steps += 1;
+            if steps > 64 {
+                if let Operand::Value(value) = root
+                    && !seen.insert(value)
+                {
+                    break;
+                }
+            }
             if let (Some(chain), Operand::Value(value)) = (chain.as_deref_mut(), root) {
                 chain.push(value);
             }
@@ -2048,18 +2069,21 @@ impl MemRef {
                 seen
             }),
         };
+        let tag =
+            unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa").map(|(_, tag)| tag.0);
         let found = seen.borrow().get(&inst).cloned();
-        let Some(found) = found else {
+        let Some((found, held_tag)) = found else {
             let made = crate::references::of(unit, inst);
-            seen.borrow_mut().insert(inst, made.clone());
+            seen.borrow_mut().insert(inst, (made.clone(), tag));
             return made.map(|one| (*one).clone());
         };
         // Metadata is attached without a change logged: the type is asked
-        // again.
+        // again where the tag is not the one it was held with.
         let mut found = found.map(|one| (*one).clone());
-        if let Some(access) = &mut found {
+        if let (Some(access), true) = (&mut found, tag != held_tag) {
             access.typed = typed(unit, inst);
             access.lineage = lineage(unit, inst);
+            seen.borrow_mut().insert(inst, (Some(std::rc::Rc::new(access.clone())), tag));
         }
         static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if *CHECKED.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_ACCESSES")) {
@@ -2485,6 +2509,8 @@ pub fn typed(
     unit: &Unit,
     inst: InstId,
 ) -> Option<std::rc::Rc<str>> {
+    #[cfg(test)]
+    TYPE_READS.with(|count| count.set(count.get() + 1));
     let (_, tag) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa")?;
     if let Some(tree) = unit.tbaa {
         // A type's name read through the tree is the type node's first operand,
@@ -2514,6 +2540,8 @@ pub fn lineage(
     unit: &Unit,
     inst: InstId,
 ) -> std::rc::Rc<[String]> {
+    #[cfg(test)]
+    TYPE_READS.with(|count| count.set(count.get() + 1));
     let Some((_, tag)) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa") else {
         return no_lineage();
     };
@@ -2589,6 +2617,30 @@ mod tests {
 
     fn object(kind: MemoryKind) -> MemoryObject {
         MemoryObject::new(kind)
+    }
+
+    /// A loop nothing enters (a block group that only reaches itself) can
+    /// define a pointer as `gep %p, 1` of itself, as a function with
+    /// JumpThreading did before `decide` removed it:
+    /// the chain walk never ended and held a value per step, 50 GB in 100 s
+    /// on QB's datetime.c at -Os -m16. A chain that comes back to a value ends
+    /// there, as `getUnderlyingObject` ends on a value it has seen.
+    #[test]
+    fn a_pointer_chain_that_comes_back_to_itself_ends() {
+        let module = parsed(&format!(
+            "{DOS}define i8 @f(ptr %a) {{\nb0:\n  ret i8 0\nb1:\n  %p = getelementptr inbounds i8, ptr %p, i16 1\n  %v = load i8, ptr %p\n  br label %b1\n}}\n"
+        ));
+        let layout = layout(&module);
+        let (_, _, f) = module.functions().next().unwrap();
+        let unit = Unit::of(&module, &layout, f);
+        let (_, load) = f
+            .walk()
+            .find(|&(_, at)| matches!(
+                f.instruction(at).opcode,
+                llrm_mir::opcode::Opcode::Load { .. }
+            ))
+            .unwrap();
+        assert!(MemRef::of(&unit, load).is_some());
     }
 
     /// Isel's unit named no program, so the spaces became one flat space: a QB

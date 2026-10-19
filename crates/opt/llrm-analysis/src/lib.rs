@@ -97,16 +97,19 @@ pub mod argumentattrs;
 pub mod assumptions;
 pub mod avail;
 pub mod basicaa;
+pub mod blockfreq;
 pub mod branchprob;
 pub mod capturecheck;
 pub mod capturetracking;
 pub mod cellmap;
 pub mod cfg;
+pub mod cfgwalk;
 pub mod constant_cycles;
 pub mod consts;
 #[cfg(test)]
 mod corpus_tests;
 pub mod demanded;
+pub mod demandedbits;
 pub mod dependence;
 pub mod difference;
 pub mod effects;
@@ -117,6 +120,7 @@ pub mod functionattrs;
 #[cfg(any(test, feature = "testing"))]
 pub mod generated;
 pub mod globalsaa;
+pub mod globalsmodref;
 pub mod graph;
 pub mod guards;
 pub mod induction;

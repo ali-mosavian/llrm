@@ -34,6 +34,7 @@
 //! debug-value use list to salvage into, and `salvageKnowledge` reads
 //! operand bundles, which MIR has none of.
 
+use llrm_analysis::memdep::MemoryDependenceResults;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
@@ -47,6 +48,9 @@ use llrm_support::hash::HashSet;
 
 use super::table::{Env, ExprOp, LeaderMap, ValueTable};
 use crate::local;
+
+mod loadpre;
+mod loads;
 
 /// DEVIATE 17 (temporary): what a taken compare says of its operands (`A == B`
 /// replaces `A` by `B`; `A >= B` makes `A < B` false) is not propagated. A
@@ -78,6 +82,12 @@ pub struct GvnPass<'a> {
     dt: std::borrow::Cow<'a, DomTree>,
     vn: ValueTable,
     leader_table: LeaderMap,
+    /// `MD`: the memory dependence cache, kept in step with the edits.
+    md: MemoryDependenceResults,
+    /// `enable-load-pre`, and the scalar PRE: the level's `pre`.
+    pre: bool,
+    /// `LI`, made when a load PRE asks and dropped when the CFG changes.
+    loops: Option<llrm_mir::loopinfo::LoopInfo>,
     dead_blocks: IdSet<BlockId>,
     /// A block was merged or an edge split.
     cfg_changed: bool,
@@ -90,7 +100,7 @@ pub fn run_impl(
     function: &mut Function,
     outer: &Outer,
 ) -> bool {
-    run_impl_cfg(context, layout, function, outer, None).0
+    run_impl_cfg(context, layout, function, outer, true, None).0
 }
 
 /// `run_impl`, and whether it changed the CFG: merged a block or split an edge.
@@ -100,6 +110,7 @@ pub fn run_impl_cfg(
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
+    pre: bool,
     dominators: Option<&DomTree>,
 ) -> (bool, bool) {
     let tables = TABLES.with(|pool| pool.take()).unwrap_or_else(|| (ValueTable::new(), LeaderMap::default()));
@@ -112,6 +123,9 @@ pub fn run_impl_cfg(
         dt,
         vn: tables.0,
         leader_table: tables.1,
+        md: MemoryDependenceResults::default(),
+        pre,
+        loops: None,
         dead_blocks: IdSet::new(),
         cfg_changed: false,
     };
@@ -139,6 +153,7 @@ impl GvnPass<'_> {
     }
 
     fn refresh_dominators(&mut self) {
+        self.loops = None;
         self.dt = std::borrow::Cow::Owned(DomTree::of(self.function));
     }
 
@@ -214,7 +229,7 @@ impl GvnPass<'_> {
         for phi in to_remove.iter() {
             self.remove_instruction(phi);
         }
-        for inst in self.function.block(block).instructions().to_vec() {
+        for inst in self.function.iter_block(block).collect::<Vec<_>>() {
             if self.function.is_erased(inst) {
                 continue;
             }
@@ -234,6 +249,9 @@ impl GvnPass<'_> {
             self.vn.erase(Operand::Value(result), is_phi);
             self.vn.verify_removed(Operand::Value(result));
         }
+        // `MD->removeInstruction(I)`, while it is still in its block.
+        let unit = llrm_analysis::memory::Unit::within(&*self.context, self.layout, &*self.function, self.outer);
+        self.md.remove_instruction(&unit, inst);
         self.function.erase(inst).expect("an instruction nothing uses");
     }
 
@@ -342,7 +360,7 @@ impl GvnPass<'_> {
     ) -> bool {
         matches!(
             value,
-            Operand::Value(id) if self.function.users(id).len() == 1
+            Operand::Value(id) if self.function.users(id).has_one_use()
         )
     }
 
@@ -775,20 +793,22 @@ impl GvnPass<'_> {
             }
         }
 
-        let instruction = self.function.instruction(inst);
         let parent = self.function.parent(inst).expect("a placed instruction");
 
         if self.is_assume(inst) {
             return self.process_assume_intrinsic(inst);
         }
 
-        if matches!(instruction.opcode, Opcode::Load { .. }) {
-            // Stage 4 calls `processLoad` here.
-            let value = Operand::Value(instruction.result.expect("a load has a value"));
+        if matches!(self.function.instruction(inst).opcode, Opcode::Load { .. }) {
+            if self.process_load(inst) {
+                return true;
+            }
+            let value = Operand::Value(self.function.instruction(inst).result.expect("a load has a value"));
             let num = self.lookup_or_add(value);
             self.leader_table.insert(num, value, parent);
             return false;
         }
+        let instruction = self.function.instruction(inst);
 
         // For conditional branches, we can perform simple conditional
         // propagation on the condition value itself.
@@ -976,6 +996,7 @@ impl GvnPass<'_> {
         succ: BlockId,
     ) -> Option<BlockId> {
         let block = crate::edges::split_critical_edge(self.function, pred, succ)?;
+        self.md.invalidate_cached_predecessors();
         self.cfg_changed = true;
         self.refresh_dominators();
         Some(block)

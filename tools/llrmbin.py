@@ -103,3 +103,16 @@ def pinned(binary: Path) -> Path:
     except FileExistsError:  # another thread of this process pinned it first
         pass
     return link
+
+
+def md5(path) -> str:
+    return hashlib.md5(Path(path).read_bytes()).hexdigest()
+
+
+def assert_distinct(base, new, same_source: bool = False) -> str:
+    """The header line of an A/B table: both binaries' md5. SystemExit when they are equal and the sources are not known to be: `cargo build -p X` does not
+    relink target/release/X, so two builds of different commits were the same binary and a pair read "0 differ" (lir-cleanup-port's identity run)."""
+    a, b = md5(base), md5(new)
+    if a == b and not same_source:
+        raise SystemExit(f"same binary: base {base} and new {new} both have md5 {a}; the new commit was not built into it (`cargo build --bin X`, not `-p`). Refusing to print a diff.")
+    return f"binaries: base {a[:12]} {base} | new {b[:12]} {new}" + (" (same binary, same source)" if a == b else "")

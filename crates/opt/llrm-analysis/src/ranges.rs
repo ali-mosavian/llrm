@@ -1190,7 +1190,7 @@ pub fn edges_solved(
                 up.and_then(|up| known.get(&up)).map(|up| (**up).clone()).unwrap_or(seeded)
             }
         };
-        for inst in function.block(block).iter() {
+        for inst in function.iter_block(block) {
             let (Some(interval), Some(result)) =
                 (_computed(unit, inst, &scoped, facts), function.instruction(inst).result)
             else {
@@ -1845,7 +1845,7 @@ fn bounded_solved_under(
         // value above it. A loop that took them all made its blocks' maps as
         // large as the body above it, quadratic in the branches before it.
         let header_above = shape.dominance.immediate(unit.function, loop_.header);
-        for &inst in in_layout.iter().flat_map(|&block| function.block(block).instructions().iter()) {
+        for inst in in_layout.iter().flat_map(|&block| function.iter_block(block)) {
             for operand in &function.instruction(inst).operands {
                 if let Operand::Value(value) = *operand
                     && outside(value)
@@ -1859,7 +1859,7 @@ fn bounded_solved_under(
         let operations = in_layout
             .iter()
             .filter(|&&block| inside.contains(&cfg::id(block)) || cfg::id(block) == loop_.header)
-            .flat_map(|&block| function.block(block).iter())
+            .flat_map(|&block| function.iter_block(block))
             .filter(|&inst| function.instruction(inst).opcode != Opcode::Phi)
             .collect::<Vec<_>>();
         if check_scopes() {
@@ -2446,7 +2446,7 @@ fn box_candidates(
     }
     // (phi, width, the entries' hull, the (latch, value) pairs coming round)
     let mut candidates = Vec::new();
-    for inst in function.block(header).iter() {
+    for inst in function.iter_block(header) {
         let op = function.instruction(inst);
         let (Opcode::Phi, Some(phi)) = (&op.opcode, op.result) else { continue };
         let Some(width) = unit.int_bits(Operand::Value(phi)).filter(|&width| width > 1) else { continue };

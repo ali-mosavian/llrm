@@ -40,13 +40,24 @@
 //!   MIR's does.
 //! - `AssumptionCache`, `DomTreeUpdater`, statistics, names that follow
 //!   `.sroa.` suffix rules.
-//! - Offsets are `i128` and do not wrap at the index width; an offset below
-//!   zero is outside the alloca.
+//! - Offsets are `i128` kept in `0..2^index width` after each GEP, as the
+//!   `APInt` of `PtrUseVisitor` wraps; one past the alloca is outside it, and
+//!   so is a negative one, which wraps to a large number.
 //! - `IRBuilder` here makes what it is told and does not fold constants
 //!   (`ConstantFolder`) except the splat of a constant byte; `fold` does that
 //!   after.
 //! - Metadata: an access keeps its metadata where the type and offset are
 //!   unchanged, and loses it otherwise (`adjustForAccess`).
+//!
+//! # Example
+//! An alloca of two `i32` fields, each stored and loaded whole, becomes two
+//! allocas and then registers:
+//!
+//! ```text
+//! %s = alloca { i32, i32 }
+//! store i32 1, ptr %s          ; field 0
+//! %v = load i32, ptr %s        ; becomes the constant 1, the alloca is gone
+//! ```
 
 use std::cmp::Ordering;
 
@@ -474,13 +485,13 @@ fn build_slices(
             }
             found.slices.push(Slice { begin, end, used: Some(used), splittable, kind });
         };
-        let result_users = |instruction: &llrm_mir::module::Instruction| {
-            instruction.result.map_or(0, |result| function.users(result).len())
+        let result_unused = |instruction: &llrm_mir::module::Instruction| {
+            instruction.result.is_none_or(|result| function.users(result).is_empty())
         };
         match &instruction.opcode {
             // `visitBitCastInst` (L1084).
             Opcode::Cast(CastOp::BitCast) if used.index == 0 && is_pointer(context, instruction.ty) => {
-                if result_users(instruction) == 0 {
+                if result_unused(instruction) {
                     mark_dead(&mut found);
                 } else if let Some(result) = instruction.result {
                     enqueue(&mut worklist, &mut visited_uses, result, known, offset);
@@ -493,7 +504,7 @@ fn build_slices(
             }
             // `visitGetElementPtrInst` (L1098) and `adjustOffsetForGEP`.
             Opcode::GetElementPtr { source } if used.index == 0 => {
-                if result_users(instruction) == 0 {
+                if result_unused(instruction) {
                     mark_dead(&mut found);
                     continue;
                 }
@@ -501,7 +512,14 @@ fn build_slices(
                     instruction.operands[1..].iter().map(|&one| constant_index(context, one)).collect();
                 let (known, offset) = if known && indices.iter().all(Option::is_some) {
                     let (constant, variable) = layout.collect_offset(&context.types, *source, &indices);
-                    if variable.is_empty() { (true, offset + constant) } else { (false, 0) }
+                    if variable.is_empty() {
+                        // `Offset += GEPOffset` on an `APInt` of the index
+                        // width: it wraps, and every range check is unsigned.
+                        let bits = layout.pointer(pointer_space(context, instruction.ty)).index_bits;
+                        (true, (offset + constant).rem_euclid(1i128 << bits))
+                    } else {
+                        (false, 0)
+                    }
                 } else {
                     (false, 0)
                 };
@@ -547,7 +565,7 @@ fn build_slices(
             // `visitPHINodeOrSelectInst` (L1338). A select's condition is no
             // pointer.
             Opcode::Phi | Opcode::Select if !(matches!(instruction.opcode, Opcode::Select) && used.index == 0) => {
-                if result_users(instruction) == 0 {
+                if result_unused(instruction) {
                     mark_dead(&mut found);
                     continue;
                 }
@@ -851,7 +869,7 @@ fn element_containing_offset(
 /// `getTypePartition`. SROA.cpp#L4832
 fn get_type_partition(
     layout: &DataLayout,
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
     offset: u64,
     size: u64,
@@ -1068,7 +1086,7 @@ fn is_integer_widening_viable_for_slice(
 /// `isIntegerWideningViable`. SROA.cpp#L2551
 fn is_integer_widening_viable(
     layout: &DataLayout,
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     slices: &[Slice],
     p: &Partition,
@@ -1220,8 +1238,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let declared = self.declared_allocas();
         let allocas: Vec<InstId> = self
             .function()
-            .block(entry)
-            .iter()
+            .iter_block(entry)
             .filter(|&inst| matches!(
                 self.function().instruction(inst).opcode,
                 Opcode::Alloca { .. }
@@ -1353,7 +1370,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 if !self.function().users(result).is_empty() {
                     // `UndefValue::get` (SROA.cpp#L6393).
                     let ty = self.function().value(result).ty;
-                    let undef = Operand::Constant(self.unit.context.constant(Constant { ty, kind: ConstantKind::Undef }));
+                    let undef =
+                        Operand::Constant(self.unit.context.constant(Constant { ty, kind: ConstantKind::Undef }));
                     self.unit.function.replace_value(result, undef);
                 }
             }
@@ -1890,7 +1908,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             }
             // The original load goes with its only user.
             let load_result = self.function().instruction(load).result.expect("a load");
-            if self.function().users(load_result).len() == 1 {
+            if self.function().users(load_result).has_one_use() {
                 self.dead_insts.push(load);
             }
             self.dead_insts.push(store);
@@ -2907,8 +2925,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             let block = self.function().parent(def).expect("a placed phi");
             return self
                 .function()
-                .block(block)
-                .iter()
+                .iter_block(block)
                 .find(|&one| self.function().instruction(one).opcode != Opcode::Phi)
                 .expect("a block ends in a terminator");
         }
@@ -3012,7 +3029,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let Some(result) = function.instruction(phi).result else { return false };
         let block = function.parent(phi).expect("a placed phi");
         let mut load_type: Option<TypeId> = None;
-        let users: Vec<Use> = function.users(result).to_vec();
+        let users: Vec<Use> = function.users(result).snapshot();
         for user in &users {
             let load = user.user;
             if !self.is_simple_load(load) || function.parent(load) != Some(block) {
@@ -3091,14 +3108,14 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let function = self.function();
         let result = function.instruction(phi).result?;
         let users = function.users(result);
-        let [only] = users else { return None };
+        let only = users.only()?;
         let store = only.user;
         let Opcode::Store { volatile: false, .. } = function.instruction(store).opcode else { return None };
         if only.index != 1 {
             return None;
         }
         let block = function.parent(phi).expect("a placed phi");
-        let first = function.block(block).iter().find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        let first = function.iter_block(block).find(|&one| function.instruction(one).opcode != Opcode::Phi);
         if first != Some(store) {
             return None;
         }
@@ -3173,7 +3190,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         phi: InstId,
     ) {
         let result = self.function().instruction(phi).result.expect("a phi");
-        let store = self.function().users(result)[0].user;
+        let store = self.function().users(result).first().expect("the phi's store").user;
         let pairs: Vec<Operand> = self.function().instruction(phi).operands.clone();
         let mut seen: Vec<llrm_mir::module::BlockId> = Vec::new();
         for pair in pairs.chunks(2) {

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dse.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dse.rs sha256:a14e227f65f15086422df6d152257d2c6a34b00bfc1ebd7b475595bad495e2d1 -->
+<!-- src: crates/opt/llrm-transforms/src/dse.rs sha256:98c4e1425d5585ca6e0984d778c926fe521742a9ed3df2bdf81987d209aacf46 -->
 
 # dse
 
@@ -73,4 +73,4 @@ operations and the CFG.
 Blocks and edges are unchanged: dominators and loops are preserved.
 
 ## See also
-[`crate::dead`](dead.md), [`crate::promote`](promote.md), [`crate::loopmotion`](loopmotion.md).
+[`crate::dead`](dead.md), [`crate::promote`](promote.md), `crate::loopmotion`.

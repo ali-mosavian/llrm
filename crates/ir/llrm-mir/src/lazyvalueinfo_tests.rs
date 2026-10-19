@@ -34,7 +34,8 @@ macro_rules! llvm_answers {
 }
 
 llvm_answers!(
-    assume, casts, chain, cond, guard, icmp, intrinsics, loops, pointers, predicates, ranges, select, switch, uses
+    assume, casts, chain, cond, guard, icmp, intrinsics, loops, pointers, predicates, ranges, select, switch, undef,
+    uses
 );
 
 /// The work of `getConstantRange` of every result, then of `%x` at the end of
@@ -52,7 +53,7 @@ fn steps(text: &str) -> Steps {
     let x = Operand::Value(function.parameters()[0]);
     for &bb in function.layout() {
         let terminator = function.terminator(bb).expect("a terminator");
-        for inst in function.block(bb).iter() {
+        for inst in function.iter_block(bb) {
             if let Some(result) = function.instruction(inst).result {
                 lvi.get_constant_range(&mut env, Operand::Value(result), inst, false);
             }
@@ -184,4 +185,19 @@ e:
     let GlobalKind::Function(function) = &globals[at].kind else { unreachable!() };
     let mut env = Env::new(&mut module.context, globals, &module.metadata, function, &layout, &assumptions);
     assert_eq!(lvi.get_predicate_at(&mut env, IntPredicate::Eq, p, b, compare, true), Some(false));
+}
+
+/// `predecessors(BB)` was reversed once for the oldest-first use list and
+/// stayed reversed when the list became LLVM's: it listed oldest first, and
+/// LVI met a block's incoming values in the other order than `opt`'s.
+#[test]
+fn predecessors_run_newest_first_as_llvm_walks_a_use_list() {
+    let mut module = parse::module(
+        "define void @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %end\nb:\n  br label %end\nend:\n  ret void\n}\n",
+    )
+    .expect("parses");
+    let function = &*module.function_mut("f").expect("@f").1;
+    let layout = function.layout().to_vec();
+    let end = *layout.last().expect("end");
+    assert_eq!(crate::lazyvalueinfo::predecessors(function, end), [layout[2], layout[1]]);
 }

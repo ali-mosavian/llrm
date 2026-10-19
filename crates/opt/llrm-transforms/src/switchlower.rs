@@ -289,7 +289,8 @@ impl Lowering<'_, '_> {
         let block = switch.block;
         // The block an empty one reached from the switch alone jumps on to.
         let forwarded = |one: BlockId| {
-            let [only] = function.block(one).instructions()[..] else { return None };
+            let mut body = function.iter_block(one);
+            let (Some(only), None) = (body.next(), body.next()) else { return None };
             let jump = function.instruction(only);
             let [Operand::Block(to)] = jump.operands[..] else { return None };
             (jump.opcode == Opcode::Br && function.predecessors(one) == [block]).then_some(to)
@@ -604,8 +605,7 @@ impl Lowering<'_, '_> {
     /// The default's first instruction, phis aside, is `unreachable`.
     fn default_is_unreachable(&self) -> bool {
         let function = &*self.unit.function;
-        let mut instructions =
-            function.block(self.switch.default).instructions().iter().map(|&one| function.instruction(one));
+        let mut instructions = function.iter_block(self.switch.default).map(|one| function.instruction(one));
         instructions.find(|one| one.opcode != Opcode::Phi).is_some_and(|one| one.opcode == Opcode::Unreachable)
     }
 

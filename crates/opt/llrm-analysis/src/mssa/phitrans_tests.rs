@@ -79,14 +79,14 @@ fn test_a_cast_of_a_phi_of_a_constant_folds() {
 }
 
 #[test]
-fn test_the_first_made_of_two_equal_casts_is_returned() {
+fn test_the_newest_of_two_equal_casts_is_returned() {
     let text = diamond(
         "  %c1 = zext i16 %n to i32\n  %c2 = zext i16 %n to i32",
         "",
         "  %p = phi i16 [ %n, %b0 ], [ 1, %b1 ]\n  %q = zext i16 %p to i32",
     );
-    // LLVM walks a newest-first use list and would find %c2.
-    assert_eq!(translated(&text, "q", "b0", true), "%c1");
+    // LLVM walks a newest-first use list and finds %c2.
+    assert_eq!(translated(&text, "q", "b0", true), "%c2");
 }
 
 #[test]
@@ -101,13 +101,14 @@ fn test_an_add_of_a_constant_folds_with_an_add_on_the_translated_left() {
 }
 
 #[test]
-fn test_a_gep_off_a_global_base_is_not_found_among_users() {
+fn test_a_gep_off_a_global_base_folds_to_a_constant_expression() {
     let text = diamond(
         "  %a4 = getelementptr i8, ptr @g, i16 4",
         "",
         "  %p = phi ptr [ @g, %b0 ], [ %y, %b1 ]\n  %q = getelementptr i8, ptr %p, i16 4",
     );
-    assert_eq!(translated(&text, "q", "b0", true), "none");
+    // `simplifyGEPInst` makes `gep @g, 4` a constant expression, as in LLVM.
+    assert_eq!(translated(&text, "q", "b0", true), "constant");
 }
 
 #[test]
@@ -167,5 +168,5 @@ fn test_insertion_makes_the_missing_gep_at_the_end_of_the_predecessor_or_nothing
     assert_eq!(got, Some(Operand::Value(function.instruction(made[0]).result.expect("a value"))));
     assert_eq!(function.parent(made[0]), Some(b0));
     assert!(function.terminator(b0).is_some_and(|t| function.instruction(t).opcode.is_terminator()));
-    assert_eq!(function.block(b0).instructions().len(), 2, "the GEP and the branch");
+    assert_eq!(function.block(b0).len(), 2, "the GEP and the branch");
 }

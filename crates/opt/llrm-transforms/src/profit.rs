@@ -93,7 +93,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::branchprob;
 use llrm_analysis::cfg;
-use llrm_analysis::consts::Known;
 use llrm_analysis::effects::Declarations;
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::{induction, memory};
@@ -163,7 +162,7 @@ fn folds_into_users(
 ) -> bool {
     let users = function.users(value);
     // One reader: a load read twice is held in a register, not read twice.
-    users.len() == 1
+    users.has_one_use()
         && users.iter().all(|user| {
             let one = function.instruction(user.user);
             function.parent(user.user) == Some(block)
@@ -253,12 +252,7 @@ pub fn _block(
     block: i64,
     costs: &OperationCosts,
 ) -> Option<i64> {
-    function
-        .block(cfg::block(block))
-        .instructions()
-        .iter()
-        .map(|&one| operation(context, layout, function, callees, one, costs))
-        .sum()
+    function.iter_block(cfg::block(block)).map(|one| operation(context, layout, function, callees, one, costs)).sum()
 }
 
 /// Semantic work present once in the body, independent of frequency.
@@ -287,7 +281,7 @@ pub fn site(
 ) -> llrm_analysis::peelsize::Site {
     let entries = match frequencies.0.get_or_init(|| {
         FREQUENCIES.with(|runs| runs.set(runs.get() + 1));
-        let trips = proven_trips(unit, &unit.registers());
+        let trips = proven_trips(unit);
         _frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips))
     }) {
         Some(frequency) => cfg::graph(unit.function)
@@ -304,7 +298,7 @@ pub fn site(
         .iter()
         .flat_map(|&at| {
             let block = cfg::block(at);
-            unit.function.block(block).instructions().iter().map(move |&inst| (block, inst))
+            unit.function.iter_block(block).map(move |inst| (block, inst))
         })
         .any(|(_, inst)| {
             unit.calls_out(inst)
@@ -356,10 +350,7 @@ pub fn priced(
 /// Each loop's trips by latch (the runs of its latch), where ScalarEvolution
 /// proves them (`getSmallConstantTripCount`): the `trips` that replaces the
 /// conventional ten. `LLRM_NO_SCEV_TRIPS` asks `induction` instead.
-pub fn proven_trips(
-    unit: &memory::Unit,
-    facts: &IndexMap<ValueId, Known>,
-) -> IndexMap<i64, i64> {
+pub fn proven_trips(unit: &memory::Unit) -> IndexMap<i64, i64> {
     proven_trips_using(unit, scev_trips_enabled())
 }
 

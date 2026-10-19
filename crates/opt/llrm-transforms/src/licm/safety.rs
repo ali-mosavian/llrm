@@ -28,6 +28,7 @@ pub struct LoopSafety<'a> {
     first_write: RefCell<IdMap<BlockId, Option<usize>>>,
     guaranteed: RefCell<IdMap<BlockId, bool>>,
     may_throw: bool,
+    allow_speculation: bool,
 }
 
 impl<'a> LoopSafety<'a> {
@@ -51,9 +52,23 @@ impl<'a> LoopSafety<'a> {
             first_write: Default::default(),
             guaranteed: Default::default(),
             may_throw: false,
+            allow_speculation: true,
         };
         safety.may_throw = loop_.body.iter().any(|&at| safety.block_may_throw(cfg::block(at)));
         safety
+    }
+
+    /// `AllowSpeculation` of the run these queries are asked in.
+    pub fn allowing_speculation(
+        mut self,
+        allow: bool,
+    ) -> Self {
+        self.allow_speculation = allow;
+        self
+    }
+
+    pub fn allow_speculation(&self) -> bool {
+        self.allow_speculation
     }
 
     /// `anyBlockMayThrow`.
@@ -86,7 +101,7 @@ impl<'a> LoopSafety<'a> {
         if let Some(&first) = found.borrow().get(&block) {
             return first;
         }
-        let first = self.function.block(block).instructions().iter().position(|&inst| special(inst));
+        let first = self.function.iter_block(block).position(|inst| special(inst));
         found.borrow_mut().insert(block, first);
         first
     }
@@ -101,7 +116,7 @@ impl<'a> LoopSafety<'a> {
     ) -> bool {
         let block = self.function.parent(inst).expect("an instruction in a block");
         let Some(first) = self.first_special(found, block, special) else { return false };
-        self.function.block(block).instructions().iter().position(|&one| one == inst).is_some_and(|at| first < at)
+        self.function.iter_block(block).position(|one| one == inst).is_some_and(|at| first < at)
     }
 
     /// [`isGuaranteedToTransferExecutionToSuccessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L8372).

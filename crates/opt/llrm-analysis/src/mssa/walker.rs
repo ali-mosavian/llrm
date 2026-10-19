@@ -9,7 +9,7 @@
 //! guaranteed loop invariant, its size becomes unknown, which is LLVM's own
 //! result when the translation fails.
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 use std::rc::Rc;
 
 use llrm_mir::module::{BlockId, InstId};
@@ -564,7 +564,7 @@ impl Mssa {
             },
             upward_walk_limit: 0,
             paths: Vec::new(),
-            visited_phis: HashSet::new(),
+            visited_phis: HashSet::default(),
         }
     }
 
@@ -704,7 +704,7 @@ impl Mssa {
             };
         }
         let mut found_clobber = false;
-        let mut visited: HashSet<(AccessId, Option<u32>, bool)> = HashSet::new();
+        let mut visited: HashSet<(AccessId, Option<u32>, bool)> = HashSet::default();
         let mut worklist: Vec<UpwardDefsElem> =
             vec![UpwardDefsElem { access: start, loc: start_loc.cloned(), may_be_cross_iteration: false }];
         // Walk all paths from `start` to `clobber_at`, while looking for

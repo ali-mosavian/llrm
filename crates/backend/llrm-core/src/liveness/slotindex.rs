@@ -337,7 +337,7 @@ impl Ord for SlotIndex {
         &self,
         other: &Self,
     ) -> Ordering {
-        assert!(self.lie != NONE && other.lie != NONE, "Attempt to compare reserved index.");
+        debug_assert!(self.lie != NONE && other.lie != NONE, "Attempt to compare reserved index.");
         if self.epoch == other.epoch {
             return (self.number | u32::from(self.slot)).cmp(&(other.number | u32::from(other.slot)));
         }
@@ -505,6 +505,28 @@ impl SlotIndexes {
             self.idx2mbb_map.push((block_start_index, number));
         }
         self.idx2mbb_map.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+
+    /// Whether more than one instruction shares `index`.
+    pub fn is_bundled(
+        &self,
+        index: &SlotIndex,
+    ) -> bool {
+        self.bundled.contains_key(&index.list_entry())
+    }
+
+    /// Every instruction at `index`: the first, then the rest of its bundle
+    /// (the instructions of a parallel copy share one index).
+    pub fn get_instructions_at(
+        &self,
+        index: &SlotIndex,
+    ) -> Vec<InstrKey> {
+        let Some(first) = self.get_instruction_from_index(index) else { return Vec::new() };
+        let mut all = vec![first];
+        if let Some(others) = self.bundled.get(&index.list_entry()) {
+            all.extend(others.iter().copied());
+        }
+        all
     }
 
     /// `getZeroIndex`.

@@ -219,10 +219,7 @@ fn sunk(function: &mut Function) -> bool {
         let shape = cfg::Shape::of(function);
         let Some(plan) = merged(function, &shape, block, &arms, 3) else { continue };
         let at = function
-            .block(block)
-            .instructions()
-            .iter()
-            .copied()
+            .iter_block(block)
             .find(|&one| function.instruction(one).opcode != Opcode::Phi)
             .expect("a terminated block");
         let made = built(function, &plan, at);
@@ -276,7 +273,7 @@ fn compares_sunk(function: &mut Function) -> bool {
     for (home, compare) in compares {
         let Some(result) = function.instruction(compare).result else { continue };
         let mut made: Vec<(BlockId, Operand)> = Vec::new();
-        for one in function.users(result).to_vec() {
+        for one in function.users(result).snapshot() {
             if function.instruction(one.user).opcode == Opcode::Phi {
                 continue;
             }
@@ -291,10 +288,7 @@ fn compares_sunk(function: &mut Function) -> bool {
                     let (opcode, ty, operands, flags) =
                         (original.opcode.clone(), original.ty, original.operands.clone(), original.flags);
                     let first = function
-                        .block(there)
-                        .instructions()
-                        .iter()
-                        .copied()
+                        .iter_block(there)
                         .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
                         .expect("a terminated block");
                     let inserted = function.create_instruction(opcode, ty, operands, flags, None);
@@ -344,14 +338,14 @@ fn masks_sunk(
     for (home, mask) in masks {
         let Some(result) = function.instruction(mask).result else { continue };
         let read_elsewhere = |operand: &Operand| match operand {
-            Operand::Value(value) => function.users(*value).len() > 1,
+            Operand::Value(value) => function.users(*value).has_n_uses_or_more(2),
             _ => true,
         };
         let operands = &function.instruction(mask).operands;
         if !operands.iter().any(|operand| matches!(operand, Operand::Constant(_)) || read_elsewhere(operand)) {
             continue;
         }
-        let users = function.users(result).to_vec();
+        let users = function.users(result).snapshot();
         let against_zero = |user: &llrm_mir::module::Use| {
             let one = function.instruction(user.user);
             matches!(one.opcode, Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne))
@@ -375,10 +369,7 @@ fn masks_sunk(
                 None => {
                     // Before the first of this block's compares.
                     let first = function
-                        .block(there)
-                        .instructions()
-                        .iter()
-                        .copied()
+                        .iter_block(there)
                         .find(|&inst| function.users(result).iter().any(|user| user.user == inst))
                         .expect("a compare in its block");
                     let original = function.instruction(mask);

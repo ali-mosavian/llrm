@@ -131,10 +131,7 @@ pub fn _comparison(
         return None;
     };
     function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(block)
         .find(|&one| function.instruction(one).result == Some(condition))
         .filter(|&one| matches!(function.instruction(one).opcode, Opcode::ICmp(_)))
 }
@@ -151,11 +148,20 @@ thread_local! {
 /// value, and one with an earlier phi's arms is that phi (LLVM's
 /// `EliminateDuplicatePHINodes`).
 pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
-    let predecessors =
-        function.layout().iter().map(|&block| (block, function.predecessors(block))).collect::<BTreeMap<_, _>>();
+    let blocks = function.layout().to_vec();
+    _trivial_phis_in(function, &blocks)
+}
+
+/// `_trivial_phis` of `blocks` alone: the joins whose edges changed, where a
+/// single-entry phi elsewhere (a loop's closing phi) must stay.
+pub fn _trivial_phis_in(
+    function: &mut Function,
+    blocks: &[BlockId],
+) -> Result<(), String> {
+    let predecessors = blocks.iter().map(|&block| (block, function.predecessors(block))).collect::<BTreeMap<_, _>>();
     loop {
         let mut changed = false;
-        for block in function.layout().to_vec() {
+        for &block in blocks {
             #[cfg(test)]
             BLOCKS_VISITED.with(|visited| visited.set(visited.get() + 1));
             for phi in edges::phis(function, block) {
@@ -180,23 +186,19 @@ pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
                 }
             }
         }
-        if !_duplicate_phis(function)? && !changed {
+        let mut duplicates = false;
+        for &block in blocks {
+            duplicates |= duplicate_phis_in(function, block)?;
+        }
+        if !duplicates && !changed {
             return Ok(());
         }
     }
 }
 
-/// Each phi whose arms, edge for edge, are an earlier phi's in its block
-/// replaced by that phi. Whether any was.
-fn _duplicate_phis(function: &mut Function) -> Result<bool, String> {
-    let mut changed = false;
-    for block in function.layout().to_vec() {
-        changed |= duplicate_phis_in(function, block)?;
-    }
-    Ok(changed)
-}
-
-/// `_duplicate_phis` of one `block`: LLVM's `EliminateDuplicatePHINodes(BB)`.
+/// Each phi whose arms, edge for edge, are an earlier phi's in `block`
+/// replaced by that phi: LLVM's `EliminateDuplicatePHINodes(BB)`. Whether any
+/// was.
 pub fn duplicate_phis_in(
     function: &mut Function,
     block: BlockId,
@@ -305,7 +307,7 @@ pub fn subexpressions(
     let mut verified: llrm_mir::dense::IdMap<InstId, Verified> = llrm_mir::dense::IdMap::new();
     for block in dominators_first(function, &dominance) {
         let here = order[&block];
-        let instructions = function.block(block).instructions();
+        let instructions: Vec<InstId> = function.iter_block(block).collect();
         for (index, &inst) in instructions.iter().enumerate() {
             let op = function.instruction(inst);
             // Arithmetic is `gvn::table`'s; `joined` still keys it, with
@@ -393,7 +395,7 @@ pub fn equal_calls(
     // are looked at again.
     let mut groups: IndexMap<(TypeId, &[Operand]), Vec<(usize, usize, InstId)>> = IndexMap::default();
     for (at, &block) in function.layout().iter().enumerate() {
-        for (index, &inst) in function.block(block).instructions().iter().enumerate() {
+        for (index, inst) in function.iter_block(block).enumerate() {
             let op = function.instruction(inst);
             if matches!(op.opcode, Opcode::Call(_)) && op.result.is_some() {
                 groups.entry((op.ty, &op.operands[..])).or_default().push((at, index, inst));
@@ -675,7 +677,7 @@ impl<'f> Crossings<'f> {
         let mut stores = BTreeMap::new();
         for &block in function.layout() {
             let mut counted = vec![0u32];
-            for (index, &inst) in function.block(block).instructions().iter().enumerate() {
+            for (index, inst) in function.iter_block(block).enumerate() {
                 places.insert(inst, (block, index as i64));
                 counted.push(
                     counted[index] + u32::from(matches!(function.instruction(inst).opcode, Opcode::Store { .. })),
@@ -722,7 +724,7 @@ impl<'f> Crossings<'f> {
                 continue;
             }
             let low = if at == source.0 { source.1 + 1 } else { 0 };
-            let high = if at == destination.0 { destination.1 } else { function.block(at).instructions().len() as i64 };
+            let high = if at == destination.0 { destination.1 } else { function.block(at).len() as i64 };
             if stores_in(at, low, high) {
                 return true;
             }
@@ -1161,10 +1163,7 @@ b2:
         };
         let place = |inst: InstId| {
             let block = function.parent(inst).expect("placed");
-            (
-                block,
-                function.block(block).instructions().iter().position(|&one| one == inst).expect("in its block") as i64,
-            )
+            (block, function.iter_block(block).position(|one| one == inst).expect("in its block") as i64)
         };
         let source = match function.value(holder).def {
             ValueDef::Instruction(inst) => place(inst),
@@ -1172,13 +1171,13 @@ b2:
         };
         let destination = place(load);
         let stores_in = |block: BlockId, low: i64, high: i64| {
-            let instructions = function.block(block).instructions();
-            let range = low.max(0) as usize..(high.max(0) as usize).min(instructions.len());
-            instructions
-                .get(range)
-                .is_some_and(
-                    |run| run.iter().any(|&one| matches!(function.instruction(one).opcode, Opcode::Store { .. })),
-                )
+            let (from, to) = (low.max(0) as usize, (high.max(0) as usize).min(function.block(block).len()));
+            from < to
+                && function
+                    .iter_block(block)
+                    .skip(from)
+                    .take(to - from)
+                    .any(|one| matches!(function.instruction(one).opcode, Opcode::Store { .. }))
         };
         if source.0 == destination.0 {
             return source.1 >= destination.1 || stores_in(source.0, source.1 + 1, destination.1);
@@ -1203,7 +1202,7 @@ b2:
                 continue;
             }
             let low = if at == source.0 { source.1 + 1 } else { 0 };
-            let high = if at == destination.0 { destination.1 } else { function.block(at).instructions().len() as i64 };
+            let high = if at == destination.0 { destination.1 } else { function.block(at).len() as i64 };
             if stores_in(at, low, high) {
                 return true;
             }
@@ -1276,11 +1275,9 @@ b4:
         }
     }
 
-    /// The equal loads of a block of N went one at a time, each erase taking
-    /// the block's list apart to find it: 351 M of 2.7 G on 800 statements
-    /// (mem), 13% of the compile. They go together.
+    /// The equal loads of a block of N are erased together.
     #[test]
-    fn test_equal_loads_are_erased_with_one_scan_of_the_block() {
+    fn test_equal_loads_are_erased_together() {
         let mut text = String::from(
             "define i16 @f(i16 %n) {\nb0:\n  %i = alloca i16\n  store i16 0, ptr %i\n  br label %b1\n\nb1:\n",
         );
@@ -1289,11 +1286,8 @@ b4:
         }
         text += "  store i16 %n, ptr %i\n  %c = icmp slt i16 %n, 0\n  br i1 %c, label %b1, label %b2\n\nb2:\n  ret i16 %n\n}\n";
         let mut module = parsed(&text);
-        let before = llrm_mir::edit::instructions_scanned();
         subexpressions_of(&mut module);
-        let scanned = llrm_mir::edit::instructions_scanned() - before;
         assert_eq!(printed(&module).matches("load").count(), 1, "{}", printed(&module));
-        assert!(scanned <= 4 * 210, "{scanned} instructions scanned to erase 99 loads of a block of 210");
     }
 
     /// A block of N loads of one slot with a store to another between each

@@ -94,10 +94,7 @@ impl Run<'_> {
         block: BlockId,
     ) -> Vec<InstId> {
         self.function
-            .block(block)
-            .instructions()
-            .iter()
-            .copied()
+            .iter_block(block)
             .take_while(|&one| matches!(self.function.instruction(one).opcode, Opcode::Phi))
             .collect()
     }
@@ -291,7 +288,7 @@ impl Run<'_> {
         // A placeholder for each backedge value, filled once the phi exists.
         let operands: Vec<Operand> = preds.iter().flat_map(|&p| [zero, Operand::Block(p)]).collect();
         let phi = self.function.create_instruction(Opcode::Phi, ir_ty, operands, IrFlags::default(), None);
-        let first = *self.function.block(header).instructions().first().expect("a header");
+        let first = self.function.block(header).first().expect("a header");
         self.function.insert(phi, Position::Before(first)).expect("a placed phi");
         self.x.remember(phi);
         let value = self.result_of(phi);
@@ -467,9 +464,8 @@ impl Run<'_> {
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L2468
-    /// `fixupLCSSAFormFor`: `v` read at the insert point. MIR code is not
-    /// generally in LCSSA form; a use outside the defining loop needs the
-    /// phis `formLCSSAForInstructions` makes (`llrm-transforms`' `lcssa`).
+    /// `fixupLCSSAFormFor`: `v` read at the insert point, through the LCSSA
+    /// phis `formLCSSAForInstructions` makes where it is read outside its loop.
     pub(super) fn fixup_lcssa_form_for(
         &mut self,
         v: Operand,
@@ -479,13 +475,39 @@ impl Run<'_> {
         let def_loop = self.function.parent(def).and_then(|b| self.env.loops.get_loop_for(b));
         let use_loop = self.function.parent(here).and_then(|b| self.env.loops.get_loop_for(b));
         let Some(def_loop) = def_loop else { return v };
-        if use_loop
-            .as_ref()
-            .is_some_and(|u| u.get_header() == def_loop.get_header() || def_loop.contains(u.get_header()))
-        {
+        if use_loop.is_some_and(|u| u == def_loop) || def_loop.contains_loop(use_loop) {
             return v;
         }
-        todo!("S6: formLCSSAForInstructions for a use outside the defining loop")
+        // A temporary use at the insert point, for the helper to rewrite.
+        let (opcode, to) = if !self.is_pointer(v) {
+            (CastOp::IntToPtr, self.context.types.ptr(0))
+        } else {
+            (CastOp::PtrToInt, self.context.types.int(32))
+        };
+        let user = self.function.create_instruction(Opcode::Cast(opcode), to, vec![v], IrFlags::default(), None);
+        self.function.insert(user, Position::Before(here)).expect("a placed position");
+        let formed = crate::scev::lcssa_form::form_lcssa_for_instructions(
+            self.context,
+            self.env.layout,
+            self.function,
+            self.env.loops,
+            self.env.tree,
+            vec![def],
+        );
+        for &phi in &formed.inserted {
+            self.x.remember(phi);
+        }
+        for &phi in &formed.to_remove {
+            let result = self.function.instruction(phi).result.expect("a phi value");
+            if self.function.users(result).is_empty() {
+                self.function.set_operands(phi, Vec::new());
+                self.function.erase(phi).expect("an unused phi");
+            }
+        }
+        let read = self.function.instruction(user).operands[0];
+        self.function.set_operands(user, Vec::new());
+        self.function.erase(user).expect("the temporary user");
+        read
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L929
@@ -788,7 +810,7 @@ impl Run<'_> {
         let preds = self.function.predecessors(header);
         let operands: Vec<Operand> = preds.iter().flat_map(|&p| [start_v, Operand::Block(p)]).collect();
         let phi = self.function.create_instruction(Opcode::Phi, ir_ty, operands, IrFlags::default(), None);
-        let head = *self.function.block(header).instructions().first().expect("a header");
+        let head = self.function.block(header).first().expect("a header");
         self.function.insert(phi, Position::Before(head)).expect("a placed phi");
         let pn = self.result_of(phi);
         for (at, &pred) in preds.iter().enumerate() {
@@ -917,9 +939,8 @@ impl Run<'_> {
     ) {
         if self.x.insert_point == Some(inst) {
             let block = self.function.parent(inst).expect("placed");
-            let all = self.function.block(block).instructions();
-            let at = all.iter().position(|&one| one == inst).expect("in its block");
-            self.x.insert_point = Some(all[at + 1]);
+            let next = self.function.iter_block(block).skip_while(|&one| one != inst).nth(1);
+            self.x.insert_point = Some(next.expect("in its block"));
         }
     }
 

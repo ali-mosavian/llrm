@@ -431,7 +431,7 @@ fn analyze_loop_unroll_cost(
     let mut simplified_values = IdMap::<llrm_mir::module::ValueId, Operand>::new();
     let mut unrolled_cost = Cost::FREE;
     let mut rolled_dynamic_cost = Cost::FREE;
-    let mut inst_cost_map = std::collections::HashMap::<(InstId, u32), InstState>::new();
+    let mut inst_cost_map = llrm_support::hash::HashMap::<(InstId, u32), InstState>::default();
     let mut exit_worklist: Vec<(BlockId, BlockId)> = Vec::new();
 
     // Simulate execution of each iteration of the loop counting instructions
@@ -440,7 +440,7 @@ fn analyze_loop_unroll_cost(
         // Prepare for the iteration by collecting any simplified entry or
         // backedge inputs.
         let mut simplified_input_values: Vec<(llrm_mir::module::ValueId, Operand)> = Vec::new();
-        for &inst in run.function.block(header).instructions() {
+        for inst in run.function.iter_block(header) {
             let operation = run.function.instruction(inst);
             if operation.opcode != Opcode::Phi {
                 break;
@@ -482,7 +482,7 @@ fn analyze_loop_unroll_cost(
 
             // Visit all instructions of the block and try to simplify them. The
             // IR is not changed, only optimization opportunities are counted.
-            for inst in run.function.block(bb).instructions().to_vec() {
+            for inst in run.function.iter_block(bb).collect::<Vec<_>>() {
                 // These will not get into the final code: do not even try
                 // calculating their cost.
                 if eph.contains(&inst) {
@@ -660,7 +660,7 @@ fn analyze_loop_unroll_cost(
     }
 
     while let Some((exiting_bb, exit_bb)) = exit_worklist.pop() {
-        for &inst in run.function.block(exit_bb).instructions().to_vec().iter() {
+        for &inst in run.function.iter_block(exit_bb).collect::<Vec<_>>().iter() {
             let operation = run.function.instruction(inst);
             if operation.opcode != Opcode::Phi {
                 break;
@@ -731,7 +731,7 @@ fn add_cost_recursively(
     run: &Run,
     lp: Loop,
     simplified_values: &IdMap<llrm_mir::module::ValueId, Operand>,
-    inst_cost_map: &mut std::collections::HashMap<(InstId, u32), InstState>,
+    inst_cost_map: &mut llrm_support::hash::HashMap<(InstId, u32), InstState>,
     unrolled_cost: &mut Cost,
     kind: CostKind,
     root: InstId,
@@ -1136,11 +1136,9 @@ fn try_to_unroll_loop(
         .iter()
         .any(
             |&block| run.function
-                .block(block)
-                .instructions()
-                .iter()
+                .iter_block(block)
                 .any(
-                    |&inst| match call_target(run, inst) {
+                    |inst| match call_target(run, inst) {
                         Some(Some(callee)) if (callee.0 as usize) < run.globals.len() => {
                             let value = &run.globals[callee.0 as usize];
                             !value.name.as_deref().is_some_and(|name| name.starts_with("llvm."))
@@ -1209,7 +1207,7 @@ fn try_to_unroll_loop(
     if !uce.can_unroll() {
         if llrm_support::debug::enabled("unroll") {
             for &block in lp.get_blocks() {
-                for &inst in run.function.block(block).instructions() {
+                for inst in run.function.iter_block(block) {
                     let cost = instruction_cost(
                         run.tti,
                         run.context,
@@ -1368,7 +1366,7 @@ fn simplify_loop_after_unroll(
 ) {
     for &block in blocks {
         let mut dead: Vec<InstId> = Vec::new();
-        for inst in run.function.block(block).instructions().to_vec() {
+        for inst in run.function.iter_block(block).collect::<Vec<_>>() {
             if run.function.is_erased(inst) {
                 continue;
             }

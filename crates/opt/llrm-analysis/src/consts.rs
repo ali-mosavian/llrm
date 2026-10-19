@@ -1110,15 +1110,10 @@ fn _pointer_stores(
         let mssa = crate::mssa::Mssa::build(function, &dominance, &crate::mssa::shadow::effect_of(&accesses, function));
         crate::mssa::view::Translated::new(unit, &accesses, mssa)
     };
-    let before = |source: InstId, block: BlockId, inst: InstId| {
-        let order = function.block(block).instructions();
-        match function.parent(source) {
-            Some(at) if at == block => {
-                order.iter().position(|&one| one == source) < order.iter().position(|&one| one == inst)
-            }
-            Some(at) => dominance.dominates(unit.function, cfg::id(at), cfg::id(block)),
-            None => false,
-        }
+    let before = |source: InstId, block: BlockId, inst: InstId| match function.parent(source) {
+        Some(at) if at == block => function.comes_before(source, inst),
+        Some(at) => dominance.dominates(unit.function, cfg::id(at), cfg::id(block)),
+        None => false,
     };
     let mut providers = llrm_mir::dense::IdMap::default();
     for (block, inst, (reference, result)) in candidates {

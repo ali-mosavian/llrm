@@ -332,7 +332,7 @@ impl SsaUpdater {
     /// The value at the end of `block`.
     pub fn value_at_end_of_block(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         function: &mut Function,
         block: BlockId,
     ) -> Operand {
@@ -345,7 +345,7 @@ impl SsaUpdater {
     /// The value on entry to `block`, before any definition in it.
     pub fn value_in_middle_of_block(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         function: &mut Function,
         block: BlockId,
     ) -> Operand {
@@ -408,7 +408,7 @@ impl SsaUpdater {
     /// of the block it comes from.
     pub fn rewrite_use(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         function: &mut Function,
         one: Use,
     ) {
@@ -432,7 +432,7 @@ impl SsaUpdater {
 
     fn poison(
         &self,
-        context: &mut Context,
+        context: &Context,
     ) -> Operand {
         Operand::Constant(context.constant(Constant { ty: self.ty, kind: ConstantKind::Poison }))
     }
@@ -761,7 +761,7 @@ b3:
             &[("b0", "x"), ("b2", "y")],
         );
         assert_eq!(placed, 1);
-        assert!(text.contains("b1:\n  %v = phi i16 [ %x, %b0 ], [ %y, %b2 ]\n  %u = add i16 %v, 0\n"), "{text}");
+        assert!(text.contains("b1:\n  %v = phi i16 [ %y, %b2 ], [ %x, %b0 ]\n  %u = add i16 %v, 0\n"), "{text}");
     }
 
     /// Rotating nbody's outer loop read its counter after the inner one as
@@ -814,7 +814,7 @@ b3:
     fn a_join_takes_each_arms_definition_or_what_reaches_it() {
         let (text, placed) = updated(DIAMOND, "r", &[("b0", "x"), ("b1", "a")]);
         assert_eq!(placed, 1);
-        assert!(text.contains("b3:\n  %v = phi i16 [ %a, %b1 ], [ %x, %b2 ]\n  %r = add i16 %v, 0\n"), "{text}");
+        assert!(text.contains("b3:\n  %v = phi i16 [ %x, %b2 ], [ %a, %b1 ]\n  %r = add i16 %v, 0\n"), "{text}");
     }
 
     #[test]
@@ -828,7 +828,7 @@ b3:
     fn an_edge_no_definition_reaches_brings_poison() {
         let (text, placed) = updated(DIAMOND, "r", &[("b1", "a")]);
         assert_eq!(placed, 1);
-        assert!(text.contains("%v = phi i16 [ %a, %b1 ], [ poison, %b2 ]"), "{text}");
+        assert!(text.contains("%v = phi i16 [ poison, %b2 ], [ %a, %b1 ]"), "{text}");
     }
 
     #[test]

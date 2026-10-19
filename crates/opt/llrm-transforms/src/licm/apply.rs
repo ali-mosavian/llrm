@@ -36,6 +36,7 @@ pub enum Created {
     Beginning,
     End,
     After(AccessId),
+    Before(AccessId),
 }
 
 impl Graph<'_> {
@@ -74,6 +75,20 @@ impl Graph<'_> {
         block: BlockId,
         at: Created,
     ) -> Option<AccessId> {
+        self.created_renaming(context, function, inst, block, at, true)
+    }
+
+    /// As [`created`](Self::created), where `rename_uses` says whether
+    /// `insertDef` renames the uses the new def now clobbers.
+    pub fn created_renaming(
+        &mut self,
+        context: &Context,
+        function: &Function,
+        inst: InstId,
+        block: BlockId,
+        at: Created,
+        rename_uses: bool,
+    ) -> Option<AccessId> {
         {
             let unit = llrm_analysis::memory::Unit::within(context, self.layout, function, self.outer);
             self.accesses.add_instruction(&unit, inst);
@@ -89,11 +104,12 @@ impl Graph<'_> {
             Created::After(previous) => {
                 self.updater.create_memory_access_after(self.mssa, inst, None, previous, &effect)?
             }
+            Created::Before(next) => self.updater.create_memory_access_before(self.mssa, inst, None, next, &effect)?,
         };
         if self.mssa.access(access).kind == Kind::Def {
-            self.updater.insert_def(self.mssa, function, access, true);
+            self.updater.insert_def(self.mssa, function, access, rename_uses);
         } else {
-            self.updater.insert_use(self.mssa, function, access, true);
+            self.updater.insert_use(self.mssa, function, access, rename_uses);
         }
         Some(access)
     }
@@ -121,10 +137,7 @@ fn first_insertion_point(
     block: BlockId,
 ) -> Position {
     function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(block)
         .find(|&one| function.instruction(one).opcode != Opcode::Phi)
         .map_or(Position::End(block), Position::Before)
 }
@@ -159,8 +172,7 @@ fn clone_in_exit_block(
                 let ty = function.value(value).ty;
                 let name = function.value(value).name.clone().map(|name| format!("{name}.lcssa"));
                 let phi = function.create_instruction(Opcode::Phi, ty, incoming, Flags::default(), name.as_deref());
-                let first =
-                    function.block(exit).instructions().first().copied().map_or(Position::End(exit), Position::Before);
+                let first = function.block(exit).first().map_or(Position::End(exit), Position::Before);
                 function.insert(phi, first)?;
                 lcssa.insert(value, phi);
                 phi
@@ -288,7 +300,7 @@ fn maybe_insert_lcssa_phi(
     let ty = function.value(source).ty;
     let name = function.value(source).name.clone().map(|name| format!("{name}.lcssa"));
     let phi = function.create_instruction(Opcode::Phi, ty, incoming, Flags::default(), name.as_deref());
-    let first = function.block(block).instructions().first().copied().map_or(Position::End(block), Position::Before);
+    let first = function.block(block).first().map_or(Position::End(block), Position::Before);
     function.insert(phi, first)?;
     Ok(Operand::Value(function.instruction(phi).result.expect("a phi's result")))
 }
@@ -336,8 +348,8 @@ pub fn promote(
         ssa.add_available_value(site.preheader, Operand::Value(function.instruction(load).result.expect("a load")));
         preheader_load = Some(load);
     } else {
-        let poison = context.constant(Constant { ty, kind: ConstantKind::Poison });
-        ssa.add_available_value(site.preheader, Operand::Constant(poison));
+        let undef = context.constant(Constant { ty, kind: ConstantKind::Undef });
+        ssa.add_available_value(site.preheader, Operand::Constant(undef));
     }
     // Bucket up the uses by the block they occur in: the SSA updater is for
     // references across blocks, a block's own order is ours.
@@ -374,7 +386,7 @@ pub fn promote(
         // Mixed: a scan of the block tells the order. A load after a store
         // reads the stored value; the last store defines the value at the end.
         let mut stored: Option<Operand> = None;
-        for inst in function.block(block).instructions().to_vec() {
+        for inst in function.iter_block(block).collect::<Vec<_>>() {
             if !uses.contains(&inst) {
                 continue;
             }

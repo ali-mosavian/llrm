@@ -143,6 +143,21 @@ included. `noinline`, `always_inline` and `noreturn` state facts. `unused`, `use
 `pure`, `const`, `malloc`, `deprecated`, `visibility` and a few others are read and dropped: leaving them out changes no
 meaning. Any other (`packed`, `aligned`, `section`, `weak`, `alias`) is an error, not ignored.
 
+## Block locals' lifetimes
+
+From -O1 up, a local declared in a nested block is started where its block
+begins (`llvm.lifetime.start`) and ended where the block's end is reached, as
+clang's `EmitAutoVarAlloca` and `CallLifetimeEnd` do
+([CGDecl.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/clang/lib/CodeGen/CGDecl.cpp)).
+The blocks are Open Watcom's `DBBegBlock`/`DBEndBlock`, each followed by its
+`CGAutoDecl`s. Inlined copies and frame-slot sharing (`lifetimes.rs`) read the
+markers. Function-level locals get none.
+
+A block left by `break`, `continue`, `goto` or `return` is not ended on that
+path: its locals stay live to the next start, which costs sharing, not
+correctness. A block a jump enters from outside is not marked at all (clang's
+`Bypasses`).
+
 ## Build
 
 The front end is built by `build.rs` from an Open Watcom tree: `$OWROOT` when

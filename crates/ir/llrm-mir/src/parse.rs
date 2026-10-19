@@ -514,7 +514,8 @@ impl Parser {
             }
             Token::Punct('[' | '{' | '<') => true,
             Token::Word(word) => {
-                ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr"].contains(&word.as_str())
+                ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr"]
+                    .contains(&word.as_str())
                     || spelled(&CAST, word).is_some()
             }
             _ => false,
@@ -1250,7 +1251,7 @@ impl Parser {
                         continue;
                     }
                     let inst = self.instruction(local)?;
-                    local.function.blocks[block.0 as usize].instructions.push(inst);
+                    local.function.link_last(block, inst);
                     if local.function.instruction(inst).opcode.is_terminator() {
                         current = None;
                     }
@@ -1785,7 +1786,7 @@ impl Parser {
             local.function.values.push(ValueData { ty, name: None, def: ValueDef::Instruction(id) });
             Some(value)
         };
-        local.function.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata });
+        local.function.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata, link: (0, 0) });
         for (variable, what) in std::mem::take(&mut local.pending_records) {
             local.function.debug_records.push(DebugRecord { before: id, variable, what });
         }

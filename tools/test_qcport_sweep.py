@@ -54,3 +54,18 @@ def test_the_front_end_compiles_cover_nib_and_basic_at_both_machines_and_all_lev
 def test_a_panic_is_keyed_by_its_place_and_message_not_by_rusts_backtrace_note():
     text = "thread 'main' (3957823) panicked at crates/opt/llrm-transforms/src/widen.rs:142:39:\nan instruction with a value\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
     assert q.kind(text) == "panic crates/opt/llrm-transforms/src/widen.rs:N:N: an instruction with a value"
+
+
+def test_a_commit_that_does_not_build_is_passed_over_not_a_crash():
+    """The bisection of the 48-compile BitCast failure died on `CalledProcessError`: feat/parity did not build for three hours (#2544 with #2564), so the
+    middle commit of the window had no llrm-c. The first bad commit that builds is the answer."""
+    commits = [f"c{i}" for i in range(20)]
+    unbuildable = {f"c{i}" for i in range(8, 13)}
+
+    def bad(commit):
+        if commit in unbuildable:
+            return None
+        return int(commit[1:]) >= 15
+
+    assert q.first_bad(commits, bad) == "c15"
+    assert q.first_bad(commits, lambda c: None if c in unbuildable else int(c[1:]) >= 10) == "c13"

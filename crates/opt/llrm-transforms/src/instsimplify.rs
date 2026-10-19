@@ -23,6 +23,14 @@
 //!
 //! # Keeps
 //! Blocks and edges are unchanged: dominators and loops are preserved.
+//!
+//! # Example
+//! An instruction that equals an operand is replaced by it and then deleted:
+//!
+//! ```text
+//! %a = add i32 %x, 0
+//! %b = mul i32 %a, 2   ; reads %x after the pass
+//! ```
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -102,7 +110,7 @@ pub fn instsimplify(
                 continue;
             }
             let mut dead = Vec::new();
-            for inst in function.block(block).instructions().to_vec() {
+            for inst in function.iter_block(block).collect::<Vec<_>>() {
                 // The first sweep has nothing in `to_simplify` and tries every
                 // instruction; later ones only those in it.
                 if !to_simplify.is_empty() && !to_simplify.contains(&inst) {

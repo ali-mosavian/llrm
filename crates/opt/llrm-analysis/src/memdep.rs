@@ -62,10 +62,8 @@
 //! `invalidateCachedPointerInfo`): phi translation interns constants, which
 //! needs `&mut Context` while the alias analysis holds `&Context` (#2500).
 
-use llrm_mir::context::Context;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
-use llrm_mir::facts::Facts;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Opcode, Tail};
@@ -305,17 +303,6 @@ fn identical_calls(
         && tail(x.tail) == tail(y.tail)
 }
 
-/// `isNoAliasCall`: a call whose result is `noalias`.
-fn is_no_alias_call(
-    function: &Function,
-    inst: InstId,
-) -> bool {
-    matches!(
-        &function.instruction(inst).opcode,
-        Opcode::Call(info) if Facts::of(&info.return_attrs).no_alias()
-    )
-}
-
 /// [`isStorePreservingMemoryLocation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/Loads.cpp#L843)
 /// (Loads.cpp): `store` writes back, unchanged, what `mem_loc` holds: it stores
 /// a load of the same bytes, same block, and nothing between modifies them.
@@ -383,9 +370,6 @@ pub struct MemoryDependenceResults {
     pred_cache: IdMap<BlockId, Vec<BlockId>>,
     clobber_offsets: IdMap<InstId, i32>,
     default_block_scan_limit: u32,
-    /// The context phi translation interns into (DEVIATE 8), and how many
-    /// constants the real one held when it was copied.
-    scratch: Option<(Context, usize)>,
 }
 
 impl Default for MemoryDependenceResults {
@@ -408,7 +392,6 @@ impl MemoryDependenceResults {
             pred_cache: IdMap::new(),
             clobber_offsets: IdMap::new(),
             default_block_scan_limit,
-            scratch: None,
         }
     }
 
@@ -449,7 +432,7 @@ impl MemoryDependenceResults {
     ) -> Option<InstId> {
         match scan {
             Some(inst) => function.prev_in_block(inst),
-            None => function.block(bb).instructions().last().copied(),
+            None => function.block(bb).last(),
         }
     }
 
@@ -698,7 +681,9 @@ impl MemoryDependenceResults {
             }
             // An allocation the accessed pointer is to: a Def, so a load of it
             // can become undef. BasicAA bypasses the allocation itself.
-            if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }) || is_no_alias_call(function, inst) {
+            if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. })
+                || llrm_mir::memory::returns_noalias(unit.context, unit.globals, function, inst)
+            {
                 let (access_ptr, _) = valuetracking::underlying(unit.context, unit.layout, function, mem_loc.ptr);
                 let this = function.instruction(inst).result.map(Operand::Value);
                 if this == Some(access_ptr)
@@ -950,8 +935,7 @@ impl MemoryDependenceResults {
         self.visited[bb.0 as usize].0
     }
 
-    /// Phi translation of `pointer` from `cur` to `pred` on the copy of the
-    /// context (DEVIATE 8).
+    /// Phi translation of `pointer` from `cur` to `pred`.
     fn translate(
         &mut self,
         env: Env,
@@ -960,18 +944,8 @@ impl MemoryDependenceResults {
         pred: BlockId,
     ) -> Option<Operand> {
         let unit = env.unit;
-        let held = unit.context.constant_count();
-        if self.scratch.as_ref().is_none_or(|(_, taken)| *taken != held) {
-            self.scratch = Some((unit.context.clone(), held));
-        }
-        let (scratch, _) = self.scratch.as_mut().expect("a copy");
-        let mut phi = PhiEnv { context: scratch, layout: unit.layout, function: unit.function, dt: Some(env.dt) };
-        let got = pointer.translate_value(&mut phi, cur, pred, false);
-        if matches!(got, Some(Operand::Constant(c)) if c.index() >= held) {
-            pointer.make_unavailable();
-            return None;
-        }
-        got
+        let mut phi = PhiEnv { context: unit.context, layout: unit.layout, function: unit.function, dt: Some(env.dt) };
+        pointer.translate_value(&mut phi, cur, pred, false)
     }
 
     /// `getNonLocalInfoForBlock`
@@ -1255,9 +1229,12 @@ impl MemoryDependenceResults {
                         // A select on a condition has two addresses, one per
                         // side.
                         if let Some(cond) = pred_pointer.select_condition(function) {
-                            let (scratch, _) = self.scratch.as_mut().expect("translation made a copy");
-                            let mut phi =
-                                PhiEnv { context: scratch, layout: env.unit.layout, function, dt: Some(env.dt) };
+                            let mut phi = PhiEnv {
+                                context: env.unit.context,
+                                layout: env.unit.layout,
+                                function,
+                                dt: Some(env.dt),
+                            };
                             let sides: SelectAddrs = pointer.translate_value_select(&mut phi, bb, pred, cond);
                             if let (Some(on_true), Some(on_false)) = sides {
                                 result.push(NonLocalDepResult {

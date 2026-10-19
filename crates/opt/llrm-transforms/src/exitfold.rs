@@ -151,7 +151,7 @@ struct Hoisted {
 /// Every loop's exits their counts decide, folded, and those tested once
 /// hoisted; whether any was.
 pub fn folded(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -161,7 +161,7 @@ pub fn folded(
 
 /// `folded`, what is known of the body without memory given as `standing` says.
 pub fn folded_with(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -173,7 +173,7 @@ pub fn folded_with(
 /// [`folded_with`], the exits their counts decide found by ScalarEvolution
 /// (`scev`) or by `induction::exits`.
 pub fn folded_by(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -458,9 +458,8 @@ fn _leaving(
     from: i64,
 ) -> Option<(i64, Vec<(InstId, Operand)>)> {
     let block = cfg::block(exit);
-    let body = function.block(block).instructions();
     let (phis, rest): (Vec<InstId>, Vec<InstId>) =
-        body.iter().copied().partition(|&inst| function.instruction(inst).opcode == Opcode::Phi);
+        function.iter_block(block).partition(|&inst| function.instruction(inst).opcode == Opcode::Phi);
     let arriving = |phi: InstId, from: llrm_mir::module::BlockId| {
         function.instruction(phi).operands.chunks(2).find(|pair| pair[1] == Operand::Block(from)).map(|pair| pair[0])
     };
@@ -469,10 +468,7 @@ fn _leaving(
                map: &dyn Fn(Operand) -> Option<Operand>|
      -> Option<Vec<(InstId, Operand)>> {
         function
-            .block(to)
-            .instructions()
-            .iter()
-            .copied()
+            .iter_block(to)
             .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
             .map(|phi| Some((phi, map(arriving(phi, through)?)?)))
             .collect()
@@ -541,11 +537,12 @@ fn _silent(
     at: i64,
 ) -> bool {
     let function = unit.function;
-    let body = function.block(cfg::block(at)).instructions();
-    body[..body.len().saturating_sub(1)]
-        .iter()
+    let block = cfg::block(at);
+    function
+        .iter_block(block)
+        .take(function.block(block).len().saturating_sub(1))
         .all(
-            |&inst| {
+            |inst| {
                 let op = function.instruction(inst);
                 match op.opcode {
                     Opcode::Load { volatile: false, align } => {
@@ -631,11 +628,8 @@ fn _predicated(
     let mut chosen = Vec::new();
     for exit in exits {
         let condition = function.instruction(exit.branch).operands.first().copied();
-        let phis = function
-            .block(cfg::block(exit.exit))
-            .instructions()
-            .iter()
-            .any(|&inst| function.instruction(inst).opcode == Opcode::Phi);
+        let phis =
+            function.iter_block(cfg::block(exit.exit)).any(|inst| function.instruction(inst).opcode == Opcode::Phi);
         let Some(count) = exit.taken.clone().filter(|count| count.iter().all(|one| one.width == width)) else { break };
         if !innermost(exit.block) || matches!(condition, Some(Operand::Constant(_))) || phis {
             break;
@@ -648,7 +642,7 @@ fn _predicated(
     // Only plain stores, and only where every chosen exit crashes quietly.
     let mut stores = false;
     for &at in &loop_.body {
-        for &inst in function.block(cfg::block(at)).instructions() {
+        for inst in function.iter_block(cfg::block(at)) {
             let op = function.instruction(inst);
             let effects = llrm_mir::memory::of(unit.context, outer.callees(), function, inst);
             match op.opcode {
@@ -682,7 +676,7 @@ fn _values_out(
     loop_
         .body
         .iter()
-        .flat_map(|&at| function.block(cfg::block(at)).instructions().iter().copied())
+        .flat_map(|&at| function.iter_block(cfg::block(at)))
         .filter_map(|inst| function.instruction(inst).result)
         .any(|value| {
             function
@@ -718,9 +712,8 @@ fn _crashes(
         .any(
             |to| {
                 let Operand::Block(to) = *to else { return false };
-                let body = function.block(to).instructions();
-                body.last().is_some_and(|&last| function.instruction(last).opcode == Opcode::Unreachable)
-                    && body[..body.len() - 1].iter().all(|&inst| {
+                function.block(to).last().is_some_and(|last| function.instruction(last).opcode == Opcode::Unreachable)
+                    && function.iter_block(to).take(function.block(to).len() - 1).all(|inst| {
                         matches!(function.instruction(inst).opcode, Opcode::Call(_))
                             && llrm_mir::memory::accessible(unit.context, outer.callees(), function, inst)
                                 == llrm_mir::memory::Effects::NONE
@@ -743,7 +736,7 @@ fn _tested(
     };
     let (_, compare) = unit.defining(Operand::Value(condition))?;
     let (Opcode::ICmp(predicate), [one, other]) = (&compare.opcode, &compare.operands[..]) else { return None };
-    if function.users(condition).len() != 1 || matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
+    if !function.users(condition).has_one_use() || matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
         return None;
     }
     let stays = cfg::id(yes) != exit.exit;
@@ -780,11 +773,7 @@ fn _early(
         unit.shape().loops.iter().filter(|one| one.body.contains(&at)).all(|one| one.body.len() >= loop_.body.len())
     };
     if !innermost(exit.block)
-        || function
-            .block(cfg::block(exit.exit))
-            .instructions()
-            .iter()
-            .any(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+        || function.iter_block(cfg::block(exit.exit)).any(|inst| function.instruction(inst).opcode == Opcode::Phi)
         || _values_out(function, loop_)
     {
         return false;

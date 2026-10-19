@@ -102,7 +102,7 @@ fn test_exact_nested_recurrence_rewinds_before_reloading_its_start() {
     let function = f(&mut module);
     let inner =
         function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some("b3")).unwrap();
-    let phi = function.block(inner).instructions()[0];
+    let phi = function.block(inner).first().expect("a block with an instruction");
     assert!(
         !function
             .instruction(phi)
@@ -453,8 +453,7 @@ end:
     manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
     // The pass that asks, indvars's evaluation of the loop, and the body the
     // widening (which runs first, as LLVM's `simplifyAndExtend` does) changed:
-    // widening itself asks ScalarEvolution, not the bounds. Before it ran
-    // first, the widening read the manager's bounds and the count was two.
+    // widening itself asks ScalarEvolution, not the bounds.
     assert_eq!(
         llrm_analysis::ranges::loops_solved() - before,
         3,
@@ -538,12 +537,15 @@ fn with_exit_values(text: &str) -> String {
     crate::testing::printed(&module)
 }
 
-/// The counter's step leaves a loop that also breaks, on `i + 1 < 32` false:
-/// the exit reads 32. It read the stepped counter, which kept the old one
-/// alive past its step (mandel: `lea; or; je; mov` where `inc; je` does), and
-/// made 32 in the latch each trip for the exit's phi.
+/// The counter's step leaves a loop that also breaks, on `i + 1 < 32` false.
+/// The old step read the exit's own count and wrote 32 (mandel: `lea; or; je;
+/// mov` where `inc; je` does). `rewriteLoopExitValues` asks `getSCEVAtExit`,
+/// which takes the value at the loop's one count, `umin(31, n + 1)`, once
+/// `simplifyAndExtend` has given the step `nuw nsw`: invariant, so not
+/// evaluated at the exit's count (the per-exit retry is for a variant one), and
+/// too dear to write under the budget. The exit keeps reading the counter.
 #[test]
-fn test_an_exit_phi_of_a_stepped_counter_is_the_number_its_count_gives() {
+fn test_an_exit_phi_of_a_stepped_counter_in_a_loop_with_a_second_exit_keeps_its_value() {
     let text = with_exit_values(
         "define i32 @f(i32 %n) {
 b0:
@@ -568,7 +570,7 @@ b4:
 }
 ",
     );
-    assert!(text.contains("ret i32 32") && !text.contains("%last"), "{text}");
+    assert!(text.contains("phi i32 [ %next, %b2 ]"), "{text}");
 }
 
 /// An exit whose count is not a number is written from the count, as
@@ -674,10 +676,8 @@ fn header_phis(module: &mut Module) -> usize {
     let function = f(module);
     let [one] = &loops::loops(&cfg::graph(function), function.entry().map(cfg::id))[..] else { panic!("one loop") };
     function
-        .block(cfg::block(one.header))
-        .instructions()
-        .iter()
-        .filter(|&&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+        .iter_block(cfg::block(one.header))
+        .filter(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
         .count()
 }
 
@@ -820,4 +820,108 @@ done:
     );
     assert!(text.contains("shl i16 %n, 1") || text.contains("mul i16 %n, 2"), "{text}");
     assert!(!text.contains("%s2 = add"), "the loop's sum is dead: {text}");
+}
+
+/// The flat 32-bit target as the driver builds it: widening past 16 bits is
+/// priced by its X86 cost model.
+fn m32() -> Rc<dyn llrm_mir::target::Machine> {
+    use llrm_target::Target;
+    let prices = llrm_target::CpuPrices {
+        costs: Vec::new(),
+        prefix: 1,
+        address_stall: 0,
+        registers: 6,
+        call_registers: 3,
+        float_registers: 0,
+        address_forms: Vec::new(),
+        operations: OperationCosts::default(),
+        spaces: llrm_x86_m32::layout().spaces.roles,
+        private: None,
+        calling: None,
+        foreign: llrm_target::Foreign::none(),
+        ports: llrm_x86_m32::M32.flat_ports(),
+    };
+    (llrm_x86_m32::M32.cost_model())(&prices)
+}
+
+/// A value a loop defines that a phi outside it reads, other than a phi in an
+/// exit block: the loop is not in closed SSA form. (A read by another
+/// instruction is left to the pass that closes loops again.)
+fn leaks_a_loop_value(module: &Module) -> Option<String> {
+    let (_, _, function) = module.functions().next()?;
+    let tree = llrm_mir::domtree::DomTree::of(function);
+    let loops = llrm_mir::loopinfo::LoopInfo::analyze(function, || &tree);
+    let (values, blocks) = (llrm_mir::print::value_labels(function), llrm_mir::print::block_labels(function));
+    for l in loops.get_loops_in_preorder() {
+        let exits = l.get_exit_blocks(function);
+        for &block in l.get_blocks() {
+            for inst in function.iter_block(block) {
+                let Some(value) = function.instruction(inst).result else { continue };
+                for one in function.users(value) {
+                    let home = function.parent(one.user).expect("placed");
+                    let phi = function.instruction(one.user).opcode == llrm_mir::opcode::Opcode::Phi;
+                    if phi && !l.contains(home) && !exits.contains(&home) {
+                        return Some(format!("%{} read in %{}", values[&value], blocks[&home]));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Planets (-m32, #2685): the second loop's counter starts at the first
+/// loop's widened counter. Expanding that start read the first loop's value
+/// from outside the loop, with no exit phi, and the unroll after refused the
+/// body as not in closed SSA form.
+#[test]
+fn test_a_start_expanded_from_a_loop_before_it_is_read_through_that_loops_exit_phi() {
+    crate::simplifyindvar::tests_forced(true);
+    let mut module = parsed(
+        "target datalayout = \"e-p:32:32-n8:16:32\"
+
+define i16 @f(ptr %buf, i16 %s, i16 %k, i16 %n) {
+b0:
+  br label %a
+
+a:
+  %i = phi i16 [ 0, %b0 ], [ %in, %a2 ]
+  %x = phi i16 [ %s, %b0 ], [ %xn, %a2 ]
+  %c = icmp ult i16 %i, %k
+  br i1 %c, label %a2, label %m
+
+a2:
+  %in = add nuw nsw i16 %i, 1
+  %xn = add nuw nsw i16 %x, 1
+  br label %a
+
+m:
+  %xl = phi i16 [ %x, %a ]
+  br label %b
+
+b:
+  %j = phi i16 [ 0, %m ], [ %jn, %b2 ]
+  %y = phi i16 [ %xl, %m ], [ %yn, %b2 ]
+  %d = icmp slt i16 %j, %n
+  br i1 %d, label %b2, label %e
+
+b2:
+  %w = zext i16 %y to i32
+  %p = getelementptr i8, ptr %buf, i32 %w
+  store i8 1, ptr %p
+  %jn = add nuw nsw i16 %j, 1
+  %yn = add nuw nsw i16 %y, 1
+  br label %b
+
+e:
+  %yl = phi i16 [ %y, %b ]
+  ret i16 %yl
+}
+",
+    );
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(IndVars { exit_values: true, unrolls: None });
+    manager.run_module(&mut module, m32()).unwrap();
+    let after = printed(&module);
+    assert_eq!(leaks_a_loop_value(&module), None, "{after}");
 }

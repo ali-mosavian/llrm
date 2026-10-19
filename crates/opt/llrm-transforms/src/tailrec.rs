@@ -185,7 +185,7 @@ struct Step {
 /// is exposed, so a callee cannot read what the frame holds and the next trip
 /// may reuse it.
 pub fn eliminated(
-    context: &mut Context,
+    context: &Context,
     callees: &Callees,
     globals: &[GlobalValue],
     function: &mut Function,
@@ -328,7 +328,7 @@ fn site(
         }
         _ => return None,
     };
-    let work: Vec<InstId> = function.block(block).instructions().iter().copied().filter(|&one| one != end).collect();
+    let work: Vec<InstId> = function.iter_block(block).filter(|&one| one != end).collect();
     let is_call = |inst: InstId| {
         let op = function.instruction(inst);
         let Opcode::Call(info) = &op.opcode else { return false };
@@ -385,12 +385,12 @@ fn site(
     };
     // The call's result goes nowhere but on to the way out.
     if let Some(result) = function.instruction(call).result
-        && function.users(result).len() != 1
+        && !function.users(result).has_one_use()
     {
         return None;
     }
     if let Some(step) = &step
-        && function.users(function.instruction(step.inst).result?).len() != 1
+        && !function.users(function.instruction(step.inst).result?).has_one_use()
     {
         return None;
     }
@@ -416,11 +416,7 @@ fn returned_from(
 ) -> Option<Option<Operand>> {
     let end = function.terminator(join).filter(|&one| function.instruction(one).opcode == Opcode::Ret)?;
     if join == from
-        || function
-            .block(join)
-            .instructions()
-            .iter()
-            .any(|&one| one != end && function.instruction(one).opcode != Opcode::Phi)
+        || function.iter_block(join).any(|one| one != end && function.instruction(one).opcode != Opcode::Phi)
     {
         return None;
     }
@@ -436,7 +432,7 @@ fn returned_from(
 
 /// The accumulator's value before the first trip: what `op` leaves a number as.
 fn identity(
-    context: &mut Context,
+    context: &Context,
     op: BinaryOp,
     bits: u32,
 ) -> Operand {
@@ -451,7 +447,7 @@ fn identity(
 }
 
 fn rewrite(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     found: &[Site],
     operation: Option<BinaryOp>,
@@ -461,17 +457,10 @@ fn rewrite(
     // The entry keeps the frame; the rest is the loop's header.
     let header = function.create_block(Some("tailrecurse"));
     function.insert_block(header, Some(entry)).expect("a new block");
-    let first = function
-        .block(entry)
-        .instructions()
-        .iter()
-        .copied()
-        .find(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }));
+    let first =
+        function.iter_block(entry).find(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }));
     let rest: Vec<_> = function
-        .block(entry)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(entry)
         .filter(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }))
         .collect();
     function.move_run(&rest, header).expect("a placed instruction");
@@ -572,7 +561,7 @@ fn rewrite(
     // A join nothing reaches any more goes.
     for join in joins {
         if function.layout().contains(&join) && function.predecessors(join).is_empty() {
-            for inst in function.block(join).instructions().iter().rev().copied().collect::<Vec<_>>() {
+            for inst in function.iter_block_rev(join).collect::<Vec<_>>() {
                 function.erase(inst).expect("only the block's own instructions use them");
             }
             function.erase_block(join).expect("an empty block nothing names");

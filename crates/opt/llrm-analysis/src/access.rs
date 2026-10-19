@@ -211,10 +211,7 @@ impl<'a> Addresses<'a> {
             let outer = at + 1 < counters.len();
             let latch = cfg::block(*loop_.latches.first().expect("one latch"));
             for phi in function
-                .block(cfg::block(loop_.header))
-                .instructions()
-                .iter()
-                .copied()
+                .iter_block(cfg::block(loop_.header))
                 .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
             {
                 let result = function.instruction(phi).result.expect("a phi's value");
@@ -355,7 +352,7 @@ pub fn references(
     let addresses = Addresses::new(unit, counters, variant);
     let mut out = Vec::new();
     for &at in scanned {
-        for inst in function.block(cfg::block(at)).iter() {
+        for inst in function.iter_block(cfg::block(at)) {
             let op = function.instruction(inst);
             let (pointer, ty, write) = match op.opcode {
                 Opcode::Load { volatile: false, .. } => (op.operands[0], op.ty, false),

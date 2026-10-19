@@ -361,8 +361,8 @@ fn _split(
     // The clone stops at the smaller of the loop's bound and the limit.
     let last = copied.terminator(parent).ok_or("a terminated block")?;
     let stop = _smaller(context, copied, last, proof, &test.limit);
-    let position = body.block(header).instructions().iter().position(|&one| one == proof.compare).ok_or("KeyError")?;
-    let cloned_compare = copied.block(cloned_header).instructions()[position];
+    let position = body.iter_block(header).position(|one| one == proof.compare).ok_or("KeyError")?;
+    let cloned_compare = copied.iter_block(cloned_header).nth(position).ok_or("IndexError")?;
     let counter = Operand::Value(proof.counter.value);
     let at = body.instruction(proof.compare).operands.iter().position(|&one| one != counter).ok_or("IndexError")?;
     let mut operands = copied.instruction(cloned_compare).operands.clone();

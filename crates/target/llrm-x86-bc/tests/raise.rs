@@ -493,7 +493,7 @@ fn a_push_after_the_prologue_is_no_register_save() {
     };
     let mut printed = 0;
     for &block in function.layout() {
-        for &inst in function.block(block).instructions() {
+        for inst in function.iter_block(block) {
             if callee(inst).as_deref() == Some("llrm.qb.B$PESD") {
                 let Operand::Value(argument) = function.instruction(inst).operands[0] else {
                     panic!("B$PESD of a constant")

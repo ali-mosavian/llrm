@@ -393,7 +393,7 @@ fn _found(
     // window leaves from its latch: before each trip, only a header phi's
     // value is known there; after, anything the latch reaches.
     for &block in &loop_.body {
-        for &inst in function.block(cfg::block(block)).instructions() {
+        for inst in function.iter_block(cfg::block(block)) {
             let Some(result) = function.instruction(inst).result else { continue };
             for one in function.users(result) {
                 let Some(at) = function.parent(one.user) else { continue };
@@ -482,8 +482,7 @@ fn _phi(
     name: &str,
 ) -> (InstId, Operand) {
     let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), Some(name));
-    let at =
-        function.block(block).instructions().first().map_or(Position::End(block), |&first| Position::Before(first));
+    let at = function.block(block).first().map_or(Position::End(block), Position::Before);
     function.insert(phi, at).expect("a placed phi");
     (phi, Operand::Value(function.instruction(phi).result.expect("a phi's value")))
 }
@@ -546,13 +545,8 @@ fn _split(
     let next_window = function.create_block(Some("window.next"));
     function.insert_block(next_window, Some(found.latch)).expect("a new block");
     // Every header phi is carried across windows; a walk's as its huge pointer.
-    let header_phis: Vec<InstId> = function
-        .block(found.header)
-        .instructions()
-        .iter()
-        .copied()
-        .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
-        .collect();
+    let header_phis: Vec<InstId> =
+        function.iter_block(found.header).take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect();
     let walked: Vec<InstId> = found.walks.iter().map(|walk| walk.recurrence.phi).collect();
     let mut carried = Vec::new();
     for &phi in &header_phis {
@@ -683,13 +677,8 @@ fn _split(
     // a walk's huge pointer, past its last window. A skipped loop leaves with
     // the starts.
     let test = if found.proof.posttested { found.latch } else { found.header };
-    let exit_phis: Vec<InstId> = function
-        .block(found.exit)
-        .instructions()
-        .iter()
-        .copied()
-        .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
-        .collect();
+    let exit_phis: Vec<InstId> =
+        function.iter_block(found.exit).take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect();
     for phi in exit_phis {
         let mut arms = function.instruction(phi).operands.clone();
         let mut skipped = None;
@@ -742,7 +731,7 @@ fn _entry_value(
 
 /// `value`, `from` bits wide, as `to` bits.
 fn _resized(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     value: Operand,
     from: u32,
@@ -766,7 +755,7 @@ fn _resized(
 /// first trip; a walk down, on its last.
 #[allow(clippy::too_many_arguments)]
 fn _windowed(
-    context: &mut Context,
+    context: &Context,
     declared: &mut Declared,
     function: &mut Function,
     layout: &llrm_mir::datalayout::DataLayout,
@@ -825,7 +814,7 @@ fn _windowed(
 /// stepped value.
 #[allow(clippy::too_many_arguments)]
 fn _far(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     walk: &Walk,
     origin: Operand,
@@ -889,7 +878,7 @@ fn _erased(
 /// `Intrinsic::Window` from `huge` pointers to `far` ones, declared where the
 /// module has none.
 fn _declared(
-    context: &mut Context,
+    context: &Context,
     declared: &mut Declared,
     far: TypeId,
     huge: TypeId,

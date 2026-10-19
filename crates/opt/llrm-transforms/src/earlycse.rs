@@ -775,7 +775,7 @@ impl Walk<'_> {
         block: BlockId,
     ) -> bool {
         let mut changed = false;
-        for one in self.function.users(value).to_vec() {
+        for one in self.function.users(value).snapshot() {
             let user = self.function.instruction(one.user);
             let dominated = if user.opcode == Opcode::Phi {
                 let Operand::Block(from) = user.operands[one.index as usize + 1] else { continue };
@@ -890,7 +890,7 @@ impl Walk<'_> {
         // The last non-volatile store seen, for as long as nothing reads
         // memory.
         let mut last_store: Option<InstId> = None;
-        for inst in self.function.block(block).instructions().to_vec() {
+        for inst in self.function.iter_block(block).collect::<Vec<_>>() {
             if self.function.is_erased(inst) {
                 continue;
             }

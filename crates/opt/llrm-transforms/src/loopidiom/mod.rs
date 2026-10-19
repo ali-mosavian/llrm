@@ -296,7 +296,7 @@ impl LoopIdiomRecognize {
         self.store_refs_for_memset_pattern.clear();
         self.store_refs_for_memcpy.clear();
         let function = cx.function;
-        for &inst in function.block(block).instructions() {
+        for inst in function.iter_block(block) {
             if !matches!(function.instruction(inst).opcode, Opcode::Store { .. }) {
                 continue;
             }
@@ -394,7 +394,7 @@ pub fn may_loop_access_location(
     let try_same_byte_value = !matches!(access_size, LocationSize::Precise(_)) && splat_byte.is_some();
 
     for &block in cur_loop.get_blocks() {
-        for &inst in cx.function.block(block).instructions() {
+        for inst in cx.function.iter_block(block) {
             if ignored_insts.contains(&inst) {
                 continue;
             }

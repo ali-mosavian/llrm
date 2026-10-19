@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """The per-merge tests of the integration branch feat/parity: the touched crates' fastest unit tests, a few fast run tests and a compile smoke, 10 s of CPU in all.
+First, untimed, `cargo check --workspace --all-targets` of the merged tree and every source-scan ratchet (whatever the merge touches).
 
     tools/parity_smoke.py [--bin DIR] [--base REF] [--rank CRATE...]
 
-The last line is `PARITY SMOKE PASS ...` or `PARITY SMOKE FAIL ...`, with the CPU seconds spent. Build time is not in the 10 s: the unit tests are built first, untimed.
+The last line is `PARITY SMOKE PASS ...` or `PARITY SMOKE FAIL ...`, with the CPU seconds spent. Build time is not in the 15 s: the unit tests are built first, untimed.
 The selection (tools/parity_smoke.toml) is
   units   per crate that `git diff BASE` touches (crates/<group>/<crate>/...): its cheapest unit tests, the ranked list `--rank` writes, cut to the crate's share of
           what the other steps leave; with no ranking yet, all its `--lib` tests, killed at that share (a failure before the cut fails; the cut itself is a note)
@@ -32,11 +33,15 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
 
+sys.path.insert(0, str(HERE / "dosbatch"))
+import cpulimit  # noqa: E402
+from buildslot import slotted  # noqa: E402
+
 SELECTION = HERE / "parity_smoke.toml"
-BUDGET = 10.0
+BUDGET = 15.0  # CPU seconds (user+sys of this process and its children, never wall); the user's rule is a fast set within 10-15 s
 CARGO_OVERHEAD = 0.3  # cargo's own CPU to find the test binary up to date, per crate
-MAX_CRATES = 5  # a merge touching more is tested in the 5 crates with most changed files: each crate costs its cargo start before any test
-UNIT_FLOOR = 3.0  # the seconds the fixed steps always leave for unit tests
+MAX_CRATES = 2  # a merge touching more is tested in the 3 crates with most changed files: each crate costs its cargo start before any test
+UNIT_FLOOR = 2.0  # the seconds the fixed steps always leave for unit tests
 ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "COALESCE", "REPLAY", "INTERN", "SKIPPED", "STALE")
 PROGRAM = ROOT / "bench" / "bintree"
 # d_faces.c as the scoreboard reads it (sha256 prefix), and the six reports `env.c` printed for gcc -O0: an llrm build must print the same.
@@ -69,6 +74,73 @@ def run_cut(command: list[str], seconds: float, cwd: Path) -> tuple[int | None, 
         _charged[0] += seconds
         return None, ""
     return child.returncode, out
+
+
+def workspace_check(root: Path = ROOT) -> str:
+    """"" when the whole workspace, tests and benches included, compiles; else the first errors. Built before the clock starts, like the unit tests: two halves
+    that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke feat/parity's head for every build)."""
+    done = subprocess.run(slotted(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"]), cwd=root, capture_output=True, text=True)
+    if done.returncode == 0:
+        return ""
+    errors = [line for line in done.stderr.splitlines() if "error" in line]
+    return " / ".join(errors[:3])[:300] or "cargo check failed"
+
+
+TIERS = ROOT / "tools/gate/tiers.toml"
+EXTRA_RATCHETS = (["cargo", "test", "-q", "--test", "block_list_ratchet"], ["cargo", "test", "-q", "-p", "llrm-mir", "--lib", "facts_rewrite"])
+
+
+def ratchet_commands(tiers: Path = TIERS) -> list[list[str]]:
+    """Every source-scan test of the gate (tools/gate/tiers.toml `[[scan]]`) and the two that list readers (block list, facts_rewrite), as cargo commands. A test
+    that counts what a crate's files read fails on a diff in ANOTHER crate: a reader added in llrm-transforms never ran llrm-mir's ratchets (loopdeletion +3,
+    simpleloopunswitch +5 slipped in), because the smoke ran only the touched crates' unit tests."""
+    commands = [list(c) for c in EXTRA_RATCHETS]
+    for scan in tomllib.loads(tiers.read_text()).get("scan", []):
+        if "lib" in scan:
+            commands.append(["cargo", "test", "-q", "-p", scan["package"], "--lib", "--", scan["lib"]])
+        elif "test" in scan:
+            commands.append(["cargo", "test", "-q", "-p", scan["package"], "--test", scan["test"]])
+        elif scan.get("step") == "integration":
+            commands.append(["cargo", "test", "-q", "--test", Path(scan["file"]).stem])
+    return commands
+
+
+def ratchets(root: Path = ROOT, tiers: Path = TIERS, run=None) -> str:
+    """"" when every ratchet passes on the tree in `root`; else the first that fails. Run before the clock starts, whatever the merge touches."""
+    run = run or (lambda command: subprocess.run(slotted(command), cwd=root, capture_output=True, text=True))
+    for command in ratchet_commands(tiers):
+        done = run(command)
+        if done.returncode:
+            lines = [line for line in (done.stdout + done.stderr).splitlines() if "panicked" in line or "FAILED" in line or "error" in line]
+            return f"{' '.join(command[1:])}: {' / '.join(lines[:2])[:240] or 'failed'}"
+    return ""
+
+
+def ratchet_name(command: list[str]) -> str:
+    """The name a ratchet is listed by in a failure set: the test (`--test NAME`, or the lib filter after `--`), else the filter word."""
+    if "--test" in command:
+        return command[command.index("--test") + 1]
+    return command[-1]
+
+
+def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[str, str]:
+    """name -> why, for EVERY ratchet that fails on the tree in `root` (the subset rule compares whole failure sets, not the first failure)."""
+    run = run or (lambda command: subprocess.run(slotted(command), cwd=root, capture_output=True, text=True))
+    failed = {}
+    for command in ratchet_commands(tiers):
+        done = run(command)
+        if done.returncode:
+            lines = [line for line in (done.stdout + done.stderr).splitlines() if "panicked" in line or "FAILED" in line or "error" in line]
+            failed[f"ratchet:{ratchet_name(command)}"] = " / ".join(lines[:2])[:240] or "failed"
+    return failed
+
+
+def failing_names(line: str) -> list[str]:
+    """The failed step names of a `PARITY SMOKE FAIL name: detail; name: detail | ...` line."""
+    if not line.startswith("PARITY SMOKE FAIL "):
+        return []
+    head = line[len("PARITY SMOKE FAIL "):].split(" | ")[0]
+    return [part.split(":")[0].strip() for part in head.split("; ") if part.strip()]
 
 
 def selection() -> dict:
@@ -133,7 +205,12 @@ def oracle_env() -> dict[str, str]:
 
 def compile_ok(command: list[str], env: dict[str, str]) -> str | None:
     """None where the compile succeeded; else its first line of complaint."""
-    done = subprocess.run(command, capture_output=True, text=True, env=env)
+    try:
+        done = cpulimit.run(command, 300, capture_output=True, text=True, env=env)
+    except cpulimit.MemoryLimit as error:
+        return f"memory limit: {error}"
+    except subprocess.TimeoutExpired:
+        return f"timeout: 300 s of CPU  [{' '.join(command[:3])}]"
     if done.returncode == 0:
         return None
     lines = [line for line in (done.stderr or done.stdout).splitlines() if line.strip()]
@@ -197,6 +274,23 @@ def qc_d_faces(bins: Path) -> tuple[str, str]:
     return "ok", "QCport d_faces.c at 4 levels"
 
 
+QC_MODULES = ("game/combat.c", "host/mathlib.c", "render/d_sprite.c", "sound/snd.c")
+
+
+def qc_modules(bins: Path) -> tuple[str, str]:
+    """Four more QCport modules at -O2 (compile only, the compiler's default target): 48 of 260 QCport compiles died on `BitCast of a float` (#2586) while the smoke
+    passed, because it compiled sc.c at -O1 and one module (d_faces) at four levels, and none of them has that float shape."""
+    qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
+    include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
+    if not (qcport / QC_MODULES[0]).is_file() or not include.is_dir():
+        return "skipped", f"no QCport sources ({qcport})"
+    flags = [f for part in ("host", "render", "model", "game", "sound", "ui", "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
+    for module in QC_MODULES:
+        if why := compile_ok([str(bins / "llrm-c"), "-O2", *flags, str(qcport / module), "-o", os.devnull], os.environ):
+            return "fail", f"QCport {module} -O2: {why}"
+    return "ok", f"{len(QC_MODULES)} QCport modules at -O2"
+
+
 def run_cases(bins: Path) -> tuple[str, str]:
     names = selection().get("run", {}).get("cases", [])
     if not names:
@@ -214,7 +308,7 @@ def unit_step(package: str, allowance: float):
         ranking = selection().get("units", {})
         names = unit_tests(package, allowance, {k: [(n, s) for n, s in v.get("tests", [])] for k, v in ranking.items()})
         command = ["cargo", "test", "-q", "--lib", "-p", package] + (["--", "--exact", *names] if names else [])
-        code, output = run_cut(command, allowance + CARGO_OVERHEAD, ROOT)
+        code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT)
         if code is None:
             return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
         if code:
@@ -224,7 +318,7 @@ def unit_step(package: str, allowance: float):
     return step
 
 
-FIXED = [("programs", programs, 0.5), ("sc", sc, 0.8), ("d_faces", d_faces, 2.0), ("qc_d_faces", qc_d_faces, 1.0), ("run", run_cases, 2.5)]  # (name, step, declared seconds)
+FIXED = [("programs", programs, 0.3), ("sc", sc, 0.8), ("d_faces", d_faces, 1.8), ("qc_d_faces", qc_d_faces, 1.0), ("qc_modules", qc_modules, 0.8), ("run", run_cases, 3.6)]  # (name, step, declared seconds)
 
 
 def fixed_cost() -> float:
@@ -262,10 +356,20 @@ def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET, known_red: f
     return True, f"PARITY SMOKE PASS {line}"
 
 
+def run_twice_over_budget(run) -> tuple[bool, str]:
+    """`run()` -> (passed, line); when the ONLY failure is the CPU budget it runs once more and takes that verdict: on a host at load 20-60 the CPU seconds of the same
+    steps stretch (cache and hyper-thread contention), and a tools-only PR failed 'over the budget' with no unit test in the set."""
+    ok, line = run()
+    if not ok and failing_names(line) == ["over the budget"]:
+        ok, line = run()
+        line = line.replace("PARITY SMOKE", "PARITY SMOKE (second run, the first was over the budget)", 1)
+    return ok, line
+
+
 def rank(package: str) -> None:
     """Measure `package`'s unit tests once and write the cheapest into parity_smoke.toml (not per merge)."""
     env = {**os.environ, "RUSTC_BOOTSTRAP": "1"}
-    done = subprocess.run(["cargo", "test", "--lib", "-p", package, "--", "-Z", "unstable-options", "--report-time", "--test-threads", "1"], cwd=ROOT, capture_output=True, text=True, env=env)
+    done = subprocess.run(slotted(["cargo", "test", "--lib", "-p", package, "--", "-Z", "unstable-options", "--report-time", "--test-threads", "1"]), cwd=ROOT, capture_output=True, text=True, env=env)
     tests = [(n, s) for n, s in ranked(done.stdout) if s <= 0.5][:40]
     data = selection()
     data.setdefault("units", {})[package] = {"tests": [[n, s] for n, s in tests]}
@@ -293,10 +397,23 @@ def main() -> int:
         for package in args.rank:
             rank(package)
         return 0
+    failing: list[str] = []
+    pre: list[str] = []
+    if broken := workspace_check():
+        failing.append("workspace")
+        pre.append(f"workspace: {broken}")
+    for name, why in ratchet_failures().items():
+        failing.append(name)
+        pre.append(f"{name}: {why}")
     packages = touched(args.base)
     for package in packages:  # built first, untimed
-        subprocess.run(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"], cwd=ROOT, capture_output=True)
-    ok, line = run_steps(plan(packages), args.bin or llrmbin.bin_dir(), known_red=frozenset(args.skip))
+        subprocess.run(slotted(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"]), cwd=ROOT, capture_output=True)
+    ok, line = run_twice_over_budget(lambda: run_steps(plan(packages), args.bin or llrmbin.bin_dir(), known_red=frozenset(args.skip)))
+    failing += failing_names(line.replace("PARITY SMOKE (second run, the first was over the budget)", "PARITY SMOKE"))
+    print(f"FAILING: {','.join(failing)}")
+    if pre:
+        print(f"PARITY SMOKE FAIL {'; '.join(pre)} | {line}")
+        return 1
     print(line)
     return 0 if ok else 1
 

@@ -399,14 +399,11 @@ fn weighed(
     };
     let called = |at: i64| {
         function
-            .block(cfg::block(at))
-            .instructions()
-            .iter()
-            .filter(|&&inst| matches!(
+            .iter_block(cfg::block(at))
+            .filter(|&inst| matches!(
                 function.instruction(inst).opcode,
                 Opcode::Call(_) | Opcode::Invoke(_)
             ))
-            .copied()
             .collect::<Vec<_>>()
     };
     // A way that returns at once is the base case of a recursion that the
@@ -569,11 +566,8 @@ impl Run {
         if trip < self.values.len() {
             return self.values.get(trip);
         }
-        let header = function.block(cfg::block(one.header));
-        let phis = header
-            .instructions()
-            .iter()
-            .copied()
+        let phis = function
+            .iter_block(cfg::block(one.header))
             .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
             .collect::<Vec<_>>();
         let outside = |at: &Operand| matches!(at, Operand::Block(from) if !one.body.contains(&id(*from)));
@@ -716,9 +710,9 @@ fn returned(
     function: &Function,
     block: BlockId,
 ) -> Option<(f64, f64)> {
-    let instructions = function.block(block).instructions();
-    let [only] = instructions else { return None };
-    let instruction = function.instruction(*only);
+    let body = function.block(block);
+    let (1, Some(only)) = (body.len(), body.first()) else { return None };
+    let instruction = function.instruction(only);
     let (Opcode::Ret, [Operand::Constant(value)]) = (&instruction.opcode, instruction.operands.as_slice()) else {
         return None;
     };

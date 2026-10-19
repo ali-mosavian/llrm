@@ -24,6 +24,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
+sys.path.insert(0, str(HERE / "dosbatch"))
+import cpulimit  # noqa: E402
 
 LEVELS = ("-O1", "-O2", "-O3", "-Os")
 MODULES = ("host", "render", "model", "game", "sound", "ui")
@@ -51,7 +53,12 @@ def sweep(compiler: Path, qcport: Path, include: Path, levels=LEVELS, jobs: int 
 
     def one(job):
         source, level = job
-        done = subprocess.run([str(compiler), level, *flags, str(source), "-o", os.devnull], capture_output=True, text=True)
+        try:
+            done = cpulimit.run([str(compiler), level, *flags, str(source), "-o", os.devnull], 300, capture_output=True, text=True)
+        except cpulimit.MemoryLimit as error:
+            return (source.stem, level, f"memory limit: {error}")
+        except subprocess.TimeoutExpired:
+            return (source.stem, level, "timeout: 300 s of CPU")
         return None if done.returncode == 0 else (source.stem, level, kind(done.stderr or done.stdout))
 
     with ThreadPoolExecutor(jobs) as pool:
@@ -89,21 +96,38 @@ def new_kinds(groups: dict, known: list[dict]) -> dict:
 
 
 def first_bad(commits: list[str], is_bad) -> str:
-    """The first bad commit of `commits` (old to new, the last one bad): binary search, `is_bad(commit)` builds and tests it. Assumes a single flip."""
+    """The first bad commit of `commits` (old to new, the last one bad): binary search, `is_bad(commit)` builds and tests it, and answers None for a commit that
+    does not build (a head broke for hours between two merges that each built). Such a commit is passed over: the probe takes the nearest one that builds, above
+    the middle or else below it. Assumes a single flip."""
     lo, hi = 0, len(commits) - 1  # hi is bad
     while lo < hi:
         mid = (lo + hi) // 2
-        if is_bad(commits[mid]):
-            hi = mid
+        for probe in [*range(mid, hi), *range(mid - 1, lo - 1, -1)]:
+            verdict = is_bad(commits[probe])
+            if verdict is not None:
+                break
         else:
-            lo = mid + 1
+            return commits[hi]  # nothing between lo and hi builds
+        if verdict:
+            hi = probe
+        elif probe >= mid:
+            lo = probe + 1
+        else:
+            return commits[hi]  # the nearest below mid is good and everything above it up to hi does not build
     return commits[hi]
 
 
 def bisect_one(good: str, repro: list[str], build) -> tuple[str, str]:
     """(sha, subject) of the first first-parent squash after `good` on which `repro` (a compile of the failing module) fails; `build(sha)` returns the llrm-c path."""
     shas = subprocess.run(["git", "log", "--first-parent", "--reverse", "--format=%H", f"{good}..origin/feat/parity"], cwd=ROOT, capture_output=True, text=True).stdout.split()
-    bad = lambda sha: subprocess.run([str(build(sha)), *repro], capture_output=True).returncode != 0  # noqa: E731
+
+    def bad(sha: str) -> bool | None:
+        try:
+            binary = build(sha)
+        except subprocess.CalledProcessError:
+            return None
+        return subprocess.run([str(binary), *repro], capture_output=True).returncode != 0
+
     found = first_bad(shas, bad)
     subject = subprocess.run(["git", "log", "-1", "--format=%s", found], cwd=ROOT, capture_output=True, text=True).stdout.strip()
     return found, subject
