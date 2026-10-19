@@ -20,8 +20,9 @@
 //! Before the collection, from [`crate::lsr_pass`].
 //!
 //! # Limits
-//! DEVIATE: `OptimizeShadowIV` and a vector condition (`extractelement`) are
-//! not ported.
+//! DEVIATE: a vector condition (`extractelement`) is not ported; every float
+//! type counts as legal for `OptimizeShadowIV` (`isTypeLegal`: x86 has no
+//! other).
 
 use llrm_analysis::scev::backedge::ExitCountKind;
 use llrm_analysis::scev::expr::{Kind, Use as ScevUse};
@@ -303,4 +304,159 @@ pub fn apply(
         marked.push(cond);
     }
     marked
+}
+
+// ---- OptimizeShadowIV ----
+
+/// An integer induction variable converted to floating point in the loop, and
+/// the floating-point variable that replaces the conversion.
+#[derive(Clone, Debug)]
+pub struct ShadowEdit {
+    /// The `sitofp` or `uitofp`.
+    pub cast: InstId,
+    /// The integer phi, its increment, and which of its two arms is the entry.
+    pub phi: InstId,
+    pub incr: InstId,
+    pub entry_arm: usize,
+    pub dest: llrm_mir::types::TypeId,
+    pub init: i128,
+    pub step: u64,
+}
+
+/// `OptimizeShadowIV`, read-only: `(double)i` in `for (i = 0; ...; i += c)` is
+/// a second variable, `d = 0.0; d += c`, if the conversion is exact for every
+/// value `i` takes.
+pub fn analyze_shadow(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    l: BlockId,
+    users: &IvUsers,
+) -> Option<ShadowEdit> {
+    let function = cx.function;
+    let btc = se.get_backedge_taken_count(cx, l, ExitCountKind::Exact);
+    if se.is_could_not_compute(btc) {
+        return None;
+    }
+    let lp = cx.loops.get_loop_for(l)?;
+    let preheader = lp.get_loop_preheader(function)?;
+    for u in &users.uses {
+        let instruction = function.instruction(u.user);
+        let signed = match instruction.opcode {
+            Opcode::Cast(llrm_mir::opcode::CastOp::UIToFP) => false,
+            Opcode::Cast(llrm_mir::opcode::CastOp::SIToFP) => true,
+            _ => continue,
+        };
+        // The mantissa decides which integers are exact.
+        let mantissa = match cx.context.types.get(instruction.ty) {
+            llrm_mir::types::Type::Float(llrm_mir::types::FloatKind::Float) => 24,
+            llrm_mir::types::Type::Float(llrm_mir::types::FloatKind::Double) => 53,
+            llrm_mir::types::Type::Float(llrm_mir::types::FloatKind::X86Fp80) => 64,
+            _ => continue,
+        };
+        let Operand::Value(phi_value) = instruction.operands[0] else { continue };
+        let ValueDef::Instruction(phi) = function.value(phi_value).def else { continue };
+        let phi_inst = function.instruction(phi);
+        if phi_inst.opcode != Opcode::Phi || phi_inst.operands.len() != 4 {
+            continue;
+        }
+        // Integer overflow would differ from the floating-point result.
+        let ar = se.get_scev(cx, Operand::Value(phi_value));
+        if !matches!(se.node(ar).kind, Kind::AddRec(..)) {
+            continue;
+        }
+        let wrap = if signed { llrm_analysis::scev::expr::flags::NSW } else { llrm_analysis::scev::expr::flags::NUW };
+        if se.get_no_wrap_flags(ar, wrap) == 0 {
+            continue;
+        }
+        let bits = se.get_type_size_in_bits(cx, se.type_of(ar));
+        if bits > mantissa {
+            continue;
+        }
+        let Operand::Block(first) = phi_inst.operands[1] else { continue };
+        let (entry_arm, latch_arm) = if first == preheader { (0, 1) } else { (1, 0) };
+        let Operand::Constant(init) = phi_inst.operands[2 * entry_arm] else { continue };
+        let llrm_mir::context::ConstantKind::Int(init_bits) = cx.context.get(init).kind else { continue };
+        let init = if signed { llrm_mir::context::signed(init_bits, bits) } else { init_bits as i128 };
+        let Operand::Value(incr_value) = phi_inst.operands[2 * latch_arm] else { continue };
+        let ValueDef::Instruction(incr) = function.value(incr_value).def else { continue };
+        let incr_inst = function.instruction(incr);
+        if !matches!(
+            incr_inst.opcode,
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub)
+        ) {
+            continue;
+        }
+        let phi_operand = Operand::Value(phi_value);
+        let constant = if incr_inst.operands[0] == phi_operand {
+            incr_inst.operands[1]
+        } else if incr_inst.operands[1] == phi_operand {
+            incr_inst.operands[0]
+        } else {
+            continue;
+        };
+        let Operand::Constant(step) = constant else { continue };
+        let llrm_mir::context::ConstantKind::Int(step_bits) = cx.context.get(step).kind else { continue };
+        // Negative steps are not handled.
+        if llrm_mir::context::signed(step_bits, bits) <= 0 {
+            continue;
+        }
+        return Some(ShadowEdit {
+            cast: u.user,
+            phi,
+            incr,
+            entry_arm,
+            dest: instruction.ty,
+            init,
+            step: step_bits as u64,
+        });
+    }
+    None
+}
+
+/// The shadow variable made: a phi of the floating type, its increment, and the
+/// conversion's uses on it.
+pub fn apply_shadow(
+    function: &mut Function,
+    context: &llrm_mir::context::Context,
+    edit: &ShadowEdit,
+) {
+    use llrm_mir::context::{Constant, ConstantKind};
+    let float = |value: f64| {
+        let bits = match context.types.get(edit.dest) {
+            llrm_mir::types::Type::Float(llrm_mir::types::FloatKind::Float) => u64::from((value as f32).to_bits()),
+            _ => value.to_bits(),
+        };
+        Operand::Constant(context.constant(Constant { ty: edit.dest, kind: ConstantKind::Float(bits) }))
+    };
+    let old_phi = function.instruction(edit.phi).operands.clone();
+    let latch_arm = 1 - edit.entry_arm;
+    let sub = function.instruction(edit.incr).opcode == Opcode::Binary(BinaryOp::Sub);
+    let init = float(edit.init as f64);
+    let entry_block = old_phi[2 * edit.entry_arm + 1];
+    let latch_block = old_phi[2 * latch_arm + 1];
+    // The new phi first, with the entry value and a placeholder.
+    let new_phi = function.create_instruction(
+        Opcode::Phi,
+        edit.dest,
+        vec![init, entry_block, init, latch_block],
+        Flags::default(),
+        Some("IV.S."),
+    );
+    function.insert(new_phi, Position::Before(edit.phi)).expect("a placed phi");
+    let new_value = Operand::Value(function.instruction(new_phi).result.expect("a phi value"));
+    let op = if sub { BinaryOp::FSub } else { BinaryOp::FAdd };
+    let new_incr = function.create_instruction(
+        Opcode::Binary(op),
+        edit.dest,
+        vec![new_value, float(edit.step as f64)],
+        Flags::default(),
+        Some("IV.S.next."),
+    );
+    function.insert(new_incr, Position::Before(edit.incr)).expect("a placed increment");
+    let incr_value = Operand::Value(function.instruction(new_incr).result.expect("an increment value"));
+    function.set_operand(new_phi, 2, incr_value);
+    // The conversion goes.
+    let cast_value = function.instruction(edit.cast).result.expect("a conversion value");
+    function.replace_all_uses_with(cast_value, new_value);
+    function.erase(edit.cast).expect("the conversion");
 }

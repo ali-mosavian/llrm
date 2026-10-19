@@ -38,7 +38,7 @@ use llrm_mir::tti::Tti;
 use crate::ivusers::{Env, IvUsers};
 use crate::lsr_collect::Collection;
 use crate::lsr_implement::{Implement, Plan, split_phi_edges};
-use crate::lsr_prepare::{self, ExitEdit};
+use crate::lsr_prepare::{self, ExitEdit, ShadowEdit};
 
 /// `MaxIVUsers`.
 const MAX_IV_USERS: usize = 200;
@@ -98,6 +98,8 @@ enum Outcome {
     Planned(Option<Plan>),
     /// Exit tests to edit first; the loop is then analysed again.
     Edit(Vec<ExitEdit>),
+    /// An integer variable's conversion to float, made a variable of its own.
+    Shadow(ShadowEdit),
 }
 
 /// `DominatorTree::findNearestCommonDominator(Instruction *, Instruction *)`.
@@ -171,6 +173,9 @@ fn plan_loop(
         function.terminator(lp.get_loop_latch(function).expect("a latch")).expect("a terminator");
     match marked {
         None => {
+            if let Some(shadow) = lsr_prepare::analyze_shadow(se, &cx, header, &users) {
+                return Outcome::Shadow(shadow);
+            }
             let edits = lsr_prepare::analyze(se, &cx, tti, header, &users);
             if edits.iter().any(|edit| edit.max.is_some() || edit.post_inc) {
                 return Outcome::Edit(edits);
@@ -225,13 +230,18 @@ pub fn reduced(
         // The first look may find exit tests to edit, and the plan may split
         // edges: each is followed by an analysis of the loop as it is then.
         let mut marked: Option<Vec<InstId>> = None;
-        for _ in 0..4 {
+        for _ in 0..6 {
             let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
             let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
             let plan = match plan_loop(context, layout, function, outer, tti, se, &env, header, marked.as_deref()) {
                 Outcome::Planned(None) => break,
                 Outcome::Edit(edits) => {
                     marked = Some(lsr_prepare::apply(function, &context.types, header, &edits));
+                    changed = true;
+                    continue;
+                }
+                Outcome::Shadow(edit) => {
+                    lsr_prepare::apply_shadow(function, context, &edit);
                     changed = true;
                     continue;
                 }
@@ -271,6 +281,15 @@ pub fn reduced(
             run.move_increments();
             let rewrote = run.changed;
             changed |= rewrote;
+            // `DeleteDeadPHIs`: the phis nothing reads any more, those of a
+            // cycle included.
+            let mut dead = dead;
+            dead.extend(
+                function
+                    .iter_block(header)
+                    .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                    .filter_map(|inst| function.instruction(inst).result),
+            );
             crate::dead::dead_from(context, outer.callees(), function, dead);
             break;
         }

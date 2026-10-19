@@ -128,3 +128,33 @@ exit:
     assert_eq!(phis, 1, "one induction variable: {after}");
     assert_eq!(after.matches("add i32 %k, 1").count(), 1, "the compare reuses the increment: {after}");
 }
+
+/// `(double) i` of a counter that cannot overflow is a second variable that
+/// counts in doubles, and the conversion in the loop goes (`OptimizeShadowIV`).
+#[test]
+fn a_counter_converted_to_double_gets_a_double_counter() {
+    let (changed, after) = reduced_on(
+        FLAT,
+        "define i32 @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %s = phi double [ 0.0, %entry ], [ %s2, %loop ]
+  %d = sitofp i32 %i to double
+  %s2 = fadd double %s, %d
+  %next = add nsw i32 %i, 1
+  %c = icmp eq i32 %next, %n
+  br i1 %c, label %exit, label %loop
+exit:
+  %r = fptosi double %s2 to i32
+  ret i32 %r
+}
+",
+        "i486",
+        &[&[1], &[5], &[17]],
+    );
+    assert!(changed, "{after}");
+    assert!(!after.contains("sitofp"), "{after}");
+    assert!(after.contains("IV.S."), "{after}");
+}

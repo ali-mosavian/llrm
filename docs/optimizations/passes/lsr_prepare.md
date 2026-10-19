@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_prepare.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_prepare.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_prepare.rs sha256:29af2a61db909391f9c6842acc53782a115070718ef1fcce6d70a3be36d2b6c7 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_prepare.rs sha256:6921c1075769d2f3ec83a97725053badb8e7c712a4806ada8a4e1cd3850f0263 -->
 
 # lsr_prepare
 
@@ -25,5 +25,6 @@ the incremented value, and moves to just before the latch's branch.
 Before the collection, from [`crate::lsr_pass`](lsr_pass.md).
 
 ## Limits
-DEVIATE: `OptimizeShadowIV` and a vector condition (`extractelement`) are
-not ported.
+DEVIATE: a vector condition (`extractelement`) is not ported; every float
+type counts as legal for `OptimizeShadowIV` (`isTypeLegal`: x86 has no
+other).
