@@ -188,16 +188,21 @@ fn clone_in_exit_block(
 
 /// [`sink`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1353)
 /// through phis that read nothing else: `inst` is copied into each exit block
-/// that reads it, the phi replaced by the copy, the original erased.
+/// that reads it, the phi replaced by the copy, the original erased unless
+/// `keep`: users in the loop still read it.
 fn sink(
     function: &mut Function,
     context: &Context,
     graph: &mut Graph,
     loop_: &Loop,
     inst: InstId,
+    keep: bool,
 ) -> Result<(), String> {
     let result = function.instruction(inst).result.ok_or("a sunk instruction with no result")?;
     let mut users: Vec<InstId> = function.users(result).iter().map(|one| one.user).collect();
+    users.retain(|&user| {
+        !keep || function.parent(user).is_some_and(|home| !loop_.body.contains(&llrm_analysis::cfg::id(home)))
+    });
     users.dedup();
     // Clones of this instruction. Don't create more than one per exit block!
     let mut copies: IdMap<BlockId, InstId> = IdMap::new();
@@ -218,6 +223,9 @@ fn sink(
         let copy_result = function.instruction(copy).result.ok_or("a copy with no result")?;
         function.replace_all_uses_with(phi_result, Operand::Value(copy_result));
         function.erase(user)?;
+    }
+    if keep {
+        return Ok(());
     }
     graph.erase(function, inst);
     function.erase(inst)
@@ -242,7 +250,8 @@ pub fn apply_loop(
                 graph.erase(function, inst);
                 function.erase(inst)?;
             }
-            Sinking::Sunk => sink(function, context, graph, loop_, inst)?,
+            Sinking::Sunk => sink(function, context, graph, loop_, inst, false)?,
+            Sinking::Cloned => sink(function, context, graph, loop_, inst, true)?,
         }
         changed = true;
     }

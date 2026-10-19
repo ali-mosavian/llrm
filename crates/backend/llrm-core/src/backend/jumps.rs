@@ -170,7 +170,7 @@ pub fn optimized(
     cpu: &cpu::Profile,
 ) -> Result<LirBody, masm::Unprintable> {
     let size = cpu.size;
-    let mut placed = threaded(&_placed(&_hoisted(body), size)?);
+    let mut placed = threaded(&_placed(&_hoisted(body), size, cpu.aggressive)?);
     // Tail duplication before the merge, as LLVM places with it: after, the
     // merge would give back what the copy gained.
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
@@ -405,7 +405,7 @@ fn _without_jumps_to_next(order: Vec<Block>) -> Vec<Block> {
 /// drops the jumps the order made redundant and turns the test into one
 /// branch back to the body.
 pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
-    _placed(body, false)
+    _placed(body, false, false)
 }
 
 /// The blocks in the order `MachineBlockPlacement` lays them out (see
@@ -413,6 +413,7 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
 fn _placed(
     body: &LirBody,
     size: bool,
+    aggressive: bool,
 ) -> Result<LirBody, masm::Unprintable> {
     let explicit = _explicit(body)?;
     if body.source_order {
@@ -420,7 +421,7 @@ fn _placed(
     }
     let natural = loopy::loops(&explicit, Some(body.entry));
     let busy = Frequency::over(body, &explicit);
-    let (blocks, odds) = placement::order(&explicit, body.entry, &body.odds, &busy, &natural, size);
+    let (blocks, odds) = placement::order(&explicit, body.entry, &body.odds, &busy, &natural, size, aggressive);
     Ok(_reachable(&LirBody { odds, ..body.clone() }, blocks))
 }
 
