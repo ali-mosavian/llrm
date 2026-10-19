@@ -855,6 +855,7 @@ fn estimated_callees<E: From<String>>(
             layout,
             recursive: recursive.contains(&caller),
             base: bases.get(&caller).copied().unwrap_or(0),
+            limits: true,
         };
         let mut declared = declared(modules, module);
         let (context, function) = function_mut(module, caller);
@@ -927,6 +928,7 @@ fn estimated_sites<E: From<String>>(
         layout,
         recursive: recursive.contains(&caller),
         base: bases.get(&caller).copied().unwrap_or(0),
+        limits: true,
     };
     let mut declared = declared(modules, module);
     let (context, function) = function_mut(module, caller);
@@ -978,6 +980,7 @@ fn together_trial<E: From<String>>(
         layout,
         recursive: recursive.contains(&caller),
         base: bases.get(&caller).copied().unwrap_or(0),
+        limits: true,
     };
     let mut declared = declared(modules, module);
     let (context, function) = function_mut(module, caller);
@@ -1249,6 +1252,9 @@ pub fn optimized_with<E: From<String>>(
                 }
                 let caller = module.global(id).function().expect("a procedure");
                 let constants = facts::current_call_constants(&module.context, caller);
+                // `LLRM_INLINE_REMARKS`: opt's remark per decided site, on
+                // stderr.
+                let mut decided = (llvm && llrm_support::env_flag!("LLRM_INLINE_REMARKS")).then(Vec::new);
                 let (constant, constant_more) = if llvm {
                     let params =
                         crate::inlinecost::InlineParams::from_level(if threshold.limit >= 250 { 3 } else { 2 });
@@ -1272,6 +1278,7 @@ pub fn optimized_with<E: From<String>>(
                             size,
                             threshold.limit == 0,
                             program.target.tti().as_deref(),
+                            decided.as_mut(),
                         ),
                         Default::default(),
                     )
@@ -1295,6 +1302,7 @@ pub fn optimized_with<E: From<String>>(
                     layout: &program.layout,
                     recursive: recursive.contains(&id),
                     base: bases[at].get(&id).copied().unwrap_or(0),
+                    limits: !llvm,
                 };
                 let was = calls_of(context, function);
                 let spliced_now =
@@ -1306,6 +1314,11 @@ pub fn optimized_with<E: From<String>>(
                     for (callee, count) in was {
                         *live.entry(callee).or_insert(0) -= count;
                     }
+                }
+                for (call, callee, cost) in decided.iter().flatten() {
+                    let name = |id: GlobalId| module.global(id).name.as_deref().unwrap_or("?");
+                    let spliced = module.global(id).function().is_some_and(|one| one.parent(*call).is_none());
+                    eprintln!("{}", crate::inlinecost::remark(name(id), name(*callee), cost, spliced));
                 }
                 placed(&mut declared, &mut modules[at], module)?;
                 if spliced_now {
@@ -1567,6 +1580,7 @@ pub fn optimized_with<E: From<String>>(
                     layout: &program.layout,
                     recursive: recursive.contains(&id),
                     base: bases[at].get(&id).copied().unwrap_or(0),
+                    limits: true,
                 };
                 let spliced_now = inline::expanded(context, function, &by, &available, Some(&constant), &mut declared)?;
                 placed(&mut declared, &mut modules[at], module)?;

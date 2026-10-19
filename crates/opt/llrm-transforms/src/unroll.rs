@@ -322,7 +322,7 @@ fn _phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function.block(block).iter().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
+    function.iter_block(block).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
 }
 
 /// A block's instructions, its phis and terminator aside.

@@ -31,6 +31,17 @@
 //!   `llvm.assume` are not ported; the MIR has no `NullPointerIsDefined`, so a
 //!   null pointer is undefined. What stands between the phi and the use must be
 //!   no call (`isGuaranteedToTransferExecutionToSuccessor`).
+//!
+//! # Example
+//! The arm's one cheap instruction runs before the branch and the phi becomes a
+//! select:
+//!
+//! ```text
+//! entry: br i1 %c, label %then, label %end
+//! then:  %t = add i32 %x, 1 ; br label %end
+//! end:   %p = phi i32 [ %t, %then ], [ %x, %entry ]
+//! ; becomes, in entry: %t = add i32 %x, 1 ; %p = select i1 %c, i32 %t, i32 %x
+//! ```
 
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::dense::IdMap;
@@ -67,16 +78,21 @@ fn passing_value_always_undefined(
         return false;
     }
     let block = function.parent(phi).expect("a placed phi");
-    let body = function.block(block).instructions();
-    let at = |inst: InstId| body.iter().position(|&one| one == inst);
-    let Some(phi_at) = at(phi) else { return false };
     // The first use in the block after the phi.
     let user = function
         .users(result)
         .iter()
         .filter(|one| function.parent(one.user) == Some(block) && one.user != phi)
-        .filter(|one| at(one.user).is_some_and(|there| there > phi_at))
-        .min_by_key(|one| at(one.user));
+        .filter(|one| function.comes_before(phi, one.user))
+        .min_by(|a, b| {
+            if a.user == b.user {
+                std::cmp::Ordering::Equal
+            } else if function.comes_before(a.user, b.user) {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            }
+        });
     let Some(user) = user else { return false };
     // The block's earlier uses decide first: LLVM's `find_if` stops at the
     // first use in use-list order, which is also the first that is not a
@@ -94,8 +110,8 @@ fn passing_value_always_undefined(
     ) {
         return false;
     }
-    let between = &body[phi_at + 1..at(inst).expect("a placed user")];
-    if between.iter().any(|&one| matches!(
+    let mut between = function.iter_after(phi).take_while(|&one| one != inst);
+    if between.any(|one| matches!(
         function.instruction(one).opcode,
         Opcode::Call(_) | Opcode::Invoke(_)
     )) {
@@ -168,7 +184,7 @@ pub fn executed(
     let mut speculated = 0;
     // Uses in `then` of the values of `block` that nothing else reads.
     let mut sinkable: IdMap<InstId, usize> = IdMap::new();
-    let body = function.block(then).instructions().to_vec();
+    let body = function.iter_block(then).collect::<Vec<_>>();
     for &inst in body[..body.len() - 1].iter().rev() {
         speculated += 1;
         if speculated > 1 {

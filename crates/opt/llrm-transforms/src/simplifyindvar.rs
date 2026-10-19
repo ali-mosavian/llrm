@@ -103,8 +103,7 @@ pub fn simplified(
                 let header = loop_.get_header();
                 let phis: Vec<InstId> = cx
                     .function
-                    .block(header)
-                    .iter()
+                    .iter_block(header)
                     .take_while(|inst| cx.function.instruction(*inst).opcode == Opcode::Phi)
                     .collect();
                 for phi in phis {
@@ -378,12 +377,8 @@ fn simplify_and_extend(
     has_guards: bool,
 ) -> bool {
     let mut wide_ivs: Vec<WideIvInfo> = Vec::new();
-    let mut loop_phis: Vec<InstId> = e
-        .function
-        .block(header)
-        .iter()
-        .take_while(|inst| e.function.instruction(*inst).opcode == Opcode::Phi)
-        .collect();
+    let mut loop_phis: Vec<InstId> =
+        e.function.iter_block(header).take_while(|inst| e.function.instruction(*inst).opcode == Opcode::Phi).collect();
 
     // Each round of simplification iterates through the SimplifyIVUsers
     // worklist for all current phis, then determines whether any IVs can be

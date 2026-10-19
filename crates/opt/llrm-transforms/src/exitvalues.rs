@@ -42,7 +42,6 @@ use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{Declared, Outer};
-use llrm_support::hash::HashSet;
 
 use crate::edges;
 use crate::local;
@@ -360,8 +359,7 @@ fn can_loop_be_deleted(
 
     for &block in l.get_blocks() {
         if function
-            .block(block)
-            .iter()
+            .iter_block(block)
             .any(|inst| local::may_have_side_effects(context, outer.callees(), declarations, function, inst))
         {
             return false;
@@ -398,8 +396,7 @@ fn first_insertion_point(
     block: BlockId,
 ) -> InstId {
     function
-        .block(block)
-        .iter()
+        .iter_block(block)
         .find(|&inst| !matches!(
             function.instruction(inst).opcode,
             Opcode::Phi | Opcode::LandingPad { .. }

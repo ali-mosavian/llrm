@@ -48,6 +48,16 @@
 //!   after.
 //! - Metadata: an access keeps its metadata where the type and offset are
 //!   unchanged, and loses it otherwise (`adjustForAccess`).
+//!
+//! # Example
+//! An alloca of two `i32` fields, each stored and loaded whole, becomes two
+//! allocas and then registers:
+//!
+//! ```text
+//! %s = alloca { i32, i32 }
+//! store i32 1, ptr %s          ; field 0
+//! %v = load i32, ptr %s        ; becomes the constant 1, the alloca is gone
+//! ```
 
 use std::cmp::Ordering;
 
@@ -1228,8 +1238,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let declared = self.declared_allocas();
         let allocas: Vec<InstId> = self
             .function()
-            .block(entry)
-            .iter()
+            .iter_block(entry)
             .filter(|&inst| matches!(
                 self.function().instruction(inst).opcode,
                 Opcode::Alloca { .. }
@@ -2916,8 +2925,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             let block = self.function().parent(def).expect("a placed phi");
             return self
                 .function()
-                .block(block)
-                .iter()
+                .iter_block(block)
                 .find(|&one| self.function().instruction(one).opcode != Opcode::Phi)
                 .expect("a block ends in a terminator");
         }
@@ -3107,7 +3115,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             return None;
         }
         let block = function.parent(phi).expect("a placed phi");
-        let first = function.block(block).iter().find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        let first = function.iter_block(block).find(|&one| function.instruction(one).opcode != Opcode::Phi);
         if first != Some(store) {
             return None;
         }
