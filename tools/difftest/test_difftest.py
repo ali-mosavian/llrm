@@ -278,7 +278,7 @@ def test_every_opt_command_line_carries_llrms_triple_and_cpu(monkeypatch):
     monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m16")
     seen.clear()
     difftest.opt("sroa", "")
-    assert "-mtriple=i386-unknown-linux-gnu" in seen[0] and "-mcpu=i486" in seen[0]
+    assert "-mtriple=i386-unknown-unknown-code16" in seen[0] and "-mcpu=i486" in seen[0]
 
 
 def test_the_m16_runs_read_a_datalayout_with_16_bit_pointers(monkeypatch):
@@ -286,7 +286,7 @@ def test_the_m16_runs_read_a_datalayout_with_16_bit_pointers(monkeypatch):
     monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m16")
     args = difftest.target_args()
     layout = next(a for a in args if a.startswith("--data-layout="))
-    assert "p:16:16" in layout and "-mtriple=i386-unknown-linux-gnu" in args
+    assert "p:16:16" in layout and "-mtriple=i386-unknown-unknown-code16" in args
     monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m32")
     assert "p:32:32" in next(a for a in difftest.target_args() if a.startswith("--data-layout="))
 

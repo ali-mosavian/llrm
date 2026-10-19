@@ -5,7 +5,7 @@
 mode = 16
 
 # What the LLVM tools are told to price this target as (opt -mtriple/-mcpu: the pricing CPU is the 486, nobody prices the 386) and the TTI llrm prices with (set before the TTI exists: the oracle refuses until the m16 machine states it).
-llvm_triple = "i386-unknown-linux-gnu"
+llvm_triple = "i386-unknown-unknown-code16"
 llvm_cpu = "i486"
 tti = "X86"
 
