@@ -189,6 +189,11 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
+    // LSR runs in llc's IR preparation (`TargetPassConfig::addIRPasses`,
+    // l.874), after this pipeline; the translated pieces (stage 1-3: Formula,
+    // LSRUse, IVUsers and fixups) are called by no pass yet, so the old `lsr`
+    // is the slot.
+    entry("lsr", Late, "loop-reduce (LoopStrengthReduce.cpp)", Old, "loop-passes-port"),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@728", Simplify, "lcssa", Old, "lcssa-port"),
@@ -252,6 +257,14 @@ pub struct AnalysisEntry {
 /// The analyses with a translation or a stand-in the registry follows. The
 /// result of `mssa` is handed out mutable (the walker lives inside it).
 pub const ANALYSES: &[AnalysisEntry] = &[
+    AnalysisEntry {
+        key: "dominators",
+        llvm: "DominatorTreeAnalysis",
+        kind: Translated,
+        off: false,
+        deps: &[],
+        oracle: "tools/llvmport/domcompare.py: DomTree against the pinned LLVM on the corpus (#2292)",
+    },
     AnalysisEntry {
         key: "loops",
         llvm: "LoopAnalysis",

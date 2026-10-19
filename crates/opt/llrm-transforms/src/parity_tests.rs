@@ -287,3 +287,19 @@ fn test_sccp_stands_between_gvn_and_bdce() {
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
     assert_eq!((at("gvn@787") + 1, at("sccp@792") + 1), (at("sccp@792"), at("bdce@797")));
 }
+
+/// LSR's translated pieces landed with no registry row, so the count could not
+/// show them; DomTree was translated with no analyses row. The slot is Old
+/// while no pass calls the pieces, and `dominators` is a Translated analysis.
+#[test]
+fn test_lsr_is_a_registered_slot_and_dominators_a_translated_analysis() {
+    let lsr = parity::REGISTRY.iter().find(|one| one.slot == "lsr").expect("lsr is registered");
+    assert_eq!((lsr.llvm, lsr.kind), ("loop-reduce (LoopStrengthReduce.cpp)", SlotKind::Old));
+    assert!(!lsr.replaced_by.is_empty(), "an Old slot names who replaces it");
+    let dominators = parity::ANALYSES.iter().find(|one| one.key == "dominators").expect("dominators is registered");
+    assert_eq!(
+        (dominators.llvm, dominators.kind, dominators.off),
+        ("DominatorTreeAnalysis", SlotKind::Translated, false)
+    );
+    assert!(parity::ANALYSES.iter().all(|one| one.key != "shape"), "shape is a bundle, not a translation");
+}
