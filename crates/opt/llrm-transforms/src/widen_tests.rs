@@ -66,7 +66,8 @@ fn test_a_counter_read_through_zext_is_a_counter_of_that_width() {
 fn test_a_signed_counter_read_through_sext_is_a_counter_of_that_width() {
     let after = widened(&clearing("sext", "slt", "0", "nsw"));
     assert!(after.contains("phi i32"), "{after}");
-    assert!(after.contains("icmp slt i32"), "{after}");
+    // LFTR then tests the wide counter against its exit count with `ne`.
+    assert!(after.contains("icmp ne i32"), "{after}");
     assert!(!after.contains("sext i16 %i to i32"), "{after}");
 }
 

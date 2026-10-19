@@ -66,6 +66,11 @@ struct Lftr<'a> {
     tti: &'a dyn ExpansionTti,
 }
 
+/// `LLRM_NO_SCEV_LFTR`, read once; set, the step is skipped.
+pub fn enabled() -> bool {
+    !llrm_support::env_flag!("LLRM_NO_SCEV_LFTR")
+}
+
 /// `IndVarSimplify::run`'s LFTR step over every loop of `function`, innermost
 /// first; whether anything changed. Instructions left dead are `dead`'s.
 pub fn replaced(

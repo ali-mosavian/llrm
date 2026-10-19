@@ -12,9 +12,7 @@
 //!    of the loop's count where the loop is left (`rewriteLoopExitValues`,
 //!    ScalarEvolution's exit values, from every exit of the loop, a rotated
 //!    loop's latch included); `LLRM_NO_SCEV_EXITVALUES` turns it off.
-//! 1. `exitfold::folded`: exits their counts decide are folded.
-//! 2. `exitsink::sunk`: final updates only exit phis read move to the exits.
-//! 3. `widened`: a counter read through `zext` (or, where it is signed and
+//! 1. `widened`: a counter read through `zext` (or, where it is signed and
 //!    tested by `slt`, `sext`) to the address's index width, where `induction`
 //!    proves its values never pass its own (`rises_unsigned`, `rises_signed`),
 //!    becomes a counter of that width. C's `unsigned short i` reads `a[zext
@@ -29,10 +27,16 @@
 //!    compares the wide one with that value extended
 //!    (`WidenIV::widenLoopCompare`); other readers of the narrow one read its
 //!    low part.
-//! 4. `congruent`: header counters with one start and one step are one counter
+//! 2. `congruent`: header counters with one start and one step are one counter
 //!    (`SCEVExpander::replaceCongruentIVs`); the later ones' readers read the
 //!    first, and `dead` removes them.
-//! 5. `rewound`: see below.
+//! 3. `canonexit::canonicalized` (`canonicalizeExitCondition`;
+//!    `LLRM_NO_SCEV_CANONEXIT`), then `exitfold::folded`: exits their counts
+//!    decide are folded.
+//! 4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
+//!    exit tests a counter against the value it has at the last trip.
+//! 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
+//! 6. `rewound`: see below.
 //!
 //! `rewound` carries an exact inner recurrence's exit value around the outer
 //! loop. An inner loop running exactly `count` trips leaves as
@@ -232,15 +236,6 @@ impl FunctionPass for IndVars {
         if rewrote {
             standing.changed();
         }
-        let folded = crate::exitfold::folded_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
-        if folded {
-            standing.reshaped();
-        }
-        let shape = standing.shape(unit.function);
-        let sunk = crate::exitsink::sunk(unit.function, &shape);
-        if sunk {
-            standing.changed();
-        }
         let widened = !extending
             && widened_with(
                 unit.context,
@@ -251,6 +246,25 @@ impl FunctionPass for IndVars {
                 if self.exit_values { None } else { self.unrolls },
             );
         let merged = congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        let canonical = crate::canonexit::enabled()
+            && crate::canonexit::canonicalized(unit.context, unit.layout, unit.function, &outer);
+        if canonical {
+            standing.changed();
+        }
+        let folded = crate::exitfold::folded_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        if folded {
+            standing.reshaped();
+        }
+        let tested = crate::lftr::enabled()
+            && crate::lftr::replaced(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if tested {
+            standing.changed();
+        }
+        let shape = standing.shape(unit.function);
+        let sunk = crate::exitsink::sunk(unit.function, &shape);
+        if sunk {
+            standing.changed();
+        }
         let rewound = rewound_with(
             unit.context,
             unit.layout,
@@ -260,11 +274,11 @@ impl FunctionPass for IndVars {
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
-        let dead = (compared || rewrote || sunk || rewound || widened || merged)
+        let dead = (compared || rewrote || canonical || tested || sunk || rewound || widened || merged)
             && dead::dead(unit.context, outer.callees(), unit.function);
         if folded {
             PreservedAnalyses::none()
-        } else if compared || rewrote || sunk || rewound || widened || merged || dead {
+        } else if compared || rewrote || canonical || tested || sunk || rewound || widened || merged || dead {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
         } else {

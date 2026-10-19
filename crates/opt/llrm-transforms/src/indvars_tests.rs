@@ -451,13 +451,13 @@ end:
     manager.add(super::IndVars { exit_values: false, unrolls: None });
     let before = llrm_analysis::ranges::loops_solved();
     manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
-    // The pass that asks, indvars's evaluation of the loop, and the body the
-    // widening (which runs first, as LLVM's `simplifyAndExtend` does) changed:
-    // widening itself asks ScalarEvolution, not the bounds.
+    // The pass that asks: the manager's one solve. The evaluation of the loop
+    // that asked for a second (`loopexit`) is `exitvalues` now, from
+    // ScalarEvolution.
     assert_eq!(
         llrm_analysis::ranges::loops_solved() - before,
-        3,
-        "the loop's bounds were worked out more than the manager's three times"
+        1,
+        "the loop's bounds were worked out more than the manager's once"
     );
 }
 
