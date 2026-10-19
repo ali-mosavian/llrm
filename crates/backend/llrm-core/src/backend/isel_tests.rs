@@ -3639,6 +3639,48 @@ no:
     }
 }
 
+/// The tree of a merged condition is any depth: `d == 0 || d == k || d == -k`
+/// (queens' `safe`) was `sete; test; jne; ...` chains, one branch per compare
+/// in the pin's FindMergedConditions. Both kinds, nested either way, and the
+/// `select` forms.
+#[test]
+fn test_a_branch_on_a_tree_of_compares_branches_on_each() {
+    for (joins, leaves) in [
+        ("  %u = or i1 %x, %y\n  %c = or i1 %u, %z\n", 3),
+        ("  %u = or i1 %y, %z\n  %c = or i1 %x, %u\n", 3),
+        ("  %u = and i1 %x, %y\n  %c = and i1 %u, %z\n", 3),
+        ("  %u = select i1 %x, i1 true, i1 %y\n  %c = select i1 %u, i1 true, i1 %z\n", 3),
+        ("  %u = or i1 %x, %y\n  %v = or i1 %z, %w\n  %c = or i1 %u, %v\n", 4),
+        ("  %u = and i1 %x, %y\n  %v = and i1 %z, %w\n  %c = and i1 %u, %v\n", 4),
+    ] {
+        let text = format!(
+            "declare void @g() addrspace(1)
+define void @f(i16 %a, i16 %b, i16 %d) addrspace(1) {{
+entry:
+  %x = icmp eq i16 %a, 0
+  %y = icmp slt i16 %b, 5
+  %z = icmp ne i16 %d, 7
+  %w = icmp ugt i16 %a, %b
+{joins}  br i1 %c, label %yes, label %no
+yes:
+  call addrspace(1) void @g()
+  ret void
+no:
+  ret void
+}}
+"
+        );
+        let got = listing_on("386", &text, "f");
+        assert!(
+            !got.iter().any(|line| line.starts_with("set") || line.starts_with("and") || line.starts_with("or ")),
+            "{joins}: {got:?}"
+        );
+        let branches: Vec<&String> =
+            got.iter().filter(|line| line.starts_with('j') && !line.starts_with("jmp")).collect();
+        assert_eq!(branches.len(), leaves, "{joins}: {got:?}");
+    }
+}
+
 /// A 32-bit counter proven small indexes every frame array at its own
 /// scale, `[ebp+esi*4-disp]` with one register, and EBP's upper half zeroed
 /// once before the loop: truncated, each array took a shift and a register of
