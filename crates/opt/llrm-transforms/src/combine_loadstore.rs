@@ -117,7 +117,7 @@ impl Combiner<'_> {
     }
 
     /// `Value::hasOneUse`.
-    fn has_one_use(
+    pub(crate) fn has_one_use(
         &self,
         v: Operand,
     ) -> bool {
