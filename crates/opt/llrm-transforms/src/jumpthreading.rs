@@ -38,9 +38,9 @@
 //! - J4. `DomTreeUpdater` is not used: the pass returns `none()` when it
 //!   changed anything and the manager rebuilds the dominator tree. The
 //!   reachable set at the start is a walk from the entry.
-//! - J5. The sweep visits the blocks of the layout as it stood when the sweep
-//!   began; a block made during it is met by the next sweep (LLVM's list
-//!   iterator meets one placed after the current block in the same sweep).
+//! - J5. The sweep walks the live layout as LLVM walks its block list: a block
+//!   placed after the current one is met in the same sweep, and the walk finds
+//!   its place again by position (`next_in_layout`) when a block is removed.
 //! - J6. `fcmp` is not looked through (`CmpInst` is integer compares only); MIR
 //!   has no vectors.
 //! - J7. Debug records are not retargeted (`DbgVariableRecord`s in `updateSSA`
@@ -167,6 +167,10 @@ impl FunctionPass for JumpThreading {
         "jumpthreading"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("jump-threading")
+    }
+
     /// `JumpThreadingPass::run`
     /// ([L240](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L240)).
     fn run(
@@ -193,6 +197,34 @@ impl FunctionPass for JumpThreading {
             bb_dup_threshold: DEFAULT_BB_DUP_THRESHOLD,
         };
         if pass.run_impl() { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
+
+/// Where the walk goes after `block`, which stood at `at` (or near it: the
+/// pass may have placed or removed blocks before `at`). A block that is no
+/// longer placed is not searched for, and neither is a gone `after`: the
+/// search runs outward from `at`, so it costs the distance the target moved,
+/// not the length of the layout. `probe` is called once per position looked
+/// at, so a test can count the work.
+pub(crate) fn layout_step(
+    layout: &[BlockId],
+    is_placed: impl Fn(BlockId) -> bool,
+    block: BlockId,
+    at: usize,
+    after: Option<BlockId>,
+    mut probe: impl FnMut(),
+) -> usize {
+    let mut near = |wanted: BlockId| {
+        (0..layout.len())
+            .flat_map(|distance| [at.checked_sub(distance), Some(at + distance)])
+            .flatten()
+            .inspect(|_| probe())
+            .find(|&index| layout.get(index) == Some(&wanted))
+    };
+    if is_placed(block) {
+        near(block).map_or(layout.len(), |index| index + 1)
+    } else {
+        after.filter(|&after| is_placed(after)).and_then(near).unwrap_or(layout.len())
     }
 }
 
@@ -628,18 +660,8 @@ impl State<'_, '_> {
         at: usize,
         after: Option<BlockId>,
     ) -> usize {
-        let layout = self.function().layout();
-        let near = |wanted: BlockId| {
-            (0..layout.len())
-                .flat_map(|distance| [at.checked_sub(distance), Some(at + distance)])
-                .flatten()
-                .find(|&index| layout.get(index) == Some(&wanted))
-        };
-        match (near(block), after) {
-            (Some(index), _) => index + 1,
-            (None, Some(after)) => near(after).unwrap_or(layout.len()),
-            (None, None) => layout.len(),
-        }
+        let function = self.function();
+        layout_step(function.layout(), |one| function.is_placed(one), block, at, after, || {})
     }
 
     /// The blocks reachable from `entry`.
@@ -1675,11 +1697,7 @@ impl State<'_, '_> {
         &self,
         bb: BlockId,
     ) -> bool {
-        let function = self.function();
-        function
-            .iter_block(bb)
-            .find(|&one| function.instruction(one).opcode != Opcode::Phi)
-            .is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+        crate::edges::starts_with_landing_pad(self.function(), bb)
     }
 
     /// `threadEdge`

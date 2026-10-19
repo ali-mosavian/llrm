@@ -201,6 +201,10 @@ impl llrm_target::Target for M32 {
         llrm_x86::instructions::joined(include_str!("instructions/x86.instr"))
     }
 
+    fn dialect(&self) -> &'static llrm_instr::Dialect {
+        llrm_x86::instructions::dialect()
+    }
+
     fn operand_bytes(&self) -> i64 {
         4
     }
@@ -211,6 +215,11 @@ impl llrm_target::Target for M32 {
 
     /// X86ISelLowering.cpp: `setPrefFunctionAlignment(Align(16))`.
     fn pref_function_alignment(&self) -> u8 {
+        4
+    }
+
+    /// X86ISelLowering.cpp: `setPrefLoopAlignment(Align(16))`.
+    fn pref_loop_alignment(&self) -> u8 {
         4
     }
 

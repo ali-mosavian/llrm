@@ -26,7 +26,7 @@ Levels and flags: [levels](../reference/levels.md).
 |  | [`dse`](passes/dse.md), [`promote`](passes/promote.md), [`dead`](passes/dead.md), [`loopidioms`](passes/loopidioms.md) |  |
 |  | [`unroll`](passes/unroll.md), [`peel`](passes/peel.md), [`unswitch`](passes/unswitch.md), [`loopsplit`](passes/loopsplit.md), [`loopfuse`](passes/loopfuse.md), [`loopdistribute`](passes/loopdistribute.md), `unroll-jam` |  |
 | Module, interprocedural | [`inline`](passes/inline.md), [`argpromotion`](passes/argpromotion.md), [`deadargs`](passes/deadargs.md), [`ipacp`](passes/ipacp.md), [`interprocedural`](passes/interprocedural.md) | [module-analyses](module-analyses.md), [early-summaries](early-summaries.md) |
-| After the interprocedural step | [`globaldce`](passes/globaldce.md), [`calleepop`](passes/calleepop.md), [`fixednarrow`](passes/fixednarrow.md), [`lsr`](passes/lsr.md), [`window`](passes/window.md), [`rotate`](passes/rotate.md), [`jumpthread`](passes/jumpthread.md), [`gepoffset`](passes/gepoffset.md), [`addresssink`](passes/addresssink.md), [`spares`](passes/spares.md), [`homes`](passes/homes.md) |  |
+| After the interprocedural step | [`globaldce`](passes/globaldce.md), [`calleepop`](passes/calleepop.md), [`fixednarrow`](passes/fixednarrow.md), [`lsr`](passes/lsr_pass.md), [`window`](passes/window.md), [`rotate`](passes/rotate.md), [`jumpthread`](passes/jumpthread.md), [`gepoffset`](passes/gepoffset.md), [`addresssink`](passes/addresssink.md), [`spares`](passes/spares.md), [`homes`](passes/homes.md) |  |
 | Backend | see the [backend phases](backend/readme.md) | [floating-pop-reuse](floating-pop-reuse.md), [second-frame](second-frame.md), [allocation-algorithm](allocation-algorithm.md) |
 
 ## Reference pages

@@ -1096,6 +1096,10 @@ impl FunctionPass for SimpleLoopUnswitch {
         "simpleloopunswitch"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("simple-loop-unswitch")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,
