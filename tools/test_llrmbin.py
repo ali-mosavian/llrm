@@ -110,3 +110,23 @@ def test_two_copies_of_one_binary_are_refused_and_two_different_ones_print_both_
     header = llrmbin.assert_distinct(a, c)
     assert llrmbin.md5(a)[:12] in header and llrmbin.md5(c)[:12] in header
     assert "same source" in llrmbin.assert_distinct(a, b, same_source=True)
+
+
+def test_a_source_with_a_future_mtime_is_named_as_the_reason_a_binary_stays_stale(tmp_path):
+    """A private tree copied with its timestamps kept a source an hour in the future: `cargo build` could not clear the check, and the refusal said only 'stale binaries'."""
+    import time
+
+    (tmp_path / "crates").mkdir()
+    (tmp_path / "Cargo.toml").write_text('[package]\nname = "llrm"\nversion = "0.0.0"\n[[bin]]\nname = "llrm-c"\npath = "src/c.rs"\n')
+    src = tmp_path / "crates/a.rs"
+    src.write_text("x")
+    release = tmp_path / "target/release"
+    release.mkdir(parents=True)
+    binary = release / "llrm-c"
+    binary.write_text("b")
+    (release / "llrm-c.d").write_text(f"{binary}: {src}\n")
+    future = time.time() + 3600
+    os.utime(src, (future, future))
+    assert llrmbin.stale_binaries(release, tmp_path) == ["llrm-c"]
+    detail = llrmbin.stale_detail(release, tmp_path)
+    assert str(src) in detail and "FUTURE" in detail, detail

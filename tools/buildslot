@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# buildslot CMD...: run CMD (a cargo build/check/test) holding one of 4 shared slots at nice 10; waits for a free slot.
+# buildslot CMD...: run CMD (a cargo build/check/test) holding one of 2 shared slots at nice 10; waits for a free slot.
 # CARGO_BUILD_JOBS defaults to 8 (cargo's own default is every core: four slots of 32 rustc at 1-1.7 GB each ran the host out of memory and
 # systemd-oomd killed whole sessions); set it to override. Installed to ~/.local/bin/buildslot from this file.
 # Usage: buildslot cargo build --release   (the parity merge loop does NOT use it)
-N=${BUILDSLOTS:-4}; D=${BUILDSLOT_DIR:-/tmp/buildslots}; mkdir -p $D
+N=${BUILDSLOTS:-2}; D=${BUILDSLOT_DIR:-/tmp/buildslots}; mkdir -p $D
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}
 # every test/bench binary cargo runs goes through testcap (a per-process memory cap); a caller's own runner wins
 here=$(dirname "$(readlink -f "$0")")

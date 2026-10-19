@@ -618,6 +618,29 @@ impl Function {
         self.values[to.0 as usize].name = name;
     }
 
+    /// `BasicBlock::takeName`: `to` is named what `from` was, which goes
+    /// unnamed; the name stays taken in the function.
+    pub fn take_block_name(
+        &mut self,
+        from: BlockId,
+        to: BlockId,
+    ) {
+        let name = self.blocks[from.0 as usize].name.take();
+        self.blocks[to.0 as usize].name = name;
+    }
+
+    /// `BasicBlock::setName`: `block` is named `name`, or `name` with the least
+    /// number appended that nothing live holds.
+    pub fn set_block_name(
+        &mut self,
+        block: BlockId,
+        name: &str,
+    ) {
+        self.release_name(block);
+        let name = self.unique_name(name);
+        self.blocks[block.0 as usize].name = Some(name);
+    }
+
     /// Replaces an instruction's opcode in place (a `getelementptr`'s source
     /// type, say); operands and users stay.
     pub fn set_opcode(
