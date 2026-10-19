@@ -32,6 +32,15 @@ fn generated(
     text: &str,
     body: impl FnOnce(&Cx, &mut ScalarEvolution, &mut Collection, BlockId),
 ) {
+    generated_for("core2", text, body)
+}
+
+/// [`generated`] for the x86 profile `cpu`.
+fn generated_for(
+    cpu: &str,
+    text: &str,
+    body: impl FnOnce(&Cx, &mut ScalarEvolution, &mut Collection, BlockId),
+) {
     let module = llrm_mir::parse::module(text).expect("a module");
     let (_, _, function) = module.functions().next().expect("a function");
     let layout = DataLayout::parse("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32").unwrap();
@@ -52,7 +61,7 @@ fn generated(
     let header = loops.top_level_loops().next().expect("a loop").get_header();
     let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false };
     let users = IvUsers::of(&mut se, &cx, header, &env);
-    let tti = X86::of_cpu("core2").unwrap();
+    let tti = X86::of_cpu(cpu).unwrap();
     let safe = |_: &mut ScalarEvolution, _: Scev| true;
     let mut lsr = Collection::new(&cx, &tti, header, &safe, false);
     lsr.collect_interesting_types_and_factors(&mut se, &users);
@@ -188,5 +197,56 @@ fn too_many_formulae_are_narrowed_to_the_shared_register() {
         // Every use is left with the one register they all share.
         let first = lsr.uses[0].formulae.clone();
         assert!(lsr.uses.iter().all(|lu| lu.formulae.len() == first.len() && lu.formulae == first), "{:?}", lsr.uses.iter().map(|lu| lu.formulae.len()).collect::<Vec<_>>());
+    });
+}
+
+/// `opt -passes=loop-reduce` (LLVM 20, i386) on this loop gives a pointer
+/// advancing by 4 for the store and a counter from `%n` down to zero for the
+/// exit test: each use keeps its first formula, one register each, where
+/// sharing one induction variable would take a scaled index and a base.
+#[test]
+fn the_solver_keeps_the_pointer_walk_and_counts_the_exit_down() {
+    generated_for("i486", STORE, |_, se, lsr, _| {
+        let solution = lsr.solve(se);
+        assert_eq!(solution.len(), 2);
+        for (lu, &f_idx) in lsr.uses.iter().zip(&solution) {
+            let f = &lu.formulae[f_idx];
+            assert_eq!((f.base_regs.len(), f.scaled_reg, f.scale), (1, None, 0), "{:?} {f:?}", lu.kind);
+            let reg = f.base_regs[0];
+            let step = se.as_constant(se.operands(reg)[1].scev).map(|c| c.sext_value());
+            match lu.kind {
+                Kind::Address => assert_eq!(step, Some(4)),
+                Kind::ICmpZero => {
+                    assert_eq!(step, Some(-1));
+                    assert!(f.counts_down_to_zero(se));
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+    });
+}
+
+/// Of two uses that could each take either of two constants as their register,
+/// the solver picks the one both take: one register where two would be.
+#[test]
+fn uses_that_can_share_a_register_do() {
+    generated(STORE, |cx, se, lsr, _| {
+        lsr.uses.clear();
+        lsr.reg_uses.clear();
+        let reg = |se: &mut ScalarEvolution, v| se.get_constant_of_type(cx, Ty::Int(32), v);
+        let (r1, r2, r3) = (reg(se, 1), reg(se, 2), reg(se, 3));
+        for regs in [[r1, r2], [r2, r3]] {
+            let lu_idx = lsr.uses.len();
+            let mut lu = Use::new(Kind::Basic, MemAccessTy::unknown(0));
+            lu.push_fixup(Fixup::new(InstId(0), Operand::Value(cx.function.parameters()[0])));
+            lsr.uses.push(lu);
+            for reg in regs {
+                let f = Formula { base_regs: vec![reg], has_base_reg: true, ..Formula::default() };
+                assert!(lsr.insert_formula(se, lu_idx, &f));
+            }
+        }
+        let solution = lsr.solve(se);
+        let chosen: Vec<Scev> = lsr.uses.iter().zip(&solution).map(|(lu, &f)| lu.formulae[f].base_regs[0]).collect();
+        assert_eq!(chosen, [r2, r2]);
     });
 }

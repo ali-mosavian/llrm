@@ -189,6 +189,7 @@ pub mod lsr_generate;
 #[cfg(test)]
 mod lsr_generate_tests;
 pub mod lsr_narrow;
+pub mod lsr_solve;
 pub mod lsr_use;
 #[cfg(test)]
 mod lsr_formula_tests;
