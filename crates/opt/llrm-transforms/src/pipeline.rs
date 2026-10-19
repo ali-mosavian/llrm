@@ -770,9 +770,36 @@ pub(crate) fn llvm_order(
             decide("decide@1244"),
             phiopt("phiopt@1244"),
         ],
-        // InstSimplifyPass, PassBuilderPipelines.cpp#L1662: the last function
-        // pass of `OptimizePM`, after LoopSink.
-        Phase::Late => vec![slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify))],
+        // The Late stage follows the Simplify list and its unroll-and-jam, in
+        // LLVM's order: L1438 (a nest this slot rewrote would not be jammed,
+        // so it is not at the end of the Simplify list), InstSimplifyPass
+        // (PassBuilderPipelines.cpp#L1662, the last function pass of
+        // `OptimizePM`, after LoopSink) and L2376.
+        Phase::Late => vec![
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1438:
+            // the extra sinking can create larger blocks, so loops need
+            // not stay canonical; `forwardSwitchCondToPhi`,
+            // `convertSwitchRangeToICmp`, `convertSwitchToArithmetic` and
+            // `convertSwitchToLookupTable` are not translated.
+            simplify_cfg_with(
+                "simplifycfg@1438",
+                simplifycfg::Options {
+                    need_canonical_loop: false,
+                    hoist_common_insts: true,
+                    sink_common_insts: true,
+                    ..Default::default()
+                },
+            ),
+            slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L2376:
+            // `convertSwitchRangeToICmp`, `convertSwitchToArithmetic` and
+            // `speculateUnpredictables` are not translated, so only
+            // `hoistCommonInsts` is set.
+            simplify_cfg_with(
+                "simplifycfg@2376",
+                simplifycfg::Options { hoist_common_insts: true, ..Default::default() },
+            ),
+        ],
         Phase::Simplify => {
             let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
             list.extend([
