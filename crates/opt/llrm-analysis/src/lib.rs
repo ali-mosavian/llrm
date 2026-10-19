@@ -127,6 +127,7 @@ pub mod guards;
 pub mod induction;
 pub mod interprocedural;
 pub mod liveness;
+pub mod loadstorepromoter;
 pub mod loopaccess;
 pub mod loopunrollanalyzer;
 pub mod manager;

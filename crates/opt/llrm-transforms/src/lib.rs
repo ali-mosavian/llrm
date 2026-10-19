@@ -94,6 +94,9 @@ pub mod cfg;
 pub mod combine;
 pub mod combine_addsub;
 pub mod combine_build;
+pub mod combine_casts;
+#[cfg(test)]
+mod combine_casts_tests;
 pub mod combine_compares;
 pub mod combine_gep;
 pub mod combine_gep_index;
