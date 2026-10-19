@@ -288,6 +288,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
     def passes(group: list[str]) -> bool:
         git("fetch", "-q", "origin", "feat/parity")
+        head_failed = head_failures(git("rev-parse", BASE).strip(), lambda: compute_head_failures(known))
         git("checkout", "-q", "--detach", BASE)
         for number in group:
             git("fetch", "-q", "origin", infos[number]["headRefOid"])
@@ -305,7 +306,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return False
         merged_failed, last = smoke_failures(known)
         print(f"{' '.join('#' + n for n in group)}: {last}")
-        why = subset_refusals(head_failures(git("rev-parse", BASE).strip()), merged_failed, any(claims_fix(infos[n]["body"] or "") for n in group))
+        why = subset_refusals(head_failed, merged_failed, any(claims_fix(infos[n]["body"] or "") for n in group))
         if why:
             print("\n".join(f"REFUSED: {w}" for w in why))
         return not why
@@ -389,6 +390,14 @@ def unlogged(log: Path, commits: list[str]) -> list[str]:
     return [c for c in commits if not any(c.startswith(x) or x.startswith(c) for x in seen)]
 
 
+def compute_head_failures(known: dict[str, str] | None = None) -> set[str]:
+    """The failing checks on the head itself: check origin/feat/parity out, build its binaries when stale, run the smoke. Slow (a build), once per head sha."""
+    git("checkout", "-q", "--detach", BASE)
+    if stale := ensure_bins():
+        raise SystemExit(f"the head's own binaries: {stale}")
+    return smoke_failures(known)[0]
+
+
 def merge(number: str, known: dict[str, str] | None = None) -> int:
     with land_lock():
         return _merge(number, known)
@@ -404,6 +413,7 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
         raise SystemExit("this checkout has uncommitted changes: the fast set runs on the PR head merged with feat/parity, checked out here")
     git("fetch", "-q", "origin", info["headRefOid"])
     tested_base = git("rev-parse", BASE).strip()
+    head_failed = head_failures(tested_base, lambda: compute_head_failures(known))
     merged, why = merged_result(info["headRefOid"])
     if merged is None:
         print(f"REFUSED: {why}")
@@ -416,7 +426,6 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
         return 1
     merged_failed, last = smoke_failures(known)
     print(last)
-    head_failed = head_failures(git("rev-parse", BASE).strip())
     if why := subset_refusals(head_failed, merged_failed, claims_fix(info["body"] or "")):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
