@@ -140,7 +140,7 @@ def test_llrms_answer_is_the_pass_run_alone_not_what_the_next_step_made_of_it(tm
     source = tmp_path / "in.ll"
     source.write_text(INPUT)
     runner = tmp_path / "llrm-pass"
-    runner.write_text(f"#!/bin/bash\ncat <<'EOF'\n{AGREES}EOF\n")
+    runner.write_text(f"#!/bin/bash\necho 'llrm-pass: target x86-m32 cpu 486 tti X86 datalayout d' >&2\ncat <<'EOF'\n{AGREES}EOF\n")
     runner.chmod(0o755)
     leaked = tmp_path / "next.ll"
     leaked.write_text(INPUT.replace("mul i32 %a, %b", "mul i32 %a, 7"))  # a pass after gvn changed the body further
@@ -258,3 +258,117 @@ def test_llrm_only_attributes_reach_opt_as_strings():
     """A bare `threeway` on a declaration made opt refuse 9 QCport modules: "expected top-level entity"."""
     text = 'declare i16 @_strcmp(ptr, ptr) addrspace(1) threeway nearcode\n@s = constant [8 x i8] c"threeway"\n'
     assert difftest.normalise(text) == 'declare i16 @_strcmp(ptr, ptr) addrspace(1) "threeway" "nearcode"\n@s = constant [8 x i8] c"threeway"\n'
+
+
+def test_every_opt_command_line_carries_llrms_triple_and_cpu(monkeypatch):
+    """inlinediff priced 30 i32 GEPs at 5 each with opt's host default, 370 vs 215 at i486: a dump has no `target triple`, so opt costs for x86-64 unless told."""
+    import inlinediff
+
+    seen = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "", ""
+
+    monkeypatch.setattr(difftest.subprocess, "run", lambda command, *a, **k: (seen.append(list(command)), Done())[1])
+    monkeypatch.setattr(inlinediff.subprocess, "run", lambda command, *a, **k: (seen.append(list(command)), Done())[1])
+    difftest.opt("sroa", "")
+    inlinediff.llvm_verdicts("", "inline", None)
+    difftest.licm_counts("")
+    assert len(seen) == 3 and all("-mtriple=i486-unknown-linux-gnu" in c and "-mcpu=i486" in c for c in seen), seen
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m16")
+    seen.clear()
+    difftest.opt("sroa", "")
+    assert "-mtriple=i386-unknown-unknown-code16" in seen[0] and "-mcpu=i486" in seen[0]
+
+
+def test_the_m16_runs_read_a_datalayout_with_16_bit_pointers(monkeypatch):
+    """opt used 32-bit pointers for m16 dumps: a pointer-width fold compared at the wrong width. The layout comes from the target's own datalayout.toml."""
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m16")
+    args = difftest.target_args()
+    layout = next(a for a in args if a.startswith("--data-layout="))
+    assert "p:16:16" in layout and "-mtriple=i386-unknown-unknown-code16" in args
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m32")
+    assert "p:32:32" in next(a for a in difftest.target_args() if a.startswith("--data-layout="))
+
+
+def test_export_writes_input_both_answers_and_the_diff_of_a_differing_function(tmp_path, monkeypatch):
+    """Owners with a 'unit tests only' rule cannot run the oracle: the differing bodies are written for them."""
+    src = tmp_path / "in.ll"
+    src.write_text("define i32 @f() {\n  ret i32 1\n}\n")
+    row = {"config": "c", "fn": "01", "pass": "sroa", "run": 1, "file": str(src)}
+    monkeypatch.setattr(difftest, "isolated", lambda replay, row, source: "define i32 @f() {\n  ret i32 2\n}\n")
+    monkeypatch.setattr(difftest, "opt", lambda passes, text: type("R", (), {"returncode": 0, "stdout": "define i32 @f() {\n  ret i32 3\n}\n", "stderr": ""})())
+    assert difftest.export([(row, None)], "sroa", Path("x"), tmp_path / "out") == 1
+    folder = next((tmp_path / "out" / "sroa").iterdir())
+    assert {p.name for p in folder.iterdir()} == {"input.ll", "llrm.ll", "opt.ll", "diff.txt"}
+    assert "ret i32 2" in (folder / "diff.txt").read_text() and "ret i32 3" in (folder / "diff.txt").read_text()
+
+
+def test_the_replay_gets_the_targets_layout_so_pointer_width_answers_are_the_targets(monkeypatch, tmp_path):
+    """LoopIdiom formed `memset.p0.i64` where opt at i486 forms `.i32`: llrm-pass ran on the Neutral 64-bit layout and the dumps carry no `target datalayout`."""
+    seen = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "", ""
+
+    def run(command, *a, **k):
+        seen.append(list(command))
+        mode = command[command.index("--mode") + 1]
+        done = Done()
+        done.stderr = f"llrm-pass: target x86-m{mode} cpu 486 tti X86 datalayout d\n"
+        return done
+
+    monkeypatch.setattr(difftest.subprocess, "run", run)
+    src = tmp_path / "x.ll"
+    src.write_text("")
+    difftest.isolated(Path("llrm-pass"), {"config": "c-O2", "pass": "loopidiom@737"}, src)
+    assert "--mode" in seen[0] and seen[0][seen[0].index("--mode") + 1] == "32", seen
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m16")
+    seen.clear()
+    difftest.isolated(Path("llrm-pass"), {"config": "c-O2", "pass": "loopidiom@737"}, src)
+    assert seen[0][seen[0].index("--mode") + 1] == "16"
+
+
+def test_a_neutral_llrm_side_is_refused_and_a_target_one_is_named():
+    """unroll, licm, rotate, indvars and loopidiom counts were taken with llrm-pass on Neutral (unit costs) against opt at i486: matmul unrolled to 36 blocks, opt's 216."""
+    ok = "llrm-pass: target x86-m32 cpu 486 tti X86 datalayout e-p:32:32\n"
+    assert difftest.llrm_target(ok, "m32").startswith("x86-m32 cpu 486 tti X86")
+    for stderr in ("llrm-pass: slot unroll@753\n", "llrm-pass: target neutral\n", ok.replace("tti X86", "tti none")):
+        with pytest.raises(SystemExit, match="llrm side"):
+            difftest.llrm_target(stderr, "m32")
+    assert difftest.llrm_target("llrm-pass: target neutral\n", "host") == "neutral"
+
+
+@pytest.mark.skipif(llrm_pass() is None, reason="llrm-pass is not built")
+def test_llrm_pass_unrolls_matmul_on_the_targets_machine_not_neutral(tmp_path):
+    """Neutral priced the unroll at unit cost and left matmul at 36 blocks; the i486 machine unrolls it to 216 as opt does."""
+    import subprocess
+
+    source = Path(__file__).parent / "fixtures/matmul-unroll-in.ll"
+
+    def blocks(*mode):
+        done = subprocess.run([str(llrm_pass()), "-O2", *mode, "--order", "unroll@753", str(source)], capture_output=True, text=True, check=True)
+        return sum(1 for line in done.stdout.splitlines() if line.endswith(":") and " " not in line), done.stderr
+
+    assert blocks()[0] == 36
+    count, stderr = blocks("--mode", "32")
+    assert count == 216 and "target x86-m32 cpu 486 tti X86 " in stderr
+
+
+def test_a_failed_replay_names_the_panic_not_the_header_line_llrm_pass_printed_first():
+    """Two bodies panicked in expand_iv.rs and difftest reported "llrm-pass: slot indvars@738 Simplify Old", the first stderr line."""
+    stderr = (
+        "llrm-pass: slot indvars@738 Simplify Old (LLVM: indvars)\nllrm-pass: target x86-m32 cpu 486 tti X86 datalayout d\n"
+        "thread 'main' panicked at crates/opt/x.rs:74:22:\na SCEVable type, not Float(Float)\nnote: run with `RUST_BACKTRACE=1`\n"
+    )
+    assert difftest.failure_line(stderr) == "crates/opt/x.rs:74:22: a SCEVable type, not Float(Float)"
+    assert difftest.failure_line("llrm-pass: target x\nno such file\n") == "no such file"
+
+
+def test_a_cpu_llrm_does_not_price_for_is_refused_on_the_opt_side(monkeypatch):
+    """The m16 oracle ran llrm at cpu 486 against opt at -mcpu=i386: two machines under one header."""
+    monkeypatch.setattr(difftest.targetdesc, "targets", lambda: {"m16": {"mode": 16, "llvm_cpu": "i386", "tti": "X86"}})
+    with pytest.raises(SystemExit, match="cpu 486 but opt is told -mcpu=i386"):
+        difftest.llrm_target("llrm-pass: target x86-m16 cpu 486 tti X86 datalayout d\n", "m16")
+    monkeypatch.setattr(difftest.targetdesc, "targets", lambda: {"m16": {"mode": 16, "llvm_cpu": "i486", "tti": "X86"}})
+    assert difftest.llrm_target("llrm-pass: target x86-m16 cpu 486 tti X86 datalayout d\n", "m16").startswith("x86-m16 cpu 486")

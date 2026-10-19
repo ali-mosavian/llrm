@@ -66,7 +66,7 @@
 //! `counting_tests.rs`.
 //!
 //! # Used by
-//! [`crate::loopidioms`], [`crate::loopexit`], [`crate::window`] and
+//! [`crate::loopidioms`], [`crate::window`] and
 //! [`crate::lsr`] build `Seeds` when they commit to replacing a loop's counter,
 //! and [`crate::exitfold`] and others take `constant` for operands. Not a pass:
 //! it runs only inside those.
