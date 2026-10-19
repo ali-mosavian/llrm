@@ -105,6 +105,11 @@ impl llrm_target::Target for M16 {
         0
     }
 
+    /// DEVIATE E2-1: no loop is aligned (the pin's is 16 bytes).
+    fn pref_loop_alignment(&self) -> u8 {
+        0
+    }
+
     /// 16-bit mode has the four forms of `Nops16Bit`.
     fn max_nop_bytes(&self) -> u8 {
         4

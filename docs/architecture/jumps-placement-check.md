@@ -71,3 +71,11 @@ Deviations:
 - D17 the odds of a pred after a copy are the tail's (`BlockOdds::rerouted`); block frequencies are not updated, as `MBFI` is not.
 
 Tests: `test_a_join_of_one_instruction_is_copied_into_both_arms` (llc at the pin: same orders, join gone), `test_for_size_a_join_of_two_instructions_is_not_copied`, `test_a_join_is_not_copied_into_a_block_that_branches_to_it`, `test_a_copied_test_keeps_its_loops_odds`, the loop tests (llc: guard plus test copied into the latch), post-dominator unit test; all seen failing with the threshold at 0. Removed with the code they tested: seven `duplicated_tails` tests and the copy-limit test; `test_a_small_join_is_copied_into_its_arm_before_the_arms_are_merged` guarded the merge-before-copy order, which no longer exists (the merge runs after placement, as LLVM's).
+
+## Stage 5: after placement (`jumps.rs`: `inverted`, `aligned`)
+
+- `optimizeBranches` L2964 is the second half of `inverted`: a two-way branch with neither way next gets the likelier way as its conditional jump. MIRROR, and skipped for size as `shouldOptimizeForSize` does (before, size flipped it too). `jcc next; jmp M` becoming `j!cc M` is `analyzeBranch(AllowModify)`.
+- `alignBlocks` L3003 is `aligned`, run on the final layout after the merge: every block but the first that is in a loop, not cold against the entry or its loop header (20%), and entered by no layout-predecessor edge, or one under 20% of its frequency, gets the target's loop alignment. MIRROR; `getPrefLoopAlignment` is `Target::pref_loop_alignment` (m32 16 bytes, m16 none: E2-1), `getMaxPermittedBytesForAlignment` is the default 0 (no limit). Not for size (`hasOptSize` without `alignLoopsWithOptSize`).
+- D18 the loop of a block is the nearest natural loop of the final layout, with no `llvm.loop.align` metadata.
+- Tests: `test_for_size_a_two_way_branch_keeps_its_condition` (failed before the skip), `test_a_loop_block_nothing_falls_into_is_aligned`.
+- Not translated, as off by default at the pin: `ExtTsp` placement, `rotateLoopWithProfile`, profile-driven duplicate candidates.
