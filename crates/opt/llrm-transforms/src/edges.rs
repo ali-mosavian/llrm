@@ -243,7 +243,10 @@ pub fn split_block(
     let list: Vec<InstId> = function.iter_block(old).collect();
     let first = list
         .iter()
-        .position(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Phi | Opcode::LandingPad { .. }))
+        .position(|&inst| !matches!(
+            function.instruction(inst).opcode,
+            Opcode::Phi | Opcode::LandingPad { .. }
+        ))
         .expect("a terminated block");
     let void = function.instruction(*list.last().expect("a terminated block")).ty;
     let new = function.create_block(None);
