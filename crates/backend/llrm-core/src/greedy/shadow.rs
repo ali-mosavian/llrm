@@ -346,8 +346,8 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         super::inlinespiller::remat_shape(insn) && insn.uses.is_empty()
     }
 
-    /// The definition of `parent` (a literal, address or load that reads no register) as a
-    /// definition of `to`: `rematerializeAt`.
+    /// The definition of `parent` (a literal, address or load that reads no
+    /// register) as a definition of `to`: `rematerializeAt`.
     fn rematerialize(
         &self,
         lis: &LiveIntervals,

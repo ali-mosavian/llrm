@@ -414,8 +414,9 @@ impl Machine {
         (place != u8::MAX).then_some(place as usize)
     }
 
-    /// What `one` writes, or writes if it runs: a repeated string store's pointers are written only
-    /// when the count is not zero, which ends a copy of them as a write does.
+    /// What `one` writes, or writes if it runs: a repeated string store's
+    /// pointers are written only when the count is not zero, which ends a
+    /// copy of them as a write does.
     fn written(
         &self,
         one: &Insn,
@@ -801,7 +802,8 @@ impl<'a> Walk<'a> {
                     self.reader = [Some(usize::MAX); UNITS];
                 }
                 Some(effect) => {
-                    let (reads, writes) = (machine.mask(&effect.all_reads()), machine.written(&self.insns[at], &effect));
+                    let (reads, writes) =
+                        (machine.mask(&effect.all_reads()), machine.written(&self.insns[at], &effect));
 
                     self.note_tied(at, reads);
                     for unit in units_of(reads) {

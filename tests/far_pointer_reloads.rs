@@ -1,5 +1,5 @@
-//! A far pointer live across a call is reloaded where the call needs the registers, not before
-//! every use.
+//! A far pointer live across a call is reloaded where the call needs the
+//! registers, not before every use.
 
 use std::process::Command;
 
@@ -20,9 +20,10 @@ void f(P far *fr, float *m)
 }
 ";
 
-/// r_set_frustum (QCport -Os): both halves of the far pointer parameter were spilled whole because
-/// `trySplit` refused a value the spiller can make again, and `les bx, [bp+6]` was reloaded before
-/// each of the 24 stores: 29 `les` here (1 with the old allocator), +304 `les` over QCport.
+/// r_set_frustum (QCport -Os): both halves of the far pointer parameter were
+/// spilled whole because `trySplit` refused a value the spiller can make again,
+/// and `les bx, [bp+6]` was reloaded before each of the 24 stores: 29 `les`
+/// here (1 with the old allocator), +304 `les` over QCport.
 #[test]
 fn test_a_far_pointer_live_across_a_call_is_not_reloaded_before_every_use() {
     let scratch = tempfile::tempdir().unwrap();
