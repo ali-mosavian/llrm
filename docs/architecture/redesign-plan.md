@@ -1245,6 +1245,8 @@ Checklist: the shared list.
 
 **Translate into idiomatic Rust.** Translating from language A to B is always into idiomatic B, not a straight copy. For LLVM's C++ into Rust: keep what must mirror (the algorithm, the order of checks, the worklists, caps and thresholds with their `cl::opt` defaults, the permalinks, the numbered DEVIATEs), written as Rust: ownership and borrowing instead of raw-pointer emulation, enums plus `match` instead of opcode-switch ladders or kind fields, iterators and closures instead of index loops, `Option`/`Result` instead of null or sentinel values, no getter/setter boilerplate, no C++ class hierarchies emulated with trait objects where an enum fits, Rust naming. Reviews check it; existing translations become idiomatic when their owner next touches the file, without a churn wave; an urgent file goes to oversight.
 
+**General solutions, one job per module.** A fix is a general, robust solution, never a patch for one case or shape. DRY, SRP, open/closed and separation of concerns: a new case extends a trait, a table or an interface instead of adding a branch inside existing code; shared logic lives in one place; a module has one job (analysis, transform, target and object format stay separate). Every brief and every review checks it, and reviews flag a violation unasked.
+
 **Mirror LLVM's structure by default.** Every design page and every structural PR carries a `LLVM structure` line: LLVM's structure (name and permalink at `d1106deb71cc`), ours, and `MIRROR` or `DEVIATE` with the reason. The default is to mirror. A deviation needs a reason (our MIR or LIR differs; output would change and the rows rule applies; measured not better) and a number. The mapping so far:
 
 | LLVM structure | ours | status |
