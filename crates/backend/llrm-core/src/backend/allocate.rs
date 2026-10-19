@@ -1620,13 +1620,14 @@ pub fn greedy_rewritten(
     // (`InlineSpiller`); the rounds below are the fallback.
     if !llrm_support::env_flag!("LLRM_GREEDY_ROUNDS") && body.blocks.iter().all(|block| block.phis.is_empty()) {
         let kept = frame.saved();
-        let facts =
-            Facts::of(&current, profile, segments, classes, &unspill, &empty, &Frequency::of(&current), None, None);
+        // The classes are all the greedy allocator reads of `Facts`, as
+        // `MachineRegisterInfo::getRegClass` is all `RAGreedy` reads of isel.
+        let confined = crate::backend::regclass::classes(&current, &empty, segments, classes);
         let sets = crate::backend::regclass::Sets::of(classes);
         let inputs = crate::greedy::shadow::ShadowInputs {
             body: &current,
             registers: classes.registers,
-            order: &|value| target::order(facts.confined.get(&value), segments, classes),
+            order: &|value| target::order(confined.get(&value), segments, classes),
             pins,
             unspillable: &unspill,
             data: Some(segments.data),
@@ -1899,6 +1900,16 @@ impl Drop for OldAllocator {
     }
 }
 
+thread_local! {
+    static FACTS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times `Facts::of` has run on this thread.
+#[cfg(test)]
+fn facts_built() -> usize {
+    FACTS_BUILT.with(std::cell::Cell::get)
+}
+
 /// (allocations the greedy allocator made, allocations it left to this one).
 pub fn greedy_runs() -> (usize, usize) {
     GREEDY_RUNS.with(|runs| (runs.get().0, runs.get().1))
@@ -1972,6 +1983,7 @@ impl Facts {
             old_epoch = Some(one.epoch);
             gone_slots = one.gone;
         }
+        FACTS_BUILT.with(|count| count.set(count.get() + 1));
         let same_numbering = |index: &Indexes| old_epoch == Some(index.epoch);
         let _span = llrm_support::debug::span("regalloc facts");
         let index = llrm_support::debug::timed("facts slots", || {
@@ -5605,6 +5617,27 @@ mod tests {
             "premise: the body spills, so candidates run"
         );
         assert_eq!(spiller::folded_read_scans() - before, 1);
+    }
+
+    /// The greedy allocator reads only the register classes of `Facts`, but
+    /// built all of it, the old allocator's liveness included, for every body:
+    /// 11.3 M of 1977 M instructions on d_faces.
+    #[test]
+    fn test_the_greedy_allocator_builds_no_facts_of_the_old_one() {
+        let insns: Vec<Insn> = vec![
+            _mov(1, 2, 4),
+            Insn::new(
+                8,
+                Some((8, 9)),
+                Some(semantics(Operation::Binary, "add", vec![held(1, 2)], vec![held(1, 2), held(1, 2)])),
+                vec![1],
+                vec![1],
+            ),
+        ];
+        let (runs, built) = (greedy_runs().0, facts_built());
+        _through_regalloc(_one_block(insns), &[]);
+        assert_eq!(greedy_runs().0 - runs, 1, "premise: the greedy allocator placed the body");
+        assert_eq!(facts_built() - built, 0);
     }
 
     fn _one_block(insns: Vec<Insn>) -> LirBody {

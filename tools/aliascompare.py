@@ -60,7 +60,7 @@ AA_PIPELINES = {"default": "tbaa,scoped-noalias-aa,basic-aa", "basic": "basic-aa
 
 def llvm_answers(dt, text: str, aa: str = "default") -> dict[Key, str]:
     done = subprocess.run(
-        [str(dt.LLVM_BIN / "opt"), f"-aa-pipeline={AA_PIPELINES[aa]}", "-passes=aa-eval", "-print-all-alias-modref-info", "-disable-output", "-"],
+        [str(dt.LLVM_BIN / "opt"), *dt.target_args(), f"-aa-pipeline={AA_PIPELINES[aa]}", "-passes=aa-eval", "-print-all-alias-modref-info", "-disable-output", "-"],
         input=dt.normalise(text),
         capture_output=True,
         text=True,
@@ -105,7 +105,7 @@ def memop_answers(dt, binary: str, path: Path, text: str, aa: str) -> tuple[dict
     order (each load against each store, then each store against the stores before it), so the n-th line of each is the same pair; a function
     where the counts differ is not compared (the third value)."""
     done = subprocess.run(
-        [str(dt.LLVM_BIN / "opt"), f"-aa-pipeline={AA_PIPELINES[aa]}", "-evaluate-aa-metadata", "-passes=aa-eval", "-print-all-alias-modref-info", "-disable-output", "-"],
+        [str(dt.LLVM_BIN / "opt"), *dt.target_args(), f"-aa-pipeline={AA_PIPELINES[aa]}", "-evaluate-aa-metadata", "-passes=aa-eval", "-print-all-alias-modref-info", "-disable-output", "-"],
         input=dt.normalise(text), capture_output=True, text=True,
     )
     theirs_lists: dict[str, list[str]] = collections.defaultdict(list)
@@ -143,7 +143,7 @@ def call_answers(dt, binary: str, path: Path, text: str, aa: str) -> tuple[dict,
     """(ours, LLVM's) mod/ref answers by (function, n) for the n-th call-against-pointer or call-against-call pair aa-eval lists in a function
     (every call against every pointer, then every call against every other call); a function whose counts differ is not compared."""
     done = subprocess.run(
-        [str(dt.LLVM_BIN / "opt"), f"-aa-pipeline={AA_PIPELINES[aa]}", "-passes=aa-eval", "-print-all-alias-modref-info", "-disable-output", "-"],
+        [str(dt.LLVM_BIN / "opt"), *dt.target_args(), f"-aa-pipeline={AA_PIPELINES[aa]}", "-passes=aa-eval", "-print-all-alias-modref-info", "-disable-output", "-"],
         input=dt.normalise(text), capture_output=True, text=True,
     )
     theirs_lists: dict[str, list[str]] = collections.defaultdict(list)

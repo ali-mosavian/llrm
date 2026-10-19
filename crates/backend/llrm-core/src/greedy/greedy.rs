@@ -29,6 +29,16 @@
 //! path of `tryAssign` is dropped. Callee-saved register cost is the shrink
 //! wrapping pass's.
 //!
+//! DEVIATE D-G1: at -Os m16 the greedy allocator is not at the shipped
+//! allocator's size (QCport, 65 modules: 77021 against 76183 instructions,
+//! +0.6% bytes at the default). The fact: LLVM's greedy on the same final IR
+//! (`llc -O2`, code16) emits 75881 and is as large as greedy in the largest
+//! modules (`_ent_move_trigs` 888 against 889, `_d_draw_faces` 1422 against
+//! 1435); where both allocators are far above `llc` (sc, savegame, item) the
+//! excess is instruction selection and the passes before allocation. Exit:
+//! every module at `llc` or at the shipped allocator's bytes, before the
+//! backend phase merges to main.
+//!
 //! # Example
 //! Three values live together over two registers: the third finds none free,
 //! none to evict (all heavier), waits a round, then is spilled; the spill's
