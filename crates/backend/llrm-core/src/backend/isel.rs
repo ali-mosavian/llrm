@@ -2959,7 +2959,8 @@ impl Selector<'_, '_, '_> {
             &context.get(id).kind
         {
             let base = self.far_number(operands[0])?;
-            let moved = crate::backend::globals::constant_offset(self.module, &self.layout, *source, &operands[1..]).ok()?;
+            let moved =
+                crate::backend::globals::constant_offset(self.module, &self.layout, *source, &operands[1..]).ok()?;
             return Some(base & !0xFFFF | (base + moved) & 0xFFFF);
         }
         let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) =

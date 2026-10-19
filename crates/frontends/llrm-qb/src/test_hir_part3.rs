@@ -1432,7 +1432,9 @@ SUB b\r\nPOKE 5, PEEK(4)\r\nEND SUB\r\n";
     assert_eq!(loads, 0, "{optimized}");
     let kept =
         optimized.lines().filter(|line| line.trim().starts_with("store i16 ") && line.contains("ptr @b$seg")).count();
-    assert!(optimized.contains("ptrtoint ptr addrspace(2)") && (1..=2).contains(&kept), "{optimized}");
+    // VARSEG's selector is now a constant address, so a's first b$seg store is
+    // dead too (-1 store, -3 instructions).
+    assert!(optimized.contains("addrspacecast (ptr @\"ARR%\"") && kept == 1, "{optimized}");
 }
 
 #[test]
