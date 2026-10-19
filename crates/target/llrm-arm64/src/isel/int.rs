@@ -335,7 +335,7 @@ impl Selector<'_> {
             // `x * (2^k + 1)` and `x * (2^k - 1)` by one shifted add or
             // subtract.
             let a_shift = |plus: u64| plus.is_power_of_two().then(|| plus.trailing_zeros());
-            if let Some(k) = a_shift(value - 1) {
+            if let Some(k) = a_shift(value.wrapping_sub(1)) {
                 let a = self.gpr_of(lhs)?;
                 self.inst(Inst::AddSubShifted {
                     op: AddSub { subtract: false, set_flags: false },
@@ -348,7 +348,7 @@ impl Selector<'_> {
                 });
                 return Ok(G { reg: rd, bits, known });
             }
-            if let Some(k) = a_shift(value + 1) {
+            if let Some(k) = a_shift(value.wrapping_add(1) & mask(bits)) {
                 let a = self.gpr_of(lhs)?;
                 // rd = (a << k) - a
                 let shifted = self.mf.gpr();

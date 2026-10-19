@@ -226,3 +226,10 @@ fn darwin_objects_disassemble_without_unknown_words() {
 fn division_and_remainder_by_constants() {
     compare("division");
 }
+
+/// `x * -1` (all-ones constant) overflowed `value + 1` in the multiply
+/// strength reduction and panicked the compiler.
+#[test]
+fn multiplication_by_all_ones_constants() {
+    compare("mulconst");
+}
