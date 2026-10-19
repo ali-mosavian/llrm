@@ -45,6 +45,8 @@ aggregate_pointer_popped_by = "caller"
 promotion = "slot"
 wide_slots = 1
 variadic_float = "double"
+# A variadic call tells the callee in AL how many vector registers carry arguments, so its prologue saves them.
+variadic_vector_register = "rax"
 
 [sysv64.symbol]
 elf = "*"

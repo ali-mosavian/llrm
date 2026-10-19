@@ -131,6 +131,9 @@ pub struct Convention {
     /// How many slots an i64 or a double takes.
     pub wide_slots: i64,
     pub variadic_float: String,
+    /// The register a variadic call sets, as a byte, to the number of vector registers it passes arguments in
+    /// (SysV AMD64's `al`); none where the convention has no such count.
+    pub variadic_vector_register: Option<String>,
     /// For an interrupt handler: what its frame pointer addresses, lowest
     /// address first, each slot's register and bytes. Empty for the rest.
     pub interrupt_frame: Vec<(String, i64)>,
@@ -216,6 +219,7 @@ const KEYS: &[&str] = &[
     "promotion",
     "wide_slots",
     "variadic_float",
+    "variadic_vector_register",
     "like",
     "interrupt_frame",
 ];
@@ -606,6 +610,10 @@ impl Convention {
             promotion: text("promotion")?,
             wide_slots: integer("wide_slots")?,
             variadic_float: text("variadic_float")?,
+            variadic_vector_register: table
+                .contains_key("variadic_vector_register")
+                .then(|| text("variadic_vector_register"))
+                .transpose()?,
             interrupt_frame: match table.get("interrupt_frame") {
                 None => Vec::new(),
                 Some(rows) => rows

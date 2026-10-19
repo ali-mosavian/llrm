@@ -5720,6 +5720,13 @@ impl Selector<'_, '_, '_> {
                     }
                 }
             }
+            // The vector registers a variadic call passes in, which the callee's prologue saves: none yet.
+            if let Some(name) = entry.variadic_vector_register.as_ref().filter(|_| variadic) {
+                let count = self.fresh_held(1);
+                let zero = Loc::Imm(Imm { value: 0, width: 1, address: None });
+                out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(count)], vec![zero])));
+                requires.push((count, regs.named(llrm_x86::calling::register(name), 1)));
+            }
             stack_only.retain(|&index| matches!(placement.places[index], llrm_target::calling::Place::Stack(_)));
             placed = Some((entry, placement));
         }

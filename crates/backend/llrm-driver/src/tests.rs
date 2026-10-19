@@ -238,3 +238,18 @@ fn llvm_ir_is_found_by_its_triple_and_optimized() {
         listing.lines().map(str::trim).filter(|line| line.starts_with("mov") || *line == "ret").collect();
     assert_eq!(body, ["mov eax, 42", "ret"], "{listing}");
 }
+
+/// A call of a variadic function tells the callee in `al` how many vector registers carry arguments: SysV AMD64's
+/// callee saves them by it. It was never set, so `printf` read whatever the register held.
+#[test]
+fn a_variadic_call_sets_al_to_the_vector_registers_it_uses() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @printf(ptr, ...)\n\
+                define i32 @f(ptr %s, i32 %a) {\n  %r = call i32 (ptr, ...) @printf(ptr %s, i32 %a)\n  ret i32 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let call = listing.lines().position(|line| line.trim() == "call printf").expect("the call");
+    let before: Vec<&str> = listing.lines().take(call).map(str::trim).collect();
+    assert!(before.iter().any(|line| *line == "mov eax, 0" || *line == "xor eax, eax" || *line == "mov al, 0"), "{listing}");
+}
