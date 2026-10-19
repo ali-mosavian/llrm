@@ -36,7 +36,8 @@ while true; do
   done
   log=/tmp/claude-1000/sqb-${batch[0]}.log
   ( cd $W && git fetch -q origin && git reset -q --hard && git checkout -q --detach origin/feat/parity \
-    && PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}" > $log 2>&1 )
+    && PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}" 2>&1 \
+      | awk '{print strftime("%H:%M:%S"), $0; fflush()}' > $log )
   for m in "${batch[@]}"; do
     if [ "$(gh pr view $m --repo $R --json state -q .state)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"
     else echo "$m: REFUSED: batch $log: $(grep -E "#$m|REFUSED" $log | head -2 | tr '\n' ' ' | cut -c1-400)"; fi
