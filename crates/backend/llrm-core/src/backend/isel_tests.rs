@@ -1481,6 +1481,8 @@ b1:
 /// A float phi's constant input is loaded as any float constant is: taken
 /// for an address, it refused `an address of no global` and left deedlines'
 /// CREATEOBJECT and qbdemo's FRACLINE unselected.
+// The constant is made on the edge that reads it (MachineSink): no `fstp st(0)`
+// to drop the other path's.
 #[test]
 fn test_a_float_phi_takes_a_constant_input() {
     let text = "define double @f(i16 %n) addrspace(1) {
@@ -1500,13 +1502,14 @@ done:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "fldz",
             "cmp word ptr [bp+6], 0",
-            "jle L0_3",
+            "jle L0_4294967297",
             "L0_2:",
-            "fstp st(0)",
             "fld1",
-            "L0_3:",
+            "pop bp",
+            "retf",
+            "L0_4294967297:",
+            "fldz",
             "pop bp",
             "retf"
         ]
@@ -5908,4 +5911,34 @@ fn test_a_branchs_odds_are_llvms_branch_probabilities() {
     let mut taken: Vec<u32> = body.odds.taken.values().copied().collect();
     taken.sort();
     assert_eq!(taken, vec![0x3000_0000, 0x5000_0000], "{:?}", body.odds.taken);
+}
+
+/// A constant a phi reads from a block that branches (`return n ? g(n) : 0`
+/// once the empty block is gone): the zero was made in the branching block,
+/// before the test, so the path through the call ran it too. LLVM's
+/// MachineSink breaks the edge and makes it there (hanoi, x_switch_*, mandel
+/// with jump threading on).
+#[test]
+fn test_a_phi_constant_is_made_on_its_edge_not_before_the_test() {
+    let text = "declare i16 @g(i16) addrspace(1)
+define i16 @f(i16 %n) addrspace(1) {
+b1:
+  %c = icmp eq i16 %n, 0
+  br i1 %c, label %b4, label %b2
+b2:
+  %r = call addrspace(1) i16 @g(i16 %n)
+  br label %b4
+b4:
+  %p = phi i16 [ %r, %b2 ], [ 0, %b1 ]
+  ret i16 %p
+}
+";
+    let got = listing(text, "f");
+    let test =
+        got.iter().position(|line| line.starts_with("test ") || line.starts_with("cmp ")).expect("the premise: a test");
+    let zero = got
+        .iter()
+        .position(|line| line.starts_with("xor ") || line.ends_with(", 0"))
+        .expect("the premise: the zero is made");
+    assert!(zero > test, "the zero is made before the test: {got:?}");
 }
