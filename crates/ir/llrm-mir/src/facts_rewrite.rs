@@ -322,6 +322,10 @@ mod tests {
             // `nuw`/`nsw` of the three adds (`OverflowTracking`) so the new add
             // has them only if all had them, and drops the rest.
             "combine_phi.rs",
+            // InstructionCombining.cpp's `visitGetElementPtrInst` and
+            // `emitGEPOffset` read a GEP's `inbounds`/`nusw`/`nuw` to give the
+            // replacement GEPs and the offset arithmetic the flags the GEP had.
+            "combine_gep.rs",
             // MemCpyOptimizer.cpp's `CreateInBoundsPtrAdd` makes an inbounds
             // GEP; it reads no flag.
             "memcpyopt.rs",
