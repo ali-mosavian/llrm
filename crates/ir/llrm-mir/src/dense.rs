@@ -42,6 +42,111 @@ impl Dense for i64 {
     }
 }
 
+/// `llvm::SetVector` over dense ids: insertion order kept, membership and
+/// removal of an absent id O(1). A worklist that is told to forget an id
+/// (SROA's `set_subtract` of the allocas it deleted) pays only when it holds
+/// it.
+#[derive(Clone)]
+pub struct IdSetVector<K> {
+    order: Vec<K>,
+    members: IdSet<K>,
+}
+
+impl<K> Default for IdSetVector<K> {
+    fn default() -> Self {
+        Self { order: Vec::new(), members: IdSet::default() }
+    }
+}
+
+impl<K: Dense + Copy + PartialEq> IdSetVector<K> {
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    pub fn contains(
+        &self,
+        key: &K,
+    ) -> bool {
+        self.members.contains(key)
+    }
+
+    /// Whether `key` was not in it (`insert`).
+    pub fn push(
+        &mut self,
+        key: K,
+    ) -> bool {
+        let fresh = self.members.insert(key);
+        if fresh {
+            self.order.push(key);
+        }
+        fresh
+    }
+
+    /// The last pushed (`pop_back_val`).
+    pub fn pop(&mut self) -> Option<K> {
+        let key = self.order.pop()?;
+        self.members.remove(&key);
+        Some(key)
+    }
+
+    /// Whether `key` was in it (`remove`).
+    pub fn remove(
+        &mut self,
+        key: &K,
+    ) -> bool {
+        if !self.members.remove(key) {
+            return false;
+        }
+        let at = self.order.iter().rposition(|one| one == key).expect("a member is in the order");
+        self.order.remove(at);
+        true
+    }
+
+    /// Forgets every id of `gone` it holds (`set_subtract`). A list, not an
+    /// `IdSet`: walking a bitset costs its width, not its members.
+    pub fn set_subtract(
+        &mut self,
+        gone: impl IntoIterator<Item = K>,
+    ) {
+        for key in gone {
+            self.remove(&key);
+        }
+    }
+
+    /// Keeps the first `len` (`truncate`).
+    pub fn truncate(
+        &mut self,
+        len: usize,
+    ) {
+        for key in self.order.drain(len.min(self.order.len())..) {
+            self.members.remove(&key);
+        }
+    }
+
+    /// Only the ids `keep` says to; O(n), for a pass over the whole list.
+    pub fn retain(
+        &mut self,
+        mut keep: impl FnMut(&K) -> bool,
+    ) {
+        let members = &mut self.members;
+        self.order.retain(|key| {
+            let kept = keep(key);
+            if !kept {
+                members.remove(key);
+            }
+            kept
+        });
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = K> + '_ {
+        self.order.iter().copied()
+    }
+}
+
 /// A set of ids, a bit each.
 #[derive(Clone)]
 pub struct IdSet<K> {

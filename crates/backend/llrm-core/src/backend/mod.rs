@@ -157,6 +157,8 @@ pub mod floatassign;
 pub mod floatfold;
 pub mod floatregions;
 pub mod fpconvert;
+pub mod fpcopyprop;
+pub mod fpregs;
 pub mod fpstack;
 pub mod frame;
 pub mod framefree;
