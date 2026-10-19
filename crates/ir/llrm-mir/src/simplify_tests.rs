@@ -1068,3 +1068,109 @@ exit:
 ";
     assert_eq!(simplified(text, "r").as_deref(), Some("%id"));
 }
+
+/// wrapv_overflow_check.c (#2658): `r = x + y` (nsw) in the entry, tested
+/// `r >= 0` where only `x >= 0` and `y >= 0` hold. LLVM's InstCombine folds it
+/// through the dominating branches (`SQ.DC`); without the cache nothing does.
+#[test]
+fn a_sum_of_two_values_the_branches_say_are_not_negative_is_not_negative() {
+    let text = "define i64 @f(i64 %x, i64 %y) {
+entry:
+  %r = add nsw i64 %x, %y
+  %a = icmp sge i64 %x, 0
+  br i1 %a, label %b3, label %out
+b3:
+  %b = icmp slt i64 %y, 0
+  br i1 %b, label %out, label %b6
+b6:
+  %t = icmp sge i64 %r, 0
+  br i1 %t, label %out, label %out
+out:
+  ret i64 %r
+}
+";
+    let answer = |dominating: bool| {
+        let mut module: Module = parse::module(text).unwrap();
+        let id = module.named("f").expect("@f");
+        let crate::module::GlobalKind::Function(function) = &module.globals[id.0 as usize].kind else { panic!() };
+        let function = function.clone();
+        let inst = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| {
+                function.instruction(inst).result.is_some_and(|r| function.value(r).name.as_deref() == Some("t"))
+            })
+            .expect("%t");
+        let mut analyses = crate::valuetracking::FunctionAnalyses::new(&module, &function);
+        if dominating {
+            analyses = analyses.with_dom_conditions(&module, &function);
+        }
+        simplify::simplify_instruction_in(
+            &mut module.context,
+            &module.globals,
+            &crate::datalayout::DataLayout::default(),
+            Some(&analyses),
+            &function,
+            inst,
+        )
+        .map(|value| {
+            matches!(
+                value,
+                Operand::Constant(id) if module.context.get(id).kind == ConstantKind::Int(1)
+            )
+        })
+    };
+    assert_eq!(answer(false), None);
+    assert_eq!(answer(true), Some(true));
+}
+
+/// `simplifyICmpWithDominatingAssume` and `simplifyICmpWithIntrinsicOnLHS`.
+#[test]
+fn compares_an_assume_or_a_saturating_operation_decides() {
+    let decls = "declare void @llvm.assume(i1)
+declare i16 @llvm.uadd.sat.i16(i16, i16)
+declare i16 @llvm.usub.sat.i16(i16, i16)
+";
+    for (body, expected) in [
+        // x u< 10 is assumed: x u< 20 holds, x u< 5 is not known
+        ("  %a = icmp ult i16 %x, 10\n  call void @llvm.assume(i1 %a)\n  %r = icmp ult i16 %x, 20\n", Some("1")),
+        ("  %a = icmp ult i16 %x, 10\n  call void @llvm.assume(i1 %a)\n  %r = icmp ugt i16 %x, 20\n", Some("0")),
+        ("  %a = icmp ult i16 %x, 10\n  call void @llvm.assume(i1 %a)\n  %r = icmp ult i16 %x, 5\n", None),
+        // an assume later in the block holds at the compare: execution reaches
+        // it
+        ("  %r = icmp ult i16 %x, 20\n  %a = icmp ult i16 %x, 10\n  call void @llvm.assume(i1 %a)\n", Some("1")),
+        // uadd.sat(X, Y) uge X + Y; usub.sat(X, Y) ule X - Y
+        (
+            "  %s = call i16 @llvm.uadd.sat.i16(i16 %x, i16 %y)\n  %t = add i16 %x, %y\n  %r = icmp uge i16 %s, %t\n",
+            Some("1"),
+        ),
+        (
+            "  %s = call i16 @llvm.uadd.sat.i16(i16 %x, i16 %y)\n  %t = add i16 %y, %x\n  %r = icmp ult i16 %s, %t\n",
+            Some("0"),
+        ),
+        (
+            "  %s = call i16 @llvm.usub.sat.i16(i16 %x, i16 %y)\n  %t = sub i16 %x, %y\n  %r = icmp ule i16 %s, %t\n",
+            Some("1"),
+        ),
+        (
+            "  %s = call i16 @llvm.usub.sat.i16(i16 %x, i16 %y)\n  %t = sub i16 %x, %y\n  %r = icmp ugt i16 %s, %t\n",
+            Some("0"),
+        ),
+        (
+            "  %s = call i16 @llvm.usub.sat.i16(i16 %x, i16 %y)\n  %t = sub i16 %y, %x\n  %r = icmp ule i16 %s, %t\n",
+            None,
+        ),
+        // uadd.sat(X, Y) uge X (a monotonic value); X uge usub.sat(X, Y)
+        ("  %s = call i16 @llvm.uadd.sat.i16(i16 %x, i16 %y)\n  %r = icmp uge i16 %s, %x\n", Some("1")),
+        ("  %s = call i16 @llvm.uadd.sat.i16(i16 %x, i16 %y)\n  %r = icmp ult i16 %s, %y\n", Some("0")),
+        ("  %s = call i16 @llvm.usub.sat.i16(i16 %x, i16 %y)\n  %r = icmp uge i16 %x, %s\n", Some("1")),
+        ("  %s = call i16 @llvm.usub.sat.i16(i16 %x, i16 %y)\n  %r = icmp uge i16 %y, %s\n", None),
+        // the swapped form: the intrinsic on the right
+        (
+            "  %s = call i16 @llvm.uadd.sat.i16(i16 %x, i16 %y)\n  %t = add i16 %x, %y\n  %r = icmp ule i16 %t, %s\n",
+            Some("1"),
+        ),
+    ] {
+        assert_eq!(simplified(&format!("{decls}{}", of(body)), "r").as_deref(), expected, "{body}");
+    }
+}

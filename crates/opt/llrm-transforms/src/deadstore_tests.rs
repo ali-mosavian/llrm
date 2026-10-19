@@ -144,3 +144,38 @@ fn a_returned_local_keeps_its_stores() {
         "{after}"
     );
 }
+
+/// A store to a local whose address escaped, and then `lifetime.end`: nothing
+/// reads it again and the end sweep spares it (it is visible to the callee's
+/// holder), but the terminator kills it (`isMemTerminator`).
+#[test]
+fn a_store_before_lifetime_end_goes() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @keep(ptr)\ndeclare void @llvm.lifetime.end.p0(i64, ptr)\n\ndefine void @f(i32 %x) addrspace(1) {{\nb0:\n  %a = alloca i32\n  call void @keep(ptr %a)\n  store i32 %x, ptr %a\n  call void @llvm.lifetime.end.p0(i64 4, ptr %a)\n  ret void\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(!after.contains("store i32 %x"), "{after}");
+}
+
+/// `lifetime.end` on an alloca the function returns (QB's B$FMID shape) ends
+/// nothing: the caller reads what was stored. The marker was wrong, and a DSE
+/// that trusted it removed the stores (#2625).
+#[test]
+fn a_lifetime_end_on_a_returned_alloca_kills_nothing() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @llvm.lifetime.end.p0(i64, ptr)\n\ndefine ptr @f(i32 %x) addrspace(1) {{\nb0:\n  %a = alloca i32\n  store i32 %x, ptr %a\n  call void @llvm.lifetime.end.p0(i64 4, ptr %a)\n  ret ptr %a\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(after.contains("store i32 %x"), "{after}");
+}
+
+/// A store the next call overwrites before reading, by the `initializes` of
+/// the callee's parameter, is dead (`getInitializesArgMemLoc`).
+#[test]
+fn a_store_before_a_call_that_initializes_it_goes() {
+    let mut module = parsed(&format!(
+        "{DOS}@g = global i32 0\n\ndeclare void @init(ptr initializes((0, 4)) %p) memory(argmem: write) nounwind\n\ndefine i32 @f(i32 %x) addrspace(1) {{\nb0:\n  store i32 %x, ptr @g\n  call void @init(ptr @g)\n  %r = load i32, ptr @g\n  ret i32 %r\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(!after.contains("store i32 %x"), "{after}");
+}

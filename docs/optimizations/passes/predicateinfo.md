@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/predicateinfo.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/predicateinfo.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/predicateinfo.rs sha256:fba7dcd52e7b3426727234e175f857d318851197a11bb0fecad38318685c38f6 -->
+<!-- src: crates/opt/llrm-transforms/src/predicateinfo.rs sha256:46ebd6cb7a1fd23b2d0a553f17dc56d097c3eac6bc022c9c38668bd02b769f42 -->
 
 # predicateinfo
 
@@ -22,6 +22,9 @@ replaces each use with the innermost copy; a copy is made (a no-op
 `bitcast` of the value, before the branch or after the assume) when a use
 it dominates is found. `PredicateInfo::predicate_info_for` tells which
 copies are such, and what they say.
+
+## Example
+A use the branch dominates reads a copy that carries the predicate:
 
 ```text
  b0: %c = icmp ult i32 %x, 10           b0: %c = icmp ult i32 %x, 10

@@ -426,6 +426,9 @@ pub struct AAQueryInfo {
     /// (`IsCapturedCache`): here so that a batch drops it, not the
     /// implementation.
     pub captured: HashMap<u64, crate::capturetracking::CaptureResult>,
+    /// What the implementation classified of an object, once for the batch.
+    pub classes: HashMap<llrm_mir::module::Operand, u8>,
+    pub(crate) decomposed: HashMap<llrm_mir::module::Operand, std::rc::Rc<crate::basicaa::Decomposed>>,
 }
 
 impl Default for AAQueryInfo {
@@ -436,6 +439,8 @@ impl Default for AAQueryInfo {
             locations: HashMap::default(),
             answers: HashMap::default(),
             captured: HashMap::default(),
+            classes: HashMap::default(),
+            decomposed: HashMap::default(),
         }
     }
 }

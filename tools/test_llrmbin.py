@@ -95,3 +95,18 @@ def test_a_pinned_binary_has_a_path_of_one_length_whatever_directory_it_is_in(tm
     first, second = llrmbin.pinned(short / "llrm-c"), llrmbin.pinned(long / "llrm-c")
     assert len(str(first)) == len(str(second)) == llrmbin.PINNED_BYTES
     assert os.readlink(first) == str(short / "llrm-c") and os.readlink(second) == str(long / "llrm-c")
+
+
+def test_two_copies_of_one_binary_are_refused_and_two_different_ones_print_both_md5(tmp_path):
+    """`cargo build -p llrm-c` did not relink the binary: two commits' "builds" were one file, and the identity pair read 0 differ."""
+    import pytest
+
+    a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
+    a.write_bytes(b"one")
+    b.write_bytes(b"one")
+    c.write_bytes(b"two")
+    with pytest.raises(SystemExit, match="same binary"):
+        llrmbin.assert_distinct(a, b)
+    header = llrmbin.assert_distinct(a, c)
+    assert llrmbin.md5(a)[:12] in header and llrmbin.md5(c)[:12] in header
+    assert "same source" in llrmbin.assert_distinct(a, b, same_source=True)
