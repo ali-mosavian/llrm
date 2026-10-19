@@ -55,6 +55,7 @@
 use llrm_mir::apfloat;
 use llrm_mir::constantfolding;
 use llrm_mir::context::mask;
+use llrm_mir::dense::IdMap;
 use llrm_mir::hash::HashMap;
 use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
@@ -278,7 +279,7 @@ struct Evaluator<'a, 'b> {
     c: &'a Combiner<'b>,
     /// `CxtI`.
     cxt: InstId,
-    visited: HashMap<InstId, bool>,
+    visited: IdMap<InstId, bool>,
     pending: Vec<InstId>,
 }
 
@@ -427,7 +428,7 @@ fn can_evaluate_truncated(
     ty: TypeId,
     cxt: InstId,
 ) -> bool {
-    let mut evaluator = Evaluator { c, cxt, visited: HashMap::default(), pending: Vec::new() };
+    let mut evaluator = Evaluator { c, cxt, visited: IdMap::new(), pending: Vec::new() };
     // Whether all users of the many-use values were visited is asked last,
     // outside the recursion.
     evaluator.can_evaluate(v, ty, Pred::Truncated) && evaluator.all_pending_visited()
