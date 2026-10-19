@@ -2166,7 +2166,8 @@ b2:
     );
     let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
     fixed.only = false;
-    fixed.passes = vec![Box::new(crate::simplifycfg::SimplifyCfg), Box::new(crate::loopsimplify::LoopSimplify)];
+    fixed.passes =
+        vec![Box::new(crate::simplifycfg::SimplifyCfg::default()), Box::new(crate::loopsimplify::LoopSimplify)];
     crate::testing::managed(&mut module, fixed);
 }
 /// d_faces -O2: the interprocedural stage ran body 32 again (`_clip_w`) and its
