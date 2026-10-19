@@ -210,6 +210,11 @@ impl LIRTransform for PhiElimination {
     ) -> Result<LirBody, String> {
         if !OLD_LOWERING.with(std::cell::Cell::get) && !llrm_support::env_flag!("LLRM_NO_PHIELIM_LLVM") {
             let lowered = crate::phielimination::lowered(&body)?;
+            // What it leaves (x87 values, entangled phis, edges from outside)
+            // is this pass's own; with none left there is nothing to price.
+            if lowered.blocks.iter().all(|block| block.phis.is_empty()) {
+                return Ok(lowered);
+            }
             return eliminated_priced(&lowered, self.prices);
         }
         eliminated_priced(&body, self.prices)
@@ -218,6 +223,13 @@ impl LIRTransform for PhiElimination {
 
 thread_local! {
     static OLD_LOWERING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs of this pass's own lowering, for a test that a body the translated
+    /// lowering finishes does not take it.
+    static OLD_STAGE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `work` with every phi lowered by this pass's own parallel copies, on this
@@ -264,6 +276,8 @@ pub fn eliminated_priced(
     body: &LirBody,
     prices: Option<EdgePrices>,
 ) -> Result<LirBody, String> {
+    #[cfg(test)]
+    OLD_STAGE.with(|runs| runs.set(runs.get() + 1));
     let body = &_exits_copied(body);
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let successors: IndexMap<i64, usize> = body.blocks.iter().map(|block| (block.at, block.succ.len())).collect();
@@ -2093,5 +2107,25 @@ mod tests {
         assert!(!prices.cheaper_on_edge(0.24, 1));
         assert!(prices.cheaper_on_edge(0.1, 1));
         assert!(prices.cheaper_on_edge(0.33, 2));
+    }
+
+    /// The translated lowering left this body no phi, and the old stage (its
+    /// reaching-reads, flow and width tables, and the x87 scan) ran over it
+    /// anyway: half of `lir phielim` on integer code (jpeg_fixed 11.2 M, 6.2
+    /// after).
+    #[test]
+    fn test_a_body_the_translated_lowering_finishes_does_not_take_the_old_stage() {
+        let join = body(
+            "plain",
+            vec![
+                block(0, vec![branch(0, Some((0, 2)), "jz", 2)], vec![1, 2], vec![]).into(),
+                block(1, vec![], vec![2], vec![]).into(),
+                block(2, vec![], vec![], vec![Phi { result: 3, incoming: vec![(0, 1), (1, 5)] }]).into(),
+            ],
+        );
+        OLD_STAGE.with(|runs| runs.set(0));
+        let done = PhiElimination { prices: None }.transform(join).expect("lowers");
+        assert!(done.blocks.iter().all(|block| block.phis.is_empty()), "the premise: no phi is left");
+        assert_eq!(OLD_STAGE.with(std::cell::Cell::get), 0);
     }
 }
