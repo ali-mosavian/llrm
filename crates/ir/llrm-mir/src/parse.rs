@@ -16,7 +16,7 @@ use crate::module::{
 };
 use crate::opcode::{
     Attribute, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause, FLAG_ATTRIBUTES, FLOAT_PREDICATE, Flags,
-    INT_ATTRIBUTES, INT_PREDICATE, Opcode, TYPE_ATTRIBUTES, Tail, spelled,
+    INT_ATTRIBUTES, INT_PREDICATE, Opcode, TARGET_FLAG_ATTRIBUTES, TYPE_ATTRIBUTES, Tail, spelled,
 };
 use crate::types::{FloatKind, StructBody, Type, TypeId};
 
@@ -628,6 +628,37 @@ impl Parser {
                     let value = if self.eat_punct('=') { Some(self.string()?) } else { None };
                     out.push(Attribute::Str(key, value));
                 }
+                // `captures(none)` is `nocapture`; any other capture kind says
+                // what the callee may do with the pointer, which no pass here
+                // reads.
+                Token::Word(word) if word == "captures" => {
+                    self.next();
+                    self.expect_punct('(')?;
+                    let none = self.is_word("none");
+                    while !self.eat_punct(')') {
+                        if *self.peek() == Token::Eof {
+                            return self.fail("`captures(` is never closed");
+                        }
+                        self.next();
+                    }
+                    if none {
+                        out.push(Attribute::Flag("nocapture".to_owned()));
+                    }
+                }
+                Token::Word(word) if TARGET_FLAG_ATTRIBUTES.contains(&word.as_str()) => {
+                    self.next();
+                    // An argument list (`uwtable(sync)`, `allocsize(0, 1)`) is
+                    // not read.
+                    if self.eat_punct('(') {
+                        while !self.eat_punct(')') {
+                            if *self.peek() == Token::Eof {
+                                return self.fail(format!("`{word}(` is never closed"));
+                            }
+                            self.next();
+                        }
+                    }
+                    out.push(Attribute::Flag(word));
+                }
                 Token::Word(word) if FLAG_ATTRIBUTES.contains(&word.as_str()) => {
                     self.next();
                     out.push(Attribute::Flag(word));
@@ -647,24 +678,6 @@ impl Parser {
                     let ty = self.ty()?;
                     self.expect_punct(')')?;
                     out.push(Attribute::Type(word, ty));
-                }
-                // `captures(none)` is `nocapture`, as LLVM's bitcode upgrade
-                // reads it; any other capture set only says what may be
-                // captured, which no attribute-less pointer denies.
-                Token::Word(word) if word == "captures" => {
-                    self.next();
-                    self.expect_punct('(')?;
-                    let mut none = true;
-                    loop {
-                        none &= self.word()? == "none";
-                        if !self.eat_punct(',') {
-                            break;
-                        }
-                    }
-                    self.expect_punct(')')?;
-                    if none {
-                        out.push(Attribute::Flag("nocapture".to_owned()));
-                    }
                 }
                 Token::Word(word) if word == "range" => {
                     self.next();
