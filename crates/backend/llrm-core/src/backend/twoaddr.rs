@@ -119,11 +119,14 @@ pub fn tied(body: &LirBody) -> LirBody {
             };
             let mut live_after: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
             for one in block.insns.iter().rev() {
-                if let Some((_, first, second)) = _swappable(one) {
-                    live_after.insert(
-                        ranges::key(one),
-                        [first, second].into_iter().filter(|value| alive(&changed, *value)).collect(),
-                    );
+                let tied_values = match (_swappable(one), _folded(one)) {
+                    (Some((_, first, second)), _) => Some(vec![first, second]),
+                    (None, Some((_, first, _))) => Some(vec![first.value]),
+                    _ => None,
+                };
+                if let Some(values) = tied_values {
+                    live_after
+                        .insert(ranges::key(one), values.into_iter().filter(|value| alive(&changed, *value)).collect());
                 }
                 for value in &one.defines {
                     changed.insert(*value, false);
@@ -172,12 +175,18 @@ pub fn tied(body: &LirBody) -> LirBody {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         for one in &block.insns {
             let mut one = Arc::clone(one);
-            if let Some(chosen) = _commuted(
-                &one,
-                live_after.get(&ranges::key(&one)).unwrap_or(&nothing),
-                Some(&copies),
-                Some(&interference),
-            ) {
+            let mut alive = live_after.get(&ranges::key(&one)).unwrap_or(&nothing);
+            // A load folded into an instruction whose tied source lives on is
+            // a register copy; the load first and the instruction on it is not.
+            let kept;
+            if let Some((load, unfolded)) = _unfolded(&one, alive, &mut mint) {
+                insns.push(load);
+                kept = _folded(&one).map_or_else(BTreeSet::new, |(_, first, _)| BTreeSet::from([first.value]));
+                alive = &kept;
+                one = unfolded;
+                changed = true;
+            }
+            if let Some(chosen) = _commuted(&one, alive, Some(&copies), Some(&interference)) {
                 changed = true;
                 one = chosen;
             }
@@ -448,6 +457,54 @@ pub fn ties(what: &Semantics) -> bool {
         && !what.sources.is_empty()
         && (_TIED.contains(&what.op)
             || (what.op == Operation::Multiply && what.dests.len() == 1 && what.sources.len() == 2))
+}
+
+/// `into := op first, [cell]` with all three of one width: an instruction with
+/// a load folded into its second source.
+fn _folded(one: &Insn) -> Option<(&Held, &Held, &Mem)> {
+    let what = one.what.as_ref()?;
+    if !ties(what)
+        || what.op != Operation::Binary
+        || what.dests.len() != 1
+        || what.sources.len() != 2
+        || one.group.is_some()
+        || !one.requires.is_empty()
+        || !one.delivers.is_empty()
+    {
+        return None;
+    }
+    let (Loc::Held(into), Loc::Held(first), Loc::Mem(cell)) = (&what.dests[0], &what.sources[0], &what.sources[1])
+    else {
+        return None;
+    };
+    (into.width == first.width && first.width == cell.width && into.value != first.value).then_some((into, first, cell))
+}
+
+/// The load and the instruction on it, for a folded load whose tied source is
+/// read again (`alive`): `TwoAddressInstructionPass::tryInstructionTransform`
+/// ([TwoAddressInstructionPass.cpp#L1418-L1447](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp#L1418-L1447)):
+/// it is preferable to schedule a load than a register copy.
+fn _unfolded(
+    one: &Insn,
+    alive: &BTreeSet<u32>,
+    mint: &mut dyn FnMut() -> u32,
+) -> Option<(Arc<Insn>, Arc<Insn>)> {
+    let (_, first, cell) = _folded(one)?;
+    if !alive.contains(&first.value) {
+        return None;
+    }
+    let what = one.what.as_ref()?;
+    let loaded = Held { value: mint(), width: cell.width };
+    let load = _inserted(
+        one,
+        _move(Loc::Held(loaded), Loc::Mem(cell.clone())),
+        vec![loaded.value],
+        ir::values(&Loc::Mem(cell.clone())).iter().map(|value| value.value).collect(),
+    );
+    let mut operated = one.clone();
+    operated.what = Some(Semantics { sources: vec![Loc::Held(*first), Loc::Held(loaded)], ..what.clone() });
+    operated.uses = [first.value, loaded.value].into_iter().collect::<IndexSet<u32>>().into_iter().collect();
+    Some((load, Arc::new(operated)))
 }
 
 /// The copy and the fixed instruction, or None where it is already tied.
@@ -867,5 +924,91 @@ mod tests {
         let insn = Insn::new(0, Some((0, 3)), Some(what), vec![900], vec![901]);
         let fixed = fixed(&insn).expect("untied");
         assert_eq!(fixed[1].uses, [900]);
+    }
+
+    /// `v3 := add v1, [m]` where `v1` is read again: the add took the cell as
+    /// its operand and the copy of `v1` that it needs. A load first and the add
+    /// on it needs none (the pin's `tryInstructionTransform` unfolds it).
+    #[test]
+    fn test_a_folded_load_is_unfolded_where_the_tied_source_lives_on() {
+        let (insns, cell) = folded_pair(true);
+        let loads = insns.iter().filter(|one| {
+            one.what
+                .as_ref()
+                .is_some_and(|what| what.sources == [Loc::Mem(cell.clone())] && what.name.as_deref() == Some("mov"))
+        });
+        assert_eq!(loads.count(), 1, "the premise: the cell is loaded: {insns:?}");
+        let add = insns
+            .iter()
+            .find(|one| {
+                one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("add") && what.dests == [held(3, 2)])
+            })
+            .expect("the add");
+        assert!(
+            !add.what.as_ref().expect("semantics").sources.iter().any(|source| matches!(source, Loc::Mem(_))),
+            "{insns:?}"
+        );
+    }
+
+    /// The same where `v1` dies: the cell stays the add's operand.
+    #[test]
+    fn test_a_folded_load_stays_where_the_tied_source_dies() {
+        let (insns, _) = folded_pair(false);
+        let add = insns
+            .iter()
+            .find(|one| {
+                one.what
+                    .as_ref()
+                    .is_some_and(
+                        |what| what.name.as_deref() == Some("add")
+                            && what.dests.iter().any(|d| *d == held(3, 2) || *d == held(1, 2)),
+                    )
+            })
+            .expect("the add");
+        assert!(
+            add.what.as_ref().expect("semantics").sources.iter().any(|source| matches!(source, Loc::Mem(_))),
+            "{insns:?}"
+        );
+    }
+
+    fn folded_pair(reads_again: bool) -> (Vec<Arc<Insn>>, crate::model::ir::Mem) {
+        let cell = crate::model::ir::Mem { width: 2, ..crate::model::ir::Mem::new(None, 0) };
+        let what = |op, name: &str, dests, sources| {
+            Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+        };
+        let add = Insn::new(
+            0,
+            Some((0, 0)),
+            what(Operation::Binary, "add", vec![held(3, 2)], vec![held(1, 2), Loc::Mem(cell.clone())]),
+            vec![3],
+            vec![1],
+        );
+        let user = if reads_again {
+            Insn::new(
+                1,
+                Some((1, 1)),
+                what(Operation::Binary, "sub", vec![held(4, 2)], vec![held(3, 2), held(1, 2)]),
+                vec![4],
+                vec![3, 1],
+            )
+        } else {
+            Insn::new(
+                1,
+                Some((1, 1)),
+                what(Operation::Move, "mov", vec![held(4, 2)], vec![held(3, 2)]),
+                vec![4],
+                vec![3],
+            )
+        };
+        let input = LirBody::new(
+            "folded",
+            0,
+            vec![LirBlock { succ: vec![].into(), ..LirBlock::new(0, vec![Arc::new(add), Arc::new(user)]) }.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut input = input;
+        input.inputs = [1].into_iter().collect();
+        (tied(&input).insns().to_vec(), cell)
     }
 }

@@ -693,18 +693,6 @@ impl Selector<'_, '_, '_> {
         )
     }
 
-    /// Whether `value` is free after the root (`dies_at`).
-    pub fn is_dies(
-        &self,
-        m: &Match,
-        value: Operand,
-    ) -> bool {
-        matches!(
-            value,
-            Operand::Value(value) if self.dies_at(value, m.inst)
-        )
-    }
-
     /// Whether a `getelementptr` takes the root's result: the address reads the
     /// sum's parts, not the sum, so a load covered by the sum is never
     /// selected.

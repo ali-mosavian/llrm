@@ -2317,30 +2317,6 @@ impl Selector<'_, '_, '_> {
             && function.parent(definition) == function.parent(user)
     }
 
-    /// Whether `value` is read once, by `user`, and is not live around a loop
-    /// `user` is in (`only_reader`, for an argument or a value made elsewhere
-    /// too): its register is free after `user`, so a two-address operation
-    /// updates it in place and needs no copy.
-    fn dies_at(
-        &self,
-        value: ValueId,
-        user: InstId,
-    ) -> bool {
-        let function = self.function;
-        if self.only_reader(value, user) {
-            return true;
-        }
-        if !function.users(value).only().is_some_and(|only| only.user == user) {
-            return false;
-        }
-        let Some(at) = function.parent(user).map(cfg::id) else { return false };
-        let made = match function.value(value).def {
-            ValueDef::Instruction(definition) => function.parent(definition).map(cfg::id),
-            ValueDef::Argument(_) => None,
-        };
-        self.shape.loops.iter().all(|one| !one.body.contains(&at) || made.is_some_and(|made| one.body.contains(&made)))
-    }
-
     /// Whether nothing after `from` and before `to`, in one block, may write
     /// memory.
     fn unwritten(
