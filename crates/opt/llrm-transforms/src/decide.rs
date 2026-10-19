@@ -202,7 +202,10 @@ fn _decided(
     let held =
         Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
     let outer = std::rc::Rc::clone(analyses.outer());
-    let settled = _settled(context, layout, function, &outer);
+    let shared = analyses.get::<llrm_mir::lazyvalueinfo::LviCache>(context, layout, function);
+    let mut lvi = shared.take();
+    let settled = _settled(context, layout, function, &outer, &mut lvi);
+    shared.put(lvi);
     let scev = LazyScevView::new(analyses);
     let decisions = _decisions(&held.unit(context, layout, function, &outer), &registers, &settled, &scev, use_scev)?;
     if decisions.is_empty() {
@@ -319,10 +322,10 @@ fn _settled(
     layout: &DataLayout,
     function: &Function,
     outer: &Outer,
+    lvi: &mut LazyValueInfo,
 ) -> llrm_mir::dense::IdMap<BlockId, bool> {
     let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
     let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
-    let mut lvi = LazyValueInfo::new();
     let mut settled = llrm_mir::dense::IdMap::default();
     for &block in function.layout() {
         let Some(last) = function.terminator(block) else { continue };

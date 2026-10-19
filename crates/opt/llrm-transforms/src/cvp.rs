@@ -130,10 +130,16 @@ impl FunctionPass for Cvp {
         }
         let globals = Rc::clone(&analyses.outer().globals);
         let assumptions = AssumptionCache::of(unit.context, &globals, unit.metadata, unit.function);
-        let mut pass = State { unit, analyses, globals, assumptions, lvi: LazyValueInfo::new(), cfg_changed: false };
+
+        let shared = analyses.get::<llrm_mir::lazyvalueinfo::LviCache>(unit.context, unit.layout, unit.function);
+        let mut pass = State { unit, analyses, globals, assumptions, lvi: shared.take(), cfg_changed: false };
+        #[cfg(test)]
+        let before = pass.lvi.get_impl().map_or(0, |one| one.steps.solve);
         let changed = pass.run_impl();
         #[cfg(test)]
-        SOLVED.with(|solved| solved.set(solved.get() + pass.lvi.get_impl().map_or(0, |one| one.steps.solve)));
+        SOLVED.with(|solved| solved.set(solved.get() + pass.lvi.get_impl().map_or(0, |one| one.steps.solve) - before));
+        shared.put(std::mem::take(&mut pass.lvi));
+
         match (changed, pass.cfg_changed) {
             (false, _) => PreservedAnalyses::all(),
             (true, false) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
