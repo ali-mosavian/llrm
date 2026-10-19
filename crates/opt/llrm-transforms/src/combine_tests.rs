@@ -120,3 +120,46 @@ fn a_visit_that_erases_its_instruction_is_a_change() {
     assert!(combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit));
     assert_eq!(printed(&module), "define void @f(ptr %p) {\nb0:\n  ret void\n}\n");
 }
+
+const SINKABLE: &str = "define i16 @f(i16 %a, i1 %c) {
+b0:
+  %x = mul i16 %a, %a
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i16 %x
+
+b2:
+  ret i16 0
+}
+";
+
+/// `tryToSinkInstruction`: a value read only in the one successor that only
+/// `b0` enters is computed there, so the path to `b2` does not run it.
+#[test]
+fn the_driver_sinks_an_instruction_to_its_only_users_block() {
+    check(
+        SINKABLE,
+        "define i16 @f(i16 %a, i1 %c) {\nb0:\n  br i1 %c, label %b1, label %b2\n\nb1:\n  %x = mul i16 %a, %a\n  ret i16 %x\n\nb2:\n  ret i16 0\n}\n",
+    );
+}
+
+/// With sinking off (the tests of one family) it stays where it is.
+#[test]
+fn without_sinking_it_stays() {
+    let mut module = parsed(SINKABLE);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    let changed = super::combine_with_sinking(
+        context,
+        &globals,
+        &metadata,
+        &DataLayout::default(),
+        function,
+        super::visit,
+        false,
+    );
+    assert!(!changed);
+    assert_eq!(printed(&module), printed(&parsed(SINKABLE)));
+}
