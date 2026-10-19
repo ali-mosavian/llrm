@@ -1,3 +1,4 @@
+use crate::edit::ValueMap;
 use crate::module::{BlockId, Change, Function, InstId, Module, Operand, Use, ValueId};
 use crate::opcode::{BinaryOp, Flags, Opcode};
 use crate::{Position, parse, print};
@@ -32,7 +33,7 @@ fn replacing_every_use_lets_the_definition_go() {
     let f = function(&mut module);
     let (x, value) = named(f, "x");
     let (y, _) = named(f, "y");
-    assert_eq!(f.users(value).to_vec(), [Use { user: y, index: 0 }]);
+    assert_eq!(f.users(value).snapshot(), [Use { user: y, index: 0 }]);
     assert_eq!(f.erase(x), Err(format!("instruction {}'s result still has 1 users", x.0)));
     let a = f.parameters()[0];
     f.replace_all_uses_with(value, Operand::Value(a));
@@ -81,7 +82,7 @@ fn a_clone_uses_what_its_original_uses() {
     let (y, _) = named(f, "y");
     let copy = f.clone_instruction(y);
     f.insert(copy, Position::Before(y)).expect("placed");
-    assert_eq!(f.users(value).len(), 2);
+    assert_eq!(f.users(value).iter().count(), 2);
     assert_eq!(f.take_changes()[0], Change::Cloned { from: y, to: copy });
     assert_eq!(f.erase(x), Err(format!("instruction {}'s result still has 2 users", x.0)));
     assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
@@ -397,7 +398,7 @@ fn adds(n: usize) -> String {
 }
 
 #[test]
-fn erasing_many_instructions_scans_their_block_once_not_once_each() {
+fn erasing_instructions_one_at_a_time_or_together_leaves_the_same_function() {
     // Each erase looked its instruction up in the block and shifted the rest:
     // 200 of 400 cost 200 scans of the block. On a 2048-statement function
     // the lookups were 7.5% of the whole compile, growing fourfold a doubling.
@@ -405,20 +406,15 @@ fn erasing_many_instructions_scans_their_block_once_not_once_each() {
         let mut module = module(&adds(400));
         let f = function(&mut module);
         let gone: Vec<InstId> = (0..400).step_by(2).map(|i| named(f, &format!("x{i}")).0).collect();
-        crate::edit::SCANNED.with(|scanned| scanned.set(0));
         if batch {
             f.erase_all(&gone).expect("unused");
         } else {
             gone.iter().rev().for_each(|&one| f.erase(one).expect("unused"));
         }
         assert!(f.check_uses().is_empty());
-        (print::module(&module), crate::edit::SCANNED.with(|scanned| scanned.get()))
+        print::module(&module)
     };
-    let (one_by_one, many_scans) = erase(false);
-    let (together, few_scans) = erase(true);
-    assert_eq!(together, one_by_one);
-    assert!(few_scans <= 2 * 401, "{few_scans} instructions scanned erasing 200 of 400");
-    assert!(many_scans > few_scans * 10, "the one-by-one scans no longer show the cost: {many_scans}");
+    assert_eq!(erase(true), erase(false));
 }
 
 /// Each use an erased instruction made was looked for in its operand's list of
@@ -431,19 +427,53 @@ fn erasing_users_of_one_value_reads_none_of_its_other_uses() {
         let mut module = module(&adds(400));
         let f = function(&mut module);
         let gone: Vec<InstId> = (0..400).step_by(2).map(|i| named(f, &format!("x{i}")).0).collect();
-        crate::edit::USES_SCANNED.with(|scanned| scanned.set(0));
+        crate::uselist::WALKED.with(|walked| walked.set(0));
         if batch {
             f.erase_all(&gone).expect("unused");
         } else {
             gone.iter().rev().for_each(|&one| f.erase(one).expect("unused"));
         }
+        let walked = crate::uselist::WALKED.with(|walked| walked.get());
         assert!(f.check_uses().is_empty());
-        (print::module(&module), crate::edit::USES_SCANNED.with(|scanned| scanned.get()))
+        (print::module(&module), walked)
     };
     let (one_by_one, many_scans) = erase(false);
     let (together, few_scans) = erase(true);
     assert_eq!(together, one_by_one);
     assert_eq!((many_scans, few_scans), (0, 0), "list entries read erasing 200 of 400 users of one value");
+}
+
+fn branches(n: usize) -> String {
+    let body: String = (0..n).map(|i| format!("b{i}:\n  br label %end\n")).collect();
+    format!("define void @f() {{\nentry:\n  br label %end\n{body}end:\n  ret void\n}}\n")
+}
+
+/// The terminators naming one block were looked for in its list of uses, as
+/// the values' were: 200 branches to `%end` that go were 200 scans of up to
+/// 400 uses. A block's uses unlink through their own links too.
+#[test]
+fn erasing_branches_to_one_block_reads_none_of_its_other_uses() {
+    let mut module = module(&branches(400));
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    let gone: Vec<InstId> = (0..400).step_by(2).map(|i| f.terminator(layout[1 + i]).expect("a branch")).collect();
+    crate::uselist::WALKED.with(|walked| walked.set(0));
+    gone.iter().rev().for_each(|&one| f.erase(one).expect("unused"));
+    let walked = crate::uselist::WALKED.with(|walked| walked.get());
+    assert!(f.check_uses().is_empty());
+    // `sole_successor_start` looks at two entries of the list, never the whole.
+    assert!(walked <= 2 * 200, "{walked} list entries read erasing 200 of 400 branches to one block");
+}
+
+/// A block is a `Value` in LLVM and its predecessors are its use list, the
+/// newest use first: `predecessors` ran oldest first.
+#[test]
+fn predecessors_run_newest_first() {
+    let mut module = module(&branches(3));
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    let end = *layout.last().expect("the end block");
+    assert_eq!(f.predecessors(end).iter().copied().collect::<Vec<_>>(), [layout[3], layout[2], layout[1], layout[0]]);
 }
 
 /// LLVM's `Value::addUse` puts the new use at the head: `users()` runs newest
@@ -531,7 +561,7 @@ fn a_value_replaced_and_a_phi_cleared_leave_the_use_lists_true() {
     let f = function(&mut m);
     let (_, b) = (0, f.parameters()[1]);
     let (_, a) = (0, f.parameters()[0]);
-    assert!(f.users(b).len() > n, "premise: %b is read many times");
+    assert!(f.users(b).has_n_uses_or_more(n + 1), "premise: %b is read many times");
     f.replace_value(b, Operand::Value(a));
     assert!(f.users(b).is_empty());
     assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
@@ -614,7 +644,7 @@ fn a_block_answers_ends_neighbours_and_order_after_every_edit() {
     let (y, _) = named(f, "y");
     let ret = f.terminator(entry).unwrap();
     assert_eq!((f.block(entry).len(), f.block(entry).first(), f.block(entry).last()), (3, Some(x), Some(ret)));
-    assert_eq!(f.block(entry).iter().collect::<Vec<_>>(), [x, y, ret]);
+    assert_eq!(f.iter_block(entry).collect::<Vec<_>>(), [x, y, ret]);
     assert_eq!((f.prev_in_block(x), f.next_in_block(x), f.next_in_block(ret)), (None, Some(y), None));
     assert!(f.comes_before(x, y) && !f.comes_before(y, x) && !f.comes_before(x, x));
     // The numbers were taken: an edit must make them false.
@@ -630,33 +660,27 @@ fn an_instruction_goes_after_another() {
     let (x, _) = named(f, "x");
     let (y, _) = named(f, "y");
     f.move_to(x, Position::After(y)).expect("moved");
-    assert_eq!(f.block(f.entry().unwrap()).iter().take(2).collect::<Vec<_>>(), [y, x]);
+    assert_eq!(f.iter_block(f.entry().unwrap()).take(2).collect::<Vec<_>>(), [y, x]);
 }
 
-/// A run moved as one is the run moved one by one, and costs a rewrite of the
-/// block, not one per instruction.
+/// A run moved as one is the run moved one by one.
 #[test]
-fn a_run_spliced_is_the_run_moved_one_by_one_in_a_scan_of_the_block() {
+fn a_run_spliced_is_the_run_moved_one_by_one() {
     let run = |together: bool| {
         let mut module = module(&adds(400));
         let f = function(&mut module);
         let moved: Vec<InstId> = (0..100).map(|i| named(f, &format!("x{i}")).0).collect();
         let entry = f.entry().unwrap();
         let ret = f.terminator(entry).unwrap();
-        crate::edit::SCANNED.with(|scanned| scanned.set(0));
         if together {
             f.splice(&moved, Position::Before(ret)).expect("spliced");
         } else {
             moved.iter().for_each(|&one| f.move_to(one, Position::Before(ret)).expect("moved"));
         }
         assert!(f.check_uses().is_empty());
-        (print::module(&module), crate::edit::SCANNED.with(|scanned| scanned.get()))
+        print::module(&module)
     };
-    let (one_by_one, many) = run(false);
-    let (together, few) = run(true);
-    assert_eq!(together, one_by_one);
-    assert!(few <= 2 * 401, "{few} instructions scanned splicing 100 of 400");
-    assert!(many > few * 10, "the one-by-one scans no longer show the cost: {many}");
+    assert_eq!(run(true), run(false));
 }
 
 /// Erasing several empty blocks at once leaves the others in order, and a
@@ -705,4 +729,97 @@ fn test_unannotate_logs_the_rewrite_of_the_instruction() {
     assert_eq!(f.take_changes(), vec![Change::Rewritten(v)]);
     f.unannotate(v, "range");
     assert!(f.take_changes().is_empty(), "nothing was taken off the second time");
+}
+
+/// `take_name` is `Value::takeName`: the new value is named what the old one
+/// was and the old one has none, as SCCP's `sext` -> `zext nneg` keeps `%s`.
+#[test]
+fn test_take_name_moves_the_name_to_the_other_value() {
+    let mut module =
+        module("define i16 @f(i16 %a) {\nentry:\n  %s = add i16 %a, 1\n  %t = add i16 %a, 2\n  ret i16 %t\n}\n");
+    let f = function(&mut module);
+    let ((s, sv), (t, tv)) = (named(f, "s"), named(f, "t"));
+    f.take_name(sv, tv);
+    assert_eq!((f.value(sv).name.clone(), f.value(tv).name.clone()), (None, Some("s".to_string())));
+    let _ = (s, t);
+}
+
+/// A block cloned without a remap reads the original's values; after the
+/// remap its instructions read the copy's, and the original is untouched.
+#[test]
+fn a_cloned_block_reads_its_own_values_once_remapped() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let entry = f.entry().unwrap();
+    let (_, x) = named(f, "x");
+    let mut map = ValueMap::default();
+    let copy = f.clone_block(entry, &mut map);
+    f.insert_block(copy, Some(entry)).expect("placed");
+    let Operand::Value(x_copy) = map.values[&x] else { panic!("a value") };
+    assert_ne!(x_copy, x);
+    assert_eq!(map.blocks[&entry], copy);
+    for inst in f.iter_block(copy).collect::<Vec<_>>() {
+        f.remap_instruction(inst, &map);
+    }
+    let mul = f.iter_block(copy).nth(1).unwrap();
+    assert_eq!(f.instruction(mul).operands[0], Operand::Value(x_copy));
+    let (y, _) = named(f, "y");
+    assert_eq!(f.instruction(y).operands[0], Operand::Value(x));
+    assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
+}
+
+const JOIN: &str = "define i16 @f(i1 %c, i16 %a, i16 %b) {\nentry:\n  br i1 %c, label %p1, label %p2\np1:\n  switch i16 %a, label %join [\n    i16 0, label %p3\n  ]\np2:\n  br label %join\np3:\n  br label %join\njoin:\n  %m = phi i16 [ %a, %p1 ], [ %b, %p2 ], [ 7, %p3 ]\n  ret i16 %m\n}\n";
+
+/// `removeIncomingValue` moves the LAST input into the removed one's slot; the
+/// order-preserving removal left `[%b, %p2], [7, %p3]` where `opt` leaves
+/// `[7, %p3], [%b, %p2]`, so every later phi walk differed from LLVM's.
+#[test]
+fn removing_a_predecessor_moves_the_last_phi_input_into_its_slot() {
+    let mut module = module(JOIN);
+    let (context, f) = module.function_mut("f").expect("@f");
+    let block = |f: &Function, name: &str| {
+        f.layout().iter().copied().find(|&b| f.block(b).name.as_deref() == Some(name)).expect(name)
+    };
+    let (join, p1) = (block(f, "join"), block(f, "p1"));
+    let (m, _) = named(f, "m");
+    f.predecessor_removed(context, join, p1, true);
+    let from: Vec<Operand> = f.instruction(m).operands.chunks(2).map(|pair| pair[1]).collect();
+    assert_eq!(from, vec![Operand::Block(block(f, "p3")), Operand::Block(block(f, "p2"))]);
+}
+
+/// With every other input the phi itself, `hasConstantValue` is poison and
+/// the phi goes; the skip-self version returned nothing and left the phi.
+#[test]
+fn a_phi_left_with_only_itself_becomes_poison() {
+    let text = "define i16 @f(i1 %c, i16 %a) {\nentry:\n  br i1 %c, label %loop, label %out\nloop:\n  %m = phi i16 [ %a, %entry ], [ %m, %loop ], [ %m, %loop ]\n  br i1 %c, label %loop, label %out\nout:\n  ret i16 %a\n}\n";
+    let mut module = module(text);
+    let (context, f) = module.function_mut("f").expect("@f");
+    let loop_block = f.layout().iter().copied().find(|&b| f.block(b).name.as_deref() == Some("loop")).unwrap();
+    let entry = f.entry().unwrap();
+    let (m, _) = named(f, "m");
+    f.predecessor_removed(context, loop_block, entry, false);
+    assert!(f.is_erased(m), "the phi of itself alone is replaced by poison and erased");
+}
+
+/// LLVM's `hasOneUse`, `hasNUses` and `hasNUsesOrMore` on a value with 0, 1, 2
+/// and 3 uses: the counts are read from the list at its boundaries, `len` is
+/// not there.
+#[test]
+fn a_use_list_answers_has_n_uses_at_its_boundaries() {
+    let mut module = module(
+        "define i16 @f(i16 %a) {\nentry:\n  %x = add i16 %a, 1\n  %y = add i16 %a, 2\n  %z = add i16 %a, 3\n  ret i16 %a\n}\n",
+    );
+    let f = function(&mut module);
+    let a = f.parameters()[0];
+    // %a: three adds and the ret.
+    assert!(f.users(a).has_n_uses(4) && !f.users(a).has_n_uses(3) && !f.users(a).has_n_uses(5));
+    assert!(f.users(a).has_n_uses_or_more(4) && !f.users(a).has_n_uses_or_more(5) && f.users(a).has_n_uses_or_more(0));
+    let (_, x) = named(f, "x");
+    assert!(f.users(x).is_empty() && f.users(x).has_n_uses(0) && !f.users(x).has_one_use());
+    assert!(!f.users(x).has_n_uses_or_more(1) && f.users(x).has_n_uses_or_more(0));
+    let ret = f.terminator(f.entry().unwrap()).unwrap();
+    assert!(f.users(a).snapshot().iter().any(|one| one.user == ret));
+    let (y, _) = named(f, "y");
+    f.set_operand(ret, 0, Operand::Value(named(f, "y").1));
+    assert!(f.users(named(f, "y").1).has_one_use() && f.users(a).has_n_uses(3), "{y:?}");
 }

@@ -140,7 +140,7 @@ pub fn merged(
         for block in function.layout() {
             let mut pending: Vec<(InstId, MemRef, i64)> = Vec::new();
             let mut open: Vec<Pair> = Vec::new();
-            for &inst in function.block(*block).instructions() {
+            for inst in function.iter_block(*block) {
                 if let Some(pending_load) = _load(&unit, inst) {
                     pending.push(pending_load);
                 } else if let Some((load, from, bytes)) = _paired(&unit, inst, &pending) {
@@ -300,9 +300,8 @@ fn _replaced(
         tail: Default::default(),
     };
     let last = function
-        .block(function.parent(first.store).expect("a placed store"))
-        .iter()
-        .rfind(|inst| run.iter().any(|one| one.store == *inst))
+        .iter_block_rev(function.parent(first.store).expect("a placed store"))
+        .find(|inst| run.iter().any(|one| one.store == *inst))
         .expect("a run has stores");
     let call = function.create_instruction(
         Opcode::Call(Box::new(info)),

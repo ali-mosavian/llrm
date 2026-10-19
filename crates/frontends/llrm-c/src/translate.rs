@@ -105,7 +105,15 @@ pub fn program(
         .map(|proc| proc.symbol)
         .collect();
     let param_facts = crate::ow_facts::param_facts(unit);
-    let module = Shared { calling, unit, data: &data, keys: &keys, valueless: &valueless, param_facts: &param_facts };
+    let module = Shared {
+        calling,
+        unit,
+        data: &data,
+        keys: &keys,
+        valueless: &valueless,
+        param_facts: &param_facts,
+        lifetimes: profile.lifetimes,
+    };
     let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
     for (at, proc) in unit.procs.iter().enumerate() {
@@ -641,6 +649,46 @@ struct Shared<'a> {
     valueless: &'a HashSet<i64>,
     /// The facts the language states of each parameter, by symbol.
     param_facts: &'a HashMap<i64, Vec<Fact>>,
+    /// Whether a block's locals get `llvm.lifetime` markers (clang's at -O1 and
+    /// up).
+    lifetimes: bool,
+}
+
+/// The blocks (by order of opening) that a jump enters from outside them: their
+/// locals' lifetimes are not marked, as clang's `Bypasses` leaves unmarked a
+/// local a jump skips the start of (CGDecl.cpp, `EmitAutoVarAlloca`).
+fn entered_blocks(body: &[hir::Statement]) -> HashSet<usize> {
+    let (mut path, mut opened) = (Vec::new(), 0);
+    let mut placed: HashMap<&str, Vec<usize>> = HashMap::default();
+    let mut jumps: Vec<(&str, Vec<usize>)> = Vec::new();
+    for one in body {
+        let args: Vec<&str> = one.args.iter().map(String::as_str).collect();
+        match (one.call.as_str(), &args[..]) {
+            ("DBBegBlock", []) => {
+                opened += 1;
+                path.push(opened);
+            }
+            ("DBEndBlock", []) => {
+                path.pop();
+            }
+            ("CGControl", ["O_LABEL", _, label]) => {
+                placed.insert(label, path.clone());
+            }
+            ("CGControl", ["O_GOTO", _, label] | [_, _, label])
+            | ("CGSelCase", [_, label, _])
+            | ("CGSelOther", [_, label]) => {
+                jumps.push((label, path.clone()));
+            }
+            _ => {}
+        }
+    }
+    let mut entered = HashSet::default();
+    for (label, from) in jumps {
+        if let Some(to) = placed.get(label) {
+            entered.extend(to.iter().filter(|one| !from.contains(one)));
+        }
+    }
+    entered
 }
 
 /// What a tree node evaluates to.
@@ -673,6 +721,12 @@ struct Body<'a, 't> {
     stated_instructions: Vec<(i64, Fact)>,
     /// A scaled index's product, by value: its index and the element size.
     scales: HashMap<i64, (i64, i64)>,
+    /// The places of each open block that marks its locals' lifetimes; and the
+    /// blocks (by order of opening) a jump enters from outside, which mark
+    /// none.
+    scopes: Vec<Option<Vec<i64>>>,
+    opened: usize,
+    entered: HashSet<usize>,
     shared: &'a Shared<'a>,
     unit: &'a hir::Unit,
     proc: &'a hir::Proc,
@@ -769,7 +823,14 @@ fn answered_by_inline_code(
     unit: &hir::Unit,
     proc: &hir::Proc,
 ) -> bool {
-    let statements: Vec<&hir::Statement> = proc.body.iter().filter(|one| one.call != "DBSrcCue").collect();
+    let statements: Vec<&hir::Statement> = proc
+        .body
+        .iter()
+        .filter(|one| !matches!(
+            one.call.as_str(),
+            "DBSrcCue" | "DBBegBlock" | "DBEndBlock" | "CGAutoDecl"
+        ))
+        .collect();
     statements
         .windows(2)
         .any(|two| two[1].call == "CGReturn" && two[1].args[0] == "n0" && inline_statement(unit, two[0]))
@@ -1030,6 +1091,9 @@ impl<'a, 't> Body<'a, 't> {
             selects: IndexMap::default(),
             stated_instructions: Vec::new(),
             scales: HashMap::default(),
+            scopes: Vec::new(),
+            opened: 0,
+            entered: entered_blocks(&proc.body),
             calls: Vec::new(),
             instructions: 0,
             inlined: None,
@@ -1645,8 +1709,38 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<()> {
         self.line = one.line;
         let args: Vec<&str> = one.args.iter().map(String::as_str).collect();
-        if !matches!(one.call.as_str(), "DBSrcCue" | "CGReturn") {
+        if !matches!(
+            one.call.as_str(),
+            "DBSrcCue" | "CGReturn" | "DBBegBlock" | "DBEndBlock" | "CGAutoDecl"
+        ) {
             self.inlined = None;
+        }
+        match (one.call.as_str(), &args[..]) {
+            ("DBBegBlock", []) => {
+                self.opened += 1;
+                let marks = self.shared.lifetimes && !self.entered.contains(&self.opened);
+                self.scopes.push(marks.then(Vec::new));
+                return Ok(());
+            }
+            ("CGAutoDecl", [name]) => {
+                if let (Some(Some(_)), Some(&place)) = (self.scopes.last(), self.slots.get(*name)) {
+                    self.open();
+                    self.instruction(Op::LifetimeStart, Vec::new(), vec![Operand::place_ref(place)]);
+                    self.scopes.last_mut().and_then(Option::as_mut).expect("a marking block").push(place);
+                }
+                return Ok(());
+            }
+            ("DBEndBlock", []) => {
+                // A block left by a jump has no end here: its locals stay live
+                // to the next start, never shorter than they are.
+                if let Some(Some(places)) = self.scopes.pop().filter(|_| !self.terminated(self.current)) {
+                    for place in places.into_iter().rev() {
+                        self.instruction(Op::LifetimeEnd, Vec::new(), vec![Operand::place_ref(place)]);
+                    }
+                }
+                return Ok(());
+            }
+            _ => {}
         }
         match (one.call.as_str(), &args[..]) {
             ("CGControl", ["O_LABEL", _, label]) => {
@@ -3645,6 +3739,30 @@ mod tests {
         let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         emitted.module
+    }
+
+    fn statement(
+        call: &str,
+        args: &[&str],
+    ) -> hir::Statement {
+        hir::Statement { call: call.to_owned(), args: args.iter().map(|one| (*one).to_owned()).collect(), line: 0 }
+    }
+
+    /// A jump into a block skips its locals' starts; marking them put an access
+    /// where the local is not live, which `lifetimes::intervals` drops: the
+    /// blocks it enters are reported, a jump within or out of one is not.
+    #[test]
+    fn a_jump_into_a_block_is_reported_and_one_out_of_it_is_not() {
+        let body = [
+            statement("CGControl", &["O_GOTO", "n0", "l1"]),
+            statement("DBBegBlock", &[]),
+            statement("CGControl", &["O_LABEL", "n0", "l1"]),
+            statement("CGControl", &["O_GOTO", "n0", "l2"]),
+            statement("DBEndBlock", &[]),
+            statement("CGControl", &["O_LABEL", "n0", "l2"]),
+        ];
+        assert_eq!(super::entered_blocks(&body), std::collections::HashSet::from_iter([1]));
+        assert_eq!(super::entered_blocks(&body[1..]), std::collections::HashSet::default());
     }
 
     /// The C library's strcmp is stated a three-way compare: branchprob

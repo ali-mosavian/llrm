@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/gvn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gvn.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:144733c8a4db4fc8671d24aeced828e51a82d443a8434e4bcddb92e3583c5996 -->
+<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:da2218defe08a8c10d126a9d6980c09c846f369b61d814b9d76be845d8951bcf -->
 
 # gvn
 
@@ -24,21 +24,22 @@ load or a store. `Gvn` is the pass; `EqualCalls` is its call part alone.
    the same callee and arguments that read and write no memory are one.
 2. Loads (`pass::loads`: `processLoad`, `processNonLocalLoad`). Memory
    dependence (`llrm_analysis::memdep`) names what a load depends on in its
-   block, or in every block that reaches it. A load a store or an earlier load
-   of the same bytes serves becomes that value, cut or widened to its type
-   (`vncoercion`); where several blocks serve it, a phi (`SsaUpdater`) merges
-   them. A load with an unavailable block is left for step 4. Equal calls that
-   touch no memory (`transform::equal_calls`) are one after it.
+   block, or in every block that reaches it. A load a store or an earlier
+   load of the same bytes serves becomes that value, cut or widened to its
+   type (`vncoercion`); where several blocks serve it, a phi (`SsaUpdater`)
+   merges them. A load with an unavailable block is left for step 4. Equal
+   calls that touch no memory (`transform::equal_calls`) are one after it.
 3. Join PRE (`joined`). An expression every predecessor of a join already
    computes becomes a phi of those values. With `pre`, a predecessor that
    lacks it gets the computation inserted before its unconditional `br`, if
    no loop is entered or left by the edge and the operands are available
    there. Divisions (which may trap on a path that did not divide), loads
    and floating expressions are never inserted here.
-4. Load PRE (`loadjoins::reused`). A load at a join whose bytes every
-   predecessor holds becomes a phi of those values; with `pre`, a
-   predecessor holding none gets its own load on its edge where that
-   speculates nothing.
+4. Load PRE (`pass::loadpre`: `performLoadPRE`, `performLoopLoadPRE`). With
+   `pre`, a load that is available on all but one of the ways into its block
+   is loaded on that way too (an edge into the block with several ways out
+   is split), and becomes a phi; a loop header's load of an address the loop
+   does not change is loaded in the preheader and after the one clobber.
 
 A volatile access is never numbered. Floats are numbered like integers; a
 value serves a read only of its own type, so a float store reaches a float
@@ -119,12 +120,11 @@ are on from -O2, the -O1 level being FRE, and off with `-fno-tree-pre`. Each
 runs once per body pass.
 
 ## Needs
-[`crate::transform`](transform.md), [`crate::loadjoins`](loadjoins.md), `memoryssa::Accesses`,
-`alias::PointValues`, `memdep`, `BasicAA`.
+[`crate::transform`](transform.md), `memdep`, `BasicAA`, `LoopInfo`.
 
 ## Keeps
 Dominators and loops, unless a join split an edge.
 
 ## See also
-Tests: `gvn_tests.rs`, `loadjoins_tests.rs`. Levels:
+Tests: `gvn_tests.rs`, `gvn_load_tests.rs`. Levels:
 `docs/reference/levels.md`. LLVM `GVN.cpp`; gcc `tree-ssa-pre.cc`.

@@ -35,6 +35,7 @@ use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 
 use crate::aa::{AAQueryInfo, AAResults, AliasResult, LocationSize, MemoryEffects, MemoryLocation, ModRefInfo};
+use crate::capturetracking::{CaptureComponents, DEFAULT_MAX_USES_TO_EXPLORE, pointer_may_be_captured};
 use crate::memory::Unit;
 
 /// `MaxLookupSearchDepth`.
@@ -264,6 +265,34 @@ impl<'a> BasicAA<'a> {
         llrm_mir::memory::returns_noalias(self.unit.context, self.unit.globals, self.unit.function, inst)
     }
 
+    fn in_fixed_space(
+        &self,
+        pointer: Operand,
+    ) -> bool {
+        self.unit.space(pointer).is_some_and(|space| self.unit.spaces().is_fixed(space))
+    }
+
+    /// A global variable or an alloca outside the fixed-address space.
+    fn program_object(
+        &self,
+        object: Operand,
+    ) -> bool {
+        (self.global_variable(object) || self.is_alloca(object)) && !self.in_fixed_space(object)
+    }
+
+    /// The result of `llrm.noalias`: reached by no pointer not based on it.
+    fn restrict_root(
+        &self,
+        object: Operand,
+    ) -> bool {
+        self.unit
+            .defining(object)
+            .is_some_and(
+                |(inst, one)| matches!(one.opcode, Opcode::Call(_))
+                    && self.unit.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::Restrict),
+            )
+    }
+
     /// `isIdentifiedFunctionLocal`.
     fn identified_local(
         &self,
@@ -306,25 +335,46 @@ impl<'a> BasicAA<'a> {
         })
     }
 
-    /// `AAQI.CA->getCapturesBefore(object).capturesNothing`, where the object
-    /// is a function-local identified one (the only kind capture tracking
-    /// is asked about), remembered in the batch.
+    /// `SimpleCaptureAnalysis::getCapturesBefore` (BasicAliasAnalysis.cpp:203):
+    /// what `PointerMayBeCaptured` finds of a function-local identified object
+    /// (provenance mask, stopping at full provenance), remembered in the batch
+    /// (`IsCapturedCache`). Any other object keeps its provenance.
+    fn captures_before(
+        &self,
+        object: Operand,
+        return_captures: bool,
+        aaqi: &mut AAQueryInfo,
+    ) -> CaptureComponents {
+        let Operand::Value(value) = object else { return CaptureComponents::PROVENANCE };
+        if !self.identified_local(object) {
+            return CaptureComponents::PROVENANCE;
+        }
+        let key = u64::from(value.0);
+        let found = match aaqi.captured.get(&key) {
+            Some(found) => *found,
+            None => {
+                let found = pointer_may_be_captured(
+                    self.unit.function,
+                    self.unit.globals,
+                    self.unit.context,
+                    value,
+                    CaptureComponents::PROVENANCE,
+                    |cc| cc.intersect(CaptureComponents::PROVENANCE) == CaptureComponents::PROVENANCE,
+                    DEFAULT_MAX_USES_TO_EXPLORE,
+                );
+                aaqi.captured.insert(key, found);
+                found
+            }
+        };
+        if return_captures { found.with_ret } else { found.without_ret }
+    }
+
     fn not_captured(
         &self,
         object: Operand,
         aaqi: &mut AAQueryInfo,
     ) -> bool {
-        let Operand::Value(value) = object else { return false };
-        if !self.identified_local(object) || self.argument(object) {
-            return false;
-        }
-        let key = u64::from(value.0);
-        if let Some(found) = aaqi.captured.get(&key) {
-            return !*found;
-        }
-        let captured = crate::capturecheck::may_be_captured(self.unit, value);
-        aaqi.captured.insert(key, captured);
-        !captured
+        self.captures_before(object, false, aaqi).captures_nothing()
     }
 
     /// `isObjectSmallerThan(object, size)`: an identified object whose whole
@@ -361,6 +411,18 @@ impl<'a> BasicAA<'a> {
         }
         let (o1, o2) = (self.underlying(v1), self.underlying(v2));
         if o1 != o2 {
+            // A fixed-address pointer is no global or frame object (not LLVM's:
+            // it has no such space, #2555).
+            if (self.in_fixed_space(v1) && self.program_object(o2))
+                || (self.in_fixed_space(v2) && self.program_object(o1))
+            {
+                return AliasResult::NoAlias;
+            }
+            // Pointers the pass made restrict, from different roots (not
+            // LLVM's).
+            if self.restrict_root(o1) && self.restrict_root(o2) {
+                return AliasResult::NoAlias;
+            }
             // Two different identified objects.
             if self.identified(o1) && self.identified(o2) {
                 return AliasResult::NoAlias;
@@ -631,9 +693,13 @@ impl BasicAA<'_> {
             && matches!(object, Operand::Value(_))
             && !is_call_itself
             && (local_slot || !returns_twice)
-            && self.not_captured(object, aaqi)
         {
-            other = ModRefInfo::NoModRef;
+            let captures = self.captures_before(object, false, aaqi);
+            if captures.captures_nothing() {
+                other = ModRefInfo::NoModRef;
+            } else if captures == CaptureComponents::READ_PROVENANCE {
+                other = other.intersect(ModRefInfo::Ref);
+            }
         }
         if arg.union(other) != other {
             let mut narrowed = ModRefInfo::NoModRef;
@@ -942,6 +1008,20 @@ mod tests {
             )
         };
         assert_eq!(answer(&body("store i32 0, ptr %b"), "a", "b", 4), AliasResult::NoAlias);
+        assert_eq!(answer(&body("store ptr %b, ptr @cell"), "a", "b", 4), AliasResult::MayAlias);
+    }
+
+    /// The address of a local only compared keeps its provenance:
+    /// `getCapturesBefore` asks for provenance only, so a loaded pointer is
+    /// still apart from it. The check followed every capture and said MayAlias.
+    #[test]
+    fn a_local_whose_address_is_only_compared_is_apart_from_a_loaded_pointer() {
+        let body = |address: &str| {
+            format!(
+                "@cell = global ptr null\ndefine i32 @f(ptr %p) {{\nentry:\n  %b = alloca i32\n  {address}\n  %a = load ptr, ptr @cell\n  ret i32 0\n}}\n"
+            )
+        };
+        assert_eq!(answer(&body("%n = icmp eq ptr %b, %p"), "a", "b", 4), AliasResult::NoAlias);
         assert_eq!(answer(&body("store ptr %b, ptr @cell"), "a", "b", 4), AliasResult::MayAlias);
     }
 

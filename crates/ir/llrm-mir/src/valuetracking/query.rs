@@ -119,10 +119,7 @@ impl<'a> Query<'a> {
         a: InstId,
         b: InstId,
     ) -> bool {
-        let Some(block) = self.block_of(a).filter(|block| Some(*block) == self.block_of(b)) else { return false };
-        let instructions = self.function.block(block).instructions();
-        let at = |inst: InstId| instructions.iter().position(|one| *one == inst);
-        matches!((at(a), at(b)), (Some(x), Some(y)) if x < y)
+        self.block_of(a).is_some_and(|block| Some(block) == self.block_of(b)) && self.function.comes_before(a, b)
     }
 
     pub fn type_of(

@@ -27,7 +27,7 @@ fn phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function.block(block).iter().take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
+    function.iter_block(block).take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
 }
 
 /// `call`, a call to `callee`, replaced by a copy of its body, which
@@ -51,9 +51,30 @@ pub fn splice_before(
     callee: &Function,
     anchor: Option<InstId>,
 ) -> Vec<InstId> {
+    spliced(context, function, call, callee, anchor).copies
+}
+
+/// A copy `splice_before` made.
+pub struct Spliced {
+    /// The instructions of the copy, in the order of the body's.
+    pub copies: Vec<InstId>,
+    /// The copy of the body's entry block.
+    pub entry: BlockId,
+    /// The branches back that stand for the body's returns.
+    pub returns: Vec<InstId>,
+}
+
+/// `splice_before`, with where the copy begins and returns.
+pub fn spliced(
+    context: &Context,
+    function: &mut Function,
+    call: InstId,
+    callee: &Function,
+    anchor: Option<InstId>,
+) -> Spliced {
     let void = context.types.void();
     let block = function.parent(call).expect("a placed call");
-    let instructions = function.block(block).instructions().to_vec();
+    let instructions = function.iter_block(block).collect::<Vec<_>>();
     let at = instructions.iter().position(|&one| one == call).expect("in its block");
     // What followed the call, and the phis that named its block.
     let rest = function.create_block(None);
@@ -85,13 +106,15 @@ pub fn splice_before(
     let entry = callee.entry().expect("a defined callee");
     let mut made = Vec::new();
     let mut returns = Vec::new();
+    let mut returned_from = Vec::new();
     for &one in callee.layout() {
-        for inst in callee.block(one).iter() {
+        for inst in callee.iter_block(one) {
             let instruction = callee.instruction(inst);
             if instruction.opcode == Opcode::Ret {
                 returns.push((instruction.operands.first().copied(), blocks[&one]));
                 let back =
                     function.create_instruction(Opcode::Br, void, vec![Operand::Block(rest)], Flags::default(), None);
+                returned_from.push(back);
                 function.insert(back, Position::End(blocks[&one])).expect("a placed block");
                 continue;
             }
@@ -148,5 +171,5 @@ pub fn splice_before(
         function.replace_all_uses_with(result, with);
     }
     function.erase(call).expect("its uses were replaced");
-    copies
+    Spliced { copies, entry: blocks[&entry], returns: returned_from }
 }

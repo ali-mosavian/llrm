@@ -307,6 +307,7 @@ impl Forest {
     /// in the loops `from` is in.
     fn split(
         &mut self,
+        function: &Function,
         bridge: i64,
         from: i64,
         header: i64,
@@ -315,6 +316,8 @@ impl Forest {
         for one in loops.iter_mut().filter(|one| one.header != header && one.body.contains(&from)) {
             one.body.insert(bridge);
         }
+        // A loop one block larger may now be the larger of two siblings.
+        Self::ordered(function, loops);
     }
 
     /// As `cfg::natural` lists them: smallest first, equal ones by the place in
@@ -368,13 +371,7 @@ fn _phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-        .collect()
+    function.iter_block(block).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
 }
 
 /// Whether an instruction may be skipped on entry: it computes, and nothing
@@ -472,10 +469,7 @@ fn _shape_of(
         return None;
     }
     let work = function
-        .block(header)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(header)
         .filter(
             |&inst| {
                 let op = function.instruction(inst);
@@ -563,7 +557,7 @@ pub(crate) fn _rotate(
                 Flags::default(),
                 function.value(value).name.clone().as_deref(),
             );
-            let top = function.block(shape.first).instructions().first().copied();
+            let top = function.block(shape.first).first();
             function.insert(phi, top.map_or(Position::End(shape.first), Position::Before)).expect("a placed block");
             (phi, Operand::Value(function.instruction(phi).result.expect("a phi's value")))
         })
@@ -585,7 +579,7 @@ pub(crate) fn _rotate(
         let mut updater = SsaUpdater::new(function.value(value).ty, function.value(value).name.clone().as_deref());
         updater.add_available_value(shape.preheader, starts[index]);
         updater.add_available_value(shape.latch, latest(nexts[index]));
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             let user = function.instruction(one.user);
             let at = match (user.opcode == Opcode::Phi).then(|| user.operands[one.index as usize + 1]) {
                 Some(Operand::Block(from)) => from,
@@ -607,7 +601,7 @@ pub(crate) fn _rotate(
         let mut updater = SsaUpdater::new(function.value(value).ty, function.value(value).name.clone().as_deref());
         updater.add_available_value(shape.preheader, copy);
         updater.add_available_value(shape.header, Operand::Value(value));
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             if function.parent(one.user) != Some(shape.header) {
                 updater.rewrite_use(context, function, one);
             }
@@ -713,12 +707,8 @@ fn copied(
         let Some(shape) = _shape_of(function, &loop_, false, true) else {
             continue;
         };
-        let insns = function
-            .block(shape.header)
-            .instructions()
-            .iter()
-            .filter(|&&inst| function.instruction(inst).opcode != Opcode::Phi)
-            .count();
+        let insns =
+            function.iter_block(shape.header).filter(|&inst| function.instruction(inst).opcode != Opcode::Phi).count();
         if insns > MAX_HEADER_INSNS {
             continue;
         }
@@ -794,12 +784,7 @@ fn _chained(
     if loop_.entering(function) != BTreeSet::from([preheader]) {
         return Ok(None);
     }
-    let insns = function
-        .block(first)
-        .instructions()
-        .iter()
-        .filter(|&&inst| function.instruction(inst).opcode != Opcode::Phi)
-        .count();
+    let insns = function.iter_block(first).filter(|&inst| function.instruction(inst).opcode != Opcode::Phi).count();
     if insns > remaining {
         return Ok(None);
     }
@@ -817,7 +802,7 @@ fn _chained(
     let bridge = crate::edges::split(function, cfg::block(preheader), first, Vec::new())?;
     // The loop is as it was and a block stands on its way in, in the loops
     // around.
-    forest.split(cfg::id(bridge), preheader, cfg::id(first));
+    forest.split(function, cfg::id(bridge), preheader, cfg::id(first));
     let Some(shape) = _shape_of(function, &loop_, true, true).filter(|shape| shape.preheader == bridge) else {
         forest.check(function);
         return Ok(None);
@@ -892,10 +877,7 @@ fn _copy_test(
     let phis_known = known.len();
     let entering = function.terminator(shape.preheader).expect("a terminated preheader");
     let work: Vec<InstId> = function
-        .block(shape.header)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(shape.header)
         .filter(|&inst| {
             function.instruction(inst).opcode != Opcode::Phi && !function.instruction(inst).opcode.is_terminator()
         })

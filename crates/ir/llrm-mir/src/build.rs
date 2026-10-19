@@ -134,7 +134,7 @@ pub fn function_declaration(
     for (at, ty) in parameters.into_iter().enumerate() {
         function.parameters.push(ValueId(function.values.len() as u32));
         function.values.push(ValueData { ty, name: None, def: ValueDef::Argument(at as u32) });
-        function.value_uses.push_value();
+        function.uses.push_value();
         function.parameter_attrs.push(Vec::new());
     }
     intrinsics::declare(&mut function, &context.types, name);
@@ -389,8 +389,7 @@ impl Builder<'_> {
             .create_instruction(opcode, ty, Vec::new(), Flags::default(), Some(name).filter(|one| !one.is_empty()));
         let first = self
             .function
-            .block(entry)
-            .iter()
+            .iter_block(entry)
             .find(|&one| !matches!(self.function.instruction(one).opcode, Opcode::Alloca { .. }));
         let position = first.map_or(Position::End(entry), Position::Before);
         self.function.insert(inst, position).expect("the entry block");

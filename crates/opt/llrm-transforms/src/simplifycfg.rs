@@ -407,9 +407,7 @@ fn jump_simplified(
     else {
         return false;
     };
-    if function.entry() == Some(block)
-        || function.block(block).len() != edges::phis(function, block).len() + 1
-    {
+    if function.entry() == Some(block) || function.block(block).len() != edges::phis(function, block).len() + 1 {
         return false;
     }
     let canonical = edge_sources(function, block).len() >= 2
@@ -466,7 +464,7 @@ fn phi_of(
 /// predecessors sent on): LLVM's `TryToSimplifyUncondBranchFromEmptyBlock`.
 /// MIRROR, except that a block keeps its name, and a loop's metadata check
 /// is on any `llvm.loop`.
-fn empty_block_removed(
+pub fn empty_block_removed(
     context: &Context,
     function: &mut Function,
     block: BlockId,
@@ -516,11 +514,8 @@ fn empty_block_removed(
 
     if alone {
         function.erase(last).expect("a jump defines nothing");
-        let anchor = function
-            .block(successor)
-            .iter()
-            .find(|&one| function.instruction(one).opcode != Opcode::Phi);
-        for inst in function.block(block).instructions().to_vec() {
+        let anchor = function.iter_block(successor).find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        for inst in function.iter_block(block).collect::<Vec<_>>() {
             function.move_to(inst, anchor.map_or(Position::End(successor), Position::Before)).expect("a placed phi");
         }
     } else {
@@ -544,7 +539,7 @@ fn empty_block_removed(
         function.erase_block(block).expect("a block nothing names");
     } else {
         // Everything but the common predecessor now goes to the successor.
-        for one in function.block_users(block).to_vec() {
+        for one in function.block_users(block).snapshot() {
             let parent = function.parent(one.user);
             if function.instruction(one.user).opcode.is_terminator()
                 && parent.is_some_and(|at| at != common.expect("a common predecessor") && predecessors.contains(&at))
@@ -703,10 +698,16 @@ fn values_redirected(
             }
         }
     }
-    // Both undef and poison incoming for one block is invalid: all become undef.
+    // Both undef and poison incoming for one block is invalid: all become
+    // undef.
     let poisons = true_undef
         .iter()
-        .filter(|&&at| matches!(operands[2 * at], Operand::Constant(id) if context.get(id).kind == ConstantKind::Poison))
+        .filter(|&&at| {
+            matches!(
+                operands[2 * at],
+                Operand::Constant(id) if context.get(id).kind == ConstantKind::Poison
+            )
+        })
         .count();
     if poisons != 0 && poisons != true_undef.len() {
         let ty = function.instruction(phi).ty;
@@ -753,7 +754,7 @@ pub fn unreachable_removed(
 /// keeping a one-input phi, since the block it names may go as well), what it
 /// defined replaced by poison, its instructions and then the blocks erased.
 /// LLVM's `DeleteDeadBlocks`.
-fn dead_blocks_deleted(
+pub fn dead_blocks_deleted(
     context: &Context,
     function: &mut Function,
     blocks: &[BlockId],
@@ -763,7 +764,7 @@ fn dead_blocks_deleted(
         for successor in edges_out_of(&operands.unwrap_or_default()) {
             function.predecessor_removed(context, successor, block, true);
         }
-        for inst in function.block(block).instructions().to_vec().into_iter().rev() {
+        for inst in function.iter_block(block).collect::<Vec<_>>().into_iter().rev() {
             if let Some(result) = function.instruction(inst).result {
                 let poison = context.constant(Constant { ty: function.value(result).ty, kind: ConstantKind::Poison });
                 function.replace_all_uses_with(result, Operand::Constant(poison));
@@ -795,11 +796,9 @@ fn only_unreachable(
     block: BlockId,
 ) -> bool {
     function
-        .block(block)
-        .instructions()
-        .iter()
-        .find(|&&inst| function.instruction(inst).opcode != Opcode::Phi)
-        .is_some_and(|&inst| function.instruction(inst).opcode == Opcode::Unreachable)
+        .iter_block(block)
+        .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
+        .is_some_and(|inst| function.instruction(inst).opcode == Opcode::Unreachable)
 }
 
 /// `last`, a terminator, replaced by `opcode` over `operands`; the new one

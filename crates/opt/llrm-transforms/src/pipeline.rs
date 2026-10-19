@@ -24,7 +24,7 @@
 //!   a["<b>A  once, whole module</b><br/><small>globalopt, ports (every body),<br/>stamp</small>"]:::mid
 //!   subgraph g_b["B  EACH BODY, TO A FIXED POINT (FIXED, MIR PIPELINE)"]
 //!     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
-//!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
+//!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
 //!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
@@ -154,11 +154,11 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fixednarrow, floatloop, fold,
-    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdeletion,
-    loopdistribute, loopfuse, loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit,
-    loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simpleloopunswitch,
-    simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
+    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, jumpthread, lcssa,
+    loopdeletion, loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit,
+    loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp,
+    simpleloopunswitch, simplifycfg, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -230,9 +230,9 @@ pub struct Options {
     /// turns it off.
     pub llvm_order: bool,
     /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
-    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on by
-    /// default, `LLRM_NO_ROTATE` turns it off. Not run where `unroll_jam` is
-    /// (see [`Options::rotating`]).
+    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; off by
+    /// default (it miscompiles, #2585), `LLRM_ROTATE` turns it on. Not run
+    /// where `unroll_jam` is (see [`Options::rotating`]).
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); on by default, `LLRM_NO_MEM2REG` turns it off.
@@ -243,7 +243,7 @@ pub struct Options {
     pub sroa: bool,
     /// The loop-invariant passes are the translated LICM ([`crate::licm`]):
     /// `licm` in the LICM slots and where `hoist` ran; on by default,
-    /// `LLRM_NO_LICM` brings back `hoist` and `loopmotion`.
+    /// `LLRM_NO_LICM` turns it off.
     pub licm: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
@@ -486,7 +486,7 @@ impl Options {
             "simplifycfg" => self.simplifycfg,
             "decide" => self.decide,
             "dead" => self.dead,
-            "hoist" | "loopmotion" | "licm" => self.hoist,
+            "hoist" | "loopmotion" | "licm" => self.hoist && self.licm,
             "gvn" | "equalcalls" | "earlycse" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sink" => self.sink,
@@ -551,8 +551,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Strict floating recurrences must retain their original iteration
         // order; LICM may move invariant preparation out afterwards.
         Box::new(floatloop::FloatLoop),
-        hoisting(applied),
-        Box::new(loopmotion::LoopMotion),
+        Box::new(crate::licm::Licm { apply: true, speculate: true }),
         // The loop's exit tests that nothing in it changes are made once, with
         // the loop's entry.
         Box::new(trivialunswitch::TrivialUnswitch),
@@ -580,22 +579,19 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
 
-/// The pass that moves loop invariants outside the LLVM-order slots: LLVM's
-/// LICM translated (`licm`), which also sinks and promotes, or `hoist` under
-/// `LLRM_NO_LICM`.
-fn hoisting(applied: &Applied) -> Box<dyn FunctionPass> {
-    if applied.options.licm {
-        Box::new(crate::licm::Licm { apply: true, speculate: true })
-    } else {
-        Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true })
-    }
+/// Under LLVM's order the translated LICM does the moving of code out of and
+/// into loops, in its three slots: the passes after the fixed point that
+/// stood in for MachineLICM and gcc's `pass_sink_code` (`hoist` again) have no
+/// counterpart there, and run only without the order or the LICM.
+pub fn llvm_motion(applied: &Applied) -> bool {
+    applied.options.llvm_order && applied.options.licm
 }
 
 /// Translations that have not joined the pipeline yet: `llrm-pass` and
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
 fn translated() -> Vec<Box<dyn FunctionPass>> {
-    vec![Box::new(bdce::Bdce), Box::new(crate::cvp::Cvp)]
+    vec![Box::new(crate::cvp::Cvp)]
 }
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`).
@@ -674,10 +670,9 @@ impl FunctionPass for Together {
     }
 }
 
-/// `LLRM_NO_ROTATE`, read once: set, the rotate slot of [`llvm_order`] does
-/// not run.
+/// `LLRM_ROTATE`, read once: set, the rotate slot of [`llvm_order`] runs.
 fn rotate_default() -> bool {
-    !llrm_support::env_flag!("LLRM_NO_ROTATE")
+    llrm_support::env_flag!("LLRM_ROTATE")
 }
 
 /// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by
@@ -721,17 +716,12 @@ pub(crate) fn llvm_order(
     };
     let earlycse = |name| slot(name, Box::new(crate::earlycse::EarlyCse));
     // `licm<allowspeculation>` or `licm<no-allowspeculation>`; under
-    // `LLRM_NO_LICM` the slot holds what ran there before, `hoist` and, in the
-    // places that had it, `loopmotion`.
-    let licm = |name, speculate, motion| {
+    // `LLRM_NO_LICM` the slot stays and holds nothing.
+    let licm = |name, speculate| -> Box<dyn FunctionPass> {
         if applied.options.licm {
             slot(name, Box::new(crate::licm::Licm { apply: true, speculate }))
         } else {
-            let mut parts: Vec<Box<dyn FunctionPass>> = vec![Box::new(hoist::Hoist { size, speculate, priced: false })];
-            if motion {
-                parts.push(Box::new(loopmotion::LoopMotion));
-            }
-            Box::new(Together { name, parts })
+            Box::new(Together { name, parts: Vec::new() })
         }
     };
     let canonical = |a: &'static str, b: &'static str| {
@@ -790,7 +780,7 @@ pub(crate) fn llvm_order(
                 // not proven to run, so that the second hoists into a preheader
                 // behind it (#2194). llrm skips the header copy at -Os, as
                 // gcc's -ftree-ch.
-                licm("licm@724", !rotating, true),
+                licm("licm@724", !rotating),
             ]);
             if rotating {
                 list.push(slot(
@@ -800,7 +790,7 @@ pub(crate) fn llvm_order(
                 list.extend(canonical("loopsimplify@728", "lcssa@728"));
             }
             list.extend([
-                licm("licm@730", true, false),
+                licm("licm@730", true),
                 slot("trivialunswitch@732", Box::new(simpleloopunswitch::SimpleLoopUnswitch)),
                 decide("decide@766"),
                 phiopt("phiopt@766"),
@@ -832,17 +822,20 @@ pub(crate) fn llvm_order(
                 // -O1 and -Og); rows against clang's -O1 are pending, a loss
                 // there becomes a numbered DEVIATE.
                 slot("gvn@787", Box::new(gvn::Gvn { pre: applied.options.pre })),
+                slot("sccp@792", Box::new(sccp::Sccp)),
+                slot("bdce@797", Box::new(bdce::Bdce)),
                 fold("fold@801"),
                 dead("dead@801"),
                 decide("decide@809"),
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
+                slot("adce@815", Box::new(adce::Adce)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
                 slot("merge@818", Box::new(loopidioms::Merge { size })),
-                slot("dse@820", Box::new(dse::Dse)),
+                slot("dse@820", Box::new(deadstore::DeadStoreElimination)),
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
             list.extend([
-                licm("licm@823", true, true),
+                licm("licm@823", true),
                 decide("decide@832"),
                 phiopt("phiopt@832"),
                 fold("fold@837"),
@@ -962,8 +955,18 @@ pub fn recorded(
     if applied.options.llvm_order {
         manager.hold::<GlobalsAA>();
     }
-    for stage in function_stages(applied) {
+    for (at, stage) in function_stages(applied).into_iter().enumerate() {
         manager.add(stage);
+        // LLVM's IPSCCP and DeadArgumentElimination run after the early
+        // function pipeline, before the Simplify list.
+        if at == 0 && applied.options.llvm_order {
+            manager.add_program(crate::walk::ModuleIpo {
+                inline: applied.options.inline,
+                ranges: applied.options.ipa_ranges,
+            });
+            // A program pass abandons it.
+            manager.hold::<GlobalsAA>();
+        }
     }
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
@@ -1074,8 +1077,8 @@ pub fn recorded(
     }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
-    if !guarded && applied.options.wanted("hoist") {
-        manager.add_boxed(hoisting(applied));
+    if !guarded && applied.options.wanted("hoist") && !llvm_motion(applied) {
+        manager.add(crate::licm::Licm { apply: true, speculate: true });
     }
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {
@@ -1085,12 +1088,6 @@ pub fn recorded(
     // sinks.
     if applied.options.wanted("addresssink") {
         manager.add(addresssink::AddressSink);
-    }
-    // After the passes that move work up and out: what is left below a branch
-    // that a path skips is moved to where it is needed (gcc's
-    // `pass_sink_code`).
-    if applied.options.wanted("sink") {
-        manager.add(sink::Sink { size: applied.options.prefers_size() });
     }
     // Last of the passes that reshape the body, as gcc's `pass_lower_switch`
     // follows its optimizations.
@@ -1143,7 +1140,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
-        passes.push(hoisting(applied));
+        passes.push(Box::new(crate::licm::Licm { apply: true, speculate: true }));
     }
     passes
 }

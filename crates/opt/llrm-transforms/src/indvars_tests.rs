@@ -451,13 +451,13 @@ end:
     manager.add(super::IndVars { exit_values: false, unrolls: None });
     let before = llrm_analysis::ranges::loops_solved();
     manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
-    // The pass that asks, and the one indvars's evaluation of the loop leaves
-    // the body needing; by hand it was a third. (`simplifyAndExtend`, opt-in,
-    // widens first and the changed body is solved a third time.)
+    // The pass that asks, indvars's evaluation of the loop, and the body the
+    // widening (which runs first, as LLVM's `simplifyAndExtend` does) changed:
+    // widening itself asks ScalarEvolution, not the bounds.
     assert_eq!(
         llrm_analysis::ranges::loops_solved() - before,
-        2,
-        "the loop's bounds were worked out more than the manager's twice"
+        3,
+        "the loop's bounds were worked out more than the manager's three times"
     );
 }
 
@@ -537,39 +537,6 @@ fn with_exit_values(text: &str) -> String {
     crate::testing::printed(&module)
 }
 
-/// The counter's step leaves a loop that also breaks, on `i + 1 < 32` false:
-/// the exit reads 32. It read the stepped counter, which kept the old one
-/// alive past its step (mandel: `lea; or; je; mov` where `inc; je` does), and
-/// made 32 in the latch each trip for the exit's phi.
-#[test]
-fn test_an_exit_phi_of_a_stepped_counter_is_the_number_its_count_gives() {
-    let text = with_exit_values(
-        "define i32 @f(i32 %n) {
-b0:
-  br label %b1
-
-b1:
-  %i = phi i32 [ 0, %b0 ], [ %next, %b2 ]
-  %c = icmp sgt i32 %i, %n
-  br i1 %c, label %b3, label %b2
-
-b2:
-  %next = add i32 %i, 1
-  %again = icmp slt i32 %next, 32
-  br i1 %again, label %b1, label %b4
-
-b3:
-  ret i32 -1
-
-b4:
-  %last = phi i32 [ %next, %b2 ]
-  ret i32 %last
-}
-",
-    );
-    assert!(text.contains("ret i32 32") && !text.contains("%last"), "{text}");
-}
-
 /// The counter's step leaves a loop that also breaks, on `i + 1 < 32` false.
 /// The old step read the exit's own count and wrote 32 (mandel: `lea; or; je;
 /// mov` where `inc; je` does). `rewriteLoopExitValues` asks `getSCEVAtExit`,
@@ -578,8 +545,7 @@ b4:
 /// evaluated at the exit's count (the per-exit retry is for a variant one), and
 /// too dear to write under the budget. The exit keeps reading the counter.
 #[test]
-fn test_an_exit_phi_of_a_stepped_counter_in_a_loop_with_a_second_exit_keeps_its_value_when_extending() {
-    crate::simplifyindvar::tests_forced(true);
+fn test_an_exit_phi_of_a_stepped_counter_in_a_loop_with_a_second_exit_keeps_its_value() {
     let text = with_exit_values(
         "define i32 @f(i32 %n) {
 b0:
@@ -710,8 +676,7 @@ fn header_phis(module: &mut Module) -> usize {
     let function = f(module);
     let [one] = &loops::loops(&cfg::graph(function), function.entry().map(cfg::id))[..] else { panic!("one loop") };
     function
-        .block(cfg::block(one.header))
-        .iter()
+        .iter_block(cfg::block(one.header))
         .filter(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
         .count()
 }

@@ -6,7 +6,7 @@
 use llrm_mir::module::Module;
 use llrm_mir::passes::Outer;
 
-use crate::gvn::pass::run_impl;
+use crate::gvn::pass::run_impl_cfg;
 use crate::testing::{parsed, printed, results};
 
 const XY: &[&[i128]] = &[&[0, 0], &[3, 5], &[-7, 2], &[0x7fff, 1]];
@@ -18,13 +18,22 @@ fn loaded(
     body: &str,
     inputs: &[&[i128]],
 ) -> (String, bool) {
+    loaded_with(body, inputs, true)
+}
+
+/// As `loaded`; `pre` says whether load PRE is on.
+fn loaded_with(
+    body: &str,
+    inputs: &[&[i128]],
+    pre: bool,
+) -> (String, bool) {
     let text = format!("@g = global [8 x i16] zeroinitializer\n@h = global [8 x i16] zeroinitializer\n\n{body}");
     let before = parsed(&text);
     let mut module: Module = before.clone();
     let layout = llrm_analysis::testing::layout(&module);
     let outer = Outer::of(&module, None);
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = run_impl(context, &layout, function, &outer);
+    let changed = run_impl_cfg(context, &layout, function, &outer, pre, None).0;
     let printed = printed(&module);
     assert_eq!(results(&module, inputs), results(&before, inputs), "{printed}");
     (printed, changed)
@@ -130,14 +139,10 @@ b3:
 ",
         XYC,
     );
-    assert!(changed && !text.contains("load") && text.contains("phi i16 [ %x, %b1 ], [ %y, %b2 ]"), "{text}");
+    assert!(changed && !text.contains("load") && text.contains("phi i16 [ %y, %b2 ], [ %x, %b1 ]"), "{text}");
 }
 
-#[test]
-fn test_a_load_partly_available_is_left_for_load_pre() {
-    // One arm stores, the other does not: stage 5 makes it full (OWED).
-    let (text, _) = loaded(
-        "define i16 @f(i16 %x, i16 %y, i1 %c) {
+const PARTLY: &str = "define i16 @f(i16 %x, i16 %y, i1 %c) {
 b0:
   br i1 %c, label %b1, label %b2
 
@@ -152,10 +157,96 @@ b3:
   %r = load i16, ptr @g
   ret i16 %r
 }
+";
+
+#[test]
+fn test_a_load_partly_available_is_loaded_in_the_predecessor_that_lacks_it() {
+    let (text, changed) = loaded(PARTLY, XYC);
+    assert!(changed && text.contains("%r.pre = load i16, ptr @g") && text.contains("phi i16"), "{text}");
+    assert!(!text.contains("b3:\n  %r = load"), "{text}");
+}
+
+/// The unrelated arm must not acquire a read that could fault or observe
+/// memory: the load goes on the edge, taken or not.
+#[test]
+fn test_a_missing_load_on_a_conditional_edge_gets_its_own_block() {
+    for branch in ["br i1 %d, label %b3, label %b4", "br i1 %d, label %b4, label %b3"] {
+        let (text, changed) = loaded(
+            &format!(
+                "define i16 @f(i1 %c, i1 %d, i16 %v, i16 %s) {{
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %y = load i16, ptr @g
+  %z = add i16 %y, 1
+  br label %b3
+
+b2:
+  {branch}
+
+b3:
+  %x = load i16, ptr @g
+  ret i16 %x
+
+b4:
+  ret i16 0
+}}
+"
+            ),
+            &[&[1, 1, 7, 0], &[1, 0, 7, 0], &[0, 1, 7, 0], &[0, 0, 7, 0]],
+        );
+        assert!(changed, "{text}");
+        assert!(!text.contains("b2:\n  br label %b3"), "the edge is split, not b2's own:\n{text}");
+        assert!(text.contains("load i16, ptr @g\n  br label %b3"), "{text}");
+    }
+}
+
+#[test]
+fn test_a_load_partly_available_is_left_where_pre_is_off() {
+    let (text, _) = loaded_with(PARTLY, XYC, false);
+    assert!(text.contains("%r = load i16, ptr @g") && !text.contains(".pre"), "{text}");
+}
+
+#[test]
+fn test_a_loop_header_load_of_an_invariant_address_is_loaded_in_the_preheader_and_after_the_clobber() {
+    let (text, changed) = loaded(
+        "define void @w() {
+b0:
+  store i16 5, ptr @h
+  ret void
+}
+
+define i16 @f(i16 %x, i16 %n, i1 %c) {
+b0:
+  %a = load i16, ptr @h
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b3 ]
+  %s = phi i16 [ %a, %b0 ], [ %t, %b3 ]
+  %r = load i16, ptr @h
+  %t = add i16 %s, %r
+  %skip = icmp eq i16 %i, 1
+  br i1 %skip, label %b2, label %b3
+
+b2:
+  call void @w()
+  br label %b3
+
+b3:
+  %j = add i16 %i, 1
+  %more = icmp slt i16 %j, %n
+  br i1 %more, label %b1, label %b4
+
+b4:
+  ret i16 %t
+}
 ",
-        XYC,
+        &[&[0, 3, 1], &[0, 1, 0], &[2, 5, 1]],
     );
-    assert!(text.contains("%r = load i16, ptr @g"), "{text}");
+    assert!(changed, "{text}");
+    assert_eq!(text.matches("load i16, ptr @h").count(), 2, "the preheader's and the one after the call:\n{text}");
 }
 
 #[test]

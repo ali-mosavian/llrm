@@ -1987,7 +1987,7 @@ impl<'a> State<'a> {
         // True as long as the current instruction is guaranteed to execute.
         let mut guaranteed_to_execute = true;
         // Queue conditions and assumes.
-        for inst in q.function.block(bb).iter() {
+        for inst in q.function.iter_block(bb) {
             let instruction = q.function.instruction(inst);
             if let Some(result) = instruction.result
                 && pattern::icmp_like(q, Operand::Value(result)).is_some()
@@ -2887,7 +2887,7 @@ fn replace_overflow_uses(
     let aggregate = instruction.result.expect("a with.overflow call has a result");
     let value_ty = function.operand_type(context, args[0]).expect("an operand has a type");
     let mut res: Option<Operand> = None;
-    for used in function.users(aggregate).to_vec() {
+    for used in function.users(aggregate).snapshot() {
         let user = function.instruction(used.user);
         let Opcode::ExtractValue(indices) = &user.opcode else { continue };
         let Some(user_result) = user.result else { continue };

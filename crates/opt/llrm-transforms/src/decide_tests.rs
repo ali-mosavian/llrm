@@ -931,7 +931,8 @@ zero:
     ));
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    let settled = super::_settled(context, &layout, function, &outer);
+    let settled =
+        super::_settled(context, &layout, function, &outer, &mut llrm_mir::lazyvalueinfo::LazyValueInfo::new());
     let at = |name: &str| {
         function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some(name)).expect("block")
     };

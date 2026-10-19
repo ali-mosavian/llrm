@@ -229,9 +229,9 @@ impl FloatLoop {
                 return false;
             };
             function.predecessors(exit) == [header]
-                && !function.block(exit).iter().any(|i| function.instruction(i).opcode == Opcode::Phi)
-                && function.block(header).iter().any(|i| function.instruction(i).opcode == Opcode::Phi)
-                && function.block(latch).iter().all(|inst| {
+                && !function.iter_block(exit).any(|i| function.instruction(i).opcode == Opcode::Phi)
+                && function.iter_block(header).any(|i| function.instruction(i).opcode == Opcode::Phi)
+                && function.iter_block(latch).all(|inst| {
                     let op = function.instruction(inst);
                     match op.opcode {
                         Opcode::Br => op.operands.len() == 1,
@@ -239,7 +239,7 @@ impl FloatLoop {
                         _ => floatfacts::rule(&memory, inst).is_some(),
                     }
                 })
-                && floatfacts::touches_in(unit.context, function, &function.block(latch).iter().collect::<Vec<_>>())
+                && floatfacts::touches_in(unit.context, function, &function.iter_block(latch).collect::<Vec<_>>())
         })
     }
 
@@ -356,12 +356,12 @@ fn _planned(
         return None;
     };
     if function.predecessors(exit) != [header]
-        || function.block(exit).iter().any(|inst| function.instruction(inst).opcode == Opcode::Phi)
+        || function.iter_block(exit).any(|inst| function.instruction(inst).opcode == Opcode::Phi)
     {
         return None;
     }
-    let header_insts = function.block(header).iter().collect::<Vec<_>>();
-    let latch_insts = function.block(latch).iter().collect::<Vec<_>>();
+    let header_insts = function.iter_block(header).collect::<Vec<_>>();
+    let latch_insts = function.iter_block(latch).collect::<Vec<_>>();
     let phis = header_insts
         .iter()
         .copied()
@@ -545,7 +545,7 @@ fn _rewritten(
         updater.rewrite_use(context, function, one);
     }
     // The header's phis lose the back edge, each then its one input.
-    for phi in function.block(header).iter().collect::<Vec<_>>() {
+    for phi in function.iter_block(header).collect::<Vec<_>>() {
         if function.instruction(phi).opcode != Opcode::Phi {
             continue;
         }

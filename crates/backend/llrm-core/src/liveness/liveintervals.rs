@@ -568,6 +568,10 @@ impl LiveIntervals {
         def: &SlotIndex,
         reg: u32,
     ) -> InstrKey {
+        // Nearly every index holds one instruction.
+        if !self.indexes.is_bundled(def) {
+            return self.indexes.get_instruction_from_index(def).expect("No instruction defining live value");
+        }
         let all = self.indexes.get_instructions_at(def);
         all.iter().copied().find(|key| self.insns[key].defines.contains(&reg)).unwrap_or_else(|| all[0])
     }

@@ -73,15 +73,16 @@ pub fn enabled() -> bool {
     !llrm_support::env_flag!("LLRM_NO_SCEV_IVCMP")
 }
 
-/// `LLRM_SCEV_WIDEN`, read once: `indvars` runs `simplifyAndExtend` (the IV
+/// `LLRM_NO_SCEV_WIDEN`, read once: `indvars` runs `simplifyAndExtend` (the IV
 /// users simplified and the counters widened, as LLVM's IndVarSimplify), not
-/// `simplified` and `indvars::widened`. Off by default until #2531 is fixed.
+/// `simplified` and `indvars::widened`. `LLRM_NO_SCEV_WIDEN` keeps the old
+/// step.
 pub fn widening_enabled() -> bool {
     #[cfg(test)]
     if let Some(forced) = tests::FORCED.with(|one| one.get()) {
         return forced;
     }
-    llrm_support::env_flag!("LLRM_SCEV_WIDEN")
+    !llrm_support::env_flag!("LLRM_NO_SCEV_WIDEN")
 }
 
 /// Every comparison with an induction variable that ScalarEvolution decides,
@@ -102,8 +103,7 @@ pub fn simplified(
                 let header = loop_.get_header();
                 let phis: Vec<InstId> = cx
                     .function
-                    .block(header)
-                    .iter()
+                    .iter_block(header)
                     .take_while(|inst| cx.function.instruction(*inst).opcode == Opcode::Phi)
                     .collect();
                 for phi in phis {
@@ -377,12 +377,8 @@ fn simplify_and_extend(
     has_guards: bool,
 ) -> bool {
     let mut wide_ivs: Vec<WideIvInfo> = Vec::new();
-    let mut loop_phis: Vec<InstId> = e
-        .function
-        .block(header)
-        .iter()
-        .take_while(|inst| e.function.instruction(*inst).opcode == Opcode::Phi)
-        .collect();
+    let mut loop_phis: Vec<InstId> =
+        e.function.iter_block(header).take_while(|inst| e.function.instruction(*inst).opcode == Opcode::Phi).collect();
 
     // Each round of simplification iterates through the SimplifyIVUsers
     // worklist for all current phis, then determines whether any IVs can be

@@ -49,6 +49,7 @@ use llrm_support::hash::HashSet;
 use super::table::{Env, ExprOp, LeaderMap, ValueTable};
 use crate::local;
 
+mod loadpre;
 mod loads;
 
 /// DEVIATE 17 (temporary): what a taken compare says of its operands (`A == B`
@@ -83,6 +84,10 @@ pub struct GvnPass<'a> {
     leader_table: LeaderMap,
     /// `MD`: the memory dependence cache, kept in step with the edits.
     md: MemoryDependenceResults,
+    /// `enable-load-pre`, and the scalar PRE: the level's `pre`.
+    pre: bool,
+    /// `LI`, made when a load PRE asks and dropped when the CFG changes.
+    loops: Option<llrm_mir::loopinfo::LoopInfo>,
     dead_blocks: IdSet<BlockId>,
     /// A block was merged or an edge split.
     cfg_changed: bool,
@@ -95,7 +100,7 @@ pub fn run_impl(
     function: &mut Function,
     outer: &Outer,
 ) -> bool {
-    run_impl_cfg(context, layout, function, outer, None).0
+    run_impl_cfg(context, layout, function, outer, true, None).0
 }
 
 /// `run_impl`, and whether it changed the CFG: merged a block or split an edge.
@@ -105,6 +110,7 @@ pub fn run_impl_cfg(
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
+    pre: bool,
     dominators: Option<&DomTree>,
 ) -> (bool, bool) {
     let tables = TABLES.with(|pool| pool.take()).unwrap_or_else(|| (ValueTable::new(), LeaderMap::default()));
@@ -118,6 +124,8 @@ pub fn run_impl_cfg(
         vn: tables.0,
         leader_table: tables.1,
         md: MemoryDependenceResults::default(),
+        pre,
+        loops: None,
         dead_blocks: IdSet::new(),
         cfg_changed: false,
     };
@@ -145,6 +153,7 @@ impl GvnPass<'_> {
     }
 
     fn refresh_dominators(&mut self) {
+        self.loops = None;
         self.dt = std::borrow::Cow::Owned(DomTree::of(self.function));
     }
 
@@ -220,7 +229,7 @@ impl GvnPass<'_> {
         for phi in to_remove.iter() {
             self.remove_instruction(phi);
         }
-        for inst in self.function.block(block).instructions().to_vec() {
+        for inst in self.function.iter_block(block).collect::<Vec<_>>() {
             if self.function.is_erased(inst) {
                 continue;
             }
@@ -351,7 +360,7 @@ impl GvnPass<'_> {
     ) -> bool {
         matches!(
             value,
-            Operand::Value(id) if self.function.users(id).len() == 1
+            Operand::Value(id) if self.function.users(id).has_one_use()
         )
     }
 
@@ -987,6 +996,7 @@ impl GvnPass<'_> {
         succ: BlockId,
     ) -> Option<BlockId> {
         let block = crate::edges::split_critical_edge(self.function, pred, succ)?;
+        self.md.invalidate_cached_predecessors();
         self.cfg_changed = true;
         self.refresh_dominators();
         Some(block)

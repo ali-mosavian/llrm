@@ -564,3 +564,234 @@ fn test_a_store_after_the_exit_test_leaves_the_value_of_the_last_trip() {
     let (_, after) = applied(&text, &trips());
     assert!(block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
 }
+
+/// A slot stored in an outer loop and read in an inner one through a pointer
+/// that joins its address with a pointer loaded from memory: the read may be of
+/// the slot, so it is not promoted. LICM took `*s = 1` out of the loop and the
+/// read saw the slot unwritten (`phi_slot_unknown_arm`, bench bintree bq32
+/// printed 2158 for 5736113, once LoopRotate put the inlined loop in this
+/// form).
+#[test]
+fn test_a_slot_read_through_a_join_with_a_loaded_pointer_is_not_promoted() {
+    let text = "@tbl = internal global [64 x i8] zeroinitializer
+@t = internal constant ptr @tbl
+
+define i16 @f(i16 %n) {
+b1:
+  %a = alloca i16
+  %t = load volatile ptr, ptr @t
+  br label %outer
+
+outer:
+  %i = phi i16 [ 0, %b1 ], [ %i1, %latch ]
+  %c = icmp sgt i16 %i, 1
+  br i1 %c, label %set, label %latch
+
+set:
+  store i16 1, ptr %a
+  br label %inner
+
+inner:
+  %p = phi ptr [ %a, %set ], [ %q, %inner ]
+  %v = load i16, ptr %p
+  %q = getelementptr i8, ptr %t, i16 %v
+  %z = load i16, ptr %q
+  %d = icmp eq i16 %z, 0
+  br i1 %d, label %done, label %inner
+
+done:
+  %w = phi ptr [ %q, %inner ]
+  store i16 %i, ptr %w
+  br label %latch
+
+latch:
+  %i1 = add i16 %i, 1
+  %e = icmp slt i16 %i1, %n
+  br i1 %e, label %outer, label %exit
+
+exit:
+  ret i16 0
+}
+";
+    let mut module = parsed(text);
+    let after = crate::testing::managed(&mut module, Licm { apply: true, speculate: false });
+    assert!(after.contains("store i16 1, ptr %a"), "the slot's store left the loop: {after}");
+}
+
+/// A promoted store with no load before the loop takes `UndefValue` on the
+/// preheader edge, as LLVM's `SSA.AddAvailableValue(Preheader, UndefValue)`;
+/// with poison a later fold was free to pick the arm (loopidioms'
+/// `phi_slot_unknown_arm` printed 2158 where 5736113 was wanted).
+#[test]
+fn test_a_promoted_store_without_a_load_starts_from_undef_not_poison() {
+    let text = "define void @fill(ptr %p) {
+b1:
+  br label %b2
+
+b2:
+  %0 = phi i16 [ 0, %b1 ], [ %3, %b3 ]
+  %1 = icmp slt i16 %0, 8
+  br i1 %1, label %b4, label %b5
+
+b4:
+  %2 = icmp ult i16 %0, 8
+  br i1 %2, label %b3, label %b6
+
+b3:
+  store i16 %0, ptr %p
+  %3 = add i16 %0, 1
+  br label %b2
+
+b5:
+  ret void
+
+b6:
+  unreachable
+}
+";
+    let mut after = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let after = crate::testing::printed(&after);
+    assert!(after.contains("[ undef, %b1 ]") && !after.contains("poison"), "{after}");
+}
+
+/// Asks the accesses' annotations, as the next pass that reads memory does.
+struct AsksAnnotated;
+
+impl llrm_mir::passes::FunctionPass for AsksAnnotated {
+    fn name(&self) -> &'static str {
+        "asks-annotated"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_analysis::manager::Annotated>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// A LICM run that only moved instructions kept the accesses' annotations: the
+/// next run (or any pass asking MemorySSA) found them held. They were derived
+/// again after every hoist, 81% of the cost of a MemorySSA miss in d_faces.
+#[test]
+fn test_a_hoist_only_run_keeps_the_annotations_for_the_next_ask() {
+    let text = "define i16 @f(i16 %n, i16 %a) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b2 ]
+  %k = mul i16 %a, 3
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %j = add i16 %i, %k
+  br label %b1
+
+b3:
+  ret i16 %i
+}
+";
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.add(AsksAnnotated);
+    let (_, misses_before) = llrm_mir::counts::analysed("annotated");
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let (_, misses) = llrm_mir::counts::analysed("annotated");
+    assert!(crate::testing::printed(&module).contains("%k = mul"), "premise: the multiply is hoisted");
+    assert_eq!(misses - misses_before, 1, "the next ask derived the annotations again");
+}
+
+/// `text` through `Licm` on the Dos target, printed.
+fn licm_printed(text: &str) -> String {
+    let mut module = parsed(&format!("{}{text}", llrm_analysis::testing::DOS));
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    crate::testing::printed(&module)
+}
+
+/// A slice descriptor is a `noalias readonly` parameter and its elements are
+/// written through a pointer loaded from it: the length and the data pointer
+/// it holds are invariant whatever the stores write. Overlap with an
+/// unknown pointer kept both in Nib's loops, and with them every bounds
+/// check out of reach of the counting passes.
+#[test]
+fn test_a_load_from_a_readonly_noalias_parameter_leaves_past_a_store() {
+    let text = "define i16 @f(i16 %n, ptr noalias readonly dereferenceable(16) %d) {
+b0:
+  %data = getelementptr i8, ptr %d, i16 2
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %p = load ptr, ptr %data
+  %q = getelementptr i8, ptr %p, i16 %i
+  store i8 1, ptr %q
+  %v = load i16, ptr %d
+  %i1 = add i16 %i, %v
+  br label %b1
+
+b3:
+  ret i16 %i
+}
+";
+    let after = licm_printed(text);
+    let body = block_of(&after, "b2");
+    assert!(
+        body.iter().all(|line| !line.contains("load i16, ptr %d") && !line.contains("load ptr, ptr %data")),
+        "{after}"
+    );
+}
+
+/// The language says a load reads what is written once and never again: a store
+/// the loop cannot rule out as that cell (any pointer) does not keep it in the
+/// loop.
+#[test]
+fn test_a_load_the_language_says_is_invariant_leaves_past_a_store() {
+    let with = |load: &str| {
+        format!(
+            "@g = global i16 5
+
+define i16 @f(i16 %n, ptr %p) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %v = {load}
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+b3:
+  ret i16 %i
+}}
+
+!0 = !{{}}
+"
+        )
+    };
+    let plain = licm_printed(&with("load i16, ptr @g"));
+    assert!(block_of(&plain, "b2").iter().any(|line| line.contains("load i16, ptr @g")), "a plain load stays: {plain}");
+    let stated = licm_printed(&with("load i16, ptr @g, !invariant.load !0"));
+    assert!(block_of(&stated, "b2").iter().all(|line| !line.contains("load i16, ptr @g")), "{stated}");
+    assert!(block_of(&stated, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{stated}");
+}

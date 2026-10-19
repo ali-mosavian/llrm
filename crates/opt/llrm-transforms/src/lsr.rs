@@ -1300,8 +1300,7 @@ fn _stepped_before_test(
         // The step is made before the compare, on every path to it.
         let (stepped_in, compared_in) = (function.parent(made)?, block);
         let before = if stepped_in == compared_in {
-            let all = function.block(block);
-            all.iter().position(|one| one == made)? < all.iter().position(|one| one == compare)?
+            function.comes_before(made, compare)
         } else {
             view.shape().dominance.dominates(function, cfg::id(stepped_in), at)
         };
@@ -1395,8 +1394,8 @@ fn _steps_before_test(
     let ValueDef::Instruction(made) = function.value(step).def else { return false };
     let (here, there) = (function.parent(made), function.parent(proof.branch));
     here == there
-        && function.block(here.expect("a placed step")).iter().position(|one| one == made)
-            < function.block(there.expect("a placed branch")).iter().position(|one| one == proof.branch)
+        && function.iter_block(here.expect("a placed step")).position(|one| one == made)
+            < function.iter_block(there.expect("a placed branch")).position(|one| one == proof.branch)
         || here != there
             && here.is_some_and(|step| {
                 function
@@ -1418,7 +1417,7 @@ fn _live_anyway(
 ) -> BTreeSet<ValueId> {
     let mut live = BTreeSet::new();
     for &at in &loop_.body {
-        for inst in function.block(cfg::block(at)).iter() {
+        for inst in function.iter_block(cfg::block(at)) {
             if users.web.contains(&inst) || exit.is_some_and(|exit| exit.proof.compare == inst) {
                 continue;
             }
@@ -3065,8 +3064,7 @@ fn _applied(
                     }
                 };
                 let after = function
-                    .block(block)
-                    .iter()
+                    .iter_block(block)
                     .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
                     .expect("a terminator");
                 (Position::Before(after), register)
@@ -3076,8 +3074,7 @@ fn _applied(
         let value = if fit.next {
             // The step goes before its first reader in the latch.
             if let (Some(step), Place::Before(reader)) = (stepping[*index], site.at) {
-                let order = function.block(plan.latch);
-                if order.iter().position(|one| one == reader) < order.iter().position(|one| one == step) {
+                if function.comes_before(reader, step) {
                     function.move_to(step, Position::Before(reader)).expect("a placed reader");
                 }
             }
@@ -3120,9 +3117,7 @@ fn _applied(
     // already ahead of the branch stays, where its readers need it.
     if let (true, Some(next)) = (proof.posttested, stepping[*index]) {
         let block = function.parent(branch).expect("a placed branch");
-        let order = function.block(block);
-        let ahead = function.parent(next) == Some(block)
-            && order.iter().position(|one| one == next) < order.iter().position(|one| one == branch);
+        let ahead = function.parent(next) == Some(block) && function.comes_before(next, branch);
         if !ahead {
             function.move_to(next, Position::Before(branch)).expect("a placed branch");
         }
@@ -3169,9 +3164,14 @@ fn _after_step(
     let Place::Before(reader) = site.at else { return None };
     let Operand::Value(stepped) = stepped else { return None };
     let ValueDef::Instruction(step) = function.value(stepped).def else { return None };
-    let order = function.block(latch);
-    let (step_at, reader_at) = (order.iter().position(|one| one == step)?, order.iter().position(|one| one == reader)?);
-    if site.one.kind != UseKind::Address || fit.trip.is_some() || fit.k == BigInt::from(0) || step_at > reader_at {
+    if function.parent(step) != Some(latch) || function.parent(reader) != Some(latch) {
+        return None;
+    }
+    if site.one.kind != UseKind::Address
+        || fit.trip.is_some()
+        || fit.k == BigInt::from(0)
+        || function.comes_before(reader, step)
+    {
         return None;
     }
     let by = candidate.of.step.known()?;
@@ -3246,27 +3246,25 @@ fn _realized(
         // At the block's top, or after the register where the block steps it.
         let at = match shared {
             Some(block) => {
-                let order = function.block(block).instructions();
                 let defined = match register {
                     Operand::Value(value) => match function.value(value).def {
-                        ValueDef::Instruction(def) => order
-                            .iter()
-                            .position(|&one| one == def)
-                            .filter(|_| function.instruction(def).opcode != Opcode::Phi),
+                        ValueDef::Instruction(def) => Some(def)
+                            .filter(|&def| function.parent(def) == Some(block))
+                            .filter(|&def| function.instruction(def).opcode != Opcode::Phi),
                         _ => None,
                     },
                     _ => None,
                 };
                 let first = defined.map_or_else(
                     || {
-                        order
-                            .iter()
-                            .position(|&one| function.instruction(one).opcode != Opcode::Phi)
+                        function
+                            .iter_block(block)
+                            .find(|&one| function.instruction(one).opcode != Opcode::Phi)
                             .expect("a terminator")
                     },
-                    |def| def + 1,
+                    |def| function.next_in_block(def).expect("a terminator follows"),
                 );
-                Position::Before(order[first])
+                Position::Before(first)
             }
             None => at,
         };

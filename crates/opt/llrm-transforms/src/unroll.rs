@@ -322,11 +322,7 @@ fn _phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .iter()
-        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-        .collect()
+    function.iter_block(block).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
 }
 
 /// A block's instructions, its phis and terminator aside.
@@ -510,7 +506,7 @@ fn _expanded(
     let header_values =
         header_phis.iter().chain(&header_work).filter_map(|&inst| value(function, inst)).collect::<Vec<_>>();
     for &defined in &header_values {
-        for one in function.users(defined).to_vec() {
+        for one in function.users(defined).snapshot() {
             let outside = function.parent(one.user).is_some_and(|block| !body.contains(&cfg::id(block)));
             if outside {
                 function.set_operand(one.user, one.index as usize, _provided(Operand::Value(defined), &swap));

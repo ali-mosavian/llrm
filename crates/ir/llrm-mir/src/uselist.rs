@@ -14,16 +14,25 @@
 //! found without a search. `node` asserts the slot exists; `check_uses` is the
 //! test.
 //!
-//! DEVIATE 2 (temporary): block uses stay a `Vec` until the block-use PR;
-//! their order feeds predecessor order, which needs its own difftest.
+//! A block is named by terminators and phis, so it has a list as a value does:
+//! LLVM's `BasicBlock` is a `Value` and its predecessors are its use list.
 //!
-//! DEVIATE 3 (temporary): `Users::{len, to_vec, contains}` read a use list as
-//! a slice, which LLVM cannot; the readers are counted by
-//! `slice-users.txt` and the methods go at zero.
+//! DEVIATE 2: `Users::snapshot` copies the list, where LLVM walks it with
+//! `make_early_inc_range` while the body edits. A Rust loop cannot hold the
+//! walk and the function it edits; the copies are counted by `slice-users.txt`
+//! and may only fall. There is no `len` or `contains`: LLVM has none (it has
+//! `hasOneUse`, `hasNUses` and `hasNUsesOrMore`).
 
 use crate::module::Use;
 
 const NIL: u32 = u32::MAX;
+
+#[cfg(test)]
+thread_local! {
+    /// List entries a walk has stepped over, for a test that an edit reads none
+    /// to find the use it changes.
+    pub(crate) static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct Node {
@@ -35,12 +44,31 @@ struct Node {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UseLists {
     heads: Vec<u32>,
+    block_heads: Vec<u32>,
     nodes: Vec<Node>,
     base: Vec<u32>,
     cap: Vec<u32>,
 }
 
-/// The uses of one value, newest first.
+/// What a use list belongs to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Held {
+    Value(u32),
+    Block(u32),
+}
+
+impl Held {
+    /// What `operand` names, none for a constant.
+    pub fn of(operand: crate::module::Operand) -> Option<Held> {
+        match operand {
+            crate::module::Operand::Value(value) => Some(Held::Value(value.0)),
+            crate::module::Operand::Block(block) => Some(Held::Block(block.0)),
+            crate::module::Operand::Constant(_) => None,
+        }
+    }
+}
+
+/// The uses of one value or block, newest first.
 #[derive(Clone, Copy, Debug)]
 pub struct Users<'a> {
     lists: &'a UseLists,
@@ -57,6 +85,8 @@ impl<'a> Iterator for UserIter<'a> {
 
     fn next(&mut self) -> Option<&'a Use> {
         (self.at != NIL).then(|| {
+            #[cfg(test)]
+            WALKED.with(|walked| walked.set(walked.get() + 1));
             let node = &self.lists.nodes[self.at as usize];
             self.at = node.next;
             &node.at
@@ -83,11 +113,6 @@ impl<'a> Users<'a> {
         self.head == NIL
     }
 
-    /// LLVM has no O(1) count; this walks the list.
-    pub fn len(&self) -> usize {
-        self.iter().count()
-    }
-
     pub fn first(&self) -> Option<&'a Use> {
         self.iter().next()
     }
@@ -99,15 +124,31 @@ impl<'a> Users<'a> {
         uses.next().is_none().then_some(one)
     }
 
-    pub fn to_vec(&self) -> Vec<Use> {
-        self.iter().copied().collect()
+    /// LLVM's `hasOneUse`.
+    pub fn has_one_use(&self) -> bool {
+        self.only().is_some()
     }
 
-    pub fn contains(
+    /// LLVM's `hasNUses`: it reads at most `n + 1` entries.
+    pub fn has_n_uses(
         &self,
-        one: &Use,
+        n: usize,
     ) -> bool {
-        self.iter().any(|other| other == one)
+        self.iter().take(n + 1).count() == n
+    }
+
+    /// LLVM's `hasNUsesOrMore`: it reads at most `n` entries.
+    pub fn has_n_uses_or_more(
+        &self,
+        n: usize,
+    ) -> bool {
+        self.iter().take(n).count() == n
+    }
+
+    /// The uses as they stand, for a loop whose body edits the list (LLVM's
+    /// `make_early_inc_range`): a copy of the whole list, so it is counted.
+    pub fn snapshot(&self) -> Vec<Use> {
+        self.iter().copied().collect()
     }
 }
 
@@ -115,9 +156,12 @@ impl UseLists {
     pub fn reset(
         &mut self,
         values: usize,
+        blocks: usize,
     ) {
         self.heads.clear();
         self.heads.resize(values, NIL);
+        self.block_heads.clear();
+        self.block_heads.resize(blocks, NIL);
         self.nodes.clear();
         self.base.clear();
         self.cap.clear();
@@ -127,11 +171,35 @@ impl UseLists {
         self.heads.push(NIL);
     }
 
+    pub fn push_block(&mut self) {
+        self.block_heads.push(NIL);
+    }
+
+    fn head_of(
+        &self,
+        of: Held,
+    ) -> u32 {
+        match of {
+            Held::Value(value) => self.heads[value as usize],
+            Held::Block(block) => self.block_heads[block as usize],
+        }
+    }
+
+    fn head_mut(
+        &mut self,
+        of: Held,
+    ) -> &mut u32 {
+        match of {
+            Held::Value(value) => &mut self.heads[value as usize],
+            Held::Block(block) => &mut self.block_heads[block as usize],
+        }
+    }
+
     pub fn users(
         &self,
-        value: u32,
+        of: Held,
     ) -> Users<'_> {
-        Users { lists: self, head: self.heads[value as usize] }
+        Users { lists: self, head: self.head_of(of) }
     }
 
     /// Room for `len` operand slots of `inst`. Its old slots must be unlinked.
@@ -167,28 +235,28 @@ impl UseLists {
     /// LLVM's `Value::addUse`.
     pub fn link(
         &mut self,
-        value: u32,
+        of: Held,
         at: Use,
     ) {
         let node = self.node(at);
-        let head = self.heads[value as usize];
+        let head = self.head_of(of);
         self.nodes[node as usize] = Node { at, prev: NIL, next: head };
         if head != NIL {
             self.nodes[head as usize].prev = node;
         }
-        self.heads[value as usize] = node;
+        *self.head_mut(of) = node;
     }
 
     /// LLVM's `Use::removeFromList`.
     pub fn unlink(
         &mut self,
-        value: u32,
+        of: Held,
         at: Use,
     ) {
         let node = self.node(at);
         let (prev, next) = (self.nodes[node as usize].prev, self.nodes[node as usize].next);
         if prev == NIL {
-            self.heads[value as usize] = next;
+            *self.head_mut(of) = next;
         } else {
             self.nodes[prev as usize].next = next;
         }
@@ -197,16 +265,17 @@ impl UseLists {
         }
     }
 
-    /// The newest use of `value`, if any.
+    /// The newest use of `of`, if any.
     pub fn head(
         &self,
-        value: u32,
+        of: Held,
     ) -> Option<Use> {
-        let head = self.heads[value as usize];
+        let head = self.head_of(of);
         (head != NIL).then(|| self.nodes[head as usize].at)
     }
 
     pub fn clear_all(&mut self) {
         self.heads.fill(NIL);
+        self.block_heads.fill(NIL);
     }
 }

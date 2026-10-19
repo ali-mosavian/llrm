@@ -220,8 +220,7 @@ fn expanded_in_loop_with(
     let arguments: Vec<Operand> = (0..3).map(|at| Operand::Value(function.parameters()[at])).collect();
     let s = build(&mut se, &env.cx(&context, &function), header, &arguments);
     let at = function
-        .block(header)
-        .iter()
+        .iter_block(header)
         .find(|&one| matches!(function.instruction(one).opcode, Opcode::ICmp(_)))
         .expect("the compare");
     let mut expander = Expander::new("t");
@@ -288,7 +287,7 @@ fn test_a_recurrence_written_literally_has_its_own_phi() {
     assert_eq!(
         lines(&text),
         [
-            "%0 = phi i32 [ %a, %entry ], [ %1, %h ]",
+            "%0 = phi i32 [ %1, %h ], [ %a, %entry ]",
             "%i = phi i32 [ 0, %entry ], [ %i2, %h ]",
             "%i2 = add i32 %i, 1",
             "%c = icmp slt i32 %i2, %n",
@@ -311,7 +310,7 @@ fn test_a_post_increment_recurrence_starts_one_step_back() {
         lines(&text),
         [
             "%0 = sub i32 %a, %b",
-            "%1 = phi i32 [ %0, %entry ], [ %3, %h ]",
+            "%1 = phi i32 [ %3, %h ], [ %0, %entry ]",
             "%i = phi i32 [ 0, %entry ], [ %i2, %h ]",
             "%2 = add i32 %1, %b",
             "%i2 = add i32 %i, 1",
@@ -372,8 +371,7 @@ exit:
     let header = *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("h")).expect("%h");
     let named = |function: &llrm_mir::module::Function, name: &str| {
         function
-            .block(header)
-            .iter()
+            .iter_block(header)
             .find(|&one| {
                 function.instruction(one).result.is_some_and(|v| function.value(v).name.as_deref() == Some(name))
             })
@@ -413,7 +411,7 @@ exit:
         function
             .layout()
             .iter()
-            .flat_map(|&b| function.block(b).iter().collect::<Vec<_>>())
+            .flat_map(|&b| function.iter_block(b).collect::<Vec<_>>())
             .find(|&one| {
                 function.instruction(one).result.is_some_and(|v| function.value(v).name.as_deref() == Some(name))
             })

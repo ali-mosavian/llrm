@@ -122,6 +122,7 @@ use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, induction, ranges};
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask, signed};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
@@ -669,7 +670,7 @@ fn _single_use(
 ) -> bool {
     matches!(
         operand,
-        Operand::Value(value) if function.users(value).len() == 1
+        Operand::Value(value) if function.users(value).has_one_use()
     )
 }
 
@@ -1355,8 +1356,7 @@ fn _phi_of_casts(
     function.insert(phi, Position::Before(inst)).expect("a placed phi");
     let block = function.parent(inst).expect("a placed phi");
     let first = function
-        .block(block)
-        .iter()
+        .iter_block(block)
         .find(|&one| function.instruction(one).opcode != Opcode::Phi)
         .expect("a terminated block");
     let cast = function.create_instruction(
@@ -1388,8 +1388,7 @@ fn _duplicate_phi(
     // One arm per predecessor: the same count, and each arm of this one among
     // the other's.
     let earlier = function
-        .block(block)
-        .iter()
+        .iter_block(block)
         .take_while(|&one| one != inst)
         .find(
             |&one| {
@@ -1733,7 +1732,7 @@ fn _selected(
 fn _reassociated_recurrences(function: &mut Function) -> bool {
     let mut updates = BTreeMap::<ValueId, ValueId>::new();
     for one in cfg::Shape::of(function).loops {
-        for phi in function.block(cfg::block(one.header)).iter() {
+        for phi in function.iter_block(cfg::block(one.header)) {
             let instruction = function.instruction(phi);
             if instruction.opcode != Opcode::Phi {
                 break;
@@ -1796,7 +1795,7 @@ fn _shared_shifts(
     let mut changed = false;
     for block in function.layout().to_vec() {
         let mut available = IndexMap::<Operand, BTreeMap<u128, ValueId>>::default();
-        for inst in function.block(block).iter().collect::<Vec<_>>() {
+        for inst in function.iter_block(block).collect::<Vec<_>>() {
             let Some(Scale { source, op: BinaryOp::Shl, constant, .. }) = _scale(context, function, inst) else {
                 continue;
             };
@@ -2051,11 +2050,53 @@ fn _unread_bits_once(
             }
         };
         if let Some(with) = replacement {
+            // The bits the mask cleared reach what used the result: a sum or
+            // product with `nsw`/`nuw` may now overflow (poison), where it did
+            // not (InstCombine's SimplifyDemandedUseBits drops the flags of an
+            // operation whose operand it changed).
+            _poison_flags_dropped(function, result);
             _forward(function, inst, with);
             changed = true;
         }
     }
     changed
+}
+
+/// The flags that make an overflow poison (`nsw`, `nuw`) or an inexact
+/// division poison (`exact`), cleared on every operation the value `from` flows
+/// into through arithmetic, phis and selects: they read bits of it nobody else
+/// does.
+fn _poison_flags_dropped(
+    function: &mut Function,
+    from: ValueId,
+) {
+    let mut seen = IdSet::<ValueId>::new();
+    let mut pending = vec![from];
+    while let Some(value) = pending.pop() {
+        if !seen.insert(value) {
+            continue;
+        }
+        for user in function.users(value).iter().map(|one| one.user).collect::<Vec<_>>() {
+            let instruction = function.instruction(user);
+            let flows = matches!(
+                instruction.opcode,
+                Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl)
+                    | Opcode::Phi
+                    | Opcode::Select
+            );
+            if !flows {
+                continue;
+            }
+            let flags = instruction.flags;
+            let kept = flags.without(Flags::NUW).without(Flags::NSW);
+            if kept != flags {
+                function.set_flags(user, kept);
+            }
+            if let Some(result) = function.instruction(user).result {
+                pending.push(result);
+            }
+        }
+    }
 }
 
 /// `sdiv` and `srem` of a dividend proved non-negative are `udiv` and `urem`

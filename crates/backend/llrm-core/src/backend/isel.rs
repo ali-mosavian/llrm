@@ -1663,7 +1663,7 @@ impl Selector<'_, '_, '_> {
         let kept = self.callee_facts.stack_alignment(self.arch, name);
         let mut align_of = IndexMap::<usize, i64>::default();
         for &block in layout {
-            for inst in function.block(block).iter() {
+            for inst in function.iter_block(block) {
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
                     let align = natural_align(&self.module.context.types, &self.layout, allocated)
@@ -1705,7 +1705,7 @@ impl Selector<'_, '_, '_> {
         }
         for &block in layout {
             block_at.insert(block, at);
-            for inst in function.block(block).iter() {
+            for inst in function.iter_block(block) {
                 self.ats.insert(inst, at);
                 at += 1;
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
@@ -1913,7 +1913,7 @@ impl Selector<'_, '_, '_> {
             );
         }
         for &block in layout {
-            for inst in function.block(block).iter() {
+            for inst in function.iter_block(block) {
                 self.fuse(block, inst);
                 self.covered_by_pattern(inst, &block_at, convention);
                 self.narrowed(inst);
@@ -1952,7 +1952,7 @@ impl Selector<'_, '_, '_> {
             let blocks = made.entry(block).or_default();
             let mut insns = if block == entry { std::mem::take(&mut prologue) } else { Vec::new() };
             let mut phis = Vec::new();
-            for inst in function.block(block).iter() {
+            for inst in function.iter_block(block) {
                 let instruction = function.instruction(inst);
                 if instruction.opcode == Opcode::Phi && (self.is_far(instruction.ty) || self.is_wide(instruction.ty)) {
                     let result = instruction.result.expect("a phi's value");
@@ -2340,7 +2340,7 @@ impl Selector<'_, '_, '_> {
         let function = self.function;
         let positions: IndexMap<InstId, i64> = layout
             .iter()
-            .flat_map(|&block| function.block(block).iter())
+            .flat_map(|&block| function.iter_block(block))
             .enumerate()
             .map(|(at, inst)| (inst, at as i64))
             .collect();
@@ -2415,7 +2415,7 @@ impl Selector<'_, '_, '_> {
         block: BlockId,
     ) -> Result<(), Unselected> {
         let function = self.function;
-        for inst in function.block(block).iter() {
+        for inst in function.iter_block(block) {
             let instruction = function.instruction(inst);
             if instruction.opcode != Opcode::Phi {
                 break;
@@ -2601,7 +2601,7 @@ impl Selector<'_, '_, '_> {
         let mut out = BTreeSet::new();
         let Some(&entry) = function.layout().first() else { return out };
         let order: IndexMap<InstId, usize> =
-            function.block(entry).iter().enumerate().map(|(index, inst)| (inst, index)).collect();
+            function.iter_block(entry).enumerate().map(|(index, inst)| (inst, index)).collect();
         for (&inst, &index) in &order {
             let Some(local) = self.zero_write(inst) else { continue };
             if function.users(local).iter().all(|one| {
@@ -2894,6 +2894,28 @@ impl Selector<'_, '_, '_> {
         self.layout.pointer(0).bits / 8
     }
 
+    /// `ptrtoint (ptr C to iN)` of a near pointer constant, N the pointer's
+    /// width, is that address: the pointer constant, which a link-time
+    /// address is. Any other operand is itself.
+    fn through_ptrtoint(
+        &self,
+        operand: Operand,
+    ) -> Operand {
+        let Operand::Constant(id) = operand else { return operand };
+        let context = &self.module.context;
+        let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::PtrToInt, value }) =
+            &context.get(id).kind
+        else {
+            return operand;
+        };
+        let near = matches!(self.types().get(context.get(*value).ty), Type::Pointer(0));
+        if near && self.types().int_bits(context.get(id).ty) == Some(self.address_bytes() * 8) {
+            Operand::Constant(*value)
+        } else {
+            operand
+        }
+    }
+
     fn fresh_held(
         &mut self,
         width: u32,
@@ -2941,7 +2963,7 @@ impl Selector<'_, '_, '_> {
         if let Some(value) = self.constant(operand, width) {
             return Ok(Loc::Imm(Imm { value, width, address: None }));
         }
-        if let Some(symbol) = self.symbol(operand)? {
+        if let Some(symbol) = self.symbol(self.through_ptrtoint(operand))? {
             return Ok(symbol);
         }
         Ok(Loc::Held(self.held(operand, ty, at, out)?))
@@ -3045,6 +3067,7 @@ impl Selector<'_, '_, '_> {
             out.push(insn(at, what));
             return Ok(held);
         }
+        let operand = self.through_ptrtoint(operand);
         let pointer = match operand {
             Operand::Value(value) => self.folded(value)?,
             _ => Some(self.global(operand)?),
@@ -3255,6 +3278,20 @@ impl Selector<'_, '_, '_> {
         operand: Operand,
     ) -> Result<Pointer, Unselected> {
         let Operand::Constant(id) = operand else { unreachable!("a constant") };
+        // An address no global owns, far: its selector:offset number, in two
+        // registers.
+        if self.is_far(self.module.context.get(id).ty)
+            && let Some(bits) = crate::backend::globals::absolute(self.module, &self.layout, id)
+        {
+            let Some(block) = self.current else { return refuse("a far constant outside a block") };
+            let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
+            let (base, selector) = (self.fresh_held(2), self.fresh_held(2));
+            for (into, value) in [(base, bits & 0xFFFF), (selector, (bits >> 16) & 0xFFFF)] {
+                let word = Loc::Imm(Imm { value, width: 2, address: None });
+                self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![word])));
+            }
+            return Ok(Pointer::Far { selector, base: Some(base), index: None, scale: 1, offset: 0 });
+        }
         // An address no global owns, near: its number, read as a direct
         // address.
         if let Some(offset) = crate::backend::globals::absolute(self.module, &self.layout, id)
@@ -3265,7 +3302,12 @@ impl Selector<'_, '_, '_> {
         let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id)
             .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
         let space = crate::backend::globals::space(self.module, global);
-        if self.module.global(global).address_space != self.spaces.near {
+        // A near global cast to a far pointer (`addrspacecast (ptr @g to ptr
+        // addrspace(1))`) is its DGROUP selector and its offset, as the
+        // cast instruction makes it.
+        let widened =
+            self.module.global(global).address_space == self.spaces.near && self.is_far(self.module.context.get(id).ty);
+        if self.module.global(global).address_space != self.spaces.near || widened {
             let Some(block) = self.current else { return refuse("a far global outside a block") };
             // A carried pointer is canonical: whole 64K strides of its offset
             // are in the selector, so a constant past 64K is a
@@ -3282,7 +3324,15 @@ impl Selector<'_, '_, '_> {
                         Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })
                     };
                     for (into, from) in [
-                        (selector, symbol(Space::Group, crate::backend::globals::segment_of(global))),
+                        (
+                            selector,
+                            if widened {
+                                let (space, index) = crate::hir::symbols::DGROUP;
+                                symbol(space, index)
+                            } else {
+                                symbol(Space::Group, crate::backend::globals::segment_of(global))
+                            },
+                        ),
                         (base, symbol(space, i64::from(global.0))),
                     ] {
                         self.materialized
@@ -4053,7 +4103,7 @@ impl Selector<'_, '_, '_> {
         else {
             return None;
         };
-        (self.width(instruction.ty).ok()? >= width && self.function.users(value).len() == 1)
+        (self.width(instruction.ty).ok()? >= width && self.function.users(value).has_one_use())
             .then_some((*first, *second, value))
     }
 
@@ -4079,7 +4129,7 @@ impl Selector<'_, '_, '_> {
             };
             let Some(constant) = self.constant(*by, own) else { break };
             // An add something else reads is made anyway: the address uses it.
-            if own < width || self.function.users(value).len() != 1 {
+            if own < width || !self.function.users(value).has_one_use() {
                 break;
             }
             total += if *kind == BinaryOp::Add { constant } else { -constant };
@@ -4626,7 +4676,16 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(Held, Held), Unselected> {
         // A numeric constant, null among them: selector:offset as one dword.
-        if let Some(bits) = self.constant(operand, 4) {
+        // An `inttoptr` constant is one as well.
+        let numeric = self
+            .constant(operand, 4)
+            .or_else(
+                || match operand {
+                    Operand::Constant(id) => crate::backend::globals::absolute(self.module, &self.layout, id),
+                    _ => None,
+                },
+            );
+        if let Some(bits) = numeric {
             let halves = [bits & 0xFFFF, (bits >> 16) & 0xFFFF].map(|value| {
                 let held = self.fresh_held(2);
                 let word = Loc::Imm(Imm { value, width: 2, address: None });
@@ -4880,6 +4939,39 @@ impl Selector<'_, '_, '_> {
             }
             CastOp::FPToSI => self.float_to_integer(operand, "fisttp", result, to, false, at, out)?,
             CastOp::FPToUI => self.float_to_integer(operand, "fisttp", result, to, true, at, out)?,
+            // The same bits through a stack temporary: x87 has no move
+            // between a float register and an integer one.
+            CastOp::BitCast if self.is_float(from) && matches!(self.size(from)?, 4 | 8) => {
+                let size = self.size(from)? as u32;
+                let held = self.float(operand, at, out)?;
+                let cell = self.float_stored(held, "fstp", size, at, out);
+                let into = Held { value: self.value(result), width: self.width(to)? };
+                out.push(insn(
+                    at,
+                    semantics(
+                        Operation::Move,
+                        "mov",
+                        vec![Loc::Held(into)],
+                        vec![Loc::Mem(Self::memory(regs, cell, size))],
+                    ),
+                ));
+            }
+            CastOp::BitCast if self.is_float(to) && matches!(self.size(to)?, 4 | 8) => {
+                let size = self.size(to)? as u32;
+                let held = self.held(operand, from, at, out)?;
+                let cell = self.temporary(i64::from(size));
+                out.push(insn(
+                    at,
+                    semantics(
+                        Operation::Move,
+                        "mov",
+                        vec![Loc::Mem(Self::memory(regs, cell, size))],
+                        vec![Loc::Held(held)],
+                    ),
+                ));
+                let into = Held { value: self.value(result), width: FLOAT };
+                self.float_loaded(into, "fld", cell, size, false, at, out);
+            }
             _ => return refuse(format!("{op:?} of a float")),
         }
         Ok(())

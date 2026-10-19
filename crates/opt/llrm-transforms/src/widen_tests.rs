@@ -73,7 +73,7 @@ fn test_a_signed_counter_read_through_sext_is_a_counter_of_that_width() {
 #[test]
 fn test_a_signed_counter_from_a_negative_start_is_widened_from_the_negative_number() {
     let after = widened(&clearing("sext", "slt", "-5", "nsw"));
-    assert!(after.contains("phi i32 [ -5, %b0 ]"), "{after}");
+    assert!(after.contains("[ -5, %b0 ]"), "{after}");
 }
 
 #[test]

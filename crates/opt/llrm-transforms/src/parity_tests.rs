@@ -15,7 +15,7 @@ fn names(
 fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
-    // The rotate slot is Old while `LLRM_NO_ROTATE` is set, as in the
+    // The rotate slot is Old unless `LLRM_ROTATE` is set, as in the
     // pipeline's own check.
     let rotate = pipeline::Options::default().rotate_slot;
     let mut registry: Vec<Entry> = parity::REGISTRY
@@ -34,7 +34,7 @@ fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
     assert!(why.contains("ghost@999"), "{why}");
     registry.pop();
     let without: Vec<_> = built.iter().copied().filter(|one| *one != "earlycse@649").collect();
-    // The rotate slot is Old while `LLRM_NO_ROTATE` is set, as in the
+    // The rotate slot is Old unless `LLRM_ROTATE` is set, as in the
     // pipeline's own check.
     let rotate = pipeline::Options::default().rotate_slot;
     let registry: Vec<Entry> = parity::REGISTRY
@@ -120,9 +120,9 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
     assert!(parity::joined_slots(parity::REGISTRY, &built).all(|one| one != "jumps@17"));
     let count = parity::tally(parity::REGISTRY);
     // jumps@17, allocate@11 (greedy by default under LLVM's order) and
-    // merge@818 (MemCpyOpt's memsets).
-    assert_eq!(count.partial, 3);
-    assert!(parity::report().contains("jumps@17") && parity::report().contains("3 partial"));
+    // merge@818 (MemCpyOpt's memsets) and dse@820 (stage 1).
+    assert_eq!(count.partial, 4);
+    assert!(parity::report().contains("jumps@17") && parity::report().contains("4 partial"));
 }
 
 /// A Partial slot without its criterion and exit says what is done and not what
@@ -234,4 +234,39 @@ fn test_the_tally_lines_of_the_real_registry_add_up() {
         .sum();
     assert_eq!(by_phase, parity::REGISTRY.len(), "{lines:?}");
     assert!(lines.iter().any(|line| line.starts_with("[parity] analyses ")), "{lines:?}");
+}
+
+/// LLVM runs BDCE after GVN and before the second InstCombine; the joined
+/// slot was missing from the -O2 list, so its output never reached later slots.
+#[test]
+fn test_bdce_stands_between_gvn_and_the_next_fold() {
+    let on = Applied {
+        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
+        ..Applied::default()
+    };
+    let built = names(&on, Phase::Simplify);
+    let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
+    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("fold@801"), "{built:?}");
+}
+
+/// ADCE stands where LLVM runs it, after jump threading and before MemCpyOpt
+/// (`PassBuilderPipelines.cpp` l.815).
+#[test]
+fn test_adce_stands_between_cvp_and_memcpyopt() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let built = names(&on, Phase::Simplify);
+    let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} not built"));
+    assert_eq!((at("cvp@810") + 1, at("adce@815") + 1), (at("adce@815"), at("memcpyopt@818")));
+}
+
+/// LLVM runs SCCP after GVN and before BDCE.
+#[test]
+fn test_sccp_stands_between_gvn_and_bdce() {
+    let on = Applied {
+        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
+        ..Applied::default()
+    };
+    let built = names(&on, Phase::Simplify);
+    let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
+    assert_eq!((at("gvn@787") + 1, at("sccp@792") + 1), (at("sccp@792"), at("bdce@797")));
 }

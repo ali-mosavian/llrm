@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/speculate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/speculate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:ddfbe17867c913a21cbc18a4b29273854488628f7d2750dceceddcf1fcda4b19 -->
+<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:1c7e6fbab79977f7fa3efd89cff6e046ee8ccf48355d4c88931bcda00ed355ac -->
 
 # speculate
 
@@ -36,3 +36,14 @@ more.
   `llvm.assume` are not ported; the MIR has no `NullPointerIsDefined`, so a
   null pointer is undefined. What stands between the phi and the use must be
   no call (`isGuaranteedToTransferExecutionToSuccessor`).
+
+## Example
+The arm's one cheap instruction runs before the branch and the phi becomes a
+select:
+
+```text
+entry: br i1 %c, label %then, label %end
+then:  %t = add i32 %x, 1 ; br label %end
+end:   %p = phi i32 [ %t, %then ], [ %x, %entry ]
+; becomes, in entry: %t = add i32 %x, 1 ; %p = select i1 %c, i32 %t, i32 %x
+```

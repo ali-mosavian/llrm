@@ -20,8 +20,8 @@
 //! `!dereferenceable` on a load) would not, and answers `false` below. Checked
 //! when this was written, on the passes `llrm_transforms::pipeline` runs:
 //! `hoist`, `loopmotion`, `lsr` (induction steps), `exitsink` (through
-//! `indvars`), `gvn::joined` (insertion on an edge) and `loadjoins` (a load
-//! cloned into predecessors) move or insert an instruction with its flags, and
+//! `indvars`), `gvn::joined` (insertion on an edge) and GVN's load PRE (a load
+//! made in a predecessor) move or insert an instruction with its flags, and
 //! are sound by the argument above; `algebraic` reassociation changes operands
 //! and already clears the flags (`set_flags(.., Flags::default())`). The
 //! optimiser passes `llrm-mir` once had were never run by the compile route
@@ -212,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 33] = [
+        const CHECKED: [&str; 37] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -286,6 +286,21 @@ mod tests {
             // `(x + c1) + c2` and keeps `nuw`/`nsw` only if both adds had
             // them, and `c1 + c2` did not overflow.
             "loopunrollpass.rs",
+            // DemandedBits.cpp's `determineLiveOperandBits` reads an
+            // add's/sub's/mul's `nsw`/`nuw` to see one more high bit live;
+            // it never drops one.
+            "demandedbits.rs",
+            // SCCPSolver.cpp's `refineInstruction` reads the wrap flags it is
+            // about to add (`nuw`, `nsw`, `nneg`, a GEP's `nuw`) and never
+            // drops one.
+            "sccp.rs",
+            // `visitGetElementPtrInst` reads a GEP's `nuw`/`inbounds` for
+            // not-null, and `visitCastInst` a `trunc`'s no-wrap kind for the
+            // result range, where LLVM does.
+            "sccpsolver.rs",
+            // PredicateInfo.cpp's `m_NUWTrunc(m_Value(Op0))` in
+            // `processBranch`, `processAssume` and `getConstraint`.
+            "predicateinfo.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

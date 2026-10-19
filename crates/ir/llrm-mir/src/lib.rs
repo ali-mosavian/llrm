@@ -21,6 +21,7 @@ pub mod constfold;
 pub mod constraintsystem;
 pub mod context;
 pub mod counts;
+pub mod cursor;
 pub mod cycleinfo;
 pub mod datalayout;
 pub mod debuginfo;

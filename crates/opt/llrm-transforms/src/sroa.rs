@@ -48,6 +48,16 @@
 //!   after.
 //! - Metadata: an access keeps its metadata where the type and offset are
 //!   unchanged, and loses it otherwise (`adjustForAccess`).
+//!
+//! # Example
+//! An alloca of two `i32` fields, each stored and loaded whole, becomes two
+//! allocas and then registers:
+//!
+//! ```text
+//! %s = alloca { i32, i32 }
+//! store i32 1, ptr %s          ; field 0
+//! %v = load i32, ptr %s        ; becomes the constant 1, the alloca is gone
+//! ```
 
 use std::cmp::Ordering;
 
@@ -475,13 +485,13 @@ fn build_slices(
             }
             found.slices.push(Slice { begin, end, used: Some(used), splittable, kind });
         };
-        let result_users = |instruction: &llrm_mir::module::Instruction| {
-            instruction.result.map_or(0, |result| function.users(result).len())
+        let result_unused = |instruction: &llrm_mir::module::Instruction| {
+            instruction.result.is_none_or(|result| function.users(result).is_empty())
         };
         match &instruction.opcode {
             // `visitBitCastInst` (L1084).
             Opcode::Cast(CastOp::BitCast) if used.index == 0 && is_pointer(context, instruction.ty) => {
-                if result_users(instruction) == 0 {
+                if result_unused(instruction) {
                     mark_dead(&mut found);
                 } else if let Some(result) = instruction.result {
                     enqueue(&mut worklist, &mut visited_uses, result, known, offset);
@@ -494,7 +504,7 @@ fn build_slices(
             }
             // `visitGetElementPtrInst` (L1098) and `adjustOffsetForGEP`.
             Opcode::GetElementPtr { source } if used.index == 0 => {
-                if result_users(instruction) == 0 {
+                if result_unused(instruction) {
                     mark_dead(&mut found);
                     continue;
                 }
@@ -555,7 +565,7 @@ fn build_slices(
             // `visitPHINodeOrSelectInst` (L1338). A select's condition is no
             // pointer.
             Opcode::Phi | Opcode::Select if !(matches!(instruction.opcode, Opcode::Select) && used.index == 0) => {
-                if result_users(instruction) == 0 {
+                if result_unused(instruction) {
                     mark_dead(&mut found);
                     continue;
                 }
@@ -1228,8 +1238,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let declared = self.declared_allocas();
         let allocas: Vec<InstId> = self
             .function()
-            .block(entry)
-            .iter()
+            .iter_block(entry)
             .filter(|&inst| matches!(
                 self.function().instruction(inst).opcode,
                 Opcode::Alloca { .. }
@@ -1899,7 +1908,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             }
             // The original load goes with its only user.
             let load_result = self.function().instruction(load).result.expect("a load");
-            if self.function().users(load_result).len() == 1 {
+            if self.function().users(load_result).has_one_use() {
                 self.dead_insts.push(load);
             }
             self.dead_insts.push(store);
@@ -2916,8 +2925,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             let block = self.function().parent(def).expect("a placed phi");
             return self
                 .function()
-                .block(block)
-                .iter()
+                .iter_block(block)
                 .find(|&one| self.function().instruction(one).opcode != Opcode::Phi)
                 .expect("a block ends in a terminator");
         }
@@ -3021,7 +3029,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let Some(result) = function.instruction(phi).result else { return false };
         let block = function.parent(phi).expect("a placed phi");
         let mut load_type: Option<TypeId> = None;
-        let users: Vec<Use> = function.users(result).to_vec();
+        let users: Vec<Use> = function.users(result).snapshot();
         for user in &users {
             let load = user.user;
             if !self.is_simple_load(load) || function.parent(load) != Some(block) {
@@ -3107,7 +3115,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             return None;
         }
         let block = function.parent(phi).expect("a placed phi");
-        let first = function.block(block).iter().find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        let first = function.iter_block(block).find(|&one| function.instruction(one).opcode != Opcode::Phi);
         if first != Some(store) {
             return None;
         }
