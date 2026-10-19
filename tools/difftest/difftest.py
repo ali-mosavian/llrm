@@ -68,17 +68,26 @@ COUNTERPART = {
     "instsimplify": "instsimplify",
     "loopidiom": "loop(loop-idiom)",
     "loopdeletion": "loop(loop-deletion)",
+    "rotate": "loop-mssa(loop-rotate<header-duplication;no-prepare-for-lto>)",
+    "licm": "loop-mssa(licm<allowspeculation>)",
 }
+
+
+# A slot whose pipeline differs from its pass key's: the first LICM of LPM1 does not speculate (PassBuilderPipelines.cpp#L724).
+SLOT_COUNTERPART = {"licm@724": "loop-mssa(licm<no-allowspeculation>)"}
 
 
 def counterpart(name: str) -> str:
     """The opt pipeline of a pass key or of a slot of LLVM's order (`sroa@1179` is `sroa`)."""
-    return COUNTERPART[name.split("@")[0]]
+    return SLOT_COUNTERPART.get(name) or COUNTERPART[name.split("@")[0]]
 
 
 # The C++ each counterpart is, under llvm/lib at d1106deb71cc: a difference belongs to the function of that file that does the work.
 SOURCE = {
     "instsimplify": "Transforms/Scalar/InstSimplifyPass.cpp",
+    "loop-mssa(loop-rotate<header-duplication;no-prepare-for-lto>)": "Transforms/Scalar/LoopRotation.cpp",
+    "loop-mssa(licm<allowspeculation>)": "Transforms/Scalar/LICM.cpp",
+    "loop-mssa(licm<no-allowspeculation>)": "Transforms/Scalar/LICM.cpp",
     "loop(loop-idiom)": "Transforms/Scalar/LoopIdiomRecognize.cpp",
     "loop(loop-deletion)": "Transforms/Scalar/LoopDeletion.cpp",
     "sroa": "Transforms/Scalar/SROA.cpp",
