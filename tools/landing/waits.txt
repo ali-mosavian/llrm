@@ -1,2 +1,3 @@
 # owner waits: PRs not to land until the owner fixes them (number # reason)
 2697 # parked by user: open, unowned, not queued, not closed
+2877 # speculate.rs deletes 27 lines, m16-narrow to merge fresh feat/parity
