@@ -154,8 +154,8 @@ def unit_failures(at: Path, name: str | None = None) -> set[str]:
     env = {**os.environ, "CARGO_TARGET_DIR": str(HOME / "target-test"), "CARGO_INCREMENTAL": "0"}
     env.pop("RUSTFLAGS", None)
     command = [*LOW, "buildslot", "cargo", "test", "--release", "--workspace", "--lib", "--no-fail-fast", *([name] if name else [])]
-    done = subprocess.run(command, cwd=at, env=env, capture_output=True, text=True)
-    return unit_result(done.stdout + done.stderr, done.returncode)
+    done = subprocess.run(command, cwd=at, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)  # one stream: `Running` is on stderr, the results on stdout
+    return unit_result(done.stdout, done.returncode)
 
 
 def probe(failure: str, sha: str) -> bool:
