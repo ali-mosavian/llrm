@@ -62,7 +62,7 @@
 //!     is `valuetracking::underlying`, which does not look through a `select`,
 //!     a `phi` or a call that returns an argument: two pointers that differ
 //!     only below one are not replaceable here, where LLVM may say they are.
-//! 18. `MergeBlockIntoPredecessor` erases `PTI` after redirecting the uses of
+//! 24. `MergeBlockIntoPredecessor` erases `PTI` after redirecting the uses of
 //!     `BB`; here before. A `DbgMarker` hands `PTI`'s records to the next
 //!     instruction or the trailing list, which `STI` adopts when it moves.
 //!     `Function::erase` re-homes a record when its instruction goes
@@ -777,7 +777,7 @@ pub fn fold_single_entry_phi_nodes(
 /// `bb`, which its predecessor alone reaches, joins the predecessor and is
 /// erased. With `predecessor_with_two_successors`, the predecessor may end in
 /// a conditional branch to `bb` and another block, and then branches to where
-/// `bb` jumped. Whether it merged. DEVIATE 15, 16, 18.
+/// `bb` jumped. Whether it merged. DEVIATE 15, 16, 24.
 pub fn merge_block_into_predecessor(
     context: &Context,
     function: &mut Function,
@@ -849,7 +849,7 @@ pub fn merge_block_into_predecessor(
         function.move_to(inst, Position::Before(pti)).expect("a placed instruction");
     }
 
-    // DEVIATE 18: the pin erases `PTI` after redirecting the uses of BB. The
+    // DEVIATE 24: the pin erases `PTI` after redirecting the uses of BB. The
     // records said before the branch go with `sti` when it takes the branch's
     // place (the pin: the trailing records `PTI` leaves, which
     // `moveBeforePreserving` hands to `STI`); `settle_records` does that only
