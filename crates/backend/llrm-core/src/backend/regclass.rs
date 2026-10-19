@@ -243,6 +243,66 @@ pub enum Item {
     Far(u32),
 }
 
+/// The sets of registers an operand confines a value to, and the registers a value may take at
+/// all: what `RegisterClasses` holds, without the instruction forms.
+#[derive(Clone)]
+pub struct Sets {
+    pub available: Vec<RegId>,
+    kinds: [BTreeSet<RegId>; 4],
+}
+
+impl Sets {
+    pub fn of(registers: &RegisterClasses) -> Self {
+        Self { available: registers.available.clone(), kinds: Kind::ALL.map(|kind| kind.registers(registers).clone()) }
+    }
+}
+
+/// What the instructions that name a value say of the registers it may take.
+pub enum Confinement {
+    /// The reads are not all the ones that confine by themselves (a segment selector, a base and
+    /// an index that may be either way round): the value keeps the class it had.
+    Unknown,
+    /// Nothing says.
+    Free,
+    /// The registers every confining read allows.
+    Only(BTreeSet<RegId>),
+}
+
+/// `MRI.recomputeRegClass`: the class of `value` from the instructions that name it alone.
+pub fn confinement_of<'a>(
+    regs: Regs,
+    insns: impl Iterator<Item = &'a crate::model::lir::Insn>,
+    value: u32,
+    sets: &Sets,
+) -> Confinement {
+    let mut only: Option<BTreeSet<RegId>> = None;
+    let mut items = Vec::new();
+    for one in insns {
+        items.clear();
+        contribution(regs, one, &mut items);
+        for item in &items {
+            match *item {
+                Item::Restrict { value: named, kind, .. } if named == value => {
+                    let allowed = &sets.kinds[Kind::ALL.iter().position(|k| *k == kind).expect("a kind")];
+                    only = Some(match only {
+                        Some(so_far) => so_far.intersection(allowed).copied().collect(),
+                        None => allowed.clone(),
+                    });
+                }
+                Item::Selecting(named) | Item::Far(named) if named == value => return Confinement::Unknown,
+                Item::Pair(base, index) if base == value || index == value => return Confinement::Unknown,
+                _ => {}
+            }
+        }
+        if let Some(what) = &one.what {
+            if target::far_load(regs, what) && matches!(&what.dests[1], Loc::Held(held) if held.value == value) {
+                return Confinement::Unknown;
+            }
+        }
+    }
+    only.map_or(Confinement::Free, Confinement::Only)
+}
+
 /// The items of `one`, appended.
 pub fn contribution(
     regs: Regs,

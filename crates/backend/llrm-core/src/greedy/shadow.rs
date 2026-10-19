@@ -55,6 +55,9 @@ pub struct ShadowInputs<'a> {
     /// The register every unprefixed access reads, which an instruction that
     /// needs the data group reads at once (`target::needs_data_group`).
     pub data: Option<RegId>,
+    /// The sets an operand confines a value to: a register made by a split takes the class its
+    /// own instructions give (`recomputeRegClass`), else its parent's.
+    pub sets: Option<&'a crate::backend::regclass::Sets>,
 }
 
 /// What the shadow allocator decided.
@@ -134,6 +137,13 @@ impl SpillWeightEnv for BodyEnv {
 }
 
 impl GreedyEnv for BodyEnv {
+    fn has_class(
+        &self,
+        virt: u32,
+    ) -> bool {
+        self.orders.orders.borrow().contains_key(&virt)
+    }
+
     fn allocation_order(
         &self,
         virt: u32,
@@ -181,16 +191,31 @@ struct BodySplitEnv {
     ats: Vec<i64>,
     /// Where each block address stands.
     number: crate::support::hash::HashMap<i64, usize>,
+    registers: Regs,
+    sets: Option<Rc<crate::backend::regclass::Sets>>,
+    /// The values fixed to a register: their class is that register.
+    pinned: crate::support::hash::HashSet<u32>,
 }
 
 impl BodySplitEnv {
     fn new(
         body: &LirBody,
         tables: Rc<Tables>,
+        registers: Regs,
+        sets: Option<Rc<crate::backend::regclass::Sets>>,
+        pinned: crate::support::hash::HashSet<u32>,
     ) -> Self {
         let ats: Vec<i64> = body.blocks.iter().map(|block| block.at).collect();
         let number = ats.iter().enumerate().map(|(n, &at)| (at, n)).collect();
-        Self { tables, forest: crate::analysis::loops::forest_of(&body.blocks, Some(body.entry)), ats, number }
+        Self {
+            tables,
+            forest: crate::analysis::loops::forest_of(&body.blocks, Some(body.entry)),
+            ats,
+            number,
+            registers,
+            sets,
+            pinned,
+        }
     }
 }
 
@@ -228,6 +253,46 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         let mut widths = self.tables.widths.borrow_mut();
         if let Some(width) = widths.get(&from).copied().or(named) {
             widths.insert(new, width);
+        }
+        let order = self.tables.orders.borrow().get(&from).cloned();
+        if let Some(order) = order {
+            self.tables.orders.borrow_mut().entry(new).or_insert(order);
+        }
+    }
+
+    /// `LiveRangeEdit::calculateRegClassAndHint`'s `recomputeRegClass`: a register the split made
+    /// takes the class its own instructions give, which can be wider than its parent's.
+    fn reclass(
+        &self,
+        lis: &LiveIntervals,
+        regs: &[u32],
+    ) {
+        use crate::backend::regclass::{Confinement, confinement_of};
+        let Some(sets) = &self.sets else { return };
+        for &reg in regs {
+            let Some(current) = self.tables.orders.borrow().get(&reg).cloned() else { continue };
+            // A pinned value, and one with a class of its own kind (the x87 stack), keep theirs.
+            if self.pinned.contains(&reg) || !current.iter().all(|one| sets.available.contains(one)) {
+                continue;
+            }
+            let mut seen = crate::support::hash::HashSet::default();
+            let insns: Vec<Arc<Insn>> = lis
+                .operands(reg)
+                .iter()
+                .filter(|op| seen.insert(op.instr))
+                .map(|op| Arc::clone(lis.instr(op.instr)))
+                .collect();
+            let order: Vec<RegId> = match confinement_of(self.registers, insns.iter().map(|one| &**one), reg, sets) {
+                Confinement::Unknown => continue,
+                Confinement::Free => sets.available.clone(),
+                Confinement::Only(allowed) => {
+                    let wanted: BTreeSet<RegId> = allowed.iter().map(|one| crate::model::ir::root(*one)).collect();
+                    sets.available.iter().copied().filter(|one| wanted.contains(one)).collect()
+                }
+            };
+            if !order.is_empty() {
+                self.tables.orders.borrow_mut().insert(reg, order);
+            }
         }
     }
 
@@ -629,7 +694,13 @@ pub fn decide_with_split(
     };
     let mut greedy = RAGreedy::new(lis, matrix, &env, spiller);
     if split {
-        let split_env = Box::new(BodySplitEnv::new(body, Rc::clone(&tables)));
+        let split_env = Box::new(BodySplitEnv::new(
+            body,
+            Rc::clone(&tables),
+            inputs.registers,
+            inputs.sets.map(|sets| Rc::new(sets.clone())),
+            inputs.pins.keys().copied().collect(),
+        ));
         greedy.split = Some(super::regionsplit::SplitSupport::new(split_env, mbfi, &greedy.lis.cfg.succs));
     }
     greedy.calculate_spill_weights_and_hints();
@@ -756,6 +827,7 @@ mod tests {
             pins: &IndexMap::default(),
             unspillable: &BTreeSet::new(),
             data: None,
+            sets: None,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
         let rfp = crate::backend::allocate::RFP;
@@ -790,6 +862,7 @@ mod tests {
             pins: &IndexMap::default(),
             unspillable: &BTreeSet::new(),
             data: None,
+            sets: None,
         };
         let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
         assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
@@ -917,6 +990,7 @@ mod tests {
             pins: &IndexMap::default(),
             unspillable: &BTreeSet::new(),
             data: None,
+            sets: None,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -960,6 +1034,7 @@ mod tests {
             pins: &IndexMap::default(),
             unspillable: &BTreeSet::new(),
             data: None,
+            sets: None,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -994,7 +1069,7 @@ mod tests {
         let lis = LiveIntervals::new(&body);
         // The parent (value 1) is in no table: a spill made it.
         let tables = Rc::new(Tables::default());
-        let env = BodySplitEnv::new(&body, Rc::clone(&tables));
+        let env = BodySplitEnv::new(&body, Rc::clone(&tables), Regs(&llrm_x86_m16::REGISTER_INFO), None, Default::default());
         env.note_split_from(&lis, 7, 1);
         assert_eq!(tables.widths.borrow().get(&7), Some(&4), "the clone is as wide as its parent");
     }

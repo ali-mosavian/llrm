@@ -1622,6 +1622,7 @@ pub fn greedy_rewritten(
         let kept = frame.saved();
         let facts =
             Facts::of(&current, profile, segments, classes, &unspill, &empty, &Frequency::of(&current), None, None);
+        let sets = crate::backend::regclass::Sets::of(classes);
         let inputs = crate::greedy::shadow::ShadowInputs {
             body: &current,
             registers: classes.registers,
@@ -1629,6 +1630,7 @@ pub fn greedy_rewritten(
             pins,
             unspillable: &unspill,
             data: Some(segments.data),
+            sets: Some(&sets),
         };
         let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame, classes };
         let decided = crate::greedy::shadow::decide_with(&inputs, mode);
@@ -1718,6 +1720,7 @@ pub fn greedy_rewritten(
         }
         let facts =
             Facts::of(&current, profile, segments, classes, &unspill, &empty, &Frequency::of(&current), None, None);
+        let sets = crate::backend::regclass::Sets::of(classes);
         let inputs = crate::greedy::shadow::ShadowInputs {
             body: &current,
             registers: classes.registers,
@@ -1725,6 +1728,7 @@ pub fn greedy_rewritten(
             pins,
             unspillable: &unspill,
             data: Some(segments.data),
+            sets: Some(&sets),
         };
         let Some(decided) = crate::greedy::shadow::decide(&inputs, true) else { break };
         if decided.report.stats.failed > 0 {
@@ -2333,6 +2337,7 @@ fn _allocated(
     if llrm_support::env_flag!("LLRM_SHADOW_GREEDY") {
         let none = IndexMap::default();
         let pins = pinned.unwrap_or(&none);
+        let sets = crate::backend::regclass::Sets::of(classes);
         let inputs = crate::greedy::shadow::ShadowInputs {
             body: &body,
             registers: classes.registers,
@@ -2340,6 +2345,7 @@ fn _allocated(
             pins,
             unspillable: &unspillable,
             data: Some(segments.data),
+            sets: Some(&sets),
         };
         if let Some(report) = crate::greedy::shadow::run(&inputs) {
             eprintln!(

@@ -37,3 +37,21 @@ fn test_a_far_pointer_live_across_a_call_is_not_reloaded_before_every_use() {
     let loads = text.lines().filter(|line| line.trim_start().starts_with("les ")).count();
     assert!(loads <= 8, "{loads} `les` for one far pointer (8 allowed; 21 before the split rematerializes)\n{text}");
 }
+
+/// The same function after the split: the offset half of the pointer kept `bx` (its class from the
+/// loop's `[bx+si+k]`) in every child, so the 24 stores before the loop reloaded it from a slot,
+/// `mov bx, [bp-6]` x23; a register made by a split takes the class of its own instructions.
+#[test]
+fn test_the_stores_before_the_loop_do_not_reload_the_offset_from_a_slot() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-Os", "-S", "-o", "a.s", "a.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let reloads = text.lines().filter(|line| line.trim_start().starts_with("mov ") && line.contains(", word ptr [bp-")).count();
+    assert!(reloads <= 2, "{reloads} reloads from the frame (2 allowed; 15 before a split takes its own class)\n{text}");
+}
