@@ -2720,9 +2720,20 @@ impl Selector<'_, '_, '_> {
             .then_some(def)
         };
         let join = only_in_block(condition, inst)?;
-        let conjunction = match function.instruction(join).opcode {
-            Opcode::Binary(BinaryOp::And) => true,
-            Opcode::Binary(BinaryOp::Or) => false,
+        // `m_LogicalAnd` and `m_LogicalOr`: the two operands that are compared,
+        // for an `and` or `or` of them or for the `select` form of either.
+        let operands = &function.instruction(join).operands;
+        let one = |operand: Operand, value: u128| {
+            matches!(
+                operand,
+                Operand::Constant(id) if self.module.context.get(id).kind == ConstantKind::Int(value)
+            )
+        };
+        let (conjunction, first, second) = match function.instruction(join).opcode {
+            Opcode::Binary(BinaryOp::And) => (true, operands[0], operands[1]),
+            Opcode::Binary(BinaryOp::Or) => (false, operands[0], operands[1]),
+            Opcode::Select if one(operands[1], 1) => (false, operands[0], operands[2]),
+            Opcode::Select if one(operands[2], 0) => (true, operands[0], operands[1]),
             _ => return None,
         };
         let compare = |operand: Operand| -> Option<InstId> {
@@ -2750,8 +2761,7 @@ impl Selector<'_, '_, '_> {
                 );
             (matches!(compared.opcode, Opcode::ICmp(_)) && narrow && !called).then_some(def)
         };
-        let operands = &function.instruction(join).operands;
-        Some((conjunction, join, compare(operands[0])?, compare(operands[1])?))
+        Some((conjunction, join, compare(first)?, compare(second)?))
     }
 
     /// A branch on two compares as a compare and a branch each: the first
@@ -3257,6 +3267,37 @@ impl Selector<'_, '_, '_> {
             at,
             semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(regs, to, width))], vec![Loc::Held(held)]),
         ));
+        Ok(())
+    }
+
+    /// `llvm.stacksave`: the stack pointer, a near data pointer.
+    fn stack_save(
+        &mut self,
+        inst: InstId,
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let width = self.address_bytes();
+        let value = self.function.instruction(inst).result.expect("a saved stack pointer");
+        let saved = Held { value: self.value(value), width };
+        let sp = Loc::Reg(Reg { register: RegId::SP, width });
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(saved)], vec![sp])));
+        Ok(())
+    }
+
+    /// `llvm.stackrestore`: the stack pointer a `stacksave` returned made the
+    /// stack pointer again.
+    fn stack_restore(
+        &mut self,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let width = self.address_bytes();
+        let ty = self.function.operand_type(&self.module.context, arguments[0]).expect("a typed pointer");
+        let saved = self.held(arguments[0], ty, at, out)?;
+        let sp = Loc::Reg(Reg { register: RegId::SP, width });
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![sp], vec![Loc::Held(saved)])));
         Ok(())
     }
 
@@ -5421,6 +5462,8 @@ impl Selector<'_, '_, '_> {
                 // A list that is a pointer owns nothing to release.
                 Some(Intrinsic::VaEnd) => Ok(()),
                 Some(Intrinsic::VaCopy) => self.va_copy(arguments, at, out),
+                Some(Intrinsic::StackSave) => self.stack_save(inst, at, out),
+                Some(Intrinsic::StackRestore) => self.stack_restore(arguments, at, out),
                 // Where a local's bytes are live: read by the frame layout, no
                 // code.
                 Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),
