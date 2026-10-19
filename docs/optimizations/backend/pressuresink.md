@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/pressuresink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/pressuresink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/pressuresink.rs sha256:aead09aa5719b60e5bb84a482cb6f9c14be7e939b9aeb97bc86687e7dac334b7 -->
+<!-- src: crates/backend/llrm-core/src/backend/pressuresink.rs sha256:3ab4c1be7ff0f9f98f72e4f7d8a54cba91a15b23e33b3d1f23cbce9e52063197 -->
 
 # pressuresink
 
@@ -41,6 +41,10 @@ The load moves where no class rises and at least one falls; the sets tried
 are the general set, the x87 stack and the classes of `d` and of those dying
 address operands. The moved load takes `u`'s `at`, so a block's instructions
 stay in order by it.
+
+DEVIATE P1 (#2903): no pin counterpart. LLVM orders loads by the scheduler;
+exit: the pre-RA machine scheduler translated (target 2026-11-20), then this
+file is deleted.
 
 ## Example
 None: no test fixture exercises `sunk` on a body whose LIR it prints, and

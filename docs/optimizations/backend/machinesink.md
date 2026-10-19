@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:1d62c3cc3eb3f965d8f53d7bc04f8cf854c5e3809170667db151ac7f725bf5c1 -->
+<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:6aaca051d5f9d576b0ed052aa419bf7fbfc7174c5139886a85f4b725a1da2411 -->
 
 # machinesink
 
@@ -33,32 +33,37 @@ block, which is its successor's only predecessor.
  b4: r = phi [b1: v] [b2: x]
 ```
 
-DEVIATE M1 (no number): a load is sunk only into a successor with no other
+DEVIATE M1 (#2903): a load is sunk only into a successor with no other
 predecessor, or a block made for the edge. LLVM also sinks it along a
 critical edge when `hasStoreBetween` finds no store on any path between.
 Exit: that function translated.
 
-DEVIATE M2 (no number): `isProfitableToSinkTo` ends by asking the register
+DEVIATE M2 (#2903): `isProfitableToSinkTo` ends by asking the register
 pressure of the target (`registerPressureSetExceedsLimit`) for an
 instruction inside a cycle; no instruction here sinks on that ground.
 Exit: the target description's pressure limits.
 
-DEVIATE M4 (no number): only an instruction that reads no value moves (a
+DEVIATE M4 (#2903): only an instruction that reads no value moves (a
 constant). LLVM moves any, and its allocator splits the operands' ranges
 around the stretch; ours spills. Rows with every instruction movable and
 each operand read again below the destination: `bench/grep` -O2 m16 +718
 executed instructions and 601 spill stores (two sunk `movzx`),
 `bench/quicksort` -Os m16 +22 bytes. Exit: the greedy allocator with
-SplitKit as the default allocator.
+SplitKit as the default allocator and the `grep` m16 `movzx` case fixed
+(target 2026-11-05).
 
-DEVIATE M5 (no number): in a build for size no edge is broken. The block
+DEVIATE M5 (#2903): in a build for size no edge is broken. The block
 costs a jump (`bench/recpow` -Os +5 bytes with the edge split) and nothing
 in a size build pays it back. Exit: block placement that falls through
 every split edge.
 
-DEVIATE M3 (no number): no `PerformSinkAndFold`, no sinking into cycles
+DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
 (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
 instruction has none).
+
+`pressuresink` (a load made where its reader is, within a block) has no
+pin counterpart: LLVM orders loads by the scheduler. It is deleted when the
+pre-RA machine scheduler is translated (target 2026-11-20).
 
 ## Example
 `b1: v = mov 0; cmp x, 0; je b4` and `b4: r = phi [b1: v] [b2: w]` leave
