@@ -157,8 +157,8 @@ use crate::{
     addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdeletion,
     loopdistribute, loopfuse, loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit,
-    loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simplifycfg, sink,
-    switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simpleloopunswitch,
+    simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -801,7 +801,7 @@ pub(crate) fn llvm_order(
             }
             list.extend([
                 licm("licm@730", true, false),
-                slot("trivialunswitch@732", Box::new(trivialunswitch::TrivialUnswitch)),
+                slot("trivialunswitch@732", Box::new(simpleloopunswitch::SimpleLoopUnswitch)),
                 decide("decide@766"),
                 phiopt("phiopt@766"),
                 fold("fold@768"),
