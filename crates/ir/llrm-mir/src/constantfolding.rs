@@ -24,6 +24,9 @@
 //! 3. Target intrinsics (AMDGCN, ARM, AArch64, Wasm, NVVM, x86): the MIR
 //!    verifier rejects a `llvm.*` name `Intrinsic` does not enumerate, and it
 //!    enumerates none of them.
+//! 8. A GEP with an index that is not an integer constant (`ptrtoint (@g)`)
+//!    stays an instruction: the backend lowers constant GEP offsets only
+//!    (`globals::constant_offset`), LLVM's x86 ISel lowers any constant.
 //!
 //! OWED (MIR can represent it; each has an issue and its exit):
 //! 5. The constant expressions `add`, `sub`, `xor`, `select`: `ConstantExpr`
@@ -1577,6 +1580,9 @@ fn constant_fold_inst_operands_impl(
             if let Some(c) = symbolically_evaluate_gep(context, env, *source, nw, dest, ops) {
                 return Some(c);
             }
+            if !integer_indices(context, &ops[1..]) {
+                return None;
+            }
             constant_expr_get_gep_with_layout(context, env.layout, *source, ops[0], &ops[1..], nw)
         }
         Opcode::ICmp(predicate) => {
@@ -1615,6 +1621,20 @@ fn constant_fold_inst_operands_impl(
         }
         _ => None,
     }
+}
+
+/// DEVIATE: a constant GEP is made only of integer indices, the only ones
+/// `globals::constant_offset` lowers; LLVM's x86 ISel lowers any constant.
+pub(crate) fn integer_indices(
+    context: &Context,
+    indices: &[ConstantId],
+) -> bool {
+    indices
+        .iter()
+        .all(|&one| matches!(
+            context.get(one).kind,
+            ConstantKind::Int(_) | ConstantKind::Null | ConstantKind::Zero
+        ))
 }
 
 /// `GEPNoWrapFlags` of an instruction's flags.
