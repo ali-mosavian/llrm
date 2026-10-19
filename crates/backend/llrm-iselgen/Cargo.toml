@@ -10,3 +10,6 @@ llrm-instr = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-peepgen = { workspace = true }
 llrm-support = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

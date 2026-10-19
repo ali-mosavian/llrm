@@ -982,7 +982,7 @@ b0:
 #[test]
 fn test_two_equal_calls_are_one_before_tail_recursion_makes_a_loop_of_one() {
     use super::EqualCalls;
-    use crate::tailrec::TailRecursion;
+    use crate::tailcallelim::TailCallElim;
     let text = "define internal i32 @h(i32 %n) memory(none) {
 b0:
   %z = icmp eq i32 %n, 0
@@ -1005,7 +1005,7 @@ b2:
         if merge {
             manager.add(EqualCalls);
         }
-        manager.add(TailRecursion);
+        manager.add(TailCallElim);
         manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
         printed(&module)
     };
