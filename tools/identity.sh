@@ -16,6 +16,7 @@
 export LLRM_VERIFY=${LLRM_VERIFY:-1}  # the gate checks each pass and phase
 set -u
 kind=${1:?kind: nib, c or qcport}; base=${2:?base compiler}; new=${3:?new compiler}; shift 3
+python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; print(llrmbin.assert_distinct(sys.argv[1], sys.argv[2]))" "$base" "$new" || exit 2
 target=()
 case "${1:-}" in -m[0-9]*) target=("$1") ;; esac
 root=$(cd "$(dirname "$0")/.." && pwd)
