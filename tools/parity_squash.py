@@ -342,6 +342,35 @@ def subset_refusals(head: set[str], merged: set[str], fixes: bool) -> list[str]:
     return []
 
 
+def unit_tests_of(failures: set[str]) -> dict[str, set[str]]:
+    """crate -> test names, of the `unit <crate>::<test>` entries of a failure set."""
+    found: dict[str, set[str]] = {}
+    for name in failures:
+        if name.startswith("unit ") and "::" in name:
+            crate, test = name[len("unit "):].split("::", 1)
+            found.setdefault(crate, set()).add(test)
+    return found
+
+
+def head_expanded(head: set[str], merged: set[str], run_on_head) -> set[str]:
+    """`head` plus the unit tests the merged tree fails that the head fails too. The smoke runs unit tests only for the crates a merge touches, so the head's cached set
+    holds none: a test inside an already-red crate is new only when it passes on the head. `run_on_head(crate, tests)` -> the tests of `tests` that fail there."""
+    extra = set()
+    for crate, tests in unit_tests_of(merged - head).items():
+        extra |= {f"unit {crate}::{test}" for test in run_on_head(crate, tests)}
+    return head | extra
+
+
+def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT) -> set[str]:
+    """Which of `tests` of `crate` fail on the checkout in `cwd` (exact names, release not needed: the smoke ran them as `cargo test -q --lib`)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import parity_smoke
+    from buildslot import slotted  # noqa: PLC0415
+
+    done = subprocess.run(slotted(["cargo", "test", "-q", "--lib", "-p", crate, "--", "--exact", *sorted(tests)]), cwd=cwd, capture_output=True, text=True)
+    return {name for name in tests if name in set(parity_smoke.failed_tests(done.stdout + done.stderr))}
+
+
 def smoke_failures(known: dict[str, str] | None = None) -> tuple[set[str], str]:
     """(the failing checks, the smoke's last line) of parity_smoke on this checkout: its `FAILING:` line."""
     smoke = subprocess.run(
@@ -426,6 +455,10 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
         return 1
     merged_failed, last = smoke_failures(known)
     print(last)
+    if unit_tests_of(merged_failed - head_failed):
+        git("checkout", "-q", "--detach", BASE)
+        head_failed = head_expanded(head_failed, merged_failed, failing_on_checkout)
+        git("checkout", "-q", "--detach", merged)
     if why := subset_refusals(head_failed, merged_failed, claims_fix(info["body"] or "")):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
