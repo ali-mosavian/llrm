@@ -208,6 +208,29 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
             ))
     }
 
+    /// `MRI.cloneVirtualRegister` (`LiveRangeEdit::createFrom`): the clone has
+    /// the parent's width, which decides whether a call destroys its high half
+    /// (`CallMasks`). The parent may be a value a spill made, in no table: its
+    /// instructions say how wide it is.
+    fn note_split_from(
+        &self,
+        lis: &LiveIntervals,
+        new: u32,
+        from: u32,
+    ) {
+        let named = lis
+            .operands(from)
+            .iter()
+            .flat_map(|op| crate::backend::allocate::_named_widths(lis.instr(op.instr)).collect::<Vec<_>>())
+            .filter(|(value, _)| *value == from)
+            .map(|(_, width)| width)
+            .max();
+        let mut widths = self.tables.widths.borrow_mut();
+        if let Some(width) = widths.get(&from).copied().or(named) {
+            widths.insert(new, width);
+        }
+    }
+
     fn is_rematerializable(
         &self,
         reg: u32,
@@ -890,5 +913,36 @@ mod tests {
         assert!(split.report.reloads < plain.report.reloads, "premise: the split body reloads less");
         let default = decide_with(&inputs, Mode::Simple).expect("allocated");
         assert_eq!(default.report.reloads, plain.report.reloads, "the default is not split");
+    }
+
+    /// A register made by a split is a clone of its parent (`createFrom`): as
+    /// wide, so a call that destroys the high half of `esi` (m16) is held
+    /// against it. The complement of a split has no copy defining it and no
+    /// table entry; it was placed in `edi` across a call and bintree.c -O2
+    /// -m16 printed 165553 for 5736113.
+    #[test]
+    fn test_a_register_made_by_a_split_is_as_wide_as_its_parent() {
+        use crate::greedy::splitkit::SplitEnv as _;
+        use crate::model::ir::{Held, Loc, Operation, Semantics};
+        let what = Semantics {
+            name: Some("mov".to_owned()),
+            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            sources: vec![Loc::Held(Held { value: 2, width: 4 })],
+            ..Semantics::new(Operation::Move)
+        };
+        let insns = vec![Arc::new(Insn::new(0, None, Some(what), vec![1], vec![2]))];
+        let body = LirBody::new(
+            "wide",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let lis = LiveIntervals::new(&body);
+        // The parent (value 1) is in no table: a spill made it.
+        let tables = Rc::new(Tables::default());
+        let env = BodySplitEnv::new(&body, Rc::clone(&tables));
+        env.note_split_from(&lis, 7, 1);
+        assert_eq!(tables.widths.borrow().get(&7), Some(&4), "the clone is as wide as its parent");
     }
 }

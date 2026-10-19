@@ -351,11 +351,13 @@ impl<'d> SplitEditor<'d> {
     ) -> usize {
         // Create the complement as index 0.
         if self.edit().empty() {
-            self.edit_mut().create_empty_interval(cx.lis, cx.vrm);
+            let new = self.edit_mut().create_empty_interval(cx.lis, cx.vrm);
+            cx.env.note_split_from(cx.lis, new, self.edit().get_reg());
         }
         // Create the open interval.
         self.open_idx = self.edit().size();
-        self.edit_mut().create_empty_interval(cx.lis, cx.vrm);
+        let new = self.edit_mut().create_empty_interval(cx.lis, cx.vrm);
+        cx.env.note_split_from(cx.lis, new, self.edit().get_reg());
         self.open_idx
     }
 
@@ -896,6 +898,7 @@ impl<'d> SplitEditor<'d> {
             if a_stop != def {
                 continue;
             }
+
             // We could hoist back-copy right after another back-copy. As a
             // result the previous instruction is actually dead now. We cannot
             // set its stop to it, which would be the same as start.
@@ -1430,12 +1433,15 @@ impl<'d> SplitEditor<'d> {
                 }
             }
         }
-        for mi in dead {
-            let block = cx.lis.indexes.get_mbb_from_index(&cx.lis.indexes.get_instruction_index(mi));
-            let reg = cx.lis.instr(mi).defines[0];
-            let def = cx.lis.indexes.get_instruction_index(mi).get_reg_slot(false);
-            LiveIntervals::remove_vreg_def_at(cx.lis.interval_mut(reg), &def);
-            cx.lis.remove_instr(block, mi);
+        // `eliminateDeadDefs`: the copy goes and the ranges of what it read are
+        // cut back to their other reads (`shrinkToUses`), else they end at an
+        // index with no instruction.
+        while let Some(mi) = dead.pop() {
+            for def in cx.lis.erase_dead_def(mi) {
+                if cx.env.is_copy_like(cx.lis.instr(def)) && cx.lis.instr(def).defines.len() == 1 {
+                    dead.push(def);
+                }
+            }
         }
     }
 
@@ -1513,6 +1519,7 @@ impl<'d> SplitEditor<'d> {
             for new in split {
                 // The new intervals all map back to i.
                 self.edit_mut().create_from(cx.lis, cx.vrm, new, reg);
+                cx.env.note_split_from(cx.lis, new, reg);
                 map.push(i);
             }
         }
@@ -1568,6 +1575,14 @@ mod tests {
             _block: usize,
         ) -> bool {
             false
+        }
+
+        fn note_split_from(
+            &self,
+            _lis: &LiveIntervals,
+            _new: u32,
+            _from: u32,
+        ) {
         }
 
         fn is_rematerializable(
