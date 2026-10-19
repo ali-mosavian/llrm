@@ -70,3 +70,46 @@ def test_parity_squash_main_runs_every_command_inside_the_landing(monkeypatch):
     monkeypatch.setattr(parity_squash, "dispatch", lambda: seen.append(os.environ.get(bs.LANDING)) or 0)
     monkeypatch.delenv(bs.LANDING, raising=False)
     assert parity_squash.main() == 0 and seen == ["1"] and bs.LANDING not in os.environ
+
+
+def test_a_build_slot_caps_cargo_jobs_unless_the_caller_sets_them(tmp_path):
+    """Four slots of cargo at every core (32 rustc of 1-1.7 GB each) ran the host out of memory: systemd-oomd killed whole sessions at 19:58 and 20:13-20:17."""
+    script = str(Path(__file__).resolve().parent / "buildslot")
+    run = lambda env: subprocess.run([script, "sh", "-c", "echo $CARGO_BUILD_JOBS"], capture_output=True, text=True, env=env).stdout.strip()  # noqa: E731
+    base = {**os.environ, "BUILDSLOT_DIR": str(tmp_path)}
+    default = run({k: v for k, v in base.items() if k != "CARGO_BUILD_JOBS"})
+    assert default == "8", default
+    assert run({**base, "CARGO_BUILD_JOBS": "3"}) == "3"
+
+
+def test_a_test_that_allocates_past_the_cap_dies_alone(tmp_path):
+    """A 175 GB test binary (a Reassociate test) took the host to 1 GB free and systemd-oomd killed whole sessions: a runaway test must die by itself."""
+    testcap = str(Path(__file__).resolve().parent / "testcap")
+    grab = ["python3", "-c", "import sys; b = bytearray(int(sys.argv[1]) << 30); print('ok')"]
+    run = lambda gb: subprocess.run([testcap, *grab, str(gb)], capture_output=True, text=True, env={**os.environ, "TEST_MEM_CAP_GB": "1"})  # noqa: E731
+    assert run(0).stdout.strip() == "ok" and run(0).returncode == 0
+    over = run(4)
+    assert over.returncode != 0 and "ok" not in over.stdout and "MemoryError" in over.stderr, (over.returncode, over.stderr[-200:])
+
+
+def test_buildslot_hands_cargo_the_test_cap_unless_the_caller_has_a_runner(tmp_path):
+    script = str(Path(__file__).resolve().parent / "buildslot")
+    show = lambda env: subprocess.run([script, "sh", "-c", "echo $CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER"], capture_output=True, text=True, env=env).stdout.strip()  # noqa: E731
+    base = {**os.environ, "BUILDSLOT_DIR": str(tmp_path)}
+    base.pop("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER", None)
+    assert show(base).endswith("/testcap"), show(base)
+    assert show({**base, "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER": "mine"}) == "mine"
+
+
+def test_only_two_builds_hold_a_slot_at_once(tmp_path):
+    """Four slots of builds plus the landing's own put the load at 67-71 on 32 cores and nothing landed for half an hour: a third command waits for a free slot."""
+    import time
+
+    script = str(Path(__file__).resolve().parent / "buildslot")
+    log = tmp_path / "starts"
+    env = {k: v for k, v in {**os.environ, "BUILDSLOT_DIR": str(tmp_path / "slots")}.items() if k != "BUILDSLOTS"}
+    procs = [subprocess.Popen([script, "sh", "-c", f"date +%s.%N >> {log}; sleep 2"], env=env) for _ in range(3)]
+    for p in procs:
+        p.wait(timeout=60)
+    starts = sorted(float(x) for x in log.read_text().split())
+    assert len(starts) == 3 and starts[2] - starts[0] >= 1.8, starts
