@@ -24,9 +24,15 @@ def failures(text: str) -> dict[str, str]:
     return found
 
 
+PREMISE_MAX = 10  # a base failing more programs than this is a broken instrument (a missing tool), not a compiler: nothing can be said of the flip
+
+
 def compare(base: str, new: str) -> tuple[list[str], list[str]]:
-    """(lines for the failures only in `new`, names fixed in `new`)."""
+    """(lines for the failures only in `new`, names fixed in `new`). A base that fails more than PREMISE_MAX programs makes the comparison void: one line says so."""
     before, after = failures(base), failures(new)
+    if len(before) > PREMISE_MAX:
+        first = next(iter(before.items()))
+        return [f"PREMISE BROKEN: the base fails {len(before)} programs (first: {first[0]}: {first[1][:100]}); the comparison says nothing"], []
     added = [f"NEW FAIL {name}: {reason}" for name, reason in after.items() if name not in before]
     return added, [name for name in before if name not in after]
 
@@ -34,6 +40,8 @@ def compare(base: str, new: str) -> tuple[list[str], list[str]]:
 def main() -> int:
     added, fixed = compare(Path(sys.argv[1]).read_text(), Path(sys.argv[2]).read_text())
     print("\n".join(added) or "no new tests/run failure")
+    if added and added[0].startswith("PREMISE BROKEN"):
+        return 2
     print("\n".join(f"FIXED {name}" for name in fixed))
     return 1 if added else 0
 
