@@ -348,6 +348,16 @@ def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET, known_red: f
     return True, f"PARITY SMOKE PASS {line}"
 
 
+def run_twice_over_budget(run) -> tuple[bool, str]:
+    """`run()` -> (passed, line); when the ONLY failure is the CPU budget it runs once more and takes that verdict: on a host at load 20-60 the CPU seconds of the same
+    steps stretch (cache and hyper-thread contention), and a tools-only PR failed 'over the budget' with no unit test in the set."""
+    ok, line = run()
+    if not ok and failing_names(line) == ["over the budget"]:
+        ok, line = run()
+        line = line.replace("PARITY SMOKE", "PARITY SMOKE (second run, the first was over the budget)", 1)
+    return ok, line
+
+
 def rank(package: str) -> None:
     """Measure `package`'s unit tests once and write the cheapest into parity_smoke.toml (not per merge)."""
     env = {**os.environ, "RUSTC_BOOTSTRAP": "1"}
@@ -390,8 +400,8 @@ def main() -> int:
     packages = touched(args.base)
     for package in packages:  # built first, untimed
         subprocess.run(slotted(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"]), cwd=ROOT, capture_output=True)
-    ok, line = run_steps(plan(packages), args.bin or llrmbin.bin_dir(), known_red=frozenset(args.skip))
-    failing += failing_names(line)
+    ok, line = run_twice_over_budget(lambda: run_steps(plan(packages), args.bin or llrmbin.bin_dir(), known_red=frozenset(args.skip)))
+    failing += failing_names(line.replace("PARITY SMOKE (second run, the first was over the budget)", "PARITY SMOKE"))
     print(f"FAILING: {','.join(failing)}")
     if pre:
         print(f"PARITY SMOKE FAIL {'; '.join(pre)} | {line}")

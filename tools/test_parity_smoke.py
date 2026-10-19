@@ -212,3 +212,16 @@ def test_every_failing_ratchet_is_named_not_only_the_first():
 def test_the_failed_steps_come_out_of_the_smoke_line_by_name():
     assert ps.failing_names("PARITY SMOKE FAIL qc_modules: QCport game/combat.c -O2: x; run: y: z | programs ok 0.3 s") == ["qc_modules", "run"]
     assert ps.failing_names("PARITY SMOKE PASS programs ok 0.3 s") == []
+
+
+def test_a_run_over_the_cpu_budget_alone_is_run_once_more_before_it_fails():
+    """#2730 (tools only, no unit test in its set) was refused 'over the budget' on a loaded host: the same steps cost more CPU seconds under load."""
+    verdicts = iter([(False, "PARITY SMOKE FAIL over the budget: 11.2 s > 10 s | programs ok 0.3 s"), (True, "PARITY SMOKE PASS programs ok 0.3 s | 8.4 s CPU of 10 s")])
+    ok, line = ps.run_twice_over_budget(lambda: next(verdicts))
+    assert ok and "second run" in line
+    calls = []
+    both = lambda: (calls.append(1), (False, "PARITY SMOKE FAIL over the budget: 11 s > 10 s | x"))[1]  # noqa: E731
+    assert ps.run_twice_over_budget(both)[0] is False and len(calls) == 2
+    other = lambda: (calls.append(1), (False, "PARITY SMOKE FAIL run: x; over the budget: 11 s > 10 s | y"))[1]  # noqa: E731
+    calls.clear()
+    assert ps.run_twice_over_budget(other)[0] is False and len(calls) == 1
