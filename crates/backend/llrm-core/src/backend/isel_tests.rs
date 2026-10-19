@@ -179,15 +179,15 @@ done:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov bx, word ptr [bp+6]",
+            "mov cx, word ptr [bp+6]",
             "xor ax, ax",
-            "xor cx, cx",
-            "cmp cx, bx",
+            "xor dx, dx",
+            "cmp dx, cx",
             "jge L0_8",
             "L0_5:",
-            "add ax, cx",
-            "inc cx",
-            "cmp cx, bx",
+            "add ax, dx",
+            "inc dx",
+            "cmp dx, cx",
             "jl L0_5",
             "L0_8:",
             "pop bp",
@@ -605,18 +605,18 @@ no:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov bx, word ptr [bp+6]",
-            "cmp bx, word ptr [bp+8]",
-            "setl cl",
-            "movzx ax, cl",
+            "mov cx, word ptr [bp+6]",
+            "cmp cx, word ptr [bp+8]",
+            "setl dl",
+            "movzx ax, dl",
             "neg ax",
-            "cmp bx, 3",
-            "sete dl",
-            "movzx bx, dl",
-            "and cl, dl",
+            "cmp cx, 3",
+            "sete bl",
+            "movzx cx, bl",
+            "and dl, bl",
             "je L0_8",
             "L0_6:",
-            "add ax, bx",
+            "add ax, cx",
             "pop bp",
             "retf",
             "L0_8:",
@@ -1060,29 +1060,29 @@ b1:
             "push di",
             "L0_0:",
             "mov eax, dword ptr [bp+6]",
-            "mov ecx, dword ptr [bp+10]",
-            "imul ecx",
-            "mov ebx, eax",
-            "shrd ebx, edx, 16",
-            "mov eax, ebx",
+            "mov ebx, dword ptr [bp+10]",
+            "imul ebx",
+            "mov ecx, eax",
+            "shrd ecx, edx, 16",
+            "mov eax, ecx",
             "cdq",
             "mov ax, dx",
-            "shld eax, ebx, 16",
-            "shl ebx, 16",
+            "shld eax, ecx, 16",
+            "shl ecx, 16",
             "mov esi, eax",
             "sar esi, 31",
-            "xor ebx, esi",
+            "xor ecx, esi",
             "xor eax, esi",
-            "sub ebx, esi",
+            "sub ecx, esi",
             "sbb eax, esi",
-            "mov edi, ecx",
+            "mov edi, ebx",
             "sar edi, 31",
-            "xor ecx, edi",
-            "sub ecx, edi",
+            "xor ebx, edi",
+            "sub ebx, edi",
             "xor edx, edx",
-            "div ecx",
-            "mov eax, ebx",
-            "div ecx",
+            "div ebx",
+            "mov eax, ecx",
+            "div ebx",
             "xor esi, edi",
             "xor eax, esi",
             "sub eax, esi",
@@ -1399,8 +1399,8 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
             "fist word ptr [bp-2]",
             "mov ax, word ptr [bp-2]",
             "fistp dword ptr [bp-4]",
-            "mov bx, word ptr [bp-4]",
-            "add ax, bx",
+            "mov cx, word ptr [bp-4]",
+            "add ax, cx",
             "fldcw word ptr [bp-6]",
             "leave",
             "retf"
@@ -1436,20 +1436,20 @@ b1:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov ebx, dword ptr [bp+6]",
-            "mov eax, ebx",
+            "mov ecx, dword ptr [bp+6]",
+            "mov eax, ecx",
             "cdq",
-            "shld edx, ebx, 16",
-            "shl ebx, 16",
+            "shld edx, ecx, 16",
+            "shl ecx, 16",
             "mov eax, edx",
             "sar eax, 31",
             "shr eax, 22",
-            "xor ecx, ecx",
-            "add ebx, eax",
-            "adc edx, ecx",
-            "shrd ebx, edx, 10",
-            "shld edx, ebx, 16",
-            "mov ax, bx",
+            "xor ebx, ebx",
+            "add ecx, eax",
+            "adc edx, ebx",
+            "shrd ecx, edx, 10",
+            "shld edx, ecx, 16",
+            "mov ax, cx",
             "pop bp",
             "retf",
         ]
@@ -1460,18 +1460,18 @@ b1:
             "push bp",
             "mov bp, sp",
             "L1_0:",
-            "mov ebx, dword ptr [bp+6]",
-            "mov eax, ebx",
+            "mov ecx, dword ptr [bp+6]",
+            "mov eax, ecx",
             "cdq",
-            "shld edx, ebx, 16",
-            "shl ebx, 16",
+            "shld edx, ecx, 16",
+            "shl ecx, 16",
             "sar edx, 31",
             "shr edx, 22",
-            "add edx, ebx",
+            "add edx, ecx",
             "and edx, 4294966272",
-            "sub ebx, edx",
-            "shld edx, ebx, 16",
-            "mov ax, bx",
+            "sub ecx, edx",
+            "shld edx, ecx, 16",
+            "mov ax, cx",
             "pop bp",
             "retf",
         ]
@@ -1546,8 +1546,8 @@ define i1 @ne(double %a, double %b) addrspace(1) {
             .filter(|line| !compared.contains(&line.as_str()) && !line.ends_with(':'))
             .collect::<Vec<_>>()
     };
-    assert_eq!(answered("eq"), ["sete al", "setnp bl", "and al, bl", "pop bp", "retf"]);
-    assert_eq!(answered("ne"), ["setne al", "setp bl", "or al, bl", "pop bp", "retf"]);
+    assert_eq!(answered("eq"), ["sete al", "setnp cl", "and al, cl", "pop bp", "retf"]);
+    assert_eq!(answered("ne"), ["setne al", "setp cl", "or al, cl", "pop bp", "retf"]);
 }
 
 /// An unordered predicate is the carry or zero unordered also sets: ult is
@@ -1593,11 +1593,11 @@ define void @f(i16 %port) addrspace(1) {
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov bx, word ptr [bp+6]",
+            "mov cx, word ptr [bp+6]",
             "in al, 96",
             "mov dx, 968",
             "out dx, al",
-            "mov dx, bx",
+            "mov dx, cx",
             "out dx, al",
             "pop bp",
             "retf"
@@ -2273,7 +2273,7 @@ fn test_a_dword_divided_by_a_constant_is_multiplied_where_cheaper() {
 fn test_a_word_divides_and_an_unsigned_dword_is_multiplied_where_cheaper() {
     let word = "define i16 @f(i16 %x) addrspace(1) {\n  %q = sdiv i16 %x, 10\n  ret i16 %q\n}\n";
     let unsigned = "define i32 @f(i32 %x) addrspace(1) {\n  %q = udiv i32 %x, 10\n  ret i32 %q\n}\n";
-    assert!(inner_on("P5", word).contains(&"idiv bx".to_owned()), "{:?}", inner_on("P5", word));
+    assert!(inner_on("P5", word).contains(&"idiv cx".to_owned()), "{:?}", inner_on("P5", word));
     assert!(
         inner_on("P5", unsigned).iter().any(|one| one.starts_with("mul "))
             && !inner_on("P5", unsigned).iter().any(|one| one.starts_with("div ")),
@@ -2297,11 +2297,11 @@ fn test_a_multiply_by_a_constant_is_shifts_and_adds() {
     let by = |factor: i16| {
         inner(&format!("define i16 @f(i16 %x) addrspace(1) {{\n  %q = mul i16 %x, {factor}\n  ret i16 %q\n}}\n"))
     };
-    assert_eq!(by(10), ["mov bx, word ptr [bp+6]", "lea ax, [ebx+ebx*4]", "add ax, ax"]);
+    assert_eq!(by(10), ["mov cx, word ptr [bp+6]", "lea ax, [ecx+ecx*4]", "add ax, ax"]);
     // Greedy (#2312) leaves 8x - x in ax, the result's register: the old
     // pin's fifth instruction, a move into ax, is gone.
     let seven = by(7);
-    assert_eq!(seven, ["mov bx, word ptr [bp+6]", "mov ax, bx", "shl ax, 3", "sub ax, bx"]);
+    assert_eq!(seven, ["mov cx, word ptr [bp+6]", "mov ax, cx", "shl ax, 3", "sub ax, cx"]);
     assert_eq!(counts(&seven), (4, 1));
     let variable = "define i16 @f(i16 %x, i16 %y) addrspace(1) {\n  %q = mul i16 %x, %y\n  ret i16 %q\n}\n";
     assert_eq!(inner(variable), ["mov ax, word ptr [bp+6]", "imul ax, word ptr [bp+8]"]);
@@ -2547,7 +2547,7 @@ fn test_an_and_only_compared_with_zero_is_test() {
     };
     assert_eq!(
         tested("%m", "0")[..4],
-        ["mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "test ax, bx", "je L0_3"]
+        ["mov ax, word ptr [bp+6]", "mov cx, word ptr [bp+8]", "test ax, cx", "je L0_3"]
     );
     // Read again, the AND is computed; a constant mask is the instruction's
     // immediate (`test ax, 12`), not a copy `and`ed: collatz's `n & 1` was
@@ -2698,10 +2698,10 @@ done:
     // Greedy's register choice (#2312): the old pin's instructions, memory
     // operands, prefixes and adjacent dependencies, other registers.
     let read = element(&sum("inbounds"));
-    assert_eq!(read, "add ax, word ptr a[ebx+ebx]");
+    assert_eq!(read, "add ax, word ptr a[ecx+ecx]");
     assert_eq!(counts(&[&read]), (1, 1));
     // Without `inbounds` nothing places the start: the offset may wrap.
-    assert_eq!(element(&sum("")), "add ax, word ptr a[si]");
+    assert_eq!(element(&sum("")), "add ax, word ptr a[bx]");
 }
 
 /// A word product only cells read is the 67h form's scaled index on the
@@ -2735,10 +2735,10 @@ no:
     // first.
     assert!(
         got.iter().any(|line| line.starts_with("movzx eax, word ptr ["))
-            && got.iter().any(|line| line.starts_with("movzx ebx, word ptr [")),
+            && got.iter().any(|line| line.starts_with("movzx ecx, word ptr [")),
         "{got:?}"
     );
-    assert!(got.contains(&"mov ax, word ptr [ebx+eax*2]".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov ax, word ptr [ecx+eax*2]".to_owned()), "{got:?}");
     // A negative index names another byte 32 bits wide; the 486 prices
     // the form above a spill.
     for (cpu, guard) in [("386", "ne"), ("486", "sge")] {
@@ -3005,16 +3005,16 @@ define void @f(i16 %n) addrspace(1) {
     assert_eq!(
         got[from..from + 11],
         [
-            "mov bx, word ptr [bp+6]",
-            "mov cx, bx",
+            "mov dx, word ptr [bp+6]",
+            "mov cx, dx",
             "shr cx, 2",
-            "and bx, 3",
+            "and dx, 3",
             "mov di, offset g",
             "pushw seg g",
             "pop es",
             "xor eax, eax",
             "rep stosd",
-            "mov cx, bx",
+            "mov cx, dx",
             "rep stosb",
         ]
     );
@@ -3248,16 +3248,16 @@ b1:
             "mov bp, sp",
             "L0_0:",
             "mov eax, dword ptr [bp+6]",
-            "mov ebx, dword ptr [bp+10]",
-            "imul ebx",
-            "mov ebx, eax",
-            "shrd ebx, edx, 16",
-            "mov ecx, 196608",
-            "mov eax, ebx",
+            "mov ecx, dword ptr [bp+10]",
+            "imul ecx",
+            "mov ecx, eax",
+            "shrd ecx, edx, 16",
+            "mov ebx, 196608",
+            "mov eax, ecx",
             "cdq",
-            "shld edx, ebx, 16",
+            "shld edx, ecx, 16",
             "shl eax, 16",
-            "idiv ecx",
+            "idiv ebx",
             "shld edx, eax, 16",
             "pop bp",
             "retf",
@@ -4178,9 +4178,9 @@ fn test_far_pointers_compare_by_words() {
             "L0_0:",
             "mov ax, word ptr [bp+6]",
             "xor ax, word ptr [bp+10]",
-            "mov bx, word ptr [bp+8]",
-            "xor bx, word ptr [bp+12]",
-            "or ax, bx",
+            "mov cx, word ptr [bp+8]",
+            "xor cx, word ptr [bp+12]",
+            "or ax, cx",
             "sete al",
             "movzx ax, al",
             "pop bp",
@@ -4375,8 +4375,8 @@ fn test_huge_pointers_compare_by_selector_then_offset() {
             "mov ax, word ptr [bp+6]",
             "sub ax, word ptr [bp+10]",
             "mov ax, word ptr [bp+12]",
-            "mov bx, word ptr [bp+8]",
-            "sbb bx, ax",
+            "mov cx, word ptr [bp+8]",
+            "sbb cx, ax",
             "setb al",
             "movzx ax, al",
             "pop bp",
@@ -4402,14 +4402,14 @@ define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
             "mov bp, sp",
             "L0_0:",
             "movzx eax, word ptr [bp+6]",
-            "movzx ebx, word ptr [bp+10]",
-            "sub eax, ebx",
-            "movzx ebx, word ptr [bp+8]",
-            "movzx ecx, word ptr [bp+12]",
-            "sub ebx, ecx",
-            "sar ebx, 12",
-            "shl ebx, 16",
-            "add eax, ebx",
+            "movzx ecx, word ptr [bp+10]",
+            "sub eax, ecx",
+            "movzx ecx, word ptr [bp+8]",
+            "movzx edx, word ptr [bp+12]",
+            "sub ecx, edx",
+            "sar ecx, 12",
+            "shl ecx, 16",
+            "add eax, ecx",
             "shld edx, eax, 16",
             "pop bp",
             "retf"
@@ -4430,7 +4430,7 @@ define ptr addrspace(1) @g(ptr addrspace(3) %p) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"add eax, 70000".to_owned()) && got.contains(&"sar ebx, 16".to_owned()), "{got:?}");
+    assert!(got.contains(&"add eax, 70000".to_owned()) && got.contains(&"sar ecx, 16".to_owned()), "{got:?}");
     assert_eq!(
         listing(text, "g"),
         ["push bp", "mov bp, sp", "L1_0:", "mov ax, word ptr [bp+6]", "mov dx, word ptr [bp+8]", "pop bp", "retf"]
@@ -5196,14 +5196,14 @@ fn test_m16_emits_386_forms() {
         "define i32 @f(i32 %a, i32 %b) addrspace(1) {\n  %c = add i32 %a, %b\n  %d = mul i32 %c, 3\n  ret i32 %d\n}\n",
         "f",
     );
-    assert!(arithmetic.contains(&"add ebx, dword ptr [bp+10]".to_owned()), "{arithmetic:?}");
-    assert!(arithmetic.contains(&"lea eax, [ebx+ebx*2]".to_owned()), "{arithmetic:?}");
+    assert!(arithmetic.contains(&"add ecx, dword ptr [bp+10]".to_owned()), "{arithmetic:?}");
+    assert!(arithmetic.contains(&"lea eax, [ecx+ecx*2]".to_owned()), "{arithmetic:?}");
 
     let extends = listing(
         "define i32 @f(i8 %a, i16 %b) addrspace(1) {\n  %x = sext i8 %a to i32\n  %y = zext i16 %b to i32\n  %z = add i32 %x, %y\n  ret i32 %z\n}\n",
         "f",
     );
-    for want in ["movsx eax, byte ptr [bp+6]", "movzx ebx, word ptr [bp+8]", "add eax, ebx"] {
+    for want in ["movsx eax, byte ptr [bp+6]", "movzx ecx, word ptr [bp+8]", "add eax, ecx"] {
         assert!(extends.contains(&want.to_owned()), "{want}: {extends:?}");
     }
 
@@ -5220,7 +5220,7 @@ fn test_m16_emits_386_forms() {
             "f",
         )
     };
-    assert!(scaled("386").contains(&"mov ax, word ptr [ebx+eax*2]".to_owned()), "{:?}", scaled("386"));
+    assert!(scaled("386").contains(&"mov ax, word ptr [ecx+eax*2]".to_owned()), "{:?}", scaled("386"));
     assert!(!scaled("486").iter().any(|one| one.contains("*2")), "{:?}", scaled("486"));
 }
 
@@ -5842,7 +5842,7 @@ define i16 @f(i16 %x) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"sub bx, offset g".to_owned()) && got.contains(&"mov ax, offset g+6".to_owned()), "{got:?}");
+    assert!(got.contains(&"sub cx, offset g".to_owned()) && got.contains(&"mov ax, offset g+6".to_owned()), "{got:?}");
 }
 
 #[test]
@@ -5856,7 +5856,7 @@ define i16 @f() addrspace(1) {
 ";
     let got = listing(text, "f");
     // 1342177280 is 0x5000:0000 stored, 1358954496 is 0x5100:0000 read through.
-    assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov cx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
 }
 
 /// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
@@ -5892,7 +5892,7 @@ define i16 @f(i16 %i) addrspace(1) {
     // DGROUP:offset joined into the dword; -18432 is the selector 0xB800 in
     // `pushw`.
     let has = |text: &str| got.iter().any(|one| one == text);
-    assert!(has("mov ax, DGROUP") && has("mov bx, offset g") && has("shl eax, 16") && has("pushw 47104"), "{got:?}");
+    assert!(has("mov ax, DGROUP") && has("mov cx, offset g") && has("shl eax, 16") && has("pushw 47104"), "{got:?}");
 }
 
 /// A branch's LIR odds are `BranchProbabilityInfo`'s: `p == null` is the
