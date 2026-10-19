@@ -114,7 +114,7 @@ def test_the_premise_line_names_a_program_combine_changed_and_says_when_the_bina
     bins, built = tmp_path / "bins", tmp_path / "built"
     for one in (bins, built):
         one.mkdir()
-        (one / "llrm-c").write_text('#!/bin/sh\\nout=""\\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\\necho "${LLRM_NO_COMBINE:-on}" > "$out"\\n')
+        (one / "llrm-c").write_text('#!/bin/sh\nout=""\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\necho "${LLRM_NO_COMBINE:-on}" > "$out"\n')
         (one / "llrm-c").chmod(0o755)
     assert "equals" in postland.combine_premise(tmp_path, bins, built) and "a.c differs" in postland.combine_premise(tmp_path, bins, built)
     (built / "llrm-c").write_text("#!/bin/sh\nexit 0\n")
