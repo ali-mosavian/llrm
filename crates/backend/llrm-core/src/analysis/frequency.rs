@@ -14,7 +14,6 @@
 //! pair measured nothing for them, #2731). Exit: remove when `_emitted`'s use
 //! is replaced by a concept of the pin.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_mir::blockfrequency::{BlockFrequencyInfo, BranchProbability, EdgeProbabilities, FlowGraph};
@@ -385,7 +384,7 @@ impl Frequency {
         let mut shared: IndexMap<(i64, i64), f64> = IndexMap::default();
         for block in blocks.iter().filter(|block| bridge(block.at).is_none() || block.at == entry) {
             let list = successors.entry(block.at).or_default();
-            for to in block.succ.iter().copied().collect::<BTreeSet<_>>() {
+            for to in crate::model::lir::distinct(&block.succ) {
                 let past = beyond(to);
                 *shared.entry((block.at, past)).or_default() += taken[&(block.at, to)];
                 if !list.contains(&past) {
@@ -425,7 +424,7 @@ impl Frequency {
         let mut entering: IndexMap<i64, Vec<&crate::model::lir::Block>> = IndexMap::default();
         let mapped = pending.len() > 16;
         for from in blocks.iter().filter(|_| mapped) {
-            for to in from.succ.iter().copied().collect::<BTreeSet<_>>() {
+            for to in crate::model::lir::distinct(&from.succ) {
                 entering.entry(to).or_default().push(from);
             }
         }
@@ -523,15 +522,16 @@ fn trip_adjusted(
 /// The blocks between `entry` and the rest, as `BlockFrequencyInfoImpl` runs
 /// over a `MachineFunction` (`MachineBlockFrequencyInfo`): each block's
 /// frequency per call, `edges` its edges' probabilities.
-struct Flow<'a> {
+struct Flow {
     blocks: Vec<BlockId>,
-    at: Vec<i64>,
     succs: Vec<BlockList>,
     preds: Vec<BlockList>,
-    edges: &'a IndexMap<(i64, i64), f64>,
+    /// Each block's successors' probabilities, normalized once, as a
+    /// `MachineBasicBlock` keeps them.
+    probabilities: Vec<Vec<BranchProbability>>,
 }
 
-impl DomGraph for Flow<'_> {
+impl DomGraph for Flow {
     fn entry(&self) -> Option<BlockId> {
         (!self.blocks.is_empty()).then_some(BlockId(0))
     }
@@ -559,24 +559,15 @@ impl DomGraph for Flow<'_> {
     }
 }
 
-impl FlowGraph for Flow<'_> {}
+impl FlowGraph for Flow {}
 
-impl EdgeProbabilities for Flow<'_> {
+impl EdgeProbabilities for Flow {
     fn get_edge_probability(
         &self,
         src: BlockId,
         index: usize,
     ) -> BranchProbability {
-        let from = self.at[src.0 as usize];
-        let mut probs: Vec<BranchProbability> = self.succs[src.0 as usize]
-            .iter()
-            .map(|to| {
-                let p = self.edges.get(&(from, self.at[to.0 as usize])).copied().unwrap_or(0.0);
-                BranchProbability::get_branch_probability_f64(p.clamp(0.0, 1.0))
-            })
-            .collect();
-        BranchProbability::normalize_probabilities(&mut probs);
-        probs[index]
+        self.probabilities[src.0 as usize][index]
     }
 }
 
@@ -602,7 +593,22 @@ fn propagated(
         succs[0] = [BlockId(1)].into_iter().collect();
         preds[1].push(BlockId(0));
     }
-    let flow = Flow { blocks: (0..at.len() as u32).map(BlockId).collect(), succs, preds, at: at.clone(), edges };
+    let probabilities = at
+        .iter()
+        .zip(&succs)
+        .map(|(from, list)| {
+            let mut probs: Vec<BranchProbability> = list
+                .iter()
+                .map(|to| {
+                    let p = edges.get(&(*from, at[to.0 as usize])).copied().unwrap_or(0.0);
+                    BranchProbability::get_branch_probability_f64(p.clamp(0.0, 1.0))
+                })
+                .collect();
+            BranchProbability::normalize_probabilities(&mut probs);
+            probs
+        })
+        .collect();
+    let flow = Flow { blocks: (0..at.len() as u32).map(BlockId).collect(), succs, preds, probabilities };
     let cycles = CycleInfo::compute(&flow);
     let bfi = BlockFrequencyInfo::calculate(&flow, &flow, &cycles);
     let entry_freq = bfi.get_entry_freq().get_frequency().max(1) as f64;
