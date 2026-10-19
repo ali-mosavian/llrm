@@ -120,6 +120,10 @@ impl FunctionPass for Cvp {
         "cvp"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("correlated-propagation")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,

@@ -198,6 +198,10 @@ impl FunctionPass for SimplifyCfg {
         "simplifycfg"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("simplifycfg")
+    }
+
     fn reads(&self) -> Footprint {
         Footprint::CONTROL | Footprint::STRUCTURE
     }
