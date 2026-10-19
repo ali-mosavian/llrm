@@ -10,12 +10,11 @@ thread_local! {
     pub static FORCED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-/// `simplifyAndExtend` is opt-in (`LLRM_SCEV_WIDEN`) until #2531 is fixed: a
-/// run without the variable takes the old path. Its panic at `widen.rs:142`
-/// (a user with no value) stopped every smoke program at -O2 -m32.
+/// `simplifyAndExtend` is on again (#2531, a user with no value, is fixed):
+/// a run without `LLRM_NO_SCEV_WIDEN` takes it.
 #[test]
-fn test_widening_by_scalar_evolution_is_off_unless_asked_for() {
-    assert!(!super::widening_enabled());
+fn test_widening_by_scalar_evolution_is_on_unless_turned_off() {
+    assert!(super::widening_enabled());
 }
 
 fn simplified(text: &str) -> (bool, String) {
@@ -186,4 +185,135 @@ b17:
 fn test_a_scope_that_forgets_its_own_expression_is_read_again() {
     let (_, after) = simplified(SCOPE_FORGETS_ITS_OWN_ENTRY);
     assert!(after.contains("define"), "{after}");
+}
+
+// ------------------------------------------------- simplifyUsers, beyond
+// compares
+
+/// @f of `text` through `indvars` with `simplifyAndExtend` on, printed, and
+/// computing what it did on `inputs`.
+fn extended(
+    text: &str,
+    inputs: &[&[i128]],
+) -> String {
+    super::tests_forced(true);
+    let mut module = parsed(text);
+    let before = results(&module, inputs);
+    crate::testing::managed(&mut module, crate::indvars::IndVars { exit_values: true, unrolls: None });
+    let after = printed(&module);
+    assert_eq!(results(&module, inputs), before, "{after}");
+    after
+}
+
+/// `for (i = 0; i < 100; i++) g = <body>` over i32; the body sees `%i`.
+fn counted(body: &str) -> String {
+    format!(
+        "@g = global i32 0
+
+define i32 @f(i32 %n) {{
+b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %in, %l ]
+  %c = icmp slt i32 %i, 100
+  br i1 %c, label %l, label %e
+l:
+{body}
+  store i32 %v, ptr @g
+  %in = add nsw i32 %i, 1
+  br label %h
+e:
+  ret i32 0
+}}
+"
+    )
+}
+
+#[test]
+fn test_a_signed_division_of_a_nonnegative_counter_is_unsigned() {
+    let after = extended(&counted("  %v = sdiv i32 %i, 3"), &[&[0], &[5]]);
+    assert!(after.contains("udiv i32 %i, 3") && !after.contains("sdiv"), "{after}");
+}
+
+/// `i` is below 101 where the loop reads it (its range is `[0, 101)`): the
+/// remainder by 101 is the counter.
+#[test]
+fn test_a_remainder_by_a_bound_the_counter_is_below_is_the_counter() {
+    let after = extended(&counted("  %v = urem i32 %i, 101"), &[&[0], &[5]]);
+    assert!(!after.contains("urem"), "{after}");
+    assert!(after.contains("store i32 %i, ptr @g"), "{after}");
+}
+
+#[test]
+fn test_a_signed_remainder_of_a_nonnegative_counter_is_unsigned() {
+    let after = extended(&counted("  %v = srem i32 %i, 7"), &[&[3], &[7], &[200]]);
+    assert!(after.contains("urem i32 %i, 7") && !after.contains("srem"), "{after}");
+}
+
+#[test]
+fn test_an_add_of_zero_to_the_counter_is_the_counter() {
+    let after = extended(&counted("  %v = add i32 %i, 0"), &[&[0], &[5]]);
+    assert!(!after.contains("add i32 %i, 0") && after.contains("store i32 %i, ptr @g"), "{after}");
+}
+
+#[test]
+fn test_an_increment_that_cannot_wrap_gains_its_flags() {
+    let after = extended(&counted("  %v = add i32 %i, 1"), &[&[0], &[5]]);
+    assert!(after.contains("add nuw nsw i32"), "{after}");
+}
+
+/// `((i + 1) >> 2)` of a counter that steps by 4 from 0 is `i >> 2`: the
+/// increment is folded into the use.
+#[test]
+fn test_an_increment_an_aligned_counter_makes_no_difference_to_is_folded_into_its_use() {
+    let text = "@g = global i32 0
+
+define i32 @f(i32 %n) {
+b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %in, %l ]
+  %c = icmp ult i32 %i, 400
+  br i1 %c, label %l, label %e
+l:
+  %j = add nuw i32 %i, 1
+  %v = lshr i32 %j, 2
+  store i32 %v, ptr @g
+  %in = add nuw nsw i32 %i, 4
+  br label %h
+e:
+  ret i32 0
+}
+";
+    let after = extended(text, &[&[0]]);
+    assert!(after.contains("lshr i32 %i, 2"), "{after}");
+    assert!(!after.contains("lshr i32 %j"), "{after}");
+}
+
+/// `icmp ult (trunc i), n16` where `i` is below 100: the compare is on the
+/// counter against the extended bound, and the `trunc` goes.
+#[test]
+fn test_a_compare_of_a_truncated_counter_is_a_compare_of_the_counter() {
+    let text = "@g = global i32 0
+
+define i32 @f(i16 %n) {
+b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %in, %l ]
+  %c = icmp slt i32 %i, 100
+  br i1 %c, label %l, label %e
+l:
+  %t = trunc i32 %i to i16
+  %k = icmp ult i16 %t, %n
+  %v = zext i1 %k to i32
+  store i32 %v, ptr @g
+  %in = add nsw i32 %i, 1
+  br label %h
+e:
+  ret i32 0
+}
+";
+    let after = extended(text, &[&[0], &[50], &[200]]);
+    assert!(!after.contains("trunc"), "{after}");
 }

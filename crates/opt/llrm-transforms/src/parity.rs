@@ -126,7 +126,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
     entry("licm@724", Simplify, "licm<no-allowspeculation>", Translated, ""),
     entry("licm@730", Simplify, "licm<allowspeculation>", Translated, ""),
-    entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial>", Old, "loop-passes-port"),
+    entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial>", Translated, ""),
     entry("decide@766", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("phiopt@766", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("fold@768", Simplify, "instcombine", Old, "instcombine-port"),
@@ -395,7 +395,7 @@ pub fn check_phase_at(
 /// [`check_phase_at`] with the explicit off switches: the slots whose
 /// translation is `sroa.rs` are Old when `LLRM_NO_SROA` is set, those of
 /// `mem2reg.rs` when `LLRM_NO_MEM2REG` is, and the old stand-in is what runs;
-/// with `rotate` false (`LLRM_NO_ROTATE`) the rotate slot is not run.
+/// with `rotate` false (the default) the rotate slot is not run.
 pub(crate) fn check_phase_with(
     phase: Phase,
     built: &[&str],
@@ -405,7 +405,7 @@ pub(crate) fn check_phase_with(
     rotate: bool,
 ) -> Result<(), String> {
     let absent = if level == Level::O1 { ABSENT_AT_O1 } else { &[] };
-    // `LLRM_NO_ROTATE` takes the translated `loop-rotate` out of the order.
+    // The translated `loop-rotate` is in the order only with `LLRM_ROTATE`.
     let registry: Vec<Entry> = REGISTRY
         .iter()
         .map(|one| {

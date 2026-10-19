@@ -166,8 +166,8 @@ b0:
   br label %b1
 
 b1:
-  %0 = phi i16 [ 0, %b0 ], [ %j, %b2 ]
-  %1 = phi i16 [ 0, %b0 ], [ %t, %b2 ]
+  %0 = phi i16 [ %j, %b2 ], [ 0, %b0 ]
+  %1 = phi i16 [ %t, %b2 ], [ 0, %b0 ]
   %more = icmp slt i16 %0, %n
   br i1 %more, label %b2, label %b3
 
@@ -212,7 +212,7 @@ b3:
 fn test_stores_on_both_arms_join_in_a_phi() {
     forwarded(DIAMOND, INPUTS);
     assert!(
-        promote(DIAMOND).contains("b3:\n  %0 = phi i16 [ 7, %b1 ], [ %d, %b2 ]\n  %y = add i16 %0, 1\n"),
+        promote(DIAMOND).contains("b3:\n  %0 = phi i16 [ %d, %b2 ], [ 7, %b1 ]\n  %y = add i16 %0, 1\n"),
         "{}",
         promote(DIAMOND)
     );

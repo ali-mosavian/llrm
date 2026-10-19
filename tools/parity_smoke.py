@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """The per-merge tests of the integration branch feat/parity: the touched crates' fastest unit tests, a few fast run tests and a compile smoke, 10 s of CPU in all.
+First, untimed, `cargo check --workspace --all-targets` of the merged tree.
 
     tools/parity_smoke.py [--bin DIR] [--base REF] [--rank CRATE...]
 
@@ -69,6 +70,16 @@ def run_cut(command: list[str], seconds: float, cwd: Path) -> tuple[int | None, 
         _charged[0] += seconds
         return None, ""
     return child.returncode, out
+
+
+def workspace_check(root: Path = ROOT) -> str:
+    """"" when the whole workspace, tests and benches included, compiles; else the first errors. Built before the clock starts, like the unit tests: two halves
+    that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke feat/parity's head for every build)."""
+    done = subprocess.run(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"], cwd=root, capture_output=True, text=True)
+    if done.returncode == 0:
+        return ""
+    errors = [line for line in done.stderr.splitlines() if "error" in line]
+    return " / ".join(errors[:3])[:300] or "cargo check failed"
 
 
 def selection() -> dict:
@@ -293,6 +304,9 @@ def main() -> int:
         for package in args.rank:
             rank(package)
         return 0
+    if broken := workspace_check():
+        print(f"PARITY SMOKE FAIL the workspace does not compile: {broken}")
+        return 1
     packages = touched(args.base)
     for package in packages:  # built first, untimed
         subprocess.run(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"], cwd=ROOT, capture_output=True)
