@@ -71,9 +71,9 @@ def repro(failure: str) -> str:
     return f"cargo test --release -p {crate} --lib {test}"
 
 
-def report(sha: str, previous: str, rows: list[dict]) -> str:
-    """The markdown of one head: a table of failure, culprit PR, owner, repro."""
-    lines = [f"# {sha[:9]} (previous {previous[:9]})", ""]
+def report(sha: str, previous: str, rows: list[dict], covered: list[str]) -> str:
+    """The markdown of one head: what ran (COVERED SUITES), then a table of failure, culprit PR, owner, repro. A short list of failures is not health unless the suites ran."""
+    lines = [f"# {sha[:9]} (previous {previous[:9]})", "", "## COVERED SUITES", "", *(f"- {one}" for one in covered), ""]
     if not rows:
         return "\n".join([*lines, "No new failure."]) + "\n"
     lines += ["| failure | culprit | owner | repro |", "|---|---|---|---|"]
@@ -133,11 +133,31 @@ def dist(at: Path, sha: str) -> Path:
     return out
 
 
-def run_failures(at: Path, bins: Path, only: str | None = None) -> set[str]:
+def run_groups(at: Path, bins: Path, only: str | None = None) -> tuple[set[str], str]:
     """`run <program>` for each FAIL line of the tests/run groups (both widths, any config) or of one program: the XFAIL list's ids carry no config."""
     command = [sys.executable, "tools/dosbatch/run_groups.py"] if only is None else [sys.executable, "tools/dosbatch/run_tests.py", only]
     done = subprocess.run([*LOW, *command], cwd=at, env={**os.environ, "LLRM_BIN": str(bins)}, capture_output=True, text=True)
-    return {f"run {name.split(' [')[0]}" for name in pairruns.failures(done.stdout + done.stderr)}
+    output = done.stdout + done.stderr
+    return {f"run {name.split(' [')[0]}" for name in pairruns.failures(output)}, group_summary(output)
+
+
+def group_summary(output: str) -> str:
+    """`57 groups, 858 programs, 0 failing` from the `[group] N programs: P pass, K known, F fail` lines; `NOT RUN` when there are none."""
+    lines = re.findall(r"^\[\w+\] (\d+) programs: (\d+) pass, (\d+) known, (\d+) fail", output, re.M)
+    if not lines:
+        return "NOT RUN (no group line)"
+    return f"{len(lines)} groups, {sum(int(one[0]) for one in lines)} programs, {sum(int(one[3]) for one in lines)} failing"
+
+
+def unit_summary(output: str) -> str:
+    """`llrm-c 142/6, llrm-mir 900/1 ...` (tests run / failing) per crate, from each binary's `test result:` line."""
+    parts = []
+    for block in output.split("     Running ")[1:]:
+        binary = re.search(r"/(\w+)-[0-9a-f]+\)", block.splitlines()[0])
+        result = re.search(r"test result: \w+\. (\d+) passed; (\d+) failed", block)
+        if binary and result:
+            parts.append(f"{binary[1].replace('_', '-')} {int(result[1]) + int(result[2])}/{result[2]}")
+    return ", ".join(parts) or "NOT RUN (no test result)"
 
 
 def by_binary(output: str) -> dict[str, list[str]]:
@@ -165,7 +185,7 @@ def unit_result(output: str, code: int) -> set[str]:
     return named or ({"unit workspace::failed-without-a-test-name"} if code else set())
 
 
-def unit_failures(at: Path, name: str | None = None) -> set[str]:
+def unit_failures(at: Path, name: str | None = None) -> tuple[set[str], str]:
     """`unit <crate>::<test>` for each failing lib test of the workspace (or of one test), in one cargo through buildslot: a crate alone lacks the features the
     root package turns on (llrm-c's `toolchain`: 19 tests failed with "built without the toolchain feature" on a run per crate), a workspace run has them."""
     env = {**os.environ, "CARGO_TARGET_DIR": str(HOME / "target-test"), "CARGO_INCREMENTAL": "0"}
@@ -173,7 +193,7 @@ def unit_failures(at: Path, name: str | None = None) -> set[str]:
     command = [*LOW, "buildslot", "cargo", "test", "--release", "--workspace", "--lib", "--no-fail-fast", *([name] if name else [])]
     fresh(at)
     output, code = merged(command, at, env)
-    return unit_result(output, code)
+    return unit_result(output, code), unit_summary(output)
 
 
 def probe(failure: str, sha: str) -> bool:
@@ -181,14 +201,36 @@ def probe(failure: str, sha: str) -> bool:
     at = tree(sha)
     kind, _, name = failure.partition(" ")
     if kind == "run":
-        return failure in run_failures(at, dist(at, sha), Path(name).stem)
-    return failure in unit_failures(at, name.partition("::")[2])
+        return failure in run_groups(at, dist(at, sha), Path(name).stem)[0]
+    return failure in unit_failures(at, name.partition("::")[2])[0]
 
 
-def check(sha: str) -> set[str]:
-    """Every failure of the head: tests/run at m16+m32, then the workspace lib tests."""
+def smoke(at: Path, bins: Path, previous: str) -> tuple[set[str], str]:
+    """parity_smoke's own checks on the pinned tree (workspace check, ratchets, docs, warnings, the instruction budget): (`smoke <name>` per failing step, its result line)."""
+    env = {**os.environ, "CARGO_TARGET_DIR": str(HOME / "target-test"), "CARGO_INCREMENTAL": "0"}
+    env.pop("RUSTFLAGS", None)
+    output, _ = merged([*LOW, sys.executable, "tools/parity_smoke.py", "--bin", str(bins), "--base", previous], at, env)
+    named = re.search(r"^FAILING: (.*)$", output, re.M)
+    last = (output.strip().splitlines() or ["no output"])[-1][:300]
+    if not named:
+        return {"smoke nothing-printed"}, f"NOT RUN or unparsed: {last}"
+    return {f"smoke {one}" for one in named[1].split(",") if one}, last
+
+
+def check(sha: str, previous: str) -> tuple[set[str], list[str]]:
+    """Every failure of the head and the COVERED SUITES lines: tests/run at m16+m32, the workspace lib tests, parity_smoke's checks and budget."""
     at = tree(sha)
-    return run_failures(at, dist(at, sha)) | unit_failures(at)
+    bins = dist(at, sha)
+    runs, run_line = run_groups(at, bins)
+    units, unit_line = unit_failures(at)
+    smoked, smoke_line = smoke(at, bins, previous)
+    covered = [
+        f"tests/run m16+m32 (run_groups): {run_line}",
+        f"workspace lib tests (tests run/failing per crate): {unit_line}",
+        f"parity_smoke (workspace check, ratchets, docs, warnings, instruction budget): {smoke_line}",
+        "NOT RUN: fmt.sh, prepush.sh, the integration tests (tests/*.rs), the bench rows",
+    ]
+    return runs | units | smoked, covered
 
 
 def load_state() -> dict:
@@ -218,7 +260,7 @@ def once(sha: str | None = None) -> str:
     sha = git("rev-parse", sha or "origin/feat/parity")
     state = load_state()
     previous = state["last"]
-    failing = check(sha)
+    failing, covered = check(sha, previous or sha)
     listed = xfail.load()
     before = set(state["heads"].get(previous, [])) if previous else set()
     rows = []
@@ -230,7 +272,7 @@ def once(sha: str | None = None) -> str:
         rows.append({"failure": failure, "commit": found, "pr": pr, "owner": pr_owner(pr) if pr else "unknown", "repro": repro(failure)})
     HOME.mkdir(parents=True, exist_ok=True)
     path = HOME / f"{sha[:9]}.md"
-    path.write_text(report(sha, previous or sha, rows))
+    path.write_text(report(sha, previous or sha, rows, covered))
     state["heads"][sha] = sorted(failing)
     state["last"] = sha
     save_state(state)

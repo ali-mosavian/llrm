@@ -40,9 +40,9 @@ def test_a_failure_has_a_command_that_runs_it_alone():
 
 def test_the_report_is_a_table_of_failure_culprit_owner_repro():
     rows = [{"failure": "run scroll", "commit": "abc1234567", "pr": 2890, "owner": "simplify-combine-wiring-2128", "repro": "python3 tools/dosbatch/run_tests.py scroll"}]
-    text = postland.report("f" * 40, "e" * 40, rows)
+    text = postland.report("f" * 40, "e" * 40, rows, ["tests/run: 57 groups"])
     assert "| run scroll | #2890 | simplify-combine-wiring-2128 | `python3 tools/dosbatch/run_tests.py scroll` |" in text
-    assert "No new failure" in postland.report("f" * 40, "e" * 40, [])
+    assert "No new failure" in postland.report("f" * 40, "e" * 40, [], ["tests/run: 57 groups"])
 
 
 def test_failing_tests_are_attributed_to_the_crate_whose_binary_ran_them():
@@ -85,3 +85,16 @@ def test_a_tree_built_after_a_newer_one_is_still_newer_than_the_shared_targets_a
     os.utime(tmp_path / "a.rs", (1, 1))
     postland.fresh(tmp_path)
     assert (tmp_path / "a.rs").stat().st_mtime >= artifact.stat().st_mtime
+
+
+def test_the_report_opens_with_what_ran_so_a_short_list_is_not_read_as_health():
+    """A report of two failures said nothing of the 40 suites that never ran."""
+    text = postland.report("f" * 40, "e" * 40, [], ["tests/run m16+m32: 57 groups, 858 programs, 0 failing", "NOT RUN: fmt.sh"])
+    assert text.index("COVERED SUITES") < text.index("No new failure") and "NOT RUN: fmt.sh" in text
+
+
+def test_the_summaries_count_the_groups_and_the_crates_that_ran_and_say_so_when_none_did():
+    assert postland.group_summary("[c] 351 programs: 349 pass, 0 known, 2 fail\n[nib] 49 programs: 49 pass, 0 known, 0 fail\n") == "2 groups, 400 programs, 2 failing"
+    assert postland.group_summary("") == "NOT RUN (no group line)"
+    out = "     Running unittests src/lib.rs (deps/llrm_c-0a1b)\ntest result: FAILED. 140 passed; 2 failed; 0 ignored\n"
+    assert postland.unit_summary(out) == "llrm-c 142/2" and postland.unit_summary("error") == "NOT RUN (no test result)"
