@@ -159,8 +159,8 @@ impl Selector<'_, '_, '_> {
             reads: runtime::Memory::Any,
             .._helper(
                 routine.name,
-                runtime_registers(&routine.reads, false),
-                runtime_registers(&routine.clobbers, true),
+                runtime_registers(&self.regs, &routine.reads, false),
+                runtime_registers(&self.regs, &routine.clobbers, true),
             )
         };
         out.push(Arc::new(Insn {

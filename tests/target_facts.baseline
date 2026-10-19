@@ -13,7 +13,6 @@
 15 crates/backend/llrm-core/src/backend/inline_asm.rs
 10 crates/backend/llrm-core/src/backend/isel.rs
 3 crates/backend/llrm-core/src/backend/loopslots.rs
-4 crates/backend/llrm-core/src/backend/lower_int64.rs
 6 crates/backend/llrm-core/src/backend/machinecp.rs
 15 crates/backend/llrm-core/src/backend/masm.rs
 2 crates/backend/llrm-core/src/backend/objbuild.rs
