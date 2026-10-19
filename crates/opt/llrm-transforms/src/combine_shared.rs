@@ -239,6 +239,14 @@ pub fn has_one_use(
 }
 
 impl Combiner<'_> {
+    /// `Value::hasOneUse`.
+    pub(crate) fn has_one_use(
+        &self,
+        v: Operand,
+    ) -> bool {
+        has_one_use(self, v)
+    }
+
     /// `isa<UndefValue>`: `undef` or `poison`.
     pub fn is_undef_value(
         &self,
