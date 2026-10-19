@@ -28,6 +28,7 @@ llrm-support = { path = "crates/support/llrm-support" }
 llrm-x86-m16 = { path = "crates/target/llrm-x86-m16" }
 llrm-x86-m16-select = { path = "crates/target/llrm-x86-m16-select" }
 llrm-target = { path = "crates/target/llrm-target" }
+llrm-instr = { path = "crates/target/llrm-instr" }
 llrm-x86 = { path = "crates/target/llrm-x86" }
 llrm-x86-m32 = { path = "crates/target/llrm-x86-m32" }
 llrm-x86-m32-select = { path = "crates/target/llrm-x86-m32-select" }
