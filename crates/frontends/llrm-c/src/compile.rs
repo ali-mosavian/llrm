@@ -1161,6 +1161,78 @@ mod tests {
         assert_eq!(order, ["XIB", "XI", "XIE"], "{asm}");
     }
 
+    /// The address of a function the unit only declares, taken in code and
+    /// not in a table, stopped the compile ("@name undeclared"): the call
+    /// declares its callee and the address did not.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_the_address_of_an_extern_function_taken_in_code_is_compiled() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("addr.c");
+        std::fs::write(&source, "extern unsigned other(void);\nunsigned (*get(void))(void) { return other; }\n")
+            .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records addr.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let built = super::selected(&text, "addr", None, &options);
+        let asm = llrm_core::backend::masm::text(&built.unwrap()).unwrap();
+        assert!(asm.contains("mov ax, offset other_") && asm.contains("extern other_:far"), "{asm}");
+    }
+
+    /// Inline code with registers that names a symbol (`"call __doserror1_"`,
+    /// `"mov ax,offset table"`) was refused, which left clib's DOS calls to the
+    /// reference compiler. A near call is spelled as the instruction, a far
+    /// one and an offset as their words.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_with_registers_may_name_symbols() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("sym.c");
+        std::fs::write(
+            &source,
+            "extern void __near fixed(void);\nextern void __far reach(void);\nextern int table[4];\n\
+             extern int step(int n);\n\
+             #pragma aux step = \"int 21h\" \"call fixed\" \"call reach\" \"mov dx,offset table\" \
+             __parm __caller [__ax] __value [__ax] __modify __exact [__ax __dx]\n\
+             int run(int n) { return step(n); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records sym.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "sym", None, &options).unwrap()).unwrap();
+        assert!(asm.contains("call near ptr fixed_"), "{asm}");
+        assert!(asm.contains("dw offset reach_") && asm.contains("dw seg reach_"), "{asm}");
+        assert!(asm.contains("dw offset _table"), "{asm}");
+        assert!(asm.contains("extern fixed_:near") && asm.contains("extern reach_:far"), "{asm}");
+    }
+
+    /// Every module's code was in `<MODULE>_TEXT`, so a near call between
+    /// modules (clib's `__set_errno_dos`, declared near) reached into another
+    /// segment. `-mcode-segment=_TEXT` puts them all in one.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_code_segment_may_be_named_for_every_module() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("one.c");
+        std::fs::write(&source, "int one(void) { return 1; }\n").unwrap();
+        let argv: Vec<String> = ["-m16", "-mabi=watcom", "-mcode-segment=_TEXT", "one.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records one.c");
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "one", None, &args.codegen).unwrap()).unwrap();
+        assert!(asm.lines().any(|one| one == ".code _TEXT"), "{asm}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`
@@ -2521,6 +2593,10 @@ mod tests {
     /// which nothing writes, is read again instead.
     #[test]
     fn test_a_float_argument_is_read_from_its_own_cell() {
+        // RFP-3, a row loss under RFP: greedy spills the argument to a slot of
+        // its own across the call (`sub sp, 20`), where floatassign
+        // re-read its cell.
+        let _old = llrm_core::backend::allocate::RfpOn::off();
         let text =
             std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/paramremat.cgs")).unwrap();
         let options = llrm_core::driver::Options {

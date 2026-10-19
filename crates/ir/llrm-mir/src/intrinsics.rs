@@ -43,6 +43,11 @@ pub enum Intrinsic {
     },
     /// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop`.
     BitCount(BitCount),
+    /// `llvm.scmp` and `llvm.ucmp`: -1, 0 or 1 as the first argument is less
+    /// than, equal to or greater than the second, in the result's integer type.
+    Compare {
+        signed: bool,
+    },
     FMulAdd,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
     Unary(FloatFunction),
@@ -84,6 +89,11 @@ pub enum Intrinsic {
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
+    /// `llvm.stacksave`: the stack pointer, to give back to `stackrestore`.
+    StackSave,
+    /// `llvm.stackrestore`: the stack pointer `stacksave` returned made the
+    /// stack pointer again, releasing what was allocated since.
+    StackRestore,
     /// Inline machine code, laid down where it is called: its name carries
     /// the bytes, and each argument is a frame place whose displacement it
     /// reads at a byte offset the name gives. It answers what it leaves in
@@ -142,9 +152,20 @@ pub fn code(name: &str) -> Option<(Vec<u8>, Vec<(usize, i64)>)> {
 }
 
 /// What names inline assembly with declared registers:
-/// `llrm.ia16.asm.<hex bytes>.<in>.<out>.<clobbers>.<m|n>`, each list its
-/// registers joined by `_` (`-` for none), `m` where it reaches memory.
+/// `llrm.ia16.asm.<hex bytes>.<in>.<out>.<clobbers>.<m|n>` and, per word naming
+/// a symbol, `.f<at>_<kind>_<addend>`; each list its registers joined by `_`
+/// (`-` for none), `m` where it reaches memory. The symbols' addresses are the
+/// call's first arguments, in order, before the registers'.
 const ASM: &str = "llrm.ia16.asm.";
+
+/// A word of an inline block that names a symbol: where, as what (`offset`,
+/// `segment`, `reloff`), and plus what.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AsmFixup {
+    pub at: usize,
+    pub kind: String,
+    pub addend: i64,
+}
 
 /// An inline assembly block: registers by their 16-bit names.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -154,13 +175,15 @@ pub struct AsmBlock {
     pub outputs: Vec<String>,
     pub clobbers: Vec<String>,
     pub memory: bool,
+    pub fixups: Vec<AsmFixup>,
 }
 
 pub fn asm_name(block: &AsmBlock) -> String {
     let hex: String = block.code.iter().map(|one| format!("{one:02x}")).collect();
     let list = |names: &[String]| if names.is_empty() { "-".to_owned() } else { names.join("_") };
+    let fixups: String = block.fixups.iter().map(|one| format!(".f{}_{}_{}", one.at, one.kind, one.addend)).collect();
     format!(
-        "{ASM}{hex}.{}.{}.{}.{}",
+        "{ASM}{hex}.{}.{}.{}.{}{fixups}",
         list(&block.inputs),
         list(&block.outputs),
         list(&block.clobbers),
@@ -169,9 +192,11 @@ pub fn asm_name(block: &AsmBlock) -> String {
 }
 
 pub fn asm(name: &str) -> Option<AsmBlock> {
-    let [hex, inputs, outputs, clobbers, memory] = name.strip_prefix(ASM)?.split('.').collect::<Vec<_>>()[..] else {
+    let parts = name.strip_prefix(ASM)?.split('.').collect::<Vec<_>>();
+    let [hex, inputs, outputs, clobbers, memory, fixups @ ..] = &parts[..] else {
         return None;
     };
+    let (hex, inputs, outputs, clobbers, memory) = (*hex, *inputs, *outputs, *clobbers, *memory);
     if hex.len() % 2 != 0 {
         return None;
     }
@@ -185,7 +210,18 @@ pub fn asm(name: &str) -> Option<AsmBlock> {
         "n" => false,
         _ => return None,
     };
-    Some(AsmBlock { code, inputs: list(inputs), outputs: list(outputs), clobbers: list(clobbers), memory })
+    let fixups = fixups
+        .iter()
+        .map(|one| {
+            let mut fields = one.strip_prefix('f')?.splitn(3, '_');
+            Some(AsmFixup {
+                at: fields.next()?.parse().ok()?,
+                kind: fields.next()?.to_owned(),
+                addend: fields.next()?.parse().ok()?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(AsmBlock { code, inputs: list(inputs), outputs: list(outputs), clobbers: list(clobbers), memory, fixups })
 }
 
 /// What `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop` count.
@@ -339,13 +375,27 @@ const fn bit_count(
     arithmetic(name, Intrinsic::BitCount(count), Slot::Any(0), parameters, Kind::Int)
 }
 
+const fn compare(
+    name: &'static str,
+    signed: bool,
+) -> Spec {
+    Spec {
+        name,
+        intrinsic: Intrinsic::Compare { signed },
+        overloads: &[Kind::Int, Kind::Int],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(1), Slot::Any(1)],
+        own: None,
+    }
+}
+
 const FIXED: &[Slot] = &[Slot::Any(0), Slot::Any(0), Slot::Int(32)];
 
 const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 38] = [
+const TABLE: [Spec; 42] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -359,6 +409,8 @@ const TABLE: [Spec; 38] = [
     bit_count("llvm.ctlz", BitCount::LeadingZeros),
     bit_count("llvm.cttz", BitCount::TrailingZeros),
     bit_count("llvm.ctpop", BitCount::Population),
+    compare("llvm.scmp", true),
+    compare("llvm.ucmp", false),
     arithmetic("llvm.smul.fix", Intrinsic::Fixed { divide: false }, Slot::Any(0), FIXED, Kind::Int),
     Spec {
         name: "llvm.sdiv.fix",
@@ -468,6 +520,22 @@ const TABLE: [Spec; 38] = [
     Spec {
         name: "llvm.va_start",
         intrinsic: Intrinsic::VaStart,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.stacksave",
+        intrinsic: Intrinsic::StackSave,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.stackrestore",
+        intrinsic: Intrinsic::StackRestore,
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
         parameters: &[Slot::Any(0)],
@@ -685,7 +753,15 @@ impl Intrinsic {
             if !answers {
                 return Err("Intrinsic has incorrect return type!".to_owned());
             }
-            if *variadic || parameters.len() != block.inputs.len() || !parameters.iter().all(word) {
+            // The symbols a block names come first, as addresses, then the
+            // registers'.
+            let (symbols, registers) = parameters.split_at(block.fixups.len().min(parameters.len()));
+            if *variadic
+                || symbols.len() != block.fixups.len()
+                || registers.len() != block.inputs.len()
+                || !symbols.iter().all(|ty| matches!(types.get(*ty), Type::Pointer(_)))
+                || !registers.iter().all(word)
+            {
                 return Err("Intrinsic has incorrect argument type!".to_owned());
             }
             return Ok(());

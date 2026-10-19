@@ -157,8 +157,8 @@ use crate::{
     adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, jumpthread, lcssa,
     loopdeletion, loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit,
-    loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp,
-    simpleloopunswitch, simplifycfg, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    loopunrollpass, loopversion, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp, simpleloopunswitch,
+    simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -241,6 +241,10 @@ pub struct Options {
     /// [`crate::sroa`], with [`crate::mem2reg`]); on by default,
     /// `LLRM_NO_SROA` turns it off.
     pub sroa: bool,
+    /// The InstCombine slots (`combine@N`) run the translated families
+    /// ([`crate::combine_pass`]); on by default, `LLRM_NO_COMBINE` turns it
+    /// off.
+    pub combine: bool,
     /// The loop-invariant passes are the translated LICM ([`crate::licm`]):
     /// `licm` in the LICM slots and where `hoist` ran; on by default,
     /// `LLRM_NO_LICM` turns it off.
@@ -313,6 +317,7 @@ impl Default for Options {
             interchange: false,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
+            combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
             licm: !llrm_support::env_flag!("LLRM_NO_LICM"),
             copy_headers: true,
             for_size: false,
@@ -541,7 +546,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(ports::Ports),
         // A terminator on a literal is a jump before `decide` asks what the
         // body's values are.
-        Box::new(simplifycfg::SimplifyCfg),
+        Box::new(simplifycfg::SimplifyCfg::default()),
         Box::new(decide::Decide),
         // gcc runs phiopt at -O1 and above (opts.cc:609); it is priced in bytes
         // at -Os.
@@ -551,7 +556,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Before a call is made a loop: two equal calls are one first, as
         // LLVM's EarlyCSE and gcc's FRE precede tail-recursion elimination.
         Box::new(gvn::EqualCalls),
-        Box::new(tailrec::TailRecursion),
+        Box::new(tailcallelim::TailCallElim),
         Box::new(loopsimplify::LoopSimplify),
         Box::new(lcssa::LoopClosedSSA),
         // Strict floating recurrences must retain their original iteration
@@ -598,7 +603,12 @@ pub fn llvm_motion(applied: &Applied) -> bool {
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
 fn translated() -> Vec<Box<dyn FunctionPass>> {
-    vec![Box::new(crate::cvp::Cvp), Box::new(crate::jumpthreading::JumpThreading::from_env())]
+    vec![
+        Box::new(crate::cvp::Cvp),
+        Box::new(crate::jumpthreading::JumpThreading::from_env()),
+        Box::new(crate::dfajumpthreading::DfaJumpThreading::from_env()),
+        Box::new(crate::tailcallelim::TailCallElim),
+    ]
 }
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`).
@@ -616,6 +626,10 @@ struct Slot {
 impl FunctionPass for Slot {
     fn name(&self) -> &'static str {
         self.name
+    }
+
+    fn translations(&self) -> Vec<&'static str> {
+        self.inner.translations()
     }
 
     fn adds_memory_operations(&self) -> bool {
@@ -650,6 +664,10 @@ impl FunctionPass for Together {
 
     fn parts(&self) -> Vec<&'static str> {
         self.parts.iter().flat_map(|part| part.parts()).collect()
+    }
+
+    fn translations(&self) -> Vec<&'static str> {
+        self.parts.iter().flat_map(|part| part.translations()).collect()
     }
 
     fn adds_memory_operations(&self) -> bool {
@@ -698,8 +716,11 @@ pub(crate) fn llvm_order(
     let slot =
         |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
     let decide = |name| slot(name, Box::new(decide::Decide));
+    let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
+    let simplify_cfg_with = |name, options| slot(name, Box::new(simplifycfg::SimplifyCfg { options }));
     let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
     let fold = |name| slot(name, Box::new(fold::Fold));
+    let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
@@ -739,7 +760,10 @@ pub(crate) fn llvm_order(
         // themselves.
         Phase::Module | Phase::Backend => Vec::new(),
         Phase::Early => {
-            vec![decide("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
+            // EarlyFPM's `SimplifyCFGPass()` (PassBuilderPipelines.cpp#L1178),
+            // at the default options. The slot keeps the name
+            // `decide@1178`.
+            vec![simplify_cfg("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
         }
         Phase::Cleanup => vec![
             Box::new(Together {
@@ -752,9 +776,13 @@ pub(crate) fn llvm_order(
                     vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)]
                 },
             }),
+            combine("combine@1242"),
             fold("fold@1242"),
             dead("dead@1242"),
-            decide("decide@1244"),
+            // `SimplifyCFGOptions().convertSwitchRangeToICmp(true)`
+            // (PassBuilderPipelines.cpp#L1245): the option is read by
+            // `simplifySwitch`, not translated yet, so these are the defaults.
+            simplify_cfg("decide@1244"),
             phiopt("phiopt@1244"),
         ],
         // InstSimplifyPass, PassBuilderPipelines.cpp#L1662: the last function
@@ -765,13 +793,19 @@ pub(crate) fn llvm_order(
             list.extend([
                 slot("jumpthreading@668", Box::new(crate::jumpthreading::JumpThreading::from_env())),
                 slot("cvp@669", Box::new(crate::cvp::Cvp)),
-                decide("decide@675"),
+                // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L675:
+                // the option is read by `simplifySwitch`, untranslated.
+                simplify_cfg("decide@675"),
                 phiopt("phiopt@675"),
+                combine("combine@677"),
                 fold("fold@677"),
                 dead("dead@677"),
-                slot("tailrec@688", Box::new(tailrec::TailRecursion)),
-                decide("decide@690"),
+                slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
+                // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L691:
+                // the option is read by `simplifySwitch`, untranslated.
+                simplify_cfg("decide@690"),
                 phiopt("phiopt@690"),
+                slot("reassociate@696", Box::new(crate::reassociate::Reassociate)),
                 slot("algebraic@696", Box::new(algebraic::Algebraic { size, llvm: true })),
             ]);
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
@@ -802,8 +836,11 @@ pub(crate) fn llvm_order(
             list.extend([
                 licm("licm@730", true),
                 slot("trivialunswitch@732", Box::new(simpleloopunswitch::SimpleLoopUnswitch)),
-                decide("decide@766"),
+                // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L766:
+                // the option is read by `simplifySwitch`, untranslated.
+                simplify_cfg("decide@766"),
                 phiopt("phiopt@766"),
+                combine("combine@768"),
                 fold("fold@768"),
                 dead("dead@768"),
             ]);
@@ -835,8 +872,16 @@ pub(crate) fn llvm_order(
                 slot("gvn@787", Box::new(gvn::Gvn { pre: applied.options.pre })),
                 slot("sccp@792", Box::new(sccp::Sccp)),
                 slot("bdce@797", Box::new(bdce::Bdce)),
+                combine("combine@801"),
                 fold("fold@801"),
                 dead("dead@801"),
+                // DFAJumpThreadingPass, PassBuilderPipelines.cpp#L806.
+                slot(
+                    "dfajumpthreading@806",
+                    Box::new(
+                        crate::dfajumpthreading::DfaJumpThreading::from_env().for_size(applied.options.prefers_size()),
+                    ),
+                ),
                 slot("jumpthreading@809", Box::new(crate::jumpthreading::JumpThreading::from_env())),
                 decide("decide@809"),
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
@@ -848,8 +893,15 @@ pub(crate) fn llvm_order(
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
             list.extend([
                 licm("licm@823", true),
-                decide("decide@832"),
+                // L832: hoistCommonInsts and sinkCommonInsts on, besides
+                // convertSwitchRangeToICmp and convertSwitchToArithmetic
+                // (read by `simplifySwitch`, untranslated).
+                simplify_cfg_with(
+                    "decide@832",
+                    simplifycfg::Options { hoist_common_insts: true, sink_common_insts: true, ..Default::default() },
+                ),
                 phiopt("phiopt@832"),
+                combine("combine@837"),
                 fold("fold@837"),
                 dead("dead@837"),
             ]);
@@ -938,6 +990,7 @@ pub fn recorded(
     manager.without_loop_intervals = !applied.options.loop_intervals;
     manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
+    manager.dump_inputs = llrm_support::env_flag!("LLRM_DUMP_INPUTS");
     if !applied.options.optimize {
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
@@ -1061,10 +1114,7 @@ pub fn recorded(
     }
     // Each loop's counters chosen once, on the loop the passes above leave.
     if applied.options.wanted("lsr") {
-        manager.add(lsr::Lsr {
-            size: applied.options.prefers_size(),
-            bounds: if applied.options.searches_all() { lsr::Bounds::NONE } else { lsr::Bounds::GCC },
-        });
+        manager.add(crate::lsr_pass::LoopStrengthReduce);
         // What the counters it chose leave behind (a bound subtracted from a
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.
@@ -1305,6 +1355,8 @@ impl Fixed {
         quiet.options.llvm_order = true;
         let mut one = Self::linear(&quiet, phase);
         one.passes.retain(|pass| pass.name() == slot);
+        // A slot is the one pass: -O3's peeler ran in its place.
+        one.peelers.clear();
         one.only = true;
         one
     }
@@ -1324,6 +1376,12 @@ impl Fixed {
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
         let level = if applied.options.pre { crate::parity::Level::O2 } else { crate::parity::Level::O1 };
+        let off = crate::parity::REGISTRY
+            .iter()
+            .filter(|one| one.phase == phase && !applied.options.wanted(one.slot))
+            .map(|one| one.slot)
+            .collect::<Vec<_>>();
+        let held = linear.passes.iter().map(|one| (one.name(), one.translations())).collect::<Vec<_>>();
         let checked = crate::parity::check_phase_with(
             phase,
             &built,
@@ -1331,6 +1389,8 @@ impl Fixed {
             applied.options.sroa,
             applied.options.mem2reg,
             applied.options.rotating(),
+            &off,
+            &held,
         );
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
@@ -1565,6 +1625,10 @@ impl Fixed {
 }
 
 impl FunctionPass for Fixed {
+    fn dumps_inputs_itself(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "pipeline"
     }

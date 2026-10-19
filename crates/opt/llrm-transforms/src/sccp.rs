@@ -65,6 +65,10 @@ impl FunctionPass for Sccp {
         "sccp"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("sccp")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,

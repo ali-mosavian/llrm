@@ -259,6 +259,29 @@ def test_a_compile_that_outgrows_the_memory_limit_is_reported_as_a_memory_limit(
     assert why and why.startswith("memory limit"), why
 
 
+def test_an_unformatted_file_refuses_a_pr_through_the_prepush_ratchet():
+    """#2732 and #2735 landed with unformatted files: the smoke ran neither fmt nor the docs scans. prepush's failing steps are ratchets of the smoke."""
+    class Done:
+        def __init__(self, out, code):
+            self.stdout, self.stderr, self.returncode = out, "", code
+
+    failed = ps.prepush_failures(run=lambda command: Done("PREPUSH FAIL: fmt, docs\ncovers: fmt, docs", 1))
+    assert set(failed) == {"ratchet:prepush-fmt", "ratchet:prepush-docs"}, failed
+    assert ps.prepush_failures(run=lambda command: Done("PREPUSH PASS\n", 0)) == {}
+    assert set(ps.prepush_failures(run=lambda command: Done("", 2))) == {"ratchet:prepush-did-not-run"}
+
+
+def test_unused_code_fails_the_warnings_check_and_clean_code_passes(tmp_path):
+    """deadstore.rs landed with unused code under -D warnings."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "Cargo.toml").write_text('[package]\nname = "w"\nversion = "0.0.0"\nedition = "2021"\n')
+    (tmp_path / "src/lib.rs").write_text("fn unused() {}\n")
+    why = ps.warnings_check(tmp_path, tmp_path / "t")
+    assert why, "an unused function must fail under -D warnings"
+    (tmp_path / "src/lib.rs").write_text("pub fn used() {}\n")
+    assert ps.warnings_check(tmp_path, tmp_path / "t") == ""
+
+
 def test_a_failed_unit_step_names_each_failed_test_not_its_crate():
     """The subset rule compared checks: a PR adding one failing test inside an already-red crate failed `unit llrm-qb`, which the red head failed too, and landed."""
     out = "running 3 tests\\nfailures:\\n\\n---- t::a stdout ----\\n    printed\\n\\nfailures:\\n    t::a\\n    t::b\\n\\ntest result: FAILED. 1 passed; 2 failed\\n".replace("\\n", "\n")
@@ -281,3 +304,36 @@ def test_the_budget_is_instructions_so_a_loaded_host_passes_and_a_doubled_step_f
     fallback = iter([0.0, 0.0, 0.0, 20.0])  # no perf: the CPU seconds decide, as before
     ok, line = ps.run_steps(steps, Path("."), clock=lambda: next(fallback), meter=counted(None), limit=12_000_000_000)
     assert not ok and "perf unavailable" in line
+
+
+def test_each_smoke_step_prints_its_stage_line_before_it_runs(capsys):
+    """The smoke's stage times were only in the final line: a step announces itself, flushed, when it starts."""
+    order = []
+    step = lambda bins: (order.append(capsys.readouterr().out.strip().splitlines()[-1]), ("ok", ""))[1]
+    ps.run_steps([("sc", step, 1.0)], Path("."), clock=lambda: 0.0)
+    assert order and order[0].endswith(" STAGE step sc")
+
+
+def test_the_ratchets_run_side_by_side_and_report_in_command_order(monkeypatch):
+    """A precheck spent ~45 s of its ~70 s running ten cargo test ratchets one after another; four at a time they overlap their links and runs."""
+    import threading
+
+    monkeypatch.setattr(ps, "RATCHET_WORKERS", 4)
+    monkeypatch.setattr(ps, "ratchet_commands", lambda tiers=None: [["cargo", "test", "a"], ["cargo", "test", "b"], ["cargo", "test", "facts_rewrite"], ["cargo", "test", "d"]])  # an even count: the barrier takes pairs
+    gate = threading.Barrier(2, timeout=5)  # a serial runner never reaches 2 parties: the barrier breaks (10 ratchets: pairs)
+
+    class Done:
+        def __init__(self, code):
+            self.returncode, self.stdout, self.stderr = code, "", ""
+
+    def run(command):
+        gate.wait()
+        return Done(1 if "facts_rewrite" in " ".join(command) else 0)
+
+    failed = ps.ratchet_failures(run=run)
+    assert list(failed) == ["ratchet:facts_rewrite"], failed
+
+
+def test_the_ratchets_run_one_at_a_time_by_default():
+    """Four at a time cost 600-750 s a PR at load 70 against ~57 s in a row (cargo's lock serializes the compiles; the links collide): serial is the default, RATCHET_WORKERS overrides."""
+    assert ps.RATCHET_WORKERS == 1

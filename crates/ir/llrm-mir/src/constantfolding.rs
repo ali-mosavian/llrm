@@ -1588,6 +1588,7 @@ fn constant_fold_inst_operands_impl(
         Opcode::ICmp(predicate) => {
             constant_fold_compare_inst_operands(context, env.globals, env.layout, *predicate, ops[0], ops[1])
         }
+        Opcode::FCmp(predicate) => constfold::compare_float(context, *predicate, ops[0], ops[1]),
         Opcode::Freeze => {
             let guaranteed = with_query(context, env, |q| {
                 crate::valuetracking::guarantee::is_guaranteed_not_to_be_undef_or_poison(

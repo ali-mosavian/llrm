@@ -7,7 +7,7 @@ mkdir -p "${LAND_TMP:-/tmp/landing}"
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
-HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
 STACKS="2752 2773 2776|2785 2789 2797|2713 2738 2764|2753 2757 2763|2672 2683"
 group() { for g in ${STACKS//|/ |}; do :; done; echo "$STACKS" | tr '|' '\n' | grep -w -- "$1" | head -1; }
@@ -15,9 +15,13 @@ while true; do
   # never run beside another landing (old runner's land.sh)
   while ps -eo args | awk '/land\.sh/ && !/awk/ {f=1} END{exit !f}'; do sleep 20; done
   "$HERE/build-queue.sh" > $Q.new && mv $Q.new $Q || echo "build-queue failed, keeping the old queue"
+  # landings outside the gate: every first-parent commit of feat/parity not in landed.log, reported once
+  git -C "$W" fetch -q origin 2>/dev/null; (cd "$W" && "$HERE/unlogged.sh" 2>/dev/null) | while read -r l; do
+    grep -qxF "$l" "${LAND_TMP:-/tmp/landing}/unlogged.log" 2>/dev/null || { echo "UNLOGGED LANDING: $l"; echo "$l" >> "${LAND_TMP:-/tmp/landing}/unlogged.log"; }
+  done
   # size cap: cargo never removes the artifacts of older hashes
   [ "$(du -sk "$T" 2>/dev/null | cut -f1)" -gt "${TARGET_CAP_KB:-41943040}" ] && echo "target over cap: $(PRUNE_LOG=${LAND_TMP:-/tmp/landing}/prune.log "$HERE/prune-target.sh" "$T" --apply)"
-  # every cargo target over 30 GB loses its stale hashes, at most every 10 minutes
+  # every cargo target over 15 GB loses its stale hashes, at most every 10 minutes
   if [ -z "$(find "${LAND_TMP:-/tmp/landing}/sweep.stamp" -mmin -10 2>/dev/null)" ]; then
     touch "${LAND_TMP:-/tmp/landing}/sweep.stamp"; "$HERE/sweep-targets.sh" 2>&1 | sed "s/^/$(date +%H:%M) /" >> "${LAND_TMP:-/tmp/landing}/sweep.log"
   fi
@@ -25,7 +29,14 @@ while true; do
   batch=("$n"); g=$(group "$n")
   if [ -z "$g" ]; then
     cand=(); for m in $(sed -n '1,40p' $Q); do [ -z "$(group "$m")" ] && cand+=("$m"); done
-    batch=($(pick_disjoint 8 "${cand[@]}"))
+    # the cheap static checks (ratchets, fmt, docs, deletions) on each PR merged with feat/parity: a failure never reaches a batch (and never halves it)
+    if [ "${LAND_FAST:-}" = 1 ]; then  # the user's call: no precheck, no smoke, up to 16 PRs in queue order; merge-batch leaves out the ones that cannot join
+      batch=("${cand[@]:0:16}")
+    else
+      cand=($(prechecked "${cand[@]:0:${PRECHECK_WINDOW:-16}}"))
+      batch=($(pick_disjoint 8 "${cand[@]}"))
+    fi
+    [ ${#batch[@]} -eq 0 ] && { sleep 60; continue; }
   fi
   for m in "${batch[@]}"; do sed -i "/^$m\$/d" $Q; done
   open=($(open_only "${batch[@]}"))
@@ -39,7 +50,7 @@ while true; do
     [ "$2" = true ] && gh pr ready $m --repo $R >/dev/null
   done
   log=${LAND_TMP:-/tmp/landing}/sqb-${batch[0]}.log
-  ( cd $W && git fetch -q origin && git reset -q --hard && git checkout -q --detach origin/feat/parity \
+  ( cd $W && git fetch -q origin && git reset -q --hard && git checkout -q --detach ${LAND_TOOLS_REF:-origin/feat/parity} \
     && PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}" 2>&1 \
       | awk '{print strftime("%H:%M:%S"), $0; fflush()}' > $log )
   for m in "${batch[@]}"; do
