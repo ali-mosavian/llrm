@@ -258,3 +258,15 @@ fn test_adce_stands_between_cvp_and_memcpyopt() {
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} not built"));
     assert_eq!((at("cvp@810") + 1, at("adce@815") + 1), (at("adce@815"), at("memcpyopt@818")));
 }
+
+/// LLVM runs SCCP after GVN and before BDCE.
+#[test]
+fn test_sccp_stands_between_gvn_and_bdce() {
+    let on = Applied {
+        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
+        ..Applied::default()
+    };
+    let built = names(&on, Phase::Simplify);
+    let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
+    assert_eq!((at("gvn@787") + 1, at("sccp@792") + 1), (at("sccp@792"), at("bdce@797")));
+}

@@ -183,6 +183,8 @@ pub mod ports;
 pub mod profit;
 pub mod promote;
 pub mod rotate;
+pub mod sccp;
+pub mod sccpsolver;
 pub mod settled;
 pub mod simpleloopunswitch;
 pub mod simplifycfg;
