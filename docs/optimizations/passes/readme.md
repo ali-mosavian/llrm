@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 132 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 133 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -32,6 +32,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_gep_phi | `foldGEPOfPhi`: a `getelementptr` of a phi of `getelementptr`s as a `getelementptr` of a phi of the one index they differ in. |  | [combine_gep_phi](combine_gep_phi.md) |
 | combine_loadstore | InstCombine's stores: the store that cannot matter is erased, the one that cannot execute stores poison. | `combine` (its `visit`). | [combine_loadstore](combine_loadstore.md) |
 | combine_muldivrem | InstCombine's `visitMul` and the helpers it calls, from [`InstCombineMulDivRem.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp) at d1106deb71cc. | `combine::visit`, once the mul family's slot is flipped. | [combine_muldivrem](combine_muldivrem.md) |
+| combine_negator | `Negator`: sinks a negation into an expression tree when that does not add an instruction. | `combine_addsub::visit_sub`, `combine_muldivrem`. | [combine_negator](combine_negator.md) |
 | combine_pass | The pass: InstCombine as a function pass of the pipeline. | `pipeline` (`combine@N`, in front of the old `fold@N` of each InstCombine | [combine_pass](combine_pass.md) |
 | combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
 | combine_select | `FoldOpIntoSelect`: an instruction that reads a select becomes a select of the instruction applied to each arm. | `foldBinOpIntoSelectOrPhi` and the `visit*` of the families that fold an | [combine_select](combine_select.md) |

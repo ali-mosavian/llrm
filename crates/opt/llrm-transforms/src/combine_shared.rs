@@ -154,7 +154,7 @@ fn min_max(
 }
 
 /// `Instruction::isCommutative`.
-fn is_commutative(op: BinaryOp) -> bool {
+pub fn is_commutative(op: BinaryOp) -> bool {
     matches!(
         op,
         BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::FAdd | BinaryOp::FMul
@@ -314,7 +314,7 @@ fn simplify_assoc_cast_assoc(
 }
 
 /// `Instruction::dropPoisonGeneratingFlags`.
-fn drop_poison_generating_flags(
+pub fn drop_poison_generating_flags(
     c: &mut Combiner,
     inst: InstId,
 ) {

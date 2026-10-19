@@ -322,6 +322,10 @@ mod tests {
             // both had it, `zext(B -nuw A)` needs `nuw`, and `(or A, B) +
             // (and A, B)` rewrites the operands in place to keep the flags.
             "combine_add_idioms.rs",
+            // InstCombineNegator.cpp's `sub`/`shl`/`mul` cases give the
+            // negated operation `nsw` only if the original and the negation
+            // had it.
+            "combine_negator.rs",
             // InstructionCombining.cpp's `foldBinopWithRecurrence` merges the
             // `nuw`/`nsw` of the three adds (`OverflowTracking`) so the new add
             // has them only if all had them, and drops the rest.
