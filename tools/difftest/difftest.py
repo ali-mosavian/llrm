@@ -132,7 +132,8 @@ def functions(text: str) -> dict[str, list[str]]:
     current = None
     for line in text.splitlines():
         if line.startswith("define "):
-            current = re.search(r"@([\w.$-]+)\(", line)[1]
+            named = re.search(r'@(?:"([^"]+)"|([\w.$-]+))\(', line)  # m16 quotes its decorated names: @"_f@3"
+            current = named[1] or named[2]
             found[current] = []
         if current is not None:
             found[current].append(line)
