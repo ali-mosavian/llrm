@@ -146,7 +146,7 @@ impl LoopCtx<'_> {
         &self,
         block: BlockId,
     ) -> bool {
-        self.innermost.get(&block).is_some_and(|&at| self.shape.loops[at] != *self.loop_)
+        self.innermost.get(&block).is_some_and(|&at| self.shape.loops[at].header != self.loop_.header)
     }
 
     /// `Loop::isLoopInvariant(Value)`.
