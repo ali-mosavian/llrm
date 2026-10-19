@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# queue-runner.sh: batches up to 8 disjoint PRs of /tmp/land-queue.txt (tools/parity_squash.py merge-batch: one smoke, halving on failure);
+# stacked PRs (same STACKS group) and a batch that does not merge land one at a time with land.sh. Prints `N: MERGED ...` / `N: REFUSED: ...` lines
+# (the format refusals-report.sh reads). Waits for any running land.sh/runner first.
+export BUILDSLOT_BYPASS=1
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"
+R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
+STACKS="2752 2773 2776|2785 2789 2797|2713 2738 2764|2753 2757 2763|2672 2683"
+group() { for g in ${STACKS//|/ |}; do :; done; echo "$STACKS" | tr '|' '\n' | grep -w -- "$1" | head -1; }
+while true; do
+  # never run beside another landing (old runner's land.sh)
+  while ps -eo args | awk '/land\.sh/ && !/awk/ {f=1} END{exit !f}'; do sleep 20; done
+  n=$(head -1 $Q); [ -z "$n" ] && { sleep 20; continue; }
+  batch=("$n"); g=$(group "$n")
+  if [ -z "$g" ]; then
+    for m in $(sed -n '2,40p' $Q); do
+      [ ${#batch[@]} -ge 8 ] && break
+      [ -n "$(group "$m")" ] && continue
+      [[ " ${batch[*]} " == *" $m "* ]] && continue
+      batch+=("$m")
+    done
+  fi
+  for m in "${batch[@]}"; do sed -i "/^$m\$/d" $Q; done
+  open=($(open_only "${batch[@]}"))
+  batch=("${open[@]}"); [ ${#batch[@]} -eq 0 ] && continue; n=${batch[0]}
+  echo "== $(date +%H:%M) landing ${batch[*]}"
+  if [ ${#batch[@]} -eq 1 ]; then "$HERE/land.sh" "$n" 2>&1 | cut -c1-260; continue; fi
+  for m in "${batch[@]}"; do
+    info=$(gh pr view $m --repo $R --json state,isDraft,baseRefName -q '"\(.state) \(.isDraft) \(.baseRefName)"'); set -- $info
+    [ "$1" = OPEN ] || continue
+    [ "$3" = feat/parity ] || gh pr edit $m --repo $R --base feat/parity >/dev/null
+    [ "$2" = true ] && gh pr ready $m --repo $R >/dev/null
+  done
+  log=/tmp/claude-1000/sqb-${batch[0]}.log
+  ( cd $W && git fetch -q origin && git reset -q --hard && git checkout -q --detach origin/feat/parity \
+    && PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}" > $log 2>&1 )
+  for m in "${batch[@]}"; do
+    if [ "$(gh pr view $m --repo $R --json state -q .state)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"
+    else echo "$m: REFUSED: batch $log: $(grep -E "#$m|REFUSED" $log | head -2 | tr '\n' ' ' | cut -c1-400)"; fi
+  done
+done
