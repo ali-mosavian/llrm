@@ -45,6 +45,7 @@ pub mod guards;
 mod guards_tests;
 pub mod how_many;
 pub mod implied;
+pub mod lcssa_form;
 pub mod minmax;
 pub mod normalize;
 pub mod pattern;

@@ -94,7 +94,7 @@ impl FunctionPass for FixedNarrow {
         let narrow = narrowable(unit, analyses);
         // The operands were taken before any rewrite: one that is an earlier
         // product's result reads its replacement.
-        let mut replaced: std::collections::HashMap<Operand, Operand> = std::collections::HashMap::new();
+        let mut replaced: llrm_support::hash::HashMap<Operand, Operand> = Default::default();
         for product in &narrow {
             let product = &Narrow {
                 a: *replaced.get(&product.a).unwrap_or(&product.a),

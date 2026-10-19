@@ -418,10 +418,47 @@ impl<'a> AliasQuery<'a> {
         &self,
         call: InstId,
     ) -> (bool, bool) {
+        // Memory no pointer reaches (`inaccessiblemem`) is no location of the
+        // access lists, yet a call that reads or writes it is not one that
+        // `doesNotAccessMemory`: a BIOS poll in a loop is not loop-invariant.
+        let hidden = self.inaccessible_effects(call);
         (
-            self.accesses.reads(call).is_none_or(|reads| !reads.is_empty()),
-            self.accesses.writes(call).is_none_or(|writes| !writes.is_empty()),
+            hidden.reads || self.accesses.reads(call).is_none_or(|reads| !reads.is_empty()),
+            hidden.writes || self.accesses.writes(call).is_none_or(|writes| !writes.is_empty()),
         )
+    }
+
+    /// What the call's `memory(inaccessiblemem: ...)`, at the site and on its
+    /// callee, allows.
+    fn inaccessible_effects(
+        &self,
+        call: InstId,
+    ) -> llrm_mir::memory::Effects {
+        let unit = self.unit;
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(call).opcode else {
+            return llrm_mir::memory::Effects::NONE;
+        };
+        let callee = llrm_mir::memory::callee(unit.context, unit.function, call)
+            .and_then(|one| unit.globals.get(one.0 as usize))
+            .and_then(|one| one.function())
+            .map(|one| one.attrs.as_slice());
+        // An attribute states a bound; a callee with none is known by its body
+        // alone, which the access lists already hold.
+        let states = |attrs: &[llrm_mir::opcode::Attribute]| {
+            attrs
+                .iter()
+                .any(|one| matches!(
+                    one,
+                    llrm_mir::opcode::Attribute::Memory(_) | llrm_mir::opcode::Attribute::Flag(_)
+                ))
+        };
+        if !states(&info.attrs) && !callee.is_some_and(states) {
+            return llrm_mir::memory::Effects::NONE;
+        }
+        // Each bounds what the call does there: the narrower holds.
+        let site = llrm_mir::memory::inaccessible(&info.attrs);
+        let declared = callee.map_or(site, llrm_mir::memory::inaccessible);
+        llrm_mir::memory::Effects { reads: site.reads && declared.reads, writes: site.writes && declared.writes }
     }
 
     /// `!isNoModRef(AA.getModRefInfo(I1, I2))`
