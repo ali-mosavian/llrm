@@ -186,6 +186,7 @@ pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
 pub mod ports;
+pub mod predicateinfo;
 pub mod profit;
 pub mod promote;
 pub mod rotate;

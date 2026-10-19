@@ -19,7 +19,8 @@ fn sccped(module: &mut Module) -> bool {
         .map(|at| llrm_mir::context::GlobalId(at as u32));
     let metadata = outer.metadata.clone();
     let (context, function) = module.function_mut("f").expect("@f");
-    run_sccp(context, &layout, &outer, &metadata, id, function).anything
+    let dt = llrm_mir::domtree::DomTree::of(function);
+    run_sccp(context, &layout, &outer, &metadata, id, &dt, function).anything
 }
 
 /// `text` after SCCP is `expected` and computes what it did on `inputs`.
@@ -299,5 +300,81 @@ b1:
 }
 ",
         &[&[0], &[3]],
+    );
+}
+
+/// A compare a branch has already decided is a constant where the branch holds
+/// (`PredicateInfo`'s copy of `%x` carries `[0, 10)` into `%b1`).
+#[test]
+fn test_a_branch_condition_decides_a_later_compare() {
+    check(
+        "define i32 @f(i32 %x) {
+b0:
+  %c = icmp ult i32 %x, 10
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %d = icmp ult i32 %x, 20
+  br i1 %d, label %b3, label %b4
+
+b3:
+  ret i32 1
+
+b4:
+  ret i32 2
+
+b2:
+  ret i32 3
+}
+",
+        "define range(i32 1, 4) i32 @f(i32 %x) {
+b0:
+  %c = icmp ult i32 %x, 10
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b3:
+  ret i32 1
+
+b2:
+  ret i32 3
+}
+",
+        &[&[0], &[9], &[10], &[50]],
+    );
+}
+
+/// Where `%x == 5` holds, `%x` is 5: what reads it there folds.
+#[test]
+fn test_an_equality_branch_makes_the_value_a_constant_where_it_holds() {
+    check(
+        "define i32 @f(i32 %x) {
+b0:
+  %c = icmp eq i32 %x, 5
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %r = add i32 %x, 1
+  ret i32 %r
+
+b2:
+  ret i32 0
+}
+",
+        "define range(i32 0, 7) i32 @f(i32 %x) {
+b0:
+  %c = icmp eq i32 %x, 5
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i32 6
+
+b2:
+  ret i32 0
+}
+",
+        &[&[5], &[6]],
     );
 }
