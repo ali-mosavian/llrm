@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# queue-runner.sh: batches up to 8 disjoint PRs of /tmp/land-queue.txt (tools/parity_squash.py merge-batch: one smoke, halving on failure);
+# queue-runner.sh: batches up to 8 disjoint PRs of the queue build-queue.sh writes to /tmp/land-queue.txt before every batch (tools/parity_squash.py merge-batch: one smoke, halving on failure);
 # stacked PRs (same STACKS group) and a batch that does not merge land one at a time with land.sh. Prints `N: MERGED ...` / `N: REFUSED: ...` lines
 # (the format refusals-report.sh reads). Waits for any running land.sh/runner first.
 export BUILDSLOT_BYPASS=1
@@ -13,6 +13,7 @@ group() { for g in ${STACKS//|/ |}; do :; done; echo "$STACKS" | tr '|' '\n' | g
 while true; do
   # never run beside another landing (old runner's land.sh)
   while ps -eo args | awk '/land\.sh/ && !/awk/ {f=1} END{exit !f}'; do sleep 20; done
+  "$HERE/build-queue.sh" > $Q.new && mv $Q.new $Q || echo "build-queue failed, keeping the old queue"
   n=$(head -1 $Q); [ -z "$n" ] && { sleep 20; continue; }
   batch=("$n"); g=$(group "$n")
   if [ -z "$g" ]; then
