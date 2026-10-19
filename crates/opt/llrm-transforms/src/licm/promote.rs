@@ -384,7 +384,7 @@ pub fn promote_loop_accesses_to_scalars(
     let mut access_ty = None;
     for &pointer in pointers {
         for &at in ctx.loop_.body.iter() {
-            for &inst in function.block(cfg::block(at)).instructions() {
+            for inst in function.iter_block(cfg::block(at)) {
                 if ctx.state.gone.borrow().contains(&inst) || !ctx.contains(inst) {
                     continue;
                 }
@@ -535,14 +535,15 @@ fn value_type(
     }
 }
 
-/// `isSafeToExecuteUnconditionally` of a load (`AllowSpeculation` true).
+/// `isSafeToExecuteUnconditionally` of a load (`AllowSpeculation` the run's).
 fn is_safe_to_execute_unconditionally(
     unit: &passes::Unit,
     outer: &Outer,
     safety: &LoopSafety,
     load: InstId,
 ) -> bool {
-    super::hoist::is_safe_to_speculatively_execute(unit, outer, load) || safety.is_guaranteed_to_execute(load)
+    (safety.allow_speculation() && super::hoist::is_safe_to_speculatively_execute(unit, outer, load))
+        || safety.is_guaranteed_to_execute(load)
 }
 
 /// What promoting `found` does to the loop as the later decisions see it: the

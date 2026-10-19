@@ -101,6 +101,54 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
     llrm_core::hir::model::StackCheck::from_toml(&row).expect("stack.toml states a stack check")
 }
 
+/// The unit `text` records and the profile it is raised under, for `codegen`.
+pub(crate) fn prepared(
+    text: &str,
+    codegen: &llrm_core::driver::Options,
+    wrapv: bool,
+    entry_requests: bool,
+) -> Result<(hir::Unit, Profile), CompileError> {
+    let mut unit = hir::unit(&stream::parse(text))?;
+    unit.wrapv = wrapv;
+    let mut profile = Profile::for_abi(&*codegen.arch, codegen.abi.as_deref()).map_err(hir::Unsupported)?;
+    profile.lifetimes = codegen.pipeline.optimize;
+    // Only a program linked against the target's own start-up library asks
+    // for it.
+    if !entry_requests {
+        profile.entry_requests.clear();
+        profile.entry_argument_requests.clear();
+    }
+    let calling = codegen.arch.calling();
+    let cc_of = |name: &str| {
+        calling
+            .named(name)
+            .and_then(|one| one.cc.clone())
+            .ok_or_else(|| hir::Unsupported(format!("calling.toml has no {name} with a cc")))
+    };
+    unit.cdecl_cc = Some(cc_of(&profile.cdecl)?).filter(|cc| cc != "cdecl");
+    unit.registers_cc = Some(cc_of(&profile.registers)?).filter(|cc| cc != "cdecl");
+    unit.entry = profile.entry.clone();
+    unit.default_registers = profile.default_registers.clone();
+    unit.hardware = profile.hardware.clone();
+    unit.entry_cc = calling
+        .named(&profile.entry_convention)
+        .and_then(|one| one.cc.clone())
+        .ok_or_else(|| hir::Unsupported(format!("calling.toml has no {} with a cc", profile.entry_convention)))?;
+    unit.decorate(calling, codegen.object_format);
+    // The front end was picked by the shim's flat flag; the target says
+    // what flat is.
+    if unit.flat != codegen.arch.layout().spaces.far_is_near() {
+        return Err(hir::Unsupported(format!(
+            "the front end is {} but target {} is {}",
+            if unit.flat { "flat" } else { "segmented" },
+            codegen.arch.name(),
+            if unit.flat { "segmented" } else { "flat" }
+        ))
+        .into());
+    }
+    Ok((unit, profile))
+}
+
 /// [`selected`], each function checking its stack as `stack_check` says
 /// (`-fsanitize=stack`).
 pub fn selected_checking(
@@ -113,43 +161,7 @@ pub fn selected_checking(
     entry_requests: bool,
 ) -> Result<masm::Module, CompileError> {
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
-        let mut unit = hir::unit(&stream::parse(text))?;
-        unit.wrapv = wrapv;
-        let mut profile = Profile::for_abi(&*codegen.arch, codegen.abi.as_deref()).map_err(hir::Unsupported)?;
-        // Only a program linked against the target's own start-up library asks
-        // for it.
-        if !entry_requests {
-            profile.entry_requests.clear();
-            profile.entry_argument_requests.clear();
-        }
-        let calling = codegen.arch.calling();
-        let cc_of = |name: &str| {
-            calling
-                .named(name)
-                .and_then(|one| one.cc.clone())
-                .ok_or_else(|| hir::Unsupported(format!("calling.toml has no {name} with a cc")))
-        };
-        unit.cdecl_cc = Some(cc_of(&profile.cdecl)?).filter(|cc| cc != "cdecl");
-        unit.registers_cc = Some(cc_of(&profile.registers)?).filter(|cc| cc != "cdecl");
-        unit.entry = profile.entry.clone();
-        unit.default_registers = profile.default_registers.clone();
-        unit.hardware = profile.hardware.clone();
-        unit.entry_cc = calling
-            .named(&profile.entry_convention)
-            .and_then(|one| one.cc.clone())
-            .ok_or_else(|| hir::Unsupported(format!("calling.toml has no {} with a cc", profile.entry_convention)))?;
-        unit.decorate(calling, codegen.object_format);
-        // The front end was picked by the shim's flat flag; the target says
-        // what flat is.
-        if unit.flat != codegen.arch.layout().spaces.far_is_near() {
-            return Err(hir::Unsupported(format!(
-                "the front end is {} but target {} is {}",
-                if unit.flat { "flat" } else { "segmented" },
-                codegen.arch.name(),
-                if unit.flat { "segmented" } else { "flat" }
-            ))
-            .into());
-        }
+        let (unit, profile) = prepared(text, codegen, wrapv, entry_requests)?;
         let program = translate::program(&unit, module, codegen.arch.calling(), &profile)?;
         for warning in unit.warnings.borrow().iter() {
             eprintln!("{module}: {warning}");
@@ -242,6 +254,9 @@ pub struct Profile {
     /// Segments the target's linker lays out between two markers, as
     /// `BEGIN:MIDDLE:END` (`XIB:XI:XIE`).
     pub bracketed_segments: Vec<String>,
+    /// Whether a block's locals are marked with `llvm.lifetime` (the pipeline
+    /// optimizes: clang's `ShouldEmitLifetimeMarkers`).
+    pub lifetimes: bool,
 }
 
 impl Profile {
@@ -336,6 +351,7 @@ impl Profile {
             // of Borland's to undo.
             header: text(abi, "header").or_else(|_| text(frontend, "header"))?,
             interrupt_parameters,
+            lifetimes: false,
             // Only a target that has inline code naming registers states them.
             hardware: match frontend.get("registers").and_then(toml::Value::as_table) {
                 Some(table) => crate::hwreg::Registers::parse(table)?,
@@ -2604,6 +2620,34 @@ mod tests {
         assert!(built.is_ok(), "{:?}", built.err());
     }
 
+    /// tests/fixtures/c32/`fixture`, raised under `-m32 level`, printed.
+    fn flat_text(
+        fixture: &str,
+        level: &str,
+    ) -> String {
+        let text =
+            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32").join(fixture)).unwrap();
+        let argv: Vec<String> = ["-m32", level, "x.c"].map(str::to_owned).to_vec();
+        let codegen = super::parse_args(&argv).unwrap().codegen;
+        let (unit, profile) = super::prepared(&text, &codegen, false, false).unwrap();
+        let program = super::translate::program(&unit, "test", codegen.arch.calling(), &profile).unwrap();
+        let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m32::layout()).swap_remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        llrm_mir::print::module(&emitted.module)
+    }
+
+    /// `total`, declared in a block of matmul's loop, had no `llvm.lifetime`
+    /// calls, so no copy of the function carried a marker and the frame slots
+    /// of locals in different blocks never shared (QCport's `_menu_draw`: 266
+    /// to 3548 bytes inlined). Marked: one start and one end, none unmarked.
+    #[test]
+    fn a_local_in_a_loops_block_is_started_and_ended() {
+        let text = flat_text("matmul.cgs", "-O1");
+        assert_eq!(text.matches("call void @llvm.lifetime.start").count(), 1, "{text}");
+        assert_eq!(text.matches("call void @llvm.lifetime.end").count(), 1, "{text}");
+        assert!(!flat_text("matmul.cgs", "-O0").contains("lifetime"));
+    }
+
     /// tests/fixtures/c32/`fixture`.cgs, as the 386 front end recorded it,
     /// selected for `-m32`.
     fn flat_listing(fixture: &str) -> Vec<String> {
@@ -2634,7 +2678,8 @@ mod tests {
     /// `j.a = 200` on a field that fills its byte was a read-modify-write of an
     /// unwritten byte: `load; and 0; or; store`. SROA reads an unwritten
     /// slot as poison, `and poison, 0` is poison, and bitfield_long_long
-    /// printed 0 at -O2. A field filling its container is stored, as clang does.
+    /// printed 0 at -O2. A field filling its container is stored, as clang
+    /// does.
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]

@@ -116,7 +116,7 @@ b0:
     let (mssa, _) = translated(&unit);
     mssa.verify_memory_ssa(unit.function, Level::Full).unwrap();
     let block = unit.function.layout()[0];
-    let insts = unit.function.block(block).instructions();
+    let insts = unit.function.iter_block(block).collect::<Vec<_>>();
     assert!(mssa.get_memory_access(insts[1]).is_none());
     for at in [0, 2] {
         let access = mssa.get_memory_access(insts[at]).expect("an access");
@@ -303,7 +303,7 @@ b0:
     let (mssa, _) = translated(&unit);
     mssa.verify_memory_ssa(unit.function, Level::Full).unwrap();
     let block = unit.function.layout()[0];
-    let insts = unit.function.block(block).instructions();
+    let insts = unit.function.iter_block(block).collect::<Vec<_>>();
     assert_eq!(mssa.access(mssa.get_memory_access(insts[0]).expect("an access")).kind, Kind::Def);
     assert_eq!(mssa.access(mssa.get_memory_access(insts[1]).expect("an access")).kind, Kind::Use);
 }

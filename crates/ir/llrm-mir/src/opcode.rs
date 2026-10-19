@@ -259,6 +259,20 @@ impl Flags {
     pub const NSZ: Flags = Flags(1 << 11);
     pub const ARCP: Flags = Flags(1 << 12);
     pub const FAST: Flags = Flags(0x7f << 8);
+    /// What makes a result poison where the operation's promise breaks:
+    /// `Instruction::dropPoisonGeneratingFlags`.
+    pub const POISON_GENERATING: Flags = Flags(
+        Flags::NUW.0
+            | Flags::NSW.0
+            | Flags::EXACT.0
+            | Flags::DISJOINT.0
+            | Flags::NNEG.0
+            | Flags::SAMESIGN.0
+            | Flags::INBOUNDS.0
+            | Flags::NUSW.0
+            | Flags::NNAN.0
+            | Flags::NINF.0,
+    );
     /// On a `switch`: the backend lowers it as a jump table, its cases the
     /// indices `0..n` in a register of the pointer's width.
     pub const TABLE: Flags = Flags(1 << 15);
@@ -306,6 +320,14 @@ impl Flags {
 
     pub fn is_empty(self) -> bool {
         self.0 == 0
+    }
+
+    /// The flags of `self` that `other` does not have.
+    pub fn without(
+        self,
+        other: Flags,
+    ) -> Flags {
+        Flags(self.0 & !other.0)
     }
 
     /// The flags both have.
@@ -511,7 +533,7 @@ pub enum Clause {
 /// callee` and `call args.., callee`, as LLVM's CallBase keeps them;
 /// `phi (v, block)*`; `alloca [count]`; `store value, ptr`; `gep ptr,
 /// indices..`; `landingpad clauses..`.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash)]
 pub enum Opcode {
     Ret,
     Br,
@@ -535,6 +557,41 @@ pub enum Opcode {
     Freeze,
     Call(Box<CallInfo>),
     LandingPad { cleanup: bool, clauses: Vec<Clause> },
+}
+
+/// `==` inlined: a compare with a unit variant (`opcode == Opcode::Phi`) is
+/// one discriminant test, where the derived `eq` was a call and the temporary's
+/// drop glue (4% of a diamond-800 compile).
+impl PartialEq for Opcode {
+    #[inline]
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        use std::mem::discriminant;
+        if discriminant(self) != discriminant(other) {
+            return false;
+        }
+        match (self, other) {
+            (Self::Invoke(a), Self::Invoke(b)) | (Self::Call(a), Self::Call(b)) => a == b,
+            (Self::Binary(a), Self::Binary(b)) => a == b,
+            (Self::Cast(a), Self::Cast(b)) => a == b,
+            (Self::ExtractValue(a), Self::ExtractValue(b)) | (Self::InsertValue(a), Self::InsertValue(b)) => a == b,
+            (
+                Self::Alloca { allocated: a, align: b, address_space: c },
+                Self::Alloca { allocated: d, align: e, address_space: f },
+            ) => a == d && b == e && c == f,
+            (Self::Load { align: a, volatile: b }, Self::Load { align: c, volatile: d })
+            | (Self::Store { align: a, volatile: b }, Self::Store { align: c, volatile: d }) => a == c && b == d,
+            (Self::GetElementPtr { source: a }, Self::GetElementPtr { source: b }) => a == b,
+            (Self::ICmp(a), Self::ICmp(b)) => a == b,
+            (Self::FCmp(a), Self::FCmp(b)) => a == b,
+            (Self::LandingPad { cleanup: a, clauses: b }, Self::LandingPad { cleanup: c, clauses: d }) => {
+                a == c && b == d
+            }
+            _ => true,
+        }
+    }
 }
 
 impl Opcode {
@@ -577,3 +634,53 @@ impl Opcode {
 /// caller of: here arguments pushed right to left and popped by the callee
 /// (`ret N`), which a caller's `add sp,N` then does not repeat.
 pub const FAST: u32 = 8;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Opcode::eq` is hand-written (inlined) and must stay the derived one:
+    /// equal only to itself, payload included.
+    #[test]
+    fn opcode_equality_compares_the_variant_and_its_payload() {
+        let info = || {
+            Box::new(CallInfo {
+                function_type: crate::context::Context::default().types.void(),
+                calling_convention: 0,
+                return_attrs: Vec::new(),
+                argument_attrs: Vec::new(),
+                attrs: Vec::new(),
+                tail: Tail::None,
+            })
+        };
+        let ops = [
+            Opcode::Ret,
+            Opcode::Br,
+            Opcode::Phi,
+            Opcode::Select,
+            Opcode::Freeze,
+            Opcode::Binary(BinaryOp::Add),
+            Opcode::Binary(BinaryOp::Sub),
+            Opcode::Cast(CastOp::ZExt),
+            Opcode::Cast(CastOp::SExt),
+            Opcode::ICmp(IntPredicate::Eq),
+            Opcode::ICmp(IntPredicate::Ne),
+            Opcode::Load { align: None, volatile: false },
+            Opcode::Load { align: Some(2), volatile: false },
+            Opcode::Load { align: None, volatile: true },
+            Opcode::Store { align: None, volatile: false },
+            Opcode::ExtractValue(vec![0]),
+            Opcode::ExtractValue(vec![1]),
+            Opcode::InsertValue(vec![0]),
+            Opcode::Call(info()),
+            Opcode::Invoke(info()),
+            Opcode::LandingPad { cleanup: false, clauses: vec![] },
+            Opcode::LandingPad { cleanup: true, clauses: vec![] },
+        ];
+        for (a, x) in ops.iter().enumerate() {
+            for (b, y) in ops.iter().enumerate() {
+                assert_eq!(x == y, a == b, "{x:?} against {y:?}");
+            }
+        }
+    }
+}

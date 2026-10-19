@@ -155,3 +155,13 @@ exit:
     assert!(!every(adds[1]));
     assert!(!every(adds[2]));
 }
+
+/// Old: an `undef` constant was taken for a value that may be neither: `add
+/// undef, 1` and a phi over `undef` answered as LLVM's
+/// `isGuaranteedNotToBePoison` and `isGuaranteedNotToBeUndef` do not
+/// (poison-only 1, undef 0).
+#[test]
+fn test_undef_is_not_guaranteed_undef_free_as_llvm_says() {
+    let text = include_str!("../../tests/vt/guarantee/undef.ll");
+    assert_eq!(dump(text), include_str!("../../tests/vt/guarantee/undef.expected"));
+}

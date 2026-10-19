@@ -201,7 +201,7 @@ pub(crate) fn emptied_into(
     for phi in phis {
         function.erase(phi).expect("a replaced phi");
     }
-    function.move_run(&function.block(second).instructions().to_vec(), source).expect("a placed block");
+    function.move_run(&function.iter_block(second).collect::<Vec<_>>(), source).expect("a placed block");
     function.replace_block_uses_with(second, source);
     Some(second)
 }
@@ -214,7 +214,7 @@ pub(crate) fn emptied_into(
 /// branch, which then goes where `bb` went. The emptied `bb` is left placed,
 /// for the caller to `erase_blocks` with the others; whether it merged.
 pub fn merge_block_into_predecessor(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     bb: BlockId,
     with_two_successors: bool,
@@ -266,7 +266,7 @@ pub fn merge_block_into_predecessor(
 
     // Move all definitions in the successor to the predecessor...
     let end = function.terminator(bb).expect("a terminated block");
-    let moved = function.block(bb).instructions().iter().copied().filter(|&one| one != end).collect::<Vec<_>>();
+    let moved = function.iter_block(bb).filter(|&one| one != end).collect::<Vec<_>>();
     for inst in moved {
         function.move_to(inst, Position::Before(pti)).expect("a placed predecessor");
     }

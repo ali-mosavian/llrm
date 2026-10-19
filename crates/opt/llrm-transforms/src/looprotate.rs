@@ -330,7 +330,7 @@ fn should_speculate_instrs(
     let jump = function.terminator(latch).expect("a terminated latch");
     let mut seen_increment = false;
     let multi_exit_loop = lp.get_exiting_block(function).is_none();
-    for &inst in function.block(latch).instructions() {
+    for inst in function.iter_block(latch) {
         if inst == jump {
             break;
         }
@@ -426,7 +426,7 @@ fn rewrite_uses_of_cloned_instructions(
     value_map: &IdMap<ValueId, Operand>,
 ) {
     // Remove phi entries that are no longer live.
-    let header_instructions = run.function.block(orig_header).instructions().to_vec();
+    let header_instructions = run.function.iter_block(orig_header).collect::<Vec<_>>();
     for &inst in &header_instructions {
         if run.function.instruction(inst).opcode != Opcode::Phi {
             break;
@@ -439,8 +439,7 @@ fn rewrite_uses_of_cloned_instructions(
     // necessary.
     for &inst in &header_instructions {
         let Some(result) = run.function.instruction(inst).result else { continue };
-        // LLVM's use lists begin with the newest use; ours end with it.
-        let uses = run.function.users(result).iter().rev().copied().collect::<Vec<_>>();
+        let uses = run.function.users(result).iter().copied().collect::<Vec<_>>();
         // If there are no uses of the value there is nothing to rewrite.
         if uses.is_empty() {
             continue;
@@ -678,7 +677,7 @@ fn rotate_loop(
     // entry for each instruction. For phis, the value available in the old
     // preheader is just the incoming value from the old preheader.
     let mut value_map = IdMap::<ValueId, Operand>::new();
-    let header_instructions = run.function.block(orig_header).instructions().to_vec();
+    let header_instructions = run.function.iter_block(orig_header).collect::<Vec<_>>();
     let mut rest = 0;
     for &inst in &header_instructions {
         if run.function.instruction(inst).opcode != Opcode::Phi {
@@ -825,7 +824,7 @@ fn rotate_loop(
     } else {
         // The conditional branch can be folded, which makes things simpler.
         // The first step is to remove the extra edge to the exit block.
-        remove_predecessor(run, exit, orig_preheader);
+        run.function.predecessor_removed(&*run.context, exit, orig_preheader, true);
         let void = run.function.instruction(guard).ty;
         let jump =
             run.function.create_instruction(Opcode::Br, void, vec![Operand::Block(new_header)], Flags::default(), None);
@@ -846,19 +845,6 @@ fn rotate_loop(
     Some(latch)
 }
 
-/// `BasicBlock::removePredecessor(pred, KeepOneInputPHIs = true)`: `block`'s
-/// phis forget their input from `pred`.
-fn remove_predecessor(
-    run: &mut Run,
-    block: BlockId,
-    pred: BlockId,
-) {
-    for phi in edges::phis(run.function, block) {
-        let kept = arms(run.function, phi).into_iter().filter(|&(_, from)| from != pred).collect::<Vec<_>>();
-        run.function.set_operands(phi, from_arms(&kept));
-    }
-}
-
 /// The `llvm.assume` calls of the loop (`AssumptionCache::assumptions` less
 /// those outside it, R1).
 fn assume_calls(
@@ -868,7 +854,7 @@ fn assume_calls(
     let function = &*run.function;
     lp.get_blocks()
         .iter()
-        .flat_map(|&block| function.block(block).instructions().iter().copied())
+        .flat_map(|&block| function.iter_block(block))
         .filter(|&inst| {
             llrm_mir::memory::callee(run.context, function, inst)
                 .is_some_and(|callee| run.globals[callee.0 as usize].name.as_deref() == Some("llvm.assume"))

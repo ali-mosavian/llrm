@@ -931,10 +931,32 @@ zero:
     ));
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    let settled = super::_settled(context, &layout, function, &outer);
+    let settled =
+        super::_settled(context, &layout, function, &outer, &mut llrm_mir::lazyvalueinfo::LazyValueInfo::new());
     let at = |name: &str| {
         function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some(name)).expect("block")
     };
     assert_eq!(settled.get(&at("x")), Some(&false), "the check at the exit is settled");
     assert_eq!(settled.get(&at("h")), None, "an unknown condition is not");
+}
+
+/// `br i1 %c, T, T` decided left the two inputs `T`'s phi had from the block
+/// for the one edge a jump has: the verifier refused ("2 inputs from block
+/// for 1 edges") after JumpThreading made such a branch (QCport `sc_shift`).
+#[test]
+fn test_a_branch_to_one_block_twice_leaves_its_phi_one_input() {
+    let mut module = parsed(
+        "define i16 @f(i16 %x) {
+b0:
+  %c = icmp slt i16 2, 3
+  br i1 %c, label %b1, label %b1
+
+b1:
+  %p = phi i16 [ %x, %b0 ], [ %x, %b0 ]
+  ret i16 %p
+}
+",
+    );
+    assert!(decide(&mut module));
+    assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{}", printed(&module));
 }

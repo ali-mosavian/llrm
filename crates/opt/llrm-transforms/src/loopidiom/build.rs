@@ -39,7 +39,7 @@ fn width_of(
 }
 
 fn int(
-    context: &mut Context,
+    context: &Context,
     width: u32,
     value: u128,
 ) -> Operand {
@@ -53,7 +53,7 @@ fn align(value: Option<u64>) -> Vec<Attribute> {
 
 /// A call of `name` (type `ty`) with `arguments`, placed before `before`.
 fn call(
-    context: &mut Context,
+    context: &Context,
     declared: &mut Declared,
     function: &mut Function,
     before: InstId,
@@ -234,7 +234,7 @@ mod tests {
             })
             .expect("a function");
         let before = function.layout()[0];
-        let store = function.block(before).instructions()[0];
+        let store = function.block(before).first().expect("a store");
         assert!(function.instruction(store).metadata.iter().any(|(kind, _)| kind == "tbaa"), "the store is tagged");
         let [p, q, n] = function.parameters()[..] else { panic!("three parameters") };
         let byte = int(&mut context, 8, 0);

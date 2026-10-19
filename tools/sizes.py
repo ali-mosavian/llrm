@@ -193,6 +193,15 @@ def table(bins: Path, level: str, demos: bool = True) -> dict:
         return dict(zip((name for name, _ in listed), pool.map(lambda one: measure(one[1], level), listed)))
 
 
+def premise(before: dict, after: dict) -> tuple[str, list[str]]:
+    """(the header line, the programs the base compiled and the new binary does not). Both counts are named in every table: a pair that read "failed in both" as
+    noise passed a real regression (the BASIC programs tryFoldLoad broke were failures of the new side in a table nobody read)."""
+    in_base = sorted(name for name in before if not before[name])
+    in_new = sorted(name for name in after if not after[name])
+    broken = [name for name in in_new if before.get(name)]
+    return f"failed in base: {len(in_base)}, failed in new: {len(in_new)}" + (f", new fails what base compiled: {len(broken)}" if broken else ""), broken
+
+
 def main() -> None:
     args = [one for one in sys.argv[1:] if not one.startswith("-")]
     levels = [one for one in sys.argv[1:] if one.startswith("-O")] or ["-O2"]
@@ -203,9 +212,13 @@ def main() -> None:
         before, after = table(base, level), table(new, level)
         both = [name for name in before if before[name] and after.get(name)]
         failed = [(side, name) for side, built in (("base", before), ("new", after)) for name in built if not built[name]]
-        print(f"== {level}: {len(both)} programs")
+        header, broken = premise(before, after)
+        print(f"== {level}: {len(both)} programs; {header}")
         for side, name in failed:
             print(f"FAILED to compile on {side}: {name}")
+        if broken:
+            print(f"PREMISE BROKEN: the new binary fails to compile {len(broken)} program(s) the base compiled: {', '.join(broken)}")
+            sys.exit(3)
         for name in both:
             if before[name] != after[name]:
                 b0, b1 = before[name], after[name]

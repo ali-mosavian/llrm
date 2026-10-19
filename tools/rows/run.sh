@@ -1,4 +1,5 @@
 #!/bin/bash
+ulimit -v "${LLRM_MEMORY_LIMIT_KB:-8000000}"  # a runaway compile dies at 8 GB instead of taking the host (datetime.c grew to 50 GB)
 # rows/run.sh NAME LLRM_C [gccclang-from]: build + run the 71 vsgcc programs; llrm variants always, gcc/clang unless copied
 set -e
 # run.sh NAME LLRM_C [NAME_WITH_GCC_CLANG_RESULTS]: the 71 vsgcc programs; the first run (no third argument) also builds and runs gcc and clang

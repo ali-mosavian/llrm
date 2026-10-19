@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/twoentryphi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/twoentryphi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:4ad5e9f3358dc0898bc07e1c1d76287eb7dab314493279f8c42e975299f827e4 -->
+<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:9fab671c0cbb818310ae17dc0e818821a94488f601e02e9809e703e83fa481f1 -->
 
 # twoentryphi
 
@@ -36,3 +36,14 @@ a block whose first instruction is a phi of two entries.
 ## See also
 [`phiopt`](phiopt.md), which prices a constant-only phi in the
 target's units and runs at its own slot.
+
+## Example
+The phi that a branch chooses between becomes a select in the branch's
+block:
+
+```text
+entry: br i1 %c, label %then, label %end
+then:  br label %end
+end:   %p = phi i32 [ 1, %then ], [ 2, %entry ]
+; becomes, in entry: %p = select i1 %c, i32 1, i32 2
+```

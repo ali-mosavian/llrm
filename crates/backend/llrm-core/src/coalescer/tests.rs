@@ -249,3 +249,179 @@ fn test_a_parameter_joined_into_its_copy_stays_a_parameter() {
     assert_eq!(names(&lis), vec![(vec![], vec![survivor])], "the read names the parameter");
     assert!(lis.assert_intervals_cover_afresh(&after) >= 1);
 }
+
+/// Two parameters, both defined on entry and both live there, are different
+/// values: copying the first into the second later does not make them one. They
+/// were joined (the copy removed, the two arguments one register) before the
+/// entry's definitions stopped counting as phis.
+#[test]
+fn test_two_parameters_live_on_entry_are_not_joined() {
+    let (c, r1, r2, r) = (copy(2, 1), read(1), read(2), read(2));
+    let was = LirBody { inputs: [1, 2].into_iter().collect(), ..body(&[(&[r1, r2, Arc::clone(&c), r], &[])]) };
+    let mut lis = LiveIntervals::new(&was);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Deferred);
+    assert_eq!(names(&lis).len(), 4, "no instruction was erased");
+}
+
+/// Two arms each copy their own value into `v2`, read after the join: the
+/// copies join (or not) so that every value read is one something defines.
+/// (Ported from the old coalescer's
+/// `two_copies_into_one_value_leave_every_read_defined`.)
+#[test]
+fn test_two_copies_into_one_value_leave_every_read_defined() {
+    let arm = |value: u32, at: i64| block_at(at, vec![def(value), copy(2, value), jump(0x20)], &[0x20]);
+    let was = body_of(vec![arm(61, 0), arm(63, 0x10), block_at(0x20, vec![read(2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    let stats = super::driver::run(&mut lis, &AnyClass, &[0, 0, 0]);
+    assert!(stats.joined >= 1, "premise: something joined: {stats:?}");
+    let after = lis.body_like(&was);
+    let made: std::collections::BTreeSet<u32> =
+        after.blocks.iter().flat_map(|one| one.insns.iter()).flat_map(|one| one.defines.clone()).collect();
+    let read: std::collections::BTreeSet<u32> =
+        after.blocks.iter().flat_map(|one| one.insns.iter()).flat_map(|one| one.uses.clone()).collect();
+    let missing: Vec<u32> = read.difference(&made).copied().collect();
+    assert!(missing.is_empty(), "read with nothing defining it: {missing:?}");
+    assert!(lis.assert_intervals_cover_afresh(&after) >= 1);
+}
+
+/// A joined copy's destination is the address of a later load: the load's
+/// memory operand names the surviving value, which something still defines.
+#[test]
+fn test_a_coalesced_address_keeps_its_memory_operand_defined() {
+    use crate::model::ir::Mem;
+    let memory = Mem { base: Some(Held { value: 2, width: 2 }), ..Mem::new(None, 2) };
+    let what = Semantics {
+        name: Some("mov".to_owned()),
+        dests: vec![held(3)],
+        sources: vec![Loc::Mem(memory)],
+        ..Semantics::new(Operation::Move)
+    };
+    let load = Arc::new(Insn::new(0, None, Some(what), vec![3], vec![2]));
+    let was = body(&[(&[def(1), copy(2, 1), load, read(1), read(3)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    let stats = super::driver::run(&mut lis, &AnyClass, &[0]);
+    assert!(stats.joined >= 1, "{stats:?}");
+    let after = lis.body_like(&was);
+    let made: std::collections::BTreeSet<u32> =
+        after.blocks.iter().flat_map(|one| one.insns.iter()).flat_map(|one| one.defines.clone()).collect();
+    for one in after.blocks.iter().flat_map(|one| one.insns.iter()) {
+        for value in one.uses.iter().chain(&one.defines) {
+            assert!(made.contains(value), "v{value} is named and defined by nothing");
+        }
+    }
+}
+
+/// Values pinned to different registers are not joined, whatever their
+/// intervals: the environment says they cannot share.
+#[test]
+fn test_values_pinned_to_different_registers_are_not_joined() {
+    use llrm_lir::registers::RegId;
+    struct Pinned;
+    impl CoalescerEnv for Pinned {
+        fn can_share(
+            &self,
+            a: u32,
+            b: u32,
+        ) -> bool {
+            let pin = |value: u32| match value {
+                1 => Some(RegId::ES),
+                2 => Some(RegId::FS),
+                _ => None,
+            };
+            !matches!((pin(a), pin(b)), (Some(x), Some(y)) if x != y)
+        }
+    }
+    let (c, r) = (copy(2, 1), read(2));
+    let was = body(&[(&[def(1), Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    assert_eq!(join_copy(&mut lis, &Pinned, &mut State::new(), &mut Default::default(), c.id()), JoinResult::Rejected);
+    assert_eq!(names(&lis).len(), 3);
+}
+
+/// `a, b = b, t` at the end of a loop, as one parallel copy (`gcd`'s
+/// `a = b; b = a % b`): after the group `a` is the old `b`, and `b` the new
+/// value, both live round the loop. Joining `a` with `b` (the first copy then
+/// "an identity") made `a` the new `b`: gcd(1071, 462) printed 0.
+fn swap_loop() -> LirBody {
+    let (a, b, t, saved) = (4, 3, 5, 12);
+    let grouped = |one: Arc<Insn>| {
+        let mut made = (*one).clone();
+        made.group = Some(2);
+        Arc::new(made)
+    };
+    let step = {
+        let what = Semantics {
+            name: Some("idiv".to_owned()),
+            dests: vec![held(t)],
+            sources: vec![held(a), held(b)],
+            ..Semantics::new(Operation::Binary)
+        };
+        Arc::new(Insn::new(0, None, Some(what), vec![t], vec![a, b]))
+    };
+    let branch = {
+        let what = Semantics { name: Some("jne".to_owned()), target: Some(1), ..Semantics::new(Operation::Branch) };
+        Arc::new(Insn::new(0, None, Some(what), vec![], vec![]))
+    };
+    body_of(vec![
+        block_at(0, vec![def(a), def(b), jump(1)], &[1]),
+        block_at(1, vec![step, copy(saved, b), grouped(copy(a, b)), grouped(copy(b, t)), branch], &[1, 2]),
+        block_at(2, vec![read(saved)], &[]),
+    ])
+}
+
+#[test]
+fn test_a_parallel_swap_round_a_loop_is_not_joined_away() {
+    let was = swap_loop();
+    let mut lis = LiveIntervals::new(&was);
+    super::driver::run(&mut lis, &AnyClass, &[0, 1, 0]);
+    let after = lis.body_like(&was);
+    let loop_copies: Vec<(u32, u32)> = after.blocks[1]
+        .insns
+        .iter()
+        .filter_map(|one| crate::coalescer::pair::full_copy(one).map(|(d, s)| (d.value, s.value)))
+        .collect();
+    // `a` takes the old `b` while `b` takes `t`: a copy of `b` into something
+    // other than `b` itself must remain in the loop, and the exit's saved
+    // value must not have become `b`.
+    assert!(loop_copies.iter().any(|(dst, src)| src == &3 && dst != &3), "a's copy of b went away: {loop_copies:?}");
+    let exit_read = after.blocks[2].insns[0].uses[0];
+    assert!(
+        loop_copies.iter().any(|(dst, src)| *dst == exit_read && *src == 3) || exit_read != 3,
+        "the exit reads b after the loop rewrote it: v{exit_read}, {loop_copies:?}"
+    );
+}
+
+fn block_at(
+    at: i64,
+    insns: Vec<Arc<Insn>>,
+    succ: &[i64],
+) -> LirBlock {
+    LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at, insns) }
+}
+
+fn body_of(blocks: Vec<LirBlock>) -> LirBody {
+    LirBody::new("joined", 0, blocks.into_iter().map(Block::from).collect(), IndexMap::default(), IndexMap::default())
+}
+
+fn jump(target: i64) -> Arc<Insn> {
+    let what = Semantics { name: Some("jmp".to_owned()), target: Some(target), ..Semantics::new(Operation::Jump) };
+    Arc::new(Insn::new(0, None, Some(what), vec![], vec![]))
+}
+
+/// A join verified both ranges and the joined one (`assert(verify())` of
+/// LiveInterval.cpp is compiled out of LLVM's release builds): each is linear
+/// in the range, so a run of joins was quadratic in the body (`diamond` 800:
+/// `LiveRange::verify` 14 M of the coalescer's 86 M). Only
+/// `LLRM_CHECK_LIVEINTERVALS` asks.
+#[test]
+fn test_a_join_does_not_verify_the_ranges() {
+    let (a, c, r) = (def(1), copy(2, 1), read(2));
+    let was = body(&[(&[a, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let before = crate::liveness::liverange::verifies();
+    assert_eq!(join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id()), JoinResult::Joined);
+    assert_eq!(crate::liveness::liverange::verifies() - before, 0, "a join verified a range");
+}

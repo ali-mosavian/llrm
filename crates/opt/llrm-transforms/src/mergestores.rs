@@ -175,7 +175,7 @@ fn chunks(
 /// `function` with each run of copies of adjacent cells to adjacent cells made
 /// one wider copy; whether any was.
 pub fn merged_copies(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     callees: &Callees,
     function: &mut Function,
@@ -203,19 +203,22 @@ pub fn merged_copies(
                     loads.remove(&value);
                 }
             };
-            for (order, &inst) in function.block(*block).instructions().iter().enumerate() {
+            for (order, inst) in function.iter_block(*block).enumerate() {
                 let op = function.instruction(inst);
                 match op.opcode {
                     Opcode::Load { volatile: false, .. } => {
                         let result = op.result.expect("a load's value");
                         let width = unit.int_bits(Operand::Value(result)).filter(|bits| matches!(bits, 8 | 16 | 32));
                         let users = function.users(result);
-                        let single_store = users.len() == 1
-                            && matches!(
-                                function.instruction(users[0].user).opcode,
-                                Opcode::Store { volatile: false, .. }
-                            )
-                            && users[0].index == 0;
+                        let single_store = users
+                            .only()
+                            .is_some_and(
+                                |only| matches!(
+                                    function.instruction(only.user).opcode,
+                                    Opcode::Store { volatile: false, .. }
+                                )
+                                    && only.index == 0,
+                            );
                         match (width, single_store, width.and_then(|bits| cell(&unit, op.operands[0], bits / 8))) {
                             (Some(_), true, Some((root, _))) => {
                                 reads.push(root);
@@ -439,7 +442,7 @@ fn constants_merged(
 /// `function` with each run of stores of constants to adjacent cells of one
 /// object made stores of the widest legal integer; whether any was.
 pub fn merged_constants(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     callees: &Callees,
     function: &mut Function,
@@ -458,7 +461,7 @@ pub fn merged_constants(
         let mut spans: Vec<Vec<Constant>> = Vec::new();
         for block in function.layout() {
             let mut open: Vec<Constant> = Vec::new();
-            for (order, &inst) in function.block(*block).instructions().iter().enumerate() {
+            for (order, inst) in function.iter_block(*block).enumerate() {
                 if let Some(one) = constant(&unit, inst, order) {
                     *stored.entry((one.value, (one.high - one.low) as u32)).or_default() += 1;
                     open.push(one);

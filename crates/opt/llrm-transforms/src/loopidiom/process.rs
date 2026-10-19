@@ -139,21 +139,22 @@ fn delete_dead_instruction(
 
 /// The `i8` constant a `Byte` stands for, as an operand.
 fn byte_operand(
-    context: &mut Context,
+    context: &Context,
     byte: Byte,
 ) -> Operand {
     let ty = context.types.int(8);
     match byte {
         Byte::Value(value) => value,
         Byte::Constant(value) => Operand::Constant(context.int(ty, i128::from(value))),
-        Byte::Undef | Byte::Poison => Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison })),
+        Byte::Undef => Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Undef })),
+        Byte::Poison => Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison })),
     }
 }
 
 /// `Builder.CreateMul(TripCount, getIntN(Width, Reps))`, folded as the
 /// `IRBuilder`'s constant folder does.
 fn create_mul(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     before: InstId,
     value: Operand,
@@ -594,7 +595,7 @@ impl LoopIdiomRecognize {
                 .function
                 .instruction(args.the_load)
                 .result
-                .is_some_and(|result| run.function.users(result).len() == 1);
+                .is_some_and(|result| run.function.users(result).has_one_use());
             if !only_user {
                 return (changed, false);
             }
@@ -666,7 +667,7 @@ impl LoopIdiomRecognize {
             Some(int_idx_ty),
         );
 
-        build::create_mem_copy(
+        let copy = build::create_mem_copy(
             run.context,
             run.declared,
             run.function,
@@ -678,6 +679,16 @@ impl LoopIdiomRecognize {
             args.load_align,
             num_bytes,
         );
+        // LD6 llrm's code generator lowers a `memmove` only with its direction
+        // stated (`llrm.forward`, `llrm.backward`), and no libc `memmove` to
+        // call: the starts are a constant apart, so the copy runs backward
+        // where the destination is after the source.
+        if use_mem_move && let Some(off) = verifier.off {
+            let kind =
+                if off.sext_value() > 0 { llrm_mir::intrinsics::BACKWARD } else { llrm_mir::intrinsics::FORWARD };
+            let node = run.declared.node(llrm_mir::module::MetadataNode { distinct: false, operands: Vec::new() });
+            run.function.annotate(copy, kind, node);
+        }
 
         // Okay, a new call to memcpy/memmove has been formed. Zap the original
         // store and anything that feeds into it.
@@ -753,6 +764,6 @@ impl MemmoveVerifier {
         // Ensure that LoadBasePtr is after StoreBasePtr or before StoreBasePtr
         // for negative stride. LoadBasePtr shouldn't overlap with
         // StoreBasePtr.
-        if is_neg_stride { off_val < load_size } else { off_val > -load_size }
+        !(if is_neg_stride { off_val < load_size } else { off_val > -load_size })
     }
 }

@@ -208,6 +208,29 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
             ))
     }
 
+    /// `MRI.cloneVirtualRegister` (`LiveRangeEdit::createFrom`): the clone has
+    /// the parent's width, which decides whether a call destroys its high half
+    /// (`CallMasks`). The parent may be a value a spill made, in no table: its
+    /// instructions say how wide it is.
+    fn note_split_from(
+        &self,
+        lis: &LiveIntervals,
+        new: u32,
+        from: u32,
+    ) {
+        let named = lis
+            .operands(from)
+            .iter()
+            .flat_map(|op| crate::backend::allocate::_named_widths(lis.instr(op.instr)).collect::<Vec<_>>())
+            .filter(|(value, _)| *value == from)
+            .map(|(_, width)| width)
+            .max();
+        let mut widths = self.tables.widths.borrow_mut();
+        if let Some(width) = widths.get(&from).copied().or(named) {
+            widths.insert(new, width);
+        }
+    }
+
     fn is_rematerializable(
         &self,
         reg: u32,
@@ -317,7 +340,10 @@ impl PhysInterference for CallMasks {
             return None;
         }
         let mut found: Option<Vec<RegId>> = None;
-        let wide = self.widths.widths.borrow().get(&li.reg()).copied().unwrap_or(0) > 2;
+        // Every allocated value has a width (the table, or the clone it was
+        // made from, `note_split_from`); a missing one is the safe side, wide.
+        let width = self.widths.widths.borrow().get(&li.reg()).copied();
+        let wide = width.is_none_or(|width| width > 2);
         let mut at = self.calls.partition_point(|(slot, ..)| *slot < li.begin_index());
         let mut segment = 0usize;
         while at < self.calls.len() && segment < li.segments.len() {
@@ -851,5 +877,73 @@ mod tests {
             split.report.reloads,
             plain.report.reloads
         );
+    }
+
+    /// Splitting is on by default (`LLRM_NO_SPLIT=1` turns it off): the
+    /// default allocation of the body that only splitting can improve is the
+    /// split one.
+    #[test]
+    fn test_live_range_splitting_is_on_by_default() {
+        let insn = |defines: &[u32], uses: &[u32]| Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()));
+        let blocks: Vec<Block> = [
+            (0, vec![insn(&[1], &[]), insn(&[], &[1]), insn(&[], &[1])]),
+            (1, vec![insn(&[2], &[]), insn(&[3], &[]), insn(&[], &[2, 3])]),
+            (2, vec![insn(&[], &[1]), insn(&[], &[1])]),
+        ]
+        .into_iter()
+        .map(|(n, insns)| {
+            let mut b = LirBlock::new(n, insns);
+            if n < 2 {
+                b.succ = vec![n + 1].into();
+            }
+            Block::from(b)
+        })
+        .collect();
+        let body = LirBody::new("on", 0, blocks, IndexMap::default(), IndexMap::default());
+        let order = |_: u32| vec![RegId::EAX, RegId::EBX];
+        let inputs = ShadowInputs {
+            body: &body,
+            registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+            order: &order,
+            pins: &IndexMap::default(),
+            unspillable: &BTreeSet::new(),
+            data: None,
+        };
+        let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
+        let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
+        assert!(split.report.reloads < plain.report.reloads, "premise: the split body reloads less");
+        let default = decide_with(&inputs, Mode::Simple).expect("allocated");
+        assert_eq!(default.report.reloads, split.report.reloads, "the default is the split one");
+    }
+
+    /// A register made by a split is a clone of its parent (`createFrom`): as
+    /// wide, so a call that destroys the high half of `esi` (m16) is held
+    /// against it. The complement of a split has no copy defining it and no
+    /// table entry; it was placed in `edi` across a call and bintree.c -O2
+    /// -m16 printed 165553 for 5736113.
+    #[test]
+    fn test_a_register_made_by_a_split_is_as_wide_as_its_parent() {
+        use crate::greedy::splitkit::SplitEnv as _;
+        use crate::model::ir::{Held, Loc, Operation, Semantics};
+        let what = Semantics {
+            name: Some("mov".to_owned()),
+            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            sources: vec![Loc::Held(Held { value: 2, width: 4 })],
+            ..Semantics::new(Operation::Move)
+        };
+        let insns = vec![Arc::new(Insn::new(0, None, Some(what), vec![1], vec![2]))];
+        let body = LirBody::new(
+            "wide",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let lis = LiveIntervals::new(&body);
+        // The parent (value 1) is in no table: a spill made it.
+        let tables = Rc::new(Tables::default());
+        let env = BodySplitEnv::new(&body, Rc::clone(&tables));
+        env.note_split_from(&lis, 7, 1);
+        assert_eq!(tables.widths.borrow().get(&7), Some(&4), "the clone is as wide as its parent");
     }
 }

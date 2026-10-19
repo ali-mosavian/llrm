@@ -86,6 +86,15 @@ pub struct Side {
 }
 
 impl Side {
+    /// Whether `vni` is this side's parameter on entry to the function.
+    fn is_entry_input(
+        &self,
+        lis: &LiveIntervals,
+        vni: &Vn,
+    ) -> bool {
+        vni.is_phi_def() && lis.is_input(self.reg) && vni.def() == lis.indexes.get_mbb_start_idx(lis.cfg.entry)
+    }
+
     fn new(
         reg: u32,
         lr: LiveRange,
@@ -133,7 +142,7 @@ impl<'a> JoinVals<'a> {
         let mut track_reg = self.sides[me].reg;
         while !vni.is_phi_def() {
             let def = vni.def();
-            let key = self.lis.indexes.get_instruction_from_index(&def).expect("No defining instruction");
+            let key = self.lis.defining_instr(&def, track_reg);
             let Some((_, src)) = full_copy(self.lis.instr(key)) else { return (Some(vni), track_reg) };
             let li = self.lis.interval_rc(src.value);
             // No subrange involved.
@@ -192,7 +201,7 @@ impl<'a> JoinVals<'a> {
             // Conservatively assume that all lanes in a PHI are valid.
             None
         } else {
-            let key = self.lis.indexes.get_instruction_from_index(&vni.def()).expect("a defining instruction");
+            let key = self.lis.defining_instr(&vni.def(), self.sides[me].reg);
             Some(Rc::new(self.lis.instr(key).clone()))
         };
         // Find the value in Other that overlaps VNI->def, if any.
@@ -224,8 +233,10 @@ impl<'a> JoinVals<'a> {
             }
             // Both sides have been analyzed now. Allow overlapping PHI values.
             // Any real interference would show up in a predecessor, the PHI
-            // itself can't introduce any conflicts.
-            if vni.is_phi_def() {
+            // itself can't introduce any conflicts. A parameter's value on
+            // entry is no PHI: the entry block has no predecessor to show
+            // it, and two parameters are two values (DEVIATE C9).
+            if vni.is_phi_def() && !self.sides[me].is_entry_input(self.lis, &vni) {
                 return Resolution::Merge;
             }
             // Overlapping lanes can't be resolved: one lane, valid on both.
@@ -418,7 +429,7 @@ impl<'a> JoinVals<'a> {
             if self.sides[me].vals[i].resolution != Resolution::Erase {
                 continue;
             }
-            let key = self.lis.indexes.get_instruction_from_index(&def).expect("No instruction to erase");
+            let key = self.lis.defining_instr(&def, self.sides[me].reg);
             if let Some((_, src)) = full_copy(self.lis.instr(key)) {
                 if src.value != self.cp.src_reg() && src.value != self.cp.dst_reg() {
                     shrink_regs.push(src.value);

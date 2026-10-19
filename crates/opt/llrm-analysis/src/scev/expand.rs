@@ -183,16 +183,13 @@ impl Run<'_> {
         must_dominate: InstId,
     ) -> InstId {
         let block = self.function.parent(inst).expect("a placed instruction");
-        let all = self.function.block(block).instructions();
-        let at = all.iter().position(|&one| one == inst).expect("in its block");
-        let mut at = at + 1;
-        while matches!(self.function.instruction(all[at]).opcode, Opcode::Phi) {
-            at += 1;
-        }
-        while all[at] != must_dominate && self.x.is_inserted_instruction(&all[at]) {
-            at += 1;
-        }
-        all[at]
+        self.function
+            .iter_block(block)
+            .skip_while(|&one| one != inst)
+            .skip(1)
+            .skip_while(|&one| matches!(self.function.instruction(one).opcode, Opcode::Phi))
+            .find(|&one| one == must_dominate || !self.x.is_inserted_instruction(&one))
+            .expect("in its block")
     }
 
     /// `getFirstInsertionPt` of `block`.
@@ -200,8 +197,10 @@ impl Run<'_> {
         &self,
         block: BlockId,
     ) -> InstId {
-        let all = self.function.block(block).instructions();
-        *all.iter().find(|&&one| !matches!(self.function.instruction(one).opcode, Opcode::Phi)).expect("a terminator")
+        self.function
+            .iter_block(block)
+            .find(|&one| !matches!(self.function.instruction(one).opcode, Opcode::Phi))
+            .expect("a terminator")
     }
 
     /// Whether `v` is defined outside the loop with header `header`:
@@ -274,9 +273,8 @@ impl Run<'_> {
         // Scan the six instructions before the insert point for this binop.
         let ip = self.x.insert_point.expect("an insert point");
         let block = self.function.parent(ip).expect("a placed insert point");
-        let all = self.function.block(block).instructions();
-        let here = all.iter().position(|&one| one == ip).expect("in its block");
-        for &before in all[..here].iter().rev().take(6) {
+        let before_ip = self.function.iter_block_rev(block).skip_while(|&one| one != ip).skip(1).take(6);
+        for before in before_ip {
             let one = self.function.instruction(before);
             let overflowing = matches!(
                 op,
@@ -349,9 +347,9 @@ impl Run<'_> {
             ValueDef::Argument(_) => {
                 // After the casts of other arguments at the start of the entry.
                 let entry = self.function.entry().expect("an entry");
-                let all = self.function.block(entry).instructions();
-                *all.iter()
-                    .find(|&&one| {
+                self.function
+                    .iter_block(entry)
+                    .find(|&one| {
                         let inst = self.function.instruction(one);
                         let argument_cast = matches!(inst.opcode, Opcode::Cast(CastOp::BitCast))
                             && matches!(
@@ -382,10 +380,9 @@ impl Run<'_> {
                     continue;
                 }
                 // At or before the insert point, and not the builder's own.
-                let all = self.function.block(block.expect("placed")).instructions();
-                let at = all.iter().position(|&i| i == ip).expect("in its block");
-                let found = all.iter().position(|&i| i == user.user).expect("in its block");
-                if found <= at && Some(user.user) != self.x.insert_point {
+                if (user.user == ip || self.function.comes_before(user.user, ip))
+                    && Some(user.user) != self.x.insert_point
+                {
                     return Operand::Value(one.result.expect("a value"));
                 }
             }
@@ -422,9 +419,8 @@ impl Run<'_> {
         // Scan the six instructions before the insert point for this GEP.
         let ip = self.x.insert_point.expect("an insert point");
         let block = self.function.parent(ip).expect("placed");
-        let all = self.function.block(block).instructions();
-        let here = all.iter().position(|&one| one == ip).expect("in its block");
-        for &before in all[..here].iter().rev().take(6) {
+        let before_ip = self.function.iter_block_rev(block).skip_while(|&one| one != ip).skip(1).take(6);
+        for before in before_ip {
             let one = self.function.instruction(before);
             if one.opcode == gep && one.operands == [base, idx] && one.flags.is_empty() {
                 return Operand::Value(one.result.expect("a value"));
@@ -608,9 +604,7 @@ impl Run<'_> {
                 }
                 while at != here && self.x.is_inserted_instruction(&at) {
                     let block = self.function.parent(at).expect("placed");
-                    let all = self.function.block(block).instructions();
-                    let next = all.iter().position(|&one| one == at).expect("in its block") + 1;
-                    at = all[next];
+                    at = self.function.iter_block(block).skip_while(|&one| one != at).nth(1).expect("in its block");
                 }
                 break;
             }
@@ -621,6 +615,7 @@ impl Run<'_> {
         }
         self.x.insert_point = Some(at);
         let v = self.visit(s);
+        let v = self.fixup_lcssa_form_for(v);
         self.x.insert_point = Some(here);
         self.x.expressions.insert((s, at), v);
         v

@@ -62,9 +62,8 @@
 //! `invalidateCachedPointerInfo`): phi translation interns constants, which
 //! needs `&mut Context` while the alias analysis holds `&Context` (#2500).
 
-use llrm_mir::context::Context;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
-use llrm_mir::facts::Facts;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Opcode, Tail};
@@ -219,10 +218,23 @@ const BLOCK_NUMBER_LIMIT: usize = 200;
 const CACHE_GLOBAL_LIMIT: usize = 10000;
 
 /// [`RemoveFromReverseMap`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemoryDependenceAnalysis.cpp#L96).
-fn remove_from_reverse_map<K: Copy + Eq + std::hash::Hash>(
-    reverse: &mut HashMap<InstId, HashSet<K>>,
+fn remove_from_reverse_map(
+    reverse: &mut IdMap<InstId, IdSet<InstId>>,
     inst: InstId,
-    value: K,
+    value: InstId,
+) {
+    let set = reverse.get_mut(&inst).expect("Reverse map out of sync?");
+    assert!(set.remove(&value), "Invalid reverse map!");
+    if set.is_empty() {
+        reverse.remove(&inst);
+    }
+}
+
+/// `RemoveFromReverseMap` for the pointer pairs.
+fn remove_from_reverse_pairs(
+    reverse: &mut IdMap<InstId, HashSet<ValueIsLoadPair>>,
+    inst: InstId,
+    value: ValueIsLoadPair,
 ) {
     let set = reverse.get_mut(&inst).expect("Reverse map out of sync?");
     assert!(set.remove(&value), "Invalid reverse map!");
@@ -291,17 +303,6 @@ fn identical_calls(
         && tail(x.tail) == tail(y.tail)
 }
 
-/// `isNoAliasCall`: a call whose result is `noalias`.
-fn is_no_alias_call(
-    function: &Function,
-    inst: InstId,
-) -> bool {
-    matches!(
-        &function.instruction(inst).opcode,
-        Opcode::Call(info) if Facts::of(&info.return_attrs).no_alias()
-    )
-}
-
 /// [`isStorePreservingMemoryLocation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/Loads.cpp#L843)
 /// (Loads.cpp): `store` writes back, unchanged, what `mem_loc` holds: it stores
 /// a load of the same bytes, same block, and nothing between modifies them.
@@ -356,22 +357,19 @@ pub fn is_store_preserving_memory_location<A: AAResults>(
 /// The cached answers and their reverse maps.
 #[derive(Debug)]
 pub struct MemoryDependenceResults {
-    local_deps: HashMap<InstId, MemDepResult>,
-    non_local_deps_map: HashMap<InstId, (NonLocalDepInfo, bool)>,
-    reverse_local_deps: HashMap<InstId, HashSet<InstId>>,
-    reverse_non_local_deps: HashMap<InstId, HashSet<InstId>>,
+    local_deps: IdMap<InstId, MemDepResult>,
+    non_local_deps_map: IdMap<InstId, (NonLocalDepInfo, bool)>,
+    reverse_local_deps: IdMap<InstId, IdSet<InstId>>,
+    reverse_non_local_deps: IdMap<InstId, IdSet<InstId>>,
     non_local_pointer_deps: HashMap<ValueIsLoadPair, NonLocalPointerInfo>,
-    reverse_non_local_ptr_deps: HashMap<InstId, HashSet<ValueIsLoadPair>>,
+    reverse_non_local_ptr_deps: IdMap<InstId, HashSet<ValueIsLoadPair>>,
     /// `NonLocalPointerDepVisited`: for each block, the pointer it was reached
     /// with in the query of this epoch.
     visited: Vec<(Option<Operand>, u32)>,
     epoch: u32,
-    pred_cache: HashMap<BlockId, Vec<BlockId>>,
-    clobber_offsets: HashMap<InstId, i32>,
+    pred_cache: IdMap<BlockId, Vec<BlockId>>,
+    clobber_offsets: IdMap<InstId, i32>,
     default_block_scan_limit: u32,
-    /// The context phi translation interns into (DEVIATE 8), and how many
-    /// constants the real one held when it was copied.
-    scratch: Option<(Context, usize)>,
 }
 
 impl Default for MemoryDependenceResults {
@@ -383,18 +381,17 @@ impl Default for MemoryDependenceResults {
 impl MemoryDependenceResults {
     pub fn new(default_block_scan_limit: u32) -> Self {
         Self {
-            local_deps: HashMap::default(),
-            non_local_deps_map: HashMap::default(),
-            reverse_local_deps: HashMap::default(),
-            reverse_non_local_deps: HashMap::default(),
+            local_deps: IdMap::new(),
+            non_local_deps_map: IdMap::new(),
+            reverse_local_deps: IdMap::new(),
+            reverse_non_local_deps: IdMap::new(),
             non_local_pointer_deps: HashMap::default(),
-            reverse_non_local_ptr_deps: HashMap::default(),
+            reverse_non_local_ptr_deps: IdMap::new(),
             visited: Vec::new(),
             epoch: 0,
-            pred_cache: HashMap::default(),
-            clobber_offsets: HashMap::default(),
+            pred_cache: IdMap::new(),
+            clobber_offsets: IdMap::new(),
             default_block_scan_limit,
-            scratch: None,
         }
     }
 
@@ -417,7 +414,7 @@ impl MemoryDependenceResults {
         function: &Function,
         bb: BlockId,
     ) -> Vec<BlockId> {
-        self.pred_cache.entry(bb).or_insert_with(|| function.predecessors(bb).to_vec()).clone()
+        self.pred_cache.get_or_insert_with(bb, || function.predecessors(bb).to_vec()).clone()
     }
 
     /// `invalidateCachedPredecessors`
@@ -435,7 +432,7 @@ impl MemoryDependenceResults {
     ) -> Option<InstId> {
         match scan {
             Some(inst) => function.prev_in_block(inst),
-            None => function.block(bb).instructions().last().copied(),
+            None => function.block(bb).last(),
         }
     }
 
@@ -684,7 +681,9 @@ impl MemoryDependenceResults {
             }
             // An allocation the accessed pointer is to: a Def, so a load of it
             // can become undef. BasicAA bypasses the allocation itself.
-            if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }) || is_no_alias_call(function, inst) {
+            if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. })
+                || llrm_mir::memory::returns_noalias(unit.context, unit.globals, function, inst)
+            {
                 let (access_ptr, _) = valuetracking::underlying(unit.context, unit.layout, function, mem_loc.ptr);
                 let this = function.instruction(inst).result.map(Operand::Value);
                 if this == Some(access_ptr)
@@ -738,7 +737,7 @@ impl MemoryDependenceResults {
         let mut scan_pos = query;
         // A cached result that is not dirty is returned (an unseen query is
         // dirty).
-        let cached = self.local_deps.entry(query).or_default();
+        let cached = self.local_deps.get_or_insert_with(query, MemDepResult::default);
         if !cached.is_dirty() {
             return *cached;
         }
@@ -767,7 +766,7 @@ impl MemoryDependenceResults {
         self.local_deps.insert(query, result);
         // Remember the reverse map so `remove_instruction` finds who depends.
         if let Some(inst) = result.inst() {
-            self.reverse_local_deps.entry(inst).or_default().insert(query);
+            self.reverse_local_deps.get_or_insert_with(inst, Default::default).insert(query);
         }
         result
     }
@@ -803,7 +802,7 @@ impl MemoryDependenceResults {
             dirty_blocks.extend(self.preds(function, query_bb));
         }
         let is_readonly_call = BatchAAResults::new(aa).only_reads_memory(query);
-        let mut visited: HashSet<BlockId> = HashSet::default();
+        let mut visited = IdSet::<BlockId>::new();
         // The entries sorted when the walk started; later ones are appended.
         let num_sorted = cache.len();
         while let Some(dirty_bb) = dirty_blocks.pop() {
@@ -846,7 +845,7 @@ impl MemoryDependenceResults {
             // remembered.
             if !dep.is_non_local() {
                 if let Some(inst) = dep.inst() {
-                    self.reverse_non_local_deps.entry(inst).or_default().insert(query);
+                    self.reverse_non_local_deps.get_or_insert_with(inst, Default::default).insert(query);
                 }
             } else {
                 dirty_blocks.extend(self.preds(function, dirty_bb));
@@ -936,8 +935,7 @@ impl MemoryDependenceResults {
         self.visited[bb.0 as usize].0
     }
 
-    /// Phi translation of `pointer` from `cur` to `pred` on the copy of the
-    /// context (DEVIATE 8).
+    /// Phi translation of `pointer` from `cur` to `pred`.
     fn translate(
         &mut self,
         env: Env,
@@ -946,18 +944,8 @@ impl MemoryDependenceResults {
         pred: BlockId,
     ) -> Option<Operand> {
         let unit = env.unit;
-        let held = unit.context.constant_count();
-        if self.scratch.as_ref().is_none_or(|(_, taken)| *taken != held) {
-            self.scratch = Some((unit.context.clone(), held));
-        }
-        let (scratch, _) = self.scratch.as_mut().expect("a copy");
-        let mut phi = PhiEnv { context: scratch, layout: unit.layout, function: unit.function, dt: Some(env.dt) };
-        let got = pointer.translate_value(&mut phi, cur, pred, false);
-        if matches!(got, Some(Operand::Constant(c)) if c.index() >= held) {
-            pointer.make_unavailable();
-            return None;
-        }
-        got
+        let mut phi = PhiEnv { context: unit.context, layout: unit.layout, function: unit.function, dt: Some(env.dt) };
+        pointer.translate_value(&mut phi, cur, pred, false)
     }
 
     /// `getNonLocalInfoForBlock`
@@ -999,7 +987,7 @@ impl MemoryDependenceResults {
         {
             assert!(function.parent(inst) == Some(bb), "Instruction invalidated?");
             scan_pos = Some(inst);
-            remove_from_reverse_map(&mut self.reverse_non_local_ptr_deps, inst, key);
+            remove_from_reverse_pairs(&mut self.reverse_non_local_ptr_deps, inst, key);
         }
         let dep = self.get_pointer_dependency_from_with(env, batch, loc, is_load, scan_pos, bb, query, None);
         // An invariant load's answer is not cached.
@@ -1015,7 +1003,7 @@ impl MemoryDependenceResults {
             return dep;
         }
         let inst = dep.inst().expect("Didn't depend on anything?");
-        self.reverse_non_local_ptr_deps.entry(inst).or_default().insert(key);
+        self.reverse_non_local_ptr_deps.get_or_insert_with(inst, Default::default).insert(key);
         dep
     }
 
@@ -1053,7 +1041,7 @@ impl MemoryDependenceResults {
                 let dropped = std::mem::take(&mut info.non_local_deps);
                 for entry in &dropped {
                     if let Some(inst) = entry.result.inst() {
-                        remove_from_reverse_map(&mut self.reverse_non_local_ptr_deps, inst, cache_key);
+                        remove_from_reverse_pairs(&mut self.reverse_non_local_ptr_deps, inst, cache_key);
                     }
                 }
                 is_incomplete = true;
@@ -1066,7 +1054,7 @@ impl MemoryDependenceResults {
                     let dropped = std::mem::take(&mut info.non_local_deps);
                     for entry in &dropped {
                         if let Some(inst) = entry.result.inst() {
-                            remove_from_reverse_map(&mut self.reverse_non_local_ptr_deps, inst, cache_key);
+                            remove_from_reverse_pairs(&mut self.reverse_non_local_ptr_deps, inst, cache_key);
                         }
                     }
                     is_incomplete = true;
@@ -1241,9 +1229,12 @@ impl MemoryDependenceResults {
                         // A select on a condition has two addresses, one per
                         // side.
                         if let Some(cond) = pred_pointer.select_condition(function) {
-                            let (scratch, _) = self.scratch.as_mut().expect("translation made a copy");
-                            let mut phi =
-                                PhiEnv { context: scratch, layout: env.unit.layout, function, dt: Some(env.dt) };
+                            let mut phi = PhiEnv {
+                                context: env.unit.context,
+                                layout: env.unit.layout,
+                                function,
+                                dt: Some(env.dt),
+                            };
                             let sides: SelectAddrs = pointer.translate_value_select(&mut phi, bb, pred, cond);
                             if let (Some(on_true), Some(on_false)) = sides {
                                 result.push(NonLocalDepResult {
@@ -1346,7 +1337,7 @@ impl MemoryDependenceResults {
             // Ignore non-local results.
             let Some(target) = entry.result.inst() else { continue };
             assert!(function.parent(target) == Some(entry.bb));
-            remove_from_reverse_map(&mut self.reverse_non_local_ptr_deps, target, pair);
+            remove_from_reverse_pairs(&mut self.reverse_non_local_ptr_deps, target, pair);
         }
     }
 
@@ -1416,7 +1407,7 @@ impl MemoryDependenceResults {
                 !depending.is_empty() && !function.instruction(rem).opcode.is_terminator(),
                 "Nothing can locally depend on a terminator"
             );
-            for inst in depending {
+            for inst in depending.iter() {
                 assert!(inst != rem, "Already removed our local dep info");
                 self.local_deps.insert(inst, new_dirty_val);
                 let next = new_dirty_val
@@ -1425,13 +1416,13 @@ impl MemoryDependenceResults {
                 reverse_deps_to_add.push((next, inst));
             }
             while let Some((key, value)) = reverse_deps_to_add.pop() {
-                self.reverse_local_deps.entry(key).or_default().insert(value);
+                self.reverse_local_deps.get_or_insert_with(key, Default::default).insert(value);
             }
         }
         if let Some(depending) = self.reverse_non_local_deps.remove(&rem) {
-            for inst in depending {
+            for inst in depending.iter() {
                 assert!(inst != rem, "Already removed NonLocalDep info for RemInst");
-                let info = self.non_local_deps_map.entry(inst).or_default();
+                let info = self.non_local_deps_map.get_or_insert_with(inst, Default::default);
                 info.1 = true;
                 for entry in &mut info.0 {
                     if entry.result.inst() != Some(rem) {
@@ -1444,7 +1435,7 @@ impl MemoryDependenceResults {
                 }
             }
             while let Some((key, value)) = reverse_deps_to_add.pop() {
-                self.reverse_non_local_deps.entry(key).or_default().insert(value);
+                self.reverse_non_local_deps.get_or_insert_with(key, Default::default).insert(value);
             }
         }
         if let Some(pairs) = self.reverse_non_local_ptr_deps.remove(&rem) {
@@ -1471,7 +1462,7 @@ impl MemoryDependenceResults {
                 info.non_local_deps.sort_by_key(|entry| entry.bb);
             }
             for (key, pair) in to_add {
-                self.reverse_non_local_ptr_deps.entry(key).or_default().insert(pair);
+                self.reverse_non_local_ptr_deps.get_or_insert_with(key, Default::default).insert(pair);
             }
         }
         assert!(!self.non_local_deps_map.contains_key(&rem), "RemInst got reinserted?");
@@ -1487,17 +1478,17 @@ impl MemoryDependenceResults {
     ) {
         let value =
             function.instruction(removed).result.map(Operand::Value).unwrap_or(Operand::Block(BlockId(u32::MAX)));
-        for (&key, dep) in &self.local_deps {
+        for (key, dep) in self.local_deps.iter() {
             assert!(key != removed && dep.inst() != Some(removed), "Inst occurs in data structures");
         }
-        for (&key, (entries, _)) in &self.non_local_deps_map {
+        for (key, (entries, _)) in self.non_local_deps_map.iter() {
             assert!(key != removed, "Inst occurs in data structures");
             for entry in entries {
                 assert!(entry.result.inst() != Some(removed), "Inst occurs in data structures");
             }
         }
         for (key, set) in self.reverse_local_deps.iter().chain(self.reverse_non_local_deps.iter()) {
-            assert!(*key != removed && !set.contains(&removed), "Inst occurs in data structures");
+            assert!(key != removed && !set.contains(&removed), "Inst occurs in data structures");
         }
         for (&(pointer, _), info) in &self.non_local_pointer_deps {
             assert!(pointer != value, "Inst occurs in NLPD map key");
@@ -1505,8 +1496,8 @@ impl MemoryDependenceResults {
                 assert!(entry.result.inst() != Some(removed), "Inst occurs as NLPD value");
             }
         }
-        for (key, set) in &self.reverse_non_local_ptr_deps {
-            assert!(*key != removed, "Inst occurs in rev NLPD map");
+        for (key, set) in self.reverse_non_local_ptr_deps.iter() {
+            assert!(key != removed, "Inst occurs in rev NLPD map");
             for &(pointer, _) in set {
                 assert!(pointer != value, "Inst occurs in ReverseNonLocalPtrDeps map");
             }

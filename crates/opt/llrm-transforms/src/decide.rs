@@ -108,7 +108,6 @@ use llrm_analysis::induction::{self, Scev};
 use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::num::Num as BigInt;
-use llrm_analysis::ranges;
 use llrm_analysis::scev::analysis::LazyScevView;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
@@ -202,7 +201,10 @@ fn _decided(
     let held =
         Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
     let outer = std::rc::Rc::clone(analyses.outer());
-    let settled = _settled(context, layout, function, &outer);
+    let shared = analyses.get::<llrm_mir::lazyvalueinfo::LviCache>(context, layout, function);
+    let mut lvi = shared.take();
+    let settled = _settled(context, layout, function, &outer, &mut lvi);
+    shared.put(lvi);
     let scev = LazyScevView::new(analyses);
     let decisions = _decisions(&held.unit(context, layout, function, &outer), &registers, &settled, &scev, use_scev)?;
     if decisions.is_empty() {
@@ -210,7 +212,7 @@ fn _decided(
     }
     for (block, target) in decisions {
         let last = function.terminator(block).expect("a terminator");
-        _jump(function, last, target);
+        _jump(context, function, last, target);
     }
     cfg::_unreachable(context, function);
     transform::_trivial_phis(function)?;
@@ -267,7 +269,6 @@ fn _decisions(
         Some(constant_cycles::Successors { choose: &successors, reads: &reads }),
         None,
     );
-    let scoped = ranges::bounds(unit)?;
     let mut out = Vec::new();
     for &block in function.layout() {
         let Some(last) = function.terminator(block) else {
@@ -284,18 +285,6 @@ fn _decisions(
         let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
         if answer.is_none() {
             answer = settled.get(&block).copied();
-        }
-        if answer.is_none() {
-            let scope = scoped.scope(unit, cfg::id(block));
-            let mut possible = Vec::new();
-            for target in function.successors(block) {
-                if ranges::on_edge_over(unit, block, target, &scope, Some(&facts))?.is_some() {
-                    possible.push(target);
-                }
-            }
-            if let [one] = possible[..] {
-                answer = Some(one == taken);
-            }
         }
         if answer.is_none() {
             answer = if use_scev {
@@ -319,10 +308,10 @@ fn _settled(
     layout: &DataLayout,
     function: &Function,
     outer: &Outer,
+    lvi: &mut LazyValueInfo,
 ) -> llrm_mir::dense::IdMap<BlockId, bool> {
     let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
     let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
-    let mut lvi = LazyValueInfo::new();
     let mut settled = llrm_mir::dense::IdMap::default();
     for &block in function.layout() {
         let Some(last) = function.terminator(block) else { continue };
@@ -392,12 +381,20 @@ fn _implied_by_scev(
     })
 }
 
-/// `last`, a terminator, replaced by a jump to `target`.
+/// `last`, a terminator, replaced by a jump to `target`. `br i1 %c, T, T` has
+/// two edges to `T` and a phi of `T` two inputs from the block: a jump has one
+/// edge, so the phi loses one.
 fn _jump(
+    context: &Context,
     function: &mut Function,
     last: InstId,
     target: BlockId,
 ) {
+    let block = function.parent(last).expect("a placed terminator");
+    let edges = function.instruction(last).operands.iter().filter(|one| **one == Operand::Block(target)).count();
+    for _ in 1..edges {
+        function.predecessor_removed(context, target, block, true);
+    }
     let jump = function.create_instruction(
         Opcode::Br,
         function.instruction(last).ty,
@@ -530,7 +527,7 @@ pub fn _executable_successors(
 /// it: false where `from` is the branch's false side, true where it is the true
 /// side (LLVM JumpThreading's `getKnownConstant` of an edge).
 fn known_on_edge(
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     value: ValueId,
     from: BlockId,
@@ -559,19 +556,19 @@ fn known_on_edge(
 /// constant leads: LLVM JumpThreading's `ProcessBranchOnPHI`. A loop's
 /// header keeps its edges. Whether anything changed.
 pub fn _phi_threaded(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
 ) -> Result<bool, String> {
     let headers = cfg::Shape::of(function).loops.iter().map(|one| one.header).collect::<BTreeSet<_>>();
     let mut changed = false;
     for block in function.layout().to_vec() {
-        let instructions = function.block(block).instructions().to_vec();
+        let instructions = function.iter_block(block).collect::<Vec<_>>();
         let [phi, last] = instructions[..] else { continue };
         let branch = function.instruction(last);
         let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
             continue;
         };
-        let reads_only = function.users(condition).len() == 1;
+        let reads_only = function.users(condition).has_one_use();
         let is_phi = function.instruction(phi).opcode == Opcode::Phi;
         if headers.contains(&cfg::id(block))
             || branch.opcode != Opcode::Br
@@ -670,7 +667,7 @@ pub(crate) fn loop_form_blocks(function: &Function) -> BTreeSet<i64> {
 /// Loop-simplify form keeps a loop's one entry edge, its one back edge and
 /// its dedicated exits as blocks of their own.
 pub fn _threaded(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
 ) -> bool {
     if function.entry().is_none() {
@@ -680,7 +677,7 @@ pub fn _threaded(
     let mut redirects = BTreeMap::new();
     for &block in function.layout() {
         let at = cfg::id(block);
-        let [only] = function.block(block).instructions()[..] else {
+        let [only] = function.iter_block(block).collect::<Vec<_>>()[..] else {
             continue;
         };
         let instruction = function.instruction(only);
@@ -723,7 +720,7 @@ pub fn _threaded(
         if let [_, Operand::Block(taken), Operand::Block(other)] = function.instruction(last).operands[..]
             && taken == other
         {
-            _jump(function, last, taken);
+            _jump(context, function, last, taken);
             changed = true;
         }
     }

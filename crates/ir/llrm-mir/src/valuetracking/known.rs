@@ -363,7 +363,11 @@ fn compute_known_bits_from_lerp_pattern(
         return;
     }
 
-    let is_xor = sub_bc.get().is_some_and(|inst| q.function.instruction(inst).opcode == Opcode::Binary(BinaryOp::Xor));
+    let is_xor =
+        sub_bc.get().is_some_and(|inst| matches!(
+            q.function.instruction(inst).opcode,
+            Opcode::Binary(BinaryOp::Xor)
+        ));
     if is_xor && known_c.max_value() & !known_b.min_value() != 0 {
         return;
     }
@@ -791,7 +795,7 @@ fn phi_has_undef_constant_value(
     }
     matches!(
         constant_value,
-        Operand::Constant(id) if matches!(q.context().get(id).kind, ConstantKind::Poison)
+        Operand::Constant(id) if matches!(q.context().get(id).kind, ConstantKind::Poison | ConstantKind::Undef)
     )
 }
 
@@ -1487,7 +1491,7 @@ fn compute_known_bits_from_operator(
         }
         Opcode::Cast(CastOp::PtrToInt | CastOp::IntToPtr | CastOp::ZExt | CastOp::Trunc) => {
             *known = kb(operand(0));
-            if instruction.opcode == Opcode::Cast(CastOp::ZExt)
+            if matches!(instruction.opcode, Opcode::Cast(CastOp::ZExt))
                 && instruction.flags.contains(Flags::NNEG)
                 && !known.is_negative()
             {
@@ -1623,7 +1627,7 @@ fn constant_expression(
             if *inbounds { Flags::INBOUNDS } else { Flags::default() },
         ),
     };
-    Some(Instruction { opcode, ty: constant.ty, operands, flags, result: None, metadata: Vec::new() })
+    Some(Instruction { opcode, ty: constant.ty, operands, flags, result: None, metadata: Vec::new(), link: (0, 0) })
 }
 
 /// `computeKnownBits(V, DemandedElts, Known, Q, Depth)`: `known` has the width
@@ -1653,7 +1657,11 @@ pub fn compute_known_bits_into(
     known.reset_all();
 
     if let Operand::Constant(id) = v {
-        if matches!(q.context().get(id).kind, ConstantKind::Poison) {
+        // We can't imply anything about undefs.
+        if matches!(
+            q.context().get(id).kind,
+            ConstantKind::Poison | ConstantKind::Undef
+        ) {
             return;
         }
     }

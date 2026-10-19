@@ -74,6 +74,32 @@ def test_a_step_file_is_the_answer_of_its_step_and_its_input_is_the_nearest_slot
     assert difftest.dump_pairs(tmp_path, "sroa") == [], "the first step of a list has no input in the dump"
 
 
+def test_a_slot_name_selects_that_slot_alone_and_has_its_passes_counterpart(tmp_path):
+    """`sroa@776` was not a name the oracle took: the translated slots of LLVM's order could not be asked for, only the old pass names."""
+    body = tmp_path / "f"
+    body.mkdir()
+    for name in ("1-r01-gvn@5.ll", "2-r01-earlycse@649.ll", "2-r01-dead@5.ll", "3-r01-earlycse@1180.ll"):
+        (body / name).write_text("")
+    got = difftest.dump_pairs(tmp_path, "earlycse@1180")
+    assert [(Path(r["file"]).name, r["pass"], p.name) for r, p in got] == [("2-r01-earlycse@649.ll", "earlycse@1180", "3-r01-earlycse@1180.ll")]
+    assert difftest.dump_pairs(tmp_path, "earlycse@999") == []
+    assert difftest.counterpart("sroa@776") == "sroa" and difftest.counterpart("loopdeletion@749") == "loop(loop-deletion)"
+
+
+def test_no_input_compared_is_a_failed_premise_not_an_ok_one(tmp_path):
+    """Eight slots read 'inputs 0 ... premise ok': dumps hold only the steps that changed a body, and a report over nothing said ok."""
+    assert difftest.premise(0, 0).startswith("PREMISE FAILED")
+
+
+def test_the_inputs_of_a_slot_are_every_run_changed_or_not(tmp_path):
+    body = tmp_path / "cfg" / "01"
+    body.mkdir(parents=True)
+    for name in ("0003-in-sroa@1179.ll", "0007-in-sroa@776.ll", "0002-in-earlycse@1180.ll"):
+        (body / name).write_text("")
+    got = difftest.input_pairs(tmp_path / "cfg", "sroa@776")
+    assert [(r["pass"], r["run"], Path(r["file"]).name, a) for r, a in got] == [("sroa@776", 7, "0007-in-sroa@776.ll", None)]
+
+
 def test_a_pass_without_a_counterpart_is_refused_by_name(capsys, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["difftest.py", "run", "ports"])
     assert difftest.main() == 2 and "ports has no counterpart" in capsys.readouterr().err
@@ -224,3 +250,9 @@ def test_inputs_of_reads_the_runs_of_other_passes_as_the_passes_own():
     got = difftest.relabelled(rows, "bdce", ["fold", "dead"])
     assert [r["pass"] for r in got] == ["bdce", "bdce", "gvn"] and rows[0]["pass"] == "fold"
     assert difftest.relabelled(rows, "bdce", None) == rows
+
+
+def test_llrm_only_attributes_reach_opt_as_strings():
+    """A bare `threeway` on a declaration made opt refuse 9 QCport modules: "expected top-level entity"."""
+    text = 'declare i16 @_strcmp(ptr, ptr) addrspace(1) threeway nearcode\n@s = constant [8 x i8] c"threeway"\n'
+    assert difftest.normalise(text) == 'declare i16 @_strcmp(ptr, ptr) addrspace(1) "threeway" "nearcode"\n@s = constant [8 x i8] c"threeway"\n'

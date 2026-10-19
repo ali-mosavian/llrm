@@ -88,8 +88,15 @@ fn operator<'a>(
                 }
                 _ => return None,
             };
-            let instruction =
-                Instruction { opcode, ty: constant.ty, operands, flags, result: None, metadata: Vec::new() };
+            let instruction = Instruction {
+                opcode,
+                ty: constant.ty,
+                operands,
+                flags,
+                result: None,
+                metadata: Vec::new(),
+                link: (0, 0),
+            };
             Some(Operator { instruction: Cow::Owned(instruction), inst: None })
         }
         Operand::Block(_) => None,
@@ -451,8 +458,8 @@ fn is_known_non_null_from_dominating_condition(
     let Some(cxt_block) = q.block_of(cxt) else { return false };
 
     let mut explored = 0;
-    // LLVM walks the use list newest first; MIR's lists are oldest first.
-    for use_ in q.function.users(value).iter().rev() {
+    // LLVM walks the use list newest first, as `users` does.
+    for use_ in q.function.users(value) {
         if explored >= DOM_CONDITIONS_MAX_USES {
             break;
         }
@@ -1533,13 +1540,16 @@ pub fn strip_and_accumulate_constant_offsets(
             }
             offset = offset.wrapping_add(sext_or_trunc(gep_offset, gep_width, width)) & mask(width);
             current = gep.pointer;
-        } else if operator.instruction.opcode == Opcode::Cast(CastOp::BitCast) {
+        } else if matches!(operator.instruction.opcode, Opcode::Cast(CastOp::BitCast)) {
             let source = operator.instruction.operands[0];
             if !q.is_pointer(source) {
                 return (current, offset);
             }
             current = source;
-        } else if operator.instruction.opcode == Opcode::Cast(CastOp::AddrSpaceCast) {
+        } else if matches!(
+            operator.instruction.opcode,
+            Opcode::Cast(CastOp::AddrSpaceCast)
+        ) {
             current = operator.instruction.operands[0];
         } else if call_info(&operator.instruction).is_some() {
             if let Some(returned) = returned_argument_operand(q, &operator.instruction) {
@@ -1719,7 +1729,7 @@ fn is_known_non_equal_demanded(
     let ptr_to_int_same_size = |v: Operand| {
         let operator = operator(q, v)?;
         let source = operator.instruction.operands.first().copied()?;
-        let same = operator.instruction.opcode == Opcode::Cast(CastOp::PtrToInt)
+        let same = matches!(operator.instruction.opcode, Opcode::Cast(CastOp::PtrToInt))
             && q.layout.size_bits(&q.context.types, operator.instruction.ty)
                 == q.layout.size_bits(&q.context.types, q.type_of(source)?);
         same.then_some(source)
@@ -1758,4 +1768,102 @@ pub fn column(
     v: Operand,
 ) -> String {
     format!(" nz={}", u8::from(is_known_non_zero(q, v, 0)))
+}
+
+/// `getOffsetFromIndex`
+/// ([Value.cpp:1065](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L1065)):
+/// the offset the indices of `gep` from operand `idx` on add, all constant.
+fn get_offset_from_index(
+    q: &Query,
+    gep: &Gep,
+    idx: usize,
+) -> Option<i64> {
+    let types = &q.context.types;
+    // The type each index steps over: the source type's elements for the
+    // first, then the indexed type of the one before.
+    let mut current = gep.source;
+    let mut offset = 0_i64;
+    for (at, index) in gep.indices.iter().enumerate() {
+        // `at + 1` is the operand number.
+        let (stride, field) = if at == 0 {
+            (q.layout.alloc_size(types, current), None)
+        } else {
+            match types.get(current) {
+                Type::Struct { .. } | Type::Named(_) => (1, Some(current)),
+                Type::Array { element, .. } | Type::Vector { element, .. } => {
+                    current = *element;
+                    (q.layout.alloc_size(types, current), None)
+                }
+                _ => return None,
+            }
+        };
+        let (value, from) = pattern::apint(q, *index).map_or((None, 0), |(v, w)| (Some(v), w));
+        if at + 1 < idx {
+            // Skip over the first indices: only the type walk matters.
+            if let Some(structure) = field {
+                let element = value? as u64;
+                current = types.member(structure, element)?;
+            }
+            continue;
+        }
+        let value = value?;
+        if value == 0 {
+            if let Some(structure) = field {
+                current = types.member(structure, 0).unwrap_or(structure);
+            }
+            continue;
+        }
+        if let Some(structure) = field {
+            // Struct indices add their field offset to the pointer.
+            let (_, offsets) = q.layout.struct_layout(types, structure);
+            let element = value as usize;
+            current = types.member(structure, element as u64)?;
+            offset += *offsets.get(element)? as i64;
+            continue;
+        }
+        // Otherwise a sequential type: the index times the element size.
+        offset += stride as i64 * signed(value, from) as i64;
+    }
+    Some(offset)
+}
+
+/// `Value::getPointerOffsetFrom`
+/// ([Value.cpp:1098](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L1098)):
+/// the constant number of bytes `this` is past `other`, if it is one.
+pub fn get_pointer_offset_from(
+    q: &Query,
+    this: Operand,
+    other: Operand,
+) -> Option<i64> {
+    let index_bits = |v: Operand| {
+        q.type_of(v).and_then(|ty| pointer_space(q, ty)).map_or(64, |space| q.layout.pointer(space).index_bits)
+    };
+    let (width1, width2) = (index_bits(other), index_bits(this));
+    let (ptr1, offset1) = strip_and_accumulate_constant_offsets(q, other, width1, true);
+    let (ptr2, offset2) = strip_and_accumulate_constant_offsets(q, this, width2, true);
+    let (offset1, offset2) = (signed(offset1, width1) as i64, signed(offset2, width2) as i64);
+
+    // Handle the trivial case first.
+    if ptr1 == ptr2 {
+        return Some(offset2 - offset1);
+    }
+    let gep1 = operator(q, ptr1).and_then(|operator| gep_of(&operator))?;
+    let gep2 = operator(q, ptr2).and_then(|operator| gep_of(&operator))?;
+    // Right now we handle the case when Ptr1/Ptr2 are both GEPs with an
+    // identical base. After that base, they may have some number of common (and
+    // potentially variable) indices. After that they handle some constant
+    // offset, which determines their offset from each other.
+    if gep1.pointer != gep2.pointer || gep1.source != gep2.source {
+        return None;
+    }
+    // Skip any common indices and track the GEP types.
+    let mut idx = 1;
+    while idx != gep1.indices.len() + 1
+        && idx != gep2.indices.len() + 1
+        && gep1.indices[idx - 1] == gep2.indices[idx - 1]
+    {
+        idx += 1;
+    }
+    let (index1, index2) = (get_offset_from_index(q, &gep1, idx)?, get_offset_from_index(q, &gep2, idx)?);
+    Some(index2 - index1 + offset2 - offset1)
 }

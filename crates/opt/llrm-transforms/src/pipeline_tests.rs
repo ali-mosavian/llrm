@@ -1450,7 +1450,7 @@ fn test_sroa_and_mem2reg_are_on_by_default_and_the_registry_calls_their_slots_tr
                 level,
                 applied.options.sroa,
                 applied.options.mem2reg,
-                applied.options.rotate_slot,
+                applied.options.rotating(),
             );
             assert_eq!(checked, Ok(()), "{phase:?} sroa {} mem2reg {}", applied.options.sroa, applied.options.mem2reg);
         }
@@ -2072,7 +2072,9 @@ declare cc 1005 void @N$PN() addrspace(1) memory(inaccessiblemem: readwrite)
 /// module below): each of the order's three function stages started from a
 /// dropped one. LLVM keeps it past every function pass, so the stages add no
 /// computation. What is left are the program passes (the first ask, `ports`,
-/// `Stamp`, the interprocedural stage); 6 here, which this holds at.
+/// `Stamp`, the interprocedural stage, and `ModuleIpo` between Early and the
+/// Simplify list, a module pass LLVM's GlobalsAA does not survive either); 7
+/// here, which this holds at.
 #[test]
 fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() {
     let mut files = corpus_files();
@@ -2093,7 +2095,7 @@ fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() 
     .and_then(|done| done)
     .unwrap_or_else(|error| panic!("{name}: {error}"));
     let made = llrm_mir::counts::analysed("globals-aa").1 - before;
-    assert!(made <= 6, "{name}: globals-aa made {made} times, 8 before it was held past the function stages");
+    assert!(made <= 7, "{name}: globals-aa made {made} times, 8 before it was held past the function stages");
 }
 
 /// The fixed point hashed the body before it ran even when its list runs once
@@ -2166,31 +2168,6 @@ b2:
     fixed.passes = vec![Box::new(crate::simplifycfg::SimplifyCfg), Box::new(crate::loopsimplify::LoopSimplify)];
     crate::testing::managed(&mut module, fixed);
 }
-/// x_life -Os under the LLVM order: the spill forecast kept the inner loop's
-/// invariant address math (`mul`, `getelementptr`) in the loop, 16 ops where
-/// the old rounds left 11, so `unroll` refused the full unroll and the
-/// program ran 1.94x the instructions (clocks 0.807 to 1.448 of min(gcc,
-/// clang)). The order's LICM slot prices no registers, as LLVM's: run alone on
-/// two inner loops that six registers cannot hold, it moves all six loads.
-#[test]
-fn test_the_llvm_order_hoists_invariants_the_spill_forecast_would_keep() {
-    let applied =
-        Applied { options: pipeline::Options { llvm_order: true, ..pipeline::Options::size() }, ..Applied::default() };
-    let mut module = crate::testing::parsed(&crate::hoist::tests::two_inner_loops());
-    let mut manager = llrm_mir::passes::PassManager::default();
-    manager.require::<llrm_analysis::manager::Summaries>();
-    let slots = pipeline::llvm_order(&applied, crate::parity::Phase::Simplify);
-    let slot = slots.into_iter().find(|one| one.name() == "hoist@730").expect("the speculating LICM slot");
-    manager.add_boxed(slot);
-    manager
-        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
-        .unwrap();
-    let printed = crate::testing::printed(&module);
-    let f = &printed[printed.find("define i16 @f(").expect("f")..];
-    let b0 = f[f.find("\nb0:\n").unwrap() + 5..].lines().take_while(|line| line.starts_with("  ")).collect::<Vec<_>>();
-    assert_eq!(b0.iter().filter(|line| line.contains("load")).count(), 6, "{printed}");
-}
-
 /// d_faces -O2: the interprocedural stage ran body 32 again (`_clip_w`) and its
 /// `[runs] body` line named `_d_draw_faces`, the last function the manager's
 /// loop had set. A rerun names the function it runs.
@@ -2209,4 +2186,67 @@ fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
         super::rerun(&mut module, &mut analyses, llrm_mir::context::GlobalId(0), &mut fixed).unwrap()
     });
     assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
+}
+
+/// LoopRotate is off by default (it miscompiled with the passes after it,
+/// #2585; `LLRM_ROTATE` turns it on), and off where unroll-and-jam runs, whose
+/// nests are the header-tested form (RJ1).
+#[test]
+fn test_the_rotate_slot_is_off_by_default_and_off_where_unroll_jam_is() {
+    // Off until #2585 is fixed (`LLRM_ROTATE` sets it); the option still gates
+    // the slot.
+    let on = pipeline::Options { rotate_slot: true, ..pipeline::Options::default() };
+    assert!(on.rotating());
+    assert_eq!(pipeline::Options::default().rotating(), std::env::var_os("LLRM_ROTATE").is_some());
+    assert!(!pipeline::Options { unroll_jam: true, ..on }.rotating());
+    assert!(!pipeline::Options::speed().rotating());
+    assert!(!pipeline::Options::aggressive().rotating());
+}
+
+/// `llrm-pass --order` could not name a slot of LLVM's order: the oracle ran
+/// only the old pass names, so the translated SROA, promote and EarlyCSE slots
+/// were never compared with `opt`. A slot is selectable when the level builds
+/// it; `gvn@787` is not built at -O1.
+#[test]
+fn test_a_slot_of_the_order_can_be_run_alone_when_the_level_builds_it() {
+    let o2 = Applied::default();
+    for slot in ["sroa@1179", "promote@1241", "earlycse@649", "unroll@753", "instsimplify@1662", "memcpyopt@818"] {
+        assert!(pipeline::slot_built(&o2, slot), "{slot}");
+    }
+    assert!(!pipeline::slot_built(&o2, "sroa@1"), "no such slot");
+    assert!(!pipeline::slot_built(&o2, "gvn"), "a pass name is no slot");
+    let o1 = Applied { options: pipeline::Options { pre: false, ..Default::default() }, ..Applied::default() };
+    assert!(!pipeline::slot_built(&o1, "gvn@787"), "-O1 has no GVN");
+}
+
+/// d_faces -O2 under the LLVM order ran `hoist` three times in its slots and
+/// `sink` (a register-pressure forecast) after the fixed point, where LLVM has
+/// no such pass; `sink` is gone and the translated LICM runs in its three
+/// slots and once after the header copy (`rotate` is not a slot yet).
+#[test]
+fn test_the_llvm_order_runs_licm_in_its_three_slots_and_once_after_the_header_copy() {
+    let text = "define i16 @f(i16 %n, i16 %a) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp slt i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %k = mul i16 %a, 3\n  %j = add i16 %i, %k\n  br label %h\nx:\n  ret i16 %i\n}\n";
+    llrm_mir::counts::per_pass();
+    let ran = |licm: bool| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied { options: pipeline::Options { licm, ..Default::default() }, ..Applied::default() };
+        let before = llrm_mir::counts::lines();
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+            pipeline::applied(program, &applied)
+        })
+        .and_then(|done| done)
+        .expect("the pipeline runs");
+        // Every slot of the pass is a row of its own (`licm@724`).
+        let runs = |lines: &[String], name: &str| {
+            lines
+                .iter()
+                .filter_map(|line| line.strip_prefix("[counts] pass ")?.split_once(' '))
+                .filter(|(row, _)| row.split('@').next() == Some(name))
+                .filter_map(|(_, rest)| rest.split(' ').next()?.parse::<u64>().ok())
+                .sum::<u64>()
+        };
+        let after = llrm_mir::counts::lines();
+        runs(&after, "licm") - runs(&before, "licm")
+    };
+    assert_eq!(ran(true), 4, "licm@724, licm@730, licm@823 and the one after the header copy");
 }

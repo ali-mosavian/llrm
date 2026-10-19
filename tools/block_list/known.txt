@@ -1,0 +1,1 @@
+# Readers of a block's instruction slice per file, total 0; written by `cargo test --test block_list_ratchet write_known -- --ignored`. The count may only fall: use the cursor API.

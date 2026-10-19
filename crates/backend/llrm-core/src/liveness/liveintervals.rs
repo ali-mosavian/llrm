@@ -422,12 +422,38 @@ impl LiveIntervals {
         (a == b).then_some(a)
     }
 
+    /// The position in `block` of the first instruction whose index is `at`
+    /// or later (`strict`: later than `at`). The block is in slot order.
+    pub fn partition_at(
+        &self,
+        block: usize,
+        at: &SlotIndex,
+        strict: bool,
+    ) -> usize {
+        self.blocks[block].partition_point(|one| {
+            let here = self.indexes.get_instruction_index(one.id());
+            if strict { here <= *at } else { here < *at }
+        })
+    }
+
     fn position_of(
         &self,
         block: usize,
         key: InstrKey,
     ) -> usize {
-        self.blocks[block].iter().position(|one| one.id() == key).expect("an instruction of the block")
+        // The block is in slot order, so the instruction is found by bisection
+        // (LLVM's list gives the position for free); a parallel copy shares
+        // one index, so the run of equal ones is searched.
+        let at = self.indexes.get_instruction_index(key);
+        let insns = &self.blocks[block];
+        let first = insns.partition_point(|one| self.indexes.get_instruction_index(one.id()) < at);
+        insns[first..]
+            .iter()
+            .take_while(|one| self.indexes.get_instruction_index(one.id()) == at)
+            .position(|one| one.id() == key)
+            .map(|run| first + run)
+            .or_else(|| insns.iter().position(|one| one.id() == key))
+            .expect("an instruction of the block")
     }
 
     /// `insertMachineInstrInMaps` for an instruction put immediately before
@@ -519,6 +545,36 @@ impl LiveIntervals {
         self.indexes.remove_machine_instr_from_maps(key);
     }
 
+    /// Erases `key`, which defines a value nothing reads, and cuts back the
+    /// ranges of what it read to their other reads (`shrinkToUses`, as
+    /// `LiveRangeEdit::eliminateDeadDefs` does): left alone they would end at
+    /// the index of an instruction that is gone. Returns the instructions that
+    /// now define a value nothing reads.
+    pub fn erase_dead_def(
+        &mut self,
+        key: InstrKey,
+    ) -> Vec<InstrKey> {
+        let at = self.indexes.get_instruction_index(key);
+        let block = self.indexes.get_mbb_from_index(&at);
+        let (defined, sources) = {
+            let insn = self.instr(key);
+            (insn.defines.clone(), insn.uses.clone())
+        };
+        for reg in defined {
+            if self.has_interval(reg) {
+                Self::remove_vreg_def_at(self.interval_mut(reg), &at.get_reg_slot(false));
+            }
+        }
+        self.remove_instr(block, key);
+        let mut dead = Vec::new();
+        for source in sources {
+            if self.has_interval(source) {
+                dead.extend(self.shrink_to_uses(source).1);
+            }
+        }
+        dead
+    }
+
     /// `body` with the instructions as edited through this (same blocks, same
     /// edges): what `assert_intervals_equal_afresh` compares with.
     pub fn body_like(
@@ -528,6 +584,30 @@ impl LiveIntervals {
         let blocks =
             body.blocks.iter().enumerate().map(|(n, block)| block.with_insns(self.blocks[n].clone())).collect();
         LirBody { inputs: self.inputs.clone(), ..body.with_blocks(blocks) }
+    }
+
+    /// The instruction at `def` that defines `reg`: the one a value of `reg`
+    /// starts at. At a bundle's index (a parallel copy shares one) there are
+    /// several, and `getInstructionFromIndex` names the first.
+    pub fn defining_instr(
+        &self,
+        def: &SlotIndex,
+        reg: u32,
+    ) -> InstrKey {
+        // Nearly every index holds one instruction.
+        if !self.indexes.is_bundled(def) {
+            return self.indexes.get_instruction_from_index(def).expect("No instruction defining live value");
+        }
+        let all = self.indexes.get_instructions_at(def);
+        all.iter().copied().find(|key| self.insns[key].defines.contains(&reg)).unwrap_or_else(|| all[0])
+    }
+
+    /// Whether `reg` is a parameter, defined on entry to the function.
+    pub fn is_input(
+        &self,
+        reg: u32,
+    ) -> bool {
+        self.inputs.contains(&reg)
     }
 
     /// A parameter that joined another value is that value now (the rename
@@ -767,7 +847,7 @@ impl LiveIntervals {
                 li.remove_segment_at(at, false);
             } else {
                 // This is a dead def.
-                let instr = self.indexes.get_instruction_from_index(&def).expect("No instruction defining live value");
+                let instr = self.defining_instr(&def, li.reg());
                 dead.push(instr);
             }
             may_have_split_components = true;
@@ -964,6 +1044,23 @@ mod tests {
         lis.remove_interval(1);
         lis.interval(1);
         let edited = body(&[Arc::clone(&insns[0]), Arc::clone(&insns[1]), Arc::clone(&insns[2]), late]);
+        assert_eq!(lis.assert_intervals_equal_afresh(&edited), 1);
+    }
+
+    /// A dead copy that was the last read of `%1` goes, and `%1` ends at its
+    /// last read left, not at the index of the copy: a split of QCport
+    /// d_sprite.c -Os asked `enterIntvAfter` for that index and panicked.
+    #[test]
+    fn test_erasing_a_dead_def_cuts_back_the_range_of_what_it_read() {
+        let insns = [insn(&[1], &[]), insn(&[], &[1]), insn(&[2], &[1]), insn(&[], &[])];
+        let mut lis = LiveIntervals::new(&body(&insns));
+        lis.interval(1);
+        lis.interval(2);
+        let end_before = lis.get_interval(1).end_index();
+        lis.erase_dead_def(insns[2].id());
+        let edited = body(&[Arc::clone(&insns[0]), Arc::clone(&insns[1]), Arc::clone(&insns[3])]);
+        lis.remove_interval(2);
+        assert!(lis.get_interval(1).end_index() < end_before, "premise: the range was long");
         assert_eq!(lis.assert_intervals_equal_afresh(&edited), 1);
     }
 

@@ -173,7 +173,7 @@ impl Selector<'_, '_, '_> {
         // Poison is any value: zero, as a float and an address are.
         let poison = matches!(
             operand,
-            Operand::Constant(id) if matches!(self.module.context.get(id).kind, llrm_mir::ConstantKind::Poison)
+            Operand::Constant(id) if matches!(self.module.context.get(id).kind, llrm_mir::ConstantKind::Poison | llrm_mir::ConstantKind::Undef)
         );
         if let Some(bits) = if poison { Some(0) } else { self.constant(operand, 8) } {
             let [low, high] = self.immediates(bits)?;
@@ -254,6 +254,12 @@ impl Selector<'_, '_, '_> {
         let (operand, to) = (instruction.operands[0], instruction.ty);
         let from = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
         let result = instruction.result.expect("a cast's value");
+        // A `uitofp nneg` is a `sitofp` of the same bits (LangRef).
+        let op = if op == CastOp::UIToFP && instruction.flags.contains(llrm_mir::opcode::Flags::NNEG) {
+            CastOp::SIToFP
+        } else {
+            op
+        };
         // fild reads a qword: the pair stored, low dword first.
         if op == CastOp::SIToFP && self.is_float(to) {
             let (low, high) = self.wide(operand, at, out)?;
@@ -273,11 +279,33 @@ impl Selector<'_, '_, '_> {
             self.integer_made_float(8, result, to, cell, 8, at, out)?;
             return Ok(());
         }
+        // A double's bits are an i64's: fstp stores a qword, read back as the
+        // halves; and the halves stored, fld reads them as a double.
+        if op == CastOp::BitCast && self.is_wide(from) && self.is_float(to) && self.size(to)? == 8 {
+            let (low, high) = self.wide(operand, at, out)?;
+            let cell = self.temporary(8);
+            for (half, held) in self.wide_halves()?.into_iter().zip([low, high]) {
+                self.put(
+                    semantics(
+                        Operation::Move,
+                        "mov",
+                        vec![Loc::Mem(Self::memory(regs, cell.moved(half.offset), half.bytes))],
+                        vec![Loc::Held(held)],
+                    ),
+                    at,
+                    out,
+                );
+            }
+            let into = Held { value: self.value(result), width: super::FLOAT };
+            self.float_loaded(into, "fld", cell, 8, false, at, out);
+            return Ok(());
+        }
         // fistp stores a qword, truncating as the control word is set: read
         // back as the halves.
-        if op == CastOp::FPToSI && self.is_float(from) {
+        if (op == CastOp::FPToSI || op == CastOp::BitCast) && self.is_float(from) {
             let held = self.float(operand, at, out)?;
-            let cell = self.float_stored(held, "fisttp", 8, at, out);
+            let name = if op == CastOp::BitCast { "fstp" } else { "fisttp" };
+            let cell = self.float_stored(held, name, 8, at, out);
             let (low, high) = (self.half(), self.half());
             for (half, held) in self.wide_halves()?.into_iter().zip([low, high]) {
                 self.put(
@@ -297,8 +325,8 @@ impl Selector<'_, '_, '_> {
         // fild reads a signed qword, so an unsigned one is its two halves each
         // read as a qword of its own, the high one scaled by 2^32 (a
         // qword of (0, 1) read the same way), and added: every step exact in
-        // the x87's 64-bit mantissa, one rounding when the sum is
-        // stored as a float or a double.
+        // the x87's 64-bit mantissa. Under `-fexcess-precision=standard` the
+        // sum rounds to the type's width, as `integer_made_float` rounds.
         if op == CastOp::UIToFP && self.is_float(to) {
             let (low, high) = self.wide(operand, at, out)?;
             let places = self.wide_halves()?;
@@ -336,16 +364,23 @@ impl Selector<'_, '_, '_> {
                 out,
             );
             let into = Held { value: self.value(result), width: super::FLOAT };
+            let size = self.size(to)? as u32;
+            let rounds = self.cpu.float_store && size < 10;
+            let sum = if rounds { self.fresh_held(super::FLOAT) } else { into };
             self.put(
                 semantics(
                     Operation::FloatArith,
                     "fadd",
-                    vec![Loc::Held(into)],
+                    vec![Loc::Held(sum)],
                     vec![Loc::Held(lower), Loc::Held(scaled)],
                 ),
                 at,
                 out,
             );
+            if rounds {
+                let cell = self.float_stored(sum, "fstp", size, at, out);
+                self.float_loaded(into, "fld", cell, size, false, at, out);
+            }
             return Ok(());
         }
         if !self.is_wide(to) {

@@ -191,7 +191,7 @@ pub fn forwardable_walk(
         .function
         .layout()
         .iter()
-        .flat_map(|&block| unit.function.block(block).instructions().to_vec())
+        .flat_map(|&block| unit.function.iter_block(block).collect::<Vec<_>>())
         .filter(|inst| want.contains(inst) && loaded_into(unit, accesses, *inst).is_some())
         .collect();
     if missing.is_empty() { Vec::new() } else { memory_providers(unit, accesses, &missing) }
@@ -686,7 +686,7 @@ impl Solve<'_, '_> {
         let stored = &self.stored;
         let mut found = Vec::new();
         let mut overwritten = overwritten.clone();
-        for inst in unit.function.block(cfg::block(block)).iter().rev() {
+        for inst in unit.function.iter_block_rev(cfg::block(block)) {
             let opcode = &unit.function.instruction(inst).opcode;
             let call = matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_));
             // Nothing can read a private cell but by its name: not a call,
@@ -1184,12 +1184,7 @@ fn memory_providers(
         .layout()
         .iter()
         .flat_map(|&block| {
-            function
-                .block(block)
-                .instructions()
-                .iter()
-                .enumerate()
-                .map(move |(index, &inst)| (inst, (cfg::id(block), index)))
+            function.iter_block(block).enumerate().map(move |(index, inst)| (inst, (cfg::id(block), index)))
         })
         .collect();
     let loads: Vec<(InstId, (MemRef, ValueId))> =

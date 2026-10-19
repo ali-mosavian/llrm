@@ -41,13 +41,12 @@ use llrm_analysis::scev::{Cx, Flags as ScevFlags, ScalarEvolution};
 use llrm_mir::constantrange::ConstantRange;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dense::IdSet;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::types::TypeId;
-use llrm_support::hash::HashMap;
 
 /// `ExtendKind`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,21 +127,21 @@ pub struct WidenIv {
     wide_inc_expr: Option<Scev>,
     widened: IdSet<InstId>,
     /// `ExtendKindMap`.
-    extend_kind_map: HashMap<InstId, ExtendKind>,
+    extend_kind_map: IdMap<InstId, ExtendKind>,
     /// `PostIncRangeInfos`: the key is an IV def and a use of it denoting the
     /// context.
-    post_inc_range_infos: HashMap<(InstId, InstId), ConstantRange>,
+    post_inc_range_infos: IdMap<InstId, Vec<(InstId, ConstantRange)>>,
     narrow_iv_users: Vec<NarrowIvDefUse>,
 }
 
-fn result_of(
+pub(crate) fn result_of(
     function: &Function,
     inst: InstId,
 ) -> ValueId {
     function.instruction(inst).result.expect("an instruction with a value")
 }
 
-fn defining(
+pub(crate) fn defining(
     function: &Function,
     operand: Operand,
 ) -> Option<InstId> {
@@ -153,7 +152,7 @@ fn defining(
     }
 }
 
-fn operand_type(
+pub(crate) fn operand_type(
     e: &Edit,
     operand: Operand,
 ) -> TypeId {
@@ -186,7 +185,7 @@ fn ir_ty(
 
 /// `Builder.Create<op>(V, Ty)` before `before`: a constant folds, a value of
 /// the type already is itself.
-fn build_cast(
+pub(crate) fn build_cast(
     e: &mut Edit,
     op: CastOp,
     value: Operand,
@@ -371,7 +370,7 @@ fn replace_uses_of_with(
     }
 }
 
-fn value_op(
+pub(crate) fn value_op(
     e: &Edit,
     inst: InstId,
 ) -> Operand {
@@ -388,7 +387,7 @@ impl WidenIv {
         use_post_increment_ranges: bool,
     ) -> Self {
         let l = e.function.parent(wi.narrow_iv).expect("a placed phi");
-        let mut extend_kind_map = HashMap::default();
+        let mut extend_kind_map = IdMap::default();
         extend_kind_map.insert(wi.narrow_iv, if wi.is_signed { ExtendKind::Sign } else { ExtendKind::Zero });
         Self {
             orig_phi: wi.narrow_iv,
@@ -403,7 +402,7 @@ impl WidenIv {
             wide_inc_expr: None,
             widened: IdSet::new(),
             extend_kind_map,
-            post_inc_range_infos: HashMap::default(),
+            post_inc_range_infos: IdMap::default(),
             narrow_iv_users: Vec::new(),
         }
     }
@@ -681,7 +680,11 @@ impl WidenIv {
         e: &mut Edit,
         du: NarrowIvDefUse,
     ) -> WidenedRec {
-        let narrow_use_op = value_op(e, du.narrow_use);
+        // A user with no value (a store, a branch) is not an integer.
+        let Some(narrow_use_result) = e.function.instruction(du.narrow_use).result else {
+            return (None, ExtendKind::Unknown);
+        };
+        let narrow_use_op = Operand::Value(narrow_use_result);
         let narrow_ty = operand_type(e, narrow_use_op);
         if e.context.types.int_bits(narrow_ty).is_none() {
             return (None, ExtendKind::Unknown);
@@ -1038,7 +1041,7 @@ impl WidenIv {
         du: NarrowIvDefUse,
     ) -> Option<InstId> {
         debug_assert!(
-            self.extend_kind_map.contains_key(&du.narrow_def),
+            self.extend_kind_map.get(&du.narrow_def).is_some(),
             "Should already know the kind of extension used to widen NarrowDef"
         );
         let narrow_def_kind = self.get_extend_kind(du.narrow_def);
@@ -1046,7 +1049,6 @@ impl WidenIv {
         // narrow def was widened by a sext. Same for zext.
         let can_widen_by_sext = du.never_negative || narrow_def_kind == ExtendKind::Sign;
         let can_widen_by_zext = du.never_negative || narrow_def_kind == ExtendKind::Zero;
-        let narrow_use_op = value_op(e, du.narrow_use);
         let narrow_def_op = value_op(e, du.narrow_def);
         let wide_def_op = value_op(e, du.wide_def);
 
@@ -1103,6 +1105,8 @@ impl WidenIv {
             || (use_opcode == Opcode::Cast(CastOp::ZExt)
                 && e.function.instruction(du.narrow_use).flags.contains(Flags::NNEG));
         if (sext_like && can_widen_by_sext) || (use_opcode == Opcode::Cast(CastOp::ZExt) && can_widen_by_zext) {
+            // An extension has a value.
+            let narrow_use_op = value_op(e, du.narrow_use);
             let mut new_def = wide_def_op;
             let use_ty = e.function.instruction(du.narrow_use).ty;
             let wide_ir = self.wide_ir_type(e);
@@ -1256,7 +1260,7 @@ impl WidenIv {
             if !non_negative_def {
                 // We might have a control-dependent range information for this
                 // context.
-                if let Some(range) = self.post_inc_range_infos.get(&(narrow_def, narrow_user)) {
+                if let Some(range) = self.post_inc_range(narrow_def, narrow_user) {
                     non_negative_use = is_non_negative(range.get_signed_min(), range.width);
                 }
             }
@@ -1463,10 +1467,7 @@ impl WidenIv {
             }
             let cx = cx!(e);
             let query = cx.query(None);
-            let block = cx.function.parent(ctx).expect("placed");
-            let list = cx.function.block(block).instructions();
-            let at = list.iter().position(|one| *one == ctx).expect("in its block");
-            for &inst in list[..=at].iter().rev() {
+            for inst in std::iter::successors(Some(ctx), |&one| cx.function.prev_in_block(one)) {
                 if llrm_mir::valuetracking::pattern::call_intrinsic(&query, inst)
                     == Some(llrm_mir::valuetracking::pattern::IntrinsicId::ExperimentalGuard)
                 {
@@ -1538,15 +1539,23 @@ impl WidenIv {
         use_: InstId,
         range: ConstantRange,
     ) {
-        match self.post_inc_range_infos.get(&(def, use_)) {
-            None => {
-                self.post_inc_range_infos.insert((def, use_), range);
-            }
-            Some(old) => {
-                let merged = range.intersect_with(old, llrm_mir::constantrange::PreferredRangeType::Smallest);
-                self.post_inc_range_infos.insert((def, use_), merged);
-            }
+        if self.post_inc_range_infos.get(&def).is_none() {
+            self.post_inc_range_infos.insert(def, Vec::new());
         }
+        let ranges = self.post_inc_range_infos.get_mut(&def).expect("just made");
+        match ranges.iter_mut().find(|(one, _)| *one == use_) {
+            None => ranges.push((use_, range)),
+            Some((_, old)) => *old = range.intersect_with(old, llrm_mir::constantrange::PreferredRangeType::Smallest),
+        }
+    }
+
+    /// `getPostIncRangeInfo`.
+    fn post_inc_range(
+        &self,
+        def: InstId,
+        use_: InstId,
+    ) -> Option<&ConstantRange> {
+        self.post_inc_range_infos.get(&def)?.iter().find(|(one, _)| *one == use_).map(|(_, range)| range)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyIndVar.cpp#L2250
@@ -1605,9 +1614,7 @@ fn find_common_dominator(
                     cx.function.terminator(block).expect("a terminated block")
                 } else {
                     // Use whichever instruction is first in the block.
-                    let list = cx.function.block(a).instructions();
-                    let at = |x: InstId| list.iter().position(|y| *y == x);
-                    if at(one) < at(inst) { one } else { inst }
+                    if cx.function.comes_before(one, inst) { one } else { inst }
                 }
             }
         });
@@ -1616,15 +1623,12 @@ fn find_common_dominator(
 }
 
 /// `BasicBlock::getFirstInsertionPt`.
-fn first_insertion_point(
+pub(crate) fn first_insertion_point(
     function: &Function,
     block: BlockId,
 ) -> InstId {
     function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(block)
         .find(|&inst| !matches!(
             function.instruction(inst).opcode,
             Opcode::Phi | Opcode::LandingPad { .. }

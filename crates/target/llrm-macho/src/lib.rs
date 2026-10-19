@@ -390,12 +390,13 @@ mod tests {
             name: name.into(),
             binding: Binding::Public,
             definition: Definition::Defined { section, offset },
+            size: 0,
             group: None,
         }
     }
 
     fn external(name: &str) -> Symbol {
-        Symbol { name: name.into(), binding: Binding::Public, definition: Definition::Undefined, group: None }
+        Symbol { name: name.into(), binding: Binding::Public, definition: Definition::Undefined, size: 0, group: None }
     }
 
     fn reloc(
@@ -540,6 +541,7 @@ _flag:  .byte 0
                     name: "local".into(),
                     binding: Binding::Local,
                     definition: Definition::Defined { section: 1, offset: 0 },
+                    size: 0,
                     group: None,
                 },
             ],

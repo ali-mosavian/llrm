@@ -122,7 +122,7 @@ use llrm_support::hash::IndexMap;
 use crate::counting::{self, Seeds};
 use crate::edges;
 use crate::lcssa::{arms, operations};
-use crate::transform::_trivial_phis;
+use crate::transform::_trivial_phis_in;
 
 pub struct LoopExit;
 
@@ -300,7 +300,8 @@ fn _deleted(
     for &inst in work[..work.len() - 1].iter().rev() {
         function.erase(inst)?;
     }
-    _trivial_phis(function)
+    // Only the exit's joins changed; another loop's closing phis stay.
+    _trivial_phis_in(function, &[exit])
 }
 
 /// Sum a linear increment over N iterations using N(N-1)/2, before modular
@@ -318,7 +319,7 @@ fn _exit_terms(
     let mut headers = phis.iter().filter_map(|&phi| function.instruction(phi).result).collect::<BTreeSet<_>>();
     // An invariant is a term, whatever computes it.
     for &at in &loop_.body {
-        for &inst in function.block(cfg::block(at)).instructions() {
+        for inst in function.iter_block(cfg::block(at)) {
             headers.extend(function.instruction(inst).operands.iter().filter_map(|one| match one {
                 Operand::Value(value) if still.contains(*value) => Some(*value),
                 _ => None,
@@ -435,7 +436,7 @@ fn _widened_counters(
     let extensions = loop_
         .body
         .iter()
-        .flat_map(|&at| function.block(cfg::block(at)).instructions().iter().map(move |&inst| (at, inst)))
+        .flat_map(|&at| function.iter_block(cfg::block(at)).map(move |inst| (at, inst)))
         .filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Cast(CastOp::SExt))
         .collect::<Vec<_>>();
     if extensions.is_empty() {
@@ -570,7 +571,7 @@ fn _aliases(
 /// Each value in `swap`, and the exit phi naming it, read as its number
 /// wherever `following` reads it.
 fn _substituted_exits(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     exit: BlockId,
     following: &BTreeSet<BlockId>,
@@ -587,7 +588,7 @@ fn _substituted_exits(
     for (&value, number) in swap {
         let bits = context_bits(context, function.value(value).ty);
         let constant = counting::constant(context, number, bits);
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             let user = function.instruction(one.user);
             let from = if user.opcode == Opcode::Phi {
                 match user.operands[one.index as usize + 1] {
@@ -632,7 +633,7 @@ fn _disposable(
     loop_
         .body
         .iter()
-        .flat_map(|&at| function.block(cfg::block(at)).instructions().to_vec())
+        .flat_map(|&at| function.iter_block(cfg::block(at)).collect::<Vec<_>>())
         .all(
             |inst| {
                 let op = function.instruction(inst);

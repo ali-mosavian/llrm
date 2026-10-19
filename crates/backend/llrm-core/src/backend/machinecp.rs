@@ -84,6 +84,10 @@ thread_local! {
 }
 
 thread_local! {
+    static WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+thread_local! {
     static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -91,6 +95,12 @@ thread_local! {
 /// with no copy is not given to it.
 pub fn runs() -> usize {
     RUNS.with(std::cell::Cell::get)
+}
+
+/// How many blocks this thread has walked, for a test that a block with no copy
+/// is not.
+pub fn walks() -> usize {
+    WALKS.with(std::cell::Cell::get)
 }
 
 /// How many units this thread's tracker has visited, for the slope test.
@@ -1119,6 +1129,11 @@ pub fn propagated(body: &LirBody) -> LirBody {
         .blocks
         .iter()
         .map(|block| {
+            // Both walks start from a copy: a block with none is as it was.
+            if !block.insns.iter().any(|one| machine.copy_of(one).is_some()) {
+                return block.clone();
+            }
+            WALKS.with(|walks| walks.set(walks.get() + 1));
             let live_out = dead.get(&block.at).map_or(universe, |dead| universe.minus(dead));
             let mut walk = Walk::new(&machine, block);
             walk.backward(live_out);

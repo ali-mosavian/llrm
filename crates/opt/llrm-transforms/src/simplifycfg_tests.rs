@@ -189,13 +189,8 @@ b2:
         "define i16 @f(i16 %x) {
 b0:
   %cond = icmp eq i16 %x, 1
-  br i1 %cond, label %b1, label %b2
-
-b1:
-  ret i16 10
-
-b2:
-  ret i16 20
+  %0 = select i1 %cond, i16 10, i16 20
+  ret i16 %0
 }
 ",
         &[&[1], &[2], &[3]],
@@ -232,9 +227,12 @@ b0:
     );
 }
 
+/// The two returns are one (`tailMergeBlocksWithSimilarFunctionTerminators`),
+/// and the two-entry phi of constants it makes a select.
 #[test]
-fn test_a_branch_on_a_value_is_left_alone() {
-    let text = "define i16 @f(i16 %x) {
+fn test_a_branch_on_a_value_whose_arms_return_constants_is_a_select() {
+    check(
+        "define i16 @f(i16 %x) {
 b0:
   %c = icmp eq i16 %x, 1
   br i1 %c, label %b1, label %b2
@@ -245,8 +243,16 @@ b1:
 b2:
   ret i16 20
 }
-";
-    check(text, text, &[&[1], &[2]]);
+",
+        "define i16 @f(i16 %x) {
+b0:
+  %c = icmp eq i16 %x, 1
+  %0 = select i1 %c, i16 10, i16 20
+  ret i16 %0
+}
+",
+        &[&[1], &[2]],
+    );
 }
 
 /// The jump that closes a loop keeps its `!llvm.loop` (it is the loop's one
@@ -642,6 +648,7 @@ b2:
 /// With `SpeculateBlocks` off no select forms: only the empty arm goes.
 #[test]
 fn test_without_speculate_blocks_no_select_forms() {
+    // The arms differ, so `hoistCommonCodeFromSuccessors` has nothing to share.
     let text = "define i16 @f(i16 %a, i16 %b, i1 %c) {
 b0:
   br i1 %c, label %b1, label %b2
@@ -650,10 +657,11 @@ b1:
   br label %b3
 
 b2:
+  %d = mul i16 %b, 3
   br label %b3
 
 b3:
-  %m = phi i16 [ %a, %b1 ], [ %b, %b2 ]
+  %m = phi i16 [ %a, %b1 ], [ %d, %b2 ]
   ret i16 %m
 }
 ";
@@ -662,10 +670,11 @@ b0:
   br i1 %c, label %b3, label %b2
 
 b2:
+  %d = mul i16 %b, 3
   br label %b3
 
 b3:
-  %m = phi i16 [ %b, %b2 ], [ %a, %b0 ]
+  %m = phi i16 [ %d, %b2 ], [ %a, %b0 ]
   ret i16 %m
 }
 ";
@@ -748,4 +757,59 @@ b2:
 }
 ";
     check(text, text, &[&[3, 1, 1], &[3, 0, 1], &[3, 1, 0]]);
+}
+
+/// `CanMergeValues` and `replaceUndefValuesInPhi`: an `undef` input merges with
+/// any other as `poison` does, so a jump block whose phi value is `undef` is
+/// bypassed where b0 itself reaches b2 with 2. The second body runs the
+/// `poison`/`undef` pair fix-up of `replaceUndefValuesInPhi`; the phi folds
+/// afterwards either way, so no result tells the fix-up from its absence.
+#[test]
+fn test_undef_inputs_merge_and_a_poison_undef_pair_becomes_undef() {
+    check_branching(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b2
+
+b2:
+  %p = phi i16 [ undef, %b0 ], [ 2, %b1 ]
+  ret i16 %p
+}
+",
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  ret i16 2
+}
+",
+        &[&[3, 1]],
+    );
+    check_branching(
+        "define i16 @f(i16 %x, i1 %c, i1 %d) {
+b0:
+  br i1 %d, label %b3, label %b4
+
+b4:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b2
+
+b3:
+  br label %b2
+
+b2:
+  %p = phi i16 [ poison, %b4 ], [ undef, %b1 ], [ %x, %b3 ]
+  ret i16 %p
+}
+",
+        "define i16 @f(i16 %x, i1 %c, i1 %d) {
+b0:
+  ret i16 %x
+}
+",
+        &[&[3, 1, 1]],
+    );
 }

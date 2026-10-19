@@ -23,9 +23,6 @@
 //!    arms of `getValueFromICmpCondition`, `isNotCrossLaneOperation` in
 //!    `getValueAtUse` (line 1929). MIR types vectors but has no lane operation
 //!    and nothing produces one (#2201).
-//! 2. `undef` does not exist in MIR; `poison` constants are `UndefValue` to the
-//!    lattice, as in LLVM, and the undef states are reachable through them
-//!    (#2202).
 //! 3. No `TargetLibraryInfo`: LVI's only use is the wrapper pass dependency.
 //! 4. `LVIValueHandle` (a `CallbackVH` that erases a deleted value) has no Rust
 //!    equivalent; a pass calls [`LazyValueInfo::forget_value`] where LLVM's
@@ -464,13 +461,13 @@ fn range_intrinsic(id: IntrinsicId) -> Option<RangeIntrinsic> {
 }
 
 /// `ConstantRange` of `!range` metadata of an integer of `width` bits.
-fn constant_range_from_metadata(
-    env: &Env,
+pub fn constant_range_from_metadata(
+    context: &Context,
     node: &MetadataNode,
     width: u32,
 ) -> Option<ConstantRange> {
     let bound = |at: usize| match node.operands.get(at) {
-        Some(MetadataOperand::Constant(id)) => match env.context.get(*id).kind {
+        Some(MetadataOperand::Constant(id)) => match context.get(*id).kind {
             ConstantKind::Int(bits) => Some(bits),
             _ => None,
         },
@@ -498,7 +495,7 @@ fn get_from_range_metadata(
     if from_call || matches!(instruction.opcode, Opcode::Load { .. }) {
         if let Some(ranges) = q.metadata_node(bbi, "range")
             && let Some(Type::Int(width)) = Some(env.context.types.get(instruction.ty))
-            && let Some(range) = constant_range_from_metadata(env, ranges, *width)
+            && let Some(range) = constant_range_from_metadata(env.context, ranges, *width)
         {
             return Lattice::get_range(range, false);
         }
@@ -924,7 +921,7 @@ impl LazyValueInfoImpl {
         let max = Self::max_block_number(env);
         self.the_cache.is_non_null_at_end_of_block(val, bb, max, |bb| {
             let mut non_null_pointers = NonNullPointerSet::default();
-            for i in env.function.block(bb).iter() {
+            for i in env.function.iter_block(bb) {
                 add_non_null_pointers_by_instruction(env, i, &mut non_null_pointers);
             }
             non_null_pointers
@@ -1050,10 +1047,8 @@ impl LazyValueInfoImpl {
 
         // If guards are not used in the module, don't spend time looking for
         // them
-        if self.guard_decl && function.block(bb).instructions().first() != Some(&bbi) {
-            let instructions = function.block(bb).instructions();
-            let at = instructions.iter().position(|&i| i == bbi).expect("bbi is in its block");
-            for &i in instructions[..at].iter().rev() {
+        if self.guard_decl && function.block(bb).first() != Some(bbi) {
+            for i in std::iter::successors(function.prev_in_block(bbi), |&one| function.prev_in_block(one)) {
                 let q = env.query();
                 if intrinsic_id(&q, i) == Some(IntrinsicId::ExperimentalGuard)
                     && matches!(function.instruction(i).opcode, Opcode::Call(_))
@@ -1585,7 +1580,10 @@ impl LazyValueInfoImpl {
         {
             if edge_pred == IntPredicate::Eq {
                 return Some(Lattice::get(&LatticeConstant::of(env.context, rhs_c)));
-            } else if env.context.get(rhs_c).kind != ConstantKind::Poison {
+            } else if !matches!(
+                env.context.get(rhs_c).kind,
+                ConstantKind::Poison | ConstantKind::Undef
+            ) {
                 return Some(Lattice::get_not(&LatticeConstant::of(env.context, rhs_c)));
             }
         }
@@ -2190,14 +2188,7 @@ impl LazyValueInfoImpl {
             // This also disallows looking through phi nodes: If the phi node is
             // part of a cycle, we might end up reasoning about
             // values from different cycle iterations (PR60629).
-            let single_use = curr_inst
-                .result
-                .and_then(
-                    |r| match function.users(r) {
-                        [only] => Some(*only),
-                        _ => None,
-                    },
-                );
+            let single_use = curr_inst.result.and_then(|r| function.users(r).only().copied());
             let Some(next_use) = single_use else { break };
             if !is_safe_to_speculatively_execute_with_variable_replaced(env, curr_i, false) {
                 break;
@@ -2220,13 +2211,11 @@ impl LazyValueInfoImpl {
 }
 
 /// `predecessors(BB)`, newest use first as LLVM walks a use list.
-fn predecessors(
+pub(crate) fn predecessors(
     function: &Function,
     bb: BlockId,
 ) -> Vec<BlockId> {
-    let mut preds: Vec<BlockId> = function.predecessors(bb).iter().copied().collect();
-    preds.reverse();
-    preds
+    function.predecessors(bb).iter().copied().collect()
 }
 
 /// `Constant::toConstantRange` of an integer constant.
@@ -2429,6 +2418,7 @@ fn constant_fold_extract_value_instruction(
         ConstantKind::Aggregate(members) => *members.get(first as usize)?,
         ConstantKind::Zero => zero_value(env.context, element_ty),
         ConstantKind::Poison => env.context.constant(Constant { ty: element_ty, kind: ConstantKind::Poison }),
+        ConstantKind::Undef => env.context.constant(Constant { ty: element_ty, kind: ConstantKind::Undef }),
         _ => return None,
     };
     constant_fold_extract_value_instruction(env, element, rest)
@@ -2436,7 +2426,7 @@ fn constant_fold_extract_value_instruction(
 
 /// `Constant::getNullValue(Ty)`.
 fn zero_value(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> ConstantId {
     let kind = match context.types.get(ty) {
@@ -2613,6 +2603,60 @@ fn strip_pointer_casts(
         if !visited.insert(v) {
             return v;
         }
+    }
+}
+
+/// The LVI of a function, kept from one pass to the next while nothing edits
+/// the function: LLVM's `LazyValueAnalysis` result, whose value cache lives
+/// until a pass that changes the function does not preserve it. A pass takes
+/// the cache for its run and puts it back.
+pub struct SharedLvi(std::rc::Rc<std::cell::RefCell<LazyValueInfo>>);
+
+impl SharedLvi {
+    pub fn take(&self) -> LazyValueInfo {
+        std::mem::take(&mut *self.0.borrow_mut())
+    }
+
+    pub fn put(
+        &self,
+        lvi: LazyValueInfo,
+    ) {
+        *self.0.borrow_mut() = lvi;
+    }
+}
+
+impl PartialEq for SharedLvi {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for SharedLvi {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        f.write_str("SharedLvi")
+    }
+}
+
+/// `LazyValueAnalysis`: an empty [`SharedLvi`], filled by the passes that ask.
+pub struct LviCache;
+
+impl crate::passes::Analysis for LviCache {
+    type Result = SharedLvi;
+    const NAME: &'static str = "lvi";
+
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        _: &mut crate::passes::Analyses,
+    ) -> SharedLvi {
+        SharedLvi(Default::default())
     }
 }
 
@@ -3081,7 +3125,7 @@ impl LazyValueInfoImpl {
         let mut out = Vec::new();
         for &bb in function.layout() {
             self.emit_basic_block_start_annot(env, bb, &mut out);
-            for i in function.block(bb).iter() {
+            for i in function.iter_block(bb) {
                 self.emit_instruction_annot(env, dtree, i, &mut out);
             }
         }
@@ -3166,7 +3210,7 @@ impl LazyValueInfoImpl {
         }
 
         // Print LVI in blocks where `I` is used.
-        for u in result_id.map_or(&[][..], |result| function.users(result)) {
+        for u in result_id.into_iter().flat_map(|result| function.users(result).iter()) {
             let use_i = function.instruction(u.user);
             let use_bb = function.parent(u.user).expect("a placed user");
             if use_i.opcode != Opcode::Phi || dt.dominates(parent_bb, use_bb) {
@@ -3245,19 +3289,5 @@ fn constant_fold_compare_inst_operands(
     c1: &LatticeConstant,
     c2: &LatticeConstant,
 ) -> Option<bool> {
-    let mut make = |c: &LatticeConstant| match c {
-        LatticeConstant::Undef => None,
-        LatticeConstant::Int { width, bits } => {
-            let ty = env.context.types.int(*width);
-            Some(env.context.constant(Constant { ty, kind: ConstantKind::Int(*bits) }))
-        }
-        LatticeConstant::Other { ty, kind } => Some(env.context.constant(Constant { ty: *ty, kind: kind.clone() })),
-    };
-    let (a, b) = (make(c1)?, make(c2)?);
-    let folded =
-        crate::constantfolding::constant_fold_compare_inst_operands(env.context, env.globals, env.layout, pred, a, b)?;
-    match env.context.get(folded).kind {
-        ConstantKind::Int(bits) => Some(bits & 1 == 1),
-        _ => None,
-    }
+    crate::valuelattice::fold_compare(env.context, env.globals, env.layout, pred, c1, c2)
 }

@@ -69,6 +69,9 @@
 //! under `Options::llvm_order`, on by default (`LLRM_NO_LLVM_ORDER` turns it
 //! off).
 
+use std::rc::Rc;
+
+use llrm_analysis::manager::{MemorySsa, MssaGraph};
 use llrm_analysis::memory::Unit as View;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::mssa::view::Translated;
@@ -235,11 +238,16 @@ pub trait MemorySsaView {
         ahead: usize,
         access: usize,
     ) -> bool;
-    /// `removeMemoryAccess(inst)`: the manager's graph is not updated.
+    /// `removeMemoryAccess(inst)`, before `inst` is erased from `function`.
     fn remove_memory_access(
         &mut self,
+        _function: &Function,
         _inst: InstId,
     ) {
+    }
+    /// The graph as the removals left it, where the view holds one.
+    fn into_mssa(self: Box<Self>) -> Option<Mssa> {
+        None
     }
 }
 
@@ -272,6 +280,18 @@ impl MemorySsaView for Translated<'_> {
         access: usize,
     ) -> bool {
         Translated::dominates(self, ahead as u32, access as u32)
+    }
+
+    fn remove_memory_access(
+        &mut self,
+        function: &Function,
+        inst: InstId,
+    ) {
+        Translated::remove_memory_access(self, function, inst);
+    }
+
+    fn into_mssa(self: Box<Self>) -> Option<Mssa> {
+        Some(Translated::into_mssa(*self))
     }
 }
 
@@ -755,7 +775,7 @@ impl Walk<'_> {
         block: BlockId,
     ) -> bool {
         let mut changed = false;
-        for one in self.function.users(value).to_vec() {
+        for one in self.function.users(value).snapshot() {
             let user = self.function.instruction(one.user);
             let dominated = if user.opcode == Opcode::Phi {
                 let Operand::Block(from) = user.operands[one.index as usize + 1] else { continue };
@@ -870,7 +890,7 @@ impl Walk<'_> {
         // The last non-volatile store seen, for as long as nothing reads
         // memory.
         let mut last_store: Option<InstId> = None;
-        for inst in self.function.block(block).instructions().to_vec() {
+        for inst in self.function.iter_block(block).collect::<Vec<_>>() {
             if self.function.is_erased(inst) {
                 continue;
             }
@@ -1155,7 +1175,14 @@ impl FunctionPass for EarlyCse {
         let view = View::within(&frozen, unit.layout, &before, &outer).with_shape(&shape);
         let simplifier = FunctionAnalyses::of(&frozen, view.globals, view.metadata, view.layout, &before);
         let shape = view.shape();
-        let mssa = Mssa::build(&before, &shape.dominance, &shadow::effect_of(&accesses, &before));
+        // The manager's graph of this body, cloned: the removals below update
+        // the clone, which is put back (`MemorySSAUpdater`, as EarlyCSE.cpp
+        // keeps MemorySSA through `PA.preserve<MemorySSAAnalysis>()`).
+        let held = analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function);
+        let (mssa, kept_accesses) = match &*held {
+            Ok(held) => (held.mssa.clone(), Some(Rc::clone(&held.accesses))),
+            Err(_) => (Mssa::build(&before, &shape.dominance, &shadow::effect_of(&accesses, &before)), None),
+        };
         let translated = Translated::new(&view, &accesses, mssa);
         let mut walk = Walk {
             context: unit.context,
@@ -1179,10 +1206,19 @@ impl FunctionPass for EarlyCse {
         let function = walk.function;
         for inst in gone.into_iter().rev() {
             if !function.is_erased(inst) {
+                walk.mssa.remove_memory_access(function, inst);
                 function.erase(inst).unwrap_or_else(|error| panic!("earlycse: {error}"));
             }
         }
-        if changed { PreservedAnalyses::none().preserve::<Dominators>() } else { PreservedAnalyses::all() }
+        if !changed {
+            return PreservedAnalyses::all();
+        }
+        let mut preserved = PreservedAnalyses::none().preserve::<Dominators>();
+        if let (Some(updated), Some(accesses)) = (walk.mssa.into_mssa(), kept_accesses) {
+            analyses.replace::<MemorySsa>(&*function, Ok(Rc::new(MssaGraph { mssa: updated, accesses })));
+            preserved = preserved.preserve_updated::<MemorySsa>();
+        }
+        preserved
     }
 }
 

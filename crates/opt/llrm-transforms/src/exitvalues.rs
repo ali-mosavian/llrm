@@ -32,7 +32,7 @@
 use llrm_analysis::effects::Declarations;
 use llrm_analysis::occurrence::arms;
 use llrm_analysis::scev::analysis::ScevSession;
-use llrm_analysis::scev::expand_cost::{ExpansionTti, UnitCosts};
+use llrm_analysis::scev::expand_cost::{ExpansionTti, MachineCosts};
 use llrm_analysis::scev::expander::Expander;
 use llrm_analysis::scev::expr::Scev;
 use llrm_mir::context::Context;
@@ -42,7 +42,6 @@ use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{Declared, Outer};
-use llrm_support::hash::HashSet;
 
 use crate::edges;
 use crate::local;
@@ -88,7 +87,7 @@ pub fn rewritten(
         headers
     };
     let minimum_size = function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "minsize"));
-    let tti = UnitCosts { minimum_size };
+    let tti = MachineCosts { tti: outer.target().tti(), minimum_size };
     let mut rewriter = Expander::new("indvars");
     let mut changed = false;
     for header in headers {
@@ -189,12 +188,6 @@ fn rewrite_loop_exit_values(
                     if llrm_analysis::scev::guards::contains_add_recurrence(se, exit_value) {
                         continue;
                     }
-                    // DEVIATE 15: the closed form of a sum over the count
-                    // (`n(n-1)/2`) is computed in a type one bit wider
-                    // (`i33`), which the back end does not legalize (#2497).
-                    if has_odd_width(se, exit_value) {
-                        continue;
-                    }
                     // Computing the value outside of the loop brings no
                     // benefit if it is definitely used inside the loop in a
                     // way which can not be optimized away. Avoid doing so
@@ -285,32 +278,6 @@ fn rewrite_loop_exit_values(
     replaced
 }
 
-/// Whether `s` has a subexpression of an integer width other than 8, 16, 32
-/// or 64: the expansion would write an `iN` the back end cannot select.
-fn has_odd_width(
-    se: &llrm_analysis::scev::ScalarEvolution,
-    s: Scev,
-) -> bool {
-    use llrm_analysis::scev::expr::{Kind, Ty};
-    let mut seen: HashSet<Scev> = HashSet::default();
-    let mut work = vec![s];
-    while let Some(s) = work.pop() {
-        if !seen.insert(s) {
-            continue;
-        }
-        if let Some(Ty::Int(bits)) = se.node(s).ty {
-            if !matches!(bits, 1 | 8 | 16 | 32 | 64) {
-                return true;
-            }
-        }
-        match &se.node(s).kind {
-            Kind::Constant(_) | Kind::Unknown(_) | Kind::CouldNotCompute => {}
-            _ => work.extend(se.operands_of(s).iter().map(|op| op.scev)),
-        }
-    }
-    false
-}
-
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L1770
 /// `hasHardUserWithinLoop(L, I)`.
 fn has_hard_user_within_loop(
@@ -392,10 +359,8 @@ fn can_loop_be_deleted(
 
     for &block in l.get_blocks() {
         if function
-            .block(block)
-            .instructions()
-            .iter()
-            .any(|&inst| local::may_have_side_effects(context, outer.callees(), declarations, function, inst))
+            .iter_block(block)
+            .any(|inst| local::may_have_side_effects(context, outer.callees(), declarations, function, inst))
         {
             return false;
         }
@@ -431,10 +396,7 @@ fn first_insertion_point(
     block: BlockId,
 ) -> InstId {
     function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(block)
         .find(|&inst| !matches!(
             function.instruction(inst).opcode,
             Opcode::Phi | Opcode::LandingPad { .. }
@@ -444,7 +406,7 @@ fn first_insertion_point(
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopInfo.cpp#L1036
 /// `LoopInfo::replacementPreservesLCSSAForm(From, To)`.
-fn replacement_preserves_lcssa_form(
+pub(crate) fn replacement_preserves_lcssa_form(
     cx: &llrm_analysis::scev::Cx,
     from: InstId,
     to: Operand,

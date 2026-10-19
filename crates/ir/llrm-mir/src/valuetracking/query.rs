@@ -119,10 +119,7 @@ impl<'a> Query<'a> {
         a: InstId,
         b: InstId,
     ) -> bool {
-        let Some(block) = self.block_of(a).filter(|block| Some(*block) == self.block_of(b)) else { return false };
-        let instructions = self.function.block(block).instructions();
-        let at = |inst: InstId| instructions.iter().position(|one| *one == inst);
-        matches!((at(a), at(b)), (Some(x), Some(y)) if x < y)
+        self.block_of(a).is_some_and(|block| Some(block) == self.block_of(b)) && self.function.comes_before(a, b)
     }
 
     pub fn type_of(
@@ -321,14 +318,32 @@ impl DomConditionCache {
         function: &Function,
     ) -> Self {
         let layout = DataLayout::default();
-        let query = Query::new(module, function, &layout);
+        Self::registered(&Query::new(module, function, &layout), function)
+    }
+
+    /// [`DomConditionCache::new`] from the parts of a module a pass holds.
+    pub fn of(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Self {
+        let query = Query { globals, metadata, ..Query::bare(context, function, layout) };
+        Self::registered(&query, function)
+    }
+
+    fn registered(
+        query: &Query,
+        function: &Function,
+    ) -> Self {
         let mut cache = Self::default();
         for &block in function.layout() {
             if let Some(branch) = function.terminator(block)
                 && function.instruction(branch).opcode == Opcode::Br
                 && function.instruction(branch).operands.len() == 3
             {
-                cache.register_branch(&query, branch);
+                cache.register_branch(query, branch);
             }
         }
         cache
@@ -367,6 +382,7 @@ pub struct FunctionAnalyses {
     layout: DataLayout,
     dt: DomTree,
     assumptions: AssumptionCache,
+    dom_conditions: Option<DomConditionCache>,
 }
 
 impl FunctionAnalyses {
@@ -375,7 +391,12 @@ impl FunctionAnalyses {
         function: &Function,
     ) -> Self {
         let layout = module.datalayout.as_deref().and_then(|text| DataLayout::parse(text).ok()).unwrap_or_default();
-        Self { layout, dt: DomTree::of(function), assumptions: AssumptionCache::new(module, function) }
+        Self {
+            layout,
+            dt: DomTree::of(function),
+            assumptions: AssumptionCache::new(module, function),
+            dom_conditions: None,
+        }
     }
 
     /// The same from the parts of a module a pass holds, not the module.
@@ -390,7 +411,37 @@ impl FunctionAnalyses {
             layout: layout.clone(),
             dt: DomTree::of(function),
             assumptions: AssumptionCache::of(context, globals, metadata, function),
+            dom_conditions: None,
         }
+    }
+
+    /// The same with the branch conditions that tell of a value (`SQ.DC`, the
+    /// `DomConditionCache` InstCombine keeps): a query at an instruction then
+    /// reads what the branches dominating it say.
+    pub fn with_dom_conditions(
+        mut self,
+        module: &Module,
+        function: &Function,
+    ) -> Self {
+        self.dom_conditions = Some(DomConditionCache::new(module, function));
+        self
+    }
+
+    /// [`FunctionAnalyses::with_dom_conditions`] from the parts of a module.
+    pub fn with_dom_conditions_of(
+        mut self,
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        function: &Function,
+    ) -> Self {
+        self.dom_conditions = Some(DomConditionCache::of(context, globals, metadata, &self.layout, function));
+        self
+    }
+
+    /// The dominating-condition cache (`SQ.DC`), where asked for.
+    pub fn dom_conditions(&self) -> Option<&DomConditionCache> {
+        self.dom_conditions.as_ref()
     }
 
     /// The dominator tree (`SQ.DT`).
@@ -413,6 +464,7 @@ impl FunctionAnalyses {
         Query {
             dt: Some(&self.dt),
             assumptions: Some(&self.assumptions),
+            dom_conditions: self.dom_conditions.as_ref(),
             ..Query::new(module, function, &self.layout).with_cxt(cxt)
         }
     }

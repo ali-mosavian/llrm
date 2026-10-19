@@ -182,12 +182,12 @@ done:
             "mov bx, word ptr [bp+6]",
             "xor ax, ax",
             "xor cx, cx",
+            "L0_1:",
             "cmp cx, bx",
             "jge L0_8",
             "L0_5:",
             "add ax, cx",
             "inc cx",
-            "L0_1:",
             "cmp cx, bx",
             "jl L0_5",
             "L0_8:",
@@ -272,13 +272,13 @@ no:
             "mov bp, sp",
             "L0_0:",
             "cmp word ptr [bp+6], 5",
-            "jl L0_2",
-            "L0_3:",
-            "mov ax, 2",
-            "pop bp",
-            "retf",
+            "jge L0_3",
             "L0_2:",
             "mov ax, 1",
+            "pop bp",
+            "retf",
+            "L0_3:",
+            "mov ax, 2",
             "pop bp",
             "retf",
         ]
@@ -544,17 +544,17 @@ other:
             "je L0_3",
             "L0_6:",
             "cmp ax, 9",
-            "je L0_1",
-            "L0_4:",
-            "xor ax, ax",
-            "pop bp",
-            "retf",
+            "jne L0_4",
             "L0_1:",
             "mov ax, 10",
             "pop bp",
             "retf",
             "L0_3:",
             "mov ax, 50",
+            "pop bp",
+            "retf",
+            "L0_4:",
+            "xor ax, ax",
             "pop bp",
             "retf",
         ]
@@ -615,13 +615,13 @@ no:
             "sete dl",
             "movzx bx, dl",
             "and cl, dl",
-            "jne L0_6",
-            "L0_8:",
-            "xor ax, ax",
-            "pop bp",
-            "retf",
+            "je L0_8",
             "L0_6:",
             "add ax, bx",
+            "pop bp",
+            "retf",
+            "L0_8:",
+            "xor ax, ax",
             "pop bp",
             "retf",
         ]
@@ -2010,7 +2010,7 @@ fn test_a_load_only_a_comparison_reads_is_its_operand() {
     };
     assert_eq!(
         compared("%v = load i16, ptr %p", "sgt i16 %v, 5"),
-        ["mov bx, word ptr [bp+6]", "cmp word ptr [bx], 5", "jg L0_3"]
+        ["mov bx, word ptr [bp+6]", "cmp word ptr [bx], 5", "jle L0_4"]
     );
     assert_eq!(
         compared("%v = load i8, ptr %p\n  %w = zext i8 %v to i16", "eq i16 %w, 0"),
@@ -2675,7 +2675,7 @@ done:
     // Greedy's register choice (#2312): the old pin's instructions, memory
     // operands, prefixes and adjacent dependencies, other registers.
     let read = element(&sum("inbounds"));
-    assert_eq!(read, "add ax, word ptr a[esi+esi]");
+    assert_eq!(read, "add ax, word ptr a[ebx+ebx]");
     assert_eq!(counts(&[&read]), (1, 1));
     // Without `inbounds` nothing places the start: the offset may wrap.
     assert_eq!(element(&sum("")), "add ax, word ptr a[si]");
@@ -2885,6 +2885,26 @@ fn test_an_i64_to_a_float_is_filds_qword() {
             && got[..fild].iter().any(|line| line.starts_with("xor e")),
         "{got:?}"
     );
+}
+
+/// A float's bits are an integer's through a stack temporary (SROA turns a
+/// double stored and read as an i32 into `bitcast double to i64`; isel refused
+/// "BitCast to an i64" and "BitCast of a float", 48 of 260 QCport compiles).
+#[test]
+fn test_a_float_bitcast_to_an_integer_goes_through_the_stack() {
+    let text = |from: &str, to: &str| {
+        inner(&format!(
+            "define {to} @f({from} %x) addrspace(1) {{\n  %b = bitcast {from} %x to {to}\n  ret {to} %b\n}}\n"
+        ))
+    };
+    let single = text("float", "i32");
+    assert!(single.iter().any(|line| line.starts_with("fstp dword ptr [bp-")), "{single:?}");
+    let double = text("double", "i64");
+    assert!(double.iter().any(|line| line.starts_with("fstp qword ptr [bp-")), "{double:?}");
+    let back = text("i32", "float");
+    assert!(back.iter().any(|line| line.starts_with("fld dword ptr [bp-")), "{back:?}");
+    let back = text("i64", "double");
+    assert!(back.iter().any(|line| line.starts_with("fld qword ptr [bp-")), "{back:?}");
 }
 
 /// A zeroed array descriptor was `mov dword ptr [bp-n], 0` each, 8 bytes each:
@@ -3993,9 +4013,9 @@ fn test_dbg_lines_become_linnum() {
     let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {\n  %s = sub i16 %a, %b, !dbg !0\n  %t = add i16 %s, 3, !dbg !1\n  ret i16 %t, !dbg !1\n}\n!0 = !{i32 7}\n!1 = !{i32 8}\n";
     let module = parsed(text);
     let (_, _, function) = module.functions().next().expect("f");
-    let instructions = function.layout().iter().flat_map(|&block| function.block(block).instructions());
+    let instructions = function.layout().iter().flat_map(|&block| function.iter_block(block));
     let attached =
-        instructions.filter(|&&one| function.instruction(one).metadata.iter().any(|(kind, _)| kind == "dbg")).count();
+        instructions.filter(|&one| function.instruction(one).metadata.iter().any(|(kind, _)| kind == "dbg")).count();
     assert_eq!(attached, 3, "the fixture carries its lines");
     let mut assembled =
         assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC)
@@ -4502,6 +4522,26 @@ fn test_a_narrowing_float_rounds_to_its_targets_width() {
     // -fexcess-precision=fast: no round trip through memory
     assert!(!listing(text, "f").iter().any(|line| line.starts_with("fstp")), "{:?}", listing(text, "f"));
     assert!(!listing(text, "g").iter().any(|line| line.starts_with("fstp dword")), "{:?}", listing(text, "g"));
+}
+
+/// An i64 made a float rounds to the float under `-fexcess-precision=standard`:
+/// LLVM's order makes `sitofp (zext i32)` a `uitofp nneg`, whose unsigned
+/// 64-bit lowering (two `fild qword`, scaled and added) kept the x87's exact
+/// sum, so `4294967295 == 4294967296.0f` was false (int_compared_with_float).
+/// A `nneg` one is a signed `fild qword`; either rounds through a dword.
+#[test]
+fn test_an_unsigned_i64_made_a_float_rounds_to_the_float() {
+    let text = "define float @f(i64 %x) addrspace(1) {\n  %d = uitofp nneg i64 %x to float\n  ret float %d\n}\ndefine float @g(i64 %x) addrspace(1) {\n  %d = uitofp i64 %x to float\n  ret float %d\n}\n";
+    assert!(text.contains("uitofp nneg i64") && text.contains("uitofp i64"), "the shapes that were not rounded");
+    let rounded = |name| listing_float_store(text, name);
+    for name in ["f", "g"] {
+        let got = rounded(name);
+        assert!(got.iter().any(|line| line.starts_with("fstp dword")), "{name}: {got:?}");
+    }
+    // `nneg`: one signed qword read, no scaling by 2^32.
+    let f = rounded("f");
+    assert_eq!(f.iter().filter(|line| line.starts_with("fild qword")).count(), 1, "{f:?}");
+    assert!(!f.iter().any(|line| line.starts_with("fmul")), "{f:?}");
 }
 
 /// A long double is compared from a register: fcom has no 10-byte memory
@@ -5519,18 +5559,302 @@ fn test_a_poison_i64_is_two_zero_dwords() {
     assert!(!listing(text, "f").is_empty());
 }
 
-/// The translated coalescer is the default: a function compiled here never
-/// reaches the old pass, whose counter says when it can be deleted.
+/// A far pointer that is poison (SROA's value for a read of an unwritten
+/// slot, which a returned struct's hidden pointer was) was refused: "an address
+/// of no global: Poison" (regparm3_matrix_22 at -O2). Poison is any value.
 #[test]
-fn test_the_old_coalescer_is_not_reached_by_default() {
-    let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
-  %c = add i16 %a, %b
-  %d = mul i16 %c, %a
-  ret i16 %d
+fn test_a_poison_far_pointer_is_selected_as_any_value() {
+    let text = "define ptr addrspace(1) @f() addrspace(1) {
+b0:
+  ret ptr addrspace(1) poison
 }
 ";
-    let before = crate::backend::coalesce::old_runs();
     let got = listing(text, "f");
-    assert!(got.len() > 3, "premise: the function compiled: {got:?}");
-    assert_eq!(crate::backend::coalesce::old_runs() - before, 0, "the old coalescer ran");
+    assert!(got.iter().any(|line| line == "retf"), "{got:?}");
+}
+
+/// Old: `@g = global i16 undef` was refused as "a poison initializer". An undef
+/// initializer is any bytes; the data is zero, as a `zeroinitializer` is.
+#[test]
+fn test_an_undef_initializer_is_zero_bytes() {
+    use crate::backend::masm::{Datum, Label};
+    let text = "@u = internal global i16 undef\n@s = internal global { i8, i16 } undef\n";
+    let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
+    let names =
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
+    let datums = |name: &str| {
+        crate::backend::globals::datums(&module, module.named(name).expect("a global"), &names).expect("data")
+    };
+    assert_eq!(datums("u"), [Datum::Label(Label { name: "u".to_owned() }), Datum::Bytes(vec![0, 0])]);
+    assert_eq!(datums("s"), [Datum::Label(Label { name: "s".to_owned() }), Datum::Bytes(vec![0, 0, 0, 0])]);
+}
+
+/// A load only an add reads is the add's memory operand, as `ADD32rm` is
+/// X86DAGToDAGISel's: `add ax, [g]`, no register made to hold the load.
+#[test]
+fn test_a_load_only_an_add_reads_is_its_memory_operand() {
+    let text = "@g = global i16 5
+define i16 @f(i16 %a) addrspace(1) {
+  %v = load i16, ptr @g
+  %r = add i16 %a, %v
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("add ") && line.contains("ptr g")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("mov ") && line.contains("ptr g")), "a separate load: {got:?}");
+}
+
+/// The load first, for an operation that commutes.
+#[test]
+fn test_a_load_first_in_a_commutative_operation_is_its_memory_operand() {
+    let text = "@g = global i16 5
+define i16 @f(i16 %a) addrspace(1) {
+  %v = load i16, ptr @g
+  %r = xor i16 %v, %a
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("xor ") && line.contains("ptr g")), "{got:?}");
+}
+
+/// The other operand live around a loop: folding the load made `mov esi, r;
+/// add esi, [m]` (3 clocks on a 486) of `mov esi, [m]; add esi, r` (2):
+/// `x_transpose` +7.6% clocks, `x_bigadd` +3.7%, `nbody_fixed` +1.0%.
+#[test]
+fn test_a_load_is_not_folded_into_an_operation_whose_other_operand_lives_on() {
+    let text = "@g = global [8 x i16] zeroinitializer
+@h = global [8 x i16] zeroinitializer
+define void @f(i16 %r, i16 %n) addrspace(1) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %loop ]
+  %p = getelementptr i16, ptr @g, i16 %i
+  %q = getelementptr i16, ptr @h, i16 %i
+  %v = load i16, ptr %p
+  %s = add i16 %v, %r
+  store i16 %s, ptr %q
+  %next = add i16 %i, 1
+  %c = icmp ult i16 %next, %n
+  br i1 %c, label %loop, label %done
+done:
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(!got.iter().any(|line| line.starts_with("add ") && line.contains("[")), "{got:?}");
+    assert!(got.iter().any(|line| line.contains("g[")), "the premise: the cell is read: {got:?}");
+}
+
+/// The sum a `getelementptr` takes as its index is read by the address, in its
+/// parts: folding the load into the sum left the load unselected and its value
+/// read ("value is read but never defined", `liverangecalc` "a unique value");
+/// `dynsz.bas`, `bintree.bas` and 4 more m16 BASIC programs did not compile.
+#[test]
+fn test_a_load_added_into_an_address_index_is_still_selected() {
+    let text = "@g = global i16 5
+@d = global ptr addrspace(1) null
+define i16 @f(i16 %i) addrspace(1) {
+  %v = load i16, ptr @g
+  %s = add i16 %v, %i
+  %t = load ptr addrspace(1), ptr @d
+  %p = getelementptr i8, ptr addrspace(1) %t, i16 %s
+  %x = load i16, ptr addrspace(1) %p
+  ret i16 %x
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.contains("ptr g")), "the premise: the cell is read: {got:?}");
+}
+
+/// A store to the cell between the load and its reader: the load keeps the old
+/// value, so it stays where it was made.
+#[test]
+fn test_a_store_between_the_load_and_the_add_keeps_the_load_apart() {
+    let text = "@g = global i16 5
+define i16 @f(i16 %a) addrspace(1) {
+  %v = load i16, ptr @g
+  store i16 1, ptr @g
+  %r = add i16 %a, %v
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("mov ") && line.contains("ptr g")), "{got:?}");
+}
+
+/// `*p += x` stays one instruction on the memory: the load folded into the
+/// add would leave the store to be a second instruction.
+#[test]
+fn test_an_update_in_place_is_not_split_by_a_memory_operand() {
+    let text = "@g = global i16 5
+@h = global i16 7
+define void @f() addrspace(1) {
+  %a = load i16, ptr @g
+  %b = load i16, ptr @h
+  %s = add i16 %a, %b
+  store i16 %s, ptr @g
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(
+        got.iter()
+            .any(|line| line.starts_with("add ") && line.split(',').next().is_some_and(|dest| dest.contains("ptr g"))),
+        "the update is not an add to the cell: {got:?}"
+    );
+}
+
+/// An `and` a comparison with zero reads is a `test` (`and_tested`), whose
+/// operands are not given a memory operand by the add's pattern (the covered
+/// load was left unselected: `d_faces` aborted in the allocator).
+#[test]
+fn test_a_tested_and_of_a_load_still_selects_the_load() {
+    let text = "@g = global i16 5
+define i16 @f(i16 %a) addrspace(1) {
+  %v = load i16, ptr @g
+  %m = and i16 %v, 1
+  %c = icmp ne i16 %m, 0
+  br i1 %c, label %yes, label %no
+yes:
+  ret i16 %a
+no:
+  ret i16 0
+}
+";
+    assert!(!listing(text, "f").is_empty());
+}
+
+/// `freeze undef` and a bare `undef` operand are selected as any value: a
+/// constant, no register read and no refusal (an `undef` constant had no
+/// case in the selector before #2532).
+#[test]
+fn test_freeze_of_undef_and_an_undef_operand_are_selected_as_a_constant() {
+    for (ty, body) in [
+        ("i16", "%f = freeze i16 undef\n  ret i16 %f"),
+        ("i32", "%f = freeze i32 undef\n  ret i32 %f"),
+        ("i16", "%f = add i16 undef, 5\n  ret i16 %f"),
+        ("i32", "%a = add i32 undef, 5\n  %f = freeze i32 %a\n  ret i32 %f"),
+    ] {
+        let text = format!("define {ty} @f() addrspace(1) {{\n  {body}\n}}\n");
+        let got = listing(&text, "f");
+        assert!(
+            !got.is_empty() && got.iter().all(|one| !one.contains("undef") && !one.contains("[")),
+            "{body}: {got:?}"
+        );
+    }
+}
+
+/// Markers bound a local whose address a call is given, as LLVM's
+/// StackColoring trusts them: refusing such locals left every inlined copy's
+/// buffer a slot of its own (QCport's `_menu_draw`: 3548 bytes, not 266).
+#[test]
+fn test_locals_passed_to_a_call_with_disjoint_lifetimes_share_a_frame_slot() {
+    let passed = |markers: bool| {
+        scopes(markers, false)
+            .replace(
+                "define i16 @f(i16 %a, i16 %c) addrspace(1) {",
+                "declare void @use(ptr)\ndefine i16 @f(i16 %a, i16 %c) addrspace(1) {",
+            )
+            .replace("  store volatile i16 %a, ptr %p\n", "  store volatile i16 %a, ptr %p\n  call void @use(ptr %p)\n")
+            .replace("  store volatile i16 %c, ptr %q\n", "  store volatile i16 %c, ptr %q\n  call void @use(ptr %q)\n")
+    };
+    assert!(passed(true).contains("@use(ptr %q)"), "the premise: both are passed on");
+    // One 16-byte local fewer than without markers.
+    assert_eq!(frame_bytes(&passed(true)), frame_bytes(&passed(false)) - 16);
+}
+
+/// Old: `addrspacecast (ptr @g to ptr addrspace(1))` as an operand (what
+/// `simplifyCastInst` makes of the cast since #2614) was refused, "a far
+/// constant", and 39 qb programs did not compile. It is DGROUP:offset.
+#[test]
+fn test_a_near_global_cast_to_a_far_pointer_constant_is_selected() {
+    let text = "@g = internal global i16 5
+define i16 @f() addrspace(1) {
+  %v = load i16, ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1))
+  ret i16 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|one| one.contains("DGROUP")), "{got:?}");
+}
+
+/// Markers are trusted for what the code does not show (#2656), not for what
+/// it does: a local whose address is stored and passed on, then read after its
+/// end, keeps its own slot.
+#[test]
+fn test_an_escaped_local_read_past_its_end_shares_no_slot() {
+    let text = scopes(true, false)
+        .replace(
+            "define i16 @f(i16 %a, i16 %c) addrspace(1) {",
+            "@kept = global ptr null\ndeclare void @use(ptr)\ndefine i16 @f(i16 %a, i16 %c) addrspace(1) {",
+        )
+        .replace(
+            "  store volatile i16 %a, ptr %p\n",
+            "  store volatile i16 %a, ptr %p\n  store ptr %p, ptr @kept\n  call void @use(ptr %p)\n",
+        )
+        .replace("  ret i16 %v\n", "  %again = load volatile i16, ptr %p\n  ret i16 %again\n");
+    assert!(text.contains("store ptr %p, ptr @kept") && text.contains("%again"), "the premise");
+    let unmarked = text.replace("call void @llvm.lifetime", "; call void @llvm.lifetime");
+    assert!(!unmarked.contains("\n  call void @llvm.lifetime"), "the premise: the baseline has no markers");
+    let read_in_time = text.replace("  %again = load volatile i16, ptr %p\n  ret i16 %again\n", "  ret i16 %v\n");
+    assert!(frame_bytes(&read_in_time) < frame_bytes(&unmarked), "the premise: read in time, they share");
+    assert_eq!(frame_bytes(&text), frame_bytes(&unmarked));
+}
+
+/// Constant expressions as operands, the shapes `simplifyCastInst` and the GEP
+/// fold make since #2614/#2610: each was refused, "an address of no global".
+/// `ptrtoint` of a global (and of a GEP off one) is its link-time address; a
+/// far `inttoptr` constant is a selector:offset pair, whether stored or read
+/// through.
+#[test]
+fn test_ptrtoint_of_a_global_is_its_address_as_an_operand() {
+    let text = "@g = internal global [8 x i16] zeroinitializer
+define i16 @f(i16 %x) addrspace(1) {
+  %a = sub i16 %x, ptrtoint (ptr @g to i16)
+  %b = sub i16 ptrtoint (ptr getelementptr inbounds (i8, ptr @g, i16 6) to i16), %a
+  ret i16 %b
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"sub bx, offset g".to_owned()) && got.contains(&"mov ax, offset g+6".to_owned()), "{got:?}");
+}
+
+#[test]
+fn test_a_far_inttoptr_constant_is_a_number_as_a_value_and_as_an_address() {
+    let text = "@slot = internal global ptr addrspace(1) null
+define i16 @f() addrspace(1) {
+  store ptr addrspace(1) inttoptr (i32 1342177280 to ptr addrspace(1)), ptr @slot
+  %v = load i16, ptr addrspace(1) inttoptr (i32 1358954496 to ptr addrspace(1))
+  ret i16 %v
+}
+";
+    let got = listing(text, "f");
+    // 1342177280 is 0x5000:0000 stored, 1358954496 is 0x5100:0000 read through.
+    assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
+}
+
+/// More constant-expression operands (alias/farstruct.c, textfill): the dword
+/// of a far pointer to near data (`ptrtoint (addrspacecast @g)`), and a segment
+/// constant widened to far (`addrspacecast (inttoptr N to ptr addrspace(2))`),
+/// which is `N:0`. Both were refused, "an address of no global".
+#[test]
+fn test_a_far_pointer_constant_as_an_integer_and_a_segment_as_a_far_pointer_are_selected() {
+    let text = "@g = internal global i16 5
+@slot = internal global i32 0
+define i16 @f(i16 %i) addrspace(1) {
+  store i32 ptrtoint (ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)) to i32), ptr @slot
+  %p = getelementptr i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 -18432 to ptr addrspace(2)) to ptr addrspace(1)), i16 %i
+  %v = load i8, ptr addrspace(1) %p
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+";
+    let got = listing(text, "f");
+    // DGROUP:offset joined into the dword; -18432 is the selector 0xB800 in
+    // `pushw`.
+    let has = |text: &str| got.iter().any(|one| one == text);
+    assert!(has("mov ax, DGROUP") && has("mov bx, offset g") && has("shl eax, 16") && has("pushw 47104"), "{got:?}");
 }
