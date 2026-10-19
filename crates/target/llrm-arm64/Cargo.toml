@@ -8,6 +8,9 @@ description = "The arm64 (AArch64) target: its descriptions, translated from LLV
 [dependencies]
 llrm-lir = { workspace = true }
 llrm-object = { workspace = true }
+llrm-mir = { workspace = true }
+llrm-transforms = { workspace = true }
+llrm-support = { workspace = true }
 
 [build-dependencies]
 llrm-lir = { workspace = true }

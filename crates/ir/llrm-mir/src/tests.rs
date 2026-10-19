@@ -562,6 +562,22 @@ fn null_pointer_is_valid_is_a_function_attribute_that_round_trips() {
     assert_eq!(round(&once), once);
 }
 
+/// Clang's output for arm64 states `ssp` and `uwtable(sync)` on a function and
+/// `captures(none)` on a parameter (LLVM 22's `nocapture`); the reader refused
+/// each ("expected `}`, found `ssp`", "expected `,`, found `captures`"), so no
+/// module from that front end could be read.
+#[test]
+fn clangs_target_attributes_and_captures_are_read() {
+    let text = format!(
+        "{DATALAYOUT}\ndefine void @f(ptr captures(none) %p) ssp uwtable(sync) {{\nb0:\n  store i16 0, ptr %p\n  ret void\n}}\n"
+    );
+    let once = round(&text);
+    assert!(once.contains("nocapture") && once.contains("uwtable"), "{once}");
+    assert_eq!(round(&once), once);
+    let kept = round(&format!("{DATALAYOUT}\ndeclare void @g(ptr captures(address) %p)\n"));
+    assert!(!kept.contains("nocapture"), "{kept}");
+}
+
 /// Each use asked `instruction_dominates` of its definition, which scanned the
 /// block for both: the verifier was 12% of compiling 800 BASIC statements
 /// (#560). The positions are made once.

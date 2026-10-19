@@ -435,6 +435,11 @@ pub const FLAG_ATTRIBUTES: [&str; 44] = [
     "zeroext",
 ];
 
+/// Attributes a front end states for the target's sake that no pass here reads
+/// (stack protection, unwind tables), kept as flags; `uwtable` may carry its
+/// kind in parentheses (`uwtable(sync)`).
+pub const TARGET_FLAG_ATTRIBUTES: [&str; 4] = ["ssp", "sspreq", "sspstrong", "uwtable"];
+
 pub const INT_ATTRIBUTES: [&str; 4] = ["align", "alignstack", "dereferenceable", "dereferenceable_or_null"];
 
 pub const TYPE_ATTRIBUTES: [&str; 5] = ["byref", "byval", "elementtype", "inalloca", "sret"];
