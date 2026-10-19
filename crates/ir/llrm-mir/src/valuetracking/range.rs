@@ -661,7 +661,7 @@ fn m_binary<'a>(
     op: BinaryOp,
 ) -> Option<(&'a Instruction, SelectOperand, SelectOperand)> {
     let (_, instruction) = instruction_of(q, v)?;
-    (instruction.opcode == Opcode::Binary(op))
+    (matches!(instruction.opcode, Opcode::Binary(kind) if kind == op))
         .then(|| (instruction, instruction.operands[0].into(), instruction.operands[1].into()))
 }
 
@@ -695,7 +695,7 @@ fn m_sext(
     v: SelectOperand,
 ) -> Option<SelectOperand> {
     let (_, instruction) = instruction_of(q, v)?;
-    (instruction.opcode == Opcode::Cast(CastOp::SExt)).then(|| instruction.operands[0].into())
+    (matches!(instruction.opcode, Opcode::Cast(CastOp::SExt))).then(|| instruction.operands[0].into())
 }
 
 /// `m_Intrinsic<id>(...)`: the call's arguments.
