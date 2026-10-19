@@ -72,6 +72,38 @@ e:
     );
 }
 
+/// The same shape with `noundef` parameters folds to an `or`, not a select:
+/// `%0` cannot be poison, so `or i1 %a, %0` equals the two branches. The C
+/// front end states `noundef` of its scalar parameters, so a C `a || b` was the
+/// select form (a compare and a branch more on m16) while it stated none.
+#[test]
+fn test_noundef_parameters_make_the_or_form() {
+    let out = simplify(
+        "declare void @g1()
+
+declare void @g2()
+
+define void @f(i1 noundef %a, i16 noundef %x) {
+p:
+  br i1 %a, label %t, label %bb
+
+bb:
+  %b = icmp eq i16 %x, 0
+  br i1 %b, label %t, label %e
+
+t:
+  call void @g1()
+  ret void
+
+e:
+  call void @g2()
+  ret void
+}
+",
+    );
+    assert!(out.contains("%or.cond = or i1 %a, %0") && !out.contains("select"), "{out}");
+}
+
 /// Two instructions besides the condition do not fit the budget of one.
 #[test]
 fn test_a_block_with_two_instructions_besides_the_condition_stays() {

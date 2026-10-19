@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 124 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 130 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -23,8 +23,14 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine | One worklist over a function's instructions: each is visited, simplified to a value it equals when its operands say so, and what read it is visited again. | `fold` (its number step). | [combine](combine.md) |
 | combine_addsub | InstCombine's `visitAdd` and the helpers it calls, from [`InstCombineAddSub.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp) at d1106deb71cc. | `combine::visit`, once the add family's slot is flipped. | [combine_addsub](combine_addsub.md) |
 | combine_build | `InstCombiner::Builder`: the `IRBuilder` over `InstSimplifyFolder` that InstCombine's `visit*` functions build new instructions with. | `combine_addsub` and the families after it. | [combine_build](combine_build.md) |
+| combine_casts | InstCombine's `visitTrunc` and the helpers it calls, from [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp) at d1106deb71cc. | `combine::visit`, once the casts family's slot is flipped. | [combine_casts](combine_casts.md) |
 | combine_compares | InstCombine's `visitICmpInst` and the helpers it calls, from [`InstCombineCompares.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp) at d1106deb71cc. | `combine::visit`, once the compares slot is flipped. | [combine_compares](combine_compares.md) |
+| combine_gep | `visitGetElementPtrInst`: canonical forms of a `getelementptr`. |  | [combine_gep](combine_gep.md) |
+| combine_gep_index | The rewrites of `visitGetElementPtrInst` that read its indices and flags (:3513-3705): a scaled single index, `inbounds` and `nuw` the object or the indices prove, a sum split in two GEPs, a select of constants, and `srem` as `urem`. |  | [combine_gep_index](combine_gep_index.md) |
+| combine_gep_merge | `visitGEPOfGEP`: a `getelementptr` of a `getelementptr` as one. |  | [combine_gep_merge](combine_gep_merge.md) |
+| combine_gep_phi | `foldGEPOfPhi`: a `getelementptr` of a phi of `getelementptr`s as a `getelementptr` of a phi of the one index they differ in. |  | [combine_gep_phi](combine_gep_phi.md) |
 | combine_loadstore | InstCombine's stores: the store that cannot matter is erased, the one that cannot execute stores poison. | `combine` (its `visit`). | [combine_loadstore](combine_loadstore.md) |
+| combine_muldivrem | InstCombine's `visitMul` and the helpers it calls, from [`InstCombineMulDivRem.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp) at d1106deb71cc. | `combine::visit`, once the mul family's slot is flipped. | [combine_muldivrem](combine_muldivrem.md) |
 | combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
 | combine_select | `FoldOpIntoSelect`: an instruction that reads a select becomes a select of the instruction applied to each arm. | `foldBinOpIntoSelectOrPhi` and the `visit*` of the families that fold an | [combine_select](combine_select.md) |
 | combine_shared | What InstCombine's integer `visit*` functions share from `InstructionCombining.cpp`: the complexity order that puts constants on the right, and the reassociation of an associative or commutative operation. | `combine_addsub` (`visitAdd`, `visitSub`) and the families after it. | [combine_shared](combine_shared.md) |
@@ -118,6 +124,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | sroa | `sroa-real`: scalar replacement of aggregates as LLVM's SROA does it: the uses of an alloca are cut into slices, the slices into partitions that no access straddles, each partition becomes an alloca of its own (or the old one), the accesses are rewritten onto it, and what is then only loaded and stored whole is promoted to registers. |  | [sroa](sroa.md) |
 | switchcg | LLVM's switch clusters: which cases are one range, a jump table or a bit test, and where the tree of what is left splits. |  | [switchcg](switchcg.md) |
 | switchlower | A switch lowered as LLVM's SelectionDAG lowers one: the likeliest range peeled off, jump tables and bit tests for what is dense, and a balanced tree of range tests over the rest. | As two passes: `switchconv` (gcc's `pass_convert_switch`, -O2 and up), | [switchlower](switchlower.md) |
+| tailcallelim | Tail calls are marked, and a function's calls to itself in tail position become a loop, as LLVM's `TailCallElim`. | Not in the pipeline yet; `tailrec` still runs. | [tailcallelim](tailcallelim.md) |
 | tailmerge | The blocks that end the function with the same terminator become one block each: SimplifyCFG's `tailMergeBlocksWithSimilarFunctionTerminators`. |  | [tailmerge](tailmerge.md) |
 | tailrec | A call a function makes to itself as the last thing it does becomes a branch to its own entry with the arguments rewritten. | In the function pipeline after `gvn::EqualCalls`, so two equal calls are | [tailrec](tailrec.md) |
 | transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], [`crate::unswitch`] share: equal calls, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `equal_calls` on each function it numbers; | [transform](transform.md) |

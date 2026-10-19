@@ -138,6 +138,7 @@ impl FunctionCompiler<'_> {
             self.facts,
             self.unchecked_bounds,
             false,
+            false,
         )?;
         compiler.compile(&check).map(|_| ())
     }

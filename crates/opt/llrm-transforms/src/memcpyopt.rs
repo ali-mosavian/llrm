@@ -17,7 +17,11 @@
 //! - a memcpy of a memset's bytes is a memset (`performMemCpyToMemSetOptzn`);
 //! - a copy of memory nothing wrote (a fresh alloca) is gone
 //!   (`hasUndefContents`);
-//! - a memmove whose ranges cannot meet is a memcpy (`processMemMove`).
+//! - a memmove whose ranges cannot meet is a memcpy (`processMemMove`);
+//! - an aggregate loaded and stored right after is a memcpy, or a memmove where
+//!   the store may write what the load reads (`processStoreOfLoad`), the store
+//!   lifted above the first write to the loaded bytes when nothing in between
+//!   needs it (`moveUp`).
 //!
 //! # Example
 //! A copy of a copy reads the first source:
@@ -36,13 +40,17 @@
 //!    false.
 //! 3. No debug-info assignment IDs (`mergeDIAssignID`), no `combineAAMetadata`
 //!    (the formed calls carry no `!tbaa`, as in `loopidiom`).
-//! 4. Done later (stages): `processStoreOfLoad` and `moveUp`,
-//!    `performCallSlotOptzn`, `performStackMoveOptzn`, `processByValArgument`
-//!    and `processImmutArgument`.
+//! 4. Done later (stages): the call slot (`performCallSlotOptzn`, also reached
+//!    from `processStoreOfLoad`), `performStackMoveOptzn`,
+//!    `processByValArgument` and `processImmutArgument`.
 //! 5. MIR holds no constant expression in code: where the builder folds
 //!    `getelementptr (i8, @g, 16)` the pass makes the instruction. A forced
 //!    inline copy (`llvm.memcpy.inline`) is not forwarded, as the builder's
 //!    `CreateMemCpyInline` has no counterpart here.
+//! 6. `moveUp` does not lift a call (LLVM does when it neither reads nor writes
+//!    what the lifted ones touch): a call between the load and the store ends
+//!    the attempt. Fact: `getModRefInfo(Instruction, CallBase)` has no model
+//!    here. Exit: the call-slot stage brings the call-against-call query.
 //!
 //! # Runs
 //! In the slot of `memcpyopt@818`.
@@ -83,6 +91,10 @@ pub struct MemCpyOpt;
 impl FunctionPass for MemCpyOpt {
     fn name(&self) -> &'static str {
         "memcpyopt"
+    }
+
+    fn translation(&self) -> Option<&'static str> {
+        Some("memcpyopt")
     }
 
     fn run(
@@ -363,6 +375,8 @@ impl State<'_> {
                         Kind3::Copy => repeat_instruction = self.process_memcpy(mem, &mut bi),
                         Kind3::Move => repeat_instruction = self.process_memmove(mem, &mut bi),
                     }
+                } else if matches!(self.function.instruction(inst).opcode, Opcode::Store { .. }) {
+                    repeat_instruction = self.process_store(inst, &mut bi);
                 }
                 if repeat_instruction {
                     // `--BI` when not at the beginning.
@@ -1007,6 +1021,248 @@ impl State<'_> {
         let callee = Operand::Constant(self.context.constant(Constant { ty: ptr, kind: ConstantKind::Global(id) }));
         let last = self.function.instruction(m.inst).operands.len() - 1;
         self.function.set_operand(m.inst, last, callee);
+        true
+    }
+
+    /// `processStore`, its `processStoreOfLoad` arm: the store of a loaded
+    /// value. The memset arms are stage 1's (`crate::memcpyoptimizer`).
+    fn process_store(
+        &mut self,
+        si: InstId,
+        bbi: &mut Option<InstId>,
+    ) -> bool {
+        let Opcode::Store { volatile: false, .. } = self.function.instruction(si).opcode else { return false };
+        // A copy would lose the non-temporal hint.
+        if self.function.instruction(si).metadata.iter().any(|(kind, _)| kind == "nontemporal") {
+            return false;
+        }
+        let Operand::Value(stored) = self.function.instruction(si).operands[0] else { return false };
+        let llrm_mir::module::ValueDef::Instruction(li) = self.function.value(stored).def else { return false };
+        if !matches!(self.function.instruction(li).opcode, Opcode::Load { .. }) {
+            return false;
+        }
+        self.process_store_of_load(si, li, bbi)
+    }
+
+    /// `MemoryLocation::get(I)` of a load or a store.
+    fn access_location(
+        &self,
+        aa: &AliasQuery,
+        inst: InstId,
+    ) -> Option<Rc<Location>> {
+        let instruction = self.function.instruction(inst);
+        let (pointer, value) = match instruction.opcode {
+            Opcode::Load { .. } => (instruction.operands[0], instruction.result.map(Operand::Value)?),
+            Opcode::Store { .. } => (instruction.operands[1], instruction.operands[0]),
+            _ => return None,
+        };
+        let ty = self.function.operand_type(self.context, value)?;
+        let width = u32::try_from(self.layout.store_size(&self.context.types, ty)).ok()?;
+        Some(aa.location_for(&self.reference_at(aa.unit(), pointer, width), false))
+    }
+
+    /// `processStoreOfLoad`, the aggregate arm: `li` loaded what `si` stores,
+    /// and is gone once a copy does it in one go. The call slot and the stack
+    /// move it goes on to are later stages.
+    fn process_store_of_load(
+        &mut self,
+        si: InstId,
+        li: InstId,
+        bbi: &mut Option<InstId>,
+    ) -> bool {
+        let Opcode::Load { volatile: false, align: load_align } = self.function.instruction(li).opcode else {
+            return false;
+        };
+        let Opcode::Store { align: store_align, .. } = self.function.instruction(si).opcode else { return false };
+        let result = self.function.instruction(li).result.expect("a load has a value");
+        if !self.function.users(result).has_one_use() || self.function.parent(li) != self.function.parent(si) {
+            return false;
+        }
+        let ty = self.function.value(result).ty;
+        if !matches!(
+            self.context.types.get(ty),
+            llrm_mir::types::Type::Struct { .. }
+                | llrm_mir::types::Type::Named(_)
+                | llrm_mir::types::Type::Array { .. }
+        ) {
+            return false;
+        }
+        let size = self.layout.store_size(&self.context.types, ty);
+        // `getAlign()`: an access with none is aligned as its type is.
+        let abi_align = self.layout.align(&self.context.types, ty);
+        let (load_align, store_align) = (load_align.or(Some(abi_align)), store_align.or(Some(abi_align)));
+        // The first write to the loaded bytes between the load and the store:
+        // the copy goes there instead of at the store.
+        let (p, store_writes_load) = {
+            let view = self.view();
+            let aa = AliasQuery::new(&view, &self.accesses);
+            let Some(load_loc) = self.access_location(&aa, li) else { return false };
+            let mut p = si;
+            let mut at = self.function.next_in_block(li);
+            while let Some(inst) = at.filter(|&one| one != si) {
+                if aa.get_mod_ref_info(inst, &load_loc).is_mod() {
+                    p = inst;
+                    break;
+                }
+                at = self.function.next_in_block(inst);
+            }
+            (p, aa.get_mod_ref_info(si, &load_loc).is_mod())
+        };
+        if p != si && !self.move_up(si, p, li) {
+            return false;
+        }
+        let length = {
+            let i64 = self.context.types.int(64);
+            Operand::Constant(self.context.int(i64, i128::from(size)))
+        };
+        let (dest, source) = (self.function.instruction(si).operands[1], self.function.instruction(li).operands[0]);
+        // A store that may write what the load reads needs the move.
+        let how = if store_writes_load { Copy::Memmove } else { Copy::Memcpy };
+        let new_m = create_mem_copy(
+            &mut *self.context,
+            &mut *self.declared,
+            &mut *self.function,
+            p,
+            how,
+            dest,
+            store_align,
+            source,
+            load_align,
+            length,
+        );
+        let last_def = self.mssa.get_memory_access(si).expect("a store has a def");
+        self.insert_def(new_m, Created::After(last_def), true);
+        self.erase_instruction(si);
+        self.erase_instruction(li);
+        // Do not invalidate the iterator.
+        *bbi = Some(new_m);
+        true
+    }
+
+    /// `moveUp`: lifts `si`, and what it needs, before `p`, if nothing between
+    /// them stops it. The load `li` is implicitly moved down past what is
+    /// lifted, so none of it may write what `li` reads.
+    fn move_up(
+        &mut self,
+        si: InstId,
+        p: InstId,
+        li: InstId,
+    ) -> bool {
+        let block = self.function.parent(si).expect("a placed store");
+        let mut to_lift = vec![si];
+        let mut args: llrm_mir::dense::IdSet<InstId> = Default::default();
+        // The in-block definition of `operand`; `None` for another block's, or
+        // none.
+        let in_block_def = |this: &Self, operand: Operand| -> Option<InstId> {
+            let Operand::Value(value) = operand else { return None };
+            match this.function.value(value).def {
+                llrm_mir::module::ValueDef::Instruction(def) if this.function.parent(def) == Some(block) => Some(def),
+                _ => None,
+            }
+        };
+        // `AddArg`: false when a lifted instruction uses `p` itself.
+        let add_arg = |this: &Self, operand: Operand, args: &mut llrm_mir::dense::IdSet<InstId>| -> bool {
+            if let Some(def) = in_block_def(this, operand) {
+                if def == p {
+                    return false;
+                }
+                args.insert(def);
+            }
+            true
+        };
+        {
+            let view = self.view();
+            let aa = AliasQuery::new(&view, &self.accesses);
+            let Some(store_loc) = self.access_location(&aa, si) else { return false };
+            // If the store aliases this position, bail out.
+            if aa.get_mod_ref_info(p, &store_loc).is_mod_or_ref() {
+                return false;
+            }
+            let Some(load_loc) = self.access_location(&aa, li) else { return false };
+            if !add_arg(self, self.function.instruction(si).operands[1], &mut args) {
+                return false;
+            }
+            let mut locations = vec![store_loc];
+            let mut at = self.function.prev_in_block(si);
+            while let Some(c) = at.filter(|&one| one != p) {
+                at = self.function.prev_in_block(c);
+                // Make sure hoisting does not perform a store that was not
+                // guaranteed to happen.
+                if !llrm_mir::valuetracking::guarantee::is_guaranteed_to_transfer_execution_to_successor(
+                    &self.query(),
+                    c,
+                ) {
+                    return false;
+                }
+                // `getModRefInfo(C, std::nullopt)`: it has a memory access.
+                let may_alias = self.mssa.get_memory_access(c).is_some();
+                let need_lift = if args.remove(&c) {
+                    true
+                } else {
+                    may_alias && locations.iter().any(|loc| aa.get_mod_ref_info(c, loc).is_mod_or_ref())
+                };
+                if !need_lift {
+                    continue;
+                }
+                if may_alias {
+                    // None of the lifted may modify the load's source.
+                    if aa.get_mod_ref_info(c, &load_loc).is_mod() {
+                        return false;
+                    }
+                    match self.function.instruction(c).opcode {
+                        Opcode::Load { .. } | Opcode::Store { .. } => {
+                            let Some(loc) = self.access_location(&aa, c) else { return false };
+                            // If we can't lift this before `p`, it's game over.
+                            if aa.get_mod_ref_info(p, &loc).is_mod_or_ref() {
+                                return false;
+                            }
+                            locations.push(loc);
+                        }
+                        // We don't know how to lift this instruction (a call:
+                        // DEVIATE 6).
+                        _ => return false,
+                    }
+                }
+                to_lift.push(c);
+                for operand in self.function.instruction(c).operands.clone() {
+                    if !add_arg(self, operand, &mut args) {
+                        return false;
+                    }
+                }
+            }
+        }
+        // The point in the memory graph the lifted accesses follow: the access
+        // before `p`'s, or the nearest one above `p` back to the load.
+        let mut insert_point = if let Some(access) = self.mssa.get_memory_access(p) {
+            let list = self.mssa.get_block_accesses(block).expect("a placed access");
+            let at = list.iter().position(|&one| one == access).expect("a placed access");
+            Some(list[at - 1])
+        } else {
+            let mut found = None;
+            let mut at = self.function.prev_in_block(p);
+            while let Some(inst) = at {
+                if let Some(access) = self.mssa.get_memory_access(inst) {
+                    found = Some(access);
+                    break;
+                }
+                if inst == li {
+                    break;
+                }
+                at = self.function.prev_in_block(inst);
+            }
+            found
+        };
+        // We made it, we need to lift.
+        for inst in to_lift.into_iter().rev() {
+            self.function
+                .move_to(inst, llrm_mir::edit::Position::Before(p))
+                .unwrap_or_else(|error| panic!("memcpyopt: {error}"));
+            if let Some(access) = self.mssa.get_memory_access(inst) {
+                let point = insert_point.expect("a memory access to insert after");
+                self.updater.move_after(&mut self.mssa, &*self.function, access, point);
+                insert_point = Some(access);
+            }
+        }
         true
     }
 

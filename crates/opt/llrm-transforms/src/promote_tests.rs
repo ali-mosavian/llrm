@@ -1027,3 +1027,44 @@ fn test_what_sroa_asks_after_it_split_a_copy_is_derived_from_the_body_it_left() 
     let stale = analyses.held_stale(context, &layout, function);
     assert!(stale.is_empty(), "held but stale: {stale:?}");
 }
+
+/// A C variable-length array after the loop passes: an alloca whose element
+/// count is a run-time value, indexed by a 64-bit counter that runs to a
+/// sign-extended 32-bit bound, so the index spans 2^63 elements and the slice
+/// bound 2^65. `annotated` refused it ("slice bound 36893488147419103225
+/// exceeds the i64 slice model") and SROA panicked on any such function.
+#[test]
+fn a_dynamic_alloca_with_a_wide_index_range_is_promoted_without_failing() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"
+
+define i32 @vla(i32 %n) {
+entry:
+  %wide = zext i32 %n to i64
+  %a = alloca i32, i64 %wide, align 4
+  %bound = sext i32 %n to i64
+  br label %head
+
+head:
+  %i = phi i64 [ %next, %body ], [ 0, %entry ]
+  %more = icmp slt i64 %i, %bound
+  br i1 %more, label %body, label %done
+
+body:
+  %sq = mul nsw i64 %i, %i
+  %p = getelementptr inbounds i32, ptr %a, i64 %i
+  %v = trunc nsw i64 %sq to i32
+  store i32 %v, ptr %p, align 4
+  %next = add nuw nsw i64 %i, 1
+  br label %head
+
+done:
+  %m = sub nsw i32 %n, 1
+  %e = sext i32 %m to i64
+  %q = getelementptr inbounds i32, ptr %a, i64 %e
+  %r = load i32, ptr %q, align 4
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    promote_all(&mut module, true).unwrap();
+}
