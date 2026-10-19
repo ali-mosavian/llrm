@@ -105,7 +105,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "decide@1178",
         Early,
         "simplifycfg",
-        "criterion: the slot is the translated simplifycfg.rs (SimplifyCFGPass at the default options, #2907): its output equals opt -passes=simplifycfg per tools/difftest/difftest.py simplifycfg on the corpus inputs; exit: the remaining folds of SimplifyCFG.cpp are translated and the decide@N slots run it too, then the old Decide family is deleted (simplifycfg-fold-2148, join 6)",
+        "translated SimplifyCfg at the pin's default options runs here and Decide does not (#2907); untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@1178) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
     ),
     entry("phiopt@1178", Early, "simplifycfg", Old, "simplifycfg-port"),
     entry("sroa@1179", Early, "sroa<modify-cfg>", Translated, "sroa.rs"),
