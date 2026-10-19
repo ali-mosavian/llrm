@@ -231,3 +231,54 @@ b3:
         assert!(changed && !after.contains("ret i16 %s"), "{after}");
     }
 }
+
+/// Deleting one loop resolves the joins it changed, not every single-entry
+/// phi of the body: another loop's closing phi was folded into its value, so
+/// loopdeletion read that loop as having no result (poison past it) and unroll
+/// refused it, "not in closed SSA form" (the Nib runtime under
+/// LLRM_EXP_INLINEDECIDE).
+#[test]
+fn test_deleting_a_loop_keeps_another_loops_closing_phi() {
+    let text = "define i8 @f(i32 %n, i8 %init) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ %i.next, %b3 ], [ 0, %b0 ]
+  %x = phi i8 [ %init, %b0 ], [ %y, %b3 ]
+  %go = icmp ult i32 %i, %n
+  br i1 %go, label %b2, label %b4
+
+b2:
+  %t = trunc i32 %i to i8
+  %v = mul i8 %t, %x
+  br label %b3
+
+b3:
+  %y = or i8 %x, %v
+  %i.next = add nuw nsw i32 %i, 1
+  br label %b1
+
+b4:
+  %out = phi i8 [ %x, %b1 ]
+  br label %b5
+
+b5:
+  %j = phi i16 [ 0, %b4 ], [ %j.next, %b6 ]
+  %c = icmp uge i16 %j, 4
+  br i1 %c, label %b7, label %b6
+
+b6:
+  %j.next = add i16 %j, 1
+  br label %b5
+
+b7:
+  ret i8 %out
+}
+";
+    let (after, changed, kept) = evaluated_text(text, &[&[0, 7], &[5, 3], &[9, 1]]);
+    assert!(changed && kept == 1, "the premise: the counting loop is deleted, the other kept: {after}");
+    let mut module = parsed(&format!("{DOS}{after}"));
+    let function = module.function_mut("f").unwrap().1;
+    assert_eq!(crate::lcssa::closed(function), Ok(false), "{after}");
+}
