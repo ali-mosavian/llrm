@@ -212,7 +212,7 @@ fn _decided(
     }
     for (block, target) in decisions {
         let last = function.terminator(block).expect("a terminator");
-        _jump(function, last, target);
+        _jump(context, function, last, target);
     }
     cfg::_unreachable(context, function);
     transform::_trivial_phis(function)?;
@@ -381,12 +381,20 @@ fn _implied_by_scev(
     })
 }
 
-/// `last`, a terminator, replaced by a jump to `target`.
+/// `last`, a terminator, replaced by a jump to `target`. `br i1 %c, T, T` has
+/// two edges to `T` and a phi of `T` two inputs from the block: a jump has one
+/// edge, so the phi loses one.
 fn _jump(
+    context: &Context,
     function: &mut Function,
     last: InstId,
     target: BlockId,
 ) {
+    let block = function.parent(last).expect("a placed terminator");
+    let edges = function.instruction(last).operands.iter().filter(|one| **one == Operand::Block(target)).count();
+    for _ in 1..edges {
+        function.predecessor_removed(context, target, block, true);
+    }
     let jump = function.create_instruction(
         Opcode::Br,
         function.instruction(last).ty,
@@ -712,7 +720,7 @@ pub fn _threaded(
         if let [_, Operand::Block(taken), Operand::Block(other)] = function.instruction(last).operands[..]
             && taken == other
         {
-            _jump(function, last, taken);
+            _jump(context, function, last, taken);
             changed = true;
         }
     }
