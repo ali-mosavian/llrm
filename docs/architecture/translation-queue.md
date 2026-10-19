@@ -4,7 +4,7 @@ architecture-order: 277
 ---
 # The translation queue
 
-The 52 `Old` slots of the parity registry, ranked by what replacing each saves on `d_faces` -O2. Middle-end rows are measured; Backend rows are not (the cost source covers only the function pipeline) and are listed after, unranked.
+The 52 `Old` slots of the parity registry, ranked by what replacing each saves on `d_faces` -O2. Middle-end rows are runs-work measured; Backend rows are ranked by bucket, from callgrind (section below).
 
 **Key** = own cost (M instructions) + old-analysis misses x 0.165. 0.165 M is the average cost the manager charged per miss to these slots (their inclusive minus own cost, 100.9 M, over 610 misses). Misses are deduplicated: `shape` counts once (its `loops` and `dominators`), `exposed-frames` once (its `registers`). Own and inclusive are LLRM_DEBUG=runs instructions summed over the 12 bodies and rounds (inclusive charges a shared analysis to its first asker); the whole compile is 1,611.1 M. Misses are the `ask <slot> <analysis>` lines of `LLRM_DEBUG=counts`. Owner is the port named in the registry; `none` in the LLVM column marks a delete or DEVIATE candidate.
 
@@ -51,23 +51,22 @@ The 52 `Old` slots of the parity registry, ranked by what replacing each saves o
 | 37 | `loopsimplify@728` | loopsimplify-port | [LoopSimplify.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopSimplify.cpp) | 0.0 | 0.0 | 0 | 0.0 |
 | 38 | `lcssa@728` | lcssa-port | [LCSSA.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LCSSA.cpp) | 0.0 | 0.0 | 0 | 0.0 |
 
-## Backend, not measured
+## Backend, ranked by bucket
 
-| Slot | Owner | LLVM counterpart |
-|---|---|---|
-| `twoaddr@9` | lir-cleanup-poc | two-address-instruction |
-| `ssaspill@3` | unowned | none (spiller route) |
-| `schedule@16` | unowned | post-RA scheduler |
-| `prologue@13` | unowned | prologepilog |
-| `pressuresink@5` | lir-cleanup-poc | machine-sink |
-| `phielim@4` | lir-cleanup-poc | phi-node-elimination |
-| `phiconst@2` | unowned | none (shared phi constants) |
-| `peephole@14` | unowned | peephole-opt, machine-cse, machine-dce |
-| `parcopy@12` | unowned | phi-node-elimination copies, virtregrewriter |
-| `loopslots@15` | regalloc-core-poc | greedy region splitting (SplitKit) |
-| `floatfold@6` | unowned | x86 isel float folding (target) |
-| `floatassign@7` | regalloc-core-poc | x87 stack slots (regalloc, target) |
-| `farcall@1` | unowned | x86 far-call lowering (target) |
-| `coalesce@10` | lir-cleanup-poc | register-coalescer |
+Cost is callgrind self cost by pass bucket on `d_faces` -O2 (M instructions, own), 445.7 M in all, 27.1% of the compile. The unit is not the middle-end key's (runs-work instructions plus charged asks), so the two lists are not summed; read them side by side by M. Backend asks per slot do not exist (the counts count askers per analysis), so a Backend row has no key.
 
-Backend cost needs the machine phases of `LLRM_DEBUG=time`, which the per-slot table does not cover.
+A slot is placed in a bucket by the bucket's label and top functions; slots inside a bucket are unordered. Machine clean-up is rank 6 of the pass buckets (after simplifycfg/JT/CVP 219.7, instcombine 199.1, register allocation 153.3, loop-reduce 109.3, module Summaries 71.7 ranks below it only by 9 M), not top 3.
+
+| # | Bucket | M | Slots (Old, Partial, Missing) | Owner | LLVM counterpart |
+|---|---|---|---|---|---|
+| B1 | register allocation | 153.3 | `allocate@11` (Partial), `loopslots@15`, `parcopy@12`, `ssaspill@3` | regalloc-core-poc (`loopslots@15`); others unowned | greedy, SplitKit, virtregrewriter |
+| B2 | machine clean-up (cse, sink, peephole, licm) | 80.7 | `peephole@14`, `pressuresink@5` | unowned; lir-cleanup-poc | peephole-opt, machine-cse, machine-dce, machine-sink |
+| B3 | fp stackifier | 51.2 | `floatassign@7` (`floatalloc@8` is Translated) | regalloc-core-poc | x87 stack slots, X86FloatingPoint.cpp |
+| B4 | isel | 43.8 | `floatfold@6`, `farcall@1` (isel itself is not a slot) | unowned | x86 isel float folding, far-call lowering |
+| B5 | branch folding, placement | 36.6 | `jumps@17` (Partial), `early-tailduplication` (Missing) | lir-cleanup-poc (`jumps@17`) | branch-folder, block-placement, tailduplication |
+| B6 | phi-elim, two-address | 23.8 | `phielim@4`, `twoaddr@9`, `phiconst@2` | lir-cleanup-poc; `phiconst@2` unowned | phi-node-elimination, two-address-instruction |
+| B7 | assemble (frame, shrink-wrap) | 22.7 | `prologue@13`, `shrink-wrap` (Missing), `stack-coloring` (Missing) | unowned | prologepilog, shrink-wrap, stack-coloring |
+| B8 | coalesce, live intervals | 16.8 | `coalesce@10` | lir-cleanup-poc | register-coalescer |
+| B9 | emission | 16.8 | none (`driver::emitted`, not a slot) | none | none |
+
+`schedule@16` (post-RA scheduler, unowned) is in no bucket of the table. Top functions per bucket are in the bench file `bucket-cost-dfaces-O2.tsv`.
