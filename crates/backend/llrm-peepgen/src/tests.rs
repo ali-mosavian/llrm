@@ -14,8 +14,13 @@ fn forms() -> String {
     format!("{}\n{}", read("llrm-x86"), read("llrm-x86-m16"))
 }
 
+fn dialect() -> llrm_instr::Dialect {
+    llrm_instr::Dialect::parse(include_str!("../../../target/llrm-x86/src/instructions/dialect.toml"))
+        .expect("x86's dialect")
+}
+
 fn table() -> table::Table {
-    table::load(&forms(), "x86.instr").unwrap()
+    table::load(&forms(), "x86.instr", &dialect()).unwrap()
 }
 
 fn compiled(rules: &str) -> Result<Vec<automaton::Automaton>, String> {
@@ -29,7 +34,7 @@ fn the_rules_llrm_builds_with_compile() {
         include_str!("../../../target/llrm-x86/src/isel/peephole.peep"),
         include_str!("../../../target/llrm-x86-m16/src/isel/peephole.peep")
     );
-    let made = generate(&forms(), "x86.instr", &rules, "peephole.peep");
+    let made = generate(&forms(), "x86.instr", &rules, "peephole.peep", &dialect());
     assert!(made.is_ok(), "{}", made.err().unwrap_or_default());
 }
 
