@@ -13,6 +13,9 @@
 //! most one instruction besides the condition is copied, and the join with
 //! the inversion `P` may need costs two at most.
 //!
+//! # Example
+//! The block's comparison runs in the predecessor:
+//!
 //! ```text
 //!   p:  br %a, bb, x                 p:  %b = icmp ...
 //!   bb: %b = icmp ...          ==>       %c = select %a, %b, false
@@ -37,15 +40,14 @@
 //!   make a speculated instruction undefined, as in
 //!   [`twoentryphi`](crate::twoentryphi) (D4 there).
 
-use std::collections::HashMap;
-
-use llrm_mir::context::{ConstantKind, Context};
+use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::instructioncost::instruction_cost;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::tti::{ArithOp, CostKind, OperandInfo, Ty};
 use llrm_mir::valuetracking::Query;
+use llrm_support::hash::HashMap;
 
 use crate::twoentryphi::Speculation;
 
@@ -375,7 +377,7 @@ fn performed(
         function.set_metadata(pbi, "llvm.loop", Some(loop_id));
     }
     // Copies of the block's instructions run before PBI.
-    let mut mapped: HashMap<Operand, Operand> = HashMap::new();
+    let mut mapped: HashMap<Operand, Operand> = HashMap::default();
     for inst in function.iter_block(block).collect::<Vec<_>>() {
         if inst == branch {
             continue;
