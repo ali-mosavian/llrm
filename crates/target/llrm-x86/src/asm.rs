@@ -88,6 +88,7 @@ const MNEMONICS: &[Mnemonic] = &[
     Mnemonic::Sbb,
     Mnemonic::Neg,
     Mnemonic::Rcr,
+    Mnemonic::Ror,
     Mnemonic::Clc,
     Mnemonic::Stc,
     Mnemonic::Mul,

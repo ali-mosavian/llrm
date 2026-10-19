@@ -58,14 +58,15 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 5] = ["Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink"];
+const UNOPTIMIZED: [&str; 6] = ["Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink", "MachineSink"];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 18] = [
+const SLOTS: [(&str, &str); 19] = [
     ("FarIndirectCalls", "farcall@1"),
     ("SharedConstants", "phiconst@2"),
     ("SsaSpill", "ssaspill@3"),
     ("PhiElimination", "phielim@4"),
+    ("MachineSink", "machinesink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FloatFold", "floatfold@6"),
     ("FloatAssign", "floatassign@7"),
@@ -119,6 +120,8 @@ pub fn machine_with<'a>(
             prices: ssaspill::Prices::of(target),
             run: spilling.clone().unwrap_or_default(),
         }),
+        // On SSA, where a def with phi users alone can go to its edge.
+        Box::new(crate::backend::machinesink::MachineSink { size: target.size }),
         Box::new(phielim::PhiElimination { prices: phielim::EdgePrices::of(target) }),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
@@ -179,7 +182,7 @@ pub fn machine_with<'a>(
     if !target.optimized {
         phases.retain(|phase| !UNOPTIMIZED.contains(&phase.class_name()));
     }
-    // Under `LLRM_GREEDY_RFP` the stackifier runs after allocation, on the FP
+    // Under RFP the stackifier runs after allocation, on the FP
     // registers greedy assigned, as X86FloatingPoint does.
     if crate::backend::allocate::rfp_on()
         && let Some(fps) = phases.iter().position(|phase| phase.class_name() == "FloatAlloc")
@@ -193,7 +196,8 @@ pub fn machine_with<'a>(
         // must be, and none of those is.
         let slot_of = |class: &str| SLOTS.iter().find(|(one, _)| *one == class).map_or("unknown", |(_, slot)| *slot);
         let built: Vec<&str> = phases.iter().map(|phase| slot_of(phase.class_name())).collect();
-        let off: Vec<&str> = if target.optimized { Vec::new() } else { UNOPTIMIZED.iter().map(|one| slot_of(one)).collect() };
+        let off: Vec<&str> =
+            if target.optimized { Vec::new() } else { UNOPTIMIZED.iter().map(|one| slot_of(one)).collect() };
         llrm_transforms::parity::check_backend(&built, &off)?;
     }
     Ok(phases)
@@ -204,9 +208,13 @@ pub fn verified(
     body: LirBody,
     stage: &str,
     in_ssa: bool,
+    allocated: Option<&std::collections::BTreeSet<RegId>>,
     spaces: &llrm_mir::spaces::Spaces,
 ) -> Result<LirBody, Malformed> {
-    let complaints = verify::verify_for(&body, in_ssa, spaces);
+    let mut complaints = verify::verify_for(&body, in_ssa, spaces);
+    if let Some(arguments) = allocated {
+        complaints.extend(verify::physical(&body, arguments));
+    }
     if let Some(first) = complaints.first() {
         return Err(Malformed(format!("{stage}: {first}")));
     }
@@ -225,6 +233,7 @@ pub fn checked(
     body: LirBody,
     phase: &mut dyn LIRTransform,
     in_ssa: bool,
+    allocated: Option<&std::collections::BTreeSet<RegId>>,
     classes: &crate::backend::classes::RegisterClasses,
     segments: &Segments,
     arch: &dyn llrm_target::Target,
@@ -241,7 +250,7 @@ pub fn checked(
     transformed.facts.0.end_phase();
     let body = if verifying {
         crate::support::debug::timed("lir verify", || {
-            verified(transformed, &stage, in_ssa, &arch.layout().spaces.roles)
+            verified(transformed, &stage, in_ssa, allocated, &arch.layout().spaces.roles)
         })
         .map_err(Checked::Malformed)?
     } else {
@@ -394,7 +403,7 @@ mod tests {
 
     /// jumps deleted a block holding only a source `jmp`, and its three
     /// bytes had no owner; nothing noticed.
-    /// Under `LLRM_GREEDY_RFP` floatassign's slot keeps its legalization only
+    /// Under RFP floatassign's slot keeps its legalization only
     /// and the stackifier runs after allocation, on the FP registers greedy
     /// assigned (X86FloatingPoint's place); without it the order is as ever.
     #[test]
@@ -407,9 +416,10 @@ mod tests {
                 .collect()
         };
         let at = |names: &[&str], one: &str| names.iter().position(|name| *name == one);
+        let old = crate::backend::allocate::RfpOn::off();
         let before = names();
         assert!(at(&before, "FloatAlloc") < at(&before, "RegAlloc") && at(&before, "FloatAssign").is_some());
-        let _rfp = crate::backend::allocate::RfpOn::set();
+        drop(old);
         let after = names();
         assert_eq!(at(&after, "FloatAssign"), None);
         assert_eq!(at(&after, "FloatPrep"), at(&before, "FloatAssign"));
@@ -432,6 +442,7 @@ mod tests {
             body,
             &mut DropsBytes,
             false,
+            None,
             &crate::backend::classes::RegisterClasses::m16(),
             &crate::backend::target::BUILT_IN,
             &llrm_x86_m16::M16,
@@ -462,6 +473,7 @@ mod tests {
             body,
             &mut LosesDefinition,
             false,
+            None,
             &crate::backend::classes::RegisterClasses::m16(),
             &crate::backend::target::BUILT_IN,
             &llrm_x86_m16::M16,
@@ -501,6 +513,7 @@ mod tests {
             body,
             &mut Keeps,
             false,
+            None,
             &crate::backend::classes::RegisterClasses::m16(),
             &crate::backend::target::BUILT_IN,
             &llrm_x86_m16::M16,

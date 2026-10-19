@@ -1155,6 +1155,10 @@ impl FunctionPass for EarlyCse {
         "earlycse"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("early-cse")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,
