@@ -1065,3 +1065,14 @@ pub fn is_argument(
         Operand::Value(id) if matches!(q.function.value(id).def, ValueDef::Argument(_))
     )
 }
+
+// ---- combine_shared.rs ----
+
+/// `m_Neg(m_Value(X))`: `sub 0, x`, with the flags of the `sub`.
+pub fn neg(
+    q: &Query,
+    v: Operand,
+) -> Option<(InstId, Operand, Flags)> {
+    let (inst, instruction, a, b) = binary(q, v, BinaryOp::Sub)?;
+    zero(q, a).then_some((inst, b, instruction.flags))
+}
