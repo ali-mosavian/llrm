@@ -12,7 +12,7 @@
 
 use llrm_mir::constantfolding;
 use llrm_mir::context::{ConstantId, ConstantKind};
-use llrm_mir::hash::HashMap;
+use llrm_mir::dense::IdMap;
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, GlobalKind, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, IntPredicate, Opcode};
@@ -220,7 +220,7 @@ impl ScalarEvolution {
             return self.get_could_not_compute();
         }
 
-        let mut current: HashMap<InstId, ConstantId> = HashMap::default();
+        let mut current: IdMap<InstId, ConstantId> = IdMap::new();
         let Some(latch) = l.get_loop_latch(cx.function) else { return self.get_could_not_compute() };
         let phis: Vec<InstId> = header_phis(cx, header);
         for &phi in &phis {
@@ -246,7 +246,7 @@ impl ScalarEvolution {
             }
 
             // Update all the PHI nodes for the next iteration.
-            let mut next: HashMap<InstId, ConstantId> = HashMap::default();
+            let mut next: IdMap<InstId, ConstantId> = IdMap::new();
             let to_compute: Vec<InstId> = phis.iter().copied().filter(|phi| current.contains_key(phi)).collect();
             for phi in to_compute {
                 let be_value = incoming_for_block(cx, phi, latch);
@@ -381,7 +381,7 @@ fn get_constant_evolving_phi_operands(
     cx: &Cx,
     l: &Loop,
     use_inst: InstId,
-    phi_map: &mut HashMap<InstId, Option<InstId>>,
+    phi_map: &mut IdMap<InstId, Option<InstId>>,
     depth: u32,
 ) -> Option<InstId> {
     if depth > MAX_CONSTANT_EVOLVING_DEPTH {
@@ -435,7 +435,7 @@ fn get_constant_evolving_phi(
         return Some(inst);
     }
     // Record non-constant instructions contained by the loop.
-    let mut phi_map = HashMap::default();
+    let mut phi_map = IdMap::new();
     get_constant_evolving_phi_operands(cx, l, inst, &mut phi_map, 0)
 }
 
@@ -446,7 +446,7 @@ fn evaluate_expression(
     cx: &Cx,
     l: &Loop,
     v: Operand,
-    vals: &mut HashMap<InstId, ConstantId>,
+    vals: &mut IdMap<InstId, ConstantId>,
 ) -> Option<ConstantId> {
     // Convenient constant check, but redundant for recursive calls.
     if let Operand::Constant(c) = v {
