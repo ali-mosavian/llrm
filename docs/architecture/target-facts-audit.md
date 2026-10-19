@@ -32,7 +32,9 @@ Belongs in: a generic LIR opcode set (move, push, pop, load-address, add, …) w
 mapping it to its encodings; passes ask `Target` for the generic opcode (`target.ops().mov`) and
 match on it. This is the arm64 spike's `RegId`/`Flag`/opcode change: do not start it here.
 
-## B. Mode (16/32) tests and `m16()` constructors (28 hits)
+## B. Mode (16/32) tests (28 hits)
+
+The `m16()`/`M16` defaults (`assemble.rs`, `cpu.rs`, `driver/mod.rs`, `flow.rs`, `classes.rs`, `registerinfo.rs`, `floatalloc.rs`) are `#[cfg(test)]` helpers: not facts in a pass. `Peephole::new` and `floatalloc::allocated` are test-only too. None in production.
 
 | file:line | fact | belongs in |
 |---|---|---|
@@ -42,7 +44,6 @@ match on it. This is the arm64 spike's `RegId`/`Flag`/opcode change: do not star
 | `cfi.rs:101` | 16-bit register spelling drops `e` | `registers.regs` name per width |
 | `classes.rs:125`, `inline_asm.rs:114` | `one.bits == 16`, `bits == 32` | `registers.regs` |
 | `isel.rs:3353` | `bits >= 32` | `Layout` |
-| `assemble.rs:158`, `cpu.rs:544`, `driver/mod.rs:101`, `flow.rs:53`, `peephole.rs:225`, `regalloc_input.rs:142`, `floatalloc.rs:369` | the m16 target, classes or isel hard-wired as the default | the caller passes the `Target`; no default |
 
 ## C. Registers by name (93 hits; the ratchet sees only strings and `Register::`)
 
