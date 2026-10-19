@@ -95,7 +95,7 @@ fn listing_float_store(
     name: &str,
 ) -> Vec<String> {
     let profile =
-        crate::backend::cpu::tuned_optimizing(&llrm_x86_m16::M16, "486", false, true, false, true, true, true)
+        crate::backend::cpu::tuned_optimizing(&llrm_x86_m16::M16, "486", false, true, false, true, true, true, false)
             .expect("the 486 profile");
     let module = assemble::assembled(
         &parsed(text),
@@ -182,7 +182,6 @@ done:
             "mov bx, word ptr [bp+6]",
             "xor ax, ax",
             "xor cx, cx",
-            "L0_1:",
             "cmp cx, bx",
             "jge L0_8",
             "L0_5:",
