@@ -244,3 +244,23 @@ fn a_chain_of_stores_a_variable_stride_apart_computes_the_same() {
     assert_eq!(chained.matches("shl i32 %x, 2").count(), 1, "{chained}");
     assert_eq!(chained.matches("getelementptr i8, ptr %").count(), 3, "{chained}");
 }
+
+/// The loop of qb's `SEVEN_TERMS`: seven `sp(yy(k) + f(x - xp(k)))` of one
+/// counter `x` on 16-bit pointers. `opt -passes=loop-reduce` (LLVM 20, i386)
+/// keeps the one counter and writes each `f(x - xp(k))` as a base plus `x * 2`:
+/// one phi.
+#[test]
+fn seven_affine_terms_of_one_counter_keep_one_phi() {
+    let text = include_str!("lsr_seven_terms.ll");
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap();
+    let changed = crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let after = printed(&module);
+    assert!(changed, "{after}");
+    assert_eq!(after.matches(" = phi ").count(), 1, "{after}");
+    // As `opt` has them, one `x * 2` per term; a later CSE makes it one.
+    assert_eq!(after.matches("shl nuw nsw i16 %").count(), 7, "{after}");
+}
