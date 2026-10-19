@@ -11,7 +11,8 @@ mkdir -p $d/src $d/.git $d/debug/build; echo fn > $d/src/lib.rs; echo ref > $d/.
 out=$("$here/prune-target.sh" $d); case "$out" in *"4 entries"*) ;; *) echo "FAIL: dry run counts: $out"; exit 1;; esac
 bytes=$(echo "$out" | sed -E 's/.*\(([0-9]+) bytes\).*/\1/'); [ "$bytes" -ge 50000 ] || { echo "FAIL: the incremental entry's size was not counted: $out"; exit 1; }
 [ -e $d/debug/deps/libfoo-aaaaaaaaaaaaaaaa.rlib ] || { echo "FAIL: dry run removed a file"; exit 1; }
-"$here/prune-target.sh" $d --apply >/dev/null
+PRUNE_LOG=$d/prune.log "$here/prune-target.sh" $d --apply >/dev/null
+grep -q "pruned 4 entries" $d/prune.log && grep -q "libfoo-aaaaaaaaaaaaaaaa.rlib" $d/prune.log || { echo "FAIL: the run did not log its list"; exit 1; }
 for gone in debug/deps/libfoo-aaaaaaaaaaaaaaaa.rlib debug/deps/libfoo-aaaaaaaaaaaaaaaa.d debug/deps/libbar-dddddddddddddddd.rlib debug/incremental/old-1; do
   [ -e $d/$gone ] && { echo "FAIL: stale $gone survived"; exit 1; }; done
 for kept in src/lib.rs .git/HEAD debug/build/script-aaaaaaaaaaaaaaaa debug/deps/libfoo-bbbbbbbbbbbbbbbb.rlib debug/deps/libdep-cccccccccccccccc.rlib debug/deps/libbar-eeeeeeeeeeeeeeee.rlib debug/incremental/fresh-1; do

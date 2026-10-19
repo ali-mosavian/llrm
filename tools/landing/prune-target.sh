@@ -11,5 +11,5 @@ find "$dir"/*/deps -maxdepth 1 -type f -printf '%T@ %s %p\n' 2>/dev/null | awk -
   END { for (i in files) { split(files[i], f, " "); if (fhash[i] != newhash[fkey[i]] && now - f[1] > age*60) print f[2], f[3] } }' > "${TMPDIR:-/tmp}/prune-list.$$"
 find "$dir"/*/incremental -mindepth 1 -maxdepth 1 -mmin +"$age" -print0 2>/dev/null | while IFS= read -r -d '' p; do echo "$(( $(du -sk "$p" | cut -f1) * 1024 )) $p"; done >> "${TMPDIR:-/tmp}/prune-list.$$"
 awk '{s+=$1} END{printf "%.1f GB (%d bytes) in %d entries\n", s/1e9, s, NR}' "${TMPDIR:-/tmp}/prune-list.$$"
-if [ "$apply" = --apply ]; then cut -d' ' -f2- "${TMPDIR:-/tmp}/prune-list.$$" | tr '\n' '\0' | xargs -0 rm -rf --; fi
+if [ "$apply" = --apply ]; then { echo "$(date +%H:%M:%S) pruned $(wc -l < "${TMPDIR:-/tmp}/prune-list.$$") entries"; cat "${TMPDIR:-/tmp}/prune-list.$$"; } >> "${PRUNE_LOG:-/dev/null}"; cut -d' ' -f2- "${TMPDIR:-/tmp}/prune-list.$$" | tr '\n' '\0' | xargs -0 rm -rf --; fi
 rm -f "${TMPDIR:-/tmp}/prune-list.$$"
