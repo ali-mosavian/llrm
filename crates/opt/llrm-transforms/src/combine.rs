@@ -10,10 +10,9 @@
 //! [`InstructionWorklist`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/Transforms/Utils/InstructionWorklist.h).
 //! `visit` is [`llrm_mir::simplify::simplify_instruction_in`].
 //!
-//! MIRROR: the worklist (a stack, a map from instruction to slot, a deferred
-//! set); the seed in reverse reverse-post-order after folding and deleting the
-//! dead as it walks; the live-successor handling of a constant branch (the phi
-//! inputs of a dead edge become poison); the pop, delete-if-dead, visit,
+//! MIRROR: the seed in reverse reverse-post-order after folding and deleting
+//! the dead as it walks; the live-successor handling of a constant branch (the
+//! phi inputs of a dead edge become poison); the pop, delete-if-dead, visit,
 //! replace-all-uses, `pushUsersToWorkList`, erase sequence.
 //!
 //! DEVIATE, with the reason: code sinking (`tryToSinkInstruction`) is not made
@@ -39,93 +38,28 @@
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dense::{IdMap, IdSet};
+use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Operand, ValueDef};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::simplify::simplify_instruction_in;
+use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::FunctionAnalyses;
 
-/// `InstructionWorklist`: a stack of instructions, one entry each, and the
-/// deferred ones that `eraseInstFromFunction` adds for what lost a user.
-#[derive(Default)]
-struct Worklist {
-    stack: Vec<Option<InstId>>,
-    slot: IdMap<InstId, usize>,
-    deferred: Vec<InstId>,
-    deferred_set: IdSet<InstId>,
-}
+use crate::instworklist::InstWorklist;
 
-impl Worklist {
-    fn is_empty(&self) -> bool {
-        self.stack.is_empty() && self.deferred.is_empty()
-    }
-
-    /// `add`: queue `inst` to be looked at before the worklist is popped.
-    fn add(
-        &mut self,
-        inst: InstId,
-    ) {
-        if self.deferred_set.insert(inst) {
-            self.deferred.push(inst);
-        }
-    }
-
-    /// `push`.
-    fn push(
-        &mut self,
-        inst: InstId,
-    ) {
-        if self.slot.get(&inst).is_none() {
-            self.slot.insert(inst, self.stack.len());
-            self.stack.push(Some(inst));
-        }
-    }
-
-    /// `popDeferred`.
-    fn pop_deferred(&mut self) -> Option<InstId> {
-        let inst = self.deferred.pop()?;
-        self.deferred_set.remove(&inst);
-        Some(inst)
-    }
-
-    /// `remove`.
-    fn remove(
-        &mut self,
-        inst: InstId,
-    ) {
-        if let Some(at) = self.slot.remove(&inst) {
-            self.stack[at] = None;
-        }
-        if self.deferred_set.remove(&inst) {
-            self.deferred.retain(|&one| one != inst);
-        }
-    }
-
-    /// `removeOne`: the top of the stack, skipping the holes `remove` left.
-    fn remove_one(&mut self) -> Option<InstId> {
-        while let Some(top) = self.stack.pop() {
-            if let Some(inst) = top {
-                self.slot.remove(&inst);
-                return Some(inst);
-            }
-        }
-        None
-    }
-
-    /// `handleUseCountDecrement`: an operand that lost a user, and the one user
-    /// it has left, are looked at again.
-    fn handle_use_count_decrement(
-        &mut self,
-        function: &Function,
-        operand: Operand,
-    ) {
-        let Some(inst) = defining(function, operand) else { return };
-        self.add(inst);
-        if let Some(result) = function.instruction(inst).result
-            && let Some(only) = function.users(result).only()
-        {
-            self.add(only.user);
-        }
+/// `handleUseCountDecrement`: an operand that lost a user, and the one user it
+/// has left, are looked at again.
+pub(crate) fn handle_use_count_decrement(
+    worklist: &mut InstWorklist,
+    function: &Function,
+    operand: Operand,
+) {
+    let Some(inst) = defining(function, operand) else { return };
+    worklist.add(inst);
+    if let Some(result) = function.instruction(inst).result
+        && let Some(only) = function.users(result).only()
+    {
+        worklist.add(only.user);
     }
 }
 
@@ -172,14 +106,14 @@ fn is_trivially_dead(
 /// again.
 fn erase(
     function: &mut Function,
-    worklist: &mut Worklist,
+    worklist: &mut InstWorklist,
     inst: InstId,
 ) {
     let operands = function.instruction(inst).operands.to_vec();
     worklist.remove(inst);
     function.erase(inst).expect("nothing reads it");
     for operand in operands {
-        worklist.handle_use_count_decrement(function, operand);
+        handle_use_count_decrement(worklist, function, operand);
     }
 }
 
@@ -191,7 +125,7 @@ fn prepare(
     env: &Env,
     context: &mut Context,
     function: &mut Function,
-    worklist: &mut Worklist,
+    worklist: &mut InstWorklist,
 ) -> bool {
     let mut changed = false;
     let Some(entry) = function.entry() else { return false };
@@ -318,69 +252,154 @@ fn handle_only_live_successor(
     }
 }
 
-/// `InstCombinerImpl::run` (:5780): drain the worklist. Whether anything
-/// changed.
-fn drain(
-    env: &Env,
-    context: &mut Context,
-    function: &mut Function,
-    worklist: &mut Worklist,
-) -> bool {
-    let mut changed = false;
-    while !worklist.is_empty() {
-        // Walk deferred instructions, deleting the dead among them (and so,
-        // chain by chain, what only they read), and push the rest.
-        while let Some(inst) = worklist.pop_deferred() {
-            if function.parent(inst).is_none() {
-                continue;
-            }
-            if is_trivially_dead(function, inst) {
-                erase(function, worklist, inst);
-                changed = true;
-                continue;
-            }
-            worklist.push(inst);
-        }
-        let Some(inst) = worklist.remove_one() else { continue };
-        if function.parent(inst).is_none() {
-            continue;
-        }
-        // Check to see if we can DCE the instruction.
-        if is_trivially_dead(function, inst) {
-            erase(function, worklist, inst);
-            changed = true;
-            continue;
-        }
-        // Visit: the value it equals, if any.
-        let Some(result) = function.instruction(inst).result else { continue };
-        let Some(found) =
-            simplify_instruction_in(context, env.globals, env.layout, Some(&env.analyses), function, inst)
-        else {
-            continue;
-        };
-        if found == Operand::Value(result) {
-            continue;
-        }
-        // Everything uses the new value now; the users are looked at again.
-        let users: Vec<InstId> = function.users(result).iter().map(|one| one.user).collect();
-        function.replace_value(result, found);
-        for user in users {
-            worklist.push(user);
-        }
-        if let Some(new) = defining(function, found) {
-            worklist.push(new);
-        }
-        erase(function, worklist, inst);
-        changed = true;
-    }
-    changed
+/// What `visit` returns, as LLVM's `Instruction *`: null, the instruction
+/// itself (changed in place) or another value that replaces it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Visit {
+    None,
+    Changed,
+    Replace(Operand),
 }
 
 /// What `visit` reads besides the function.
-struct Env<'a> {
-    globals: &'a [GlobalValue],
-    layout: &'a DataLayout,
-    analyses: FunctionAnalyses,
+pub struct Env<'a> {
+    pub globals: &'a [GlobalValue],
+    pub layout: &'a DataLayout,
+    pub analyses: FunctionAnalyses,
+}
+
+/// `InstCombinerImpl`: the function being combined, the worklist, and the
+/// edits a `visit*` makes, each of which queues what it touches.
+pub struct Combiner<'a> {
+    pub context: &'a mut Context,
+    pub function: &'a mut Function,
+    pub env: &'a Env<'a>,
+    pub worklist: InstWorklist,
+}
+
+impl Combiner<'_> {
+    /// `Worklist.add`.
+    pub fn add_to_worklist(
+        &mut self,
+        inst: InstId,
+    ) {
+        self.worklist.add(inst);
+    }
+
+    /// `Builder.Insert*` through the `InstCombineWorklist` inserter: a new
+    /// instruction before `at`, queued. Its value, if it has one.
+    pub fn insert_before(
+        &mut self,
+        at: InstId,
+        opcode: Opcode,
+        ty: TypeId,
+        operands: Vec<Operand>,
+        flags: Flags,
+    ) -> InstId {
+        let new = self.function.create_instruction(opcode, ty, operands, flags, None);
+        self.function.insert(new, Position::Before(at)).expect("a placed instruction");
+        self.worklist.add(new);
+        new
+    }
+
+    /// `replaceInstUsesWith`: every use of `inst` reads `with`, and the users
+    /// are queued (`pushUsersToWorkList`). `inst` stays, unread.
+    pub fn replace_inst_with(
+        &mut self,
+        inst: InstId,
+        with: Operand,
+    ) {
+        let result = self.function.instruction(inst).result.expect("a value");
+        let users: Vec<InstId> = self.function.users(result).iter().map(|one| one.user).collect();
+        self.function.replace_value(result, with);
+        for user in users {
+            self.worklist.push(user);
+        }
+        if let Some(new) = defining(self.function, with) {
+            self.worklist.push(new);
+        }
+    }
+
+    /// `eraseInstFromFunction`.
+    pub fn erase(
+        &mut self,
+        inst: InstId,
+    ) {
+        erase(self.function, &mut self.worklist, inst);
+    }
+}
+
+/// `InstCombinerImpl::visit`: what the instruction simplifies to, else the
+/// `visit*` of its opcode.
+pub fn visit(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    let Some(result) = c.function.instruction(inst).result else { return Visit::None };
+    let env = c.env;
+    match simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst) {
+        Some(found) if found != Operand::Value(result) => Visit::Replace(found),
+        _ => Visit::None,
+    }
+}
+
+/// `InstCombinerImpl::run` (:5780): drain the worklist. Whether anything
+/// changed.
+fn drain(
+    c: &mut Combiner,
+    visit: fn(&mut Combiner, InstId) -> Visit,
+) -> bool {
+    let mut changed = false;
+    while !c.worklist.is_empty() {
+        // Walk deferred instructions, deleting the dead among them (and so,
+        // chain by chain, what only they read), and push the rest.
+        while let Some(inst) = c.worklist.pop_deferred() {
+            if c.function.parent(inst).is_none() {
+                continue;
+            }
+            if is_trivially_dead(c.function, inst) {
+                c.erase(inst);
+                changed = true;
+                continue;
+            }
+            c.worklist.push(inst);
+        }
+        let Some(inst) = c.worklist.remove_one() else { continue };
+        if c.function.parent(inst).is_none() {
+            continue;
+        }
+        // Check to see if we can DCE the instruction.
+        if is_trivially_dead(c.function, inst) {
+            c.erase(inst);
+            changed = true;
+            continue;
+        }
+        match visit(c, inst) {
+            Visit::None => {}
+            // Changed in place: it and its users are looked at again.
+            Visit::Changed => {
+                let result = c.function.instruction(inst).result;
+                if let Some(result) = result {
+                    let users: Vec<InstId> = c.function.users(result).iter().map(|one| one.user).collect();
+                    for user in users {
+                        c.worklist.push(user);
+                    }
+                }
+                if is_trivially_dead(c.function, inst) {
+                    c.erase(inst);
+                } else {
+                    c.worklist.push(inst);
+                }
+                changed = true;
+            }
+            Visit::Replace(found) => {
+                c.replace_inst_with(inst, found);
+                c.erase(inst);
+                changed = true;
+            }
+        }
+    }
+    changed
 }
 
 /// One combine of `function`: the worklist seeded and drained. Whether anything
@@ -392,10 +411,21 @@ pub fn combine(
     layout: &DataLayout,
     function: &mut Function,
 ) -> bool {
+    combine_with(context, globals, metadata, layout, function, visit)
+}
+
+pub(crate) fn combine_with(
+    context: &mut Context,
+    globals: &[GlobalValue],
+    metadata: &[MetadataNode],
+    layout: &DataLayout,
+    function: &mut Function,
+    visit: fn(&mut Combiner, InstId) -> Visit,
+) -> bool {
     let env = Env { globals, layout, analyses: FunctionAnalyses::of(context, globals, metadata, layout, function) };
-    let mut worklist = Worklist::default();
-    let mut changed = prepare(&env, context, function, &mut worklist);
-    changed |= drain(&env, context, function, &mut worklist);
+    let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default() };
+    let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
+    changed |= drain(&mut c, visit);
     changed
 }
 

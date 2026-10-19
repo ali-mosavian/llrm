@@ -506,7 +506,7 @@ fn _expanded(
     let header_values =
         header_phis.iter().chain(&header_work).filter_map(|&inst| value(function, inst)).collect::<Vec<_>>();
     for &defined in &header_values {
-        for one in function.users(defined).to_vec() {
+        for one in function.users(defined).snapshot() {
             let outside = function.parent(one.user).is_some_and(|block| !body.contains(&cfg::id(block)));
             if outside {
                 function.set_operand(one.user, one.index as usize, _provided(Operand::Value(defined), &swap));

@@ -122,6 +122,7 @@ use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, induction, ranges};
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask, signed};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
@@ -669,7 +670,7 @@ fn _single_use(
 ) -> bool {
     matches!(
         operand,
-        Operand::Value(value) if function.users(value).len() == 1
+        Operand::Value(value) if function.users(value).has_one_use()
     )
 }
 
@@ -2049,11 +2050,53 @@ fn _unread_bits_once(
             }
         };
         if let Some(with) = replacement {
+            // The bits the mask cleared reach what used the result: a sum or
+            // product with `nsw`/`nuw` may now overflow (poison), where it did
+            // not (InstCombine's SimplifyDemandedUseBits drops the flags of an
+            // operation whose operand it changed).
+            _poison_flags_dropped(function, result);
             _forward(function, inst, with);
             changed = true;
         }
     }
     changed
+}
+
+/// The flags that make an overflow poison (`nsw`, `nuw`) or an inexact
+/// division poison (`exact`), cleared on every operation the value `from` flows
+/// into through arithmetic, phis and selects: they read bits of it nobody else
+/// does.
+fn _poison_flags_dropped(
+    function: &mut Function,
+    from: ValueId,
+) {
+    let mut seen = IdSet::<ValueId>::new();
+    let mut pending = vec![from];
+    while let Some(value) = pending.pop() {
+        if !seen.insert(value) {
+            continue;
+        }
+        for user in function.users(value).iter().map(|one| one.user).collect::<Vec<_>>() {
+            let instruction = function.instruction(user);
+            let flows = matches!(
+                instruction.opcode,
+                Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl)
+                    | Opcode::Phi
+                    | Opcode::Select
+            );
+            if !flows {
+                continue;
+            }
+            let flags = instruction.flags;
+            let kept = flags.without(Flags::NUW).without(Flags::NSW);
+            if kept != flags {
+                function.set_flags(user, kept);
+            }
+            if let Some(result) = function.instruction(user).result {
+                pending.push(result);
+            }
+        }
+    }
 }
 
 /// `sdiv` and `srem` of a dividend proved non-negative are `udiv` and `urem`

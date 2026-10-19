@@ -914,6 +914,19 @@ fn a_tags_ancestors_are_the_same_with_and_without_the_type_tree() {
     assert_eq!(llrm_mir::tbaa::Tbaa::chain(metadata, llrm_mir::module::MetadataId(5)), ["int", "scalar", "root"]);
 }
 
+/// A body with no call was solved for what escapes twice by `summaries`: once
+/// for its direct summary and once for its visit, which finds the same with no
+/// call to give other captures (2 of 4 solves of d_faces' escape phase, which
+/// is 2.7% of the compile). The visit reuses the direct summary's facts.
+#[test]
+fn a_body_with_no_call_is_solved_for_what_escapes_once_by_summaries() {
+    let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
+    let procedures = IndexMap::from_iter([("callee".to_owned(), Procedure::of(parsed.unit_of("callee")))]);
+    let before = crate::alias::escape_solves();
+    summaries(&procedures, None).unwrap();
+    assert_eq!(crate::alias::escape_solves() - before, 1, "a call-free body was solved for escapes twice");
+}
+
 /// What a body does on its own was made again for every body in every round of
 /// the fixed point: 7000 times in deedlines, 47 s of 101 (#394). It is made
 /// once per body, however many rounds.
@@ -1104,6 +1117,27 @@ fn a_typed_reference_is_copied_without_allocating() {
     let copy = reference.clone();
     assert_eq!(counted::made() - before, 0, "a copy of a reference allocated");
     drop((copy, copies));
+}
+
+/// A held access was asked its `!tbaa` name and lineage again at every hit
+/// (9 M instructions on d_faces). Unchanged metadata is not asked twice.
+#[test]
+fn a_held_access_is_not_asked_its_type_again() {
+    let parsed = Parsed::new(&format!(
+        "define void @f(ptr %p) {{\n  store i16 1, ptr %p, !tbaa !5\n  ret void\n}}\n{TYPE_TREE}"
+    ));
+    let store = parsed.all(|op| matches!(op, Opcode::Store { .. }))[0];
+    let tree = llrm_mir::tbaa::Tbaa::of(&parsed.module.metadata);
+    for tree in [None, Some(&tree)] {
+        let unit = Unit { tbaa: tree, ..parsed.unit() };
+        let first = MemRef::of(&unit, store).expect("a store");
+        let before = crate::memory::TYPE_READS.with(std::cell::Cell::get);
+        for _ in 0..20 {
+            assert_eq!(MemRef::of(&unit, store).as_ref(), Some(&first));
+        }
+        let reads = crate::memory::TYPE_READS.with(std::cell::Cell::get) - before;
+        assert_eq!(reads, 0, "a held access was asked its type {reads} times in 20 hits");
+    }
 }
 
 /// A reference of a unit with no type tree was given the names of its type and

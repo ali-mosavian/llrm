@@ -2606,6 +2606,60 @@ fn strip_pointer_casts(
     }
 }
 
+/// The LVI of a function, kept from one pass to the next while nothing edits
+/// the function: LLVM's `LazyValueAnalysis` result, whose value cache lives
+/// until a pass that changes the function does not preserve it. A pass takes
+/// the cache for its run and puts it back.
+pub struct SharedLvi(std::rc::Rc<std::cell::RefCell<LazyValueInfo>>);
+
+impl SharedLvi {
+    pub fn take(&self) -> LazyValueInfo {
+        std::mem::take(&mut *self.0.borrow_mut())
+    }
+
+    pub fn put(
+        &self,
+        lvi: LazyValueInfo,
+    ) {
+        *self.0.borrow_mut() = lvi;
+    }
+}
+
+impl PartialEq for SharedLvi {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for SharedLvi {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        f.write_str("SharedLvi")
+    }
+}
+
+/// `LazyValueAnalysis`: an empty [`SharedLvi`], filled by the passes that ask.
+pub struct LviCache;
+
+impl crate::passes::Analysis for LviCache {
+    type Result = SharedLvi;
+    const NAME: &'static str = "lvi";
+
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        _: &mut crate::passes::Analyses,
+    ) -> SharedLvi {
+        SharedLvi(Default::default())
+    }
+}
+
 impl LazyValueInfo {
     pub fn new() -> Self {
         Self::default()

@@ -307,6 +307,7 @@ impl Forest {
     /// in the loops `from` is in.
     fn split(
         &mut self,
+        function: &Function,
         bridge: i64,
         from: i64,
         header: i64,
@@ -315,6 +316,8 @@ impl Forest {
         for one in loops.iter_mut().filter(|one| one.header != header && one.body.contains(&from)) {
             one.body.insert(bridge);
         }
+        // A loop one block larger may now be the larger of two siblings.
+        Self::ordered(function, loops);
     }
 
     /// As `cfg::natural` lists them: smallest first, equal ones by the place in
@@ -584,7 +587,7 @@ pub(crate) fn _rotate(
         let mut updater = SsaUpdater::new(function.value(value).ty, function.value(value).name.clone().as_deref());
         updater.add_available_value(shape.preheader, starts[index]);
         updater.add_available_value(shape.latch, latest(nexts[index]));
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             let user = function.instruction(one.user);
             let at = match (user.opcode == Opcode::Phi).then(|| user.operands[one.index as usize + 1]) {
                 Some(Operand::Block(from)) => from,
@@ -606,7 +609,7 @@ pub(crate) fn _rotate(
         let mut updater = SsaUpdater::new(function.value(value).ty, function.value(value).name.clone().as_deref());
         updater.add_available_value(shape.preheader, copy);
         updater.add_available_value(shape.header, Operand::Value(value));
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             if function.parent(one.user) != Some(shape.header) {
                 updater.rewrite_use(context, function, one);
             }
@@ -807,7 +810,7 @@ fn _chained(
     let bridge = crate::edges::split(function, cfg::block(preheader), first, Vec::new())?;
     // The loop is as it was and a block stands on its way in, in the loops
     // around.
-    forest.split(cfg::id(bridge), preheader, cfg::id(first));
+    forest.split(function, cfg::id(bridge), preheader, cfg::id(first));
     let Some(shape) = _shape_of(function, &loop_, true, true).filter(|shape| shape.preheader == bridge) else {
         forest.check(function);
         return Ok(None);

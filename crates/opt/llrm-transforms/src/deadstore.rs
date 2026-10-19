@@ -41,7 +41,8 @@
 //! DEVIATE 2: nothing throws (no unwinding in MIR), so `ThrowingBlocks` is
 //! empty and every local object is invisible on unwind. Exit: when MIR has EH.
 //! DEVIATE 3: an object is invisible after the function returns when it is
-//! a stack or frame object (`isa<AllocaInst>`); `dead_on_return` and byval
+//! a stack or frame object (`isa<AllocaInst>`) whose address is not captured
+//! (`alias::captured`, a `ret` and a store of it included); `dead_on_return` and byval
 //! arguments (stage 3), and non-alloca objects with no capture (malloc) are
 //! absent. Exit: stage 3.
 //! DEVIATE 4: memory terminators (`lifetime.end`, `free`), the `initializes`
@@ -85,6 +86,7 @@ use llrm_analysis::mssa::alias::{AliasQuery, Location};
 use llrm_analysis::mssa::updater::MemorySsaUpdater;
 use llrm_analysis::mssa::{AccessId, Kind, Mssa, shadow};
 use llrm_mir::context::Context;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::{DomTree, PostDomTree};
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
@@ -151,7 +153,7 @@ impl FunctionPass for DeadStoreElimination {
         let gone = std::mem::take(&mut state.to_remove);
         let shortened = std::mem::take(&mut state.shortened);
         let merged = std::mem::take(&mut state.merged);
-        for (memset, (length, skip)) in shortened {
+        for (memset, &(length, skip)) in shortened.iter() {
             if unit.function.is_erased(memset) || gone.contains(&memset) {
                 continue;
             }
@@ -178,7 +180,7 @@ impl FunctionPass for DeadStoreElimination {
             }
             unit.function.set_operands(memset, now);
         }
-        for (store, value) in merged {
+        for (store, &value) in merged.iter() {
             if unit.function.is_erased(store) || gone.contains(&store) {
                 continue;
             }
@@ -227,7 +229,7 @@ struct Dse<'a> {
     pdt: &'a PostDomTree,
     loops: &'a [llrm_analysis::graph::loops::Loop],
     /// Post-order numbers of the reachable blocks.
-    post_order: HashMap<BlockId, u32>,
+    post_order: IdMap<BlockId, u32>,
     /// All the defs that could kill others.
     mem_defs: Vec<AccessId>,
     /// Defs already deleted.
@@ -237,15 +239,17 @@ struct Dse<'a> {
     to_remove: Vec<InstId>,
     /// `IOLs`: per partly overwritten instruction, the bytes the killing writes
     /// found so far cover, as end -> start of disjoint intervals.
-    overlaps: HashMap<InstId, std::collections::BTreeMap<i64, i64>>,
+    overlaps: IdMap<InstId, std::collections::BTreeMap<i64, i64>>,
     /// Stores whose constant became a merge with a killing store's: the
     /// store, and its new value.
-    merged: HashMap<InstId, u128>,
+    merged: IdMap<InstId, u128>,
     /// The order the partly overwritten instructions were first seen in.
     overlap_order: Vec<InstId>,
     /// The memsets to shorten: the new length, and the bytes taken off the
     /// front.
-    shortened: HashMap<InstId, (i64, i64)>,
+    shortened: IdMap<InstId, (i64, i64)>,
+    /// Per alloca value, whether its address is captured (a `ret` included).
+    captured: std::cell::RefCell<HashMap<u32, bool>>,
 }
 
 impl<'a> Dse<'a> {
@@ -272,15 +276,16 @@ impl<'a> Dse<'a> {
             dt,
             pdt,
             loops,
-            post_order: HashMap::default(),
+            post_order: IdMap::new(),
             mem_defs: Vec::new(),
             skip_stores: HashSet::default(),
             any_unreachable_exit: false,
             to_remove: Vec::new(),
-            overlaps: HashMap::default(),
-            merged: HashMap::default(),
+            overlaps: IdMap::new(),
+            merged: IdMap::new(),
             overlap_order: Vec::new(),
-            shortened: HashMap::default(),
+            shortened: IdMap::new(),
+            captured: Default::default(),
         };
         // Post-order numbers, and the defs that could kill.
         for (number, block) in post_order_of(function).into_iter().enumerate() {
@@ -440,12 +445,21 @@ impl<'a> Dse<'a> {
         )
     }
 
-    /// `isInvisibleToCallerAfterRet`: a local (an alloca).
+    /// `isInvisibleToCallerAfterRet`: a local (an alloca) whose address is not
+    /// captured, a `ret` of it included (`PointerMayBeCaptured` with
+    /// `ReturnCaptures`).
     fn invisible_after_return(
         &self,
         loc: &Location,
     ) -> bool {
-        self.object_of(loc).is_some_and(|object| matches!(object.kind, MemoryKind::Stack | MemoryKind::Frame))
+        let Some(object) = self.object_of(loc) else { return false };
+        if !matches!(object.kind, MemoryKind::Stack | MemoryKind::Frame) {
+            return false;
+        }
+        let llrm_analysis::memory::Key::Value(alloca) = object.key else { return false };
+        *self.captured.borrow_mut().entry(alloca).or_insert_with(|| {
+            llrm_mir::alias::captured(self.context, self.callees, self.function, llrm_mir::module::ValueId(alloca))
+        }) == false
     }
 
     /// `isInvisibleToCallerOnUnwind`: nothing unwinds, so the same.
@@ -864,7 +878,7 @@ impl<'a> Dse<'a> {
                 if self.is_complete_overwrite(&maybe_dead_loc, maybe_dead_inst, use_inst) {
                     let killing_block = self.function.parent(use_inst).expect("a placed instruction");
                     let dead_block = self.mssa.access(maybe_dead_access).block;
-                    if self.post_order[&killing_block] < self.post_order[&dead_block] {
+                    if self.post_order.get(&killing_block) < self.post_order.get(&dead_block) {
                         if !self.invisible_after_return(killing_loc) {
                             killing_defs.push(use_inst);
                         }
@@ -1084,7 +1098,8 @@ impl<'a> Dse<'a> {
         let mut work: Vec<(BlockId, bool)> = vec![(second_block, true)];
         while let Some((block, is_first)) = work.pop() {
             // The block after `first` where it holds it, up to `second` where
-            // that is the block's end of the walk; empty if `first` is not before.
+            // that is the block's end of the walk; empty if `first` is not
+            // before.
             let backwards = block == first_block && is_first && !self.function.comes_before(first, second);
             let rest: Box<dyn Iterator<Item = InstId> + '_> = match (backwards, block == first_block) {
                 (true, _) => Box::new(std::iter::empty()),
@@ -1131,7 +1146,7 @@ impl<'a> Dse<'a> {
             if !self.overlaps.contains_key(&dead_inst) {
                 self.overlap_order.push(dead_inst);
             }
-            let map = self.overlaps.entry(dead_inst).or_default();
+            let map = self.overlaps.get_or_insert_with(dead_inst, Default::default);
             let (mut start, mut end) = (killing_off, killing_off + killing_size);
             // Intervals ending at or after the start that begin before the end.
             let mut merging: Vec<i64> = Vec::new();
@@ -1185,7 +1200,7 @@ impl<'a> Dse<'a> {
             (killing_size - (*dead_start - killing_start) as u64, true)
         };
         let new_size = *dead_size - remove_size;
-        let entry = self.shortened.entry(dead).or_insert((*dead_size as i64, 0));
+        let entry = self.shortened.get_or_insert_with(dead, || (*dead_size as i64, 0));
         entry.0 = new_size as i64;
         if begin {
             entry.1 += remove_size as i64;
@@ -1486,7 +1501,7 @@ impl<'a> Dse<'a> {
 /// The reachable blocks in post-order.
 fn post_order_of(function: &Function) -> Vec<BlockId> {
     let Some(entry) = function.entry() else { return Vec::new() };
-    let mut seen: HashSet<BlockId> = HashSet::default();
+    let mut seen: IdSet<BlockId> = IdSet::new();
     let mut order = Vec::new();
     // A block's first successor is visited first, as LLVM's `post_order`: the
     // lists are popped from the back.

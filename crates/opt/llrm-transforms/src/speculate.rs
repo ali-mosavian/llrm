@@ -225,7 +225,7 @@ pub fn executed(
     }
     for (def, uses) in sinkable.iter() {
         let result = function.instruction(def).result.expect("a value used as an operand");
-        if function.users(result).len() == *uses {
+        if function.users(result).has_n_uses(*uses) {
             speculated += 1;
             if speculated > 1 {
                 return false;

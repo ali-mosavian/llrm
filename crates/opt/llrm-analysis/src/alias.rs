@@ -1385,11 +1385,16 @@ pub fn visits() -> usize {
 }
 
 pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
+    _direct_summary_with(unit).map(|(summary, _)| summary)
+}
+
+/// `_direct_summary`, and the points-to facts it was made from.
+fn _direct_summary_with(unit: &Unit) -> Result<(Summary, Rc<PointsTo>), String> {
     DIRECT_RUNS.with(|runs| runs.set(runs.get() + 1));
     let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
     let (mut unknown_read, mut unknown_write) = (false, false);
     let mut types = Some(BTreeSet::new());
-    let facts = points_to(unit, None, None)?;
+    let facts = Rc::new(points_to(unit, None, None)?);
     for (_, inst) in unit.function.walk() {
         let Some(reference) = MemRef::of(unit, inst) else { continue };
         let read = matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. });
@@ -1448,14 +1453,15 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
             _ => None,
         })
         .collect();
-    Ok(Summary {
+    let summary = Summary {
         reads: reads.into(),
         writes: writes.into(),
         captures,
         unknown_read,
         unknown_write,
         unknown_write_types: types,
-    })
+    };
+    Ok((summary, facts))
 }
 
 fn _widen_parameters(summary: Summary) -> Summary {
@@ -1588,6 +1594,9 @@ impl Bodies for IndexMap<String, Procedure<'_>> {
 pub struct SummaryMemo {
     result: IndexMap<String, Summary>,
     direct: IndexMap<String, Summary>,
+    /// The facts a call-free body's direct summary was made from: its visit,
+    /// with no call to give them other captures, finds the same.
+    direct_facts: IndexMap<String, Rc<PointsTo>>,
     /// The last visit of each body, in the order of the run, with its name.
     found: Vec<(String, Option<Visit>)>,
     known: Option<IndexMap<String, Summary>>,
@@ -1659,7 +1668,15 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
         let mut dirty_at: Vec<usize> = dirty_names.iter().filter_map(|name| procedures.position(name)).collect();
         dirty_at.sort_unstable();
         for at in dirty_at {
-            memo.direct.insert(procedures.name(at).to_owned(), _direct_summary(&procedures.procedure(at).unit)?);
+            let procedure = procedures.procedure(at);
+            let (summary, facts) = _direct_summary_with(&procedure.unit)?;
+            let name = procedures.name(at).to_owned();
+            if procedure.calls.is_empty() && procedure.arguments.is_empty() {
+                memo.direct_facts.insert(name.clone(), facts);
+            } else {
+                memo.direct_facts.shift_remove(&name);
+            }
+            memo.direct.insert(name, summary);
         }
         Ok::<(), String>(())
     })?;
@@ -1825,6 +1842,7 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
                 at,
                 &procedure,
                 &direct[name],
+                memo.direct_facts.get(name),
                 &result,
                 (callbacks.as_ref(), version),
                 &mut last[at].1,
@@ -2094,6 +2112,7 @@ fn _summarized(
     me: usize,
     procedure: &Procedure,
     direct: &Summary,
+    direct_facts: Option<&Rc<PointsTo>>,
     result: &IndexMap<String, Summary>,
     (callbacks, version): (Option<&Summary>, usize),
     memo: &mut Option<Visit>,
@@ -2107,9 +2126,12 @@ fn _summarized(
         .map(|(at, target)| (*at, _summary(procedure, result, target).map(|one| one.captures.clone())))
         .collect::<IndexMap<_, _>>();
     if memo.as_ref().is_none_or(|one| one.captured != captured_at) {
-        let facts = Rc::new(llrm_support::debug::timed("summaries points-to", || {
-            points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at))
-        })?);
+        let facts = match direct_facts {
+            Some(held) if captured_at.is_empty() && procedure.arguments.is_empty() => Rc::clone(held),
+            _ => Rc::new(llrm_support::debug::timed("summaries points-to", || {
+                points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at))
+            })?),
+        };
         *memo = Some(Visit { captured: captured_at, facts, version: None, unknown: Default::default(), base: None });
     }
     let visit = memo.as_mut().expect("made above");

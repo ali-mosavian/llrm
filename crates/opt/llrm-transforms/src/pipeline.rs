@@ -957,8 +957,18 @@ pub fn recorded(
     if applied.options.llvm_order {
         manager.hold::<GlobalsAA>();
     }
-    for stage in function_stages(applied) {
+    for (at, stage) in function_stages(applied).into_iter().enumerate() {
         manager.add(stage);
+        // LLVM's IPSCCP and DeadArgumentElimination run after the early
+        // function pipeline, before the Simplify list.
+        if at == 0 && applied.options.llvm_order {
+            manager.add_program(crate::walk::ModuleIpo {
+                inline: applied.options.inline,
+                ranges: applied.options.ipa_ranges,
+            });
+            // A program pass abandons it.
+            manager.hold::<GlobalsAA>();
+        }
     }
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
