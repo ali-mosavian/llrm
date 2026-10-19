@@ -1097,15 +1097,15 @@ fn test_an_array_field_fills_and_copies_as_one_run_each() {
     let source = written(
         &directory,
         "field_runs.nib",
-        "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\nfn main() -> i16:\n    let f = relay(3)\n    return f.handle + i16(f.buffer[5])\n",
+        "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\nfn main() -> i16:\n    let f = relay(3)\n    let g = relay(4)\n    return f.handle + g.handle + i16(f.buffer[5])\n",
     );
-    // `opened` is inlined into `relay`: its fill and relay's copies are both
-    // there.
+    // `opened` is inlined into `relay`; two calls keep `relay` a function.
     let assembly = listing(&parsed(&source), "main", &O2());
     let relay = between(&assembly, "_relay proc", "_relay endp");
 
     assert!(relay.contains("rep stos"), "{relay}");
-    assert!(relay.contains("rep movs") || Regex::new(r"\bj\w+\s").unwrap().is_match(relay), "{relay}");
+    // MemCpyOpt builds the fill in the returned struct, so no copy is left.
+    assert!(!relay.contains("movs") && !Regex::new(r"\bj\w+\s").unwrap().is_match(relay), "{relay}");
     assert!(relay.matches("byte ptr").count() < 8, "{relay}");
 }
 
@@ -2505,7 +2505,7 @@ fn test_the_level_reaches_the_rich_route() {
 #[test]
 fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() {
     use llrm_mir::facts::Fact;
-    let source = "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    bump(a, b, 4)\n    return a.x\n";
+    let source = "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    let c = P(x=0, y=4)\n    bump(a, b, 4)\n    bump(a, c, 5)\n    return a.x\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "bump.nib", source));
     let bump = function(&program, "bump");
@@ -2529,7 +2529,7 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
             .expect("a loop");
         between(&body[..end], &format!("{head}:\n"), "\0").matches("ptr").count()
     };
-    // Unrolled, the 4-trip loop is gone and there is nothing to count.
+    // Two calls with different arguments keep the loop from being folded.
     let pipeline = llrm_transforms::pipeline::Options {
         inline: llrm_transforms::inline::Threshold::none(),
         unroll: false,
@@ -2541,7 +2541,8 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
         ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
-    assert_eq!(looped(&masm::text(&module).expect("prints")), 1);
+    // The store to `dst.x` is promoted too: the loop touches no memory.
+    assert_eq!(looped(&masm::text(&module).expect("prints")), 0);
 }
 
 /// examples/league.nib's `main` was refused after #127 made every spiller
