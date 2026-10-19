@@ -16,10 +16,10 @@ END SUB
 ";
 
 /// The handler's offset was `ptrtoint` of the landing to the runtime's 16-bit
-/// word, though a pointer is 32 bits at -m32: no pattern selected the
-/// narrowing, so every program with ON LOCAL ERROR failed with "@TOP: ptrtoint"
-/// (#2672), and one that selected it would have passed a flat address cut to 16
-/// bits. The offset is the pointer's width: m32 pushes the address, m16 a word.
+/// word, though a pointer is 32 bits at -m32: no pattern selected the narrowing,
+/// so every program with ON LOCAL ERROR failed with "@TOP: ptrtoint" (#2672),
+/// and one that selected it would have passed a flat address cut to 16 bits. The
+/// offset is the pointer's width: m32 pushes the address, m16 a word.
 #[test]
 fn test_on_local_error_registers_the_handlers_offset_at_the_pointers_width() {
     let scratch = tempfile::tempdir().unwrap();
