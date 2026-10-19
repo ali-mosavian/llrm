@@ -267,7 +267,6 @@ fn _decisions(
         Some(constant_cycles::Successors { choose: &successors, reads: &reads }),
         None,
     );
-    let scoped = ranges::bounds(unit)?;
     let mut out = Vec::new();
     for &block in function.layout() {
         let Some(last) = function.terminator(block) else {
@@ -284,18 +283,6 @@ fn _decisions(
         let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
         if answer.is_none() {
             answer = settled.get(&block).copied();
-        }
-        if answer.is_none() {
-            let scope = scoped.scope(unit, cfg::id(block));
-            let mut possible = Vec::new();
-            for target in function.successors(block) {
-                if ranges::on_edge_over(unit, block, target, &scope, Some(&facts))?.is_some() {
-                    possible.push(target);
-                }
-            }
-            if let [one] = possible[..] {
-                answer = Some(one == taken);
-            }
         }
         if answer.is_none() {
             answer = if use_scev {
