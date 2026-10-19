@@ -5252,6 +5252,18 @@ impl Selector<'_, '_, '_> {
                 out.push(Arc::new(one));
                 return Ok(());
             }
+            // A constant is the dword it is: one move.
+            if let ([whole], Operand::Constant(id)) = (&convention.returns[..], value)
+                && let Some(number) = self.far_number(id)
+            {
+                let dword = self.fresh_held(4);
+                let word = Loc::Imm(Imm { value: number, width: 4, address: None });
+                out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(dword)], vec![word])));
+                one.requires = vec![(dword, *whole)];
+                one.uses = vec![dword.value];
+                out.push(Arc::new(one));
+                return Ok(());
+            }
             let (offset, selector) = self.far(value, at, out)?;
             match convention.returns[..] {
                 [low, high] => {
