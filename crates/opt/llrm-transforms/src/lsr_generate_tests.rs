@@ -125,7 +125,7 @@ fn every_generated_formula_is_legal_canonical_and_distinct() {
     generated(STORE, |_, se, lsr, header| {
         let tti = X86::of_cpu("core2").unwrap();
         for lu in &lsr.uses {
-            let mut keys = std::collections::HashSet::new();
+            let mut keys = llrm_support::hash::HashSet::default();
             for f in &lu.formulae {
                 assert!(f.is_canonical(se, header), "{f:?}");
                 assert!(is_legal_use_formula(&tti, lu.min_offset, lu.max_offset, lu.kind, f), "{f:?}");
@@ -187,6 +187,10 @@ fn too_many_formulae_are_narrowed_to_the_shared_register() {
         assert!(lsr.estimate_search_space_complexity() < 65535);
         // Every use is left with the one register they all share.
         let first = lsr.uses[0].formulae.clone();
-        assert!(lsr.uses.iter().all(|lu| lu.formulae.len() == first.len() && lu.formulae == first), "{:?}", lsr.uses.iter().map(|lu| lu.formulae.len()).collect::<Vec<_>>());
+        assert!(
+            lsr.uses.iter().all(|lu| lu.formulae.len() == first.len() && lu.formulae == first),
+            "{:?}",
+            lsr.uses.iter().map(|lu| lu.formulae.len()).collect::<Vec<_>>()
+        );
     });
 }

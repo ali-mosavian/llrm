@@ -11,6 +11,10 @@
 //! merge uses outside the loop into those inside, and last pick the register
 //! most uses share and drop what does not use it, until the space fits.
 //!
+//! # Example
+//! Four uses of twenty formulae each (160000 combinations) with a register all
+//! share: the formulae without it go, one is left per use.
+//!
 //! # Runs
 //! Nothing runs it yet: stage 4 of the translation of LSR.
 //!
@@ -19,8 +23,8 @@
 //! prefers none) and `NarrowSearchSpaceByDeletingCostlyFormulas`
 //! (`-lsr-exp-narrow`, off by default) are not ported.
 
-use llrm_analysis::scev::expr::Scev;
 use llrm_analysis::scev::ScalarEvolution;
+use llrm_analysis::scev::expr::Scev;
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::lsr_collect::Collection;
@@ -99,8 +103,8 @@ impl Collection<'_, '_> {
         }
     }
 
-    /// `NarrowSearchSpaceByCollapsingUnrolledCode`: uses a constant offset apart
-    /// use the same registers: the fixups of one move into the other.
+    /// `NarrowSearchSpaceByCollapsingUnrolledCode`: uses a constant offset
+    /// apart use the same registers: the fixups of one move into the other.
     pub fn narrow_search_space_by_collapsing_unrolled_code(&mut self) {
         if !self.too_complex() {
             return;
@@ -176,9 +180,9 @@ impl Collection<'_, '_> {
         }
     }
 
-    /// `NarrowSearchSpaceByFilterFormulaWithSameScaledReg`: of the formulae with
-    /// one scaled register and scale, the best, so as many pairs as possible
-    /// survive.
+    /// `NarrowSearchSpaceByFilterFormulaWithSameScaledReg`: of the formulae
+    /// with one scaled register and scale, the best, so as many pairs as
+    /// possible survive.
     pub fn narrow_search_space_by_filter_formula_with_same_scaled_reg(
         &mut self,
         se: &mut ScalarEvolution,
@@ -207,10 +211,7 @@ impl Collection<'_, '_> {
                 // The formula with fewer new registers: one shared among uses
                 // adds less to the count.
                 let new_regs = |this: &Self, f: &Formula| -> usize {
-                    f.base_regs
-                        .iter()
-                        .map(|&reg| num_uses - this.reg_uses.used_by_indices(reg).count() + 1)
-                        .sum()
+                    f.base_regs.iter().map(|&reg| num_uses - this.reg_uses.used_by_indices(reg).count() + 1).sum()
                 };
                 let (fa, fb) = (new_regs(self, &f), new_regs(self, &best));
                 let better = if fa != fb {
@@ -251,27 +252,43 @@ impl Collection<'_, '_> {
             let this_f = lu.formulae[0].clone();
             let (min, max) = (lu.min_offset, lu.max_offset);
             // A compatible use inside the loop to merge with.
-            let target = self.uses.iter().position(|other| {
-                if other.all_fixups_outside_loop || other.kind == Kind::ICmpZero || other.formulae.is_empty() {
-                    return false;
-                }
-                // This use's offsets must be legal for all the other's formulae.
-                if other.formulae.iter().any(|f| {
-                    !is_legal_use(self.tti, min, max, other.kind, f.base_gv.is_some(), f.base_offset, f.has_base_reg, f.scale)
-                }) {
-                    return false;
-                }
-                // The same initial formula; the kind and access type may differ,
-                // which makes the cost inexact but is what ignoring the uses
-                // outside the loop gives.
-                let other_f = &other.formulae[0];
-                this_f.base_regs == other_f.base_regs
-                    && this_f.scaled_reg == other_f.scaled_reg
-                    && this_f.base_gv == other_f.base_gv
-                    && this_f.scale == other_f.scale
-                    && this_f.unfolded_offset == other_f.unfolded_offset
-                    && this_f.base_offset == other_f.base_offset
-            });
+            let target = self
+                .uses
+                .iter()
+                .position(
+                    |other| {
+                        if other.all_fixups_outside_loop || other.kind == Kind::ICmpZero || other.formulae.is_empty() {
+                            return false;
+                        }
+                        // This use's offsets must be legal for all the other's
+                        // formulae.
+                        if other.formulae.iter().any(|f| {
+                            !is_legal_use(
+                                self.tti,
+                                min,
+                                max,
+                                other.kind,
+                                f.base_gv.is_some(),
+                                f.base_offset,
+                                f.has_base_reg,
+                                f.scale,
+                            )
+                        }) {
+                            return false;
+                        }
+                        // The same initial formula; the kind and access type
+                        // may differ, which makes the cost inexact but is
+                        // what ignoring the uses outside the loop
+                        // gives.
+                        let other_f = &other.formulae[0];
+                        this_f.base_regs == other_f.base_regs
+                            && this_f.scaled_reg == other_f.scaled_reg
+                            && this_f.base_gv == other_f.base_gv
+                            && this_f.scale == other_f.scale
+                            && this_f.unfolded_offset == other_f.unfolded_offset
+                            && this_f.base_offset == other_f.base_offset
+                    },
+                );
             let Some(target) = target else {
                 lu_idx += 1;
                 continue;
@@ -302,7 +319,8 @@ impl Collection<'_, '_> {
         }
         let Some(diff) = se.compute_constant_difference(self.cx, best, reg) else { return false };
         let diff = diff.sext_value() as i64;
-        self.tti.is_legal_addressing_mode(false, diff, true, 0) && !self.tti.is_legal_addressing_mode(false, diff.wrapping_neg(), true, 0)
+        self.tti.is_legal_addressing_mode(false, diff, true, 0)
+            && !self.tti.is_legal_addressing_mode(false, diff.wrapping_neg(), true, 0)
     }
 
     /// `NarrowSearchSpaceByPickingWinnerRegs`: with the rest tried, pick the
@@ -355,7 +373,10 @@ impl Collection<'_, '_> {
                     } else {
                         self.uses[lu_idx].delete_formula(i);
                         any = true;
-                        assert!(!self.uses[lu_idx].formulae.is_empty(), "Use has no formulae left! Is Regs inconsistent?");
+                        assert!(
+                            !self.uses[lu_idx].formulae.is_empty(),
+                            "Use has no formulae left! Is Regs inconsistent?"
+                        );
                     }
                 }
                 if any {
