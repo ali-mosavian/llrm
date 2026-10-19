@@ -1444,8 +1444,10 @@ fn test_bases_past_the_registers_are_not_stepped_as_pointers() {
     // CYCLEBLOBS stepped one pointer per term; five spilled, each an
     // `add [bp-N],2` per pixel where its invariant base cost nothing.
     let text = optimized_sub(SEVEN_TERMS, "T");
+    // Two: the one scaled index every term shares, and the counter that counts
+    // to zero for the exit and the POKE address; none per term.
     let steps = poke_block(&text).lines().filter(|line| line.contains(" = phi ")).count();
-    assert!(steps <= 1, "{steps} pointer steps\n{text}");
+    assert!(steps <= 2, "{steps} pointer steps\n{text}");
 }
 
 const SEVEN_TERMS: &str = "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED sp(8000), f(700), xp(7), yy(7), cd(2000)\r\nt\r\nSUB t\r\n\
@@ -1471,15 +1473,20 @@ fn test_affine_addresses_of_one_counter_step_no_pointer_in_memory() {
 fn test_affine_terms_of_one_counter_share_its_scaled_value() {
     let text = optimized_sub(SEVEN_TERMS, "T");
     let body = poke_block(&text);
-    let counter =
-        regex::Regex::new(r"(%[\w.]+) = phi ").expect("a pattern").captures(body).unwrap_or_else(|| panic!("{text}"))
-            [1]
-        .to_owned();
+    // The shared scaled value is itself a phi now (stepped by 2), so no phi is
+    // shifted or multiplied per trip, where there were seven.
+    let counters: Vec<String> = regex::Regex::new(r"(%[\w.]+) = phi ")
+        .expect("a pattern")
+        .captures_iter(body)
+        .map(|found| found[1].to_owned())
+        .collect();
+    assert!(!counters.is_empty(), "{text}");
     let scaled = body
         .lines()
-        .filter(|line| (line.contains(" = shl ") || line.contains(" = mul ")) && line.contains(&format!("{counter},")))
+        .filter(|line| line.contains(" = shl ") || line.contains(" = mul "))
+        .filter(|line| counters.iter().any(|counter| line.contains(&format!("{counter},"))))
         .count();
-    assert_eq!(scaled, 1, "{text}");
+    assert!(scaled <= 1, "{text}");
 }
 
 /// A POKE into VGA memory counted as reaching a local array's descriptor, so
@@ -2104,7 +2111,9 @@ fn test_a_loop_doubles_an_index_with_add_not_the_three_clock_shift() {
         .filter_map(|(at, end, label)| {
             text.find(&format!("{label}:\n")).filter(|begun| *begun < at).map(|begun| &text[begun..end])
         })
-        .find(|one| one.contains("S%"))
+        // The lookup loop is the last: its sum stays in a register, so `S%`
+        // no longer names it.
+        .last()
         .unwrap_or_else(|| panic!("{text}"));
     assert!(!regex::Regex::new(r"s[ah]l \w+, 1\n").unwrap().is_match(body), "{body}");
 }
@@ -3086,12 +3095,15 @@ fn peek_and_poke_touch_memory_every_time() {
     let text = listing(&parsed_as(&path, "qb45", "qb45"));
     assert!(source.windows(5).any(|one| one == b"PEEK("), "the shape that was folded");
     // The loop re-reads: a label, a byte read of the tick (loaded, or compared
-    // in place), and a jump back to it.
-    let read = regex::Regex::new(r"(L\d+_\d+):\n\s+(?:movzx \w+, byte ptr es:\[108\]|cmp byte ptr es:\[108\], \w+)\n")
-        .unwrap();
+    // in place), and a jump back to it. The address is 108 or, hoisted into bx
+    // (a shorter encoding in the loop), `bx`.
+    let read = regex::Regex::new(
+        r"(L\d+_\d+):\n\s+(?:movzx \w+, byte ptr es:\[(?:108|bx)\]|cmp byte ptr es:\[(?:108|bx)\], \w+)\n",
+    )
+    .unwrap();
     let back = |label: &str| regex::Regex::new(&format!(r"\s+j\w+ {label}\n")).unwrap().is_match(&text);
     assert!(read.captures_iter(&text).any(|found| back(&found[1])), "{text}");
-    assert_eq!(text.matches("mov byte ptr es:[108],").count(), 2, "{text}");
+    assert_eq!(regex::Regex::new(r"mov byte ptr es:\[(?:108|bx)\],").unwrap().find_iter(&text).count(), 2, "{text}");
 }
 
 /// Every dynamic array shared one `allocation` tag, so a store to `a(i)` was

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:5e70bd8e37b3c24e9e026aab83cbae0a313210321b0a4c7a312971a79a0b621b -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:496388de83dbf84feb93fcea77e85f63cad13e36d7898d983d8e381fe8cafdff -->
 
 # manager
 
@@ -147,8 +147,8 @@ The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
 `Bounded`; module entries `GlobalsAA`, `Summaries`, `Callbacks`; program
 entry `ProgramSummaries`; `Held`, `Ranges`, `Touched::reach`,
 `call_effects`, `writes`. [`crate::cfg`](cfg.md)'s `Shape`, [`crate::memoryssa`](memoryssa.md)'s
-`Accesses`, [`crate::observers`](observers.md)'s `Published` and [`crate::noreturn`](noreturn.md)'s
-`TerminalSites` are entries defined beside their analyses.
+`Accesses` and [`crate::observers`](observers.md)'s `Published` are entries defined
+beside their analyses.
 
 ## Needs
 [`crate::alias`](alias.md), [`crate::consts`](consts.md), [`crate::globalsaa`](globalsaa.md),

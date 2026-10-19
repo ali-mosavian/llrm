@@ -156,6 +156,7 @@ mod gvn_load_tests;
 mod gvn_scalar_tests;
 pub mod hoistcommon;
 pub mod homes;
+pub mod icmpchain;
 pub mod indvars;
 pub mod inferspace;
 #[cfg(test)]
@@ -177,6 +178,7 @@ pub mod jumpthread;
 pub mod jumpthreading;
 #[cfg(test)]
 mod jumpthreading_tests;
+pub mod knownpred;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod lftr;
