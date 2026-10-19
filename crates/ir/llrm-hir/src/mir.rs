@@ -1127,7 +1127,13 @@ fn data_initializer(
             let operands = vec![target, index];
             address = context.constant(Constant {
                 ty,
-                kind: ConstantKind::Expr(ConstantExpr::GetElementPtr { source: byte, inbounds: false, operands }),
+                kind: ConstantKind::Expr(ConstantExpr::GetElementPtr {
+                    source: byte,
+                    inbounds: false,
+                    nusw: false,
+                    nuw: false,
+                    operands,
+                }),
             });
         }
         let cast = |context: &mut llrm_mir::Context, op, ty| {
