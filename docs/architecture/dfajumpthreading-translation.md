@@ -1,0 +1,54 @@
+---
+architecture-index: DFAJumpThreading as a translation of LLVM's
+architecture-order: 277
+---
+# DFAJumpThreading as a translation of LLVM's: the plan
+
+TL;DR: `DFAJumpThreading.cpp` (1,579 lines, pin `d1106deb71cc`) becomes a new `dfajumpthreading.rs` in three slices (about 1,300 + 350 + 150 lines); the registry row `dfa-jump-threading` is Missing, owner parity-pipeline. It retires only the switch half of the old `jumpthread.rs`; the rest of that file belongs to other passes (section 4).
+
+Rule for the code: each Rust function is a translation of the C++ function named in its comment (permalink at the pin); what is not translated is a numbered DEVIATE (`DF1`, `DF2`, ...) in the module header. Idiomatic Rust, no machine facts in the pass: the limits are fields of a `DfaJumpThreadingOptions` (defaults are the pin's values, as `JumpThreadingOptions` does), costs come from `CodeMetrics` and the TTI trait (`crates/ir/llrm-mir/src/tti.rs`). Near O(n): the pin's caps are the bound, kept as they are; a step beyond them needs a stated reason and a slope test at 1x and 4x.
+
+## 1. The functions
+
+Base: [`DFAJumpThreading.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp). Kind: MIRROR, DEVIATE (reason). Slice: S1 to S3.
+
+| function (line) | needs | kind | slice |
+|---|---|---|---|
+| [`DFAJumpThreading::run` L1478](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L1478), [`DFAJumpThreadingPass::run` L1561](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L1561) | skip `hasOptSize`; first switch with threading paths only (once per function); `DomTreeUpdater` Lazy (`domtree_updater.rs`); `collect_ephemeral_values` (`codemetrics.rs`); preserves the dom tree, loop info only if nothing was cloned | MIRROR | S1 |
+| [`MainSwitch::isCandidate` L478](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L478), [`isValidSelectInst` L549](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L549) | use-def walk from the switch condition (a phi, in a loop); `dfa-early-exit-heuristic` | MIRROR; a select in the chain rejects the switch until S2 (DF1) | S1, S2 |
+| [`ThreadingPath` L409](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L409) | a block path, an exit value (`APInt`), a determinator block | MIRROR as a plain struct | S1 |
+| [`AllSwitchPaths::getStateDefMap` L768](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L768), [`getPathsFromStateDefMap` L610](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L610), [`paths` L700](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L700) | the caps `dfa-max-path-length` 20, `dfa-max-num-visited-paths` 2500, `dfa-max-num-paths` 200 bound the search | MIRROR, caps as options | S1 |
+| [`findTPaths` L816](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L816), [`getNextCaseSuccessor` L864](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L864), [`unifyTPaths` L880](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L880) | the case value to successor map built once per switch | MIRROR | S1 |
+| [`isLegalAndProfitableToTransform` L928](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L928) | `CodeMetrics::analyze_basic_block` (exists); `getEstimatedNumberOfCaseClusters` as a TTI hook (today a private `case_clusters` in `inlinecost.rs`, TODO row T1); `dfa-cost-threshold` 50, `dfa-max-cloned-rate` 7.5, `dfa-max-out-use-blocks` 40 | MIRROR; no `noduplicate` or controlled convergence in MIR (as `codemetrics.rs` C1) | S1 |
+| [`createAllExitPaths` L1092](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L1092), [`createExitPath` L1133](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L1133), [`cloneBlockAndUpdatePredecessor` L1247](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L1247), [`updateSuccessorPhis` L1295](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L1295), [`updateLastSuccessor` L1401](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L1401) | `Function::clone_block` and `ValueMap` (`edit.rs`, #2616); `DomTreeUpdater`; `ConstantFoldTerminator` (`simplifycfg.rs`) | MIRROR | S1 |
+| [`updateSSA` L1177](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L1177), [`updateDefMap` L1367](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L1367), [`cleanPhiNodes` L1431](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L1431) | the pin uses `SSAUpdaterBulk` (Utils/SSAUpdaterBulk.cpp), which is not in the repo (TODO T2): DF2 uses `ssaupdater.rs` `SsaUpdater` per value, same result by LLVM's own account, until T2 | DEVIATE DF2 | S1, S3 |
+| [`DFAJumpThreading::unfold` L201](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DFAJumpThreading.cpp#L201), `unfoldSelectInstrs` L166 | select to control flow with a worklist; compare `jumpthreading.rs` `unfold_select_instr` (JumpThreading's, a different function): share a helper only if the bodies agree | MIRROR | S2 |
+
+## 2. What exists, what is missing
+
+Exists: `CodeMetrics` and `collect_ephemeral_values` (`codemetrics.rs`), `clone_block`/`ValueMap`, `split_block_predecessors` (`edges.rs`), `DomTreeUpdater`, `SsaUpdater` (`ssaupdater.rs`, LoopRotate's translation), `LoopInfo` with `get_outermost_loop`, `ConstantFoldTerminator`.
+
+Missing, each a TODO row: T1 `getEstimatedNumberOfCaseClusters` as a TTI trait method (the jump-table size and the case clusters; today private in `inlinecost.rs`, D2 there); T2 `SSAUpdaterBulk`; T3 the loop-info update for the clones (the pin keeps loop info unless it cloned: `LoopInfoBroken`, so the manager drops it on change).
+
+## 3. Slot and registry
+
+`DFAJumpThreadingPass` runs once per function in the function simplification pipeline at [`PassBuilderPipelines.cpp#L806`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L806), right before `JumpThreadingPass` (`jumpthreading@809`), under `enable-dfa-jump-thread` (default on); slot `dfa-jump-threading@806`, absent at -O1, 3 runs on `x_hanoi2` and 11 on `d_faces` (`parity-pipeline-slots.md`), skipped for `optsize` functions. The registry row `dfa-jump-threading` (Simplify, Missing) becomes Partial with S1 (criterion: identical to `opt -passes=dfa-jump-threading` on the corpus inputs; exit: the old `jumpthread.rs` switch half deleted) and Translated after S3. On by default from S1 under `llvm_order`, off with `LLRM_NO_DFAJUMPTHREADING` (set).
+
+## 4. The old `jumpthread.rs` (1,370 lines, 31 tests)
+
+It runs once per body after the loop passes (`pipeline.rs`, `wanted("jumpthread")`), not at the pin's position. It does four jobs; DFAJumpThreading replaces the first:
+
+- **Switch on a state phi** in a loop (the `DFAJumpThreading` shape). Tests by name: the switch-on-state, two-joins, several-edges and three-edges cases (`jumpthread_tests.rs`) become oracle cases; the `found` twice test (#2700) too.
+- **Branch on an `i1` phi or a compare of a phi** and the correlated branch: JumpThreading's `processBranchOnPHI` and threading (S2 of `jumpthreading.rs`, on by default); the branch tests are JumpThreading oracle cases, not DFA's.
+- **`split_arms`** (a loop branching on an invariant gets a loop per arm): no DFA counterpart; the pin's is non-trivial `simple-loop-unswitch`. Stays until that pass is translated (a registry row, owner loop-passes-port).
+- **gcc's limits** (`MAX_PATH` 100, `MAX_COPIED` 400, tuned-for-size) and the cleaning sandwich after a thread (`fold`, `algebraic`, `decide`, `dead`): replaced by the pin's cost model and by the pass returning its preserved set; the gcc-limit test is stale.
+
+Retire plan: after S1 is oracle-identical on the corpus kernels that use the switch half (QCport `triggers`/`ent_trig_shot`, the switch programs) the switch code is deleted from `jumpthread.rs` (a `Deletes:` line); the branch and `split_arms` halves go with JumpThreading's flip and `simple-loop-unswitch`, so the file itself is deleted only then.
+
+## 5. Staging
+
+- **S1 (about 1,300 lines):** options, `run`, `MainSwitch` without select unfolding, all of `AllSwitchPaths`, `TransformDFA` whole (legality, cost, clones, SSA by DF2), the slot and the oracle `dfajumpthreading` in `tools/difftest` against `opt -passes=dfa-jump-threading`. Fail-first tests: one per stage (a candidate, a path set, the cost refusal, a clone, an outer use).
+- **S2 (about 350 lines):** `unfold` and the select worklist; closes DF1.
+- **S3 (about 150 lines):** `SSAUpdaterBulk` (T2) if the oracle shows a difference, loop-info update (T3), registry to Translated.
+
+Estimate for S1: about one day of fork time after this note lands (JumpThreading S1, 1,950 lines, took about one day; S2 and S3, 1,050 lines, about one day). A date follows when S1 is open.
