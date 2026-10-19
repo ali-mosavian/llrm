@@ -1,5 +1,5 @@
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::Module;
+use llrm_mir::module::{Module, Operand};
 
 use super::combine;
 use crate::testing::{parsed, printed};
@@ -58,4 +58,38 @@ fn what_only_a_dead_instruction_read_goes_with_it() {
 fn a_body_with_nothing_to_simplify_is_unchanged() {
     let text = "define i16 @f(i16 %x, i16 %y) {\nb0:\n  %a = add i16 %x, %y\n  ret i16 %a\n}\n";
     check(text, text);
+}
+
+/// `mul x, 2` becomes `add x, x` through `insert_before` (the new instruction
+/// is queued) and `Visit::Replace`; its users are visited again, so the
+/// `sub` of it with itself folds to 0 in the same drain.
+#[test]
+fn a_visit_that_builds_a_replacement_has_it_and_the_users_revisited() {
+    use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+
+    use super::visit as simplified;
+    use super::{Combiner, Visit, combine_with};
+
+    fn visit(
+        c: &mut Combiner,
+        inst: llrm_mir::module::InstId,
+    ) -> Visit {
+        let instruction = c.function.instruction(inst).clone();
+        if instruction.opcode != Opcode::Binary(BinaryOp::Mul)
+            || instruction.operands[1] != Operand::Constant(c.context.int(instruction.ty, 2))
+        {
+            return simplified(c, inst);
+        }
+        let x = instruction.operands[0];
+        let new = c.insert_before(inst, Opcode::Binary(BinaryOp::Add), instruction.ty, vec![x, x], Flags::default());
+        Visit::Replace(Operand::Value(c.function.instruction(new).result.expect("a value")))
+    }
+
+    let mut module =
+        parsed("define i16 @f(i16 %x) {\nb0:\n  %a = mul i16 %x, 2\n  %c = sub i16 %a, %a\n  ret i16 %c\n}\n");
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    assert!(combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit));
+    assert_eq!(printed(&module), "define i16 @f(i16 %x) {\nb0:\n  ret i16 0\n}\n");
 }
