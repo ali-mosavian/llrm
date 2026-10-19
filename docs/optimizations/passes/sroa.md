@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sroa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sroa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sroa.rs sha256:00f5a89589f9256060596ace0233a23d8e7e00e6d7aa247babe2f1a562cf75ac -->
+<!-- src: crates/opt/llrm-transforms/src/sroa.rs sha256:c02abf63b88c7b44920d2dc6f42b00ccd694cebd20c82843aea402b5a89ee4d2 -->
 
 # sroa
 
@@ -22,6 +22,9 @@ DEVIATE, each with its reason (line numbers are SROA.cpp's):
   L3451-L3637, `rewriteTreeStructuredMerge` L3002,
   `tryCanonicalizeStructToVector` L5460): the targets have no vector
   registers, and `AggregateToVector` is off at -O2.
+- `propagateStoredValuesToLoads` (L6200), reached when a pointer only
+  escapes read-only (it needs `SSAUpdater` and `LoadAndStorePromoter`): such
+  an alloca is left as it is.
 - Calls and invokes escape a pointer whatever their attributes
   (`visitCallBase` L1402 looks at read-only, nocapture operands).
 - Address-space casts abort; pointers in a space that is a selector and an
