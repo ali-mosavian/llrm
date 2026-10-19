@@ -168,3 +168,14 @@ fn a_lifetime_end_on_a_returned_alloca_kills_nothing() {
     let after = managed(&mut module, DeadStoreElimination);
     assert!(after.contains("store i32 %x"), "{after}");
 }
+
+/// A store the next call overwrites before reading, by the `initializes` of
+/// the callee's parameter, is dead (`getInitializesArgMemLoc`).
+#[test]
+fn a_store_before_a_call_that_initializes_it_goes() {
+    let mut module = parsed(&format!(
+        "{DOS}@g = global i32 0\n\ndeclare void @init(ptr initializes((0, 4)) %p) memory(argmem: write) nounwind\n\ndefine i32 @f(i32 %x) addrspace(1) {{\nb0:\n  store i32 %x, ptr @g\n  call void @init(ptr @g)\n  %r = load i32, ptr @g\n  ret i32 %r\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(!after.contains("store i32 %x"), "{after}");
+}
