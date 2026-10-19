@@ -264,6 +264,34 @@ impl<'a> BasicAA<'a> {
         llrm_mir::memory::returns_noalias(self.unit.context, self.unit.globals, self.unit.function, inst)
     }
 
+    fn in_fixed_space(
+        &self,
+        pointer: Operand,
+    ) -> bool {
+        self.unit.space(pointer).is_some_and(|space| self.unit.spaces().is_fixed(space))
+    }
+
+    /// A global variable or an alloca outside the fixed-address space.
+    fn program_object(
+        &self,
+        object: Operand,
+    ) -> bool {
+        (self.global_variable(object) || self.is_alloca(object)) && !self.in_fixed_space(object)
+    }
+
+    /// The result of `llrm.noalias`: reached by no pointer not based on it.
+    fn restrict_root(
+        &self,
+        object: Operand,
+    ) -> bool {
+        self.unit
+            .defining(object)
+            .is_some_and(
+                |(inst, one)| matches!(one.opcode, Opcode::Call(_))
+                    && self.unit.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::Restrict),
+            )
+    }
+
     /// `isIdentifiedFunctionLocal`.
     fn identified_local(
         &self,
@@ -361,6 +389,18 @@ impl<'a> BasicAA<'a> {
         }
         let (o1, o2) = (self.underlying(v1), self.underlying(v2));
         if o1 != o2 {
+            // A fixed-address pointer is no global or frame object (not LLVM's:
+            // it has no such space, #2555).
+            if (self.in_fixed_space(v1) && self.program_object(o2))
+                || (self.in_fixed_space(v2) && self.program_object(o1))
+            {
+                return AliasResult::NoAlias;
+            }
+            // Pointers the pass made restrict, from different roots (not
+            // LLVM's).
+            if self.restrict_root(o1) && self.restrict_root(o2) {
+                return AliasResult::NoAlias;
+            }
             // Two different identified objects.
             if self.identified(o1) && self.identified(o2) {
                 return AliasResult::NoAlias;

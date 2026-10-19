@@ -154,10 +154,10 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fixednarrow, floatloop,
-    fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdeletion,
-    loopdistribute, loopfuse, loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit,
-    loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simpleloopunswitch,
+    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
+    floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa,
+    loopdeletion, loopdistribute, loopfuse, loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify,
+    loopsplit, loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simpleloopunswitch,
     simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
@@ -848,7 +848,7 @@ pub(crate) fn llvm_order(
                 slot("adce@815", Box::new(adce::Adce)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
                 slot("merge@818", Box::new(loopidioms::Merge { size })),
-                slot("dse@820", Box::new(dse::Dse)),
+                slot("dse@820", Box::new(deadstore::DeadStoreElimination)),
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
             list.extend([
