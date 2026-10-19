@@ -52,7 +52,6 @@
 use llrm_mir::context::{mask, signed};
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
-use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::valuetracking::range::{
     OverflowResult, compute_overflow_for_signed_add, compute_overflow_for_signed_sub,
 };
@@ -62,11 +61,11 @@ use crate::combine::{Combiner, Visit};
 use crate::combine_add_idioms::fold_add_rest;
 use crate::combine_shared::{
     binop, commutative, fold_constants, has_one_use, inst_def, parts, query, simplify_associative_or_commutative,
-    specific_int, width, wrap_of,
+    simplify_visited, specific_int, width, wrap_of,
 };
 
 /// `InstCombiner::AddOne` and `SubOne` of a constant.
-fn add_to(
+pub fn add_to(
     c: &Combiner,
     v: Operand,
     delta: i128,
@@ -86,7 +85,7 @@ fn will_not_overflow_signed_add(
 }
 
 /// `willNotOverflowSignedSub(l, r, I)`.
-fn will_not_overflow_signed_sub(
+pub fn will_not_overflow_signed_sub(
     c: &Combiner,
     cxt: InstId,
     l: Operand,
@@ -644,14 +643,8 @@ pub fn visit_add(
     inst: InstId,
 ) -> Visit {
     // simplifyAddInst
-    {
-        let env = c.env;
-        if let Some(found) =
-            simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst)
-            && Some(found) != c.function.instruction(inst).result.map(Operand::Value)
-        {
-            return Visit::Replace(found);
-        }
+    if let Some(found) = simplify_visited(c, inst) {
+        return found;
     }
     if simplify_associative_or_commutative(c, inst) {
         return Visit::Changed;

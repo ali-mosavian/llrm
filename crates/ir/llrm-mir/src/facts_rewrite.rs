@@ -338,6 +338,10 @@ mod tests {
             // negated operation `nsw` only if the original and the negation
             // had it.
             "combine_negator.rs",
+            // InstCombineAddSub.cpp's `visitSub` keeps `nsw`/`nuw` on the
+            // sub it builds only where the operands and the original had
+            // them, and infers them from the overflow queries.
+            "combine_sub.rs",
             // InstructionCombining.cpp's `foldBinopWithRecurrence` merges the
             // `nuw`/`nsw` of the three adds (`OverflowTracking`) so the new add
             // has them only if all had them, and drops the rest.

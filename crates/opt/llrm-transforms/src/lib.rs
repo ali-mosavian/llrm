@@ -117,6 +117,7 @@ pub mod combine_select_bools;
 pub mod combine_select_op_op;
 pub mod combine_shared;
 pub mod combine_shifts;
+pub mod combine_sub;
 pub mod combine_sink;
 pub mod combine_visit_select;
 #[cfg(test)]
