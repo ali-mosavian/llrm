@@ -105,7 +105,7 @@ use crate::backend::allocate::{_clobbered, _masks};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::target::{self, Segments};
 use crate::model::ir::{Loc, Operation, Space};
-use crate::model::lir::LirBody;
+use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::IndexMap;
 
 pub type Classes = IndexMap<u32, BTreeSet<RegId>>;
@@ -616,7 +616,25 @@ fn _through_webs(
             web.insert(one, other);
         }
     }
-    for one in body.blocks.iter().flat_map(|block| &block.insns).filter(|one| optimistic && one.group.is_some()) {
+    // A selector carried round a loop by its phi is a plain `mov` to the
+    // register of the phi and another back: one value, which a segment
+    // register can hold the whole way.
+    let carries = |one: &Insn| {
+        one.group.is_none()
+            && one.what.as_ref().is_some_and(|what| {
+                matches!(
+                    (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()),
+                    (Operation::Move, Some("mov"), [Loc::Held(into)], [Loc::Held(from)])
+                        if into.width == 2 && from.width == 2
+                )
+            })
+    };
+    for one in body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insns)
+        .filter(|one| if one.group.is_some() { optimistic } else { carries(one) })
+    {
         if let ([into], [from]) = (one.defines.as_slice(), one.uses.as_slice()) {
             let (a, b) = (find(&mut web, *into), find(&mut web, *from));
             web.insert(a, b);
@@ -656,7 +674,15 @@ fn _through_webs(
         let wanted = optimistic
             || agreed.as_ref().is_some_and(|class| class.iter().all(|register| selectors.contains(register)));
         if let (true, true, Some(class)) = (agree, wanted, agreed) {
-            let bare: Vec<u32> = list.iter().copied().filter(|value| !out.contains_key(value)).collect();
+            // A member read as a number (an `xor`) stays a general register:
+            // the copies between it and the selectors are real
+            // moves.
+            let agreed_selectors = class.iter().all(|register| selectors.contains(register));
+            let bare: Vec<u32> = list
+                .iter()
+                .copied()
+                .filter(|value| !out.contains_key(value) && !(agreed_selectors && numeric(*value)))
+                .collect();
             for value in bare {
                 out.insert(value, class.clone());
             }
