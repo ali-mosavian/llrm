@@ -30,6 +30,133 @@ pub fn poison(module: &Module) -> Vec<String> {
     out
 }
 
+/// Where a value read from bytes of an alloca that nothing stores to reaches a
+/// store, a call or a return: an RMW of a bitfield word whose other bits were
+/// never written. Run by `LLRM_CHECK_UNINIT=1` over a frontend's MIR; a store
+/// that wrote only part of the word is the usual shape. Flow-insensitive on
+/// what is stored (any store anywhere to a byte covers it), so it reports
+/// bytes no code writes, never an ordering.
+pub fn uninit_flow(module: &Module) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(layout) = module.datalayout.as_deref().and_then(|one| DataLayout::parse(one).ok()) else {
+        return out;
+    };
+    for (_, global, function) in module.functions() {
+        if function.is_declaration() {
+            continue;
+        }
+        let name = global.name.as_deref().unwrap_or("<unnamed>");
+        out.extend(function_uninit_flow(module, &layout, function).into_iter().map(|one| format!("@{name}: {one}")));
+    }
+    out
+}
+
+fn function_uninit_flow(
+    module: &Module,
+    layout: &DataLayout,
+    function: &Function,
+) -> Vec<String> {
+    let context = &module.context;
+    let mut out = Vec::new();
+    for (_, inst) in function.walk() {
+        let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode else { continue };
+        let slot = function.instruction(inst).result.expect("an alloca's pointer");
+        let size = layout.alloc_size(&context.types, allocated) as usize;
+        let mut pointers = vec![slot];
+        let mut at = 0;
+        while at < pointers.len() {
+            for &Use { user, .. } in function.users(pointers[at]) {
+                let derived = function.instruction(user);
+                if matches!(derived.opcode, Opcode::GetElementPtr { .. } | Opcode::Cast(_)) {
+                    pointers.extend(derived.result.filter(|one| !pointers.contains(one)));
+                }
+            }
+            at += 1;
+        }
+        // The bytes some instruction writes; a store at an unknown offset, a
+        // call that is handed the pointer and a memset cover all of it.
+        let mut everywhere = false;
+        let mut stores: Vec<(usize, usize, Operand)> = Vec::new();
+        let mut loads = Vec::new();
+        for &pointer in &pointers {
+            for &one in function.users(pointer) {
+                let user = function.instruction(one.user);
+                match &user.opcode {
+                    Opcode::Store { .. } if one.index == 1 => {
+                        let (base, offset) = crate::valuetracking::underlying(context, layout, function, user.operands[1]);
+                        let bytes = function
+                            .operand_type(context, user.operands[0])
+                            .map_or(size, |ty| layout.store_size(&context.types, ty) as usize);
+                        match (base, offset) {
+                            (Operand::Value(base), Some(offset)) if base == slot => {
+                                stores.push((offset.max(0) as usize, bytes, user.operands[0]));
+                            }
+                            _ => everywhere = true,
+                        }
+                    }
+                    Opcode::Call(_) | Opcode::Invoke(_) => everywhere = true,
+                    Opcode::Load { .. } if one.index == 0 => loads.push(one.user),
+                    _ => {}
+                }
+            }
+        }
+        for load in loads {
+            let instruction = function.instruction(load);
+            let (base, offset) = crate::valuetracking::underlying(context, layout, function, instruction.operands[0]);
+            let (Operand::Value(base), Some(offset)) = (base, offset) else { continue };
+            if base != slot {
+                continue;
+            }
+            let from = offset.max(0) as usize;
+            let bytes = layout.store_size(&context.types, instruction.ty) as usize;
+            let Some(result) = instruction.result else { continue };
+            if everywhere {
+                continue;
+            }
+            let mut tainted = vec![result];
+            let mut sinks = Vec::new();
+            let mut at = 0;
+            while at < tainted.len() {
+                for &Use { user, index } in function.users(tainted[at]) {
+                    let reader = function.instruction(user);
+                    let sink = match &reader.opcode {
+                        Opcode::Store { .. } if index == 0 => Some("a store"),
+                        Opcode::Call(_) | Opcode::Invoke(_) => Some("a call"),
+                        Opcode::Ret => Some("a return"),
+                        Opcode::Binary(_) | Opcode::Cast(_) | Opcode::Phi | Opcode::Select | Opcode::FNeg => {
+                            let value = reader.result.filter(|one| !tainted.contains(one));
+                            tainted.extend(value);
+                            None
+                        }
+                        _ => None,
+                    };
+                    sinks.extend(sink);
+                }
+                at += 1;
+            }
+            // What the value derived from the read stores back does not fill
+            // the bytes it was read from.
+            let mut written = vec![false; size];
+            for &(start, length, value) in &stores {
+                if matches!(value, Operand::Value(one) if tainted.contains(&one)) {
+                    continue;
+                }
+                for byte in start..(start + length).min(size) {
+                    written[byte] = true;
+                }
+            }
+            let Some(hole) = (from..(from + bytes).min(size)).find(|&byte| !written[byte]) else { continue };
+            let name = function.value(slot).name.clone().map_or_else(|| "an alloca".to_owned(), |one| format!("%{one}"));
+            for sink in sinks {
+                out.push(format!("a value read from byte {hole} of {name}, which nothing stores, reaches {sink}"));
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 fn holds_poison(
     context: &Context,
     constant: crate::context::ConstantId,
