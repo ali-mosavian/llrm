@@ -178,6 +178,7 @@ pub mod selectors {
 }
 pub mod edges;
 pub mod incremental;
+pub mod intbits;
 #[cfg(test)]
 mod isel_tests;
 pub mod jumps;
@@ -215,9 +216,9 @@ pub mod prologue;
 pub mod regthrash;
 pub mod relayout;
 pub mod rmw;
+pub mod saverestore;
 pub mod schedule;
 pub mod selects;
-pub mod saverestore;
 pub mod shrinkwrap;
 pub mod slots;
 pub mod stackusage;
