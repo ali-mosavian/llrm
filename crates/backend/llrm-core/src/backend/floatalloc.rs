@@ -533,6 +533,13 @@ pub(super) fn _truncating(
     };
     // Python keys these slots by the 1-tuples ("control",) and ("chop",).
     let (saved, chop) = (frame.cell(("control", 0), 2)?, frame.cell(("chop", 0), 2)?);
+    let loaded_id = super::spiller::_next_value(body);
+    let chopped_id = loaded_id + 1;
+    let loaded = Held { value: loaded_id, width: 2 };
+    let chopped = Held { value: chopped_id, width: 2 };
+    // Under `LLRM_GREEDY_RFP` the registers are allocated by now: no value is
+    // left to hold the word, so it goes through memory alone.
+    let through_memory = super::allocate::rfp_on();
 
     let insn = |what: Semantics, at: i64| -> Arc<Insn> {
         let held = |args: &[Loc]| -> Vec<Held> {
@@ -566,22 +573,36 @@ pub(super) fn _truncating(
         if block.at == body.entry {
             let at = block.insns.first().map_or(block.at, |first| first.at);
             insns.extend(block.insns[..arrivals].iter().cloned());
-            // Through memory alone: no register is free to hold the word here
-            // once the registers are allocated (the stackifier runs after
-            // them under `LLRM_GREEDY_RFP`).
+            if through_memory {
+                insns.extend([
+                    insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(saved.clone())], Vec::new()), at),
+                    insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(chop.clone())], Vec::new()), at),
+                    insn(
+                        semantics(
+                            Operation::Binary,
+                            "or",
+                            vec![Loc::Mem(chop.clone())],
+                            vec![Loc::Mem(chop.clone()), Loc::Imm(Imm { value: 0x0C00, width: 2, address: None })],
+                        ),
+                        at,
+                    ),
+                ]);
+            } else {
             insns.extend([
                 insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(saved.clone())], Vec::new()), at),
-                insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(chop.clone())], Vec::new()), at),
+                insn(semantics(Operation::Move, "mov", vec![Loc::Held(loaded)], vec![Loc::Mem(saved.clone())]), at),
                 insn(
                     semantics(
                         Operation::Binary,
                         "or",
-                        vec![Loc::Mem(chop.clone())],
-                        vec![Loc::Mem(chop.clone()), Loc::Imm(Imm { value: 0x0C00, width: 2, address: None })],
+                        vec![Loc::Held(chopped)],
+                        vec![Loc::Held(loaded), Loc::Imm(Imm { value: 0x0C00, width: 2, address: None })],
                     ),
                     at,
                 ),
+                insn(semantics(Operation::Move, "mov", vec![Loc::Mem(chop.clone())], vec![Loc::Held(chopped)]), at),
             ]);
+            }
         }
         let mut current = modes.entering[&block.at];
         for one in &block.insns[arrivals..] {

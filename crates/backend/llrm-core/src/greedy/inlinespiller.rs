@@ -471,7 +471,6 @@ impl InlineSpiller<'_> {
             let mut reload = (*crate::backend::floatassign::_spill_home(new, cell.clone())).clone();
             (reload.at, reload.covers) = beside(&old[0]);
             reload.spill_reload = true;
-            reload.defines = vec![new];
             lis.insert_instr_before(block, Some(renamed[0].id()), Arc::new(reload));
             self.reloads += 1;
         }

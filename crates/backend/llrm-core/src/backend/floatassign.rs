@@ -675,7 +675,7 @@ pub(crate) fn _spill_home(
     cell: Mem,
 ) -> Arc<Insn> {
     let load = semantics(Operation::FloatLoad, "fld", vec![Loc::Held(Held { value, width: 10 })], vec![Loc::Mem(cell)]);
-    Arc::new(Insn { widths: vec![(value, 10)], ..inserted(0, load) })
+    Arc::new(Insn { widths: vec![(value, 10)], defines: vec![value], ..inserted(0, load) })
 }
 
 /// A cell of the spill format, for pricing forms before any cell is taken.
@@ -2131,6 +2131,43 @@ pub fn prepared(
     Ok(_sequenced(&_aliased_by(&body, &live_out).0))
 }
 
+/// A float compare clobbers the status-word register, as LLVM selects FCOM with
+/// an `FNSTSW16r` that defines AX: no value lives there across it.
+fn _compares_clobber(
+    body: &LirBody,
+    word: RegId,
+) -> LirBody {
+    let compares = |one: &Insn| {
+        one.what.as_ref().is_some_and(|what| {
+            what.op == Operation::Compare
+                && what.sources.iter().any(|source| matches!(source, Loc::Held(held) if held.width == 10))
+        })
+    };
+    if !body.insns().iter().any(|one| compares(one)) {
+        return body.clone();
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let insns: Vec<Arc<Insn>> = block
+                .insns
+                .iter()
+                .map(|one| {
+                    if !compares(one) {
+                        return Arc::clone(one);
+                    }
+                    let mut made = (**one).clone();
+                    made.clobbers.insert(word);
+                    Arc::new(made)
+                })
+                .collect();
+            block.with_insns(insns.into())
+        })
+        .collect();
+    body.with_blocks(blocks)
+}
+
 /// The x87 copies of each parallel-copy group as plain moves in an order that
 /// reads before it writes, a temporary breaking a cycle: LLVM's PHI
 /// elimination writes the copies one at a time, and greedy cannot place the
@@ -2228,6 +2265,9 @@ pub struct FloatPrep {
     pub frame: Option<Rc<RefCell<Frame>>>,
     pub pool: Option<Rc<RefCell<Pool>>>,
     pub basic_semantics: bool,
+    /// The register `fnstsw` writes: the stackifier, after allocation, puts
+    /// the status word there for every compare.
+    pub status_word: Option<RegId>,
 }
 
 impl LIRTransform for FloatPrep {
@@ -2245,8 +2285,12 @@ impl LIRTransform for FloatPrep {
     ) -> Result<LirBody, String> {
         let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
         let mut pool = self.pool.as_ref().map(|pool| pool.borrow_mut());
-        prepared(&body, frame.as_deref_mut(), pool.as_deref_mut(), self.basic_semantics)
-            .map_err(|error| error.to_string())
+        let prepared = prepared(&body, frame.as_deref_mut(), pool.as_deref_mut(), self.basic_semantics)
+            .map_err(|error| error.to_string())?;
+        Ok(match self.status_word {
+            Some(word) => _compares_clobber(&prepared, word),
+            None => prepared,
+        })
     }
 }
 

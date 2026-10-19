@@ -438,6 +438,11 @@ impl Fps<'_> {
                 }
                 _ => {}
             }
+            if one.what.as_ref() != Some(&what) {
+                let mut changed = (*one).clone();
+                changed.what = Some(what.clone());
+                self.one = Some(Arc::new(changed));
+            }
         }
         let held = |args: &[Loc]| -> Vec<u32> {
             args.iter()
