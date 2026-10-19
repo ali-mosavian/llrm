@@ -41,9 +41,11 @@
 //!
 //! # Deviations from LLVM (numbered, measured when the diff against
 //! `opt -passes=inline` has rows)
-//! - D1: block frequencies: LLVM's `BlockFrequencyInfo` decides a cold or hot
-//!   site; the caller passes the site's frequency relative to the caller's
-//!   entry (`Site::relative_frequency`), from `profit`'s.
+//! - D1: block frequencies: `BlockFrequencyInfo` over `BranchProbabilityInfo`,
+//!   both translated (`llrm_analysis::blockfreq`, `llrm_analysis::bpi`). The
+//!   caller passes the site's frequency relative to its entry
+//!   (`Site::relative_frequency`), a ratio where LLVM compares
+//!   `BlockFrequency`s.
 //! - D2: `TargetTransformInfo`: `getInstructionCost`, `isLoweredToCall`,
 //!   `getFPOpCost`, `getEstimatedNumberOfCaseClusters` are the generic
 //!   (BasicTTIImpl) answers with the x86 legal addressing modes, in
@@ -2117,11 +2119,7 @@ pub fn shadow(
             continue;
         }
         let caller_id = GlobalId(at as u32);
-        // D1: the block frequencies of `profit`, the site's over the entry's.
-        let frequencies = crate::profit::_frequencies(&module.context, &module.metadata, &module.globals, caller, None)
-            .unwrap_or_default();
-        let entry_frequency =
-            caller.layout().first().and_then(|&entry| frequencies.get(&llrm_analysis::cfg::id(entry)).copied());
+        let frequencies = block_frequencies(module, layout, caller);
         let caller_recursive = caller
             .layout()
             .iter()
@@ -2154,12 +2152,7 @@ pub fn shadow(
                         && !addressed.contains(&callee_id),
                     caller_recursive,
                     caller_size: CallerSize::Speed,
-                    relative_frequency: caller
-                        .parent(inst)
-                        .and_then(|block| frequencies.get(&llrm_analysis::cfg::id(block)).copied())
-                        .zip(entry_frequency)
-                        .filter(|(_, entry)| *entry > 0)
-                        .map(|(site, entry)| site as f64 / entry as f64),
+                    relative_frequency: caller.parent(inst).and_then(|block| relative_to_entry(&frequencies, block)),
                     // The shadow is the oracle's: opt without a triple prices
                     // generically.
                     tti: None,
@@ -2221,6 +2214,34 @@ pub fn remark(
         }
         (false, false) => format!("'{callee}' not inlined into '{caller}' because too costly to inline {priced}"),
     }
+}
+
+/// `BlockFrequencyInfo` of `caller` as the inliner's `GetBFI` gives it: over
+/// `BranchProbabilityInfo` (D1).
+fn block_frequencies(
+    module: &Module,
+    layout: &DataLayout,
+    caller: &Function,
+) -> llrm_analysis::blockfreq::BlockFrequencies {
+    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+        llrm_analysis::bpi::Module {
+            context: &module.context,
+            declarations: &module.globals,
+            metadata: &module.metadata,
+            layout,
+        },
+        caller,
+    );
+    llrm_analysis::blockfreq::BlockFrequencies::of_bpi(caller, &bpi)
+}
+
+/// `block`'s frequency over the entry's, as `isColdCallSite` and
+/// `getHotCallSiteThreshold` compare them; none where the entry's is 0.
+fn relative_to_entry(
+    frequencies: &llrm_analysis::blockfreq::BlockFrequencies,
+    block: BlockId,
+) -> Option<f64> {
+    (frequencies.get_entry_freq().get_frequency() > 0).then(|| frequencies.relative_to_entry(block))
 }
 
 fn caller_global_name(
@@ -2385,10 +2406,7 @@ pub fn sites(
     let mut out = llrm_support::hash::SparseIdMap::default();
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
     let caller_recursive = recursive.contains(&caller_id);
-    let frequencies = crate::profit::_frequencies(&module.context, &module.metadata, &module.globals, caller, None)
-        .unwrap_or_default();
-    let entry_frequency =
-        caller.layout().first().and_then(|&entry| frequencies.get(&llrm_analysis::cfg::id(entry)).copied());
+    let frequencies = block_frequencies(module, layout, caller);
     for (block, inst) in caller.walk() {
         let Some(callee_id) = llrm_mir::memory::callee(&module.context, caller, inst) else { continue };
         let callee_global = module.global(callee_id);
@@ -2409,12 +2427,7 @@ pub fn sites(
                 && !addressed.contains(&callee_id),
             caller_recursive,
             caller_size: size,
-            relative_frequency: frequencies
-                .get(&llrm_analysis::cfg::id(block))
-                .copied()
-                .zip(entry_frequency)
-                .filter(|(_, entry)| *entry > 0)
-                .map(|(here, entry)| here as f64 / entry as f64),
+            relative_frequency: relative_to_entry(&frequencies, block),
             tti,
         };
         // `-fno-inline-functions`: clang's pipeline is the always-inliner

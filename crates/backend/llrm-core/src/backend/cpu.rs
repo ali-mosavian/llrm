@@ -691,7 +691,7 @@ mod tests {
     }
 
     /// The target every frontend lowers to states its LLVM cost model: the
-    /// flat 32-bit target's, none for real mode. `tti` was not forwarded, so
+    /// flat 32-bit target's and real mode's. `tti` was not forwarded, so
     /// `LLRM_EXP_INLINEDECIDE` priced with the generic rules whatever the
     /// target said (the rows with and without the model were the same run).
     #[test]
@@ -705,7 +705,7 @@ mod tests {
         };
         let flat: &'static Profile = Box::leak(Box::new(Profile::new(&llrm_x86_m32::M32, "486", 1, true, 1, 0)));
         assert!(crate::abi::qb::LoweredTarget::of(flat, abi()).tti().is_some());
-        assert!(crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi()).tti().is_none());
+        assert!(crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi()).tti().is_some());
     }
 
     /// The target every frontend lowers to states X86's `TargetLowering`

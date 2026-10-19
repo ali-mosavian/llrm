@@ -52,7 +52,7 @@
 //!
 //! Loops: `loopsimplify`, `lcssa` (with `lcssamerges`), `hoist`, `loopmotion`,
 //! `trivialunswitch`, `unswitch`, `loopsplit`, `loopfuse`, `loopdistribute`
-//! (with `loopshape`), `indvars` (with `loopexit`, `exitfold`, `exitsink`),
+//! (with `loopshape`), `indvars` (with `exitvalues`, `exitfold`, `exitsink`),
 //! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`, `unroll_jam`,
 //! `loopidioms`, `floatloop`, `tailrec`.
 //!
@@ -98,6 +98,7 @@ pub mod combine_shared;
 pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
+pub mod congruentiv;
 pub mod constraintelim;
 #[cfg(test)]
 mod constraintelim_tests;
@@ -117,6 +118,8 @@ pub mod dse;
 pub mod earlycse;
 pub mod edges;
 pub mod exitfold;
+pub mod exitopt;
+pub mod exitpredicate;
 pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;
@@ -150,6 +153,9 @@ pub mod instworklist;
 mod instworklist_tests;
 pub mod interprocedural;
 pub mod ipacp;
+pub mod ivusers;
+#[cfg(test)]
+mod ivusers_tests;
 pub mod jumpthread;
 pub mod jumpthreading;
 #[cfg(test)]
@@ -164,7 +170,6 @@ mod local_tests;
 pub mod loopclone;
 pub mod loopdeletion;
 pub mod loopdistribute;
-pub mod loopexit;
 pub mod loopfuse;
 pub mod loopidiom;
 pub mod loopidioms;
@@ -178,9 +183,15 @@ pub mod loopunroll;
 pub mod loopunrollpass;
 pub mod loopversion;
 pub mod lsr;
+pub mod lsr_collect;
+#[cfg(test)]
+mod lsr_collect_tests;
 pub mod lsr_formula;
 #[cfg(test)]
 mod lsr_formula_tests;
+pub mod lsr_use;
+#[cfg(test)]
+mod lsr_use_tests;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
@@ -208,6 +219,7 @@ pub mod settled;
 pub mod simpleloopunswitch;
 pub mod simplifycfg;
 pub mod simplifyindvar;
+pub mod sinkcommon;
 pub mod spares;
 pub mod speculate;
 pub mod spill;

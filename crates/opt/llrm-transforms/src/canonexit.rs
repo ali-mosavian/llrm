@@ -37,6 +37,11 @@ use llrm_mir::opcode::{CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::types::Type as MirType;
 
+/// `LLRM_NO_SCEV_CANONEXIT`, read once; set, the step is skipped.
+pub fn enabled() -> bool {
+    !llrm_support::env_flag!("LLRM_NO_SCEV_CANONEXIT")
+}
+
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp#L1527
 /// `canonicalizeExitCondition` over every loop of `function`, innermost
 /// first; whether anything changed.

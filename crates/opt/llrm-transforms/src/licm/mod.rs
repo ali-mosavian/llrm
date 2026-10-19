@@ -146,7 +146,7 @@ impl LoopCtx<'_> {
         &self,
         block: BlockId,
     ) -> bool {
-        self.innermost.get(&block).is_some_and(|&at| self.shape.loops[at] != *self.loop_)
+        self.innermost.get(&block).is_some_and(|&at| self.shape.loops[at].header != self.loop_.header)
     }
 
     /// `Loop::isLoopInvariant(Value)`.
@@ -196,6 +196,8 @@ pub struct Promoted {
 #[derive(Clone, Debug, Default)]
 pub struct Decisions {
     pub hoisted: Vec<Hoisted>,
+    /// `NumBOAssociationsHoisted`.
+    pub reassociated: Vec<Hoisted>,
     /// `NumPromotionCandidates`, and the sets promoted.
     pub promotion_candidates: usize,
     pub promoted: Vec<Promoted>,
@@ -214,7 +216,11 @@ pub struct Decisions {
 }
 
 fn found_changed(found: &Decisions) -> bool {
-    !found.hoisted.is_empty() || !found.sunk.is_empty() || !found.erased.is_empty() || !found.promoted.is_empty()
+    !found.hoisted.is_empty()
+        || !found.reassociated.is_empty()
+        || !found.sunk.is_empty()
+        || !found.erased.is_empty()
+        || !found.promoted.is_empty()
 }
 
 /// Each block's innermost loop, an index in `shape.loops`.
@@ -264,8 +270,8 @@ pub fn decide(
             allow_speculation: true,
         };
         let header = cfg::block(one.header);
-        let (sunk, hoisted) = sink_and_hoist(unit, &outer, &ctx, &mut mssa, &aa, &accesses);
-        record_edits(unit, &mut decisions, header, &sunk, &hoisted);
+        let (sunk, hoisted, reassociated) = sink_and_hoist(unit, &outer, &ctx, &mut mssa, &aa, &accesses);
+        record_edits(unit, &mut decisions, header, &sunk, &hoisted, &reassociated);
         // Promoting one set of accesses may make the pointers for another set
         // loop invariant, so run this in a loop.
         loop {
@@ -300,6 +306,7 @@ fn record_edits(
     header: BlockId,
     sunk: &[(InstId, sink::Sinking)],
     hoisted: &[(InstId, BlockId)],
+    reassociated: &[hoist::Reassociation],
 ) {
     let count = |inst: InstId, decisions: &mut Decisions| match unit.function.instruction(inst).opcode {
         llrm_mir::opcode::Opcode::Load { .. } => decisions.moved_loads += 1,
@@ -318,6 +325,9 @@ fn record_edits(
     for &(inst, _) in hoisted {
         decisions.hoisted.push(Hoisted { function: unit.id, header, inst });
         count(inst, decisions);
+    }
+    for one in reassociated {
+        decisions.reassociated.push(Hoisted { function: unit.id, header, inst: one.bo });
     }
 }
 
@@ -430,9 +440,9 @@ pub fn run(
             use llrm_analysis::cfg::Around;
             one.preheader(unit.function).map(cfg::block)
         };
-        let (sunk, hoisted) = looking!(one, true, |view, ctx, mssa, aa, accesses| {
+        let (sunk, hoisted, reassociated) = looking!(one, true, |view, ctx, mssa, aa, accesses| {
             let found = sink_and_hoist(view, &outer, &ctx, mssa, &aa, accesses);
-            record_edits(view, &mut decisions, header, &found.0, &found.1);
+            record_edits(view, &mut decisions, header, &found.0, &found.1, &found.2);
             found
         });
         {
@@ -445,16 +455,26 @@ pub fn run(
                 layout: unit.layout,
                 last_store: IdMap::new(),
             };
-            apply::apply_loop(&mut *unit.function, &*unit.context, &mut kept, one, preheader, &sunk, &hoisted)
-                .unwrap_or_else(|why| panic!("licm: {why}"));
+            apply::apply_loop(
+                &mut *unit.function,
+                &*unit.context,
+                &mut kept,
+                one,
+                preheader,
+                &sunk,
+                &hoisted,
+                &reassociated,
+            )
+            .unwrap_or_else(|why| panic!("licm: {why}"));
         }
         check_graph(
             unit,
             graph.as_ref().expect("a graph"),
             &format!(
-                "the sinking and hoisting of the loop at {header:?}: {} sunk, {} hoisted",
+                "the sinking and hoisting of the loop at {header:?}: {} sunk, {} hoisted, {} reassociated",
                 sunk.len(),
-                hoisted.len()
+                hoisted.len(),
+                reassociated.len()
             ),
         );
         let Some(preheader) = preheader else { continue };
@@ -534,10 +554,10 @@ pub fn run(
 
 /// Whether the loop has an instruction any of the three could start from: one
 /// that may be hoisted (every operand outside the loop), one read only outside
-/// it or by no one (sunk or erased), a GEP also read outside it, or a load or
-/// store through a pointer the loop does not change (promoted). The cheap look
-/// LLVM's passes have in the instructions they walk, ahead of the graph they
-/// would ask.
+/// it or by no one (sunk or erased), a GEP also read outside it, an operation
+/// on one of its own kind (reassociated), or a load or store through a pointer
+/// the loop does not change (promoted). The cheap look LLVM's passes have in
+/// the instructions they walk, ahead of the graph they would ask.
 fn seeded(
     function: &Function,
     shape: &Shape,
@@ -567,12 +587,17 @@ fn seeded(
                     && instruction
                         .result
                         .is_some_and(|result| function.users(result).iter().any(|one| !ctx.contains(one.user)));
+                let reassociable = hoist::may_reassociate(function, inst);
                 let access = match instruction.opcode {
                     llrm_mir::opcode::Opcode::Load { .. } => Some(instruction.operands[0]),
                     llrm_mir::opcode::Opcode::Store { .. } => Some(instruction.operands[1]),
                     _ => None,
                 };
-                invariant || outside_only || foldable || access.is_some_and(|pointer| ctx.is_loop_invariant(pointer))
+                invariant
+                    || outside_only
+                    || foldable
+                    || reassociable
+                    || access.is_some_and(|pointer| ctx.is_loop_invariant(pointer))
             })
     })
 }
@@ -586,7 +611,7 @@ fn sink_and_hoist(
     mssa: &mut Mssa,
     aa: &AliasQuery,
     accesses: &Accesses,
-) -> (Vec<(InstId, sink::Sinking)>, Vec<(InstId, BlockId)>) {
+) -> (Vec<(InstId, sink::Sinking)>, Vec<(InstId, BlockId)>, Vec<hoist::Reassociation>) {
     use llrm_analysis::cfg::Around;
     let preheader = ctx.loop_.preheader(unit.function).map(cfg::block);
     let mut flags = Flags::new(
@@ -604,11 +629,11 @@ fn sink_and_hoist(
         Vec::new()
     };
     flags.set_is_sink(false);
-    let hoisted = match preheader {
+    let (hoisted, reassociated) = match preheader {
         Some(preheader) => hoist::hoist_region(unit, outer, ctx, preheader, mssa, aa, &mut flags, &safety),
-        None => Vec::new(),
+        None => (Vec::new(), Vec::new()),
     };
-    (sunk, hoisted)
+    (sunk, hoisted, reassociated)
 }
 
 /// One pass of the do-while of `runOnLoop`'s promotion: the candidates counted,
@@ -710,7 +735,10 @@ impl FunctionPass for Licm {
     ) -> PreservedAnalyses {
         let found = if self.apply { run(unit, analyses, self.speculate) } else { decide(unit, analyses) };
         let changed = found_changed(&found);
-        let only_moved = found.sunk.is_empty() && found.erased.is_empty() && found.promoted.is_empty();
+        let only_moved = found.reassociated.is_empty()
+            && found.sunk.is_empty()
+            && found.erased.is_empty()
+            && found.promoted.is_empty();
         if self.apply && llrm_support::env_flag!("LLRM_DEBUG_LICM") {
             eprintln!(
                 "licm: {} rebuilds of {} instructions, {} hoisted, {} sunk, {} erased, {} promoted",
@@ -725,6 +753,7 @@ impl FunctionPass for Licm {
         DECIDED.with(|all| {
             let mut all = all.borrow_mut();
             all.hoisted.extend(found.hoisted);
+            all.reassociated.extend(found.reassociated);
             all.sunk.extend(found.sunk);
             all.erased.extend(found.erased);
             all.promotion_candidates += found.promotion_candidates;
