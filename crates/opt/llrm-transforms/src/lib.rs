@@ -108,6 +108,7 @@ pub mod combine_loadstore;
 pub mod combine_muldivrem;
 #[cfg(test)]
 mod combine_muldivrem_tests;
+pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_select;
 pub mod combine_shared;
@@ -275,6 +276,7 @@ pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
 pub mod twoentryphi;
+pub mod uncondicmp;
 pub mod undefpred;
 pub mod unroll;
 pub mod unroll_jam;

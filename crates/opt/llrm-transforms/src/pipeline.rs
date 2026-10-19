@@ -157,8 +157,8 @@ use crate::{
     adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, jumpthread, lcssa,
     loopdeletion, loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit,
-    loopunrollpass, loopversion, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp,
-    simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    loopunrollpass, loopversion, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp, simpleloopunswitch,
+    simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -241,6 +241,10 @@ pub struct Options {
     /// [`crate::sroa`], with [`crate::mem2reg`]); on by default,
     /// `LLRM_NO_SROA` turns it off.
     pub sroa: bool,
+    /// The InstCombine slots (`combine@N`) run the translated families
+    /// ([`crate::combine_pass`]); on by default, `LLRM_NO_COMBINE` turns it
+    /// off.
+    pub combine: bool,
     /// The loop-invariant passes are the translated LICM ([`crate::licm`]):
     /// `licm` in the LICM slots and where `hoist` ran; on by default,
     /// `LLRM_NO_LICM` turns it off.
@@ -313,6 +317,7 @@ impl Default for Options {
             interchange: false,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
+            combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
             licm: !llrm_support::env_flag!("LLRM_NO_LICM"),
             copy_headers: true,
             for_size: false,
@@ -715,6 +720,7 @@ pub(crate) fn llvm_order(
     let simplify_cfg_with = |name, options| slot(name, Box::new(simplifycfg::SimplifyCfg { options }));
     let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
     let fold = |name| slot(name, Box::new(fold::Fold));
+    let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
@@ -770,6 +776,7 @@ pub(crate) fn llvm_order(
                     vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)]
                 },
             }),
+            combine("combine@1242"),
             fold("fold@1242"),
             dead("dead@1242"),
             // `SimplifyCFGOptions().convertSwitchRangeToICmp(true)`
@@ -778,9 +785,25 @@ pub(crate) fn llvm_order(
             simplify_cfg("decide@1244"),
             phiopt("phiopt@1244"),
         ],
-        // InstSimplifyPass, PassBuilderPipelines.cpp#L1662: the last function
-        // pass of `OptimizePM`, after LoopSink.
-        Phase::Late => vec![slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify))],
+        // The Late stage follows the Simplify list and its unroll-and-jam:
+        // L1438, InstSimplifyPass (PassBuilderPipelines.cpp#L1662, the last
+        // function pass of `OptimizePM`, after LoopSink) and L2376.
+        // DEVIATE LS1: the jam is not in the pin's default pipeline
+        // (`enable-unroll-and-jam` is false, L222); at the pin, if enabled,
+        // L1438 comes first, then the jam at L1474. llrm runs the jam first
+        // because its matcher needs the pre-L1438 nest: `needCanonicalLoops
+        // (false)` merges the blocks it matches (a testing outer header, a
+        // chain `pre` and `post`; hoist and sink alone leave them), and
+        // `only_o3_jams_a_nest_that_sweeps_the_same_cells` fails with the slot
+        // at the end of the Simplify list. Exit: the matcher accepts the
+        // L1438 form, no date.
+        Phase::Late => vec![
+            // The slots' options, with the pin's lines,
+            // are `simplifycfg::Options::{L1438, L2376}`.
+            simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
+            slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
+            simplify_cfg_with("simplifycfg@2376", simplifycfg::Options::L2376),
+        ],
         Phase::Simplify => {
             let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
             list.extend([
@@ -790,6 +813,7 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@675"),
                 phiopt("phiopt@675"),
+                combine("combine@677"),
                 fold("fold@677"),
                 dead("dead@677"),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
@@ -832,6 +856,7 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
                 phiopt("phiopt@766"),
+                combine("combine@768"),
                 fold("fold@768"),
                 dead("dead@768"),
             ]);
@@ -863,6 +888,7 @@ pub(crate) fn llvm_order(
                 slot("gvn@787", Box::new(gvn::Gvn { pre: applied.options.pre })),
                 slot("sccp@792", Box::new(sccp::Sccp)),
                 slot("bdce@797", Box::new(bdce::Bdce)),
+                combine("combine@801"),
                 fold("fold@801"),
                 dead("dead@801"),
                 // DFAJumpThreadingPass, PassBuilderPipelines.cpp#L806.
@@ -891,6 +917,7 @@ pub(crate) fn llvm_order(
                     simplifycfg::Options { hoist_common_insts: true, sink_common_insts: true, ..Default::default() },
                 ),
                 phiopt("phiopt@832"),
+                combine("combine@837"),
                 fold("fold@837"),
                 dead("dead@837"),
             ]);
