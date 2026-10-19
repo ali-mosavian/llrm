@@ -422,3 +422,16 @@ fn accesses_to_one_global_share_its_address_and_take_the_index_in_the_address() 
     let adds = lines.iter().filter(|line| line.starts_with("add")).count();
     assert_eq!((leas, adds), (1, 0), "{listing}");
 }
+
+/// The x86-64 timings still carried a 386's `imul` (10 clocks), so `x * 100`
+/// was five shifts and adds where `llc` has one `imul r,r,100`.
+#[test]
+fn a_multiply_by_a_constant_is_one_imul_at_x86_64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %x) {\n  %r = mul i32 %x, 100\n  ret i32 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("imul")), "{listing}");
+    assert!(!listing.lines().any(|line| line.trim().starts_with("shl")), "{listing}");
+}
