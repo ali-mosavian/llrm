@@ -671,7 +671,7 @@ impl State<'_, '_> {
 
         let mut changed = false;
         let result = self.result(s);
-        for u in self.unit.function.users(result).to_vec() {
+        for u in self.unit.function.users(result).snapshot() {
             let user = u.user;
             let c = if self.unit.function.instruction(user).opcode == Opcode::Phi {
                 let incoming = self.op(user, u.index as usize + 1);
@@ -938,7 +938,7 @@ impl State<'_, '_> {
         // `replaceUsesWithIf`: every use but an `llvm.assume`'s.
         let result = self.result(cmp);
         let mut changed = false;
-        for u in self.unit.function.users(result).to_vec() {
+        for u in self.unit.function.users(result).snapshot() {
             if self.intrinsic_id(u.user) != Some(IntrinsicId::Assume) {
                 self.unit.function.set_operand(u.user, u.index as usize, res);
                 changed = true;
@@ -1852,7 +1852,7 @@ impl State<'_, '_> {
         // the same block.
         const MAX_USES_TO_INSPECT: usize = 4;
         let def_bb = self.parent(bin_op);
-        let uses = self.unit.function.users(self.result(bin_op)).to_vec();
+        let uses = self.unit.function.users(self.result(bin_op)).snapshot();
         let mut num_uses = 0;
         for u in &uses {
             num_uses += 1;
@@ -2563,70 +2563,7 @@ impl State<'_, '_> {
 
     // ---- BasicBlock.cpp, Instructions.cpp, Local.cpp ----
 
-    /// `PHINode::removeIncomingValue(BB, DeletePHIIfEmpty)`.
-    ///
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L148>
-    fn remove_incoming_value(
-        &mut self,
-        phi: InstId,
-        bb: BlockId,
-        delete_phi_if_empty: bool,
-    ) {
-        let mut operands = self.unit.function.instruction(phi).operands.clone();
-        let Some(index) = operands.chunks(2).position(|pair| pair[1] == Operand::Block(bb)) else { return };
-        // Swap with the end of the list.
-        let last = operands.len() / 2 - 1;
-        if index != last {
-            operands[2 * index] = operands[2 * last];
-            operands[2 * index + 1] = operands[2 * last + 1];
-        }
-
-        // Nuke the last value.
-        operands.truncate(2 * last);
-        let empty = operands.is_empty();
-        self.unit.function.set_operands(phi, operands);
-
-        // If the PHI node is dead, because it has zero entries, nuke it now.
-        if empty && delete_phi_if_empty {
-            // If anyone is using this PHI, make them use a dummy value
-            // instead...
-            let ty = self.unit.function.instruction(phi).ty;
-            let poison = Operand::Constant(self.unit.context.constant(Constant { ty, kind: ConstantKind::Poison }));
-            self.replace_and_erase(phi, poison);
-        }
-    }
-
-    /// `PHINode::hasConstantValue`.
-    ///
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L212>
-    fn has_constant_value(
-        &mut self,
-        phi: InstId,
-    ) -> Option<Operand> {
-        let this = Operand::Value(self.result(phi));
-        let incoming: Vec<Operand> =
-            self.unit.function.instruction(phi).operands.chunks(2).map(|pair| pair[0]).collect();
-        // Exploit the fact that phi nodes always have at least one entry.
-        let mut constant_value = incoming[0];
-        for &value in &incoming[1..] {
-            if value != constant_value && value != this {
-                if constant_value != this {
-                    return None; // Incoming values not all the same.
-                }
-                // The case where the first value is this PHI.
-                constant_value = value;
-            }
-        }
-        if constant_value == this {
-            let ty = self.unit.function.instruction(phi).ty;
-            return Some(Operand::Constant(self.unit.context.constant(Constant { ty, kind: ConstantKind::Poison })));
-        }
-        Some(constant_value)
-    }
-
     /// `BasicBlock::removePredecessor`.
-    ///
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/BasicBlock.cpp#L446>
     fn remove_predecessor(
         &mut self,
         block: BlockId,
@@ -2634,27 +2571,16 @@ impl State<'_, '_> {
         keep_one_input_phis: bool,
     ) {
         let function = &*self.unit.function;
-        let phis: Vec<InstId> =
-            function.iter_block(block).take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect();
-        // Return early if there are no PHI nodes to update.
-        let Some(&front) = phis.first() else { return };
-
-        let num_preds = function.instruction(front).operands.len() / 2;
-        for phi in phis {
-            self.remove_incoming_value(phi, pred, !keep_one_input_phis);
-            if keep_one_input_phis {
-                continue;
-            }
-
-            // If we have a single predecessor, removeIncomingValue may have
-            // erased the PHI node itself.
-            if num_preds == 1 {
-                continue;
-            }
-
-            // Try to replace the PHI node with a constant value.
-            if let Some(phi_constant) = self.has_constant_value(phi) {
-                self.replace_and_erase(phi, phi_constant);
+        let phis: Vec<(InstId, Operand)> = function
+            .iter_block(block)
+            .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+            .map(|phi| (phi, Operand::Value(self.result(phi))))
+            .collect();
+        self.unit.function.predecessor_removed(self.unit.context, block, pred, keep_one_input_phis);
+        // The deleted value handle of LVI, for the phis the call erased.
+        for (phi, result) in phis {
+            if self.unit.function.is_erased(phi) {
+                self.lvi.forget_value(result);
             }
         }
     }

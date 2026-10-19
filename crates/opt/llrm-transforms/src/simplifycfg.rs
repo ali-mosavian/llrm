@@ -464,7 +464,7 @@ fn phi_of(
 /// predecessors sent on): LLVM's `TryToSimplifyUncondBranchFromEmptyBlock`.
 /// MIRROR, except that a block keeps its name, and a loop's metadata check
 /// is on any `llvm.loop`.
-fn empty_block_removed(
+pub fn empty_block_removed(
     context: &Context,
     function: &mut Function,
     block: BlockId,
@@ -539,7 +539,7 @@ fn empty_block_removed(
         function.erase_block(block).expect("a block nothing names");
     } else {
         // Everything but the common predecessor now goes to the successor.
-        for one in function.block_users(block).to_vec() {
+        for one in function.block_users(block).snapshot() {
             let parent = function.parent(one.user);
             if function.instruction(one.user).opcode.is_terminator()
                 && parent.is_some_and(|at| at != common.expect("a common predecessor") && predecessors.contains(&at))
@@ -754,7 +754,7 @@ pub fn unreachable_removed(
 /// keeping a one-input phi, since the block it names may go as well), what it
 /// defined replaced by poison, its instructions and then the blocks erased.
 /// LLVM's `DeleteDeadBlocks`.
-fn dead_blocks_deleted(
+pub fn dead_blocks_deleted(
     context: &Context,
     function: &mut Function,
     blocks: &[BlockId],

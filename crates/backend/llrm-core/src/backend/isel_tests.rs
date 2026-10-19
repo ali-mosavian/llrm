@@ -182,12 +182,12 @@ done:
             "mov bx, word ptr [bp+6]",
             "xor ax, ax",
             "xor cx, cx",
+            "L0_1:",
             "cmp cx, bx",
             "jge L0_8",
             "L0_5:",
             "add ax, cx",
             "inc cx",
-            "L0_1:",
             "cmp cx, bx",
             "jl L0_5",
             "L0_8:",
@@ -272,13 +272,13 @@ no:
             "mov bp, sp",
             "L0_0:",
             "cmp word ptr [bp+6], 5",
-            "jl L0_2",
-            "L0_3:",
-            "mov ax, 2",
-            "pop bp",
-            "retf",
+            "jge L0_3",
             "L0_2:",
             "mov ax, 1",
+            "pop bp",
+            "retf",
+            "L0_3:",
+            "mov ax, 2",
             "pop bp",
             "retf",
         ]
@@ -544,17 +544,17 @@ other:
             "je L0_3",
             "L0_6:",
             "cmp ax, 9",
-            "je L0_1",
-            "L0_4:",
-            "xor ax, ax",
-            "pop bp",
-            "retf",
+            "jne L0_4",
             "L0_1:",
             "mov ax, 10",
             "pop bp",
             "retf",
             "L0_3:",
             "mov ax, 50",
+            "pop bp",
+            "retf",
+            "L0_4:",
+            "xor ax, ax",
             "pop bp",
             "retf",
         ]
@@ -615,13 +615,13 @@ no:
             "sete dl",
             "movzx bx, dl",
             "and cl, dl",
-            "jne L0_6",
-            "L0_8:",
-            "xor ax, ax",
-            "pop bp",
-            "retf",
+            "je L0_8",
             "L0_6:",
             "add ax, bx",
+            "pop bp",
+            "retf",
+            "L0_8:",
+            "xor ax, ax",
             "pop bp",
             "retf",
         ]
@@ -2010,7 +2010,7 @@ fn test_a_load_only_a_comparison_reads_is_its_operand() {
     };
     assert_eq!(
         compared("%v = load i16, ptr %p", "sgt i16 %v, 5"),
-        ["mov bx, word ptr [bp+6]", "cmp word ptr [bx], 5", "jg L0_3"]
+        ["mov bx, word ptr [bp+6]", "cmp word ptr [bx], 5", "jle L0_4"]
     );
     assert_eq!(
         compared("%v = load i8, ptr %p\n  %w = zext i8 %v to i16", "eq i16 %w, 0"),
@@ -5626,4 +5626,19 @@ fn test_locals_passed_to_a_call_with_disjoint_lifetimes_share_a_frame_slot() {
     assert!(passed(true).contains("@use(ptr %q)"), "the premise: both are passed on");
     // One 16-byte local fewer than without markers.
     assert_eq!(frame_bytes(&passed(true)), frame_bytes(&passed(false)) - 16);
+}
+
+/// Old: `addrspacecast (ptr @g to ptr addrspace(1))` as an operand (what
+/// `simplifyCastInst` makes of the cast since #2614) was refused, "a far
+/// constant", and 39 qb programs did not compile. It is DGROUP:offset.
+#[test]
+fn test_a_near_global_cast_to_a_far_pointer_constant_is_selected() {
+    let text = "@g = internal global i16 5
+define i16 @f() addrspace(1) {
+  %v = load i16, ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1))
+  ret i16 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|one| one.contains("DGROUP")), "{got:?}");
 }

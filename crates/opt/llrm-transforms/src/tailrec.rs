@@ -385,12 +385,12 @@ fn site(
     };
     // The call's result goes nowhere but on to the way out.
     if let Some(result) = function.instruction(call).result
-        && function.users(result).len() != 1
+        && !function.users(result).has_one_use()
     {
         return None;
     }
     if let Some(step) = &step
-        && function.users(function.instruction(step.inst).result?).len() != 1
+        && !function.users(function.instruction(step.inst).result?).has_one_use()
     {
         return None;
     }

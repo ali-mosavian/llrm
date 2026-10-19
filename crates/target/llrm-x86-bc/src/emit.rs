@@ -2238,7 +2238,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let mut sentinels: Vec<(ValueId, Sentinel)> = self.sentinels.drain().collect();
         sentinels.sort_by_key(|(value, _)| *value);
         for (value, sentinel) in sentinels {
-            let users: Vec<llrm_mir::Use> = self.b.function.users(value).to_vec();
+            let users: Vec<llrm_mir::Use> = self.b.function.users(value).snapshot();
             let inst = match self.b.function.value(value).def {
                 llrm_mir::ValueDef::Instruction(inst) => inst,
                 _ => unreachable!("a sentinel is an instruction"),
@@ -2329,7 +2329,7 @@ fn demanded(
         _ => None,
     };
     let mut out = 0u64;
-    for one in function.users(value).to_vec() {
+    for one in function.users(value).snapshot() {
         let user = function.instruction(one.user);
         let result = |memo: &mut HashMap<ValueId, u64>| {
             user.result.map_or(all, |result| demanded(function, context, result, memo))

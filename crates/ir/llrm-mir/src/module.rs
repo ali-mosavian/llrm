@@ -67,7 +67,7 @@ pub struct ValueData {
     pub def: ValueDef,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Instruction {
     pub opcode: Opcode,
     /// The result's type; `void` when there is none.
@@ -76,6 +76,26 @@ pub struct Instruction {
     pub flags: Flags,
     pub result: Option<ValueId>,
     pub metadata: Vec<(String, MetadataId)>,
+    /// The previous and next instruction in its block, as an id + 1 (0: none):
+    /// the block list's links, beside the payload they lead to so that a walk
+    /// reads one record per instruction. Not part of what the instruction is.
+    #[doc(hidden)]
+    pub link: (u32, u32),
+}
+
+/// Two instructions are equal by what they are, not by where they stand.
+impl PartialEq for Instruction {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.opcode == other.opcode
+            && self.ty == other.ty
+            && self.operands == other.operands
+            && self.flags == other.flags
+            && self.result == other.result
+            && self.metadata == other.metadata
+    }
 }
 
 /// A basic block. Its instructions are a doubly linked list through the
@@ -129,23 +149,6 @@ impl Block {
     /// `BasicBlock::empty`.
     pub fn is_empty(&self) -> bool {
         self.len == 0
-    }
-}
-
-/// A block read through its function, so that its instructions can be listed:
-/// `first`, `last`, `len`, `is_empty` and the fields read the block as it is;
-/// `instructions` and `iter` build the view from the links on the first ask
-/// after an edit (and count the rebuild as a scan).
-pub struct BlockRef<'a> {
-    function: &'a Function,
-    block: &'a Block,
-}
-
-impl std::ops::Deref for BlockRef<'_> {
-    type Target = Block;
-
-    fn deref(&self) -> &Block {
-        self.block
     }
 }
 
@@ -428,7 +431,6 @@ pub struct Function {
     pub(crate) uses: crate::uselist::UseLists,
     /// Each instruction's (previous, next) in its block, as an id + 1 (0:
     /// none): the block lists' links.
-    pub(crate) link: Vec<(u32, u32)>,
     pub(crate) order: OrderCache,
     pub(crate) changes: ChangeLog,
     /// How many edits of each kind the function has had: no part of what it is.
@@ -493,7 +495,6 @@ impl Function {
             blocks: Vec::new(),
             layout: Vec::new(),
             uses: Default::default(),
-            link: Vec::new(),
             order: OrderCache::default(),
             changes: ChangeLog::default(),
             epochs: crate::touched::Epochs::default(),
@@ -612,11 +613,11 @@ impl Function {
     pub fn block(
         &self,
         id: BlockId,
-    ) -> BlockRef<'_> {
-        BlockRef { function: self, block: &self.blocks[id.0 as usize] }
+    ) -> &Block {
+        &self.blocks[id.0 as usize]
     }
 
-    /// `BasicBlock::begin` to `end` without the view: a cursor over the links.
+    /// `BasicBlock::begin` to `end`: a cursor over the links.
     pub fn iter_block(
         &self,
         id: BlockId,
@@ -625,7 +626,7 @@ impl Function {
         std::iter::from_fn(move || {
             (at != 0).then(|| {
                 let inst = InstId(at - 1);
-                at = self.link[inst.0 as usize].1;
+                at = self.instructions[inst.0 as usize].link.1;
                 inst
             })
         })
@@ -660,7 +661,7 @@ impl Function {
         inst: InstId,
     ) -> Option<InstId> {
         self.parent(inst)?;
-        match self.link[inst.0 as usize].1 {
+        match self.instructions[inst.0 as usize].link.1 {
             0 => None,
             n => Some(InstId(n - 1)),
         }
@@ -672,7 +673,7 @@ impl Function {
         inst: InstId,
     ) -> Option<InstId> {
         self.parent(inst)?;
-        match self.link[inst.0 as usize].0 {
+        match self.instructions[inst.0 as usize].link.0 {
             0 => None,
             n => Some(InstId(n - 1)),
         }
@@ -787,7 +788,7 @@ impl Function {
         block: BlockId,
     ) -> crate::blocklist::BlockList {
         let users = self.block_users(block);
-        if users.len() > SCAN {
+        if users.has_n_uses_or_more(SCAN + 1) {
             return self.parents_once(users);
         }
         let mut out = crate::blocklist::BlockList::new();
