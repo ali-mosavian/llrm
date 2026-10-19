@@ -462,14 +462,6 @@ impl<'a> Dse<'a> {
         }) == false
     }
 
-    /// `isInvisibleToCallerOnUnwind`: nothing unwinds, so the same.
-    fn invisible_on_unwind(
-        &self,
-        loc: &Location,
-    ) -> bool {
-        self.invisible_after_return(loc)
-    }
-
     // ---- loops --------------------------------------------------------------
 
     /// The innermost loop of `block`, by its header (`CycleInfo::getCycle`).
