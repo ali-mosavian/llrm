@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -39,6 +40,7 @@ from buildslot import slotted  # noqa: E402
 
 SELECTION = HERE / "parity_smoke.toml"
 BUDGET = 15.0  # CPU seconds (user+sys of this process and its children, never wall); the user's rule is a fast set within 10-15 s
+INSTRUCTIONS = 60_000_000_000  # user-space instructions of the steps. Today's set (a tools-only merge, one unit crate) is 50.9 G, repeating to 0.1 %, in 12.6-13.4 s CPU at load 31-33: 4.0 G/s at best, so 15 s is 60 G
 CARGO_OVERHEAD = 0.3  # cargo's own CPU to find the test binary up to date, per crate
 MAX_CRATES = 2  # a merge touching more is tested in the 3 crates with most changed files: each crate costs its cargo start before any test
 UNIT_FLOOR = 2.0  # the seconds the fixed steps always leave for unit tests
@@ -57,6 +59,49 @@ def cpu() -> float:
     """CPU seconds of this process and its children, and of the groups cut short (each charged the whole time it was given)."""
     t = os.times()
     return t.user + t.system + t.children_user + t.children_system + _charged[0]
+
+
+class Meter:
+    """User-space instructions of every command the steps start while open: each is run under `perf stat -e instructions:u -- COMMAND` (load-independent, where CPU
+    seconds stretch with contention) and the counts are summed. `perf stat -p PID` was tried first: it read 74 G, 799 G and 893 G for the same set, more than the
+    cores can execute in the CPU seconds; wrapping the command repeats to 0.01 %. `.value` is None where perf is missing, and the budget then falls back to CPU."""
+
+    def __init__(self) -> None:
+        self.value: int | None = None
+        self._files: list[Path] = []
+        self._popen = None
+
+    def __enter__(self) -> "Meter":
+        if shutil.which("perf") is None:
+            return self
+        import tempfile
+
+        meter, original = self, subprocess.Popen
+        self._popen = original
+
+        class Counting(original):  # type: ignore[valid-type, misc]
+            def __init__(self, args, *rest, **kwargs):
+                if isinstance(args, (list, tuple)) and not kwargs.get("shell") and args:
+                    counts = Path(tempfile.mkstemp(prefix="instructions-")[1])
+                    meter._files.append(counts)
+                    args = ["perf", "stat", "-x,", "-e", "instructions:u", "-o", str(counts), "--", *args]
+                super().__init__(args, *rest, **kwargs)
+
+        subprocess.Popen = Counting
+        return self
+
+    def __exit__(self, *_) -> None:
+        if self._popen is None:
+            return
+        subprocess.Popen = self._popen
+        total, seen = 0, 0
+        for counts in self._files:
+            for line in counts.read_text().splitlines():
+                fields = line.split(",")
+                if len(fields) > 2 and fields[2].startswith("instructions") and fields[0].isdigit():
+                    total, seen = total + int(fields[0]), seen + 1
+            counts.unlink(missing_ok=True)
+        self.value = total if seen else None
 
 
 def run_cut(command: list[str], seconds: float, cwd: Path) -> tuple[int | None, str]:
@@ -343,22 +388,32 @@ def declared(packages: list[str], budget: float = BUDGET) -> float:
     return sum(cost for _, _, cost in plan(packages, budget))
 
 
-def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET, known_red: frozenset[str] = frozenset()) -> tuple[bool, str]:
-    """(passed, the last line). The clock is the test's, which waits on virtual time. A step named in `known_red` is not run and is said to be skipped."""
+def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET, known_red: frozenset[str] = frozenset(), meter=None, limit: int | None = None) -> tuple[bool, str]:
+    """(passed, the last line). The clock is the test's, which waits on virtual time. A step named in `known_red` is not run and is said to be skipped.
+    The budget is the steps' user-space instructions against `limit` (INSTRUCTIONS) where perf counted them and a limit is set; else the CPU seconds, as before:
+    a loaded host stretches the CPU seconds of the same work (a tools-only PR failed 16.1 s > 15 s at load 32 on 32 cores), not its instructions."""
+    limit = INSTRUCTIONS if limit is None else limit
     started, wall, parts, failed, skipped = clock(), time.monotonic(), [], [], []
-    for name, step, _ in steps:
-        began = clock()
-        verdict, detail, *tests = ("skipped", "known red, not run") if name in known_red else step(bins)
-        parts.append(f"{name} {verdict} {clock() - began:.1f} s")
-        if verdict == "fail":
-            # a step that names the tests it failed is listed by them: the subset rule compares test names, not crates
-            failed.extend(f"{one}: {detail}" for one in (tests[0] if tests and tests[0] else [name]))
-        elif verdict == "skipped":
-            skipped.append(f"{name}: {detail}")
-    spent = clock() - started
-    if spent > budget:
-        failed.append(f"over the budget: {spent:.1f} s > {budget:.0f} s")
-    line = f"{' | '.join(parts)} | {spent:.1f} s CPU of {budget:.0f} s ({time.monotonic() - wall:.1f} s wall)" + (f" | skipped {'; '.join(skipped)}" if skipped else "")
+    with (meter or Meter)() as counted:
+        for name, step, _ in steps:
+            began = clock()
+            verdict, detail, *tests = ("skipped", "known red, not run") if name in known_red else step(bins)
+            parts.append(f"{name} {verdict} {clock() - began:.1f} s")
+            if verdict == "fail":
+                # a step that names the tests it failed is listed by them: the subset rule compares test names, not crates
+                failed.extend(f"{one}: {detail}" for one in (tests[0] if tests and tests[0] else [name]))
+            elif verdict == "skipped":
+                skipped.append(f"{name}: {detail}")
+    spent, instructions = clock() - started, counted.value
+    if instructions is not None and limit:
+        measure = f"{instructions / 1e9:.2f} G instr of {limit / 1e9:.2f} G ({spent:.1f} s CPU for reference)"
+        if instructions > limit:
+            failed.append(f"over the budget: {instructions / 1e9:.2f} G instructions > {limit / 1e9:.2f} G")
+    else:
+        measure = f"{spent:.1f} s CPU of {budget:.0f} s" + ("" if instructions is None else f" ({instructions / 1e9:.2f} G instr, no limit set)") + (" (perf unavailable)" if instructions is None else "")
+        if spent > budget:
+            failed.append(f"over the budget: {spent:.1f} s > {budget:.0f} s")
+    line = f"{' | '.join(parts)} | {measure} ({time.monotonic() - wall:.1f} s wall)" + (f" | skipped {'; '.join(skipped)}" if skipped else "")
     if failed:
         return False, f"PARITY SMOKE FAIL {'; '.join(failed)} | {line}"
     return True, f"PARITY SMOKE PASS {line}"
