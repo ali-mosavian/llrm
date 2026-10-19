@@ -6,6 +6,10 @@ rust-version.workspace = true
 description = "Compiles a target's instruction-selection patterns into a decision automaton and an emitter per pattern"
 
 [dependencies]
+llrm-instr = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-peepgen = { workspace = true }
 llrm-support = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

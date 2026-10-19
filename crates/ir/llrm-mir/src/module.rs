@@ -98,6 +98,19 @@ impl PartialEq for Instruction {
     }
 }
 
+impl Instruction {
+    /// `Instruction::isIdenticalToWhenDefined`
+    /// ([Instruction.cpp:1008](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L1008)):
+    /// the same operation on the same operands (a phi's blocks are among
+    /// them), ignoring the flags and the metadata.
+    pub fn is_identical_to_when_defined(
+        &self,
+        other: &Instruction,
+    ) -> bool {
+        self.opcode == other.opcode && self.ty == other.ty && self.operands == other.operands
+    }
+}
+
 /// A basic block. Its instructions are a doubly linked list through the
 /// function's `link` arena (LLVM's `simple_ilist`): the block holds the first,
 /// the last and the count, so an insert, an erase or a move at a known

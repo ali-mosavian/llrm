@@ -65,9 +65,26 @@ Tests that encoded gcc's rules, each re-checked with `llc -O2 -mtriple=i386 -tai
 Deviations:
 
 - D13 a block is counted without the jump to the block laid out next, and `jcc next; jmp other` as one `jncc`: LLVM's form after branch folding, which the explicit jumps here do not have yet.
-- D14 `TailDupSize` is 2 (1 for size); `-O3`'s 4 needs the optimisation level, which the profile does not carry.
+- D14 `TailDupSize` is 2 (1 for size, 4 at -O3 via `cpu::Profile::aggressive`). Bench: the -O3 threshold loses the -O3 size gain (m32 -595 B to +26 B, m16 -354 to -94; clocks .8972 vs .8964); kept, as the pin does.
 - D15 not copied: a block with a phi, a call's record, a group, a symbol, spread bytes, data, a barrier, a call or an indirect jump; the entry is never copied or removed (it may have predecessors here). Copies claim none of the source bytes.
 - D16 the old guard against a copy that makes a loop irreducible is gone: LLVM has none. Fact to measure: how many bodies become irreducible on the corpus, and what `Frequency` makes of them.
 - D17 the odds of a pred after a copy are the tail's (`BlockOdds::rerouted`); block frequencies are not updated, as `MBFI` is not.
 
 Tests: `test_a_join_of_one_instruction_is_copied_into_both_arms` (llc at the pin: same orders, join gone), `test_for_size_a_join_of_two_instructions_is_not_copied`, `test_a_join_is_not_copied_into_a_block_that_branches_to_it`, `test_a_copied_test_keeps_its_loops_odds`, the loop tests (llc: guard plus test copied into the latch), post-dominator unit test; all seen failing with the threshold at 0. Removed with the code they tested: seven `duplicated_tails` tests and the copy-limit test; `test_a_small_join_is_copied_into_its_arm_before_the_arms_are_merged` guarded the merge-before-copy order, which no longer exists (the merge runs after placement, as LLVM's).
+
+## Stage 5: after placement (`jumps.rs`: `inverted`, `aligned`)
+
+- `optimizeBranches` L2964 is the second half of `inverted`: a two-way branch with neither way next gets the likelier way as its conditional jump. MIRROR, and skipped for size as `shouldOptimizeForSize` does (before, size flipped it too). `jcc next; jmp M` becoming `j!cc M` is `analyzeBranch(AllowModify)`.
+- `alignBlocks` L3003 is `aligned`, run on the final layout after the merge: every block but the first that is in a loop, not cold against the entry or its loop header (20%), and entered by no layout-predecessor edge, or one under 20% of its frequency, gets the target's loop alignment. MIRROR; `getPrefLoopAlignment` is `Target::pref_loop_alignment` (m32 16 bytes, m16 none: E2-1), `getMaxPermittedBytesForAlignment` is the default 0 (no limit). Not for size (`hasOptSize` without `alignLoopsWithOptSize`).
+- D19 (a fact, not a deviation) m32 code grows 4% at -O1..-O3 (+6.5/+7.5/+8.4 KB on the rows corpus) from the nop padding: the pin sets `setPrefLoopAlignment(Align(16))` for every CPU ([X86ISelLowering.cpp L2950](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L2950)), and `llc -O2 -mcpu=i486` marks the loop blocks `(align 16)`. The 486 clock model does not see alignment, so no clock gain shows. Exit: none while m32 follows the pin; m16 aligns nothing.
+- D18 the loop of a block is the nearest natural loop of the final layout, with no `llvm.loop.align` metadata.
+- Tests: `test_for_size_a_two_way_branch_keeps_its_condition` (failed before the skip), `test_a_loop_block_nothing_falls_into_is_aligned`.
+- Not translated, as off by default at the pin: `ExtTsp` placement, `rotateLoopWithProfile`, profile-driven duplicate candidates.
+
+## Branch folding (OptimizeBranches)
+
+`jumps/branchfold.rs` replaces `_step` and the bookkeeping it needed (`Places`, `_stranded`, `_converged`). Output is unchanged on 41 kernels and d_faces at -Os/-O1/-O2/-O3, m32 and m16 (assembly compared against the build before).
+
+- D20 `OptimizeBlock`'s rules that move a block (`moveAfter`, `moveBefore`) are not translated: placement has laid the blocks out, and LLVM redoes its layout when this pass changes anything after placement, which we do not.
+- D21 The next block is the next that emits something, and a block's own jump is read against it, not the previous block's against this one: the explicit form leaves blocks of only anchors in between.
+- Not yet translated: merging a block into its only predecessor, the identical-conditional single-branch block, the tail-call fold (no unconditional tail calls reach this pass).
