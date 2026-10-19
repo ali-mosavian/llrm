@@ -21,7 +21,8 @@
 //!
 //! DEVIATE D-SE1: `defFromParent` rematerializes only a definition that reads
 //! no register (a literal, address or load of a cell); `allUsesAvailableAt` and
-//! `rematWillIncreaseRestriction` are not translated, as D-E1 of `LiveRangeEdit`.
+//! `rematWillIncreaseRestriction` are not translated, as D-E1 of
+//! `LiveRangeEdit`.
 //!
 //! DEVIATE D-SE2: no sub-ranges or lane masks (`addDeadDef`'s sub-range
 //! branches, `buildSingleSubRegCopy`, `getLiveLaneMaskAt`, the
@@ -191,7 +192,8 @@ pub struct SplitEditor<'d> {
     pub reg_assign: RegAssignMap,
     /// (register index, parent value id) -> the value defining it there.
     values: HashMap<(usize, u32), ValueForce>,
-    /// The parent values made again where a copy would have been (`Edit->didRematerialize`).
+    /// The parent values made again where a copy would have been
+    /// (`Edit->didRematerialize`).
     rematted: HashSet<u32>,
     /// `LICalc[2]`: the second serves the registers after the complement in the
     /// spill modes.
@@ -1416,7 +1418,8 @@ impl<'d> SplitEditor<'d> {
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1484>).
     ///
     /// DEVIATE D-SE6: `eliminateDeadDefs` is not translated (D-E1); only the
-    /// copies this editor made and the pure definitions whose value nothing reads are erased.
+    /// copies this editor made and the pure definitions whose value nothing
+    /// reads are erased.
     fn delete_remat_victims(
         &mut self,
         cx: &mut SplitCx,
@@ -1435,7 +1438,8 @@ impl<'d> SplitEditor<'d> {
                 }
             }
         }
-        // A definition rematerialized elsewhere leaves the original with no reader.
+        // A definition rematerialized elsewhere leaves the original with no
+        // reader.
         for reg in self.regs() {
             let operands = cx.lis.operands(reg);
             if operands.is_empty() || operands.iter().any(|op| !op.is_def) {
@@ -1498,8 +1502,8 @@ impl<'d> SplitEditor<'d> {
             }
             let reg_idx = self.reg_assign.lookup(pvni.def()) as usize;
             self.def_value(cx, reg_idx, pvni, pvni.def(), true);
-            // Force rematted values to be recomputed everywhere. The new live ranges may be
-            // truncated.
+            // Force rematted values to be recomputed everywhere. The new live
+            // ranges may be truncated.
             if self.rematted.contains(&pvni.id()) {
                 for i in 0..self.edit().size() {
                     self.force_recompute(cx, i, pvni);

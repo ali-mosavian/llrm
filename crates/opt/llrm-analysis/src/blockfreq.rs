@@ -79,6 +79,20 @@ impl BlockFrequencies {
         Self { freqs, entry }
     }
 
+    /// `BlockFrequencyInfo::calculate` over `bpi`, as LLVM's
+    /// `BlockFrequencyAnalysis` runs it.
+    pub fn of_bpi(
+        function: &Function,
+        bpi: &crate::bpi::BranchProbabilityInfo,
+    ) -> Self {
+        let ci = CycleInfo::compute(function);
+        let bfi = BlockFrequencyInfo::calculate(function, &bpi.edges(function), &ci);
+        let freqs =
+            (0..function.block_capacity() as u32).map(|b| bfi.get_block_freq(BlockId(b)).get_frequency()).collect();
+        let entry = if function.entry().is_some() { bfi.get_entry_freq().get_frequency() } else { 0 };
+        Self { freqs, entry }
+    }
+
     pub fn get_block_freq(
         &self,
         block: BlockId,

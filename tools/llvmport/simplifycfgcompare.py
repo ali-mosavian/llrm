@@ -23,12 +23,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("paths", nargs="+", type=Path)
     parser.add_argument("--hoist-common-insts", action="store_true")
+    parser.add_argument("--sink-common-insts", action="store_true")
     parser.add_argument("--show", type=int, default=3)
     parser.add_argument("--strict", action="store_true")
     parser.add_argument("--list", action="store_true", help="one line per function: FILE@NAME identical|differs")
     args = parser.parse_args()
     example = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "release/examples/simplifycfg"
-    passes = "simplifycfg<hoist-common-insts>" if args.hoist_common_insts else "simplifycfg"
+    named = [name for name, on in (("hoist-common-insts", args.hoist_common_insts), ("sink-common-insts", args.sink_common_insts)) if on]
+    passes = f"simplifycfg<{';'.join(named)}>" if named else "simplifycfg"
     files = [f for p in args.paths for f in ([p] if p.is_file() else sorted(p.glob("*.ll")))]
     skipped, same, differ, shown = 0, 0, 0, 0
     for file in files:
@@ -36,7 +38,7 @@ def main() -> int:
         text = "\n".join(line for line in text.split("\n") if not line.startswith("target triple"))
         with tempfile.NamedTemporaryFile("w", suffix=".ll", delete=False) as handle:
             handle.write(text)
-        flags = ["--hoist-common-insts"] if args.hoist_common_insts else []
+        flags = [f"--{name}" for name in named]
         done = subprocess.run([str(example), *flags, handle.name], capture_output=True, text=True)
         os.unlink(handle.name)
         if done.returncode:

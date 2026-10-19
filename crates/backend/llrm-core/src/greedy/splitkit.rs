@@ -91,7 +91,8 @@ pub trait SplitEnv {
         reg: u32,
     ) -> bool;
 
-    /// `recomputeRegClass` of the registers an edit made, once their instructions are in place.
+    /// `recomputeRegClass` of the registers an edit made, once their
+    /// instructions are in place.
     fn reclass(
         &self,
         _lis: &LiveIntervals,
@@ -99,8 +100,9 @@ pub trait SplitEnv {
     ) {
     }
 
-    /// A definition that is only a definition, so nothing is lost by erasing it when nothing reads
-    /// what it writes (`MI->isSafeToMove` and no side effects, of `eliminateDeadDefs`).
+    /// A definition that is only a definition, so nothing is lost by erasing it
+    /// when nothing reads what it writes (`MI->isSafeToMove` and no side
+    /// effects, of `eliminateDeadDefs`).
     fn is_pure_def(
         &self,
         _insn: &Insn,
@@ -114,8 +116,9 @@ pub trait SplitEnv {
         insn: &Insn,
     ) -> bool;
 
-    /// `LiveRangeEdit::canRematerializeAt` and `rematerializeAt`: the definition of `parent` made again
-    /// as a definition of `to`, beside `beside` (as `build_copy`), or None when it cannot be (not
+    /// `LiveRangeEdit::canRematerializeAt` and `rematerializeAt`: the
+    /// definition of `parent` made again as a definition of `to`, beside
+    /// `beside` (as `build_copy`), or None when it cannot be (not
     /// rematerializable, or it reads a register).
     fn rematerialize(
         &self,

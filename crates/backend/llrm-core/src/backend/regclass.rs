@@ -243,8 +243,9 @@ pub enum Item {
     Far(u32),
 }
 
-/// The sets of registers an operand confines a value to, and the registers a value may take at
-/// all: what `RegisterClasses` holds, without the instruction forms.
+/// The sets of registers an operand confines a value to, and the registers a
+/// value may take at all: what `RegisterClasses` holds, without the instruction
+/// forms.
 #[derive(Clone)]
 pub struct Sets {
     pub available: Vec<RegId>,
@@ -259,8 +260,9 @@ impl Sets {
 
 /// What the instructions that name a value say of the registers it may take.
 pub enum Confinement {
-    /// The reads are not all the ones that confine by themselves (a segment selector, a base and
-    /// an index that may be either way round): the value keeps the class it had.
+    /// The reads are not all the ones that confine by themselves (a segment
+    /// selector, a base and an index that may be either way round): the
+    /// value keeps the class it had.
     Unknown,
     /// Nothing says.
     Free,
@@ -268,7 +270,8 @@ pub enum Confinement {
     Only(BTreeSet<RegId>),
 }
 
-/// `MRI.recomputeRegClass`: the class of `value` from the instructions that name it alone.
+/// `MRI.recomputeRegClass`: the class of `value` from the instructions that
+/// name it alone.
 pub fn confinement_of<'a>(
     regs: Regs,
     insns: impl Iterator<Item = &'a crate::model::lir::Insn>,
