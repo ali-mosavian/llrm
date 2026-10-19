@@ -43,7 +43,7 @@ The Mac needs: a clone or worktree of `feat/arm64-spike`; rustup (toolchain per 
 
 ```
 cargo build --release -p llrm-c --bin llrm-c
-target/release/llrm-c -O2 -c prog.c -o prog.o   # arm64 Mach-O, once step 5 lands
+target/release/llrm-c -O2 -march=<arm64 name> prog.c -o prog.o   # flags provisional: fixed when the target lands (today: -O2 -march=i486 -S -o)
 clang -arch arm64 prog.o -o prog && ./prog       # system clang links; the compiler is llrm
 clang -arch arm64 -O2 prog.c -o ref && ./ref     # reference output
 ```
