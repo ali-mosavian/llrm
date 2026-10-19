@@ -4,7 +4,7 @@ architecture-order: 277
 ---
 # DFAJumpThreading as a translation of LLVM's: the plan
 
-TL;DR: `DFAJumpThreading.cpp` (1,579 lines, pin `d1106deb71cc`) becomes a new `dfajumpthreading.rs` in three slices (about 1,300 + 350 + 150 lines); the registry row `dfa-jump-threading` is Missing, owner parity-pipeline. It retires only the switch half of the old `jumpthread.rs`; the rest of that file belongs to other passes (section 4).
+TL;DR: `DFAJumpThreading.cpp` (1,579 lines, pin `d1106deb71cc`) becomes a new `dfajumpthreading.rs` in three slices (about 1,300 + 350 + 150 lines); the registry row `dfa-jump-threading` is Missing, owner parity-pipeline. The old `jumpthread.rs` is deleted whole after S1–S3: its switch half is DFAJumpThreading's, the branch half is JumpThreading's, and `split_arms` is parity to drop at -O2/-Os (section 4).
 
 Rule for the code: each Rust function is a translation of the C++ function named in its comment (permalink at the pin); what is not translated is a numbered DEVIATE (`DF1`, `DF2`, ...) in the module header. Idiomatic Rust, no machine facts in the pass: the limits are fields of a `DfaJumpThreadingOptions` (defaults are the pin's values, as `JumpThreadingOptions` does), costs come from `CodeMetrics` and the TTI trait (`crates/ir/llrm-mir/src/tti.rs`). Near O(n): the pin's caps are the bound, kept as they are; a step beyond them needs a stated reason and a slope test at 1x and 4x.
 
@@ -40,10 +40,10 @@ It runs once per body after the loop passes (`pipeline.rs`, `wanted("jumpthread"
 
 - **Switch on a state phi** in a loop (the `DFAJumpThreading` shape). Tests by name: the switch-on-state, two-joins, several-edges and three-edges cases (`jumpthread_tests.rs`) become oracle cases; the `found` twice test (#2700) too.
 - **Branch on an `i1` phi or a compare of a phi** and the correlated branch: JumpThreading's `processBranchOnPHI` and threading (S2 of `jumpthreading.rs`, on by default); the branch tests are JumpThreading oracle cases, not DFA's.
-- **`split_arms`** (a loop branching on an invariant gets a loop per arm): no DFA counterpart; the pin's is non-trivial `simple-loop-unswitch`. Stays until that pass is translated (a registry row, owner loop-passes-port).
+- **`split_arms`** (a loop branching on an invariant gets a loop per arm): no DFA counterpart; the pin's is non-trivial `simple-loop-unswitch`, which runs only at -O3 ([`PassBuilderPipelines.cpp#L733`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L733): `NonTrivial = Level == O3`). At -O2/-Os it splits loops where the pin never does, so deleting it there is parity. Any -O3 loss is a numbered row against jumps/unswitch until loop-passes-port's non-trivial `simple-loop-unswitch` is wired at -O3 (estimate 2026-10-27, theirs).
 - **gcc's limits** (`MAX_PATH` 100, `MAX_COPIED` 400, tuned-for-size) and the cleaning sandwich after a thread (`fold`, `algebraic`, `decide`, `dead`): replaced by the pin's cost model and by the pass returning its preserved set; the gcc-limit test is stale.
 
-Retire plan: after S1 is oracle-identical on the corpus kernels that use the switch half (QCport `triggers`/`ent_trig_shot`, the switch programs) the switch code is deleted from `jumpthread.rs` (a `Deletes:` line); the branch and `split_arms` halves go with JumpThreading's flip and `simple-loop-unswitch`, so the file itself is deleted only then.
+Retire plan: after S1 is oracle-identical on the corpus kernels that use the switch half (QCport `triggers`/`ent_trig_shot`, the switch programs) the switch code is deleted from `jumpthread.rs` (a `Deletes:` line). The branch half goes with JumpThreading's flip (done). So `jumpthread.rs` is deleted whole after S1–S3 alone; it does not wait for non-trivial `simple-loop-unswitch`.
 
 ## 5. Staging
 
