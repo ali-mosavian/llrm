@@ -189,6 +189,24 @@ impl Expander {
         run.hoist_iv_inc(inc, insert_pos, recompute_poison_flags)
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L1909
+    /// `replaceCongruentIVs(L, DT, DeadInsts, TTI)` for the loop headed by
+    /// `header`: the number of phis eliminated; the dead ones are in `dead`.
+    pub fn replace_congruent_ivs(
+        &mut self,
+        env: &Env,
+        context: &mut Context,
+        function: &mut Function,
+        se: &mut ScalarEvolution,
+        header: BlockId,
+        dead: &mut Vec<InstId>,
+        tti: Option<&dyn llrm_mir::tti::Tti>,
+    ) -> u32 {
+        let mut declared = Declared::default();
+        let mut run = super::expand::Run { x: self, env: *env, context, declared: &mut declared, function, se };
+        run.replace_congruent_ivs(header, dead, tti)
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L901
     /// `canReuseFlagsFromOriginalIVInc(OrigPhi, WidePhi, OrigInc, WideInc)`:
     /// both increments are the same binary operation of their phi.

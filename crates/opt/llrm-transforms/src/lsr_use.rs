@@ -40,7 +40,7 @@ const SETUP_COST_DEPTH_LIMIT: u32 = 7;
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1324
 /// `LSRUse::KindType`: what kinds of scaled and immediate operands a use takes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Kind {
     /// A normal use, with no folding.
     Basic,
