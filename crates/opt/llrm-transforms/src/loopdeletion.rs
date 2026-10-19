@@ -196,7 +196,7 @@ fn make_loop_invariant(
 }
 
 /// `LoopBlocksRPO`: the blocks of the loop from its header, reverse postorder.
-fn loop_blocks_rpo(
+pub(crate) fn loop_blocks_rpo(
     function: &Function,
     lp: Loop,
 ) -> Vec<BlockId> {
@@ -221,7 +221,7 @@ fn loop_blocks_rpo(
 
 /// `containsIrreducibleCFG`: an edge back to a block already visited that is
 /// not a backedge of a loop around its source.
-fn contains_irreducible_cfg(
+pub(crate) fn contains_irreducible_cfg(
     function: &Function,
     info: &LoopInfo,
     rpo: &[BlockId],
