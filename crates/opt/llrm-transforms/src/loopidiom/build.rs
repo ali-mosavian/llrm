@@ -234,7 +234,7 @@ mod tests {
             })
             .expect("a function");
         let before = function.layout()[0];
-        let store = function.block(before).instructions()[0];
+        let store = function.block(before).first().expect("a store");
         assert!(function.instruction(store).metadata.iter().any(|(kind, _)| kind == "tbaa"), "the store is tagged");
         let [p, q, n] = function.parameters()[..] else { panic!("three parameters") };
         let byte = int(&mut context, 8, 0);

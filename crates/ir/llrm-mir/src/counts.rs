@@ -376,8 +376,8 @@ mod tests {
 #[cfg(test)]
 mod block_list_tests {
     #[test]
-    fn test_the_counts_print_the_block_list_readers() {
+    fn test_the_counts_print_the_block_list_readers_and_there_are_none() {
         let line = super::lines().into_iter().find(|line| line.starts_with("[counts] block_list_readers ")).unwrap();
-        assert!(line.rsplit(' ').next().unwrap().parse::<usize>().unwrap() > 0, "{line}");
+        assert_eq!(line.rsplit(' ').next().unwrap().parse::<usize>().unwrap(), 0, "{line}");
     }
 }

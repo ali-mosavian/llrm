@@ -94,8 +94,7 @@ impl Run<'_> {
         block: BlockId,
     ) -> Vec<InstId> {
         self.function
-            .block(block)
-            .iter()
+            .iter_block(block)
             .take_while(|&one| matches!(self.function.instruction(one).opcode, Opcode::Phi))
             .collect()
     }
@@ -915,7 +914,7 @@ impl Run<'_> {
     ) {
         if self.x.insert_point == Some(inst) {
             let block = self.function.parent(inst).expect("placed");
-            let next = self.function.block(block).iter().skip_while(|&one| one != inst).nth(1);
+            let next = self.function.iter_block(block).skip_while(|&one| one != inst).nth(1);
             self.x.insert_point = Some(next.expect("in its block"));
         }
     }

@@ -48,12 +48,18 @@ impl Stride {
         let function = view.function;
         // The cheap look before the loop's recurrences are asked of: some
         // operation multiplies two values neither of which is a constant.
-        let multiplies =
-            shape.loop_.body.iter().flat_map(|&at| function.block(cfg::block(at)).instructions()).any(|&inst| {
-                let op = function.instruction(inst);
-                op.opcode == Opcode::Binary(llrm_mir::opcode::BinaryOp::Mul)
-                    && op.operands.iter().all(|operand| matches!(operand, Operand::Value(_)))
-            });
+        let multiplies = shape
+            .loop_
+            .body
+            .iter()
+            .flat_map(|&at| function.iter_block(cfg::block(at)))
+            .any(
+                |inst| {
+                    let op = function.instruction(inst);
+                    op.opcode == Opcode::Binary(llrm_mir::opcode::BinaryOp::Mul)
+                        && op.operands.iter().all(|operand| matches!(operand, Operand::Value(_)))
+                },
+            );
         if !multiplies {
             return None;
         }

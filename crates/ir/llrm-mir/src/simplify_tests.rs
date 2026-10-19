@@ -824,9 +824,112 @@ fn a_freeze_of_a_defined_value_is_the_value() {
     check("  %r = freeze i16 poison\n", "r", None);
 }
 
-/// Old: `getelementptr @g, 0, 2` was left an instruction (~55 on bench/lru) where
-/// `simplifyGEPInst` folds a GEP of constants through `ConstantExpr::getGetElementPtr`
-/// to a constant expression. A zero-index GEP is the pointer, a variable index stays.
+/// `simplifyCall`: the integer intrinsics, each rule of
+/// `simplifyUnaryIntrinsic`, `simplifyBinaryIntrinsic` and the
+/// three-operand arms of `simplifyIntrinsic` at its LLVM result.
+#[test]
+fn integer_intrinsics() {
+    let decls = "declare i16 @llvm.bswap.i16(i16)
+declare i16 @llvm.bitreverse.i16(i16)
+declare i16 @llvm.ctpop.i16(i16)
+declare i16 @llvm.abs.i16(i16, i1)
+declare i16 @llvm.cttz.i16(i16, i1)
+declare i16 @llvm.ctlz.i16(i16, i1)
+declare i16 @llvm.smax.i16(i16, i16)
+declare i16 @llvm.smin.i16(i16, i16)
+declare i16 @llvm.umax.i16(i16, i16)
+declare i16 @llvm.umin.i16(i16, i16)
+declare i16 @llvm.uadd.sat.i16(i16, i16)
+declare i16 @llvm.sadd.sat.i16(i16, i16)
+declare i16 @llvm.usub.sat.i16(i16, i16)
+declare i16 @llvm.ssub.sat.i16(i16, i16)
+declare i8 @llvm.scmp.i8.i16(i16, i16)
+declare { i16, i1 } @llvm.umul.with.overflow.i16(i16, i16)
+declare i16 @llvm.fshl.i16(i16, i16, i16)
+declare i16 @llvm.fshr.i16(i16, i16, i16)
+declare i16 @llvm.smul.fix.i16(i16, i16, i32 immarg)
+";
+    for (body, expected) in [
+        // bswap(bswap(x)) -> x, bitreverse(bitreverse(x)) -> x
+        ("  %a = call i16 @llvm.bswap.i16(i16 %x)\n  %r = call i16 @llvm.bswap.i16(i16 %a)\n", Some("%x")),
+        ("  %a = call i16 @llvm.bitreverse.i16(i16 %x)\n  %r = call i16 @llvm.bitreverse.i16(i16 %a)\n", Some("%x")),
+        // ctpop of a power of two is 1; of a value with only bit 0 possible is
+        // itself
+        ("  %p = shl i16 1, %y\n  %r = call i16 @llvm.ctpop.i16(i16 %p)\n", Some("1")),
+        ("  %a = and i16 %x, 1\n  %r = call i16 @llvm.ctpop.i16(i16 %a)\n", Some("%a")),
+        ("  %r = call i16 @llvm.ctpop.i16(i16 %x)\n", None),
+        // abs(abs(x)) -> abs(x)
+        (
+            "  %a = call i16 @llvm.abs.i16(i16 %x, i1 false)\n  %r = call i16 @llvm.abs.i16(i16 %a, i1 true)\n",
+            Some("%a"),
+        ),
+        // cttz(1 << y) -> y; ctlz(-1 >>u y) -> y; ctlz(-1 >>s y) -> 0
+        ("  %a = shl i16 1, %y\n  %r = call i16 @llvm.cttz.i16(i16 %a, i1 false)\n", Some("%y")),
+        ("  %a = lshr i16 -1, %y\n  %r = call i16 @llvm.ctlz.i16(i16 %a, i1 false)\n", Some("%y")),
+        ("  %a = ashr i16 -1, %y\n  %r = call i16 @llvm.ctlz.i16(i16 %a, i1 false)\n", Some("0")),
+        // min and max
+        ("  %r = call i16 @llvm.smax.i16(i16 %x, i16 %x)\n", Some("%x")),
+        ("  %r = call i16 @llvm.smax.i16(i16 %x, i16 32767)\n", Some("32767")),
+        ("  %r = call i16 @llvm.smax.i16(i16 32767, i16 %x)\n", Some("32767")),
+        ("  %r = call i16 @llvm.smax.i16(i16 %x, i16 -32768)\n", Some("%x")),
+        ("  %r = call i16 @llvm.umin.i16(i16 %x, i16 0)\n", Some("0")),
+        ("  %r = call i16 @llvm.umax.i16(i16 %x, i16 undef)\n", Some("65535")),
+        ("  %r = call i16 @llvm.smin.i16(i16 %x, i16 undef)\n", Some("32768")),
+        ("  %r = call i16 @llvm.umax.i16(i16 3, i16 5)\n", Some("5")),
+        ("  %a = call i16 @llvm.umax.i16(i16 %x, i16 3)\n  %r = call i16 @llvm.umax.i16(i16 %a, i16 2)\n", Some("%a")),
+        ("  %a = call i16 @llvm.umax.i16(i16 %x, i16 2)\n  %r = call i16 @llvm.umax.i16(i16 %a, i16 3)\n", None),
+        (
+            "  %a = call i16 @llvm.umax.i16(i16 %x, i16 %y)\n  %r = call i16 @llvm.umin.i16(i16 %a, i16 %x)\n",
+            Some("%x"),
+        ),
+        (
+            "  %a = call i16 @llvm.umax.i16(i16 %x, i16 %y)\n  %r = call i16 @llvm.umax.i16(i16 %a, i16 %y)\n",
+            Some("%a"),
+        ),
+        ("  %a = and i16 %x, 7\n  %r = call i16 @llvm.umax.i16(i16 %a, i16 8)\n", Some("8")),
+        ("  %a = and i16 %x, 7\n  %r = call i16 @llvm.umin.i16(i16 %a, i16 8)\n", Some("%a")),
+        // saturating arithmetic
+        ("  %r = call i16 @llvm.usub.sat.i16(i16 %x, i16 %x)\n", Some("0")),
+        ("  %r = call i16 @llvm.usub.sat.i16(i16 0, i16 %x)\n", Some("0")),
+        ("  %r = call i16 @llvm.usub.sat.i16(i16 %x, i16 -1)\n", Some("0")),
+        ("  %r = call i16 @llvm.usub.sat.i16(i16 %x, i16 0)\n", Some("%x")),
+        ("  %r = call i16 @llvm.ssub.sat.i16(i16 %x, i16 %x)\n", Some("0")),
+        ("  %r = call i16 @llvm.ssub.sat.i16(i16 0, i16 %x)\n", None),
+        ("  %r = call i16 @llvm.uadd.sat.i16(i16 %x, i16 -1)\n", Some("65535")),
+        ("  %r = call i16 @llvm.uadd.sat.i16(i16 0, i16 %x)\n", Some("%x")),
+        ("  %r = call i16 @llvm.sadd.sat.i16(i16 %x, i16 0)\n", Some("%x")),
+        ("  %r = call i16 @llvm.sadd.sat.i16(i16 %x, i16 -1)\n", None),
+        ("  %r = call i16 @llvm.sadd.sat.i16(i16 %x, i16 undef)\n", Some("65535")),
+        // three-way compare
+        ("  %r = call i8 @llvm.scmp.i8.i16(i16 %x, i16 %x)\n", Some("0")),
+        ("  %r = call i8 @llvm.scmp.i8.i16(i16 %x, i16 %y)\n", None),
+        // with.overflow
+        ("  %r = call { i16, i1 } @llvm.umul.with.overflow.i16(i16 %x, i16 0)\n", Some("0")),
+        ("  %r = call { i16, i1 } @llvm.umul.with.overflow.i16(i16 %x, i16 %y)\n", None),
+        // funnel shifts
+        ("  %r = call i16 @llvm.fshl.i16(i16 %x, i16 %y, i16 16)\n", Some("%x")),
+        ("  %r = call i16 @llvm.fshr.i16(i16 %x, i16 %y, i16 32)\n", Some("%y")),
+        ("  %r = call i16 @llvm.fshl.i16(i16 %x, i16 %y, i16 3)\n", None),
+        ("  %r = call i16 @llvm.fshl.i16(i16 0, i16 0, i16 %y)\n", Some("0")),
+        ("  %r = call i16 @llvm.fshr.i16(i16 -1, i16 -1, i16 %y)\n", Some("65535")),
+        (
+            "  %a = lshr i16 %x, 5\n  %b = shl i16 %x, 11\n  %r = call i16 @llvm.fshl.i16(i16 %a, i16 %b, i16 5)\n",
+            Some("%x"),
+        ),
+        // fixed-point multiply
+        ("  %r = call i16 @llvm.smul.fix.i16(i16 %x, i16 0, i32 2)\n", Some("0")),
+        ("  %r = call i16 @llvm.smul.fix.i16(i16 %x, i16 4, i32 2)\n", Some("%x")),
+        ("  %r = call i16 @llvm.smul.fix.i16(i16 4, i16 %x, i32 2)\n", Some("%x")),
+        ("  %r = call i16 @llvm.smul.fix.i16(i16 %x, i16 4, i32 3)\n", None),
+    ] {
+        assert_eq!(simplified(&format!("{decls}{}", of(body)), "r").as_deref(), expected, "{body}");
+    }
+}
+
+/// Old: `getelementptr @g, 0, 2` was left an instruction (~55 on bench/lru)
+/// where `simplifyGEPInst` folds a GEP of constants through
+/// `ConstantExpr::getGetElementPtr` to a constant expression. A zero-index GEP
+/// is the pointer, a variable index stays.
 #[test]
 fn a_gep_of_a_global_and_constants_is_a_constant_expression() {
     let text = |body: &str| {
@@ -841,7 +944,8 @@ fn a_gep_of_a_global_and_constants_is_a_constant_expression() {
 
 /// Old: `addrspacecast @g` and `ptrtoint @g` of a constant were left casts
 /// (`simplifyCastInst` folded through `constfold::cast`, which makes no
-/// constant expression); the pin's `ConstantFoldCastOperand` does (5 on bench/lru).
+/// constant expression); the pin's `ConstantFoldCastOperand` does (5 on
+/// bench/lru).
 #[test]
 fn a_cast_of_a_global_is_a_constant_expression() {
     let text = |body: &str| format!("@g = global i16 0\ndefine void @f(i16 %x) {{\nb0:\n{body}  ret void\n}}\n");

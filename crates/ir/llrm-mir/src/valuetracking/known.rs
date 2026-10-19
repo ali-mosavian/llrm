@@ -363,7 +363,11 @@ fn compute_known_bits_from_lerp_pattern(
         return;
     }
 
-    let is_xor = sub_bc.get().is_some_and(|inst| q.function.instruction(inst).opcode == Opcode::Binary(BinaryOp::Xor));
+    let is_xor =
+        sub_bc.get().is_some_and(|inst| matches!(
+            q.function.instruction(inst).opcode,
+            Opcode::Binary(BinaryOp::Xor)
+        ));
     if is_xor && known_c.max_value() & !known_b.min_value() != 0 {
         return;
     }
@@ -1487,7 +1491,7 @@ fn compute_known_bits_from_operator(
         }
         Opcode::Cast(CastOp::PtrToInt | CastOp::IntToPtr | CastOp::ZExt | CastOp::Trunc) => {
             *known = kb(operand(0));
-            if instruction.opcode == Opcode::Cast(CastOp::ZExt)
+            if matches!(instruction.opcode, Opcode::Cast(CastOp::ZExt))
                 && instruction.flags.contains(Flags::NNEG)
                 && !known.is_negative()
             {

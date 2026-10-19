@@ -793,7 +793,7 @@ fn _available(
     };
 
     let through = |at: i64, mut available: Bits, mut reads: Option<&mut HashSet<InstId>>| {
-        for &inst in function.block(cfg::block(at)).instructions() {
+        for inst in function.iter_block(cfg::block(at)) {
             let instruction = function.instruction(inst);
             let store = matches!(instruction.opcode, Opcode::Store { .. });
             // A volatile access writes its own bytes: it orders, it does not
@@ -931,7 +931,7 @@ fn live_in(
     let mut reads = vec![llrm_support::bits::Bits::new(cells); blocks.len()];
     let mut kills = vec![llrm_support::bits::Bits::new(cells); blocks.len()];
     for (at, &block) in blocks.iter().enumerate() {
-        for &inst in function.block(block).instructions() {
+        for inst in function.iter_block(block) {
             if let Some(&slot) = plan.loads.get(&inst) {
                 if !kills[at].contains(slot) {
                     reads[at].insert(slot);
@@ -1029,7 +1029,7 @@ fn rewrite(
                 let from = edges(function, block);
                 let operands = from.iter().flat_map(|&one| [poison[slot], Operand::Block(one)]).collect();
                 let phi = function.create_instruction(Opcode::Phi, ty, operands, Flags::default(), None);
-                let first = function.block(block).instructions().first().copied();
+                let first = function.block(block).first();
                 function.insert(phi, first.map_or(Position::End(block), Position::Before)).expect("a placed block");
                 phis.insert((frontier, slot), (phi, from));
                 if let Some(named) = plan.variables.get(slot).copied().flatten() {
@@ -1046,12 +1046,7 @@ fn rewrite(
     // from the top of the block on.
     for (block, phi, named) in named_phis {
         let value = function.instruction(phi).result.expect("a phi's value");
-        let first = function
-            .block(block)
-            .instructions()
-            .iter()
-            .copied()
-            .find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        let first = function.iter_block(block).find(|&one| function.instruction(one).opcode != Opcode::Phi);
         if let Some(first) = first {
             function.add_debug_record_first(first, named.variable, named.is(Operand::Value(value)));
         }
@@ -1099,7 +1094,7 @@ fn rewrite(
             undo.push((slot, current[slot]));
             current[slot] = Operand::Value(function.instruction(*phi).result.expect("a phi's value"));
         }
-        for inst in function.block(block).instructions().to_vec() {
+        for inst in function.iter_block(block).collect::<Vec<_>>() {
             if let Some(&slot) = plan.loads.get(&inst) {
                 function.replace_value(function.instruction(inst).result.expect("a load's value"), current[slot]);
                 dead.push(inst);
@@ -1108,8 +1103,7 @@ fn rewrite(
                 current[slot] = function.instruction(inst).operands[0];
                 // And the value it stores, from the instruction after it on.
                 if let Some(named) = plan.variables.get(slot).copied().flatten()
-                    && let Some(next) =
-                        function.block(block).instructions().iter().copied().skip_while(|&one| one != inst).nth(1)
+                    && let Some(next) = function.next_in_block(inst)
                 {
                     function.add_debug_record_first(next, named.variable, named.is(current[slot]));
                 }

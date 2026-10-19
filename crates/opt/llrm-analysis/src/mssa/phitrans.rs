@@ -395,9 +395,15 @@ impl PhiTransAddr {
                     return Some(v);
                 }
                 // `gep x, 0` is x.
-                if let Some(simplified) =
-                    simplify_gep_operands(env.context, env.layout, function, source, translated[0], &translated[1..], flags)
-                {
+                if let Some(simplified) = simplify_gep_operands(
+                    env.context,
+                    env.layout,
+                    function,
+                    source,
+                    translated[0],
+                    &translated[1..],
+                    flags,
+                ) {
                     for &operand in &translated {
                         remove_inst_inputs(function, operand, &mut self.inputs);
                     }

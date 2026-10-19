@@ -4,7 +4,6 @@
 use std::collections::BTreeSet;
 
 use crate::context::{Constant, ConstantKind, Context};
-use crate::hash::HashMap;
 use crate::module::{
     Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, NameIndex, Names,
     Operand, Use, ValueData, ValueDef, ValueId,
@@ -221,7 +220,6 @@ impl Function {
         }
         b.tail = id;
         b.len += 1;
-        b.view.take();
     }
 
     /// Links `inst` before `next` in `block`'s list.
@@ -242,7 +240,6 @@ impl Function {
             b.head = id;
         }
         b.len += 1;
-        b.view.take();
     }
 
     /// Takes `inst` out of `block`'s list.
@@ -265,7 +262,6 @@ impl Function {
         }
         self.link[inst.0 as usize] = (0, 0);
         b.len -= 1;
-        b.view.take();
     }
 
     /// Links `inst` at `position`; the block and what follows it.
@@ -333,7 +329,7 @@ impl Function {
             (Some(only), None) if only == inst => {}
             _ => return None,
         }
-        self.block(target).iter().find(|&one| self.instruction(one).opcode != Opcode::Phi)
+        self.iter_block(target).find(|&one| self.instruction(one).opcode != Opcode::Phi)
     }
 
     /// Takes `inst` out of its block. What was said before it is said before
@@ -588,6 +584,17 @@ impl Function {
         let Opcode::ICmp(held) = &mut self.instructions[inst.0 as usize].opcode else { panic!("an icmp") };
         *held = predicate;
         self.log(Change::Rewritten(inst));
+    }
+
+    /// `Value::takeName`: `to` is named what `from` was, which goes unnamed;
+    /// the name stays taken in the function.
+    pub fn take_name(
+        &mut self,
+        from: ValueId,
+        to: ValueId,
+    ) {
+        let name = self.values[from.0 as usize].name.take();
+        self.values[to.0 as usize].name = name;
     }
 
     /// Replaces an instruction's flags.
@@ -1213,11 +1220,11 @@ impl Function {
     }
 
     /// One edge from `predecessor` into `block` gone: its phis lose one input
-    /// from it. Unless `keep_one_input_phis`, a phi left with one value (or
-    /// none) is replaced by it (or by poison). LLVM's
-    /// [`BasicBlock::removePredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/BasicBlock.cpp#L446),
-    /// with `PHINode::hasConstantValue` (L468). MIRROR, except a phi has one
-    /// input per edge, so one call drops one input.
+    /// from it. Unless `keep_one_input_phis`, a phi left with no input is
+    /// replaced by poison, and one whose inputs are all alike by that value.
+    /// LLVM's
+    /// [`BasicBlock::removePredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/BasicBlock.cpp#L446).
+    /// MIRROR, one call drops one input.
     pub fn predecessor_removed(
         &mut self,
         context: &Context,
@@ -1226,51 +1233,86 @@ impl Function {
         keep_one_input_phis: bool,
     ) {
         let phis: Vec<InstId> =
-            self.block(block).iter().take_while(|&one| self.instruction(one).opcode == Opcode::Phi).collect();
+            self.iter_block(block).take_while(|&one| self.instruction(one).opcode == Opcode::Phi).collect();
+        // Return early if there are no PHI nodes to update.
+        let Some(&front) = phis.first() else { return };
+        let num_preds = self.instruction(front).operands.len() / 2;
         for phi in phis {
-            let mut operands = self.instruction(phi).operands.clone();
-            let Some(at) = operands.chunks(2).position(|pair| pair[1] == Operand::Block(predecessor)) else {
-                continue;
-            };
-            operands.drain(2 * at..2 * at + 2);
-            let result = self.instruction(phi).result.expect("a phi's value");
-            let emptied = operands.is_empty();
-            self.set_operands(phi, operands);
+            self.remove_incoming_value(context, phi, predecessor, !keep_one_input_phis);
             if keep_one_input_phis {
                 continue;
             }
-            let only = if emptied {
-                let poison = context.constant(Constant { ty: self.value(result).ty, kind: ConstantKind::Poison });
-                Some(Operand::Constant(poison))
-            } else {
-                self.phi_constant_value(phi)
-            };
-            if let Some(only) = only {
-                self.replace_value(result, only);
+            // With a single predecessor, removeIncomingValue erased the phi.
+            if num_preds == 1 {
+                continue;
+            }
+            if let Some(constant) = self.phi_constant_value(context, phi) {
+                self.replace_value(self.instruction(phi).result.expect("a phi's value"), constant);
                 self.set_operands(phi, Vec::new());
                 self.erase(phi).expect("a phi nothing reads");
             }
         }
     }
 
-    /// The one value all of `phi`'s inputs are, itself not counted: LLVM's
-    /// `PHINode::hasConstantValue`.
+    /// `PHINode::removeIncomingValue(BB, DeletePHIIfEmpty)`: the last input
+    /// takes the removed one's place. Whether an input from `predecessor` was
+    /// there.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L148>
+    pub fn remove_incoming_value(
+        &mut self,
+        context: &Context,
+        phi: InstId,
+        predecessor: BlockId,
+        delete_phi_if_empty: bool,
+    ) -> bool {
+        let mut operands = self.instruction(phi).operands.clone();
+        let Some(at) = operands.chunks(2).position(|pair| pair[1] == Operand::Block(predecessor)) else {
+            return false;
+        };
+        let last = operands.len() / 2 - 1;
+        if at != last {
+            operands[2 * at] = operands[2 * last];
+            operands[2 * at + 1] = operands[2 * last + 1];
+        }
+        operands.truncate(2 * last);
+        let emptied = operands.is_empty();
+        self.set_operands(phi, operands);
+        if emptied && delete_phi_if_empty {
+            let result = self.instruction(phi).result.expect("a phi's value");
+            let poison = context.constant(Constant { ty: self.value(result).ty, kind: ConstantKind::Poison });
+            self.replace_value(result, Operand::Constant(poison));
+            self.erase(phi).expect("a phi nothing reads");
+        }
+        true
+    }
+
+    /// `PHINode::hasConstantValue`: the one value all of `phi`'s inputs are
+    /// but itself (poison if it has only itself).
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L212>
     fn phi_constant_value(
         &self,
+        context: &Context,
         phi: InstId,
     ) -> Option<Operand> {
-        let result = Operand::Value(self.instruction(phi).result.expect("a phi's value"));
-        let mut only = None;
-        for pair in self.instruction(phi).operands.chunks(2) {
-            if pair[0] == result {
-                continue;
+        let result = self.instruction(phi).result.expect("a phi's value");
+        let this = Operand::Value(result);
+        let mut inputs = self.instruction(phi).operands.chunks(2).map(|pair| pair[0]);
+        let mut only = inputs.next()?;
+        for value in inputs {
+            if value != only && value != this {
+                if only != this {
+                    return None;
+                }
+                only = value;
             }
-            if only.is_some_and(|one| one != pair[0]) {
-                return None;
-            }
-            only = Some(pair[0]);
         }
-        only
+        if only == this {
+            let poison = context.constant(Constant { ty: self.value(result).ty, kind: ConstantKind::Poison });
+            return Some(Operand::Constant(poison));
+        }
+        Some(only)
     }
 
     /// Removes an empty block nothing names.
@@ -1322,22 +1364,9 @@ pub fn layout_scanned() -> usize {
     LAYOUT_SCANNED.with(std::cell::Cell::get)
 }
 
-thread_local! {
-    /// Instructions of a block looked over to take instructions out of it: the
-    /// cost of erasing, which was a scan of the block per instruction erased.
-    pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many instructions of a block this thread has looked over to take
-/// instructions out of it, for a test that a pass erasing k of a block's n
-/// does not scan k times n.
-pub fn instructions_scanned() -> usize {
-    SCANNED.with(std::cell::Cell::get)
-}
-
 /// `ValueToValueMapTy`: what `clone_block` copied, original to copy.
 #[derive(Default)]
 pub struct ValueMap {
-    pub values: HashMap<ValueId, Operand>,
-    pub blocks: HashMap<BlockId, BlockId>,
+    pub values: crate::dense::IdMap<ValueId, Operand>,
+    pub blocks: crate::dense::IdMap<BlockId, BlockId>,
 }
