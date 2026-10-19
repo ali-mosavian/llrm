@@ -1,5 +1,7 @@
 //! The arm64 target. Its descriptions are the files beside this one.
 
+pub mod mc;
+
 use llrm_lir::registers::{RegId, Row};
 
 /// The register ids, numbered by `registers.regs`'s lines: `reg::X0`.
