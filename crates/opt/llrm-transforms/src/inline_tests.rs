@@ -1610,3 +1610,52 @@ fn test_a_site_llvm_decided_is_copied_past_gccs_growth_limit() {
     assert!(calls_left(true) > 0, "the premise: gcc's growth limit refuses some");
     assert_eq!(calls_left(false), 0);
 }
+
+/// `InsertLifetime`: each copy's buffer begins where the copy does and ends
+/// where it returns. Copies carried no markers, so the backend gave sibling
+/// copies a slot each (QCport's `_menu_draw`: 3548 bytes, not 266).
+#[test]
+fn test_each_copys_alloca_is_bounded_by_lifetime_markers() {
+    let source = "declare void @use(ptr)\n\
+        define internal void @c() {\nb0:\n  %buf = alloca [100 x i8]\n  call void @use(ptr %buf)\n  ret void\n}\n\
+        define void @main() {\nb0:\n  call void @c()\n  call void @c()\n  ret void\n}\n";
+    let mut module = parsed(source);
+    let layout = DataLayout::default();
+    let available = candidates(
+        &module,
+        &llrm_mir::memory::callees(&module),
+        &layout,
+        &call_counts(&module),
+        &private(&module),
+        &costs(8),
+        8,
+        Threshold::default(),
+    );
+    let by = Caller { layout: &layout, recursive: false, base: 0, limits: true };
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("main").unwrap();
+    assert_eq!(expanded_all(context, function, &by, &available, None, &mut declared).unwrap(), 2, "the premise");
+    declared.place(&mut module).unwrap();
+    let text = printed(&module);
+    let main = &text[text.find("define void @main").unwrap()..];
+    let lines: Vec<&str> = main.lines().map(str::trim).filter(|one| one.starts_with("call") || one.contains("alloca")).collect();
+    let starts = lines.iter().filter(|one| one.contains("@llvm.lifetime.start.p0(i64 100, ptr")).count();
+    let ends = lines.iter().filter(|one| one.contains("@llvm.lifetime.end.p0(i64 100, ptr")).count();
+    assert_eq!((starts, ends), (2, 2), "{main}");
+    // Each copy's call of `use` sits between its own start and end.
+    let order: Vec<char> = lines
+        .iter()
+        .filter_map(|one| {
+            if one.contains("lifetime.start") {
+                Some('(')
+            } else if one.contains("lifetime.end") {
+                Some(')')
+            } else if one.contains("@use") {
+                Some('u')
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(order.iter().collect::<String>(), "(u)(u)", "{main}");
+}

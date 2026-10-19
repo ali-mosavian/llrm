@@ -5608,3 +5608,22 @@ fn test_freeze_of_undef_and_an_undef_operand_are_selected_as_a_constant() {
         );
     }
 }
+
+/// Markers bound a local whose address a call is given, as LLVM's
+/// StackColoring trusts them: refusing such locals left every inlined copy's
+/// buffer a slot of its own (QCport's `_menu_draw`: 3548 bytes, not 266).
+#[test]
+fn test_locals_passed_to_a_call_with_disjoint_lifetimes_share_a_frame_slot() {
+    let passed = |markers: bool| {
+        scopes(markers, false)
+            .replace(
+                "define i16 @f(i16 %a, i16 %c) addrspace(1) {",
+                "declare void @use(ptr)\ndefine i16 @f(i16 %a, i16 %c) addrspace(1) {",
+            )
+            .replace("  store volatile i16 %a, ptr %p\n", "  store volatile i16 %a, ptr %p\n  call void @use(ptr %p)\n")
+            .replace("  store volatile i16 %c, ptr %q\n", "  store volatile i16 %c, ptr %q\n  call void @use(ptr %q)\n")
+    };
+    assert!(passed(true).contains("@use(ptr %q)"), "the premise: both are passed on");
+    // One 16-byte local fewer than without markers.
+    assert_eq!(frame_bytes(&passed(true)), frame_bytes(&passed(false)) - 16);
+}
