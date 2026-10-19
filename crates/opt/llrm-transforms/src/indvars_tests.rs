@@ -700,7 +700,7 @@ fn counters_with_one_start_and_one_step_are_one_counter() {
 fn counters_whose_steps_are_the_same_add_are_one_counter() {
     let text = two_counters(0, 1).replace("%j.next = add i16 %j, 1", "%j.next = add i16 %i, 1");
     let mut module = parsed(&text);
-    managed(&mut module, IndVars { exit_values: false, unrolls: None });
+    managed(&mut module, IndVars { exit_values: false, unrolls: None, lftr: true });
     assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
     let other = parsed(&text);
     assert_eq!(results(&module, &[&[0], &[3], &[9]]), results(&other, &[&[0], &[3], &[9]]));
@@ -977,4 +977,11 @@ fn test_lftr_off_leaves_the_test_of_a_loop_not_rotated() {
     managed(&mut on, IndVars { exit_values: true, unrolls: None, lftr: true });
     let on = printed(&on);
     assert!(on.contains("exitcond"), "{on}");
+}
+
+/// LFTR was on in the pipeline (the rotated copy ran it with the rotate slot
+/// off): sieve.c -O1 m32 grew 32 B. It is opt-in until the translated LSR.
+#[test]
+fn test_lftr_is_off_in_the_pipeline_unless_asked() {
+    assert_eq!(super::lftr_default(), std::env::var_os("LLRM_LFTR").is_some());
 }

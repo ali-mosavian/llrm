@@ -173,8 +173,15 @@ pub struct IndVars {
     /// `max_unroll_iterations`, 0 for any number), none where it is off: a
     /// signed counter of such a loop is left for it until `exit_values`.
     pub unrolls: Option<i64>,
-    /// Whether LFTR runs: only where loop-rotate has run before (D22).
+    /// Whether LFTR runs: opt-in, `LLRM_LFTR` (D22).
     pub lftr: bool,
+}
+
+/// `LLRM_LFTR`, read once: LFTR runs in the pipeline (D22). Off by default:
+/// the old `lsr` does not reduce the counter LFTR leaves, and every counted
+/// loop got a few bytes larger (+0.4% bytes of m32 code, rows pair on #2752).
+pub fn lftr_default() -> bool {
+    llrm_support::env_flag!("LLRM_LFTR")
 }
 
 impl FunctionPass for IndVars {
@@ -340,8 +347,9 @@ fn congruent(
 /// Phis of one block whose arms are, for each predecessor, one value or two
 /// pure binary operations of the same operands: the later reads as the first.
 /// DEVIATE (IV1, docs/architecture/loop-passes-port.md): `SCEVExpander::
-/// replaceCongruentIVs` finds them by their recurrences; this is by shape. LoopRotate leaves a counter twice that way, a phi of its
-/// sign-extension stepping by a copy of the counter's own `add`.
+/// replaceCongruentIVs` finds them by their recurrences; this is by shape.
+/// LoopRotate leaves a counter twice that way, a phi of its sign-extension
+/// stepping by a copy of the counter's own `add`.
 fn twin_phis(function: &mut Function) -> bool {
     #[derive(Eq, Hash, PartialEq)]
     enum Arm {
