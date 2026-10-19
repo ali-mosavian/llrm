@@ -16,7 +16,7 @@
 //!
 //! # Runs
 //! Nothing runs it yet: stage 2 of the translation of LSR (the old pass in
-//! [`crate::lsr`] is gcc's ivopts and stays the default).
+//! [`crate::lsr_pass`] is the pass that runs them).
 //!
 //! # Limits
 //! DEVIATE: the target hooks have no access type or address space on the

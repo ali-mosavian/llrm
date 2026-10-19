@@ -172,6 +172,27 @@ pub enum CastKind {
     BitCast,
 }
 
+/// What `getUnrollingPreferences` reads of a loop beyond its cost: AArch64 sets
+/// its thresholds by nesting depth and exit count.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LoopShape {
+    /// It calls something that is lowered to a call.
+    pub has_calls: bool,
+    /// The loop's nesting depth, 1 for an outermost loop.
+    pub depth: u32,
+    /// The blocks outside the loop it can exit to, and the blocks inside that
+    /// exit.
+    pub exit_blocks: u32,
+    pub exiting_blocks: u32,
+}
+
+/// The predicate of a comparison.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Predicate {
+    Int(crate::opcode::IntPredicate),
+    Float(crate::opcode::FloatPredicate),
+}
+
 /// A comparison or a select (`getCmpSelInstrCost`'s opcodes).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CmpSel {
@@ -260,6 +281,13 @@ pub trait Tti {
         "generic"
     }
 
+    /// `TargetLowering::convertSelectOfConstantsToMath`: whether a select
+    /// between two scalar integer constants may become arithmetic on its
+    /// condition (X86: yes for every scalar integer).
+    fn convert_select_of_constants_to_math(&self) -> bool {
+        true
+    }
+
     /// The cost of an integer-to-float cast whose operand is a load, where the
     /// target prices it apart (X86: the extension of a narrow integer to i32 is
     /// free for a load, `FILD` reads it from memory); none: as any cast (T4).
@@ -291,6 +319,17 @@ pub trait Tti {
     /// models of the cpus the plan page pins are known, and none has one).
     fn loop_micro_op_buffer_size(&self) -> u32 {
         0
+    }
+
+    /// `getUnrollingPreferences` given the loop's shape, which targets read
+    /// (nesting depth, exits); by default the loop-blind
+    /// `get_unrolling_preferences`.
+    fn get_unrolling_preferences_for(
+        &self,
+        shape: &LoopShape,
+        up: &mut UnrollingPreferences,
+    ) {
+        self.get_unrolling_preferences(shape.has_calls, up)
     }
 
     /// `BasicTTIImplBase::getUnrollingPreferences`: partial and runtime
@@ -325,6 +364,20 @@ pub trait Tti {
         ty: Ty,
         kind: CostKind,
     ) -> Cost;
+
+    /// `getCmpSelInstrCost` with the comparison's predicate, which some targets
+    /// price by (AArch64: an `fcmp one` or `ueq` takes two conditions). Callers
+    /// that know the predicate ask this; by default it is `cmp_sel_cost`.
+    fn cmp_sel_cost_for(
+        &self,
+        op: CmpSel,
+        ty: Ty,
+        kind: CostKind,
+        predicate: Option<Predicate>,
+    ) -> Cost {
+        let _ = predicate;
+        self.cmp_sel_cost(op, ty, kind)
+    }
 
     /// `getMemoryOpCost`; `stored_constant`: the stored value is a constant.
     fn memory_op_cost(
@@ -374,6 +427,38 @@ pub trait Tti {
         has_base_reg: bool,
         scale: i64,
     ) -> bool;
+
+    /// `isLegalAddressingMode` for an access of `access_bytes` (LLVM's
+    /// `AccessTy`): an immediate offset's legality depends on the access
+    /// size on AArch64 (`ldr x` takes an offset `ldr w` does not). By
+    /// default the size is not asked: `is_legal_addressing_mode`.
+    fn is_legal_addressing_mode_for(
+        &self,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        let _ = access_bytes;
+        self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale)
+    }
+
+    /// `getScalingFactorCost` for an access of `access_bytes`.
+    fn scaling_factor_cost_for(
+        &self,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> Cost {
+        if self.is_legal_addressing_mode_for(access_bytes, base_gv, base_offset, has_base_reg, scale) {
+            Cost::FREE
+        } else {
+            Cost::INVALID
+        }
+    }
 
     /// `TargetTransformInfoImplBase::isLegalAddImmediate`: none.
     fn is_legal_add_immediate(
@@ -547,6 +632,22 @@ pub trait Tti {
         !(ONE_NODE.contains(&name) || SMALLER.contains(&name) || MORE.contains(&name))
     }
 
+    /// `getEstimatedNumberOfCaseClusters`
+    /// ([BasicTTIImpl.h:584](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L584)):
+    /// the clusters a switch on `cases` (sign-extended values, `index_bits`
+    /// wide) is estimated to lower to, and the size of its jump table where it
+    /// gets one (0: none). The generic answer, [`basic_case_clusters`]; a
+    /// target with its own jump table limits or bit tests overrides it
+    /// (T1).
+    fn estimated_number_of_case_clusters(
+        &self,
+        cases: &[i128],
+        index_bits: u32,
+        for_size: bool,
+    ) -> (u64, u64) {
+        basic_case_clusters(cases, index_bits, for_size)
+    }
+
     /// `getIntrinsicInstrCost` of the call `name(args)` returning `ret`
     /// (none for `void`): invalid where the target has no answer (T7).
     fn intrinsic_cost(
@@ -559,6 +660,29 @@ pub trait Tti {
         let _ = (ret, args, kind);
         if is_free_intrinsic(name) { Cost::FREE } else { Cost::INVALID }
     }
+}
+
+/// `BasicTTIImplBase::getEstimatedNumberOfCaseClusters`, T1: bit tests
+/// (`isSuitableForBitTests`) are not translated; a jump table is allowed with
+/// `getMinimumJumpTableEntries()` = 4, density 10% (40% for size), at most 64K
+/// entries. The clusters, and the jump table's size, if one.
+pub fn basic_case_clusters(
+    cases: &[i128],
+    index_bits: u32,
+    for_size: bool,
+) -> (u64, u64) {
+    let count = cases.len() as u64;
+    let _ = index_bits;
+    if count < 4 {
+        return (count, 0);
+    }
+    let (low, high) = (cases.iter().min().copied().unwrap_or(0), cases.iter().max().copied().unwrap_or(0));
+    let range = (high - low) as u64 + 1;
+    let density = if for_size { 40 } else { 10 };
+    if range <= 1 << 16 && count * 100 >= range * density {
+        return (1, range);
+    }
+    (count, 0)
 }
 
 /// An intrinsic that makes no code: `assume`, `lifetime`, the scope marks of
@@ -665,5 +789,142 @@ impl Tti for Basic {
         _: OperandInfo,
     ) -> Cost {
         Cost::BASIC
+    }
+}
+
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+
+    /// A target that states none of the access-aware questions answers them as
+    /// the older ones: nothing existing changes when a caller asks the new.
+    #[test]
+    fn the_questions_that_take_more_default_to_the_older_ones() {
+        let basic = Basic;
+        assert_eq!(
+            basic.cmp_sel_cost_for(CmpSel::FCmp, Ty::Double, CostKind::RecipThroughput, None),
+            basic.cmp_sel_cost(CmpSel::FCmp, Ty::Double, CostKind::RecipThroughput)
+        );
+        assert_eq!(
+            basic.is_legal_addressing_mode_for(4, false, 8, true, 1),
+            basic.is_legal_addressing_mode(false, 8, true, 1)
+        );
+        assert_eq!(basic.scaling_factor_cost_for(8, false, 0, true, 2), basic.scaling_factor_cost(false, 0, true, 2));
+        struct Counts(Basic);
+        impl Tti for Counts {
+            fn get_unrolling_preferences(
+                &self,
+                has_calls: bool,
+                up: &mut UnrollingPreferences,
+            ) {
+                up.max_count = if has_calls { 7 } else { 9 };
+            }
+
+            fn cmp_sel_cost(
+                &self,
+                op: CmpSel,
+                ty: Ty,
+                kind: CostKind,
+            ) -> Cost {
+                self.0.cmp_sel_cost(op, ty, kind)
+            }
+
+            fn memory_op_cost(
+                &self,
+                op: MemoryOp,
+                ty: Ty,
+                kind: CostKind,
+                stored_constant: bool,
+            ) -> Cost {
+                self.0.memory_op_cost(op, ty, kind, stored_constant)
+            }
+
+            fn cf_instr_cost(
+                &self,
+                phi: bool,
+                kind: CostKind,
+            ) -> Cost {
+                self.0.cf_instr_cost(phi, kind)
+            }
+
+            fn int_imm_cost(
+                &self,
+                imm: i128,
+                bits: u32,
+            ) -> Cost {
+                self.0.int_imm_cost(imm, bits)
+            }
+
+            fn int_imm_cost_inst(
+                &self,
+                op: ImmUser,
+                index: u32,
+                imm: i128,
+                bits: u32,
+            ) -> Cost {
+                self.0.int_imm_cost_inst(op, index, imm, bits)
+            }
+
+            fn is_truncate_free(
+                &self,
+                from: Ty,
+                to: Ty,
+            ) -> bool {
+                self.0.is_truncate_free(from, to)
+            }
+
+            fn is_legal_addressing_mode(
+                &self,
+                gv: bool,
+                offset: i64,
+                base: bool,
+                scale: i64,
+            ) -> bool {
+                self.0.is_legal_addressing_mode(gv, offset, base, scale)
+            }
+
+            fn cast_cost(
+                &self,
+                op: CastKind,
+                dst: Ty,
+                src: Ty,
+                kind: CostKind,
+            ) -> Cost {
+                self.0.cast_cost(op, dst, src, kind)
+            }
+
+            fn arithmetic_cost(
+                &self,
+                op: ArithOp,
+                ty: Ty,
+                kind: CostKind,
+                a: OperandInfo,
+                b: OperandInfo,
+            ) -> Cost {
+                self.0.arithmetic_cost(op, ty, kind, a, b)
+            }
+        }
+        let mut up = UnrollingPreferences {
+            threshold: 0,
+            max_percent_threshold_boost: 0,
+            opt_size_threshold: 0,
+            partial_threshold: 0,
+            partial_opt_size_threshold: 0,
+            default_unroll_runtime_count: 0,
+            max_count: 0,
+            max_upper_bound: 0,
+            full_unroll_max_count: 0,
+            be_insns: 0,
+            partial: false,
+            runtime: false,
+            allow_remainder: false,
+            unroll_remainder: false,
+            allow_expensive_trip_count: false,
+            force: false,
+            upper_bound: false,
+            max_iterations_count_to_analyze: 0,
+        };
+        Counts(Basic).get_unrolling_preferences_for(&LoopShape { has_calls: true, ..LoopShape::default() }, &mut up);
+        assert_eq!(up.max_count, 7);
     }
 }

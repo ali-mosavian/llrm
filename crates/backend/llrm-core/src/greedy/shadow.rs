@@ -435,6 +435,8 @@ struct CallMasks {
     /// a narrow value, a wide one (the high halves too), and the registers it
     /// reads a value ending at it would lose.
     calls: Vec<(SlotIndex, RegSet, RegSet, RegSet)>,
+    /// Whether each of `calls` destroys any register (the rest only read one).
+    destroying: Vec<bool>,
     /// Each block's slots, start and end, and the run of `calls` in it
     /// (`getRegMaskSlotsInBlock`), in slot order.
     blocks: Vec<(SlotIndex, SlotIndex, std::ops::Range<usize>)>,
@@ -461,6 +463,8 @@ impl CallMasks {
         blocks: Vec<(SlotIndex, SlotIndex, std::ops::Range<usize>)>,
         widths: Rc<Tables>,
     ) -> Self {
+        let destroying =
+            calls.iter().map(|(_, destroyed, high, _)| !destroyed.is_empty() || !high.is_empty()).collect();
         let calls = calls
             .into_iter()
             .map(|(slot, destroyed, high, read)| {
@@ -468,7 +472,7 @@ impl CallMasks {
                 (slot, narrow, narrow.union(&high), read)
             })
             .collect();
-        Self { calls, blocks, widths }
+        Self { calls, destroying, blocks, widths }
     }
 
     /// `LiveIntervals::intervalIsInOneMBB`: the run of calls in the one block
@@ -563,6 +567,13 @@ impl PhysInterference for CallMasks {
         i: usize,
     ) -> SlotIndex {
         self.calls[i].0
+    }
+
+    fn reg_mask_destroys(
+        &self,
+        i: usize,
+    ) -> bool {
+        self.destroying[i]
     }
 
     /// DEVIATE D-IC2: a call's registers are the roots it destroys plus the
@@ -668,7 +679,7 @@ pub fn decide_with_split(
         })
         .collect();
     let tables = Rc::new(Tables::default());
-    // Under `LLRM_GREEDY_RFP` the x87 values take FP0..FP6 (LLVM's RFP
+    // Under RFP the x87 values take FP0..FP6 (LLVM's RFP
     // classes); a stack position an instruction names is the stackifier's.
     let floats = if crate::backend::allocate::rfp_on() {
         crate::backend::floatassign::_floating_values(body)
@@ -835,7 +846,7 @@ mod tests {
     use crate::liveness::slotindex::SlotIndexes;
     use crate::model::lir::{Block, LirBlock};
 
-    /// Under `LLRM_GREEDY_RFP` an x87 value takes one of FP0..FP6 or is
+    /// Under RFP an x87 value takes one of FP0..FP6 or is
     /// spilled: nine live at once over seven registers, two at least go to
     /// memory. A value that lived in an x87 register over an instruction that
     /// names a stack position (the stack must be empty there) would be lost.

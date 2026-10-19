@@ -340,6 +340,26 @@ b0:
     );
 }
 
+/// Verifier.cpp: `llvm.bswap` takes whole 16-bit units; an `i8` or an `i24` is
+/// reported at the call, an `i16` is not.
+#[test]
+fn a_bswap_of_an_odd_number_of_bytes_is_reported() {
+    let problems = |bits: u32| {
+        crate::verify::verify(
+            &parse::module(&format!(
+                "declare i{bits} @llvm.bswap.i{bits}(i{bits})\n\
+                 define i{bits} @f(i{bits} %x) {{\nb0:\n  %r = call i{bits} @llvm.bswap.i{bits}(i{bits} %x)\n  ret i{bits} %r\n}}\n"
+            ))
+            .unwrap_or_else(|error| panic!("{error}")),
+        )
+    };
+    assert_eq!(problems(16), Vec::<String>::new());
+    for bits in [8, 24] {
+        let found = problems(bits);
+        assert!(found.iter().any(|one| one.contains("bswap must be an even number of bytes")), "i{bits}: {found:?}");
+    }
+}
+
 fn dominance_problems(text: &str) -> Vec<String> {
     crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")))
         .into_iter()
@@ -560,6 +580,26 @@ fn null_pointer_is_valid_is_a_function_attribute_that_round_trips() {
     let once = round(&text);
     assert!(once.contains("null_pointer_is_valid"), "{once}");
     assert_eq!(round(&once), once);
+}
+
+/// Clang's output for arm64 states `ssp` and `uwtable(sync)` on a function and
+/// `captures(none)` on a parameter (LLVM 22's `nocapture`); the reader refused
+/// each ("expected `}`, found `ssp`", "expected `,`, found `captures`"), so no
+/// module from that front end could be read.
+#[test]
+fn clangs_target_attributes_and_captures_are_read() {
+    let text = format!(
+        "{DATALAYOUT}\ndefine void @f(ptr captures(none) %p) ssp uwtable(sync) {{\nb0:\n  store i16 0, ptr %p\n  ret void\n}}\n"
+    );
+    let once = round(&text);
+    assert!(once.contains("nocapture") && once.contains("uwtable"), "{once}");
+    assert_eq!(round(&once), once);
+    let kept = round(&format!("{DATALAYOUT}\ndeclare void @g(ptr captures(address) %p)\n"));
+    assert!(!kept.contains("nocapture"), "{kept}");
+    // The attributes of by-value copies.
+    round(&format!("{DATALAYOUT}\ndeclare i16 @h(ptr nofreeobj dead_on_return %p) nocreateundeforpoison\n"));
+    // `allocsize(0, 1)` on a declaration (clang's `malloc`, `calloc`).
+    round(&format!("{DATALAYOUT}\ndeclare ptr @calloc(i16, i16) allocsize(0, 1) allockind(\"alloc,zeroed\")\n"));
 }
 
 /// Each use asked `instruction_dominates` of its definition, which scanned the

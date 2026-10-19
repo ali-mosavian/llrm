@@ -39,6 +39,10 @@ TEST_RUST = re.compile(r"^-\s*#\[test\]")
 TEST_PY = re.compile(r"^-\s*def (test_\w+)")
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from stages import PREFIX, stage  # noqa: E402
+
+
 def git(*args: str, cwd: Path = ROOT) -> str:
     done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
     if done.returncode:
@@ -293,6 +297,7 @@ def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
     import llrmbin  # noqa: PLC0415
     from buildslot import slotted  # noqa: PLC0415
 
+    stage("build")
     directory = Path(smoke_bins(env))
     if not llrmbin.stale_binaries(directory, cwd):
         return ""
@@ -379,6 +384,7 @@ def merged_result(head: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str | 
     contains `base` the result is `head` itself. The squash lands on whatever feat/parity is at the call: the tests must run on this result, not on a head that
     compiled beside a base that has since moved (#2544 and #2564 each compiled; together the head did not build for three hours). A conflict only in generated
     files is resolved by regenerating them (`regenerate`)."""
+    stage("merge")
     git("checkout", "-q", "--detach", head, cwd=cwd)
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
         merged = subprocess.run(["git", "merge", "--no-edit", "-q", base], cwd=cwd, capture_output=True, text=True)
@@ -423,7 +429,8 @@ def run_smoke(known: dict[str, str] | None = None) -> tuple[bool, str]:
     return smoke.returncode == 0, (smoke.stdout.strip().splitlines() or [""])[-1]
 
 
-MAX_BATCH = 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
+FAST = os.environ.get("LAND_FAST") == "1"  # the user's call (2026-10-19): no smoke, no tests, no precheck; each PR is merged in order and squashed; only a build of the combined tree can halve a batch
+MAX_BATCH = 16 if FAST else 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
 def batch(prs: list, passes, land, refuse) -> None:
@@ -443,6 +450,27 @@ def batch(prs: list, passes, land, refuse) -> None:
     batch(prs[middle:], passes, land, refuse)
 
 
+def clean_checkout(ref: str, cwd: Path = ROOT) -> None:
+    """`ref` checked out with nothing left from earlier batches: tracked changes reset and UNTRACKED files removed. A regenerated docs page left untracked made every later PR that adds
+    it fail its local merge ("would be overwritten"), which read as a conflict and left such PRs out for hours."""
+    git("reset", "-q", "--hard", cwd=cwd)
+    git("clean", "-fdq", cwd=cwd)
+    git("checkout", "-q", "--detach", ref, cwd=cwd)
+
+
+def fast_merge(numbers: list[str], merge_one) -> tuple[list[str], dict[str, str]]:
+    """The PRs of a fast batch, in order: `merge_one(number)` merges one into the checkout and returns `""` or why it cannot join (a conflict with an earlier one, a deletion it
+    does not name). A PR that cannot join is left out, with its reason, and never fails the others."""
+    kept, left_out = [], {}
+    for number in numbers:
+        why = merge_one(number)
+        if why:
+            left_out[number] = why
+        else:
+            kept.append(number)
+    return kept, left_out
+
+
 def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     """`parity_squash.py merge-batch N1..N8`: the PRs in order, one smoke on the base with all of them merged in, each squashed with its head lease."""
     known = known or {}
@@ -456,7 +484,40 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         infos[number] = info
     landed, refused = [], []
 
+    left_out: dict[str, str] = {}
+
+    def passes_fast(group: list[str]) -> bool:
+        git("fetch", "-q", "origin", "feat/parity")
+        clean_checkout(BASE)
+
+        def merge_one(number: str) -> str:
+            before = git("rev-parse", "HEAD").strip()
+            git("fetch", "-q", "origin", infos[number]["headRefOid"])
+            merge = subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True, text=True)
+            if merge.returncode and (conflicts := git("diff", "--name-only", "--diff-filter=U").split()) and not regenerate(conflicts):
+                merge = subprocess.CompletedProcess([], 0)  # only generated docs conflicted: regenerated and committed
+            if merge.returncode:
+                subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+                return "conflicts with an earlier PR of the batch or with feat/parity: its owner merges fresh feat/parity"
+            if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or "", base=before):
+                git("reset", "-q", "--hard", before)
+                return "; ".join(why)
+            return ""
+
+        kept, out = fast_merge(group, merge_one)
+        left_out.update(out)
+        for number, why in out.items():
+            print(f"#{number}: left out: {why}")
+        if not kept:
+            return True
+        if broken := _workspace_check(ROOT):
+            print(f"REFUSED: the batch does not build: {broken[:300]}")
+            return False
+        return True
+
     def passes(group: list[str]) -> bool:
+        if FAST:
+            return passes_fast(group)
         git("fetch", "-q", "origin", "feat/parity")
         head_failed = head_failures(git("rev-parse", BASE).strip(), lambda: compute_head_failures(known))
         git("checkout", "-q", "--detach", BASE)
@@ -484,6 +545,10 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         return not why
 
     def land(number: str) -> None:
+        if number in left_out:
+            refused.append(number)
+            return
+        stage(f"squash #{number}")
         done = subprocess.run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", infos[number]["headRefOid"], "--subject", infos[number]["title"], "--body", known_red_line(known)])
         (landed if done.returncode == 0 else refused).append(number)
         if done.returncode == 0:
@@ -543,13 +608,29 @@ def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT) -> set[st
     return {name for name in tests if name in set(parity_smoke.failed_tests(done.stdout + done.stderr))}
 
 
+def run_streaming(command: list[str], cwd: Path):
+    """The finished process (.returncode, .stdout, .stderr) with the stage lines of its stdout echoed as they arrive, so the squash's log has the smoke's step times."""
+    import tempfile
+    import types
+
+    with tempfile.TemporaryFile("w+") as err:
+        process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=err, text=True)
+        out = []
+        for line in process.stdout:
+            out.append(line)
+            if f" {PREFIX} " in line:
+                print(line.rstrip(), flush=True)
+        process.wait()
+        err.seek(0)
+        return types.SimpleNamespace(returncode=process.returncode, stdout="".join(out), stderr=err.read())
+
+
 def smoke_failures(known: dict[str, str] | None = None) -> tuple[set[str], str]:
     """(the failing checks, the smoke's last line) of parity_smoke on this checkout: its `FAILING:` line."""
-    smoke = subprocess.run(
+    stage("smoke")
+    smoke = run_streaming(
         ["uv", "run", "-q", "--project", "tools", "python", "tools/parity_smoke.py", "--bin", smoke_bins(), "--base", BASE, *[a for step in (known or {}) for a in ("--skip", step)]],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
+        ROOT,
     )
     lines = smoke.stdout.strip().splitlines()
     if smoke.returncode and not any(line.startswith("FAILING:") for line in lines):
@@ -582,6 +663,7 @@ def head_failures(sha: str, compute=None, cache: Path = HEAD_FAILURES) -> set[st
 
 def log_landed(sha: str, number: str, result: str, path: Path | None = None) -> None:
     """One line per landed squash for the coordinator's log: `<sha> <PR> <gate result> <date>`."""
+    stage(f"log #{number}")
     path = path or LANDED_LOG
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as log:
@@ -599,6 +681,7 @@ def unlogged(log: Path, commits: list[str]) -> list[str]:
 
 def compute_head_failures(known: dict[str, str] | None = None) -> set[str]:
     """The failing checks on the head itself: check origin/feat/parity out, build its binaries when stale, run the smoke. Slow (a build), once per head sha."""
+    stage("head-failures")
     git("checkout", "-q", "--detach", BASE)
     if stale := ensure_bins():
         raise SystemExit(f"the head's own binaries: {stale}")
