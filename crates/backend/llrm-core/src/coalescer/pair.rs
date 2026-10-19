@@ -27,6 +27,34 @@ pub trait CoalescerEnv {
         a: u32,
         b: u32,
     ) -> bool;
+
+    /// A build for size: a copy of a constant is made again only where that
+    /// leaves no second copy of the constant (DEVIATE C10).
+    fn tuned_for_size(&self) -> bool {
+        false
+    }
+
+    /// `TII->isAsCheapAsAMove(DefMI) && TII->isReMaterializable(DefMI) &&
+    /// DefMI->isSafeToMove()` with one def: a move of an immediate that reads
+    /// and writes nothing else.
+    fn rematerializable(
+        &self,
+        insn: &Insn,
+    ) -> bool {
+        let Some(what) = &insn.what else { return false };
+        what.op == Operation::Move
+            && what.name.as_deref() == Some("mov")
+            && matches!((what.dests.as_slice(), what.sources.as_slice()), ([Loc::Held(_)], [Loc::Imm(_)]))
+            && insn.defines.len() == 1
+            && insn.uses.is_empty()
+            && insn.clobbers.is_empty()
+            && insn.requires.is_empty()
+            && insn.delivers.is_empty()
+            && insn.spread.is_empty()
+            && insn.group.is_none()
+            && insn.call.is_none()
+            && !insn.volatile
+    }
 }
 
 /// The (destination, source) of a plain move between values of one width
