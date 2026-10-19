@@ -420,7 +420,7 @@ fn _placed(
         return Ok(body.with_blocks(explicit));
     }
     let natural = loopy::loops(&explicit, Some(body.entry));
-    let busy = Frequency::over(body, &explicit);
+    let busy = Frequency::of(body);
     let (blocks, odds) = placement::order(&explicit, body.entry, &body.odds, &busy, &natural, size, aggressive);
     Ok(_reachable(&LirBody { odds, ..body.clone() }, blocks))
 }

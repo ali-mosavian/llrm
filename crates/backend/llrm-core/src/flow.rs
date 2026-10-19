@@ -182,7 +182,7 @@ pub fn machine_with<'a>(
     if !target.optimized {
         phases.retain(|phase| !UNOPTIMIZED.contains(&phase.class_name()));
     }
-    // Under `LLRM_GREEDY_RFP` the stackifier runs after allocation, on the FP
+    // Under RFP the stackifier runs after allocation, on the FP
     // registers greedy assigned, as X86FloatingPoint does.
     if crate::backend::allocate::rfp_on()
         && let Some(fps) = phases.iter().position(|phase| phase.class_name() == "FloatAlloc")
@@ -398,7 +398,7 @@ mod tests {
 
     /// jumps deleted a block holding only a source `jmp`, and its three
     /// bytes had no owner; nothing noticed.
-    /// Under `LLRM_GREEDY_RFP` floatassign's slot keeps its legalization only
+    /// Under RFP floatassign's slot keeps its legalization only
     /// and the stackifier runs after allocation, on the FP registers greedy
     /// assigned (X86FloatingPoint's place); without it the order is as ever.
     #[test]
@@ -411,9 +411,10 @@ mod tests {
                 .collect()
         };
         let at = |names: &[&str], one: &str| names.iter().position(|name| *name == one);
+        let old = crate::backend::allocate::RfpOn::off();
         let before = names();
         assert!(at(&before, "FloatAlloc") < at(&before, "RegAlloc") && at(&before, "FloatAssign").is_some());
-        let _rfp = crate::backend::allocate::RfpOn::set();
+        drop(old);
         let after = names();
         assert_eq!(at(&after, "FloatAssign"), None);
         assert_eq!(at(&after, "FloatPrep"), at(&before, "FloatAssign"));
