@@ -16,7 +16,7 @@ For contributors changing the backend, the loop passes or the measuring tools: p
 
 **A port is not an unknown callee.** An OUT to a port that reaches memory writes anything, not only what escaped; a DMA write may touch a global whose address was never taken. Guard: `test_a_port_call_is_narrowed_only_where_the_target_says_its_device_reaches_no_memory` (`ports_tests.rs`).
 
-**Facts only the frontend knows must be said.** A slice descriptor is `noalias readonly`, so its length loads leave the loop and bounds checks are counted. Guard: `test_a_load_from_a_readonly_noalias_parameter_leaves_past_a_store` (`hoist_tests.rs`).
+**Facts only the frontend knows must be said.** A slice descriptor is `noalias readonly`, so its length loads leave the loop and bounds checks are counted. Guard: `test_a_load_from_a_readonly_noalias_parameter_leaves_past_a_store` (`licm/tests.rs`).
 
 **A pass can ask for a form the selector does not build.** A far pointer is never compared for the exit: the selector has no compare for it. Guard: `test_a_far_pointer_is_never_compared_for_the_exit` (`lsr_tests.rs`).
 
