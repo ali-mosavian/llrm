@@ -75,6 +75,15 @@ pub trait SplitEnv {
         l: usize,
     ) -> usize;
 
+    /// `new` was made from `from` by a split (`createFrom`): what the target
+    /// knows by register number (its width) goes with it.
+    fn note_split_from(
+        &self,
+        lis: &LiveIntervals,
+        new: u32,
+        from: u32,
+    );
+
     /// `TII.isTriviallyReMaterializable(*MRI.getUniqueVRegDef(reg))`: the
     /// value can be made again where it is read.
     fn is_rematerializable(
@@ -588,6 +597,14 @@ mod tests {
             block: usize,
         ) -> bool {
             self.latches.contains(&block)
+        }
+
+        fn note_split_from(
+            &self,
+            _lis: &LiveIntervals,
+            _new: u32,
+            _from: u32,
+        ) {
         }
 
         fn is_rematerializable(
