@@ -783,29 +783,11 @@ pub(crate) fn llvm_order(
         // at the end of the Simplify list. Exit: the matcher accepts the
         // L1438 form, no date.
         Phase::Late => vec![
-            // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1438:
-            // the extra sinking can create larger blocks, so loops need
-            // not stay canonical; `forwardSwitchCondToPhi`,
-            // `convertSwitchRangeToICmp`, `convertSwitchToArithmetic` and
-            // `convertSwitchToLookupTable` are not translated.
-            simplify_cfg_with(
-                "simplifycfg@1438",
-                simplifycfg::Options {
-                    need_canonical_loop: false,
-                    hoist_common_insts: true,
-                    sink_common_insts: true,
-                    ..Default::default()
-                },
-            ),
+            // The slots' options, with the pin's lines,
+            // are `simplifycfg::Options::{L1438, L2376}`.
+            simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
-            // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L2376:
-            // `convertSwitchRangeToICmp`, `convertSwitchToArithmetic` and
-            // `speculateUnpredictables` are not translated, so only
-            // `hoistCommonInsts` is set.
-            simplify_cfg_with(
-                "simplifycfg@2376",
-                simplifycfg::Options { hoist_common_insts: true, ..Default::default() },
-            ),
+            simplify_cfg_with("simplifycfg@2376", simplifycfg::Options::L2376),
         ],
         Phase::Simplify => {
             let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];

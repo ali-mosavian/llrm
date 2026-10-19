@@ -927,13 +927,8 @@ x:
     };
     let (kept_changed, kept) = run(&super::Options::default());
     assert!(!kept_changed && kept.contains("\ne:\n"), "{kept}");
-    let late = super::Options {
-        need_canonical_loop: false,
-        hoist_common_insts: true,
-        sink_common_insts: true,
-        ..Default::default()
-    };
-    let (gone_changed, gone) = run(&late);
+    // The options the pipeline builds the slot from.
+    let (gone_changed, gone) = run(&super::Options::L1438);
     assert!(gone_changed && !gone.contains("\ne:\n"), "{gone}");
     assert!(gone.contains("br i1 %c, label %h, label %a"), "{gone}");
 }

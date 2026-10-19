@@ -240,6 +240,28 @@ pub struct Options {
     pub sink_common_insts: bool,
 }
 
+impl Options {
+    /// The slot at
+    /// [L1438](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1438):
+    /// the extra sinking can create larger blocks, so loops need not stay
+    /// canonical. The switch options are not translated.
+    pub const L1438: Options = Options {
+        need_canonical_loop: false,
+        speculate_blocks: true,
+        hoist_common_insts: true,
+        sink_common_insts: true,
+    };
+
+    /// The slot at
+    /// [L2376](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L2376).
+    pub const L2376: Options = Options {
+        need_canonical_loop: true,
+        speculate_blocks: true,
+        hoist_common_insts: true,
+        sink_common_insts: false,
+    };
+}
+
 impl Default for Options {
     fn default() -> Self {
         Options {
