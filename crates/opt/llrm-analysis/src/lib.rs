@@ -120,6 +120,7 @@ pub mod functionattrs;
 #[cfg(any(test, feature = "testing"))]
 pub mod generated;
 pub mod globalsaa;
+pub mod globalsmodref;
 pub mod graph;
 pub mod guards;
 pub mod induction;
