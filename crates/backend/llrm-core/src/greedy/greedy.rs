@@ -39,6 +39,14 @@
 //! every module at `llc` or at the shipped allocator's bytes, before the
 //! backend phase merges to main.
 //!
+//! Named row of D-G1 (qb `register_live_through`, qbdemo PLASMA): the x loop
+//! keeps 2 stores and 3 loads per trip in `[bp]` where the shipped allocator
+//! kept none; `llc` on the same IR has 1 store and 4 loads. Six registers
+//! against five induction variables and the address temporaries. The test
+//! stays red: it pins what the shipped allocator achieved. Closers: fewer live
+//! induction variables (the new LSR), or a translated improvement from the pin
+//! that avoids the induction variable's spill.
+//!
 //! # Example
 //! Three values live together over two registers: the third finds none free,
 //! none to evict (all heavier), waits a round, then is spilled; the spill's
