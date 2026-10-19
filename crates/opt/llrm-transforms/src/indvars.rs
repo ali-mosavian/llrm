@@ -213,8 +213,19 @@ impl FunctionPass for IndVars {
             analyses.invalidate(function, &kept);
             analyses.get::<llrm_analysis::manager::Registers>(context, layout, function)
         });
-        let compared = crate::simplifyindvar::enabled()
-            && crate::simplifyindvar::simplified(unit.context, unit.layout, unit.function, &outer);
+        let extending = crate::simplifyindvar::widening_enabled();
+        let compared = if extending {
+            crate::simplifyindvar::simplified_and_extended(
+                unit.context,
+                unit.layout,
+                unit.function,
+                unit.declared,
+                &outer,
+            )
+        } else {
+            crate::simplifyindvar::enabled()
+                && crate::simplifyindvar::simplified(unit.context, unit.layout, unit.function, &outer)
+        };
         if compared {
             standing.changed();
         }
@@ -238,14 +249,15 @@ impl FunctionPass for IndVars {
         if sunk {
             standing.changed();
         }
-        let widened = widened_with(
-            unit.context,
-            unit.layout,
-            unit.function,
-            &outer,
-            &mut standing,
-            if self.exit_values { None } else { self.unrolls },
-        );
+        let widened = !extending
+            && widened_with(
+                unit.context,
+                unit.layout,
+                unit.function,
+                &outer,
+                &mut standing,
+                if self.exit_values { None } else { self.unrolls },
+            );
         let merged = congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
         let rewound = rewound_with(
             unit.context,
@@ -274,7 +286,7 @@ impl FunctionPass for IndVars {
 /// replaceCongruentIVs`). Two loops fused, or one written with a counter twice,
 /// leave such a pair, and what is indexed by either is then the same address.
 fn congruent(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &passes::Outer,
@@ -398,7 +410,7 @@ fn _preheader(
 /// old form is a load and a store, the new a memory update, which `costs`
 /// prices. Nothing here names either form.
 pub fn rewound(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &Analyses,
@@ -412,7 +424,7 @@ pub fn rewound(
 /// where the run before it changed nothing, found once for the body where it
 /// did.
 pub fn rewound_with(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &passes::Outer,
@@ -443,7 +455,7 @@ pub fn rewound_with(
             Flags::default(),
             None,
         );
-        let first = function.block(plan.exit).instructions()[0];
+        let first = function.block(plan.exit).first().expect("a block with an instruction");
         function.insert(closed, Position::Before(first)).expect("a placed block");
         Operand::Value(function.instruction(closed).result.expect("a phi's value"))
     };
@@ -453,9 +465,7 @@ pub fn rewound_with(
         function.create_instruction(Opcode::Binary(BinaryOp::Add), ty, vec![exit_value, back], Flags::default(), None);
     let after = function
         .block(plan.exit)
-        .instructions()
         .iter()
-        .copied()
         .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
         .expect("a terminator");
     function.insert(reset, Position::Before(after)).expect("a placed block");
@@ -467,7 +477,7 @@ pub fn rewound_with(
         Flags::default(),
         None,
     );
-    let first = function.block(plan.parent_header).instructions()[0];
+    let first = function.block(plan.parent_header).first().expect("a block with an instruction");
     function.insert(carried, Position::Before(first)).expect("a placed block");
     let carried = Operand::Value(function.instruction(carried).result.expect("a phi's value"));
     let mut incoming = arms(function, plan.phi);
@@ -621,7 +631,7 @@ mod tests;
 /// before it, and what else reads the narrow one reads its low part. Every
 /// counter widened; whether any was.
 pub fn widened(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &passes::Outer,
@@ -636,7 +646,7 @@ pub fn widened(
 /// rolled: one operation fewer in the widened loop was a loop that no longer
 /// fit its own size (bench/lru's three-trip fill).
 pub fn widened_with(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &passes::Outer,
@@ -844,7 +854,7 @@ fn _compares_extended(
 /// `operand` zero- (or, where `signed`, sign-) extended to `ty` at the end of
 /// `preheader`: a number is its own extension.
 fn _extended(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     preheader: BlockId,
     operand: Operand,
@@ -875,7 +885,7 @@ fn _extended(
 }
 
 fn _widen(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     found: &_Found,
 ) {
@@ -884,7 +894,7 @@ fn _widen(
     let header = function.parent(found.phi).expect("a placed phi");
     // The bound and the start, extended once before the loop.
     let bound = _extended(context, function, found.preheader, found.bound, ty, found.signed);
-    let first = function.block(header).instructions()[0];
+    let first = function.block(header).first().expect("a block with an instruction");
     let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), Some("widen.iv"));
     function.insert(phi, Position::Before(first)).expect("a header");
     let value = Operand::Value(function.instruction(phi).result.expect("a phi's value"));

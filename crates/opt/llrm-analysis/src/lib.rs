@@ -107,6 +107,7 @@ pub mod consts;
 #[cfg(test)]
 mod corpus_tests;
 pub mod demanded;
+pub mod demandedbits;
 pub mod dependence;
 pub mod difference;
 pub mod effects;
@@ -123,6 +124,7 @@ pub mod induction;
 pub mod interprocedural;
 pub mod liveness;
 pub mod loopaccess;
+pub mod loopunrollanalyzer;
 pub mod manager;
 pub mod memdep;
 pub mod memory;

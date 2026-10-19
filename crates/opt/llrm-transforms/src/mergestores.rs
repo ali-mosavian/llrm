@@ -1,8 +1,18 @@
-//! Adjacent copies through registers become wider ones: LLVM's
-//! `DAGCombiner::mergeConsecutiveStores` for stores of loaded values
-//! (`tryStoreMergeOfLoads`).
+//! Adjacent stores become wider ones: LLVM's
+//! `DAGCombiner::mergeConsecutiveStores` for stores of constants
+//! (`tryStoreMergeOfConstants`, `merged_constants`) and of loaded values
+//! (`tryStoreMergeOfLoads`, `merged_copies`).
 //!
 //! # How it works
+//! Constants: stores of integer constants to adjacent cells of one object are
+//! one store of their bytes, little-endian, when the bytes are a legal integer
+//! (`getConsecutiveStores` finds the run of cells of one width, the widest
+//! legal prefix is taken, and a store made is a candidate again, so a byte pair
+//! and a word beside it become a dword). A load of any of the cells, another
+//! store, a call or a volatile store ends the span; stores that overlap leave
+//! the object alone.
+//!
+//! Loads:
 //! In straight-line code, a store of a value another instruction loaded, the
 //! only use of that load, is a copy of a cell. Copies of adjacent cells to
 //! adjacent cells, `a[0] = b[0]; a[1] = b[1]`, are one wider load and one wider
@@ -30,6 +40,16 @@
 //! apart (`MemRef::object`), is the same fact. Exit: none; MemorySSA could
 //! widen the span.
 //!
+//! DEVIATE M3 (pinned by `constants_that_cannot_be_one_wider_store_are_kept`):
+//! a wider constant store starts at a multiple of its size. LLVM's
+//! `allowsMemoryAccess` calls any x86 access fast.
+//!
+//! DEVIATE M4 (rows, `sum_three -Os`): tuned for size, a merge is made only
+//! where the one store is no more code bytes than the ones it replaces, a
+//! constant stored more than once being held in a register (a dword immediate
+//! with its operand-size prefix in 16-bit code is more than two register
+//! stores). LLVM has no such price.
+//!
 //! DEVIATE M2 (no number): no vector types, no rotate of a reversed pair, no
 //! truncating store; the target has none of them for integers here
 //! (`TLI.isTypeLegal` is `largest_legal_integer`), and a load or store of
@@ -48,12 +68,15 @@
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_support::hash::IndexMap;
+
+use crate::profit::OperationCosts;
 
 /// One copy of a cell: a load whose only use is a store, and where each reads
 /// and writes.
@@ -152,7 +175,7 @@ fn chunks(
 /// `function` with each run of copies of adjacent cells to adjacent cells made
 /// one wider copy; whether any was.
 pub fn merged_copies(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     callees: &Callees,
     function: &mut Function,
@@ -162,15 +185,23 @@ pub fn merged_copies(
     let mut plan: Vec<Vec<Pair>> = Vec::new();
     {
         let unit = Unit::within(context, layout, function, outer);
+        // The loads of the span, by result: one map for the function, emptied
+        // by taking out what the span put in.
+        let mut loads: IdMap<ValueId, InstId> = IdMap::default();
+        let mut put: Vec<ValueId> = Vec::new();
         for block in function.layout() {
-            let mut loads: IndexMap<ValueId, InstId> = IndexMap::default();
             let mut span: Vec<Pair> = Vec::new();
             let mut reads: Vec<Operand> = Vec::new();
-            let mut flush = |span: &mut Vec<Pair>, reads: &mut Vec<Operand>, loads: &mut IndexMap<ValueId, InstId>| {
+            let mut flush = |span: &mut Vec<Pair>,
+                             reads: &mut Vec<Operand>,
+                             loads: &mut IdMap<ValueId, InstId>,
+                             put: &mut Vec<ValueId>| {
                 plan.extend(chunks(&unit, span, reads, legal));
                 span.clear();
                 reads.clear();
-                loads.clear();
+                for value in put.drain(..) {
+                    loads.remove(&value);
+                }
             };
             for (order, &inst) in function.block(*block).instructions().iter().enumerate() {
                 let op = function.instruction(inst);
@@ -179,18 +210,22 @@ pub fn merged_copies(
                         let result = op.result.expect("a load's value");
                         let width = unit.int_bits(Operand::Value(result)).filter(|bits| matches!(bits, 8 | 16 | 32));
                         let users = function.users(result);
-                        let single_store = users.len() == 1
-                            && matches!(
-                                function.instruction(users[0].user).opcode,
-                                Opcode::Store { volatile: false, .. }
-                            )
-                            && users[0].index == 0;
+                        let single_store = users
+                            .only()
+                            .is_some_and(
+                                |only| matches!(
+                                    function.instruction(only.user).opcode,
+                                    Opcode::Store { volatile: false, .. }
+                                )
+                                    && only.index == 0,
+                            );
                         match (width, single_store, width.and_then(|bits| cell(&unit, op.operands[0], bits / 8))) {
                             (Some(_), true, Some((root, _))) => {
                                 reads.push(root);
                                 loads.insert(result, inst);
+                                put.push(result);
                             }
-                            _ => flush(&mut span, &mut reads, &mut loads),
+                            _ => flush(&mut span, &mut reads, &mut loads, &mut put),
                         }
                     }
                     Opcode::Store { volatile: false, .. } => {
@@ -199,7 +234,7 @@ pub fn merged_copies(
                             _ => None,
                         };
                         let Some((value, load)) = paired else {
-                            flush(&mut span, &mut reads, &mut loads);
+                            flush(&mut span, &mut reads, &mut loads, &mut put);
                             continue;
                         };
                         let bits = unit.int_bits(Operand::Value(value)).expect("an integer");
@@ -208,7 +243,7 @@ pub fn merged_copies(
                         let (Some((src, src_low)), Some((dst, dst_low))) =
                             (cell(&unit, source, width), cell(&unit, op.operands[1], width))
                         else {
-                            flush(&mut span, &mut reads, &mut loads);
+                            flush(&mut span, &mut reads, &mut loads, &mut put);
                             continue;
                         };
                         span.push(Pair {
@@ -225,10 +260,10 @@ pub fn merged_copies(
                         });
                     }
                     _ if memory::speculatable(unit.context, callees, function, inst) => {}
-                    _ => flush(&mut span, &mut reads, &mut loads),
+                    _ => flush(&mut span, &mut reads, &mut loads, &mut put),
                 }
             }
-            flush(&mut span, &mut reads, &mut loads);
+            flush(&mut span, &mut reads, &mut loads, &mut put);
         }
     }
     for chunk in &plan {
@@ -259,6 +294,226 @@ pub fn merged_copies(
         }
         for one in chunk {
             function.erase(one.load).expect("a load with no use left");
+        }
+    }
+    !plan.is_empty()
+}
+
+/// One store of a constant a merge may take.
+#[derive(Clone)]
+struct Constant {
+    /// The stores it stands for, in the order they were found.
+    stores: Vec<InstId>,
+    /// The last of them in the block, and its place there.
+    last: InstId,
+    order: usize,
+    root: Operand,
+    low: i64,
+    high: i64,
+    value: u128,
+    /// The pointer of the lowest cell.
+    pointer: Operand,
+}
+
+/// A store of an integer constant to a cell of an object.
+fn constant(
+    unit: &Unit,
+    inst: InstId,
+    order: usize,
+) -> Option<Constant> {
+    let op = unit.function.instruction(inst);
+    let Opcode::Store { volatile: false, .. } = op.opcode else { return None };
+    let (value, pointer) = (op.operands[0], op.operands[1]);
+    let bits = unit.int_bits(value).filter(|bits| matches!(bits, 8 | 16 | 32))?;
+    let value = unit.int_constant(value)?;
+    let (root, low) = cell(unit, pointer, bits / 8)?;
+    Some(Constant {
+        stores: vec![inst],
+        last: inst,
+        order,
+        root,
+        low,
+        high: low + i64::from(bits / 8),
+        value: value & ((1u128 << bits) - 1),
+        pointer,
+    })
+}
+
+/// Whether one store of `wide` bytes is no more code bytes than `cells`'
+/// stores: `costs.store` is a store of an immediate of the operand size, so a
+/// register store (the form of a constant stored more than once in the
+/// function, which a register holds) is that less the operand, and a store of
+/// `width` bytes of immediate has them instead, each under the operand-size
+/// prefix where its width is not the operand's.
+fn smaller(
+    unit: &Unit,
+    costs: &OperationCosts,
+    cells: &[Constant],
+    wide: i64,
+    stored: &IndexMap<(u128, u32), usize>,
+) -> bool {
+    let Some(space) = unit.space(cells[0].pointer) else { return false };
+    let operand = i64::from(unit.layout.pointer(space).index_bits / 8);
+    let register = |width: i64| costs.sized(costs.store - operand, width, operand);
+    let immediate = |width: i64| register(width) + width;
+    let each: i64 = cells
+        .iter()
+        .map(|one| {
+            let width = one.high - one.low;
+            let held = stored.get(&(one.value, width as u32)).is_some_and(|&count| count > 1);
+            if held { register(width) } else { immediate(width) }
+        })
+        .sum();
+    immediate(wide) <= each
+}
+
+/// The cells of `group` (one object, by address, none overlapping) after every
+/// merge `getConsecutiveStores` and `tryStoreMergeOfConstants` make of them: a
+/// run of adjacent cells of one width is cut into the widest legal stores that
+/// start at a multiple of their size, and the stores made are candidates again.
+fn constants_merged(
+    unit: &Unit,
+    group: Vec<Constant>,
+    legal: u32,
+    stored: &IndexMap<(u128, u32), usize>,
+    costs: &OperationCosts,
+    size: bool,
+) -> Vec<Constant> {
+    let mut cells = group;
+    loop {
+        let mut changed = false;
+        let mut at = 0;
+        while at + 1 < cells.len() {
+            let width = cells[at].high - cells[at].low;
+            // The run of adjacent cells of this width from `at`.
+            let mut run = 1;
+            while at + run < cells.len()
+                && cells[at + run].low == cells[at + run - 1].high
+                && cells[at + run].high - cells[at + run].low == width
+            {
+                run += 1;
+            }
+            // The most cells whose bytes are a legal integer, aligned to their
+            // size.
+            let take = (2..=run)
+                .rev()
+                .find(
+                    |&count| {
+                        let bits = width * count as i64 * 8;
+                        matches!(bits, 16 | 32 | 64)
+                            && bits <= i64::from(legal)
+                            && cells[at].low % (width * count as i64) == 0
+                            && (!size || smaller(unit, costs, &cells[at..at + count], width * count as i64, stored))
+                    },
+                );
+            let Some(take) = take else {
+                at += 1;
+                continue;
+            };
+            let low = cells[at].low;
+            let mut value = 0u128;
+            let mut stores = Vec::new();
+            for one in &cells[at..at + take] {
+                value |= one.value << (8 * (one.low - low) as u32);
+                stores.extend(one.stores.iter().copied());
+            }
+            let latest = cells[at..at + take].iter().max_by_key(|one| one.order).expect("a run has cells");
+            let (last, order) = (latest.last, latest.order);
+            let merged = Constant {
+                stores,
+                last,
+                order,
+                root: cells[at].root,
+                low,
+                high: cells[at + take - 1].high,
+                value,
+                pointer: cells[at].pointer,
+            };
+            cells.splice(at..at + take, [merged]);
+            changed = true;
+            at += 1;
+        }
+        if !changed {
+            return cells;
+        }
+    }
+}
+
+/// `function` with each run of stores of constants to adjacent cells of one
+/// object made stores of the widest legal integer; whether any was.
+pub fn merged_constants(
+    context: &Context,
+    layout: &DataLayout,
+    callees: &Callees,
+    function: &mut Function,
+    outer: &Outer,
+    size: bool,
+) -> bool {
+    let legal = layout.largest_legal_integer();
+    let costs = outer.target().size_costs();
+    let mut plan: Vec<Constant> = Vec::new();
+    {
+        let unit = Unit::within(context, layout, function, outer);
+        // How many stores of the function write each constant: a value stored
+        // more than once is held in a register, which a store reads without an
+        // immediate.
+        let mut stored: IndexMap<(u128, u32), usize> = IndexMap::default();
+        let mut spans: Vec<Vec<Constant>> = Vec::new();
+        for block in function.layout() {
+            let mut open: Vec<Constant> = Vec::new();
+            for (order, &inst) in function.block(*block).instructions().iter().enumerate() {
+                if let Some(one) = constant(&unit, inst, order) {
+                    *stored.entry((one.value, (one.high - one.low) as u32)).or_default() += 1;
+                    open.push(one);
+                } else if !memory::speculatable(unit.context, callees, function, inst)
+                    || matches!(function.instruction(inst).opcode, Opcode::Store { .. })
+                {
+                    spans.push(std::mem::take(&mut open));
+                }
+            }
+            spans.push(open);
+        }
+        for span in spans {
+            // One object and address space at a time, by address.
+            let mut groups: Vec<Vec<Constant>> = Vec::new();
+            for one in span {
+                let space = unit.space(one.pointer);
+                match groups.iter_mut().find(|group| group[0].root == one.root && unit.space(group[0].pointer) == space)
+                {
+                    Some(group) => group.push(one),
+                    None => groups.push(vec![one]),
+                }
+            }
+            for mut group in groups {
+                group.sort_by_key(|one| one.low);
+                // Two stores to one byte keep their order: leave the object
+                // alone.
+                if group.windows(2).any(|two| two[1].low < two[0].high) {
+                    continue;
+                }
+                plan.extend(
+                    constants_merged(&unit, group, legal, &stored, &costs, size)
+                        .into_iter()
+                        .filter(|one| one.stores.len() > 1),
+                );
+            }
+        }
+    }
+    for wide in &plan {
+        let bits = (8 * (wide.high - wide.low)) as u32;
+        let value = crate::counting::constant(context, &llrm_analysis::num::Num::from(wide.value), bits);
+        let void = context.types.void();
+        let last = wide.last;
+        let store = function.create_instruction(
+            Opcode::Store { align: None, volatile: false },
+            void,
+            vec![value, wide.pointer],
+            Flags::default(),
+            None,
+        );
+        function.insert(store, Position::Before(last)).expect("a placed store");
+        for one in &wide.stores {
+            function.erase(*one).expect("a store has no result");
         }
     }
     !plan.is_empty()
@@ -366,5 +621,74 @@ mod tests {
         let (after, changed) = merge(&text, &[&[0], &[3]]);
         assert!(changed && after.contains("load i32") && !after.contains("store i8"), "{after}");
         assert_eq!(after.matches("store i32").count(), 1, "{after}");
+    }
+}
+
+#[cfg(test)]
+mod constant_tests {
+    use llrm_analysis::testing::{DOS, layout};
+    use llrm_mir::passes::Outer;
+
+    use super::merged_constants;
+    use crate::testing::{parsed, printed, results};
+
+    fn merge(
+        body: &str,
+        size: bool,
+    ) -> (String, bool) {
+        let text = format!(
+            "@s = global [8 x i8] zeroinitializer\n\ndefine i16 @f(i16 %x, i16 %q) {{\n  %p1 = getelementptr inbounds [8 x i8], ptr @s, i16 0, i16 1\n  %p2 = getelementptr inbounds [8 x i8], ptr @s, i16 0, i16 2\n  %p3 = getelementptr inbounds [8 x i8], ptr @s, i16 0, i16 3\n  %p4 = getelementptr inbounds [8 x i8], ptr @s, i16 0, i16 4\n{body}  %r = getelementptr inbounds [8 x i8], ptr @s, i16 0, i16 %q\n  %v = load i8, ptr %r\n  %w = zext i8 %v to i16\n  ret i16 %w\n}}\n"
+        );
+        let before = parsed(&format!("{DOS}{text}"));
+        let mut module = before.clone();
+        let (layout, outer) =
+            (layout(&module), Outer::of(&module, Some(std::rc::Rc::new(llrm_x86_m16::Dos::default()))));
+        let callees = llrm_mir::memory::callees(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let changed = merged_constants(context, &layout, &callees, function, &outer, size);
+        let after = printed(&module);
+        let inputs: &[&[i128]] = &[&[0, 0], &[0, 1], &[0, 2], &[0, 3], &[0, 4], &[0, 5]];
+        assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+        (after, changed)
+    }
+
+    /// A byte pair and a word beside it are a dword: the store made from the
+    /// pair is a candidate again.
+    #[test]
+    fn test_a_byte_pair_and_a_word_beside_it_are_a_dword() {
+        let (after, changed) = merge("  store i8 1, ptr @s\n  store i8 2, ptr %p1\n  store i16 3, ptr %p2\n", false);
+        assert!(
+            changed && after.contains("store i32 197121, ptr @s") && after.matches("store").count() == 1,
+            "{after}"
+        );
+    }
+
+    /// A packed `{ a:8, b:32 }`: `a` is the byte at 0 and `b` the four at 1.
+    /// The bytes are five, not a legal integer, and `b += 5` reads the four and
+    /// writes them again: no store is merged with another, none is made wider
+    /// across the read.
+    #[test]
+    fn test_packed_bitfield_stores_with_a_read_modify_write_between_are_kept() {
+        let body = "  store i8 -56, ptr @s\n  store i32 7, ptr %p1\n  %b = load i32, ptr %p1\n  %c = add i32 %b, 5\n  store i32 %c, ptr %p1\n";
+        let (after, changed) = merge(body, false);
+        assert!(!changed, "{after}");
+        assert_eq!(after.matches("store").count(), 3, "{after}");
+    }
+
+    /// The same two stores with only a partial overwrite after them: `b`'s low
+    /// byte is stored again, so the dword store at 1 and the byte at 1 overlap:
+    /// the object is left alone.
+    #[test]
+    fn test_a_partial_overwrite_of_a_merged_cell_leaves_the_object_alone() {
+        let body = "  store i8 1, ptr @s\n  store i8 2, ptr %p1\n  store i8 9, ptr %p1\n";
+        let (after, changed) = merge(body, false);
+        assert!(!changed, "{after}");
+    }
+
+    /// A dword whose first byte is not a multiple of four (M3).
+    #[test]
+    fn test_a_pair_that_would_start_off_its_alignment_is_kept() {
+        let (after, changed) = merge("  store i8 18, ptr %p1\n  store i8 52, ptr %p2\n", false);
+        assert!(!changed, "{after}");
     }
 }

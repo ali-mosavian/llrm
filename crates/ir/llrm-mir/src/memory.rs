@@ -206,6 +206,7 @@ pub fn argument_memory_only(attrs: &[Attribute]) -> bool {
 }
 
 /// The function `inst` calls directly, if it is a call.
+#[inline]
 pub fn callee(
     context: &Context,
     function: &Function,
@@ -220,6 +221,24 @@ pub fn callee(
         },
         _ => None,
     }
+}
+
+/// `isNoAliasCall`: whether the call `inst` returns `noalias`, as the call
+/// site or its callee states it (`CallBase::hasRetAttr` reads both).
+pub fn returns_noalias(
+    context: &Context,
+    globals: &[GlobalValue],
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
+    Facts::of(&info.return_attrs).no_alias()
+        || callee(context, function, inst).and_then(|global| globals.get(global.0 as usize)).is_some_and(|global| {
+            match &global.kind {
+                GlobalKind::Function(callee) => Facts::of(&callee.return_attrs).no_alias(),
+                GlobalKind::Variable(_) => false,
+            }
+        })
 }
 
 /// Whether `inst`'s only effect is its value, so that if nothing needs the

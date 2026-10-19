@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 51 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 54 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -22,6 +22,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 51 documented, 0 undoc
 | constant_cycles | Sparse value propagation over phis, with distinct pending and overdefined states, to find constants that only a cycle proves. | `State`, `Successors` and `propagated`. Consumers: [`crate::consts`](consts.md) | [constant_cycles](constant_cycles.md) |
 | consts | Which values are known, and what they are: integer constant propagation and folding, with memory read through MemorySSA. | `Known`, `known` (registers, cached as [`crate::manager::Registers`](manager.md)), | [consts](consts.md) |
 | demanded | Which bits of each integer value anything reads: LLVM's `DemandedBits`. | `demanded(context, function)`: a `ValueId -> u128` map. Cached as | [demanded](demanded.md) |
+| demandedbits | Which bits of each integer value anything reads: a translation of LLVM's `DemandedBits` (`DemandedBits.cpp` at d1106deb71cc). | `DemandedBits::of`, then `demanded_bits`, `demanded_bits_of_use`, | [demandedbits](demandedbits.md) |
 | dependence | Data dependence distances over a two-deep loop nest, the outer unroll factor that unroll-and-jam may use for them, and whether two loops may be fused. | `distances`, `factor`, `fusable`, `meetings`, `interchangeable`, | [dependence](dependence.md) |
 | difference | What a set of compares proves of the unknowns they test, by difference bounds: LLVM's ConstraintElimination. | `proves(width, facts, ranges, predicate, left, right)`. Its one consumer is | [difference](difference.md) |
 | effects | What a call may do to memory its operands do not name, from LLVM's call attributes. | `call`, `touches_memory`, `writes_memory`, `unmodeled_read`, | [effects](effects.md) |
@@ -37,7 +38,9 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 51 documented, 0 undoc
 | interprocedural | Finds what the two sides of a direct call make certain: constant arguments, constant returns, purity and termination. | The functions above, and the re-export of `noreturn::terminal_sites`. | [interprocedural](interprocedural.md) |
 | liveness | Which SSA values are live at each block's entry and exit, and how many are live at once. | `Liveness`, `live`, `live_where`, `pressure`, `pressure_of`, `entry_values`, | [liveness](liveness.md) |
 | loopaccess | `getPointersDiff` and `isConsecutiveAccess`. |  | [loopaccess](loopaccess.md) |
+| loopunrollanalyzer | `UnrolledInstAnalyzer`: what simplifies in one iteration of a loop if it were unrolled completely, to cost the unrolled form without making it. |  | [loopunrollanalyzer](loopunrollanalyzer.md) |
 | manager | The memory and range analyses as entries of llrm-mir's analysis manager: asked for by name, cached, kept or brought up to date after a pass. | The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`, | [manager](manager.md) |
+| memdep | `MemoryDependenceAnalysis`: for a load, a store or a call, the nearest instruction it depends on in its block (a def or a clobber), or that there is none there and the question moves to the predecessors. | `MemDepResult`, `MemoryDependenceResults` (`get_dependency`, | [memdep](memdep.md) |
 | memory | The memory model every alias query reads: objects, byte slices, provenance, accesses (`MemRef`) and the `Unit` that carries a function's facts. | The types above; `exposed_frames`, `object_of`, `global_object`, `typed`, | [memory](memory.md) |
 | memoryssa | Memory SSA: a single memory state versioned by stores and writing calls, with a walker that finds the writes a load may see. | `Accesses` (analysis `accesses`), `MemorySSA` via `built`, `Kind`, `Access`, | [memoryssa](memoryssa.md) |
 | mustexecute | `SimpleLoopSafetyInfo`. |  | [mustexecute](mustexecute.md) |

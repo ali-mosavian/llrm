@@ -57,7 +57,7 @@ fn passing_value_always_undefined(
     // A null, a zero or a poison.
     let null = matches!(
         context.get(id).kind,
-        ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison | ConstantKind::Int(0)
+        ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison | ConstantKind::Undef | ConstantKind::Int(0)
     );
     if !null {
         return false;
@@ -145,7 +145,7 @@ fn selects_priced(
 /// `then` (reached only by the branch ending `block`, and jumping to `end`,
 /// the branch's other target) run before the branch. Whether it was.
 pub fn executed(
-    context: &mut Context,
+    context: &Context,
     spec: &Speculation,
     function: &mut Function,
     block: BlockId,

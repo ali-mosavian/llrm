@@ -238,7 +238,7 @@ fn spill_model(program: &Program) {
                 .with_spaces(program.target.spaces())
                 .with_registers(&registers)
                 .with_shape(&shape);
-            let trips = profit::proven_trips(&unit, &registers);
+            let trips = profit::proven_trips(&unit);
             let Some(frequency) =
                 profit::_frequencies(&module.context, &module.metadata, &module.globals, function, Some(&trips))
             else {
@@ -303,9 +303,8 @@ pub fn emitted(
                 module.globals.iter().filter_map(|global| global.function()).filter(|one| !one.is_declaration())
             })
         };
-        let instructions: usize = bodies()
-            .map(|one| one.layout().iter().map(|&block| one.block(block).instructions().len()).sum::<usize>())
-            .sum();
+        let instructions: usize =
+            bodies().map(|one| one.layout().iter().map(|&block| one.block(block).len()).sum::<usize>()).sum();
         llrm_support::debug!("mir", "functions {} instructions {}", bodies().count(), instructions);
     }
     Ok((linked, data))
@@ -347,9 +346,18 @@ pub fn optimized(
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
+    timed("mir odd widths", || program.modules.iter_mut().try_for_each(crate::backend::legalize::promoted))?;
     timed("mir min max", || program.modules.iter_mut().try_for_each(crate::backend::selects::minmax_expanded))?;
     if options.arch.expands("select") {
-        timed("mir selects", || program.modules.iter_mut().try_for_each(crate::backend::selects::lowered))?;
+        let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
+        let pricing = crate::backend::selects::Pricing {
+            target: Some(program.target.clone()),
+            layout: &program.layout,
+            tti: &*tti,
+        };
+        timed("mir selects", || {
+            program.modules.iter_mut().try_for_each(|module| crate::backend::selects::lowered(module, &pricing))
+        })?;
     }
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {
         timed("mir spill model", || spill_model(program));

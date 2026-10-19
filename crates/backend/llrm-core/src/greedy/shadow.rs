@@ -26,6 +26,7 @@
 
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use llrm_lir::registers::{RegId, Regs};
 
@@ -168,6 +169,119 @@ impl GreedyEnv for BodyEnv {
         _virt: u32,
     ) -> bool {
         false
+    }
+}
+
+/// What `SplitKit` asks of the function: its loops, its terminators and the
+/// copies it inserts.
+struct BodySplitEnv {
+    tables: Rc<Tables>,
+    forest: Rc<llrm_mir::forest::Forest>,
+    /// The address of each block, by number.
+    ats: Vec<i64>,
+    /// Where each block address stands.
+    number: crate::support::hash::HashMap<i64, usize>,
+}
+
+impl BodySplitEnv {
+    fn new(
+        body: &LirBody,
+        tables: Rc<Tables>,
+    ) -> Self {
+        let ats: Vec<i64> = body.blocks.iter().map(|block| block.at).collect();
+        let number = ats.iter().enumerate().map(|(n, &at)| (at, n)).collect();
+        Self { tables, forest: crate::analysis::loops::forest_of(&body.blocks, Some(body.entry)), ats, number }
+    }
+}
+
+impl super::splitkit::SplitEnv for BodySplitEnv {
+    fn is_terminator(
+        &self,
+        insn: &Insn,
+    ) -> bool {
+        use crate::model::ir::Operation;
+        insn.what
+            .as_ref()
+            .is_some_and(|what| matches!(
+                what.op,
+                Operation::Jump | Operation::Branch | Operation::Return
+            ))
+    }
+
+    fn is_rematerializable(
+        &self,
+        reg: u32,
+    ) -> bool {
+        self.tables.remat.borrow().contains(&reg)
+    }
+
+    fn loop_of(
+        &self,
+        block: usize,
+    ) -> Option<usize> {
+        self.forest.innermost(self.ats[block])
+    }
+
+    fn loop_depth(
+        &self,
+        l: usize,
+    ) -> u32 {
+        self.forest.loops[l].depth
+    }
+
+    fn loop_header(
+        &self,
+        l: usize,
+    ) -> usize {
+        self.number[&self.forest.loops[l].header]
+    }
+
+    fn is_loop_latch(
+        &self,
+        block: usize,
+    ) -> bool {
+        let at = self.ats[block];
+        self.forest.innermost(at).is_some_and(|l| self.forest.loops[l].latches.contains(&at))
+    }
+
+    fn is_copy_like(
+        &self,
+        insn: &Insn,
+    ) -> bool {
+        crate::backend::coalesce::_copy(insn).is_some()
+    }
+
+    /// A move of `from` into `to`, as wide as the widest access of `from`
+    /// (a value a spill made is in no table: its instructions say).
+    fn build_copy(
+        &self,
+        lis: &LiveIntervals,
+        to: u32,
+        from: u32,
+        beside: Option<&Insn>,
+    ) -> Arc<Insn> {
+        use crate::model::ir::{Held, Loc, Operation, Semantics};
+        let named = lis
+            .operands(from)
+            .iter()
+            .flat_map(|op| crate::backend::allocate::_named_widths(lis.instr(op.instr)).collect::<Vec<_>>())
+            .filter(|(value, _)| *value == from)
+            .map(|(_, width)| width)
+            .max();
+        let width = named.or_else(|| self.tables.widths.borrow().get(&from).copied()).unwrap_or(4);
+        self.tables.widths.borrow_mut().insert(to, width);
+        let what = Semantics {
+            name: Some("mov".to_owned()),
+            dests: vec![Loc::Held(Held { value: to, width })],
+            sources: vec![Loc::Held(Held { value: from, width })],
+            ..Semantics::new(Operation::Move)
+        };
+        // Beside another instruction, claiming none of its bytes.
+        let (at, covers) = beside.map_or((0, None), |b| {
+            let start = b.covers.map_or(b.at, |c| c.0);
+            (b.at, Some((start, start)))
+        });
+        Arc::new(Insn::new(at, covers, Some(what), vec![to], vec![from]))
     }
 }
 
@@ -320,6 +434,17 @@ pub fn decide_with(
     inputs: &ShadowInputs,
     mode: Mode<'_>,
 ) -> Option<Decided> {
+    // Off until the miscompiles it caused at -O2 -m16 (bintree, algebra, loop,
+    // branch, memory, recpow) are fixed: `LLRM_SPLIT=1` turns it on.
+    decide_with_split(inputs, mode, llrm_support::env_flag!("LLRM_SPLIT") && !llrm_support::env_flag!("LLRM_NO_SPLIT"))
+}
+
+/// `decide_with`, with live range splitting (`trySplit`) chosen.
+pub fn decide_with_split(
+    inputs: &ShadowInputs,
+    mode: Mode<'_>,
+    split: bool,
+) -> Option<Decided> {
     let body = inputs.body;
     if body.blocks.iter().any(|block| !block.phis.is_empty()) || body.blocks.is_empty() {
         return None;
@@ -357,8 +482,19 @@ pub fn decide_with(
         })
         .collect();
     let tables = Rc::new(Tables::default());
+    // Under `LLRM_GREEDY_RFP` the x87 values take FP0..FP6 (LLVM's RFP
+    // classes); a stack position an instruction names is the stackifier's.
+    let floats = if crate::backend::allocate::rfp_on() {
+        crate::backend::floatassign::_floating_values(body)
+    } else {
+        Default::default()
+    };
     for reg in lis.virt_regs() {
-        let mut order: Vec<RegId> = (inputs.order)(reg).into_iter().map(crate::model::ir::root).collect();
+        let mut order: Vec<RegId> = if floats.contains(&reg) {
+            crate::backend::allocate::RFP.to_vec()
+        } else {
+            (inputs.order)(reg).into_iter().map(crate::model::ir::root).collect()
+        };
         order.dedup();
         tables.orders.borrow_mut().insert(reg, order);
     }
@@ -366,7 +502,12 @@ pub fn decide_with(
         tables.widths.borrow_mut().insert(value, width);
     }
     tables.remat.borrow_mut().extend(crate::backend::spiller::remade_values(body));
-    let pins = inputs.pins.iter().map(|(&reg, &phys)| (reg, crate::model::ir::root(phys))).collect();
+    let pins = inputs
+        .pins
+        .iter()
+        .filter(|(reg, _)| !floats.contains(reg))
+        .map(|(&reg, &phys)| (reg, crate::model::ir::root(phys)))
+        .collect();
     let env = BodyEnv { orders: Rc::clone(&tables), pins, freq, exiting };
     // The calls.
     let mut calls = Vec::new();
@@ -378,12 +519,20 @@ pub fn decide_with(
                 .map(crate::model::ir::root)
                 .into_iter()
                 .collect();
-            if !one.clobbers.is_empty() || !one.clobbers_high.is_empty() || !read.is_empty() {
+            // The stack is empty at a call and wherever an instruction names a
+            // position (`X86FloatingPoint`): FP0..FP6 are lost there.
+            let empties = !floats.is_empty()
+                && (one.call.is_some() || one.clobbers.iter().any(|r| inputs.registers.positional(*r)));
+            if !one.clobbers.is_empty() || !one.clobbers_high.is_empty() || !read.is_empty() || empties {
                 let slot = lis.indexes.get_instruction_index(one.id()).get_reg_slot(false);
                 let roots = |list: &BTreeSet<RegId>| -> Vec<RegId> {
                     list.iter().map(|r| crate::model::ir::root(*r)).collect::<BTreeSet<_>>().into_iter().collect()
                 };
-                calls.push((slot, roots(&one.clobbers), roots(&one.clobbers_high), read));
+                let mut destroyed = roots(&one.clobbers);
+                if empties {
+                    destroyed.extend(crate::backend::allocate::RFP);
+                }
+                calls.push((slot, destroyed, roots(&one.clobbers_high), read));
             }
         }
     }
@@ -392,6 +541,9 @@ pub fn decide_with(
         Box::new(CallMasks { calls, widths: Rc::clone(&tables) }),
     );
     let inline = matches!(mode, Mode::Inline { .. });
+    // A split edits the function, and a caller that only records what to spill
+    // writes it on the function as it was.
+    let split = split && !matches!(mode, Mode::Record);
     let spiller: Box<dyn super::greedy::Spiller + '_> = match mode {
         Mode::Record => Box::new(super::spill::RecordingSpiller::default()),
         Mode::Simple => Box::new(SimpleSpiller::default()),
@@ -400,6 +552,10 @@ pub fn decide_with(
         }
     };
     let mut greedy = RAGreedy::new(lis, matrix, &env, spiller);
+    if split {
+        let split_env = Box::new(BodySplitEnv::new(body, Rc::clone(&tables)));
+        greedy.split = Some(super::regionsplit::SplitSupport::new(split_env, mbfi, &greedy.lis.cfg.succs));
+    }
     greedy.calculate_spill_weights_and_hints();
     let values = greedy.lis.virt_regs().len();
     // Values that may not be spilled, and the pinned ones in the registers that
@@ -416,7 +572,7 @@ pub fn decide_with(
     // one-register class), and it competes like any other range: it can be
     // evicted or spilled.
     for (&reg, &phys) in inputs.pins {
-        if !greedy.lis.reg_nodbg_empty(reg) {
+        if !greedy.lis.reg_nodbg_empty(reg) && !floats.contains(&reg) {
             tables.orders.borrow_mut().insert(reg, vec![crate::model::ir::root(phys)]);
             greedy.pinned.insert(reg);
         }
@@ -456,7 +612,7 @@ pub fn decide_with(
     });
     if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") {
         if let Some(edited) = &edited {
-            let held = greedy.lis.interval_count();
+            let held = greedy.lis.virt_regs().into_iter().filter(|r| greedy.lis.has_interval(*r)).count();
             let compared = greedy.lis.assert_intervals_equal_afresh(edited);
             assert!(
                 compared == held,
@@ -479,6 +635,60 @@ mod tests {
     use crate::liveness::liverange::Segment;
     use crate::liveness::slotindex::SlotIndexes;
     use crate::model::lir::{Block, LirBlock};
+
+    /// Under `LLRM_GREEDY_RFP` an x87 value takes one of FP0..FP6 or is
+    /// spilled: nine live at once over seven registers, two at least go to
+    /// memory. A value that lived in an x87 register over an instruction that
+    /// names a stack position (the stack must be empty there) would be lost.
+    #[test]
+    fn test_x87_values_take_fp0_to_fp6_and_the_rest_spill() {
+        use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
+        let _rfp = crate::backend::allocate::RfpOn::set();
+        let float = |value: u32| Loc::Held(Held { value, width: 10 });
+        let cell = |disp: i64| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8));
+        let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
+            name: Some(name.to_owned()),
+            dests,
+            sources,
+            ..Semantics::new(op)
+        };
+        let mut insns: Vec<Arc<Insn>> = (1..=9)
+            .map(|v| {
+                let load = what(Operation::FloatLoad, "fld", vec![float(v)], vec![cell(-8 * i64::from(v))]);
+                Arc::new(Insn::new(i64::from(v), None, Some(load), vec![v], vec![]))
+            })
+            .collect();
+        let mut empties = Insn::new(20, None, None, vec![], vec![]);
+        empties.clobbers = [RegId::ST0].into_iter().collect();
+        insns.push(Arc::new(empties));
+        for v in 1..=9 {
+            let store = what(Operation::FloatStore, "fstp", vec![cell(-100 - 8 * i64::from(v))], vec![float(v)]);
+            insns.push(Arc::new(Insn::new(30 + i64::from(v), None, Some(store), vec![], vec![v])));
+        }
+        let body = LirBody::new(
+            "x87",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let order = |_: u32| vec![RegId::EAX];
+        let inputs = ShadowInputs {
+            body: &body,
+            registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+            order: &order,
+            pins: &IndexMap::default(),
+            unspillable: &BTreeSet::new(),
+            data: None,
+        };
+        let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
+        let rfp = crate::backend::allocate::RFP;
+        assert!(decided.placed.iter().all(|(_, reg)| rfp.contains(reg)), "{:?}", decided.placed);
+        // All nine live across the empty-stack point: none keeps a register
+        // (the registers placed are the reloads' and the stores' short ranges).
+        assert!(decided.placed.iter().all(|(value, _)| *value > 9), "{:?}", decided.placed);
+        assert_eq!(decided.report.stats.spilled_ranges, 9, "{:?}", decided.report.stats);
+    }
 
     /// Greedy's spill weights read `MachineBlockFrequencyInfo`
     /// (`liveness::blockfrequency`), not the old `analysis::frequency`,
@@ -600,5 +810,85 @@ mod tests {
         assert!(masks.reg_mask_clobbered(&li).is_none_or(|roots| roots.is_empty()));
         let visited = calls_visited() - before;
         assert!(visited <= 10, "{visited} calls looked at for a range with no call in it");
+    }
+
+    /// A value used before and after a stretch where two others need both
+    /// registers was spilled everywhere and reloaded at each of its four uses
+    /// (`trySplit` was a stub): split around the stretch it is reloaded once.
+    #[test]
+    fn test_a_value_that_does_not_fit_in_the_middle_is_split_not_spilled_everywhere() {
+        let insn = |defines: &[u32], uses: &[u32]| Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()));
+        let blocks: Vec<Block> = [
+            (0, vec![insn(&[1], &[]), insn(&[], &[1]), insn(&[], &[1])]),
+            (1, vec![insn(&[2], &[]), insn(&[3], &[]), insn(&[], &[2, 3])]),
+            (2, vec![insn(&[], &[1]), insn(&[], &[1])]),
+        ]
+        .into_iter()
+        .map(|(n, insns)| {
+            let mut b = LirBlock::new(n, insns);
+            if n < 2 {
+                b.succ = vec![n + 1].into();
+            }
+            Block::from(b)
+        })
+        .collect();
+        let body = LirBody::new("split", 0, blocks, IndexMap::default(), IndexMap::default());
+        let order = |_: u32| vec![RegId::EAX, RegId::EBX];
+        let inputs = ShadowInputs {
+            body: &body,
+            registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+            order: &order,
+            pins: &IndexMap::default(),
+            unspillable: &BTreeSet::new(),
+            data: None,
+        };
+        let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
+        let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
+        assert_eq!(plain.report.stats.failed, 0, "premise: it allocates without splitting");
+        assert_eq!(split.report.stats.failed, 0);
+        assert!(plain.report.reloads >= 4, "premise: {} reloads without a split", plain.report.reloads);
+        assert!(
+            split.report.reloads < plain.report.reloads,
+            "{} reloads with a split, {} without",
+            split.report.reloads,
+            plain.report.reloads
+        );
+    }
+
+    /// Splitting is opt-in (`LLRM_SPLIT=1`): by default a value that does not
+    /// fit is spilled whole, as before `trySplit`, which miscompiled ~20
+    /// programs at -O2 -m16 (bintree.c printed 165553 for 5736113).
+    #[test]
+    fn test_live_range_splitting_is_off_by_default() {
+        let insn = |defines: &[u32], uses: &[u32]| Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()));
+        let blocks: Vec<Block> = [
+            (0, vec![insn(&[1], &[]), insn(&[], &[1]), insn(&[], &[1])]),
+            (1, vec![insn(&[2], &[]), insn(&[3], &[]), insn(&[], &[2, 3])]),
+            (2, vec![insn(&[], &[1]), insn(&[], &[1])]),
+        ]
+        .into_iter()
+        .map(|(n, insns)| {
+            let mut b = LirBlock::new(n, insns);
+            if n < 2 {
+                b.succ = vec![n + 1].into();
+            }
+            Block::from(b)
+        })
+        .collect();
+        let body = LirBody::new("off", 0, blocks, IndexMap::default(), IndexMap::default());
+        let order = |_: u32| vec![RegId::EAX, RegId::EBX];
+        let inputs = ShadowInputs {
+            body: &body,
+            registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+            order: &order,
+            pins: &IndexMap::default(),
+            unspillable: &BTreeSet::new(),
+            data: None,
+        };
+        let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
+        let split = decide_with_split(&inputs, Mode::Simple, true).expect("premise: splitting changes this body");
+        assert!(split.report.reloads < plain.report.reloads, "premise: the split body reloads less");
+        let default = decide_with(&inputs, Mode::Simple).expect("allocated");
+        assert_eq!(default.report.reloads, plain.report.reloads, "the default is not split");
     }
 }

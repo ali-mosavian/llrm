@@ -530,6 +530,26 @@ impl LiveIntervals {
         LirBody { inputs: self.inputs.clone(), ..body.with_blocks(blocks) }
     }
 
+    /// The instruction at `def` that defines `reg`: the one a value of `reg`
+    /// starts at. At a bundle's index (a parallel copy shares one) there are
+    /// several, and `getInstructionFromIndex` names the first.
+    pub fn defining_instr(
+        &self,
+        def: &SlotIndex,
+        reg: u32,
+    ) -> InstrKey {
+        let all = self.indexes.get_instructions_at(def);
+        all.iter().copied().find(|key| self.insns[key].defines.contains(&reg)).unwrap_or_else(|| all[0])
+    }
+
+    /// Whether `reg` is a parameter, defined on entry to the function.
+    pub fn is_input(
+        &self,
+        reg: u32,
+    ) -> bool {
+        self.inputs.contains(&reg)
+    }
+
     /// A parameter that joined another value is that value now (the rename
     /// `updateRegDefsUses` makes in every instruction, for the entry's def).
     pub fn rename_input(
@@ -767,7 +787,7 @@ impl LiveIntervals {
                 li.remove_segment_at(at, false);
             } else {
                 // This is a dead def.
-                let instr = self.indexes.get_instruction_from_index(&def).expect("No instruction defining live value");
+                let instr = self.defining_instr(&def, li.reg());
                 dead.push(instr);
             }
             may_have_split_components = true;
@@ -850,7 +870,10 @@ impl LiveIntervals {
         };
         // The slot indexes of every `SlotIndexes` of a thread live in one
         // arena, which a new one empties: what this holds is named first.
-        let mut regs: Vec<u32> = self.intervals.keys().copied().collect();
+        // A register nothing names holds the range it had when it was split
+        // (`isOriginalEndpoint` reads it): it is no longer computed from
+        // anything, so it is not compared.
+        let mut regs: Vec<u32> = self.intervals.keys().copied().filter(|r| !self.reg_nodbg_empty(*r)).collect();
         regs.sort_unstable();
         let held: Vec<(u32, Vec<_>)> = regs.iter().map(|reg| (*reg, shape(self, &self.intervals[reg]))).collect();
         let mut fresh = Self::new(body);

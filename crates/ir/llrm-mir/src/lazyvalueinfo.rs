@@ -23,9 +23,6 @@
 //!    arms of `getValueFromICmpCondition`, `isNotCrossLaneOperation` in
 //!    `getValueAtUse` (line 1929). MIR types vectors but has no lane operation
 //!    and nothing produces one (#2201).
-//! 2. `undef` does not exist in MIR; `poison` constants are `UndefValue` to the
-//!    lattice, as in LLVM, and the undef states are reachable through them
-//!    (#2202).
 //! 3. No `TargetLibraryInfo`: LVI's only use is the wrapper pass dependency.
 //! 4. `LVIValueHandle` (a `CallbackVH` that erases a deleted value) has no Rust
 //!    equivalent; a pass calls [`LazyValueInfo::forget_value`] where LLVM's
@@ -1585,7 +1582,10 @@ impl LazyValueInfoImpl {
         {
             if edge_pred == IntPredicate::Eq {
                 return Some(Lattice::get(&LatticeConstant::of(env.context, rhs_c)));
-            } else if env.context.get(rhs_c).kind != ConstantKind::Poison {
+            } else if !matches!(
+                env.context.get(rhs_c).kind,
+                ConstantKind::Poison | ConstantKind::Undef
+            ) {
                 return Some(Lattice::get_not(&LatticeConstant::of(env.context, rhs_c)));
             }
         }
@@ -2190,14 +2190,7 @@ impl LazyValueInfoImpl {
             // This also disallows looking through phi nodes: If the phi node is
             // part of a cycle, we might end up reasoning about
             // values from different cycle iterations (PR60629).
-            let single_use = curr_inst
-                .result
-                .and_then(
-                    |r| match function.users(r) {
-                        [only] => Some(*only),
-                        _ => None,
-                    },
-                );
+            let single_use = curr_inst.result.and_then(|r| function.users(r).only().copied());
             let Some(next_use) = single_use else { break };
             if !is_safe_to_speculatively_execute_with_variable_replaced(env, curr_i, false) {
                 break;
@@ -2429,6 +2422,7 @@ fn constant_fold_extract_value_instruction(
         ConstantKind::Aggregate(members) => *members.get(first as usize)?,
         ConstantKind::Zero => zero_value(env.context, element_ty),
         ConstantKind::Poison => env.context.constant(Constant { ty: element_ty, kind: ConstantKind::Poison }),
+        ConstantKind::Undef => env.context.constant(Constant { ty: element_ty, kind: ConstantKind::Undef }),
         _ => return None,
     };
     constant_fold_extract_value_instruction(env, element, rest)
@@ -2436,7 +2430,7 @@ fn constant_fold_extract_value_instruction(
 
 /// `Constant::getNullValue(Ty)`.
 fn zero_value(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> ConstantId {
     let kind = match context.types.get(ty) {
@@ -3166,7 +3160,7 @@ impl LazyValueInfoImpl {
         }
 
         // Print LVI in blocks where `I` is used.
-        for u in result_id.map_or(&[][..], |result| function.users(result)) {
+        for u in result_id.map(|result| function.users(result).to_vec()).unwrap_or_default().iter() {
             let use_i = function.instruction(u.user);
             let use_bb = function.parent(u.user).expect("a placed user");
             if use_i.opcode != Opcode::Phi || dt.dominates(parent_bb, use_bb) {
@@ -3245,7 +3239,7 @@ fn constant_fold_compare_inst_operands(
     c1: &LatticeConstant,
     c2: &LatticeConstant,
 ) -> Option<bool> {
-    let mut make = |c: &LatticeConstant| match c {
+    let make = |c: &LatticeConstant| match c {
         LatticeConstant::Undef => None,
         LatticeConstant::Int { width, bits } => {
             let ty = env.context.types.int(*width);

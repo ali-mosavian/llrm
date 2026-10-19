@@ -130,20 +130,41 @@ pub fn unroll_loop(
     loop_: &Loop,
     options: &Options,
 ) -> Result<Unrolled, String> {
+    let body = loop_.body.iter().map(|&at| cfg::block(at)).collect::<Vec<_>>();
+    let latches = loop_.latches.iter().map(|&at| cfg::block(at)).collect::<Vec<_>>();
+    let mut emptied = Vec::new();
+    let result = unroll_loop_blocks(function, cfg::block(loop_.header), &body, &latches, options, &mut emptied)?;
+    function.erase_blocks(&emptied)?;
+    lcssa::closed(function)?;
+    Ok(result)
+}
+
+/// `unroll_loop` of the loop with this `header`, `body` blocks and `latches`.
+/// The blocks merged into another are left in the layout, empty and named by
+/// nothing, and added to `emptied`: erasing them scans the layout, so a caller
+/// unrolling many loops erases them once. Nor is the function put in closed
+/// SSA form again (`lcssa::closed`, which reads all of it): a loop with no loop
+/// around it needs none.
+pub fn unroll_loop_blocks(
+    function: &mut Function,
+    header: BlockId,
+    body: &[BlockId],
+    latches: &[BlockId],
+    options: &Options,
+    emptied_blocks: &mut Vec<BlockId>,
+) -> Result<Unrolled, String> {
     if options.count == 0 || options.max_trip_count == 0 || options.count != options.max_trip_count {
         return Err("a complete unroll's count is the maximum trip count (D2)".to_owned());
     }
-    let header = cfg::block(loop_.header);
-    let inside = |at: BlockId| loop_.body.contains(&cfg::id(at));
+    let inside = |at: BlockId| body.contains(&at);
     let outside_predecessors = function.predecessors(header).into_iter().filter(|&at| !inside(at)).collect::<Vec<_>>();
     let [preheader] = outside_predecessors[..] else { return Ok(Unrolled::Unmodified) };
     if function.successors(preheader).len() != 1 {
         return Ok(Unrolled::Unmodified);
     }
-    let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return Ok(Unrolled::Unmodified) };
-    let latch = cfg::block(latch);
+    let [latch] = latches[..] else { return Ok(Unrolled::Unmodified) };
 
-    let original = loop_.body.iter().map(|&at| cfg::block(at)).collect::<Vec<_>>();
+    let original = body.to_vec();
     let exit_blocks = _exit_blocks(function, &original, &inside);
     let count = options.count as usize;
 
@@ -206,7 +227,7 @@ pub fn unroll_loop(
                     .collect::<Result<Vec<_>, String>>()?;
                 map.extend(incoming);
             }
-            for inst in function.block(at).instructions().to_vec() {
+            for inst in function.block(at).iter().collect::<Vec<_>>() {
                 if at == header && function.instruction(inst).opcode == Opcode::Phi {
                     continue;
                 }
@@ -248,7 +269,7 @@ pub fn unroll_loop(
             fresh.push(new);
         }
         for &new in &fresh {
-            for inst in function.block(new).instructions().to_vec() {
+            for inst in function.block(new).iter().collect::<Vec<_>>() {
                 // Only the operands that change: `set_operands` scans the
                 // use list of each, and a value every copy reads has `count`.
                 let operands = function.instruction(inst).operands.clone();
@@ -345,9 +366,7 @@ pub fn unroll_loop(
             }
         }
     }
-    function.erase_blocks(&emptied)?;
-
-    lcssa::closed(function)?;
+    emptied_blocks.extend(emptied);
     Ok(Unrolled::Fully)
 }
 
@@ -383,7 +402,7 @@ fn _closed(
     inside: &impl Fn(BlockId) -> bool,
 ) -> bool {
     blocks.iter().all(|&at| {
-        function.block(at).instructions().iter().filter_map(|&inst| function.instruction(inst).result).all(|value| {
+        function.block(at).iter().filter_map(|inst| function.instruction(inst).result).all(|value| {
             function.users(value).iter().all(|one| {
                 function.parent(one.user).is_some_and(|block| {
                     inside(block) || (exits.contains(&block) && function.instruction(one.user).opcode == Opcode::Phi)

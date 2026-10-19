@@ -747,3 +747,79 @@ fn address_with_only_zero_indices_is_its_pointer() {
     assert_eq!(simplified(text, "w").as_deref(), Some("%p"));
     assert_eq!(simplified(text, "v"), None);
 }
+
+/// Old: `undef` operands were found by no rule (`X & undef` stayed an `and`).
+/// Each arm is the pin's: `X + undef` and `X - undef` and `X ^ undef` undef,
+/// `X * undef` and `X & undef` 0, `X | undef` -1, `X / undef` poison,
+/// `undef / X` 0, a shift by undef poison, `undef >> X` 0 (undef if exact),
+/// `undef << X` 0 (undef if nsw/nuw), `icmp eq X, undef` undef, `icmp ult X,
+/// undef` false (undef equal to X), `getelementptr undef` undef.
+#[test]
+fn undef_operands_fold_as_the_pin_does() {
+    let cases = [
+        ("add i16 %x, undef", "Undef"),
+        ("sub i16 %x, undef", "Undef"),
+        ("sub i16 undef, %x", "Undef"),
+        ("xor i16 %x, undef", "Undef"),
+        ("mul i16 %x, undef", "0"),
+        ("and i16 %x, undef", "0"),
+        ("or i16 %x, undef", "65535"),
+        ("udiv i16 %x, undef", "poison"),
+        ("srem i16 %x, undef", "poison"),
+        ("udiv i16 undef, %x", "0"),
+        ("shl i16 %x, undef", "poison"),
+        ("lshr i16 %x, undef", "poison"),
+        ("lshr i16 undef, %x", "0"),
+        ("lshr exact i16 undef, %x", "Undef"),
+        ("ashr i16 undef, %x", "0"),
+        ("shl i16 undef, %x", "0"),
+        ("shl nsw i16 undef, %x", "Undef"),
+        ("icmp eq i16 %x, undef", "Undef"),
+        ("icmp ne i16 %x, undef", "Undef"),
+        ("icmp ult i16 %x, undef", "0"),
+        ("icmp ule i16 %x, undef", "1"),
+        ("icmp sge i16 %x, undef", "1"),
+    ];
+    for (instruction, expected) in cases {
+        check(&format!("  %r = {instruction}\n"), "r", Some(expected));
+    }
+    let text = "define ptr @f(ptr %p) {\nb0:\n  %r = getelementptr i16, ptr undef, i16 1\n  ret ptr %r\n}\n";
+    assert_eq!(simplified(text, "r").as_deref(), Some("Undef"));
+}
+
+/// `simplifyPHINode`: undef incoming values are skipped; all undef gives undef;
+/// `phi(X, undef)` is X only when X dominates the phi and cannot be poison,
+/// else undef would become poison. `select ?, undef, X` is X when X is poison
+/// only if the condition is. `select undef, X, Y` is X (Y a constant -> Y).
+#[test]
+fn undef_in_a_phi_or_a_select_folds_as_the_pin_does() {
+    let phi = |incoming: &str, define: &str| {
+        let text = format!(
+            "define void @f(i16 %x, i16 %y, i1 %c) {{\nb0:\n{define}  br i1 %c, label %p1, label %p2\np1:\n  br label %j\np2:\n  br label %j\nj:\n  %r = phi i16 {incoming}\n  ret void\n}}\n"
+        );
+        simplified(&text, "r")
+    };
+    assert_eq!(phi("[ undef, %p1 ], [ undef, %p2 ]", "").as_deref(), Some("Undef"));
+    assert_eq!(phi("[ undef, %p1 ], [ poison, %p2 ]", "").as_deref(), Some("Undef"));
+    assert_eq!(phi("[ %a, %p1 ], [ undef, %p2 ]", "  %a = freeze i16 %x\n").as_deref(), Some("%a"));
+    assert_eq!(phi("[ %a, %p1 ], [ undef, %p2 ]", "  %a = add i16 %x, %y\n").as_deref(), None, "%a may be poison");
+    check("  %r = select i1 undef, i16 %x, i16 %y\n", "r", Some("%x"));
+    check("  %r = select i1 undef, i16 %x, i16 7\n", "r", Some("7"));
+    let guarded =
+        |arms: &str| of(&format!("  %k = icmp eq i16 %x, 0\n  %w = zext i1 %k to i16\n  %r = select i1 %k, {arms}\n"));
+    assert_eq!(simplified(&guarded("i16 undef, i16 %w"), "r").as_deref(), Some("%w"));
+    assert_eq!(simplified(&guarded("i16 %w, i16 undef"), "r").as_deref(), Some("%w"));
+    check("  %r = select i1 %c, i16 undef, i16 %y\n", "r", None);
+}
+
+/// Old: `freeze` of a value that is neither undef nor poison was kept
+/// (`simplifyFreezeInst` was not translated): a constant, a freeze of a
+/// freeze. A freeze of an undef, a poison or an unknown argument stays.
+#[test]
+fn a_freeze_of_a_defined_value_is_the_value() {
+    check("  %r = freeze i16 7\n", "r", Some("7"));
+    check("  %f = freeze i16 %x\n  %r = freeze i16 %f\n", "r", Some("%f"));
+    check("  %r = freeze i16 %x\n", "r", None);
+    check("  %r = freeze i16 undef\n", "r", None);
+    check("  %r = freeze i16 poison\n", "r", None);
+}

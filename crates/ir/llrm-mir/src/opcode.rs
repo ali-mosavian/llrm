@@ -259,6 +259,20 @@ impl Flags {
     pub const NSZ: Flags = Flags(1 << 11);
     pub const ARCP: Flags = Flags(1 << 12);
     pub const FAST: Flags = Flags(0x7f << 8);
+    /// What makes a result poison where the operation's promise breaks:
+    /// `Instruction::dropPoisonGeneratingFlags`.
+    pub const POISON_GENERATING: Flags = Flags(
+        Flags::NUW.0
+            | Flags::NSW.0
+            | Flags::EXACT.0
+            | Flags::DISJOINT.0
+            | Flags::NNEG.0
+            | Flags::SAMESIGN.0
+            | Flags::INBOUNDS.0
+            | Flags::NUSW.0
+            | Flags::NNAN.0
+            | Flags::NINF.0,
+    );
     /// On a `switch`: the backend lowers it as a jump table, its cases the
     /// indices `0..n` in a register of the pointer's width.
     pub const TABLE: Flags = Flags(1 << 15);
@@ -297,8 +311,23 @@ impl Flags {
         self.0 |= other.0;
     }
 
+    pub fn remove(
+        &mut self,
+        other: Flags,
+    ) {
+        self.0 &= !other.0;
+    }
+
     pub fn is_empty(self) -> bool {
         self.0 == 0
+    }
+
+    /// The flags of `self` that `other` does not have.
+    pub fn without(
+        self,
+        other: Flags,
+    ) -> Flags {
+        Flags(self.0 & !other.0)
     }
 
     /// The flags both have.

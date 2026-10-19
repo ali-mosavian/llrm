@@ -285,7 +285,7 @@ pub fn inline_viable(
 ) -> Result<(), String> {
     let returns_twice = has_flag(&callee.attrs, "returns_twice");
     for &block in callee.layout() {
-        for &inst in callee.block(block).instructions() {
+        for inst in callee.block(block).iter() {
             let opcode = &callee.instruction(inst).opcode;
             if !matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
                 continue;
@@ -1565,7 +1565,7 @@ impl<'a> Analyzer<'a> {
         &mut self,
         block: BlockId,
     ) -> Result<(), String> {
-        for &inst in self.callee.block(block).instructions() {
+        for inst in self.callee.block(block).iter() {
             // D5: no ephemeral values; a debug intrinsic costs nothing and is
             // not counted (:2750).
             if let Some(target) = llrm_mir::memory::callee(self.context, self.callee, inst)
@@ -1777,7 +1777,7 @@ impl<'a> Analyzer<'a> {
             }
             let block = worklist[at];
             at += 1;
-            if self.callee.block(block).instructions().is_empty() {
+            if self.callee.block(block).is_empty() {
                 continue;
             }
             // onBlockStart: CostAtBBStart unused without cost-benefit (D4).
@@ -2128,13 +2128,12 @@ pub fn shadow(
             .any(
                 |&block| caller
                     .block(block)
-                    .instructions()
                     .iter()
-                    .any(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(caller_id)),
+                    .any(|inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(caller_id)),
             );
         let mut ordinal: HashMap<GlobalId, usize> = HashMap::default();
         for &block in caller.layout() {
-            for &inst in caller.block(block).instructions() {
+            for inst in caller.block(block).iter() {
                 let Some(callee_id) = llrm_mir::memory::callee(&module.context, caller, inst) else { continue };
                 let callee_global = module.global(callee_id);
                 let GlobalKind::Function(callee) = &callee_global.kind else { continue };
@@ -2172,10 +2171,9 @@ pub fn shadow(
                     .any(
                         |&block| callee
                             .block(block)
-                            .instructions()
                             .iter()
                             .any(
-                                |&one| llrm_mir::memory::callee(&module.context, callee, one).is_some_and(|inner| {
+                                |one| llrm_mir::memory::callee(&module.context, callee, one).is_some_and(|inner| {
                                     matches!(
                                         &module.global(inner).kind,
                                         GlobalKind::Function(body) if !body.layout().is_empty()
