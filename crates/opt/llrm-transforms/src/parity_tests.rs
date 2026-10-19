@@ -15,7 +15,7 @@ fn names(
 fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
-    // The rotate slot is Old while `LLRM_NO_ROTATE` is set, as in the
+    // The rotate slot is Old unless `LLRM_ROTATE` is set, as in the
     // pipeline's own check.
     let rotate = pipeline::Options::default().rotate_slot;
     let mut registry: Vec<Entry> = parity::REGISTRY
@@ -34,7 +34,7 @@ fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
     assert!(why.contains("ghost@999"), "{why}");
     registry.pop();
     let without: Vec<_> = built.iter().copied().filter(|one| *one != "earlycse@649").collect();
-    // The rotate slot is Old while `LLRM_NO_ROTATE` is set, as in the
+    // The rotate slot is Old unless `LLRM_ROTATE` is set, as in the
     // pipeline's own check.
     let rotate = pipeline::Options::default().rotate_slot;
     let registry: Vec<Entry> = parity::REGISTRY
@@ -234,4 +234,27 @@ fn test_the_tally_lines_of_the_real_registry_add_up() {
         .sum();
     assert_eq!(by_phase, parity::REGISTRY.len(), "{lines:?}");
     assert!(lines.iter().any(|line| line.starts_with("[parity] analyses ")), "{lines:?}");
+}
+
+/// LLVM runs BDCE after GVN and before the second InstCombine; the joined
+/// slot was missing from the -O2 list, so its output never reached later slots.
+#[test]
+fn test_bdce_stands_between_gvn_and_the_next_fold() {
+    let on = Applied {
+        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
+        ..Applied::default()
+    };
+    let built = names(&on, Phase::Simplify);
+    let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
+    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("fold@801"), "{built:?}");
+}
+
+/// ADCE stands where LLVM runs it, after jump threading and before MemCpyOpt
+/// (`PassBuilderPipelines.cpp` l.815).
+#[test]
+fn test_adce_stands_between_cvp_and_memcpyopt() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let built = names(&on, Phase::Simplify);
+    let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} not built"));
+    assert_eq!((at("cvp@810") + 1, at("adce@815") + 1), (at("adce@815"), at("memcpyopt@818")));
 }

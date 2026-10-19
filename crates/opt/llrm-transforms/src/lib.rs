@@ -73,6 +73,7 @@
 //! `docs/reference/levels.md` for which pass runs at which level, and each
 //! module's own header.
 
+pub mod adce;
 pub mod addresssink;
 pub mod algebraic;
 pub mod argpromotion;

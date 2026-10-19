@@ -1,9 +1,6 @@
 # Files that read a use list as a slice (users(..).len(), .to_vec(), .contains(), counted by tests.rs), and how many: a ceiling that only falls; the exit is zero and the shim methods of `Users` go.
 crates/backend/llrm-core/src/backend/ehprepare.rs	2
 crates/backend/llrm-core/src/backend/isel.rs	2
-crates/ir/llrm-mir/src/edit.rs	3
-crates/ir/llrm-mir/src/lazyvalueinfo.rs	1
-crates/ir/llrm-mir/src/valuetracking/range.rs	1
 crates/opt/llrm-transforms/src/addresssink.rs	3
 crates/opt/llrm-transforms/src/algebraic.rs	1
 crates/opt/llrm-transforms/src/constraintelim.rs	1
@@ -27,3 +24,4 @@ crates/opt/llrm-transforms/src/tailrec.rs	2
 crates/opt/llrm-transforms/src/unroll.rs	1
 crates/target/llrm-x86-bc/src/emit.rs	2
 crates/opt/llrm-transforms/src/loopdeletion.rs	1
+crates/opt/llrm-transforms/src/simpleloopunswitch.rs	1

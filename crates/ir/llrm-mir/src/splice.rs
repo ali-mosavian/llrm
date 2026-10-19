@@ -53,7 +53,7 @@ pub fn splice_before(
 ) -> Vec<InstId> {
     let void = context.types.void();
     let block = function.parent(call).expect("a placed call");
-    let instructions = function.block(block).instructions().to_vec();
+    let instructions = function.block(block).iter().collect::<Vec<_>>();
     let at = instructions.iter().position(|&one| one == call).expect("in its block");
     // What followed the call, and the phis that named its block.
     let rest = function.create_block(None);
