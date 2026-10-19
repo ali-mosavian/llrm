@@ -182,7 +182,6 @@ done:
             "mov bx, word ptr [bp+6]",
             "xor ax, ax",
             "xor cx, cx",
-            "L0_1:",
             "cmp cx, bx",
             "jge L0_8",
             "L0_5:",

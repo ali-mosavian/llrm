@@ -54,4 +54,20 @@ Tests that encoded gcc's rules, each re-checked with `llc -O2 -mtriple=i386 -tai
 
 - `isTrellis` L1023, `getBestNonConflictingEdges` L1079, `getBestTrellisSuccessor` L1123: MIRROR (`is_trellis`, `best_trellis_successor`), called from `selectBestSuccessor` after the `ComputedEdges` lookup. The tail-duplication branch of `getBestTrellisSuccessor` comes with stage 4.
 - Test: `test_a_trellis_places_the_heaviest_pair_of_edges_as_fall_throughs` (llc at the pin breaks the source order the same way; failed with the call disabled).
-- Triangle chains (`precomputeTriangleChains` L1333) run only when tail duplication in placement is allowed: with stage 4.
+- Triangle chains (`precomputeTriangleChains` L1333): stage 4.
+
+## Stage 4: tail duplication in placement (`jumps/placement/taildup.rs`)
+
+- `maybeTailDuplicateBlock` L3213, `repeatedlyTailDuplicateBlock` L3155 with `TailDuplicator::tailDuplicateAndUpdate` L165 and `tailDuplicate` L859 (layout mode, after allocation: no phis, no copies): MIRROR (`maybe_tail_duplicate`, `repeatedly_tail_duplicate`, `copy_into`, `remove`). The block last in the chain takes the tail whole when it is all that is left to reach it; the removed block leaves its chain, work list and loop set.
+- `shouldTailDuplicate` L840 and `TailDuplicator::shouldTailDuplicate` L562, `canTailDuplicate` L825, `canTailDuplicateUnplacedPreds` L1210, `isProfitableToTailDup` L869, `greaterWithBias`, `precomputeTriangleChains` L1333, the duplicate candidates in `selectBestSuccessor` and the tail-duplication branch of `getBestTrellisSuccessor`: MIRROR. `isSimpleBB`, `findDuplicateCandidates`, `isBestSuccessor` and `scaleThreshold` need profile data: not translated. `MachinePostDominatorTree` is `placement/postdom.rs`, found once as LLVM's is.
+- Replaces `duplicated_tails`, `duplicated` and `rotated`'s copies (D3 ends); `duplicated_returns` (gcc's `copy_bb_p`, in `assemble`) stays until it is looked at.
+
+Deviations:
+
+- D13 a block is counted without the jump to the block laid out next, and `jcc next; jmp other` as one `jncc`: LLVM's form after branch folding, which the explicit jumps here do not have yet.
+- D14 `TailDupSize` is 2 (1 for size); `-O3`'s 4 needs the optimisation level, which the profile does not carry.
+- D15 not copied: a block with a phi, a call's record, a group, a symbol, spread bytes, data, a barrier, a call or an indirect jump; the entry is never copied or removed (it may have predecessors here). Copies claim none of the source bytes.
+- D16 the old guard against a copy that makes a loop irreducible is gone: LLVM has none. Fact to measure: how many bodies become irreducible on the corpus, and what `Frequency` makes of them.
+- D17 the odds of a pred after a copy are the tail's (`BlockOdds::rerouted`); block frequencies are not updated, as `MBFI` is not.
+
+Tests: `test_a_join_of_one_instruction_is_copied_into_both_arms` (llc at the pin: same orders, join gone), `test_for_size_a_join_of_two_instructions_is_not_copied`, `test_a_join_is_not_copied_into_a_block_that_branches_to_it`, `test_a_copied_test_keeps_its_loops_odds`, the loop tests (llc: guard plus test copied into the latch), post-dominator unit test; all seen failing with the threshold at 0. Removed with the code they tested: seven `duplicated_tails` tests and the copy-limit test; `test_a_small_join_is_copied_into_its_arm_before_the_arms_are_merged` guarded the merge-before-copy order, which no longer exists (the merge runs after placement, as LLVM's).

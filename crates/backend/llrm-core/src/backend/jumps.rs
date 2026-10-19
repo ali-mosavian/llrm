@@ -8,12 +8,11 @@
 //!
 //! 1. `_hoisted` moves an edge block's no-byte anchors up before the branch
 //!    into it, so the edge block becomes a bare jump that threading can skip.
-//! 2. `_placed` orders the blocks. By estimated frequency (every block counts
-//!    once at -Os): the likelier edge falls through, a diamond's likelier arm
-//!    falls into its join, and a new trace starts at the busiest block left. A
-//!    loop header that only decides whether to go round (`_tests`) is placed
-//!    after its latch, so a pass round the loop takes one branch. Cold blocks
-//!    go last.
+//! 2. `_placed` orders the blocks as LLVM's `MachineBlockPlacement` does
+//!    (`placement`): chains joined along the likelier edges, loops innermost
+//!    first with their top and exit chosen and rotated, trellises, and a short
+//!    block copied into the blocks that jump to it where that saves taken
+//!    branches. See `docs/architecture/jumps-placement-check.md`.
 //! 3. `threaded` applies local changes until none applies (`_step`): a jump to
 //!    a block that only jumps goes to its target (`_through`; a loop header
 //!    with a measured trip count is kept), a jump to the next block is dropped,
@@ -24,31 +23,16 @@
 //!    block where no one holds only the tail; `machinedce::eliminated` then
 //!    removes what the merge made dead (a compare nothing selects on), and the
 //!    body is threaded again. Both repeat until nothing merges.
-//!
-//! Then, unless sized for code size, `duplicated_tails` replaces a `jmp` to a
-//! short tail (at most `TAIL_DUPLICATION` plain instructions besides its
-//! jumps) by a copy of the tail, where the copy's own fall-through jump runs
-//! less often than the jump removed, and a copy that would make a loop
-//! irreducible is refused. A tail is not copied into a jump that follows a
-//! branch whose other way is likelier than the tail (and is not the block
-//! itself): the copy would leave code between that branch and what follows
-//! it, and the likelier way would be taken whatever is laid next (a latch with
-//! a short exit tail would pay a taken back edge every trip to save the exit's
-//! one jump). `duplicated` then does the same for tails that return,
-//! `rotated` rotates a loop so its latch falls into the header (gcc's
-//! bb-reorder `rotate_loop`) when that takes fewer jumps by the target's jump
-//! prices, and `inverted` flips each `jcc L; jmp M` the copying left where `L`
-//! is next; where neither way is next, it makes the likelier way the
-//! conditional jump, so the trip that goes on pays one taken branch, not a
-//! branch not taken and a jump (the loop that went round by `je exit; jmp
-//! top`).
+//! 5. `inverted` flips each `jcc L; jmp M` the copying left where `L` is next;
+//!    where neither way is next, it makes the likelier way the conditional
+//!    jump, so the trip that goes on pays one taken branch, not a branch not
+//!    taken and a jump (the loop that went round by `je exit; jmp top`).
 //!
 //! ```text
-//!   before                       after (placed, threaded)
-//!   test: cmp; jge exit          jmp test
-//!   body: ...; jmp test          body: ...
-//!   exit: ...                    test: cmp; jl body
-//!                                exit: ...
+//!   before                       after (placed, a guard copy of the test)
+//!   test: cmp; jge exit          cmp; jge exit
+//!   body: ...; jmp test          body: ...; cmp; jl body
+//!   exit: ...                    exit: ...
 //! ```
 //!
 //! `duplicated_returns` is separate and runs later, from `assemble`, because
@@ -113,7 +97,7 @@ use crate::analysis::loops as loopy;
 use crate::backend::layout::_OPPOSITE;
 use crate::backend::{cpu, machinedce, masm, select};
 use crate::model::ir::{Operation, Semantics};
-use crate::model::lir::{self, Block, BlockOdds, Insn, LirBlock, LirBody};
+use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::hash::HashSet;
 use crate::support::hash::{IndexMap, IndexSet};
@@ -189,11 +173,6 @@ pub fn optimized(
     let mut placed = threaded(&_placed(&_hoisted(body), size)?);
     // Tail duplication before the merge, as LLVM places with it: after, the
     // merge would give back what the copy gained.
-    if !size {
-        placed = threaded(&duplicated_tails(&placed));
-    }
-    // Tail duplication before the merge, as LLVM places with it: after, the
-    // merge would give back what the copy gained.
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
     // the branches optimised (`threaded`), until neither changes anything. A
     // merge can leave a compare nothing selects on; LLVM leaves it (T6).
@@ -204,7 +183,7 @@ pub fn optimized(
         };
         placed = machinedce::eliminated(threaded(&merged));
     }
-    let done = inverted(&if size { placed } else { duplicated(&placed, true) });
+    let done = inverted(&placed);
     // Every block leaves by a way the printer can read.
     #[cfg(test)]
     for block in &done.blocks {
@@ -301,277 +280,6 @@ fn inverted(body: &LirBody) -> LirBody {
     if changed { body.with_blocks(blocks) } else { body.clone() }
 }
 
-/// gcc's `max-grow-copy-bb-insns`: a block is copied while it is at most this
-/// many unconditional jumps long.
-const COPY_BB_INSNS: usize = 8;
-
-/// gcc's `get_uncond_jump_length`: what the target prices one unconditional
-/// jump at, in its long form.
-pub(crate) fn uncond_jump_bytes(bits: u32) -> usize {
-    let jump = Semantics { name: Some("jmp".into()), target: Some(2), ..Semantics::new(Operation::Jump) };
-    select::priced_in(bits, &jump, 0, None, false, false, None).map_or(2, |made| made.code.len())
-}
-
-/// The bytes a block may be and still be copied (`copy_bb_p`): `COPY_BB_INSNS`
-/// jumps of code.
-fn copy_limit(bits: u32) -> usize {
-    COPY_BB_INSNS * uncond_jump_bytes(bits)
-}
-
-/// A block that only returns: plain operations then a `ret`, no way on, within
-/// `limit` bytes and none of it source-owned.
-fn _return_tail(
-    bits: u32,
-    block: &LirBlock,
-) -> bool {
-    if !block.phis.is_empty()
-        || !block.succ.is_empty()
-        || block
-            .insns
-            .iter()
-            .any(|one| one.call.is_some() || one.group.is_some() || one.symbol == Some(true) || !one.spread.is_empty())
-    {
-        return false;
-    }
-    let real = _real(block);
-    let Some((last, rest)) = real.split_last() else { return false };
-    // A return that covers source bytes is the program's own (a BASIC module's
-    // end spells a runtime call at it): not copied.
-    if last.what.as_ref().is_none_or(|what| what.op != Operation::Return)
-        || !last.inserted()
-        || rest.iter().any(|one| {
-            one.call.is_some()
-                || one.what.as_ref().is_none_or(|what| {
-                    matches!(
-                        what.op,
-                        Operation::Barrier
-                            | Operation::Branch
-                            | Operation::Call
-                            | Operation::Data
-                            | Operation::Jump
-                            | Operation::Return
-                    )
-                })
-        })
-    {
-        return false;
-    }
-    real.iter()
-        .try_fold(0usize, |bytes, one| {
-            select::priced_in(bits, one.what.as_ref()?, 0, None, false, false, None).map(|made| bytes + made.code.len())
-        })
-        .is_some_and(|bytes| bytes <= copy_limit(bits))
-}
-
-/// LLVM's `TailDupSize` at -O2: the instructions a tail may hold besides its
-/// jumps.
-const TAIL_DUPLICATION: usize = 2;
-
-/// Each `jmp` to a short tail replaced by a copy of the tail, as LLVM's tail
-/// duplication: the copy runs where the jump did, and the jump is gone. A
-/// tail that falls through gets a `jmp` there in its copy, which runs only
-/// as often as the copy falls through, so a copy is made only where that is
-/// less often than the jump it removes. A copy claims none of the
-/// original's bytes, which the tail keeps.
-pub fn duplicated_tails(body: &LirBody) -> LirBody {
-    duplicated(body, false)
-}
-
-/// `duplicated_tails`, or only the tails that return: the jump a copied tail
-/// ended in may reach one. A tail is not copied into a jump after a branch
-/// whose other way is likelier than the tail (and is not the block itself): the
-/// copy would leave code between that branch and what follows it, and the
-/// likelier way would be taken whatever is laid next (x_adler's `jne top; jmp
-/// exit` latch).
-fn duplicated(
-    body: &LirBody,
-    returns: bool,
-) -> LirBody {
-    let by_at: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let after: IndexMap<i64, i64> = body.blocks.windows(2).map(|pair| (pair[0].at, pair[1].at)).collect();
-    let frequency = Frequency::of(body);
-    let mut odds = body.odds.clone();
-    let irreducible = |blocks: &[Block]| !loopy::irreducible(blocks, Some(body.entry)).is_empty();
-    let reducible = !irreducible(&body.blocks);
-    // Every copy that can be made, whether or not an earlier one is: what a
-    // copy reads is the body as it came.
-    let mut copies: Vec<(usize, LirBlock, i64, Vec<(i64, f64)>)> = Vec::new();
-    for (index, parent) in body.blocks.iter().enumerate() {
-        let made = (|| {
-            let real = _real(parent);
-            let Some(last) = real
-                .last()
-                .and_then(|one| one.what.as_ref())
-                .filter(|what| what.op == Operation::Jump && !what.indirect)
-            else {
-                return None;
-            };
-            let Some(tail) =
-                last.target.filter(|at| *at != parent.at && *at != body.entry).and_then(|at| by_at.get(&at))
-            else {
-                return None;
-            };
-            let Some((copied, falls)) = _duplicable(body.bits, tail, after.get(&tail.at).copied())
-                .filter(|(_, falls)| !returns || falls.is_none())
-                .filter(|_| !returns || _return_tail(body.bits, tail))
-            else {
-                return None;
-            };
-            // A conditional branch before this jump leaves by its way when
-            // that way is the likelier, and it falls through to its block when
-            // that block is laid next (`inverted`, `rotated` lay it so): the
-            // jump is the cold way's. A copy of the tail in the jump's place
-            // leaves code between the branch and what follows it, so the branch
-            // is taken whatever is laid next: not where its way is the likelier
-            // (a latch with a short exit tail paid a taken back edge every trip
-            // to save the exit's one jump).
-            if let (_, Some(branch)) = _real_tail(parent) {
-                let way = branch.what.as_ref().filter(|what| what.op == Operation::Branch && !what.indirect);
-                if let Some(way) = way.and_then(|what| what.target)
-                    && way != tail.at
-                    // A block cannot fall into itself: a loop of one block is a
-                    // taken branch back whatever is laid next.
-                    && way != parent.at
-                    && frequency.edge(parent.at, way) > frequency.edge(parent.at, tail.at)
-                {
-                    return None;
-                }
-            }
-            // Per run of the jump: the fall-through's jump runs as often as the
-            // tail falls through.
-            if let Some(next) = falls {
-                let share =
-                    |from: i64, to: i64| frequency.edge(from, to) / frequency.block(from).max(f64::MIN_POSITIVE);
-                if share(tail.at, next) >= 1.0 {
-                    return None;
-                }
-            }
-            let jump = &parent.insns[parent
-                .insns
-                .iter()
-                .rposition(|one| Arc::ptr_eq(one, real.last().expect("checked")))
-                .expect("a real instruction")];
-            // The jump's work goes; its source bytes stay, as `_reachable`
-            // keeps them.
-            let mut insns: Vec<Arc<Insn>> = parent
-                .insns
-                .iter()
-                .map(|one| if Arc::ptr_eq(one, jump) { lir::bytes_only(one) } else { Arc::clone(one) })
-                .collect();
-            insns.extend(copied.iter().map(|one| _unowned(one, jump)));
-            if let Some(next) = falls {
-                let mut made = (**jump).clone();
-                made.what = Some(Semantics { target: Some(next), ..last.clone() });
-                insns.push(_unowned(&made, jump));
-            }
-            // The edge to the tail becomes the tail's edges, at its share.
-            // The edge to the tail becomes the tail's edges, at their odds.
-            let into: Vec<(i64, f64)> =
-                tail.succ.iter().map(|next| (*next, body.odds.chance(tail.at, &tail.succ, *next))).collect();
-            // The parent's own branches keep their targets.
-            let mut succ: Vec<i64> = parent.succ.iter().copied().filter(|at| *at != tail.at).collect();
-            succ.extend(tail.succ.iter().filter(|at| !succ.contains(at)).copied().collect::<Vec<_>>());
-            Some((LirBlock { succ: succ.into(), ..parent.with_insns(insns).into_inner() }, tail.at, into))
-        })();
-        if let Some((made, tail, into)) = made {
-            copies.push((index, made, tail, into));
-        }
-    }
-    // A copy that makes a second entry into a loop is refused: an irreducible
-    // body has no estimate of its loops. Checked once for all the copies, as
-    // each is checked after the ones before it only when the whole is not
-    // reducible.
-    // One by one, each checked after the ones before it.
-    let sequential = |odds: &mut BlockOdds, copies: Vec<(usize, LirBlock, i64, Vec<(i64, f64)>)>| {
-        let mut blocks = body.blocks.clone();
-        for (index, made, tail, into) in copies {
-            let before = std::mem::replace(&mut blocks[index], made.into());
-            if reducible && irreducible(&blocks) {
-                blocks[index] = before;
-            } else {
-                odds.rerouted(body.blocks[index].at, &body.blocks[index].succ, tail, &into);
-            }
-        }
-        blocks
-    };
-    let mut blocks: Vec<Block> = body.blocks.clone();
-    for (index, made, _, _) in &copies {
-        blocks[*index] = made.clone().into();
-    }
-    if reducible && irreducible(&blocks) {
-        blocks = sequential(&mut odds, copies);
-    } else {
-        #[cfg(test)]
-        {
-            let mut checked = odds.clone();
-            assert!(
-                sequential(&mut checked, copies.clone()) == blocks
-                    && checked == {
-                        let mut all = odds.clone();
-                        for (index, _, tail, into) in &copies {
-                            all.rerouted(body.blocks[*index].at, &body.blocks[*index].succ, *tail, into);
-                        }
-                        all
-                    },
-                "the copies checked once are not the copies checked one by one"
-            );
-        }
-        for (index, _, tail, into) in &copies {
-            odds.rerouted(body.blocks[*index].at, &body.blocks[*index].succ, *tail, into);
-        }
-    }
-    _reachable(&LirBody { odds, ..body.clone() }, blocks)
-}
-
-/// A tail's printed instructions where it may be copied, and the block it
-/// falls through to: at most `TAIL_DUPLICATION` besides the branches it ends
-/// in, every one a plain operation.
-fn _duplicable(
-    bits: u32,
-    tail: &LirBlock,
-    next: Option<i64>,
-) -> Option<(Vec<Arc<Insn>>, Option<i64>)> {
-    if !tail.phis.is_empty() {
-        return None;
-    }
-    // gcc's bb-reorder `copy_bb_p` for a block that only returns: copied up to
-    // `max-grow-copy-bb-insns` jumps of code.
-    if _return_tail(bits, tail) {
-        return Some((_real(tail), None));
-    }
-    let real = _real(tail);
-    let ops: Vec<Semantics> = real.iter().map(|one| one.what.clone()).collect::<Option<_>>()?;
-    let jumps = ops
-        .iter()
-        .rev()
-        .take_while(|one| matches!(one.op, Operation::Jump | Operation::Branch) && !one.indirect)
-        .count();
-    let plain = ops[..ops.len() - jumps]
-        .iter()
-        .all(
-            |one| !matches!(
-                one.op,
-                Operation::Call
-                    | Operation::Return
-                    | Operation::Data
-                    | Operation::Barrier
-                    | Operation::Jump
-                    | Operation::Branch
-            ),
-        );
-    if jumps == 0
-        || jumps > 2
-        || ops.len() - jumps > TAIL_DUPLICATION
-        || !plain
-        || real.iter().any(|one| one.group.is_some())
-    {
-        return None;
-    }
-    let ends = ops.last().is_some_and(|one| one.op == Operation::Jump);
-    let falls = if ends { None } else { Some(next.filter(|at| tail.succ.contains(at))?) };
-    Some((real, falls))
-}
-
 /// `one` copied where `beside` was, claiming no bytes.
 fn _unowned(
     one: &Insn,
@@ -664,8 +372,8 @@ fn _placed(
     }
     let natural = loopy::loops(&explicit, Some(body.entry));
     let busy = Frequency::over(body, &explicit);
-    let order = placement::order(&explicit, body.entry, &body.odds, &busy, &natural, size);
-    Ok(body.with_blocks(order.into_iter().map(|place| explicit[place].clone()).collect()))
+    let (blocks, odds) = placement::order(&explicit, body.entry, &body.odds, &busy, &natural, size);
+    Ok(_reachable(&LirBody { odds, ..body.clone() }, blocks))
 }
 
 pub fn threaded(body: &LirBody) -> LirBody {
