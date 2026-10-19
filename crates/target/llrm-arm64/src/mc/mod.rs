@@ -6,6 +6,7 @@ pub mod encode;
 pub mod immediate;
 pub mod inst;
 mod text;
+pub mod visit;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

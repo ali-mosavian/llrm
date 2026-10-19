@@ -80,11 +80,11 @@ fn error<T>(text: impl Into<String>) -> Result<T, Error> {
 }
 
 fn reg(register: Gpr) -> Result<u32, Error> {
-    if register.0 > 31 { error(format!("x{} is no register", register.0)) } else { Ok(u32::from(register.0)) }
+    if register.0 > 31 { error(format!("x{} is no machine register", register.0)) } else { Ok(register.0) }
 }
 
 fn vreg(register: Vreg) -> Result<u32, Error> {
-    if register.0 > 31 { error(format!("v{} is no register", register.0)) } else { Ok(u32::from(register.0)) }
+    if register.0 > 31 { error(format!("v{} is no machine register", register.0)) } else { Ok(register.0) }
 }
 
 fn field(
@@ -516,8 +516,8 @@ fn memory(mem: &Memory) -> Result<(u32, u32, u32, u32), Error> {
 
 fn memory_register(mem: &Memory) -> u32 {
     match mem {
-        Memory::Int { reg, .. } => u32::from(reg.0),
-        Memory::Fp { reg, .. } => u32::from(reg.0),
+        Memory::Int { reg, .. } => reg.0,
+        Memory::Fp { reg, .. } => reg.0,
     }
 }
 
@@ -571,6 +571,7 @@ fn load_store(
                 | base(b)? << 5
                 | rt
         }
+        Addr::Slot { .. } => return error("a frame object is addressed after the frame is laid out"),
         Addr::PageOffset { base: b, target, got } => {
             let kind =
                 if *got { FixupKind::GotPageOffset12 } else { FixupKind::PageOffset12 { access: Some(log as u8) } };

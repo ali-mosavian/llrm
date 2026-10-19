@@ -29,18 +29,32 @@ impl Width {
 
 /// A general-purpose register, `x0`..`x30`, or number 31, which is the zero
 /// register or the stack pointer as the operand's role says.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Gpr(pub u8);
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Gpr(pub u32);
 
 impl Gpr {
     /// Number 31.
     pub const R31: Gpr = Gpr(31);
+    pub const FP: Gpr = Gpr(29);
     pub const LR: Gpr = Gpr(30);
+    /// The first number of a virtual register: below it are the 32 machine
+    /// registers, as LLVM numbers its own (`Register::isVirtualRegister`).
+    pub const FIRST_VIRTUAL: u32 = 64;
+
+    pub fn is_virtual(self) -> bool {
+        self.0 >= Self::FIRST_VIRTUAL
+    }
 }
 
 /// A floating-point or vector register, `v0`..`v31`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Vreg(pub u8);
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Vreg(pub u32);
+
+impl Vreg {
+    pub fn is_virtual(self) -> bool {
+        self.0 >= Gpr::FIRST_VIRTUAL
+    }
+}
 
 /// The size of a scalar floating-point operand: the `type` field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -247,6 +261,10 @@ pub enum Addr {
     Register { base: Gpr, index: Gpr, extend: Extend, shifted: bool },
     /// `[base, #:lo12:symbol]`
     PageOffset { base: Gpr, target: Target, got: bool },
+    /// A frame object, before the frame is laid out: frame lowering turns it
+    /// into `Offset` from the stack or frame pointer (LLVM's frame index
+    /// operand).
+    Slot { slot: u32, offset: i64 },
 }
 
 /// The register a load or store moves and how much of it.

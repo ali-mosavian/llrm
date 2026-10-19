@@ -135,6 +135,7 @@ fn address(
             };
             format!("[{}, {}{extension}]", base(b), gpr(*index, width, false))
         }
+        Addr::Slot { slot, offset } => format!("[slot{slot}, #{offset}]"),
         Addr::PageOffset { base: b, target: to, got } => {
             format!("[{}, {}]", base(b), target(to, if *got { "@GOTPAGEOFF" } else { "@PAGEOFF" }))
         }

@@ -9,7 +9,7 @@ use std::process::Command;
 use super::encode::encode;
 use super::inst::*;
 
-fn pinned_mc() -> Option<String> {
+pub(crate) fn pinned_mc() -> Option<String> {
     let build = std::env::var("LLVM_BUILD")
         .unwrap_or_else(|_| format!("{}/scratch/llvm-build-aarch64", std::env::var("HOME").unwrap_or_default()));
     let path = format!("{build}/bin/llvm-mc");
@@ -34,7 +34,7 @@ fn fixed_byte(text: &str) -> u8 {
 }
 
 /// The words the pinned `llvm-mc` assembles `lines` to, one per line.
-fn assembled(
+pub(crate) fn assembled(
     mc: &str,
     lines: &[String],
 ) -> Vec<u32> {
@@ -81,7 +81,6 @@ fn check(insts: &[Inst]) {
 }
 
 const WIDTHS: [Width; 2] = [Width::W, Width::X];
-const REGS: [u8; 6] = [0, 1, 7, 18, 29, 30];
 
 #[test]
 fn add_and_subtract() {
@@ -443,6 +442,5 @@ fn floating_point() {
     }
     all.push(Inst::FpToFp { to: FpSize::D, from: FpSize::S, rd: Vreg(1), rn: Vreg(2) });
     all.push(Inst::FpToFp { to: FpSize::S, from: FpSize::D, rd: Vreg(1), rn: Vreg(2) });
-    let _ = REGS;
     check(&all);
 }
