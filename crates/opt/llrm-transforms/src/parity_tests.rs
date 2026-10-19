@@ -403,6 +403,7 @@ fn test_no_old_slot_of_the_built_lists_runs_a_translated_pass() {
                 on.options.sroa,
                 on.options.mem2reg,
                 on.options.rotating(),
+                &[],
                 &held,
             );
             assert_eq!(checked, Ok(()), "{phase:?} {level:?}");
