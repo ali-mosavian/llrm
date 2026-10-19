@@ -3426,12 +3426,14 @@ impl Selector<'_, '_, '_> {
         {
             let Some(block) = self.current else { return refuse("a far constant outside a block") };
             let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
-            let (base, selector) = (self.fresh_held(2), self.fresh_held(2));
-            for (into, value) in [base, selector].into_iter().zip(dword_halves(bits)) {
-                let word = Loc::Imm(Imm { value, width: 2, address: None });
-                self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![word])));
-            }
-            return Ok(Pointer::Far { selector, base: Some(base), index: None, scale: 1, offset: 0 });
+            // The offset is the displacement of whatever address the pointer
+            // ends up in (`matchAddress` of a constant: `AM.Disp += Val`),
+            // not a register that holds it.
+            let [offset, high] = dword_halves(bits);
+            let selector = self.fresh_held(2);
+            let word = Loc::Imm(Imm { value: high, width: 2, address: None });
+            self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(selector)], vec![word])));
+            return Ok(Pointer::Far { selector, base: None, index: None, scale: 1, offset });
         }
         // An address no global owns, near: its number, read as a direct
         // address.
