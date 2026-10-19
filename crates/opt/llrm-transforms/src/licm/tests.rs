@@ -891,4 +891,26 @@ b2:
     assert!(after.contains("%y.reass = add i16 %i,"), "{after}");
     let after = licm_printed(&text("nsw", "nsw", "%z = add i16 %x, 2"));
     assert!(!after.contains("reass"), "{after}");
+    // A chain: the reassociations of one loop read nothing an earlier one
+    // erased. Reading it looped SCEV forever in `qb-pressx`.
+    let chain = "define i16 @f(i16 %n, i16 %a, i16 %b, i16 %c, i16 %d) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %p = add i16 %i, %a
+  %q = add i16 %p, %b
+  %r = add i16 %q, %c
+  %s = add i16 %r, %d
+  %i1 = add i16 %i, %s
+  %k = icmp slt i16 %i1, %n
+  br i1 %k, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+";
+    let after = licm_printed(chain);
+    assert!(block_of(&after, "b1").iter().filter(|line| line.contains(".reass =")).count() <= 1, "{after}");
 }

@@ -125,8 +125,9 @@ pub struct Reassociation {
 /// [`hoistBOAssociation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2686):
 /// `(LV op C1) op C2` and its commuted forms, the integer `add`, `mul`, `and`,
 /// `or` and `xor`. DEVIATE: an instruction another reassociation of the loop
-/// has replaced is left alone, where LLVM would reassociate the new one in
-/// turn.
+/// has replaced, or one reading a value it erased, is left alone, where LLVM
+/// would reassociate the new one in turn (the next round of the pipeline
+/// does).
 fn hoist_bo_association(
     unit: &passes::Unit,
     ctx: &LoopCtx,
@@ -158,6 +159,17 @@ fn hoist_bo_association(
         std::mem::swap(&mut lv, &mut c1);
     }
     if ctx.is_loop_invariant(lv) || !ctx.is_loop_invariant(c1) || !ctx.is_loop_invariant(c2) {
+        return None;
+    }
+    // A value an earlier reassociation of the loop has erased is not read.
+    let erased = |operand: Operand| match operand {
+        Operand::Value(value) => match function.value(value).def {
+            ValueDef::Instruction(def) => ctx.state.gone.borrow().contains(&def),
+            ValueDef::Argument(_) => false,
+        },
+        _ => false,
+    };
+    if erased(lv) || erased(c1) || erased(c2) {
         return None;
     }
     // `OverflowTracking` with `AllKnownNonNegative` and `AllKnownNonZero` off,
