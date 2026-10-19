@@ -234,7 +234,29 @@ pub fn reassociate(
     function: &mut Function,
 ) -> bool {
     let env = Env { globals: &outer.globals, layout };
-    Reassociator::new(context, env, outer, function).run()
+    // Upstream's `MadeChange` is also true when the pass swaps an add's
+    // operands and swaps them back (a body already in its order): the
+    // pipeline repeats until no pass changes a body, so report a change
+    // only if there is one.
+    let before = digest(function);
+    Reassociator::new(context, env, outer, function).run();
+    digest(function) != before
+}
+
+/// A hash of the body: what each instruction is and reads, in order. (Not
+/// `print::fingerprint`, which the pipeline counts as a hashed body.)
+fn digest(function: &Function) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (block, inst) in function.walk() {
+        block.hash(&mut hasher);
+        let instruction = function.instruction(inst);
+        instruction.opcode.hash(&mut hasher);
+        instruction.operands.hash(&mut hasher);
+        instruction.flags.hash(&mut hasher);
+        instruction.ty.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// One run of the pass over a function.

@@ -89,3 +89,20 @@ e:
     );
     assert_eq!(r, [(5 << 16) + 1, (5 << 16) + 2]);
 }
+
+/// An instruction that reads itself, outside a phi, in a block the walk
+/// reaches (pipeline state of corpus entry nib-examples-level): the walk of
+/// operands never ended, pushing frames until the test process held 158 GB.
+#[test]
+fn test_an_instruction_that_reads_itself_outside_a_phi_still_has_a_rank() {
+    let r = ranks(
+        "define i32 @f(i32 %x) {
+b0:
+  %a = add i32 %a, %x
+  ret i32 %a
+}
+",
+        &["a"],
+    );
+    assert_eq!(r, [4]);
+}

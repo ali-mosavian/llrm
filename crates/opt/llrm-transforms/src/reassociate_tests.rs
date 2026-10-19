@@ -703,3 +703,22 @@ b0:
 ",
     );
 }
+
+/// An add already in the order the pass wants is swapped by
+/// `canonicalizeOperands` and swapped back by the rewrite: upstream's
+/// `MadeChange` is true, the body is the same. The pipeline's rounds ran until
+/// no pass changed a body, so the pass never settled (corpus entry
+/// nib-examples-level: unbounded growth of the test process to 158 GB).
+#[test]
+fn test_a_body_the_pass_leaves_as_it_was_is_not_reported_changed() {
+    let mut module = parsed(
+        "define i32 @f(i32 %x, i32 %y) {
+b0:
+  %a = add i32 %y, %x
+  ret i32 %a
+}
+",
+    );
+    assert!(!reassociated(&mut module));
+    assert!(!reassociated(&mut module));
+}
