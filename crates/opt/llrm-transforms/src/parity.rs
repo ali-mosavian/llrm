@@ -173,6 +173,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@801", Simplify, "instcombine", Old, "instcombine-port"),
     partial(
+        "dfajumpthreading@806",
+        Simplify,
+        "dfa-jump-threading",
+        "criterion: the S1 shapes of docs/architecture/dfajumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=dfa-jump-threading) does; exit: S2 (select unfolding, DF1) and S3 (SSAUpdaterBulk, loop-info update) landed, and the switch half of the old jumpthread.rs deleted; on by default, LLRM_NO_DFAJUMPTHREADING turns it off",
+    ),
+    partial(
         "jumpthreading@809",
         Simplify,
         "jump-threading",
@@ -218,7 +224,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@728", Simplify, "lcssa", Old, "lcssa-port"),
-    entry("dfa-jump-threading", Simplify, "dfa-jump-threading", Missing, "parity-pipeline"),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
     // (`module@row`, the row of the table in `backend/mod.rs`).
@@ -533,7 +538,7 @@ pub const TODO: &[&str] = &[
 /// function (`PassBuilderPipelines.cpp`: the function simplification pipeline
 /// runs once per function, so `gvn` once; llvm-difftest counted 11 on d_faces
 /// -O2 for its 11 functions). The slot name is as in `llvm_order`.
-pub const RUNS_PER_BODY: &[(&str, [usize; 4])] = &[("gvn@787", [0, 1, 1, 1])];
+pub const RUNS_PER_BODY: &[(&str, [usize; 4])] = &[("gvn@787", [0, 1, 1, 1]), ("dfajumpthreading@806", [0, 1, 1, 1])];
 
 /// The level a list is built for: the pin's `default<O1>`, `default<O2>`,
 /// `default<O3>`; -Os is the -O2 list on optsize IR (`opt` rejects `-Os`).
@@ -554,7 +559,7 @@ impl Level {
 /// Registry slots the pin's `default<O1>` does not have (no GVN or
 /// JumpThreading at -O1: `buildO1FunctionSimplificationPipeline`), so a
 /// Translated one is not required in a -O1 list.
-pub const ABSENT_AT_O1: &[&str] = &["gvn@787", "jumpthreading@668", "jumpthreading@809"];
+pub const ABSENT_AT_O1: &[&str] = &["gvn@787", "jumpthreading@668", "jumpthreading@809", "dfajumpthreading@806"];
 
 /// Run counts LLVM does not match yet, stated and not checked:
 /// `loopsimplify`/`lcssa` run at three unconditional slots per body at every
