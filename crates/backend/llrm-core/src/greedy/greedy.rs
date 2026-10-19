@@ -274,7 +274,8 @@ impl AllocationOrder {
 
 /// What the allocator asks of the target's register classes and instructions.
 pub trait GreedyEnv: SpillWeightEnv {
-    /// Whether `virt` has a class of its own (`MRI->getRegClass`), else its original's is asked.
+    /// Whether `virt` has a class of its own (`MRI->getRegClass`), else its
+    /// original's is asked.
     fn has_class(
         &self,
         _virt: u32,
@@ -499,8 +500,8 @@ impl<'a> RAGreedy<'a> {
         }
         // Giant live ranges fall back to the global assignment heuristic, which
         // prevents excessive spilling in pathological cases.
-        let force_global = (size / SlotIndex::INSTR_DIST) as usize
-            > 2 * self.env.num_allocatable_regs(self.class_reg(reg));
+        let force_global =
+            (size / SlotIndex::INSTR_DIST) as usize > 2 * self.env.num_allocatable_regs(self.class_reg(reg));
         let mut global_bit = 0u32;
         let mut prio;
         if stage == LiveRangeStage::Assign
@@ -610,8 +611,8 @@ impl<'a> RAGreedy<'a> {
 
     // ---- direct assignment, eviction ---------------------------------------
 
-    /// The register whose class `virt` has: itself where it has one of its own, else its
-    /// original.
+    /// The register whose class `virt` has: itself where it has one of its own,
+    /// else its original.
     fn class_reg(
         &self,
         virt: u32,
@@ -623,12 +624,7 @@ impl<'a> RAGreedy<'a> {
         &self,
         virt: u32,
     ) -> AllocationOrder {
-        AllocationOrder::create(
-            virt,
-            &self.matrix.vrm,
-            self.env.allocation_order(self.class_reg(virt)),
-            &self.hints,
-        )
+        AllocationOrder::create(virt, &self.matrix.vrm, self.env.allocation_order(self.class_reg(virt)), &self.hints)
     }
 
     /// `tryAssign` (RegAllocGreedy.cpp#L532), without the cost-per-use path.

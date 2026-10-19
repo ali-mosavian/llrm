@@ -91,7 +91,8 @@ pub trait SplitEnv {
         reg: u32,
     ) -> bool;
 
-    /// `recomputeRegClass` of the registers an edit made, once their instructions are in place.
+    /// `recomputeRegClass` of the registers an edit made, once their
+    /// instructions are in place.
     fn reclass(
         &self,
         _lis: &LiveIntervals,
