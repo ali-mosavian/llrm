@@ -43,7 +43,8 @@
 //! # Used by
 //! `RAGreedy::trySplit` and its region, block and local splits.
 
-use std::collections::{BTreeMap, HashMap};
+use llrm_support::hash::{HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -209,7 +210,7 @@ impl<'d> SplitEditor<'d> {
             open_idx: 0,
             spill_mode: ComplementSpillMode::Partition,
             reg_assign: RegAssignMap::default(),
-            values: HashMap::new(),
+            values: HashMap::default(),
             lical: [LiveIntervalCalc::new(), LiveIntervalCalc::new()],
         }
     }
@@ -974,7 +975,7 @@ impl<'d> SplitEditor<'d> {
     fn compute_redundant_back_copies(
         &mut self,
         cx: &mut SplitCx,
-        not_to_hoist: &std::collections::HashSet<u32>,
+        not_to_hoist: &HashSet<u32>,
         back_copies: &mut Vec<Vn>,
     ) {
         let li_reg = self.edit().get(0);
@@ -1046,7 +1047,7 @@ impl<'d> SplitEditor<'d> {
         let mut costs: Vec<BlockFrequency> = vec![BlockFrequency(0); nvn];
         // The ParentVNI->id set for which hoisting back-copies are not
         // beneficial for Speed.
-        let mut not_to_hoist: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut not_to_hoist: HashSet<u32> = HashSet::default();
 
         // Find the nearest common dominator for parent values with multiple
         // back-copies.
