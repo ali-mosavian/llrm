@@ -468,6 +468,12 @@ impl Options {
         self.for_size
     }
 
+    /// Whether the code generator may grow code for speed: -O3 and -Omax
+    /// (`CodeGenOptLevel::Aggressive`).
+    pub fn aggressive_codegen(&self) -> bool {
+        self.limits.target_percent >= 200
+    }
+
     /// -Oz: no loop is copied.
     pub fn min_size() -> Self {
         Self { unroll: false, peel: false, ..Self::size() }

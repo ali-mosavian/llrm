@@ -137,6 +137,7 @@ impl Options {
             self.pipeline.compares_routes(),
             self.pipeline.optimize,
             self.float_store,
+            self.pipeline.aggressive_codegen(),
         )
     }
 }

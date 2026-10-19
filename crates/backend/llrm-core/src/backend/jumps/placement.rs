@@ -19,8 +19,11 @@ use crate::support::hash::{HashSet, IndexMap};
 const PREDECESSOR_LIMIT: usize = 1000;
 
 /// `TailDupPlacementThreshold`: the instructions a block may hold and be
-/// copied (1 for size; `-O3`'s 4 needs the level, which the profile lacks).
+/// copied (1 for size).
 const TAIL_DUPLICATION: usize = 2;
+
+/// `TailDupPlacementAggressiveThreshold`, at -O3.
+const TAIL_DUPLICATION_AGGRESSIVE: usize = 4;
 
 /// `TailDupPlacementPenalty` (2 per cent).
 const TAIL_DUPLICATION_PENALTY: f64 = 0.02;
@@ -96,10 +99,11 @@ pub(super) fn order(
     busy: &Frequency,
     natural: &[Loop],
     size: bool,
+    aggressive: bool,
 ) -> (Vec<Block>, BlockOdds) {
     let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(place, block)| (block.at, place)).collect();
     let entry = index.get(&entry).copied().unwrap_or(0);
-    let mut placer = Placer::new(blocks, odds, busy, &index, size, entry);
+    let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, entry);
     let order = placer.build(natural, &index);
     let mut out = odds.clone();
     for (from, succ, tail, into) in &placer.rerouted {
@@ -117,6 +121,7 @@ impl Placer {
         busy: &Frequency,
         index: &IndexMap<i64, usize>,
         size: bool,
+        aggressive: bool,
         entry: usize,
     ) -> Self {
         let n = blocks.len();
@@ -161,7 +166,7 @@ impl Placer {
             exit: None,
             blocks: blocks.to_vec(),
             dead: vec![false; n],
-            dup_size: if size { 1 } else { TAIL_DUPLICATION },
+            dup_size: if size { 1 } else if aggressive { TAIL_DUPLICATION_AGGRESSIVE } else { TAIL_DUPLICATION },
             rerouted: Vec::new(),
         }
     }

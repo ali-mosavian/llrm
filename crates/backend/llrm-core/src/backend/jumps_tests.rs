@@ -1240,7 +1240,7 @@ fn test_for_size_a_join_of_two_instructions_is_not_copied() {
     let join = || vec![_move(30, imm(3)), _return(31)];
     let speed = placed(&diamond_joined(0.9, join())).unwrap();
     assert!(speed.blocks.iter().all(|one| one.at != 30), "copied for speed");
-    let size = _placed(&diamond_joined(0.9, join()), true).unwrap();
+    let size = _placed(&diamond_joined(0.9, join()), true, false).unwrap();
     assert!(size.blocks.iter().any(|one| one.at == 30), "kept for size");
 }
 
@@ -1296,7 +1296,7 @@ fn test_a_copied_test_keeps_its_loops_odds() {
 /// Size places as speed does, but for a loop's top (`findBestLoopTop`).
 #[test]
 fn test_for_size_a_diamond_is_placed_as_for_speed() {
-    let order = |body: LirBody| _placed(&body, true).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+    let order = |body: LirBody| _placed(&body, true, false).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
     assert_eq!(order(weighted_diamond(0.7)), vec![1, 10, 20, 30]);
     assert_eq!(order(weighted_diamond(0.9)), vec![1, 10, 30, 20]);
 }
