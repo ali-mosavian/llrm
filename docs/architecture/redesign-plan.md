@@ -1247,6 +1247,8 @@ Checklist: the shared list.
 
 **General solutions, one job per module.** A fix is a general, robust solution, never a patch for one case or shape. DRY, SRP, open/closed and separation of concerns: a new case extends a trait, a table or an interface instead of adding a branch inside existing code; shared logic lives in one place; a module has one job (analysis, transform, target and object format stay separate). Every brief and every review checks it, and reviews flag a violation unasked.
 
+**As close to O(n) as possible.** Where LLVM is super-linear, mirror the caps and thresholds that bound it, with permalinks. Never add a quadratic step LLVM lacks (rescans, nested walks over the function, re-solving per query). Any remaining super-linear step needs a stated reason and a slope test at 1x and 4x input size. Briefs and reviews check it.
+
 **Mirror LLVM's structure by default.** Every design page and every structural PR carries a `LLVM structure` line: LLVM's structure (name and permalink at `d1106deb71cc`), ours, and `MIRROR` or `DEVIATE` with the reason. The default is to mirror. A deviation needs a reason (our MIR or LIR differs; output would change and the rows rule applies; measured not better) and a number. The mapping so far:
 
 | LLVM structure | ours | status |
