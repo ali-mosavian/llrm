@@ -1,10 +1,10 @@
 //! Each body is MIR text run by llrm-mir's interpreter before and after, so a
 //! wrong loop shows as a wrong answer; what is asserted of the text is whether
-//! the call is gone.
+//! the call is gone, or marked `tail`.
 
 use llrm_analysis::testing::DOS;
 
-use super::TailRecursion;
+use super::TailCallElim;
 use crate::testing::{managed, parsed, results};
 
 /// `text` through the pass: its printed form, run as before on `inputs`.
@@ -14,7 +14,7 @@ fn eliminated(
 ) -> String {
     let before = parsed(&format!("{DOS}{text}"));
     let mut module = before.clone();
-    let after = managed(&mut module, TailRecursion);
+    let after = managed(&mut module, TailCallElim);
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     after
 }
@@ -40,14 +40,6 @@ b2:
 
 const PAIRS: &[&[i128]] = &[&[12, 18], &[17, 5], &[100, 75], &[7, 7], &[0, 9], &[9, 0]];
 
-/// `ret f(b, a % b)` was a call per step; it is the loop of Euclid.
-#[test]
-fn a_call_returned_as_it_is_becomes_a_loop() {
-    let after = eliminated(GCD, PAIRS);
-    assert_eq!(calls(&after), 0, "{after}");
-    assert!(after.contains("tailrecurse"), "{after}");
-}
-
 const SUM: &str = "define i16 @f(i16 %n) {
 b0:
   %z = icmp eq i16 %n, 0
@@ -64,11 +56,44 @@ b2:
 }
 ";
 
+/// `ret f(b, a % b)` was a call per step; it is the loop of Euclid.
+#[test]
+fn a_call_returned_as_it_is_becomes_a_loop() {
+    let after = eliminated(GCD, PAIRS);
+    assert_eq!(calls(&after), 0, "{after}");
+    assert!(after.contains("tailrecurse"), "{after}");
+    assert!(!after.contains("ret.tr"), "the return value carried by nobody is not carried: {after}");
+}
+
 /// `n + f(n - 1)` is a call whose result only feeds an `add`: an accumulator,
 /// and no call.
 #[test]
 fn a_call_whose_result_only_feeds_an_add_becomes_a_loop_with_an_accumulator() {
     let after = eliminated(SUM, &[&[0], &[1], &[5], &[30]]);
+    assert_eq!(calls(&after), 0, "{after}");
+    assert!(after.contains("accumulator.tr"), "{after}");
+}
+
+/// A recursion the result of which is multiplied is an accumulator that starts
+/// at one.
+#[test]
+fn a_product_accumulates_from_one() {
+    let text = "define i16 @f(i16 %n) {
+b0:
+  %z = icmp ule i16 %n, 1
+  br i1 %z, label %b1, label %b2
+
+b1:
+  ret i16 1
+
+b2:
+  %m = sub i16 %n, 1
+  %v = call i16 @f(i16 %m)
+  %p = mul i16 %v, %n
+  ret i16 %p
+}
+";
+    let after = eliminated(text, &[&[0], &[1], &[5], &[7]]);
     assert_eq!(calls(&after), 0, "{after}");
 }
 
@@ -100,29 +125,6 @@ b4:
 ";
     let after = eliminated(text, &[&[0, 1, 3, 2], &[1, 1, 3, 2], &[4, 1, 3, 2], &[7, 1, 3, 2]]);
     assert_eq!(calls(&after), 1, "{after}");
-}
-
-/// A recursion the result of which is multiplied is an accumulator that starts
-/// at one.
-#[test]
-fn a_product_accumulates_from_one() {
-    let text = "define i16 @f(i16 %n) {
-b0:
-  %z = icmp ule i16 %n, 1
-  br i1 %z, label %b1, label %b2
-
-b1:
-  ret i16 1
-
-b2:
-  %m = sub i16 %n, 1
-  %v = call i16 @f(i16 %m)
-  %p = mul i16 %v, %n
-  ret i16 %p
-}
-";
-    let after = eliminated(text, &[&[0], &[1], &[5], &[7]]);
-    assert_eq!(calls(&after), 0, "{after}");
 }
 
 /// A void recursion whose call ends one arm of a branch (bench/bintree's
@@ -158,7 +160,7 @@ b0:
 ";
     let before = parsed(&format!("{DOS}{text}"));
     let mut module = before.clone();
-    let after = managed(&mut module, TailRecursion);
+    let after = managed(&mut module, TailCallElim);
     let inputs: &[&[i128]] = &[&[2, 9], &[1, 9], &[0, 9]];
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     assert!(!after.contains("call void @g(i16 %next"), "{after}");
@@ -179,7 +181,8 @@ fn what_cannot_be_a_loop_keeps_its_call() {
     assert_eq!(calls(&eliminated(&stored, &[&[0], &[3]])), 1);
 }
 
-/// A frame object the callee may read is not reused by the next trip.
+/// A frame object the callee may read is not reused by the next trip: the call
+/// that is passed it is not a tail call.
 #[test]
 fn a_call_that_is_passed_the_frame_keeps_its_call() {
     let text = "define i16 @f(i16 %n, ptr %p) {
@@ -198,15 +201,16 @@ b2:
   ret i16 %v
 }
 ";
-    let after = managed(&mut parsed(&format!("{DOS}{text}")), TailRecursion);
+    let after = managed(&mut parsed(&format!("{DOS}{text}")), TailCallElim);
     assert_eq!(calls(&after), 1, "{after}");
+    assert!(!after.contains("tail call"), "{after}");
 }
 
-/// A `byval` parameter is the caller's copy in memory: the loop would store
-/// through the next trip's argument, `@g` itself, where the call stored through
-/// a copy. The call stays.
+/// `byval` is the caller's copy in memory: the loop copies the argument into a
+/// temporary and from it into the parameter (the pin's
+/// `copyByValueOperandIntoLocalTemp`), so the recursion is a loop.
 #[test]
-fn a_byval_parameter_keeps_its_call() {
+fn a_byval_argument_is_copied_through_a_temporary() {
     let text = "@g = global i16 0
 
 define void @f(ptr byval(i16) %p, i16 %n) {
@@ -224,12 +228,13 @@ b2:
   ret void
 }
 ";
-    let after = managed(&mut parsed(&format!("{DOS}{text}")), TailRecursion);
-    assert!(after.contains("call void @f("), "{after}");
+    let after = managed(&mut parsed(&format!("{DOS}{text}")), TailCallElim);
+    assert!(!after.contains("call void @f("), "{after}");
+    assert_eq!(after.matches("call void @llvm.memcpy").count(), 2, "{after}");
 }
 
-/// A function that calls `setjmp` returns into one frame a second time: it
-/// keeps one per level.
+/// A function that calls `setjmp` returns into one frame a second time: no call
+/// is marked, none is a loop.
 #[test]
 fn a_function_that_calls_a_returns_twice_routine_keeps_its_call() {
     let text = "declare i16 @setjmp(ptr) returns_twice
@@ -251,13 +256,13 @@ b2:
 
 @buf = global [8 x i16] zeroinitializer
 ";
-    let after = managed(&mut parsed(&format!("{DOS}{text}")), TailRecursion);
+    let after = managed(&mut parsed(&format!("{DOS}{text}")), TailCallElim);
     assert_eq!(calls(&after), 1, "{after}");
 }
 
-/// An argument every call passes on as it got it needs no phi: `a` stays the
-/// parameter, where the loop passes would first find `phi [%a, entry], [%phi,
-/// latch]`.
+/// An argument every call passes on as it got it needs no phi: the pin makes
+/// one per parameter and `cleanupAndFinalize` removes the ones
+/// `simplifyInstruction` finds to be the parameter.
 #[test]
 fn an_argument_passed_on_unchanged_gets_no_phi() {
     let text = "define i16 @f(i16 %n, i16 %a) {
@@ -279,8 +284,7 @@ b2:
 }
 
 /// bench/fib: `f(n - 1) + f(n - 2)`, both operands of the sum calls. The second
-/// is the tail and the first is what it adds to: 350256 instructions, gcc's
-/// loop 206373.
+/// is the tail and the first is what it adds to.
 #[test]
 fn of_two_calls_summed_the_later_is_the_loop() {
     let text = "define i16 @f(i16 %n) {
@@ -308,68 +312,134 @@ b4:
     assert_eq!(calls(&after), 1, "{after}");
 }
 
-/// bench/hanoi, bench/quicksort and bench/fib on m16 (six registers, two kept
-/// across a call) ran 8% to 25% more memory operands as a loop whose carried
-/// values spilled than as the recursion: a call left in the loop keeps the
-/// values in the registers kept across it, with one to spare, or the recursion
-/// stays.
+/// `f(n - 1) << 1` with the base case 1 is a chain of shifts by a constant: the
+/// pin's unary accumulator, `2^n`, that starts at the base case and shifts once
+/// per trip.
 #[test]
-fn a_loop_whose_carried_values_outnumber_the_registers_kept_across_a_call_stays_a_recursion() {
-    use crate::testing::{Tuned, managed_on};
-    let text = "define i16 @f(i16 %n, i16 %a, i16 %b, i16 %c) {
-b0:
-  %z = icmp eq i16 %n, 0
-  br i1 %z, label %b3, label %b2
-
-b2:
-  %m = sub i16 %n, 1
-  %x = call i16 @f(i16 %m, i16 %a, i16 %c, i16 %b)
-  %y = add i16 %x, 1
-  %w = call i16 @f(i16 %m, i16 %c, i16 %b, i16 %a)
-  %s = add i16 %y, %w
-  br label %b4
-
-b3:
-  br label %b4
-
-b4:
-  %r = phi i16 [ %s, %b2 ], [ 0, %b3 ]
-  ret i16 %r
-}
-";
-    let after = |kept: i64| {
-        let mut module = parsed(&format!("{DOS}{text}"));
-        let machine = Tuned { registers: 6, call_registers: kept, ..Tuned::default() };
-        managed_on(&mut module, TailRecursion, machine)
-    };
-    // Five carried (four parameters and the sum), then one to spare.
-    assert_eq!(calls(&after(2)), 2, "{}", after(2));
-    assert_eq!(calls(&after(5)), 2, "{}", after(5));
-    assert_eq!(calls(&after(6)), 1, "{}", after(6));
-}
-
-/// Nib's `sort(a: &mut [i16], lo, hi)` passes `a` on as it got it: stripped of
-/// `noalias`, the loop could not keep the slice's header in registers over the
-/// partition's stores, and quicksort ran 57% more instructions on m16. The
-/// parameter the calls change loses it, the one they pass on keeps it.
-#[test]
-fn noalias_stays_on_the_parameter_the_calls_pass_on() {
-    let text = "define i16 @f(ptr noalias %a, ptr noalias %b, i16 %n) {
+fn a_shift_by_a_constant_accumulates_from_the_base_case() {
+    let text = "define i16 @f(i16 %n) {
 b0:
   %z = icmp eq i16 %n, 0
   br i1 %z, label %b1, label %b2
 
 b1:
-  ret i16 0
+  ret i16 1
 
 b2:
   %m = sub i16 %n, 1
-  %p = getelementptr i16, ptr %b, i16 1
-  %v = call i16 @f(ptr %a, ptr %p, i16 %m)
-  ret i16 %v
+  %v = call i16 @f(i16 %m)
+  %s = shl i16 %v, 1
+  ret i16 %s
 }
 ";
-    let after = managed(&mut parsed(&format!("{DOS}{text}")), TailRecursion);
+    let after = eliminated(text, &[&[0], &[1], &[5], &[12]]);
     assert_eq!(calls(&after), 0, "{after}");
-    assert!(after.contains("define i16 @f(ptr noalias %a, ptr %b, i16 %n)"), "{after}");
+}
+
+/// A recursion followed by a return of another value: the value is the
+/// function's whenever a trip got there, which `ret.tr` and `ret.known.tr`
+/// carry.
+#[test]
+fn a_value_returned_after_the_call_is_carried_by_the_return_phis() {
+    let text = "define i16 @f(i16 %n) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b1, label %b2
+
+b1:
+  ret i16 1
+
+b2:
+  %m = sub i16 %n, 1
+  %v = call i16 @f(i16 %m)
+  ret i16 5
+}
+";
+    let after = eliminated(text, &[&[0], &[1], &[4]]);
+    assert_eq!(calls(&after), 0, "{after}");
+    assert!(after.contains("ret.known.tr"), "{after}");
+}
+
+/// A call to a function that reads no memory, of constants and parameters, is a
+/// tail call whether or not an alloca has escaped; the pin's
+/// `tailcall-readnone` case.
+#[test]
+fn a_readnone_call_of_parameters_is_marked_tail() {
+    let text = "declare i16 @pure(i16) memory(none)
+
+define i16 @h(i16 %x) {
+b0:
+  %cell = alloca i16
+  store ptr %cell, ptr @sink
+  %v = call i16 @pure(i16 %x)
+  ret i16 %v
+}
+
+@sink = global ptr null
+";
+    let after = managed(&mut parsed(&format!("{DOS}{text}")), TailCallElim);
+    assert!(after.contains("tail call i16 @pure("), "{after}");
+}
+
+/// A call before an alloca's address escapes is a tail call; one after is not
+/// (`markTails`' escaped state).
+#[test]
+fn a_call_after_the_frame_escapes_is_not_marked_tail() {
+    let text = "declare void @use(ptr)
+declare i16 @g(i16)
+
+@sink = global ptr null
+
+define i16 @h(i16 %x) {
+b0:
+  %cell = alloca i16
+  %before = call i16 @g(i16 %x)
+  store ptr %cell, ptr @sink
+  %after = call i16 @g(i16 %before)
+  ret i16 %after
+}
+";
+    let after = managed(&mut parsed(&format!("{DOS}{text}")), TailCallElim);
+    assert!(after.contains("tail call i16 @g(i16 %x)"), "{after}");
+    assert!(after.contains("%after = call i16 @g("), "{after}");
+}
+
+/// `disable-tail-calls`="true" leaves the function as it is.
+#[test]
+fn the_disable_tail_calls_attribute_leaves_the_function_alone() {
+    let text = GCD
+        .replace("define i16 @f(i16 %a, i16 %b) {", "define i16 @f(i16 %a, i16 %b) \"disable-tail-calls\"=\"true\" {");
+    let after = managed(&mut parsed(&format!("{DOS}{text}")), TailCallElim);
+    assert_eq!(calls(&after), 1, "{after}");
+}
+
+/// A function of `n` blocks that each return a call to the function.
+fn arms(n: usize) -> String {
+    let mut text = String::from("define i16 @f(i16 %n) {\nentry:\n  br label %c0\n");
+    for k in 0..n {
+        text += &format!(
+            "\nc{k}:\n  %t{k} = icmp eq i16 %n, {k}\n  br i1 %t{k}, label %r{k}, label %c{}\n\nr{k}:\n  %m{k} = sub i16 %n, 1\n  %v{k} = call i16 @f(i16 %m{k})\n  ret i16 %v{k}\n",
+            k + 1
+        );
+    }
+    text + &format!("\nc{n}:\n  ret i16 0\n}}\n")
+}
+
+/// The pass is linear in the sites: four times the arms cost about four times,
+/// not sixteen (a slope test at 1x and 4x, the least of three runs of each).
+#[test]
+fn the_time_grows_with_the_arms_not_with_their_square() {
+    let least = |n: usize| {
+        let text = arms(n);
+        (0..3)
+            .map(|_| {
+                let mut module = parsed(&format!("{DOS}{text}"));
+                let start = std::time::Instant::now();
+                managed(&mut module, TailCallElim);
+                start.elapsed().as_secs_f64()
+            })
+            .fold(f64::MAX, f64::min)
+    };
+    let (small, large) = (least(150), least(600));
+    assert!(large < small * 6.0, "150 arms {small:.4} s, 600 arms {large:.4} s: a ratio of {:.1}", large / small);
 }

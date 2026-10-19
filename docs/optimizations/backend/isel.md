@@ -39,7 +39,9 @@ pattern has one `match` line (opcode, result type, operand kinds and types,
 nested defining instructions), optional `when` predicates, `let` operand
 constructors, and a body: `emit` a form, `call` a hook written by hand
 (`hook_` in `matcher.rs`), `chain` an operation on a wide integer as its
-halves, `refuse` or `nothing`. `group` members with a `cost` compete; a
+halves, `refuse` or `nothing`. An operand may be a shift, a condition or an
+extension field (`shift(code, amount)`, `cond(code)`, `extend(code, amount)`; kinds `h`, `c`, `e` in
+the form), carried in LIR as `Loc::Field`. `group` members with a `cost` compete; a
 pattern with `cover` takes over a nested instruction. The generator turns
 the `match` lines into a decision automaton, as TableGen merges common
 prefixes, and the rest into `holds`, `cost` and `emit` functions.

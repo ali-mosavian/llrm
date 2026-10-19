@@ -168,6 +168,11 @@ impl UsedBy {
         self.0.get(index).copied().unwrap_or(false)
     }
 
+    /// `set_bits`: the indices that are set, ascending.
+    pub fn set_bits(&self) -> impl Iterator<Item = usize> + '_ {
+        self.0.iter().enumerate().filter(|&(_, &one)| one).map(|(at, _)| at)
+    }
+
     pub fn count(&self) -> usize {
         self.0.iter().filter(|&&one| one).count()
     }

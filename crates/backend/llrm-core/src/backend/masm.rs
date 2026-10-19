@@ -164,6 +164,8 @@ impl From<Unprintable> for crate::model::passes::Exception {
 pub enum InlinePart {
     Bytes(Vec<u8>),
     Fixup(String, String, i64),
+    /// A near call (0xE8) or jump (0xE9) to a symbol: the opcode and the name.
+    Near(u8, String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1924,6 +1926,9 @@ pub fn _code(parts: &[InlinePart]) -> Vec<String> {
                 out.push(format!("dw offset {name}{}", _signed(*offset)));
             }
             InlinePart::Fixup(kind, name, _) if kind == "segment" => out.push(format!("dw seg {name}")),
+            InlinePart::Near(opcode, name) => {
+                out.push(format!("{} near ptr {name}", if *opcode == 0xE8 { "call" } else { "jmp" }));
+            }
             InlinePart::Fixup(..) => {}
         }
     }
@@ -1972,7 +1977,7 @@ pub fn _operand(
         Loc::Address(ir::AddressRef { through, index_through: index, scale, offset, .. }) => {
             format!("[{}{}]", _registers(regs, *through, *index, *scale), _signed(*offset))
         }
-        Loc::Held(_) => return Err(Unprintable(format!("operand {}", r#where.repr()))),
+        Loc::Held(_) | Loc::Field(_) => return Err(Unprintable(format!("operand {}", r#where.repr()))),
     })
 }
 
