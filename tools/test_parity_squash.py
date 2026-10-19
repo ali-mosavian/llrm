@@ -1,6 +1,7 @@
 """#2329 squashed a stale head and reverted decide's LVI step (a82b332be): the squash must refuse what a bare `gh pr merge` merged."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -156,3 +157,58 @@ def test_the_base_is_read_again_at_the_merge_call(tmp_path):
     moved = lambda: commit(repo, "c.rs", "fn c() {}\n", "main moved while the checks ran")  # noqa: E731
     why = ps.stale_at_the_call(head, fetch=moved, base="main", cwd=repo)
     assert why and "moved while the checks ran" in why[0], why
+
+
+def make_pair(tmp_path):
+    """A git repo with a cargo workspace and two branches off one base, each compiling beside the base, not together: A makes `undef` take `&mut Context`
+    (and fixes its caller), B adds a second caller with a `&Context`. origin/feat/parity is A, landed."""
+    import subprocess as sp
+
+    def run(*cmd):
+        sp.run(cmd, cwd=tmp_path, check=True, capture_output=True, text=True, env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
+
+    (tmp_path / "lib/src").mkdir(parents=True)
+    (tmp_path / "app/src").mkdir(parents=True)
+    (tmp_path / "Cargo.toml").write_text('[workspace]\nmembers = ["lib", "app"]\nresolver = "2"\n')
+    (tmp_path / "lib/Cargo.toml").write_text('[package]\nname = "lib"\nversion = "0.0.0"\nedition = "2021"\n')
+    (tmp_path / "app/Cargo.toml").write_text('[package]\nname = "app"\nversion = "0.0.0"\nedition = "2021"\n[dependencies]\nlib = { path = "../lib" }\n')
+    (tmp_path / "lib/src/lib.rs").write_text("pub struct Context;\npub fn undef(_c: &Context) {}\n")
+    (tmp_path / "app/src/lib.rs").write_text("pub fn fold(c: &lib::Context) { lib::undef(c); }\n")
+    run("git", "init", "-q", "-b", "base")
+    run("git", "add", "-A")
+    run("git", "commit", "-q", "-m", "base")
+    run("git", "checkout", "-q", "-b", "b")
+    (tmp_path / "app/src/bin").mkdir()
+    (tmp_path / "app/src/bin/b.rs").write_text("fn main() { let c = lib::Context; lib::undef(&c); }\n")
+    run("git", "add", "-A")
+    run("git", "commit", "-q", "-m", "b adds a caller")
+    run("git", "checkout", "-q", "base")
+    (tmp_path / "lib/src/lib.rs").write_text("pub struct Context;\npub fn undef(_c: &mut Context) {}\n")
+    (tmp_path / "app/src/lib.rs").write_text("pub fn fold(c: &mut lib::Context) { lib::undef(c); }\n")
+    run("git", "commit", "-q", "-am", "a changes the signature")
+    run("git", "update-ref", "refs/remotes/origin/feat/parity", "HEAD")
+    return run
+
+
+def test_two_prs_that_compile_apart_and_not_together_are_refused_the_second_time(tmp_path):
+    """#2544 and #2564 each compiled; landed back to back, feat/parity did not build for three hours. The PR is tested merged with the base it lands on."""
+    import parity_smoke
+
+    make_pair(tmp_path)
+    head = subprocess.run(["git", "rev-parse", "b"], cwd=tmp_path, capture_output=True, text=True).stdout.strip()
+    why = ps.merged_refusals(head, base="origin/feat/parity", check=parity_smoke.workspace_check, cwd=tmp_path)
+    assert why and "does not build as a whole" in why[0], why
+    alone = subprocess.run(["git", "rev-parse", "base~0"], cwd=tmp_path, capture_output=True, text=True).stdout.strip()
+    assert ps.merged_refusals(alone, base="origin/feat/parity", check=parity_smoke.workspace_check, cwd=tmp_path) == []
+
+
+def test_a_second_landing_waits_for_the_first_one_to_release_the_lock(tmp_path):
+    lock = str(tmp_path / "land.lock")
+    with ps.land_lock(lock):
+        try:
+            with ps.land_lock(lock, wait=False):
+                raise AssertionError("two landings held the lock at once")
+        except BlockingIOError:
+            pass
+    with ps.land_lock(lock, wait=False):
+        pass

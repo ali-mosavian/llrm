@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The one way to squash a pull request into feat/parity: a bare `gh pr merge` merged stale heads that reverted other PRs' work (#2329 reverted decide's LVI step).
 
-    [PARITY_BIN=DIR] tools/parity_squash.py merge PR [--known-red STEP=ISSUE]...   refuse, or run the fast set on this checkout's head (it must be the PR's) and `gh pr merge --squash`
+    [PARITY_BIN=DIR] tools/parity_squash.py merge PR [--known-red STEP=ISSUE]...   under /tmp/land.lock (land.sh's): merge feat/parity into the PR head here (not pushed), refuse or run the fast set on THAT, then `gh pr merge --squash --match-head-commit`
     tools/parity_squash.py audit [SINCE] every squash on origin/feat/parity since SINCE (default 96468410e): what it deleted without a Deletes:/Reverts: line in its PR's description
 
 Refused unless: the PR head contains the current origin/feat/parity; the squash diff deletes no file, no test function (`#[test] fn`, `def test_`, unless re-added) and no more than
@@ -13,6 +13,8 @@ PARITY_BIN names the directory of the built release llrm-c, llrm-qb and llrm-nib
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -23,6 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LIMIT = 20  # deleted lines allowed in files the PR's own commits did not touch
 BASE = "origin/feat/parity"
+LAND_LOCK = "/tmp/land.lock"  # the coordinator's land.sh holds the same file: one landing at a time, whoever lands
 TEST_RUST = re.compile(r"^-\s*#\[test\]")
 TEST_PY = re.compile(r"^-\s*def (test_\w+)")
 
@@ -178,16 +181,68 @@ def squash_strays(squash: str, expected: set[str], cwd: Path = ROOT) -> list[tup
     return out
 
 
+@contextlib.contextmanager
+def land_lock(path: str = LAND_LOCK, wait: bool = True):
+    """The exclusive flock every landing holds, this script's and land.sh's alike. `wait=False` raises BlockingIOError when another landing holds it."""
+    with open(path, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def merged_result(head: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str | None, str]:
+    """(sha, "") of `head` with `base` merged into it, checked out detached in `cwd` and not pushed; (None, why) when `base` conflicts. When `head` already
+    contains `base` the result is `head` itself. The squash lands on whatever feat/parity is at the call: the tests must run on this result, not on a head that
+    compiled beside a base that has since moved (#2544 and #2564 each compiled; together the head did not build for three hours)."""
+    git("checkout", "-q", "--detach", head, cwd=cwd)
+    if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
+        merged = subprocess.run(["git", "merge", "--no-edit", "-q", base], cwd=cwd, capture_output=True, text=True)
+        if merged.returncode:
+            conflicts = git("diff", "--name-only", "--diff-filter=U", cwd=cwd).split()
+            subprocess.run(["git", "merge", "--abort"], cwd=cwd, capture_output=True)
+            return None, f"merging {base} into the PR head conflicts in {', '.join(conflicts) or 'the tree'}"
+    return git("rev-parse", "HEAD", cwd=cwd).strip(), ""
+
+
+def merged_refusals(head: str, base: str = BASE, check=None, cwd: Path = ROOT) -> list[str]:
+    """Why the PR at `head` may not land on `base` as it stands now: the merge conflicts, or the merged tree does not compile as a whole (`check(cwd)` is
+    parity_smoke.workspace_check: "" when it does)."""
+    sha, why = merged_result(head, base, cwd)
+    if sha is None:
+        return [why]
+    broken = (check or _workspace_check)(cwd)
+    return [f"the PR head merged with {base} does not build as a whole: {broken}"] if broken else []
+
+
+def _workspace_check(cwd: Path) -> str:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import parity_smoke
+
+    return parity_smoke.workspace_check(cwd)
+
+
 def merge(number: str, known: dict[str, str] | None = None) -> int:
+    with land_lock():
+        return _merge(number, known)
+
+
+def _merge(number: str, known: dict[str, str] | None = None) -> int:
     known = known or {}
     info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
     if info["baseRefName"] != "feat/parity":
         raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
     git("fetch", "-q", "origin", "feat/parity")
-    here = git("rev-parse", "HEAD").strip()
-    if here != info["headRefOid"]:
-        raise SystemExit(f"this checkout is {here[:9]}, the PR head is {info['headRefOid'][:9]}: check the PR head out first (the fast set runs on exactly it)")
-    if why := refusals(info["headRefOid"], info["body"] or ""):
+    if git("status", "--porcelain", "--untracked-files=no").strip():
+        raise SystemExit("this checkout has uncommitted changes: the fast set runs on the PR head merged with feat/parity, checked out here")
+    git("fetch", "-q", "origin", info["headRefOid"])
+    tested_base = git("rev-parse", BASE).strip()
+    merged, why = merged_result(info["headRefOid"])
+    if merged is None:
+        print(f"REFUSED: {why}")
+        return 1
+    if why := refusals(merged, info["body"] or ""):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
     bins = smoke_bins()
@@ -198,10 +253,13 @@ def merge(number: str, known: dict[str, str] | None = None) -> int:
         print("REFUSED: the fast set fails on this head")
         return 1
     files = {f["path"] for f in json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "files"], capture_output=True, text=True, check=True).stdout)["files"]}
-    if why := stale_at_the_call(info["headRefOid"]):
+    if why := stale_at_the_call(merged):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
-    done = subprocess.run(["gh", "pr", "merge", number, "--squash", "--subject", info["title"], "--body", known_red_line(known)])
+    if git("rev-parse", BASE).strip() != tested_base:
+        print(f"REFUSED: feat/parity moved from {tested_base[:9]} to {git('rev-parse', BASE).strip()[:9]} while the checks ran; run again")
+        return 1
+    done = subprocess.run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", known_red_line(known)])
     if done.returncode:
         return done.returncode
     git("fetch", "-q", "origin", "feat/parity")
