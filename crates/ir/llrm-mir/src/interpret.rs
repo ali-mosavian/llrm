@@ -1229,24 +1229,6 @@ fn fcmp(
 ) -> Val {
     let (Val::Float(kind, x), Val::Float(_, y)) = (a, b) else { return Val::Poison };
     let (x, y) = (to_f64(kind, x), to_f64(kind, y));
-    let unordered = x.is_nan() || y.is_nan();
-    let truth = match predicate {
-        FloatPredicate::False => false,
-        FloatPredicate::True => true,
-        FloatPredicate::Ord => !unordered,
-        FloatPredicate::Uno => unordered,
-        FloatPredicate::Oeq => !unordered && x == y,
-        FloatPredicate::Ogt => !unordered && x > y,
-        FloatPredicate::Oge => !unordered && x >= y,
-        FloatPredicate::Olt => !unordered && x < y,
-        FloatPredicate::Ole => !unordered && x <= y,
-        FloatPredicate::One => !unordered && x != y,
-        FloatPredicate::Ueq => unordered || x == y,
-        FloatPredicate::Ugt => unordered || x > y,
-        FloatPredicate::Uge => unordered || x >= y,
-        FloatPredicate::Ult => unordered || x < y,
-        FloatPredicate::Ule => unordered || x <= y,
-        FloatPredicate::Une => unordered || x != y,
-    };
+    let truth = predicate.holds(x.partial_cmp(&y));
     Val::Int { bits: u128::from(truth), width: 1 }
 }

@@ -1,5 +1,7 @@
 //! LLVM's instructions, each with what its class carries beside operands.
 
+use std::cmp::Ordering;
+
 use crate::types::TypeId;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -113,6 +115,35 @@ pub enum FloatPredicate {
 }
 
 impl FloatPredicate {
+    /// `FCmpInst::compare`
+    /// ([Instructions.cpp:3916](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/Instructions.cpp#L3916)):
+    /// whether the predicate holds for operands that compare as `order`, None
+    /// being unordered.
+    pub fn holds(
+        self,
+        order: Option<Ordering>,
+    ) -> bool {
+        use Ordering::{Equal, Greater, Less};
+        match self {
+            Self::False => false,
+            Self::True => true,
+            Self::Uno => order.is_none(),
+            Self::Ord => order.is_some(),
+            Self::Ueq => matches!(order, None | Some(Equal)),
+            Self::Oeq => order == Some(Equal),
+            Self::Une => order != Some(Equal),
+            Self::One => matches!(order, Some(Less | Greater)),
+            Self::Ult => matches!(order, None | Some(Less)),
+            Self::Olt => order == Some(Less),
+            Self::Ugt => matches!(order, None | Some(Greater)),
+            Self::Ogt => order == Some(Greater),
+            Self::Ule => order != Some(Greater),
+            Self::Ole => matches!(order, Some(Less | Equal)),
+            Self::Uge => order != Some(Less),
+            Self::Oge => matches!(order, Some(Greater | Equal)),
+        }
+    }
+
     /// `CmpInst::getInversePredicate`: the predicate that holds where this one
     /// does not (an ordered one becomes the unordered of its complement).
     pub fn inverse(self) -> Self {
