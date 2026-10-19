@@ -6,6 +6,7 @@ pub mod blockfrequency;
 pub mod calcspillweights;
 pub mod cfg;
 pub mod eqclasses;
+pub mod intervalmap;
 pub mod liveintervals;
 pub mod liveintervalunion;
 pub mod liverange;

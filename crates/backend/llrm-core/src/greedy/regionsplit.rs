@@ -1055,7 +1055,8 @@ impl Splitter<'_> {
             let Some(liu) = self.matrix.union(unit) else { continue };
             let mut int_i = liu.find(&start_idx);
             let mut gap = 0usize;
-            'segments: while let Some(key) = int_i {
+            'segments: while let Some(at) = int_i {
+                let key = liu.entry(at).start;
                 if key >= stop_idx {
                     break;
                 }
@@ -1067,8 +1068,8 @@ impl Splitter<'_> {
                     }
                 }
                 // Update the gaps covered by IntI.
-                let stop = liu.stop_of(&key);
-                let weight = self.lis.get_interval(liu.vreg_of(&key)).weight();
+                let (stop, vreg) = (liu.entry(at).stop, liu.entry(at).value);
+                let weight = self.lis.get_interval(vreg).weight();
                 while gap != num_gaps {
                     gap_weight[gap] = gap_weight[gap].max(weight);
                     if uses[gap + 1].get_base_index() >= stop {
@@ -1079,7 +1080,7 @@ impl Splitter<'_> {
                 if gap == num_gaps {
                     break;
                 }
-                int_i = liu.next(&key);
+                int_i = liu.next(at);
             }
         }
 

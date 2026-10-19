@@ -17,10 +17,8 @@
 //!   range   [32,56)                        overlaps %3 and %7
 //! ```
 //!
-//! DEVIATE (container, number to follow from the shadow core): `IntervalMap`
-//! (llvm/include/llvm/ADT/IntervalMap.h, a B+ tree with inline small nodes) is
-//! a `BTreeMap` keyed by the start of an entry; its iterators (`find`,
-//! `advanceTo`, `++`) are `range` lookups on the key. A virtual register is its
+//! DEVIATE (container): `IntervalMap` (llvm/include/llvm/ADT/IntervalMap.h) is [`IntervalMap`], a row of leaves; its iterators
+//! (`find`, `advanceTo`, `++`, `--`) are [`Pos`], held by the cache and the query until the union changes. A virtual register is its
 //! number.
 //!
 //! # Example
@@ -30,28 +28,11 @@
 //! # Used by
 //! `liveregmatrix`.
 
-use std::collections::BTreeMap;
-use std::ops::Bound;
-
+use super::intervalmap::{Entry, IntervalMap};
 use super::liverange::LiveRange;
 use super::slotindex::SlotIndex;
 
-#[cfg(test)]
-thread_local! {
-    static LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// The searches of a union's map made on this thread, for a test that a cursor walking blocks does not search per step.
-#[cfg(test)]
-pub fn lookups() -> usize {
-    LOOKUPS.with(std::cell::Cell::get)
-}
-
-/// One search of the map.
-fn probe() {
-    #[cfg(test)]
-    LOOKUPS.with(|n| n.set(n.get() + 1));
-}
+pub use super::intervalmap::Pos;
 
 /// A virtual register, as `const LiveInterval *` is in C++.
 pub type VReg = u32;
@@ -61,7 +42,7 @@ pub type VReg = u32;
 pub struct LiveIntervalUnion {
     /// start -> (stop, register): `IntervalMap<SlotIndex, const LiveInterval
     /// *>`.
-    segments: BTreeMap<SlotIndex, (SlotIndex, VReg)>,
+    segments: IntervalMap<VReg>,
     /// A unique tag for the current contents.
     tag: u32,
 }
@@ -76,11 +57,11 @@ impl LiveIntervalUnion {
     }
 
     pub fn start_index(&self) -> SlotIndex {
-        self.segments.keys().next().expect("a segment").clone()
+        self.segments.first().expect("a segment").start
     }
 
     pub fn end_index(&self) -> SlotIndex {
-        self.segments.values().next_back().expect("a segment").0.clone()
+        self.segments.last().expect("a segment").stop
     }
 
     /// `getTag`: an opaque tag representing the current state of the union.
@@ -98,126 +79,49 @@ impl LiveIntervalUnion {
 
     /// The entries in order: (start, stop, register).
     pub fn iter(&self) -> impl Iterator<Item = (&SlotIndex, &SlotIndex, VReg)> {
-        self.segments.iter().map(|(start, (stop, reg))| (start, stop, *reg))
+        self.segments.iter().map(|e| (&e.start, &e.stop, e.value))
     }
 
-    /// `IntervalMap::find(x)`: the entry with the first stop after `x`: the one
-    /// containing it, or the first after the hole it is in. None at the end.
+    /// `IntervalMap::find(x)`: the entry with the first stop after `x`: the one containing it, or the first after the hole it is in.
+    /// None at the end.
     pub fn find(
         &self,
         x: &SlotIndex,
-    ) -> Option<SlotIndex> {
-        probe();
-        if let Some((start, (stop, _))) = self.segments.range(..=x.clone()).next_back() {
-            if stop > x {
-                return Some(start.clone());
-            }
-        }
-        self.segments.range((Bound::Excluded(x.clone()), Bound::Unbounded)).next().map(|(start, _)| start.clone())
+    ) -> Option<Pos> {
+        self.segments.find(x)
     }
 
-    /// `find` with the stop of the entry it finds, so an iterator held as (start, stop) is read without a lookup.
-    pub fn find_entry(
+    /// `advanceTo(x)`: from `at`, the first entry whose stop is after `x`.
+    pub fn advance_to(
         &self,
+        at: Option<Pos>,
         x: &SlotIndex,
-    ) -> Option<(SlotIndex, SlotIndex)> {
-        probe();
-        if let Some((start, (stop, _))) = self.segments.range(..=*x).next_back() {
-            if stop > x {
-                return Some((*start, *stop));
-            }
-        }
-        self.segments.range((Bound::Excluded(*x), Bound::Unbounded)).next().map(|(start, (stop, _))| (*start, *stop))
+    ) -> Option<Pos> {
+        self.segments.advance_to(at, x)
     }
 
-    /// `IntervalMap::const_iterator::advanceTo(x)`: from the entry `at` (start, stop), the first entry whose stop is after `x`. The
-    /// held stop answers a step that stays; a few steps of one range, then a search.
-    pub fn advance_entry(
-        &self,
-        at: Option<(SlotIndex, SlotIndex)>,
-        x: &SlotIndex,
-    ) -> Option<(SlotIndex, SlotIndex)> {
-        let (start, stop) = at?;
-        if stop > *x {
-            return at;
-        }
-        probe();
-        let mut steps = self.segments.range((Bound::Excluded(start), Bound::Unbounded));
-        for _ in 0..3 {
-            let (start, (stop, _)) = steps.next()?;
-            if stop > x {
-                return Some((*start, *stop));
-            }
-        }
-        self.find_entry(x)
-    }
-
-    /// `advanceTo(x)` from the entry `at` (which starts before `x`), then `--I` when that is not an entry starting before `x`: the
-    /// iterator after the move and the last entry that starts before `x`. A few steps of one range find both; a far one is a search.
-    pub fn advance_to_last_before(
-        &self,
-        at: (SlotIndex, SlotIndex),
-        x: &SlotIndex,
-    ) -> (Option<(SlotIndex, SlotIndex)>, (SlotIndex, SlotIndex)) {
-        let mut last = at;
-        if at.1 > *x {
-            return (Some(at), at);
-        }
-        probe();
-        let mut steps = self.segments.range((Bound::Excluded(at.0), Bound::Unbounded));
-        for _ in 0..3 {
-            let Some((start, (stop, _))) = steps.next() else { return (None, last) };
-            let found = (*start, *stop);
-            if stop > x {
-                return (Some(found), if start < x { found } else { last });
-            }
-            last = found;
-        }
-        let moved = self.find_entry(x);
-        let last = match moved {
-            Some((start, _)) if start < *x => moved.expect("an entry"),
-            _ => self.prev_entry(moved.as_ref()).expect("an entry before the end"),
-        };
-        (moved, last)
-    }
-
-    /// `--I`: the entry before the one starting at `at`; the last entry from the end (`None`).
-    pub fn prev_entry(
-        &self,
-        at: Option<&(SlotIndex, SlotIndex)>,
-    ) -> Option<(SlotIndex, SlotIndex)> {
-        probe();
-        let before = match at {
-            Some((start, _)) => self.segments.range(..*start).next_back(),
-            None => self.segments.iter().next_back(),
-        };
-        before.map(|(start, (stop, _))| (*start, *stop))
-    }
-
-    /// The entry after the one starting at `key`.
+    /// `++I`.
     pub fn next(
         &self,
-        key: &SlotIndex,
-    ) -> Option<SlotIndex> {
-        probe();
-        self.segments.range((Bound::Excluded(key.clone()), Bound::Unbounded)).next().map(|(start, _)| start.clone())
+        at: Pos,
+    ) -> Option<Pos> {
+        self.segments.next(at)
     }
 
-    /// `I.value()` of the entry starting at `key`: the register holding it.
-    pub fn vreg_of(
+    /// `--I`; from the end (`None`), the last entry.
+    pub fn prev(
         &self,
-        key: &SlotIndex,
-    ) -> VReg {
-        self.segments[key].1
+        at: Option<Pos>,
+    ) -> Option<Pos> {
+        self.segments.prev(at)
     }
 
-    /// `I.stop()` of the entry starting at `key`.
-    pub fn stop_of(
+    /// `I.start()`, `I.stop()` and `I.value()` of the entry at `at`.
+    pub fn entry(
         &self,
-        key: &SlotIndex,
-    ) -> SlotIndex {
-        probe();
-        self.segments[key].0
+        at: Pos,
+    ) -> &Entry<VReg> {
+        self.segments.at(at)
     }
 
     /// `IntervalMap::insert(start, stop, reg)`: adjacent entries of the same
@@ -228,20 +132,23 @@ impl LiveIntervalUnion {
         mut stop: SlotIndex,
         reg: VReg,
     ) {
-        if let Some((left, (left_stop, left_reg))) = self.segments.range(..start.clone()).next_back() {
-            if *left_stop == start && *left_reg == reg {
-                let left = left.clone();
-                start = left.clone();
-                self.segments.remove(&left);
+        if let Some(left) = self.segments.before(&start) {
+            let left = *self.segments.at(left);
+            if left.stop == start && left.value == reg {
+                start = left.start;
+                let at = self.segments.get(&left.start).expect("the left entry");
+                self.segments.remove(at);
             }
         }
-        if let Some((right_stop, right_reg)) = self.segments.get(&stop).cloned() {
-            if right_reg == reg {
-                self.segments.remove(&stop);
-                stop = right_stop;
+        if let Some(right) = self.segments.get(&stop) {
+            let right = *self.segments.at(right);
+            if right.value == reg {
+                stop = right.stop;
+                let at = self.segments.get(&right.start).expect("the right entry");
+                self.segments.remove(at);
             }
         }
-        self.segments.insert(start, (stop, reg));
+        self.segments.insert(Entry { start, stop, value: reg });
     }
 
     /// `unify` (LiveIntervalUnion.cpp#L28): adds a live virtual register and
@@ -275,17 +182,15 @@ impl LiveIntervalUnion {
         // Remove each of the virtual register's live segments from the map.
         let mut reg_pos = 0usize;
         let mut seg_pos = self.find(&range.segments[0].start);
-        while let Some(key) = seg_pos {
-            let (_, reg) = self.segments.remove(&key).expect("an entry");
-            assert_eq!(reg, virt_reg, "Inconsistent LiveInterval");
+        while let Some(at) = seg_pos {
+            let removed = self.segments.remove(at);
+            assert_eq!(removed.value, virt_reg, "Inconsistent LiveInterval");
             // The iterator is now at the entry after the one erased.
-            let Some(next) =
-                self.segments.range((Bound::Included(key.clone()), Bound::Unbounded)).next().map(|(s, _)| s.clone())
-            else {
+            let Some(next) = self.segments.after_removed(at) else {
                 return;
             };
             // Skip all segments that may have been coalesced.
-            reg_pos = range.advance_to(reg_pos, &next);
+            reg_pos = range.advance_to(reg_pos, &self.segments.at(next).start);
             if reg_pos == range.segments.len() {
                 return;
             }
@@ -300,7 +205,7 @@ impl LiveIntervalUnion {
         virt_reg: VReg,
     ) {
         self.tag += 1;
-        self.segments.retain(|_, (_, reg)| *reg != virt_reg);
+        self.segments.retain(|e| e.value != virt_reg);
     }
 
     /// `clear`: removes all inserted virtual registers.
@@ -312,7 +217,7 @@ impl LiveIntervalUnion {
     /// `getOneVReg` (LiveIntervalUnion.cpp#L111): any virtual register assigned
     /// to this unit.
     pub fn get_one_vreg(&self) -> Option<VReg> {
-        self.segments.values().next().map(|(_, reg)| *reg)
+        self.segments.first().map(|e| e.value)
     }
 
     /// `print` (LiveIntervalUnion.cpp#L97).
@@ -340,8 +245,8 @@ pub struct Query {
     union_key: Option<u64>,
     /// Current position in LR.
     lri: usize,
-    /// Current position in the union: the start of an entry; None at the end.
-    live_union_i: Option<SlotIndex>,
+    /// Current position in the union; None at the end.
+    live_union_i: Option<Pos>,
     interfering_vregs: Vec<VReg>,
     checked_first_interference: bool,
     seen_all_interferences: bool,
@@ -452,12 +357,9 @@ impl Query {
         }
         let lr_end = lr.segments.len();
         let mut recent_reg: Option<VReg> = None;
-        while let Some(key) = self.live_union_i.clone() {
+        while let Some(mut at) = self.live_union_i {
             assert!(self.lri != lr_end, "Reached end of LR");
-            let (mut ustart, mut ustop, mut ureg) = {
-                let (stop, reg) = union.segments[&key].clone();
-                (key, stop, reg)
-            };
+            let Entry { start: mut ustart, stop: mut ustop, value: mut ureg } = *union.entry(at);
             // Check for overlapping interference.
             while lr.segments[self.lri].start < ustop && lr.segments[self.lri].end > ustart {
                 // This is an overlap, record the interfering register.
@@ -465,17 +367,15 @@ impl Query {
                     recent_reg = Some(ureg);
                     self.interfering_vregs.push(ureg);
                     if self.interfering_vregs.len() >= max_interfering_regs {
-                        self.live_union_i = Some(ustart);
+                        self.live_union_i = Some(at);
                         return self.interfering_vregs.len();
                     }
                 }
                 // This LiveUnion segment is no longer interesting.
-                match union.next(&ustart) {
+                match union.next(at) {
                     Some(next) => {
-                        let (stop, reg) = union.segments[&next].clone();
-                        ustart = next;
-                        ustop = stop;
-                        ureg = reg;
+                        at = next;
+                        Entry { start: ustart, stop: ustop, value: ureg } = *union.entry(at);
                     }
                     None => {
                         self.live_union_i = None;
@@ -484,7 +384,7 @@ impl Query {
                     }
                 }
             }
-            self.live_union_i = Some(ustart.clone());
+            self.live_union_i = Some(at);
             // The iterators are now not overlapping, LiveUnionI has been
             // advanced beyond LRI.
             assert!(lr.segments[self.lri].end <= ustart, "Expected non-overlap");
