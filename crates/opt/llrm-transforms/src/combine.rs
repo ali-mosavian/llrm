@@ -253,12 +253,13 @@ fn handle_only_live_successor(
 }
 
 /// What `visit` returns, as LLVM's `Instruction *`: null, the instruction
-/// itself (changed in place) or another value that replaces it. `Erased` is
-/// `return eraseInstFromFunction(I)`: the visit erased the instruction itself.
+/// itself (changed in place) or another value that replaces it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Visit {
     None,
     Changed,
+    /// `eraseInstFromFunction(I)` already done by the visit; counts as a
+    /// change. The driver does not touch the instruction again.
     Erased,
     Replace(Operand),
 }
