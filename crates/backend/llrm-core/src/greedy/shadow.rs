@@ -435,6 +435,8 @@ struct CallMasks {
     /// a narrow value, a wide one (the high halves too), and the registers it
     /// reads a value ending at it would lose.
     calls: Vec<(SlotIndex, RegSet, RegSet, RegSet)>,
+    /// Whether each of `calls` destroys any register (the rest only read one).
+    destroying: Vec<bool>,
     /// Each block's slots, start and end, and the run of `calls` in it
     /// (`getRegMaskSlotsInBlock`), in slot order.
     blocks: Vec<(SlotIndex, SlotIndex, std::ops::Range<usize>)>,
@@ -461,6 +463,8 @@ impl CallMasks {
         blocks: Vec<(SlotIndex, SlotIndex, std::ops::Range<usize>)>,
         widths: Rc<Tables>,
     ) -> Self {
+        let destroying =
+            calls.iter().map(|(_, destroyed, high, _)| !destroyed.is_empty() || !high.is_empty()).collect();
         let calls = calls
             .into_iter()
             .map(|(slot, destroyed, high, read)| {
@@ -468,7 +472,7 @@ impl CallMasks {
                 (slot, narrow, narrow.union(&high), read)
             })
             .collect();
-        Self { calls, blocks, widths }
+        Self { calls, destroying, blocks, widths }
     }
 
     /// `LiveIntervals::intervalIsInOneMBB`: the run of calls in the one block
@@ -563,6 +567,13 @@ impl PhysInterference for CallMasks {
         i: usize,
     ) -> SlotIndex {
         self.calls[i].0
+    }
+
+    fn reg_mask_destroys(
+        &self,
+        i: usize,
+    ) -> bool {
+        self.destroying[i]
     }
 
     /// DEVIATE D-IC2: a call's registers are the roots it destroys plus the
