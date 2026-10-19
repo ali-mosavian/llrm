@@ -906,3 +906,50 @@ fn a_falling_byte_copy_seven_apart_is_never_a_memcpy_whatever_its_addresses_look
         }
     }
 }
+
+/// `screen[i + 80] = screen[i]` for `i` falling from `n - 1` (bench/scroll's
+/// scroll back down) on words.
+fn words_down(
+    body: &str,
+    start: &str,
+) -> String {
+    format!(
+        "@buf = global [2000 x i16] zeroinitializer
+
+{MEMSET}define i16 @f(i16 %n, i16 %q) {{
+b0:
+  %s = sub i16 %n, 1
+  br label %b1
+
+b1:
+  %i = phi i16 [ {start}, %b0 ], [ %next, %b2 ]
+  %c = icmp sge i16 %i, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+{body}  %next = sub i16 %i, 1
+  br label %b1
+
+b3:
+  %r = getelementptr i16, ptr @buf, i16 %q
+  %v = load i16, ptr %r
+  ret i16 %v
+}}
+"
+    )
+}
+
+#[test]
+fn a_falling_word_copy_eighty_cells_up_is_never_a_memcpy_whatever_its_addresses_look_like() {
+    const INPUTS: &[&[i128]] = &[&[0, 0], &[1, 80], &[100, 150], &[100, 3], &[1920, 1999]];
+    for body in [
+        "  %p = getelementptr i16, ptr @buf, i16 %i\n  %x = load i16, ptr %p\n  %j = add i16 %i, 80\n  %d = getelementptr i16, ptr @buf, i16 %j\n  store i16 %x, ptr %d\n",
+        "  %p = getelementptr i16, ptr @buf, i16 %i\n  %x = load i16, ptr %p\n  %k = getelementptr i16, ptr @buf, i16 %i\n  %d = getelementptr i8, ptr %k, i16 160\n  store i16 %x, ptr %d\n",
+    ] {
+        for start in ["%s", "1919"] {
+            let after = managed_fill(&words_down(body, start), INPUTS);
+            assert!(!after.contains("llvm.memcpy"), "{start}\n{after}");
+            assert!(!after.contains("llvm.memmove") || after.contains("!llrm.backward"), "{start}\n{after}");
+        }
+    }
+}
