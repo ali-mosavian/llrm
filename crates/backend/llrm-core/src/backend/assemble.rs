@@ -1094,7 +1094,8 @@ fn phased_to(
     let frame = Rc::new(RefCell::new(staged.frame.clone()));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    let preserved: std::collections::BTreeSet<RegId> = registers.saved.iter().map(|(whole, _)| whole.full_register()).collect();
+    let preserved: std::collections::BTreeSet<RegId> =
+        registers.saved.iter().map(|(whole, _)| whole.full_register()).collect();
     let mut allocated = false;
     for mut phase in flow::machine_with(
         &pinned,
@@ -1117,11 +1118,18 @@ fn phased_to(
             in_ssa = false;
         }
         let kept = (!body.notes.is_empty()).then(|| body.clone());
-        body = flow::checked(body, phase.as_mut(), in_ssa, allocated.then_some(&preserved), classes, target.segments, target.arch).map_err(|error| {
-            match error {
-                flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
-                flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
-            }
+        body = flow::checked(
+            body,
+            phase.as_mut(),
+            in_ssa,
+            allocated.then_some(&preserved),
+            classes,
+            target.segments,
+            target.arch,
+        )
+        .map_err(|error| match error {
+            flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
+            flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;
         if phase.class_name() == "RegAlloc" {
             allocated = true;

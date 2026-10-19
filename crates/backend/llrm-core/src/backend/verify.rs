@@ -153,11 +153,12 @@ pub fn physical(
     use crate::backend::peephole::_lanes;
     use crate::support::hash::IndexMap;
     let regs = body.regs();
-    let machine_state = |register: RegId| register.is_segment_register() || regs.is_frame(register) || regs.is_stack(register);
+    let machine_state =
+        |register: RegId| register.is_segment_register() || regs.is_frame(register) || regs.is_stack(register);
     let mut entering = Lanes::new();
     for block in body.blocks.iter().filter(|block| block.at == body.entry) {
-        for (_, register) in block.insns.iter().flat_map(|one| one.delivers.iter()) {
-            entering = entering.or(&_lanes(regs, *register));
+        for (held, register) in block.insns.iter().flat_map(|one| one.delivers.iter()) {
+            entering = entering.or(&_lanes(regs, regs.named(*register, i64::from(held.width))));
         }
     }
     for register in regs.integer_registers().iter().copied().chain(regs.segments()) {
@@ -186,7 +187,15 @@ pub fn physical(
                 // An instruction nothing is known of may write anything.
                 None => defined = everything,
                 Some(effect) => {
-                    *complaint = complaint.or(&effect.reads.minus(&defined));
+                    // A register with some lane defined is read whole: its
+                    // other lanes are the consumer's to ignore (a short
+                    // argument is read as the dword that holds it).
+                    let touched: Lanes = effect
+                        .reads
+                        .iter()
+                        .filter(|&&(register, _)| !_lanes(regs, register).is_disjoint(&defined))
+                        .fold(Lanes::new(), |all, &(register, _)| all.or(&_lanes(regs, register)));
+                    *complaint = complaint.or(&effect.reads.minus(&defined).minus(&touched));
                     defined = defined.or(&effect.writes);
                 }
             }
@@ -221,12 +230,17 @@ pub fn physical(
         };
         walked(block.at, defined, &mut complaint);
     }
-    let seen: BTreeSet<RegId> = complaint.iter().map(|&(register, _)| register).filter(|register| *register != RegId::None).collect();
+    let seen: BTreeSet<RegId> =
+        complaint.iter().map(|&(register, _)| register).filter(|register| *register != RegId::None).collect();
     if seen.is_empty() {
         return Vec::new();
     }
     let names: Vec<String> = seen.iter().map(|one| regs.name(*one).unwrap_or("?").to_owned()).collect();
-    vec![format!("{} reads {} before every path writes it, and the entry does not deliver it", body.name, names.join(", "))]
+    vec![format!(
+        "{} reads {} before every path writes it, and the entry does not deliver it",
+        body.name,
+        names.join(", ")
+    )]
 }
 
 /// Once instruction selection has tagged them, every frame cell names the slot
@@ -662,5 +676,60 @@ mod tests {
         assert!(named(bare, true).iter().any(|complaint| complaint.contains("a frame cell at -4 names no slot")));
         assert!(named(bare.in_slot(-4), true).is_empty());
         assert!(named(ir::Addr::new(ir::Space::Literal, -4), true).is_empty());
+    }
+
+    fn register(
+        register: RegId,
+        width: u32,
+    ) -> Loc {
+        Loc::Reg(ir::Reg { register, width })
+    }
+
+    fn physical_body(insns: Vec<Insn>) -> LirBody {
+        body("allocated", vec![LirBlock::new(1, insns.into_iter().map(Arc::new).collect()).into()])
+    }
+
+    /// `mov ax, bx` with nothing before it: BX is not an argument, so the
+    /// machine form reads a register nothing wrote ("Using an undefined
+    /// physical register"). The virtual check could not see it: no value is
+    /// named.
+    #[test]
+    fn test_a_register_read_before_any_write_is_refused_after_allocation() {
+        let read = Insn::new(
+            1,
+            Some((1, 1)),
+            Some(semantics(Operation::Move, "mov", vec![register(RegId::AX, 2)], vec![register(RegId::BX, 2)])),
+            vec![],
+            vec![],
+        );
+        let said = physical(&physical_body(vec![read]), &BTreeSet::new());
+        assert!(said.iter().any(|complaint| complaint.contains("reads ebx before every path writes it")), "{said:?}");
+    }
+
+    /// The same read is fine where the function preserves BX (its epilogue
+    /// reads it) and where an earlier write defines it.
+    #[test]
+    fn test_a_register_written_first_or_preserved_is_not_refused() {
+        let write = Insn::new(
+            1,
+            Some((1, 1)),
+            Some(semantics(
+                Operation::Move,
+                "mov",
+                vec![register(RegId::BX, 2)],
+                vec![Loc::Imm(ir::Imm { value: 1, width: 2, address: None })],
+            )),
+            vec![],
+            vec![],
+        );
+        let read = Insn::new(
+            2,
+            Some((2, 2)),
+            Some(semantics(Operation::Move, "mov", vec![register(RegId::AX, 2)], vec![register(RegId::BX, 2)])),
+            vec![],
+            vec![],
+        );
+        assert!(physical(&physical_body(vec![write, read.clone()]), &BTreeSet::new()).is_empty());
+        assert!(physical(&physical_body(vec![read]), &BTreeSet::from([RegId::BX.full_register()])).is_empty());
     }
 }
