@@ -394,8 +394,7 @@ pub struct Function {
     pub(crate) blocks: Vec<Block>,
     /// The blocks in order, entry first; empty for a declaration.
     pub(crate) layout: Vec<BlockId>,
-    pub(crate) value_uses: crate::uselist::UseLists,
-    pub(crate) block_uses: Vec<Vec<Use>>,
+    pub(crate) uses: crate::uselist::UseLists,
     pub(crate) order: OrderCache,
     pub(crate) changes: ChangeLog,
     /// How many edits of each kind the function has had: no part of what it is.
@@ -459,8 +458,7 @@ impl Function {
             erased: Vec::new(),
             blocks: Vec::new(),
             layout: Vec::new(),
-            value_uses: Default::default(),
-            block_uses: Vec::new(),
+            uses: Default::default(),
             order: OrderCache::default(),
             changes: ChangeLog::default(),
             epochs: crate::touched::Epochs::default(),
@@ -501,7 +499,7 @@ impl Function {
         for &parameter in &self.parameters {
             out.parameters.push(ValueId(out.values.len() as u32));
             out.values.push(ValueData { name: None, ..self.value(parameter).clone() });
-            out.value_uses.push_value();
+            out.uses.push_value();
         }
         out
     }
@@ -677,15 +675,15 @@ impl Function {
         &self,
         value: ValueId,
     ) -> crate::uselist::Users<'_> {
-        self.value_uses.users(value.0)
+        self.uses.users(crate::uselist::Held::Value(value.0))
     }
 
     /// The operand slots naming `block`: terminators' and phis'.
     pub fn block_users(
         &self,
         block: BlockId,
-    ) -> &[Use] {
-        &self.block_uses[block.0 as usize]
+    ) -> crate::uselist::Users<'_> {
+        self.uses.users(crate::uselist::Held::Block(block.0))
     }
 
     pub fn terminator(
@@ -753,7 +751,7 @@ impl Function {
     #[cold]
     fn parents_once(
         &self,
-        users: &[Use],
+        users: crate::uselist::Users<'_>,
     ) -> crate::blocklist::BlockList {
         let mut seen = crate::dense::IdSet::<u32>::new();
         users
