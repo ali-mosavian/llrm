@@ -1249,6 +1249,8 @@ Checklist: the shared list.
 
 **As close to O(n) as possible.** Where LLVM is super-linear, mirror the caps and thresholds that bound it, with permalinks. Never add a quadratic step LLVM lacks (rescans, nested walks over the function, re-solving per query). Any remaining super-linear step needs a stated reason and a slope test at 1x and 4x input size. Briefs and reviews check it.
 
+**No machine facts in backend code.** Registers and classes, encodings, latencies, sizes, alignment, calling conventions and costs live in one configurable target description per target (LLVM's split: the TableGen description, the subtarget and TTI) and are passed to the passes that use them: never a literal or a target `match` inside a pass. The arm64 and x86-64 spikes build on that description from the start and add no constants of their own. backend-two audits the existing backend for hardcoded facts (a list by file) and moves them in small PRs. Briefs and reviews check it.
+
 **Mirror LLVM's structure by default.** Every design page and every structural PR carries a `LLVM structure` line: LLVM's structure (name and permalink at `d1106deb71cc`), ours, and `MIRROR` or `DEVIATE` with the reason. The default is to mirror. A deviation needs a reason (our MIR or LIR differs; output would change and the rows rule applies; measured not better) and a number. The mapping so far:
 
 | LLVM structure | ours | status |
