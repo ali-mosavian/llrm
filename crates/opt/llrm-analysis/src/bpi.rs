@@ -24,6 +24,7 @@ use llrm_mir::constantfolding::{self, Env};
 use llrm_mir::context::{ConstantId, ConstantKind, Context};
 use llrm_mir::cycleinfo::{CycleInfo, CycleRef};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::{DomTree, PostDomTree};
 use llrm_mir::facts::Fact;
 use llrm_mir::loopinfo::{children, inverse_children};
@@ -31,7 +32,7 @@ use llrm_mir::module::{BlockId, Function, MetadataNode, MetadataOperand, Operand
 use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, Analysis};
 use llrm_mir::types::Type;
-use llrm_support::hash::{HashMap, HashSet};
+use llrm_support::hash::HashMap;
 
 use crate::effects::{self, Declarations};
 
@@ -89,7 +90,7 @@ mod weight {
     pub const UNREACHABLE: u32 = ZERO;
     pub const NORETURN: u32 = LOWEST_NON_ZERO;
     pub const UNWIND: u32 = LOWEST_NON_ZERO;
-    pub const COLD: u32 = 0xffff;
+    pub const COLD: u32 = u16::MAX as u32;
     pub const DEFAULT: u32 = 0xfffff;
 }
 
@@ -127,7 +128,7 @@ impl BranchProbabilityInfo {
             module,
             function,
             cycles: &cycles,
-            block_weight: HashMap::default(),
+            block_weight: IdMap::new(),
             loop_weight: HashMap::default(),
         };
         let (post, rpo) = orders(function, entry);
@@ -243,7 +244,7 @@ fn orders(
     function: &Function,
     entry: BlockId,
 ) -> (Vec<BlockId>, Vec<BlockId>) {
-    let mut seen = HashSet::default();
+    let mut seen = IdSet::new();
     let mut post = Vec::new();
     seen.insert(entry);
     let mut stack = vec![(entry, children(function, entry).collect::<Vec<_>>(), 0usize)];
@@ -267,7 +268,7 @@ struct Construction<'a> {
     module: Module<'a>,
     function: &'a Function,
     cycles: &'a CycleInfo,
-    block_weight: HashMap<BlockId, u32>,
+    block_weight: IdMap<BlockId, u32>,
     loop_weight: HashMap<CycleRef, u32>,
 }
 
@@ -323,7 +324,7 @@ impl Construction<'_> {
         cycle: CycleRef,
     ) -> Vec<BlockId> {
         let mut exits = Vec::new();
-        let mut seen = HashSet::default();
+        let mut seen = IdSet::new();
         for &block in self.cycles.get_blocks(cycle) {
             for successor in children(self.function, block) {
                 if !self.cycles.contains(cycle, successor) && seen.insert(successor) {
@@ -503,8 +504,8 @@ impl Construction<'_> {
         &self,
         block: BlockId,
         cycle: CycleRef,
-    ) -> HashSet<BlockId> {
-        let mut unlikely = HashSet::default();
+    ) -> IdSet<BlockId> {
+        let mut unlikely = IdSet::new();
         let Some(terminator) = self.function.terminator(block) else { return unlikely };
         let branch = self.function.instruction(terminator);
         if branch.opcode != Opcode::Br || branch.operands.len() != 3 {
@@ -539,7 +540,7 @@ impl Construction<'_> {
         }
         let env = Env { globals: self.module.declarations, layout: self.module.layout };
         let successors: Vec<BlockId> = children(self.function, block).collect();
-        let mut visited = HashSet::default();
+        let mut visited = IdSet::new();
         let mut work = vec![lhs];
         visited.insert(lhs);
         while let Some(phi) = work.pop() {
@@ -794,7 +795,7 @@ impl Construction<'_> {
     ) -> Option<Vec<BranchProbability>> {
         let cycle = self.cycles.get_cycle(block);
         let trip_count = LBH_TAKEN_WEIGHT / LBH_NONTAKEN_WEIGHT;
-        let unlikely = if cycle.is_valid() { self.unlikely_successors(block, cycle) } else { HashSet::default() };
+        let unlikely = if cycle.is_valid() { self.unlikely_successors(block, cycle) } else { IdSet::new() };
         let mut found = false;
         let mut weights = Vec::with_capacity(successors.len());
         let mut total: u64 = 0;
