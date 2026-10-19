@@ -1623,7 +1623,7 @@ fn constant_expression(
             if *inbounds { Flags::INBOUNDS } else { Flags::default() },
         ),
     };
-    Some(Instruction { opcode, ty: constant.ty, operands, flags, result: None, metadata: Vec::new() })
+    Some(Instruction { opcode, ty: constant.ty, operands, flags, result: None, metadata: Vec::new(), link: (0, 0) })
 }
 
 /// `computeKnownBits(V, DemandedElts, Known, Q, Depth)`: `known` has the width

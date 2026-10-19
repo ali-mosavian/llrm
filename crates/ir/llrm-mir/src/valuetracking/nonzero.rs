@@ -88,8 +88,15 @@ fn operator<'a>(
                 }
                 _ => return None,
             };
-            let instruction =
-                Instruction { opcode, ty: constant.ty, operands, flags, result: None, metadata: Vec::new() };
+            let instruction = Instruction {
+                opcode,
+                ty: constant.ty,
+                operands,
+                flags,
+                result: None,
+                metadata: Vec::new(),
+                link: (0, 0),
+            };
             Some(Operator { instruction: Cow::Owned(instruction), inst: None })
         }
         Operand::Block(_) => None,
