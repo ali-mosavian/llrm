@@ -151,6 +151,10 @@ impl FunctionPass for Gvn {
         "gvn"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("gvn")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,
