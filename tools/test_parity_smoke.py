@@ -314,10 +314,12 @@ def test_each_smoke_step_prints_its_stage_line_before_it_runs(capsys):
     assert order and order[0].endswith(" STAGE step sc")
 
 
-def test_the_ratchets_run_side_by_side_and_report_in_command_order():
+def test_the_ratchets_run_side_by_side_and_report_in_command_order(monkeypatch):
     """A precheck spent ~45 s of its ~70 s running ten cargo test ratchets one after another; four at a time they overlap their links and runs."""
     import threading
 
+    monkeypatch.setattr(ps, "RATCHET_WORKERS", 4)
+    monkeypatch.setattr(ps, "ratchet_commands", lambda tiers=None: [["cargo", "test", "a"], ["cargo", "test", "b"], ["cargo", "test", "facts_rewrite"], ["cargo", "test", "d"]])  # an even count: the barrier takes pairs
     gate = threading.Barrier(2, timeout=5)  # a serial runner never reaches 2 parties: the barrier breaks (10 ratchets: pairs)
 
     class Done:
@@ -330,3 +332,8 @@ def test_the_ratchets_run_side_by_side_and_report_in_command_order():
 
     failed = ps.ratchet_failures(run=run)
     assert list(failed) == ["ratchet:facts_rewrite"], failed
+
+
+def test_the_ratchets_run_one_at_a_time_by_default():
+    """Four at a time cost 600-750 s a PR at load 70 against ~57 s in a row (cargo's lock serializes the compiles; the links collide): serial is the default, RATCHET_WORKERS overrides."""
+    assert ps.RATCHET_WORKERS == 1
