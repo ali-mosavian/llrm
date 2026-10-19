@@ -137,6 +137,7 @@ impl Options {
             self.pipeline.compares_routes(),
             self.pipeline.optimize,
             self.float_store,
+            self.pipeline.aggressive_codegen(),
         )
     }
 }
@@ -339,9 +340,12 @@ pub fn optimized(
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
     timed("mir ehprepare", || {
-        program.modules.iter_mut().try_for_each(|module| {
-            crate::backend::ehprepare::prepared(module, llrm_target::Target::layout(&*options.arch).spaces.far)
-        })
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(
+                |module| crate::backend::ehprepare::prepared(module, &llrm_target::Target::layout(&*options.arch)),
+            )
     })?;
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;

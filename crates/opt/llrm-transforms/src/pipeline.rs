@@ -468,6 +468,12 @@ impl Options {
         self.for_size
     }
 
+    /// Whether the code generator may grow code for speed: -O3 and -Omax
+    /// (`CodeGenOptLevel::Aggressive`).
+    pub fn aggressive_codegen(&self) -> bool {
+        self.limits.target_percent >= 200
+    }
+
     /// -Oz: no loop is copied.
     pub fn min_size() -> Self {
         Self { unroll: false, peel: false, ..Self::size() }
@@ -612,6 +618,10 @@ impl FunctionPass for Slot {
         self.name
     }
 
+    fn translations(&self) -> Vec<&'static str> {
+        self.inner.translations()
+    }
+
     fn adds_memory_operations(&self) -> bool {
         self.inner.adds_memory_operations()
     }
@@ -644,6 +654,10 @@ impl FunctionPass for Together {
 
     fn parts(&self) -> Vec<&'static str> {
         self.parts.iter().flat_map(|part| part.parts()).collect()
+    }
+
+    fn translations(&self) -> Vec<&'static str> {
+        self.parts.iter().flat_map(|part| part.translations()).collect()
     }
 
     fn adds_memory_operations(&self) -> bool {
@@ -692,6 +706,7 @@ pub(crate) fn llvm_order(
     let slot =
         |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
     let decide = |name| slot(name, Box::new(decide::Decide));
+    let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg));
     let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
     let fold = |name| slot(name, Box::new(fold::Fold));
     let dead = |name| slot(name, Box::new(dead::Dead));
@@ -733,7 +748,10 @@ pub(crate) fn llvm_order(
         // themselves.
         Phase::Module | Phase::Backend => Vec::new(),
         Phase::Early => {
-            vec![decide("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
+            // EarlyFPM's `SimplifyCFGPass()` (PassBuilderPipelines.cpp#L1178),
+            // at the default options. The slot keeps the name
+            // `decide@1178`.
+            vec![simplify_cfg("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
         }
         Phase::Cleanup => vec![
             Box::new(Together {
@@ -785,6 +803,8 @@ pub(crate) fn llvm_order(
                 licm("licm@724", !rotating),
             ]);
             if rotating {
+                // DEVIATE (D10 R7): the pin duplicates headers at -Os; `size`
+                // is -Os and -Oz.
                 list.push(slot(
                     "rotate@728",
                     Box::new(looprotate::LoopRotate { duplicate_headers: applied.options.copy_headers && !size }),
@@ -1297,6 +1317,8 @@ impl Fixed {
         quiet.options.llvm_order = true;
         let mut one = Self::linear(&quiet, phase);
         one.passes.retain(|pass| pass.name() == slot);
+        // A slot is the one pass: -O3's peeler ran in its place.
+        one.peelers.clear();
         one.only = true;
         one
     }
@@ -1316,6 +1338,7 @@ impl Fixed {
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
         let level = if applied.options.pre { crate::parity::Level::O2 } else { crate::parity::Level::O1 };
+        let held = linear.passes.iter().map(|one| (one.name(), one.translations())).collect::<Vec<_>>();
         let checked = crate::parity::check_phase_with(
             phase,
             &built,
@@ -1323,6 +1346,7 @@ impl Fixed {
             applied.options.sroa,
             applied.options.mem2reg,
             applied.options.rotating(),
+            &held,
         );
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;

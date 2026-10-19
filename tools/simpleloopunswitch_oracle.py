@@ -14,6 +14,7 @@ corpus must hold each shape the translation claims (REQUIRED). Prints
 on any failure or a missing side.
 """
 import glob
+import targetdesc
 import re
 import struct
 import subprocess
@@ -23,6 +24,7 @@ from pathlib import Path
 
 REQUIRED = {"header_exit", "variant_stays", "partial_or", "partial_and", "switch_exit", "switch_default_exit", "latch_exit", "exit_phi_variant", "stores_first", "nested_hoist", "shared_exit", "second_branch", "constant_cond"}
 PINNED = Path.home() / "scratch/llvm-build/bin/opt"
+TARGET = targetdesc.triple_cpu()  # llrm's default target (crates/target/*/datalayout.toml): a dump has no `target triple`, and opt costs for x86-64 without one
 COMMIT = "24.0.0git"
 ROOT = Path(__file__).resolve().parent.parent
 LLRM = ROOT / "target/debug/llrm-mir"
@@ -152,7 +154,7 @@ def canonical(ir, nodes=None, body=None):
 
 
 def opt_unswitched(ir, passes=PASS):
-    r = run([str(PINNED), f"-passes={passes}", "-S"], stdin=ir)
+    r = run([str(PINNED), *TARGET, f"-passes={passes}", "-S"], stdin=ir)
     return r.stdout if r.returncode == 0 else None
 
 
@@ -178,7 +180,7 @@ def main():
         ir = Path(f).read_text()
         # The loop pass manager hands its passes loops in simplified, LCSSA form;
         # both sides start from the same one.
-        prepared = run([str(PINNED), "-passes=loop-simplify,lcssa" + (",loop-rotate" if ROTATED else ""), "-S"], stdin=ir).stdout
+        prepared = run([str(PINNED), *TARGET, "-passes=loop-simplify,lcssa" + (",loop-rotate" if ROTATED else ""), "-S"], stdin=ir).stdout
         tmp = Path(tempfile.mkdtemp()) / "prepared.ll"
         tmp.write_text(to_mir(prepared))
         want = opt_unswitched(prepared)
