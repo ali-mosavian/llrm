@@ -47,8 +47,11 @@ The run count per slot must match LLVM's. `parity::RUNS_PER_BODY` states it and 
 ```
 [parity] slots translated 5 partial 2 old 67 missing 9 (of 83)
 [parity] phase simplify translated 3 partial 0 old 45 missing 6
-[parity] analyses translated 2 partial 0 old 0 missing 0
+[parity] analyses translated 7 partial 1 old 37 missing 0
+[parity] analysis followers old Followers
 ```
+
+Every analysis the manager computes has a row in `parity::ANALYSES` and a `[parity] analysis <key> <kind> <type>` line. An Old row says what replaces it (`replaced_by`; "none" is a DEVIATE or delete candidate). `tools/old_analysis_callers.py` reads its list of old analyses from these lines, not from a file of its own.
 
 ## Scoreboard
 
