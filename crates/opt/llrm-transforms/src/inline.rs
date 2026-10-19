@@ -1174,11 +1174,12 @@ fn unmarked_allocas(
 /// Whether the object at `pointer` may be read after the body returns: its
 /// address, or one derived from it, is returned or stored as a value.
 ///
-/// DEVIATE 2: `InsertLifetime` marks every static alloca, as returning or
-/// keeping a local's address is undefined in C. Fact: QB's runtime bodies,
-/// copied only, return their own allocas (`B$FMID`'s view); ending the view at
-/// the return made the read through it undef. Exit: none while such bodies
-/// return locals.
+/// DEVIATE D10 (docs/architecture/cgscc-plan.md): `InsertLifetime` marks every
+/// static alloca, as returning or keeping a local's address is undefined in C.
+/// Fact: QB's runtime bodies, copied only, return their own allocas (`B$FMID`'s
+/// view); ending the view at the return made the read through it undef. Exit:
+/// the lifetime ends after the copy's last use of the address, not at its
+/// return.
 fn outlives_the_copy(
     body: &Function,
     pointer: Operand,
