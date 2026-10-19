@@ -187,10 +187,12 @@ fn model_of(source: &str) -> llrm_object::debug::Info {
 /// show, not even to say it is optimized out. It is in the model with no
 /// location.
 ///
-/// This was `gcd(1071, 462)` with two constants, which the pin folds away
-/// whole (the function is gone, clang -O1/-O2 included), so the parameters
-/// could not be told apart from a function that no longer exists. A
-/// parameter nothing reads is removed while the function stays.
+/// This was `gcd(1071, 462)` with two constants. The pin does not fold it
+/// (clang -O2 keeps the rotated `urem` loop: full unroll finds no exit count
+/// over two header phis); ours folded it only while loop rotation was off, so
+/// the test rested on a deviation and broke when rotation turned on. A
+/// parameter nothing reads is removed while the function stays, with rotation
+/// on or off, and needs no fold.
 #[test]
 fn a_parameter_the_optimiser_removed_is_in_the_model_with_no_location() {
     use llrm_object::debug::{Kind, Location};
