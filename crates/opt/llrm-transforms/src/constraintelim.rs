@@ -2887,7 +2887,7 @@ fn replace_overflow_uses(
     let aggregate = instruction.result.expect("a with.overflow call has a result");
     let value_ty = function.operand_type(context, args[0]).expect("an operand has a type");
     let mut res: Option<Operand> = None;
-    for used in function.users(aggregate).to_vec() {
+    for used in function.users(aggregate).snapshot() {
         let user = function.instruction(used.user);
         let Opcode::ExtractValue(indices) = &user.opcode else { continue };
         let Some(user_result) = user.result else { continue };

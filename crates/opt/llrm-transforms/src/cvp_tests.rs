@@ -103,6 +103,27 @@ fn doubling_the_function_doubles_the_solves() {
     assert!(large * 10 <= small * 21, "{small} solves for 60 diamonds, {large} for 120");
 }
 
+/// LLVM keeps `LazyValueAnalysis` between passes that leave the function as it
+/// is. Here each `cvp` and `decide` slot started an empty LVI: nine runs of
+/// the same solves on a diamond ladder (+16% of its compile).
+#[test]
+fn a_second_run_on_an_unchanged_function_solves_nothing() {
+    let text = "define i32 @f(i32 %x, i32 %y) {\nentry:\n  %c = icmp ult i32 %x, %y\n  %r = select i1 %c, i32 %x, i32 %y\n  ret i32 %r\n}\n";
+    let solves = |passes: usize| {
+        let mut module = parsed(text);
+        let mut manager = llrm_mir::passes::PassManager::default();
+        for _ in 0..passes {
+            manager.add(Cvp);
+        }
+        SOLVED.with(|one| one.set(0));
+        manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
+        SOLVED.with(std::cell::Cell::get)
+    };
+    let once = solves(1);
+    assert!(once > 0, "the pass asked LVI nothing");
+    assert_eq!(solves(2), once);
+}
+
 /// LVI takes an `ICmpInst` predicate and MIR holds no floating-point compare
 /// of constants for it to fold, so `processCmp` leaves an `fcmp` alone. LLVM
 /// answers `ret i1 true`; this fails the day `cvp.rs` folds it.

@@ -914,6 +914,19 @@ fn a_tags_ancestors_are_the_same_with_and_without_the_type_tree() {
     assert_eq!(llrm_mir::tbaa::Tbaa::chain(metadata, llrm_mir::module::MetadataId(5)), ["int", "scalar", "root"]);
 }
 
+/// A body with no call was solved for what escapes twice by `summaries`: once
+/// for its direct summary and once for its visit, which finds the same with no
+/// call to give other captures (2 of 4 solves of d_faces' escape phase, which
+/// is 2.7% of the compile). The visit reuses the direct summary's facts.
+#[test]
+fn a_body_with_no_call_is_solved_for_what_escapes_once_by_summaries() {
+    let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
+    let procedures = IndexMap::from_iter([("callee".to_owned(), Procedure::of(parsed.unit_of("callee")))]);
+    let before = crate::alias::escape_solves();
+    summaries(&procedures, None).unwrap();
+    assert_eq!(crate::alias::escape_solves() - before, 1, "a call-free body was solved for escapes twice");
+}
+
 /// What a body does on its own was made again for every body in every round of
 /// the fixed point: 7000 times in deedlines, 47 s of 101 (#394). It is made
 /// once per body, however many rounds.

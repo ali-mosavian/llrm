@@ -45,7 +45,7 @@ pub fn intrinsic_runtime(base: &str) -> Option<&'static str> {
 
 pub const STATEMENTS: [&str; 9] =
     ["CGDone", "CGTrash", "CGControl", "CGReturn", "CGSelCase", "CGSelRange", "CGSelOther", "CGSelect", "CGBigLabel"];
-pub const IGNORED: [&str; 13] = [
+pub const IGNORED: [&str; 11] = [
     "START",
     "STOP",
     "FINI",
@@ -57,8 +57,6 @@ pub const IGNORED: [&str; 13] = [
     "DBEndStruct",
     "DBConst",
     "DBTypeDef",
-    "DBBegBlock",
-    "DBEndBlock",
 ];
 
 /// A construct the C path refuses rather than guesses at.
@@ -480,6 +478,8 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
     let mut proc: Option<usize> = None;
     let mut segment: Option<i64> = None;
     let mut line = 0;
+    // How many `DBBegBlock`s of the procedure are open.
+    let mut depth = 0usize;
     let mut main_file: Option<String> = None;
     for one in records {
         let args = &one.args;
@@ -638,6 +638,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     debug: Vec::new(),
                 });
                 proc = Some(made.procs.len() - 1);
+                depth = 0;
             }
             "CGParmDecl" => {
                 let at = open(proc);
@@ -647,7 +648,16 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
             "CGAutoDecl" => {
                 let at = open(proc);
                 let auto = (arg(one, 0).to_owned(), arg(one, 1).to_owned());
+                // A local of a nested block is placed where its block begins.
+                if depth > 0 {
+                    made.procs[at].body.push(Statement { call: one.call.clone(), args: vec![auto.0.clone()], line });
+                }
                 made.procs[at].autos.push(auto);
+            }
+            "DBBegBlock" | "DBEndBlock" => {
+                let at = open(proc);
+                depth = if one.call == "DBBegBlock" { depth + 1 } else { depth.saturating_sub(1) };
+                made.procs[at].body.push(Statement { call: one.call.clone(), args: Vec::new(), line });
             }
             "CGTemp" => {
                 let at = open(proc);

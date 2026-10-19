@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 56 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 57 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -16,7 +16,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 56 documented, 0 undoc
 | basicaa | BasicAA, a translation of `BasicAliasAnalysis.cpp` at d1106deb71cc behind the interface of [`crate::aa`] (stage S1/S2 of docs/architecture/basicaa-port.md). | `BasicAA`, an [`crate::aa::AAResults`](aa.md). No client reads it yet. | [basicaa](basicaa.md) |
 | blockfreq | `BlockFrequencyInfo` of a MIR function: LLVM's `BlockFrequencyInfoImpl` (`llrm_mir::blockfrequency`) over `branchprob`'s edge probabilities, as `BlockFrequencyInfoWrapperPass` runs it over `BranchProbabilityInfo`. | `inlinecost` (cold and hot call sites, D1). | [blockfreq](blockfreq.md) |
 | branchprob | Static branch probabilities and block frequencies, as LLVM's `BranchProbabilityInfo` and `BlockFrequencyInfo` estimate them when no profile says otherwise. | `Odds { taken, frequency, by }` from `estimated`, `propagated` and | [branchprob](branchprob.md) |
-| capturecheck | # How it works `LLRM_CHECK_CAPTURES`: the frame objects the pointer facts say never escape, checked against LLVM's capture tracking read straight off the uses, with no fact followed: a pointer is captured when any use of it, or of what is made of it by a gep, a cast, a phi or a select (every arm), stores it, returns it, turns it into an integer or passes it where the callee keeps no copy is not promised. | `may_be_captured` and the check behind `LLRM_CHECK_CAPTURES`. | [capturecheck](capturecheck.md) |
+| capturecheck | # How it works `LLRM_CHECK_CAPTURES`: the frame objects the pointer facts say never escape, checked against LLVM's capture tracking read straight off the uses, with no fact followed: a pointer is captured when any use of it, or of what is made of it by a gep, a cast, a phi or a select (every arm), stores it, returns it, turns it into an integer or passes it where the callee keeps no copy is not promised. | The check behind `LLRM_CHECK_CAPTURES`. | [capturecheck](capturecheck.md) |
 | capturetracking | `CaptureTracking.cpp` at d1106deb71cc: which components of a pointer a use of it keeps (`DetermineUseCaptureKind`), and the walk over the uses of a value that asks a tracker about each (`PointerMayBeCaptured`). | `CaptureComponents`, `UseCaptureInfo`, `CaptureTracker`, | [capturetracking](capturetracking.md) |
 | cellmap | A map from memory cell to fact, indexed by the object each cell lies in, so a write is tested only against the cells it can reach. | The container. Consumers: [`crate::alias`](alias.md), [`crate::consts`](consts.md), | [cellmap](cellmap.md) |
 | cfg | A function's blocks as the graph walks see them: block ids, successors, dominance, natural loops and reachability, built once per body. | `Shape` (a `Analysis` named `shape`), the | [cfg](cfg.md) |
@@ -34,6 +34,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 56 documented, 0 undoc
 | functionattrs | `norecurse`, `nounwind`, `willreturn` and `noreturn` of one call-graph SCC, as LLVM's `PostOrderFunctionAttrs` infers them from a body and the attributes of its callees. | `interprocedural::stamped` calls `post_order` once per SCC, callees first: | [functionattrs](functionattrs.md) |
 | generated | Random loops for checking the recurrence form (`induction::Scev`) against the interpreter. | `case`, `seeds`, `observed`, `Inputs`, `Rng`, `Tracked`, built only for | [generated](generated.md) |
 | globalsaa | Which globals no code outside the program reaches but by name: LLVM's GlobalsAA, GCC's ipa-reference. | `Globals` (`tracked`, `unsummarized`, `entries`, `covers`), `analysis`, | [globalsaa](globalsaa.md) |
+| globalsmodref | What each function does to the globals no code reaches but by name: LLVM's `GlobalsModRef.cpp` (`GlobalsAAResult`), translated at the pin (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/GlobalsModRef.cpp>). | `GlobalsModRef`, `FunctionInfo`, `compute`. | [globalsmodref](globalsmodref.md) |
 | graph | Block-graph algorithms (loops, depth, reducibility, dominators) over any IR whose blocks implement `loops::Node`. | The algorithms of `loops`. Consumers: [`crate::cfg`](cfg.md) (`Loop`, `Node`, | [graph](graph.md) |
 | guards | What the branches that dominate a block prove on entry to it. | Guard facts and the implication queries above. Consumers: `decide`, | [guards](guards.md) |
 | induction | Which values are affine functions of a loop's counter, and how many trips a loop makes. | `AffineOperand`, `Affine`, `CountedLoop`, `Counted`, `ExitCount`, `Scev`, | [induction](induction.md) |

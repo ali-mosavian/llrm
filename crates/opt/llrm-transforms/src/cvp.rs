@@ -130,10 +130,16 @@ impl FunctionPass for Cvp {
         }
         let globals = Rc::clone(&analyses.outer().globals);
         let assumptions = AssumptionCache::of(unit.context, &globals, unit.metadata, unit.function);
-        let mut pass = State { unit, analyses, globals, assumptions, lvi: LazyValueInfo::new(), cfg_changed: false };
+
+        let shared = analyses.get::<llrm_mir::lazyvalueinfo::LviCache>(unit.context, unit.layout, unit.function);
+        let mut pass = State { unit, analyses, globals, assumptions, lvi: shared.take(), cfg_changed: false };
+        #[cfg(test)]
+        let before = pass.lvi.get_impl().map_or(0, |one| one.steps.solve);
         let changed = pass.run_impl();
         #[cfg(test)]
-        SOLVED.with(|solved| solved.set(solved.get() + pass.lvi.get_impl().map_or(0, |one| one.steps.solve)));
+        SOLVED.with(|solved| solved.set(solved.get() + pass.lvi.get_impl().map_or(0, |one| one.steps.solve) - before));
+        shared.put(std::mem::take(&mut pass.lvi));
+
         match (changed, pass.cfg_changed) {
             (false, _) => PreservedAnalyses::all(),
             (true, false) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
@@ -671,7 +677,7 @@ impl State<'_, '_> {
 
         let mut changed = false;
         let result = self.result(s);
-        for u in self.unit.function.users(result).to_vec() {
+        for u in self.unit.function.users(result).snapshot() {
             let user = u.user;
             let c = if self.unit.function.instruction(user).opcode == Opcode::Phi {
                 let incoming = self.op(user, u.index as usize + 1);
@@ -938,7 +944,7 @@ impl State<'_, '_> {
         // `replaceUsesWithIf`: every use but an `llvm.assume`'s.
         let result = self.result(cmp);
         let mut changed = false;
-        for u in self.unit.function.users(result).to_vec() {
+        for u in self.unit.function.users(result).snapshot() {
             if self.intrinsic_id(u.user) != Some(IntrinsicId::Assume) {
                 self.unit.function.set_operand(u.user, u.index as usize, res);
                 changed = true;
@@ -1852,7 +1858,7 @@ impl State<'_, '_> {
         // the same block.
         const MAX_USES_TO_INSPECT: usize = 4;
         let def_bb = self.parent(bin_op);
-        let uses = self.unit.function.users(self.result(bin_op)).to_vec();
+        let uses = self.unit.function.users(self.result(bin_op)).snapshot();
         let mut num_uses = 0;
         for u in &uses {
             num_uses += 1;

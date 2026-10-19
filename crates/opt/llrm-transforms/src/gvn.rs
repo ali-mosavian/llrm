@@ -30,10 +30,11 @@
 //!    no loop is entered or left by the edge and the operands are available
 //!    there. Divisions (which may trap on a path that did not divide), loads
 //!    and floating expressions are never inserted here.
-//! 4. Load PRE (`loadjoins::reused`). A load at a join whose bytes every
-//!    predecessor holds becomes a phi of those values; with `pre`, a
-//!    predecessor holding none gets its own load on its edge where that
-//!    speculates nothing.
+//! 4. Load PRE (`pass::loadpre`: `performLoadPRE`, `performLoopLoadPRE`). With
+//!    `pre`, a load that is available on all but one of the ways into its block
+//!    is loaded on that way too (an edge into the block with several ways out
+//!    is split), and becomes a phi; a loop header's load of an address the loop
+//!    does not change is loaded in the preheader and after the one clobber.
 //!
 //! A volatile access is never numbered. Floats are numbered like integers; a
 //! value serves a read only of its own type, so a float store reaches a float
@@ -114,22 +115,18 @@
 //! runs once per body pass.
 //!
 //! # Needs
-//! [`crate::transform`], [`crate::loadjoins`], `memoryssa::Accesses`,
-//! `alias::PointValues`, `memdep`, `BasicAA`.
+//! [`crate::transform`], `memdep`, `BasicAA`, `LoopInfo`.
 //!
 //! # Keeps
 //! Dominators and loops, unless a join split an edge.
 //!
 //! # See also
-//! Tests: `gvn_tests.rs`, `loadjoins_tests.rs`. Levels:
+//! Tests: `gvn_tests.rs`, `gvn_load_tests.rs`. Levels:
 //! `docs/reference/levels.md`. LLVM `GVN.cpp`; gcc `tree-ssa-pre.cc`.
 
 use std::collections::BTreeMap;
 
-use llrm_analysis::alias::PointValues;
 use llrm_analysis::graph::loops::{self, Loop};
-use llrm_analysis::manager::PointerValues;
-use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, ssa};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
@@ -141,7 +138,7 @@ pub mod pass;
 pub mod table;
 
 use crate::lcssa::{arms, from_arms, place_phi};
-use crate::{edges, loadjoins, transform};
+use crate::{edges, transform};
 
 /// The single value-reuse pass: scalar GVN, load elimination and PRE.
 /// Without `pre` it only eliminates what is redundant on every path
@@ -174,7 +171,7 @@ impl FunctionPass for Gvn {
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let tree = shape.dominance.tree(unit.function);
         let (scalar, cfg_changed) =
-            pass::run_impl_cfg(unit.context, unit.layout, unit.function, analyses.outer(), Some(tree));
+            pass::run_impl_cfg(unit.context, unit.layout, unit.function, analyses.outer(), self.pre, Some(tree));
         drop(shape);
         // Equal calls that touch nothing are one, after the arithmetic that
         // makes their arguments equal.
@@ -195,13 +192,7 @@ impl FunctionPass for Gvn {
                     .preserve::<llrm_analysis::cfg::Shape>(),
             );
         }
-        let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
-        let pointers = analyses.get::<PointerValues>(unit.context, unit.layout, unit.function);
-        let pointers = Result::as_ref(&*pointers).map_err(String::clone);
-        let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-        match accesses.and_then(|accesses| {
-            optimized(unit, analyses.outer(), &accesses, pointers?, &shape, self.pre, scalar || called)
-        }) {
+        match optimized(unit, self.pre, scalar || called) {
             Ok((true, numbering_changed_cfg))
                 if cfg_changed || numbering_changed_cfg || unit.function.layout().len() != blocks =>
             {
@@ -252,46 +243,17 @@ impl FunctionPass for EqualCalls {
     }
 }
 
-/// Complete join PRE and load PRE after the numbering; whether anything
-/// changed, and whether the CFG did. `outer` is what the analyses read of the
-/// module and target, `accesses` what each instruction of `unit` touches,
-/// `pointers` what each pointer points to. `numbered` says the numbering
-/// changed something; `subexpressed` that a join's PRE should only complete.
-///
-/// The numbering removes loads and adds no memory access, so `accesses` stays
-/// true of what is left.
+/// Complete join PRE after the numbering; whether anything changed, and
+/// whether the CFG did. `numbered` says the numbering changed something.
 pub fn optimized(
     unit: &mut Unit,
-    outer: &Outer,
-    accesses: &Accesses,
-    pointers: &PointValues,
-    shape: &cfg::Shape,
     pre: bool,
     numbered: bool,
 ) -> Result<(bool, bool), String> {
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, pre && !numbered)?;
-    // Joining may split an edge, which the manager's shape has not seen.
-    let joined_shape;
-    let shape = if combined {
-        joined_shape = cfg::Shape::of(unit.function);
-        &joined_shape
-    } else {
-        shape
-    };
-    let loaded = loadjoins::reused(
-        unit.context,
-        unit.layout,
-        unit.function,
-        outer,
-        outer.callees(),
-        accesses,
-        pointers,
-        pre && !combined,
-        shape,
-    )?;
-    Ok((numbered || combined || loaded, false))
+    Ok((numbered || combined, false))
 }
 
 /// Translate simultaneously: an incoming phi value belongs to the prior edge.

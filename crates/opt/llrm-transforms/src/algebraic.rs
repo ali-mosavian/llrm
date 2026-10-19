@@ -670,7 +670,7 @@ fn _single_use(
 ) -> bool {
     matches!(
         operand,
-        Operand::Value(value) if function.users(value).len() == 1
+        Operand::Value(value) if function.users(value).has_one_use()
     )
 }
 

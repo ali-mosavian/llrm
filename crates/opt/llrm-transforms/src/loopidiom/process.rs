@@ -595,7 +595,7 @@ impl LoopIdiomRecognize {
                 .function
                 .instruction(args.the_load)
                 .result
-                .is_some_and(|result| run.function.users(result).len() == 1);
+                .is_some_and(|result| run.function.users(result).has_one_use());
             if !only_user {
                 return (changed, false);
             }
@@ -754,6 +754,6 @@ impl MemmoveVerifier {
         // Ensure that LoadBasePtr is after StoreBasePtr or before StoreBasePtr
         // for negative stride. LoadBasePtr shouldn't overlap with
         // StoreBasePtr.
-        if is_neg_stride { off_val < load_size } else { off_val > -load_size }
+        !(if is_neg_stride { off_val < load_size } else { off_val > -load_size })
     }
 }

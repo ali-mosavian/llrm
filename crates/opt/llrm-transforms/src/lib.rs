@@ -46,7 +46,7 @@
 //! judges a rewrite tried on a copy of the body.
 //!
 //! Scalar and memory: `fold` (with `canonical` and `floatfold`), `decide`,
-//! `dead`, `algebraic`, `phiopt`, `cfg`, `dse`, `gvn` (with `loadjoins`),
+//! `dead`, `algebraic`, `phiopt`, `cfg`, `dse`, `gvn`,
 //! `promote` (`Sroa`, `Promote`, with `splitcopy`), `inferspace`, `jumpthread`,
 //! `gepoffset`, `addresssink`, `fixednarrow`, `ports`.
 //!
@@ -148,7 +148,6 @@ pub mod jumpthread;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod licm;
-pub mod loadjoins;
 pub mod local;
 #[cfg(test)]
 mod local_tests;
@@ -186,6 +185,7 @@ pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
 pub mod ports;
+pub mod predicateinfo;
 pub mod profit;
 pub mod promote;
 pub mod rotate;
@@ -216,6 +216,7 @@ pub mod versionstride;
 pub mod vncoercion;
 #[cfg(test)]
 mod vncoercion_tests;
+pub mod walk;
 pub mod widen;
 pub mod window;
 // Not ported, meaning nothing where a value is whole: `wholephis` and

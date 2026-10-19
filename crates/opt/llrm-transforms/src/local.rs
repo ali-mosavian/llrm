@@ -342,7 +342,7 @@ fn replace_dominated_uses_with_template(
     debug_assert_eq!(function.value(from).ty, type_of(context, function, to));
     let mut count = 0;
     // `fake_use` users are not skipped: DEVIATE 6.
-    for at in function.users(from).to_vec() {
+    for at in function.users(from).snapshot() {
         if !should_replace(&*function, at) {
             continue;
         }
@@ -485,6 +485,26 @@ fn may_throw(
         Opcode::Resume | Opcode::Invoke(_) => true,
         _ => false,
     }
+}
+
+/// `isGuaranteedToTransferExecutionToSuccessor`
+/// ([ValueTracking.cpp:7951](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7951)):
+/// the instruction returns to the one after it and does not unwind. DEVIATE: a
+/// volatile access and a call that is not `willreturn`/`nounwind` are not; MIR
+/// has no other source.
+pub(crate) fn is_guaranteed_to_transfer_execution_to_successor(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    if matches!(
+        function.instruction(inst).opcode,
+        Opcode::Unreachable | Opcode::Resume
+    ) {
+        return false;
+    }
+    will_return(context, declarations, function, inst) && !may_throw(context, declarations, function, inst)
 }
 
 /// `Instruction::mayHaveSideEffects`
