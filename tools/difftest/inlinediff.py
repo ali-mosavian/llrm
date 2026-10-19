@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import difftest  # noqa: E402
 
-CALL = re.compile(r"\b(?:call|invoke)\b[^@\n]*@([\w.$-]+)\(")
+CALL = re.compile(r'\b(?:call|invoke)\b[^@\n]*@(?:"([^"]+)"|([\w.$-]+))\(')
 INLINED = re.compile(r"'(?P<callee>[^']+)' inlined into '(?P<caller>[^']+)' with \(cost=(?P<cost>-?\d+)(?:, [^)]*?)?, threshold=(?P<threshold>-?\d+)\)")
 MISSED = re.compile(r"'(?P<callee>[^']+)' not inlined into '(?P<caller>[^']+)' because (?P<reason>[^(\n]*?)(?: \(cost=(?P<cost>-?\d+|never)(?:, [^)]*?)?(?:, threshold=(?P<threshold>-?\d+))?\))?\s*$", re.M)
 
@@ -36,7 +36,7 @@ def sites(text: str) -> collections.Counter:
     found: collections.Counter = collections.Counter()
     for caller, lines in difftest.functions(text).items():
         for line in lines[1:]:
-            found.update((caller, m[1]) for m in CALL.finditer(line.split(";", 1)[0]))
+            found.update((caller, m[1] or m[2]) for m in CALL.finditer(line.split(";", 1)[0]))
     return found
 
 
