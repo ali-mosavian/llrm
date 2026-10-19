@@ -141,7 +141,7 @@ mod tests {
         // listing reloaded `src.y` in the loop that -S hoists it out of.
         let directory = tempfile::tempdir().expect("a directory");
         let source = directory.path().join("bump.nib");
-        std::fs::write(&source, "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    bump(a, b, 4)\n    return a.x\n").expect("writes");
+        std::fs::write(&source, "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    let c = P(x=0, y=4)\n    bump(a, b, 4)\n    bump(a, c, 5)\n    return a.x\n").expect("writes");
         let output = directory.path().join("dump");
         // Unrolled, the 4-trip loop is gone and there is nothing to count.
         let argv = [
@@ -166,6 +166,6 @@ mod tests {
             .find(|(label, at)| body[..*at].contains(&format!("{label}:\n")))
             .expect("a loop");
         let looped = body[..end].split(&format!("{head}:\n")).nth(1).expect("the loop");
-        assert_eq!(looped.matches("ptr").count(), 1, "{looped}");
+        assert_eq!(looped.matches("ptr").count(), 0, "{looped}");
     }
 }
