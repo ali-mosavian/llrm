@@ -76,6 +76,9 @@ def test_the_sweep_compiles_the_basic_corpus_at_m32_which_tests_run_never_does(t
     """ownf_local_pds71 and ownf_local_vbdos failed at -m32 with `@TOP: ptrtoint` (140 compiles in a full-corpus run) while tests/run, BASIC on m16 only, reported 0 fail."""
     corpus = tmp_path / "tests/run/qb"
     corpus.mkdir(parents=True)
+    for crate, mode in (("a", 16), ("b", 32)):
+        (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
+        (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
     (corpus / "flat.bas").write_text("PRINT 1\n")
     (corpus / "huge.bas").write_text("' targets: x86-m16\nPRINT 2\n")
     jobs = q.extra_jobs(tmp_path)
