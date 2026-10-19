@@ -2,7 +2,7 @@
 4 crates/backend/llrm-core/src/backend/arithmetic.rs
 12 crates/backend/llrm-core/src/backend/classes.rs
 15 crates/backend/llrm-core/src/backend/inline_asm.rs
-10 crates/backend/llrm-core/src/backend/isel.rs
+2 crates/backend/llrm-core/src/backend/isel.rs
 2 crates/backend/llrm-core/src/backend/masm.rs
 2 crates/backend/llrm-core/src/backend/objbuild.rs
 4 crates/backend/llrm-core/src/backend/peep/guards.rs

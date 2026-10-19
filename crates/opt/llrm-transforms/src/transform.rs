@@ -148,11 +148,20 @@ thread_local! {
 /// value, and one with an earlier phi's arms is that phi (LLVM's
 /// `EliminateDuplicatePHINodes`).
 pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
-    let predecessors =
-        function.layout().iter().map(|&block| (block, function.predecessors(block))).collect::<BTreeMap<_, _>>();
+    let blocks = function.layout().to_vec();
+    _trivial_phis_in(function, &blocks)
+}
+
+/// `_trivial_phis` of `blocks` alone: the joins whose edges changed, where a
+/// single-entry phi elsewhere (a loop's closing phi) must stay.
+pub fn _trivial_phis_in(
+    function: &mut Function,
+    blocks: &[BlockId],
+) -> Result<(), String> {
+    let predecessors = blocks.iter().map(|&block| (block, function.predecessors(block))).collect::<BTreeMap<_, _>>();
     loop {
         let mut changed = false;
-        for block in function.layout().to_vec() {
+        for &block in blocks {
             #[cfg(test)]
             BLOCKS_VISITED.with(|visited| visited.set(visited.get() + 1));
             for phi in edges::phis(function, block) {
@@ -177,23 +186,19 @@ pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
                 }
             }
         }
-        if !_duplicate_phis(function)? && !changed {
+        let mut duplicates = false;
+        for &block in blocks {
+            duplicates |= duplicate_phis_in(function, block)?;
+        }
+        if !duplicates && !changed {
             return Ok(());
         }
     }
 }
 
-/// Each phi whose arms, edge for edge, are an earlier phi's in its block
-/// replaced by that phi. Whether any was.
-fn _duplicate_phis(function: &mut Function) -> Result<bool, String> {
-    let mut changed = false;
-    for block in function.layout().to_vec() {
-        changed |= duplicate_phis_in(function, block)?;
-    }
-    Ok(changed)
-}
-
-/// `_duplicate_phis` of one `block`: LLVM's `EliminateDuplicatePHINodes(BB)`.
+/// Each phi whose arms, edge for edge, are an earlier phi's in `block`
+/// replaced by that phi: LLVM's `EliminateDuplicatePHINodes(BB)`. Whether any
+/// was.
 pub fn duplicate_phis_in(
     function: &mut Function,
     block: BlockId,
