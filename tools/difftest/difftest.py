@@ -110,15 +110,17 @@ def source_link(passes: str) -> str:
 
 LLRM_CONVENTIONS = re.compile(r"(?<![\w@%$.\"-])(?:watcallcc|sysvcc|ia16cc|regparm3cc|regparm3popcc|cc ?[0-9]+)(?![\w$.\"-]) ?")
 DECLARED_INTERNAL = re.compile(r"^declare internal ")
+# llrm's own attributes (llrm-transforms local.rs); LLVM reads them as string attributes.
+LLRM_ATTRIBUTES = re.compile(r"(?<![\w@%$.\"-])(noretain|releases|nearcode|threeway)(?![\w$.\"-])")
 
 
 def normalise(text: str) -> str:
-    """llrm's text in the dialect LLVM reads: its calling-convention words (`watcallcc`, `sysvcc`, `cc1000`) and `internal` on a declaration. Only
+    """llrm's text in the dialect LLVM reads: its calling-convention words (`watcallcc`, `sysvcc`, `cc1000`), its own attributes (`threeway`) and `internal` on a declaration. Only
     those tokens, in code: not a name that contains one, not a string, not a comment."""
     out = []
     for line in text.splitlines(keepends=True):
         parts = re.split(r'("(?:[^"\\]|\\.)*"|;.*$)', line.rstrip("\n"), flags=re.M)
-        code = [p if i % 2 else LLRM_CONVENTIONS.sub("", p) for i, p in enumerate(parts)]
+        code = [p if i % 2 else LLRM_ATTRIBUTES.sub(r'"\1"', LLRM_CONVENTIONS.sub("", p)) for i, p in enumerate(parts)]
         line = "".join(code) + ("\n" if line.endswith("\n") else "")
         out.append(DECLARED_INTERNAL.sub("declare ", line))
     return "".join(out)

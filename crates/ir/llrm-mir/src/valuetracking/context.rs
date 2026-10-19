@@ -229,8 +229,7 @@ pub fn will_not_free_between(
         true
     };
     let (Some(ctx_block), Some(assume_block)) = (q.block_of(ctx), q.block_of(assume)) else { return false };
-    let position =
-        |block: BlockId, inst: InstId| q.function.block(block).instructions().iter().position(|one| *one == inst);
+    let position = |block: BlockId, inst: InstId| q.function.block(block).iter().position(|one| one == inst);
     if ctx_block == assume_block {
         if assume != ctx && !q.comes_before(assume, ctx) {
             return false;

@@ -120,9 +120,9 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
     assert!(parity::joined_slots(parity::REGISTRY, &built).all(|one| one != "jumps@17"));
     let count = parity::tally(parity::REGISTRY);
     // jumps@17, allocate@11 (greedy by default under LLVM's order) and
-    // merge@818 (MemCpyOpt's memsets).
-    assert_eq!(count.partial, 3);
-    assert!(parity::report().contains("jumps@17") && parity::report().contains("3 partial"));
+    // merge@818 (MemCpyOpt's memsets) and dse@820 (stage 1).
+    assert_eq!(count.partial, 4);
+    assert!(parity::report().contains("jumps@17") && parity::report().contains("4 partial"));
 }
 
 /// A Partial slot without its criterion and exit says what is done and not what

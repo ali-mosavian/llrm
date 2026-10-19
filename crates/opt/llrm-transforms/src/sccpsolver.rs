@@ -604,8 +604,7 @@ impl<'a> Solver<'a> {
             // feasible, so its phis have potentially new operands.
             let phis: Vec<InstId> = self
                 .function
-                .block(dest)
-                .iter()
+                .iter_block(dest)
                 .take_while(|&one| self.function.instruction(one).opcode == Opcode::Phi)
                 .collect();
             for phi in phis {
@@ -1543,7 +1542,7 @@ impl<'a> Solver<'a> {
             // Process the basic block work list.
             while let Some(block) = self.bb_work.pop() {
                 self.bb_visited.insert(block);
-                let insts: Vec<InstId> = self.function.block(block).iter().collect();
+                let insts: Vec<InstId> = self.function.iter_block(block).collect();
                 for inst in insts {
                     self.current = Some(inst);
                     self.visit(inst);
@@ -1615,7 +1614,7 @@ impl<'a> Solver<'a> {
             if !self.bb_executable.contains(&block) {
                 continue;
             }
-            let insts: Vec<InstId> = self.function.block(block).iter().collect();
+            let insts: Vec<InstId> = self.function.iter_block(block).collect();
             for inst in insts {
                 made_change |= self.resolved_undef(inst);
             }

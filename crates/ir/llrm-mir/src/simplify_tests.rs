@@ -823,3 +823,19 @@ fn a_freeze_of_a_defined_value_is_the_value() {
     check("  %r = freeze i16 undef\n", "r", None);
     check("  %r = freeze i16 poison\n", "r", None);
 }
+
+/// Old: `getelementptr @g, 0, 2` was left an instruction (~55 on bench/lru)
+/// where `simplifyGEPInst` folds a GEP of constants through
+/// `ConstantExpr::getGetElementPtr` to a constant expression. A zero-index GEP
+/// is the pointer, a variable index stays.
+#[test]
+fn a_gep_of_a_global_and_constants_is_a_constant_expression() {
+    let text = |body: &str| {
+        format!("@g = global [4 x i16] zeroinitializer\ndefine void @f(i16 %x) {{\nb0:\n{body}  ret void\n}}\n")
+    };
+    let folded = simplified(&text("  %r = getelementptr inbounds [4 x i16], ptr @g, i16 0, i16 2\n"), "r");
+    assert!(folded.as_deref().is_some_and(|one| one.starts_with("Expr(GetElementPtr")), "{folded:?}");
+    let bytes = simplified(&text("  %r = getelementptr i8, ptr @g, i16 6\n"), "r");
+    assert!(bytes.as_deref().is_some_and(|one| one.starts_with("Expr(GetElementPtr")), "{bytes:?}");
+    assert_eq!(simplified(&text("  %r = getelementptr [4 x i16], ptr @g, i16 0, i16 %x\n"), "r"), None);
+}

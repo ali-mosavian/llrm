@@ -155,7 +155,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "memcpyopt (tryMergingIntoMemset), MergeConsecutiveStores (backend)",
         "criterion: the memsets are MemCpyOpt's (memcpyoptimizer.rs, checked against opt by tools/llvmport/mccompare.py); exit: the wider constant stores of loopidioms::Merge go with the backend MergeConsecutiveStores (lir-cleanup-port)",
     ),
-    entry("dse@820", Simplify, "dse", Old, "backend-slopes (after memcpyopt)"),
+    partial(
+        "dse@820",
+        Simplify,
+        "dse",
+        "criterion: DSE stage 1 (deadstore.rs) removes what opt -passes=dse does on near pointers (tools/llvmport/dsecompare.py, 9000 cases); exit: stages 2-3 (memory terminators, initializes, calloc folding, dominating conditions)",
+    ),
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@823", Simplify, "lcssa", Old, "lcssa-port"),
     entry("licm@823", Simplify, "licm<allowspeculation>", Translated, ""),

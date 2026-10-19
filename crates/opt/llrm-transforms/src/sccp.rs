@@ -156,8 +156,7 @@ pub fn run_sccp(
     // Remove unreachable blocks and non-feasible edges.
     for &dead in &blocks_to_erase {
         let first = function
-            .block(dead)
-            .iter()
+            .iter_block(dead)
             .find(|&one| function.instruction(one).opcode != Opcode::Phi)
             .expect("a block has a terminator");
         local::change_to_unreachable(rewrite.context, function, first);
@@ -284,7 +283,7 @@ impl Rewrite<'_> {
         block: BlockId,
     ) -> bool {
         let mut made_changes = false;
-        let insts: Vec<InstId> = function.block(block).iter().collect();
+        let insts: Vec<InstId> = function.iter_block(block).collect();
         for inst in insts {
             if function.is_erased(inst) || function.instruction(inst).result.is_none() {
                 continue;
@@ -705,7 +704,7 @@ impl Rewrite<'_> {
         function: &mut Function,
         block: BlockId,
     ) {
-        let insts: Vec<InstId> = function.block(block).iter().collect();
+        let insts: Vec<InstId> = function.iter_block(block).collect();
         for dead in insts.into_iter().rev() {
             if let Some(result) = function.instruction(dead).result
                 && !function.users(result).is_empty()

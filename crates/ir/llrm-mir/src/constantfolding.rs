@@ -1613,7 +1613,7 @@ fn constant_fold_inst_operands_impl(
 }
 
 /// `GEPNoWrapFlags` of an instruction's flags.
-fn nw_of_flags(flags: Flags) -> u8 {
+pub(crate) fn nw_of_flags(flags: Flags) -> u8 {
     let mut nw = 0;
     if flags.contains(Flags::INBOUNDS) {
         nw |= IN_BOUNDS | NUSW;

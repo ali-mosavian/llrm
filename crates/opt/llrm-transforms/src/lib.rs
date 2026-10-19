@@ -89,6 +89,7 @@ mod calleepop_tests;
 pub mod candidate;
 pub mod canonical;
 pub mod cfg;
+pub mod combine;
 pub mod constraintelim;
 #[cfg(test)]
 mod constraintelim_tests;
@@ -102,6 +103,7 @@ pub mod dead;
 pub mod deadargs;
 #[cfg(test)]
 mod deadargs_tests;
+pub mod deadstore;
 pub mod decide;
 pub mod dse;
 pub mod earlycse;
@@ -135,6 +137,9 @@ pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;
 pub mod instsimplify;
+pub mod instworklist;
+#[cfg(test)]
+mod instworklist_tests;
 pub mod interprocedural;
 pub mod ipacp;
 pub mod jumpthread;

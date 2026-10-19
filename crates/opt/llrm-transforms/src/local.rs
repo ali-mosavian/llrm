@@ -817,7 +817,7 @@ pub fn merge_block_into_predecessor(
     let sti = function.terminator(bb).expect("a block ends in a terminator");
 
     // Move all definitions in the successor to the predecessor...
-    let moved: Vec<InstId> = function.block(bb).iter().filter(|one| *one != sti).collect();
+    let moved: Vec<InstId> = function.iter_block(bb).filter(|one| *one != sti).collect();
     for inst in moved {
         function.move_to(inst, Position::Before(pti)).expect("a placed instruction");
     }
@@ -1597,11 +1597,7 @@ pub fn change_to_unreachable(
     let unreachable = function.create_instruction(Opcode::Unreachable, void, Vec::new(), Flags::default(), None);
     function.insert(unreachable, Position::Before(inst)).expect("a placed block");
     // All instructions after this are dead.
-    let rest: Vec<InstId> = {
-        let list = function.block(block);
-        let at = list.iter().position(|one| one == inst).expect("the instruction is in its block");
-        list.iter().skip(at).collect()
-    };
+    let rest: Vec<InstId> = function.iter_block(block).skip_while(|&one| one != inst).collect();
     let removed = rest.len();
     for dead in rest {
         if let Some(result) = function.instruction(dead).result
