@@ -1618,6 +1618,9 @@ impl<'a, 't> Body<'a, 't> {
                     let parameter = self.value(pointer);
                     parameters.push(parameter);
                     self.byval.push(parameter);
+                    // CGCall.cpp DetermineNoUndef: an indirect argument is
+                    // `noundef`.
+                    stated.push((parameter, Fact::NoUndef));
                     self.byval_homes.push((place, parameter));
                     self.slots.insert(format!("y{symbol}"), place);
                 }
@@ -1650,6 +1653,9 @@ impl<'a, 't> Body<'a, 't> {
                     stores.push((place, -1, parameter));
                     homes.push((place, parameter));
                     self.slots.insert(format!("y{symbol}"), place);
+                    // CGCall.cpp DetermineNoUndef: a scalar parameter is
+                    // `noundef`.
+                    stated.push((parameter, Fact::NoUndef));
                     // What the language states of a parameter: C99 6.7.3.1 for
                     // restrict.
                     stated.extend(
@@ -4052,6 +4058,20 @@ mod tests {
         let function = module.global(module.named("_add").unwrap()).function().unwrap();
         assert!(
             (0..function.parameter_attrs.len()).all(|at| llrm_mir::facts::Facts::param(function, at).no_alias()),
+            "{:?}",
+            function.parameter_attrs
+        );
+    }
+
+    /// CGCall.cpp `DetermineNoUndef`: a scalar parameter is `noundef`. None was
+    /// stated, so SimplifyCFG could not tell `a || b` from one that reads an
+    /// undefined `b`, and kept the select form (a branch more on m16).
+    #[test]
+    fn test_scalar_parameters_are_noundef() {
+        let module = raised("tests/test_restrict_reaches_mir_as_distinct_noalias_roots.cgs");
+        let function = module.global(module.named("_add").unwrap()).function().unwrap();
+        assert!(
+            (0..function.parameter_attrs.len()).all(|at| llrm_mir::facts::Facts::param(function, at).no_undef()),
             "{:?}",
             function.parameter_attrs
         );
