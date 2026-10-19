@@ -181,6 +181,12 @@ def pr_owner(number: int) -> str:
     return owner_of(done.stdout)
 
 
+def pr_of_commit(sha: str) -> int | None:
+    """The PR a landed commit came from, by GitHub's own link, for a squash whose subject carries no number."""
+    done = subprocess.run(["gh", "api", f"repos/{{owner}}/{{repo}}/commits/{sha}/pulls", "-q", ".[0].number"], capture_output=True, text=True)
+    return int(done.stdout) if done.stdout.strip().isdigit() else None
+
+
 def once(sha: str | None = None) -> str:
     """Check one head against the last checked one; write and return its report path."""
     git("fetch", "-q", "origin")
@@ -195,7 +201,7 @@ def once(sha: str | None = None) -> str:
         commits = first_parent(previous, sha) if previous else []
         found = culprit([one for one, _ in commits], lambda one: probe(failure, one)) if commits else None
         subject = dict(commits).get(found, "") if found else ""
-        pr = pr_of(subject)
+        pr = pr_of(subject) or (pr_of_commit(found) if found else None)
         rows.append({"failure": failure, "commit": found, "pr": pr, "owner": pr_owner(pr) if pr else "unknown", "repro": repro(failure)})
     HOME.mkdir(parents=True, exist_ok=True)
     path = HOME / f"{sha[:9]}.md"
