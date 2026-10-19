@@ -310,6 +310,7 @@ impl Query<'_> {
             globals: self.globals,
             dt: self.analyses.map(FunctionAnalyses::dominator_tree),
             assumptions: self.analyses.map(FunctionAnalyses::assumption_cache),
+            dom_conditions: self.analyses.and_then(FunctionAnalyses::dom_conditions),
             cxt: self.cxt,
             ..ValueQuery::bare(self.context, self.function, self.layout)
         }
@@ -3126,10 +3127,19 @@ fn simplify_icmp(
     if let Some(v) = simplify_icmp_with_min_max(q, pred, lhs, rhs, max_recurse) {
         return Some(v);
     }
+    if let Some(v) = simplify_icmp_with_intrinsic_on_lhs(q, pred, lhs, rhs) {
+        return Some(v);
+    }
+    if let Some(v) = simplify_icmp_with_intrinsic_on_lhs(q, swapped(pred), rhs, lhs) {
+        return Some(v);
+    }
     if let Some(v) = simplify_icmp_using_monotonic_values(q, pred, lhs, rhs) {
         return Some(v);
     }
     if let Some(v) = simplify_icmp_using_monotonic_values(q, swapped(pred), rhs, lhs) {
+        return Some(v);
+    }
+    if let Some(v) = simplify_icmp_with_dominating_assume(q, pred, lhs, rhs) {
         return Some(v);
     }
     if let Some(cxt) = q.cxt
@@ -3148,6 +3158,85 @@ fn simplify_icmp(
         return thread_cmp_over_phi(q, pred, lhs, rhs, max_recurse);
     }
     None
+}
+
+/// `simplifyICmpWithDominatingAssume`
+/// ([:3811](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3811)):
+/// an `llvm.assume` valid at the context instruction implies the compare.
+fn simplify_icmp_with_dominating_assume(
+    q: &mut Query,
+    pred: IntPredicate,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    // Gracefully handle instructions that have not been inserted yet.
+    let (Some(analyses), Some(cxt)) = (q.analyses, q.cxt) else { return None };
+    let tracking = q.tracking();
+    let found = [lhs, rhs]
+        .into_iter()
+        .find_map(
+            |base| analyses
+                .assumption_cache()
+                .assumptions_for(base)
+                .iter()
+                .find_map(
+                    |&assume| {
+                        let condition = q.function.instruction(assume).operands[0];
+                        let implied = conditions::is_implied_condition_cmp(
+                            &tracking,
+                            condition,
+                            pattern::CmpPredicate::new(pred),
+                            pattern::Side::of(&tracking, lhs),
+                            pattern::Side::of(&tracking, rhs),
+                            true,
+                            0,
+                        )?;
+                        conditions::is_valid_assume_for_context(&tracking, assume, cxt, false).then_some(implied)
+                    },
+                ),
+        )?;
+    let i1 = q.context.types.int(1);
+    Some(q.int(i1, u128::from(found)))
+}
+
+/// `simplifyICmpWithIntrinsicOnLHS`
+/// ([:3835](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3835)).
+fn simplify_icmp_with_intrinsic_on_lhs(
+    q: &mut Query,
+    pred: IntPredicate,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    let tracking = q.tracking();
+    let (inst, _) = tracking.instruction_of(lhs)?;
+    let id = pattern::call_intrinsic(&tracking, inst)?;
+    let [x, y, _] = q.function.instruction(inst).operands[..] else { return None };
+    let i1 = q.context.types.int(1);
+    match id {
+        // uadd.sat(X, Y) uge X + Y
+        pattern::IntrinsicId::UaddSat => {
+            let sum = q.binary_of(rhs, BinaryOp::Add).is_some_and(|(a, b, _)| (a == x && b == y) || (a == y && b == x));
+            if sum && pred == IntPredicate::Uge {
+                return Some(q.int(i1, 1));
+            }
+            if sum && pred == IntPredicate::Ult {
+                return Some(q.int(i1, 0));
+            }
+            None
+        }
+        // usub.sat(X, Y) ule X - Y
+        pattern::IntrinsicId::UsubSat => {
+            let difference = q.binary_of(rhs, BinaryOp::Sub).is_some_and(|(a, b, _)| a == x && b == y);
+            if difference && pred == IntPredicate::Ule {
+                return Some(q.int(i1, 1));
+            }
+            if difference && pred == IntPredicate::Ugt {
+                return Some(q.int(i1, 0));
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// `CmpInst::getInversePredicate`.
