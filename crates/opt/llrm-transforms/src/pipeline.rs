@@ -770,7 +770,10 @@ pub(crate) fn llvm_order(
             }),
             fold("fold@1242"),
             dead("dead@1242"),
-            decide("decide@1244"),
+            // `SimplifyCFGOptions().convertSwitchRangeToICmp(true)`
+            // (PassBuilderPipelines.cpp#L1245): the option is read by
+            // `simplifySwitch`, not translated yet, so these are the defaults.
+            simplify_cfg("decide@1244"),
             phiopt("phiopt@1244"),
         ],
         // InstSimplifyPass, PassBuilderPipelines.cpp#L1662: the last function
