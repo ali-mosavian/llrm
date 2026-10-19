@@ -129,7 +129,7 @@ fn _trap_branches(
 /// branch. The header copy, on by default, settles the branch threaded and
 /// takes it out (#1194).
 #[test]
-fn test_a_partition_loop_has_no_bounds_check_in_it() {
+fn test_a_partition_loop_keeps_only_the_bounds_check_llvm_keeps() {
     let function = _nib("partition", "partition", "_partition");
     let loops = _innermost_loops(&function);
     assert!(!loops.is_empty(), "premise: the loop is found\n{function}");
