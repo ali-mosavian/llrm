@@ -724,7 +724,8 @@ impl LIRTransform for FloatAlloc {
         body: LirBody,
     ) -> Result<LirBody, String> {
         let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
-        crate::backend::fpstack::converted(&body, &self.classes)
+        let propagated = if super::allocate::rfp_on() { crate::backend::fpcopyprop::propagated(&body) } else { None };
+        crate::backend::fpstack::converted(propagated.as_ref().unwrap_or(&body), &self.classes)
             .and_then(|converted| _truncating(&converted, frame.as_deref_mut()))
             .map_err(|error| error.to_string())
     }

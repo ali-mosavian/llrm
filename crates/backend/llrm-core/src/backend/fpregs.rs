@@ -35,7 +35,7 @@ use crate::support::hash::{HashSet, IndexMap};
 const SLOTS: usize = RFP.len();
 
 /// Which of `FP0`..`FP6` `place` is.
-fn slot_of(
+pub(super) fn slot_of(
     regs: Regs,
     place: &Loc,
 ) -> Option<usize> {
@@ -49,7 +49,7 @@ fn slot_of(
 }
 
 /// The slots `what` reads and the slots it writes, as bit masks.
-fn touched(
+pub(super) fn touched(
     regs: Regs,
     what: &Semantics,
 ) -> (u8, u8) {
@@ -60,7 +60,7 @@ fn touched(
 
 /// For each block the slots live out of it: read before written somewhere
 /// ahead.
-fn live_out(
+pub(super) fn live_out(
     body: &LirBody,
     regs: Regs,
 ) -> IndexMap<i64, u8> {
