@@ -44,22 +44,24 @@ use llrm_mir::valuetracking::pattern;
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_phi::UB_IMPLYING;
+use crate::combine_select_bools::select_of_bools;
 use crate::combine_shared::{has_one_use, query, replace_operand};
 
 /// The parts of a `select`.
 pub(crate) struct Sel {
-    cond: Operand,
-    if_true: Operand,
-    if_false: Operand,
-    ty: llrm_mir::types::TypeId,
+    pub cond: Operand,
+    pub if_true: Operand,
+    pub if_false: Operand,
+    pub ty: llrm_mir::types::TypeId,
 }
 
-type Fold = fn(&mut Combiner, InstId, &Sel) -> Option<Visit>;
+pub(crate) type Fold = fn(&mut Combiner, InstId, &Sel) -> Option<Visit>;
 
 /// The rewrites in the pin's order (:4598-5429), the translated ones.
 const FOLDS: &[Fold] = &[
     ctpop_guard,
     cond_known_in_arms,
+    select_of_bools,
     bool_to_extension,
     select_of_gep,
     select_of_phi_condition,
@@ -89,7 +91,7 @@ impl Combiner<'_> {
     }
 
     /// `Builder.CreateLogicalAnd(a, b, "", &SI)`: `select a, b, false`.
-    fn create_logical_and(
+    pub(crate) fn create_logical_and(
         &mut self,
         at: InstId,
         select: InstId,
@@ -101,7 +103,7 @@ impl Combiner<'_> {
     }
 
     /// `Builder.CreateLogicalOr(a, b, "", &SI)`: `select a, true, b`.
-    fn create_logical_or(
+    pub(crate) fn create_logical_or(
         &mut self,
         at: InstId,
         select: InstId,
