@@ -374,16 +374,6 @@ pattern pointer_cast for ptrtoint=mov inttoptr=mov addrspacecast=mov
   emit $x86 r <- s
 end
 
-# A `ptrtoint` to less than the pointer's width is its low bytes, as a `trunc`
-# is.
-pattern pointer_truncate
-  match ptrtoint(x)
-  when narrower(x)
-  let r = result
-  let s = narrowed(x)
-  emit mov r <- s
-end
-
 # A frozen value is the value: LLVM selects it as a copy.
 pattern freeze
   match freeze.i1|i8|i16|i32|ptr(x)
