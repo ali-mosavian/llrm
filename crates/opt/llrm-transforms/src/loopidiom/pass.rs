@@ -97,6 +97,10 @@ impl FunctionPass for LoopIdiom {
         "loopidiom"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("loop-idiom")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,

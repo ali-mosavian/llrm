@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/fpstack.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/fpstack.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/fpstack.rs sha256:bb0e5430ea625af485623aa8adadfc0bf6c1c55e811977d7a60d7b9d1327f6e9 -->
+<!-- src: crates/backend/llrm-core/src/backend/fpstack.rs sha256:7c34791b7597cd81aad3a79e6e561728af8c71d9b89b4276b87c9b9af313b52b -->
 
 # fpstack
 
@@ -28,8 +28,9 @@ fixed its entry first.
 
 DEVIATE 1: a floating value is a value number, not `FP0`..`FP6`: the stack
 model keeps the numbers in `values`, top first, and a scratch register is a
-fresh number. More than `float_stack` live values at once is refused where
-LLVM's `pushReg` is fatal.
+fresh number. Registers become values first (`fpregs`). More than
+`float_stack` live values at once is refused where LLVM's `pushReg` is
+fatal.
 
 DEVIATE 2: LLVM has no simultaneous copies at this stage (`PHIElimination`
 writes them one at a time through temporaries); a group of phi copies here

@@ -314,6 +314,11 @@ impl Function {
             return None;
         }
         let [Operand::Block(target)] = self.instruction(inst).operands[..] else { return None };
+        // A branch to its own block enters no other: its records have no start
+        // to go to but itself, which is going away.
+        if self.parent(inst) == Some(target) {
+            return None;
+        }
         // A phi that names the block as where its value comes from is a use of
         // it too, but no way in. (An erase has already taken its own
         // use of the block away.)
@@ -616,6 +621,29 @@ impl Function {
     ) {
         let name = self.values[from.0 as usize].name.take();
         self.values[to.0 as usize].name = name;
+    }
+
+    /// `BasicBlock::takeName`: `to` is named what `from` was, which goes
+    /// unnamed; the name stays taken in the function.
+    pub fn take_block_name(
+        &mut self,
+        from: BlockId,
+        to: BlockId,
+    ) {
+        let name = self.blocks[from.0 as usize].name.take();
+        self.blocks[to.0 as usize].name = name;
+    }
+
+    /// `BasicBlock::setName`: `block` is named `name`, or `name` with the least
+    /// number appended that nothing live holds.
+    pub fn set_block_name(
+        &mut self,
+        block: BlockId,
+        name: &str,
+    ) {
+        self.release_name(block);
+        let name = self.unique_name(name);
+        self.blocks[block.0 as usize].name = Some(name);
     }
 
     /// Replaces an instruction's opcode in place (a `getelementptr`'s source
