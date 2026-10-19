@@ -304,7 +304,7 @@ impl Assumption for Disjoint {
 
     fn assumed(
         &self,
-        _: &mut Context,
+        _: &Context,
         function: &mut Function,
         copy: &LoopCopy,
     ) -> Result<(), String> {

@@ -233,9 +233,7 @@ impl LoopGuards {
             let phis: Vec<_> = cx
                 .function
                 .block(second)
-                .instructions()
                 .iter()
-                .copied()
                 .take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi)
                 .collect();
             for phi in phis {

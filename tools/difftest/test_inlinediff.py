@@ -62,3 +62,10 @@ def test_the_report_states_whether_llvm_both_inlined_and_declined():
     assert "premise (LLVM inlined 1 of 2 sites): ok" in inlinediff.table(report)
     alone = inlinediff.compare(BEFORE, AFTER, "inline")
     assert alone["premise"].startswith("PREMISE FAILED: LLVM inlined all 2 sites"), alone["premise"]
+
+
+def test_quoted_names_of_m16_modules_are_read():
+    """m16 names a function `@"_f@3"` (its convention's decoration): the reader took only bare names and stopped at the first quoted
+    `define`, so no m16 module could be compared (TypeError in `functions`)."""
+    text = 'define i16 @"_main@0"() addrspace(1) {\n  %1 = call cc 1005 addrspace(1) i16 @"_tiny@3"(i16 1)\n  ret i16 %1\n}\n'
+    assert inlinediff.sites(text) == {("_main@0", "_tiny@3"): 1}

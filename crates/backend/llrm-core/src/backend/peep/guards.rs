@@ -8,7 +8,8 @@
 //!
 //! ```text
 //!   metadata    free(@k, set)         none of the set's metadata present
-//!   liveness    dead, flags_dead,     lanes or flags nothing reads after
+//!   liveness    dead, unread,         lanes or flags nothing reads after
+//!               flags_dead,
 //!               flags_dead_out        the instruction or the block
 //!   encoding    encodable, no_longer, the rewrite encodes, in no more bytes
 //!               same_length,          than the original (via `select`)
@@ -132,6 +133,16 @@ pub fn dead(
 ) -> bool {
     let regs = cx.regs();
     lanes.is_subset(&cx.dead_after(regs, one))
+}
+
+/// No instruction after `one` reads any lane in `lanes`, even where a call may
+/// clobber an upper half: a narrowed write cannot rely on the callee.
+pub fn unread(
+    cx: &Cx,
+    one: &Arc<Insn>,
+    lanes: Lanes,
+) -> bool {
+    lanes.is_subset(&cx.unread_after(cx.regs(), one))
 }
 
 /// Nothing after this instruction reads an arithmetic flag.

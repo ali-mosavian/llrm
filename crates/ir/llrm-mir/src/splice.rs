@@ -33,7 +33,7 @@ fn phis(
 /// `call`, a call to `callee`, replaced by a copy of its body, which
 /// `carries`. The instructions of the copy, in the order of the body's.
 pub fn splice(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     call: InstId,
     callee: &Function,
@@ -45,7 +45,7 @@ pub fn splice(
 /// of the caller's entry, not before the entry's first: copies made out of
 /// order stand as they would made in it.
 pub fn splice_before(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     call: InstId,
     callee: &Function,

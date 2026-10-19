@@ -191,7 +191,7 @@ pub fn forwardable_walk(
         .function
         .layout()
         .iter()
-        .flat_map(|&block| unit.function.block(block).instructions().to_vec())
+        .flat_map(|&block| unit.function.block(block).iter().collect::<Vec<_>>())
         .filter(|inst| want.contains(inst) && loaded_into(unit, accesses, *inst).is_some())
         .collect();
     if missing.is_empty() { Vec::new() } else { memory_providers(unit, accesses, &missing) }
@@ -1184,12 +1184,7 @@ fn memory_providers(
         .layout()
         .iter()
         .flat_map(|&block| {
-            function
-                .block(block)
-                .instructions()
-                .iter()
-                .enumerate()
-                .map(move |(index, &inst)| (inst, (cfg::id(block), index)))
+            function.block(block).iter().enumerate().map(move |(index, inst)| (inst, (cfg::id(block), index)))
         })
         .collect();
     let loads: Vec<(InstId, (MemRef, ValueId))> =

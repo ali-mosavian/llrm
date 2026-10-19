@@ -95,9 +95,7 @@ impl Run<'_> {
     ) -> Vec<InstId> {
         self.function
             .block(block)
-            .instructions()
             .iter()
-            .copied()
             .take_while(|&one| matches!(self.function.instruction(one).opcode, Opcode::Phi))
             .collect()
     }
@@ -291,7 +289,7 @@ impl Run<'_> {
         // A placeholder for each backedge value, filled once the phi exists.
         let operands: Vec<Operand> = preds.iter().flat_map(|&p| [zero, Operand::Block(p)]).collect();
         let phi = self.function.create_instruction(Opcode::Phi, ir_ty, operands, IrFlags::default(), None);
-        let first = *self.function.block(header).instructions().first().expect("a header");
+        let first = self.function.block(header).first().expect("a header");
         self.function.insert(phi, Position::Before(first)).expect("a placed phi");
         self.x.remember(phi);
         let value = self.result_of(phi);
@@ -788,7 +786,7 @@ impl Run<'_> {
         let preds = self.function.predecessors(header);
         let operands: Vec<Operand> = preds.iter().flat_map(|&p| [start_v, Operand::Block(p)]).collect();
         let phi = self.function.create_instruction(Opcode::Phi, ir_ty, operands, IrFlags::default(), None);
-        let head = *self.function.block(header).instructions().first().expect("a header");
+        let head = self.function.block(header).first().expect("a header");
         self.function.insert(phi, Position::Before(head)).expect("a placed phi");
         let pn = self.result_of(phi);
         for (at, &pred) in preds.iter().enumerate() {
@@ -917,9 +915,8 @@ impl Run<'_> {
     ) {
         if self.x.insert_point == Some(inst) {
             let block = self.function.parent(inst).expect("placed");
-            let all = self.function.block(block).instructions();
-            let at = all.iter().position(|&one| one == inst).expect("in its block");
-            self.x.insert_point = Some(all[at + 1]);
+            let next = self.function.block(block).iter().skip_while(|&one| one != inst).nth(1);
+            self.x.insert_point = Some(next.expect("in its block"));
         }
     }
 

@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::passes::PassManager;
+use llrm_mir::passes::{Declared, PassManager};
 use llrm_mir::target::Machine;
 
 use super::*;
@@ -53,7 +53,7 @@ fn stepped(
                 stages.push((module.global(id).name.clone().unwrap(), stage.to_owned()));
                 Ok(())
             },
-            &mut |_, _, function| Ok(function),
+            &mut |module, _, function| Ok((function, Declared::of(module))),
             &mut |_, _, _| Ok(()),
         )
     })
@@ -238,7 +238,7 @@ fn test_a_terminal_body_in_another_module_cuts_its_callers_tail() {
         1,
         Threshold::default(),
         &mut |_, _, _, _| Ok(()),
-        &mut |_, _, function| Ok(function),
+        &mut |module, _, function| Ok((function, Declared::of(module))),
         &mut |_, _, _| Ok(()),
     )
     .unwrap();
@@ -304,7 +304,7 @@ fn test_a_constant_another_module_returns_reaches_its_callers() {
         1,
         Threshold::default(),
         &mut |_, _, _, _| Ok(()),
-        &mut |_, _, function| Ok(function),
+        &mut |module, _, function| Ok((function, Declared::of(module))),
         &mut |_, _, _| Ok(()),
     )
     .unwrap();
@@ -333,7 +333,7 @@ fn test_an_entry_keeps_its_parameters_whatever_its_linkage() {
         1,
         Threshold::default(),
         &mut |_, _, _, _| Ok(()),
-        &mut |_, _, function| Ok(function),
+        &mut |module, _, function| Ok((function, Declared::of(module))),
         &mut |_, _, _| Ok(()),
     )
     .unwrap();
@@ -349,7 +349,7 @@ fn test_the_step_runs_as_a_program_pass() {
         crate::testing::Tuned { costs: OperationCosts { call: 4, ..OperationCosts::default() }, ..Default::default() };
     manager.add_program(Interprocedural {
         pipeline: Box::new(|_, _, _, _| {}),
-        specialise: Box::new(|_, _, function| function),
+        specialise: Box::new(|module, _, function| (function, Declared::of(module))),
         proved: None,
         inline: Threshold::default(),
         rate: None,
@@ -405,7 +405,7 @@ b:
         };
         manager.add_program(Interprocedural {
             pipeline: Box::new(|_, _, _, _| {}),
-            specialise: Box::new(|_, _, function| function),
+            specialise: Box::new(|module, _, function| (function, Declared::of(module))),
             proved: None,
             inline: Threshold::default(),
             rate,
@@ -1054,7 +1054,7 @@ b:
         };
         manager.add_program(Interprocedural {
             pipeline: Box::new(|_, _, _, _| {}),
-            specialise: Box::new(|_, _, function| function),
+            specialise: Box::new(|module, _, function| (function, Declared::of(module))),
             proved: None,
             inline: Threshold::default(),
             rate: size.then_some(0),
@@ -1188,7 +1188,7 @@ fn test_a_caller_of_many_callees_is_put_through_the_pipeline_a_bounded_number_of
             }
             Ok(())
         },
-        &mut |_, _, function| Ok(function),
+        &mut |module, _, function| Ok((function, Declared::of(module))),
         &mut |_, _, _| Ok(()),
     )
     .unwrap();
@@ -1218,9 +1218,9 @@ fn test_a_callee_is_specialised_once_for_the_constants_its_sites_pass() {
     let mut memo = Specialisations::default();
     let costs = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
     let mut bytes = |constants: &[Option<llrm_mir::context::ConstantId>]| {
-        memo.bytes::<String>(&mut module, &mut modules, mix, constants, &costs, &mut |_, _, function| {
+        memo.bytes::<String>(&mut module, &mut modules, mix, constants, &costs, &mut |module, _, function| {
             runs.set(runs.get() + 1);
-            Ok(function)
+            Ok((function, Declared::of(module)))
         })
         .unwrap()
     };
@@ -1228,6 +1228,46 @@ fn test_a_callee_is_specialised_once_for_the_constants_its_sites_pass() {
     assert_eq!((first, runs.get()), (again, 1), "the second site made the specialisation again");
     bytes(&[Some(four), None]);
     assert_eq!(runs.get(), 2, "other constants share the first's");
+}
+
+/// A specialised copy whose pipeline declares a function (a `memset` it made
+/// from a fill loop) has a call to an id the module lacks: pricing indexed past
+/// its globals and panicked (c/pattern_fill -O2 -m32).
+#[test]
+fn test_a_specialised_copy_calling_a_function_it_declared_is_priced() {
+    let mut module = parsed(
+        "declare void @ext(i16)\n\ndefine void @mix(i16 %a) {\nb:\n  call void @ext(i16 %a)\n  ret void\n}\n",
+    );
+    let (mix, ext) = (module.named("mix").unwrap(), module.named("ext").unwrap());
+    let mut modules = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
+    let three = {
+        let ty = module.context.types.int(16);
+        module.context.int(ty, 3)
+    };
+    let sized = Specialisations::default().bytes::<String>(
+        &mut module,
+        &mut modules,
+        mix,
+        &[Some(three)],
+        &OperationCosts::default(),
+        &mut |module, _, mut function| {
+            let mut declared = Declared::of(module);
+            let ty = module.global(ext).function().unwrap().ty;
+            let fresh = declared.declare("llvm.fresh", ty);
+            let call = function.walk().map(|(_, inst)| inst).find(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Call(_)));
+            let call = call.unwrap();
+            let last = function.instruction(call).operands.len() - 1;
+            let llrm_mir::module::Operand::Constant(was) = function.instruction(call).operands[last] else { unreachable!("a callee") };
+            let pointer = module.context.get(was).ty;
+            let to = module.context.constant(llrm_mir::context::Constant {
+                ty: pointer,
+                kind: llrm_mir::context::ConstantKind::Global(fresh),
+            });
+            function.set_operand(call, last, llrm_mir::module::Operand::Constant(to));
+            Ok((function, declared))
+        },
+    );
+    assert!(sized.is_ok(), "{sized:?}");
 }
 
 /// A pass that rewrites the calls of the function it changes (dead arguments,

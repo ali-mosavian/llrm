@@ -81,6 +81,7 @@ mod argpromotion_tests;
 pub mod availableexternally;
 #[cfg(test)]
 mod availableexternally_tests;
+pub mod bdce;
 pub mod calleepop;
 #[cfg(test)]
 mod calleepop_tests;
@@ -118,6 +119,8 @@ pub mod globaldce;
 mod globaldce_tests;
 pub mod globalopt;
 pub mod gvn;
+#[cfg(test)]
+mod gvn_load_tests;
 #[cfg(test)]
 mod gvn_scalar_tests;
 pub mod hoist;
@@ -180,6 +183,7 @@ pub mod profit;
 pub mod promote;
 pub mod rotate;
 pub mod settled;
+pub mod simpleloopunswitch;
 pub mod simplifycfg;
 pub mod simplifyindvar;
 pub mod sink;

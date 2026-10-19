@@ -58,6 +58,7 @@ COUNTERPART = {
     "decide": "simplifycfg",
     "trivialunswitch": "loop-mssa(simple-loop-unswitch<no-nontrivial>)",
     "dead": "adce",
+    "bdce": "bdce",
     "tailrec": "tailcallelim",
     "memcpyopt": "memcpyopt",
     "cvp": "correlated-propagation",
@@ -92,6 +93,7 @@ SOURCE = {
     "simplifycfg": "Transforms/Utils/SimplifyCFG.cpp",
     "loop-mssa(simple-loop-unswitch<no-nontrivial>)": "Transforms/Scalar/SimpleLoopUnswitch.cpp",
     "adce": "Transforms/Scalar/ADCE.cpp",
+    "bdce": "Transforms/Scalar/BDCE.cpp",
     "tailcallelim": "Transforms/Scalar/TailRecursionElimination.cpp",
     "memcpyopt": "Transforms/Scalar/MemCpyOptimizer.cpp",
     "correlated-propagation": "Transforms/Scalar/CorrelatedValuePropagation.cpp",
@@ -130,7 +132,8 @@ def functions(text: str) -> dict[str, list[str]]:
     current = None
     for line in text.splitlines():
         if line.startswith("define "):
-            current = re.search(r"@([\w.$-]+)\(", line)[1]
+            named = re.search(r'@(?:"([^"]+)"|([\w.$-]+))\(', line)  # m16 quotes its decorated names: @"_f@3"
+            current = named[1] or named[2]
             found[current] = []
         if current is not None:
             found[current].append(line)
