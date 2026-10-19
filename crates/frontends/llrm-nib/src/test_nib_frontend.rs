@@ -1470,6 +1470,32 @@ fn test_pascal_functions_push_in_order_and_clean_up_after_themselves() {
     assert!(text.contains(&format!("pushd {}", 255 << 16 | 100)), "{text}");
 }
 
+const MEAN: &str = "@export(\"pascal16\")\nfn mean(a: f32, b: f32, c: f32, d: f32) -> f32:\n    let readings: f32[4] = [a, b, c, d]\n    let mut total: f32 = 0.0\n    for r in readings:\n        total += r\n    return total / 4.0\n\nfn main() -> i16:\n    return 0\n";
+
+/// The `fstp` count of `mean` at -O2 with `float_store` as given.
+fn mean_stores(float_store: bool) -> usize {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "mean.nib", MEAN);
+    let frontend = crate::Frontend { float_store, ..crate::real_mode() };
+    let program = driver::parsed(&source, &frontend, None).expect("parses");
+    let text = listing_on(&program, "main", &level("O2"), "486");
+    between(&text, "MEAN proc far", "MEAN endp").matches("fstp").count()
+}
+
+#[test]
+/// `-fexcess-precision=standard` rounds an f32 variable at each assignment.
+/// The sum of four unknown readings stayed in one x87 register, 10.0375 where
+/// per-store rounding gives 10.037499.
+fn test_standard_mode_rounds_an_f32_variable_per_assignment() {
+    assert!(mean_stores(true) >= 4);
+}
+
+#[test]
+/// Fast mode, the default, leaves the sum in the register.
+fn test_fast_mode_keeps_an_f32_variable_extended() {
+    assert!(mean_stores(false) < 4);
+}
+
 #[test]
 /// QB returns a float through a hidden near pointer, its last parameter. A
 /// pascal16 function whose last parameter merely has that type returned
