@@ -150,6 +150,9 @@ pub mod instworklist;
 mod instworklist_tests;
 pub mod interprocedural;
 pub mod ipacp;
+pub mod ivusers;
+#[cfg(test)]
+mod ivusers_tests;
 pub mod jumpthread;
 pub mod jumpthreading;
 #[cfg(test)]
@@ -178,9 +181,6 @@ pub mod loopunroll;
 pub mod loopunrollpass;
 pub mod loopversion;
 pub mod lsr;
-pub mod ivusers;
-#[cfg(test)]
-mod ivusers_tests;
 pub mod lsr_collect;
 #[cfg(test)]
 mod lsr_collect_tests;

@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 114 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 116 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -57,6 +57,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | instworklist | The instruction worklist of InstCombine and the passes that drive a simplifier to a fixed point. | Not a pass: a data structure. Nothing uses it yet; `instsimplify`'s driver | [instworklist](instworklist.md) |
 | interprocedural | The whole-program step run once every body has reached its own fixed point: states what each body does, inlines, carries constants across direct calls, drops dead pure calls and the tails of calls that never return, and sends each changed body back through its pipeline. | A `ProgramPass` after the per-body fixed point and before `globaldce`, | [interprocedural](interprocedural.md) |
 | ipacp | Copies a function for the constants its callers pass and redirects those calls to the copy, so the copy's loops and branches fold on values the original cannot assume: GCC's `ipa-cp` cloning. | In [`crate::interprocedural`](../analyses/interprocedural.md)'s constants loop, after constant arguments are | [ipacp](ipacp.md) |
+| ivusers | The users of a loop's induction variables (`IVUsers.cpp` at `d1106deb71cc`), which loop strength reduction rewrites. | Nothing runs it yet: stage 3 of the translation of LSR. | [ivusers](ivusers.md) |
 | jumpthread | Threads a path through a branch or switch that the way into it decides: the blocks between the deciding value and the test are copied for that path, which jumps straight to its target and does not run the test. | After the loop passes and `rotate`, before the last `hoist`. Switch state | [jumpthread](jumpthread.md) |
 | jumpthreading | Jump threading: a block that ends in a branch or switch on a condition some of its predecessors decide is bypassed for those predecessors, which jump straight to the target; as LLVM's `jump-threading`. | `pipeline` (`jumpthreading@668`, `jumpthreading@809`), the `Partial` | [jumpthreading](jumpthreading.md) |
 | lcssa | Puts every natural loop in loop-closed SSA form, so loop passes can change a loop without rewriting the readers of its values elsewhere. | In every body's pipeline after `loopsimplify`, unless `lcssa` is turned off, | [lcssa](lcssa.md) |
@@ -79,6 +80,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | loopunrollpass | `LoopFullUnrollPass`: a loop whose trip count is known and small enough, or whose unrolled form simplifies enough, is copied out completely. |  | [loopunrollpass](loopunrollpass.md) |
 | loopversion | Loop versioning: a loop is copied for what is true of it only at run time, and the copy is entered behind a test of that. | Once per body, after `unswitch`, `split`, `fuse` and `distribute` and | [loopversion](loopversion.md) |
 | lsr | Strength reduction: replaces a loop's induction variables, and the address arithmetic built from them, with the cheapest set of counters the target can address, so the loop carries few registers and no multiply (LLVM's LoopStrengthReduce, gcc's ivopts). | Once per body, after the interprocedural step and `fixednarrow`, before | [lsr](lsr.md) |
+| lsr_collect | What LLVM's loop strength reduction collects before it generates formulae: the uses and their fixups, the interesting factors and types, and each use's first formula (`LSRInstance::getUse`, `CollectInterestingTypesAndFactors`, `CollectFixupsAndInitialFormulae`, `CollectLoopInvariantFixupsAndFormulae` and the helpers they call; LoopStrengthReduce.cpp at `d1106deb71cc`, l.795-1125 and l.2817-3960). | Nothing runs it yet: stage 3 of the translation of LSR. | [lsr_collect](lsr_collect.md) |
 | lsr_formula | The data of LLVM's loop strength reduction: `Immediate`, `RegUseTracker` and `Formula` (LoopStrengthReduce.cpp at `d1106deb71cc`, l.212-793). | Nothing runs it yet: stage 1 of the translation of LSR (the old pass in | [lsr_formula](lsr_formula.md) |
 | lsr_use | The uses and the price of LLVM's loop strength reduction: `LSRFixup`, `LSRUse`, `Cost` and the addressing-mode checks they rate by (LoopStrengthReduce.cpp at `d1106deb71cc`, l.1070-2130). | Nothing runs it yet: stage 2 of the translation of LSR (the old pass in | [lsr_use](lsr_use.md) |
 | mem2reg | `mem2reg`: an alloca read and written only by direct loads and stores becomes SSA values and phis, and its loads, stores and the alloca go. | [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when | [mem2reg](mem2reg.md) |

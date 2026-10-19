@@ -173,16 +173,14 @@ fn an_exact_division_has_no_remainder() {
 #[test]
 fn an_immediate_is_taken_out_of_a_sum_and_a_recurrence_start() {
     collected(STORE, |cx, se, lsr, _, _| {
-        use llrm_analysis::scev::expr::{Ty, Use as ScevUse};
         use llrm_analysis::scev::Flags;
+        use llrm_analysis::scev::expr::{Ty, Use as ScevUse};
         let n = se.get_unknown(cx, llrm_mir::module::Operand::Value(cx.function.parameters()[1]));
         let seven = se.get_constant_of_type(cx, Ty::Int(32), 7);
         let sum = se.get_add_expr(cx, vec![ScevUse::of(seven), ScevUse::of(n)], Flags::default(), 0).scev;
         let (offset, rest) = extract_immediate(se, cx, sum);
         assert_eq!((offset, rest), (Immediate(7), n));
-        let ar = se
-            .get_add_rec_expr(cx, vec![ScevUse::of(sum), ScevUse::of(seven)], lsr.l, Flags::default())
-            .scev;
+        let ar = se.get_add_rec_expr(cx, vec![ScevUse::of(sum), ScevUse::of(seven)], lsr.l, Flags::default()).scev;
         let (offset, rest) = extract_immediate(se, cx, ar);
         assert_eq!(offset, Immediate(7));
         assert_eq!(se.operands(rest)[0].scev, n);
