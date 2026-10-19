@@ -84,6 +84,10 @@ pub enum Intrinsic {
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
+    /// `llvm.va_end`: the list is finished with; no code.
+    VaEnd,
+    /// `llvm.va_copy`: the second list copied into the first.
+    VaCopy,
     /// Inline machine code, laid down where it is called: its name carries
     /// the bytes, and each argument is a frame place whose displacement it
     /// reads at a byte offset the name gives. It answers what it leaves in
@@ -345,7 +349,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 38] = [
+const TABLE: [Spec; 40] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -471,6 +475,22 @@ const TABLE: [Spec; 38] = [
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
         parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.va_end",
+        intrinsic: Intrinsic::VaEnd,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.va_copy",
+        intrinsic: Intrinsic::VaCopy,
+        overloads: &[Kind::Pointer, Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0), Slot::Any(1)],
         own: None,
     },
     Spec {

@@ -253,6 +253,24 @@ pub struct Convention {
     /// The registers its prologue may save: the convention's, but those its
     /// parameters arrive in.
     pub saved: Vec<(RegId, RegId)>,
+    /// Where the first stack argument the function does not name lies, by its
+    /// displacement from the frame register.
+    pub stack_arguments: i64,
+}
+
+/// A variadic function's `va_list` under `sysv-amd64`: what `va_start` writes.
+#[derive(Clone, Copy, Debug)]
+struct VaList {
+    /// The frame displacement of the register save area, one quadword for each
+    /// argument register.
+    save: i64,
+    /// The offset in the area of the first unnamed integer register.
+    gp_offset: i64,
+    /// The offset past the integer registers, where the vector registers' part
+    /// begins.
+    fp_offset: i64,
+    /// The frame displacement of the first unnamed stack argument.
+    overflow: i64,
 }
 
 /// How a calling convention pushes arguments and who pops them. C pushes
@@ -505,7 +523,7 @@ fn convention(
         0
     };
     let saved = saved(arch, described, &parameters, &returns);
-    Ok(Convention { parameters, returns, popped, saved })
+    Ok(Convention { parameters, returns, popped, saved, stack_arguments: cursor })
 }
 
 /// The stack bytes the address of a struct result takes where `entry` passes it
@@ -1019,6 +1037,7 @@ pub fn selected_with<'c>(
         pool,
         unsealed: false,
         variadic: None,
+        va: None,
         variables: Vec::new(),
         homed: BTreeSet::new(),
         homes: IndexMap::default(),
@@ -1629,6 +1648,8 @@ pub struct Selector<'m, 'c, 'p> {
     /// Where the first variadic argument is, by its displacement from BP:
     /// past the last parameter's slot.
     variadic: Option<i64>,
+    /// The `va_list` of a function whose convention keeps a register save area.
+    va: Option<VaList>,
     /// `-g`'s frame variables, each with the function declaring it.
     variables: Vec<(String, DebugVariable)>,
     /// The arguments `-g` names that the debug format cannot say are in their
@@ -1929,6 +1950,42 @@ impl Selector<'_, '_, '_> {
             let held = Held { value: self.value(parameter), width };
             let what = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(frame(disp, width))]);
             prologue.push(insn(block_at[&entry], what));
+        }
+        let (_, _, is_variadic) = self.module.signature(function.ty);
+        let described = self::entry(self.arch, function.calling_convention, is_variadic);
+        if let Some(one) = described.filter(|one| is_variadic && one.va_list.as_deref() == Some("sysv-amd64")) {
+            // The unnamed argument registers are stored at entry in a register
+            // save area, one quadword each; the list `va_start`
+            // makes names the area and the first unnamed stack argument.
+            let named: usize = convention
+                .parameters
+                .iter()
+                .map(|place| if let Parameter::Registers(registers) = place { registers.len() } else { 0 })
+                .sum();
+            let slot_bytes = self.arch.stack_slot_bytes();
+            let Pointer::Frame { disp: save, .. } = self.temporary(slot_bytes * one.argument_registers.len() as i64)
+            else {
+                unreachable!("a temporary is a frame cell")
+            };
+            for (index, name) in one.argument_registers.iter().enumerate().skip(named) {
+                let held = self.fresh_held(slot_bytes as u32);
+                arrived.push((held, regs.named(llrm_x86::calling::register(name), slot_bytes)));
+                let what = semantics(
+                    Operation::Move,
+                    "mov",
+                    vec![Loc::Mem(frame(save + slot_bytes * index as i64, slot_bytes as u32))],
+                    vec![Loc::Held(held)],
+                );
+                prologue.push(Arc::new(Insn { volatile: true, ..(*insn(block_at[&entry], what)).clone() }));
+            }
+            let registers = slot_bytes * one.argument_registers.len() as i64;
+            self.va = Some(VaList {
+                save,
+                gp_offset: slot_bytes * named as i64,
+                fp_offset: registers,
+                overflow: convention.stack_arguments,
+            });
+            self.unsealed = true;
         }
         if !arrived.is_empty() {
             let at = block_at[&entry];
@@ -3248,6 +3305,9 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
         let regs = self.regs();
+        if let Some(va) = self.va {
+            return self.va_start_with_save_area(va, arguments, at, out);
+        }
         let Some(disp) = self.variadic else {
             return refuse("va_start with no parameter before the variadic arguments");
         };
@@ -3261,6 +3321,68 @@ impl Selector<'_, '_, '_> {
             at,
             semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(regs, list, width))], vec![Loc::Held(held)]),
         ));
+        Ok(())
+    }
+
+    /// `llvm.va_copy`: the whole list, the pointer it is or the structure of a
+    /// register save area, moved a slot at a time through a register.
+    fn va_copy(
+        &mut self,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let regs = self.regs();
+        let width = self.layout.pointer(self.spaces.data).bits / 8;
+        let slots = if self.va.is_some() { 3 } else { 1 };
+        let (to, from) = (self.pointer(arguments[0])?, self.pointer(arguments[1])?);
+        for slot in 0..slots {
+            let by = i64::from(width) * slot;
+            let held = Held { value: self.fresh(), width };
+            let load = semantics(
+                Operation::Move,
+                "mov",
+                vec![Loc::Held(held)],
+                vec![Loc::Mem(Self::memory(regs, from.moved(by), width))],
+            );
+            out.push(insn(at, load));
+            let store = semantics(
+                Operation::Move,
+                "mov",
+                vec![Loc::Mem(Self::memory(regs, to.moved(by), width))],
+                vec![Loc::Held(held)],
+            );
+            out.push(insn(at, store));
+        }
+        Ok(())
+    }
+
+    /// `llvm.va_start` of a list with a register save area: `{ i32 gp_offset,
+    /// i32 fp_offset, ptr overflow_arg_area, ptr reg_save_area }`, written
+    /// field by field as X86's `LowerVASTART` does.
+    fn va_start_with_save_area(
+        &mut self,
+        va: VaList,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let regs = self.regs();
+        let list = self.pointer(arguments[0])?;
+        let stored = |this: &mut Self, by: i64, width: u32, value: Loc, out: &mut Vec<Arc<Insn>>| {
+            let cell = Self::memory(regs, list.moved(by), width);
+            out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![value])));
+            let _ = this;
+        };
+        for (by, offset) in [(0, va.gp_offset), (4, va.fp_offset)] {
+            stored(self, by, 4, Loc::Imm(Imm { value: offset, width: 4, address: None }), out);
+        }
+        let width = self.layout.pointer(self.spaces.data).bits / 8;
+        for (by, disp) in [(8, va.overflow), (16, va.save)] {
+            let held = Held { value: self.fresh(), width };
+            out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1, home: None }, held)));
+            stored(self, by, width, Loc::Held(held), out);
+        }
         Ok(())
     }
 
@@ -5439,6 +5561,8 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::PtrDiff) => self.pointer_difference(inst, arguments, at, out),
                 Some(Intrinsic::Window) => self.window(inst, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
+                Some(Intrinsic::VaEnd) => Ok(()),
+                Some(Intrinsic::VaCopy) => self.va_copy(arguments, at, out),
                 // Where a local's bytes are live: read by the frame layout, no
                 // code.
                 Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),

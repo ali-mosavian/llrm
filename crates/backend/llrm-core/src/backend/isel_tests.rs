@@ -5408,6 +5408,7 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
         returns: Vec::new(),
         popped: 0,
         saved: Vec::new(),
+        stack_arguments: 0,
     };
     let found: Vec<(String, DebugPlace)> =
         isel::parameters(&module, module.functions().next().expect("@f").2, "f", &convention, &Default::default())

@@ -321,3 +321,28 @@ fn an_alloca_with_the_pins_lifetime_markers_is_promoted() {
         listing.lines().map(str::trim).filter(|line| line.starts_with("mov") || *line == "ret").collect();
     assert_eq!(body, ["mov eax, 5", "ret"], "{listing}");
 }
+
+/// A variadic definition saves the argument registers it does not name and
+/// `va_start` fills the SysV list: "va_start with no parameter before the
+/// variadic arguments" refused every `va_list` of x86-64.
+#[test]
+fn va_start_saves_the_unnamed_argument_registers_and_fills_the_list() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.va_start.p0(ptr)\n\
+                declare void @llvm.va_end.p0(ptr)\n\
+                define i32 @f(i32 %n, ...) {\n  %ap = alloca [24 x i8], align 8\n  call void @llvm.va_start.p0(ptr %ap)\n  %g = load i32, ptr %ap, align 8\n  call void @llvm.va_end.p0(ptr %ap)\n  ret i32 %g\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    // One argument is named: rsi, rdx, rcx, r8 and r9 are saved; the list
+    // starts with gp_offset 8.
+    for register in ["rsi", "rdx", "rcx", "r8", "r9"] {
+        assert!(
+            listing.lines().any(|line| line.trim().starts_with("mov qword ptr") && line.trim().ends_with(register)),
+            "{register}\n{listing}"
+        );
+    }
+    let rdi_saved =
+        listing.lines().any(|line| line.trim().starts_with("mov qword ptr") && line.trim().ends_with("rdi"));
+    assert!(!rdi_saved, "the named argument is not saved\n{listing}");
+}
