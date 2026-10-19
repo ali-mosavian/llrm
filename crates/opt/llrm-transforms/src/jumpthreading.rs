@@ -77,8 +77,8 @@
 //!   clone verdict). Exit: W2's `inlinecost::decide` lands.
 //! - J14. `hanoi` -O2 runs 109 -> 114 clocks. Our output equals `opt`. With it
 //!   on, `_hanoi` does `push ecx; mov ecx, eax` before the `n == 0` test, so
-//!   the early return pays frame setup (shrink-wrap) and the constant copy
-//!   sits before the test (pre-RA MachineSink). Exit: the ShrinkWrap port
+//!   the early return pays frame setup (shrink-wrap) and the constant copy sits
+//!   before the test (pre-RA MachineSink). Exit: the ShrinkWrap port
 //!   (backend-two) and the MachineSink translation (lir-cleanup-port).
 //!
 //! Rows pair, one binary, on against off (feat/parity 846c0c0c6): clocks
