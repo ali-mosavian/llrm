@@ -1282,7 +1282,7 @@ impl State<'_, '_> {
         inst: InstId,
     ) -> bool {
         let result = self.function().instruction(inst).result.expect("a value");
-        self.function().users(result).len() == 1
+        self.function().users(result).has_one_use()
     }
 
     /// `UncondBrInst::Create(target, term)` then `term->eraseFromParent()`.
