@@ -1,0 +1,53 @@
+# The OLD analyses of the parity pipeline: stand-ins that a translation replaces. `tools/old_analysis_callers.py`
+# counts their callers. The list is the registry's (parity-pipeline owns it); `ask` is a manager analysis asked by
+# `get::<T>`, `require::<T>` and the like, `use` a type or function named in code, `module` a module whose functions are called.
+# `scope`: path prefixes searched (default crates/).
+# `defined_in`: files that define it or are its own plumbing; they are not callers.
+
+[[analysis]]
+name = "Summaries"
+ask = "Summaries"
+defined_in = ["crates/opt/llrm-analysis/src/manager.rs"]
+
+[[analysis]]
+name = "ExposedFrames"
+ask = "ExposedFrames"
+defined_in = ["crates/opt/llrm-analysis/src/manager.rs", "crates/opt/llrm-analysis/src/memory.rs"]
+
+[[analysis]]
+name = "Ranges"
+ask = "Ranges"
+defined_in = ["crates/opt/llrm-analysis/src/manager.rs"]
+
+[[analysis]]
+name = "PlainAccesses"
+ask = "PlainAccesses"
+defined_in = ["crates/opt/llrm-analysis/src/manager.rs"]
+
+[[analysis]]
+name = "Stamp"
+use = "Stamp"
+scope = ["crates/opt/"]
+defined_in = ["crates/opt/llrm-transforms/src/interprocedural.rs"]
+
+[[analysis]]
+name = "MemRef"
+use = "MemRef"
+defined_in = ["crates/opt/llrm-analysis/src/memory.rs", "crates/opt/llrm-analysis/src/manager.rs"]
+
+[[analysis]]
+name = "Accesses"
+use = "Accesses"
+defined_in = ["crates/opt/llrm-analysis/src/memoryssa.rs", "crates/opt/llrm-analysis/src/manager.rs"]
+
+[[analysis]]
+name = "ranges"
+module = "ranges"
+defined_in = ["crates/opt/llrm-analysis/src/ranges.rs"]
+scope = ["crates/opt/"]
+
+[[analysis]]
+name = "regions"
+module = "regions"
+defined_in = ["crates/opt/llrm-analysis/src/regions.rs"]
+scope = ["crates/opt/"]
