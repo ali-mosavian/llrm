@@ -1605,6 +1605,7 @@ pub fn greedy_rewritten(
     classes: &RegisterClasses,
     frame: &mut Frame,
     splitting: bool,
+    saved: &[RegId],
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
     const ROUNDS: usize = 24;
     let profile = targets::profile(cpu.clone()).map_err(Error::Value)?;
@@ -1632,6 +1633,8 @@ pub fn greedy_rewritten(
             unspillable: &unspill,
             data: Some(segments.data),
             sets: Some(&sets),
+            saved,
+            csr_first_use_cost: classes.csr_first_use_cost,
         };
         let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame, classes };
         let decided = crate::greedy::shadow::decide_with(&inputs, mode);
@@ -1730,6 +1733,8 @@ pub fn greedy_rewritten(
             unspillable: &unspill,
             data: Some(segments.data),
             sets: Some(&sets),
+            saved: &[],
+            csr_first_use_cost: 0,
         };
         let Some(decided) = crate::greedy::shadow::decide(&inputs, true) else { break };
         if decided.report.stats.failed > 0 {
@@ -2358,6 +2363,8 @@ fn _allocated(
             unspillable: &unspillable,
             data: Some(segments.data),
             sets: Some(&sets),
+            saved: &[],
+            csr_first_use_cost: 0,
         };
         if let Some(report) = crate::greedy::shadow::run(&inputs) {
             eprintln!(
@@ -4230,6 +4237,9 @@ pub struct RegAlloc {
     pub cpu: Profile,
     pub segments: Segments,
     pub classes: Rc<RegisterClasses>,
+    /// The registers this function keeps for its caller
+    /// (`MachineRegisterInfo::getCalleeSavedRegs`), whole.
+    pub saved: Vec<RegId>,
 }
 
 impl RegAlloc {
@@ -4248,6 +4258,7 @@ impl RegAlloc {
             cpu: targets::profile(cpu)?.clone(),
             segments: segments.clone(),
             classes: Rc::clone(classes),
+            saved: Vec::new(),
         })
     }
 
@@ -4383,24 +4394,37 @@ impl RegAlloc {
             // Each spill gets a slot of its own; they are shared once, over the
             // allocation kept (`spiller::slots_colored`).
             frame.borrow_mut().defer_colours = true;
-            let allocate = if greedy_on()
-                && std::env::var("LLRM_GREEDY_ONLY").map_or(true, |only| only.split(',').any(|n| n == candidate.name))
-            {
-                greedy_rewritten
+            let greedy = greedy_on()
+                && std::env::var("LLRM_GREEDY_ONLY").map_or(true, |only| only.split(',').any(|n| n == candidate.name));
+            let mut held = frame.borrow_mut();
+            let (cpu_now, frame_now) = ((&cpu).into(), &mut *held);
+            let allocated = if greedy {
+                greedy_rewritten(
+                    candidate,
+                    Some(&pins),
+                    Some(unspillable),
+                    Some(protected),
+                    cpu_now,
+                    &segments,
+                    &self.classes,
+                    frame_now,
+                    splitting,
+                    &self.saved,
+                )
             } else {
-                rewritten
+                rewritten(
+                    candidate,
+                    Some(&pins),
+                    Some(unspillable),
+                    Some(protected),
+                    cpu_now,
+                    &segments,
+                    &self.classes,
+                    frame_now,
+                    splitting,
+                )
             };
-            let allocated = allocate(
-                candidate,
-                Some(&pins),
-                Some(unspillable),
-                Some(protected),
-                (&cpu).into(),
-                &segments,
-                &self.classes,
-                &mut frame.borrow_mut(),
-                splitting,
-            );
+            drop(held);
             frame.borrow_mut().defer_colours = false;
             let (got, out, spilled) = allocated?;
             let cost = llrm_support::debug::timed("regalloc cost", || _emitted(&out));

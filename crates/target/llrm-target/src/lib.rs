@@ -426,6 +426,12 @@ pub trait Target {
     /// The registers an allocator may hold values in.
     fn register_capacity(&self) -> i64;
 
+    /// `TargetRegisterInfo::getCSRFirstUseCost`: what a function pays the
+    /// first time it uses a callee-saved register, per entry.
+    fn csr_first_use_cost(&self) -> u64 {
+        0
+    }
+
     /// How deep the floating register stack is: the roots of class `x87` its
     /// register file states.
     fn float_stack(&self) -> usize {

@@ -76,6 +76,8 @@ pub struct RegisterClasses {
     status_word: Option<RegId>,
     /// The register file of the target these classes are of.
     pub registers: llrm_lir::registers::Regs,
+    /// `getCSRFirstUseCost`.
+    pub csr_first_use_cost: u64,
 }
 
 impl RegisterClasses {
@@ -156,6 +158,7 @@ impl RegisterClasses {
             },
             status_word: None,
             registers: llrm_lir::registers::Regs(arch.registers()),
+            csr_first_use_cost: arch.csr_first_use_cost(),
         };
         classes.status_word = classes.found_status_word();
         classes

@@ -70,6 +70,12 @@ impl llrm_target::Target for M16 {
         GENERAL.len() as i64
     }
 
+    /// `X86RegisterInfo::getCSRFirstUseCost`: push + pop.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86RegisterInfo.cpp#L1299>
+    fn csr_first_use_cost(&self) -> u64 {
+        2
+    }
+
     fn march(
         &self,
         name: &str,

@@ -142,13 +142,10 @@ pub fn machine_with<'a>(
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
         Box::new(twoaddr::TwoAddress),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
-        Box::new(allocate::RegAlloc::new(
-            Some(&pinned),
-            frame.clone(),
-            ProfileOrName::Profile(target),
-            segments,
-            classes,
-        )?),
+        Box::new(allocate::RegAlloc {
+            saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+            ..allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?
+        }),
         // After allocation: which moves in a phi's copy conflict is a question
         // about locations.
         Box::new(parcopy::ParallelCopy {

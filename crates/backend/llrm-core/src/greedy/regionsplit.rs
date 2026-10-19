@@ -49,7 +49,7 @@ use llrm_lir::registers::RegId;
 use llrm_mir::blockfrequency::frequency::BlockFrequency;
 
 use super::edgebundles::EdgeBundles;
-use super::greedy::{AllocationOrder, ExtraRegInfo, GreedyEnv, LiveRangeStage};
+use super::greedy::{AllocationOrder, ExtraRegInfo, GreedyEnv, LiveRangeStage, is_unused_callee_saved_reg};
 use super::interferencecache::{Cursor, Env, InterferenceCache};
 use super::liverangeedit::{LiveRangeEdit, NoDelegate};
 use super::matrix::LiveRegMatrix;
@@ -224,6 +224,57 @@ impl Splitter<'_> {
 
         // Then isolate blocks.
         self.try_block_split(virt, new_vregs)
+    }
+
+    /// The pre-split of `tryAssignCSRFirstTime`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2398>):
+    /// a region split of `virt` around the unused callee-saved registers, done
+    /// when one costs less than `limit`. Whether it was done.
+    pub fn try_split_under(
+        &mut self,
+        virt: &Rc<LiveInterval>,
+        order: &AllocationOrder,
+        limit: BlockFrequency,
+        new_vregs: &mut Vec<u32>,
+    ) -> bool {
+        self.analyze(virt);
+        let mut num_cands = 0usize;
+        // Don't modify CSRCost.
+        let mut best_cost = limit;
+        let best_cand = self.calculate_region_split_cost(order, &mut best_cost, &mut num_cands, true);
+        // Use the CSR if we can't find a region split below CSRCost.
+        if best_cand == NO_CAND {
+            return false;
+        }
+        // Perform the actual pre-splitting.
+        self.do_region_split(virt, best_cand, false, new_vregs);
+        true
+    }
+
+    /// `calcSpillCost`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2356>):
+    /// each instruction that reads or writes `li`'s register, once for each,
+    /// at its block's frequency.
+    pub fn calc_spill_cost(
+        &self,
+        li: &LiveInterval,
+    ) -> BlockFrequency {
+        let mut cost = 0u64;
+        let mut seen: Vec<(crate::liveness::slotindex::InstrKey, bool, bool)> = Vec::new();
+        for operand in self.lis.operands(li.reg()) {
+            match seen.iter_mut().find(|(instr, _, _)| *instr == operand.instr) {
+                Some(one) => {
+                    one.1 |= operand.reads_reg;
+                    one.2 |= operand.is_def;
+                }
+                None => seen.push((operand.instr, operand.reads_reg, operand.is_def)),
+            }
+        }
+        for (instr, reads, writes) in seen {
+            let block = self.lis.indexes.get_mbb_from_index(&self.lis.indexes.get_instruction_index(instr));
+            cost += (u64::from(reads) + u64::from(writes)) * self.block_freq(block as u32).0;
+        }
+        BlockFrequency(cost)
     }
 
     fn analyze(
@@ -824,7 +875,7 @@ impl Splitter<'_> {
             best_cost = spill_cost;
         }
 
-        let best_cand = self.calculate_region_split_cost(order, &mut best_cost, &mut num_cands);
+        let best_cand = self.calculate_region_split_cost(order, &mut best_cost, &mut num_cands, false);
 
         // No solutions found, fall back to single block splitting.
         if !has_compact && best_cand == NO_CAND {
@@ -912,9 +963,13 @@ impl Splitter<'_> {
         order: &AllocationOrder,
         best_cost: &mut BlockFrequency,
         num_cands: &mut usize,
+        ignore_csr: bool,
     ) -> usize {
         let mut best_cand = NO_CAND;
         for (phys, _) in order.iter() {
+            if ignore_csr && is_unused_callee_saved_reg(self.env, self.matrix, phys) {
+                continue;
+            }
             self.calculate_region_split_cost_around_reg(phys, best_cost, num_cands, &mut best_cand);
         }
         best_cand

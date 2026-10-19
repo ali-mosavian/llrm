@@ -60,6 +60,10 @@ pub struct ShadowInputs<'a> {
     /// takes the class its own instructions give (`recomputeRegClass`),
     /// else its parent's.
     pub sets: Option<&'a crate::backend::regclass::Sets>,
+    /// The registers the function keeps for its caller, whole.
+    pub saved: &'a [RegId],
+    /// `getCSRFirstUseCost`.
+    pub csr_first_use_cost: u64,
 }
 
 /// What the shadow allocator decided.
@@ -81,6 +85,9 @@ struct BodyEnv {
     pins: IndexMap<u32, RegId>,
     freq: Vec<f32>,
     exiting: Vec<bool>,
+    /// The registers the function keeps for its caller, whole.
+    saved: Vec<RegId>,
+    csr_first_use_cost: u64,
 }
 
 impl SpillWeightEnv for BodyEnv {
@@ -181,6 +188,17 @@ impl GreedyEnv for BodyEnv {
         _virt: u32,
     ) -> bool {
         false
+    }
+
+    fn is_callee_saved(
+        &self,
+        phys: RegId,
+    ) -> bool {
+        self.saved.contains(&crate::model::ir::root(phys))
+    }
+
+    fn csr_first_use_cost(&self) -> u64 {
+        self.csr_first_use_cost
     }
 }
 
@@ -694,7 +712,14 @@ pub fn decide_with_split(
         .filter(|(reg, _)| !floats.contains(reg))
         .map(|(&reg, &phys)| (reg, crate::model::ir::root(phys)))
         .collect();
-    let env = BodyEnv { orders: Rc::clone(&tables), pins, freq, exiting };
+    let env = BodyEnv {
+        orders: Rc::clone(&tables),
+        pins,
+        freq,
+        exiting,
+        saved: inputs.saved.iter().map(|one| crate::model::ir::root(*one)).collect(),
+        csr_first_use_cost: inputs.csr_first_use_cost,
+    };
     // The calls.
     let mut calls = Vec::new();
     let mut blocks = Vec::with_capacity(body.blocks.len());
@@ -880,6 +905,8 @@ mod tests {
             unspillable: &BTreeSet::new(),
             data: None,
             sets: None,
+            saved: &[],
+            csr_first_use_cost: 0,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
         let rfp = crate::backend::allocate::RFP;
@@ -915,6 +942,8 @@ mod tests {
             unspillable: &BTreeSet::new(),
             data: None,
             sets: None,
+            saved: &[],
+            csr_first_use_cost: 0,
         };
         let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
         assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
@@ -1083,6 +1112,8 @@ mod tests {
             unspillable: &BTreeSet::new(),
             data: None,
             sets: None,
+            saved: &[],
+            csr_first_use_cost: 0,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -1127,6 +1158,8 @@ mod tests {
             unspillable: &BTreeSet::new(),
             data: None,
             sets: None,
+            saved: &[],
+            csr_first_use_cost: 0,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
