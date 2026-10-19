@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# sweep-targets.sh: runs prune-target.sh --apply on every cargo target dir over CAP_KB (default 30 GB) under SWEEP_ROOTS (default ~/scratch and the worktrees),
+# sweep-targets.sh: runs prune-target.sh --apply on every cargo target dir over CAP_KB (default 15 GB) under SWEEP_ROOTS (default ~/scratch and the worktrees),
 # active dirs included: it removes only stale hashes (see prune-target.sh), which the owner's next build recreates. Prints `dir: pruned N entries, X bytes` per dir.
-HERE=$(cd "$(dirname "$0")" && pwd); cap=${CAP_KB:-31457280}
+HERE=$(cd "$(dirname "$0")" && pwd); cap=${CAP_KB:-15728640}
 # default: ~/scratch, and every worktree of this repo (taken from git, so no tool-named directory is spelled out here)
 roots=${SWEEP_ROOTS:-"$HOME/scratch $(git -C "$HERE" worktree list --porcelain | sed -n 's/^worktree //p' | xargs -r -n1 dirname | sort -u | tr '\n' ' ')"}
 for root in $roots; do
