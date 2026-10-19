@@ -133,6 +133,7 @@ pub mod arithmetic;
 pub mod arrival;
 pub mod asm;
 pub mod assemble;
+pub mod bitcounts;
 pub mod calleefacts;
 pub mod callregs;
 pub mod cfi;
