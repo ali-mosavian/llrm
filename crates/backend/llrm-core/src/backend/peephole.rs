@@ -3006,7 +3006,7 @@ pub fn constants(body: &LirBody) -> LirBody {
             let moved = what.is_some_and(|what| what.op == Operation::Move && what.name.as_deref() == Some("mov"));
             let extend = what.is_some_and(|what| {
                 what.op == Operation::Extend
-                    && matches!(what.name.as_deref(), Some("cwd" | "cdq" | "movsx" | "movzx"))
+                    && matches!(what.name.as_deref(), Some("cwd" | "cdq" | "cqo" | "movsx" | "movzx"))
                     && what.dests.len() == 1
                     && what.sources.len() == 1
                     && what.dests.iter().chain(&what.sources).all(|arg| matches!(arg, Loc::Reg(_)))

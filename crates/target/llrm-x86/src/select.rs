@@ -856,9 +856,15 @@ pub fn push_imm(
     relocated: bool,
 ) -> Option<Emitted> {
     let value = _immediate(value, width);
-    let mut names = vec![if width == 4 { "PUSHD_IMM32" } else { "PUSH_IMM16" }];
+    // A quadword push takes a sign-extended dword or byte.
+    let (full, short) = match width {
+        8 => ("PUSHQ_IMM32", "PUSHQ_IMM8"),
+        4 => ("PUSHD_IMM32", "PUSHD_IMM8"),
+        _ => ("PUSH_IMM16", "PUSHW_IMM8"),
+    };
+    let mut names = vec![full];
     if fits_in_a_byte(value) && !relocated {
-        names.insert(0, if width == 4 { "PUSHD_IMM8" } else { "PUSHW_IMM8" });
+        names.insert(0, short);
     }
     for one in names {
         let Some(code) = _code(one) else {
@@ -1057,6 +1063,7 @@ pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(
         ("retf", "RETFW"),
         ("cwd", "CWD"),
         ("cdq", "CDQ"),
+        ("cqo", "CQO"),
         // PDS /Ot closes a procedure with it: `mov sp,bp` then `pop bp`.
         ("leave", "LEAVEW"),
         // an interrupt handler's entry and exit

@@ -3052,7 +3052,9 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<Loc, Unselected> {
         let width = self.width(ty)?;
-        if let Some(value) = self.constant(operand, width) {
+        // A quadword immediate is a sign-extended dword: only `mov r64, imm64` takes more, so any other reader gets a
+        // register the constant is loaded into.
+        if let Some(value) = self.constant(operand, width).filter(|&value| width < 8 || i32::try_from(value).is_ok()) {
             return Ok(Loc::Imm(Imm { value, width, address: None }));
         }
         if let Some(symbol) = self.symbol(self.through_ptrtoint(operand))? {
@@ -4427,7 +4429,7 @@ impl Selector<'_, '_, '_> {
         if width == 1 {
             return self.divide_byte(op, inst, out);
         }
-        if !matches!(width, 2 | 4) {
+        if !matches!(width, 2 | 4 | 8) {
             return refuse("a wide division");
         }
         let dividend = self.held(instruction.operands[0], ty, at, out)?;
@@ -4443,7 +4445,7 @@ impl Selector<'_, '_, '_> {
         // A signed division by a constant is a multiply by its reciprocal
         // where the target prices that cheaper, as the old route's
         // division::reciprocal selects.
-        if let Some(constant) = self.constant(instruction.operands[1], width) {
+        if let Some(constant) = self.constant(instruction.operands[1], width).filter(|_| width < 8) {
             let mut next = self.next;
             let mut fresh = || {
                 next += 1;
@@ -4478,7 +4480,11 @@ impl Selector<'_, '_, '_> {
             if signed {
                 semantics(
                     Operation::Extend,
-                    if width == 2 { "cwd" } else { "cdq" },
+                    match width {
+                        2 => "cwd",
+                        4 => "cdq",
+                        _ => "cqo",
+                    },
                     vec![Loc::Held(high)],
                     vec![Loc::Held(dividend)],
                 )

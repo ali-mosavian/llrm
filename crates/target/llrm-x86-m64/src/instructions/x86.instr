@@ -19,3 +19,6 @@ movsd     copy       m,r,r/r,r          32         rep_movs     s0=si,s1=di,d1=s
 movsb     copy       m,r,r,r/r,r,r      8          rep_movs     s0=cx,s1=si,s2=di,d1=si,d2=di,d3=cx  ds,es   rep     DF/-            Movsb_m8_m8
 movsw     copy       m,r,r,r/r,r,r      16         rep_movs     s0=cx,s1=si,s2=di,d1=si,d2=di,d3=cx  ds,es   rep     DF/-            Movsw_m16_m16
 movsd     copy       m,r,r,r/r,r,r      32         rep_movs     s0=cx,s1=si,s2=di,d1=si,d2=di,d3=cx  ds,es   rep     DF/-            Movsd_m32_m32
+
+# The sign extension of rax into rdx before a quadword divide.
+cqo       extend     r/r                64         cdq          s0=ax,d0=dx             -       -       -/-             Cqo

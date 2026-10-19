@@ -84,3 +84,11 @@ fn a_dword_widens_to_a_quadword() {
     assert_eq!(bytes(&extend("movzx", RegId::RAX, RegId::ECX)), [0x8b, 0xc1]);
     assert_eq!(bytes(&extend("movsx", RegId::R10, RegId::R9D)), [0x4d, 0x63, 0xd1]);
 }
+
+#[test]
+fn a_quadword_push_of_a_constant() {
+    // push $0 was `pushw $0` (66 6a 00): a word, which left the stack misaligned for the call that followed.
+    let push = |value| sem(Operation::Push, Some("push"), vec![], vec![im(value, 8, None)], None, false);
+    assert_eq!(bytes(&push(0)), [0x6a, 0x00]);
+    assert_eq!(bytes(&push(0x1234)), [0x68, 0x34, 0x12, 0x00, 0x00]);
+}
