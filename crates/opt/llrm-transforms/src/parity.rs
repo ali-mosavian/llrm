@@ -165,7 +165,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
     entry("licm@724", Simplify, "licm<no-allowspeculation>", Translated, ""),
     entry("licm@730", Simplify, "licm<allowspeculation>", Translated, ""),
-    entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial>", Translated, ""),
+    entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial> (-O3: nontrivial;trivial)", Translated, ""),
     partial(
         "decide@766",
         Simplify,

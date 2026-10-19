@@ -26,7 +26,7 @@
 //!     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
 //!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
-//!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+//!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>simple-loop-unswitch,<br/>non-trivial</small>"]:::mid
 //!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     ver["<b>version (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     fuse["<b>fuse (-Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
@@ -73,8 +73,9 @@
 //! dominators.
 //!
 //! Peeling repeats while it leaves fewer loops, so an outer loop whose inner
-//! loop was peeled is peeled in turn. [`crate::unswitch`] re-optimizes each
-//! candidate with a `Fixed` of its own that has unswitching and jamming off.
+//! loop was peeled is peeled in turn. The passes that make a candidate
+//! re-optimize it with a `Fixed` of its own that has unswitching and jamming
+//! off.
 //!
 //! In E, `lsr` is after the interprocedural step because nothing after it may
 //! choose a loop's counters again; `rotate{proven}` is last of the loop
@@ -158,7 +159,7 @@ use crate::{
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, jumpthread, lcssa,
     loopdeletion, loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit,
     loopunrollpass, loopversion, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp, simpleloopunswitch,
-    simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -851,7 +852,12 @@ pub(crate) fn llvm_order(
             }
             list.extend([
                 licm("licm@730", true),
-                slot("trivialunswitch@732", Box::new(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: false })),
+                // The pin's `SimpleLoopUnswitchPass(NonTrivial = Level == O3)`:
+                // the options say -O3 and -Omax.
+                slot(
+                    "trivialunswitch@732",
+                    Box::new(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: applied.options.unswitch }),
+                ),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L766:
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
@@ -1265,7 +1271,7 @@ pub struct Fixed {
     peelers: Vec<Box<dyn FunctionPass>>,
     /// Once, after everything else.
     last: Vec<Box<dyn FunctionPass>>,
-    unswitch: Option<unswitch::Unswitch>,
+    unswitch: Option<simpleloopunswitch::SimpleLoopUnswitch>,
     split: Option<loopsplit::Split>,
     distribute: Option<loopdistribute::Distribute>,
     version: Option<loopversion::Version>,
@@ -1325,7 +1331,7 @@ impl Fixed {
                 ..applied.clone()
             }))
         };
-        let unswitch = applied.options.unswitch.then(|| unswitch::Unswitch { passes: vec![judged()] });
+        let unswitch = applied.options.unswitch.then_some(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: true });
         let distribute = applied.options.distribute.then(|| loopdistribute::Distribute { passes: vec![judged()] });
         // A loop the copy changes the shape of is judged as it will be run:
         // its header copied and what it loads unchanged moved out.
@@ -1410,9 +1416,10 @@ impl Fixed {
         );
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
+        // The slot of the order unswitches, where the pin does.
+        linear.unswitch = None;
         if !matches!(phase, Phase::Simplify) {
             linear.peelers.clear();
-            linear.unswitch = None;
             linear.split = None;
             linear.distribute = None;
             linear.version = None;
