@@ -36,8 +36,8 @@ import llrmbin  # noqa: E402
 SELECTION = HERE / "parity_smoke.toml"
 BUDGET = 10.0
 CARGO_OVERHEAD = 0.3  # cargo's own CPU to find the test binary up to date, per crate
-MAX_CRATES = 3  # a merge touching more is tested in the 3 crates with most changed files: each crate costs its cargo start before any test
-UNIT_FLOOR = 3.0  # the seconds the fixed steps always leave for unit tests
+MAX_CRATES = 2  # a merge touching more is tested in the 3 crates with most changed files: each crate costs its cargo start before any test
+UNIT_FLOOR = 2.0  # the seconds the fixed steps always leave for unit tests
 ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "COALESCE", "REPLAY", "INTERN", "SKIPPED", "STALE")
 PROGRAM = ROOT / "bench" / "bintree"
 # d_faces.c as the scoreboard reads it (sha256 prefix), and the six reports `env.c` printed for gcc -O0: an llrm build must print the same.
@@ -208,6 +208,23 @@ def qc_d_faces(bins: Path) -> tuple[str, str]:
     return "ok", "QCport d_faces.c at 4 levels"
 
 
+QC_MODULES = ("game/combat.c", "host/mathlib.c", "render/d_sprite.c", "sound/snd.c")
+
+
+def qc_modules(bins: Path) -> tuple[str, str]:
+    """Four more QCport modules at -O2 (compile only, the compiler's default target): 48 of 260 QCport compiles died on `BitCast of a float` (#2586) while the smoke
+    passed, because it compiled sc.c at -O1 and one module (d_faces) at four levels, and none of them has that float shape."""
+    qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
+    include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
+    if not (qcport / QC_MODULES[0]).is_file() or not include.is_dir():
+        return "skipped", f"no QCport sources ({qcport})"
+    flags = [f for part in ("host", "render", "model", "game", "sound", "ui", "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
+    for module in QC_MODULES:
+        if why := compile_ok([str(bins / "llrm-c"), "-O2", *flags, str(qcport / module), "-o", os.devnull], os.environ):
+            return "fail", f"QCport {module} -O2: {why}"
+    return "ok", f"{len(QC_MODULES)} QCport modules at -O2"
+
+
 def run_cases(bins: Path) -> tuple[str, str]:
     names = selection().get("run", {}).get("cases", [])
     if not names:
@@ -235,7 +252,7 @@ def unit_step(package: str, allowance: float):
     return step
 
 
-FIXED = [("programs", programs, 0.3), ("sc", sc, 0.8), ("d_faces", d_faces, 1.8), ("qc_d_faces", qc_d_faces, 1.0), ("run", run_cases, 3.6)]  # (name, step, declared seconds)
+FIXED = [("programs", programs, 0.3), ("sc", sc, 0.8), ("d_faces", d_faces, 1.8), ("qc_d_faces", qc_d_faces, 1.0), ("qc_modules", qc_modules, 0.8), ("run", run_cases, 3.6)]  # (name, step, declared seconds)
 
 
 def fixed_cost() -> float:

@@ -156,3 +156,22 @@ def test_two_halves_that_each_compile_but_not_together_fail_the_workspace_check(
     assert ps.workspace_check(tmp_path) != ""
     (tmp_path / "app/src/lib.rs").write_text("pub fn fold(context: &mut lib::Context) { lib::undef(context); }\n")
     assert ps.workspace_check(tmp_path) == ""
+
+
+def test_a_qcport_module_that_fails_at_o2_fails_the_step_whatever_d_faces_does(tmp_path, monkeypatch):
+    """#2586: `BitCast of a float` killed 48 of 260 QCport compiles (combat, mathlib, d_sprite, snd ...) and the smoke passed: its QCport steps were sc.c -O1 and d_faces."""
+    import stat
+
+    for module in ps.QC_MODULES:
+        (tmp_path / "src" / module).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "src" / module).write_text("int x;\n")
+    (tmp_path / "inc").mkdir()
+    compiler = tmp_path / "llrm-c"
+    compiler.write_text("#!/bin/sh\ncase \"$*\" in *sound/snd.c*) echo 'llrm-c: @_snd_frame@3: BitCast of a float' >&2; exit 1;; esac\nexit 0\n")
+    compiler.chmod(compiler.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
+    monkeypatch.setenv("QCPORT_INC", str(tmp_path / "inc"))
+    verdict, detail = ps.qc_modules(tmp_path)
+    assert verdict == "fail" and "sound/snd.c" in detail and "BitCast of a float" in detail, detail
+    compiler.write_text("#!/bin/sh\nexit 0\n")
+    assert ps.qc_modules(tmp_path)[0] == "ok"
