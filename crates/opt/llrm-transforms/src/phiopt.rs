@@ -223,7 +223,7 @@ fn sides(
     }
     // Where an empty block of one jump, reached from `block` alone, leads.
     let empty = |side: BlockId| {
-        let mut body = function.block(side).iter();
+        let mut body = function.iter_block(side);
         let (Some(only), None) = (body.next(), body.next()) else { return None };
         let jump = function.instruction(only);
         let [Operand::Block(to)] = jump.operands[..] else { return None };

@@ -793,7 +793,7 @@ fn _available(
     };
 
     let through = |at: i64, mut available: Bits, mut reads: Option<&mut HashSet<InstId>>| {
-        for inst in function.block(cfg::block(at)).iter() {
+        for inst in function.iter_block(cfg::block(at)) {
             let instruction = function.instruction(inst);
             let store = matches!(instruction.opcode, Opcode::Store { .. });
             // A volatile access writes its own bytes: it orders, it does not
@@ -931,7 +931,7 @@ fn live_in(
     let mut reads = vec![llrm_support::bits::Bits::new(cells); blocks.len()];
     let mut kills = vec![llrm_support::bits::Bits::new(cells); blocks.len()];
     for (at, &block) in blocks.iter().enumerate() {
-        for inst in function.block(block).iter() {
+        for inst in function.iter_block(block) {
             if let Some(&slot) = plan.loads.get(&inst) {
                 if !kills[at].contains(slot) {
                     reads[at].insert(slot);
@@ -1046,7 +1046,7 @@ fn rewrite(
     // from the top of the block on.
     for (block, phi, named) in named_phis {
         let value = function.instruction(phi).result.expect("a phi's value");
-        let first = function.block(block).iter().find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        let first = function.iter_block(block).find(|&one| function.instruction(one).opcode != Opcode::Phi);
         if let Some(first) = first {
             function.add_debug_record_first(first, named.variable, named.is(Operand::Value(value)));
         }
@@ -1094,7 +1094,7 @@ fn rewrite(
             undo.push((slot, current[slot]));
             current[slot] = Operand::Value(function.instruction(*phi).result.expect("a phi's value"));
         }
-        for inst in function.block(block).iter().collect::<Vec<_>>() {
+        for inst in function.iter_block(block).collect::<Vec<_>>() {
             if let Some(&slot) = plan.loads.get(&inst) {
                 function.replace_value(function.instruction(inst).result.expect("a load's value"), current[slot]);
                 dead.push(inst);

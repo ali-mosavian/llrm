@@ -99,7 +99,7 @@ impl ScalarEvolution {
         let function = cx.function;
         let (Some(a_block), Some(b_block)) = (function.parent(a), function.parent(b)) else { return false };
         let position = |block: BlockId, inst: InstId| -> usize {
-            function.block(block).iter().position(|one| one == inst).expect("an instruction of its block")
+            function.iter_block(block).position(|one| one == inst).expect("an instruction of its block")
         };
         if a_block == b_block
             && position(a_block, a) <= position(b_block, b)

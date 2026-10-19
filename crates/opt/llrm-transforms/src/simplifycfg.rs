@@ -514,8 +514,8 @@ fn empty_block_removed(
 
     if alone {
         function.erase(last).expect("a jump defines nothing");
-        let anchor = function.block(successor).iter().find(|&one| function.instruction(one).opcode != Opcode::Phi);
-        for inst in function.block(block).iter().collect::<Vec<_>>() {
+        let anchor = function.iter_block(successor).find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        for inst in function.iter_block(block).collect::<Vec<_>>() {
             function.move_to(inst, anchor.map_or(Position::End(successor), Position::Before)).expect("a placed phi");
         }
     } else {
@@ -764,7 +764,7 @@ fn dead_blocks_deleted(
         for successor in edges_out_of(&operands.unwrap_or_default()) {
             function.predecessor_removed(context, successor, block, true);
         }
-        for inst in function.block(block).iter().collect::<Vec<_>>().into_iter().rev() {
+        for inst in function.iter_block(block).collect::<Vec<_>>().into_iter().rev() {
             if let Some(result) = function.instruction(inst).result {
                 let poison = context.constant(Constant { ty: function.value(result).ty, kind: ConstantKind::Poison });
                 function.replace_all_uses_with(result, Operand::Constant(poison));
@@ -796,8 +796,7 @@ fn only_unreachable(
     block: BlockId,
 ) -> bool {
     function
-        .block(block)
-        .iter()
+        .iter_block(block)
         .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
         .is_some_and(|inst| function.instruction(inst).opcode == Opcode::Unreachable)
 }

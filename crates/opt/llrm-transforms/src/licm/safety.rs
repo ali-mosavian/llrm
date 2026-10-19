@@ -101,7 +101,7 @@ impl<'a> LoopSafety<'a> {
         if let Some(&first) = found.borrow().get(&block) {
             return first;
         }
-        let first = self.function.block(block).iter().position(|inst| special(inst));
+        let first = self.function.iter_block(block).position(|inst| special(inst));
         found.borrow_mut().insert(block, first);
         first
     }
@@ -116,7 +116,7 @@ impl<'a> LoopSafety<'a> {
     ) -> bool {
         let block = self.function.parent(inst).expect("an instruction in a block");
         let Some(first) = self.first_special(found, block, special) else { return false };
-        self.function.block(block).iter().position(|one| one == inst).is_some_and(|at| first < at)
+        self.function.iter_block(block).position(|one| one == inst).is_some_and(|at| first < at)
     }
 
     /// [`isGuaranteedToTransferExecutionToSuccessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L8372).

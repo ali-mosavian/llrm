@@ -374,7 +374,7 @@ fn split_block(
     run: &mut Run,
     old: BlockId,
 ) -> BlockId {
-    let list = run.function.block(old).iter().collect::<Vec<_>>();
+    let list = run.function.iter_block(old).collect::<Vec<_>>();
     let first = list
         .iter()
         .position(|&inst| !matches!(
@@ -605,7 +605,7 @@ fn unswitch_trivial_branch(
     // side effects.
     if let (Some(index), Some(latch), Some(exit)) = (latch_idx, loop_latch, ul_exit)
         && are_loop_exit_phis_trivial(run, lp, latch, exit, false)
-        && !run.function.block(latch).iter().any(|inst| has_side_effects(run, inst))
+        && !run.function.iter_block(latch).any(|inst| has_side_effects(run, inst))
     {
         // We need to prove the loop is finite, otherwise this change will
         // convert it to a finite loop. This conservative check is good enough
@@ -1007,7 +1007,7 @@ fn unswitch_all_trivial_conditions(
         // Check if there are any side-effecting instructions (e.g. stores,
         // calls, volatile loads) in the part of the loop that the code *would*
         // execute without unswitching.
-        if run.function.block(current).iter().collect::<Vec<_>>().into_iter().any(|inst| has_side_effects(run, inst)) {
+        if run.function.iter_block(current).collect::<Vec<_>>().into_iter().any(|inst| has_side_effects(run, inst)) {
             return changed;
         }
         let term = run.function.terminator(current).expect("a terminated block");

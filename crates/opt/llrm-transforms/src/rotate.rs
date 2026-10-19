@@ -368,7 +368,7 @@ fn _phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function.block(block).iter().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
+    function.iter_block(block).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
 }
 
 /// Whether an instruction may be skipped on entry: it computes, and nothing
@@ -466,8 +466,7 @@ fn _shape_of(
         return None;
     }
     let work = function
-        .block(header)
-        .iter()
+        .iter_block(header)
         .filter(
             |&inst| {
                 let op = function.instruction(inst);
@@ -706,8 +705,7 @@ fn copied(
             continue;
         };
         let insns = function
-            .block(shape.header)
-            .iter()
+            .iter_block(shape.header)
             .filter(|&inst| function.instruction(inst).opcode != Opcode::Phi)
             .count();
         if insns > MAX_HEADER_INSNS {
@@ -785,7 +783,7 @@ fn _chained(
     if loop_.entering(function) != BTreeSet::from([preheader]) {
         return Ok(None);
     }
-    let insns = function.block(first).iter().filter(|&inst| function.instruction(inst).opcode != Opcode::Phi).count();
+    let insns = function.iter_block(first).filter(|&inst| function.instruction(inst).opcode != Opcode::Phi).count();
     if insns > remaining {
         return Ok(None);
     }
@@ -878,8 +876,7 @@ fn _copy_test(
     let phis_known = known.len();
     let entering = function.terminator(shape.preheader).expect("a terminated preheader");
     let work: Vec<InstId> = function
-        .block(shape.header)
-        .iter()
+        .iter_block(shape.header)
         .filter(|&inst| {
             function.instruction(inst).opcode != Opcode::Phi && !function.instruction(inst).opcode.is_terminator()
         })

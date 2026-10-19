@@ -125,8 +125,7 @@ fn promote_memory_to_register(
     let mut changed = false;
     loop {
         let allocas: Vec<InstId> = function
-            .block(entry)
-            .iter()
+            .iter_block(entry)
             .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }))
             .filter(|&inst| is_alloca_promotable(context, callees, function, inst))
             .collect();
@@ -383,7 +382,7 @@ impl LargeBlockInfo {
         }
         let block = function.parent(inst).expect("a placed instruction");
         let mut next = 0;
-        for one in function.block(block).iter() {
+        for one in function.iter_block(block) {
             if Self::is_interesting(function, one) {
                 self.numbers.insert(one, next);
                 next += 1;
@@ -880,7 +879,7 @@ impl<'a> PromoteMem2Reg<'a> {
             }
             // Every phi this pass inserted in the block has the same count.
             let bad = have;
-            for inst in self.function.block(block).iter().collect::<Vec<_>>() {
+            for inst in self.function.iter_block(block).collect::<Vec<_>>() {
                 let op = self.function.instruction(inst);
                 if op.opcode != Opcode::Phi || op.operands.len() / 2 != bad {
                     break;
@@ -914,7 +913,7 @@ impl<'a> PromoteMem2Reg<'a> {
             let block = worklist[at];
             if def_blocks.contains(&block) {
                 let mut kept = true;
-                for inst in self.function.block(block).iter() {
+                for inst in self.function.iter_block(block) {
                     let op = self.function.instruction(inst);
                     match op.opcode {
                         Opcode::Store { .. } if op.operands[1] == Operand::Value(address) => {
@@ -1015,7 +1014,7 @@ impl<'a> PromoteMem2Reg<'a> {
             let pred = pred.expect("a block with inserted phis has a predecessor");
             // Edges from `pred` to this block (`count(successors(Pred), BB)`).
             let edge_count = edges(self.function, block).iter().filter(|&&one| one == pred).count();
-            for inst in self.function.block(block).iter().collect::<Vec<_>>() {
+            for inst in self.function.iter_block(block).collect::<Vec<_>>() {
                 let op = self.function.instruction(inst);
                 if op.opcode != Opcode::Phi || op.operands.len() != new_operands {
                     break;
@@ -1033,7 +1032,7 @@ impl<'a> PromoteMem2Reg<'a> {
                 // And the variable is the phi from the top of the block.
                 let variables = std::mem::take(&mut self.alloca_variables[alloca_no]);
                 let top =
-                    self.function.block(block).iter().find(|&one| self.function.instruction(one).opcode != Opcode::Phi);
+                    self.function.iter_block(block).find(|&one| self.function.instruction(one).opcode != Opcode::Phi);
                 if let Some(top) = top {
                     let alloca = self.allocas[alloca_no];
                     convert_declares_to_values(
@@ -1055,7 +1054,7 @@ impl<'a> PromoteMem2Reg<'a> {
             return;
         }
 
-        for inst in self.function.block(block).iter().collect::<Vec<_>>() {
+        for inst in self.function.iter_block(block).collect::<Vec<_>>() {
             let op = self.function.instruction(inst);
             match op.opcode {
                 Opcode::Load { .. } => {

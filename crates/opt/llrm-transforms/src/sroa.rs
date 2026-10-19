@@ -1228,8 +1228,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let declared = self.declared_allocas();
         let allocas: Vec<InstId> = self
             .function()
-            .block(entry)
-            .iter()
+            .iter_block(entry)
             .filter(|&inst| matches!(
                 self.function().instruction(inst).opcode,
                 Opcode::Alloca { .. }
@@ -2916,8 +2915,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             let block = self.function().parent(def).expect("a placed phi");
             return self
                 .function()
-                .block(block)
-                .iter()
+                .iter_block(block)
                 .find(|&one| self.function().instruction(one).opcode != Opcode::Phi)
                 .expect("a block ends in a terminator");
         }
@@ -3107,7 +3105,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             return None;
         }
         let block = function.parent(phi).expect("a placed phi");
-        let first = function.block(block).iter().find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        let first = function.iter_block(block).find(|&one| function.instruction(one).opcode != Opcode::Phi);
         if first != Some(store) {
             return None;
         }

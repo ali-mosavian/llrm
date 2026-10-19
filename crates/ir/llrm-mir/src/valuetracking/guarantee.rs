@@ -268,8 +268,7 @@ pub fn may_throw(
             let Some(Operand::Block(destination)) = unwind else { return false };
             let pad = q
                 .function
-                .block(destination)
-                .iter()
+                .iter_block(destination)
                 .find(|one| q.function.instruction(*one).opcode != Opcode::Phi);
             match pad {
                 Some(pad) if matches!(q.function.instruction(pad).opcode, Opcode::LandingPad { .. }) => {
@@ -894,7 +893,7 @@ pub fn is_guaranteed_to_transfer_execution_to_successor_block(
     q: &Query,
     block: BlockId,
 ) -> bool {
-    q.function.block(block).iter().all(|one| is_guaranteed_to_transfer_execution_to_successor(q, one))
+    q.function.iter_block(block).all(|one| is_guaranteed_to_transfer_execution_to_successor(q, one))
 }
 
 /// `isGuaranteedToTransferExecutionToSuccessor(Begin, End, ScanLimit)`:
@@ -947,7 +946,7 @@ pub fn is_guaranteed_to_execute_for_every_iteration(
     if q.block_of(inst) != Some(l.get_header()) {
         return false;
     }
-    for one in q.function.block(l.get_header()).iter() {
+    for one in q.function.iter_block(l.get_header()) {
         if one == inst {
             return true;
         }
@@ -1162,7 +1161,7 @@ fn program_undefined_if_undef_or_poison_of(
 ) -> bool {
     let (mut block, mut begin) = if let Some((inst, _)) = q.instruction_of(v) {
         let Some(block) = q.block_of(inst) else { return false };
-        let at = q.function.block(block).iter().position(|one| one == inst);
+        let at = q.function.iter_block(block).position(|one| one == inst);
         (block, at.map_or(0, |at| at + 1))
     } else if let Operand::Value(value) = v
         && let ValueDef::Argument(_) = q.function.value(value).def
@@ -1250,8 +1249,7 @@ fn program_undefined_if_undef_or_poison_of(
         block = next;
         begin = q
             .function
-            .block(block)
-            .iter()
+            .iter_block(block)
             .position(|one| q.function.instruction(one).opcode != Opcode::Phi)
             .unwrap_or(q.function.block(block).len());
     }

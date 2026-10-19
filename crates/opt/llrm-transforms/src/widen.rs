@@ -1628,8 +1628,7 @@ pub(crate) fn first_insertion_point(
     block: BlockId,
 ) -> InstId {
     function
-        .block(block)
-        .iter()
+        .iter_block(block)
         .find(|&inst| !matches!(
             function.instruction(inst).opcode,
             Opcode::Phi | Opcode::LandingPad { .. }

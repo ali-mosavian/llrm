@@ -393,7 +393,7 @@ fn _found(
     // window leaves from its latch: before each trip, only a header phi's
     // value is known there; after, anything the latch reaches.
     for &block in &loop_.body {
-        for inst in function.block(cfg::block(block)).iter() {
+        for inst in function.iter_block(cfg::block(block)) {
             let Some(result) = function.instruction(inst).result else { continue };
             for one in function.users(result) {
                 let Some(at) = function.parent(one.user) else { continue };
@@ -546,8 +546,7 @@ fn _split(
     function.insert_block(next_window, Some(found.latch)).expect("a new block");
     // Every header phi is carried across windows; a walk's as its huge pointer.
     let header_phis: Vec<InstId> = function
-        .block(found.header)
-        .iter()
+        .iter_block(found.header)
         .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
         .collect();
     let walked: Vec<InstId> = found.walks.iter().map(|walk| walk.recurrence.phi).collect();
@@ -681,7 +680,7 @@ fn _split(
     // the starts.
     let test = if found.proof.posttested { found.latch } else { found.header };
     let exit_phis: Vec<InstId> =
-        function.block(found.exit).iter().take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect();
+        function.iter_block(found.exit).take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect();
     for phi in exit_phis {
         let mut arms = function.instruction(phi).operands.clone();
         let mut skipped = None;

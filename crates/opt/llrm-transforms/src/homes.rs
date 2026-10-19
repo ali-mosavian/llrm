@@ -264,7 +264,7 @@ impl<'a> Scan<'a> {
         let overlaps = |cell: &MemRef, inst: InstId| self.overlaps(cell, inst);
         let mut held = Vec::new();
         for &block in function.layout() {
-            for inst in function.block(block).iter() {
+            for inst in function.iter_block(block) {
                 let phi = function.instruction(inst);
                 let (Opcode::Phi, Some(result)) = (&phi.opcode, phi.result) else { continue };
                 let inputs: Vec<(Operand, BlockId)> = phi
@@ -397,7 +397,7 @@ fn survives(
         let following = from.filter(|&one| function.parent(one) == Some(block));
         let rest: Box<dyn Iterator<Item = InstId> + '_> = match following {
             Some(one) => Box::new(function.iter_after(one)),
-            None => Box::new(function.block(block).iter()),
+            None => Box::new(function.iter_block(block)),
         };
         rest.into_iter().all(|one| !overlaps(cell, one))
     };
@@ -473,7 +473,7 @@ pub(crate) fn homed_scanning(
     };
     let mut homes = Vec::new();
     for &block in function.layout() {
-        for inst in function.block(block).iter() {
+        for inst in function.iter_block(block) {
             let phi = function.instruction(inst);
             let (Opcode::Phi, Some(result)) = (&phi.opcode, phi.result) else { continue };
             let inputs: Vec<(Operand, BlockId)> = phi
@@ -553,7 +553,7 @@ fn survives_scanning(
         let following = from.filter(|&one| function.parent(one) == Some(block));
         let rest: Box<dyn Iterator<Item = InstId> + '_> = match following {
             Some(one) => Box::new(function.iter_after(one)),
-            None => Box::new(function.block(block).iter()),
+            None => Box::new(function.iter_block(block)),
         };
         rest.into_iter().all(|one| !overlaps(cell, one))
     };

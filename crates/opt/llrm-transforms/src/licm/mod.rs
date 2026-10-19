@@ -476,7 +476,7 @@ pub fn run(
                 .into_iter()
                 .filter_map(|exit| {
                     let first =
-                        view.function.block(exit).iter().find(|&one| {
+                        view.function.iter_block(exit).find(|&one| {
                             !matches!(
                                 view.function.instruction(one).opcode,
                                 llrm_mir::opcode::Opcode::Phi
@@ -548,7 +548,7 @@ fn seeded(
     ctx.loop_.body.iter().any(|&at| {
         let block = cfg::block(at);
         !ctx.in_sub_loop(block)
-            && function.block(block).iter().any(|inst| {
+            && function.iter_block(block).any(|inst| {
                 let instruction = function.instruction(inst);
                 if instruction.opcode.is_terminator() || matches!(instruction.opcode, llrm_mir::opcode::Opcode::Phi) {
                     return false;

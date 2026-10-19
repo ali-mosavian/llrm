@@ -88,8 +88,7 @@ fn every_trip_is_peeled_ahead_of_the_residual_loop() {
         let first = function.successors(entry)[0];
         assert_ne!(function.block(first).name.as_deref(), Some("b1"), "{trips}");
         let phis = function
-            .block(first)
-            .iter()
+            .iter_block(first)
             .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
             .collect::<Vec<_>>();
         assert_eq!(phis.len(), 2);

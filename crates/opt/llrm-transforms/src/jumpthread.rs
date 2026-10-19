@@ -382,8 +382,7 @@ fn found(
                     Some(&Operand::Value(c)) if matches!(function.value(c).def, ValueDef::Instruction(made) if function.parent(made) == Some(block) && matches!(function.instruction(made).opcode, Opcode::ICmp(_)))
                 );
                 let copies = function
-                    .block(block)
-                    .iter()
+                    .iter_block(block)
                     .filter(|&inst| {
                         function.instruction(inst).opcode != Opcode::Phi
                             && !function.instruction(inst).opcode.is_terminator()
@@ -392,8 +391,7 @@ fn found(
                     .saturating_sub(usize::from(killed_here));
                 let phis = if function.predecessors(block).len() > 1 && function.successors(block).len() > 1 {
                     function
-                        .block(block)
-                        .iter()
+                        .iter_block(block)
                         .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
                         .count()
                 } else {
@@ -472,7 +470,7 @@ fn found(
                     // copies hold.
                     blocks
                         .iter()
-                        .flat_map(|&one| function.block(one).iter())
+                        .flat_map(|&one| function.iter_block(one))
                         .filter(|&inst| {
                             function.instruction(inst).opcode != Opcode::Phi
                                 && !function.instruction(inst).opcode.is_terminator()
@@ -493,8 +491,7 @@ fn found(
                         .filter(|&&one| function.predecessors(one).len() > 1 && function.successors(one).len() > 1)
                         .map(|&one| {
                             function
-                                .block(one)
-                                .iter()
+                                .iter_block(one)
                                 .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi && inst != phi)
                                 .count()
                         })
@@ -524,7 +521,7 @@ fn size_weighted(
     function: &Function,
     blocks: &[BlockId],
 ) -> usize {
-    let insts = blocks.iter().flat_map(|&one| function.block(one).iter());
+    let insts = blocks.iter().flat_map(|&one| function.iter_block(one));
     (crate::inline::gcc_insns_in(function, insts) as usize).saturating_sub(1)
 }
 
@@ -682,8 +679,7 @@ fn copyable(
     block: BlockId,
 ) -> bool {
     function
-        .block(block)
-        .iter()
+        .iter_block(block)
         .all(
             |inst| {
                 let instruction = function.instruction(inst);
@@ -817,7 +813,7 @@ fn copy(
             // The way in: a phi takes what it takes from the block before on
             // the path.
             let before = if index == 0 { path.from } else { originals[index - 1] };
-            for inst in function.block(block).iter().collect::<Vec<_>>() {
+            for inst in function.iter_block(block).collect::<Vec<_>>() {
                 let instruction = function.instruction(inst).clone();
                 if instruction.opcode == Opcode::Phi {
                     // A phi of the path's one way in: the copy has one input,
@@ -891,7 +887,7 @@ fn copy(
             let leaving: Vec<BlockId> =
                 function.successors(clone).into_iter().filter(|to| !at.values().any(|one| one == to)).collect();
             for to in leaving {
-                for phi in function.block(to).iter().collect::<Vec<_>>() {
+                for phi in function.iter_block(to).collect::<Vec<_>>() {
                     if function.instruction(phi).opcode != Opcode::Phi {
                         break;
                     }
@@ -914,7 +910,7 @@ fn copy(
             .map(|&one| if one == Operand::Block(first) { Operand::Block(clones[0]) } else { one })
             .collect();
         function.set_operands(entry, redirected);
-        for phi in function.block(first).iter().collect::<Vec<_>>() {
+        for phi in function.iter_block(first).collect::<Vec<_>>() {
             if function.instruction(phi).opcode != Opcode::Phi {
                 break;
             }
@@ -935,7 +931,7 @@ fn copy(
     // iteration before: one updater joins the definitions where the paths meet.
     let originals: BTreeSet<BlockId> = paths.iter().flat_map(|path| path.blocks.iter().copied()).collect();
     for &block in &originals {
-        for inst in function.block(block).iter().collect::<Vec<_>>() {
+        for inst in function.iter_block(block).collect::<Vec<_>>() {
             let Some(result) = function.instruction(inst).result else { continue };
             // Read anywhere but its own block: an original block is reached
             // from the copies too, and reads what meets there.
@@ -1005,7 +1001,7 @@ fn arms_of(
     }
     // The header holds phis and its branch.
     let last = function.terminator(header)?;
-    if function.block(header).iter().any(|inst| inst != last && function.instruction(inst).opcode != Opcode::Phi) {
+    if function.iter_block(header).any(|inst| inst != last && function.instruction(inst).opcode != Opcode::Phi) {
         return None;
     }
     let [Operand::Value(condition), Operand::Block(yes), Operand::Block(no)] = function.instruction(last).operands[..]
@@ -1096,7 +1092,7 @@ fn arms_of(
     }
     let size = crate::inline::gcc_insns_in(
         function,
-        chain.iter().flat_map(|&block| function.block(block).iter().collect::<Vec<_>>()),
+        chain.iter().flat_map(|&block| function.iter_block(block).collect::<Vec<_>>()),
     ) as usize;
     Some(Arms { header, heads: [yes, no], chain, regions, feeders, size })
 }
@@ -1194,7 +1190,7 @@ fn _split(
         let feeder = if arms.feeders[arm] == header { heads[arm] } else { arms.feeders[arm] };
         for &block in &arms.chain {
             let clone = at[&block];
-            for inst in function.block(block).iter().collect::<Vec<_>>() {
+            for inst in function.iter_block(block).collect::<Vec<_>>() {
                 let original = function.instruction(inst).clone();
                 if original.opcode == Opcode::Phi {
                     // The one way in of the join.
@@ -1293,7 +1289,7 @@ fn _split(
     // What the header made, an arm's blocks read as its copy has it.
     for arm in 0..2 {
         for block in arms.regions[arm].iter() {
-            for inst in function.block(block).iter().collect::<Vec<_>>() {
+            for inst in function.iter_block(block).collect::<Vec<_>>() {
                 let operands = function
                     .instruction(inst)
                     .operands

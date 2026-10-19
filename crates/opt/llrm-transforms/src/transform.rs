@@ -131,8 +131,7 @@ pub fn _comparison(
         return None;
     };
     function
-        .block(block)
-        .iter()
+        .iter_block(block)
         .find(|&one| function.instruction(one).result == Some(condition))
         .filter(|&one| matches!(function.instruction(one).opcode, Opcode::ICmp(_)))
 }
@@ -303,7 +302,7 @@ pub fn subexpressions(
     let mut verified: llrm_mir::dense::IdMap<InstId, Verified> = llrm_mir::dense::IdMap::new();
     for block in dominators_first(function, &dominance) {
         let here = order[&block];
-        let instructions: Vec<InstId> = function.block(block).iter().collect();
+        let instructions: Vec<InstId> = function.iter_block(block).collect();
         for (index, &inst) in instructions.iter().enumerate() {
             let op = function.instruction(inst);
             // Arithmetic is `gvn::table`'s; `joined` still keys it, with
@@ -391,7 +390,7 @@ pub fn equal_calls(
     // are looked at again.
     let mut groups: IndexMap<(TypeId, &[Operand]), Vec<(usize, usize, InstId)>> = IndexMap::default();
     for (at, &block) in function.layout().iter().enumerate() {
-        for (index, inst) in function.block(block).iter().enumerate() {
+        for (index, inst) in function.iter_block(block).enumerate() {
             let op = function.instruction(inst);
             if matches!(op.opcode, Opcode::Call(_)) && op.result.is_some() {
                 groups.entry((op.ty, &op.operands[..])).or_default().push((at, index, inst));
@@ -673,7 +672,7 @@ impl<'f> Crossings<'f> {
         let mut stores = BTreeMap::new();
         for &block in function.layout() {
             let mut counted = vec![0u32];
-            for (index, inst) in function.block(block).iter().enumerate() {
+            for (index, inst) in function.iter_block(block).enumerate() {
                 places.insert(inst, (block, index as i64));
                 counted.push(
                     counted[index] + u32::from(matches!(function.instruction(inst).opcode, Opcode::Store { .. })),
@@ -1159,7 +1158,7 @@ b2:
         };
         let place = |inst: InstId| {
             let block = function.parent(inst).expect("placed");
-            (block, function.block(block).iter().position(|one| one == inst).expect("in its block") as i64)
+            (block, function.iter_block(block).position(|one| one == inst).expect("in its block") as i64)
         };
         let source = match function.value(holder).def {
             ValueDef::Instruction(inst) => place(inst),

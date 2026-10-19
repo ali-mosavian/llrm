@@ -52,7 +52,7 @@ impl Stride {
             .loop_
             .body
             .iter()
-            .flat_map(|&at| function.block(cfg::block(at)).iter())
+            .flat_map(|&at| function.iter_block(cfg::block(at)))
             .any(
                 |inst| {
                     let op = function.instruction(inst);

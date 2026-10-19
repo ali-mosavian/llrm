@@ -168,7 +168,7 @@ pub fn executed(
     let mut speculated = 0;
     // Uses in `then` of the values of `block` that nothing else reads.
     let mut sinkable: IdMap<InstId, usize> = IdMap::new();
-    let body = function.block(then).iter().collect::<Vec<_>>();
+    let body = function.iter_block(then).collect::<Vec<_>>();
     for &inst in body[..body.len() - 1].iter().rev() {
         speculated += 1;
         if speculated > 1 {

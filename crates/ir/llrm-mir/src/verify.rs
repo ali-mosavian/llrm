@@ -213,7 +213,7 @@ impl Checker<'_> {
         }
         for &block in function.layout() {
             self.block(block, block == entry);
-            for inst in function.block(block).iter() {
+            for inst in function.iter_block(block) {
                 self.instruction(inst, returns);
                 self.dominance(&tree, inst);
             }
@@ -271,7 +271,7 @@ impl Checker<'_> {
                 *edges.entry(parent).or_default() += 1;
             }
         }
-        for inst in self.function.block(block).iter() {
+        for inst in self.function.iter_block(block) {
             let instruction = self.function.instruction(inst);
             if instruction.opcode != Opcode::Phi {
                 continue;
@@ -570,7 +570,7 @@ impl Checker<'_> {
         let operands = &self.function.instruction(inst).operands;
         let Operand::Block(unwind) = operands[operands.len() - 2] else { return };
         let first =
-            self.function.block(unwind).iter().find(|&one| self.function.instruction(one).opcode != Opcode::Phi);
+            self.function.iter_block(unwind).find(|&one| self.function.instruction(one).opcode != Opcode::Phi);
         if !first.is_some_and(|one| matches!(
             self.function.instruction(one).opcode,
             Opcode::LandingPad { .. }

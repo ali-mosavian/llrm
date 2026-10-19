@@ -80,8 +80,7 @@ impl Selector<'_, '_, '_> {
             .copied()
             .filter(|&block| {
                 function
-                    .block(block)
-                    .iter()
+                    .iter_block(block)
                     .any(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
             })
             .collect()

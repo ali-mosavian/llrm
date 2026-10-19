@@ -1395,8 +1395,8 @@ fn _steps_before_test(
     let ValueDef::Instruction(made) = function.value(step).def else { return false };
     let (here, there) = (function.parent(made), function.parent(proof.branch));
     here == there
-        && function.block(here.expect("a placed step")).iter().position(|one| one == made)
-            < function.block(there.expect("a placed branch")).iter().position(|one| one == proof.branch)
+        && function.iter_block(here.expect("a placed step")).position(|one| one == made)
+            < function.iter_block(there.expect("a placed branch")).position(|one| one == proof.branch)
         || here != there
             && here.is_some_and(|step| {
                 function
@@ -1418,7 +1418,7 @@ fn _live_anyway(
 ) -> BTreeSet<ValueId> {
     let mut live = BTreeSet::new();
     for &at in &loop_.body {
-        for inst in function.block(cfg::block(at)).iter() {
+        for inst in function.iter_block(cfg::block(at)) {
             if users.web.contains(&inst) || exit.is_some_and(|exit| exit.proof.compare == inst) {
                 continue;
             }
@@ -3065,8 +3065,7 @@ fn _applied(
                     }
                 };
                 let after = function
-                    .block(block)
-                    .iter()
+                    .iter_block(block)
                     .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
                     .expect("a terminator");
                 (Position::Before(after), register)
@@ -3258,8 +3257,7 @@ fn _realized(
                 let first = defined.map_or_else(
                     || {
                         function
-                            .block(block)
-                            .iter()
+                            .iter_block(block)
                             .find(|&one| function.instruction(one).opcode != Opcode::Phi)
                             .expect("a terminator")
                     },

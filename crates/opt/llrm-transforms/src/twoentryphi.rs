@@ -362,7 +362,7 @@ fn hoisted_into(
     before: InstId,
     arm: BlockId,
 ) {
-    let body = function.block(arm).iter().collect::<Vec<_>>();
+    let body = function.iter_block(arm).collect::<Vec<_>>();
     for &inst in &body[..body.len() - 1] {
         function.move_to(inst, Position::Before(before)).expect("a placed instruction");
         metadata_dropped(function, inst);

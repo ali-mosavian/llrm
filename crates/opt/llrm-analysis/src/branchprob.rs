@@ -399,8 +399,7 @@ fn weighed(
     };
     let called = |at: i64| {
         function
-            .block(cfg::block(at))
-            .iter()
+            .iter_block(cfg::block(at))
             .filter(|&inst| matches!(
                 function.instruction(inst).opcode,
                 Opcode::Call(_) | Opcode::Invoke(_)

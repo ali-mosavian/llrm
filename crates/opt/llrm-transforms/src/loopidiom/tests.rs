@@ -43,8 +43,7 @@ fn kinds(
     let mut se = ScalarEvolution::new();
     let idiom = LoopIdiomRecognize::new(options, library);
     function
-        .block(header)
-        .iter()
+        .iter_block(header)
         .filter(|&inst: &InstId| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
         .map(|inst| idiom.is_legal_store(&cx, &mut se, cur_loop, inst))
         .collect()
@@ -152,8 +151,7 @@ fn same_byte(text: &str) -> Vec<bool> {
         *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("h")).expect("%h");
     let cur_loop = loops.get_loop_for(header).expect("a loop");
     let stores: Vec<InstId> = function
-        .block(header)
-        .iter()
+        .iter_block(header)
         .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
         .collect();
     let splat = llrm_mir::valuetracking::bytewise::is_bytewise_value(

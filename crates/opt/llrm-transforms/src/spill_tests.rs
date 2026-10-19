@@ -208,7 +208,7 @@ entry:
     let loads = function
         .layout()
         .iter()
-        .flat_map(|&block| function.block(block).iter().collect::<Vec<_>>())
+        .flat_map(|&block| function.iter_block(block).collect::<Vec<_>>())
         .filter(|&inst| matches!(
             function.instruction(inst).opcode,
             llrm_mir::opcode::Opcode::Load { .. }

@@ -651,7 +651,7 @@ fn a_block_answers_ends_neighbours_and_order_after_every_edit() {
     let (y, _) = named(f, "y");
     let ret = f.terminator(entry).unwrap();
     assert_eq!((f.block(entry).len(), f.block(entry).first(), f.block(entry).last()), (3, Some(x), Some(ret)));
-    assert_eq!(f.block(entry).iter().collect::<Vec<_>>(), [x, y, ret]);
+    assert_eq!(f.iter_block(entry).collect::<Vec<_>>(), [x, y, ret]);
     assert_eq!((f.prev_in_block(x), f.next_in_block(x), f.next_in_block(ret)), (None, Some(y), None));
     assert!(f.comes_before(x, y) && !f.comes_before(y, x) && !f.comes_before(x, x));
     // The numbers were taken: an edit must make them false.
@@ -667,7 +667,7 @@ fn an_instruction_goes_after_another() {
     let (x, _) = named(f, "x");
     let (y, _) = named(f, "y");
     f.move_to(x, Position::After(y)).expect("moved");
-    assert_eq!(f.block(f.entry().unwrap()).iter().take(2).collect::<Vec<_>>(), [y, x]);
+    assert_eq!(f.iter_block(f.entry().unwrap()).take(2).collect::<Vec<_>>(), [y, x]);
 }
 
 /// A run moved as one is the run moved one by one; the block is a list, so

@@ -184,8 +184,7 @@ impl Run<'_> {
     ) -> InstId {
         let block = self.function.parent(inst).expect("a placed instruction");
         self.function
-            .block(block)
-            .iter()
+            .iter_block(block)
             .skip_while(|&one| one != inst)
             .skip(1)
             .skip_while(|&one| matches!(self.function.instruction(one).opcode, Opcode::Phi))
@@ -199,8 +198,7 @@ impl Run<'_> {
         block: BlockId,
     ) -> InstId {
         self.function
-            .block(block)
-            .iter()
+            .iter_block(block)
             .find(|&one| !matches!(self.function.instruction(one).opcode, Opcode::Phi))
             .expect("a terminator")
     }
@@ -275,7 +273,7 @@ impl Run<'_> {
         // Scan the six instructions before the insert point for this binop.
         let ip = self.x.insert_point.expect("an insert point");
         let block = self.function.parent(ip).expect("a placed insert point");
-        let before_ip = self.function.block(block).iter().rev().skip_while(|&one| one != ip).skip(1).take(6);
+        let before_ip = self.function.iter_block_rev(block).skip_while(|&one| one != ip).skip(1).take(6);
         for before in before_ip {
             let one = self.function.instruction(before);
             let overflowing = matches!(
@@ -350,8 +348,7 @@ impl Run<'_> {
                 // After the casts of other arguments at the start of the entry.
                 let entry = self.function.entry().expect("an entry");
                 self.function
-                    .block(entry)
-                    .iter()
+                    .iter_block(entry)
                     .find(|&one| {
                         let inst = self.function.instruction(one);
                         let argument_cast = matches!(inst.opcode, Opcode::Cast(CastOp::BitCast))
@@ -423,7 +420,7 @@ impl Run<'_> {
         // Scan the six instructions before the insert point for this GEP.
         let ip = self.x.insert_point.expect("an insert point");
         let block = self.function.parent(ip).expect("placed");
-        let before_ip = self.function.block(block).iter().rev().skip_while(|&one| one != ip).skip(1).take(6);
+        let before_ip = self.function.iter_block_rev(block).skip_while(|&one| one != ip).skip(1).take(6);
         for before in before_ip {
             let one = self.function.instruction(before);
             if one.opcode == gep && one.operands == [base, idx] && one.flags.is_empty() {
@@ -608,7 +605,7 @@ impl Run<'_> {
                 }
                 while at != here && self.x.is_inserted_instruction(&at) {
                     let block = self.function.parent(at).expect("placed");
-                    at = self.function.block(block).iter().skip_while(|&one| one != at).nth(1).expect("in its block");
+                    at = self.function.iter_block(block).skip_while(|&one| one != at).nth(1).expect("in its block");
                 }
                 break;
             }
