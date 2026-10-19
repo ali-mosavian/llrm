@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/aliassets.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/aliassets.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/aliassets.rs sha256:663a049bf91e2ff67a83c7c8a9af14c1a05933a1702423c75cd786840d4a1a1e -->
+<!-- src: crates/opt/llrm-analysis/src/aliassets.rs sha256:813c7683b21625af81e37931d67c7b2cc29a8cf1183e7e42022bf7b200894e49 -->
 
 # aliassets
 
@@ -13,3 +13,12 @@ that forwards is skipped by every iteration, and one that does not is
 referenced by the pointer map, so no set is ever removed. Unknown
 instructions (`addUnknown`) are not tracked: LICM adds loads and stores
 only.
+
+## Example
+Two stores through pointers that may alias share a set; through pointers
+that cannot alias they are two sets:
+
+```text
+store i32 1, ptr %a
+store i32 2, ptr %b   ; one set if %a and %b may alias, two if they do not
+```

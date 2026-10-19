@@ -20,7 +20,7 @@ BEFORE = (
     "define i32 @main(i32 %x) {\nentry:\n  %t = call i32 @tiny(i32 %x)\n  %m = call i32 @mid(i32 %t)\n  ret i32 %m\n}\n"
 )
 # llrm inlined both calls
-AFTER = BEFORE.split("define i32 @main")[0] + "define i32 @main(i32 %x) {\nentry:\n  %t = add i32 %x, 1\n  %m = add i32 %t, 31\n  ret i32 %m\n}\n"
+AFTER = "'tiny' inlined into 'main' with (cost=-30, threshold=225)\n'mid' inlined into 'main' with (cost=-15000, threshold=225)\n"
 
 
 def classes(report: dict) -> dict:
@@ -48,11 +48,11 @@ def test_the_sites_of_a_module_are_counted_by_caller_and_callee():
     assert inlinediff.sites(BEFORE) == {("main", "tiny"): 1, ("main", "mid"): 1}
 
 
-def test_the_stage_files_of_a_dump_are_the_second_pipeline_module_and_the_interprocedural_one(tmp_path):
-    for name in ("03-stamp.ll", "04-pipeline.ll", "05-pipeline.ll", "06-pipeline.ll", "07-interprocedural.ll"):
+def test_the_stage_files_of_a_dump_are_the_second_pipeline_module_and_the_remarks(tmp_path):
+    for name in ("03-stamp.ll", "04-pipeline.ll", "05-pipeline.ll", "06-pipeline.ll", "07-interprocedural.ll", "remarks.txt"):
         (tmp_path / name).write_text("")
-    before, after = inlinediff.stage_files(tmp_path)
-    assert (before.name, after.name) == ("05-pipeline.ll", "07-interprocedural.ll")
+    before, remarks = inlinediff.stage_files(tmp_path)
+    assert (before.name, remarks.name) == ("05-pipeline.ll", "remarks.txt")
 
 
 @needs_opt
@@ -69,3 +69,23 @@ def test_quoted_names_of_m16_modules_are_read():
     `define`, so no m16 module could be compared (TypeError in `functions`)."""
     text = 'define i16 @"_main@0"() addrspace(1) {\n  %1 = call cc 1005 addrspace(1) i16 @"_tiny@3"(i16 1)\n  ret i16 %1\n}\n'
     assert inlinediff.sites(text) == {("_main@0", "_tiny@3"): 1}
+
+
+@needs_opt
+def test_the_calls_of_a_caller_inlined_and_deleted_are_not_inlined_by_llrm():
+    """Counting calls left after the stage read `outer` inlined into `main` and deleted as llrm inlining `outer`'s call of the declaration
+    `ext`: 425 of QCport's 574 llrm-only sites named a callee with no body."""
+    before = (
+        "declare i32 @ext(i32)\n"
+        "define internal i32 @outer(i32 %x) {\nentry:\n  %r = call i32 @ext(i32 %x)\n  ret i32 %r\n}\n"
+        "define i32 @main(i32 %x) {\nentry:\n  %r = call i32 @outer(i32 %x)\n  ret i32 %r\n}\n"
+    )
+    remarks = "'outer' inlined into 'main' with (cost=-15000, threshold=225)\n"
+    report = inlinediff.compare(before, remarks, "inline")
+    assert classes(report)["llrm-only"] == 0, report["rows"]
+
+
+def test_a_refusal_keeps_its_threshold():
+    """The cost's optional tail took `, threshold=T` before the threshold group could: every refusal read threshold None."""
+    _, refused = inlinediff.verdicts("'f' not inlined into 'g' because too costly to inline (cost=300, threshold=225)\n")
+    assert refused[("g", "f")] == [("too costly to inline", "300", "225")]

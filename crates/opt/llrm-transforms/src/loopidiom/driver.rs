@@ -415,7 +415,7 @@ impl LoopIdiomRecognize {
         kind: MemKind,
     ) -> bool {
         let mut made_change = false;
-        let mut insts: Vec<InstId> = run.function.block(block).instructions().to_vec();
+        let mut insts: Vec<InstId> = run.function.iter_block(block).collect::<Vec<_>>();
         let mut at = 0;
         while at < insts.len() {
             let inst = insts[at];
@@ -451,7 +451,7 @@ impl LoopIdiomRecognize {
             // If processing the instruction invalidated our iterator, start
             // over from the top of the block.
             if next.is_some_and(|next| run.function.is_erased(next)) {
-                insts = run.function.block(block).instructions().to_vec();
+                insts = run.function.iter_block(block).collect::<Vec<_>>();
                 at = 0;
             }
         }

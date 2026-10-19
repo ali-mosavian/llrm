@@ -89,6 +89,10 @@ mod calleepop_tests;
 pub mod candidate;
 pub mod canonical;
 pub mod cfg;
+pub mod combine;
+pub mod combine_sink;
+#[cfg(test)]
+mod combine_sink_tests;
 pub mod constraintelim;
 #[cfg(test)]
 mod constraintelim_tests;
@@ -102,6 +106,7 @@ pub mod dead;
 pub mod deadargs;
 #[cfg(test)]
 mod deadargs_tests;
+pub mod deadstore;
 pub mod decide;
 pub mod dse;
 pub mod earlycse;
@@ -135,6 +140,9 @@ pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;
 pub mod instsimplify;
+pub mod instworklist;
+#[cfg(test)]
+mod instworklist_tests;
 pub mod interprocedural;
 pub mod ipacp;
 pub mod jumpthread;
@@ -183,6 +191,8 @@ pub mod ports;
 pub mod profit;
 pub mod promote;
 pub mod rotate;
+pub mod sccp;
+pub mod sccpsolver;
 pub mod settled;
 pub mod simpleloopunswitch;
 pub mod simplifycfg;

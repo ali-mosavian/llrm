@@ -688,7 +688,7 @@ pub fn _unreachable(
                 Operand::Block(one) if reached.contains(&id(*one)) && predecessors.get(&at).is_some_and(|from| from.contains(&id(*one)))
             )
         };
-        for phi in function.block(block(at)).iter().collect::<Vec<_>>() {
+        for phi in function.iter_block(block(at)).collect::<Vec<_>>() {
             if function.instruction(phi).opcode != Opcode::Phi {
                 break;
             }
@@ -703,7 +703,7 @@ pub fn _unreachable(
     let dead: Vec<BlockId> = blocks.iter().filter(|one| !reached.contains(&one.at)).map(|one| block(one.at)).collect();
     // Values defined there are used only there, or by phis on dropped edges.
     for &one in &dead {
-        for inst in function.block(one).iter().collect::<Vec<_>>().into_iter().rev() {
+        for inst in function.iter_block(one).collect::<Vec<_>>().into_iter().rev() {
             if let Some(result) = function.instruction(inst).result {
                 let poison = context.constant(Constant { ty: function.value(result).ty, kind: ConstantKind::Poison });
                 function.replace_all_uses_with(result, Operand::Constant(poison));

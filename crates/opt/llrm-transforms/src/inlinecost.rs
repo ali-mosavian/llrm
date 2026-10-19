@@ -285,7 +285,7 @@ pub fn inline_viable(
 ) -> Result<(), String> {
     let returns_twice = has_flag(&callee.attrs, "returns_twice");
     for &block in callee.layout() {
-        for inst in callee.block(block).iter() {
+        for inst in callee.iter_block(block) {
             let opcode = &callee.instruction(inst).opcode;
             if !matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
                 continue;
@@ -1565,7 +1565,7 @@ impl<'a> Analyzer<'a> {
         &mut self,
         block: BlockId,
     ) -> Result<(), String> {
-        for inst in self.callee.block(block).iter() {
+        for inst in self.callee.iter_block(block) {
             // D5: no ephemeral values; a debug intrinsic costs nothing and is
             // not counted (:2750).
             if let Some(target) = llrm_mir::memory::callee(self.context, self.callee, inst)
@@ -2127,13 +2127,12 @@ pub fn shadow(
             .iter()
             .any(
                 |&block| caller
-                    .block(block)
-                    .iter()
+                    .iter_block(block)
                     .any(|inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(caller_id)),
             );
         let mut ordinal: HashMap<GlobalId, usize> = HashMap::default();
         for &block in caller.layout() {
-            for inst in caller.block(block).iter() {
+            for inst in caller.iter_block(block) {
                 let Some(callee_id) = llrm_mir::memory::callee(&module.context, caller, inst) else { continue };
                 let callee_global = module.global(callee_id);
                 let GlobalKind::Function(callee) = &callee_global.kind else { continue };
@@ -2170,8 +2169,7 @@ pub fn shadow(
                     .iter()
                     .any(
                         |&block| callee
-                            .block(block)
-                            .iter()
+                            .iter_block(block)
                             .any(
                                 |one| llrm_mir::memory::callee(&module.context, callee, one).is_some_and(|inner| {
                                     matches!(
@@ -2198,6 +2196,30 @@ pub fn shadow(
                 );
             }
         }
+    }
+}
+
+/// `opt -pass-remarks=inline`'s line for a decided site (InlineAdvisor.cpp
+/// `emitInlinedInto`, Inliner.cpp's missed remark); `spliced` says whether
+/// the copy was made, which a decision to inline may still be refused.
+pub fn remark(
+    caller: &str,
+    callee: &str,
+    cost: &InlineCost,
+    spliced: bool,
+) -> String {
+    let priced = match cost {
+        InlineCost::Always(why) => format!("(cost=always): {why}"),
+        InlineCost::Never(why) => format!("(cost=never): {why}"),
+        InlineCost::Cost { cost, threshold, .. } => format!("(cost={cost}, threshold={threshold})"),
+    };
+    match (spliced, cost.is_ok()) {
+        (true, _) => format!("'{callee}' inlined into '{caller}' with {priced}"),
+        (false, true) => format!("'{callee}' not inlined into '{caller}' because the copy was not made {priced}"),
+        (false, false) if matches!(cost, InlineCost::Never(_)) => {
+            format!("'{callee}' not inlined into '{caller}' because it should never be inlined {priced}")
+        }
+        (false, false) => format!("'{callee}' not inlined into '{caller}' because too costly to inline {priced}"),
     }
 }
 
@@ -2358,6 +2380,7 @@ pub fn sites(
     size: CallerSize,
     always_only: bool,
     tti: Option<&dyn llrm_mir::tti::Tti>,
+    mut decided: Option<&mut Vec<(InstId, GlobalId, InlineCost)>>,
 ) -> llrm_support::hash::SparseIdMap<InstId, crate::inline::Candidate> {
     let mut out = llrm_support::hash::SparseIdMap::default();
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
@@ -2397,6 +2420,9 @@ pub fn sites(
         // `-fno-inline-functions`: clang's pipeline is the always-inliner
         // alone.
         let cost = inline_cost(&site, params);
+        if let Some(decided) = decided.as_deref_mut() {
+            decided.push((inst, callee_id, cost.clone()));
+        }
         if if always_only { matches!(cost, InlineCost::Always("always inline attribute")) } else { cost.is_ok() } {
             out.insert(
                 inst,
