@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/unroll_jam.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unroll_jam.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:3a294aac6b27b3d5cc7b03d3d590f04a568d61e5b10c43eb423f19f39e86da63 -->
+<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:3f10aa35ab7ef4c251868497f901b7f7f8df4ee838e580ff56c817e9b2e12cc9 -->
 
 # unroll_jam
 
@@ -119,6 +119,13 @@ nest. If it fused a nest, `sroa` and the fixed point run again over the
 result (the fused stores merge there). -O3 and -Omax:
 `-floop-unroll-and-jam`. Not run where one pass is selected by name. See
 `docs/reference/levels.md`.
+
+The pin's default pipeline never jams: `enable-unroll-and-jam` is false
+([`PassBuilderPipelines.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L222)),
+so this pass is gcc's, not a translation. Were it enabled, the pin runs
+SimplifyCFG with hoisting and sinking (L1438) before it (L1474); llrm runs
+the jam first, because the matcher needs the nest as it was before that
+rewrite. Exit: the matcher accepts the L1438 form; no date.
 
 ## Needs
 `induction` (trip counts), `dependence`, `Registers` (`llrm_analysis`);
