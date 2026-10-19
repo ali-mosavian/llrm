@@ -104,3 +104,18 @@ def test_the_partial_report_lists_what_ran_and_each_raw_failure_line():
     """The list existed only in memory for 1 h; the owners could not be told while the bisect ran."""
     text = postland.partial("f" * 40, "e" * 40, ["tests/run: 57 groups"], ["run c/x.c [-O2]: want '1', got '2'"])
     assert "COVERED SUITES" in text and "want '1', got '2'" in text and "bisect pending" in text
+
+
+def test_the_premise_line_names_a_program_combine_changed_and_says_when_the_binary_is_not_the_build(tmp_path, monkeypatch):
+    """Today's instruments passed silently three times: a 0-failing run is only a result if the tested binary is the build and combine changed something."""
+    monkeypatch.setattr(postland, "HOME", tmp_path)
+    (tmp_path / "tests/run/c").mkdir(parents=True)
+    (tmp_path / "tests/run/c/a.c").write_text("int a;")
+    bins, built = tmp_path / "bins", tmp_path / "built"
+    for one in (bins, built):
+        one.mkdir()
+        (one / "llrm-c").write_text('#!/bin/sh\\nout=""\\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\\necho "${LLRM_NO_COMBINE:-on}" > "$out"\\n')
+        (one / "llrm-c").chmod(0o755)
+    assert "equals" in postland.combine_premise(tmp_path, bins, built) and "a.c differs" in postland.combine_premise(tmp_path, bins, built)
+    (built / "llrm-c").write_text("#!/bin/sh\nexit 0\n")
+    assert "DIFFERS FROM" in postland.combine_premise(tmp_path, bins, built)

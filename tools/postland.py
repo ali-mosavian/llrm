@@ -239,12 +239,35 @@ def combine_off(at: Path, bins: Path, programs: set[str]) -> str:
     return f"LLRM_NO_COMBINE=1 clears: {', '.join(cleared) or 'none'} (of {len(programs)} failing)"
 
 
+def digest(path: Path) -> str:
+    import hashlib
+
+    return hashlib.md5(path.read_bytes()).hexdigest()[:12]
+
+
+def combine_premise(at: Path, bins: Path, built: Path) -> str:
+    """The premise line: the tested llrm-c is the dist build's (same md5), and a program's object differs between default and LLRM_NO_COMBINE=1 on it, so combine ran."""
+    same = digest(bins / "llrm-c") == digest(built / "llrm-c")
+    seen = "no program differed"
+    for source in sorted((at / "tests/run/c").glob("*.c"))[:200]:
+        objects = []
+        for off in (False, True):
+            out = HOME / ("premise-off.obj" if off else "premise-on.obj")
+            env = {**os.environ, **({"LLRM_NO_COMBINE": "1"} if off else {})}
+            done = subprocess.run([str(bins / "llrm-c"), "-m32", "-march=i486", "-O2", "-o", str(out), str(source)], env=env, capture_output=True)
+            objects.append(digest(out) if done.returncode == 0 and out.exists() else None)
+        if objects[0] and objects[1] and objects[0] != objects[1]:
+            seen = f"{source.name} differs"
+            break
+    return f"premise: tested llrm-c {digest(bins / 'llrm-c')} {'equals' if same else 'DIFFERS FROM'} the dist build {digest(built / 'llrm-c')}; default vs LLRM_NO_COMBINE=1: {seen}"
+
+
 def check(sha: str, previous: str, emit=lambda covered, raw: None) -> tuple[set[str], list[str]]:
     """Every failure of the head and the COVERED SUITES lines: tests/run at m16+m32 first (written out at once), the workspace lib tests, parity_smoke's checks and budget."""
     at = tree(sha)
     bins = dist(at, sha)
     runs, run_line, reasons = run_groups(at, bins)
-    covered = [f"tests/run m16+m32 (run_groups): {run_line}"]
+    covered = [combine_premise(at, bins, HOME / "target-dist" / "dist"), f"tests/run m16+m32 (run_groups): {run_line}"]
     raw = [f"{name}: {why}" for name, why in reasons.items()]
     emit(covered, raw)
     if runs:
