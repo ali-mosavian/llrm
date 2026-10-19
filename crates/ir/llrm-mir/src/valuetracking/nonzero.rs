@@ -78,7 +78,7 @@ fn operator<'a>(
         Operand::Constant(id) => {
             let constant = q.context.get(id);
             let (opcode, operands, flags) = match &constant.kind {
-                ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands }) => (
+                ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands, .. }) => (
                     Opcode::GetElementPtr { source: *source },
                     operands.iter().map(|one| Operand::Constant(*one)).collect(),
                     if *inbounds { Flags::INBOUNDS } else { Flags::default() },

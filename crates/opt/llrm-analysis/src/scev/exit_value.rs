@@ -7,26 +7,20 @@
 //! in at most `bitwidth` iterations; if the compare is false there, the
 //! backedge is taken a bounded number of times.
 //!
-//! # Deviations
-//! - D-T4 (temporary,
-//!   [#2328](https://github.com/ali-mosavian/llrm/issues/2328)):
-//!   `computeExitCountExhaustively`, `getConstantEvolvingPHI`,
-//!   `EvaluateExpression` and `getConstantEvolutionLoopExitValue` run the loop
-//!   on constants through `ConstantFoldInstOperands`, which MIR's folder does
-//!   not offer for an instruction by operand list. The exhaustive count is
-//!   CouldNotCompute, which is LLVM's answer when `getConstantEvolvingPHI`
-//!   finds no phi.
-//!
 //! # Example
 //! `while (x >>= 1)` over an `i32` is taken at most 32 times.
 
-use llrm_mir::module::{BlockId, Operand};
+use llrm_mir::constantfolding;
+use llrm_mir::context::{ConstantId, ConstantKind};
+use llrm_mir::dense::IdMap;
+use llrm_mir::loopinfo::Loop;
+use llrm_mir::module::{BlockId, GlobalKind, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, IntPredicate, Opcode};
 use llrm_mir::valuetracking::known::compute_known_bits_at;
 use llrm_mir::valuetracking::pattern;
 
 use super::ap::Ap;
-use super::expr::Scev;
+use super::expr::{Scev, Ty};
 use super::trip::ExitLimit;
 use super::{Cx, ScalarEvolution};
 
@@ -207,15 +201,294 @@ impl ScalarEvolution {
         self.ty_of(cx, ty).expect("a SCEVable value")
     }
 
-    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L10040
-    /// `computeExitCountExhaustively` (D-T4): CouldNotCompute.
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L10012
+    /// `computeExitCountExhaustively`: run the loop on constants until `cond`
+    /// is `exit_when`.
     pub(super) fn compute_exit_count_exhaustively(
         &mut self,
-        _cx: &Cx,
-        _header: BlockId,
-        _cond: Operand,
-        _exit_when: bool,
+        cx: &Cx,
+        header: BlockId,
+        cond: Operand,
+        exit_when: bool,
     ) -> Scev {
+        let Some(l) = cx.loops.get_loop_for(header) else { return self.get_could_not_compute() };
+        let Some(pn) = get_constant_evolving_phi(cx, &l, cond) else { return self.get_could_not_compute() };
+
+        // If the loop is canonicalized, the PHI will have exactly two entries.
+        // That's the only form we support here.
+        if cx.function.instruction(pn).operands.len() != 4 {
+            return self.get_could_not_compute();
+        }
+
+        let mut current: IdMap<InstId, ConstantId> = IdMap::new();
+        let Some(latch) = l.get_loop_latch(cx.function) else { return self.get_could_not_compute() };
+        let phis: Vec<InstId> = header_phis(cx, header);
+        for &phi in &phis {
+            if let Some(start) = get_other_incoming_value(cx, phi, latch) {
+                current.insert(phi, start);
+            }
+        }
+        if !current.contains_key(&pn) {
+            return self.get_could_not_compute();
+        }
+
+        // Okay, we find a PHI node that defines the trip count of this loop.
+        // Execute the loop symbolically to determine when the condition gets a
+        // value of "ExitWhen".
+        for iteration in 0..MAX_BRUTE_FORCE_ITERATIONS {
+            let value = evaluate_expression(cx, &l, cond, &mut current).map(|c| cx.context.get(c).kind.clone());
+            let Some(ConstantKind::Int(bits)) = value else {
+                // Couldn't symbolically evaluate.
+                return self.get_could_not_compute();
+            };
+            if bits == u128::from(exit_when) {
+                return self.get_constant_of_type(cx, Ty::Int(32), i128::from(iteration));
+            }
+
+            // Update all the PHI nodes for the next iteration.
+            let mut next: IdMap<InstId, ConstantId> = IdMap::new();
+            let to_compute: Vec<InstId> = phis.iter().copied().filter(|phi| current.contains_key(phi)).collect();
+            for phi in to_compute {
+                let be_value = incoming_for_block(cx, phi, latch);
+                if let Some(c) = be_value.and_then(|v| evaluate_expression(cx, &l, v, &mut current)) {
+                    next.insert(phi, c);
+                }
+            }
+            current = next;
+        }
+
+        // Too many iterations were needed to evaluate.
         self.get_could_not_compute()
     }
+}
+
+/// `MaxBruteForceIterations`: the `cl::opt` default.
+const MAX_BRUTE_FORCE_ITERATIONS: u32 = 100;
+
+/// `MaxConstantEvolvingDepth`.
+const MAX_CONSTANT_EVOLVING_DEPTH: u32 = 100;
+
+fn header_phis(
+    cx: &Cx,
+    header: BlockId,
+) -> Vec<InstId> {
+    cx.function.iter_block(header).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect()
+}
+
+/// The instruction that defines `v`.
+fn instruction_of(
+    cx: &Cx,
+    v: Operand,
+) -> Option<InstId> {
+    let Operand::Value(value) = v else { return None };
+    match cx.function.value(value).def {
+        ValueDef::Instruction(inst) => Some(inst),
+        ValueDef::Argument(_) => None,
+    }
+}
+
+/// `PHI->getIncomingValueForBlock(bb)`.
+fn incoming_for_block(
+    cx: &Cx,
+    phi: InstId,
+    bb: BlockId,
+) -> Option<Operand> {
+    let want = Operand::Block(bb);
+    cx.function.instruction(phi).operands.chunks(2).find(|pair| pair[1] == want).map(|pair| pair[0])
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L9904
+/// `getOtherIncomingValue`: if every incoming value of `phi` except the one
+/// for `bb` is one specific constant, that constant.
+fn get_other_incoming_value(
+    cx: &Cx,
+    phi: InstId,
+    bb: BlockId,
+) -> Option<ConstantId> {
+    let mut incoming: Option<ConstantId> = None;
+    for pair in cx.function.instruction(phi).operands.chunks(2) {
+        if pair[1] == Operand::Block(bb) {
+            continue;
+        }
+        let Operand::Constant(current) = pair[0] else { return None };
+        if incoming != Some(current) {
+            if incoming.is_some() {
+                return None;
+            }
+            incoming = Some(current);
+        }
+    }
+    incoming
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L9764
+/// `canConstantFold`: an instruction of this kind folds when its operands
+/// are constants.
+fn can_constant_fold(
+    cx: &Cx,
+    inst: InstId,
+) -> bool {
+    let instruction = cx.function.instruction(inst);
+    match &instruction.opcode {
+        Opcode::Binary(_)
+        | Opcode::FNeg
+        | Opcode::GetElementPtr { .. }
+        | Opcode::Freeze
+        | Opcode::ICmp(_)
+        | Opcode::FCmp(_)
+        | Opcode::Select
+        | Opcode::Cast(_)
+        | Opcode::Load { .. }
+        | Opcode::ExtractValue(_)
+        | Opcode::InsertValue(_) => true,
+        Opcode::Call(info) => {
+            let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return false };
+            let ConstantKind::Global(id) = cx.context.get(callee).kind else { return false };
+            let Some(global) = cx.globals.get(id.0 as usize) else { return false };
+            let (GlobalKind::Function(function), Some(name)) = (&global.kind, global.name.as_deref()) else {
+                return false;
+            };
+            constantfolding::can_constant_fold_call_to(info, function, name)
+        }
+        _ => false,
+    }
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L9780
+/// `canConstantEvolve`.
+fn can_constant_evolve(
+    cx: &Cx,
+    l: &Loop,
+    inst: InstId,
+) -> bool {
+    // An instruction outside of the loop can't be derived from a loop PHI.
+    if !l.contains_instruction(cx.function, inst) {
+        return false;
+    }
+    if cx.function.instruction(inst).opcode == Opcode::Phi {
+        // We don't currently keep track of the control flow needed to evaluate
+        // PHIs, so we cannot handle PHIs inside of loops.
+        return cx.function.parent(inst) == Some(l.get_header());
+    }
+    // If we won't be able to constant fold this expression even if the
+    // operands are constants, bail early.
+    can_constant_fold(cx, inst)
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L9800
+/// `getConstantEvolvingPHIOperands`.
+fn get_constant_evolving_phi_operands(
+    cx: &Cx,
+    l: &Loop,
+    use_inst: InstId,
+    phi_map: &mut IdMap<InstId, Option<InstId>>,
+    depth: u32,
+) -> Option<InstId> {
+    if depth > MAX_CONSTANT_EVOLVING_DEPTH {
+        return None;
+    }
+
+    // Otherwise, we can evaluate this instruction if all of its operands are
+    // constant or derived from a PHI node themselves.
+    let mut phi: Option<InstId> = None;
+    for &op in &cx.function.instruction(use_inst).operands {
+        if matches!(op, Operand::Constant(_)) {
+            continue;
+        }
+        let op_inst = instruction_of(cx, op).filter(|&one| can_constant_evolve(cx, l, one))?;
+
+        let mut p = if cx.function.instruction(op_inst).opcode == Opcode::Phi {
+            Some(op_inst)
+        } else {
+            // If this operand is already visited, reuse the prior result. We
+            // may have P != PHI if this is the deepest point at which the
+            // inconsistent paths meet.
+            phi_map.get(&op_inst).copied().flatten()
+        };
+        if p.is_none() {
+            // Recurse and memoize the results, whether a phi is found or not.
+            p = get_constant_evolving_phi_operands(cx, l, op_inst, phi_map, depth + 1);
+            phi_map.insert(op_inst, p);
+        }
+        // Not evolving from PHI.
+        let p = p?;
+        // Evolving from multiple different PHIs.
+        if phi.is_some_and(|one| one != p) {
+            return None;
+        }
+        phi = Some(p);
+    }
+    // This is a expression evolving from a constant PHI!
+    phi
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L9843
+/// `getConstantEvolvingPHI`: a phi in the loop that `v` is derived from,
+/// through operations whose other operands are constants.
+fn get_constant_evolving_phi(
+    cx: &Cx,
+    l: &Loop,
+    v: Operand,
+) -> Option<InstId> {
+    let inst = instruction_of(cx, v).filter(|&one| can_constant_evolve(cx, l, one))?;
+    if cx.function.instruction(inst).opcode == Opcode::Phi {
+        return Some(inst);
+    }
+    // Record non-constant instructions contained by the loop.
+    let mut phi_map = IdMap::new();
+    get_constant_evolving_phi_operands(cx, l, inst, &mut phi_map, 0)
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L9861
+/// `EvaluateExpression`: the value of `v` given the values of the loop's
+/// phis in `vals`, if it folds.
+fn evaluate_expression(
+    cx: &Cx,
+    l: &Loop,
+    v: Operand,
+    vals: &mut IdMap<InstId, ConstantId>,
+) -> Option<ConstantId> {
+    // Convenient constant check, but redundant for recursive calls.
+    if let Operand::Constant(c) = v {
+        return Some(c);
+    }
+    let inst = instruction_of(cx, v)?;
+
+    if let Some(&c) = vals.get(&inst) {
+        return Some(c);
+    }
+
+    // An instruction inside the loop depends on a value outside the loop that
+    // we weren't given a mapping for, or a value such as a call inside the
+    // loop.
+    if !can_constant_evolve(cx, l, inst) {
+        return None;
+    }
+
+    // An unmapped PHI can be due to a branch or another loop inside this loop,
+    // or due to this not being the initial iteration through a loop where we
+    // couldn't compute the evolution of this particular PHI last time.
+    if cx.function.instruction(inst).opcode == Opcode::Phi {
+        return None;
+    }
+
+    let operands = cx.function.instruction(inst).operands.clone();
+    let mut folded: Vec<ConstantId> = Vec::with_capacity(operands.len());
+    for operand in operands {
+        let c = match instruction_of(cx, operand) {
+            Some(op_inst) => {
+                let c = evaluate_expression(cx, l, Operand::Value(cx.function.instruction(op_inst).result?), vals)?;
+                vals.insert(op_inst, c);
+                c
+            }
+            None => match operand {
+                Operand::Constant(c) => c,
+                _ => return None,
+            },
+        };
+        folded.push(c);
+    }
+
+    let env = constantfolding::Env { globals: cx.globals, layout: cx.layout };
+    constantfolding::constant_fold_inst_operands_at(cx.context, env, cx.function, inst, &folded)
 }

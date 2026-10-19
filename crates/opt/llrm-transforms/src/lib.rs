@@ -52,7 +52,7 @@
 //!
 //! Loops: `loopsimplify`, `lcssa` (with `lcssamerges`), `hoist`, `loopmotion`,
 //! `trivialunswitch`, `unswitch`, `loopsplit`, `loopfuse`, `loopdistribute`
-//! (with `loopshape`), `indvars` (with `loopexit`, `exitfold`, `exitsink`),
+//! (with `loopshape`), `indvars` (with `exitvalues`, `exitfold`, `exitsink`),
 //! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`, `unroll_jam`,
 //! `loopidioms`, `floatloop`, `tailrec`.
 //!
@@ -98,6 +98,7 @@ pub mod combine_shared;
 pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
+pub mod congruentiv;
 pub mod constraintelim;
 #[cfg(test)]
 mod constraintelim_tests;
@@ -169,7 +170,6 @@ mod local_tests;
 pub mod loopclone;
 pub mod loopdeletion;
 pub mod loopdistribute;
-pub mod loopexit;
 pub mod loopfuse;
 pub mod loopidiom;
 pub mod loopidioms;

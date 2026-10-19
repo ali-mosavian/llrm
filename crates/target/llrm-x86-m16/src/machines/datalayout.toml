@@ -4,6 +4,11 @@
 # What gcc's -m names it: -m16.
 mode = 16
 
+# What the LLVM tools are told to price this target as (opt -mtriple/-mcpu: the pricing CPU is the 486, nobody prices the 386) and the TTI llrm prices with (set before the TTI exists: the oracle refuses until the m16 machine states it).
+llvm_triple = "i386-unknown-unknown-code16"
+llvm_cpu = "i486"
+tti = "X86"
+
 datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
 
 # The operations this machine has no instruction for, which the compiler expands before selection: fptoui to a 64-bit integer

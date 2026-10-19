@@ -943,6 +943,8 @@ impl Parser {
                 ConstantKind::Expr(ConstantExpr::GetElementPtr {
                     source,
                     inbounds: flags.contains(Flags::INBOUNDS),
+                    nusw: flags.contains(Flags::INBOUNDS) || flags.contains(Flags::NUSW),
+                    nuw: flags.contains(Flags::NUW),
                     operands,
                 })
             }
