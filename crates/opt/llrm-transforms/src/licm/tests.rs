@@ -1018,3 +1018,145 @@ c60:
     let looked = super::sink::CHILDREN_EXAMINED.with(|one| one.get());
     assert!(looked <= 10, "{looked} blocks looked at for a loop of two blocks in a function of 64");
 }
+
+/// `hoistGEP`: matmul's `gep i16, (gep [16 x i8], %a, %j), %i` read the
+/// invariant index only after the variant one, so the row address was rebuilt
+/// every trip. Not for constant indices, nor when the inner GEP has another
+/// user.
+#[test]
+fn test_a_gep_of_a_variant_gep_is_reassociated_to_leave_the_loop() {
+    let text = |outer: &str, extra: &str| {
+        format!(
+            "define i16 @f(ptr %a, i16 %n, i16 %k) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %p = getelementptr inbounds i16, ptr %a, i16 %i
+  %q = getelementptr inbounds [16 x i8], ptr %p, i16 {outer}
+  {extra}
+  store i8 1, ptr %q
+  %i1 = add nuw i16 %i, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        )
+    };
+    let after = licm_printed(&text("%k", ""));
+    assert!(
+        block_of(&after, "b0")
+            .iter()
+            .any(|line| line.contains("%invariant.gep = getelementptr [16 x i8], ptr %a, i16 %k")),
+        "{after}"
+    );
+    assert!(
+        block_of(&after, "b1").iter().any(|line| line.contains("%gep = getelementptr i16, ptr %invariant.gep, i16 %i")),
+        "{after}"
+    );
+    assert!(!after.contains("%p ="), "{after}");
+    assert!(!licm_printed(&text("3", "")).contains("invariant.gep"));
+    assert!(!licm_printed(&text("%k", "store ptr %p, ptr %a")).contains("invariant.gep"));
+}
+
+/// A reassociation reaches the preheader where the visit found it: matmul's
+/// `invariant.op` came after the GEPs visited later, LLVM's before them.
+#[test]
+fn test_a_reassociation_keeps_its_place_among_the_hoists() {
+    let after = licm_printed(
+        "define i16 @f(ptr %a, i16 %n, i16 %k, i16 %m) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = add nsw i16 %i, %m
+  %y = add nsw i16 %x, 1
+  %g = getelementptr i16, ptr %a, i16 %k
+  store i16 %y, ptr %g
+  %i1 = add nuw i16 %i, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    let entry = block_of(&after, "b0");
+    let place = |what: &str| entry.iter().position(|line| line.contains(what)).unwrap_or_else(|| panic!("{after}"));
+    assert!(place("%invariant.op =") < place("%g ="), "{after}");
+}
+
+/// Under `licm<no-allowspeculation>` a GEP the loop may skip stays in it:
+/// `nbody`'s `gep @_pos_x, %i` in the conditional branch of the inner loop was
+/// copied out to the inner preheader, which LLVM's first LICM does not do.
+#[test]
+fn test_without_allow_speculation_a_conditional_gep_stays_in_the_loop() {
+    let text = "define i16 @f(i16 %n, ptr %a, i16 %k) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b4 ]
+  %t = and i16 %i, 1
+  %c = icmp eq i16 %t, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %g = getelementptr i16, ptr %a, i16 %k
+  %v = load i16, ptr %g
+  br label %b4
+
+b3:
+  br label %b4
+
+b4:
+  %p = phi i16 [ %v, %b2 ], [ 0, %b3 ]
+  %j = add i16 %i, 1
+  %d = icmp slt i16 %j, %n
+  br i1 %d, label %b1, label %b5
+
+b5:
+  ret i16 %p
+}
+";
+    let mut module = parsed(text);
+    let kept = crate::testing::managed(&mut module, Licm { apply: true, speculate: false });
+    assert!(block_of(&kept, "b2").iter().any(|line| line.starts_with("%g =")), "{kept}");
+}
+
+/// `hoistGEP` asks `isKnownNonNegative` of the translated value tracking: the
+/// matmul indices `phi [zext i16, 0]` are, so the re-formed GEPs are `inbounds`
+/// as LLVM's are (the older query answered no, and they lost the flag).
+#[test]
+fn test_a_reassociated_gep_of_non_negative_indices_stays_inbounds() {
+    let after = licm_printed(
+        "define i16 @f(ptr %a, i16 %n, i32 %k) {
+b0:
+  %kk = and i32 %k, 255
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b1 ]
+  %c = phi i16 [ 0, %b0 ], [ %c1, %b1 ]
+  %p = getelementptr inbounds i16, ptr %a, i32 %i
+  %q = getelementptr inbounds [16 x i8], ptr %p, i32 %kk
+  store i8 1, ptr %q
+  %c1 = add i16 %c, 1
+  %i1 = zext i16 %c1 to i32
+  %d = icmp slt i16 %c1, %n
+  br i1 %d, label %b1, label %b2
+
+b2:
+  ret i16 %c1
+}
+",
+    );
+    assert!(after.contains("%invariant.gep = getelementptr inbounds [16 x i8]"), "{after}");
+    assert!(after.contains("%gep = getelementptr inbounds i16"), "{after}");
+}

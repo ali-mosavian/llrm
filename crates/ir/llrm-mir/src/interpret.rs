@@ -427,6 +427,16 @@ impl<'m> Machine<'m> {
                 }
                 Val::Int { bits: count.apply(bits, width), width }
             }
+            Intrinsic::Compare { signed } => {
+                let (Val::Int { .. }, Val::Int { .. }) = (argument(0), argument(1)) else { return Ok(Val::Poison) };
+                let width = self.types().int_bits(returns).expect("an integer result");
+                let less = icmp(if signed { IntPredicate::Slt } else { IntPredicate::Ult }, argument(0), argument(1));
+                let greater =
+                    icmp(if signed { IntPredicate::Sgt } else { IntPredicate::Ugt }, argument(0), argument(1));
+                let bit = |compare: Val| matches!(compare, Val::Int { bits: 1, .. });
+                // -1, 0 or 1 at the result's width.
+                Val::Int { bits: (u128::from(bit(greater)).wrapping_sub(u128::from(bit(less)))) & mask(width), width }
+            }
             Intrinsic::Fixed { divide } => {
                 let (Val::Int { bits: a, width }, Val::Int { bits: b, .. }, Val::Int { bits: scale, .. }) =
                     (argument(0), argument(1), argument(2))
@@ -533,6 +543,7 @@ impl<'m> Machine<'m> {
             Intrinsic::Window | Intrinsic::Restrict => argument(0),
             Intrinsic::PortIn | Intrinsic::PortOut => return unsupported("an I/O port"),
             Intrinsic::VaStart => return unsupported("a variadic argument list"),
+            Intrinsic::StackSave | Intrinsic::StackRestore => return unsupported("a stack pointer"),
             Intrinsic::Code => return unsupported("inline code"),
             Intrinsic::Asm => return unsupported("inline assembly"),
         })

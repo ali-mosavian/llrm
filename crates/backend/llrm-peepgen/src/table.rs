@@ -4,10 +4,7 @@
 
 use iced_x86::RflagsBits;
 use indexmap::IndexMap;
-
-#[path = "../../../target/llrm-x86/src/parse.rs"]
-#[allow(dead_code)]
-mod parse;
+use llrm_instr as parse;
 
 /// The six arithmetic flags.
 pub const ARITHMETIC: u32 =
@@ -84,8 +81,9 @@ fn operands(list: &[parse::Operand]) -> String {
 pub fn load(
     source: &str,
     file: &str,
+    dialect: &parse::Dialect,
 ) -> Result<Table, String> {
-    let forms = parse::parse(source).map_err(|error| format!("{file}: {error}"))?;
+    let forms = parse::parse(source, dialect).map_err(|error| format!("{file}: {error}"))?;
     let mut mnemonics: IndexMap<String, Mnem> = IndexMap::new();
     for form in forms {
         let op = operation(&form.operation)

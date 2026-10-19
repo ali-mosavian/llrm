@@ -1743,6 +1743,10 @@ impl crate::analysis::facts::Fact for BodyRoots {
                     found.disturbed.insert(disturbed);
                 }
                 let Some(what) = &one.what else { continue };
+                // A move into the stack pointer (`stackrestore`) leaves it
+                // somewhere else, as an `alloca` does.
+                found.moves_stack |= what.op == Operation::Move
+                    && what.dests.iter().any(|to| matches!(to, Loc::Reg(reg) if ir::root(reg.register) == stack));
                 for r#where in what.dests.iter().chain(&what.sources) {
                     if let Loc::Reg(ir::Reg { register, .. }) = r#where {
                         found.plain.insert(ir::root(*register));
@@ -1968,7 +1972,7 @@ pub fn _operand(
         Loc::Address(ir::AddressRef { through, index_through: index, scale, offset, .. }) => {
             format!("[{}{}]", _registers(regs, *through, *index, *scale), _signed(*offset))
         }
-        Loc::Held(_) => return Err(Unprintable(format!("operand {}", r#where.repr()))),
+        Loc::Held(_) | Loc::Field(_) => return Err(Unprintable(format!("operand {}", r#where.repr()))),
     })
 }
 
