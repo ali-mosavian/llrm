@@ -432,7 +432,7 @@ fn defined(program: &Program) -> impl Iterator<Item = Defined> + '_ {
 }
 
 /// Defined procedures of module `at`, in module order.
-fn procedures(
+pub(crate) fn procedures(
     program: &Program,
     at: usize,
 ) -> Vec<GlobalId> {
@@ -581,7 +581,7 @@ fn calls_of(
 
 /// Defined procedures no outside code calls: every caller is in the program,
 /// and a call through a pointer is not one, so none has its address taken.
-fn unexported(program: &Program) -> BTreeSet<Defined> {
+pub(crate) fn unexported(program: &Program) -> BTreeSet<Defined> {
     let addressed: BTreeSet<Defined> = program
         .modules
         .iter()
@@ -1042,7 +1042,7 @@ fn together_trial<E: From<String>>(
 
 /// Module `at`'s procedures every caller of which is in the module: no
 /// outside code, and no other module, calls them.
-fn private(
+pub(crate) fn private(
     program: &Program,
     at: usize,
 ) -> BTreeSet<GlobalId> {

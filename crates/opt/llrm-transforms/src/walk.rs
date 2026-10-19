@@ -39,13 +39,22 @@
 //! `IPSCCPPass`, `GlobalOptPass`, `DeadArgumentEliminationPass` before the
 //! CGSCC walk), `DeadArgumentElimination.cpp`.
 
+use std::collections::BTreeSet;
+
+use llrm_analysis::interprocedural as facts;
+use llrm_mir::context::GlobalId;
 use llrm_mir::passes::PreservedAnalyses;
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 
-use crate::interprocedural::{managers, reporting_marked, vouched};
+use crate::interprocedural::{function_mut, managers, private, procedures, reporting_marked, unexported, vouched};
 
-/// Parameters nothing reads are not passed, before the Simplify list.
-pub struct ModuleIpo;
+/// What the interprocedural step does to a body before the Simplify list:
+/// a parameter every call passes the same constant uses it (`ipa-args`), a
+/// function called with a constant is copied for it (`ipa-cp`, the clone at
+/// -O3), and a parameter nothing reads is not passed (`ipa-deadargs`).
+pub struct ModuleIpo {
+    pub inline: crate::inline::Threshold,
+}
 
 impl ProgramPass for ModuleIpo {
     fn name(&self) -> &'static str {
@@ -57,26 +66,63 @@ impl ProgramPass for ModuleIpo {
         program: &mut Program,
         analyses: &mut ProgramAnalyses,
     ) -> Result<(), String> {
-        // A program pass drops what the function stages hold (GlobalsAA): it
-        // runs only where a parameter goes.
-        if !program.modules.iter().any(crate::deadargs::any_dead) {
-            return Ok(());
-        }
+        let count = program.modules.len();
+        let mut procedures: Vec<Vec<GlobalId>> = (0..count).map(|at| procedures(program, at)).collect();
+        let mut private: Vec<BTreeSet<GlobalId>> = (0..count).map(|at| private(program, at)).collect();
+        let unexported = unexported(program);
+        let costs = program.target.size_costs();
         let mut modules = managers(program, analyses);
         let mut changed = false;
-        for at in 0..program.modules.len() {
+        let constants = facts::program_parameters(program, &unexported);
+        for at in 0..count {
+            for &id in &procedures[at] {
+                let Some(known) = constants[at].get(&id) else { continue };
+                let (context, function) = function_mut(&mut program.modules[at], id);
+                if facts::specialize_parameters(context, function, known) {
+                    modules[at].changed(id);
+                    changed = true;
+                }
+            }
+        }
+        let mut cloning = crate::ipacp::Cloning::default();
+        for at in 0..count {
+            let (made, before) = reporting_marked(&mut program.modules[at], &mut modules[at], |module| {
+                crate::ipacp::cloned(
+                    module,
+                    &program.layout,
+                    &procedures[at],
+                    &private[at],
+                    &costs,
+                    self.inline.cp_clone,
+                    &mut cloning,
+                )
+            });
+            vouched(&program.modules[at], made.edited.iter().copied().filter(|id| !made.unsound.contains(id)), &before);
+            for &id in &made.added {
+                procedures[at].push(id);
+                private[at].insert(id);
+            }
+            for &id in made.added.iter().chain(&made.edited) {
+                llrm_mir::memory::unsplit(
+                    &mut function_mut(&mut program.modules[at], id).1.attrs,
+                    llrm_mir::memory::Moved::OutOfArguments,
+                );
+                modules[at].changed(id);
+                changed = true;
+            }
+        }
+        for at in 0..count {
             let ((removed, unsound), before) =
                 reporting_marked(&mut program.modules[at], &mut modules[at], crate::deadargs::removed_with);
             vouched(&program.modules[at], removed.iter().copied().filter(|id| !unsound.contains(id)), &before);
-            if !before.is_empty() {
-                changed = true;
-                modules[at].invalidate_bodies(&PreservedAnalyses::none());
-            }
+            changed |= !removed.is_empty();
+        }
+        for one in &mut modules {
+            one.invalidate_bodies(&PreservedAnalyses::none());
         }
         for (at, one) in modules.into_iter().enumerate() {
             analyses.carry(at, one.carried());
         }
-        // The held GlobalsAA stays where nothing changed.
         if changed {
             analyses.invalidate();
         }

@@ -977,7 +977,7 @@ pub fn recorded(
         // LLVM's IPSCCP and DeadArgumentElimination run after the early
         // function pipeline, before the Simplify list.
         if at == 0 && applied.options.llvm_order {
-            manager.add_program(crate::walk::ModuleIpo);
+            manager.add_program(crate::walk::ModuleIpo { inline: applied.options.inline });
             // A program pass abandons it.
             manager.hold::<GlobalsAA>();
         }
