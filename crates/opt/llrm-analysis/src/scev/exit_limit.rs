@@ -114,7 +114,7 @@ impl ScalarEvolution {
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L9167
     /// `computeExitLimitFromCond`.
-    pub(super) fn compute_exit_limit_from_cond(
+    pub fn compute_exit_limit_from_cond(
         &mut self,
         cx: &Cx,
         header: BlockId,
