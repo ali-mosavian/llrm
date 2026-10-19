@@ -307,3 +307,19 @@ def test_a_new_failing_test_inside_a_red_crate_is_refused_and_one_the_head_fails
     on_head = lambda crate, tests: {t for t in tests if t == "test_a"}  # test_b passes on the head
     assert ps.subset_refusals(ps.head_expanded(head, merged, on_head), merged, False) != []
     assert ps.subset_refusals(ps.head_expanded(head, merged, lambda crate, tests: set(tests)), merged, False) == []  # the head fails test_b too
+
+
+def test_a_refusal_after_a_rebuild_names_the_newest_source_the_oldest_binary_and_a_failed_build(monkeypatch):
+    """#2764 was refused "binaries still older than the merged tree after a rebuild" with nothing to say whether the build failed or a source was newer."""
+    import llrmbin
+
+    monkeypatch.setattr(ps, "smoke_bins", lambda env=None: "/x")
+    monkeypatch.setattr(llrmbin, "stale_binaries", lambda directory, cwd=None: ["llrm-c", "llrm-qb"])
+    monkeypatch.setattr(llrmbin, "stale_found", lambda directory, repo=None: [("llrm-c", 100.0, "crates/a/src/x.rs", 160.0), ("llrm-qb", 90.0, "crates/b/src/y.rs", 130.0)])
+
+    class Failed:
+        returncode, stderr, stdout = 101, "error[E0425]: cannot find type\nerror: could not compile `llrm-nib`", ""
+
+    why = ps.ensure_bins(build=lambda: Failed())
+    assert "oldest binary llrm-qb" in why and "newest source crates/a/src/x.rs" in why and "70 s later" in why, why
+    assert "the rebuild exited 101" in why and "could not compile `llrm-nib`" in why, why
