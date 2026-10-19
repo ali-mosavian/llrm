@@ -372,3 +372,21 @@ def test_a_cpu_llrm_does_not_price_for_is_refused_on_the_opt_side(monkeypatch):
         difftest.llrm_target("llrm-pass: target x86-m16 cpu 486 tti X86 datalayout d\n", "m16")
     monkeypatch.setattr(difftest.targetdesc, "targets", lambda: {"m16": {"mode": 16, "llvm_cpu": "i486", "tti": "X86"}})
     assert difftest.llrm_target("llrm-pass: target x86-m16 cpu 486 tti X86 datalayout d\n", "m16").startswith("x86-m16 cpu 486")
+
+
+def test_llrm_pass_runs_with_rotate_on_and_indvars_with_lftr_and_the_header_says_so(monkeypatch, tmp_path):
+    """Without LLRM_ROTATE=1 the licm@724 slot speculated while opt runs no-allowspeculation: fpbench, nbody and matmul read as licm differences that were the instrument's."""
+    seen = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "", "llrm-pass: target x86-m32 cpu 486 tti X86 datalayout d\n"
+
+    monkeypatch.setattr(difftest.subprocess, "run", lambda command, *a, **k: (seen.append(k.get("env", {})), Done())[1])
+    monkeypatch.delenv("LLRM_ROTATE", raising=False)
+    src = tmp_path / "x.ll"
+    src.write_text("")
+    difftest.USED_ENV.clear()
+    difftest.isolated(Path("llrm-pass"), {"config": "c-O2", "pass": "licm@724"}, src)
+    difftest.isolated(Path("llrm-pass"), {"config": "c-O2", "pass": "indvars@738"}, src)
+    assert seen[0]["LLRM_ROTATE"] == "1" and "LLRM_LFTR" not in seen[0] and seen[1]["LLRM_ROTATE"] == "1" and seen[1]["LLRM_LFTR"] == "1"
+    assert difftest.USED_ENV == {"LLRM_ROTATE=1", "LLRM_LFTR=1 LLRM_ROTATE=1"}

@@ -425,13 +425,24 @@ def licm_counts(text: str) -> dict[str, collections.Counter]:
     return dict(found)
 
 
+def oracle_env(pass_name: str) -> dict[str, str]:
+    """What llrm-pass runs with for a comparison of record: the pin's order has rotate before licm and indvars, and without LLRM_ROTATE=1 `rotating()` is false, so the
+    licm@724 slot speculates where opt runs no-allowspeculation (fpbench, nbody, matmul diffs that were the instrument's); LFTR acts only with LLRM_LFTR=1 (indvars)."""
+    return {"LLRM_ROTATE": "1", **({"LLRM_LFTR": "1"} if pass_name.split("@")[0] == "indvars" else {})}
+
+
+USED_ENV: set[str] = set()  # the oracle_env settings llrm-pass ran with, printed in the header
+
+
 def isolated(replay: Path, row: dict, source: Path) -> str:
     """llrm's answer to the input alone: `llrm-pass` runs the one pass PASS once on `source`."""
     try:
         order = ["--order"] if "@" in row["pass"] else []
         mode = targetdesc.default()
         layout = ["--mode", mode[1:]] if mode != "host" else []
-        done = subprocess.run([str(replay), level_of(row["config"]), *layout, *order, row["pass"], str(source)], capture_output=True, text=True)
+        env = {**os.environ, **oracle_env(row["pass"])}
+        USED_ENV.add(" ".join(f"{k}={v}" for k, v in sorted(oracle_env(row["pass"]).items())))
+        done = subprocess.run([str(replay), level_of(row["config"]), *layout, *order, row["pass"], str(source)], capture_output=True, text=True, env=env)
     except OSError as error:
         raise RuntimeError(f"{replay}: {error}") from error
     if done.returncode:
@@ -618,6 +629,8 @@ def main() -> int:
     print(f"opt: {LLVM_BIN / 'opt'} ({version}); target {' '.join(target_args()) or 'host default'}")
     for seen in sorted(SEEN):
         print(f"llrm-pass: target {seen}")
+    for used in sorted(USED_ENV):
+        print(f"llrm-pass: env {used} (the inputs must have been dumped with LLRM_ROTATE=1 too)")
     print(table(report))
     if getattr(args, "json", None):
         args.json.write_text(json.dumps(report, indent=1))
