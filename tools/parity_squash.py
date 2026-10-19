@@ -24,6 +24,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -76,13 +78,22 @@ def outside_files(base: str, head: str, cwd: Path = ROOT) -> list[str]:
     return sorted(net - own)
 
 
+DOCS_PAGE = re.compile(r"^> Generated from the `//!` headers? of ")
+
+
+def is_generated(base: str, path: str, cwd: Path = ROOT) -> bool:
+    """Whether `path` at `base` is a docsbuild page: the docs check regenerates it on the merged tree, so a rewrite of its source is not a deletion."""
+    done = subprocess.run(["git", "show", f"{base}:{path}"], cwd=cwd, capture_output=True, text=True)
+    return done.returncode == 0 and bool(DOCS_PAGE.match(done.stdout.split("\n", 1)[0]))
+
+
 def losses(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, int, int, bool]]:
     """(path, deleted lines, test functions removed, whole file gone) for each file of the net diff base..head that loses more than LIMIT lines, loses a test or goes.
     Own commits or not: #2443's own commit deleted scev/expand_iv.rs (855 lines) from a stale tree, and 'outside its own commits' let it through."""
     out = []
     for line in git("diff", "--numstat", base, head, cwd=cwd).splitlines():
         added, gone, path = line.split("\t", 2)
-        if gone == "-":
+        if gone == "-" or is_generated(base, path, cwd):
             continue
         diff = git("diff", base, head, "--", path, cwd=cwd)
         tests = len(removed_tests(diff))
@@ -110,6 +121,129 @@ def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT) ->
             why.append(f"{path}: the squash {what}{f' and {tests} test function(s)' if tests else ''}{' (no commit of this PR touched it)' if path in outside else ''}; "
                        "name the path in a `Deletes:` or `Reverts:` line of the description if that is meant")
     return why
+
+
+PRECHECK_CACHE = LANDED_LOG.parent / "precheck-cache.json"  # (PR head sha, feat/parity sha) -> the verdict line, and the head's own check failures per sha: ~40 candidates per cycle must not rebuild the dev checkout each
+PRECHECK_DIR = Path(os.environ.get("PRECHECK_DIR", Path.home() / "scratch/precheck"))  # a persistent dev checkout + target dir: no dist build, seconds per PR after the first
+
+
+PRECHECK_DIR = Path(os.environ.get("PRECHECK_DIR", Path.home() / "scratch/precheck"))  # a persistent dev checkout + target dir: no dist build, seconds per PR after the first
+
+
+def fmt_differs(root: Path, files: list[str], run=subprocess.run) -> set[str]:
+    """The `.rs` files of `files` that `tools/fmt.sh --stdin` would change: --check on only the PR's own files, ~1 s where the whole tree takes ~13."""
+
+    def one(path: str) -> str | None:
+        text = (root / path).read_text()
+        done = run(["tools/fmt.sh", "--stdin", path], cwd=root, input=text, capture_output=True, text=True)
+        return path if done.returncode or done.stdout != text else None
+
+    rust = [f for f in files if f.endswith(".rs") and (root / f).is_file()]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return {path for path in pool.map(one, rust) if path}
+
+
+def precheck_checks(dev: Path, target: Path):
+    """The cheap static checks of the gate, each `(name, root -> {check: the set of items failing})`: a ratchet's name, fmt's files, the docs' stale pages. Run on the
+    dev checkout against the persistent dev target; the items are what a head's own failures are told apart from a PR's by."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import parity_smoke  # noqa: PLC0415
+    from buildslot import slotted  # noqa: PLC0415
+
+    env = {**os.environ, "CARGO_TARGET_DIR": str(target)}
+
+    def ratchets(root: Path) -> dict[str, set[str]]:
+        failed = parity_smoke.ratchet_failures(root, run=lambda command: subprocess.run(slotted(command), cwd=root, env=env, capture_output=True, text=True))
+        return {name: {name} for name in failed}
+
+    def fmt(root: Path, only: list[str] | None = None) -> dict[str, set[str]]:
+        if only is not None:  # the PR side: its own files only (the baseline, computed once per feat/parity sha, checks them all)
+            files = fmt_differs(root, only)
+            return {"fmt": files} if files else {}
+        done = subprocess.run(["tools/fmt.sh", "--check"], cwd=root, env=env, capture_output=True, text=True)
+        files = {line.strip() for line in done.stdout.splitlines() if re.fullmatch(r"\S+\.(rs|py|toml)", line.strip())}
+        return {"fmt": files or {"fmt --check failed"}} if done.returncode else {}
+
+    def docs(root: Path) -> dict[str, set[str]]:
+        done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=root, env=env, capture_output=True, text=True)
+        if not done.returncode:
+            return {}
+        out = (done.stdout + done.stderr).splitlines()
+        return {"docs": {line.strip() for line in out if line.strip().startswith("docs/")} or {"docsbuild --check failed"}}
+
+    fmt.takes_only = True
+    return [("ratchets", ratchets), ("fmt", fmt), ("docs", docs)]
+
+
+def precheck_items(dev: Path, checks, deletions_of=None, seconds: dict[str, float] | None = None, only: list[str] | None = None) -> dict[str, set[str]]:
+    """Every check's failing items on the checkout in `dev`, merged by check name; `seconds` collects each check's wall time; `only` (the PR's changed
+    files) goes to the checks that can use it (`takes_only`)."""
+    found: dict[str, set[str]] = {}
+    for label, check in checks:
+        started = time.monotonic()
+        for name, items in (check(dev, only=only) if only is not None and getattr(check, "takes_only", False) else check(dev)).items():
+            found.setdefault(name, set()).update(items)
+        if seconds is not None:
+            seconds[label] = round(time.monotonic() - started, 1)
+    return found
+
+
+def precheck_baseline(dev: Path, checks, base_sha: str, cache: Path) -> dict[str, set[str]]:
+    """The checks' failures on feat/parity ITSELF, cached per its sha: a red head file (fmt, a stale page) must not refuse every PR, nor the PR that fixes it."""
+    cached = json.loads(cache.read_text()) if cache.exists() else {}
+    key = f"base {base_sha}"
+    if key in cached:
+        return {name: set(items) for name, items in cached[key].items()}
+    git("checkout", "-q", "--detach", base_sha, cwd=dev)
+    found = precheck_items(dev, checks)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({**cached, key: {name: sorted(items) for name, items in found.items()}}))
+    return found
+
+
+def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHECK_DIR / "target", checks=None, merge=None, deletions=None, info=None, head_failed: set[str] | None = None, cache: Path = PRECHECK_CACHE, base_sha: str | None = None) -> str:
+    """`N: PASS`, or `N: REFUSED: <names>` after merging PR N's head with feat/parity in the dev checkout and running the cheap static checks (ratchets, fmt, docs, the
+    deletion rule) there: seconds, no dist build. #2836 cost a batch 26 minutes of halving for a failure these checks name. Only items NEW against feat/parity's own
+    failures refuse (by check AND file/page): a red head file refused every PR, the fixes included. The verdict is cached per (PR head sha, feat/parity sha)."""
+    info = info or json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
+    if info["baseRefName"] != "feat/parity":
+        return f"{number}: REFUSED: targets {info['baseRefName']}, not feat/parity"
+    base_sha = base_sha or git("rev-parse", BASE).strip()
+    key = f"{info['headRefOid']} {base_sha}"
+    cached = json.loads(cache.read_text()) if cache.exists() else {}
+    if key in cached:
+        return cached[key].replace("{number}", number)
+    line = _precheck(number, info, dev, target, checks, merge, deletions, head_failed, cache, base_sha)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cached = json.loads(cache.read_text()) if cache.exists() else {}
+    cache.write_text(json.dumps({**cached, key: line.replace(number, "{number}", 1)}))
+    return line
+
+
+def _precheck(number, info, dev, target, checks, merge, deletions, head_failed, cache, base_sha) -> str:
+    if not dev.exists():
+        dev.parent.mkdir(parents=True, exist_ok=True)
+        git("fetch", "-q", "origin", "feat/parity")
+        git("worktree", "add", "-q", "--detach", str(dev), base_sha)
+    git("fetch", "-q", "origin", info["headRefOid"], cwd=dev)
+    checks = list(checks) if checks is not None else precheck_checks(dev, target)
+    before = precheck_baseline(dev, checks, base_sha, cache)
+    seconds: dict[str, float] = {}
+    started = time.monotonic()
+    sha, why = (merge or merged_result)(info["headRefOid"], BASE, dev)
+    seconds["merge"] = round(time.monotonic() - started, 1)
+    if sha is None:
+        return f"{number}: REFUSED: {why}"
+    after = precheck_items(dev, checks, seconds=seconds, only=git("diff", "--name-only", base_sha, sha, cwd=dev).split())
+    with (cache.parent / "precheck-times.log").open("a") as log:  # where a precheck's minutes go, per PR
+        log.write(json.dumps({"pr": number, "at": datetime.datetime.now().strftime("%H:%M:%S"), "load": round(os.getloadavg()[0], 1), **seconds}) + "\n")
+    if problems := (deletions or refusals)(sha, info["body"] or "", BASE, dev):
+        after["deletes"] = {problem.split(":")[0] for problem in problems}
+    new = {name: items - before.get(name, set()) for name, items in after.items() if name not in (head_failed or set())}
+    new = {name: items for name, items in new.items() if items}
+    if not new:
+        return f"{number}: PASS"
+    return f"{number}: REFUSED: {', '.join(sorted(new))} ({'; '.join(f'{k}: ' + ', '.join(sorted(v)[:6]) for k, v in sorted(new.items()))})"
 
 
 def audit(since: str, cwd: Path = ROOT) -> list[tuple[str, str, str]]:
@@ -427,6 +561,12 @@ def smoke_failures(known: dict[str, str] | None = None) -> tuple[set[str], str]:
     return {n for n in names.split(",") if n}, (lines or [""])[-1]
 
 
+def head_failures_cached() -> set[str]:
+    """The cached failure set of the current head, or none known (then every failure refuses)."""
+    file = HEAD_FAILURES / f"{git('rev-parse', BASE).strip()}.json"
+    return set(json.loads(file.read_text())) if file.exists() else set()
+
+
 def head_failures(sha: str, compute=None, cache: Path = HEAD_FAILURES) -> set[str]:
     """The failing checks of the fast set on the head `sha`, computed once per sha (`compute()` on a checkout of it with ITS binaries; `head-failures` stores it)."""
     file = cache / f"{sha}.json"
@@ -522,6 +662,15 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
 
 
 def main() -> int:
+    """The landing commands run at the landing's build priority (`buildslot.landing`); the others (audit, unlogged) start no cargo."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from buildslot import landing  # noqa: PLC0415
+
+    with landing():
+        return dispatch()
+
+
+def dispatch() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "merge":
         rest = sys.argv[3:]
         return merge(sys.argv[2], parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))
@@ -538,6 +687,10 @@ def main() -> int:
         for sha in missing:
             print(f"UNLOGGED {sha} {git('log', '-1', '--format=%an: %s', sha).strip()[:90]}")
         return 1 if missing else 0
+    if len(sys.argv) >= 3 and sys.argv[1] == "precheck":
+        line = precheck(sys.argv[2], head_failed=head_failures_cached())
+        print(line)
+        return 0 if line.endswith("PASS") else 1
     if len(sys.argv) >= 3 and sys.argv[1] == "merge-batch":
         numbers = [a for a in sys.argv[2:] if not a.startswith("--") and a.isdigit()]
         rest = sys.argv[2:]

@@ -1,5 +1,5 @@
-//! `x86.instr`'s reader. Its only dependency is `llrm-lir`, which a build
-//! script has too, so it can include this with `#[path]`.
+//! The reader of a target's instruction description (`x86.instr`, ...): one
+//! schema for every target, read by the generators and the target crates.
 
 /// Condition codes, in iced's spelling, that `{cc}` expands to.
 pub const CONDITIONS: [&str; 16] =
