@@ -392,3 +392,16 @@ fn a_select_is_one_conditional_move() {
         assert!(!listing.lines().any(|line| line.trim().starts_with('j')), "{name}: no branch\n{listing}");
     }
 }
+
+/// The listing (`-S`, stage dumps) panicked "a pointer of 8 bytes" on a global
+/// holding a pointer, so a program with one could not be dumped at x86-64.
+#[test]
+fn a_global_holding_a_pointer_lists_as_a_quadword() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @x = global i32 0\n@p = global ptr @x\n\
+                define ptr @f() {\n  %v = load ptr, ptr @p\n  ret ptr %v\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("dq x"), "{listing}");
+}

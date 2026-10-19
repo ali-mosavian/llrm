@@ -425,6 +425,7 @@ pub fn datum(item: &Datum) -> Vec<String> {
                 match bytes {
                     4 => "dd",
                     2 => "dw",
+                    8 => "dq",
                     other => panic!("a pointer of {other} bytes"),
                 },
                 _signed(*offset)
