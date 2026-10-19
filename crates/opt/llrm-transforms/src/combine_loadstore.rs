@@ -141,9 +141,7 @@ impl Combiner<'_> {
             a.opcode,
             Opcode::Binary(_) | Opcode::Cast(_) | Opcode::Phi | Opcode::GetElementPtr { .. }
         )
-            && a.opcode == b.opcode
-            && a.ty == b.ty
-            && a.operands == b.operands
+            && a.is_identical_to_when_defined(b)
     }
 
     /// `canSimplifyNullStoreOrGEP`: the address is null, or a GEP of null, and

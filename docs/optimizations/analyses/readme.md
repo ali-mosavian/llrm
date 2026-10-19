@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 59 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 60 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -41,6 +41,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 59 documented, 0 undoc
 | induction | Which values are affine functions of a loop's counter, and how many trips a loop makes. | `AffineOperand`, `Affine`, `CountedLoop`, `Counted`, `ExitCount`, `Scev`, | [induction](induction.md) |
 | interprocedural | Finds what the two sides of a direct call make certain: constant arguments, constant returns, purity and termination. | The functions above, and the re-export of `noreturn::terminal_sites`. | [interprocedural](interprocedural.md) |
 | liveness | Which SSA values are live at each block's entry and exit, and how many are live at once. | `Liveness`, `live`, `live_where`, `pressure`, `pressure_of`, `entry_values`, | [liveness](liveness.md) |
+| loads | The value a load can reuse from an access before it in its block. | InstCombine's `visitLoadInst`, JumpThreading's load PRE, Promote. | [loads](loads.md) |
 | loadstorepromoter | `LoadAndStorePromoter`: the loads and stores of one memory slot, rewritten so each load reads the value that reaches it. |  | [loadstorepromoter](loadstorepromoter.md) |
 | loopaccess | `getPointersDiff` and `isConsecutiveAccess`. |  | [loopaccess](loopaccess.md) |
 | loopunrollanalyzer | `UnrolledInstAnalyzer`: what simplifies in one iteration of a loop if it were unrolled completely, to cost the unrolled form without making it. |  | [loopunrollanalyzer](loopunrollanalyzer.md) |
