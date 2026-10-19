@@ -389,8 +389,7 @@ impl Builder<'_> {
             .create_instruction(opcode, ty, Vec::new(), Flags::default(), Some(name).filter(|one| !one.is_empty()));
         let first = self
             .function
-            .block(entry)
-            .iter()
+            .iter_block(entry)
             .find(|&one| !matches!(self.function.instruction(one).opcode, Opcode::Alloca { .. }));
         let position = first.map_or(Position::End(entry), Position::Before);
         self.function.insert(inst, position).expect("the entry block");

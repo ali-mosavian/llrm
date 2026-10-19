@@ -2661,7 +2661,7 @@ pub fn initialized(
         }
     };
     let transfer = |at: i64, mut state: State| -> State {
-        for inst in function.block(cfg::block(at)).iter().rev() {
+        for inst in function.iter_block_rev(cfg::block(at)) {
             let op = function.instruction(inst);
             if let Some(effect) = effects.get(&inst) {
                 for one in
@@ -2989,7 +2989,7 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
     // the ones that read each value they read.
     let mut order: Vec<InstId> = Vec::new();
     for block in &graph {
-        for inst in function.block(cfg::block(block.at)).iter() {
+        for inst in function.iter_block(cfg::block(block.at)) {
             let op = function.instruction(inst);
             let pointer_result = op.result.is_some_and(|result| pointer_values.contains(&result));
             let pointer_store = matches!(op.opcode, Opcode::Store { .. }) && is_pointer(unit, op.operands[0]);
@@ -3015,7 +3015,7 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
         let place: llrm_mir::dense::IdMap<InstId, usize> = function
             .layout()
             .iter()
-            .flat_map(|&block| function.block(block).iter().enumerate().map(|(at, inst)| (inst, at)))
+            .flat_map(|&block| function.iter_block(block).enumerate().map(|(at, inst)| (inst, at)))
             .collect();
         pointer_loads
             .iter()
@@ -3244,7 +3244,7 @@ fn escapes(
     let function = unit.function;
     let graph = cfg::graph(function);
     let values = &solved.values;
-    let instructions = |at: i64| function.block(cfg::block(at)).iter();
+    let instructions = |at: i64| function.iter_block(cfg::block(at));
     // Escape is flow-sensitive separately from pointer contents. A pointer
     // published after a call must not make the earlier call reach its frame.
     let mut pointer_fields: IndexMap<ObjectRef, BTreeSet<ObjectRef>> = IndexMap::default();

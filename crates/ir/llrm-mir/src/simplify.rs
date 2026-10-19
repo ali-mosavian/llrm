@@ -49,9 +49,9 @@
 //! find only the facts that need none (a single-predecessor branch needs only
 //! the context instruction, which `simplify_instruction_in` sets).
 
+use crate::constantfolding;
 use crate::constantrange::ConstantRange;
 use crate::constantrange::PreferredRangeType;
-use crate::constantfolding;
 use crate::constfold;
 use crate::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
 use crate::datalayout::DataLayout;
@@ -2791,7 +2791,8 @@ fn simplify_cast(
     _max_recurse: u32,
 ) -> Option<Operand> {
     if let Some(c) = q.constant(op) {
-        return constantfolding::constant_fold_cast_operand(q.context, q.layout, cast_opc, c, ty).map(Operand::Constant);
+        return constantfolding::constant_fold_cast_operand(q.context, q.layout, cast_opc, c, ty)
+            .map(Operand::Constant);
     }
     // A cast of a cast back to the source type that is eliminable
     // (`isEliminableCastPair == BitCast`): trunc (zext X) and trunc (sext X) to
@@ -3924,12 +3925,11 @@ fn simplify_gep(
     let indices_c = indices.iter().map(|&index| q.constant(index)).collect::<Option<Vec<_>>>()?;
     let nw = constantfolding::nw_of_flags(flags);
     let env = constantfolding::Env { globals: q.globals, layout: q.layout };
-    let folded = match constantfolding::constant_expr_get_gep_with_layout(
-        q.context, q.layout, source, ptr_c, &indices_c, nw,
-    ) {
-        Some(expr) => constantfolding::constant_fold_constant(q.context, env, expr),
-        None => constantfolding::constant_fold_get_element_ptr(q.context, source, ptr_c, &indices_c, nw),
-    };
+    let folded =
+        match constantfolding::constant_expr_get_gep_with_layout(q.context, q.layout, source, ptr_c, &indices_c, nw) {
+            Some(expr) => constantfolding::constant_fold_constant(q.context, env, expr),
+            None => constantfolding::constant_fold_get_element_ptr(q.context, source, ptr_c, &indices_c, nw),
+        };
     Some(Operand::Constant(folded))
 }
 

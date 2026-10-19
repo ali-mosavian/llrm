@@ -218,8 +218,7 @@ fn can_return(
             function.terminator(block).is_some_and(|last| function.instruction(last).opcode == Opcode::Ret);
         if ends_in_ret
             && !function
-                .block(block)
-                .iter()
+                .iter_block(block)
                 .any(|inst| effects::states(context, declarations, function, inst, Fact::NoReturn))
         {
             return true;

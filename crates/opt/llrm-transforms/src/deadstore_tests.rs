@@ -102,7 +102,9 @@ fn a_memset_overwritten_by_a_store_goes() {
 fn a_long_chain_of_overwrites_is_linear() {
     let chain = |n: usize| {
         let stores: String = (0..n).map(|k| format!("  store i16 {k}, ptr @g\n")).collect();
-        format!("@g = global i16 0\n\ndefine i16 @f(i16 %x) {{\nb0:\n{stores}  %r = load i16, ptr @g\n  ret i16 %r\n}}\n")
+        format!(
+            "@g = global i16 0\n\ndefine i16 @f(i16 %x) {{\nb0:\n{stores}  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
+        )
     };
     let work = |n: usize| {
         let before = super::steps();
@@ -114,10 +116,11 @@ fn a_long_chain_of_overwrites_is_linear() {
     assert!(large as f64 <= 2.5 * small as f64, "{small} steps for 100 stores, {large} for 200");
 }
 
-/// Blocks are walked in LLVM's post-order, a branch's first target first. Walked
-/// the other way, the memset arm killed the word store (through the bytes the
-/// final store and the memset cover) before the first arm's byte store had
-/// killed the dword store, which the read in the join then needs; `opt` keeps it.
+/// Blocks are walked in LLVM's post-order, a branch's first target first.
+/// Walked the other way, the memset arm killed the word store (through the
+/// bytes the final store and the memset cover) before the first arm's byte
+/// store had killed the dword store, which the read in the join then needs;
+/// `opt` keeps it.
 #[test]
 fn the_first_target_of_a_branch_is_walked_first() {
     let after = eliminated(

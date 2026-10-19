@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 102 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 104 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -86,6 +86,8 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | profit | Machine-neutral profitability shared by the MIR transforms: what an instruction, a block and a function cost under a target's prices, how often each block runs, and what registers cost past the target's. | Each of [`crate::lsr`](lsr.md), [`crate::hoist`](hoist.md), [`crate::gvn`](gvn.md), | [profit](profit.md) |
 | promote | Write-through promotion: a load of a cell that a store left its value in on every path becomes that value, a phi where paths join. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point: `Sroa` at the boundaries of | [promote](promote.md) |
 | rotate | Loop rotation: a loop proven to run at least once is entered at its body, not its test; a loop that is not proven is entered behind a copy of its test (gcc's `-ftree-ch`). | Twice in [`crate::pipeline`](pipeline.md), outside the per-body fixed point. `copy` runs | [rotate](rotate.md) |
+| sccp | Sparse conditional constant propagation. |  | [sccp](sccp.md) |
+| sccpsolver | Sparse conditional constant propagation: the solver. |  | [sccpsolver](sccpsolver.md) |
 | settled | What each pass found nothing to do on, kept from one run of the pipeline over a body to the next: a body goes through its pipeline again only where something a pass read of it has changed. | `Settled` (the records, held by the module's `Context`) and `slice`. | [settled](settled.md) |
 | simpleloopunswitch | `SimpleLoopUnswitch<trivial>`: a branch or switch in a loop on a loop-invariant condition, one side of which leaves the loop, is decided before the loop instead of on every trip. |  | [simpleloopunswitch](simpleloopunswitch.md) |
 | simplifycfg | A terminator on a constant becomes a jump, the blocks nothing reaches go, and what that leaves is merged: LLVM's `SimplifyCFGPass` and the `ConstantFoldTerminator`, `removeUnreachableBlocks` and `BasicBlock::removePredecessor` it is made of. | Once per round of the function fixed point, before `decide`: the branches | [simplifycfg](simplifycfg.md) |
