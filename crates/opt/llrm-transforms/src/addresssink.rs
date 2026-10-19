@@ -219,8 +219,7 @@ fn sunk(function: &mut Function) -> bool {
         let shape = cfg::Shape::of(function);
         let Some(plan) = merged(function, &shape, block, &arms, 3) else { continue };
         let at = function
-            .block(block)
-            .iter()
+            .iter_block(block)
             .find(|&one| function.instruction(one).opcode != Opcode::Phi)
             .expect("a terminated block");
         let made = built(function, &plan, at);
@@ -289,8 +288,7 @@ fn compares_sunk(function: &mut Function) -> bool {
                     let (opcode, ty, operands, flags) =
                         (original.opcode.clone(), original.ty, original.operands.clone(), original.flags);
                     let first = function
-                        .block(there)
-                        .iter()
+                        .iter_block(there)
                         .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
                         .expect("a terminated block");
                     let inserted = function.create_instruction(opcode, ty, operands, flags, None);
@@ -371,8 +369,7 @@ fn masks_sunk(
                 None => {
                     // Before the first of this block's compares.
                     let first = function
-                        .block(there)
-                        .iter()
+                        .iter_block(there)
                         .find(|&inst| function.users(result).iter().any(|user| user.user == inst))
                         .expect("a compare in its block");
                     let original = function.instruction(mask);

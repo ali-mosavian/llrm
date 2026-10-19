@@ -399,8 +399,7 @@ fn weighed(
     };
     let called = |at: i64| {
         function
-            .block(cfg::block(at))
-            .iter()
+            .iter_block(cfg::block(at))
             .filter(|&inst| matches!(
                 function.instruction(inst).opcode,
                 Opcode::Call(_) | Opcode::Invoke(_)
@@ -567,8 +566,10 @@ impl Run {
         if trip < self.values.len() {
             return self.values.get(trip);
         }
-        let header = function.block(cfg::block(one.header));
-        let phis = header.iter().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect::<Vec<_>>();
+        let phis = function
+            .iter_block(cfg::block(one.header))
+            .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+            .collect::<Vec<_>>();
         let outside = |at: &Operand| matches!(at, Operand::Block(from) if !one.body.contains(&id(*from)));
         let incoming = |inst, inside: bool| {
             let pairs = function

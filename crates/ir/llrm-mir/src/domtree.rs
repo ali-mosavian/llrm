@@ -2797,9 +2797,7 @@ impl DomTree {
         if !self.is_reachable(b) {
             return true;
         }
-        SCANS.with(|scans| scans.set(scans.get() + 1));
-        let list = function.block(a).instructions();
-        list.iter().position(|one| *one == def) < list.iter().position(|one| *one == user)
+        function.comes_before(def, user)
     }
 
     /// `instruction_dominates`, where `position` is each instruction's index in

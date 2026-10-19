@@ -565,7 +565,7 @@ pub fn _phi_threaded(
     let headers = cfg::Shape::of(function).loops.iter().map(|one| one.header).collect::<BTreeSet<_>>();
     let mut changed = false;
     for block in function.layout().to_vec() {
-        let instructions = function.block(block).iter().collect::<Vec<_>>();
+        let instructions = function.iter_block(block).collect::<Vec<_>>();
         let [phi, last] = instructions[..] else { continue };
         let branch = function.instruction(last);
         let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
@@ -680,7 +680,7 @@ pub fn _threaded(
     let mut redirects = BTreeMap::new();
     for &block in function.layout() {
         let at = cfg::id(block);
-        let [only] = function.block(block).iter().collect::<Vec<_>>()[..] else {
+        let [only] = function.iter_block(block).collect::<Vec<_>>()[..] else {
             continue;
         };
         let instruction = function.instruction(only);

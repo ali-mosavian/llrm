@@ -492,7 +492,7 @@ fn copy_byval_arguments(
         let (pointer, void, flag) = (context.types.ptr(0), context.types.void(), context.types.int(1));
         let entry = function.entry().ok_or("a caller with a body")?;
         let first = anchor.or_else(|| {
-            function.block(entry).iter().find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }))
+            function.iter_block(entry).find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }))
         });
         let alloca = function.create_instruction(
             Opcode::Alloca { allocated: aggregate, align: None, address_space: 0 },

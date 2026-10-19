@@ -27,7 +27,7 @@ fn phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function.block(block).iter().take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
+    function.iter_block(block).take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
 }
 
 /// `call`, a call to `callee`, replaced by a copy of its body, which
@@ -53,7 +53,7 @@ pub fn splice_before(
 ) -> Vec<InstId> {
     let void = context.types.void();
     let block = function.parent(call).expect("a placed call");
-    let instructions = function.block(block).iter().collect::<Vec<_>>();
+    let instructions = function.iter_block(block).collect::<Vec<_>>();
     let at = instructions.iter().position(|&one| one == call).expect("in its block");
     // What followed the call, and the phis that named its block.
     let rest = function.create_block(None);
@@ -86,7 +86,7 @@ pub fn splice_before(
     let mut made = Vec::new();
     let mut returns = Vec::new();
     for &one in callee.layout() {
-        for inst in callee.block(one).iter() {
+        for inst in callee.iter_block(one) {
             let instruction = callee.instruction(inst);
             if instruction.opcode == Opcode::Ret {
                 returns.push((instruction.operands.first().copied(), blocks[&one]));

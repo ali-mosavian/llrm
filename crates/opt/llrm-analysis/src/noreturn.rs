@@ -239,8 +239,7 @@ pub fn cold(
     let blocks = cfg::graph(function);
     let marked = |at: i64| {
         function
-            .block(cfg::block(at))
-            .iter()
+            .iter_block(cfg::block(at))
             .any(
                 |inst| matches!(
                     function.instruction(inst).opcode,
@@ -269,8 +268,9 @@ fn _ends_cold(
     terminal_calls: &BTreeSet<InstId>,
     found: &BTreeSet<i64>,
 ) -> bool {
-    let instructions = function.block(cfg::block(block.at));
-    if instructions.iter().any(|inst| terminal_calls.contains(&inst)) || _stops(function, block.at) {
+    if function.iter_block(cfg::block(block.at)).any(|inst| terminal_calls.contains(&inst))
+        || _stops(function, block.at)
+    {
         return true;
     }
     !block.succ.is_empty() && block.succ.iter().all(|at| found.contains(at))
@@ -324,7 +324,7 @@ pub fn _cannot_return(
         if !visited.insert(at) {
             continue;
         }
-        if function.block(cfg::block(at)).iter().any(|inst| terminal_calls.contains(&inst)) {
+        if function.iter_block(cfg::block(at)).any(|inst| terminal_calls.contains(&inst)) {
             continue;
         }
         if _returns(function, at) {
@@ -352,7 +352,7 @@ pub fn after_terminal_calls(
     let void = context.types.void();
     let mut changed = false;
     for block in function.layout().to_vec() {
-        let instructions = function.block(block).iter().collect::<Vec<_>>();
+        let instructions = function.iter_block(block).collect::<Vec<_>>();
         let cut = instructions
             .iter()
             .position(

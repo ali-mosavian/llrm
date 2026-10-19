@@ -260,7 +260,7 @@ fn phis_of(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function.block(block).iter().take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
+    function.iter_block(block).take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
 }
 
 /// `IsEquivalentPHI`.
