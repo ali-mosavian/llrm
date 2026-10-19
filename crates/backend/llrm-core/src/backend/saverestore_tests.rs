@@ -14,10 +14,7 @@ struct Graph {
 
 impl Graph {
     fn of(edges: &[&[u32]]) -> Self {
-        Self {
-            blocks: (0..edges.len() as u32).map(BlockId).collect(),
-            succs: edges.iter().map(|one| one.to_vec()).collect(),
-        }
+        Self { blocks: (0..edges.len() as u32).map(BlockId).collect(), succs: edges.iter().map(|one| one.to_vec()).collect() }
     }
 }
 
@@ -109,11 +106,7 @@ fn placed(
     restore: u32,
     split: Option<&[u32]>,
 ) -> Option<Placement> {
-    Some(Placement {
-        save: BlockId(save),
-        restore: BlockId(restore),
-        split: split.map(|one| one.iter().map(|&at| BlockId(at)).collect()),
-    })
+    Some(Placement { save: BlockId(save), restore: BlockId(restore), split: split.map(|one| one.iter().map(|&at| BlockId(at)).collect()) })
 }
 
 #[test]
@@ -150,8 +143,7 @@ fn test_a_use_in_a_loop_is_wrapped_outside_the_loop() {
 
 #[test]
 fn test_a_loop_the_entry_falls_into_leaves_the_frame_at_the_entry() {
-    // The header's only way in is the entry: no block outside the loop to save
-    // in.
+    // The header's only way in is the entry: no block outside the loop to save in.
     let graph = Graph::of(&[&[1, 4], &[2], &[1, 3], &[5], &[5], &[]]);
     let frame = body(&[2], &[5]);
     assert_eq!(run(&graph, &frame, &frame), None);
@@ -167,9 +159,8 @@ fn test_a_save_hotter_than_the_entry_moves_up() {
 
 #[test]
 fn test_the_restore_is_split_so_the_clean_path_skips_it() {
-    // 0 -> {1, 9}; 1 -> {2, 3}; 2 and 3 need the frame; 9 does not; all join in
-    // 8, the only return. Save goes down to 1, the restore is split on 2
-    // and 3.
+    // 0 -> {1, 9}; 1 -> {2, 3}; 2 and 3 need the frame; 9 does not; all join in 8,
+    // the only return. Save goes down to 1, the restore is split on 2 and 3.
     let graph = Graph::of(&[&[1, 4], &[2, 3], &[5], &[5], &[5], &[]]);
     let frame = body(&[2, 3], &[5]);
     assert_eq!(run(&graph, &frame, &frame), placed(1, 5, Some(&[2, 3])));
