@@ -985,3 +985,36 @@ b2:
     let after = licm_printed(chain);
     assert!(block_of(&after, "b1").iter().filter(|line| line.contains(".reass =")).count() <= 1, "{after}");
 }
+
+/// `collectChildrenInLoop` looked at every block of the function once per loop
+/// block (and `inSubLoop` compared whole loop bodies): with the inliner's big
+/// bodies `sink_and_hoist` went from 24 to 62 M on d_faces. Its work follows
+/// the loop, not the function.
+#[test]
+fn test_the_children_walk_of_a_loop_does_not_look_at_the_whole_function() {
+    let chain: String = (0..60).map(|at| format!("\nc{at}:\n  br label %c{}\n", at + 1)).collect();
+    let text = format!(
+        "define i16 @f(i16 %n, i16 %a) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %k = mul i16 %a, 3
+  br label %b2
+
+b2:
+  %i1 = add i16 %i, %k
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %c0
+{chain}
+c60:
+  ret i16 %i1
+}}
+"
+    );
+    super::sink::CHILDREN_EXAMINED.with(|one| one.set(0));
+    licm_printed(&text);
+    let looked = super::sink::CHILDREN_EXAMINED.with(|one| one.get());
+    assert!(looked <= 10, "{looked} blocks looked at for a loop of two blocks in a function of 64");
+}
