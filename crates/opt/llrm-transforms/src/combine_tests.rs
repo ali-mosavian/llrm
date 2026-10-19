@@ -120,3 +120,19 @@ fn a_visit_that_erases_its_instruction_is_a_change() {
     assert!(combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit));
     assert_eq!(printed(&module), "define void @f(ptr %p) {\nb0:\n  ret void\n}\n");
 }
+
+/// `(x + -5) * 3 + 7` (`sub x, 5` is this once the Sub arm canonicalizes it):
+/// the multiply is visited before its user and distributes (`x * 3 - 15`), so
+/// the add folds the constants: `opt` gives `mul x, 3; add -8`. With no
+/// multiply visit the add saw `mul(x + -5, 3) + 7` and kept it. (By eight the
+/// multiply is a shift first, and the shift distributes: the shift family's.)
+#[test]
+fn a_multiply_is_visited_before_the_add_that_reads_it() {
+    let mut module = parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %s = add i16 %x, -5\n  %m = mul i16 %s, 3\n  %r = add i16 %m, 7\n  ret i16 %r\n}\n",
+    );
+    combined(&mut module);
+    let out = printed(&module);
+    assert!(out.contains("mul i16 %x, 3") && out.contains("add i16 %") && out.contains(", -8"), "{out}");
+    assert!(!out.contains("%s = add"), "{out}");
+}

@@ -71,7 +71,6 @@
 //! in `noreturn_tests.rs`.
 //!
 //! # Provides
-//! `TerminalSites` (analysis of the function with no body proven noreturn),
 //! `terminal_sites`, `inferred`, `inferred_in`, `cold`, `stranded`,
 //! `after_terminal_calls`. Consumers: [`crate::interprocedural`]
 //! (`noreturn_procedures`, `terminal_calls`), [`crate::branchprob`] (`cold`),
@@ -84,12 +83,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::callgraph::Defined;
-use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
 use llrm_mir::facts::Fact;
 use llrm_mir::module::{Function, InstId, Module, Operand};
 use llrm_mir::opcode::Opcode;
-use llrm_mir::passes::{Analyses, Analysis};
 use llrm_mir::program::Program;
 use llrm_mir::{Constant, ConstantKind, Context, GlobalId, Position};
 
@@ -190,23 +187,6 @@ fn fixed<K: Copy + Ord>(
 /// Direct calls whose callee cannot return: named in `noreturn`, or stated
 /// `noreturn`. An `invoke` may still unwind to its handler, so only a call
 /// counts.
-/// `terminal_sites` of no function proven noreturn.
-pub struct TerminalSites;
-
-impl Analysis for TerminalSites {
-    type Result = BTreeSet<InstId>;
-    const NAME: &'static str = "terminal-sites";
-
-    fn run(
-        context: &Context,
-        _: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self::Result {
-        terminal_sites(context, &analyses.outer().globals, function, &BTreeSet::new())
-    }
-}
-
 pub fn terminal_sites(
     context: &Context,
     declarations: &Declarations,

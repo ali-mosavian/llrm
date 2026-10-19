@@ -1,5 +1,5 @@
 //! InstSimplify's floating-point folds: `fneg`, `fadd`, `fsub`, `fmul`,
-//! `fdiv`, `frem`.
+//! `fdiv`, `frem`, and the head of `fcmp`.
 //!
 //! Translation of `simplifyFNegInst` (:5923), `propagateNaN` (:5943),
 //! `simplifyFPOp` (:5985), `simplifyFAddInst` (:6023), `simplifyFSubInst`
@@ -26,6 +26,9 @@
 //!
 //! DEVIATE 4: an `x86_fp80` constant is held as a double: it is matched
 //! (`m_NaN`, `m_AnyZeroFP`...) but never folded.
+//!
+//! `simplifyFCmpInst` is translated down to the undef rule (DEVIATE 5, on
+//! `simplify_fcmp`).
 
 use super::*;
 use crate::apfloat::{ApFloat, IEEE_DOUBLE, IEEE_SINGLE, Sem};
@@ -349,6 +352,40 @@ pub(super) fn simplify_fneg(
     }
     // fneg (fneg X) ==> X
     fneg_of(q, op)
+}
+
+/// `simplifyFCmpInst`
+/// ([:4198](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L4198)),
+/// down to the undef rule: two constants fold, then the trivial predicates,
+/// poison, and an undef operand (a NaN, so true where the predicate is
+/// unordered). DEVIATE 5: the rest of it (`x fcmp x`, the NaN and class
+/// folds, `simplifyFCmpWithSelect`...) is not translated, and a vector
+/// compare is left alone.
+pub(super) fn simplify_fcmp(
+    q: &Query,
+    pred: FloatPredicate,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    let Some(Type::Float(_)) = q.function.operand_type(q.context, lhs).map(|ty| q.context.types.get(ty)) else {
+        return None;
+    };
+    if let (Some(left), Some(right)) = (q.constant(lhs), q.constant(rhs))
+        && let Some(folded) = constfold::compare_float(q.context, pred, left, right)
+    {
+        return Some(Operand::Constant(folded));
+    }
+    let i1 = q.context.types.int(1);
+    let answer = |held: bool| {
+        Operand::Constant(q.context.constant(Constant { ty: i1, kind: ConstantKind::Int(u128::from(held)) }))
+    };
+    if matches!(pred, FloatPredicate::False | FloatPredicate::True) {
+        return Some(answer(pred == FloatPredicate::True));
+    }
+    if q.is_poison(lhs) || q.is_poison(rhs) {
+        return Some(poison(q, i1));
+    }
+    (q.is_undef(lhs) || q.is_undef(rhs)).then(|| answer(pred.holds(None)))
 }
 
 /// `simplifyFAddInst`.
