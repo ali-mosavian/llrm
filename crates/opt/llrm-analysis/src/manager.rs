@@ -1182,6 +1182,31 @@ impl Analysis for Pointers {
     type Result = Result<PointsTo, String>;
     const NAME: &'static str = "points-to";
     const SKIPS: bool = true;
+    const AUDITED: bool = true;
+    fn audit(
+        result: &Self::Result,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) {
+        if let Ok(facts) = result {
+            let unit = Unit::within(context, layout, function, analyses.outer());
+            // A callee the module defines is read in its body as it stood
+            // before this pass.
+            let snapshot = llrm_mir::passes::MODULE_SNAPSHOT.with(|held| held.borrow().clone());
+            let verify = snapshot
+                .as_ref()
+                .map(
+                    |module| {
+                        let mut verify = crate::capturecheck::Verify::new(module, layout, 8);
+                        verify.trust_external = true;
+                        verify
+                    },
+                );
+            crate::capturecheck::check_with(&unit, facts, verify.as_ref());
+        }
+    }
     fn depends() -> Option<Depends> {
         Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at), edges: true })
     }
@@ -1285,9 +1310,17 @@ impl Analysis for CallEffects {
         substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
         _changes: &[llrm_mir::module::Change],
         _context: &Context,
-        _function: &Function,
+        function: &Function,
     ) -> Option<Self::Result> {
-        Some(Ok(alias::effects_renamed(old.as_ref().ok()?, substituted)?))
+        let old = old.as_ref().ok()?;
+        // A reference holds its pointer's decomposition (root, base, scale),
+        // read down the chain of instructions below it. Renaming a value to one
+        // that decomposes otherwise (a load forwarded to the GEP it loaded)
+        // gives a reference that knows less than a fresh one: derived again.
+        if renamed_into_a_chain(function, substituted, old) {
+            return None;
+        }
+        Some(Ok(alias::effects_renamed(old, substituted)?))
     }
     fn run(
         context: &Context,
@@ -1305,6 +1338,63 @@ impl Analysis for CallEffects {
         }
         call_effects(&unit, outer)
     }
+}
+
+/// Whether a value replaced by another is read the same by a decomposition:
+/// both stop it (a load, a call, an allocation, a phi, a parameter, a
+/// constant), or both are one instruction (opcode, operands and flags: an
+/// inbounds gep goes on through its index where a plain one does not).
+pub(crate) fn decomposes_alike(
+    function: &Function,
+    was: ValueId,
+    now: ValueId,
+) -> bool {
+    use llrm_mir::module::ValueDef;
+    let ends = |value: ValueId| match function.value(value).def {
+        ValueDef::Instruction(inst) => matches!(
+            function.instruction(inst).opcode,
+            Opcode::Load { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Alloca { .. } | Opcode::Phi
+        ),
+        _ => true,
+    };
+    match (function.value(was).def, function.value(now).def) {
+        (ValueDef::Instruction(a), ValueDef::Instruction(b)) => {
+            let (a, b) = (function.instruction(a), function.instruction(b));
+            (ends(was) && ends(now))
+                || (!ends(was) && !ends(now) && a.opcode == b.opcode && a.operands == b.operands && a.flags == b.flags)
+        }
+        _ => ends(was) && ends(now),
+    }
+}
+
+/// Whether a value some reference of `effects` names is replaced by one that a
+/// fresh decomposition reads differently: the reference would name the new
+/// value as its root, where a decomposition goes on through the definition of a
+/// GEP, a cast, an add, and stops at a parameter, a constant, a load, a call,
+/// an allocation, a phi. A load forwarded to the pointer it loaded (a GEP) is
+/// the case; a value replaced by an equal instruction (the same opcode and
+/// operands) decomposes alike.
+fn renamed_into_a_chain(
+    function: &Function,
+    substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
+    effects: &IndexMap<InstId, alias::Effect>,
+) -> bool {
+    use llrm_mir::module::Operand;
+    let alike = |was: ValueId, now: ValueId| decomposes_alike(function, was, now);
+    let differs = |one: &crate::memory::MemRef| {
+        [one.pointer, one.root, one.base.map(Operand::Value), one.segment].into_iter().any(|named| {
+            matches!(
+                named,
+                Some(Operand::Value(was)) if matches!(substituted(was), Some(Operand::Value(now)) if !alike(was, now))
+            )
+        })
+    };
+    // The lists calls share are looked at once.
+    let mut seen: llrm_support::hash::HashSet<*const [crate::memory::MemRef]> = Default::default();
+    effects.values().any(|effect| {
+        let mut lists = [&effect.loads, &effect.stores].into_iter().filter(|list| seen.insert(Rc::as_ptr(list)));
+        lists.any(|list| list.iter().any(&differs)) || effect.fills.iter().any(&differs)
+    })
 }
 
 /// What each call of `unit` reads and writes, its callee as `Summaries`
@@ -1647,7 +1737,7 @@ impl Analysis for Counted {
             one.body.iter().any(|at| reached.contains(&crate::cfg::block(*at)))
                 || (cfg_changed
                     && (function.predecessors(crate::cfg::block(one.header)).iter().any(|pred| reached.contains(pred))
-                        || reached.iter().any(|r| shape.dominance.dominates(crate::cfg::id(r), one.header))))
+                        || reached.iter().any(|r| shape.dominance.dominates(function, crate::cfg::id(r), one.header))))
         }))
     }
 }
@@ -1741,6 +1831,56 @@ impl Analysis for PlainAccesses {
             outer: std::rc::Rc::clone(analyses.outer()),
         };
         Ok(std::rc::Rc::new(memoryssa::Accesses::plain(&unit, &calls).with_plain_source(source)))
+    }
+}
+
+/// A body's translated MemorySSA with the accesses it was made from.
+pub struct MssaGraph {
+    pub mssa: crate::mssa::Mssa,
+    pub accesses: std::rc::Rc<memoryssa::Accesses>,
+}
+
+/// Two graphs are equal when every access says the same (`shadow::said`): the
+/// manager's check of a preserved set compares a graph with the one made again.
+impl PartialEq for MssaGraph {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        std::ptr::eq(self, other) || crate::mssa::shadow::said(&self.mssa) == crate::mssa::shadow::said(&other.mssa)
+    }
+}
+
+impl std::fmt::Debug for MssaGraph {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        f.write_str("MssaGraph")
+    }
+}
+
+/// `MemorySSAAnalysis`: the graph `mssa::Mssa::build` makes of a body, once per
+/// body state. A pass that edits it takes a clone (`Mssa: Clone`) and updates
+/// that; the manager drops the cached graph with the pass's edit.
+pub struct MemorySsa;
+
+impl Analysis for MemorySsa {
+    type Result = Result<std::rc::Rc<MssaGraph>, String>;
+    const NAME: &'static str = "mssa";
+
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let plain = analyses.get::<PlainAccesses>(context, layout, function);
+        let accesses = Result::as_ref(&*plain).map_err(String::clone)?;
+        let shape = analyses.get::<Shape>(context, layout, function);
+        let mssa =
+            crate::mssa::Mssa::build(function, &shape.dominance, &crate::mssa::shadow::effect_of(accesses, function));
+        Ok(std::rc::Rc::new(MssaGraph { mssa, accesses: std::rc::Rc::clone(accesses) }))
     }
 }
 
@@ -1900,13 +2040,14 @@ impl Analysis for DominatedEdges {
         let shape = analyses.get::<Shape>(context, layout, function);
         let reached: llrm_mir::dense::IdSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
         let held = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone()).ok()?;
-        Some(Ok(held.keeping(|at| !dominated_by(&shape, &reached, at))))
+        Some(Ok(held.keeping(|at| !dominated_by(&shape, function, &reached, at))))
     }
 }
 
 /// Whether `at`, or a block above it, is one of `reached`.
 pub fn dominated_by(
     shape: &Shape,
+    function: &Function,
     reached: &llrm_mir::dense::IdSet<i64>,
     at: i64,
 ) -> bool {
@@ -1915,7 +2056,7 @@ pub fn dominated_by(
         if reached.contains(&one) {
             return true;
         }
-        above = shape.dominance.immediate(one);
+        above = shape.dominance.immediate(function, one);
     }
     false
 }
@@ -1962,7 +2103,7 @@ impl Analysis for Bounded {
         // block a change reached or one it dominates may have changed.
         let reached: llrm_mir::dense::IdSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
         let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, &|at| {
-            dominated_by(&shape, &reached, at)
+            dominated_by(&shape, function, &reached, at)
         });
         Some(Self::solved(context, layout, function, analyses, Some((bounds, &dirty))))
     }

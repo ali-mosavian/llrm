@@ -10,7 +10,7 @@
 //! with repeats, as `children<BasicBlock *>` gives them; predecessors are one
 //! per edge, as `inverse_children` gives them.
 
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::module::{BlockId, Function, MetadataNode, MetadataOperand, Operand};
 use crate::opcode::Opcode;
 
@@ -131,12 +131,12 @@ pub trait Dominance<B> {
     ) -> bool;
 }
 
-impl Dominance<BlockId> for DominatorTree {
+impl Dominance<BlockId> for DomTree {
     fn is_reachable(
         &self,
         block: BlockId,
     ) -> bool {
-        DominatorTree::is_reachable(self, block)
+        self.is_reachable_from_entry(block)
     }
 
     fn dominates(
@@ -144,7 +144,7 @@ impl Dominance<BlockId> for DominatorTree {
         dominator: BlockId,
         block: BlockId,
     ) -> bool {
-        DominatorTree::dominates(self, dominator, block)
+        DomTree::dominates(self, dominator, block)
     }
 }
 
@@ -230,6 +230,23 @@ impl LoopGraph for Function {
     ) -> bool {
         self.terminator(block).is_none_or(|term| !matches!(self.instruction(term).opcode, Opcode::Invoke(_)))
     }
+}
+
+/// `children<BasicBlock *>(block)`: repeats kept.
+pub fn children(
+    function: &Function,
+    block: BlockId,
+) -> impl Iterator<Item = BlockId> + '_ {
+    let mut cursor = 0;
+    std::iter::from_fn(move || LoopGraph::child(function, block, &mut cursor))
+}
+
+/// `inverse_children<BasicBlock *>(block)`: one per edge.
+pub fn inverse_children(
+    function: &Function,
+    block: BlockId,
+) -> impl Iterator<Item = BlockId> + '_ {
+    LoopGraph::inverse_children(function, block)
 }
 
 /// `tagLoopHeader`.
@@ -650,6 +667,24 @@ impl Loop<'_, BlockId> {
     ) -> bool {
         function.parent(inst).is_some_and(|block| self.contains(block))
     }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopInfo.cpp#L67
+    /// `isLoopInvariant(const Value *)`: an instruction outside the loop, or
+    /// anything that is not an instruction.
+    pub fn is_loop_invariant(
+        &self,
+        function: &Function,
+        value: crate::module::Operand,
+    ) -> bool {
+        use crate::module::{Operand, ValueDef};
+        match value {
+            Operand::Value(value) => match function.value(value).def {
+                ValueDef::Instruction(inst) => !self.contains_instruction(function, inst),
+                ValueDef::Argument(_) => true,
+            },
+            _ => true,
+        }
+    }
 }
 
 /// A loop of a [`LoopInfo`].
@@ -988,7 +1023,7 @@ pub fn print_loops(module: &crate::module::Module) -> String {
         if function.layout().is_empty() {
             continue;
         }
-        let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+        let info = LoopInfo::analyze(function, || DomTree::of(function));
         let labels = crate::print::block_labels(function);
         out += &info.print(function, global.name.as_deref().unwrap_or("?"), &|block| {
             labels.get(&block).cloned().unwrap_or_default()
@@ -1033,7 +1068,7 @@ pub fn ends_by_promise(
     function: &Function,
     whole: bool,
 ) -> bool {
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     info.get_loops_in_preorder()
         .iter()
         .all(

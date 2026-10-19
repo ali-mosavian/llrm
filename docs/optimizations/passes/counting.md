@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/counting.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/counting.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/counting.rs sha256:4a05153dfe3ec99e2a574a177520ba6bf2c8e661d262de7f1b87fb97a32bd8c4 -->
+<!-- src: crates/opt/llrm-transforms/src/counting.rs sha256:d4dbbd6d6b703f30fa2ceddb34d1b7727e054828ac8fddcbff121d26eb0b78e9 -->
 
 # counting
 
@@ -71,10 +71,10 @@ From unit test
 `counting_tests.rs`.
 
 ## Used by
-[`crate::fill`](fill.md), [`crate::loopexit`](loopexit.md), [`crate::window`](window.md) and [`crate::lsr`](lsr.md)
-build `Seeds` when they commit to replacing a loop's counter, and
-[`crate::exitfold`](exitfold.md) and others take `constant` for operands. Not a pass: it
-runs only inside those.
+[`crate::loopidioms`](loopidioms.md), [`crate::window`](window.md) and
+[`crate::lsr`](lsr.md) build `Seeds` when they commit to replacing a loop's counter,
+and [`crate::exitfold`](exitfold.md) and others take `constant` for operands. Not a pass:
+it runs only inside those.
 
 ## See also
 [`crate::expand`](expand.md) for sums.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/objbuild.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/objbuild.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/objbuild.rs sha256:ed16e11bcda00a1e330497cc1717656fe76b1d8d9e61a040af7e15847b0107a5 -->
+<!-- src: crates/backend/llrm-core/src/backend/objbuild.rs sha256:75cdef675a66848efb42ccfc44d20e01dad68f40c5df99c16a79cc6cfefd9be5 -->
 
 # objbuild
 
@@ -40,6 +40,14 @@ becomes a relocation against that symbol with the addend in the code (as
 jwasm writes it), anything else is an undefined symbol, and a reference to
 a name neither defined nor declared is an error. 16-bit data segments of
 the near kind join the `DGROUP` group.
+
+Code is padded as MC does: an `Align` item (a block's `align` and
+`max_skip`) pads with `nops` (`writeNopData`), and each function not tuned
+for size starts at the target's preferred function alignment: `.p2align` in
+OMF and COFF, ELF's `.prefalign` (no more than the body fills). DEVIATE E2-1: m16 reports
+alignment 0, so it pads no function, loop or block (user decision 2026-10-18, code size).
+
+An ELF function symbol's `st_size` is its body, from its label to its end label; the padding before it is no symbol's, as `.size` leaves it.
 
 `written_in` hands the object to the writer crate of the target's format
 (OMF, ELF32/64, COFF32/64, Mach-O x86-64), or refuses a pair none writes.

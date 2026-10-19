@@ -111,12 +111,17 @@ filter = "test_the_identity_gate_passes"
 # skipped llrm-mir's dense-key ratchet and main's full run went red on it). A test that reads sources and is not listed here fails
 # test_gate. `step = "integration"`: a root test binary the integration step runs on every code change anyway.
 [scan_inputs]
-paths = ["**/*.rs", "tools/**/*.py", "tools/**/*.sh", "crates/**/*.py", "crates/**/*.sh", "src/**/*.py", "src/**/*.sh", "crates/ir/llrm-mir/dense-keys.txt", "tests/target_facts.baseline"]
+paths = ["**/*.rs", "tools/**/*.py", "tools/**/*.sh", "crates/**/*.py", "crates/**/*.sh", "src/**/*.py", "src/**/*.sh", "crates/ir/llrm-mir/dense-keys.txt", "crates/ir/llrm-mir/slice-users.txt", "tests/target_facts.baseline"]
 
 [[scan]]
 file = "crates/ir/llrm-mir/src/tests.rs"
 package = "llrm-mir"
 lib = "no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id"
+
+[[scan]]
+file = "crates/ir/llrm-mir/src/tests.rs"
+package = "llrm-mir"
+lib = "no_file_gains_a_slice_read_of_a_use_list"
 
 [[scan]]
 file = "crates/opt/llrm-transforms/tests/no_hand_solved_bounds.rs"
@@ -130,6 +135,10 @@ test = "no_uncached_env_checks"
 
 [[scan]]
 file = "tests/seeded_maps.rs"
+step = "integration"
+
+[[scan]]
+file = "tests/no_todo.rs"
 step = "integration"
 
 [[scan]]
@@ -164,6 +173,7 @@ slow_pytest = [
     "tools/dosbatch/test_qbrt.py",
     "tools/dosbatch/test_qb32.py",
     "tools/gate/test_gate.py",
+    "tools/gate/test_prepush.py",
     "tools/dosbatch/test_qbgfxfill.py",
     "tools/bench/test_bench.py",
     "tools/dosbatch/test_qbgfxspeed.py",
@@ -176,6 +186,16 @@ slow_pytest = [
     "crates/target/llrm-x86-m32/vsgcc/dfaces/test_dfaces.py",
     "tools/dosbatch/test_dosbatch.py",
 ]
+
+# What tools/prepush.sh runs before a push: these gate steps (the smoke tier's commands, cut to the cheap ones that read the tree: the format check,
+# the generated docs, the tracked build products, the source scans, target_facts) and these root test binaries beside them. A scan added to
+# [[scan]] or a step added here is picked up; the script has no list of its own.
+[prepush]
+steps = ["fmt", "docs", "products", "scans", "facts"]
+tests = ["docs_links"]
+# Shell checks of the diff against origin/main (the tree as it stands, committed or not): a conflict marker or whitespace error that a merge left.
+[prepush.checks]
+"diff check" = "git diff --check origin/main && ! git diff -U0 origin/main | grep -nE '^\\+(<<<<<<<|>>>>>>>)( |$)'"
 
 # Every step the planner can produce is in exactly one group (a test checks).
 [bench]
@@ -298,6 +318,43 @@ high = 0.025         # a step needs this share of the compile's work to fail (th
 
 # Rows the user accepted a rise on, each at a ceiling equal to what the decision measured: a row above its ceiling fails as ever.
 # A row names a prefix (`nest O1` is also its steps); the limits it gives replace the general ones for it. Tighten as the follow-up lands.
+
+# A row with `branch` is a decision for that PR alone (tools/measure.py drops it for any other head and lays its limits over the
+# first matching row, the higher standing). T-1, https://github.com/ali-mosavian/llrm/issues/2295: the scalar GVN (#2179) costs +1.0% of
+# a compile and gvn's own cost is x1.1 to x1.6 of the base's while the old forwarding and pricing machinery still runs beside it
+# (a constant factor: gvn at 512, 1024, 2048, 4096 statements of `straight` O1 is x1.414, x1.414, x1.413, x1.410 of the base's).
+# Exit, the same for each of the four: stages 4-6 of docs/architecture/gvn-port.md delete spill_forecast, loadjoins, motion_price and
+# joined and Gvn::run reaches <= 25,680 instructions per IR instruction per run; the four are deleted in that PR.
+[[measure.accepted]]
+row = "qcport -Os"
+branch = "alim/feat/gvn-scalar-pr"
+geomean = 1.0145
+why = "T-1: qcport geomean at -Os."
+
+[[measure.accepted]]
+suffix = "mir gvn"
+branch = "alim/feat/gvn-scalar-pr"
+pass_slack = 1.65
+step_rise = 1.6
+why = "T-1: gvn's own cost at 2N against the base's, on every axis and level (widest read: cells O1 x1.626, straight O1 x1.583)."
+
+[[measure.accepted]]
+row = "straight Os"
+branch = "alim/feat/gvn-scalar-pr"
+worst = 1.0225
+why = "T-1: the whole compile at 2N=1024 of the straight axis (read x1.0220)."
+
+[[measure.accepted]]
+row = "callers Os analysis call-effects"
+branch = "alim/feat/gvn-scalar-pr"
+pass_slack = 1.15
+why = "T-1: call-effects at 2N (read x1.133), asked more often by the scalar pass's callers."
+
+[[measure.accepted]]
+row = "callers-m16 Os analysis call-effects"
+branch = "alim/feat/gvn-scalar-pr"
+pass_slack = 1.15
+why = "T-1: call-effects at 2N (read x1.132)."
 
 [[measure.accepted]]
 row = "fjoins O1 analysis through-memory"

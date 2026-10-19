@@ -46,9 +46,6 @@ direction = 2*alu_rr
 # 38% less code: this target's gate lets executed work only fall, so the larger budget stays.
 unroll_budget = 200
 
-# `test r, imm`: the `and` and the compare against zero are one instruction.
-mask_test = alu_rr
-
 # What each operation comes to in code bytes: the instruction's bytes, twice
 # where an operation becomes more than the instruction (the extensions, copies,
 # address calculations and spill code around it; `-fno-inline-functions`

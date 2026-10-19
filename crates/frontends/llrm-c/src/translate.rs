@@ -105,7 +105,15 @@ pub fn program(
         .map(|proc| proc.symbol)
         .collect();
     let param_facts = crate::ow_facts::param_facts(unit);
-    let module = Shared { calling, unit, data: &data, keys: &keys, valueless: &valueless, param_facts: &param_facts };
+    let module = Shared {
+        calling,
+        unit,
+        data: &data,
+        keys: &keys,
+        valueless: &valueless,
+        param_facts: &param_facts,
+        lifetimes: profile.lifetimes,
+    };
     let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
     for (at, proc) in unit.procs.iter().enumerate() {
@@ -641,6 +649,46 @@ struct Shared<'a> {
     valueless: &'a HashSet<i64>,
     /// The facts the language states of each parameter, by symbol.
     param_facts: &'a HashMap<i64, Vec<Fact>>,
+    /// Whether a block's locals get `llvm.lifetime` markers (clang's at -O1 and
+    /// up).
+    lifetimes: bool,
+}
+
+/// The blocks (by order of opening) that a jump enters from outside them: their
+/// locals' lifetimes are not marked, as clang's `Bypasses` leaves unmarked a
+/// local a jump skips the start of (CGDecl.cpp, `EmitAutoVarAlloca`).
+fn entered_blocks(body: &[hir::Statement]) -> HashSet<usize> {
+    let (mut path, mut opened) = (Vec::new(), 0);
+    let mut placed: HashMap<&str, Vec<usize>> = HashMap::default();
+    let mut jumps: Vec<(&str, Vec<usize>)> = Vec::new();
+    for one in body {
+        let args: Vec<&str> = one.args.iter().map(String::as_str).collect();
+        match (one.call.as_str(), &args[..]) {
+            ("DBBegBlock", []) => {
+                opened += 1;
+                path.push(opened);
+            }
+            ("DBEndBlock", []) => {
+                path.pop();
+            }
+            ("CGControl", ["O_LABEL", _, label]) => {
+                placed.insert(label, path.clone());
+            }
+            ("CGControl", ["O_GOTO", _, label] | [_, _, label])
+            | ("CGSelCase", [_, label, _])
+            | ("CGSelOther", [_, label]) => {
+                jumps.push((label, path.clone()));
+            }
+            _ => {}
+        }
+    }
+    let mut entered = HashSet::default();
+    for (label, from) in jumps {
+        if let Some(to) = placed.get(label) {
+            entered.extend(to.iter().filter(|one| !from.contains(one)));
+        }
+    }
+    entered
 }
 
 /// What a tree node evaluates to.
@@ -671,6 +719,14 @@ struct Open {
 struct Body<'a, 't> {
     /// The facts the language states of instructions, by instruction id.
     stated_instructions: Vec<(i64, Fact)>,
+    /// A scaled index's product, by value: its index and the element size.
+    scales: HashMap<i64, (i64, i64)>,
+    /// The places of each open block that marks its locals' lifetimes; and the
+    /// blocks (by order of opening) a jump enters from outside, which mark
+    /// none.
+    scopes: Vec<Option<Vec<i64>>>,
+    opened: usize,
+    entered: HashSet<usize>,
     shared: &'a Shared<'a>,
     unit: &'a hir::Unit,
     proc: &'a hir::Proc,
@@ -767,7 +823,14 @@ fn answered_by_inline_code(
     unit: &hir::Unit,
     proc: &hir::Proc,
 ) -> bool {
-    let statements: Vec<&hir::Statement> = proc.body.iter().filter(|one| one.call != "DBSrcCue").collect();
+    let statements: Vec<&hir::Statement> = proc
+        .body
+        .iter()
+        .filter(|one| !matches!(
+            one.call.as_str(),
+            "DBSrcCue" | "DBBegBlock" | "DBEndBlock" | "CGAutoDecl"
+        ))
+        .collect();
     statements
         .windows(2)
         .any(|two| two[1].call == "CGReturn" && two[1].args[0] == "n0" && inline_statement(unit, two[0]))
@@ -1027,6 +1090,10 @@ impl<'a, 't> Body<'a, 't> {
             done: HashMap::default(),
             selects: IndexMap::default(),
             stated_instructions: Vec::new(),
+            scales: HashMap::default(),
+            scopes: Vec::new(),
+            opened: 0,
+            entered: entered_blocks(&proc.body),
             calls: Vec::new(),
             instructions: 0,
             inlined: None,
@@ -1055,6 +1122,7 @@ impl<'a, 't> Body<'a, 't> {
             body.statement(one)?;
         }
         body.finish()?;
+        body.drop_unread_scales();
         let mut body_instruction_facts = std::mem::take(&mut body.stated_instructions);
         let body_widths: HashMap<i64, i64> =
             parameters.iter().map(|&one| (one, body.types.get(body.values[one as usize - 1].r#type).width)).collect();
@@ -1256,6 +1324,55 @@ impl<'a, 't> Body<'a, 't> {
         let block = &mut self.blocks[self.current];
         block.instructions.push(made);
         block.instructions.last_mut().expect("just pushed")
+    }
+
+    /// The scaled products no instruction reads: an index that counts elements
+    /// leaves its multiply behind.
+    fn drop_unread_scales(&mut self) {
+        fn read(
+            operand: &Operand,
+            into: &mut HashSet<i64>,
+        ) {
+            match operand {
+                Operand::ValueRef(one) => {
+                    into.insert(one.value);
+                }
+                Operand::ArrayElement(one) => one.indices.iter().for_each(|index| read(index, into)),
+                Operand::ProjectedPlace(one) => one.indices.iter().for_each(|index| read(index, into)),
+                Operand::IndirectPlace(one) => {
+                    into.insert(one.base);
+                }
+                Operand::DescriptorPlace(one) => {
+                    into.insert(one.base);
+                }
+                Operand::Constant(_) | Operand::PlaceRef(_) => {}
+            }
+        }
+        if self.scales.is_empty() {
+            return;
+        }
+        let mut used = HashSet::default();
+        for block in &self.blocks {
+            let operands = block.instructions.iter().flat_map(|one| &one.operands);
+            let ending = block.terminator.iter().flat_map(|one| &one.operands);
+            operands.chain(ending).for_each(|operand| read(operand, &mut used));
+        }
+        let scales = &self.scales;
+        let dead = |one: &h::Instruction| {
+            one.op == Op::Mul && one.results.iter().all(|result| scales.contains_key(result) && !used.contains(result))
+        };
+        let (ids, unread): (HashSet<i64>, HashSet<i64>) = self
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter(|one| dead(one))
+            .map(|one| (one.id, one.results[0]))
+            .unzip();
+        for block in &mut self.blocks {
+            block.instructions.retain(|one| !ids.contains(&one.id));
+        }
+        self.stated_instructions.retain(|(id, _)| !ids.contains(id));
+        self.values.retain(|value| !unread.contains(&value.id));
     }
 
     /// That C promises the result of instruction `id` fits its type.
@@ -1592,8 +1709,38 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<()> {
         self.line = one.line;
         let args: Vec<&str> = one.args.iter().map(String::as_str).collect();
-        if !matches!(one.call.as_str(), "DBSrcCue" | "CGReturn") {
+        if !matches!(
+            one.call.as_str(),
+            "DBSrcCue" | "CGReturn" | "DBBegBlock" | "DBEndBlock" | "CGAutoDecl"
+        ) {
             self.inlined = None;
+        }
+        match (one.call.as_str(), &args[..]) {
+            ("DBBegBlock", []) => {
+                self.opened += 1;
+                let marks = self.shared.lifetimes && !self.entered.contains(&self.opened);
+                self.scopes.push(marks.then(Vec::new));
+                return Ok(());
+            }
+            ("CGAutoDecl", [name]) => {
+                if let (Some(Some(_)), Some(&place)) = (self.scopes.last(), self.slots.get(*name)) {
+                    self.open();
+                    self.instruction(Op::LifetimeStart, Vec::new(), vec![Operand::place_ref(place)]);
+                    self.scopes.last_mut().and_then(Option::as_mut).expect("a marking block").push(place);
+                }
+                return Ok(());
+            }
+            ("DBEndBlock", []) => {
+                // A block left by a jump has no end here: its locals stay live
+                // to the next start, never shorter than they are.
+                if let Some(Some(places)) = self.scopes.pop().filter(|_| !self.terminated(self.current)) {
+                    for place in places.into_iter().rev() {
+                        self.instruction(Op::LifetimeEnd, Vec::new(), vec![Operand::place_ref(place)]);
+                    }
+                }
+                return Ok(());
+            }
+            _ => {}
         }
         match (one.call.as_str(), &args[..]) {
             ("CGControl", ["O_LABEL", _, label]) => {
@@ -2414,16 +2561,21 @@ impl<'a, 't> Body<'a, 't> {
         let field = ones(width) << start;
         let kept = !field & ones(bits);
         let value = self.resized(value, signed, unit);
-        let whole = self.loaded(pointer, volatile, first, bytes, unit);
-        let (shift, inside, outside) = (
-            self.constant(unit, Number::Int(start.into())),
-            self.constant(unit, Number::Int(field.into())),
-            self.constant(unit, Number::Int(kept.into())),
-        );
+        let (shift, inside) =
+            (self.constant(unit, Number::Int(start.into())), self.constant(unit, Number::Int(field.into())));
         let placed = self.op(Op::Shl, unit, vec![value_ref(value), value_ref(shift)]);
         let part = self.op(Op::And, unit, vec![value_ref(placed), value_ref(inside)]);
-        let rest = self.op(Op::And, unit, vec![value_ref(whole), value_ref(outside)]);
-        let joined = self.op(Op::Or, unit, vec![value_ref(rest), value_ref(part)]);
+        // A field that fills its container keeps nothing: clang stores it
+        // (`EmitStoreThroughBitfieldLValue`, `StorageSize == Info.Size`). The
+        // read-modify-write of an unwritten container read poison at -O2.
+        let joined = if start == 0 && width == bytes * 8 {
+            part
+        } else {
+            let whole = self.loaded(pointer, volatile, first, bytes, unit);
+            let outside = self.constant(unit, Number::Int(kept.into()));
+            let rest = self.op(Op::And, unit, vec![value_ref(whole), value_ref(outside)]);
+            self.op(Op::Or, unit, vec![value_ref(rest), value_ref(part)])
+        };
         self.stored(pointer, volatile, first, bytes, unit, joined);
         Ok(if signed {
             let (up, down) = (
@@ -2693,6 +2845,9 @@ impl<'a, 't> Body<'a, 't> {
         if unsigned {
             self.stated_instructions.push((id, Fact::NoUnsignedWrap));
         }
+        if let Some(bytes) = self.whole_constant(size) {
+            self.scales.insert(result, (if index == left { a } else { b }, bytes));
+        }
         self.done.insert(hir::handle(node), Got::Value(result));
         Ok(())
     }
@@ -2816,14 +2971,30 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<i64> {
         // A huge pointer's index is a dword; a far one's its offset's word.
         let word = self.types.int(if self.space(pointer) == Some(HUGE) { 4 } else { self.types.word() }, true);
-        let by = match self.bits(by) {
-            Some(_) => self.resized(by, signed(&self.unit.canonical_type(from)), word),
-            None => return self.refuse(format!("a pointer moved by a {from}")),
+        // A product of an index and an element size, at 32 bits: the index
+        // counts elements as clang's `a[i]` does. A 16-bit byte offset may pass
+        // 32767 inside a segment, which an element index promises it does not.
+        let scale = self.scales.get(&by).copied().filter(|_| !subtract && self.types.word() == 4);
+        if self.bits(by).is_none() {
+            return self.refuse(format!("a pointer moved by a {from}"));
+        }
+        let signed = signed(&self.unit.canonical_type(from));
+        let operands = match scale {
+            Some((index, size)) => {
+                let index = self.resized(index, signed, word);
+                let ty = self.types.int(self.types.word(), true);
+                let size = Operand::Constant(h::Constant { r#type: ty, value: Number::Int(size) });
+                vec![value_ref(pointer), value_ref(index), size]
+            }
+            None => {
+                let by = self.resized(by, signed, word);
+                let by = if subtract { self.op(Op::Neg, word, vec![value_ref(by)]) } else { by };
+                vec![value_ref(pointer), value_ref(by)]
+            }
         };
-        let by = if subtract { self.op(Op::Neg, word, vec![value_ref(by)]) } else { by };
         let ty = self.type_of(pointer);
         let result = self.value(ty);
-        let id = self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(by)]).id;
+        let id = self.instruction(Op::PtrOffset, vec![result], operands).id;
         self.stated_instructions.push((id, Fact::InBounds));
         Ok(result)
     }
@@ -3570,6 +3741,30 @@ mod tests {
         emitted.module
     }
 
+    fn statement(
+        call: &str,
+        args: &[&str],
+    ) -> hir::Statement {
+        hir::Statement { call: call.to_owned(), args: args.iter().map(|one| (*one).to_owned()).collect(), line: 0 }
+    }
+
+    /// A jump into a block skips its locals' starts; marking them put an access
+    /// where the local is not live, which `lifetimes::intervals` drops: the
+    /// blocks it enters are reported, a jump within or out of one is not.
+    #[test]
+    fn a_jump_into_a_block_is_reported_and_one_out_of_it_is_not() {
+        let body = [
+            statement("CGControl", &["O_GOTO", "n0", "l1"]),
+            statement("DBBegBlock", &[]),
+            statement("CGControl", &["O_LABEL", "n0", "l1"]),
+            statement("CGControl", &["O_GOTO", "n0", "l2"]),
+            statement("DBEndBlock", &[]),
+            statement("CGControl", &["O_LABEL", "n0", "l2"]),
+        ];
+        assert_eq!(super::entered_blocks(&body), llrm_support::hash::HashSet::from_iter([1]));
+        assert_eq!(super::entered_blocks(&body[1..]), llrm_support::hash::HashSet::default());
+    }
+
     /// The C library's strcmp is stated a three-way compare: branchprob
     /// read `strcmp(a, b) > 0` as a likely `x > 0`.
     #[test]
@@ -3871,6 +4066,61 @@ mod tests {
             (Linkage::Internal, Linkage::External)
         );
         assert_eq!(linkage(&raised("parity/loop.cgs"), "_demo_seed"), Linkage::Internal);
+    }
+
+    /// `source`'s `_f`, recorded by wccq and raised for the m16 or m32 target.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    fn raised_c(
+        source: &str,
+        flat: bool,
+    ) -> String {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("x.c");
+        std::fs::write(&path, source).unwrap();
+        let (calling, profile, layout) = if flat {
+            (
+                llrm_target::Target::calling(&llrm_x86_m32::M32),
+                crate::compile::Profile::of(&llrm_x86_m32::M32).unwrap(),
+                llrm_x86_m32::layout(),
+            )
+        } else {
+            (
+                llrm_target::Target::calling(&llrm_x86_m16::M16),
+                crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
+                llrm_x86_m16::layout(),
+            )
+        };
+        let text = crate::compile::recorded_for(&path, &[], false, &[], &profile).expect("wccq records x.c");
+        let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", calling, &profile).unwrap();
+        let emitted = llrm_core::hir::mir::emit(&program, &layout).swap_remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        defined(&emitted.module, "_f")
+    }
+
+    const ARRAYS: &str = "short a[100]; int b[100];\n\
+        int __cdecl f(int n, short *p) { int t = 0; int i; for (i = 0; i < n; i++) t += a[i] + b[i] + p[i]; return t; }\n";
+
+    /// A flat `a[i]` was `i * 2` and a byte step, per access: 159 `mul`s and
+    /// a byte `getelementptr` each at d_faces' first SROA, against clang's 8.
+    /// It steps `i` elements of the array's own size, as clang's does.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_flat_array_index_counts_elements_without_a_multiply() {
+        let text = raised_c(ARRAYS, true);
+        assert!(!text.contains(" mul "), "{text}");
+        assert!(text.contains("getelementptr inbounds i16, ptr @_a, i32 "), "{text}");
+        assert!(text.contains("getelementptr inbounds i32, ptr @_b, i32 "), "{text}");
+        assert!(text.contains("getelementptr inbounds i16, ptr %"), "{text}");
+    }
+
+    /// A 16-bit index may pass 32767 bytes inside a segment (`scaled`), which
+    /// an element count would promise it does not: m16 keeps the byte step.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_16_bit_array_index_keeps_its_byte_offset() {
+        let text = raised_c(ARRAYS, false);
+        assert!(text.contains(" mul ") && text.contains("getelementptr inbounds i8, "), "{text}");
     }
 
     /// In `bytes`, `i++` is a signed int's and `total +=` an unsigned's;

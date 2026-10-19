@@ -22,8 +22,8 @@
 //! - Memory: [`memory`] (objects, slices, `MemRef`, `Unit`), [`pointerfacts`],
 //!   [`regions`], [`alias`] (points-to, summaries), [`effects`],
 //!   [`frameescape`], [`globalsaa`], [`sliceset`] and [`cellmap`] (containers),
-//!   [`memoryssa`], [`avail`] (forwardable loads, dead stores), [`observers`]
-//!   (cells nothing outside can read).
+//!   [`memoryssa`], [`avail`] (dead stores), [`observers`] (cells nothing
+//!   outside can read).
 //! - Calls and control: [`interprocedural`], [`noreturn`],
 //!   [`parameter_ranges`], [`branchprob`] (static frequencies).
 //! - [`manager`] caches the facts that are expensive or asked repeatedly.
@@ -89,36 +89,52 @@
 //! The manager contract is `crates/ir/llrm-mir/src/passes.rs`. LLVM's
 //! `AnalysisManager` and `PreservedAnalyses` are its counterpart.
 
+pub mod aa;
 pub mod access;
 pub mod alias;
+pub mod aliassets;
+pub mod argumentattrs;
 pub mod assumptions;
 pub mod avail;
+pub mod basicaa;
+pub mod blockfreq;
+pub mod bpi;
 pub mod branchprob;
+pub mod capturecheck;
+pub mod capturetracking;
 pub mod cellmap;
 pub mod cfg;
+pub mod cfgwalk;
 pub mod constant_cycles;
 pub mod consts;
 #[cfg(test)]
 mod corpus_tests;
 pub mod demanded;
+pub mod demandedbits;
 pub mod dependence;
 pub mod difference;
 pub mod effects;
 pub mod floatbounds;
 pub mod floatfacts;
 pub mod frameescape;
+pub mod functionattrs;
 #[cfg(any(test, feature = "testing"))]
 pub mod generated;
 pub mod globalsaa;
+pub mod globalsmodref;
 pub mod graph;
 pub mod guards;
 pub mod induction;
 pub mod interprocedural;
 pub mod liveness;
+pub mod loopaccess;
+pub mod loopunrollanalyzer;
 pub mod manager;
+pub mod memdep;
 pub mod memory;
 pub mod memoryssa;
 pub mod mssa;
+pub mod mustexecute;
 pub mod nearest;
 pub mod noreturn;
 pub mod num;
@@ -131,8 +147,10 @@ pub mod ranger;
 pub mod ranges;
 pub mod references;
 pub mod regions;
+pub mod scev;
 pub mod sliceset;
 pub mod slotstores;
 pub mod ssa;
+pub mod ssaupdater;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

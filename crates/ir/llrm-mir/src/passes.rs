@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use crate::context::{Context, GlobalId};
 use crate::datalayout::DataLayout;
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::hash::{HashMap, HashSet};
 use crate::module::{Change, Function, GlobalKind, GlobalValue, MetadataNode, Module};
 use crate::program::{Program, ProgramAnalyses, ProgramPass, ProgramProxy, interface};
@@ -71,6 +71,27 @@ pub fn in_function<T>(
     let (mut run, mut out) = (Some(run), None);
     (observer.function)(function, &mut || out = run.take().map(|run| run()));
     out.expect("the observer ran the step")
+}
+
+thread_local! {
+    static RUNNING_FUNCTION: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// The name of the function a function pass is running over, for the debug
+/// lines (`LLRM_DEBUG=runs`).
+pub fn running_function() -> String {
+    RUNNING_FUNCTION.with(|name| name.borrow().clone())
+}
+
+/// Tells the debug lines which function a body is about to run over: for a
+/// run outside the manager's loop over a pass's functions (the interprocedural
+/// stage's reruns), which would otherwise print the last function it set.
+pub fn set_running_function(name: &str) {
+    RUNNING_FUNCTION.with(|running| {
+        let mut running = running.borrow_mut();
+        running.clear();
+        running.push_str(name);
+    });
 }
 
 pub(crate) fn counted(
@@ -172,6 +193,18 @@ impl Declared {
         })
     }
 
+    /// The name of a function declared and not yet placed in the module.
+    pub fn pending_name(
+        &self,
+        id: GlobalId,
+    ) -> Option<&str> {
+        let at = (id.0 as usize).checked_sub(self.next as usize - self.pending.len())?;
+        match self.pending.get(at)? {
+            Pending::Function(name, _) => Some(name),
+            Pending::Table(..) => None,
+        }
+    }
+
     /// The metadata nodes made so far, which the module has after the pass.
     pub fn nodes(&self) -> &[crate::module::MetadataNode] {
         &self.nodes
@@ -227,8 +260,13 @@ impl Declared {
         let id = GlobalId(self.next);
         self.next += 1;
         self.names().insert(name.clone(), id);
-        let variable =
-            crate::module::GlobalVariable { ty, constant: true, initializer: Some(initializer), align: None };
+        let variable = crate::module::GlobalVariable {
+            externally_initialized: false,
+            ty,
+            constant: true,
+            initializer: Some(initializer),
+            align: None,
+        };
         self.pending.push(Pending::Table(name, variable));
         id
     }
@@ -345,6 +383,21 @@ pub trait Analysis: 'static {
         function: &Function,
     ) -> bool {
         Self::depends().is_some_and(|depends| depends.unaffected(changes, context, function))
+    }
+
+    /// Whether `audit` runs on every result this analysis hands out, kept or
+    /// derived (`LLRM_CHECK_CAPTURES`): a fact is judged where a pass reads it.
+    const AUDITED: bool = false;
+
+    /// An independent check of `result`, made each time it is handed out.
+    #[allow(unused_variables)]
+    fn audit(
+        result: &Self::Result,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) {
     }
 
     /// `previous`, which was true of the function before `changes`, made true
@@ -605,22 +658,43 @@ impl ModuleAnalysis for Declarations {
 pub struct Dominators;
 
 impl Analysis for Dominators {
-    type Result = DominatorTree;
+    type Result = DomTree;
     const READS_OUTER: bool = false;
     const NAME: &'static str = "dominators";
     const INCREMENTAL: bool = true;
 
+    fn preserved(preserved: &PreservedAnalyses) -> bool {
+        preserved.kept::<Self>() || preserved.cfg_preserved()
+    }
+
     /// The blocks the changed edges reach are worked out again; nothing else
     /// can move.
     fn update(
-        previous: &DominatorTree,
+        previous: &DomTree,
         changes: &[crate::module::Change],
         _: &Context,
         _: &DataLayout,
         function: &Function,
         _: &mut Analyses,
-    ) -> Option<DominatorTree> {
+    ) -> Option<DomTree> {
         previous.updated(function, changes)
+    }
+
+    /// In place where nothing else holds the tree: LLVM's pass updates the
+    /// tree it owns, and a copy of it per edit is a step in the size of the
+    /// function.
+    fn update_owned(
+        previous: Rc<DomTree>,
+        changes: &[crate::module::Change],
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> Option<DomTree> {
+        match Rc::try_unwrap(previous) {
+            Ok(mut tree) => tree.update_in_place(function, changes).then_some(tree),
+            Err(shared) => shared.updated(function, changes),
+        }
     }
 
     fn run(
@@ -628,8 +702,8 @@ impl Analysis for Dominators {
         _: &DataLayout,
         function: &Function,
         _: &mut Analyses,
-    ) -> DominatorTree {
-        DominatorTree::new(function)
+    ) -> DomTree {
+        DomTree::of(function)
     }
 }
 
@@ -640,6 +714,11 @@ impl Analysis for Loops {
     type Result = crate::loopinfo::LoopInfo;
     const READS_OUTER: bool = false;
     const NAME: &'static str = "loops";
+
+    fn preserved(preserved: &PreservedAnalyses) -> bool {
+        preserved.kept::<Self>() || preserved.cfg_preserved()
+    }
+
     fn run(
         context: &Context,
         layout: &DataLayout,
@@ -674,12 +753,18 @@ impl Analysis for ScalarEvolution {
 #[derive(Clone, Debug, Default)]
 pub struct PreservedAnalyses {
     all: bool,
+    /// LLVM's `preserveSet<CFGAnalyses>`: the pass left the CFG as it was.
+    cfg: bool,
     kept: HashSet<TypeId>,
+    /// Kept because the pass brought them up to date itself and put the
+    /// result back (`Analyses::replace`): LLVM's pass that uses
+    /// `MemorySSAUpdater` and then `preserve<MemorySSAAnalysis>()`.
+    updated: HashSet<TypeId>,
 }
 
 impl PreservedAnalyses {
     pub fn all() -> Self {
-        Self { all: true, kept: HashSet::default() }
+        Self { all: true, cfg: false, kept: HashSet::default(), updated: HashSet::default() }
     }
 
     pub fn none() -> Self {
@@ -691,9 +776,31 @@ impl PreservedAnalyses {
         self
     }
 
+    /// `A` is kept because the pass updated it: the manager holds it only if
+    /// the pass put its updated result back with [`Analyses::replace`] as the
+    /// function stands after its last edit; otherwise it drops it (and
+    /// `LLRM_CHECK_STALE` fails, naming the pass).
+    pub fn preserve_updated<A: Analysis>(mut self) -> Self {
+        self.kept.insert(TypeId::of::<A>());
+        self.updated.insert(TypeId::of::<A>());
+        self
+    }
+
     pub fn preserve_module<M: ModuleAnalysis>(mut self) -> Self {
         self.kept.insert(TypeId::of::<M>());
         self
+    }
+
+    /// `preserveSet<CFGAnalyses>`: the pass changed no block or edge, so the
+    /// analyses that read only the CFG (dominators, loops) stand.
+    pub fn preserve_cfg(mut self) -> Self {
+        self.cfg = true;
+        self
+    }
+
+    /// `PreservedAnalyses::allAnalysesInSet<CFGAnalyses>`.
+    pub fn cfg_preserved(&self) -> bool {
+        self.all || self.cfg
     }
 
     /// Whether the pass changed nothing: LLVM's `areAllPreserved`.
@@ -711,6 +818,14 @@ impl PreservedAnalyses {
         analysis: TypeId,
     ) -> bool {
         self.all || self.kept.contains(&analysis)
+    }
+
+    /// Whether the pass kept `analysis` by updating it (`preserve_updated`).
+    fn updated_by_pass(
+        &self,
+        analysis: TypeId,
+    ) -> bool {
+        self.updated.contains(&analysis)
     }
 }
 
@@ -1046,6 +1161,11 @@ fn check_modules() -> bool {
     *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_MODULES").is_some())
 }
 
+fn check_captures() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CAPTURES").is_some())
+}
+
 fn check_replay() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_REPLAY").is_some())
@@ -1193,6 +1313,18 @@ impl Analyses {
         &self.outer
     }
 
+    /// `A`'s result, if computed, and the point in the function's history it
+    /// was true at: the cached one, or one kept past an invalidation for
+    /// `update` to bring up to date. What a pass that edits and rarely asks
+    /// holds (the updates queue in the change log), for LLVM's lazy
+    /// `DomTreeUpdater`.
+    pub fn held<A: Analysis>(&self) -> Option<(Rc<A::Result>, crate::module::Mark)> {
+        let key = TypeId::of::<A>();
+        let entry = self.cache.get(&key).or_else(|| self.kept.get(&key))?;
+        let entry = entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+        Some((Rc::clone(&entry.result), entry.mark))
+    }
+
     /// `A`'s result, if computed: LLVM's `getCachedResult`.
     pub fn cached<A: Analysis>(&self) -> Option<Rc<A::Result>> {
         if A::READS_OUTER
@@ -1249,6 +1381,19 @@ impl Analyses {
 
     /// `A`'s result for `function`, computed once until invalidated.
     pub fn get<A: Analysis>(
+        &mut self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Rc<A::Result> {
+        let result = self.found::<A>(context, layout, function);
+        if A::AUDITED && check_captures() {
+            A::audit(&result, context, layout, function, self);
+        }
+        result
+    }
+
+    fn found<A: Analysis>(
         &mut self,
         context: &Context,
         layout: &DataLayout,
@@ -1444,6 +1589,32 @@ impl Analyses {
         }
     }
 
+    /// Puts `result` back as `A`'s result for `function` as it stands now: a
+    /// pass that updated a clone of what it asked for (LLVM's
+    /// `MemorySSAUpdater` on the analysis itself) stores it here, then
+    /// returns `PreservedAnalyses::preserve_updated::<A>()`. Call it after the
+    /// last edit: the result is stamped with the function's history now.
+    pub fn replace<A: Analysis>(
+        &mut self,
+        function: &Function,
+        result: A::Result,
+    ) {
+        let key = TypeId::of::<A>();
+        self.kept.remove(&key);
+        self.evicted.remove(&key);
+        self.soft.remove(&key);
+        self.cache.insert(
+            key,
+            Box::new(Entry::<A> {
+                result: Rc::new(result),
+                outer: Rc::clone(&self.outer),
+                mark: function.mark(),
+                bits: 0,
+                from_older: false,
+            }),
+        );
+    }
+
     /// Drops what `preserved` does not keep: LLVM's
     /// `FunctionAnalysisManager::invalidate`, for a pass running others. What
     /// it keeps the pass vouches for as `function` is now: it is stamped
@@ -1490,8 +1661,24 @@ impl Analyses {
         current: Option<&Function>,
     ) {
         self.attributes = current.map(Function::attributes_stamp);
-        let gone: Vec<TypeId> =
+        let mut gone: Vec<TypeId> =
             self.cache.iter().filter(|(_, entry)| !entry.preserved(preserved)).map(|(key, _)| *key).collect();
+        // Kept because the pass updated it: held only if the pass put the
+        // result back as the function stands, else it is as old as the edits.
+        if let Some(function) = current {
+            for (key, entry) in &self.cache {
+                if preserved.updated_by_pass(*key) && !preserved.are_all_preserved() && entry.mark() != function.mark()
+                {
+                    assert!(
+                        !stale_checks_on(),
+                        "{} was declared kept updated by {} and not put back with `replace` after its last edit",
+                        entry.name(),
+                        PASS.with(std::cell::Cell::get)
+                    );
+                    gone.push(*key);
+                }
+            }
+        }
         self.retire(gone);
     }
 
@@ -2080,6 +2267,11 @@ impl ModuleAnalyses {
 
 pub trait FunctionPass {
     fn name(&self) -> &'static str;
+    /// The names of the passes that run under `name` (a slot that stands for
+    /// one pass of LLVM and runs several): the pass itself if it is one.
+    fn parts(&self) -> Vec<&'static str> {
+        vec![self.name()]
+    }
     /// Whether the pass may add a memory operation a function did not have (a
     /// load speculated, a call made). The module analyses frozen at a point
     /// of the pipeline (`PassManager::freeze`) are held past a pass that says
@@ -2130,6 +2322,7 @@ pub(crate) enum Pass {
     /// Not a pass: from here the module analyses it names are not dropped by a
     /// pass that adds no memory operation.
     Freeze(Vec<Kind>),
+    Hold(Vec<Kind>),
 }
 
 impl Pass {
@@ -2139,6 +2332,7 @@ impl Pass {
             Pass::Module(pass) => pass.name(),
             Pass::Program(pass) => pass.name(),
             Pass::Freeze(_) => "freeze",
+            Pass::Hold(_) => "hold",
         }
     }
 }
@@ -2196,6 +2390,15 @@ impl PassManager {
     /// stays conservative.
     pub fn freeze<M: ModuleAnalysis>(&mut self) {
         self.passes.push(Pass::Freeze(vec![Kind::of::<M>()]));
+    }
+
+    /// From this point `M` is held past every function pass, whatever it adds,
+    /// as LLVM's `GlobalsAAResult::invalidate` (GlobalsModRef.cpp:825): the
+    /// result is stateless, kept unless a pass abandons it, and only module
+    /// passes do. Held past a function pass it is rechecked under
+    /// `LLRM_CHECK_STALE` like a frozen one.
+    pub fn hold<M: ModuleAnalysis>(&mut self) {
+        self.passes.push(Pass::Hold(vec![Kind::of::<M>()]));
     }
 
     pub fn add_module(
@@ -2354,6 +2557,7 @@ impl PassManager {
             running
         };
         let mut frozen: Vec<Kind> = Vec::new();
+        let mut held: Vec<Kind> = Vec::new();
         for (number, pass) in self.passes.iter_mut().enumerate().skip(passes.start).take(passes.len()) {
             let name = pass.name();
             PASS.with(|p| p.set(name));
@@ -2362,6 +2566,10 @@ impl PassManager {
                 Pass::Program(_) => unreachable!("a program pass runs over every module"),
                 Pass::Freeze(kinds) => {
                     frozen.extend(kinds.iter().copied());
+                    continue;
+                }
+                Pass::Hold(kinds) => {
+                    held.extend(kinds.iter().copied());
                     continue;
                 }
                 Pass::Module(pass) => {
@@ -2408,12 +2616,18 @@ impl PassManager {
             let mut declared = Declared::of(module);
             for at in 0..module.globals.len() {
                 let id = GlobalId(at as u32);
+                // The other bodies as they stand, for an audit that reads a
+                // callee.
+                if check_captures() {
+                    MODULE_SNAPSHOT.with(|held| *held.borrow_mut() = Some(Rc::new(module.clone())));
+                }
                 let Module { context, globals, metadata, .. } = &mut *module;
                 let global = &mut globals[at];
                 let GlobalKind::Function(function) = &mut global.kind else { continue };
                 if function.is_declaration() || !bisected(name, global.name.as_deref().unwrap_or_default()) {
                     continue;
                 }
+                set_running_function(global.name.as_deref().unwrap_or_default());
                 let cache = analyses.manager(id, &outer);
                 let before = function.mark();
                 let running = crate::counts::pass_run_over(name, function);
@@ -2461,12 +2675,15 @@ impl PassManager {
             if !pass.adds_memory_operations() {
                 kept.extend(frozen.iter().map(|one| one.id).filter(|one| analyses.results.contains_key(one)));
             }
+            kept.extend(held.iter().map(|one| one.id).filter(|one| analyses.results.contains_key(one)));
             let mut preserved = PreservedAnalyses::none();
             preserved.kept = kept;
             analyses.invalidate(&preserved);
+            let mut checked = held.clone();
             if !pass.adds_memory_operations() {
-                checked_stale(module, analyses, &frozen, name);
+                checked.extend(frozen.iter().copied());
             }
+            checked_stale(module, analyses, &checked, name);
             after(dump, self.verify_each, number, name, module)?;
         }
         Ok(stages)
@@ -2474,12 +2691,21 @@ impl PassManager {
 }
 
 thread_local! {
+    /// The module as it stood before the function pass now running
+    /// (`LLRM_CHECK_CAPTURES`).
+    pub static MODULE_SNAPSHOT: std::cell::RefCell<Option<Rc<Module>>> = const { std::cell::RefCell::new(None) };
     static CHECK_STALE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `LLRM_CHECK_STALE` for this thread, for a test.
 pub fn check_stale(on: bool) {
     CHECK_STALE.with(|check| check.set(on));
+}
+
+/// `LLRM_CHECK_STALE`, or `check_stale(true)` on this thread.
+fn stale_checks_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    CHECK_STALE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_STALE").is_some())
 }
 
 static STALE_CHECKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

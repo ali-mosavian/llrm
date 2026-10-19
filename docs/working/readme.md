@@ -13,7 +13,10 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [fragility](fragility.md) | What broke, or hid a break, and what guards it |
 | [figures](figures.md) | Drawing a figure as mermaid, and the generated pass pages |
 | [codegen-improvements](codegen-improvements.md) | Backend ideas drawn from other compilers |
+| [fold-split](fold-split.md) | The plan splitting the fold work between valuetracking-port and fold-poc |
+| [value-tracking-port](value-tracking-port.md) | Evidence for the ValueTracking, KnownBits and ConstantRange port: agreement with LLVM, deviations, owed work |
+| [undef-table](undef-table.md) | MIR `undef`: each pass and pin function that treats it apart from poison, and its state |
 
 ## Docs with the change
 
-A change to a pass, analysis, flag, level, tool, target or runtime updates its doc in the same PR. A pass's `//!` header is its doc; after editing one, run `tools/fmt.sh` (it rewraps header comments), then `python3 tools/docsbuild/build.py --sync` and commit what it writes. The tests (`pytest tools/docsbuild`, `tests/header_mir.rs`) fail on a stale page, a missing section or a malformed MIR example.
+A change to a pass, analysis, flag, level, tool, target or runtime updates its doc in the same PR. A pass's `//!` header is its doc; after editing one, run `tools/fmt.sh` (it rewraps header comments), then `python3 tools/docsbuild/build.py --sync` and commit what it writes. A page of `docs/architecture/` joins its readme's Contents list by front matter (`architecture-index:` and `architecture-order:`, tools/docsbuild/archindex.py); `build.py --sync` rewrites the list, and `--check` fails on a stale one. The tests (`pytest tools/docsbuild`, `tests/header_mir.rs`) fail on a stale page, a missing section or a malformed MIR example.

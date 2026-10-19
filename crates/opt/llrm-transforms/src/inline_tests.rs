@@ -62,7 +62,8 @@ fn inline_with(
         call,
         threshold,
     );
-    let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)), base: 0 };
+    let by =
+        Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)), base: 0, limits: true };
     let mut changed = false;
     while expand_once(module, caller, &by, &available) {
         changed = true;
@@ -105,7 +106,7 @@ fn assert_the_one_scan_is_the_repeated_one(
         1,
         threshold,
     );
-    let by = Caller { layout: &layout, recursive: false, base: 0 };
+    let by = Caller { layout: &layout, recursive: false, base: 0, limits: true };
     while expand_once(&mut many, "main", &by, &available) {}
     let mut declared = llrm_mir::passes::Declared::of(&one);
     let (context, function) = one.function_mut("main").unwrap();
@@ -1175,7 +1176,7 @@ fn a_routine_that_frees_a_temporary_is_not_inlined_at_a_call_of_one() {
     );
     assert!(available.contains_key(&id(&module, "first")), "the premise: the body is a candidate");
     for (caller, inlined) in [("temporary", false), ("owned", true)] {
-        let by = Caller { layout: &layout, recursive: false, base: 0 };
+        let by = Caller { layout: &layout, recursive: false, base: 0, limits: true };
         assert_eq!(expand_once(&mut module, caller, &by, &available), inlined, "{caller}\n{}", printed(&module));
     }
 }
@@ -1219,7 +1220,7 @@ fn test_the_last_calls_into_a_large_caller_stop_where_it_has_doubled() {
         8,
         Threshold::default(),
     );
-    let by = Caller { layout: &layout, recursive: false, base: original };
+    let by = Caller { layout: &layout, recursive: false, base: original, limits: true };
     while expand_once(&mut module, "main", &by, &available) {}
     let after = operations(module.global(id(&module, "main")).function().unwrap());
     let calls_left = module
@@ -1386,7 +1387,7 @@ b1:
             2,
             Threshold::default(),
         );
-        let by = Caller { layout: &layout, recursive: false, base: 0 };
+        let by = Caller { layout: &layout, recursive: false, base: 0, limits: true };
         while expand_once(&mut module, "main", &by, &available) {}
         !printed(&module).contains("call ")
     };
@@ -1546,4 +1547,145 @@ fn a_noipa_routine_is_never_inlined() {
     assert!(inline_into(&mut plain, "main", 1), "premise: the small private routine inlines");
     let mut marked = parsed(&text("noipa"));
     assert!(!inline_into(&mut marked, "main", 1), "{}", printed(&marked));
+}
+
+/// A site LLVM's `InlineCost` admits is copied however large the caller
+/// grows: gcc's growth limit refused 168 of QCport's sites `opt -passes=inline`
+/// inlined, after llrm had decided to inline them.
+#[test]
+fn test_a_site_llvm_decided_is_copied_past_gccs_growth_limit() {
+    let chain = |n: usize, from: &str| -> String {
+        (0..n)
+            .map(|at| {
+                format!(
+                    "  %t{at} = add i16 {}, {at}\n",
+                    if at == 0 { from.to_owned() } else { format!("%t{}", at - 1) }
+                )
+            })
+            .collect()
+    };
+    let calls: String = (0..200).map(|at| format!("  %r{at} = call i16 @c(i16 %y)\n")).collect();
+    let text = format!(
+        "define internal i16 @c(i16 %x) {{\nb0:\n{}  ret i16 %t19\n}}\n\n\
+         define i16 @main(i16 %x) {{\nb0:\n{}  %y = add i16 %t2799, 1\n{calls}  ret i16 %r0\n}}\n",
+        chain(20, "%x"),
+        chain(2800, "%x")
+    );
+    let calls_left = |limits: bool| {
+        let mut module = parsed(&text);
+        let layout = DataLayout::default();
+        let main = id(&module, "main");
+        let decided = crate::inlinecost::sites(
+            &module,
+            &layout,
+            main,
+            &call_counts(&module),
+            &BTreeSet::new(),
+            &recursive(&module),
+            crate::inlinecost::InlineParams::from_level(2),
+            crate::inlinecost::CallerSize::Speed,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(decided.len(), 200, "the premise: LLVM's cost admits every site");
+        let by = Caller {
+            layout: &layout,
+            recursive: false,
+            base: semantic_count(module.global(main).function().unwrap()),
+            limits,
+        };
+        let mut declared = llrm_mir::passes::Declared::of(&module);
+        let (context, function) = module.function_mut("main").unwrap();
+        expanded_all(context, function, &by, &IndexMap::default(), Some(&decided), &mut declared).unwrap();
+        let function = module.global(main).function().unwrap();
+        function
+            .walk()
+            .filter(|&(_, inst)| matches!(
+                function.instruction(inst).opcode,
+                llrm_mir::opcode::Opcode::Call(_)
+            ))
+            .count()
+    };
+    assert!(calls_left(true) > 0, "the premise: gcc's growth limit refuses some");
+    assert_eq!(calls_left(false), 0);
+}
+
+/// `InsertLifetime`: each copy's buffer begins where the copy does and ends
+/// where it returns. Copies carried no markers, so the backend gave sibling
+/// copies a slot each (QCport's `_menu_draw`: 3548 bytes, not 266).
+#[test]
+fn test_each_copys_alloca_is_bounded_by_lifetime_markers() {
+    let source = "declare void @use(ptr)\n\
+        define internal void @c() {\nb0:\n  %buf = alloca [100 x i8]\n  call void @use(ptr %buf)\n  ret void\n}\n\
+        define void @main() {\nb0:\n  call void @c()\n  call void @c()\n  ret void\n}\n";
+    let mut module = parsed(source);
+    let layout = DataLayout::default();
+    let available = candidates(
+        &module,
+        &llrm_mir::memory::callees(&module),
+        &layout,
+        &call_counts(&module),
+        &private(&module),
+        &costs(8),
+        8,
+        Threshold::default(),
+    );
+    let by = Caller { layout: &layout, recursive: false, base: 0, limits: true };
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("main").unwrap();
+    assert_eq!(expanded_all(context, function, &by, &available, None, &mut declared).unwrap(), 2, "the premise");
+    declared.place(&mut module).unwrap();
+    let text = printed(&module);
+    let main = &text[text.find("define void @main").unwrap()..];
+    let lines: Vec<&str> =
+        main.lines().map(str::trim).filter(|one| one.starts_with("call") || one.contains("alloca")).collect();
+    let starts = lines.iter().filter(|one| one.contains("@llvm.lifetime.start.p0(i64 100, ptr")).count();
+    let ends = lines.iter().filter(|one| one.contains("@llvm.lifetime.end.p0(i64 100, ptr")).count();
+    assert_eq!((starts, ends), (2, 2), "{main}");
+    // Each copy's call of `use` sits between its own start and end.
+    let order: Vec<char> = lines
+        .iter()
+        .filter_map(|one| {
+            if one.contains("lifetime.start") {
+                Some('(')
+            } else if one.contains("lifetime.end") {
+                Some(')')
+            } else if one.contains("@use") {
+                Some('u')
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(order.iter().collect::<String>(), "(u)(u)", "{main}");
+}
+
+/// An alloca whose address the body returns outlives the copy, so it gets no
+/// lifetime markers: QB's `B$FMID` returns its view, and its end at the
+/// return let the read through the view fold to undef (`SUM= 0`).
+#[test]
+fn test_an_alloca_the_body_returns_gets_no_lifetime_markers() {
+    let source = "define internal ptr @view(i16 %n) {\nb0:\n  %v = alloca [4 x i8]\n  store i16 %n, ptr %v\n  ret ptr %v\n}\n\
+        define i16 @main(i16 %n) {\nb0:\n  %p = call ptr @view(i16 %n)\n  %r = load i16, ptr %p\n  ret i16 %r\n}\n";
+    let mut module = parsed(source);
+    let layout = DataLayout::default();
+    let available = candidates(
+        &module,
+        &llrm_mir::memory::callees(&module),
+        &layout,
+        &call_counts(&module),
+        &private(&module),
+        &costs(8),
+        8,
+        Threshold::default(),
+    );
+    let by = Caller { layout: &layout, recursive: false, base: 0, limits: true };
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("main").unwrap();
+    assert_eq!(expanded_all(context, function, &by, &available, None, &mut declared).unwrap(), 1, "the premise");
+    declared.place(&mut module).unwrap();
+    let text = printed(&module);
+    let main = &text[text.find("define i16 @main").unwrap()..];
+    assert!(!main.contains("call void @llvm.lifetime"), "{main}");
 }

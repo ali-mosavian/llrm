@@ -18,7 +18,7 @@ use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::HashMap;
 use crate::support::hash::IndexMap;
 
-fn sem(
+pub(crate) fn sem(
     op: Operation,
     name: &str,
     dests: Vec<Loc>,
@@ -27,34 +27,34 @@ fn sem(
     Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
 }
 
-fn fl(value: u32) -> Loc {
+pub(crate) fn fl(value: u32) -> Loc {
     Loc::Held(Held { value, width: 10 })
 }
 
-fn m(cell: &Mem) -> Loc {
+pub(crate) fn m(cell: &Mem) -> Loc {
     Loc::Mem(cell.clone())
 }
 
-fn st(index: u32) -> Loc {
+pub(crate) fn st(index: u32) -> Loc {
     Loc::st(index)
 }
 
-fn frame_cell(
+pub(crate) fn frame_cell(
     disp: i64,
     width: u32,
 ) -> Mem {
     Mem::new(Some(Addr::new(Space::Frame, disp)), width)
 }
 
-fn emits(what: &Semantics) -> bool {
+pub(crate) fn emits(what: &Semantics) -> bool {
     select::emit(what, 0, None, false, false, None).is_some()
 }
 
-fn name(one: &Insn) -> &str {
+pub(crate) fn name(one: &Insn) -> &str {
     one.what.as_ref().unwrap().name.as_deref().unwrap_or("")
 }
 
-fn what(one: &Insn) -> &Semantics {
+pub(crate) fn what(one: &Insn) -> &Semantics {
     one.what.as_ref().unwrap()
 }
 
@@ -67,7 +67,7 @@ fn held_values(args: &[Loc]) -> Vec<u32> {
         .collect()
 }
 
-fn _body(operations: Vec<Semantics>) -> LirBody {
+pub(crate) fn _body(operations: Vec<Semantics>) -> LirBody {
     let insns = operations
         .into_iter()
         .enumerate()
@@ -83,7 +83,7 @@ fn _body(operations: Vec<Semantics>) -> LirBody {
     }
 }
 
-fn block(
+pub(crate) fn block(
     at: i64,
     insns: Vec<Arc<Insn>>,
     succ: Vec<i64>,
@@ -92,11 +92,11 @@ fn block(
 }
 
 /// As the pipeline runs it: phis are copies by now.
-fn run(body: &LirBody) -> LirBody {
+pub(crate) fn run(body: &LirBody) -> LirBody {
     allocated(&phielim::eliminated(body).unwrap(), None, None, true, "386").unwrap()
 }
 
-fn with_frame(
+pub(crate) fn with_frame(
     body: &LirBody,
     frame: &mut Frame,
 ) -> LirBody {
@@ -121,7 +121,7 @@ fn arith(
 
 /// Run allocated instructions over `memory`, cells to numbers: the memory after
 /// and the stack left.
-fn _x87(
+pub(crate) fn _x87(
     insns: &[Arc<Insn>],
     memory: &[(&Mem, f64)],
 ) -> (HashMap<Mem, f64>, Vec<f64>) {
@@ -130,7 +130,7 @@ fn _x87(
 }
 
 /// `_x87`, and every store to memory in order.
-fn _x87_traced(
+pub(crate) fn _x87_traced(
     insns: &[Arc<Insn>],
     memory: &[(&Mem, f64)],
 ) -> (HashMap<Mem, f64>, Vec<f64>, Vec<(Mem, f64)>) {
@@ -206,7 +206,7 @@ fn _x87_traced(
 
 /// The instructions run along `path`, through any block allocation put on an
 /// edge of it.
-fn _along(
+pub(crate) fn _along(
     result: &LirBody,
     path: &[i64],
 ) -> Vec<Arc<Insn>> {
@@ -230,21 +230,21 @@ fn _cells(
     displacements.into_iter().map(|disp| frame_cell(disp, width)).collect()
 }
 
-fn _load(
+pub(crate) fn _load(
     value: u32,
     cell: &Mem,
 ) -> Semantics {
     sem(Operation::FloatLoad, "fld", vec![fl(value)], vec![m(cell)])
 }
 
-fn _store(
+pub(crate) fn _store(
     cell: &Mem,
     value: u32,
 ) -> Semantics {
     sem(Operation::FloatStore, "fstp", vec![m(cell)], vec![fl(value)])
 }
 
-fn _arithmetic(
+pub(crate) fn _arithmetic(
     name: &str,
     result: u32,
     left: Loc,
@@ -253,7 +253,7 @@ fn _arithmetic(
     sem(Operation::FloatArith, name, vec![fl(result)], vec![left, right])
 }
 
-fn fchs(
+pub(crate) fn fchs(
     result: u32,
     source: u32,
 ) -> Semantics {
@@ -293,6 +293,34 @@ fn test_truncation_saves_the_control_word_once_per_body() {
     // The switch to truncation is made on the one edge in, at the end of block
     // 0.
     assert_eq!(names, vec![(0, vec!["fnstcw", "mov", "or", "mov", "fldcw"]), (5, vec!["fistp", "fistp", "fldcw"])]);
+}
+
+/// With the registers allocated (`LLRM_GREEDY_RFP`) no value is left to hold
+/// the control word: the truncating word is made in memory alone. A `mov` of a
+/// value the allocator never saw reached the encoder as an unplaced value.
+#[test]
+fn test_the_truncating_word_is_made_in_memory_under_rfp() {
+    let _rfp = crate::backend::allocate::RfpOn::set();
+    let insn = |at: i64, what: Semantics| Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]));
+    let cell = Mem { through: RegId::BP, offset: 0, disp_width: 2, ..frame_cell(-2, 2) };
+    let blocks =
+        vec![block(0, vec![insn(0, sem(Operation::FloatStore, "fisttp", vec![m(&cell)], vec![st(0)]))], vec![])];
+    let mut frame = Frame::new(-8);
+    let result = _truncating(
+        &LirBody::new("t", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default()),
+        Some(&mut frame),
+    )
+    .unwrap();
+    assert!(
+        result
+            .insns()
+            .iter()
+            .all(|one| one.what.as_ref().is_none_or(|what| {
+                what.dests.iter().chain(&what.sources).all(|place| !matches!(place, Loc::Held(_)))
+            })),
+        "a value is named"
+    );
+    assert_eq!(&names_of(&result, 0)[..3], ["fnstcw", "fnstcw", "or"]);
 }
 
 /// A loop of `(int)a[i]` (entry 0, loop 5, exit 9): `body` is what its block
@@ -1936,4 +1964,23 @@ fn test_a_compare_that_keeps_its_left_and_drops_its_right_copies_nothing() {
     body.blocks[0].insns = insns.into();
     let names = names_in_order(&with_frame(&body, &mut Frame::new(-16)));
     assert_eq!(names.iter().filter(|name| *name == "fld").count(), 2, "{names:?}");
+}
+
+/// A float copied to a cell by a plain `mov` (a phi's copy the inline spiller
+/// folded to memory) is an `fstp`, and a copy back an `fld`: the stackifier had
+/// no rule for a `mov` of an x87 value ("1 operands, 0 results").
+#[test]
+fn test_a_plain_move_of_a_float_to_and_from_a_cell_is_stored_and_loaded() {
+    let (source, spill) = (frame_cell(-8, 8), frame_cell(-16, 8));
+    let mut to_cell = sem(Operation::Move, "mov", vec![m(&spill)], vec![fl(1)]);
+    to_cell.op = Operation::Move;
+    let from_cell = sem(Operation::Move, "mov", vec![fl(2)], vec![m(&spill)]);
+    let body = _body(vec![_load(1, &source), to_cell, from_cell, _store(&source, 2)]);
+    let result =
+        crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
+            .expect("converts");
+    let insns = result.insns();
+    let names: Vec<&str> = insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect();
+    assert!(!names.contains(&"mov"), "{names:?}");
+    assert!(names.contains(&"fld") && names.contains(&"fstp"), "{names:?}");
 }

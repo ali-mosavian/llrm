@@ -490,9 +490,16 @@ fn written_basic_inner(
         segments.push(stack);
     }
     let every: Vec<usize> = (0..module.procedures.len()).collect();
-    objbuild::_code_by(&mut segments[0], 0, module, &every, &mut symbols, |procedure, number| {
-        _basic_listing(procedure, number)
-    })
+    objbuild::_code_by(
+        &mut segments[0],
+        0,
+        module,
+        &every,
+        &mut symbols,
+        &mut Default::default(),
+        llrm_target::object::Format::Omf,
+        |procedure, number| _basic_listing(procedure, number),
+    )
     .map_err(|error| error.to_string())?;
 
     let code = &mut segments[0];
@@ -543,7 +550,8 @@ fn written_basic_inner(
     }
     read_segment.fixups.clear();
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
-    let object = objbuild::object_of(module, name, segments, &symbols, &externs).map_err(|error| error.to_string())?;
+    let object = objbuild::object_of(module, name, segments, &symbols, &Default::default(), &externs)
+        .map_err(|error| error.to_string())?;
     let emitted = llrm_omf::write::write(&object).map_err(|error| error.to_string())?;
     // QB's classes and combine modes shape a real-mode link; a flat object
     // keeps the ones its writer gave.
@@ -1001,6 +1009,7 @@ pub fn assembled(
         debug,
         stack: 0,
         object: options.arch.object(),
+        padding: Default::default(),
     })
 }
 

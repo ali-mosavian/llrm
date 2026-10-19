@@ -24,7 +24,6 @@
 //!   MIR has none.
 //! - No `llvm.assume`, so no `convertMetadataToAssumes` (`noundef` metadata)
 //!   and no droppable users; no `fake_use`. Lifetime markers are translated.
-//! - MIR has `poison` and no `undef`: `UndefValue` is `poison`.
 //! - `isGuaranteedNotToBePoison` is true of a constant that is not `poison`
 //!   only (no `noundef` arguments).
 //! - The iterated dominance frontier is `Dominance::frontiers` iterated with
@@ -75,7 +74,7 @@
 //!
 //! # Used by
 //! [`crate::pipeline`]: the round's `Promote` is swapped for `Mem2Reg` when
-//! `Options::mem2reg` (`LLRM_EXP_MEM2REG`) is set; off by default.
+//! `Options::mem2reg` is set (on by default; `LLRM_NO_MEM2REG` turns it off).
 
 use llrm_analysis::cfg;
 use llrm_mir::datalayout::DataLayout;
@@ -126,10 +125,7 @@ fn promote_memory_to_register(
     let mut changed = false;
     loop {
         let allocas: Vec<InstId> = function
-            .block(entry)
-            .instructions()
-            .iter()
-            .copied()
+            .iter_block(entry)
             .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }))
             .filter(|&inst| is_alloca_promotable(context, callees, function, inst))
             .collect();
@@ -241,7 +237,7 @@ pub fn is_alloca_promotable(
 /// the pointers derived from it, go; a marker leaves a store of poison where
 /// it was, as the memory is dead from there. PromoteMemoryToRegister.cpp#L522
 fn remove_intrinsic_users(
-    context: &mut Context,
+    context: &Context,
     callees: &Callees,
     function: &mut Function,
     alloca: InstId,
@@ -285,7 +281,7 @@ fn remove_intrinsic_users(
         if let Some(ty) = promoted_type
             && memory::lifetime(context, callees, function, user).is_some()
         {
-            let value = poison(context, ty);
+            let value = uninitialized(context, ty);
             let store = function.create_instruction(
                 Opcode::Store { align, volatile: false },
                 void,
@@ -386,7 +382,7 @@ impl LargeBlockInfo {
         }
         let block = function.parent(inst).expect("a placed instruction");
         let mut next = 0;
-        for &one in function.block(block).instructions() {
+        for one in function.iter_block(block) {
             if Self::is_interesting(function, one) {
                 self.numbers.insert(one, next);
                 next += 1;
@@ -406,10 +402,18 @@ impl LargeBlockInfo {
 
 /// `poison` of `ty`: MIR's `UndefValue`/`PoisonValue`.
 fn poison(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> Operand {
     Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison }))
+}
+
+/// `UndefValue::get(ty)`.
+fn uninitialized(
+    context: &Context,
+    ty: TypeId,
+) -> Operand {
+    Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Undef }))
 }
 
 /// `isGuaranteedNotToBePoison` as far as MIR can say: a constant that is not
@@ -473,7 +477,7 @@ fn convert_declares_to_values(
 /// value. Whether the alloca is gone; if not, `info.using_blocks` holds the
 /// blocks of the loads left. PromoteMemoryToRegister.cpp#L593
 fn rewrite_single_store_alloca(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     alloca: InstId,
@@ -506,7 +510,7 @@ fn rewrite_single_store_alloca(
                     info.using_blocks.push(store_block);
                     continue;
                 }
-            } else if !dominance.dominates(cfg::id(store_block), cfg::id(load_block)) {
+            } else if !dominance.dominates(function, cfg::id(store_block), cfg::id(load_block)) {
                 info.using_blocks.push(load_block);
                 continue;
             }
@@ -550,7 +554,7 @@ fn erase_alloca(
 /// over it. Whether the alloca is gone (false when a load comes before every
 /// store). PromoteMemoryToRegister.cpp#L706
 fn promote_single_block_alloca(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     alloca: InstId,
@@ -579,7 +583,7 @@ fn promote_single_block_alloca(
         let at = stores.partition_point(|&(index, _)| index < load_index);
         let value = if at == 0 {
             if stores.is_empty() {
-                poison(context, function.instruction(user).ty)
+                uninitialized(context, function.instruction(user).ty)
             } else {
                 // No store before this load: it may be affected by the stores
                 // after it.
@@ -794,12 +798,12 @@ impl<'a> PromoteMem2Reg<'a> {
         }
         lbi.numbers.clear();
 
-        // The incoming value of every alloca on entry is poison, for a load
+        // The incoming value of every alloca on entry is undef, for a load
         // before any store.
         let values: Vec<Operand> = (0..self.allocas.len())
             .map(|at| {
                 let ty = self.alloca_value_types[at].expect("an accessed alloca has a type");
-                poison(self.context, ty)
+                uninitialized(self.context, ty)
             })
             .collect();
         self.incoming_vals = VectorWithUndo { values, undo: Vec::new() };
@@ -851,7 +855,7 @@ impl<'a> PromoteMem2Reg<'a> {
         let phis: Vec<InstId> = self.new_phi_nodes.values().copied().collect();
         for phi in phis {
             let block = self.function.parent(phi).expect("a placed phi");
-            let first = self.function.block(block).instructions()[0];
+            let first = self.function.block(block).first().expect("a placed phi's block");
             // Once a block, at its first phi.
             if first != phi {
                 continue;
@@ -875,7 +879,7 @@ impl<'a> PromoteMem2Reg<'a> {
             }
             // Every phi this pass inserted in the block has the same count.
             let bad = have;
-            for inst in self.function.block(block).instructions().to_vec() {
+            for inst in self.function.iter_block(block).collect::<Vec<_>>() {
                 let op = self.function.instruction(inst);
                 if op.opcode != Opcode::Phi || op.operands.len() / 2 != bad {
                     break;
@@ -909,7 +913,7 @@ impl<'a> PromoteMem2Reg<'a> {
             let block = worklist[at];
             if def_blocks.contains(&block) {
                 let mut kept = true;
-                for &inst in self.function.block(block).instructions() {
+                for inst in self.function.iter_block(block) {
                     let op = self.function.instruction(inst);
                     match op.opcode {
                         Opcode::Store { .. } if op.operands[1] == Operand::Value(address) => {
@@ -985,7 +989,7 @@ impl<'a> PromoteMem2Reg<'a> {
         let name = self.function.value(address).name.clone().map(|one| format!("{one}.{version}"));
         *version += 1;
         let phi = self.function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), name.as_deref());
-        let first = self.function.block(block).instructions().first().copied();
+        let first = self.function.block(block).first();
         self.function.insert(phi, first.map_or(Position::End(block), Position::Before)).expect("a placed block");
         self.new_phi_nodes.insert((cfg::id(block), alloca_no), phi);
         self.phi_to_alloca.insert(phi, alloca_no);
@@ -1002,7 +1006,7 @@ impl<'a> PromoteMem2Reg<'a> {
     ) {
         // The phis inserted into this block are already in it: each takes the
         // value of its alloca from `pred`.
-        let first_phi = self.function.block(block).instructions().first().copied();
+        let first_phi = self.function.block(block).first();
         if let Some(first) = first_phi
             && self.phi_to_alloca.contains_key(&first)
         {
@@ -1010,7 +1014,7 @@ impl<'a> PromoteMem2Reg<'a> {
             let pred = pred.expect("a block with inserted phis has a predecessor");
             // Edges from `pred` to this block (`count(successors(Pred), BB)`).
             let edge_count = edges(self.function, block).iter().filter(|&&one| one == pred).count();
-            for inst in self.function.block(block).instructions().to_vec() {
+            for inst in self.function.iter_block(block).collect::<Vec<_>>() {
                 let op = self.function.instruction(inst);
                 if op.opcode != Opcode::Phi || op.operands.len() != new_operands {
                     break;
@@ -1027,13 +1031,8 @@ impl<'a> PromoteMem2Reg<'a> {
                 self.incoming_vals.set(alloca_no, Operand::Value(result));
                 // And the variable is the phi from the top of the block.
                 let variables = std::mem::take(&mut self.alloca_variables[alloca_no]);
-                let top = self
-                    .function
-                    .block(block)
-                    .instructions()
-                    .iter()
-                    .copied()
-                    .find(|&one| self.function.instruction(one).opcode != Opcode::Phi);
+                let top =
+                    self.function.iter_block(block).find(|&one| self.function.instruction(one).opcode != Opcode::Phi);
                 if let Some(top) = top {
                     let alloca = self.allocas[alloca_no];
                     convert_declares_to_values(
@@ -1055,7 +1054,7 @@ impl<'a> PromoteMem2Reg<'a> {
             return;
         }
 
-        for inst in self.function.block(block).instructions().to_vec() {
+        for inst in self.function.iter_block(block).collect::<Vec<_>>() {
             let op = self.function.instruction(inst);
             match op.opcode {
                 Opcode::Load { .. } => {
@@ -1117,7 +1116,7 @@ fn edges(
 /// poison. Local until `llrm_mir::simplify::simplify_phi` lands.
 /// InstructionSimplify.cpp `simplifyPHINode`
 fn simplify_phi(
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     dominance: &cfg::Dominance,
     phi: InstId,
@@ -1151,7 +1150,7 @@ fn simplify_phi(
         Operand::Value(id) => match function.value(id).def {
             llrm_mir::module::ValueDef::Instruction(def) => {
                 let defined = function.parent(def)?;
-                defined != at && dominance.dominates(cfg::id(defined), cfg::id(at))
+                defined != at && dominance.dominates(function, cfg::id(defined), cfg::id(at))
             }
             _ => true,
         },
@@ -1161,7 +1160,7 @@ fn simplify_phi(
 }
 
 /// `PromoteMemToReg`: `allocas` promoted. PromoteMemoryToRegister.cpp#L1264
-fn promote_mem_to_reg(
+pub(crate) fn promote_mem_to_reg(
     context: &mut Context,
     layout: &DataLayout,
     callees: &Callees,

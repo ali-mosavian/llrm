@@ -20,8 +20,8 @@
 //! `!dereferenceable` on a load) would not, and answers `false` below. Checked
 //! when this was written, on the passes `llrm_transforms::pipeline` runs:
 //! `hoist`, `loopmotion`, `lsr` (induction steps), `exitsink` (through
-//! `indvars`), `gvn::joined` (insertion on an edge) and `loadjoins` (a load
-//! cloned into predecessors) move or insert an instruction with its flags, and
+//! `indvars`), `gvn::joined` (insertion on an edge) and GVN's load PRE (a load
+//! made in a predecessor) move or insert an instruction with its flags, and
 //! are sound by the argument above; `algebraic` reassociation changes operands
 //! and already clears the flags (`set_flags(.., Flags::default())`). The
 //! optimiser passes `llrm-mir` once had were never run by the compile route
@@ -45,9 +45,31 @@
 //! the operands of the instruction it simplifies, as LLVM's
 //! `InstructionSimplify` does (`(X <<nuw Y) >> Y` is `X`): each is an operand,
 //! so it ran wherever the user does, and the answer replaces that user only.
-//! `ranges`, `guards`, `consts` and value tracking read no flag. The test below
-//! lists the files that name a no-wrap or inbounds flag, so a new reader is
-//! checked before it is added.
+//! `constantfolding` reads the flags of the GEP it folds to flag the constant
+//! that replaces that GEP, in its place and for its users only.
+//! `ranges`, `guards` and `consts` read no flag. Value tracking
+//! (`valuetracking/`: `context`, `guarantee`, `known`, `nonzero`, `power2`,
+//! `range`, and the matchers in `pattern`) reads a promise of the instruction
+//! it is asked about, or of an operand of it, to conclude about that
+//! instruction's result, as LLVM does: the result is poison where the promise
+//! fails, and poison matters only where it is read. It reads one to conclude
+//! about an operand, or about another point, in four places, each with its
+//! proof that the instruction runs there. A comparison that an assume or a
+//! dominating branch makes true gives bits and ranges of its operand from the
+//! `nuw`/`nsw` of the operation it compares, `trunc nuw` and `samesign`
+//! (`computeKnownBitsFromCmp` L886, `computeKnownBitsFromICmpCond` L992,
+//! `computeKnownBitsFromCond` L1014, `computeKnownBitsFromContext` L1057,
+//! `computeConstantRange` L10755): the assume is valid for the context
+//! (`isValidAssumeForContext`) or the edge dominates it. A recurrence reads the
+//! flags of the binary operator that is the phi's back-edge value (L1847,
+//! L2696, L3162, L4032): it ran on every trip, and it uses the phi, so it is
+//! never hoisted above it. `isKnownNonNullFromDominatingCondition` (L3048)
+//! reads the `nonnull` of a call's argument at a call that dominates the
+//! context. `handleGuaranteedWellDefinedOps` (L8556) reads `noundef` and
+//! `dereferenceable` arguments of a call that `programUndefinedIfUndefOrPoison`
+//! reaches from the value through instructions that transfer execution. The
+//! test below lists the files that name a no-wrap or inbounds flag, so a
+//! new reader is checked before it is added.
 
 use crate::facts::{Bounds, Effect, Fact, Facts};
 
@@ -190,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 10] = [
+        const CHECKED: &[&str] = &[
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -200,10 +222,109 @@ mod tests {
             "interpret.rs",
             "mir.rs",
             "pointerfacts.rs",
+            "context.rs",
+            "guarantee.rs",
+            "known.rs",
+            "nonzero.rs",
+            "pattern.rs",
+            "power2.rs",
+            "range.rs",
+            // ConstantFolding.cpp reads a GEP's `inbounds`, `nusw` and `nuw`
+            // to flag the constant that replaces it.
+            "constantfolding.rs",
             // InlineCost.cpp reads a GEP's `inbounds` where LLVM does
             // (`stripAndAccumulateInBoundsConstantOffsets`,
             // `visitGetElementPtr`).
             "inlinecost.rs",
+            // ScalarEvolution.cpp reads them in `createSCEV`
+            // and `MatchBinaryOp`
+            // (`getNoWrapFlagsFromUB`, `getNoWrapFlagsForGEP`); a pass that
+            // drops one forgets the value, as LLVM's do (`forgetValue`).
+            "create.rs",
+            "create_phi.rs",
+            "create_addrec.rs",
+            // ScalarEvolutionExpander.cpp's `InsertBinop` reuses a nearby
+            // binop only if its `nsw`/`nuw` equal the requested ones
+            // (`canGenerateIncompatiblePoison`).
+            "expand.rs",
+            // `getAddRecExprPHILiterally` sets `nuw`/`nsw` on the increment
+            // `IsIncrementNUW`/`NSW` prove.
+            "expand_iv.rs",
+            // Local.cpp's `andIRFlags` and `dropPoisonGeneratingFlags`, and
+            // GVN.cpp's `m_NUWTrunc` in `propagateEquality`, read them where
+            // LLVM does.
+            "local.rs",
+            "pass.rs",
+            // SimplifyIndVar.cpp's `WidenIV` reads an add's/sub's/mul's
+            // `nsw`/`nuw` (`matchBinaryOp`, `getExtendedOperandRecurrence`,
+            // `widenWithVariantUse`) to extend its operands, and `copyIRFlags`
+            // gives the wide clone the narrow flags it proved.
+            "widen.rs",
+            // ScalarEvolution.cpp's `getStrengthenedNoWrapFlagsFromBinOp`
+            // reads the flags the operation has and adds the ones the
+            // no-wrap proofs give (`willNotOverflow`); it never drops one.
+            "how_many.rs",
+            // IndVarSimplify.cpp's `linearFunctionTestReplace` clears the
+            // increment's `nuw`/`nsw` that SCEV did not prove for its
+            // post-inc add recurrence; it never adds one.
+            "lftr.rs",
+            // PHITransAddr.cpp's `translateSubExpr` reads an add's
+            // `nsw`/`nuw` for `simplifyAddInst`, and `insertTranslatedSubExpr`
+            // copies a GEP's no-wrap flags to the GEP it makes.
+            "phitrans.rs",
+            // LazyValueInfo.cpp's `binaryOp(BO)`, `Trunc->getNoWrapKind()`,
+            // `m_NUWMul` and `m_AddLike`, and `stripInBoundsOffsets`, read
+            // them where LLVM does.
+            "lazyvalueinfo.rs",
+            // ConstraintElimination.cpp reads nuw/inbounds/nsw where LLVM
+            // does (`decompose`, `getFlagsFor...`).
+            "constraintelim.rs",
+            // BasicAliasAnalysis.cpp's `DecomposeGEPExpression` reads a GEP's
+            // `inbounds` and `nuw` where LLVM does; `aliasGEP` takes NoAlias
+            // from them only as LLVM's rules do.
+            "basicaa.rs",
+            // SROA.cpp's use of `Value::stripInBoundsOffsets`: it walks a
+            // GEP only when it is `inbounds`, where LLVM does.
+            "sroa.rs",
+            // LoopUnroll.cpp's `simplifyLoopAfterUnroll` folds
+            // `(x + c1) + c2` and keeps `nuw`/`nsw` only if both adds had
+            // them, and `c1 + c2` did not overflow.
+            "loopunrollpass.rs",
+            // DemandedBits.cpp's `determineLiveOperandBits` reads an
+            // add's/sub's/mul's `nsw`/`nuw` to see one more high bit live;
+            // it never drops one.
+            "demandedbits.rs",
+            // SCCPSolver.cpp's `refineInstruction` reads the wrap flags it is
+            // about to add (`nuw`, `nsw`, `nneg`, a GEP's `nuw`) and never
+            // drops one.
+            "sccp.rs",
+            // `visitGetElementPtrInst` reads a GEP's `nuw`/`inbounds` for
+            // not-null, and `visitCastInst` a `trunc`'s no-wrap kind for the
+            // result range, where LLVM does.
+            "sccpsolver.rs",
+            // InstCombineCompares.cpp's `foldICmpWithZero` reads a multiply's
+            // `nuw`/`nsw` (`BO0->hasNoUnsignedWrap()`) to drop it from an
+            // equality with zero; it never drops one.
+            "combine_compares.rs",
+            // PredicateInfo.cpp's `m_NUWTrunc(m_Value(Op0))` in
+            // `processBranch`, `processAssume` and `getConstraint`.
+            "predicateinfo.rs",
+            // InstructionCombining.cpp's `SimplifyAssociativeOrCommutative`
+            // reads `nuw`/`nsw` (`hasNoUnsignedWrap`, `maintainNoSignedWrap`)
+            // to set them on the reassociated operation only when both
+            // operations had them, and drops the rest.
+            "combine_shared.rs",
+            // InstCombineAddSub.cpp's `visitAdd` and its helpers read an add's
+            // and a sub's `nsw`/`nuw` where LLVM does, to give the
+            // replacement the flags the operands prove.
+            "combine_addsub.rs",
+            // InstructionCombining.cpp's `foldBinopWithRecurrence` merges the
+            // `nuw`/`nsw` of the three adds (`OverflowTracking`) so the new add
+            // has them only if all had them, and drops the rest.
+            "combine_phi.rs",
+            // MemCpyOptimizer.cpp's `CreateInBoundsPtrAdd` makes an inbounds
+            // GEP; it reads no flag.
+            "memcpyopt.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

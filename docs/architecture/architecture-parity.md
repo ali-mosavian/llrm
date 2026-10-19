@@ -1,3 +1,7 @@
+---
+architecture-index: LLVM's architecture against llrm's
+architecture-order: 210
+---
 # Architecture parity with LLVM: what carries the gap, and how to prove it early
 
 Pinned sources: LLVM at [`d1106deb71cc`][llvm], llrm main at [`bd6e647f6`][llrm]. The redesign plan is [PR #2040][plan] at `bd88740dc`. Numbers are `d_faces` -O2, `-m32 -march=i486 -fno-inline-functions`, callgrind instructions, unless stated. A number with no repo or [#1994] source is marked `unmeasured`; a session's report that is not yet in the repo is marked "session report".

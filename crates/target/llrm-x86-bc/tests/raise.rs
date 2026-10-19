@@ -30,7 +30,13 @@ fn cell(
     let global = module
         .add_variable(
             name,
-            GlobalVariable { ty, constant: false, initializer: Some(initializer), align: None },
+            GlobalVariable {
+                externally_initialized: false,
+                ty,
+                constant: false,
+                initializer: Some(initializer),
+                align: None,
+            },
             Linkage::Internal,
         )
         .expect("free");
@@ -48,7 +54,13 @@ fn stub_runtime(module: &mut Module) {
     let printed = module
         .add_variable(
             "printed",
-            GlobalVariable { ty: row, constant: false, initializer: Some(zero), align: None },
+            GlobalVariable {
+                externally_initialized: false,
+                ty: row,
+                constant: false,
+                initializer: Some(zero),
+                align: None,
+            },
             Linkage::Internal,
         )
         .expect("free");
@@ -481,7 +493,7 @@ fn a_push_after_the_prologue_is_no_register_save() {
     };
     let mut printed = 0;
     for &block in function.layout() {
-        for &inst in function.block(block).instructions() {
+        for inst in function.iter_block(block) {
             if callee(inst).as_deref() == Some("llrm.qb.B$PESD") {
                 let Operand::Value(argument) = function.instruction(inst).operands[0] else {
                     panic!("B$PESD of a constant")

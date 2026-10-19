@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/profit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/profit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/profit.rs sha256:051060be37e949c477e875deb604527a351ce9bfbdb46e87da10a4b50b5add01 -->
+<!-- src: crates/opt/llrm-transforms/src/profit.rs sha256:1ea7081cb9b5cf38bdc2c959589b3697d3fb599ab07c57a53c282e60a91f8770 -->
 
 # profit
 
@@ -40,8 +40,9 @@ flowchart TB
 Frequencies come in two models, both per entry:
 - `_frequencies`: `branchprob`'s estimate in `UNIT`ths of an execution
   (never below one, so a cold arm is near free but ordered), with each
-  loop's proven trips (`proven_trips`, from `induction::trip_count`) in
-  place of its estimate;
+  loop's proven trips (`proven_trips`, from ScalarEvolution's
+  `getSmallConstantTripCount`; `LLRM_NO_SCEV_TRIPS` asks
+  `induction::trip_count`) in place of its estimate;
 - `_loop_products`: the trips of each loop around a block multiplied, with
   `UNKNOWN_TRIPS` (ten) for a loop `induction` does not name. `lsr` and
   `gvn` were tuned on it (#202, #203). `_loop_products_by_branch` weighs
@@ -81,13 +82,13 @@ From unit test `an_unpriced_instruction_makes_the_body_unpriced` in
 `proven_trips`, the frequency models and `UNIT`, `UNKNOWN_TRIPS`.
 
 ## Used by
-Each of [`crate::lsr`](lsr.md), [`crate::hoist`](hoist.md), [`crate::gvn`](gvn.md),
-[`crate::unswitch`](unswitch.md), [`crate::unroll`](unroll.md), [`crate::peel`](peel.md), [`crate::fill`](fill.md),
-[`crate::window`](window.md), [`crate::gepoffset`](gepoffset.md), [`crate::indvars`](indvars.md),
-[`crate::tailrec`](tailrec.md), [`crate::ipacp`](ipacp.md), [`crate::inline`](inline.md) and
-[`crate::interprocedural`](../analyses/interprocedural.md) asks it, before a rewrite that trades code size
-or registers for speed, whether the rewrite pays. Not a pass: it runs only
-inside those.
+Each of [`crate::lsr`](lsr.md), [`crate::hoist`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/licm/hoist.rs), [`crate::gvn`](gvn.md),
+[`crate::unswitch`](unswitch.md), [`crate::unroll`](unroll.md), [`crate::peel`](peel.md),
+[`crate::loopidioms`](loopidioms.md), [`crate::window`](window.md), [`crate::gepoffset`](gepoffset.md),
+[`crate::indvars`](indvars.md), [`crate::tailrec`](tailrec.md), [`crate::ipacp`](ipacp.md), [`crate::inline`](inline.md)
+and [`crate::interprocedural`](../analyses/interprocedural.md) asks it, before a rewrite that trades code
+size or registers for speed, whether the rewrite pays. Not a pass: it runs
+only inside those.
 
 ## Needs
 The target's `OperationCosts` and registers, [`crate::spill`](spill.md) for the

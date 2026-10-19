@@ -8,6 +8,64 @@ use crate::module::{Function, GlobalKind, GlobalValue, Module, Operand, ValueDef
 use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use crate::types::TypeId;
 
+#[cfg(test)]
+mod boundary_tests;
+pub mod bytewise;
+#[cfg(test)]
+mod bytewise_tests;
+pub mod context;
+#[cfg(test)]
+mod context_tests;
+pub mod guarantee;
+#[cfg(test)]
+mod guarantee_tests;
+pub mod known;
+pub mod nonzero;
+pub mod pattern;
+pub mod power2;
+mod query;
+pub mod range;
+pub mod signbits;
+#[cfg(test)]
+mod signbits_tests;
+pub mod underlying;
+
+#[cfg(test)]
+mod nonzero_tests;
+#[cfg(test)]
+mod power2_tests;
+
+pub use query::{AssumptionCache, CondContext, DomConditionCache, FunctionAnalyses, Query};
+
+#[cfg(test)]
+mod range_tests;
+
+#[cfg(test)]
+mod known_tests;
+
+/// One column of `examples/vtdump.rs`: ` name=answer`.
+pub fn column(
+    query: &Query,
+    value: Operand,
+    name: &str,
+) -> String {
+    match name {
+        "kb" => known::column(query, value),
+        "nn" => known::column_non_negative(query, value),
+        "ng" => known::column_negative(query, value),
+        "sb" => signbits::column(query, value),
+        "nz" => nonzero::column(query, value),
+        "p2" => power2::column(query, value, false),
+        "p2z" => power2::column(query, value, true),
+        "cru" => range::column(query, value, false),
+        "crs" => range::column(query, value, true),
+        "gp" => guarantee::column(query, value),
+        "pat" => range::pattern_column(query, value),
+        "ov" => range::overflow_column(query, value),
+        other => format!(" {other}=?"),
+    }
+}
+
 /// Where each bit of a shift's or width change's result comes from: result bit
 /// `i` is operand bit `i + offset`, and a result bit with no such operand bit
 /// is a copy of the sign (`Fill::Sign`) or zero. One table, read forward by
@@ -424,6 +482,33 @@ pub fn underlying(
     function: &Function,
     pointer: Operand,
 ) -> (Operand, Option<i64>) {
+    strip_offsets(context, layout, function, pointer, false)
+}
+
+/// `GetPointerBaseWithConstantOffset`
+/// ([ValueTracking.h:364](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ValueTracking.h#L364)),
+/// over `stripAndAccumulateConstantOffsets`
+/// ([Value.cpp:732](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L732)):
+/// `pointer` less every GEP with only constant indices and every address
+/// space cast, and the bytes those added. A GEP with a variable index is the
+/// base, where `underlying` goes on through it.
+pub fn pointer_base_with_constant_offset(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    pointer: Operand,
+) -> (Operand, i64) {
+    let (base, offset) = strip_offsets(context, layout, function, pointer, true);
+    (base, offset.expect("a stop at a variable index leaves a constant offset"))
+}
+
+fn strip_offsets(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    pointer: Operand,
+    stop_at_variable: bool,
+) -> (Operand, Option<i64>) {
     let int = |one: Operand| match one {
         Operand::Constant(id) => match context.get(id).kind {
             ConstantKind::Int(bits) => Some(signed(bits, context.types.int_bits(context.get(id).ty).unwrap_or(64))),
@@ -435,30 +520,47 @@ pub fn underlying(
     let mut offset = Some(0_i64);
     for _ in 0..DEPTH {
         // A GEP or an address-space cast, an instruction or a constant.
-        let (source, operands): (Option<TypeId>, Vec<Operand>) = match at {
+        let made: Vec<Operand>;
+        let (source, operands): (Option<TypeId>, &[Operand]) = match at {
             Operand::Value(value) => {
                 let ValueDef::Instruction(inst) = function.value(value).def else { break };
                 let instruction = function.instruction(inst);
                 match instruction.opcode {
-                    Opcode::GetElementPtr { source } => (Some(source), instruction.operands.clone()),
-                    Opcode::Cast(CastOp::AddrSpaceCast) => (None, instruction.operands.clone()),
+                    Opcode::GetElementPtr { source } => (Some(source), &instruction.operands),
+                    Opcode::Cast(CastOp::AddrSpaceCast) => (None, &instruction.operands),
                     _ => break,
                 }
             }
             Operand::Constant(id) => match &context.get(id).kind {
                 ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => {
-                    (Some(*source), operands.iter().map(|&one| Operand::Constant(one)).collect())
+                    made = operands.iter().map(|&one| Operand::Constant(one)).collect();
+                    (Some(*source), &made)
                 }
                 ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) => {
-                    (None, vec![Operand::Constant(*value)])
+                    made = vec![Operand::Constant(*value)];
+                    (None, &made)
                 }
                 _ => break,
             },
             Operand::Block(_) => break,
         };
         if let Some(source) = source {
-            let indices: Vec<Option<i128>> = operands[1..].iter().map(|&one| int(one)).collect();
-            let (constant, variable) = layout.collect_offset(&context.types, source, &indices);
+            // Most GEPs have a few indices: no allocation for them.
+            let mut small = [None; 4];
+            let spill: Vec<Option<i128>>;
+            let indices: &[Option<i128>] = if operands.len() - 1 <= small.len() {
+                for (slot, &one) in small.iter_mut().zip(&operands[1..]) {
+                    *slot = int(one);
+                }
+                &small[..operands.len() - 1]
+            } else {
+                spill = operands[1..].iter().map(|&one| int(one)).collect();
+                &spill
+            };
+            let (constant, variable) = layout.collect_offset(&context.types, source, indices);
+            if stop_at_variable && !variable.is_empty() {
+                break;
+            }
             offset = offset.filter(|_| variable.is_empty()).map(|one| one + constant as i64);
         }
         at = operands[0];

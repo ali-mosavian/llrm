@@ -82,7 +82,7 @@
 //! `fixed_provenance`, the bucket functions, `displaced_span`, `Index`.
 //! Consumers: [`crate::alias`], [`crate::memoryssa`], [`crate::avail`],
 //! [`crate::consts`], [`crate::floatfacts`], [`crate::cellmap`], and in
-//! llrm-transforms `promote`, `transform`, `homes`, `loopmotion`, `fill`,
+//! llrm-transforms `promote`, `transform`, `homes`, `loopmotion`, `loopidioms`,
 //! `floatloop`.
 //!
 //! # Needs

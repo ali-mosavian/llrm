@@ -207,9 +207,9 @@ fn test_dominance_of_a_body_laid_out_against_its_flow_is_not_quadratic() {
     assert!(found.dominates(0, 4000) && found.dominates(1500, 2000) && !found.dominates(2000, 1500));
     let steps = |n: usize| {
         let blocks = reversed_body(n as i64);
-        let before = llrm_support::graph::dominance_work();
-        drop(llrm_support::graph::dominance(&blocks, Some(0)));
-        llrm_support::graph::dominance_work() - before
+        let before = llrm_mir::domtree::work();
+        drop(dominance(&blocks, Some(0)));
+        llrm_mir::domtree::work() - before
     };
     assert!(grows_linearly(steps), "{} steps for 2,000 blocks, {} for 8,000", steps(2000), steps(8000));
 }
