@@ -321,3 +321,21 @@ fn a_wide_divide_is_bounded_not_a_round_per_bit() {
         assert!(steps < 160, "{} took {steps} instructions", routine.name);
     }
 }
+
+/// The huge string routines assemble for real mode, end where they began (`ds`
+/// and the direction flag are kept), and carry their loops' labels inside their
+/// own bytes.
+#[test]
+fn test_the_huge_string_routines_assemble() {
+    for routine in [
+        huge_fill(1).unwrap(),
+        huge_fill(2).unwrap(),
+        huge_fill(4).unwrap(),
+        huge_copy(false).unwrap(),
+        huge_copy(true).unwrap(),
+    ] {
+        assert!(routine.code.len() > 40 && routine.code.len() < 200, "{}: {} bytes", routine.name, routine.code.len());
+        assert!(routine.reads.contains(&RegId::ECX), "{}", routine.name);
+        assert!(routine.clobbers.contains(&RegId::ES), "{}", routine.name);
+    }
+}

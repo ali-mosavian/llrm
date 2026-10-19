@@ -701,13 +701,14 @@ pub fn check_phase_at(
     built: &[&str],
     level: Level,
 ) -> Result<(), String> {
-    check_phase_with(phase, built, level, true, true, crate::pipeline::Options::default().rotate_slot, &[])
+    check_phase_with(phase, built, level, true, true, crate::pipeline::Options::default().rotate_slot, &[], &[])
 }
 
 /// [`check_phase_at`] with the explicit off switches: the slots whose
 /// translation is `sroa.rs` are Old when `LLRM_NO_SROA` is set, those of
 /// `mem2reg.rs` when `LLRM_NO_MEM2REG` is, and the old stand-in is what runs;
-/// with `rotate` false (the default) the rotate slot is not run.
+/// with `rotate` false (the default) the rotate slot is not run. `off` are
+/// the slots an option switches off, which are not required.
 pub(crate) fn check_phase_with(
     phase: Phase,
     built: &[&str],
@@ -715,9 +716,11 @@ pub(crate) fn check_phase_with(
     sroa: bool,
     mem2reg: bool,
     rotate: bool,
+    off: &[&str],
     held: &[(&str, Vec<&'static str>)],
 ) -> Result<(), String> {
-    let absent = if level == Level::O1 { ABSENT_AT_O1 } else { &[] };
+    let absent: Vec<&str> =
+        if level == Level::O1 { ABSENT_AT_O1.iter().chain(off).copied().collect() } else { off.to_vec() };
     // The translated `loop-rotate` is in the order only with `LLRM_ROTATE`.
     let registry: Vec<Entry> = REGISTRY
         .iter()
@@ -728,7 +731,7 @@ pub(crate) fn check_phase_with(
             Entry { kind: if off { Old } else { one.kind }, ..*one }
         })
         .collect();
-    check_without(&registry, phase, built, absent)?;
+    check_without(&registry, phase, built, &absent)?;
     check_old_slots(&registry, held)?;
     llrm_mir::counts::joined(joined_slots(&registry, built));
     Ok(())

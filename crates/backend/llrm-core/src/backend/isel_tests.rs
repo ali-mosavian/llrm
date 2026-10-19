@@ -875,6 +875,34 @@ define i16 @f() addrspace(1) {
     assert!(!listing(text, "f").iter().any(|one| one.starts_with("rep")), "{moves:?}");
 }
 
+/// A fill or copy through a huge pointer is the inline routine that ends each
+/// run where the offset wraps (`isel/huge.rs`), not one `rep` through es:di,
+/// which wraps at 64K: an 80000-byte fill of a huge array was `rep stosd` of
+/// 20000 dwords from offset 0. A near operand beside a huge one is its offset
+/// and DGROUP.
+#[test]
+fn test_a_fill_or_copy_through_a_huge_pointer_is_the_run_splitting_routine() {
+    let fill = "declare void @llvm.memset.p3.i32(ptr addrspace(3), i8, i32, i1)
+define void @f(ptr addrspace(3) %p, i32 %n) addrspace(1) {
+  call void @llvm.memset.p3.i32(ptr addrspace(3) %p, i8 7, i32 80000, i1 false)
+  call void @llvm.memset.p3.i32(ptr addrspace(3) %p, i8 7, i32 %n, i1 false)
+  ret void
+}
+";
+    let copy = "declare void @llvm.memcpy.p3.p0.i32(ptr addrspace(3), ptr, i32, i1)
+define void @f(ptr addrspace(3) %p) addrspace(1) {
+  %a = alloca [64 x i8]
+  call void @llvm.memcpy.p3.p0.i32(ptr addrspace(3) %p, ptr %a, i32 70000, i1 false)
+  ret void
+}
+";
+    for text in [fill, copy] {
+        let lines = listing(text, "f");
+        assert!(lines.iter().any(|one| one.starts_with("db ")), "the routine's bytes: {lines:?}");
+        assert!(!lines.iter().any(|one| one.starts_with("rep")), "no rep through es:di: {lines:?}");
+    }
+}
+
 /// A pattern fill of a word or dword is `rep stosw` or `rep stosd` of its
 /// cells; two cells are stores. Its count in cells is never doubled.
 #[test]
@@ -5938,6 +5966,21 @@ define i16 @f() addrspace(1) {
     assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
 }
 
+/// `ptrtoint` of a far global's GEP to a word is its offset: `at < messages +
+/// sizeof messages` (runtime/qb/error.c at -O2) was refused, "an address of no
+/// global".
+#[test]
+fn test_ptrtoint_of_a_far_global_to_a_word_is_its_offset() {
+    let text = "@messages = internal addrspace(1) global [8 x i8] zeroinitializer
+define i1 @f(i16 %x) addrspace(1) {
+  %c = icmp ult i16 %x, ptrtoint (ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) @messages, i16 8) to i16)
+  ret i1 %c
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov ax, offset messages".to_owned()) && got.contains(&"add ax, 8".to_owned()), "{got:?}");
+}
+
 /// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
 /// address of no global": 13 llrm-qb tests failed to assemble a POKE.
 #[test]
@@ -5948,7 +5991,7 @@ fn test_a_gep_off_a_segment_constant_is_a_far_number() {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov bx, 1".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov al, byte ptr es:[1]".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
 }
 
 /// More constant-expression operands (alias/farstruct.c, textfill): the dword
@@ -6019,6 +6062,38 @@ b4:
     assert!(zero > test, "the zero is made before the test: {got:?}");
 }
 
+/// A store through a far constant whose offset half is zero (`POKE` into
+/// segment `&HA000`): the address is `es:[index]`. The offset was a register
+/// loaded with 0 (`xor bx, bx` every trip of qbdemo's loop) used as the base,
+/// which LLVM's `matchAddress` folds into the displacement.
+#[test]
+fn test_a_far_constant_with_a_zero_offset_is_no_base_register() {
+    let text = "define void @f(i16 %i) addrspace(1) {
+  %p = getelementptr i8, ptr addrspace(1) inttoptr (i32 -1610612736 to ptr addrspace(1)), i16 %i
+  store i8 1, ptr addrspace(1) %p
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.contains("40960")), "the premise: the selector is set: {got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("xor ") || line.ends_with(", 0")), "{got:?}");
+}
+
+/// A dword constant returned in a word pair: DX is its high word as a
+/// constant. It was a shift of the register that holds the whole
+/// (`mov edx, 42; shr edx, 16` for a high word of 0).
+#[test]
+fn test_a_dword_constant_returned_in_a_word_pair_is_a_word_each() {
+    let text = "define cc1000 i32 @f() addrspace(1) {
+  ret i32 70000
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line == "mov ax, 4464"), "the premise: the low word: {got:?}");
+    assert!(got.iter().any(|line| line == "mov dx, 1"), "the high word is its own constant: {got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("shr ")), "{got:?}");
+}
+
 /// A sum computed again in a block its first computation dominates is read
 /// from the first (MachineCSE); the second `add` was emitted.
 #[test]
@@ -6061,21 +6136,6 @@ entry:
     let got = listing(text, "f");
     let cdqs = got.iter().filter(|line| line.as_str() == "cdq").count();
     assert_eq!(cdqs, 2, "{got:?}");
-}
-
-/// A dword constant returned in a word pair: DX is its high word as a
-/// constant. It was a shift of the register that holds the whole
-/// (`mov edx, 42; shr edx, 16` for a high word of 0).
-#[test]
-fn test_a_dword_constant_returned_in_a_word_pair_is_a_word_each() {
-    let text = "define cc1000 i32 @f() addrspace(1) {
-  ret i32 70000
-}
-";
-    let got = listing(text, "f");
-    assert!(got.iter().any(|line| line == "mov ax, 4464"), "the premise: the low word: {got:?}");
-    assert!(got.iter().any(|line| line == "mov dx, 1"), "the high word is its own constant: {got:?}");
-    assert!(!got.iter().any(|line| line.starts_with("shr ")), "{got:?}");
 }
 
 /// An address with no register operand is made where it is read, not shared:
