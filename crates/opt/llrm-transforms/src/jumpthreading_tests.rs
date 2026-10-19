@@ -270,11 +270,11 @@ fn a_loop_whose_only_way_in_is_threaded_away_is_left_unreachable_as_opt_leaves_i
     assert!(after.contains("%c = add i32 %c, 1"), "{after}");
 }
 
-/// JumpThreading stage 1 ran away on datetime.c -Os (50 GB in 100 s) while on
-/// by default: unset, the pass is off.
+/// JumpThreading was off by default after the datetime.c runaway (#2736);
+/// the flip makes it on unless `LLRM_NO_JUMPTHREADING` is set.
 #[test]
-fn test_jumpthreading_is_off_unless_the_env_asks() {
-    assert_eq!(JumpThreading::from_env().enabled, std::env::var_os("LLRM_JUMPTHREADING").is_some());
+fn test_jumpthreading_is_on_unless_the_opt_out_is_set() {
+    assert_eq!(JumpThreading::from_env().enabled, std::env::var_os("LLRM_NO_JUMPTHREADING").is_none());
 }
 
 /// The limits were file constants, so a level or target could not set them;
