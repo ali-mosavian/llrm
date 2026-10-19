@@ -58,14 +58,15 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 5] = ["Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink"];
+const UNOPTIMIZED: [&str; 6] = ["Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink", "MachineSink"];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 18] = [
+const SLOTS: [(&str, &str); 19] = [
     ("FarIndirectCalls", "farcall@1"),
     ("SharedConstants", "phiconst@2"),
     ("SsaSpill", "ssaspill@3"),
     ("PhiElimination", "phielim@4"),
+    ("MachineSink", "machinesink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FloatFold", "floatfold@6"),
     ("FloatAssign", "floatassign@7"),
@@ -119,6 +120,8 @@ pub fn machine_with<'a>(
             prices: ssaspill::Prices::of(target),
             run: spilling.clone().unwrap_or_default(),
         }),
+        // On SSA, where a def with phi users alone can go to its edge.
+        Box::new(crate::backend::machinesink::MachineSink { size: target.size }),
         Box::new(phielim::PhiElimination { prices: phielim::EdgePrices::of(target) }),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
