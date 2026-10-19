@@ -1011,11 +1011,12 @@ define i16 @f() addrspace(1) {{
             "push di",
             "L0_0:",
             "lea di, [bp-8]",
+            // The segment is loaded from `ss` itself (MachineCopyPropagation):
+            // the same 16 instructions, the selector in a segment register from
+            // the start.
+            "mov es, ss",
             "mov eax, 16843009",
             "mov cx, 1",
-            // The segment is loaded from `ss` itself (MachineCopyPropagation),
-            // after the counts: the same 16 instructions as before.
-            "mov es, ss",
             "rep stosd",
             "stosw",
             "stosb",
