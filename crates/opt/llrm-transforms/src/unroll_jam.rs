@@ -115,6 +115,13 @@
 //! `-floop-unroll-and-jam`. Not run where one pass is selected by name. See
 //! `docs/reference/levels.md`.
 //!
+//! The pin's default pipeline never jams: `enable-unroll-and-jam` is false
+//! ([`PassBuilderPipelines.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L222)),
+//! so this pass is gcc's, not a translation. Were it enabled, the pin runs
+//! SimplifyCFG with hoisting and sinking (L1438) before it (L1474); llrm runs
+//! the jam first, because the matcher needs the nest as it was before that
+//! rewrite. Exit: the matcher accepts the L1438 form; no date.
+//!
 //! # Needs
 //! `induction` (trip counts), `dependence`, `Registers` (`llrm_analysis`);
 //! [`crate::loopclone`] (`chained`).

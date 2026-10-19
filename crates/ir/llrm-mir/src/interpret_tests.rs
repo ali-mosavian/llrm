@@ -257,6 +257,26 @@ fn bit_count_intrinsics_count_what_the_machine_integers_do() {
     }
 }
 
+/// `llvm.scmp` and `llvm.ucmp` give -1, 0 or 1 at the result's width, comparing
+/// as signed or unsigned integers.
+#[test]
+fn compare_intrinsics_give_minus_one_zero_or_one() {
+    let call = |name: &str, a: u8, b: u8| {
+        result(&format!(
+            "declare i8 @llvm.{name}.i8.i8(i8, i8)\n\
+             define i8 @f() {{\n  %r = call i8 @llvm.{name}.i8.i8(i8 {a}, i8 {b})\n  ret i8 %r\n}}\n"
+        ))
+    };
+    for a in [0_u8, 1, 5, 127, 128, 200, 255] {
+        for b in [0_u8, 1, 5, 127, 128, 200, 255] {
+            let signed = (a as i8).cmp(&(b as i8)) as i8 as u8;
+            let unsigned = a.cmp(&b) as i8 as u8;
+            assert_eq!(call("scmp", a, b), int(u128::from(signed), 8), "scmp {a} {b}");
+            assert_eq!(call("ucmp", a, b), int(u128::from(unsigned), 8), "ucmp {a} {b}");
+        }
+    }
+}
+
 #[test]
 fn near_memory_stays_below_64k_whatever_is_far() {
     // Globals were laid out in order, allocas after them, so a far array
