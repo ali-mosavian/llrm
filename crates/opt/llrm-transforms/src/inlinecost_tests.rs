@@ -233,3 +233,21 @@ fn the_x86_model_makes_a_scaled_address_and_a_narrow_trunc_free() {
     let target = priced_with(&trunc, 0, false, CallerSize::Speed, Some(&x86)).0;
     assert_eq!(generic - target, 5, "generic {generic}, x86 {target}");
 }
+
+#[test]
+fn test_a_decided_site_is_remarked_as_opt_remarks_it() {
+    let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0 };
+    assert_eq!(
+        crate::inlinecost::remark("_main@0", "_f@3", &priced, true),
+        "'_f@3' inlined into '_main@0' with (cost=40, threshold=225)"
+    );
+    let dear = InlineCost::Cost { cost: 300, threshold: 225, static_bonus: 0 };
+    assert_eq!(
+        crate::inlinecost::remark("g", "f", &dear, false),
+        "'f' not inlined into 'g' because too costly to inline (cost=300, threshold=225)"
+    );
+    assert_eq!(
+        crate::inlinecost::remark("g", "f", &priced, false),
+        "'f' not inlined into 'g' because the copy was not made (cost=40, threshold=225)"
+    );
+}
