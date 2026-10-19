@@ -1,83 +1,81 @@
-//! Loads and stores that copy adjacent bytes become one `llvm.memcpy` (LLVM's
-//! MemCpyOpt, which makes a call of the stores that copy a struct; gcc has no
-//! such pass and leaves them to the by-pieces expansion).
+//! MemCpyOpt on MemorySSA: LLVM's `MemCpyOptPass` apart from the memset
+//! merging of `processStore` and `processMemSet`, which
+//! [`crate::memcpyoptimizer`] does (stage 1). A translation of
+//! `MemCpyOptimizer.cpp` at d1106deb71cc.
 //!
 //! # How it works
-//! In each block, a pair is a non-volatile integer load whose only user is a
-//! non-volatile store of it in the same block, each at a constant offset from a
-//! root pointer. A run is the pairs of one source root and one destination root
-//! that tile adjacent bytes of both, the destination at the same distance from
-//! the source throughout. Pairs are taken in one walk of the block: any other
-//! instruction that touches memory, or a pair of other roots, ends the pairs
-//! open so far, so nothing stands between a run's first load and last store but
-//! work that touches no memory.
-//!
-//! The run is one `llvm.memcpy` of its bytes where its last store stood, when
-//! two things hold. The alias owner (`regions::overlapping`, over the
-//! references `Unit::annotated` gives) says no source cell and destination cell
-//! of the run can meet, so the order of its loads and stores does not matter.
-//! And it is cheaper: the pairs' loads and stores against what the same
-//! `length` costs (`loopidioms::copy_price`: the loads and stores isel makes of
-//! a short copy, else `rep movs`). Four byte pairs are one dword pair, which is
-//! a gain; two dword pairs are what isel makes of the copy, which is none.
+//! Each memcpy, memmove and aggregate store of a load is looked at in block
+//! order with the memory graph (`mssa`) kept right by the updater as
+//! instructions are made and erased. The clobber a memcpy's source or
+//! destination walks up to decides what it can become:
+//! - a copy to itself, or of no bytes, is gone; a copy out of a constant global
+//!   that repeats one byte is a memset;
+//! - a memcpy of a memcpy's destination copies from that memcpy's source
+//!   instead (`processMemCpyMemCpyDependence`);
+//! - a memcpy right after a memset of its destination: the memset shrinks to
+//!   what the copy leaves (`processMemSetMemCpyDependence`);
+//! - a memcpy of a memset's bytes is a memset (`performMemCpyToMemSetOptzn`);
+//! - a copy of memory nothing wrote (a fresh alloca) is gone
+//!   (`hasUndefContents`);
+//! - a memmove whose ranges cannot meet is a memcpy (`processMemMove`).
 //!
 //! ```text
-//!   %a = load i32, ptr %s            call memcpy(%d, %s, 40)
-//!   store i32 %a, ptr %d      ==>    (nine more pairs gone)
-//!   ... nine more pairs
+//!  call memcpy(%b, %a, 16)           call memcpy(%b, %a, 16)
+//!  call memcpy(%c, %b, 16)    ==>    call memcpy(%c, %a, 16)
 //! ```
 //!
-//! # Example
-//! Ten dword pairs, `d[i] = s[i]`, two globals:
-//!
-//! ```mir
-//! %a0 = load i32, ptr @s
-//! store i32 %a0, ptr @d
-//! %p1 = getelementptr i32, ptr @s, i32 1
-//! %a1 = load i32, ptr %p1
-//! ...
-//! ```
-//!
-//! becomes `call void @llvm.memcpy.p0.p0.i32(ptr @d, ptr @s, i32 40, i1
-//! false)`.
-//!
-//! From unit test `ten_dword_pairs_are_one_memcpy` in `memcpyopt_tests.rs`.
+//! # DEVIATEs
+//! 1. Alias questions are `mssa::alias`'s (llrm's reference model), not
+//!    BasicAA's, and there is no `EarliestEscapeAnalysis`: what it adds to
+//!    `BatchAAResults` is a capture query the reference model answers by the
+//!    object's exposure. Exit: none; the model is llrm's.
+//! 2. Nothing throws (no unwinding in MIR): `mayBeVisibleThroughUnwinding` is
+//!    false.
+//! 3. No debug-info assignment IDs (`mergeDIAssignID`), no `combineAAMetadata`
+//!    (the formed calls carry no `!tbaa`, as in `loopidiom`).
+//! 4. Done later (stages): `processStoreOfLoad` and `moveUp`,
+//!    `performCallSlotOptzn`, `performStackMoveOptzn`, `processByValArgument`
+//!    and `processImmutArgument`.
+//! 5. MIR holds no constant expression in code: where the builder folds
+//!    `getelementptr (i8, @g, 16)` the pass makes the instruction. A forced
+//!    inline copy (`llvm.memcpy.inline`) is not forwarded, as the builder's
+//!    `CreateMemCpyInline` has no counterpart here.
 //!
 //! # Runs
-//! After the function fixed point, beside `Merge` (no pass asks a memcpy what
-//! its destination holds, and `splitcopy` would split the memcpy of a local
-//! again). On and off with `-ftree-loop-distribute-patterns`, as `LoopIdioms`.
-//!
-//! # Needs
-//! `regions::overlapping` through `Unit::annotated`; the target's costs.
+//! In the slot of `memcpyopt@818`.
 //!
 //! # Keeps
 //! The blocks and edges: only instructions change.
 //!
 //! # See also
-//! [`crate::loopidioms`] owns `copy_price` and the loop that copies;
-//! [`crate::splitcopy`] is the opposite for a local.
+//! [`crate::memcpyoptimizer`], [`crate::deadstore`], the memory graph in
+//! `llrm_analysis::mssa`.
 
-use llrm_analysis::memory::{MemRef, Unit};
-use llrm_analysis::num::Num as BigInt;
-use llrm_analysis::regions;
+use std::rc::Rc;
+
+use llrm_analysis::cfg::Shape;
+use llrm_analysis::memory::{MemRef, Unit as View};
+use llrm_analysis::memoryssa::Accesses;
+use llrm_analysis::mssa::alias::{AliasQuery, Location};
+use llrm_analysis::mssa::updater::MemorySsaUpdater;
+use llrm_analysis::mssa::{AccessId, Kind, Mssa};
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::edit::Position;
-use llrm_mir::memory::{self, Effects};
-use llrm_mir::module::{Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{CallInfo, Flags, Opcode};
-use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, PreservedAnalyses};
+use llrm_mir::dense::IdMap;
+use llrm_mir::domtree::DomTree;
+use llrm_mir::intrinsics::Intrinsic;
+use llrm_mir::module::{Function, GlobalKind, InstId, Operand};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::passes::{Analyses, Declared, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
+use llrm_mir::types::TypeId;
+use llrm_mir::valuetracking::bytewise::{Byte, is_bytewise_value};
+use llrm_mir::valuetracking::nonzero::{get_pointer_offset_from, is_known_non_zero};
+use llrm_mir::valuetracking::{Query, underlying::get_underlying_object};
 
-use crate::counting;
-use crate::loopidioms::{_copy, How, copy_price};
+use crate::licm::apply::{Created, Graph};
+use crate::loopidiom::build::{Copy, create_mem_copy, create_mem_set};
 
-/// Pairs one run may take: each is checked against every other's.
-const MAX_PAIRS: usize = 64;
-
-pub struct MemCpyOpt {
-    pub size: bool,
-}
+pub struct MemCpyOpt;
 
 impl FunctionPass for MemCpyOpt {
     fn name(&self) -> &'static str {
@@ -86,235 +84,1051 @@ impl FunctionPass for MemCpyOpt {
 
     fn run(
         &mut self,
-        unit: &mut passes::Unit,
+        unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        if merged(unit, analyses, self.size) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
-    }
-}
-
-/// A load and the store of its value.
-#[derive(Clone)]
-struct Pair {
-    load: InstId,
-    store: InstId,
-    from: MemRef,
-    to: MemRef,
-    bytes: i64,
-}
-
-/// Pairs of one source root and one destination root.
-fn same_roots(
-    one: &Pair,
-    other: &Pair,
-) -> bool {
-    one.from.root == other.from.root
-        && one.to.root == other.to.root
-        && one.from.space == other.from.space
-        && one.to.space == other.to.space
-}
-
-/// `function` with each run of pairs made one memcpy where it pays; whether
-/// any was.
-pub fn merged(
-    body: &mut passes::Unit,
-    analyses: &mut Analyses,
-    size: bool,
-) -> bool {
-    let registers = analyses.get::<llrm_analysis::manager::Registers>(body.context, body.layout, body.function);
-    let outer = analyses.outer();
-    let callees = outer.callees();
-    let (context, layout, function, declared) =
-        (&mut *body.context, body.layout, &mut *body.function, &mut *body.declared);
-    let shape = llrm_analysis::cfg::Shape::of(function);
-    let runs = {
-        let unit = Unit::within(context, layout, function, outer).with_shape(&shape).with_registers(&registers);
-        let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
-        let mut found: Vec<Vec<Pair>> = Vec::new();
-        let mut close = |open: &mut Vec<Pair>| {
-            let taken = std::mem::take(open);
-            if taken.len() >= 2 {
-                found.extend(_runs(taken));
+        let outer = Rc::clone(analyses.outer());
+        let shape = analyses.get::<Shape>(&*unit.context, unit.layout, &*unit.function);
+        let registers = analyses.get::<llrm_analysis::manager::Registers>(&*unit.context, unit.layout, &*unit.function);
+        let dt = analyses.get::<Dominators>(&*unit.context, unit.layout, &*unit.function);
+        let pointers = analyses.get::<llrm_analysis::manager::Pointers>(&*unit.context, unit.layout, &*unit.function);
+        let held = analyses.get::<llrm_analysis::manager::MemorySsa>(&*unit.context, unit.layout, &*unit.function);
+        let (mssa, accesses) = match &*held {
+            Ok(held) => (held.mssa.clone(), (*held.accesses).clone()),
+            Err(_) => {
+                let memory = View::within(&*unit.context, unit.layout, &*unit.function, &outer)
+                    .with_registers(&registers)
+                    .with_shape(&shape);
+                llrm_analysis::mssa::shadow::translated(&memory)
             }
         };
-        for block in function.layout() {
-            let mut pending: Vec<(InstId, MemRef, i64)> = Vec::new();
-            let mut open: Vec<Pair> = Vec::new();
-            for inst in function.iter_block(*block) {
-                if let Some(pending_load) = _load(&unit, inst) {
-                    pending.push(pending_load);
-                } else if let Some((load, from, bytes)) = _paired(&unit, inst, &pending) {
-                    let to = MemRef::at(&unit, function.instruction(inst).operands[1], bytes as u32);
-                    let pair = Pair { load, store: inst, from, to, bytes };
-                    // A pair of other roots is memory work between the run's
-                    // loads and stores.
-                    if open.first().is_some_and(|first| !same_roots(first, &pair)) {
-                        close(&mut open);
-                        pending.clear();
-                    } else {
-                        open.push(pair);
-                    }
-                } else if memory::of(unit.context, callees, function, inst) != Effects::NONE {
-                    close(&mut open);
-                    pending.clear();
-                }
-            }
-            close(&mut open);
+        let mut state = State {
+            context: &mut *unit.context,
+            layout: unit.layout,
+            function: &mut *unit.function,
+            declared: &mut *unit.declared,
+            metadata: unit.metadata,
+            outer,
+            shape,
+            registers,
+            pointers,
+            dt,
+            mssa,
+            accesses,
+            updater: MemorySsaUpdater::new(),
+        };
+        if state.run_impl() {
+            PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+        } else {
+            PreservedAnalyses::all()
         }
-        let mut kept = Vec::new();
-        let mut references = None;
-        for run in found {
-            if !_pays(&costs, &run) {
+    }
+}
+
+/// The kind of memory intrinsic a call is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Kind3 {
+    Set,
+    Copy,
+    Move,
+}
+
+/// A `MemIntrinsic`: `llvm.memset`, `llvm.memcpy` or `llvm.memmove`.
+#[derive(Clone, Copy, Debug)]
+struct Mem {
+    inst: InstId,
+    kind: Kind3,
+    /// `getRawDest`.
+    dest: Operand,
+    /// `getRawSource` of a transfer, `getValue` of a set.
+    other: Operand,
+    length: Operand,
+    volatile: bool,
+    /// `llvm.memcpy.inline`.
+    force_inlined: bool,
+}
+
+struct State<'a> {
+    context: &'a mut Context,
+    layout: &'a DataLayout,
+    function: &'a mut Function,
+    declared: &'a mut Declared,
+    metadata: &'a [llrm_mir::module::MetadataNode],
+    outer: Rc<Outer>,
+    shape: Rc<Shape>,
+    registers: Rc<<llrm_analysis::manager::Registers as llrm_mir::passes::Analysis>::Result>,
+    pointers: Rc<<llrm_analysis::manager::Pointers as llrm_mir::passes::Analysis>::Result>,
+    dt: Rc<DomTree>,
+    mssa: Mssa,
+    accesses: Accesses,
+    updater: MemorySsaUpdater,
+}
+
+/// The graph handle of `$state`, over its fields (so the rest stay borrowable).
+macro_rules! graph {
+    ($state:expr) => {
+        Graph {
+            mssa: &mut $state.mssa,
+            accesses: &mut $state.accesses,
+            updater: &mut $state.updater,
+            outer: &$state.outer,
+            layout: $state.layout,
+            last_store: IdMap::new(),
+        }
+    };
+}
+
+impl State<'_> {
+    fn query(&self) -> Query<'_> {
+        Query {
+            context: &*self.context,
+            globals: &self.outer.globals,
+            metadata: self.metadata,
+            function: &*self.function,
+            layout: self.layout,
+            dt: None,
+            assumptions: None,
+            dom_conditions: None,
+            cond_context: None,
+            cxt: None,
+        }
+    }
+
+    /// The view the alias model reads the function through.
+    fn view(&self) -> View<'_> {
+        let view = View::within(&*self.context, self.layout, &*self.function, &self.outer)
+            .with_registers(&self.registers)
+            .with_shape(&self.shape);
+        match &*self.pointers {
+            Ok(pointers) => view.with_pointers(pointers),
+            Err(_) => view,
+        }
+    }
+
+    /// `width` bytes at `pointer`, with the objects the pointer reaches.
+    fn reference_at(
+        &self,
+        unit: &View,
+        pointer: Operand,
+        width: u32,
+    ) -> MemRef {
+        let mut reference = MemRef::at(unit, pointer, width);
+        if let Ok(pointers) = unit.pointers() {
+            reference.provenance = llrm_analysis::alias::Resolves::reference(&*pointers, unit, &reference);
+        }
+        reference
+    }
+
+    /// The memory intrinsic `inst` is, if it is one.
+    fn mem(
+        &self,
+        inst: InstId,
+    ) -> Option<Mem> {
+        let instruction = self.function.instruction(inst);
+        let Opcode::Call(_) = instruction.opcode else { return None };
+        let callee = llrm_mir::memory::callee(self.context, self.function, inst)?;
+        let global = self.outer.globals.get(callee.0 as usize)?;
+        let name = global.name.as_deref()?;
+        let kind = match Intrinsic::named(name)? {
+            Intrinsic::MemSet => Kind3::Set,
+            Intrinsic::MemCpy => Kind3::Copy,
+            Intrinsic::MemMove => Kind3::Move,
+            _ => return None,
+        };
+        let operands = &instruction.operands;
+        if operands.len() != 5 {
+            return None;
+        }
+        let volatile = self.query().int_constant(operands[3]).is_some_and(|(bits, _)| bits != 0);
+        Some(Mem {
+            inst,
+            kind,
+            dest: operands[0],
+            other: operands[1],
+            length: operands[2],
+            volatile,
+            force_inlined: name.starts_with("llvm.memcpy.inline"),
+        })
+    }
+
+    /// `ConstantInt` length of a memory intrinsic.
+    fn constant_length(
+        &self,
+        length: Operand,
+    ) -> Option<u64> {
+        llrm_mir::intrinsics::length(self.context, length)
+    }
+
+    // ---- locations ---------------------------------------------------------
+
+    /// `MemoryLocation::getForDest(M)`: the bytes a memory intrinsic writes.
+    fn dest_location(
+        &self,
+        aa: &AliasQuery,
+        mem: &Mem,
+    ) -> Option<Rc<Location>> {
+        let width = self.constant_length(mem.length).and_then(|bytes| u32::try_from(bytes).ok());
+        let reference = self.reference_at(aa.unit(), mem.dest, width.unwrap_or(1));
+        Some(aa.location_for(&reference, width.is_none()))
+    }
+
+    /// `MemoryLocation::getForSource(M)`: the bytes a transfer reads.
+    fn source_location(
+        &self,
+        aa: &AliasQuery,
+        mem: &Mem,
+    ) -> Option<Rc<Location>> {
+        let width = self.constant_length(mem.length).and_then(|bytes| u32::try_from(bytes).ok());
+        let reference = self.reference_at(aa.unit(), mem.other, width.unwrap_or(1));
+        Some(aa.location_for(&reference, width.is_none()))
+    }
+
+    // ---- the graph ---------------------------------------------------------
+
+    /// `eraseInstruction`: the access goes, then the instruction.
+    fn erase_instruction(
+        &mut self,
+        inst: InstId,
+    ) {
+        graph!(self).erase(&*self.function, inst);
+        self.function.erase(inst).unwrap_or_else(|error| panic!("memcpyopt: {error}"));
+    }
+
+    /// `createMemoryAccessAfter` / `Before` and `insertDef`.
+    fn insert_def(
+        &mut self,
+        inst: InstId,
+        at: Created,
+        rename_uses: bool,
+    ) {
+        let block = self.function.parent(inst).expect("a placed instruction");
+        graph!(self).created_renaming(&*self.context, &*self.function, inst, block, at, rename_uses);
+    }
+
+    // ---- the checks on the graph -------------------------------------------
+
+    /// `accessedBetween`: whether any instruction strictly between `start` and
+    /// `end`, in one block, may read or write `loc`.
+    fn accessed_between(
+        &self,
+        aa: &AliasQuery,
+        loc: &Location,
+        start: AccessId,
+        end: AccessId,
+    ) -> bool {
+        let block = self.mssa.access(start).block;
+        debug_assert_eq!(block, self.mssa.access(end).block, "Only local supported");
+        let list = self.mssa.get_block_accesses(block).expect("a placed access");
+        let from = list.iter().position(|&one| one == start).expect("a placed access") + 1;
+        let to = list.iter().position(|&one| one == end).expect("a placed access");
+        list[from..to]
+            .iter()
+            .any(
+                |&access| {
+                    let inst = self.mssa.access(access).inst.expect("a def or use has an instruction");
+                    aa.get_mod_ref_info(inst, loc).is_mod_or_ref()
+                },
+            )
+    }
+
+    // ---- the pass ----------------------------------------------------------
+
+    /// `runImpl`: the function walked until a walk changes nothing.
+    fn run_impl(&mut self) -> bool {
+        let mut made_change = false;
+        while self.iterate_on_function() {
+            made_change = true;
+        }
+        made_change
+    }
+
+    /// `iterateOnFunction`.
+    fn iterate_on_function(&mut self) -> bool {
+        let mut made_change = false;
+        for block in self.function.layout().to_vec() {
+            if !self.dt.is_reachable_from_entry(block) {
                 continue;
             }
-            let all = references.get_or_insert_with(|| unit.annotated().ok());
-            let apart = all
-                .as_ref()
-                .is_some_and(
-                    |all| run.iter().all(|reader| {
-                        run.iter().all(|writer| match (all.get(&reader.load), all.get(&writer.store)) {
-                            (Some(read), Some(written)) => {
-                                !regions::overlapping(read, written, None, None, unit.program).unwrap_or(true)
-                            }
-                            _ => false,
-                        })
-                    }),
-                );
-            if apart {
-                llrm_support::debug!(
-                    "memcpyopt",
-                    "{} pairs of {} bytes made one memcpy",
-                    run.len(),
-                    run.iter().map(|one| one.bytes).sum::<i64>()
-                );
-                kept.push(run);
+            let mut bi = self.function.block(block).first();
+            while let Some(inst) = bi {
+                bi = self.function.next_in_block(inst);
+                let mut repeat_instruction = false;
+                if let Some(mem) = self.mem(inst) {
+                    match mem.kind {
+                        // `processMemSet` is stage 1's.
+                        Kind3::Set => {}
+                        Kind3::Copy => repeat_instruction = self.process_memcpy(mem, &mut bi),
+                        Kind3::Move => repeat_instruction = self.process_memmove(mem, &mut bi),
+                    }
+                }
+                if repeat_instruction {
+                    // `--BI` when not at the beginning.
+                    bi = match bi {
+                        Some(next) => self.function.prev_in_block(next).or(Some(next)),
+                        None => self.function.block(block).last(),
+                    };
+                    made_change = true;
+                }
             }
         }
-        kept
-    };
-    for run in &runs {
-        _replaced(context, layout, function, declared, run);
+        made_change
     }
-    !runs.is_empty()
-}
 
-/// The load `inst` is, where its value has one user, and that a store in its
-/// block; its reference and bytes.
-fn _load(
-    unit: &Unit,
-    inst: InstId,
-) -> Option<(InstId, MemRef, i64)> {
-    let op = unit.function.instruction(inst);
-    let Opcode::Load { volatile: false, .. } = op.opcode else { return None };
-    let bits = unit.context.types.int_bits(op.ty)?;
-    let value = op.result?;
-    let only = unit.function.users(value).only()?;
-    let user = unit.function.instruction(only.user);
-    let stored = matches!(user.opcode, Opcode::Store { volatile: false, .. })
-        && only.index == 0
-        && unit.function.parent(only.user) == unit.function.parent(inst);
-    let from = MemRef::at(unit, op.operands[0], bits / 8);
-    (stored && bits % 8 == 0 && _plain(&from)).then_some((inst, from, i64::from(bits / 8)))
-}
+    /// `isZeroSize`.
+    fn is_zero_size(
+        &self,
+        size: Operand,
+    ) -> bool {
+        let size = match size {
+            Operand::Value(value) => match self.function.value(value).def {
+                llrm_mir::module::ValueDef::Instruction(inst) => {
+                    llrm_mir::simplify::simplify_instruction(self.context, self.layout, self.function, inst)
+                        .unwrap_or(size)
+                }
+                _ => size,
+            },
+            other => other,
+        };
+        let Operand::Constant(id) = size else { return false };
+        matches!(
+            self.context.get(id).kind,
+            ConstantKind::Undef | ConstantKind::Poison | ConstantKind::Zero
+        )
+            || matches!(self.context.get(id).kind, ConstantKind::Int(0))
+    }
 
-/// The pair the store `inst` completes, if the load it stores is one of the
-/// `pending`.
-fn _paired(
-    unit: &Unit,
-    inst: InstId,
-    pending: &[(InstId, MemRef, i64)],
-) -> Option<(InstId, MemRef, i64)> {
-    let op = unit.function.instruction(inst);
-    let Opcode::Store { volatile: false, .. } = op.opcode else { return None };
-    let Operand::Value(value) = op.operands[0] else { return None };
-    let ValueDef::Instruction(load) = unit.function.value(value).def else { return None };
-    let found = pending.iter().find(|one| one.0 == load)?;
-    let to = MemRef::at(unit, op.operands[1], found.2 as u32);
-    _plain(&to).then(|| found.clone())
-}
+    /// `hasUndefContents`: whether `def` leaves the bytes of `v` undefined.
+    fn has_undef_contents(
+        &self,
+        v: Operand,
+        def: AccessId,
+    ) -> bool {
+        let q = self.query();
+        let object = get_underlying_object(&q, v, 0);
+        let is_alloca = matches!(
+            object,
+            Operand::Value(value) if matches!(
+                self.function.value(value).def,
+                llrm_mir::module::ValueDef::Instruction(inst)
+                    if matches!(self.function.instruction(inst).opcode, Opcode::Alloca { .. })
+            )
+        );
+        if self.mssa.is_live_on_entry_def(def) {
+            return is_alloca;
+        }
+        if let Some(inst) = self.mssa.access(def).inst
+            && let Some(Intrinsic::LifetimeStart) = self.intrinsic_of(inst)
+            && is_alloca
+        {
+            return self.function.instruction(inst).operands[1] == object
+                || self.function.instruction(inst).operands[0] == object;
+        }
+        false
+    }
 
-/// A constant offset from a root, in a space a string move reaches.
-fn _plain(reference: &MemRef) -> bool {
-    reference.root.is_some() && reference.base.is_none() && reference.segment.is_none()
-}
+    /// The intrinsic `inst` calls.
+    fn intrinsic_of(
+        &self,
+        inst: InstId,
+    ) -> Option<Intrinsic> {
+        let callee = llrm_mir::memory::callee(self.context, self.function, inst)?;
+        let name = self.outer.globals.get(callee.0 as usize)?.name.as_deref()?;
+        Intrinsic::named(name)
+    }
 
-/// `open`'s maximal runs of two or more pairs that tile adjacent bytes of both
-/// sides at one distance, at most `MAX_PAIRS` each.
-fn _runs(mut open: Vec<Pair>) -> Vec<Vec<Pair>> {
-    open.sort_by_key(|one| one.from.disp);
-    let mut runs: Vec<Vec<Pair>> = Vec::new();
-    for pair in open {
-        let joins = runs
-            .last()
-            .and_then(|run| run.last())
-            .is_some_and(
-                |last| last.from.disp + last.bytes == pair.from.disp
-                    && last.to.disp + last.bytes == pair.to.disp
-                    && runs.last().is_some_and(|run| run.len() < MAX_PAIRS),
+    /// `overreadUndefContents`: whether the bytes `memcpy` reads past what
+    /// `mem_src` wrote are undefined.
+    fn overread_undef_contents(
+        &self,
+        aa: &AliasQuery,
+        memcpy: &Mem,
+        mem_src: &Mem,
+    ) -> bool {
+        let Some(loc) = self.source_location(aa, memcpy) else { return false };
+        let Some(src_access) = self.mssa.get_memory_access(mem_src.inst) else { return false };
+        let defining = self.mssa.access(src_access).defining.expect("a defining access");
+        let mut limit = llrm_analysis::mssa::walker::MAX_CHECK_LIMIT;
+        let clobber = self.mssa.get_clobbering_memory_access_for_location(aa, defining, &loc, &mut limit);
+        self.mssa.access(clobber).kind == Kind::Def && self.has_undef_contents(memcpy.other, clobber)
+    }
+
+    /// `processMemCpy`.
+    fn process_memcpy(
+        &mut self,
+        m: Mem,
+        bbi: &mut Option<InstId>,
+    ) -> bool {
+        // We can only optimize non-volatile memcpy's.
+        if m.volatile {
+            return false;
+        }
+        // If the source and destination of the memcpy are the same, then zap
+        // it.
+        if m.other == m.dest {
+            *bbi = bbi.and_then(|next| self.function.next_in_block(next));
+            self.erase_instruction(m.inst);
+            return true;
+        }
+        // If the size is zero, remove the memcpy.
+        if self.is_zero_size(m.length) {
+            *bbi = bbi.and_then(|next| self.function.next_in_block(next));
+            self.erase_instruction(m.inst);
+            return true;
+        }
+        let Some(ma) = self.mssa.get_memory_access(m.inst) else { return false };
+
+        // If copying from a constant, try to turn the memcpy into a memset.
+        let source_object = get_underlying_object(&self.query(), m.other, 0);
+        if let Operand::Constant(id) = source_object
+            && let ConstantKind::Global(global) = self.context.get(id).kind
+            && let Some(GlobalKind::Variable(variable)) = self.outer.globals.get(global.0 as usize).map(|g| &g.kind)
+            && variable.constant
+            && let Some(initializer) = variable.initializer
+            && let Some(byte) = is_bytewise_value(&self.query(), Operand::Constant(initializer))
+        {
+            let value = self.byte_operand(byte);
+            let align = self.align_of(m.inst, 0);
+            let new_m = create_mem_set(
+                &mut *self.context,
+                &mut *self.declared,
+                &mut *self.function,
+                m.inst,
+                m.dest,
+                value,
+                m.length,
+                align,
             );
-        if joins {
-            runs.last_mut().expect("a run").push(pair);
-        } else {
-            runs.push(vec![pair]);
+            // The memset takes the memcpy's place in the graph.
+            self.insert_def(new_m, Created::After(ma), true);
+            self.erase_instruction(m.inst);
+            return true;
+        }
+
+        let any_clobber = self.mssa.access(ma).defining.expect("a defining access");
+        let (dest_clobber, source_clobber) = {
+            let view = self.view();
+            let aa = AliasQuery::new(&view, &self.accesses);
+            let mut limit = llrm_analysis::mssa::walker::MAX_CHECK_LIMIT;
+            let dest = self
+                .dest_location(&aa, &m)
+                .map(|loc| self.mssa.get_clobbering_memory_access_for_location(&aa, any_clobber, &loc, &mut limit));
+            let source = self
+                .source_location(&aa, &m)
+                .map(|loc| self.mssa.get_clobbering_memory_access_for_location(&aa, any_clobber, &loc, &mut limit));
+            (dest, source)
+        };
+        if let Some(clobber) = dest_clobber
+            && self.mssa.access(clobber).kind == Kind::Def
+            && let Some(inst) = self.mssa.access(clobber).inst
+            && let Some(memset) = self.mem(inst).filter(|one| one.kind == Kind3::Set)
+            && self.mssa.access(clobber).block == self.function.parent(m.inst).expect("a placed memcpy")
+            && self.process_memset_memcpy_dependence(&m, &memset)
+        {
+            return true;
+        }
+        if let Some(clobber) = source_clobber
+            && self.mssa.access(clobber).kind == Kind::Def
+        {
+            if let Some(inst) = self.mssa.access(clobber).inst {
+                if let Some(dependence) = self.mem(inst) {
+                    if dependence.kind == Kind3::Copy && self.process_memcpy_memcpy_dependence(&m, &dependence) {
+                        return true;
+                    }
+                    if dependence.kind == Kind3::Set && self.perform_memcpy_to_memset_optzn(&m, &dependence) {
+                        // Converted memcpy to memset.
+                        self.erase_instruction(m.inst);
+                        return true;
+                    }
+                }
+            }
+            if self.has_undef_contents(m.other, clobber) {
+                // Removed memcpy from undef.
+                self.erase_instruction(m.inst);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// `isMustAlias(V1, V2)`: the same address, as one byte each.
+    fn must_alias(
+        &self,
+        aa: &AliasQuery,
+        one: Operand,
+        other: Operand,
+    ) -> bool {
+        let unit = aa.unit();
+        let (a, b) = (
+            aa.location_for(&self.reference_at(unit, one, 1), false),
+            aa.location_for(&self.reference_at(unit, other, 1), false),
+        );
+        aa.alias(&a, &b) == llrm_analysis::mssa::alias::AliasResult::Must
+    }
+
+    /// `processMemSetMemCpyDependence`: `memcpy` follows a `memset` of the same
+    /// destination, and copies its tail over: the memset only needs to write
+    /// what the copy leaves.
+    fn process_memset_memcpy_dependence(
+        &mut self,
+        memcpy: &Mem,
+        memset: &Mem,
+    ) -> bool {
+        let (Some(memcpy_access), Some(memset_access)) =
+            (self.mssa.get_memory_access(memcpy.inst), self.mssa.get_memory_access(memset.inst))
+        else {
+            return false;
+        };
+        {
+            let view = self.view();
+            let aa = AliasQuery::new(&view, &self.accesses);
+            // We can only transform memset/memcpy with the same destination.
+            if !self.must_alias(&aa, memset.dest, memcpy.dest) {
+                return false;
+            }
+            // Don't perform the transform if src_size may be zero: the memset
+            // would have not been a dead store.
+            if memset.volatile || !is_known_non_zero(&self.query(), memcpy.length, 0) {
+                return false;
+            }
+            // Check that src and dst of the memcpy aren't the same. While
+            // memcpy requires them to not overlap, if they do, the memcpy is
+            // still ok to delete.
+            let Some(source) = self.source_location(&aa, memcpy) else { return false };
+            if aa.get_mod_ref_info(memcpy.inst, &source).is_mod() {
+                return false;
+            }
+            // Check that nothing touches the dest of the memset between the
+            // memset and the memcpy.
+            let Some(dest) = self.dest_location(&aa, memset) else { return false };
+            if self.accessed_between(&aa, &dest, memset_access, memcpy_access) {
+                return false;
+            }
+        }
+        // (No unwinding in MIR: `mayBeVisibleThroughUnwinding` is false.)
+        let (dest_size, src_size) = (memset.length, memcpy.length);
+        if dest_size == src_size {
+            // The memset is dead: the memcpy overwrites all of it.
+            self.erase_instruction(memset.inst);
+            return true;
+        }
+        let dest_align = self.align_of(memset.inst, 0).unwrap_or(1).max(self.align_of(memcpy.inst, 0).unwrap_or(1));
+        let mut alignment = 1;
+        if dest_align > 1
+            && let Some(copy_bytes) = self.constant_length(src_size)
+        {
+            alignment = common_alignment(dest_align, copy_bytes);
+        }
+        let dest = memcpy.dest;
+        let (dest_size, src_size) = self.same_width(memcpy.inst, dest_size, src_size);
+        // Both known: the builder folds the arithmetic.
+        let (memset_len, tail) = match (self.constant_length_of(dest_size), self.constant_length_of(src_size)) {
+            (Some(dest_bytes), Some(src_bytes)) => {
+                let length = if dest_bytes <= src_bytes { 0 } else { dest_bytes - src_bytes };
+                let ty = self.function.operand_type(self.context, dest_size).expect("a typed length");
+                (Operand::Constant(self.context.int(ty, i128::from(length))), src_size)
+            }
+            _ => {
+                let ty = self.function.operand_type(self.context, dest_size).expect("a typed length");
+                let i1 = self.context.types.int(1);
+                let ule = self.insert_before(
+                    memcpy.inst,
+                    Opcode::ICmp(IntPredicate::Ule),
+                    i1,
+                    vec![dest_size, src_size],
+                    Flags::default(),
+                );
+                let diff = self.insert_before(
+                    memcpy.inst,
+                    Opcode::Binary(BinaryOp::Sub),
+                    ty,
+                    vec![dest_size, src_size],
+                    Flags::default(),
+                );
+                let zero = Operand::Constant(self.context.int(ty, 0));
+                let select =
+                    self.insert_before(memcpy.inst, Opcode::Select, ty, vec![ule, zero, diff], Flags::default());
+                (select, src_size)
+            }
+        };
+        // `Builder.CreatePtrAdd(Dest, SrcSize)`.
+        let i8 = self.context.types.int(8);
+        let ptr_ty = self.function.operand_type(self.context, dest).expect("a typed pointer");
+        let tail_ptr = self.insert_before(
+            memcpy.inst,
+            Opcode::GetElementPtr { source: i8 },
+            ptr_ty,
+            vec![dest, tail],
+            Flags::default(),
+        );
+        let new_memset = create_mem_set(
+            &mut *self.context,
+            &mut *self.declared,
+            &mut *self.function,
+            memcpy.inst,
+            tail_ptr,
+            memset.other,
+            memset_len,
+            Some(alignment),
+        );
+        self.insert_def(new_memset, Created::Before(memcpy_access), true);
+        self.erase_instruction(memset.inst);
+        true
+    }
+
+    /// `ConstantInt` value of an operand.
+    fn constant_length_of(
+        &self,
+        length: Operand,
+    ) -> Option<u64> {
+        llrm_mir::intrinsics::length(self.context, length)
+    }
+
+    /// The two sizes at the wider of their widths, constants widened.
+    fn same_width(
+        &mut self,
+        before: InstId,
+        dest_size: Operand,
+        src_size: Operand,
+    ) -> (Operand, Operand) {
+        let width = |this: &Self, op: Operand| {
+            this.function.operand_type(this.context, op).and_then(|ty| this.context.types.int_bits(ty)).unwrap_or(0)
+        };
+        let (dest_bits, src_bits) = (width(self, dest_size), width(self, src_size));
+        if dest_bits == src_bits {
+            return (dest_size, src_size);
+        }
+        let to = dest_bits.max(src_bits);
+        let widen = |this: &mut Self, op: Operand, bits: u32| -> Operand {
+            if bits == to {
+                return op;
+            }
+            let ty = this.context.types.int(to);
+            if let Some(bytes) = this.constant_length_of(op) {
+                return Operand::Constant(this.context.int(ty, i128::from(bytes)));
+            }
+            this.insert_before(before, Opcode::Cast(CastOp::ZExt), ty, vec![op], Flags::default())
+        };
+        (widen(self, dest_size, dest_bits), widen(self, src_size, src_bits))
+    }
+
+    /// An instruction built before `at`, as the builder does.
+    fn insert_before(
+        &mut self,
+        at: InstId,
+        opcode: Opcode,
+        ty: TypeId,
+        operands: Vec<Operand>,
+        flags: Flags,
+    ) -> Operand {
+        let new = self.function.create_instruction(opcode, ty, operands, flags, None);
+        self.function.insert(new, llrm_mir::edit::Position::Before(at)).expect("a placed instruction");
+        Operand::Value(self.function.instruction(new).result.expect("an instruction with a value"))
+    }
+
+    /// `processMemCpyMemCpyDependence`: `m` copies what `mdep` copied: copy
+    /// from `mdep`'s source instead.
+    fn process_memcpy_memcpy_dependence(
+        &mut self,
+        m: &Mem,
+        mdep: &Mem,
+    ) -> bool {
+        // We can only optimize non-volatile memcpy's.
+        if mdep.volatile {
+            return false;
+        }
+        let (Some(m_access), Some(mdep_access)) =
+            (self.mssa.get_memory_access(m.inst), self.mssa.get_memory_access(mdep.inst))
+        else {
+            return false;
+        };
+        // What is copied: from `forward` bytes into what `mdep` wrote, `length`
+        // of them.
+        let Some((forward, copy_length)) = ({
+            let view = self.view();
+            let aa = AliasQuery::new(&view, &self.accesses);
+            self.forwarded_range(&aa, m, mdep)
+        }) else {
+            return false;
+        };
+
+        // The source the new copy reads: `mdep`'s, past `forward` bytes. The
+        // address is made before the checks and goes again if one fails
+        // (`NewCopySource` and its cleanup).
+        let mut copy_source = mdep.other;
+        let mut copy_source_align = self.align_of(mdep.inst, 1);
+        let mut new_copy_source: Option<InstId> = None;
+        if forward > 0 {
+            let m_dest_offset = get_pointer_offset_from(&self.query(), m.dest, mdep.other);
+            if m_dest_offset == Some(forward) {
+                copy_source = m.dest;
+            } else {
+                let i8 = self.context.types.int(8);
+                let i64_ty = self.context.types.int(64);
+                let ptr_ty = self.function.operand_type(self.context, mdep.other).expect("a typed pointer");
+                let offset = Operand::Constant(self.context.int(i64_ty, i128::from(forward)));
+                let made = self
+                    .function
+                    .create_instruction(
+                        Opcode::GetElementPtr { source: i8 },
+                        ptr_ty,
+                        vec![mdep.other, offset],
+                        Flags::INBOUNDS,
+                        None,
+                    );
+                self.function.insert(made, llrm_mir::edit::Position::Before(m.inst)).expect("a placed instruction");
+                new_copy_source = Some(made);
+                copy_source = Operand::Value(self.function.instruction(made).result.expect("an address"));
+            }
+            copy_source_align = copy_source_align.map(|align| common_alignment(align, forward as u64));
+        }
+        let cleanup = |this: &mut Self, made: Option<InstId>| {
+            if let Some(made) = made {
+                let result = this.function.instruction(made).result.expect("an address");
+                if this.function.users(result).is_empty() {
+                    this.function.erase(made).expect("an unused address");
+                }
+            }
+        };
+        let (written, must, modified) = {
+            let view = self.view();
+            let aa = AliasQuery::new(&view, &self.accesses);
+            let unit = aa.unit();
+            // The bytes read of MDep: its source, `forward` on, `copy_length`
+            // long.
+            let bytes = if copy_length == mdep.length {
+                self.constant_length(mdep.length).and_then(|bytes| u32::try_from(bytes).ok())
+            } else {
+                self.constant_length(copy_length).and_then(|bytes| u32::try_from(bytes).ok())
+            };
+            let reference = self.reference_at(unit, copy_source, bytes.unwrap_or(1));
+            let loc = aa.location_for(&reference, bytes.is_none());
+            let written = self.written_between_shared(&aa, &loc, mdep_access, m_access);
+            let must = self.must_alias(&aa, m.dest, copy_source);
+            let modified =
+                self.source_location(&aa, mdep).is_some_and(|source| aa.get_mod_ref_info(m.inst, &source).is_mod());
+            (written, must, modified)
+        };
+        if written {
+            cleanup(self, new_copy_source);
+            return false;
+        }
+        // If the dest of the second might alias the source of the first, then
+        // the source and dest might overlap. In addition, if the source of the
+        // first points to constant memory, they won't overlap by definition.
+        // Otherwise, we still do the transform, using a memmove.
+        if must {
+            self.erase_instruction(m.inst);
+            cleanup(self, new_copy_source);
+            return true;
+        }
+        let use_memmove = modified;
+        if use_memmove && m.force_inlined {
+            cleanup(self, new_copy_source);
+            return false;
+        }
+        // Forced-inline copies are not made again (DEVIATE 5).
+        if m.force_inlined {
+            cleanup(self, new_copy_source);
+            return false;
+        }
+        let how = if use_memmove { Copy::Memmove } else { Copy::Memcpy };
+        let dest_align = self.align_of(m.inst, 0);
+        let new_m = create_mem_copy(
+            &mut *self.context,
+            &mut *self.declared,
+            &mut *self.function,
+            m.inst,
+            how,
+            m.dest,
+            dest_align,
+            copy_source,
+            copy_source_align,
+            copy_length,
+        );
+        self.set_volatile(new_m, m.volatile);
+        self.insert_def(new_m, Created::After(m_access), true);
+        self.erase_instruction(m.inst);
+        true
+    }
+
+    /// The first half of `processMemCpyMemCpyDependence`: where in what `mdep`
+    /// wrote `m` copies from, and how much of it is there to copy.
+    fn forwarded_range(
+        &self,
+        aa: &AliasQuery,
+        m: &Mem,
+        mdep: &Mem,
+    ) -> Option<(i64, Operand)> {
+        // If dep instruction is reading from our current input, then it is a
+        // noop transfer and substituting the input won't change this
+        // instruction. Just ignore the input and let someone else zap MDep.
+        if self.must_alias(aa, mdep.dest, mdep.other) {
+            return None;
+        }
+        let mut forward = 0_i64;
+        if m.other != mdep.dest {
+            let offset = get_pointer_offset_from(&self.query(), m.other, mdep.dest)?;
+            if offset < 0 {
+                return None;
+            }
+            forward = offset;
+        }
+        let mut copy_length = m.length;
+        if forward != 0 || mdep.length != copy_length {
+            // The lengths must be constant to be compared.
+            let mdep_len = self.constant_length(mdep.length)?;
+            let m_len = self.constant_length(copy_length)?;
+            if mdep_len < m_len + forward as u64 {
+                // The copy reads past what MDep wrote: all right only where
+                // the extra bytes are undefined anyway.
+                if !self.overread_undef_contents(aa, m, mdep) {
+                    return None;
+                }
+                if mdep_len <= forward as u64 {
+                    return None; // Should not reach here (no aliasing).
+                }
+                let ty = self.function.operand_type(self.context, copy_length)?;
+                copy_length = Operand::Constant(self.context.int(ty, i128::from(mdep_len - forward as u64)));
+            }
+        }
+        Some((forward, copy_length))
+    }
+
+    /// `performMemCpyToMemSetOptzn`: `memcpy` reads bytes a `memset` wrote:
+    /// it becomes a memset of what it copies.
+    fn perform_memcpy_to_memset_optzn(
+        &mut self,
+        memcpy: &Mem,
+        memset: &Mem,
+    ) -> bool {
+        let memset_size = memset.length;
+        let mut copy_size = memcpy.length;
+        let mut m_offset = 0_i64;
+        if memcpy.other != memset.dest {
+            // Without a constant offset, don't know how the memcpy relates.
+            let Some(offset) = get_pointer_offset_from(&self.query(), memcpy.other, memset.dest) else { return false };
+            m_offset = offset;
+        }
+        if m_offset != 0 || memset_size != copy_size {
+            let (c_memset, c_copy) = (self.constant_length(memset_size), self.constant_length(copy_size));
+            let covered = matches!(
+                (c_memset, c_copy),
+                (Some(set), Some(copy)) if m_offset >= 0 && copy as i64 + m_offset <= set as i64
+            );
+            if !covered {
+                // The memcpy reads past what was set: all right where the
+                // memset's own bytes there are undefined.
+                let ok = {
+                    let view = self.view();
+                    let aa = AliasQuery::new(&view, &self.accesses);
+                    self.overread_undef_contents(&aa, memcpy, memset)
+                };
+                if !ok {
+                    return false;
+                }
+                if let (Some(set), Some(copy)) = (c_memset, c_copy) {
+                    let new_size = if m_offset < 0 {
+                        let offset = (-m_offset) as u64;
+                        copy.saturating_sub(offset)
+                    } else if m_offset == 0 {
+                        set
+                    } else {
+                        set.saturating_sub(m_offset as u64)
+                    };
+                    let ty = self.function.operand_type(self.context, copy_size).expect("a typed length");
+                    copy_size = Operand::Constant(self.context.int(ty, i128::from(new_size)));
+                } else if m_offset < 0 {
+                    return false;
+                }
+            }
+        }
+        let Some(memcpy_access) = self.mssa.get_memory_access(memcpy.inst) else { return false };
+        let mut dest_ptr = memcpy.dest;
+        let mut align = self.align_of(memcpy.inst, 0);
+        if m_offset < 0 {
+            let i8 = self.context.types.int(8);
+            let i64_ty = self.context.types.int(64);
+            let ptr_ty = self.function.operand_type(self.context, dest_ptr).expect("a typed pointer");
+            let offset = Operand::Constant(self.context.int(i64_ty, i128::from(-m_offset)));
+            dest_ptr = self.insert_before(
+                memcpy.inst,
+                Opcode::GetElementPtr { source: i8 },
+                ptr_ty,
+                vec![dest_ptr, offset],
+                Flags::default(),
+            );
+            align = align.map(|align| common_alignment(align, (-m_offset) as u64));
+        }
+        let new_m = create_mem_set(
+            &mut *self.context,
+            &mut *self.declared,
+            &mut *self.function,
+            memcpy.inst,
+            dest_ptr,
+            memset.other,
+            copy_size,
+            align,
+        );
+        self.insert_def(new_m, Created::After(memcpy_access), true);
+        true
+    }
+
+    /// `processMemMove`.
+    fn process_memmove(
+        &mut self,
+        m: Mem,
+        bbi: &mut Option<InstId>,
+    ) -> bool {
+        let overlaps = {
+            let view = self.view();
+            let aa = AliasQuery::new(&view, &self.accesses);
+            self.source_location(&aa, &m).is_none_or(|source| aa.get_mod_ref_info(m.inst, &source).is_mod())
+        };
+        if overlaps {
+            if !m.volatile && self.is_memmove_memset_dependency(&m) {
+                // Removed redundant memmove.
+                *bbi = bbi.and_then(|next| self.function.next_in_block(next));
+                self.erase_instruction(m.inst);
+                return true;
+            }
+            return false;
+        }
+        // Optimizing memmove -> memcpy: the call names the memcpy intrinsic.
+        let Opcode::Call(info) = self.function.instruction(m.inst).opcode.clone() else { return false };
+        let Some(callee) = llrm_mir::memory::callee(self.context, self.function, m.inst) else { return false };
+        let name = self.outer.globals[callee.0 as usize].name.clone().unwrap_or_default();
+        let renamed = name.replacen("llvm.memmove.", "llvm.memcpy.", 1);
+        let function_type = info.function_type;
+        let id = self.declared.declare(&renamed, function_type);
+        let ptr = self.context.types.ptr(0);
+        let callee = Operand::Constant(self.context.constant(Constant { ty: ptr, kind: ConstantKind::Global(id) }));
+        let last = self.function.instruction(m.inst).operands.len() - 1;
+        self.function.set_operand(m.inst, last, callee);
+        true
+    }
+
+    /// `isMemMoveMemSetDependency`: the memmove moves a memset's bytes onto
+    /// themselves.
+    fn is_memmove_memset_dependency(
+        &self,
+        m: &Mem,
+    ) -> bool {
+        let Some(access) = self.mssa.get_memory_access(m.inst) else { return false };
+        let Some(move_size) = self.constant_length(m.length) else { return false };
+        // The source is a constant offset of the destination.
+        let q = self.query();
+        let Some((_, source)) = q.instruction_of(m.other) else { return false };
+        if !matches!(source.opcode, Opcode::GetElementPtr { .. }) || source.operands[0] != m.dest {
+            return false;
+        }
+        let Some(offset) = get_pointer_offset_from(&q, m.other, m.dest).filter(|&offset| offset >= 0) else {
+            return false;
+        };
+        let view = self.view();
+        let aa = AliasQuery::new(&view, &self.accesses);
+        let total = u32::try_from(offset as u64 + move_size).ok();
+        let reference = self.reference_at(aa.unit(), m.dest, total.unwrap_or(1));
+        let combined = aa.location_for(&reference, total.is_none());
+        let first_def = self.mssa.access(access).defining.expect("a defining access");
+        let mut limit = llrm_analysis::mssa::walker::MAX_CHECK_LIMIT;
+        let clobber = self.mssa.get_clobbering_memory_access_for_location(&aa, first_def, &combined, &mut limit);
+        if self.mssa.access(clobber).kind != Kind::Def {
+            return false;
+        }
+        let Some(set) =
+            self.mssa.access(clobber).inst.and_then(|inst| self.mem(inst)).filter(|one| one.kind == Kind3::Set)
+        else {
+            return false;
+        };
+        let Some(set_length) = self.constant_length(set.length) else { return false };
+        if set_length < offset as u64 + move_size {
+            return false;
+        }
+        self.must_alias(&aa, set.dest, m.dest)
+    }
+
+    /// The volatile flag of a new memory intrinsic call.
+    fn set_volatile(
+        &mut self,
+        call: InstId,
+        volatile: bool,
+    ) {
+        if !volatile {
+            return;
+        }
+        let i1 = self.context.types.int(1);
+        let one = Operand::Constant(self.context.int(i1, 1));
+        self.function.set_operand(call, 3, one);
+    }
+
+    /// `writtenBetween`, asked of the shared graph (the walker's by-location
+    /// walk reads it only).
+    fn written_between_shared(
+        &self,
+        aa: &AliasQuery,
+        loc: &Rc<Location>,
+        start: AccessId,
+        end: AccessId,
+    ) -> bool {
+        if self.mssa.access(end).kind == Kind::Use {
+            let block = self.mssa.access(start).block;
+            if block != self.mssa.access(end).block {
+                return true;
+            }
+            let list = self.mssa.get_block_accesses(block).expect("a placed access");
+            let from = list.iter().position(|&one| one == start).expect("a placed access") + 1;
+            let to = list.iter().position(|&one| one == end).expect("a placed access");
+            return list[from..to]
+                .iter()
+                .any(
+                    |&access| {
+                        if self.mssa.access(access).kind == Kind::Use {
+                            return false;
+                        }
+                        let inst = self.mssa.access(access).inst.expect("a def has an instruction");
+                        aa.get_mod_ref_info(inst, loc).is_mod()
+                    },
+                );
+        }
+        let defining = self.mssa.access(end).defining.expect("a defining access");
+        let mut limit = llrm_analysis::mssa::walker::MAX_CHECK_LIMIT;
+        let clobber = self.mssa.get_clobbering_memory_access_for_location(aa, defining, loc, &mut limit);
+        !self.mssa.dominates(clobber, start)
+    }
+
+    /// `isBytewiseValue`'s byte as the operand a memset takes.
+    fn byte_operand(
+        &self,
+        byte: Byte,
+    ) -> Operand {
+        let i8 = self.context.types.int(8);
+        match byte {
+            Byte::Constant(bits) => Operand::Constant(self.context.int(i8, i128::from(bits))),
+            Byte::Value(value) => value,
+            Byte::Undef => Operand::Constant(self.context.constant(Constant { ty: i8, kind: ConstantKind::Undef })),
+            Byte::Poison => Operand::Constant(self.context.constant(Constant { ty: i8, kind: ConstantKind::Poison })),
         }
     }
-    runs.retain(|run| run.len() >= 2);
-    runs
-}
 
-/// Whether one memcpy of `run`'s bytes costs less than its loads and stores.
-fn _pays(
-    costs: &crate::profit::OperationCosts,
-    run: &[Pair],
-) -> bool {
-    let bytes: i64 = run.iter().map(|one| one.bytes).sum();
-    run.len() as i64 * (costs.load + costs.store) > copy_price(costs, bytes, false)
-}
-
-/// `run` made one memcpy where its last store stood.
-fn _replaced(
-    context: &mut Context,
-    layout: &DataLayout,
-    function: &mut Function,
-    declared: &mut Declared,
-    run: &[Pair],
-) {
-    let bytes: i64 = run.iter().map(|one| one.bytes).sum();
-    let first = &run[0];
-    let (to_space, from_space) = (first.to.space, first.from.space);
-    let width = layout.pointer(to_space).index_bits;
-    let (callee, function_type) = _copy(context, declared, How::Apart, to_space, from_space, width);
-    let to = function.instruction(first.store).operands[1];
-    let from = function.instruction(first.load).operands[0];
-    let count = counting::constant(context, &BigInt::from(bytes), width);
-    let off = counting::constant(context, &BigInt::from(0), 1);
-    let pointer = context.types.ptr(0);
-    let callee = Operand::Constant(context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
-    let void = context.types.void();
-    let info = CallInfo {
-        function_type,
-        calling_convention: 0,
-        return_attrs: Vec::new(),
-        argument_attrs: vec![Vec::new(); 4],
-        attrs: Vec::new(),
-        tail: Default::default(),
-    };
-    let last = function
-        .iter_block_rev(function.parent(first.store).expect("a placed store"))
-        .find(|inst| run.iter().any(|one| one.store == *inst))
-        .expect("a run has stores");
-    let call = function.create_instruction(
-        Opcode::Call(Box::new(info)),
-        void,
-        vec![to, from, count, off, callee],
-        Flags::default(),
-        None,
-    );
-    function.insert(call, Position::Before(last)).expect("a placed store");
-    for one in run {
-        function.erase(one.store).expect("a store has no result");
-        function.erase(one.load).expect("a load with no user");
+    /// The alignment an argument of a call carries (`align` on parameter
+    /// `index`).
+    fn align_of(
+        &self,
+        call: InstId,
+        index: usize,
+    ) -> Option<u64> {
+        let Opcode::Call(info) = &self.function.instruction(call).opcode else { return None };
+        llrm_mir::facts::Facts::of(info.argument_attrs.get(index)?).align()
     }
+}
+
+/// `commonAlignment(A, Offset)`: the alignment of `offset` bytes past an
+/// aligned address.
+fn common_alignment(
+    align: u64,
+    offset: u64,
+) -> u64 {
+    if offset == 0 { align } else { align.min(1 << offset.trailing_zeros()) }
 }
 
 #[cfg(test)]

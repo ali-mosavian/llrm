@@ -340,9 +340,9 @@ fn int_imm_chunk(value: i64) -> i64 {
 
 /// Intrinsic prices by (profile, kind, callee name), as the pinned `opt` gives
 /// them (T7).
-fn intrinsic_prices() -> &'static std::collections::HashMap<(&'static str, &'static str, &'static str), Option<i64>> {
+fn intrinsic_prices() -> &'static llrm_support::hash::HashMap<(&'static str, &'static str, &'static str), Option<i64>> {
     static PRICES: std::sync::OnceLock<
-        std::collections::HashMap<(&'static str, &'static str, &'static str), Option<i64>>,
+        llrm_support::hash::HashMap<(&'static str, &'static str, &'static str), Option<i64>>,
     > = std::sync::OnceLock::new();
     PRICES.get_or_init(|| {
         include_str!("tti_intrinsics.txt")
