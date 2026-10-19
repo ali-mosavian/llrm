@@ -157,8 +157,8 @@ use crate::{
     addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdeletion,
     loopdistribute, loopfuse, loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit,
-    loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simplifycfg, sink,
-    switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simpleloopunswitch,
+    simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -230,9 +230,9 @@ pub struct Options {
     /// turns it off.
     pub llvm_order: bool,
     /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
-    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on by
-    /// default, `LLRM_NO_ROTATE` turns it off. Not run where `unroll_jam` is
-    /// (see [`Options::rotating`]).
+    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; off by
+    /// default (it miscompiles, #2585), `LLRM_ROTATE` turns it on. Not run
+    /// where `unroll_jam` is (see [`Options::rotating`]).
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); on by default, `LLRM_NO_MEM2REG` turns it off.
@@ -674,10 +674,9 @@ impl FunctionPass for Together {
     }
 }
 
-/// `LLRM_NO_ROTATE`, read once: set, the rotate slot of [`llvm_order`] does
-/// not run.
+/// `LLRM_ROTATE`, read once: set, the rotate slot of [`llvm_order`] runs.
 fn rotate_default() -> bool {
-    !llrm_support::env_flag!("LLRM_NO_ROTATE")
+    llrm_support::env_flag!("LLRM_ROTATE")
 }
 
 /// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by
@@ -801,7 +800,7 @@ pub(crate) fn llvm_order(
             }
             list.extend([
                 licm("licm@730", true, false),
-                slot("trivialunswitch@732", Box::new(trivialunswitch::TrivialUnswitch)),
+                slot("trivialunswitch@732", Box::new(simpleloopunswitch::SimpleLoopUnswitch)),
                 decide("decide@766"),
                 phiopt("phiopt@766"),
                 fold("fold@768"),

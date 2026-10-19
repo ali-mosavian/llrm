@@ -97,6 +97,7 @@ pub mod argumentattrs;
 pub mod assumptions;
 pub mod avail;
 pub mod basicaa;
+pub mod blockfreq;
 pub mod branchprob;
 pub mod capturecheck;
 pub mod capturetracking;

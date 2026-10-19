@@ -284,7 +284,7 @@ fn test_gvn_joins_the_values_each_arm_stored() {
         diamond("  store i16 %x, ptr @g\n", "  store i16 %y, ptr @g\n", "  %r = load i16, ptr @g\n")
     );
     assert!(
-        managed(&text).contains("b3:\n  %r1 = phi i16 [ %x, %b1 ], [ %y, %b2 ]\n  ret i16 %r1\n"),
+        managed(&text).contains("b3:\n  %r1 = phi i16 [ %y, %b2 ], [ %x, %b1 ]\n  ret i16 %r1\n"),
         "{}",
         managed(&text)
     );

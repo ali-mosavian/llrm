@@ -130,7 +130,7 @@ b3:
 ",
         XYC,
     );
-    assert!(changed && !text.contains("load") && text.contains("phi i16 [ %x, %b1 ], [ %y, %b2 ]"), "{text}");
+    assert!(changed && !text.contains("load") && text.contains("phi i16 [ %y, %b2 ], [ %x, %b1 ]"), "{text}");
 }
 
 #[test]
