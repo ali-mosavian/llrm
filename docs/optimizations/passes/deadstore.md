@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/deadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/deadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:5ee5ce26b265f5e4a7ea6d9c394a640a67fc7d1bc1e122cec08c6f36a92b62d7 -->
+<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:e0b9f0a244bcf659695db5c02a2d8fe77625402a30bc53a9bbaf6d7d357a179a -->
 
 # deadstore
 
@@ -50,12 +50,14 @@ a stack or frame object (`isa<AllocaInst>`) whose address is not captured
 (`alias::captured`, a `ret` and a store of it included); `dead_on_return`
 and byval arguments (stage 3), and non-alloca objects with no capture
 (malloc) are absent. Exit: stage 3.
-DEVIATE 4: memory terminators (`lifetime.end`, `free`), the `initializes`
-attribute, `tryFoldIntoCalloc` and
+DEVIATE 4: `free` as a memory terminator (`lifetime.end` is in),
+`tryFoldIntoCalloc` and
 `eliminateRedundantStoresViaDominatingConditions` are stage 2 and 3. Partial
 overwrites (`isPartialOverwrite`, `IOLs`,
 `tryToMergePartialOverlappingStores`, `tryToShorten` of memsets) and
-`eliminateRedundantStoresOfExistingValues` are in. Exit: stage 2.
+`eliminateRedundantStoresOfExistingValues` are in, and a call's
+`initializes` (`Accesses::fills`, which holds `getInitializesArgMemLoc`'s
+argument and capture rules; nothing unwinds). Exit: stage 2.
 DEVIATE 5: only stores and constant-length memsets are candidates, and
 `storeIsNoop` knows no `getInitialValueOfAllocation` (it needs `calloc`
 and friends). Exit: stage 2.

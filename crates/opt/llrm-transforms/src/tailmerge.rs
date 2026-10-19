@@ -9,6 +9,9 @@
 //! jumps to it, passing its own operand. The pass that follows empties and
 //! removes the blocks that held nothing else.
 //!
+//! # Example
+//! Two returns become one block that returns a phi:
+//!
 //! ```text
 //!   a: ...; ret i16 %x           a: ...; br %common.ret
 //!   b: ...; ret i16 %y     ==>   b: ...; br %common.ret

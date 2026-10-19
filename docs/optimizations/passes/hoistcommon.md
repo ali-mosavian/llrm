@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/hoistcommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/hoistcommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/hoistcommon.rs sha256:d8fb022d22d177fc35a1aa4d2c4cd46def14e2beb0220aa0b34a1015ae1b5486 -->
+<!-- src: crates/opt/llrm-transforms/src/hoistcommon.rs sha256:beb5905558ad52aba8e3f6440f6f14c8ffb049aba5391b19611c3ade26cd2d55 -->
 
 # hoistcommon
 
@@ -25,6 +25,9 @@ step from their first instruction:
 With `all_equal_only` (the default slots) the walk starts only if every
 successor is the same list of instructions, so nothing is skipped and the
 successors empty out.
+
+## Example
+The instructions both arms open with run once, before the branch:
 
 ```text
   b0: br %c, b1, b2            b0: %t = add %x, 1

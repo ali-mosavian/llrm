@@ -7401,15 +7401,13 @@ mod tests {
     /// m16 printed 43 for 60).
     #[test]
     fn test_a_spilled_word_index_is_not_folded_into_a_literal_base() {
-        let base =
-            insn(0, (0, 3), semantics(Operation::Move, "mov", vec![held(5, 2)], vec![imm(20, 2)]), &[5], &[]);
+        let base = insn(0, (0, 3), semantics(Operation::Move, "mov", vec![held(5, 2)], vec![imm(20, 2)]), &[5], &[]);
         let read = _read(0x102, 4, _far(0, Some(1)), &[5, 1]);
         let result = _out(&_body(vec![base, _add(1, 2, 0x100), read]), &[1, 5]);
         let read = result.iter().rev().find(|one| matches!(&what(one).sources[0], Loc::Mem(_))).unwrap();
         let cell = as_mem(&what(read).sources[0]);
-        let rebuilt = cell.base.is_some_and(|base| {
-            result.iter().any(|one| one.defines == [base.value] && one.rematerialized)
-        });
+        let rebuilt =
+            cell.base.is_some_and(|base| result.iter().any(|one| one.defines == [base.value] && one.rematerialized));
         assert!(cell.index.is_some() || !rebuilt, "{result:?}");
     }
 
