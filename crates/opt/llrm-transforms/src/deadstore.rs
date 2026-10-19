@@ -128,6 +128,10 @@ impl FunctionPass for DeadStoreElimination {
         "dse"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("dse")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,

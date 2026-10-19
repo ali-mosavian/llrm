@@ -48,7 +48,9 @@ fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
 /// A slot the parity pipeline runs must be in the registry, or it has no kind.
 #[test]
 fn test_a_slot_that_runs_and_is_not_registered_fails() {
-    let why = parity::check(parity::REGISTRY, Phase::Early, &["sroa@1179", "earlycse@1180", "unknown@1"]).unwrap_err();
+    let why =
+        parity::check(parity::REGISTRY, Phase::Early, &["decide@1178", "sroa@1179", "earlycse@1180", "unknown@1"])
+            .unwrap_err();
     assert!(why.contains("unknown@1"), "{why}");
 }
 
@@ -126,9 +128,10 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
     let count = parity::tally(parity::REGISTRY);
     // jumps@17, allocate@11 (greedy by default under LLVM's order) and
     // merge@818 (MemCpyOpt's memsets), dse@820 (stage 1) and the two
-    // jumpthreading slots (stage S1), indvars@738 and coalesce@10.
-    assert_eq!(count.partial, 8);
-    assert!(parity::report().contains("jumps@17") && parity::report().contains("8 partial"));
+    // jumpthreading slots (stage S1), indvars@738, coalesce@10 and decide@1178
+    // (the translated SimplifyCFG).
+    assert_eq!(count.partial, 9);
+    assert!(parity::report().contains("jumps@17") && parity::report().contains("9 partial"));
 }
 
 /// A Partial slot without its criterion and exit says what is done and not what
@@ -355,4 +358,54 @@ fn test_the_tally_lines_carry_each_analysis_with_its_kind_and_type() {
     assert!(lines.contains(&"[parity] analysis shape old Shape".to_owned()), "{lines:?}");
     assert!(lines.contains(&"[parity] analysis dominators translated Dominators".to_owned()), "{lines:?}");
     assert!(parity::ANALYSES.iter().all(|one| !one.symbol.is_empty()));
+}
+
+/// A slot called Old that runs a translated pass went unnoticed: `decide@1178`
+/// ran the translated SimplifyCFG (#2907) while its row stayed Old, and the
+/// count of record under-reported the work. The same slot called Partial or
+/// Translated passes.
+#[test]
+fn test_an_old_slot_that_runs_a_translated_pass_fails() {
+    let row = |kind| Entry {
+        slot: "fixture@1",
+        phase: Phase::Early,
+        llvm: "fixture",
+        kind,
+        replaced_by: "",
+        note: "criterion: c; exit: e",
+    };
+    let held = [("fixture@1", vec!["simplifycfg"])];
+    for kind in [SlotKind::Old, SlotKind::Missing] {
+        let why = parity::check_old_slots(&[row(kind)], &held).expect_err("a translated pass in an unfinished row");
+        assert!(why.contains("fixture@1") && why.contains("simplifycfg"), "{why}");
+    }
+    for kind in [SlotKind::Partial, SlotKind::Translated] {
+        assert_eq!(parity::check_old_slots(&[row(kind)], &held), Ok(()), "{kind:?}");
+    }
+    assert_eq!(parity::check_old_slots(&[row(SlotKind::Old)], &[("fixture@1", Vec::new())]), Ok(()));
+}
+
+/// The registry is what the order runs: no slot of the built lists, at any
+/// level, is Old and holds a translated pass.
+#[test]
+fn test_no_old_slot_of_the_built_lists_runs_a_translated_pass() {
+    for options in [pipeline::Options::basic(), pipeline::Options::standard(), pipeline::Options::size()] {
+        let on = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+        for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late] {
+            let passes = pipeline::llvm_order(&on, phase);
+            let held: Vec<_> = passes.iter().map(|one| (one.name(), one.translations())).collect();
+            let built: Vec<_> = held.iter().map(|one| one.0).collect();
+            let level = if on.options.pre { parity::Level::O2 } else { parity::Level::O1 };
+            let checked = parity::check_phase_with(
+                phase,
+                &built,
+                level,
+                on.options.sroa,
+                on.options.mem2reg,
+                on.options.rotating(),
+                &held,
+            );
+            assert_eq!(checked, Ok(()), "{phase:?} {level:?}");
+        }
+    }
 }
