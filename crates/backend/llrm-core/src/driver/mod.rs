@@ -358,8 +358,7 @@ pub fn optimized(
                 |module| crate::backend::bitcounts::expanded(module, |operation| options.arch.expands(operation)),
             )
     })?;
-    timed("mir odd widths", || program.modules.iter_mut().try_for_each(crate::backend::legalize::promoted))?;
-    timed("mir min max", || program.modules.iter_mut().try_for_each(crate::backend::selects::minmax_expanded))?;
+    timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
     if options.arch.expands("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
         let pricing = crate::backend::selects::Pricing {

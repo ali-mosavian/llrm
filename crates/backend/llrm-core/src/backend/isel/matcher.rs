@@ -59,7 +59,7 @@ use super::{
     semantics,
 };
 use crate::backend::arithmetic;
-use crate::model::ir::{Held, Imm, Loc, Operation};
+use crate::model::ir::{Field, FieldKind, Held, Imm, Loc, Operation};
 use crate::model::lir::Insn;
 use crate::support::hash::IndexMap;
 
@@ -601,6 +601,39 @@ impl Selector<'_, '_, '_> {
         width: i64,
     ) -> Result<Loc, Unselected> {
         Ok(Loc::Imm(Imm { value, width: width as u32, address: None }))
+    }
+
+    /// A shifted register's field: the target's shift `code` and the `amount`.
+    pub fn op_shift(
+        &mut self,
+        _: &Match,
+        _: &mut Vec<Arc<Insn>>,
+        code: i64,
+        amount: i64,
+    ) -> Result<Loc, Unselected> {
+        Ok(Loc::Field(Field { kind: FieldKind::Shift, code: code as u8, amount: amount as u8 }))
+    }
+
+    /// A condition field: the target's condition `code`.
+    pub fn op_cond(
+        &mut self,
+        _: &Match,
+        _: &mut Vec<Arc<Insn>>,
+        code: i64,
+    ) -> Result<Loc, Unselected> {
+        Ok(Loc::Field(Field { kind: FieldKind::Condition, code: code as u8, amount: 0 }))
+    }
+
+    /// An extended register's field: the target's extension `code` and the
+    /// `amount`.
+    pub fn op_extend(
+        &mut self,
+        _: &Match,
+        _: &mut Vec<Arc<Insn>>,
+        code: i64,
+        amount: i64,
+    ) -> Result<Loc, Unselected> {
+        Ok(Loc::Field(Field { kind: FieldKind::Extend, code: code as u8, amount: amount as u8 }))
     }
 
     // Predicates.

@@ -1,5 +1,5 @@
-//! `x86.instr`'s reader. Its only dependency is `llrm-lir`, which a build
-//! script has too, so it can include this with `#[path]`.
+//! The reader of a target's instruction description (`x86.instr`, ...): one
+//! schema for every target, read by the generators and the target crates.
 
 /// Condition codes, in iced's spelling, that `{cc}` expands to.
 pub const CONDITIONS: [&str; 16] =
@@ -84,6 +84,10 @@ impl Form {
     }
 }
 
+/// What an operand may be: a register, cell, immediate, address or float
+/// register, then a shift, condition or extension field.
+const KINDS: &str = "rmiashce";
+
 const REGISTERS: [&str; 14] = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "es", "ds", "fs", "gs", "ss", "ah"];
 
 fn operands(
@@ -99,8 +103,8 @@ fn operands(
                 let dest = tied.parse().map_err(|_| format!("x86.instr:{line}: `{one}` ties to no dest number"))?;
                 return Ok(Operand { kinds: "r".into(), tied: Some(dest) });
             }
-            if one.is_empty() || !one.chars().all(|kind| "rmias".contains(kind)) {
-                return Err(format!("x86.instr:{line}: operand `{one}` is not made of the kinds r m i a s"));
+            if one.is_empty() || !one.chars().all(|kind| KINDS.contains(kind)) {
+                return Err(format!("x86.instr:{line}: operand `{one}` is not made of the kinds r m i a s h c e"));
             }
             Ok(Operand { kinds: one.into(), tied: None })
         })
@@ -290,4 +294,22 @@ fn parse_rows(
         }
     }
     Ok(forms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A shift, condition or extension operand was refused as "not made of the
+    /// kinds r m i a s": arm64's forms carry them.
+    #[test]
+    fn an_operand_may_be_a_shift_a_condition_or_an_extension() {
+        for kind in ["h", "c", "e"] {
+            let forms = parse(&format!("add3 binary r/r,r,{kind} 32 alu_rr - - - -/- Add_{{w}}")).expect("parses");
+            assert!(forms[0].sources[2].allows(kind.chars().next().unwrap()));
+        }
+        assert!(
+            parse("add3 binary r/r,r,z 32 alu_rr - - - -/- Add_{w}").unwrap_err().contains("kinds r m i a s h c e")
+        );
+    }
 }

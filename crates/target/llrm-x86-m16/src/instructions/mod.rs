@@ -93,7 +93,7 @@ mod tests {
     #[test]
     fn a_malformed_line_is_refused_with_its_line() {
         let error = parse::parse("add binary rm/^0,rmx 16 alu_rr - - - -/- Add_rm{w}_r{w}").unwrap_err();
-        assert_eq!(error, "x86.instr:1: operand `rmx` is not made of the kinds r m i a s");
+        assert_eq!(error, "x86.instr:1: operand `rmx` is not made of the kinds r m i a s h c e");
     }
 
     /// The allocator's classes were built from every row, at about 5,000
