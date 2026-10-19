@@ -95,7 +95,7 @@ fn listing_float_store(
     name: &str,
 ) -> Vec<String> {
     let profile =
-        crate::backend::cpu::tuned_optimizing(&llrm_x86_m16::M16, "486", false, true, false, true, true, true)
+        crate::backend::cpu::tuned_optimizing(&llrm_x86_m16::M16, "486", false, true, false, true, true, true, false)
             .expect("the 486 profile");
     let module = assemble::assembled(
         &parsed(text),
@@ -182,7 +182,6 @@ done:
             "mov bx, word ptr [bp+6]",
             "xor ax, ax",
             "xor cx, cx",
-            "L0_1:",
             "cmp cx, bx",
             "jge L0_8",
             "L0_5:",
@@ -294,6 +293,47 @@ fn test_what_is_not_selected_yet_is_refused() {
         let text = format!("define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  {body}\n}}\n");
         assert_eq!(selected(&text, "f").err(), Some(Unselected(why.to_owned())), "{body}");
     }
+}
+
+/// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop` verify but have no lowering yet:
+/// a program that calls one stops with a named refusal, not a wrong result.
+#[test]
+fn a_bit_count_intrinsic_is_refused_until_it_is_lowered() {
+    for (name, parameters, arguments) in
+        [("ctlz", ", i1", ", i1 false"), ("cttz", ", i1", ", i1 false"), ("ctpop", "", "")]
+    {
+        let text = format!(
+            "declare i16 @llvm.{name}.i16(i16{parameters})\n\
+             define i16 @f(i16 %a) addrspace(1) {{\n  %r = call i16 @llvm.{name}.i16(i16 %a{arguments})\n  ret i16 %r\n}}\n"
+        );
+        assert_eq!(selected(&text, "f").err(), Some(Unselected(format!("@llvm.{name}.i16"))), "{name}");
+    }
+}
+
+/// `llvm.stacksave` reads the stack pointer and `llvm.stackrestore` writes it
+/// from a pointer.
+#[test]
+fn a_stacksave_reads_the_stack_pointer_and_a_stackrestore_writes_it() {
+    let text = "declare ptr @llvm.stacksave.p0()\n\
+                declare void @llvm.stackrestore.p0(ptr)\n\
+                define ptr @save() addrspace(1) {\n  %s = call ptr @llvm.stacksave.p0()\n  ret ptr %s\n}\n\
+                define void @restore(ptr %p) addrspace(1) {\n  call void @llvm.stackrestore.p0(ptr %p)\n  ret void\n}\n";
+    assert_eq!(listing(text, "save"), ["L0_0:", "mov ax, sp", "retf"]);
+    // The epilogue sets SP from the frame register again: SP is not where the
+    // prologue left it.
+    assert_eq!(
+        listing(text, "restore"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "L1_0:",
+            "mov ax, word ptr [bp+6]",
+            "mov sp, ax",
+            "lea sp, word ptr [bp]",
+            "pop bp",
+            "retf"
+        ]
+    );
 }
 
 /// CVP narrows a `udiv` to i8 and expands a `urem` through a `freeze`; both
@@ -5858,6 +5898,19 @@ define i16 @f() addrspace(1) {
     let got = listing(text, "f");
     // 1342177280 is 0x5000:0000 stored, 1358954496 is 0x5100:0000 read through.
     assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
+}
+
+/// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
+/// address of no global": 13 llrm-qb tests failed to assemble a POKE.
+#[test]
+fn test_a_gep_off_a_segment_constant_is_a_far_number() {
+    let text = "define i8 @f() addrspace(1) {
+  %v = load i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 -24576 to ptr addrspace(2)) to ptr addrspace(1)), i16 1)
+  ret i8 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov bx, 1".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
 }
 
 /// More constant-expression operands (alias/farstruct.c, textfill): the dword

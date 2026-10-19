@@ -2954,6 +2954,17 @@ impl Selector<'_, '_, '_> {
             return Some(bits);
         }
         let context = &self.module.context;
+        // A constant offset from one wraps within the segment.
+        if let ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr { source, operands, .. }) =
+            &context.get(id).kind
+        {
+            let base = self.far_number(operands[0])?;
+            let moved =
+                crate::backend::globals::constant_offset(self.module, &self.layout, *source, &operands[1..]).ok()?;
+            let Type::Pointer(space) = *self.types().get(context.get(id).ty) else { return None };
+            let wrap = (1i64 << self.layout.offset_bits(space)) - 1;
+            return Some(base & !wrap | (base + moved) & wrap);
+        }
         let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) =
             &context.get(id).kind
         else {
@@ -3217,6 +3228,37 @@ impl Selector<'_, '_, '_> {
             at,
             semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(regs, list, width))], vec![Loc::Held(held)]),
         ));
+        Ok(())
+    }
+
+    /// `llvm.stacksave`: the stack pointer, a near data pointer.
+    fn stack_save(
+        &mut self,
+        inst: InstId,
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let width = self.address_bytes();
+        let value = self.function.instruction(inst).result.expect("a saved stack pointer");
+        let saved = Held { value: self.value(value), width };
+        let sp = Loc::Reg(Reg { register: RegId::SP, width });
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(saved)], vec![sp])));
+        Ok(())
+    }
+
+    /// `llvm.stackrestore`: the stack pointer a `stacksave` returned made the
+    /// stack pointer again.
+    fn stack_restore(
+        &mut self,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let width = self.address_bytes();
+        let ty = self.function.operand_type(&self.module.context, arguments[0]).expect("a typed pointer");
+        let saved = self.held(arguments[0], ty, at, out)?;
+        let sp = Loc::Reg(Reg { register: RegId::SP, width });
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![sp], vec![Loc::Held(saved)])));
         Ok(())
     }
 
@@ -5244,6 +5286,18 @@ impl Selector<'_, '_, '_> {
                 out.push(Arc::new(one));
                 return Ok(());
             }
+            // A constant is the dword it is: one move.
+            if let ([whole], Operand::Constant(id)) = (&convention.returns[..], value)
+                && let Some(number) = self.far_number(id)
+            {
+                let dword = self.fresh_held(4);
+                let word = Loc::Imm(Imm { value: number, width: 4, address: None });
+                out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(dword)], vec![word])));
+                one.requires = vec![(dword, *whole)];
+                one.uses = vec![dword.value];
+                out.push(Arc::new(one));
+                return Ok(());
+            }
             let (offset, selector) = self.far(value, at, out)?;
             match convention.returns[..] {
                 [low, high] => {
@@ -5366,6 +5420,8 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::PtrDiff) => self.pointer_difference(inst, arguments, at, out),
                 Some(Intrinsic::Window) => self.window(inst, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
+                Some(Intrinsic::StackSave) => self.stack_save(inst, at, out),
+                Some(Intrinsic::StackRestore) => self.stack_restore(arguments, at, out),
                 // Where a local's bytes are live: read by the frame layout, no
                 // code.
                 Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),

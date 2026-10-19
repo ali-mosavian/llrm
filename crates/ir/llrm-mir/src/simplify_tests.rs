@@ -942,6 +942,16 @@ fn a_gep_of_a_global_and_constants_is_a_constant_expression() {
     assert_eq!(simplified(&text("  %r = getelementptr [4 x i16], ptr @g, i16 0, i16 %x\n"), "r"), None);
 }
 
+/// A GEP whose index is a link-time address (`ptrtoint @h`) folded to a
+/// constant expression once casts of globals did (#2614); the backend has no
+/// relocation for `@g + @h`, so 8 QB tests failed to assemble ("a constant
+/// address with no constant offset"). The GEP stays an instruction.
+#[test]
+fn a_gep_with_a_link_time_index_stays_an_instruction() {
+    let text = "@g = global [4 x i8] zeroinitializer\n@h = global i16 0\ndefine void @f() {\nb0:\n  %r = getelementptr i8, ptr @g, i16 ptrtoint (ptr @h to i16)\n  ret void\n}\n";
+    assert_eq!(simplified(text, "r"), None);
+}
+
 /// Old: `addrspacecast @g` and `ptrtoint @g` of a constant were left casts
 /// (`simplifyCastInst` folded through `constfold::cast`, which makes no
 /// constant expression); the pin's `ConstantFoldCastOperand` does (5 on
@@ -1173,4 +1183,14 @@ declare i16 @llvm.usub.sat.i16(i16, i16)
     ] {
         assert_eq!(simplified(&format!("{decls}{}", of(body)), "r").as_deref(), expected, "{body}");
     }
+}
+
+/// A GEP indexed by `ptrtoint` became a constant expression the backend could
+/// not lower: llrm-qb
+/// `test_runtime_entry_reserves_the_complete_live_local_extent` reported
+/// "a constant address with no constant offset".
+#[test]
+fn a_gep_with_a_relocatable_index_stays_an_instruction() {
+    let text = "@g = global [4 x i16] zeroinitializer\ndefine void @f() {\nb0:\n  %r = getelementptr i8, ptr @g, i16 ptrtoint (ptr @g to i16)\n  ret void\n}\n";
+    assert_eq!(simplified(text, "r"), None);
 }

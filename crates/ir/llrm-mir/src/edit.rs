@@ -585,6 +585,17 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// `FCmpInst::setPredicate`.
+    pub fn set_fcmp_predicate(
+        &mut self,
+        inst: InstId,
+        predicate: crate::opcode::FloatPredicate,
+    ) {
+        let Opcode::FCmp(held) = &mut self.instructions[inst.0 as usize].opcode else { panic!("an fcmp") };
+        *held = predicate;
+        self.log(Change::Rewritten(inst));
+    }
+
     /// `Value::setName`: `value` is named `name`, or `name` with the least
     /// number appended that nothing live holds.
     pub fn set_name(
@@ -605,6 +616,17 @@ impl Function {
     ) {
         let name = self.values[from.0 as usize].name.take();
         self.values[to.0 as usize].name = name;
+    }
+
+    /// Replaces an instruction's opcode in place (a `getelementptr`'s source
+    /// type, say); operands and users stay.
+    pub fn set_opcode(
+        &mut self,
+        inst: InstId,
+        opcode: Opcode,
+    ) {
+        self.instructions[inst.0 as usize].opcode = opcode;
+        self.log(Change::Rewritten(inst));
     }
 
     /// Replaces an instruction's flags.

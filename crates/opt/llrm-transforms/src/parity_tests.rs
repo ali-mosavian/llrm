@@ -108,7 +108,8 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     assert_eq!(parity::check(parity::REGISTRY, Phase::Backend, &built), Ok(()));
     let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@99"), "{why}");
-    let why = parity::check_backend(&["floatalloc@8", "jumps@17", "allocate@11", "unknown@1"]).unwrap_err();
+    let why =
+        parity::check_backend(&["floatalloc@8", "coalesce@10", "jumps@17", "allocate@11", "unknown@1"], &[]).unwrap_err();
     assert!(why.contains("unknown@1"), "{why}");
 }
 
@@ -125,9 +126,9 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
     let count = parity::tally(parity::REGISTRY);
     // jumps@17, allocate@11 (greedy by default under LLVM's order) and
     // merge@818 (MemCpyOpt's memsets), dse@820 (stage 1) and the two
-    // jumpthreading slots (stage S1).
-    assert_eq!(count.partial, 6);
-    assert!(parity::report().contains("jumps@17") && parity::report().contains("6 partial"));
+    // jumpthreading slots (stage S1), indvars@738 and coalesce@10.
+    assert_eq!(count.partial, 8);
+    assert!(parity::report().contains("jumps@17") && parity::report().contains("8 partial"));
 }
 
 /// A Partial slot without its criterion and exit says what is done and not what
@@ -136,6 +137,17 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
 fn test_a_partial_slot_states_its_criterion_and_exit() {
     for one in parity::REGISTRY.iter().filter(|one| one.kind == SlotKind::Partial) {
         assert!(one.note.contains("criterion:") && one.note.contains("exit:"), "{}: {:?}", one.slot, one.note);
+    }
+}
+
+/// indvars@738 and coalesce@10 ran translated code under the order at defaults
+/// but counted as Old, so the count of record hid the progress.
+#[test]
+fn test_indvars_and_coalesce_that_run_translations_are_partial_with_an_exit() {
+    for slot in ["indvars@738", "coalesce@10"] {
+        let one = parity::REGISTRY.iter().find(|one| one.slot == slot).expect(slot);
+        assert_eq!(one.kind, SlotKind::Partial, "{slot}");
+        assert!(one.note.contains("exit:"), "{slot}: {:?}", one.note);
     }
 }
 
@@ -274,4 +286,73 @@ fn test_sccp_stands_between_gvn_and_bdce() {
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
     assert_eq!((at("gvn@787") + 1, at("sccp@792") + 1), (at("sccp@792"), at("bdce@797")));
+}
+
+/// LSR's translated pieces landed with no registry row, so the count could not
+/// show them; DomTree was translated with no analyses row. The slot is Old
+/// while no pass calls the pieces, and `dominators` is a Translated analysis.
+#[test]
+fn test_lsr_is_a_registered_slot_and_dominators_a_translated_analysis() {
+    let lsr = parity::REGISTRY.iter().find(|one| one.slot == "lsr").expect("lsr is registered");
+    assert_eq!((lsr.llvm, lsr.kind), ("loop-reduce (LoopStrengthReduce.cpp)", SlotKind::Old));
+    assert!(!lsr.replaced_by.is_empty(), "an Old slot names who replaces it");
+    let dominators = parity::ANALYSES.iter().find(|one| one.key == "dominators").expect("dominators is registered");
+    assert_eq!(
+        (dominators.llvm, dominators.kind, dominators.off),
+        ("DominatorTreeAnalysis", SlotKind::Translated, false)
+    );
+    let shape = parity::ANALYSES.iter().find(|one| one.key == "shape").expect("shape is registered");
+    assert_eq!((shape.llvm, shape.kind), ("none", SlotKind::Old), "shape is a bundle, not a translation");
+}
+
+/// An analysis the manager computed that no registry row named left the count
+/// of old callers without a list to read: `tools/old_analysis_callers.py` kept
+/// its own by hand. Every analysis `LLRM_DEBUG=counts` can print has a row, and
+/// a row that is not Translated says what replaces it.
+#[test]
+fn test_every_analysis_the_manager_names_has_a_registry_row() {
+    let sources = [
+        include_str!("../../../ir/llrm-mir/src/passes.rs"),
+        include_str!("../../../ir/llrm-mir/src/callgraph.rs"),
+        include_str!("../../../ir/llrm-mir/src/lazyvalueinfo.rs"),
+        include_str!("../../llrm-analysis/src/manager.rs"),
+        include_str!("../../llrm-analysis/src/bpi.rs"),
+        include_str!("../../llrm-analysis/src/blockfreq.rs"),
+        include_str!("../../llrm-analysis/src/cfg.rs"),
+        include_str!("../../llrm-analysis/src/memoryssa.rs"),
+        include_str!("../../llrm-analysis/src/noreturn.rs"),
+        include_str!("../../llrm-analysis/src/observers.rs"),
+        include_str!("../../llrm-analysis/src/scev/analysis.rs"),
+        include_str!("lsr.rs"),
+        include_str!("spill.rs"),
+        include_str!("../../../ir/llrm-mir/src/memory.rs"),
+    ];
+    // An analysis names itself in `const NAME`, a scan that is not one in a
+    // `counted("..")` call.
+    let named: Vec<&str> = sources
+        .iter()
+        .flat_map(|source| source.lines())
+        .map(|line| line.trim_start().trim_start_matches("crate::passes::"))
+        .filter(|line| line.starts_with("const NAME: &'static str = \"") || line.starts_with("counted(\""))
+        .filter_map(|line| line.split('"').nth(1))
+        .filter(|name| !name.starts_with("program-"))
+        .collect();
+    assert!(named.len() > 30, "the scan found {} names", named.len());
+    let missing: Vec<&&str> =
+        named.iter().filter(|name| parity::ANALYSES.iter().all(|one| one.key != **name)).collect();
+    assert!(missing.is_empty(), "analyses with no registry row: {missing:?}");
+    for one in parity::ANALYSES.iter().filter(|one| one.kind != SlotKind::Translated) {
+        assert!(!one.replaced_by.is_empty(), "{} is not Translated and says nothing of its replacement", one.key);
+    }
+}
+
+/// `tools/old_analysis_callers.py` reads the analyses from the `[parity]
+/// analysis` lines; a row printed without its type would leave it nothing to
+/// look for.
+#[test]
+fn test_the_tally_lines_carry_each_analysis_with_its_kind_and_type() {
+    let lines = parity::tally_lines();
+    assert!(lines.contains(&"[parity] analysis shape old Shape".to_owned()), "{lines:?}");
+    assert!(lines.contains(&"[parity] analysis dominators translated Dominators".to_owned()), "{lines:?}");
+    assert!(parity::ANALYSES.iter().all(|one| !one.symbol.is_empty()));
 }
