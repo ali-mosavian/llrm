@@ -2675,7 +2675,7 @@ done:
     // Greedy's register choice (#2312): the old pin's instructions, memory
     // operands, prefixes and adjacent dependencies, other registers.
     let read = element(&sum("inbounds"));
-    assert_eq!(read, "add ax, word ptr a[esi+esi]");
+    assert_eq!(read, "add ax, word ptr a[ebx+ebx]");
     assert_eq!(counts(&[&read]), (1, 1));
     // Without `inbounds` nothing places the start: the offset may wrap.
     assert_eq!(element(&sum("")), "add ax, word ptr a[si]");
@@ -5589,6 +5589,123 @@ fn test_an_undef_initializer_is_zero_bytes() {
     assert_eq!(datums("s"), [Datum::Label(Label { name: "s".to_owned() }), Datum::Bytes(vec![0, 0, 0, 0])]);
 }
 
+/// A load only an add reads is the add's memory operand, as `ADD32rm` is
+/// X86DAGToDAGISel's: `add ax, [g]`, no register made to hold the load.
+#[test]
+fn test_a_load_only_an_add_reads_is_its_memory_operand() {
+    let text = "@g = global i16 5
+define i16 @f(i16 %a) addrspace(1) {
+  %v = load i16, ptr @g
+  %r = add i16 %a, %v
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("add ") && line.contains("ptr g")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("mov ") && line.contains("ptr g")), "a separate load: {got:?}");
+}
+
+/// The load first, for an operation that commutes.
+#[test]
+fn test_a_load_first_in_a_commutative_operation_is_its_memory_operand() {
+    let text = "@g = global i16 5
+define i16 @f(i16 %a) addrspace(1) {
+  %v = load i16, ptr @g
+  %r = xor i16 %v, %a
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("xor ") && line.contains("ptr g")), "{got:?}");
+}
+
+/// The other operand live around a loop: folding the load made `mov esi, r;
+/// add esi, [m]` (3 clocks on a 486) of `mov esi, [m]; add esi, r` (2):
+/// `x_transpose` +7.6% clocks, `x_bigadd` +3.7%, `nbody_fixed` +1.0%.
+#[test]
+fn test_a_load_is_not_folded_into_an_operation_whose_other_operand_lives_on() {
+    let text = "@g = global [8 x i16] zeroinitializer
+@h = global [8 x i16] zeroinitializer
+define void @f(i16 %r, i16 %n) addrspace(1) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %loop ]
+  %p = getelementptr i16, ptr @g, i16 %i
+  %q = getelementptr i16, ptr @h, i16 %i
+  %v = load i16, ptr %p
+  %s = add i16 %v, %r
+  store i16 %s, ptr %q
+  %next = add i16 %i, 1
+  %c = icmp ult i16 %next, %n
+  br i1 %c, label %loop, label %done
+done:
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(!got.iter().any(|line| line.starts_with("add ") && line.contains("[")), "{got:?}");
+    assert!(got.iter().any(|line| line.contains("g[")), "the premise: the cell is read: {got:?}");
+}
+
+/// A store to the cell between the load and its reader: the load keeps the old
+/// value, so it stays where it was made.
+#[test]
+fn test_a_store_between_the_load_and_the_add_keeps_the_load_apart() {
+    let text = "@g = global i16 5
+define i16 @f(i16 %a) addrspace(1) {
+  %v = load i16, ptr @g
+  store i16 1, ptr @g
+  %r = add i16 %a, %v
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("mov ") && line.contains("ptr g")), "{got:?}");
+}
+
+/// `*p += x` stays one instruction on the memory: the load folded into the
+/// add would leave the store to be a second instruction.
+#[test]
+fn test_an_update_in_place_is_not_split_by_a_memory_operand() {
+    let text = "@g = global i16 5
+@h = global i16 7
+define void @f() addrspace(1) {
+  %a = load i16, ptr @g
+  %b = load i16, ptr @h
+  %s = add i16 %a, %b
+  store i16 %s, ptr @g
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(
+        got.iter()
+            .any(|line| line.starts_with("add ") && line.split(',').next().is_some_and(|dest| dest.contains("ptr g"))),
+        "the update is not an add to the cell: {got:?}"
+    );
+}
+
+/// An `and` a comparison with zero reads is a `test` (`and_tested`), whose
+/// operands are not given a memory operand by the add's pattern (the covered
+/// load was left unselected: `d_faces` aborted in the allocator).
+#[test]
+fn test_a_tested_and_of_a_load_still_selects_the_load() {
+    let text = "@g = global i16 5
+define i16 @f(i16 %a) addrspace(1) {
+  %v = load i16, ptr @g
+  %m = and i16 %v, 1
+  %c = icmp ne i16 %m, 0
+  br i1 %c, label %yes, label %no
+yes:
+  ret i16 %a
+no:
+  ret i16 0
+}
+";
+    assert!(!listing(text, "f").is_empty());
+}
+
 /// `freeze undef` and a bare `undef` operand are selected as any value: a
 /// constant, no register read and no refusal (an `undef` constant had no
 /// case in the selector before #2532).
@@ -5696,4 +5813,26 @@ define i16 @f() addrspace(1) {
     let got = listing(text, "f");
     // 1342177280 is 0x5000:0000 stored, 1358954496 is 0x5100:0000 read through.
     assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
+}
+
+/// More constant-expression operands (alias/farstruct.c, textfill): the dword of
+/// a far pointer to near data (`ptrtoint (addrspacecast @g)`), and a segment
+/// constant widened to far (`addrspacecast (inttoptr N to ptr addrspace(2))`),
+/// which is `N:0`. Both were refused, "an address of no global".
+#[test]
+fn test_a_far_pointer_constant_as_an_integer_and_a_segment_as_a_far_pointer_are_selected() {
+    let text = "@g = internal global i16 5
+@slot = internal global i32 0
+define i16 @f(i16 %i) addrspace(1) {
+  store i32 ptrtoint (ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)) to i32), ptr @slot
+  %p = getelementptr i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 -18432 to ptr addrspace(2)) to ptr addrspace(1)), i16 %i
+  %v = load i8, ptr addrspace(1) %p
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+";
+    let got = listing(text, "f");
+    // DGROUP:offset joined into the dword; -18432 is the selector 0xB800 in `pushw`.
+    let has = |text: &str| got.iter().any(|one| one == text);
+    assert!(has("mov ax, DGROUP") && has("mov bx, offset g") && has("shl eax, 16") && has("pushw 47104"), "{got:?}");
 }
