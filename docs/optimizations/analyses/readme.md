@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 59 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 60 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -12,6 +12,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 59 documented, 0 undoc
 | aliassets | `AliasSetTracker` (LLVM `AliasSetTracker.cpp`, `d1106deb71cc`): the locations an analysis asks of, grouped into sets that may alias, with whether each set's locations all must alias. |  | [aliassets](aliassets.md) |
 | argumentattrs | `nocapture`, `readonly`, `writeonly` and `readnone` of the pointer parameters of one call-graph SCC, as `addArgumentAttrs` infers them (FunctionAttrs.cpp:1238). | `functionattrs::post_order` once per SCC, callees first. | [argumentattrs](argumentattrs.md) |
 | assumptions | What each block assumes, as LLVM's AssumptionCache: the conditions of the `llvm.assume` calls in it. | The assumed conditions per block. Consumers: [`crate::guards`](guards.md) turns them | [assumptions](assumptions.md) |
+| attrsummary | `Summary` for each defined function, derived from its attributes alone. |  | [attrsummary](attrsummary.md) |
 | avail | Dead stores, and the cells loads and stores name, as LLVM's DSE finds them. | `dead_stores`, `dead_stores_escaping`, and the accessors `loaded_into`, | [avail](avail.md) |
 | basicaa | BasicAA, a translation of `BasicAliasAnalysis.cpp` at d1106deb71cc behind the interface of [`crate::aa`] (stage S1/S2 of docs/architecture/basicaa-port.md). | `BasicAA`, an [`crate::aa::AAResults`](aa.md). No client reads it yet. | [basicaa](basicaa.md) |
 | blockfreq | `BlockFrequencyInfo` of a MIR function: LLVM's `BlockFrequencyInfoImpl` (`llrm_mir::blockfrequency`) over `branchprob`'s edge probabilities, as `BlockFrequencyInfoWrapperPass` runs it over `BranchProbabilityInfo`. | `inlinecost` (cold and hot call sites, D1). | [blockfreq](blockfreq.md) |
