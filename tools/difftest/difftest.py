@@ -132,7 +132,7 @@ def normalise(text: str) -> str:
 # The target opt costs for: a dump carries no `target triple`, so opt used its host default (x86-64) and every TTI-dependent answer (unroll, LSR, inline cost, SimplifyCFG
 # speculation, LoopIdiom ...) was priced for the wrong machine (30 i32 GEPs cost 5 each at i386/i486, not the x86-64 figure: inline cost 370 vs 215). Nor does it carry a
 # datalayout: opt used the triple's 32-bit pointers, where m16 has 16-bit near pointers (`--data-layout` below, read from the target's own datalayout.toml, not copied).
-TARGETS = {"m32": ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"], "m16": ["-mtriple=i386-unknown-linux-gnu", "-mcpu=i386"]}
+TARGETS = {"m32": ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"], "m16": ["-mtriple=i386-unknown-linux-gnu", "-mcpu=i386"], "host": []}  # host: opt's default, to restate an old claim
 
 
 def datalayout(mode: int) -> str:
@@ -149,7 +149,7 @@ def datalayout(mode: int) -> str:
 def target_args() -> list[str]:
     """`-mtriple`, `-mcpu` and `--data-layout` of llrm's target (LLRM_DIFFTEST_TARGET m32 (default) or m16)."""
     which = os.environ.get("LLRM_DIFFTEST_TARGET", "m32")
-    return [*TARGETS[which], f"--data-layout={datalayout(int(which[1:]))}"]
+    return [*TARGETS[which], f"--data-layout={datalayout(int(which[1:]))}"] if which != "host" else []
 
 
 def opt(passes: str, text: str) -> subprocess.CompletedProcess:
