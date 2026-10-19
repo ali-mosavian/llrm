@@ -621,6 +621,28 @@ impl RegSet {
         self.0[at / 64] & (1 << (at % 64)) != 0
     }
 
+    /// The registers in either set.
+    #[must_use]
+    #[inline]
+    pub fn union(
+        self,
+        other: &RegSet,
+    ) -> Self {
+        Self(std::array::from_fn(|at| self.0[at] | other.0[at]))
+    }
+
+    /// `other`'s registers added to this set, in place
+    /// (`BitVector::operator|=`).
+    #[inline]
+    pub fn union_with(
+        &mut self,
+        other: &RegSet,
+    ) {
+        for (word, more) in self.0.iter_mut().zip(other.0) {
+            *word |= more;
+        }
+    }
+
     #[must_use]
     pub fn len(&self) -> usize {
         self.0.iter().map(|word| word.count_ones() as usize).sum()

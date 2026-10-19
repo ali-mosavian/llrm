@@ -4198,6 +4198,9 @@ fn simplify_gep(
     // Check to see if this is constant foldable.
     let ptr_c = q.constant(ptr)?;
     let indices_c = indices.iter().map(|&index| q.constant(index)).collect::<Option<Vec<_>>>()?;
+    if !constantfolding::integer_indices(q.context, &indices_c) {
+        return None;
+    }
     let nw = constantfolding::nw_of_flags(flags);
     let env = constantfolding::Env { globals: q.globals, layout: q.layout };
     let folded =
@@ -4316,6 +4319,23 @@ pub fn simplify_binop_at(
 ) -> Option<Operand> {
     let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: true };
     simplify_binop_flags(&mut q, opcode, lhs, rhs, Flags::default(), RECURSION_LIMIT)
+}
+
+/// `simplifyInstructionWithOperands(&I, Ops, SQ.getWithInstruction(&cxt))`:
+/// what `inst` equals with `operands` in place of its own, asked at `cxt` (none:
+/// `SQ` of the data layout alone).
+pub fn simplify_instruction_operands_at(
+    context: &mut Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+    analyses: Option<&FunctionAnalyses>,
+    function: &Function,
+    cxt: Option<InstId>,
+    inst: InstId,
+    operands: &[Operand],
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals, analyses, cxt, can_use_undef: true };
+    simplify_instruction_with_operands(&mut q, inst, operands, RECURSION_LIMIT)
 }
 
 /// `simplifyICmpInst` for operands.
