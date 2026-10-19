@@ -201,8 +201,7 @@ fn comes_before(
 ) -> bool {
     let block = function.parent(this).expect("instructions without BB parents have no order");
     assert_eq!(function.parent(other), Some(block), "cross-BB instruction order comparison");
-    let list = function.block(block);
-    list.iter().position(|one| one == this) < list.iter().position(|one| one == other)
+    function.comes_before(this, other)
 }
 
 /// `DominatorTree::dominates(const BasicBlock *, const Use &)`

@@ -67,16 +67,21 @@ fn passing_value_always_undefined(
         return false;
     }
     let block = function.parent(phi).expect("a placed phi");
-    let body = function.block(block);
-    let at = |inst: InstId| body.iter().position(|one| one == inst);
-    let Some(phi_at) = at(phi) else { return false };
     // The first use in the block after the phi.
     let user = function
         .users(result)
         .iter()
         .filter(|one| function.parent(one.user) == Some(block) && one.user != phi)
-        .filter(|one| at(one.user).is_some_and(|there| there > phi_at))
-        .min_by_key(|one| at(one.user));
+        .filter(|one| function.comes_before(phi, one.user))
+        .min_by(|a, b| {
+            if a.user == b.user {
+                std::cmp::Ordering::Equal
+            } else if function.comes_before(a.user, b.user) {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            }
+        });
     let Some(user) = user else { return false };
     // The block's earlier uses decide first: LLVM's `find_if` stops at the
     // first use in use-list order, which is also the first that is not a

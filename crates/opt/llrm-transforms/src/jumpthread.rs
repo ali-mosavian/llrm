@@ -390,10 +390,7 @@ fn found(
                     .count()
                     .saturating_sub(usize::from(killed_here));
                 let phis = if function.predecessors(block).len() > 1 && function.successors(block).len() > 1 {
-                    function
-                        .iter_block(block)
-                        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-                        .count()
+                    function.iter_block(block).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).count()
                 } else {
                     0
                 };

@@ -1,12 +1,1 @@
-# Readers of a block's instruction slice per file, total 50; written by `cargo test --test block_list_ratchet write_known -- --ignored`. The count may only fall: use the cursor API.
-crates/ir/llrm-mir/src/domtree.rs 1
-crates/ir/llrm-mir/src/edit.rs 30
-crates/ir/llrm-mir/src/edit_tests.rs 1
-crates/ir/llrm-mir/src/interpret.rs 1
-crates/ir/llrm-mir/src/lazyvalueinfo.rs 1
-crates/ir/llrm-mir/src/module.rs 6
-crates/ir/llrm-mir/src/parse.rs 2
-crates/ir/llrm-mir/src/valuetracking/context.rs 3
-crates/ir/llrm-mir/src/valuetracking/guarantee.rs 3
-crates/ir/llrm-mir/src/valuetracking/query.rs 1
-crates/ir/llrm-mir/src/verify.rs 1
+# Readers of a block's instruction slice per file, total 0; written by `cargo test --test block_list_ratchet write_known -- --ignored`. The count may only fall: use the cursor API.

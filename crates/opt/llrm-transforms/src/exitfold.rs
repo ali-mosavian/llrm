@@ -537,9 +537,10 @@ fn _silent(
     at: i64,
 ) -> bool {
     let function = unit.function;
-    let body = function.block(cfg::block(at));
-    body.iter()
-        .take(body.len().saturating_sub(1))
+    let block = cfg::block(at);
+    function
+        .iter_block(block)
+        .take(function.block(block).len().saturating_sub(1))
         .all(
             |inst| {
                 let op = function.instruction(inst);
@@ -711,9 +712,8 @@ fn _crashes(
         .any(
             |to| {
                 let Operand::Block(to) = *to else { return false };
-                let body = function.block(to);
-                body.last().is_some_and(|last| function.instruction(last).opcode == Opcode::Unreachable)
-                    && body.iter().take(body.len() - 1).all(|inst| {
+                function.block(to).last().is_some_and(|last| function.instruction(last).opcode == Opcode::Unreachable)
+                    && function.iter_block(to).take(function.block(to).len() - 1).all(|inst| {
                         matches!(function.instruction(inst).opcode, Opcode::Call(_))
                             && llrm_mir::memory::accessible(unit.context, outer.callees(), function, inst)
                                 == llrm_mir::memory::Effects::NONE

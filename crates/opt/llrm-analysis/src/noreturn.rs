@@ -268,8 +268,9 @@ fn _ends_cold(
     terminal_calls: &BTreeSet<InstId>,
     found: &BTreeSet<i64>,
 ) -> bool {
-    let instructions = function.block(cfg::block(block.at));
-    if instructions.iter().any(|inst| terminal_calls.contains(&inst)) || _stops(function, block.at) {
+    if function.iter_block(cfg::block(block.at)).any(|inst| terminal_calls.contains(&inst))
+        || _stops(function, block.at)
+    {
         return true;
     }
     !block.succ.is_empty() && block.succ.iter().all(|at| found.contains(at))

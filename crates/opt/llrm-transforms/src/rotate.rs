@@ -704,10 +704,8 @@ fn copied(
         let Some(shape) = _shape_of(function, &loop_, false, true) else {
             continue;
         };
-        let insns = function
-            .iter_block(shape.header)
-            .filter(|&inst| function.instruction(inst).opcode != Opcode::Phi)
-            .count();
+        let insns =
+            function.iter_block(shape.header).filter(|&inst| function.instruction(inst).opcode != Opcode::Phi).count();
         if insns > MAX_HEADER_INSNS {
             continue;
         }

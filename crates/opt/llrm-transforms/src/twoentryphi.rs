@@ -325,8 +325,7 @@ pub fn folded(
     }
     // Unless the arms are emptied, the control flow stays.
     for &arm in &if_blocks {
-        let body = function.block(arm);
-        if body.iter().take(body.len() - 1).any(|one| !seen.contains(&one)) {
+        if function.iter_block(arm).take(function.block(arm).len() - 1).any(|one| !seen.contains(&one)) {
             return changed;
         }
     }

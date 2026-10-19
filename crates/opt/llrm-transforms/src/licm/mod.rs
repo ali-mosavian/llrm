@@ -475,13 +475,13 @@ pub fn run(
             promote::unique_exit_blocks(&ctx)
                 .into_iter()
                 .filter_map(|exit| {
-                    let first =
-                        view.function.iter_block(exit).find(|&one| {
-                            !matches!(
-                                view.function.instruction(one).opcode,
-                                llrm_mir::opcode::Opcode::Phi
-                            )
-                        })?;
+                    let first = view
+                        .function
+                        .iter_block(exit)
+                        .find(|&one| !matches!(
+                            view.function.instruction(one).opcode,
+                            llrm_mir::opcode::Opcode::Phi
+                        ))?;
                     Some((exit, first))
                 })
                 .collect()

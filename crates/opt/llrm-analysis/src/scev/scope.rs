@@ -98,16 +98,11 @@ impl ScalarEvolution {
         let q = cx.query(None);
         let function = cx.function;
         let (Some(a_block), Some(b_block)) = (function.parent(a), function.parent(b)) else { return false };
-        let position = |block: BlockId, inst: InstId| -> usize {
-            function.iter_block(block).position(|one| one == inst).expect("an instruction of its block")
-        };
         if a_block == b_block
-            && position(a_block, a) <= position(b_block, b)
-            && guarantee::is_guaranteed_to_transfer_execution_to_successor_between(
+            && (a == b || function.comes_before(a, b))
+            && guarantee::is_guaranteed_to_transfer_execution_to_successor_range(
                 &q,
-                a_block,
-                position(a_block, a),
-                position(b_block, b),
+                function.iter_range(a, b),
                 SCAN_LIMIT,
             )
         {
@@ -117,18 +112,10 @@ impl ScalarEvolution {
         if let Some(b_loop) = cx.loops.get_loop_for(b_block)
             && b_loop.get_header() == b_block
             && b_loop.get_loop_preheader(function) == Some(a_block)
-            && guarantee::is_guaranteed_to_transfer_execution_to_successor_between(
+            && guarantee::is_guaranteed_to_transfer_execution_to_successor_range(&q, function.iter_from(a), SCAN_LIMIT)
+            && guarantee::is_guaranteed_to_transfer_execution_to_successor_range(
                 &q,
-                a_block,
-                position(a_block, a),
-                function.block(a_block).len(),
-                SCAN_LIMIT,
-            )
-            && guarantee::is_guaranteed_to_transfer_execution_to_successor_between(
-                &q,
-                b_block,
-                0,
-                position(b_block, b),
+                function.iter_block(b_block).take_while(|&one| one != b),
                 SCAN_LIMIT,
             )
         {

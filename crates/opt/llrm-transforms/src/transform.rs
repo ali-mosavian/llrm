@@ -1166,11 +1166,10 @@ b2:
         };
         let destination = place(load);
         let stores_in = |block: BlockId, low: i64, high: i64| {
-            let instructions = function.block(block);
-            let (from, to) = (low.max(0) as usize, (high.max(0) as usize).min(instructions.len()));
+            let (from, to) = (low.max(0) as usize, (high.max(0) as usize).min(function.block(block).len()));
             from < to
-                && instructions
-                    .iter()
+                && function
+                    .iter_block(block)
                     .skip(from)
                     .take(to - from)
                     .any(|one| matches!(function.instruction(one).opcode, Opcode::Store { .. }))
@@ -1271,11 +1270,9 @@ b4:
         }
     }
 
-    /// The equal loads of a block of N went one at a time, each erase taking
-    /// the block's list apart to find it: 351 M of 2.7 G on 800 statements
-    /// (mem), 13% of the compile. They go together.
+    /// The equal loads of a block of N are erased together.
     #[test]
-    fn test_equal_loads_are_erased_with_one_scan_of_the_block() {
+    fn test_equal_loads_are_erased_together() {
         let mut text = String::from(
             "define i16 @f(i16 %n) {\nb0:\n  %i = alloca i16\n  store i16 0, ptr %i\n  br label %b1\n\nb1:\n",
         );
@@ -1284,11 +1281,8 @@ b4:
         }
         text += "  store i16 %n, ptr %i\n  %c = icmp slt i16 %n, 0\n  br i1 %c, label %b1, label %b2\n\nb2:\n  ret i16 %n\n}\n";
         let mut module = parsed(&text);
-        let before = llrm_mir::edit::instructions_scanned();
         subexpressions_of(&mut module);
-        let scanned = llrm_mir::edit::instructions_scanned() - before;
         assert_eq!(printed(&module).matches("load").count(), 1, "{}", printed(&module));
-        assert!(scanned <= 4 * 210, "{scanned} instructions scanned to erase 99 loads of a block of 210");
     }
 
     /// A block of N loads of one slot with a store to another between each

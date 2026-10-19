@@ -220,7 +220,6 @@ impl Function {
         }
         b.tail = id;
         b.len += 1;
-        b.view.take();
     }
 
     /// Links `inst` before `next` in `block`'s list.
@@ -241,7 +240,6 @@ impl Function {
             b.head = id;
         }
         b.len += 1;
-        b.view.take();
     }
 
     /// Takes `inst` out of `block`'s list.
@@ -264,7 +262,6 @@ impl Function {
         }
         self.link[inst.0 as usize] = (0, 0);
         b.len -= 1;
-        b.view.take();
     }
 
     /// Links `inst` at `position`; the block and what follows it.
@@ -332,7 +329,7 @@ impl Function {
             (Some(only), None) if only == inst => {}
             _ => return None,
         }
-        self.block(target).iter().find(|&one| self.instruction(one).opcode != Opcode::Phi)
+        self.iter_block(target).find(|&one| self.instruction(one).opcode != Opcode::Phi)
     }
 
     /// Takes `inst` out of its block. What was said before it is said before
@@ -741,7 +738,11 @@ impl Function {
         if let Some(result) = self.instruction(inst).result
             && !self.users(result).is_empty()
         {
-            return Err(format!("instruction {}'s result still has {} users", inst.0, self.users(result).iter().count()));
+            return Err(format!(
+                "instruction {}'s result still has {} users",
+                inst.0,
+                self.users(result).iter().count()
+            ));
         }
         let operands = self.instructions[inst.0 as usize].operands.clone();
         for (index, operand) in operands.into_iter().enumerate() {
@@ -1176,11 +1177,8 @@ impl Function {
         predecessor: BlockId,
         keep_one_input_phis: bool,
     ) {
-        let phis: Vec<InstId> = self
-            .block(block)
-            .iter()
-            .take_while(|&one| self.instruction(one).opcode == Opcode::Phi)
-            .collect();
+        let phis: Vec<InstId> =
+            self.iter_block(block).take_while(|&one| self.instruction(one).opcode == Opcode::Phi).collect();
         for phi in phis {
             let mut operands = self.instruction(phi).operands.clone();
             let Some(at) = operands.chunks(2).position(|pair| pair[1] == Operand::Block(predecessor)) else {
@@ -1274,17 +1272,4 @@ thread_local! {
 /// test that erasing k of n blocks does not scan k times n.
 pub fn layout_scanned() -> usize {
     LAYOUT_SCANNED.with(std::cell::Cell::get)
-}
-
-thread_local! {
-    /// Instructions of a block looked over to take instructions out of it: the
-    /// cost of erasing, which was a scan of the block per instruction erased.
-    pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many instructions of a block this thread has looked over to take
-/// instructions out of it, for a test that a pass erasing k of a block's n
-/// does not scan k times n.
-pub fn instructions_scanned() -> usize {
-    SCANNED.with(std::cell::Cell::get)
 }

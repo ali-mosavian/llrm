@@ -793,9 +793,9 @@ fn unswitch_trivial_switch(
         }
         // We do not unswitch a block that only has an unreachable statement,
         // as it's possible this is a previously unswitched block.
-        let list = run.function.block(block);
-        let term = list.last().expect("a terminated block");
-        let only = list.iter().find(|&inst| run.function.instruction(inst).opcode != Opcode::Phi) == Some(term);
+        let term = run.function.block(block).last().expect("a terminated block");
+        let only = run.function.iter_block(block).find(|&inst| run.function.instruction(inst).opcode != Opcode::Phi)
+            == Some(term);
         run.function.instruction(term).opcode != Opcode::Unreachable || !only
     };
 

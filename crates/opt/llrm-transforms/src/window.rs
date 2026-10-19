@@ -545,10 +545,8 @@ fn _split(
     let next_window = function.create_block(Some("window.next"));
     function.insert_block(next_window, Some(found.latch)).expect("a new block");
     // Every header phi is carried across windows; a walk's as its huge pointer.
-    let header_phis: Vec<InstId> = function
-        .iter_block(found.header)
-        .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
-        .collect();
+    let header_phis: Vec<InstId> =
+        function.iter_block(found.header).take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect();
     let walked: Vec<InstId> = found.walks.iter().map(|walk| walk.recurrence.phi).collect();
     let mut carried = Vec::new();
     for &phi in &header_phis {

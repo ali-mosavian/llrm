@@ -380,10 +380,9 @@ impl Run<'_> {
                     continue;
                 }
                 // At or before the insert point, and not the builder's own.
-                let all = self.function.block(block.expect("placed"));
-                let at = all.iter().position(|i| i == ip).expect("in its block");
-                let found = all.iter().position(|i| i == user.user).expect("in its block");
-                if found <= at && Some(user.user) != self.x.insert_point {
+                if (user.user == ip || self.function.comes_before(user.user, ip))
+                    && Some(user.user) != self.x.insert_point
+                {
                     return Operand::Value(one.result.expect("a value"));
                 }
             }

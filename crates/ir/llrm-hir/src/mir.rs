@@ -2629,9 +2629,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
             _ => Vec::new(),
         };
-        let Some(inst) =
-            self.b.function.block(self.b.current().expect("a placed block")).last()
-        else {
+        let Some(inst) = self.b.function.block(self.b.current().expect("a placed block")).last() else {
             return;
         };
         for fact in facts {
