@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 101 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 102 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -14,6 +14,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 101 documented
 | arrival | Finds how long a parameter stays in the register its convention passed it in, from the machine code. | `debuginfo.rs`, for 32-bit `-g` output: the parameter's location list is | [arrival](arrival.md) |
 | asm | The result of code layout: a body's bytes, where each instruction landed and the relocations that must follow, as the object writer needs them. | `layout.rs`, `objbuild.rs`. | [asm](asm.md) |
 | assemble | Takes a MIR module to masm, as `llc` takes a module to an object: each defined function selected and put through the machine phases, each defined variable's data, and the symbols both name. | Once per module. Per-function candidates are described above; the gating | [assemble](assemble.md) |
+| bitcounts | Expands `llvm.ctpop`, `llvm.ctlz` and `llvm.cttz` into shifts, masks and adds in MIR before instruction selection, for the targets whose description lists them under `expand`. | Once per module in `driver::optimized`, before the odd widths are promoted, | [bitcounts](bitcounts.md) |
 | calleefacts | Records which registers a private function writes, so its direct callers keep values in the others across the call. | Per function in `assemble.rs`: `record` after the function is machined. | [calleefacts](calleefacts.md) |
 | callregs | Which registers a runtime call destroys or keeps, read from its contract, so the allocator knows what may stay live across it. | `isel.rs`, `isel/wide.rs`, `isel/unwind.rs` (the clobber sets of a call | [callregs](callregs.md) |
 | cfi | Reads call frame information back from emitted code. | `debuginfo.rs`, under `-g`. | [cfi](cfi.md) |

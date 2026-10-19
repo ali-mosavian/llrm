@@ -315,7 +315,7 @@ State: **translated** = the pass at the pin exists in llrm (a switch-gated or sh
 | 17 | jump-table-to-switch | O2 | none | missing | scalar-cleanup-port |
 | 18 | aggressive-instcombine | O2 | none | missing | scalar-cleanup-port |
 | 19 | libcalls-shrinkwrap | all | none | n/a | |
-| 20 | tailcallelim (twice) | O2 (once O1) | `tailrec` | old | scalar-cleanup-port |
+| 20 | tailcallelim (twice) | O2 (once O1) | `tailrec` | translated | gvn-ci-2160-2172 |
 | 21 | reassociate | all | `algebraic` | old | fold-poc |
 | 22 | constraint-elimination | O2 | none | missing | domtree-port |
 | 23 | loop-instsimplify, loop-simplifycfg | all | none | missing | loop-passes-port |
@@ -1284,12 +1284,6 @@ Checklist: the shared list.
 **Translate, do not paraphrase.** Every LLVM-mirroring pass or file is a translation of LLVM's C++ at `d1106deb71cc`, read from a local checkout and not from memory or docs. The Rust follows the C++ structure: its functions, worklists, caps and thresholds with the `cl::opt` defaults, and the order of the checks. Each function carries a one-line permalink comment. Anything not translated is a `DEVIATE` with the reason and a number in the PR; the PR's `LLVM structure` line names files and lines; review reads the two side by side.
 
 **Translate into idiomatic Rust.** Translating from language A to B is always into idiomatic B, not a straight copy. For LLVM's C++ into Rust: keep what must mirror (the algorithm, the order of checks, the worklists, caps and thresholds with their `cl::opt` defaults, the permalinks, the numbered DEVIATEs), written as Rust: ownership and borrowing instead of raw-pointer emulation, enums plus `match` instead of opcode-switch ladders or kind fields, iterators and closures instead of index loops, `Option`/`Result` instead of null or sentinel values, no getter/setter boilerplate, no C++ class hierarchies emulated with trait objects where an enum fits, Rust naming. Reviews check it; existing translations become idiomatic when their owner next touches the file, without a churn wave; an urgent file goes to oversight.
-
-**General solutions, one job per module.** A fix is a general, robust solution, never a patch for one case or shape. DRY, SRP, open/closed and separation of concerns: a new case extends a trait, a table or an interface instead of adding a branch inside existing code; shared logic lives in one place; a module has one job (analysis, transform, target and object format stay separate). Every brief and every review checks it, and reviews flag a violation unasked.
-
-**As close to O(n) as possible.** Where LLVM is super-linear, mirror the caps and thresholds that bound it, with permalinks. Never add a quadratic step LLVM lacks (rescans, nested walks over the function, re-solving per query). Any remaining super-linear step needs a stated reason and a slope test at 1x and 4x input size. Briefs and reviews check it.
-
-**No machine facts in backend code.** Registers and classes, encodings, latencies, sizes, alignment, calling conventions and costs live in one configurable target description per target (LLVM's split: the TableGen description, the subtarget and TTI) and are passed to the passes that use them: never a literal or a target `match` inside a pass. The arm64 and x86-64 spikes build on that description from the start and add no constants of their own. backend-two audits the existing backend for hardcoded facts (a list by file) and moves them in small PRs. Briefs and reviews check it.
 
 **Mirror LLVM's structure by default.** Every design page and every structural PR carries a `LLVM structure` line: LLVM's structure (name and permalink at `d1106deb71cc`), ours, and `MIRROR` or `DEVIATE` with the reason. The default is to mirror. A deviation needs a reason (our MIR or LIR differs; output would change and the rows rule applies; measured not better) and a number. The mapping so far:
 

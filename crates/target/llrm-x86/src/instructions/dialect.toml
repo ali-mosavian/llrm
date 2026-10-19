@@ -4,6 +4,8 @@ registers = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "es", "ds", "fs", "
 widths = [8, 16, 32]
 # Each row ends in iced's Code name.
 assembler_column = true
+# What a rule's `any` flag reads.
+arithmetic = ["OF", "SF", "ZF", "AF", "CF", "PF"]
 
 # `{cc}` expands to these, in iced's spelling, each with the flags it tests.
 conditions = [
