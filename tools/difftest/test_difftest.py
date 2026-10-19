@@ -277,3 +277,13 @@ def test_every_opt_command_line_carries_llrms_triple_and_cpu(monkeypatch):
     seen.clear()
     difftest.opt("sroa", "")
     assert "-mtriple=i386-unknown-linux-gnu" in seen[0] and "-mcpu=i386" in seen[0]
+
+
+def test_the_m16_runs_read_a_datalayout_with_16_bit_pointers(monkeypatch):
+    """opt used 32-bit pointers for m16 dumps: a pointer-width fold compared at the wrong width. The layout comes from the target's own datalayout.toml."""
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m16")
+    args = difftest.target_args()
+    layout = next(a for a in args if a.startswith("--data-layout="))
+    assert "p:16:16" in layout and "-mtriple=i386-unknown-linux-gnu" in args
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m32")
+    assert "p:32:32" in next(a for a in difftest.target_args() if a.startswith("--data-layout="))
