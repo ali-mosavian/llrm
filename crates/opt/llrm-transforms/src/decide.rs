@@ -713,6 +713,7 @@ pub fn _threaded(
         if let [_, Operand::Block(taken), Operand::Block(other)] = function.instruction(last).operands[..]
             && taken == other
         {
+            function.predecessor_removed(context, taken, block, true);
             _jump(function, last, taken);
             changed = true;
         }

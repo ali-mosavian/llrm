@@ -90,6 +90,37 @@ b2:
     }
 }
 
+/// `br i1 %c, %b1, %b1` made a jump kept both of b1's phi inputs from b0, one
+/// per edge, so QCport's sc.c at -O2 ended in a phi naming a deleted block.
+#[test]
+fn test_a_branch_with_both_arms_one_way_leaves_the_phi_one_input() {
+    let mut module = parsed(
+        "define i16 @f(i1 %c, i16 %x) {
+b0:
+  br i1 %c, label %b1, label %b1
+
+b1:
+  %r = phi i16 [ %x, %b0 ], [ %x, %b0 ]
+  ret i16 %r
+}
+",
+    );
+    let (context, function) = module.function_mut("f").expect("@f");
+    assert!(_threaded(context, function));
+    assert_eq!(
+        printed(&module),
+        "define i16 @f(i1 %c, i16 %x) {
+b0:
+  br label %b1
+
+b1:
+  %r = phi i16 [ %x, %b0 ]
+  ret i16 %r
+}
+"
+    );
+}
+
 /// A branch on a compare of two numbers is a jump the way it goes, and
 /// the other arm goes.
 #[test]
