@@ -120,7 +120,17 @@ const PHI_DUPLICATE_THRESHOLD: u32 = 76;
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L93>
 const IMPLICATION_SEARCH_THRESHOLD: u32 = 3;
 
-pub struct JumpThreading;
+/// Off by default since it runs away on `runtime/qb/datetime.c` -Os (the peel
+/// loop never settles); `LLRM_JUMPTHREADING` turns it on.
+pub struct JumpThreading {
+    pub enabled: bool,
+}
+
+impl JumpThreading {
+    pub fn from_env() -> Self {
+        Self { enabled: llrm_support::env_flag!("LLRM_JUMPTHREADING") }
+    }
+}
 
 impl FunctionPass for JumpThreading {
     fn name(&self) -> &'static str {
@@ -134,7 +144,7 @@ impl FunctionPass for JumpThreading {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        if llrm_support::env_flag!("LLRM_NO_JUMPTHREADING") {
+        if !self.enabled {
             return PreservedAnalyses::all();
         }
         let outer = Rc::clone(analyses.outer());
