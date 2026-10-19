@@ -264,3 +264,26 @@ fn seven_affine_terms_of_one_counter_keep_one_phi() {
     // As `opt` has them, one `x * 2` per term; a later CSE makes it one.
     assert_eq!(after.matches("shl nuw nsw i16 %").count(), 7, "{after}");
 }
+
+/// The dominator tree, loops and assumptions are made once for a function, not
+/// once per loop and attempt: the old `lsr` asked each analysis again per solve
+/// and doubled in cost with the body (W2's callgrind of d_faces).
+#[test]
+fn the_analyses_are_made_once_for_the_loops_of_a_function() {
+    let one = |k: usize| {
+        format!(
+            "  br label %h{k}\nh{k}:\n  %i{k} = phi i32 [ 0, %e{k} ], [ %n{k}, %h{k} ]\n  %a{k} = getelementptr i32, ptr %buf, i32 %i{k}\n  store i32 7, ptr %a{k}\n  %n{k} = add i32 %i{k}, 1\n  %c{k} = icmp eq i32 %n{k}, %n\n  br i1 %c{k}, label %e{}, label %h{k}\ne{}:\n",
+            k + 1,
+            k + 1
+        )
+    };
+    let mut text = String::from("define i32 @f(i32 %n) {\ne0:\n  %buf = alloca [64 x i32]\n");
+    for k in 0..4 {
+        text += &one(k);
+    }
+    text += "  ret i32 0\n}\n";
+    crate::lsr_pass::SESSIONS.with(|made| made.set(0));
+    let (changed, after) = reduced_on(FLAT, &text, "i486", &[&[5]]);
+    assert!(changed, "{after}");
+    assert_eq!(crate::lsr_pass::SESSIONS.with(|made| made.get()), 1, "{after}");
+}

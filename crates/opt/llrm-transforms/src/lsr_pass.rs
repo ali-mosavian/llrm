@@ -40,6 +40,12 @@ use crate::lsr_collect::Collection;
 use crate::lsr_implement::{Implement, Plan, split_phi_edges};
 use crate::lsr_prepare::{self, ExitEdit, ShadowEdit};
 
+#[cfg(test)]
+thread_local! {
+    /// How many sessions (dominator tree, loops and assumptions) the pass made.
+    pub static SESSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `MaxIVUsers`.
 const MAX_IV_USERS: usize = 200;
 
@@ -242,10 +248,18 @@ pub fn reduced_with(
     tti: &dyn Tti,
     stress_chains: bool,
 ) -> bool {
+    // The dominator tree, loops and assumptions of the function are made once:
+    // an edit of the loop does not change the CFG. Only splitting an edge does;
+    // then they are made again.
+    let new_session = |context: &Context, function: &Function| {
+        #[cfg(test)]
+        SESSIONS.with(|made| made.set(made.get() + 1));
+        ScevSession::within(context, &outer.globals, &outer.metadata, function)
+    };
+    let mut session = new_session(context, function);
     let headers: Vec<BlockId> = {
-        let tree = llrm_mir::domtree::DomTree::of(function);
-        let loops = llrm_mir::loopinfo::LoopInfo::analyze(function, || &tree);
-        let mut headers: Vec<BlockId> = loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
+        let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
+        let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
         headers.reverse();
         headers
     };
@@ -255,78 +269,84 @@ pub fn reduced_with(
         // edges: each is followed by an analysis of the loop as it is then.
         let mut marked: Option<Vec<InstId>> = None;
         for _ in 0..6 {
-            let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
-            let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
-            let plan = match plan_loop(
-                context,
-                layout,
-                function,
-                outer,
-                tti,
-                se,
-                &env,
-                header,
-                marked.as_deref(),
-                stress_chains,
-            ) {
-                Outcome::Planned(None) => break,
-                Outcome::Edit(edits) => {
-                    marked = Some(lsr_prepare::apply(function, &context.types, header, &edits));
-                    changed = true;
-                    continue;
+            // The expressions of the loop as it was are not those of now.
+            session.forget_expressions();
+            let mut split = false;
+            {
+                let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
+                let plan = match plan_loop(
+                    context,
+                    layout,
+                    function,
+                    outer,
+                    tti,
+                    se,
+                    &env,
+                    header,
+                    marked.as_deref(),
+                    stress_chains,
+                ) {
+                    Outcome::Planned(None) => break,
+                    Outcome::Edit(edits) => {
+                        marked = Some(lsr_prepare::apply(function, &context.types, header, &edits));
+                        changed = true;
+                        continue;
+                    }
+                    Outcome::Shadow(edit) => {
+                        lsr_prepare::apply_shadow(function, context, &edit);
+                        changed = true;
+                        continue;
+                    }
+                    Outcome::Planned(Some(plan)) => plan,
+                };
+                let mut lp_blocks = llrm_mir::dense::IdSet::<BlockId>::new();
+                if let Some(lp) = env.loops.get_loop_for(header) {
+                    for &block in lp.get_blocks() {
+                        lp_blocks.insert(block);
+                    }
                 }
-                Outcome::Shadow(edit) => {
-                    lsr_prepare::apply_shadow(function, context, &edit);
+                if split_phi_edges(function, &plan, &|block| env.loops.is_loop_header(block), &|block| {
+                    lp_blocks.contains(&block)
+                }) {
                     changed = true;
-                    continue;
-                }
-                Outcome::Planned(Some(plan)) => plan,
-            };
-            let mut lp_blocks = llrm_mir::dense::IdSet::<BlockId>::new();
-            if let Some(lp) = env.loops.get_loop_for(header) {
-                for &block in lp.get_blocks() {
-                    lp_blocks.insert(block);
+                    split = true;
+                } else {
+                    // Expand and rewrite.
+                    let mut rewriter = Expander::new("lsr");
+                    rewriter.set_canonical_mode(false);
+                    rewriter.enable_lsr_mode();
+                    let mut run = Implement {
+                        context,
+                        function,
+                        declared,
+                        se,
+                        env: &env,
+                        rewriter: &mut rewriter,
+                        tti,
+                        l: header,
+                        iv_inc_insert_pos: plan.iv_inc_insert_pos,
+                        dead: Vec::new(),
+                        changed: false,
+                    };
+                    run.implement_solution(&plan);
+                    let mut dead = std::mem::take(&mut run.dead);
+                    run.move_increments();
+                    changed |= run.changed;
+                    // `DeleteDeadPHIs`: the phis nothing reads any more, those
+                    // of a cycle included.
+                    dead.extend(
+                        function
+                            .iter_block(header)
+                            .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                            .filter_map(|inst| function.instruction(inst).result),
+                    );
+                    crate::dead::dead_from(context, outer.callees(), function, dead);
+                    break;
                 }
             }
-            if split_phi_edges(function, &plan, &|block| env.loops.is_loop_header(block), &|block| {
-                lp_blocks.contains(&block)
-            }) {
-                changed = true;
-                continue;
+            if split {
+                session = new_session(context, function);
             }
-            // Expand and rewrite.
-            let mut rewriter = Expander::new("lsr");
-            rewriter.set_canonical_mode(false);
-            rewriter.enable_lsr_mode();
-            let mut run = Implement {
-                context,
-                function,
-                declared,
-                se,
-                env: &env,
-                rewriter: &mut rewriter,
-                tti,
-                l: header,
-                iv_inc_insert_pos: plan.iv_inc_insert_pos,
-                dead: Vec::new(),
-                changed: false,
-            };
-            run.implement_solution(&plan);
-            let dead = std::mem::take(&mut run.dead);
-            run.move_increments();
-            let rewrote = run.changed;
-            changed |= rewrote;
-            // `DeleteDeadPHIs`: the phis nothing reads any more, those of a
-            // cycle included.
-            let mut dead = dead;
-            dead.extend(
-                function
-                    .iter_block(header)
-                    .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
-                    .filter_map(|inst| function.instruction(inst).result),
-            );
-            crate::dead::dead_from(context, outer.callees(), function, dead);
-            break;
         }
     }
     changed
