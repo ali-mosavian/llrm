@@ -71,7 +71,7 @@ fn facts() -> Regex {
     }
     // Facts a pass writes as code, which no description lists to search for: a
     // register constant by name, a mode test, a hard-wired target's classes, the
-    // x86 decoder (docs/architecture/target-facts-audit.md).
+    // x86 decoder (the target-facts audit).
     let shapes = [
         r"(?-i:\bRegId::[A-Z][A-Z0-9_]*\b)",
         r"(?-i:\.bits\s*(?:==|!=)\s*(?:16|32)\b)",
