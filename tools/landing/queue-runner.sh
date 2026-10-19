@@ -15,6 +15,10 @@ while true; do
   # never run beside another landing (old runner's land.sh)
   while ps -eo args | awk '/land\.sh/ && !/awk/ {f=1} END{exit !f}'; do sleep 20; done
   "$HERE/build-queue.sh" > $Q.new && mv $Q.new $Q || echo "build-queue failed, keeping the old queue"
+  # landings outside the gate: every first-parent commit of feat/parity not in landed.log, reported once
+  git -C "$W" fetch -q origin 2>/dev/null; (cd "$W" && "$HERE/unlogged.sh" 2>/dev/null) | while read -r l; do
+    grep -qxF "$l" "${LAND_TMP:-/tmp/landing}/unlogged.log" 2>/dev/null || { echo "UNLOGGED LANDING: $l"; echo "$l" >> "${LAND_TMP:-/tmp/landing}/unlogged.log"; }
+  done
   n=$(head -1 $Q); [ -z "$n" ] && { sleep 20; continue; }
   batch=("$n"); g=$(group "$n")
   if [ -z "$g" ]; then
