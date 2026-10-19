@@ -562,8 +562,10 @@ dependencies = [
  "llrm-analysis",
  "llrm-mir",
  "llrm-support",
+ "llrm-target",
  "llrm-x86",
  "llrm-x86-m16",
+ "llrm-x86-m32",
  "num-bigint",
  "num-traits",
 ]

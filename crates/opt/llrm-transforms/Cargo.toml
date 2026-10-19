@@ -15,4 +15,6 @@ num-traits = { workspace = true }
 [dev-dependencies]
 llrm-x86 = { workspace = true }
 llrm-x86-m16 = { workspace = true }
+llrm-x86-m32 = { workspace = true }
+llrm-target = { workspace = true }
 llrm-analysis = { workspace = true, features = ["testing"] }
