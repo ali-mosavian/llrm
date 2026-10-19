@@ -362,6 +362,10 @@ fn intrinsic_prices() -> &'static llrm_support::hash::HashMap<(&'static str, &'s
 }
 
 impl Tti for X86 {
+    fn name(&self) -> &'static str {
+        "X86"
+    }
+
     fn cast_of_load_cost(
         &self,
         op: CastKind,
