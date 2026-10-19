@@ -493,8 +493,15 @@ impl<'a> Selector<'a> {
     ) {
         let register_bits = if bits <= 32 { 32 } else { 64 };
         let value = if register_bits == 32 { value & 0xFFFF_FFFF } else { value };
-        for inst in crate::expand_imm::mov_imm(value, register_bits, reg) {
-            self.inst(inst);
+        let insts = crate::expand_imm::mov_imm(value, register_bits, reg);
+        // A chain of `movz`/`movk` is several writes of one register: kept as one
+        // definition (expanded after allocation) so CSE and hoisting can move it.
+        if insts.len() > 1 {
+            self.emit(Op::Imm { dst: reg, bits: register_bits, value });
+        } else {
+            for inst in insts {
+                self.inst(inst);
+            }
         }
     }
 
@@ -515,9 +522,7 @@ impl<'a> Selector<'a> {
         // Through an integer register: LLVM loads from a constant pool.
         let scratch = self.mf.gpr();
         let (width, register_bits) = if size == FpSize::S { (Width::W, 32) } else { (Width::X, 64) };
-        for inst in crate::expand_imm::mov_imm(bits, register_bits, scratch) {
-            self.inst(inst);
-        }
+        self.load_immediate(scratch, register_bits, bits);
         self.inst(Inst::FpInt { op: FpConvert::Bits { to_fp: true }, width, size, gpr: scratch, fpr: reg });
     }
 
