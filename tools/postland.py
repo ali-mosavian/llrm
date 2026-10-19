@@ -102,11 +102,21 @@ def tree(sha: str) -> Path:
     return path
 
 
+def fresh(at: Path) -> None:
+    """Make every tracked file newer than whatever a shared target holds. Cargo calls an artifact fresh when no source is newer than it, and a workspace crate's artifact
+    is shared between checkouts: the tree of an older commit, built after a newer one, linked the newer tree's llrm-mir (10 compile errors that no commit had)."""
+    files = git("ls-files", "-z", cwd=at).split("\0")
+    for name in files:
+        if name and (at / name).exists():
+            os.utime(at / name)
+
+
 def dist(at: Path, sha: str) -> Path:
     """The release binaries of the tree, built at low priority through buildslot into one persistent target."""
     out = HOME / f"dist-{sha[:9]}"
     if (out / "ok").exists():
         return out
+    fresh(at)
     target = HOME / "target-dist"
     target.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "CARGO_TARGET_DIR": str(target), "CARGO_INCREMENTAL": "0"}
@@ -161,6 +171,7 @@ def unit_failures(at: Path, name: str | None = None) -> set[str]:
     env = {**os.environ, "CARGO_TARGET_DIR": str(HOME / "target-test"), "CARGO_INCREMENTAL": "0"}
     env.pop("RUSTFLAGS", None)
     command = [*LOW, "buildslot", "cargo", "test", "--release", "--workspace", "--lib", "--no-fail-fast", *([name] if name else [])]
+    fresh(at)
     output, code = merged(command, at, env)
     return unit_result(output, code)
 

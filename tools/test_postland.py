@@ -66,3 +66,22 @@ def test_stderr_and_stdout_keep_their_order(tmp_path):
     script = "echo 'Running unittests (deps/llrm_c-0a1b)' >&2; echo 'failures:'; echo '    t::x'"
     output, code = postland.merged(["sh", "-c", script], tmp_path, {})
     assert code == 0 and output.index("Running") < output.index("failures:")
+
+
+def test_a_tree_built_after_a_newer_one_is_still_newer_than_the_shared_targets_artifacts(tmp_path):
+    """A shared target called the older commit's sources fresh and linked the newer commit's crate: 10 compile errors at the head, and a culprit (#2757) that was not."""
+    import os
+    import subprocess
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t", *args], capture_output=True, check=True)
+
+    git("init", "-q")
+    (tmp_path / "a.rs").write_text("x")
+    git("add", "a.rs")
+    git("commit", "-q", "-m", "a")
+    artifact = tmp_path / "artifact"
+    artifact.write_text("built later")
+    os.utime(tmp_path / "a.rs", (1, 1))
+    postland.fresh(tmp_path)
+    assert (tmp_path / "a.rs").stat().st_mtime >= artifact.stat().st_mtime
