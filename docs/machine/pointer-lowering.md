@@ -21,7 +21,7 @@ Code: `carried`, `window` and `pointer_difference` in [`isel.rs`](../optimizatio
 
 ## Making the carry cheap
 
-Built from a counter, each use pays the whole carry (`OperationCosts::carry`); stepped by a constant, the step pays a borrow spread to a mask, cut to the selector's stride and added to it (`carry_step`). So `lsr` walks a huge array with a huge pointer ([lsr](../optimizations/passes/lsr.md)).
+Built from a counter, each use pays the whole carry (`OperationCosts::carry`); stepped by a constant, the step pays a borrow spread to a mask, cut to the selector's stride and added to it (`carry_step`). So `lsr` walks a huge array with a huge pointer ([lsr](../optimizations/passes/lsr_pass.md)).
 
 `window` ([`window.rs`](../optimizations/passes/window.md)) runs after `lsr`: a counted loop's huge recurrences are split into windows. Inside a window every recurrence is normalized (`llrm.ia16.window`) and the loop runs as many whole trips as the target's window holds (`Machine::huge_window`) on far pointers that never carry; an outer loop walks the windows. The split is priced: a window's setup against the carries it saves.
 

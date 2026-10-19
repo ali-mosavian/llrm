@@ -77,7 +77,7 @@
 //! `proven_trips`, the frequency models and `UNIT`, `UNKNOWN_TRIPS`.
 //!
 //! # Used by
-//! Each of [`crate::lsr`], [`crate::hoist`], [`crate::gvn`],
+//! Each of [`crate::lsr_pass`], [`crate::hoist`], [`crate::gvn`],
 //! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`],
 //! [`crate::loopidioms`], [`crate::window`], [`crate::gepoffset`],
 //! [`crate::indvars`], [`crate::ipacp`], [`crate::inline`]

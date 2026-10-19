@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_pass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_pass.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_pass.rs sha256:832cddfc58fb70f33feaf91e0851b0d17185da248dfd5b5b99c9a86298d97dbd -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_pass.rs sha256:492607c6e31513c2c7ec10626432b04ebd358601b3d29d82af1a934d753ec3c7 -->
 
 # lsr_pass
 
@@ -22,7 +22,7 @@ pointer phi stepping by 4 and a counter from `%n - 1` to 0; the interpreter
 agrees on every input.
 
 ## Runs
-Instead of [`crate::lsr`](lsr.md) with `LLRM_EXP_LSR`.
+In the pipeline's strength slot, after `fixednarrow`.
 
 ## Limits
 DEVIATE: not yet ported: IV chains, `OptimizeShadowIV`,

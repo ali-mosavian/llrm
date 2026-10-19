@@ -17,7 +17,7 @@
 //! agrees on every input.
 //!
 //! # Runs
-//! Instead of [`crate::lsr`] with `LLRM_EXP_LSR`.
+//! In the pipeline's strength slot, after `fixednarrow`.
 //!
 //! # Limits
 //! DEVIATE: not yet ported: IV chains, `OptimizeShadowIV`,
@@ -48,11 +48,6 @@ thread_local! {
 
 /// `MaxIVUsers`.
 const MAX_IV_USERS: usize = 200;
-
-/// Whether `LLRM_EXP_LSR` asks for this pass in place of [`crate::lsr`].
-pub fn enabled() -> bool {
-    llrm_support::env_flag!("LLRM_EXP_LSR")
-}
 
 /// LLVM's loop strength reduction.
 pub struct LoopStrengthReduce;
