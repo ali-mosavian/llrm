@@ -82,6 +82,11 @@ const SLOTS: [(&str, &str); 18] = [
     ("ControlFlow", "jumps@17"),
 ];
 
+/// The registry slot of the machine phase `class`.
+fn slot_of(class: &str) -> Option<&'static str> {
+    SLOTS.iter().find(|(name, _)| *name == class).map(|(_, slot)| *slot)
+}
+
 /// `machine`, its peephole made of the rules `rules` holds; the spiller, where
 /// `spilling` names a run, reports to it.
 #[allow(clippy::too_many_arguments)]
@@ -176,8 +181,15 @@ pub fn machine_with<'a>(
         phases.retain(|phase| phase.class_name() != "SsaSpill");
     }
     // -O0: gcc and clang improve nothing after selection and allocation.
+    let mut left_out: Vec<&str> = Vec::new();
     if !target.optimized {
-        phases.retain(|phase| !UNOPTIMIZED.contains(&phase.class_name()));
+        phases.retain(|phase| {
+            let left = UNOPTIMIZED.contains(&phase.class_name());
+            if left {
+                left_out.extend(slot_of(phase.class_name()));
+            }
+            !left
+        });
     }
     // Under `LLRM_GREEDY_RFP` the stackifier runs after allocation, on the FP
     // registers greedy assigned, as X86FloatingPoint does.
@@ -189,15 +201,10 @@ pub fn machine_with<'a>(
         phases.insert(after, moved);
     }
     if cfg!(debug_assertions) {
-        // At -O0 the optional phases are not run; a slot that is Translated
-        // must be, and none of those is.
-        let built: Vec<&str> = phases
-            .iter()
-            .map(|phase| {
-                SLOTS.iter().find(|(class, _)| *class == phase.class_name()).map_or("unknown", |(_, slot)| *slot)
-            })
-            .collect();
-        llrm_transforms::parity::check_backend(&built)?;
+        // At -O0 the optional phases are not run: a slot that is Translated
+        // or Partial must be, but those.
+        let built: Vec<&str> = phases.iter().map(|phase| slot_of(phase.class_name()).unwrap_or("unknown")).collect();
+        llrm_transforms::parity::check_backend(&built, &left_out)?;
     }
     Ok(phases)
 }

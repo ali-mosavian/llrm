@@ -462,9 +462,15 @@ pub(crate) fn check_phase_with(
 }
 
 /// [`check_phase`] for the machine phases `llc` runs: `built` is the slot of
-/// each phase of `flow::machine_with` that runs.
-pub fn check_backend(built: &[&str]) -> Result<(), String> {
-    check_phase(Phase::Backend, built)
+/// each phase of `flow::machine_with` that runs, `left_out` those it leaves out
+/// on purpose (the phases -O0 does not run).
+pub fn check_backend(
+    built: &[&str],
+    left_out: &[&str],
+) -> Result<(), String> {
+    check_without(REGISTRY, Phase::Backend, built, left_out)?;
+    llrm_mir::counts::joined(joined_slots(REGISTRY, built));
+    Ok(())
 }
 
 /// How many slots are in each state; Partial is counted apart from Translated.

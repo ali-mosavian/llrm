@@ -841,6 +841,16 @@ pub fn merge_block_into_predecessor(
         function.move_to(inst, Position::Before(pti)).expect("a placed instruction");
     }
 
+    // The records said before the predecessor's branch go with `sti` when it
+    // takes the branch's place (the pin: the trailing records `PTI` leaves,
+    // which `moveBeforePreserving` hands to `STI`). That holds only while the
+    // branch still names BB as the one block it enters, so it is erased
+    // before the uses of BB are redirected.
+    if fall_thru.is_none() {
+        // Delete the unconditional branch from the predecessor.
+        function.erase(pti).expect("a jump defines nothing");
+    }
+
     // Make all PHI nodes that referred to BB now refer to Pred as their
     // source...
     function.replace_block_uses_with(bb, pred_bb);
@@ -851,8 +861,6 @@ pub fn merge_block_into_predecessor(
         // Update branch in the predecessor.
         function.set_operand(pti, 1 + fall_thru_path, Operand::Block(new_succ));
     } else {
-        // Delete the unconditional branch from the predecessor.
-        function.erase(pti).expect("a jump defines nothing");
         // Move terminator instruction.
         function.move_to(sti, Position::End(pred_bb)).expect("a placed instruction");
     }

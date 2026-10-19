@@ -294,6 +294,22 @@ fn moving_an_instruction_leaves_its_records_in_place() {
     assert!(f.debug_records().iter().any(|one| one.before == ret && matches!(one.what, crate::DebugWhat::Value(_))));
 }
 
+/// A branch to its own block, which nothing else enters, has no block to hand
+/// its records to but its own: erased, they were left standing before the
+/// erased branch ("a debug record of !0 stands before instruction N, which is
+/// no longer in the function").
+#[test]
+fn erasing_a_branch_to_its_own_block_leaves_no_record_dangling() {
+    let mut parsed = module(
+        "define i16 @f(i16 %a) {\nentry:\n  ret i16 %a\n\nspin:\n  #dbg_value(i16 %a, !0)\n  br label %spin\n}\n\n!0 = !{!\"v\"}\n",
+    );
+    let f = function(&mut parsed);
+    let spin = f.layout()[1];
+    let jump = f.terminator(spin).expect("a branch");
+    f.erase(jump).expect("a branch defines nothing");
+    assert!(f.debug_records().iter().all(|one| one.before != jump), "{:?}", f.debug_records());
+}
+
 /// A record whose anchor is no longer in the function is the verifier's to
 /// find.
 #[test]

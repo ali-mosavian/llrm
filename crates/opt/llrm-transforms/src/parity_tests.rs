@@ -109,8 +109,24 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@99"), "{why}");
     let why =
-        parity::check_backend(&["floatalloc@8", "coalesce@10", "jumps@17", "allocate@11", "unknown@1"]).unwrap_err();
+        parity::check_backend(&["floatalloc@8", "coalesce@10", "jumps@17", "allocate@11", "unknown@1"], &[]).unwrap_err();
     assert!(why.contains("unknown@1"), "{why}");
+}
+
+/// Flipping `coalesce@10` to Partial (#2822) made the registry demand it of every
+/// backend, and -O0 leaves the coalescer out: nib's unoptimized `-g` compiles
+/// failed with "slot coalesce@10 is Translated (register-coalescer) and not run
+/// in Backend". The phases a build leaves out on purpose are not required.
+#[test]
+fn test_a_backend_that_leaves_a_partial_slot_out_on_purpose_is_not_refused() {
+    let built: Vec<&str> = parity::REGISTRY
+        .iter()
+        .filter(|one| one.phase == Phase::Backend && one.slot != "coalesce@10")
+        .map(|one| one.slot)
+        .collect();
+    let why = parity::check_backend(&built, &[]).expect_err("coalesce@10 left out unannounced");
+    assert!(why.contains("coalesce@10"), "{why}");
+    assert_eq!(parity::check_backend(&built, &["coalesce@10"]), Ok(()));
 }
 
 /// A Partial slot that is not run fails like a Translated one, but it is never

@@ -314,6 +314,11 @@ impl Function {
             return None;
         }
         let [Operand::Block(target)] = self.instruction(inst).operands[..] else { return None };
+        // A branch to its own block enters no other: its records have no start
+        // to go to but itself, which is going away.
+        if self.parent(inst) == Some(target) {
+            return None;
+        }
         // A phi that names the block as where its value comes from is a use of
         // it too, but no way in. (An erase has already taken its own
         // use of the block away.)
