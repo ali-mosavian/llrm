@@ -120,8 +120,8 @@ fn nib_lines_are_its_statements() {
 /// same statement in the equivalent C, whose `clang -O2 -g` line table is the
 /// pin's: `main`'s 10 (`counter += 1`), `scale`'s 5 (the `print`, now inside
 /// `main`), then 12, 13 and 14 (the `if`, its `print` and the `return`), in
-/// that order. The pin has no line for `scale`'s `return factor * 2` (6); ours
-/// lists it as well, which is not asserted either way. The source this
+/// that order. The pin also lists 6 (`scale`'s `return factor * 2`, inlined)
+/// and `main`'s own line 9; only the order above is asserted. The source this
 /// replaces called `scale(origin, counter)` and tested `if result > 0`, which
 /// the pin folds whole (the store to the global `counter` forwards into the
 /// argument), leaving no code for lines 10 and 19 of that source: the old
