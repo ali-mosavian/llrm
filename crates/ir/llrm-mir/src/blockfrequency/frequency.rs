@@ -26,6 +26,28 @@ impl BlockFrequency {
         self.0.checked_mul(factor).map(Self)
     }
 
+    /// `mul` by a plain factor, saturating at the largest frequency as every
+    /// `BlockFrequency` operation does: a block inside many loops weighs
+    /// the product of their trips.
+    pub fn saturating_mul(
+        self,
+        factor: u64,
+    ) -> Self {
+        Self(self.0.saturating_mul(factor))
+    }
+
+    /// This frequency times `numerator / denominator`, the product taken wide
+    /// so that only a result past the largest frequency saturates
+    /// (`BranchProbability::scale` does the same with 64-bit parts).
+    pub fn scaled(
+        self,
+        numerator: u64,
+        denominator: u64,
+    ) -> Self {
+        let scaled = u128::from(self.0) * u128::from(numerator) / u128::from(denominator.max(1));
+        Self(u64::try_from(scaled).unwrap_or(u64::MAX))
+    }
+
     /// `operator>>=`: never shifts to zero.
     pub fn shr_nonzero(
         self,
