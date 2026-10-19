@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 99 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 100 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -18,6 +18,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | candidate | Trying a rewrite on a copy of the body: the copy is cleaned by the pipeline's own passes and replaces the body only if it is better. | `adopted`, `priced`, `priced_at`, `frequencies`, `Pricing`, `Gain`, | [candidate](candidate.md) |
 | canonical | Canonical forms, as LLVM's InstCombine puts them: compares with the constant on the right, no neutral terms, and a zero test at the width of what it tests, so that every later pass matches one shape of each. | Not a step of the fixed point on its own: `fold` runs `compares` and | [canonical](canonical.md) |
 | cfg | Control-flow cleanup: a block that jumps unconditionally to a block only it reaches takes that block's instructions (LLVM's SimplifyCFG `MergeBlockIntoPredecessor`). | A library function, called by `decide` after it decides branches and by | [cfg](cfg.md) |
+| combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
 | constraintelim | `constraint-elimination`: conditions the dominating branches, assumes and memory accesses already decide become constants, by Fourier-Motzkin elimination on a system of linear constraints over the values compared. | Nothing yet: `difference` and `guards::Given::holds` move here. | [constraintelim](constraintelim.md) |
 | counting | What a counted-loop rewrite places before the loop: its seeds, skip test and exit values (LLVM's SCEVExpander, as IndVarSimplify and LoopRotate use it). | [`crate::loopidioms`](loopidioms.md), [`crate::loopexit`](loopexit.md), [`crate::window`](window.md) and | [counting](counting.md) |
 | cvp | Correlated value propagation: a value is replaced, narrowed or given a flag when the branches and ranges around it prove the fact, as LLVM's `correlated-propagation`. | Alone, through `llrm-pass cvp`; not in the pipeline. `tools/difftest` | [cvp](cvp.md) |

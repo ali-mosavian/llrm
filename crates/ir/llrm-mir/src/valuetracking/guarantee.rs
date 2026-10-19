@@ -209,7 +209,7 @@ fn is_volatile(
 /// `Instruction::willReturn()`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L1367>
-fn will_return(
+pub fn will_return(
     q: &Query,
     inst: InstId,
 ) -> bool {
