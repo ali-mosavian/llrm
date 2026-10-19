@@ -264,9 +264,10 @@ mod tests {
     }
 
     #[test]
-    fn test_m16_aligns_no_function() {
+    fn test_m16_aligns_no_function_or_loop() {
         use llrm_target::Target;
         assert_eq!(super::M16.pref_function_alignment(), 0);
+        assert_eq!(super::M16.pref_loop_alignment(), 0);
     }
 
     /// gcc's by-pieces ratios of a constant memset where its algorithm is `rep
