@@ -16,14 +16,34 @@ TL;DR: POC, not for feat/parity until decided. Mach-O arm64 (Darwin AAPCS64) fir
 
 `llrm_target::Target` (names, layout, registers, results, stack pointer, callee-saved, frame register, forms text), `llrm_mir::tti::Tti`, `llrm_mir::lowering::Lowering`, a `calling` description, forms and selection tables, an encoder, and an object `Arch`.
 
-## Order (dates are targets)
+## Status
 
-1. 10-19..10-21: AArch64+X86 pin build in a separate dir (Release, no assertions, buildslot, low -j); `llc`, `llvm-mc`, `llvm-objdump`, `clang`. Oracle = pinned `clang -target arm64-apple-macos`.
-2. 10-22..10-24: probe which x86 assumptions the LIR and isel carry (flags, two-address, forms). Output: list of leaks, each fixed in the generic layer or recorded as a numbered DEVIATE.
-3. 10-25..10-29: `Arch::Aarch64`; Mach-O arm64 and ELF aarch64 writers (relocs `ARM64_RELOC_*`, `R_AARCH64_*`); checked with `llvm-objdump`/`llvm-readobj` against pinned clang output.
-4. 10-30..11-06: `llrm-aarch64`: registers, Darwin CC, forms, encoder (checked against `llvm-mc`).
-5. 11-07..11-20: TTI, isel, frame lowering from `AArch64ISelLowering`, `AArch64FrameLowering`.
-6. 11-21..11-30: milestone programs (return, loops, calls, globals, printf) run under qemu; on the Mac when a route exists.
+Works, checked against the pinned `clang -O2` (output and exit status, under `qemu-aarch64` for ELF; 22 programs in `crates/target/llrm-arm64/tests/programs`, run by `tests/run.rs`): integer and float arithmetic of every width, division by constants, pointers and arrays, structs and arrays by value and by `sret`, variadic functions (AAPCS64 register save areas; Darwin stack slots), calls with stack arguments, function pointers, `switch`, variable-length arrays, 5 KB frames, `malloc`ed lists and trees, `qsort` callbacks, global initializers with relocations. Mach-O arm64 and ELF aarch64 objects; the Darwin fixtures disassemble clean under the pinned `llvm-objdump`; `tools/arm64_mac_check.sh` runs them on a Mac.
+
+Not yet: `__int128` (and i128 in the mid-end's SCEV), vectors, atomics, exceptions, `long double`, TLS, jump tables, `-fPIC` data access on ELF.
+
+Measured with `tools/arm64_compare.py` (modes `whole`, `backend`, `compile`; the program's own code only, runtime excluded):
+
+| comparison | code bytes | instructions executed | note |
+|---|---|---|---|
+| backend alone, same clang -O2 IR as `llc -O2` | 1.08x | 1.14x (geomean) | no LSR/post-index, no `ldp`/`stp` |
+| whole: this mid-end + backend against `clang -O2` | 1.60x | 1.62x | mid-end gaps: no vectorizer, recursion peeling |
+| compile time against `opt -O2` + `llc -O2` | | 4.35x | backend alone is 5.8 M instructions against `llc`'s 25.5 M |
+
+## Numbered DEVIATEs
+
+1. `regalloc.rs`: ranges with holes, copy coalescing, no splitting or eviction; stands in for `RAGreedy`.
+2. `driver.rs`: Apple's `va_arg` instruction is written out as loads in the text; MIR has no `va_arg` (exit: the instruction, owner lir-text-prs-1893).
+3. `prepass.rs`: CSE and loop hoisting of constants and addresses, a small version of `MachineCSE`/`MachineLICM`.
+
+## Order of work
+
+1. Pin build with AArch64. Done.
+2. Leaks of the x86 backend (below). Done; decision: own backend from MIR.
+3. Object writers (Mach-O, ELF). Done, checked against `llvm-mc`.
+4. Register file, A64 encoder (byte-identical to `llvm-mc`), constant expansion (identical to `llc`). Done.
+5. Selector, allocator, frame, calling convention, cost model (5064 oracle rows equal the pinned `opt`). Done.
+6. The deciding experiment: the core machine passes on arm64 LIR. Open.
 
 ## x86 leaks (step 2 probe, first pass)
 
