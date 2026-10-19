@@ -33,8 +33,8 @@
 //!   anything and the manager rebuilds the dominator tree and the loop info
 //!   (the pin keeps the dominator tree, and the loop info unless it cloned);
 //!   `updateSSA` reads a dominator tree built after the threading. No noalias
-//!   scopes to clone (J8 of `jumpthreading.rs`), no optimization remarks,
-//!   and no `!prof` or debug location is carried to the new branches.
+//!   scopes to clone (J8 of `jumpthreading.rs`), no optimization remarks, and
+//!   no `!prof` or debug location is carried to the new branches.
 //! - DF3. A path through a block that starts with a `landingpad` is not
 //!   threaded: the copy would be a second pad, and the one module handler
 //!   (`ehprepare`) cannot choose between two (J10 of `jumpthreading.rs`).
