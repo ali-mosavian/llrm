@@ -933,6 +933,7 @@ pub fn selected_with<'c>(
         }
     };
     let mut selector = Selector {
+        pc_relative: arch.object().pc_relative,
         module,
         function,
         arch,
@@ -1482,6 +1483,8 @@ pub struct Selector<'m, 'c, 'p> {
     in_cells: llrm_mir::dense::IdSet<ValueId>,
     /// The register file of `arch`.
     regs: Regs,
+    /// Whether `arch` reaches a symbol from the instruction pointer (its object description, read once).
+    pc_relative: bool,
     /// What the functions that take part leave different.
     callee_facts: &'c CalleeFacts,
     layout: DataLayout,
@@ -1626,7 +1629,7 @@ pub struct Selector<'m, 'c, 'p> {
 impl Selector<'_, '_, '_> {
     /// Whether a symbol is reached from the instruction pointer, so that no address adds a register to it.
     fn pc_relative(&self) -> bool {
-        self.arch.object().pc_relative
+        self.pc_relative
     }
 
     /// The register file of the target being compiled for.

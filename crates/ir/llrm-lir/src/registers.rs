@@ -46,6 +46,12 @@ impl RegId {
         RegId(Register::values().nth(index).expect("an iced register number"))
     }
 
+    /// The dword register of this one's family (see [`crate::root::root`]).
+    #[inline]
+    pub fn root(self) -> RegId {
+        RegId(ROOT_OF[self.0 as usize])
+    }
+
     /// iced's number of the register: the index into the tables.
     #[inline]
     pub const fn index(self) -> usize {

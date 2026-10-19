@@ -7,11 +7,7 @@ use crate::registers::RegId;
 /// `R8D`). The name is the token a target's `registers.regs` roots its family at; any other register (segment,
 /// x87, SSE) is its own. A 32-bit target never meets the 64-bit views, so its roots are what they were.
 pub fn root(register: RegId) -> RegId {
-    if !register.is_gpr() {
-        return register;
-    }
-    let whole = register.full_register();
-    if whole.is_gpr64() { whole.full_register32() } else { register }
+    register.root()
 }
 
 #[cfg(test)]
