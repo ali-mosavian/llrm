@@ -342,7 +342,7 @@ pub fn remade_values(body: &LirBody) -> BTreeSet<u32> {
             .collect();
         let mut out: BTreeSet<u32> = _literals_by(body, &values, false, postings).keys().copied().collect();
         out.extend(_addresses_by(body, &values, postings).keys().copied());
-        out.extend(_stable_loads_by(body, &values, &IndexMap::default(), postings).keys().copied());
+        out.extend(_stable_x87_loads_by(body, &values, postings).keys().copied());
         out
     })
 }
@@ -2880,7 +2880,18 @@ pub fn _stable_loads_by(
     copies: &IndexMap<u32, u32>,
     postings: &Postings,
 ) -> IndexMap<u32, Mem> {
-    _stable_loads_from(body, values, copies, Some(postings))
+    _stable_loads_from(body, values, copies, Some(postings), false)
+}
+
+/// `_stable_loads_by`, an x87 register's load of its cell (`fld`) taken too:
+/// what LLVM's `isTriviallyReMaterializable` takes of `LD_Fp32m` and its
+/// kin from a cell nothing writes.
+pub fn _stable_x87_loads_by(
+    body: &LirBody,
+    values: &BTreeSet<u32>,
+    postings: &Postings,
+) -> IndexMap<u32, Mem> {
+    _stable_loads_from(body, values, &IndexMap::default(), Some(postings), true)
 }
 
 /// `_stable_loads`, where a load's copies (`copies`: copy -> source) are made
@@ -2891,7 +2902,7 @@ pub fn _stable_loads_through(
     values: &BTreeSet<u32>,
     copies: &IndexMap<u32, u32>,
 ) -> IndexMap<u32, Mem> {
-    _stable_loads_from(body, values, copies, None)
+    _stable_loads_from(body, values, copies, None, false)
 }
 
 fn _stable_loads_from(
@@ -2899,6 +2910,7 @@ fn _stable_loads_from(
     values: &BTreeSet<u32>,
     copies: &IndexMap<u32, u32>,
     postings: Option<&Postings>,
+    x87: bool,
 ) -> IndexMap<u32, Mem> {
     #[cfg(test)]
     STABLE_ASKED.with(|count| count.set(count.get() + values.len()));
@@ -2951,12 +2963,15 @@ fn _stable_loads_from(
             if made.defined && values.contains(value) {
                 let mut cell = None;
                 if let Some(what) = &one.what {
-                    if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
+                    let mov = what.op == Operation::Move && what.name.as_deref() == Some("mov");
+                    let fld = x87 && what.op == Operation::FloatLoad && what.name.as_deref() == Some("fld");
+                    if mov || fld {
                         if let ([Loc::Held(dest)], [Loc::Mem(source)]) =
                             (what.dests.as_slice(), what.sources.as_slice())
                         {
+                            // An `fld` widens its cell into the register.
                             if dest.value == *value
-                                && dest.width == source.width
+                                && (fld || dest.width == source.width)
                                 && source.addr.is_some()
                                 && one.defines == [*value]
                                 && one.uses.is_empty()

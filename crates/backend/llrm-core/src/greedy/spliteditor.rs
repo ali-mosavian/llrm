@@ -1438,7 +1438,14 @@ impl<'d> SplitEditor<'d> {
                     continue;
                 }
                 let mi = cx.lis.defining_instr(&vni.def(), reg);
-                if cx.env.is_copy_like(cx.lis.instr(mi)) && cx.lis.instr(mi).defines.len() == 1 {
+                // `allDefsAreDead`, and `eliminateDeadDef`'s `isSafeToMove`: a
+                // copy, or a definition made again here (a literal, an address,
+                // a load of a cell that holds).
+                let one = cx.lis.instr(mi);
+                if (cx.env.is_copy_like(one) || cx.env.is_pure_def(one))
+                    && one.defines.len() == 1
+                    && marked.insert(mi)
+                {
                     dead.push(mi);
                 }
             }

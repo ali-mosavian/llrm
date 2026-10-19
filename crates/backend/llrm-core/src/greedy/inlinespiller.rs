@@ -83,7 +83,7 @@ pub fn remat_shape(one: &Insn) -> bool {
         && one.clobbers_high.is_empty()
         && one.symbol != Some(true)
         && one.what.as_ref().is_some_and(|w| {
-            matches!(w.op, Operation::Move | Operation::Address)
+            matches!(w.op, Operation::Move | Operation::Address | Operation::FloatLoad)
                 && matches!(
                     w.dests.as_slice(),
                     [Loc::Held(held)] if held.value == one.defines[0]
