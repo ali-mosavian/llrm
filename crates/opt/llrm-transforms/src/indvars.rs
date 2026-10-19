@@ -258,8 +258,8 @@ impl FunctionPass for IndVars {
                 &mut standing,
                 if self.exit_values { None } else { self.unrolls },
             );
-        let merged = twin_phis(unit.function)
-            | congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        let merged =
+            twin_phis(unit.function) | congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
         let rewound = rewound_with(
             unit.context,
             unit.layout,
@@ -322,8 +322,9 @@ fn congruent(
 /// Phis of one block whose arms are, for each predecessor, one value or two
 /// pure binary operations of the same operands: the later reads as the first.
 /// DEVIATE (IV1, docs/architecture/loop-passes-port.md): `SCEVExpander::
-/// replaceCongruentIVs` finds them by their recurrences; this is by shape. LoopRotate leaves a counter twice that way, a phi of its
-/// sign-extension stepping by a copy of the counter's own `add`.
+/// replaceCongruentIVs` finds them by their recurrences; this is by shape.
+/// LoopRotate leaves a counter twice that way, a phi of its sign-extension
+/// stepping by a copy of the counter's own `add`.
 fn twin_phis(function: &mut Function) -> bool {
     #[derive(Eq, Hash, PartialEq)]
     enum Arm {
