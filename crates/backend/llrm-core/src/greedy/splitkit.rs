@@ -91,6 +91,15 @@ pub trait SplitEnv {
         reg: u32,
     ) -> bool;
 
+    /// `recomputeRegClass` of the registers an edit made, once their
+    /// instructions are in place.
+    fn reclass(
+        &self,
+        _lis: &LiveIntervals,
+        _regs: &[u32],
+    ) {
+    }
+
     /// A definition that is only a definition, so nothing is lost by erasing it
     /// when nothing reads what it writes (`MI->isSafeToMove` and no side
     /// effects, of `eliminateDeadDefs`).

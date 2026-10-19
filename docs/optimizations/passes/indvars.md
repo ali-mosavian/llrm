@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/indvars.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/indvars.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:5655d9e92c6620f6d408350e5536d3240ea453b35f00b9819185d0e12fbd25f9 -->
+<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:6d71bfac897fe12338fa83d268c1ba130ec9106e97da0f970bbf811e0d2022a1 -->
 
 # indvars
 
@@ -37,8 +37,10 @@ changed the body.
    equal, a narrow one a truncation of a wide one included, are one, and
    `dead` removes the rest.
 3. `canonexit::canonicalized` (`canonicalizeExitCondition`;
-   `LLRM_NO_SCEV_CANONEXIT`), then `exitfold::folded`: exits their counts
-   decide are folded.
+   `LLRM_NO_SCEV_CANONEXIT`), `exitopt::optimized` (`optimizeLoopExits`;
+   `LLRM_NO_SCEV_EXITOPT`), `exitpredicate::predicated`
+   (`predicateLoopExits`; `LLRM_NO_SCEV_PREDICATE`), then
+   `exitfold::folded`: exits their counts decide are folded.
 4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
    exit tests a counter against the value it has at the last trip.
 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
