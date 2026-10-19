@@ -496,6 +496,8 @@ fn offset_constant(
         kind: ConstantKind::Expr(ConstantExpr::GetElementPtr {
             source: byte,
             inbounds: false,
+            nusw: false,
+            nuw: false,
             operands: vec![pointer, index],
         }),
     })

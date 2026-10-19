@@ -2,7 +2,7 @@
 """The one way to squash a pull request into feat/parity: a bare `gh pr merge` merged stale heads that reverted other PRs' work (#2329 reverted decide's LVI step).
 
     [PARITY_BIN=DIR] tools/parity_squash.py merge PR [--known-red STEP=ISSUE]...   under /tmp/land.lock (land.sh's): merge feat/parity into the PR head here (not pushed), refuse or run the fast set on THAT, then `gh pr merge --squash --match-head-commit`
-    tools/parity_squash.py merge-batch N1..N4 [--known-red STEP=ISSUE]...   up to four ready PRs: ONE fast set on the base with all merged in; on failure halve (the passing half lands first)
+    tools/parity_squash.py merge-batch N1..N8 [--known-red STEP=ISSUE]...   up to eight ready PRs: ONE fast set on the base with all merged in; on failure halve (the passing half lands first)
     tools/parity_squash.py audit [SINCE] every squash on origin/feat/parity since SINCE (default 96468410e): what it deleted without a Deletes:/Reverts: line in its PR's description
 
 Subset rule: the fast set runs on the head (origin/feat/parity, failure set cached per sha by `head-failures`) AND on the merged tree; the merged tree may fail only checks the head fails, and strictly fewer
@@ -220,15 +220,41 @@ def land_lock(path: str = LAND_LOCK, wait: bool = True):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+GENERATED = ("docs/optimizations/passes/", "docs/optimizations/analyses/", "docs/optimizations/backend/", "docs/architecture/readme.md")  # what tools/docsbuild/build.py --sync writes
+
+
+def regenerate(conflicts: list[str], cwd: Path = ROOT) -> str:
+    """"" when every conflicted path is generated and `build.py --sync --force` on the merged tree made it current (then `--check` agrees) and the merge was committed;
+    else why not. Two PRs that each add a page both rewrite the index: a hand merge of generated text is what blocked the decide flip, the LSR stack and indvars."""
+    if not conflicts or not all(path.startswith(GENERATED) for path in conflicts):
+        return "conflicts in files nothing generates: " + ", ".join(path for path in conflicts if not path.startswith(GENERATED))
+    for path in conflicts:
+        git("checkout", "--ours", "--", path, cwd=cwd)
+    build = [sys.executable, "tools/docsbuild/build.py"]
+    for flags in (["--sync", "--force"], ["--check"]):
+        done = subprocess.run([*build, *flags], cwd=cwd, capture_output=True, text=True)
+        if done.returncode:
+            return f"docsbuild {' '.join(flags)} failed on the merged tree: {(done.stdout + done.stderr).strip().splitlines()[-1:] or ['no output']}"
+    git("add", "-A", "docs", cwd=cwd)
+    done = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "commit", "-q", "--no-edit"], cwd=cwd, capture_output=True, text=True)
+    return "" if done.returncode == 0 else f"committing the regenerated merge failed: {done.stderr.strip()[:200]}"
+
+
 def merged_result(head: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str | None, str]:
     """(sha, "") of `head` with `base` merged into it, checked out detached in `cwd` and not pushed; (None, why) when `base` conflicts. When `head` already
     contains `base` the result is `head` itself. The squash lands on whatever feat/parity is at the call: the tests must run on this result, not on a head that
-    compiled beside a base that has since moved (#2544 and #2564 each compiled; together the head did not build for three hours)."""
+    compiled beside a base that has since moved (#2544 and #2564 each compiled; together the head did not build for three hours). A conflict only in generated
+    files is resolved by regenerating them (`regenerate`)."""
     git("checkout", "-q", "--detach", head, cwd=cwd)
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
         merged = subprocess.run(["git", "merge", "--no-edit", "-q", base], cwd=cwd, capture_output=True, text=True)
         if merged.returncode:
             conflicts = git("diff", "--name-only", "--diff-filter=U", cwd=cwd).split()
+            if conflicts and all(path.startswith(GENERATED) for path in conflicts):
+                if not (why := regenerate(conflicts, cwd)):
+                    return git("rev-parse", "HEAD", cwd=cwd).strip(), ""
+                subprocess.run(["git", "merge", "--abort"], cwd=cwd, capture_output=True)
+                return None, f"merging {base} into the PR head conflicts in {', '.join(conflicts)} (generated) and regenerating failed: {why}"
             subprocess.run(["git", "merge", "--abort"], cwd=cwd, capture_output=True)
             return None, f"merging {base} into the PR head conflicts in {', '.join(conflicts) or 'the tree'}"
     return git("rev-parse", "HEAD", cwd=cwd).strip(), ""
@@ -263,8 +289,11 @@ def run_smoke(known: dict[str, str] | None = None) -> tuple[bool, str]:
     return smoke.returncode == 0, (smoke.stdout.strip().splitlines() or [""])[-1]
 
 
+MAX_BATCH = 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
+
+
 def batch(prs: list, passes, land, refuse) -> None:
-    """Land `prs` (up to four, ready, in order) with ONE test of the combined tree. `passes(prs)` merges them all into the base and runs the fast set; when it fails the
+    """Land `prs` (up to MAX_BATCH, ready, in order) with ONE test of the combined tree. `passes(prs)` merges them all into the base and runs the fast set; when it fails the
     set is halved (2+2, then singles): the passing half lands, then the other half is tested on top of what landed. `refuse(pr)` names a PR that fails alone."""
     if not prs:
         return
@@ -281,8 +310,10 @@ def batch(prs: list, passes, land, refuse) -> None:
 
 
 def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
-    """`parity_squash.py merge-batch N1..N4`: the PRs in order, one smoke on the base with all of them merged in, each squashed with its head lease."""
+    """`parity_squash.py merge-batch N1..N8`: the PRs in order, one smoke on the base with all of them merged in, each squashed with its head lease."""
     known = known or {}
+    if len(numbers) > MAX_BATCH:
+        raise SystemExit(f"merge-batch takes at most {MAX_BATCH} PRs per smoke, got {len(numbers)}: split the queue")
     infos = {}
     for number in numbers:
         info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
@@ -298,6 +329,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         for number in group:
             git("fetch", "-q", "origin", infos[number]["headRefOid"])
             merge = subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True, text=True)
+            if merge.returncode and (conflicts := git("diff", "--name-only", "--diff-filter=U").split()) and not regenerate(conflicts):
+                continue  # only generated docs conflicted: regenerated and committed
             if merge.returncode:
                 subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
                 print(f"#{number}: does not merge with the others: {merge.stdout.strip()[:120] or merge.stderr.strip()[:120]}")

@@ -2389,7 +2389,7 @@ fn step(
             ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
                 through(Operand::Constant(*value))
             }
-            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands }) => {
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands, .. }) => {
                 let indices = operands[1..]
                     .iter()
                     .map(|&one| {
@@ -2453,17 +2453,31 @@ fn segment(
     unit: &Unit,
     root: Operand,
 ) -> Option<Operand> {
-    let (_, instruction) = unit.defining(root)?;
-    if !matches!(instruction.opcode, Opcode::Cast(CastOp::AddrSpaceCast)) {
-        return None;
-    }
-    let from = instruction.operands[0];
+    let from = match root {
+        Operand::Constant(id) => match &unit.context.get(id).kind {
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) => Operand::Constant(*value),
+            _ => return None,
+        },
+        _ => {
+            let (_, instruction) = unit.defining(root)?;
+            if !matches!(instruction.opcode, Opcode::Cast(CastOp::AddrSpaceCast)) {
+                return None;
+            }
+            instruction.operands[0]
+        }
+    };
     if unit.space(from) != Some(2) {
         return None;
     }
-    match unit.defining(from) {
-        Some((_, made)) if matches!(made.opcode, Opcode::Cast(CastOp::IntToPtr)) => Some(made.operands[0]),
-        _ => Some(from),
+    match from {
+        Operand::Constant(id) => match &unit.context.get(id).kind {
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => Some(Operand::Constant(*value)),
+            _ => Some(from),
+        },
+        _ => match unit.defining(from) {
+            Some((_, made)) if matches!(made.opcode, Opcode::Cast(CastOp::IntToPtr)) => Some(made.operands[0]),
+            _ => Some(from),
+        },
     }
 }
 
