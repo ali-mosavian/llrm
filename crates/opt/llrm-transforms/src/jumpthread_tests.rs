@@ -646,10 +646,10 @@ fn the_cleaning_after_a_thread_keeps_what_each_pass_preserved() {
 /// preserved.
 const BOUND: usize = 45;
 
-/// QCport `ent_trig_shot` as it reaches the pass: a state machine whose two
-/// switches find every way in twice. A path found twice was copied twice and
-/// its second copy panicked ("an input from the path") at -O2 once
-/// JumpThreading ran before it.
+/// QCport `ent_trig_shot` as it reaches the pass: `b16`'s switch sends two
+/// cases to `b23`, so its phi has two inputs from `b16`. That way in was
+/// taken twice, copied twice, and the second copy panicked ("an input from
+/// the path") at -O2.
 const FOUND_TWICE: &str = r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
 
 declare cc 1005 i16 @"_snd_start@3"(ptr, ptr, i16, i16, i16, ptr, i16) addrspace(1)
