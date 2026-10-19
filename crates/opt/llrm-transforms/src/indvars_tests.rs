@@ -693,6 +693,19 @@ fn counters_with_one_start_and_one_step_are_one_counter() {
     assert_eq!(header_phis(&mut other), 2);
 }
 
+/// LoopRotate leaves a counter twice: `j` steps from `i`'s value by an `add`
+/// that repeats `i`'s own. The loop kept both, and in bench's tile the inner
+/// loop took two registers and an `xchg` (+50% clocks at -O1).
+#[test]
+fn counters_whose_steps_are_the_same_add_are_one_counter() {
+    let text = two_counters(0, 1).replace("%j.next = add i16 %j, 1", "%j.next = add i16 %i, 1");
+    let mut module = parsed(&text);
+    managed(&mut module, IndVars { exit_values: false, unrolls: None, lftr: true });
+    assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
+    let other = parsed(&text);
+    assert_eq!(results(&module, &[&[0], &[3], &[9]]), results(&other, &[&[0], &[3], &[9]]));
+}
+
 /// A counter that starts or steps otherwise is another counter.
 #[test]
 fn counters_that_start_or_step_otherwise_stay_two() {
@@ -997,4 +1010,11 @@ b3:
     managed(&mut module, IndVars { exit_values: true, unrolls: None, lftr: false });
     let after = printed(&module);
     assert!(after.contains("br i1 false, label %b4, label %b3"), "{after}");
+}
+
+/// LFTR was on in the pipeline (the rotated copy ran it with the rotate slot
+/// off): sieve.c -O1 m32 grew 32 B. It is opt-in until the translated LSR.
+#[test]
+fn test_lftr_is_off_in_the_pipeline_unless_asked() {
+    assert_eq!(super::lftr_default(), std::env::var_os("LLRM_LFTR").is_some());
 }

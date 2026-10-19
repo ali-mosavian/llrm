@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 115 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 116 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -102,6 +102,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | simpleloopunswitch | `SimpleLoopUnswitch<trivial>`: a branch or switch in a loop on a loop-invariant condition, one side of which leaves the loop, is decided before the loop instead of on every trip. |  | [simpleloopunswitch](simpleloopunswitch.md) |
 | simplifycfg | A terminator on a constant becomes a jump, the blocks nothing reaches go, and what that leaves is merged: LLVM's `SimplifyCFGPass` and the `ConstantFoldTerminator`, `removeUnreachableBlocks` and `BasicBlock::removePredecessor` it is made of. | Once per round of the function fixed point, before `decide`: the branches | [simplifycfg](simplifycfg.md) |
 | simplifyindvar | SimplifyIndVar's comparison elimination: a comparison with an induction variable that ScalarEvolution proves true or false is that constant. | Step 0 of [`crate::indvars`](indvars.md), on by default; `LLRM_NO_SCEV_IVCMP` turns it | [simplifyindvar](simplifyindvar.md) |
+| sinkcommon | The code that ends every unconditional way into a block in the same way runs once in the block: SimplifyCFG's `sinkCommonCodeFromPredecessors`. |  | [sinkcommon](sinkcommon.md) |
 | spares | Keeps what the optimizer proved of a fixed-cell load for instruction selection: each write that leaves the load's bytes as they were, as `!llrm.spares` on the load, so the spiller can rematerialize the load past those writes. | Once, last in [`crate::pipeline`](pipeline.md) with `homes`, so the instruction ids it | [spares](spares.md) |
 | speculate | A block that only a branch reaches and that jumps back to the branch's other target runs before the branch, its phis in the target becoming selects: the `speculativelyExecuteBB` step of SimplifyCFG. |  | [speculate](speculate.md) |
 | spill | The one spill model every pricing of register pressure shares: what values past the target's registers cost. | [`crate::profit`](profit.md) (`spill_forecast`, `weighted`) prices every motion with | [spill](spill.md) |
@@ -111,7 +112,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | switchlower | A switch lowered as LLVM's SelectionDAG lowers one: the likeliest range peeled off, jump tables and bit tests for what is dense, and a balanced tree of range tests over the rest. | As two passes: `switchconv` (gcc's `pass_convert_switch`, -O2 and up), | [switchlower](switchlower.md) |
 | tailmerge | The blocks that end the function with the same terminator become one block each: SimplifyCFG's `tailMergeBlocksWithSimilarFunctionTerminators`. |  | [tailmerge](tailmerge.md) |
 | tailrec | A call a function makes to itself as the last thing it does becomes a branch to its own entry with the arguments rewritten. | In the function pipeline after `gvn::EqualCalls`, so two equal calls are | [tailrec](tailrec.md) |
-| transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], and [`crate::unswitch`] share: value reuse, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `subexpressions`, `equal_calls` and `forwarded` on each | [transform](transform.md) |
+| transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], [`crate::unswitch`] share: equal calls, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `equal_calls` on each function it numbers; | [transform](transform.md) |
 | trivialunswitch | A branch in a loop's header on a loop-invariant condition, one side of which leaves the loop, is decided in the preheader instead of on every trip. | In the function pipeline's fixed point, after `loopmotion` and before | [trivialunswitch](trivialunswitch.md) |
 | twoentryphi | A two-entry phi that a branch chooses between becomes a `select`, the arms' cheap code hoisted into the branch's block: the `foldTwoEntryPHINode` step of SimplifyCFG. |  | [twoentryphi](twoentryphi.md) |
 | unroll | Full unrolling of a loop with an exact trip count of at least two: its trips become one straight line in the latch and the loop is gone. | In the pipeline's fixed point, after each round of scalar passes and when | [unroll](unroll.md) |
