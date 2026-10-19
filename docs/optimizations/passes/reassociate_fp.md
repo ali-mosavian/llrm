@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/reassociate_fp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/reassociate_fp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/reassociate_fp.rs sha256:b750db8291da4d7d3a9ef617d1abc2ac726710e2084399765192bc67136e7db8 -->
+<!-- src: crates/opt/llrm-transforms/src/reassociate_fp.rs sha256:a2d14bc8782db5138231c8b5f0cdc07aa5fafd292d8d73e43631e63b656ad0a6 -->
 
 # reassociate_fp
 
@@ -11,3 +11,7 @@ DEVIATE: a floating constant is held as the nearest `f32` or `f64`
 
 ## Used by
 `crate::reassociate_optimize`, `crate::reassociate_negate`.
+
+## Example
+`x * 4.0 * 0.25`: the constants fold to `1.0` (`fold_float`), the identity of
+`fmul`, so the result is `x`.
