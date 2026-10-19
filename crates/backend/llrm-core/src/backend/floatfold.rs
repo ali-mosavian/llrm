@@ -243,7 +243,8 @@ pub fn read_from_cell(
     };
     let name = if cell_is_left { _reversed(&name) } else { name.as_str() };
     select::float_memory(name, cell, select::At::bits16(0))?;
-    let fused = semantics(Operation::FloatArith, name, what.dests.clone(), vec![Loc::Held(other), Loc::Mem(cell.clone())]);
+    let fused =
+        semantics(Operation::FloatArith, name, what.dests.clone(), vec![Loc::Held(other), Loc::Mem(cell.clone())]);
     let mut made = one.clone();
     made.what = Some(fused);
     made.uses.retain(|used| *used != value);
