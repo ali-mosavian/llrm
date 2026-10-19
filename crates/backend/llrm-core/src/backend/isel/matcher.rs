@@ -884,6 +884,18 @@ impl Selector<'_, '_, '_> {
         to.is_ok() && to == self.width(self.type_of(operand))
     }
 
+    /// Whether the result is narrower than the operand: a `ptrtoint` to less
+    /// than the pointer's width, which keeps the address's low bytes.
+    pub fn is_narrower(
+        &self,
+        m: &Match,
+        operand: Operand,
+    ) -> bool {
+        let to = self.width(self.function.instruction(m.inst).ty);
+        let from = self.width(self.type_of(operand));
+        matches!((to, from), (Ok(to), Ok(from)) if to < from)
+    }
+
     fn chain(
         &self,
         m: &Match,
