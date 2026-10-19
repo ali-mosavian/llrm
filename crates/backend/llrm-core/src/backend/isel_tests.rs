@@ -5697,3 +5697,24 @@ define i16 @f() addrspace(1) {
     // 1342177280 is 0x5000:0000 stored, 1358954496 is 0x5100:0000 read through.
     assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
 }
+
+/// More constant-expression operands (alias/farstruct.c, textfill): the dword of
+/// a far pointer to near data (`ptrtoint (addrspacecast @g)`), and a segment
+/// constant widened to far (`addrspacecast (inttoptr N to ptr addrspace(2))`),
+/// which is `N:0`. Both were refused, "an address of no global".
+#[test]
+fn test_a_far_pointer_constant_as_an_integer_and_a_segment_as_a_far_pointer_are_selected() {
+    let text = "@g = internal global i16 5
+@slot = internal global i32 0
+define i16 @f(i16 %i) addrspace(1) {
+  store i32 ptrtoint (ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)) to i32), ptr @slot
+  %p = getelementptr i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 -18432 to ptr addrspace(2)) to ptr addrspace(1)), i16 %i
+  %v = load i8, ptr addrspace(1) %p
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+";
+    let got = listing(text, "f");
+    println!("LIST3 {got:?}");
+    assert!(!got.is_empty());
+}
