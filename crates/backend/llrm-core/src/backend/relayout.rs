@@ -119,6 +119,7 @@ pub fn laid_again(
         reserve,
         calls: first.calls.clone(),
         inline,
+        inline_symbols: first.inline_symbols.clone(),
         inline_places: first
             .inline_places
             .iter()
@@ -360,6 +361,7 @@ pub fn difference(
     }
     if left.calls != right.calls
         || left.inline != right.inline
+        || left.inline_symbols != right.inline_symbols
         || left.far != right.far
         || left.pops != right.pops
         || left.popped != right.popped

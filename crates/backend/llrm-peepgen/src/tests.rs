@@ -108,3 +108,21 @@ fn every_operation_of_llrm_lir_has_a_spelling_and_a_variant() {
         assert!(table::variant(&format!("{op:?}")), "{op:?}");
     }
 }
+
+/// A flag a rule names is the target's own, in its dialect: a rule testing
+/// arm64's `Z` generated `RflagsBits::Z`, which x86's decoder has no such bit
+/// of.
+#[test]
+fn a_rule_names_the_flags_of_its_dialect() {
+    let arm = llrm_instr::Dialect::parse(
+        "file = \"arm64.instr\"\nregisters = [\"x0\"]\nwidths = [32, 64]\narithmetic = [\"N\", \"Z\"]\n\
+         [flags]\nN = 8\nZ = 4\n",
+    )
+    .expect("a dialect");
+    let forms = "add binary rm/^0,rmi 32,64 alu_rr - - - -/N,Z\ninc unary rm/^0 32,64 alu_rr - - - -/N,Z\n";
+    let rules =
+        "group g\n    walk each\nrule r\n    match add d:reg, d, #1\n    when dead(@0, Z)\n    rewrite @0: inc d, d\n";
+    let made = generate(forms, "arm64.instr", rules, "test.peep", &arm).unwrap_or_else(|error| panic!("{error}"));
+    assert!(made.rules.contains("Lanes::flags(flag_bits::Z)"), "{}", made.rules);
+    assert!(made.rules.contains("pub const Z: u32 = 0x4;") && !made.rules.contains("RflagsBits"), "{}", made.rules);
+}

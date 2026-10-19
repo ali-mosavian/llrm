@@ -8,6 +8,7 @@
 //! struct Plain;
 //! impl Lowering for Plain {}
 //! assert!(!Plain.is_mask_and_cmp0_folding_beneficial());
+//! assert!(!Plain.is_mask_and_cmp0_folding_beneficial_for(Some(0x100)));
 //! ```
 //!
 //! # Runs
@@ -20,5 +21,17 @@ pub trait Lowering {
     /// one instruction the pair becomes.
     fn is_mask_and_cmp0_folding_beneficial(&self) -> bool {
         false
+    }
+
+    /// The same question about the mask the `and` applies (`None`: unknown),
+    /// which AArch64 answers by: a single-bit mask is a `tbz`, so the pair is
+    /// folded; any other is better made again at each compare. By default the
+    /// mask is not asked.
+    fn is_mask_and_cmp0_folding_beneficial_for(
+        &self,
+        mask: Option<u128>,
+    ) -> bool {
+        let _ = mask;
+        self.is_mask_and_cmp0_folding_beneficial()
     }
 }
