@@ -325,10 +325,7 @@ fn apply(
         }
         // The copy's test is not made: its work runs ahead of the body.
         let first_k = inner_first(function, hi_k, &|to| body_k.contains(&to));
-        let at = function
-            .block(first_k)
-            .iter()
-            .find(|&inst| function.instruction(inst).opcode != Opcode::Phi);
+        let at = function.block(first_k).iter().find(|&inst| function.instruction(inst).opcode != Opcode::Phi);
         for inst in work(function, hi_k) {
             match at {
                 Some(at) => function.move_to(inst, Position::Before(at))?,

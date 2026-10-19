@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/gvn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gvn.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:144733c8a4db4fc8671d24aeced828e51a82d443a8434e4bcddb92e3583c5996 -->
+<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:0e5d7656c108ef36445692a04138460ab952eecccd16a2ecfd9fe4ad96164065 -->
 
 # gvn
 
@@ -24,11 +24,11 @@ load or a store. `Gvn` is the pass; `EqualCalls` is its call part alone.
    the same callee and arguments that read and write no memory are one.
 2. Loads (`pass::loads`: `processLoad`, `processNonLocalLoad`). Memory
    dependence (`llrm_analysis::memdep`) names what a load depends on in its
-   block, or in every block that reaches it. A load a store or an earlier load
-   of the same bytes serves becomes that value, cut or widened to its type
-   (`vncoercion`); where several blocks serve it, a phi (`SsaUpdater`) merges
-   them. A load with an unavailable block is left for step 4. Equal calls that
-   touch no memory (`transform::equal_calls`) are one after it.
+   block, or in every block that reaches it. A load a store or an earlier
+   load of the same bytes serves becomes that value, cut or widened to its
+   type (`vncoercion`); where several blocks serve it, a phi (`SsaUpdater`)
+   merges them. A load with an unavailable block is left for step 4. Equal
+   calls that touch no memory (`transform::equal_calls`) are one after it.
 3. Join PRE (`joined`). An expression every predecessor of a join already
    computes becomes a phi of those values. With `pre`, a predecessor that
    lacks it gets the computation inserted before its unconditional `br`, if

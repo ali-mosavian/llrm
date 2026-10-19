@@ -141,10 +141,13 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
     entry("inferspace@787", Simplify, "infer-address-spaces (target)", Old, ""),
     entry("gvn@787", Simplify, "gvn", Old, "gvn-port"),
+    entry("sccp@792", Simplify, "sccp", Missing, ""),
+    entry("bdce@797", Simplify, "bdce", Translated, ""),
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
-    entry("dead@801", Simplify, "adce", Old, "adce-port"),
+    entry("dead@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
+    entry("adce@815", Simplify, "adce", Translated, ""),
     entry("memcpyopt@818", Simplify, "memcpyopt", Old, "backend-slopes"),
     partial(
         "merge@818",
@@ -172,7 +175,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@728", Simplify, "lcssa", Old, "lcssa-port"),
-    entry("sccp-bdce", Simplify, "sccp, bdce", Missing, ""),
     entry("dfa-jump-threading", Simplify, "dfa-jump-threading", Missing, ""),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
@@ -399,7 +401,7 @@ pub fn check_phase_at(
 /// [`check_phase_at`] with the explicit off switches: the slots whose
 /// translation is `sroa.rs` are Old when `LLRM_NO_SROA` is set, those of
 /// `mem2reg.rs` when `LLRM_NO_MEM2REG` is, and the old stand-in is what runs;
-/// with `rotate` false (`LLRM_NO_ROTATE`) the rotate slot is not run.
+/// with `rotate` false (the default) the rotate slot is not run.
 pub(crate) fn check_phase_with(
     phase: Phase,
     built: &[&str],
@@ -409,7 +411,7 @@ pub(crate) fn check_phase_with(
     rotate: bool,
 ) -> Result<(), String> {
     let absent = if level == Level::O1 { ABSENT_AT_O1 } else { &[] };
-    // `LLRM_NO_ROTATE` takes the translated `loop-rotate` out of the order.
+    // The translated `loop-rotate` is in the order only with `LLRM_ROTATE`.
     let registry: Vec<Entry> = REGISTRY
         .iter()
         .map(|one| {

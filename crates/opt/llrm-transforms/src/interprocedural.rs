@@ -514,6 +514,11 @@ fn bare(
     analyses: &mut ModuleAnalyses,
     id: GlobalId,
 ) {
+    assert!(
+        !llrm_support::debug::verifying() || reference_counts(module).get(&id).copied().unwrap_or(0) == 0,
+        "@{} is bared with a call to it standing",
+        module.global(id).name.as_deref().unwrap_or_default()
+    );
     let Some(mut stub) = module.global(id).function().map(llrm_mir::module::Function::declaration) else { return };
     let void = module.context.types.void();
     let entry = stub.create_block(None);
@@ -1244,6 +1249,9 @@ pub fn optimized_with<E: From<String>>(
                 }
                 let caller = module.global(id).function().expect("a procedure");
                 let constants = facts::current_call_constants(&module.context, caller);
+                // `LLRM_INLINE_REMARKS`: opt's remark per decided site, on
+                // stderr.
+                let mut decided = (llvm && llrm_support::env_flag!("LLRM_INLINE_REMARKS")).then(Vec::new);
                 let (constant, constant_more) = if llvm {
                     let params =
                         crate::inlinecost::InlineParams::from_level(if threshold.limit >= 250 { 3 } else { 2 });
@@ -1267,6 +1275,7 @@ pub fn optimized_with<E: From<String>>(
                             size,
                             threshold.limit == 0,
                             program.target.tti().as_deref(),
+                            decided.as_mut(),
                         ),
                         Default::default(),
                     )
@@ -1302,6 +1311,11 @@ pub fn optimized_with<E: From<String>>(
                         *live.entry(callee).or_insert(0) -= count;
                     }
                 }
+                for (call, callee, cost) in decided.iter().flatten() {
+                    let name = |id: GlobalId| module.global(id).name.as_deref().unwrap_or("?");
+                    let spliced = module.global(id).function().is_some_and(|one| one.parent(*call).is_none());
+                    eprintln!("{}", crate::inlinecost::remark(name(id), name(*callee), cost, spliced));
+                }
                 placed(&mut declared, &mut modules[at], module)?;
                 if spliced_now {
                     edited(&mut modules[at], &[id]);
@@ -1332,8 +1346,10 @@ pub fn optimized_with<E: From<String>>(
                         specialised,
                         reoptimised,
                     )?;
+                    // The copies it spliced in carry calls `live` has not seen.
                     if stayed {
                         changed = true;
+                        live = reference_counts(module);
                     } else {
                         let body = module.global(id).function().expect("a procedure");
                         for (_, inst) in body.walk() {
@@ -1359,6 +1375,7 @@ pub fn optimized_with<E: From<String>>(
                             reoptimised,
                         )? {
                             changed = true;
+                            live = reference_counts(module);
                         }
                     }
                 }
