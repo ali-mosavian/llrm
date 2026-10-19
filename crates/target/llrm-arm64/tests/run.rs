@@ -162,6 +162,31 @@ fn bit_manipulation_and_division_by_constants() {
     compare("bits");
 }
 
+#[test]
+fn linked_lists_and_trees() {
+    compare("list");
+}
+
+#[test]
+fn sorting_with_callbacks() {
+    compare("sorting");
+}
+
+#[test]
+fn numeric_kernels() {
+    compare("numeric");
+}
+
+#[test]
+fn backtracking_and_128_bit_products() {
+    compare("queens");
+}
+
+#[test]
+fn a_switch_that_stays_a_switch() {
+    compare("dispatch");
+}
+
 /// Every program as the Darwin target builds it is an object the pinned
 /// `llvm-objdump` reads whole: each word of its code is an instruction, and
 /// the relocations name symbols the object defines or imports.

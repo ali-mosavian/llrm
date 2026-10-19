@@ -435,6 +435,7 @@ impl<'a> Selector<'a> {
             Opcode::Call(info) => self.call(inst, &instruction, info),
             Opcode::Ret => self.ret(&instruction),
             Opcode::Br => self.br(self.current, &instruction),
+            Opcode::Switch => self.switch(self.current, &instruction),
             Opcode::Unreachable => {
                 self.inst(Inst::Brk { imm16: 1 });
                 Ok(())

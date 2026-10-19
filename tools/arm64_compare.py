@@ -6,6 +6,7 @@ program's own functions (the shared runtime is not counted), and whether the
 output matches. Premise assertions: both builds ran to an exit with the same
 output, and the trace counted some instructions."""
 import bisect
+import math
 import os
 import re
 import subprocess
@@ -19,7 +20,10 @@ BUILD = Path(os.environ.get("LLVM_BUILD", Path.home() / "scratch/llvm-build-aarc
 CLANG, LLD, OBJDUMP = BUILD / "bin/clang", BUILD / "bin/ld.lld", BUILD / "bin/llvm-objdump"
 LLC = ROOT / "target/debug/llrm-arm64-llc"
 TRIPLE = "aarch64-unknown-linux-gnu"
-RUNTIME_FUNCTIONS = {"_start", "exit", "write", "strlen", "memcpy", "memset", "putchar", "puts", "number", "printf"}
+RUNTIME_FUNCTIONS = {
+    "_start", "exit", "write", "strlen", "memcpy", "memset", "putchar", "puts", "number", "printf", "malloc", "free",
+    "calloc", "strcmp", "strcpy", "memcmp", "atoi", "qsort", "syscall3",
+}
 
 
 def run(*command, **kwargs):
@@ -39,33 +43,38 @@ def symbols(binary):
     return sorted(found)
 
 
+def program_range(binary):
+    """[start, end) of the program's own code in `binary`: the object is linked
+    before the runtime, so its code is what lies below the runtime's first
+    function. (The symbol table lists no local function of this compiler's
+    objects, so symbols cannot say which functions are the program's.)"""
+    table = symbols(binary)
+    runtime = [address for address, _, name in table if name in RUNTIME_FUNCTIONS]
+    assert runtime, "the runtime is not in the binary"
+    start = min(address for address, _, _ in table)
+    # The object's code ends where the runtime's begins, less the alignment padding.
+    return start, min(runtime)
+
+
 def code_bytes(binary):
-    return sum(size for address, size, name in symbols(binary) if name not in RUNTIME_FUNCTIONS)
+    start, end = program_range(binary)
+    return end - start
 
 
 def executed(binary):
-    """Instructions executed in the program's own functions, from a trace with
-    one instruction per translation block."""
+    """Instructions executed in the program's own code, from a trace with one
+    instruction per translation block."""
     log = tempfile.NamedTemporaryFile(suffix=".log", delete=False).name
     done = subprocess.run(
         ["qemu-aarch64", "-one-insn-per-tb", "-d", "exec,nochain", "-D", log, str(binary)], capture_output=True
     )
-    table = symbols(binary)
-    starts = [entry[0] for entry in table]
+    start, end = program_range(binary)
     count = 0
-    per_function = {}
     for line in open(log):
         match = re.match(r"Trace \d+: \S+ \[[0-9a-f]+/([0-9a-f]+)/", line)
-        if not match:
-            continue
-        pc = int(match[1], 16)
-        at = bisect.bisect_right(starts, pc) - 1
-        if at >= 0 and table[at][2] not in RUNTIME_FUNCTIONS and pc < table[at][0] + table[at][1]:
+        if match and start <= int(match[1], 16) < end:
             count += 1
-            per_function[table[at][2]] = per_function.get(table[at][2], 0) + 1
     os.unlink(log)
-    if os.environ.get("VERBOSE"):
-        print("   ", binary.name, sorted(per_function.items(), key=lambda one: -one[1])[:6])
     return done.stdout, done.returncode, count
 
 
@@ -134,6 +143,7 @@ def main():
     run(CLANG, "-target", TRIPLE, "-O2", "-ffreestanding", "-fno-builtin", "-c", "-o", runtime, CRATE / "tests/rt/rt.c")
     print(f"{'program':12} {'code ours':>10} {'code clang':>10} {'exec ours':>10} {'exec clang':>10}  output")
     totals = [0, 0, 0, 0]
+    ratios = ([], [])
     for source in sorted((CRATE / "tests/programs").glob("*.c")):
         work = Path(tempfile.mkdtemp())
         try:
@@ -146,9 +156,13 @@ def main():
         same = out_ours == out_ref and status_ours == status_ref
         row = [code_bytes(work / "ours"), code_bytes(work / "ref"), n_ours, n_ref]
         totals = [a + b for a, b in zip(totals, row)]
+        ratios[0].append(row[0] / row[1])
+        ratios[1].append(row[2] / row[3])
         print(f"{source.stem:12} {row[0]:10} {row[1]:10} {row[2]:10} {row[3]:10}  {'same' if same else 'DIFFERENT'}")
     print(f"{'total':12} {totals[0]:10} {totals[1]:10} {totals[2]:10} {totals[3]:10}")
-    print(f"ratio: code {totals[0] / totals[1]:.2f}x, executed {totals[2] / totals[3]:.2f}x")
+    print(f"ratio of totals: code {totals[0] / totals[1]:.2f}x, executed {totals[2] / totals[3]:.2f}x")
+    geomean = lambda values: math.exp(sum(math.log(v) for v in values) / len(values))
+    print(f"geomean per program: code {geomean(ratios[0]):.2f}x, executed {geomean(ratios[1]):.2f}x")
 
 
 main()

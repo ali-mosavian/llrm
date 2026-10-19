@@ -581,6 +581,8 @@ fn clangs_target_attributes_and_captures_are_read() {
         "{DATALAYOUT}\ndeclare i16 @h(ptr nofreeobj dead_on_return %p) nocreateundeforpoison\n\ndefine i16 @k(ptr %p) {{\nb0:\n  %a = ptrtoaddr ptr %p to i16\n  ret i16 %a\n}}\n"
     ));
     assert!(newer.contains("ptrtoint ptr %p to i16"), "{newer}");
+    // `allocsize(0, 1)` on a declaration (clang's `malloc`, `calloc`).
+    round(&format!("{DATALAYOUT}\ndeclare ptr @calloc(i16, i16) allocsize(0, 1) allockind(\"alloc,zeroed\")\n"));
 }
 
 /// Each use asked `instruction_dominates` of its definition, which scanned the

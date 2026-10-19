@@ -99,6 +99,56 @@ int printf(const char *format, ...) {
   return 0;
 }
 
+static char heap[1 << 20];
+static unsigned long heap_top;
+
+void *malloc(size_t n) {
+  heap_top = (heap_top + 15) & ~15ul;
+  void *p = heap + heap_top;
+  heap_top += n;
+  return p;
+}
+
+void free(void *p) { (void)p; }
+
+void *calloc(size_t n, size_t m) { return memset(malloc(n * m), 0, n * m); }
+
+int strcmp(const char *a, const char *b) {
+  while (*a && *a == *b) { a++; b++; }
+  return (unsigned char)*a - (unsigned char)*b;
+}
+
+char *strcpy(char *to, const char *from) {
+  char *r = to;
+  while ((*to++ = *from++)) {}
+  return r;
+}
+
+int memcmp(const void *a, const void *b, size_t n) {
+  const unsigned char *x = a, *y = b;
+  for (; n; n--, x++, y++) if (*x != *y) return *x - *y;
+  return 0;
+}
+
+int atoi(const char *s) {
+  int sign = 1, v = 0;
+  if (*s == '-') { sign = -1; s++; }
+  while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0');
+  return sign * v;
+}
+
+void qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *)) {
+  char *a = base;
+  char tmp[64];
+  for (size_t i = 1; i < n; i++) {
+    for (size_t j = i; j > 0 && cmp(a + (j - 1) * size, a + j * size) > 0; j--) {
+      memcpy(tmp, a + (j - 1) * size, size);
+      memcpy(a + (j - 1) * size, a + j * size, size);
+      memcpy(a + j * size, tmp, size);
+    }
+  }
+}
+
 int main(void);
 
 void _start(void) { exit(main()); }

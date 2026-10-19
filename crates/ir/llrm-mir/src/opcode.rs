@@ -443,8 +443,17 @@ pub const FLAG_ATTRIBUTES: [&str; 44] = [
 /// Attributes the pin's clang states that no pass here reads (stack protection,
 /// unwind tables, `dead_on_return`...), kept as flags; `uwtable` may carry its
 /// kind in parentheses (`uwtable(sync)`).
-pub const TARGET_FLAG_ATTRIBUTES: [&str; 7] =
-    ["dead_on_return", "nocreateundeforpoison", "nofreeobj", "ssp", "sspreq", "sspstrong", "uwtable"];
+pub const TARGET_FLAG_ATTRIBUTES: [&str; 9] = [
+    "allockind",
+    "allocsize",
+    "dead_on_return",
+    "nocreateundeforpoison",
+    "nofreeobj",
+    "ssp",
+    "sspreq",
+    "sspstrong",
+    "uwtable",
+];
 
 pub const INT_ATTRIBUTES: [&str; 4] = ["align", "alignstack", "dereferenceable", "dereferenceable_or_null"];
 

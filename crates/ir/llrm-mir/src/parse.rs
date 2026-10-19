@@ -647,9 +647,15 @@ impl Parser {
                 }
                 Token::Word(word) if TARGET_FLAG_ATTRIBUTES.contains(&word.as_str()) => {
                     self.next();
+                    // An argument list (`uwtable(sync)`, `allocsize(0, 1)`) is
+                    // not read.
                     if self.eat_punct('(') {
-                        self.word()?;
-                        self.expect_punct(')')?;
+                        while !self.eat_punct(')') {
+                            if *self.peek() == Token::Eof {
+                                return self.fail(format!("`{word}(` is never closed"));
+                            }
+                            self.next();
+                        }
                     }
                     out.push(Attribute::Flag(word));
                 }
