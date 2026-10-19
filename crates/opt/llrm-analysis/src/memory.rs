@@ -2453,6 +2453,22 @@ fn segment(
     unit: &Unit,
     root: Operand,
 ) -> Option<Operand> {
+    // The same cast folded into a constant expression (a POKE at a known
+    // segment).
+    if let Operand::Constant(id) = root {
+        let ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) = &unit.context.get(id).kind
+        else {
+            return None;
+        };
+        let from = Operand::Constant(*value);
+        if unit.space(from) != Some(2) {
+            return None;
+        }
+        return match &unit.context.get(*value).kind {
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => Some(Operand::Constant(*value)),
+            _ => Some(from),
+        };
+    }
     let (_, instruction) = unit.defining(root)?;
     if !matches!(instruction.opcode, Opcode::Cast(CastOp::AddrSpaceCast)) {
         return None;
