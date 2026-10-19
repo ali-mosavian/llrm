@@ -1160,6 +1160,11 @@ declare i16 @llvm.usub.sat.i16(i16, i16)
             "  %s = call i16 @llvm.usub.sat.i16(i16 %x, i16 %y)\n  %t = sub i16 %y, %x\n  %r = icmp ule i16 %s, %t\n",
             None,
         ),
+        // uadd.sat(X, Y) uge X (a monotonic value); X uge usub.sat(X, Y)
+        ("  %s = call i16 @llvm.uadd.sat.i16(i16 %x, i16 %y)\n  %r = icmp uge i16 %s, %x\n", Some("1")),
+        ("  %s = call i16 @llvm.uadd.sat.i16(i16 %x, i16 %y)\n  %r = icmp ult i16 %s, %y\n", Some("0")),
+        ("  %s = call i16 @llvm.usub.sat.i16(i16 %x, i16 %y)\n  %r = icmp uge i16 %x, %s\n", Some("1")),
+        ("  %s = call i16 @llvm.usub.sat.i16(i16 %x, i16 %y)\n  %r = icmp uge i16 %y, %s\n", None),
         // the swapped form: the intrinsic on the right
         (
             "  %s = call i16 @llvm.uadd.sat.i16(i16 %x, i16 %y)\n  %t = add i16 %x, %y\n  %r = icmp ule i16 %t, %s\n",
