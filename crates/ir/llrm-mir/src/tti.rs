@@ -232,7 +232,8 @@ pub struct UnrollingPreferences {
 
 /// The target a cost is for.
 pub trait Tti {
-    /// The implementation's name, for what reports which target priced a decision.
+    /// The implementation's name, for what reports which target priced a
+    /// decision.
     fn name(&self) -> &'static str {
         "generic"
     }
