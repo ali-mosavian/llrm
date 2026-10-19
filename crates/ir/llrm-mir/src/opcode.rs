@@ -258,6 +258,7 @@ impl Flags {
     pub const NINF: Flags = Flags(1 << 10);
     pub const NSZ: Flags = Flags(1 << 11);
     pub const ARCP: Flags = Flags(1 << 12);
+    pub const CONTRACT: Flags = Flags(1 << 13);
     pub const FAST: Flags = Flags(0x7f << 8);
     /// What makes a result poison where the operation's promise breaks:
     /// `Instruction::dropPoisonGeneratingFlags`.
@@ -292,7 +293,7 @@ impl Flags {
         (Flags::NINF, "ninf"),
         (Flags::NSZ, "nsz"),
         (Flags::ARCP, "arcp"),
-        (Flags(1 << 13), "contract"),
+        (Flags::CONTRACT, "contract"),
         (Flags(1 << 14), "afn"),
         (Flags::TABLE, "table"),
     ];
@@ -328,6 +329,14 @@ impl Flags {
         other: Flags,
     ) -> Flags {
         Flags(self.0 & !other.0)
+    }
+
+    /// The flags either has.
+    pub fn union(
+        self,
+        other: Flags,
+    ) -> Flags {
+        Flags(self.0 | other.0)
     }
 
     /// The flags both have.

@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 127 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 130 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -43,7 +43,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | dead | Instructions nothing needs, removed: LLVM's ADCE and DCE. | Once per pass of the function fixed point, after `algebraic`, and again | [dead](dead.md) |
 | deadargs | Dead argument elimination (LLVM's DeadArgumentElimination): a parameter nothing reads goes, and with it the argument at every call. | In the interprocedural step, after the callers' arguments have been | [deadargs](deadargs.md) |
 | deadstore | Dead store elimination: LLVM's `DSEPass`, stage 1 (`DSEState`, `eliminateDeadDefs`, `getDomMemoryDef`, `eliminateDeadWritesAtEndOfFunction`, `storeIsNoop`). | In the slot of `dse@820` (LLVM's order); the older `dse.rs` runs elsewhere. | [deadstore](deadstore.md) |
-| decide | Branches whose way is known, decided: LLVM's JumpThreading and SimplifyCFG on known conditions. | Once per pass of the function fixed point, after `fold` and `ports`. | [decide](decide.md) |
+| decide | Branches whose way is known, decided: LLVM's JumpThreading and SimplifyCFG on known conditions. | Once per pass of the function fixed point, after `fold` and `ports` and | [decide](decide.md) |
 | dse | Dead store elimination: LLVM's DSE. | Once per pass of the function fixed point, after `trivialunswitch` and | [dse](dse.md) |
 | earlycse | LLVM's EarlyCSE with MemorySSA (`early-cse<memssa>`): one walk down the dominator tree, scoped tables of what is available, and a generation count that memory operations advance. | [`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`), | [earlycse](earlycse.md) |
 | edges | Edge surgery on conditional branches: a new block on one arm of a `br i1`, holding the operations that belong to that edge and not to either arm's block. | Not a pass: a library. `split` is called by `rotate` and | [edges](edges.md) |
@@ -63,6 +63,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | gvn | Reuses a value the function already has, so the same operation is not computed twice and the same bytes are not read again: LLVM's GVN and gcc's FRE/PRE. | `EqualCalls` runs early in the body pipeline, before `tailrec`; `Gvn` after | [gvn](gvn.md) |
 | hoistcommon | The code that opens the arms of a branch in the same way runs before the branch once: `hoistCommonCodeFromSuccessors` of SimplifyCFG. |  | [hoistcommon](hoistcommon.md) |
 | homes | Marks each phi whose value also sits in a memory cell with `!llrm.home`, naming a store of that cell, so a spill of the phi reads the cell instead of paying for a slot. | Last in the module pipeline, after `spares`, so the instruction ids it names | [homes](homes.md) |
+| icmpchain | A branch on an or/and chain of compares of one value with constants, turned into a switch (or a range check): LLVM's [`SimplifyCFGOpt::simplifyBranchOnICmpChain`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5469) with `ConstantComparesGatherer` ([L580](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L580)). |  | [icmpchain](icmpchain.md) |
 | indvars | Settles what a loop's counters are worth: a counter's value after its loop becomes a number, and a narrow counter read as a wider index becomes a counter of that width. | In the body pipeline after `promote`, with `exit_values: false`. With | [indvars](indvars.md) |
 | inferspace | Replaces a far pointer made from a near one by the near one where its users allow it, so an access needs no segment register loaded and held for it. | In every body's pipeline before `gvn`, so a far pointer cast from a near one | [inferspace](inferspace.md) |
 | inline | Whole-module MIR inlining: chooses the calls worth replacing by a copy of the callee's body, and makes the copies. | Library of [`crate::interprocedural`](../analyses/interprocedural.md), which runs it once every body has | [inline](inline.md) |
@@ -123,6 +124,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | sroa | `sroa-real`: scalar replacement of aggregates as LLVM's SROA does it: the uses of an alloca are cut into slices, the slices into partitions that no access straddles, each partition becomes an alloca of its own (or the old one), the accesses are rewritten onto it, and what is then only loaded and stored whole is promoted to registers. |  | [sroa](sroa.md) |
 | switchcg | LLVM's switch clusters: which cases are one range, a jump table or a bit test, and where the tree of what is left splits. |  | [switchcg](switchcg.md) |
 | switchlower | A switch lowered as LLVM's SelectionDAG lowers one: the likeliest range peeled off, jump tables and bit tests for what is dense, and a balanced tree of range tests over the rest. | As two passes: `switchconv` (gcc's `pass_convert_switch`, -O2 and up), | [switchlower](switchlower.md) |
+| tailcallelim | Tail calls are marked, and a function's calls to itself in tail position become a loop, as LLVM's `TailCallElim`. | Not in the pipeline yet; `tailrec` still runs. | [tailcallelim](tailcallelim.md) |
 | tailmerge | The blocks that end the function with the same terminator become one block each: SimplifyCFG's `tailMergeBlocksWithSimilarFunctionTerminators`. |  | [tailmerge](tailmerge.md) |
 | tailrec | A call a function makes to itself as the last thing it does becomes a branch to its own entry with the arguments rewritten. | In the function pipeline after `gvn::EqualCalls`, so two equal calls are | [tailrec](tailrec.md) |
 | transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], [`crate::unswitch`] share: equal calls, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `equal_calls` on each function it numbers; | [transform](transform.md) |

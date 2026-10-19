@@ -11,6 +11,7 @@ use crate::generate;
 
 /// The family's files every target's own are read after.
 pub struct Family {
+    pub dialect: crate::description::Dialect,
     pub forms: String,
     pub patterns: String,
     pub peephole: String,
@@ -25,6 +26,8 @@ fn read(path: &Path) -> String {
 /// (`llrm-x86`).
 pub fn family(dir: &Path) -> Family {
     Family {
+        dialect: crate::description::Dialect::parse(&read(&dir.join("src/instructions/dialect.toml")))
+            .unwrap_or_else(|error| panic!("{error}")),
         forms: read(&dir.join("src/instructions/x86.instr")),
         patterns: read(&dir.join("src/isel/family.isel")),
         peephole: read(&dir.join("src/isel/peephole.peep")),
@@ -59,7 +62,8 @@ pub fn target(
     let (patterns, forms) = (dir.join("src/isel/patterns.isel"), dir.join("src/instructions/x86.instr"));
     let forms = format!("{}\n{}", family.forms, read(&forms));
     let patterns = spliced(&family.patterns, &read(&patterns));
-    let generated = generate(&forms, &patterns, &name, core).unwrap_or_else(|error| panic!("{name}: {error}"));
+    let generated =
+        generate(&forms, &patterns, &name, core, &family.dialect).unwrap_or_else(|error| panic!("{name}: {error}"));
     std::fs::write(out.join(format!("isel_{ident}.rs")), generated.code).unwrap();
     let layout = read(&dir.join("src/machines/datalayout.toml"));
     let mode = layout
@@ -69,7 +73,7 @@ pub fn target(
         .trim()
         .to_owned();
     let reader = |path: &Path| read(path);
-    let rules = peephole(dir, &ident, &forms, out, &reader, groups, &family.peephole, core);
+    let rules = peephole(dir, &ident, &forms, out, &reader, groups, &family.peephole, core, &family.dialect);
     Built { name, ident, mode, rules }
 }
 
@@ -121,8 +125,11 @@ pub fn forms(
 /// `row(name, dests, sources)` for a target's `x86.instr`: what each mnemonic's
 /// forms read and write beyond their operands, and the flags (the table's, from
 /// iced's Code of the mnemonic's forms).
-pub fn effect_rows(forms: &str) -> String {
-    let rows = crate::description::parse(forms).unwrap_or_else(|error| panic!("{error}"));
+pub fn effect_rows(
+    forms: &str,
+    dialect: &crate::description::Dialect,
+) -> String {
+    let rows = crate::description::parse(forms, dialect).unwrap_or_else(|error| panic!("{error}"));
     let mut by_key: Vec<((String, usize, usize), Vec<String>)> = Vec::new();
     for form in &rows {
         let (flags_read, flags_written) = (form.flags_read, form.flags_written);
@@ -183,6 +190,7 @@ fn peephole(
     groups: &[(String, bool)],
     family: &str,
     core: &str,
+    dialect: &crate::description::Dialect,
 ) -> String {
     let rules = dir.join("src/isel/peephole.peep");
     // The family's rules, then the target's own where it has any.
@@ -192,12 +200,11 @@ fn peephole(
     } else {
         String::new()
     };
-    let made = llrm_peepgen::generate(forms, "x86.instr", &format!("{family}\n{own}"), "peephole.peep").unwrap_or_else(
-        |error| {
+    let made = llrm_peepgen::generate(forms, &dialect.file, &format!("{family}\n{own}"), "peephole.peep", dialect)
+        .unwrap_or_else(|error| {
             eprintln!("{error}");
             std::process::exit(1);
-        },
-    );
+        });
     for (group, _, _) in &made.groups {
         assert!(
             groups.iter().any(|(name, _)| name == group),
