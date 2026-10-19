@@ -435,3 +435,17 @@ fn a_multiply_by_a_constant_is_one_imul_at_x86_64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("imul")), "{listing}");
     assert!(!listing.lines().any(|line| line.trim().starts_with("shl")), "{listing}");
 }
+
+/// A call was said to destroy the upper half of every callee-saved register
+/// (`rbx` is not `ebx`, so the convention "kept only the pushed part"): values
+/// live across it fought over `ebp`, and `f` spilled three of four to the stack.
+#[test]
+fn values_live_across_a_call_take_the_callee_saved_registers() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @g(i32)\n\
+                define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d) {\n  %1 = call i32 @g(i32 %a)\n  %2 = add i32 %1, %b\n  %3 = add i32 %2, %c\n  %4 = add i32 %3, %d\n  ret i32 %4\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("[rsp"), "no value goes to the stack\n{listing}");
+}

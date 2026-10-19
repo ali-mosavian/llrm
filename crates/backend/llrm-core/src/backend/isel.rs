@@ -6387,7 +6387,7 @@ impl Selector<'_, '_, '_> {
                 // push of a 32-bit register) loses its upper half.
                 Some((entry, _)) => llrm_x86::calling::callee_saved(entry)
                     .into_iter()
-                    .filter(|(full, pushed)| full != pushed)
+                    .filter(|(full, pushed)| self.regs().bytes(*pushed) < self.regs().bytes(*full))
                     .map(|(full, _)| full)
                     .collect(),
                 None => call_clobbered_high_keeping(&contract, self.segments, &self.cpu.general, &whole),
