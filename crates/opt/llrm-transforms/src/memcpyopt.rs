@@ -8,8 +8,8 @@
 //! order with the memory graph (`mssa`) kept right by the updater as
 //! instructions are made and erased. The clobber a memcpy's source or
 //! destination walks up to decides what it can become:
-//! - a copy to itself, or of no bytes, is gone; a copy out of a constant
-//!   global that repeats one byte is a memset;
+//! - a copy to itself, or of no bytes, is gone; a copy out of a constant global
+//!   that repeats one byte is a memset;
 //! - a memcpy of a memcpy's destination copies from that memcpy's source
 //!   instead (`processMemCpyMemCpyDependence`);
 //! - a memcpy right after a memset of its destination: the memset shrinks to
@@ -36,6 +36,10 @@
 //! 4. Done later (stages): `processStoreOfLoad` and `moveUp`,
 //!    `performCallSlotOptzn`, `performStackMoveOptzn`, `processByValArgument`
 //!    and `processImmutArgument`.
+//! 5. MIR holds no constant expression in code: where the builder folds
+//!    `getelementptr (i8, @g, 16)` the pass makes the instruction. A forced
+//!    inline copy (`llvm.memcpy.inline`) is not forwarded, as the builder's
+//!    `CreateMemCpyInline` has no counterpart here.
 //!
 //! # Runs
 //! In the slot of `memcpyopt@818`.
@@ -62,8 +66,8 @@ use llrm_mir::domtree::DomTree;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
-use llrm_mir::types::TypeId;
 use llrm_mir::passes::{Analyses, Declared, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
+use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::bytewise::{Byte, is_bytewise_value};
 use llrm_mir::valuetracking::nonzero::{get_pointer_offset_from, is_known_non_zero};
 use llrm_mir::valuetracking::{Query, underlying::get_underlying_object};
@@ -85,9 +89,9 @@ impl FunctionPass for MemCpyOpt {
     ) -> PreservedAnalyses {
         let outer = Rc::clone(analyses.outer());
         let shape = analyses.get::<Shape>(&*unit.context, unit.layout, &*unit.function);
-        let registers =
-            analyses.get::<llrm_analysis::manager::Registers>(&*unit.context, unit.layout, &*unit.function);
+        let registers = analyses.get::<llrm_analysis::manager::Registers>(&*unit.context, unit.layout, &*unit.function);
         let dt = analyses.get::<Dominators>(&*unit.context, unit.layout, &*unit.function);
+        let pointers = analyses.get::<llrm_analysis::manager::Pointers>(&*unit.context, unit.layout, &*unit.function);
         let held = analyses.get::<llrm_analysis::manager::MemorySsa>(&*unit.context, unit.layout, &*unit.function);
         let (mssa, accesses) = match &*held {
             Ok(held) => (held.mssa.clone(), (*held.accesses).clone()),
@@ -107,6 +111,7 @@ impl FunctionPass for MemCpyOpt {
             outer,
             shape,
             registers,
+            pointers,
             dt,
             mssa,
             accesses,
@@ -152,6 +157,7 @@ struct State<'a> {
     outer: Rc<Outer>,
     shape: Rc<Shape>,
     registers: Rc<<llrm_analysis::manager::Registers as llrm_mir::passes::Analysis>::Result>,
+    pointers: Rc<<llrm_analysis::manager::Pointers as llrm_mir::passes::Analysis>::Result>,
     dt: Rc<DomTree>,
     mssa: Mssa,
     accesses: Accesses,
@@ -190,9 +196,27 @@ impl State<'_> {
 
     /// The view the alias model reads the function through.
     fn view(&self) -> View<'_> {
-        View::within(&*self.context, self.layout, &*self.function, &self.outer)
+        let view = View::within(&*self.context, self.layout, &*self.function, &self.outer)
             .with_registers(&self.registers)
-            .with_shape(&self.shape)
+            .with_shape(&self.shape);
+        match &*self.pointers {
+            Ok(pointers) => view.with_pointers(pointers),
+            Err(_) => view,
+        }
+    }
+
+    /// `width` bytes at `pointer`, with the objects the pointer reaches.
+    fn reference_at(
+        &self,
+        unit: &View,
+        pointer: Operand,
+        width: u32,
+    ) -> MemRef {
+        let mut reference = MemRef::at(unit, pointer, width);
+        if let Ok(pointers) = unit.pointers() {
+            reference.provenance = llrm_analysis::alias::Resolves::reference(&*pointers, unit, &reference);
+        }
+        reference
     }
 
     /// The memory intrinsic `inst` is, if it is one.
@@ -243,12 +267,8 @@ impl State<'_> {
         aa: &AliasQuery,
         mem: &Mem,
     ) -> Option<Rc<Location>> {
-        let unit = aa.unit();
         let width = self.constant_length(mem.length).and_then(|bytes| u32::try_from(bytes).ok());
-        let mut reference = MemRef::at(unit, mem.dest, width.unwrap_or(1));
-        if let Some(Some(written)) = self.accesses.writes(mem.inst).map(|writes| writes.first()) {
-            reference.provenance = written.provenance.clone();
-        }
+        let reference = self.reference_at(aa.unit(), mem.dest, width.unwrap_or(1));
         Some(aa.location_for(&reference, width.is_none()))
     }
 
@@ -258,12 +278,8 @@ impl State<'_> {
         aa: &AliasQuery,
         mem: &Mem,
     ) -> Option<Rc<Location>> {
-        let unit = aa.unit();
         let width = self.constant_length(mem.length).and_then(|bytes| u32::try_from(bytes).ok());
-        let mut reference = MemRef::at(unit, mem.other, width.unwrap_or(1));
-        if let Some(Some(read)) = self.accesses.reads(mem.inst).map(|reads| reads.first()) {
-            reference.provenance = read.provenance.clone();
-        }
+        let reference = self.reference_at(aa.unit(), mem.other, width.unwrap_or(1));
         Some(aa.location_for(&reference, width.is_none()))
     }
 
@@ -305,10 +321,14 @@ impl State<'_> {
         let list = self.mssa.get_block_accesses(block).expect("a placed access");
         let from = list.iter().position(|&one| one == start).expect("a placed access") + 1;
         let to = list.iter().position(|&one| one == end).expect("a placed access");
-        list[from..to].iter().any(|&access| {
-            let inst = self.mssa.access(access).inst.expect("a def or use has an instruction");
-            aa.get_mod_ref_info(inst, loc).is_mod_or_ref()
-        })
+        list[from..to]
+            .iter()
+            .any(
+                |&access| {
+                    let inst = self.mssa.access(access).inst.expect("a def or use has an instruction");
+                    aa.get_mod_ref_info(inst, loc).is_mod_or_ref()
+                },
+            )
     }
 
     // ---- the pass ----------------------------------------------------------
@@ -370,7 +390,10 @@ impl State<'_> {
             other => other,
         };
         let Operand::Constant(id) = size else { return false };
-        matches!(self.context.get(id).kind, ConstantKind::Undef | ConstantKind::Poison | ConstantKind::Zero)
+        matches!(
+            self.context.get(id).kind,
+            ConstantKind::Undef | ConstantKind::Poison | ConstantKind::Zero
+        )
             || matches!(self.context.get(id).kind, ConstantKind::Int(0))
     }
 
@@ -486,12 +509,12 @@ impl State<'_> {
             let view = self.view();
             let aa = AliasQuery::new(&view, &self.accesses);
             let mut limit = llrm_analysis::mssa::walker::MAX_CHECK_LIMIT;
-            let dest = self.dest_location(&aa, &m).map(|loc| {
-                self.mssa.get_clobbering_memory_access_for_location(&aa, any_clobber, &loc, &mut limit)
-            });
-            let source = self.source_location(&aa, &m).map(|loc| {
-                self.mssa.get_clobbering_memory_access_for_location(&aa, any_clobber, &loc, &mut limit)
-            });
+            let dest = self
+                .dest_location(&aa, &m)
+                .map(|loc| self.mssa.get_clobbering_memory_access_for_location(&aa, any_clobber, &loc, &mut limit));
+            let source = self
+                .source_location(&aa, &m)
+                .map(|loc| self.mssa.get_clobbering_memory_access_for_location(&aa, any_clobber, &loc, &mut limit));
             (dest, source)
         };
         if let Some(clobber) = dest_clobber
@@ -535,7 +558,10 @@ impl State<'_> {
         other: Operand,
     ) -> bool {
         let unit = aa.unit();
-        let (a, b) = (aa.location_for(&MemRef::at(unit, one, 1), false), aa.location_for(&MemRef::at(unit, other, 1), false));
+        let (a, b) = (
+            aa.location_for(&self.reference_at(unit, one, 1), false),
+            aa.location_for(&self.reference_at(unit, other, 1), false),
+        );
         aa.alias(&a, &b) == llrm_analysis::mssa::alias::AliasResult::Must
     }
 
@@ -611,8 +637,13 @@ impl State<'_> {
                     vec![dest_size, src_size],
                     Flags::default(),
                 );
-                let diff =
-                    self.insert_before(memcpy.inst, Opcode::Binary(BinaryOp::Sub), ty, vec![dest_size, src_size], Flags::default());
+                let diff = self.insert_before(
+                    memcpy.inst,
+                    Opcode::Binary(BinaryOp::Sub),
+                    ty,
+                    vec![dest_size, src_size],
+                    Flags::default(),
+                );
                 let zero = Operand::Constant(self.context.int(ty, 0));
                 let select =
                     self.insert_before(memcpy.inst, Opcode::Select, ty, vec![ule, zero, diff], Flags::default());
@@ -735,13 +766,15 @@ impl State<'_> {
                 let i64_ty = self.context.types.int(64);
                 let ptr_ty = self.function.operand_type(self.context, mdep.other).expect("a typed pointer");
                 let offset = Operand::Constant(self.context.int(i64_ty, i128::from(forward)));
-                let made = self.function.create_instruction(
-                    Opcode::GetElementPtr { source: i8 },
-                    ptr_ty,
-                    vec![mdep.other, offset],
-                    Flags::INBOUNDS,
-                    None,
-                );
+                let made = self
+                    .function
+                    .create_instruction(
+                        Opcode::GetElementPtr { source: i8 },
+                        ptr_ty,
+                        vec![mdep.other, offset],
+                        Flags::INBOUNDS,
+                        None,
+                    );
                 self.function.insert(made, llrm_mir::edit::Position::Before(m.inst)).expect("a placed instruction");
                 new_copy_source = Some(made);
                 copy_source = Operand::Value(self.function.instruction(made).result.expect("an address"));
@@ -767,16 +800,12 @@ impl State<'_> {
             } else {
                 self.constant_length(copy_length).and_then(|bytes| u32::try_from(bytes).ok())
             };
-            let mut reference = MemRef::at(unit, copy_source, bytes.unwrap_or(1));
-            if let Some(Some(read)) = self.accesses.reads(mdep.inst).map(|reads| reads.first()) {
-                reference.provenance = read.provenance.clone();
-            }
+            let reference = self.reference_at(unit, copy_source, bytes.unwrap_or(1));
             let loc = aa.location_for(&reference, bytes.is_none());
             let written = self.written_between_shared(&aa, &loc, mdep_access, m_access);
             let must = self.must_alias(&aa, m.dest, copy_source);
-            let modified = self
-                .source_location(&aa, mdep)
-                .is_some_and(|source| aa.get_mod_ref_info(m.inst, &source).is_mod());
+            let modified =
+                self.source_location(&aa, mdep).is_some_and(|source| aa.get_mod_ref_info(m.inst, &source).is_mod());
             (written, must, modified)
         };
         if written {
@@ -882,8 +911,10 @@ impl State<'_> {
         }
         if m_offset != 0 || memset_size != copy_size {
             let (c_memset, c_copy) = (self.constant_length(memset_size), self.constant_length(copy_size));
-            let covered = matches!((c_memset, c_copy), (Some(set), Some(copy))
-                if m_offset >= 0 && copy as i64 + m_offset <= set as i64);
+            let covered = matches!(
+                (c_memset, c_copy),
+                (Some(set), Some(copy)) if m_offset >= 0 && copy as i64 + m_offset <= set as i64
+            );
             if !covered {
                 // The memcpy reads past what was set: all right where the
                 // memset's own bytes there are undefined.
@@ -996,10 +1027,7 @@ impl State<'_> {
         let view = self.view();
         let aa = AliasQuery::new(&view, &self.accesses);
         let total = u32::try_from(offset as u64 + move_size).ok();
-        let mut reference = MemRef::at(aa.unit(), m.dest, total.unwrap_or(1));
-        if let Some(Some(read)) = self.accesses.reads(m.inst).map(|reads| reads.first()) {
-            reference.provenance = read.provenance.clone();
-        }
+        let reference = self.reference_at(aa.unit(), m.dest, total.unwrap_or(1));
         let combined = aa.location_for(&reference, total.is_none());
         let first_def = self.mssa.access(access).defining.expect("a defining access");
         let mut limit = llrm_analysis::mssa::walker::MAX_CHECK_LIMIT;
@@ -1007,7 +1035,8 @@ impl State<'_> {
         if self.mssa.access(clobber).kind != Kind::Def {
             return false;
         }
-        let Some(set) = self.mssa.access(clobber).inst.and_then(|inst| self.mem(inst)).filter(|one| one.kind == Kind3::Set)
+        let Some(set) =
+            self.mssa.access(clobber).inst.and_then(|inst| self.mem(inst)).filter(|one| one.kind == Kind3::Set)
         else {
             return false;
         };
@@ -1049,13 +1078,17 @@ impl State<'_> {
             let list = self.mssa.get_block_accesses(block).expect("a placed access");
             let from = list.iter().position(|&one| one == start).expect("a placed access") + 1;
             let to = list.iter().position(|&one| one == end).expect("a placed access");
-            return list[from..to].iter().any(|&access| {
-                if self.mssa.access(access).kind == Kind::Use {
-                    return false;
-                }
-                let inst = self.mssa.access(access).inst.expect("a def has an instruction");
-                aa.get_mod_ref_info(inst, loc).is_mod()
-            });
+            return list[from..to]
+                .iter()
+                .any(
+                    |&access| {
+                        if self.mssa.access(access).kind == Kind::Use {
+                            return false;
+                        }
+                        let inst = self.mssa.access(access).inst.expect("a def has an instruction");
+                        aa.get_mod_ref_info(inst, loc).is_mod()
+                    },
+                );
         }
         let defining = self.mssa.access(end).defining.expect("a defining access");
         let mut limit = llrm_analysis::mssa::walker::MAX_CHECK_LIMIT;

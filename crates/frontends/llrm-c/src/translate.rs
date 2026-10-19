@@ -105,7 +105,15 @@ pub fn program(
         .map(|proc| proc.symbol)
         .collect();
     let param_facts = crate::ow_facts::param_facts(unit);
-    let module = Shared { calling, unit, data: &data, keys: &keys, valueless: &valueless, param_facts: &param_facts, lifetimes: profile.lifetimes };
+    let module = Shared {
+        calling,
+        unit,
+        data: &data,
+        keys: &keys,
+        valueless: &valueless,
+        param_facts: &param_facts,
+        lifetimes: profile.lifetimes,
+    };
     let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
     for (at, proc) in unit.procs.iter().enumerate() {
@@ -641,7 +649,8 @@ struct Shared<'a> {
     valueless: &'a HashSet<i64>,
     /// The facts the language states of each parameter, by symbol.
     param_facts: &'a HashMap<i64, Vec<Fact>>,
-    /// Whether a block's locals get `llvm.lifetime` markers (clang's at -O1 and up).
+    /// Whether a block's locals get `llvm.lifetime` markers (clang's at -O1 and
+    /// up).
     lifetimes: bool,
 }
 
@@ -665,7 +674,9 @@ fn entered_blocks(body: &[hir::Statement]) -> HashSet<usize> {
             ("CGControl", ["O_LABEL", _, label]) => {
                 placed.insert(label, path.clone());
             }
-            ("CGControl", ["O_GOTO", _, label] | [_, _, label]) | ("CGSelCase", [_, label, _]) | ("CGSelOther", [_, label]) => {
+            ("CGControl", ["O_GOTO", _, label] | [_, _, label])
+            | ("CGSelCase", [_, label, _])
+            | ("CGSelOther", [_, label]) => {
                 jumps.push((label, path.clone()));
             }
             _ => {}
@@ -711,7 +722,8 @@ struct Body<'a, 't> {
     /// A scaled index's product, by value: its index and the element size.
     scales: HashMap<i64, (i64, i64)>,
     /// The places of each open block that marks its locals' lifetimes; and the
-    /// blocks (by order of opening) a jump enters from outside, which mark none.
+    /// blocks (by order of opening) a jump enters from outside, which mark
+    /// none.
     scopes: Vec<Option<Vec<i64>>>,
     opened: usize,
     entered: HashSet<usize>,
@@ -811,7 +823,14 @@ fn answered_by_inline_code(
     unit: &hir::Unit,
     proc: &hir::Proc,
 ) -> bool {
-    let statements: Vec<&hir::Statement> = proc.body.iter().filter(|one| !matches!(one.call.as_str(), "DBSrcCue" | "DBBegBlock" | "DBEndBlock" | "CGAutoDecl")).collect();
+    let statements: Vec<&hir::Statement> = proc
+        .body
+        .iter()
+        .filter(|one| !matches!(
+            one.call.as_str(),
+            "DBSrcCue" | "DBBegBlock" | "DBEndBlock" | "CGAutoDecl"
+        ))
+        .collect();
     statements
         .windows(2)
         .any(|two| two[1].call == "CGReturn" && two[1].args[0] == "n0" && inline_statement(unit, two[0]))
@@ -1690,7 +1709,10 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<()> {
         self.line = one.line;
         let args: Vec<&str> = one.args.iter().map(String::as_str).collect();
-        if !matches!(one.call.as_str(), "DBSrcCue" | "CGReturn" | "DBBegBlock" | "DBEndBlock" | "CGAutoDecl") {
+        if !matches!(
+            one.call.as_str(),
+            "DBSrcCue" | "CGReturn" | "DBBegBlock" | "DBEndBlock" | "CGAutoDecl"
+        ) {
             self.inlined = None;
         }
         match (one.call.as_str(), &args[..]) {
@@ -3719,7 +3741,10 @@ mod tests {
         emitted.module
     }
 
-    fn statement(call: &str, args: &[&str]) -> hir::Statement {
+    fn statement(
+        call: &str,
+        args: &[&str],
+    ) -> hir::Statement {
         hir::Statement { call: call.to_owned(), args: args.iter().map(|one| (*one).to_owned()).collect(), line: 0 }
     }
 

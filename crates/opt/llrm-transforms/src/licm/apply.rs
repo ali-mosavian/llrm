@@ -104,9 +104,7 @@ impl Graph<'_> {
             Created::After(previous) => {
                 self.updater.create_memory_access_after(self.mssa, inst, None, previous, &effect)?
             }
-            Created::Before(next) => {
-                self.updater.create_memory_access_before(self.mssa, inst, None, next, &effect)?
-            }
+            Created::Before(next) => self.updater.create_memory_access_before(self.mssa, inst, None, next, &effect)?,
         };
         if self.mssa.access(access).kind == Kind::Def {
             self.updater.insert_def(self.mssa, function, access, rename_uses);

@@ -1858,7 +1858,9 @@ pub fn get_pointer_offset_from(
     }
     // Skip any common indices and track the GEP types.
     let mut idx = 1;
-    while idx != gep1.indices.len() + 1 && idx != gep2.indices.len() + 1 && gep1.indices[idx - 1] == gep2.indices[idx - 1]
+    while idx != gep1.indices.len() + 1
+        && idx != gep2.indices.len() + 1
+        && gep1.indices[idx - 1] == gep2.indices[idx - 1]
     {
         idx += 1;
     }

@@ -212,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 36] = [
+        const CHECKED: [&str; 37] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -298,6 +298,9 @@ mod tests {
             // not-null, and `visitCastInst` a `trunc`'s no-wrap kind for the
             // result range, where LLVM does.
             "sccpsolver.rs",
+            // MemCpyOptimizer.cpp's `CreateInBoundsPtrAdd` makes an inbounds
+            // GEP; it reads no flag.
+            "memcpyopt.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

@@ -42,9 +42,9 @@
 //! empty and every local object is invisible on unwind. Exit: when MIR has EH.
 //! DEVIATE 3: an object is invisible after the function returns when it is
 //! a stack or frame object (`isa<AllocaInst>`) whose address is not captured
-//! (`alias::captured`, a `ret` and a store of it included); `dead_on_return` and byval
-//! arguments (stage 3), and non-alloca objects with no capture (malloc) are
-//! absent. Exit: stage 3.
+//! (`alias::captured`, a `ret` and a store of it included); `dead_on_return`
+//! and byval arguments (stage 3), and non-alloca objects with no capture
+//! (malloc) are absent. Exit: stage 3.
 //! DEVIATE 4: memory terminators (`lifetime.end`, `free`), the `initializes`
 //! attribute, `tryFoldIntoCalloc` and
 //! `eliminateRedundantStoresViaDominatingConditions` are stage 2 and 3. Partial
