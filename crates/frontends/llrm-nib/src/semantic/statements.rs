@@ -252,7 +252,8 @@ impl<'a> FunctionCompiler<'a> {
                 if ownership::needs_drop(binding_type) {
                     self.own(place);
                 }
-                self.emit("store", Vec::new(), vec![hir::Operand::Place(place), required(value, *span)?], None);
+                let stored = self.rounded_for_store(required(value, *span)?, binding_type);
+                self.emit("store", Vec::new(), vec![hir::Operand::Place(place), stored], None);
                 self.scopes
                     .last_mut()
                     .expect("scope")
@@ -323,7 +324,8 @@ impl<'a> FunctionCompiler<'a> {
                             self.emit("load", vec![old], vec![destination.clone()], None);
                             self.emit_drop(hir::Operand::Value(old), element);
                         }
-                        self.emit("store", Vec::new(), vec![destination, required(value, *span)?], None);
+                        let stored = self.rounded_for_store(required(value, *span)?, element);
+                        self.emit("store", Vec::new(), vec![destination, stored], None);
                     }
                     AssignmentPlace::Bits { place, packed, field } => {
                         let backing = self.types.bits_of(packed).expect("a bits type").backing;
