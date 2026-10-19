@@ -49,3 +49,9 @@ Tests that encoded gcc's rules, each re-checked with `llc -O2 -mtriple=i386 -tai
 - loop nothing falls into: llc `[e,other,latch,h,exit]`, body first and test last: `test_a_loop_nothing_falls_into_is_rotated_to_end_at_its_exit_test`.
 - `cmp; je 4` with two returns: llc `[e,r4,r9]`, `jne 9`: `test_shared_machine_pipeline_threads_the_final_branch_pair`.
 - isel listings that follow from the same rules, five tests in `isel_tests.rs`: a two-way branch to two returns puts its first successor next (`jge L3; L2`; llc `[e,r4,r9]`); the counted loop `sum` keeps `[entry,test,body,done]` (llc the same; the test copy at the bottom is `duplicated`, stage 4); the `switch` chain's last compare falls into `one` (llc ends its chain `JCC other; one`). The switch lowering itself differs from LLVM's tree, so only the last block's order is compared.
+
+## Stage 3a: trellises
+
+- `isTrellis` L1023, `getBestNonConflictingEdges` L1079, `getBestTrellisSuccessor` L1123: MIRROR (`is_trellis`, `best_trellis_successor`), called from `selectBestSuccessor` after the `ComputedEdges` lookup. The tail-duplication branch of `getBestTrellisSuccessor` comes with stage 4.
+- Test: `test_a_trellis_places_the_heaviest_pair_of_edges_as_fall_throughs` (llc at the pin breaks the source order the same way; failed with the call disabled).
+- Triangle chains (`precomputeTriangleChains` L1333) run only when tail duplication in placement is allowed: with stage 4.

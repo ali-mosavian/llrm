@@ -1090,6 +1090,36 @@ fn test_a_loop_entered_by_falling_into_its_test_keeps_it_on_top() {
     );
 }
 
+/// Two blocks that both go to the same two blocks are a trellis: the heaviest
+/// pair of edges that share no source decide the fall-throughs
+/// (`getBestTrellisSuccessor`). Here `10 -> 40` (0.35) and `20 -> 30` (0.3)
+/// beat `10 -> 30` and `20 -> 40`, so 40 follows 10 and the source order
+/// (30 first) is broken; `llc -O2` on the same CFG puts the rare-first `b`
+/// before `a` as well. Without it 30 followed 10.
+#[test]
+fn test_a_trellis_places_the_heaviest_pair_of_edges_as_fall_throughs() {
+    let mut source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![10, 20]).into(),
+            block(10, vec![_compare(10), _branch(11, "je", 40)], vec![30, 40]).into(),
+            block(20, vec![_compare(20), _branch(21, "je", 40)], vec![30, 40]).into(),
+            block(30, vec![_return(30)], vec![]).into(),
+            block(40, vec![_return(40)], vec![]).into(),
+        ],
+    );
+    let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+    for (edge, chance) in
+        [((1, 10), 0.5), ((1, 20), 0.5), ((10, 30), 0.3), ((10, 40), 0.7), ((20, 30), 0.6), ((20, 40), 0.4)]
+    {
+        source.odds.taken.insert(edge, fixed(chance));
+    }
+    let order = placed(&source).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+    let at = |block: i64| order.iter().position(|one| *one == block).unwrap();
+    assert_eq!(at(40), at(10) + 1, "{order:?}");
+}
+
 /// A loop its entry rarely reaches, the entry falling to a likelier block: no
 /// fall-through into the loop to keep, so its exit test goes last and the
 /// body first (`rotateLoop`; `llc -O2` on the same CFG puts the latch before

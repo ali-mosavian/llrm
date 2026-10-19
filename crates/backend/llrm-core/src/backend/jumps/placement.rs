@@ -360,6 +360,9 @@ impl Placer {
                 return Some(ahead);
             }
         }
+        if self.is_trellis(block, &successors, chain) {
+            return self.best_trellis_successor(block, &successors, chain);
+        }
         let (mut best, mut best_prob) = (None, 0.0);
         for to in successors {
             let real = self.prob(block, to);
@@ -374,6 +377,109 @@ impl Placer {
             best_prob = adjusted;
         }
         best
+    }
+
+    /// `hasSameSuccessors`.
+    fn has_same_successors(
+        &self,
+        block: usize,
+        successors: &[usize],
+    ) -> bool {
+        self.succ[block].len() == successors.len()
+            && !successors.contains(&block)
+            && self.succ[block].iter().all(|to| successors.contains(to))
+    }
+
+    /// `isTrellis`: `block` and the other blocks that go to its two viable
+    /// successors have those two as their only successors.
+    fn is_trellis(
+        &self,
+        block: usize,
+        viable: &[usize],
+        chain: usize,
+    ) -> bool {
+        if self.succ[block].len() != 2 || viable.len() != 2 {
+            return false;
+        }
+        let successors = &self.succ[block];
+        let mut seen: HashSet<usize> = HashSet::default();
+        for &to in viable {
+            if self.pred[to].len() > PREDECESSOR_LIMIT {
+                return false;
+            }
+            let mut count = 0;
+            for &from in &self.pred[to] {
+                if successors.contains(&from) {
+                    if self.succ[from].iter().any(|one| !successors.contains(one)) {
+                        return false;
+                    }
+                    continue;
+                }
+                let from_chain = self.chain_of[from];
+                if from == block || !self.allowed(from) || from_chain == chain || from_chain == self.chain_of[to] {
+                    continue;
+                }
+                count += 1;
+                if !seen.insert(from) {
+                    continue;
+                }
+                if !self.has_same_successors(from, successors) {
+                    return false;
+                }
+            }
+            if count < 1 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// `getBestTrellisSuccessor`: of the edges into the two successors, the
+    /// heaviest pair that share no source, and `block`'s if it is in it.
+    fn best_trellis_successor(
+        &mut self,
+        block: usize,
+        viable: &[usize],
+        chain: usize,
+    ) -> Option<usize> {
+        if self.succ[block].len() != 2 || viable.len() != 2 {
+            return None;
+        }
+        let mut edges: [Vec<(f64, usize, usize)>; 2] = [Vec::new(), Vec::new()];
+        for (which, &to) in viable.iter().enumerate() {
+            for &from in &self.pred[to] {
+                if from != block {
+                    if !self.allowed(from) {
+                        continue;
+                    }
+                    let from_chain = self.chain_of[from];
+                    if from_chain == chain || from_chain == self.chain_of[to] {
+                        continue;
+                    }
+                }
+                edges[which].push((self.freq[from] * self.prob(from, to), from, to));
+            }
+        }
+        for one in &mut edges {
+            one.sort_by(|a, b| b.0.total_cmp(&a.0));
+        }
+        let (mut a, mut b) = (edges[0][0], edges[1][0]);
+        if a.1 == b.1 {
+            let (second_a, second_b) = (edges[0][1], edges[1][1]);
+            if a.0 + second_b.0 < b.0 + second_a.0 {
+                a = second_a;
+            } else {
+                b = second_b;
+            }
+        }
+        if b.1 == block {
+            std::mem::swap(&mut a, &mut b);
+        }
+        if a.1 != block {
+            return None;
+        }
+        self.computed.insert(b.1, b.2);
+        Some(a.2)
     }
 
     /// `selectBestCandidateBlock`: the most frequent block waiting.
