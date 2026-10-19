@@ -824,9 +824,10 @@ fn a_freeze_of_a_defined_value_is_the_value() {
     check("  %r = freeze i16 poison\n", "r", None);
 }
 
-/// Old: `getelementptr @g, 0, 2` was left an instruction (~55 on bench/lru) where
-/// `simplifyGEPInst` folds a GEP of constants through `ConstantExpr::getGetElementPtr`
-/// to a constant expression. A zero-index GEP is the pointer, a variable index stays.
+/// Old: `getelementptr @g, 0, 2` was left an instruction (~55 on bench/lru)
+/// where `simplifyGEPInst` folds a GEP of constants through
+/// `ConstantExpr::getGetElementPtr` to a constant expression. A zero-index GEP
+/// is the pointer, a variable index stays.
 #[test]
 fn a_gep_of_a_global_and_constants_is_a_constant_expression() {
     let text = |body: &str| {
@@ -841,7 +842,8 @@ fn a_gep_of_a_global_and_constants_is_a_constant_expression() {
 
 /// Old: `addrspacecast @g` and `ptrtoint @g` of a constant were left casts
 /// (`simplifyCastInst` folded through `constfold::cast`, which makes no
-/// constant expression); the pin's `ConstantFoldCastOperand` does (5 on bench/lru).
+/// constant expression); the pin's `ConstantFoldCastOperand` does (5 on
+/// bench/lru).
 #[test]
 fn a_cast_of_a_global_is_a_constant_expression() {
     let text = |body: &str| format!("@g = global i16 0\ndefine void @f(i16 %x) {{\nb0:\n{body}  ret void\n}}\n");

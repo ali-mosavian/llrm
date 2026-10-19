@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The per-merge tests of the integration branch feat/parity: the touched crates' fastest unit tests, a few fast run tests and a compile smoke, 10 s of CPU in all.
-First, untimed, `cargo check --workspace --all-targets` of the merged tree.
+First, untimed, `cargo check --workspace --all-targets` of the merged tree and every source-scan ratchet (whatever the merge touches).
 
     tools/parity_smoke.py [--bin DIR] [--base REF] [--rank CRATE...]
 
@@ -80,6 +80,36 @@ def workspace_check(root: Path = ROOT) -> str:
         return ""
     errors = [line for line in done.stderr.splitlines() if "error" in line]
     return " / ".join(errors[:3])[:300] or "cargo check failed"
+
+
+TIERS = ROOT / "tools/gate/tiers.toml"
+EXTRA_RATCHETS = (["cargo", "test", "-q", "--test", "block_list_ratchet"], ["cargo", "test", "-q", "-p", "llrm-mir", "--lib", "facts_rewrite"])
+
+
+def ratchet_commands(tiers: Path = TIERS) -> list[list[str]]:
+    """Every source-scan test of the gate (tools/gate/tiers.toml `[[scan]]`) and the two that list readers (block list, facts_rewrite), as cargo commands. A test
+    that counts what a crate's files read fails on a diff in ANOTHER crate: a reader added in llrm-transforms never ran llrm-mir's ratchets (loopdeletion +3,
+    simpleloopunswitch +5 slipped in), because the smoke ran only the touched crates' unit tests."""
+    commands = [list(c) for c in EXTRA_RATCHETS]
+    for scan in tomllib.loads(tiers.read_text()).get("scan", []):
+        if "lib" in scan:
+            commands.append(["cargo", "test", "-q", "-p", scan["package"], "--lib", "--", scan["lib"]])
+        elif "test" in scan:
+            commands.append(["cargo", "test", "-q", "-p", scan["package"], "--test", scan["test"]])
+        elif scan.get("step") == "integration":
+            commands.append(["cargo", "test", "-q", "--test", Path(scan["file"]).stem])
+    return commands
+
+
+def ratchets(root: Path = ROOT, tiers: Path = TIERS, run=None) -> str:
+    """"" when every ratchet passes on the tree in `root`; else the first that fails. Run before the clock starts, whatever the merge touches."""
+    run = run or (lambda command: subprocess.run(command, cwd=root, capture_output=True, text=True))
+    for command in ratchet_commands(tiers):
+        done = run(command)
+        if done.returncode:
+            lines = [line for line in (done.stdout + done.stderr).splitlines() if "panicked" in line or "FAILED" in line or "error" in line]
+            return f"{' '.join(command[1:])}: {' / '.join(lines[:2])[:240] or 'failed'}"
+    return ""
 
 
 def selection() -> dict:
@@ -323,6 +353,9 @@ def main() -> int:
         return 0
     if broken := workspace_check():
         print(f"PARITY SMOKE FAIL the workspace does not compile: {broken}")
+        return 1
+    if broken := ratchets():
+        print(f"PARITY SMOKE FAIL a ratchet fails on the merged tree: {broken}")
         return 1
     packages = touched(args.base)
     for package in packages:  # built first, untimed

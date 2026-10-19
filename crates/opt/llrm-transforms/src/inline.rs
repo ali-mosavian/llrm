@@ -289,7 +289,16 @@ fn stated(body: &Function) -> Option<Inlining> {
 
 /// The stack, in bytes, inlining may add to one function: a copy's frame is
 /// a cell of its own wherever it sits, so copies add up, and in a recursive
-/// function they add up per level.  LLVM bounds the same way.
+/// function they add up per level.
+///
+/// DEVIATE 1: LLVM bounds only a recursive caller's allocas
+/// (`TotalAllocaSizeRecursiveCaller`, in `inlinecost`); this holds on sites
+/// LLVM's cost decided too. Fact: no copy carries lifetime markers (the C
+/// frontend emits none, the inliner adds none), so sibling copies share no
+/// slot; without the limit QCport's `_menu_draw` frame grew 266 -> 3548 bytes
+/// and `_host_frame`'s by 742, past its stack's 2.5 KB margin. Exit:
+/// `InlineFunction`'s `InsertLifetime` translated, so `lifetimes` shares the
+/// copies' slots.
 const FRAME_LIMIT: u64 = 256;
 
 /// Where the register allocator's cost leaves linear. gcc bounds a caller's
@@ -351,6 +360,9 @@ pub struct Caller<'a> {
     /// that is not known: the growth its inlines may come to is measured
     /// against it (`LARGE_FUNCTION`).
     pub base: i64,
+    /// gcc's `caller_growth_limits` hold. Off where LLVM's `InlineCost`
+    /// decided the site: LLVM bounds no caller's growth.
+    pub limits: bool,
 }
 
 /// Whether `inst` does semantic work: not a phi, a jump or a return.
@@ -480,7 +492,7 @@ fn copy_byval_arguments(
         let (pointer, void, flag) = (context.types.ptr(0), context.types.void(), context.types.int(1));
         let entry = function.entry().ok_or("a caller with a body")?;
         let first = anchor.or_else(|| {
-            function.block(entry).iter().find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }))
+            function.iter_block(entry).find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }))
         });
         let alloca = function.create_instruction(
             Opcode::Alloca { allocated: aggregate, align: None, address_space: 0 },
@@ -1248,7 +1260,7 @@ fn grows_within_limits(
 ) -> bool {
     // gcc's `DECL_DISREGARD_INLINE_LIMITS`: `always_inline` is held to no limit
     // of size.
-    if stated(callee) == Some(Inlining::Always) {
+    if stated(callee) == Some(Inlining::Always) || !caller.limits {
         return true;
     }
     let callee_size = semantic_count(callee);

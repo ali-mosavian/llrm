@@ -2893,7 +2893,9 @@ fn test_an_i64_to_a_float_is_filds_qword() {
 #[test]
 fn test_a_float_bitcast_to_an_integer_goes_through_the_stack() {
     let text = |from: &str, to: &str| {
-        inner(&format!("define {to} @f({from} %x) addrspace(1) {{\n  %b = bitcast {from} %x to {to}\n  ret {to} %b\n}}\n"))
+        inner(&format!(
+            "define {to} @f({from} %x) addrspace(1) {{\n  %b = bitcast {from} %x to {to}\n  ret {to} %b\n}}\n"
+        ))
     };
     let single = text("float", "i32");
     assert!(single.iter().any(|line| line.starts_with("fstp dword ptr [bp-")), "{single:?}");
@@ -4011,7 +4013,7 @@ fn test_dbg_lines_become_linnum() {
     let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {\n  %s = sub i16 %a, %b, !dbg !0\n  %t = add i16 %s, 3, !dbg !1\n  ret i16 %t, !dbg !1\n}\n!0 = !{i32 7}\n!1 = !{i32 8}\n";
     let module = parsed(text);
     let (_, _, function) = module.functions().next().expect("f");
-    let instructions = function.layout().iter().flat_map(|&block| function.block(block).iter());
+    let instructions = function.layout().iter().flat_map(|&block| function.iter_block(block));
     let attached =
         instructions.filter(|&one| function.instruction(one).metadata.iter().any(|(kind, _)| kind == "dbg")).count();
     assert_eq!(attached, 3, "the fixture carries its lines");
