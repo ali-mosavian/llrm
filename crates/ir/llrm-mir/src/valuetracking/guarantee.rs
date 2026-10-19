@@ -266,11 +266,8 @@ pub fn may_throw(
         Opcode::Invoke(_) => {
             let unwind = instruction.operands.len().checked_sub(2).map(|at| instruction.operands[at]);
             let Some(Operand::Block(destination)) = unwind else { return false };
-            let pad = q
-                .function
-                .block(destination)
-                .iter()
-                .find(|one| q.function.instruction(*one).opcode != Opcode::Phi);
+            let pad =
+                q.function.block(destination).iter().find(|one| q.function.instruction(*one).opcode != Opcode::Phi);
             match pad {
                 Some(pad) if matches!(q.function.instruction(pad).opcode, Opcode::LandingPad { .. }) => {
                     can_unwind_past_landing_pad(q, pad, false)
