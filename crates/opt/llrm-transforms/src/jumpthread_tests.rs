@@ -645,3 +645,103 @@ fn the_cleaning_after_a_thread_keeps_what_each_pass_preserved() {
 /// 53 with everything invalidated before each pass, 38 with what each
 /// preserved.
 const BOUND: usize = 45;
+
+/// QCport `ent_trig_shot` as it reaches the pass: `b16`'s switch sends two
+/// cases to `b23`, so its phi has two inputs from `b16`. That way in was
+/// taken twice, copied twice, and the second copy panicked ("an input from
+/// the path") at -O2.
+const FOUND_TWICE: &str = r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
+
+declare cc 1005 i16 @"_snd_start@3"(ptr, ptr, i16, i16, i16, ptr, i16) addrspace(1)
+declare cc 1005 i16 @"_ent_box_touched@3"(ptr, ptr addrspace(1), ptr addrspace(1), double) addrspace(1)
+
+define cc 1005 void @"_ent_trig_shot@3"(ptr %0, ptr %1, ptr nocapture readonly %2, ptr nocapture readonly %3, float %4, i16 %5, i16 %6, i16 %7) addrspace(1) {
+b1:
+  %8 = alloca [12 x i8]
+  %9 = getelementptr inbounds nuw i8, ptr %0, i16 224
+  %10 = getelementptr inbounds nuw i8, ptr %0, i16 226
+  %11 = fcmp ogt float undef, 0.000000e+00
+  %12 = getelementptr inbounds nuw i8, ptr %0, i16 7026
+  %13 = icmp ne i16 %7, 0
+  br label %b2
+
+b2:
+  %lsr.iv = phi i16 [ 0, %b1 ], [ %lsr.iv.next, %b22 ]
+  %14 = phi i16 [ poison, %b1 ], [ %31, %b22 ]
+  %15 = phi i16 [ 0, %b1 ], [ %32, %b22 ]
+  %16 = load i16, ptr %9
+  %17 = icmp slt i16 %15, %16
+  br i1 %17, label %b4, label %b3
+
+b3:
+  ret void
+
+b4:
+  %18 = load ptr addrspace(1), ptr %10
+  %19 = getelementptr inbounds i8, ptr addrspace(1) %18, i16 %lsr.iv
+  %20 = getelementptr inbounds nuw i8, ptr addrspace(1) %19, i16 2
+  %21 = load i16, ptr addrspace(1) %20
+  %22 = icmp eq i16 %21, 9
+  br i1 %22, label %b6, label %b16
+
+b6:
+  %23 = getelementptr inbounds nuw i8, ptr addrspace(1) %19, i16 10
+  %24 = load i16, ptr addrspace(1) %23
+  %25 = icmp eq i16 %24, 4
+  br i1 %25, label %b18, label %b22
+
+b16:
+  %26 = phi i16 [ %14, %b4 ], [ 4, %b19 ]
+  %27 = phi i16 [ %21, %b4 ], [ %30, %b19 ]
+  switch i16 %27, label %b22 [
+    i16 1, label %38
+    i16 5, label %b23
+    i16 6, label %b23
+  ]
+
+b18:
+  br i1 %11, label %b19, label %b22
+
+b19:
+  %28 = add i16 %15, 2048
+  %29 = call cc 1005 addrspace(1) i16 @"_snd_start@3"(ptr nonnull %12, ptr %1, i16 %28, i16 4, i16 163, ptr nonnull %8, i16 1)
+  %30 = load i16, ptr addrspace(1) %20
+  br label %b16
+
+b22:
+  %31 = phi i16 [ 0, %b30 ], [ 0, %b29 ], [ 0, %b27 ], [ %33, %b23 ], [ %26, %b16 ], [ 4, %b18 ], [ %24, %b6 ]
+  %32 = add nuw nsw i16 %15, 1
+  %lsr.iv.next = add i16 %lsr.iv, 78
+  br label %b2
+
+b23:
+  %33 = phi i16 [ %39, %38 ], [ %26, %b16 ], [ %26, %b16 ]
+  switch i16 %33, label %b22 [
+    i16 0, label %b27
+  ]
+
+b27:
+  br i1 %13, label %b29, label %b22
+
+b29:
+  %34 = icmp ne i16 %27, 5
+  br i1 %34, label %b30, label %b22
+
+b30:
+  %35 = getelementptr inbounds nuw i8, ptr addrspace(1) %19, i16 54
+  %36 = getelementptr inbounds nuw i8, ptr addrspace(1) %19, i16 42
+  %37 = call cc 1005 addrspace(1) i16 @"_ent_box_touched@3"(ptr %1, ptr addrspace(1) nonnull %36, ptr addrspace(1) nonnull %35, double 0.000000e+00)
+  br label %b22
+
+38:
+  %.phi.trans.insert = getelementptr inbounds nuw i8, ptr addrspace(1) %19, i16 10
+  %39 = load i16, ptr addrspace(1) %.phi.trans.insert
+  br label %b23
+}
+"#;
+
+#[test]
+fn test_a_way_in_found_twice_is_copied_once() {
+    let mut module = parsed(FOUND_TWICE);
+    managed(&mut module, JumpThread { size: false, correlated: true, states: true });
+}
