@@ -10,6 +10,24 @@ use crate::mc::inst::*;
 use crate::mc::visit::Reg;
 use crate::mfunc::{MBlock, Op, branch_to};
 
+/// What a conditional branch tests: the flags, a register against zero, or one
+/// bit of a register (`cbz`, `tbz`).
+pub(super) enum Test {
+    Flags(Cond),
+    Zero { reg: Gpr, width: Width, nonzero: bool },
+    Bit { reg: Gpr, bit: u8, nonzero: bool },
+}
+
+impl Test {
+    fn inverted(&self) -> Test {
+        match *self {
+            Test::Flags(cond) => Test::Flags(cond.inverted()),
+            Test::Zero { reg, width, nonzero } => Test::Zero { reg, width, nonzero: !nonzero },
+            Test::Bit { reg, bit, nonzero } => Test::Bit { reg, bit, nonzero: !nonzero },
+        }
+    }
+}
+
 /// A phi's incoming value, to put in its register.
 struct PhiCopy {
     dst: Reg,
@@ -162,6 +180,78 @@ impl Selector<'_> {
         Ok(edge_label)
     }
 
+    /// How to branch on the i1 `operand`: a comparison with zero is `cbz`, a
+    /// sign test or a single-bit mask is `tbz`; anything else the flags.
+    fn branch_test(
+        &mut self,
+        operand: Operand,
+    ) -> Selected<Test> {
+        use llrm_mir::IntPredicate;
+        if let Operand::Value(value) = operand
+            && self.fusable(value)
+            && let Some(inst) = super::value_def(self.function, value)
+            && let Opcode::ICmp(predicate) = self.function.instruction(inst).opcode
+        {
+            let compare = self.function.instruction(inst).clone();
+            let (left, right) = (compare.operands[0], compare.operands[1]);
+            let bits = self.types().int_bits(self.operand_type(left)?).unwrap_or(64);
+            if self.is_zero_constant(right) && bits <= 64 {
+                // An `and` left for a `tst`: one bit is `tbz`, any other mask the flags.
+                if let Operand::Value(masked) = left
+                    && let Some(and) = self.fused_and(masked)
+                {
+                    if matches!(predicate, IntPredicate::Eq | IntPredicate::Ne)
+                        && let Src::Int { value, .. } = self.src(and.operands[1])?
+                        && value.is_power_of_two()
+                    {
+                        let g = self.operand_g(and.operands[0])?;
+                        return Ok(Test::Bit {
+                            reg: g.reg,
+                            bit: value.trailing_zeros() as u8,
+                            nonzero: predicate == IntPredicate::Ne,
+                        });
+                    }
+                    self.test_bits(&and)?;
+                    return Ok(Test::Flags(super::int::condition_of(predicate)));
+                }
+                match predicate {
+                    IntPredicate::Slt | IntPredicate::Sge => {
+                        let g = self.operand_g(left)?;
+                        return Ok(Test::Bit {
+                            reg: g.reg,
+                            bit: (bits - 1) as u8,
+                            nonzero: predicate == IntPredicate::Slt,
+                        });
+                    }
+                    IntPredicate::Eq | IntPredicate::Ne => {
+                        let g = self.operand_g(left)?;
+                        let g = self.extended(g, super::val::Known::Zero);
+                        return Ok(Test::Zero {
+                            reg: g.reg,
+                            width: super::val::width_of(bits),
+                            nonzero: predicate == IntPredicate::Ne,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(Test::Flags(self.condition(operand)?))
+    }
+
+    fn is_zero_constant(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        matches!(
+            operand,
+            Operand::Constant(id) if matches!(
+                self.module.context.get(id).kind,
+                llrm_mir::ConstantKind::Int(0) | llrm_mir::ConstantKind::Zero | llrm_mir::ConstantKind::Null
+            )
+        )
+    }
+
     pub(super) fn br(
         &mut self,
         at: usize,
@@ -182,17 +272,23 @@ impl Selector<'_> {
             return Ok(());
         }
         let (on_true, on_false) = (target(instruction.operands[1])?, target(instruction.operands[2])?);
-        let cond = self.condition(instruction.operands[0])?;
+        let test = self.branch_test(instruction.operands[0])?;
         let true_label = self.edge(from, on_true, 2)?;
         let false_label = self.edge(from, on_false, 2)?;
-        let conditional =
-            |cond: Cond, label: &str| Op::I(Inst::BranchCond { cond, target: Target::Label(label.to_owned()) });
+        let jump = |test: &Test, label: &str| {
+            let target = Target::Label(label.to_owned());
+            Op::I(match *test {
+                Test::Flags(cond) => Inst::BranchCond { cond, target },
+                Test::Zero { reg, width, nonzero } => Inst::CompareBranch { nonzero, width, rt: reg, target },
+                Test::Bit { reg, bit, nonzero } => Inst::TestBranch { nonzero, rt: reg, bit, target },
+            })
+        };
         if next == Some(on_false) && !self.is_edge_label(&false_label) {
-            self.emit(conditional(cond, &true_label));
+            self.emit(jump(&test, &true_label));
         } else if next == Some(on_true) && !self.is_edge_label(&true_label) {
-            self.emit(conditional(cond.inverted(), &false_label));
+            self.emit(jump(&test.inverted(), &false_label));
         } else {
-            self.emit(conditional(cond, &true_label));
+            self.emit(jump(&test, &true_label));
             self.emit(branch_to(&false_label));
         }
         Ok(())

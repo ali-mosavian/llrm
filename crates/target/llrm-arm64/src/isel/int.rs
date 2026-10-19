@@ -160,6 +160,11 @@ impl Selector<'_> {
             return refuse(format!("{} of i{bits}", instruction_name(op)));
         }
         let width = width_of(bits);
+        if op == BinaryOp::And && instruction.result.is_some_and(|result| self.tested_by_compare(result)) {
+            // A `tst` reads the operands where the comparison is.
+            self.fused.insert(super::value_def(self.function, instruction.result.expect("checked")).expect("an instruction"));
+            return Ok(());
+        }
         let (lhs, rhs) = (self.src(instruction.operands[0])?, self.src(instruction.operands[1])?);
         let value = match op {
             BinaryOp::Add | BinaryOp::Sub => self.add_sub(op == BinaryOp::Sub, bits, lhs, rhs)?,
@@ -563,6 +568,13 @@ impl Selector<'_> {
         a: Operand,
         b: Operand,
     ) -> Selected<Cond> {
+        if let Operand::Value(value) = a
+            && self.is_zero(b)
+            && let Some(and) = self.fused_and(value)
+        {
+            self.test_bits(&and)?;
+            return Ok(condition_of(predicate));
+        }
         let (mut left, mut right, mut predicate) = (self.src(a)?, self.src(b)?, predicate);
         if matches!(left, Src::Int { .. }) && !matches!(right, Src::Int { .. }) {
             std::mem::swap(&mut left, &mut right);
@@ -632,6 +644,84 @@ impl Selector<'_> {
         Ok(condition_of(predicate))
     }
 
+    fn is_zero(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        matches!(operand, Operand::Constant(id) if matches!(self.module.context.get(id).kind, llrm_mir::ConstantKind::Int(0) | llrm_mir::ConstantKind::Zero | llrm_mir::ConstantKind::Null))
+    }
+
+    /// Whether the `and` `value` is read only by a comparison with zero whose
+    /// predicate `tst`'s flags answer: equality and the signed orders (`tst`
+    /// leaves C and V clear, as a compare with zero leaves V).
+    pub(super) fn tested_by_compare(
+        &self,
+        value: llrm_mir::ValueId,
+    ) -> bool {
+        if self.use_count(value) != 1 {
+            return false;
+        }
+        let Some(user) = self.function.users(value).into_iter().next() else { return false };
+        let reader = self.function.instruction(user.user);
+        let own = super::value_def(self.function, value).and_then(|inst| self.function.parent(inst));
+        let eligible = matches!(
+            reader.opcode,
+            llrm_mir::Opcode::ICmp(
+                IntPredicate::Eq | IntPredicate::Ne | IntPredicate::Slt | IntPredicate::Sge | IntPredicate::Sgt | IntPredicate::Sle
+            )
+        );
+        eligible
+            && own == self.function.parent(user.user)
+            && reader.operands[0] == Operand::Value(value)
+            && self.is_zero(reader.operands[1])
+            && self.function.instruction(super::value_def(self.function, value).expect("an instruction")).ty
+                != self.types().int(0)
+    }
+
+    /// The `and` that `value` is, if it was left for a `tst`.
+    pub(super) fn fused_and(
+        &self,
+        value: llrm_mir::ValueId,
+    ) -> Option<Instruction> {
+        let inst = super::value_def(self.function, value)?;
+        (self.fused.contains(&inst) && self.function.instruction(inst).opcode == llrm_mir::Opcode::Binary(BinaryOp::And))
+            .then(|| self.function.instruction(inst).clone())
+    }
+
+    /// `tst a, b`: the flags of `a & b`.
+    pub(super) fn test_bits(
+        &mut self,
+        and: &Instruction,
+    ) -> Selected<()> {
+        let bits = self.types().int_bits(and.ty).unwrap_or(64);
+        let width = width_of(bits);
+        let (mut left, mut right) = (self.src(and.operands[0])?, self.src(and.operands[1])?);
+        if matches!(left, Src::Int { .. }) {
+            std::mem::swap(&mut left, &mut right);
+        }
+        let first = self.gpr_of(left)?;
+        if let Src::Int { value, .. } = right
+            && immediate::logical(value as u64 & mask(bits), width.bits()).is_some()
+        {
+            self.inst(Inst::LogicImm { op: Logic::Ands, width, rd: Gpr::R31, rn: first.reg, imm: value as u64 & mask(bits) });
+            return Ok(());
+        }
+        let second = self.gpr_of(right)?;
+        // One operand extended: the other's bits above the width are cleared.
+        let second = self.extended(second, Known::Zero);
+        self.inst(Inst::LogicShifted {
+            op: Logic::Ands,
+            invert: false,
+            width,
+            rd: Gpr::R31,
+            rn: first.reg,
+            rm: second.reg,
+            shift: Shift::Lsl,
+            amount: 0,
+        });
+        Ok(())
+    }
+
     /// The condition that holds where the i1 `operand` is true, with the flags
     /// set for it.
     pub(crate) fn condition(
@@ -666,27 +756,61 @@ impl Selector<'_> {
         let result = instruction.result;
         let cond = self.condition(instruction.operands[0])?;
         let (a, b) = (self.src(instruction.operands[1])?, self.src(instruction.operands[2])?);
-        let value = match self.materialize(a)? {
-            Val::Float { reg: a, size } => {
-                let Val::Float { reg: b, .. } = self.materialize(b)? else {
-                    return refuse("a select of mixed classes");
-                };
+        let value = match (&a, &b) {
+            (Src::Float { .. } | Src::Val(Val::Float { .. }), _) | (_, Src::Float { .. } | Src::Val(Val::Float { .. })) => {
+                let Val::Float { reg: a, size } = self.materialize(a)? else { return refuse("a select of mixed classes") };
+                let Val::Float { reg: b, .. } = self.materialize(b)? else { return refuse("a select of mixed classes") };
                 let rd = self.mf.fpr();
                 self.inst(Inst::FpSelect { size, rd, rn: a, rm: b, cond });
                 Val::Float { reg: rd, size }
             }
-            first => {
-                let second = self.materialize(b)?;
-                let pointer = matches!(first, Val::Ptr(_));
-                let (a, b) = (self.gpr_of(Src::Val(first))?, self.gpr_of(Src::Val(second))?);
-                let bits = if pointer { 64 } else { a.bits };
+            _ => {
+                let pointer = matches!(a, Src::Val(Val::Ptr(_))) || matches!(b, Src::Val(Val::Ptr(_)));
+                let bits = match (&a, &b) {
+                    (Src::Val(Val::Int(g)), _) | (_, Src::Val(Val::Int(g))) => g.bits,
+                    (Src::Int { bits, .. }, _) => *bits,
+                    _ => 64,
+                };
+                let bits = if pointer { 64 } else { bits };
+                let width = width_of(bits);
                 let rd = self.mf.gpr();
-                self.inst(Inst::CondSelect { op: Select::Csel, width: width_of(bits), rd, rn: a.reg, rm: b.reg, cond });
+                let ones = mask(bits);
+                let constant = |src: &Src| match src {
+                    Src::Int { value, .. } => Some(*value as u64 & ones),
+                    _ => None,
+                };
+                match (constant(&a), constant(&b)) {
+                    // cset / csetm: the flags choose between 1 or -1 and 0.
+                    (Some(1), Some(0)) => self.inst(Inst::CondSelect { op: Select::Csinc, width, rd, rn: Gpr::R31, rm: Gpr::R31, cond: cond.inverted() }),
+                    (Some(0), Some(1)) => self.inst(Inst::CondSelect { op: Select::Csinc, width, rd, rn: Gpr::R31, rm: Gpr::R31, cond }),
+                    (Some(all), Some(0)) if all == ones => {
+                        self.inst(Inst::CondSelect { op: Select::Csinv, width, rd, rn: Gpr::R31, rm: Gpr::R31, cond: cond.inverted() })
+                    }
+                    (Some(0), Some(all)) if all == ones => {
+                        self.inst(Inst::CondSelect { op: Select::Csinv, width, rd, rn: Gpr::R31, rm: Gpr::R31, cond })
+                    }
+                    _ => {
+                        let first = self.gpr_or_zero(a)?;
+                        let second = self.gpr_or_zero(b)?;
+                        self.inst(Inst::CondSelect { op: Select::Csel, width, rd, rn: first, rm: second, cond });
+                    }
+                }
                 let known = if bits <= 32 { Known::Hi32Zero } else { Known::Nothing };
                 if pointer { Val::Ptr(AddrExpr::of(Base::Reg(rd))) } else { Val::Int(G { reg: rd, bits, known }) }
             }
         };
         self.define(result, Src::Val(value))
+    }
+
+    /// The register of `src`, the zero register for the constant 0.
+    pub(crate) fn gpr_or_zero(
+        &mut self,
+        src: Src,
+    ) -> Selected<Gpr> {
+        Ok(match src {
+            Src::Int { value: 0, .. } => Gpr::R31,
+            other => self.gpr_of(other)?.reg,
+        })
     }
 }
 

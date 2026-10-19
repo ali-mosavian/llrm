@@ -53,6 +53,7 @@ def executed(binary):
     table = symbols(binary)
     starts = [entry[0] for entry in table]
     count = 0
+    per_function = {}
     for line in open(log):
         match = re.match(r"Trace \d+: \S+ \[[0-9a-f]+/([0-9a-f]+)/", line)
         if not match:
@@ -61,7 +62,10 @@ def executed(binary):
         at = bisect.bisect_right(starts, pc) - 1
         if at >= 0 and table[at][2] not in RUNTIME_FUNCTIONS and pc < table[at][0] + table[at][1]:
             count += 1
+            per_function[table[at][2]] = per_function.get(table[at][2], 0) + 1
     os.unlink(log)
+    if os.environ.get("VERBOSE"):
+        print("   ", binary.name, sorted(per_function.items(), key=lambda one: -one[1])[:6])
     return done.stdout, done.returncode, count
 
 
