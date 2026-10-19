@@ -188,7 +188,9 @@ use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
 use crate::twoentryphi::{self, Speculation};
-use crate::{branchtocommon, condstores, hoistcommon, icmpchain, knownpred, sinkcommon, speculate, tailmerge, undefpred};
+use crate::{
+    branchtocommon, condstores, hoistcommon, icmpchain, knownpred, sinkcommon, speculate, tailmerge, undefpred,
+};
 use crate::{cfg, dead, edges, transform};
 
 /// LLVM's `SimplifyCFGPass` at the options of the early function pipeline
