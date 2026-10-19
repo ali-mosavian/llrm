@@ -84,12 +84,12 @@ fn test_a_value_the_loop_stores_is_left_computed_by_the_loop() {
     assert!(!changed, "{after}");
 }
 
-/// A sum over `n` trips of the counter, `n(n-1)/2`, is computed in `i33` (the
-/// product of two `zext i32` operands): the back end cannot select it (#2497,
-/// `-O3` of a float counted loop failed `a i33 value`). The sum stays computed
-/// by the loop.
+/// A sum over `n` trips of the counter has the closed form `n(n-1)/2`,
+/// computed in `i33` (the product of two `zext i32` operands). It was left to
+/// the loop while the back end could not select an odd width (#2497, `a i33
+/// value`); `legalize.rs` promotes it (#2523).
 #[test]
-fn test_no_exit_value_is_written_in_an_odd_width() {
+fn test_a_sum_of_the_counter_is_written_as_its_closed_form() {
     let text = "define i32 @f(i32 %n) {
 entry:
   %any = icmp ne i32 %n, 0
@@ -112,8 +112,7 @@ done:
 }
 ";
     let (changed, after) = rewritten(text);
-    assert!(!after.contains("i33") && !after.contains("i34"), "{after}");
-    assert!(!changed, "{after}");
+    assert!(changed && after.contains("i33"), "{after}");
 }
 
 /// The expansion is priced by the target's cost model, not one unit each: an
