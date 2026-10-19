@@ -464,7 +464,7 @@ fn phi_of(
 /// predecessors sent on): LLVM's `TryToSimplifyUncondBranchFromEmptyBlock`.
 /// MIRROR, except that a block keeps its name, and a loop's metadata check
 /// is on any `llvm.loop`.
-fn empty_block_removed(
+pub fn empty_block_removed(
     context: &Context,
     function: &mut Function,
     block: BlockId,
@@ -754,7 +754,7 @@ pub fn unreachable_removed(
 /// keeping a one-input phi, since the block it names may go as well), what it
 /// defined replaced by poison, its instructions and then the blocks erased.
 /// LLVM's `DeleteDeadBlocks`.
-fn dead_blocks_deleted(
+pub fn dead_blocks_deleted(
     context: &Context,
     function: &mut Function,
     blocks: &[BlockId],
