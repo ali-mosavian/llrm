@@ -337,14 +337,17 @@ impl State<'_, '_> {
             .collect()
     }
 
-    /// `getSinglePredecessor`.
+    /// `getSinglePredecessor`: the block of the one edge into `block`. Two
+    /// edges from one block (`br %c, %t, %t`) are not a single predecessor;
+    /// that is `getUniquePredecessor`.
     fn single_predecessor(
         &self,
         block: BlockId,
     ) -> Option<BlockId> {
-        let edges = self.pred_edges(block);
-        let first = *edges.first()?;
-        edges.iter().all(|&one| one == first).then_some(first)
+        match self.pred_edges(block).as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        }
     }
 
     /// `successors(BB)`: one per edge, in operand order.
