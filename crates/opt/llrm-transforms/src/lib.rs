@@ -255,9 +255,9 @@ pub mod splitcopy;
 pub mod sroa;
 pub mod switchcg;
 pub mod switchlower;
-pub mod tailcallelim;
 pub mod tailmerge;
 pub mod tailrec;
+pub mod tailcallelim;
 #[cfg(test)]
 pub mod testing;
 pub mod transform;

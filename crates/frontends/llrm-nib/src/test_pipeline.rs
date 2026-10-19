@@ -121,8 +121,8 @@ fn _trap_branches(
 
 /// Nib's `a[hi]` check ahead of `for j in lo..hi` bounds every index in it:
 /// quicksort's partition tested `j` and `i` against the length on every
-/// trip (3 compare-and-branch pairs against C's none, #453; `i`'s alone now),
-/// 245,433 executed instructions against C's 163,105 (#453).
+/// trip (3 compare-and-branch pairs against C's none, #453; `i`'s alone now), 245,433 executed
+/// instructions against C's 163,105 (#453).
 ///
 /// The loop kept one without the header copy: `lo < len`, invariant, is in the
 /// second block of the loop and trivial unswitch handles only a header's
