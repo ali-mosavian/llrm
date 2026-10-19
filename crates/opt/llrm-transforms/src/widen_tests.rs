@@ -83,11 +83,11 @@ fn test_an_unsigned_counter_read_through_sext_is_not_widened() {
     assert!(!after.contains("phi i32"), "{after}");
 }
 
-/// The 16-bit target states no cost model and `n8:16:32` calls `i32` legal: a
-/// counter is not widened past the pointer's 16 bits there (D18), where its
-/// `i32` add costs two.
+/// The 16-bit target's X86 model and `n8:16:32` call `i32` legal: a counter is
+/// not widened past the pointer's 16 bits there (D18), where its `i32` add
+/// costs two.
 #[test]
-fn test_a_counter_is_not_widened_past_the_pointer_width_without_a_cost_model() {
+fn test_a_counter_is_not_widened_past_the_pointer_width_on_the_16_bit_target() {
     crate::simplifyindvar::tests_forced(true);
     let text = clearing("zext", "ult", "0", "nsw").replace("e-p:32:32-n8:16:32", "e-p:16:16-n8:16:32");
     let mut module = parsed(&text);

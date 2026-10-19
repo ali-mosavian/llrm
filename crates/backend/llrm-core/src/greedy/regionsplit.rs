@@ -26,13 +26,6 @@
 //! DEVIATE D-RS2: no `IMPLICIT_DEF`: `addSplitConstraints`' test of the last
 //! instruction for an implicit def is dropped, LIR has none.
 //!
-//! DEVIATE D-RS5: a range whose one definition the spiller can make again where
-//! it is read (`isRematerializable`) is not split. The fact: `defFromParent`
-//! here has no `rematerializeAt` (D-SE1), so splitting it adds copies and a
-//! store where LLVM would remake the definition at the split; spilling it is a
-//! reload from the cell it was loaded from. Exit: translate `rematerializeAt`
-//! in `SplitEditor::defFromParent` (issue #2513).
-//!
 //! DEVIATE D-RS3: no `trySplitAroundHintReg`, `tryHintsRecoloring` and
 //! `tryAssignCSRFirstTime` (as in `greedy`); `shouldRegionSplitForVirtReg` is
 //! true (it only declines a huge rematerializable value, and rematerialization
@@ -203,12 +196,6 @@ impl Splitter<'_> {
     ) -> Option<RegId> {
         // Ranges must be Split2 or less.
         if self.extra.get_stage(virt.reg()) >= LiveRangeStage::Spill {
-            return None;
-        }
-
-        // D-RS5: a value the spiller makes again where it is read is spilled,
-        // not split.
-        if self.ss.env.is_rematerializable(virt.reg()) {
             return None;
         }
 
@@ -1055,7 +1042,8 @@ impl Splitter<'_> {
             let Some(liu) = self.matrix.union(unit) else { continue };
             let mut int_i = liu.find(&start_idx);
             let mut gap = 0usize;
-            'segments: while let Some(key) = int_i {
+            'segments: while let Some(at) = int_i {
+                let key = liu.entry(at).start;
                 if key >= stop_idx {
                     break;
                 }
@@ -1067,8 +1055,8 @@ impl Splitter<'_> {
                     }
                 }
                 // Update the gaps covered by IntI.
-                let stop = liu.stop_of(&key);
-                let weight = self.lis.get_interval(liu.vreg_of(&key)).weight();
+                let (stop, vreg) = (liu.entry(at).stop, liu.entry(at).value);
+                let weight = self.lis.get_interval(vreg).weight();
                 while gap != num_gaps {
                     gap_weight[gap] = gap_weight[gap].max(weight);
                     if uses[gap + 1].get_base_index() >= stop {
@@ -1079,7 +1067,7 @@ impl Splitter<'_> {
                 if gap == num_gaps {
                     break;
                 }
-                int_i = liu.next(&key);
+                int_i = liu.next(at);
             }
         }
 
