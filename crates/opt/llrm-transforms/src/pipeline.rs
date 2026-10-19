@@ -854,7 +854,12 @@ pub(crate) fn llvm_order(
                 fold("fold@801"),
                 dead("dead@801"),
                 // DFAJumpThreadingPass, PassBuilderPipelines.cpp#L806.
-                slot("dfajumpthreading@806", Box::new(crate::dfajumpthreading::DfaJumpThreading::from_env())),
+                slot(
+                    "dfajumpthreading@806",
+                    Box::new(
+                        crate::dfajumpthreading::DfaJumpThreading::from_env().for_size(applied.options.prefers_size()),
+                    ),
+                ),
                 slot("jumpthreading@809", Box::new(crate::jumpthreading::JumpThreading::from_env())),
                 decide("decide@809"),
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),

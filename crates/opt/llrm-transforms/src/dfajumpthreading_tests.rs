@@ -39,7 +39,7 @@ fn run_with(
 ) -> String {
     let mut module = parsed(text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(DfaJumpThreading { enabled: true, options });
+    manager.add(DfaJumpThreading { enabled: true, for_size: false, options });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
     llrm_mir::print::module(&module)
@@ -149,7 +149,7 @@ fn test_a_disabled_pass_and_an_optsize_function_are_left_alone() {
     let before = llrm_mir::print::module(&parsed(&text));
     let mut module = parsed(&text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(DfaJumpThreading { enabled: false, options: DfaJumpThreadingOptions::default() });
+    manager.add(DfaJumpThreading { enabled: false, for_size: false, options: DfaJumpThreadingOptions::default() });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     assert_eq!(llrm_mir::print::module(&module), before);
 
@@ -211,4 +211,19 @@ done:
     let after = run(text);
     assert_eq!(after.matches("landingpad").count(), 1, "{after}");
     assert!(!after.contains(".jt"), "{after}");
+}
+
+/// -Os: the pin skips a function that has `optsize` (`hasOptSize`), which
+/// clang gives every function of a size build, and llrm's functions do not
+/// carry it. x_switch at -Os grew from 108 to 133 lines of assembly with the
+/// pass on: a size build threads nothing.
+#[test]
+fn test_a_build_for_size_threads_nothing() {
+    let text = state_machine(4);
+    let mut module = parsed(&text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(DfaJumpThreading::from_env().for_size(true));
+    manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
+    assert_eq!(llrm_mir::print::module(&module), llrm_mir::print::module(&parsed(&text)));
+    assert_ne!(run(&text), llrm_mir::print::module(&parsed(&text)), "the same machine is threaded otherwise");
 }

@@ -132,6 +132,10 @@ impl Default for DfaJumpThreadingOptions {
 /// turns it off.
 pub struct DfaJumpThreading {
     pub enabled: bool,
+    /// The build is for size (-Os, -Oz): clang gives its functions `optsize`
+    /// there, and the pin skips them (`hasOptSize`). llrm's functions do not
+    /// carry the attribute, so the pipeline says it.
+    pub for_size: bool,
     pub options: DfaJumpThreadingOptions,
 }
 
@@ -139,8 +143,20 @@ impl DfaJumpThreading {
     pub fn from_env() -> Self {
         Self {
             enabled: !llrm_support::env_flag!("LLRM_NO_DFAJUMPTHREADING"),
+            for_size: false,
             options: DfaJumpThreadingOptions::default(),
         }
+    }
+}
+
+impl DfaJumpThreading {
+    /// For a build that prefers size: nothing is threaded.
+    pub fn for_size(
+        mut self,
+        for_size: bool,
+    ) -> Self {
+        self.for_size = for_size;
+        self
     }
 }
 
@@ -168,6 +184,7 @@ impl FunctionPass for DfaJumpThreading {
             callees: outer.callees(),
             tti: &*tti,
             options: &self.options,
+            for_size: self.for_size,
         };
         if run.run_impl(&loops) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -181,6 +198,7 @@ struct Run<'a, 'u> {
     callees: &'a Callees,
     tti: &'a dyn Tti,
     options: &'a DfaJumpThreadingOptions,
+    for_size: bool,
 }
 
 impl Run<'_, '_> {
@@ -197,12 +215,14 @@ impl Run<'_, '_> {
         loops: &LoopInfo,
     ) -> bool {
         // Skipping due to the 'minsize' attribute (`hasOptSize`).
-        if self.function().attrs.iter().any(|attr| {
-            matches!(
-                attr,
-                Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
-            )
-        }) {
+        if self.for_size
+            || self.function().attrs.iter().any(|attr| {
+                matches!(
+                    attr,
+                    Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+                )
+            })
+        {
             return false;
         }
 
