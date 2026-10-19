@@ -310,6 +310,15 @@ fn a_bit_count_intrinsic_is_refused_until_it_is_lowered() {
     }
 }
 
+/// `llvm.bswap` verifies but has no lowering yet: a program that calls it
+/// stops with a named refusal, not a wrong result.
+#[test]
+fn a_bswap_is_refused_until_it_is_lowered() {
+    let text = "declare i16 @llvm.bswap.i16(i16)\n\
+                define i16 @f(i16 %a) addrspace(1) {\n  %r = call i16 @llvm.bswap.i16(i16 %a)\n  ret i16 %r\n}\n";
+    assert_eq!(selected(text, "f").err(), Some(Unselected("@llvm.bswap.i16".to_owned())));
+}
+
 /// CVP narrows a `udiv` to i8 and expands a `urem` through a `freeze`; both
 /// were refused ("a byte division", "freeze") and stopped vid.c and screen.c.
 #[test]

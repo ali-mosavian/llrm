@@ -43,6 +43,8 @@ pub enum Intrinsic {
     },
     /// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop`.
     BitCount(BitCount),
+    /// `llvm.bswap`: the bytes of its argument in the opposite order.
+    ByteSwap,
     FMulAdd,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
     Unary(FloatFunction),
@@ -339,13 +341,15 @@ const fn bit_count(
     arithmetic(name, Intrinsic::BitCount(count), Slot::Any(0), parameters, Kind::Int)
 }
 
+const UNARY: &[Slot] = &[Slot::Any(0)];
+
 const FIXED: &[Slot] = &[Slot::Any(0), Slot::Any(0), Slot::Int(32)];
 
 const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 38] = [
+const TABLE: [Spec; 39] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -359,6 +363,7 @@ const TABLE: [Spec; 38] = [
     bit_count("llvm.ctlz", BitCount::LeadingZeros),
     bit_count("llvm.cttz", BitCount::TrailingZeros),
     bit_count("llvm.ctpop", BitCount::Population),
+    arithmetic("llvm.bswap", Intrinsic::ByteSwap, Slot::Any(0), UNARY, Kind::Int),
     arithmetic("llvm.smul.fix", Intrinsic::Fixed { divide: false }, Slot::Any(0), FIXED, Kind::Int),
     Spec {
         name: "llvm.sdiv.fix",
