@@ -99,3 +99,17 @@ def test_buildslot_hands_cargo_the_test_cap_unless_the_caller_has_a_runner(tmp_p
     base.pop("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER", None)
     assert show(base).endswith("/testcap"), show(base)
     assert show({**base, "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER": "mine"}) == "mine"
+
+
+def test_only_two_builds_hold_a_slot_at_once(tmp_path):
+    """Four slots of builds plus the landing's own put the load at 67-71 on 32 cores and nothing landed for half an hour: a third command waits for a free slot."""
+    import time
+
+    script = str(Path(__file__).resolve().parent / "buildslot")
+    log = tmp_path / "starts"
+    env = {k: v for k, v in {**os.environ, "BUILDSLOT_DIR": str(tmp_path / "slots")}.items() if k != "BUILDSLOTS"}
+    procs = [subprocess.Popen([script, "sh", "-c", f"date +%s.%N >> {log}; sleep 2"], env=env) for _ in range(3)]
+    for p in procs:
+        p.wait(timeout=60)
+    starts = sorted(float(x) for x in log.read_text().split())
+    assert len(starts) == 3 and starts[2] - starts[0] >= 1.8, starts

@@ -183,6 +183,12 @@ thread_local! {
     pub(crate) static OF_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Frequencies worked out from the odds, not answered from a body's facts.
+    pub(crate) static WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn tick() {
     #[cfg(test)]
     SCANNED.with(|one| one.set(one.get() + 1));
@@ -346,6 +352,8 @@ impl Frequency {
         blocks: &[Block],
         counting: bool,
     ) -> Self {
+        #[cfg(test)]
+        WORKED.with(|one| one.set(one.get() + 1));
         let mut taken = IndexMap::default();
         for block in blocks {
             for (to, chance) in body.odds.chances(block.at, &block.succ) {
