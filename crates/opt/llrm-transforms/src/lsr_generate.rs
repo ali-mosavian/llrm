@@ -15,6 +15,9 @@
 //! one per set of registers. The recursion is capped (depth 3, and
 //! sub-expression depth 3), as LLVM's is.
 //!
+//! # Example
+//! For the compare `{(-1 + %n),+,-1}`: `%n` with `{-1,+,-1}` scaled, and `(-1 + %n)` with `{0,+,-1}` scaled. For the store, `%p - 4 + 4*{1,+,1}`, sharing the compare's register.
+//!
 //! # Runs
 //! Nothing runs it yet: stage 4 of the translation of LSR.
 //!
@@ -319,7 +322,7 @@ impl Collection<'_, '_> {
         if ops.is_empty() {
             return;
         }
-        let mut formula = |this: &mut Self, se: &mut ScalarEvolution, new_base: &Formula, sum: Scev| {
+        let formula = |this: &mut Self, se: &mut ScalarEvolution, new_base: &Formula, sum: Scev| {
             // A zero sum is a fold SCEV missed: not a register to hold it.
             if se.match_zero(sum) {
                 return;

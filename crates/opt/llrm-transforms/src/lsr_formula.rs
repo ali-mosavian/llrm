@@ -8,6 +8,9 @@
 //! and the solver expect. `RegUseTracker` says which uses reference which
 //! register.
 //!
+//! # Example
+//! `p[i + 2]` with 4-byte elements: base register `p`, scaled register `i` with scale 4, base offset 8.
+//!
 //! # Runs
 //! Nothing runs it yet: stage 1 of the translation of LSR (the old pass in
 //! [`crate::lsr`] is gcc's ivopts and stays the default).

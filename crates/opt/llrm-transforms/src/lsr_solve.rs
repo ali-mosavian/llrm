@@ -10,6 +10,9 @@
 //! formula of the first use that is a single register is remembered as visited:
 //! formulae later in the search that name it lose.
 //!
+//! # Example
+//! The array walk and its exit test: the store keeps `{%p,+,4}`, the compare keeps `{(-1 + %n),+,-1}`, one register each, as `opt -passes=loop-reduce` has them.
+//!
 //! # Runs
 //! Nothing runs it yet: stage 5 of the translation of LSR.
 //!

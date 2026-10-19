@@ -11,6 +11,9 @@
 //! merge uses outside the loop into those inside, and last pick the register
 //! most uses share and drop what does not use it, until the space fits.
 //!
+//! # Example
+//! Four uses of twenty formulae each (160000 combinations) with a register all share: the formulae without it go, one is left per use.
+//!
 //! # Runs
 //! Nothing runs it yet: stage 4 of the translation of LSR.
 //!

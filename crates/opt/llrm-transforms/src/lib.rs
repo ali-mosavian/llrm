@@ -186,9 +186,13 @@ pub mod lsr_collect;
 mod lsr_collect_tests;
 pub mod lsr_formula;
 pub mod lsr_generate;
+pub mod lsr_implement;
 #[cfg(test)]
 mod lsr_generate_tests;
 pub mod lsr_narrow;
+pub mod lsr_pass;
+#[cfg(test)]
+mod lsr_pass_tests;
 pub mod lsr_solve;
 pub mod lsr_use;
 #[cfg(test)]
