@@ -570,7 +570,7 @@ impl Scan {
             |value: u32| self.counts.get(&value).is_some_and(|c| c.selecting > 0),
             |value: u32| self.counts.get(&value).is_some_and(|c| c.numeric > 0),
         );
-        _through_webs(body, &selecting, &numeric, &selectors, false, &mut out);
+        _through_webs(body, &selecting, &numeric, &selectors, selector_bytes(segments), false, &mut out);
         out
     }
 }
@@ -641,6 +641,7 @@ fn collected(
             &|value| selecting.contains(&value),
             &|value| numeric.contains(&value),
             &selectors,
+            selector_bytes(segments),
             optimistic,
             &mut out,
         )
@@ -652,11 +653,18 @@ fn collected(
 /// one value once the coalescer has merged them: each takes the class of the
 /// web. A value that only a phi or such a copy reads, as one a loop reads
 /// through its header phi is, has no class of its own.
+/// How many bytes a segment selector is: the width of the segment registers the
+/// program model places selectors in.
+fn selector_bytes(segments: &Segments) -> Option<i64> {
+    segments.selectors.first().and_then(|register| segments.registers.width_of(*register))
+}
+
 fn _through_webs(
     body: &LirBody,
     selecting: &dyn Fn(u32) -> bool,
     numeric: &dyn Fn(u32) -> bool,
     selectors: &BTreeSet<RegId>,
+    selector_bytes: Option<i64>,
     optimistic: bool,
     out: &mut Classes,
 ) {
@@ -688,7 +696,7 @@ fn _through_webs(
                 matches!(
                     (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()),
                     (Operation::Move, Some("mov"), [Loc::Held(into)], [Loc::Held(from)])
-                        if into.width == 2 && from.width == 2
+                        if Some(i64::from(into.width)) == selector_bytes && into.width == from.width
                 )
             })
     };
