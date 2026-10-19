@@ -214,3 +214,106 @@ fn geps_in_a_phi_differing_in_two_operands_are_left() {
     let out = combined_function(&text);
     assert!(out.contains("phi ptr [ %x, %a ], [ %y, %b ]"), "{out}");
 }
+
+fn function_of(
+    params: &str,
+    ret: &str,
+    body: &str,
+) -> String {
+    combined_function(&format!(
+        "target datalayout = \"e-p:64:64-i64:64\"\n@g1 = global [8 x i8] zeroinitializer\n@g2 = global [8 x i8] zeroinitializer\ndefine {ret} @f({params}) {{\nb0:\n{body}}}\n"
+    ))
+}
+
+/// An exact division by the element size is the byte index.
+#[test]
+fn an_exact_division_by_the_element_size_is_a_byte_index() {
+    for divide in ["udiv exact i64 %i, 4", "sdiv exact i64 %i, 4", "lshr exact i64 %i, 2", "ashr exact i64 %i, 2"] {
+        let out = function_of(
+            "ptr %b, i64 %i",
+            "ptr",
+            &format!("  %d = {divide}\n  %g = getelementptr i32, ptr %b, i64 %d\n  ret ptr %g\n"),
+        );
+        assert!(out.contains("getelementptr i8, ptr %b, i64 %i") && !out.contains("exact"), "{divide}: {out}");
+    }
+}
+
+/// A division that is not exact is not the index.
+#[test]
+fn an_inexact_division_is_left() {
+    let out = function_of(
+        "ptr %b, i64 %i",
+        "ptr",
+        "  %d = udiv i64 %i, 4\n  %g = getelementptr i32, ptr %b, i64 %d\n  ret ptr %g\n",
+    );
+    assert!(out.contains("udiv i64 %i, 4"), "{out}");
+}
+
+/// A pointer difference added back to its subtrahend is the minuend, for a
+/// compare of it.
+#[test]
+fn a_pointer_difference_added_back_is_the_pointer_for_a_compare() {
+    let out = function_of(
+        "ptr %p, ptr %q",
+        "i1",
+        "  %a = ptrtoint ptr %p to i64\n  %b = ptrtoint ptr %q to i64\n  %d = sub i64 %a, %b\n  %g = getelementptr i8, ptr %q, i64 %d\n  %c = icmp eq ptr %g, null\n  ret i1 %c\n",
+    );
+    assert!(out.contains("icmp eq ptr %p, null"), "{out}");
+}
+
+/// `gep p, x + y` is two GEPs.
+#[test]
+fn an_added_index_is_two_geps() {
+    let out = function_of(
+        "ptr %b, i64 %x, i64 %y",
+        "ptr",
+        "  %s = add i64 %x, %y\n  %g = getelementptr i32, ptr %b, i64 %s\n  ret ptr %g\n",
+    );
+    assert!(out.contains("ptr %b, i64 %x") && out.contains(", i64 %y"), "{out}");
+    assert!(!out.contains("add i64"), "{out}");
+}
+
+/// A signed remainder by a power of two, under `inbounds nuw`, is unsigned.
+#[test]
+fn a_signed_remainder_index_under_inbounds_nuw_is_unsigned() {
+    let out = function_of(
+        "ptr %b, i64 %i",
+        "ptr",
+        "  %r = srem i64 %i, 8\n  %g = getelementptr inbounds nuw i8, ptr %b, i64 %r\n  ret ptr %g\n",
+    );
+    assert!(out.contains("urem i64 %i, 8") && !out.contains("srem"), "{out}");
+}
+
+/// A constant offset through a select of constants is a select of constants.
+#[test]
+fn a_gep_of_a_select_of_globals_is_a_select_of_geps() {
+    let out = function_of(
+        "i1 %c",
+        "ptr",
+        "  %s = select i1 %c, ptr @g1, ptr @g2\n  %g = getelementptr i8, ptr %s, i64 4\n  ret ptr %g\n",
+    );
+    assert!(out.contains("select i1 %c,") && !out.contains("%s = select i1 %c, ptr @g1, ptr @g2"), "{out}");
+}
+
+/// `nusw` over indices known non-negative is `nuw` too.
+#[test]
+fn nusw_with_a_non_negative_index_gains_nuw() {
+    let out = function_of(
+        "ptr %b, i64 %i",
+        "ptr",
+        "  %n = and i64 %i, 255\n  %g = getelementptr nusw i8, ptr %b, i64 %n\n  ret ptr %g\n",
+    );
+    assert!(out.contains("getelementptr nusw nuw i8"), "{out}");
+}
+
+/// A constant offset inside the object a pointer is dereferenceable for is
+/// in bounds.
+#[test]
+fn an_offset_inside_a_dereferenceable_object_is_inbounds() {
+    let out =
+        function_of("ptr dereferenceable(16) %b", "ptr", "  %g = getelementptr i8, ptr %b, i64 4\n  ret ptr %g\n");
+    assert!(out.contains("getelementptr inbounds"), "{out}");
+    let past =
+        function_of("ptr dereferenceable(16) %b", "ptr", "  %g = getelementptr i8, ptr %b, i64 17\n  ret ptr %g\n");
+    assert!(!past.contains("inbounds"), "{past}");
+}

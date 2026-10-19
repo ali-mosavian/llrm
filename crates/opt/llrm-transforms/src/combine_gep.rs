@@ -40,6 +40,9 @@ use llrm_mir::simplify::simplify_gep_operands;
 use llrm_mir::types::{Type, TypeId};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_gep_index::{
+    infer_in_bounds, nusw_nneg_is_nuw, scaled_single_index, select_of_constants, split_added_index, srem_is_urem,
+};
 
 /// What an index of a `getelementptr` steps over (`gep_type_iterator`).
 #[derive(Clone, Copy)]
@@ -364,152 +367,206 @@ impl Combiner<'_> {
         }
     }
 
-    /// `visitGetElementPtrInst`.
+    /// `visitGetElementPtrInst`: the first of `FOLDS` that applies.
     pub fn visit_get_element_ptr(
         &mut self,
         inst: InstId,
     ) -> Visit {
-        let Some(Gep { source, ptr, indices, flags, ty }) = self.gep_of(inst) else { return Visit::None };
-        let index_ty = self.index_type(ty);
-        let Some(steps) = self.steps(source, &indices) else { return Visit::None };
-
-        // Replace the indices over a zero-size type by zero, and cast each
-        // to the layout's index type.
-        let mut changed = false;
-        for (slot, (&index, step)) in indices.iter().zip(&steps).enumerate() {
-            let Step::Sequence(element) = *step else { continue };
-            let mut current = index;
-            if self.alloc_size(element) == 0 && !self.is_zero_constant(index) {
-                current = self.int(index_ty, 0);
-                changed = true;
-            }
-            let from = self.type_of(index);
-            if from != index_ty {
-                let narrower = self.context.types.int_bits(from) < self.context.types.int_bits(index_ty);
-                current = if narrower {
-                    // sext, or zext nneg where the GEP cannot wrap either way
-                    if GepFlags::of(flags).nuw && GepFlags::of(flags).nusw {
-                        self.create_cast(inst, CastOp::ZExt, current, index_ty, Flags::NNEG)
-                    } else {
-                        self.create_cast(inst, CastOp::SExt, current, index_ty, Flags::default())
-                    }
-                } else {
-                    let mut wrap = Flags::default();
-                    if GepFlags::of(flags).nuw {
-                        wrap.insert(Flags::NUW);
-                    }
-                    if GepFlags::of(flags).nusw {
-                        wrap.insert(Flags::NSW);
-                    }
-                    self.create_cast(inst, CastOp::Trunc, current, index_ty, wrap)
-                };
-                changed = true;
-            }
-            if current != index {
-                self.function.set_operand(inst, slot + 1, current);
-            }
-        }
-        if changed {
-            return Visit::Changed;
-        }
-
-        // Canonicalize constant GEPs to i8 type.
-        let byte = self.context.types.int(8);
-        let constants: Option<Vec<ConstantId>> = indices
-            .iter()
-            .map(|&index| match index {
-                Operand::Constant(id) => Some(id),
-                _ => None,
-            })
-            .collect();
-        if source != byte
-            && let Some(constants) = constants
-            && let width = self.context.types.int_bits(index_ty).expect("an integer")
-            && let Some(offset) = accumulate_constant_offset(self.context, self.env.layout, source, &constants, width)
-        {
-            let offset = self.int(index_ty, offset);
-            let found = self.create_ptr_add(inst, ptr, offset, flags);
-            return Visit::Replace(found);
-        }
-
-        let gep = Gep { source, ptr, indices: indices.clone(), flags, ty };
-        if self.should_canonicalize_gep_to_ptr_add(&gep) {
-            let offset = self.emit_gep_offset(inst, false);
-            let found = self.create_ptr_add(inst, ptr, offset, flags);
-            return Visit::Replace(found);
-        }
-
-        // Strip trailing zero indices.
-        if let Some((&last, front)) = indices.split_last()
-            && self.is_zero_constant(last)
-        {
-            let found = self.create_gep(inst, source, ptr, front, flags);
-            return Visit::Replace(found);
-        }
-
-        // Strip leading zero indices.
-        if let Some(&first) = indices.first()
-            && self.is_zero_constant(first)
-            && let Some(Step::Sequence(element)) = steps.get(1).copied()
-        {
-            let found = self.create_gep(inst, element, ptr, &indices[1..], flags);
-            return Visit::Replace(found);
-        }
-
-        // A GEP with several non-zero indices is split in two.
-        let mut seen_non_zero = false;
-        for (at, &index) in indices.iter().enumerate() {
-            // Ignore one leading zero index.
-            if at == 0 && self.is_zero_constant(index) {
-                continue;
-            }
-            if !seen_non_zero {
-                seen_non_zero = true;
-                continue;
-            }
-            let front = self.create_gep(inst, source, ptr, &indices[..at], flags);
-            let reached = self.indexed_type(source, &indices[..at]).expect("a well-formed getelementptr");
-            let mut back = vec![self.int(index_ty, 0)];
-            back.extend_from_slice(&indices[at..]);
-            let operands = std::iter::once(front).chain(back).collect();
-            return self.replace_with_new(inst, Opcode::GetElementPtr { source: reached }, ty, operands, flags);
-        }
-
-        // Canonicalize gep %T to gep [sizeof(%T) x i8].
-        let canonical = |c: &Self, ty: TypeId| {
-            let element = match c.context.types.get(ty) {
-                Type::Array { element, .. } => *element,
-                _ => ty,
-            };
-            c.context.types.int_bits(element) == Some(8)
-        };
-        if indices.len() == 1 && !canonical(self, source) {
-            let scale = self.alloc_size(source);
-            let new_source =
-                if scale == 1 { byte } else { self.context.types.intern(Type::Array { element: byte, count: scale }) };
-            self.function.set_opcode(inst, Opcode::GetElementPtr { source: new_source });
-            return Visit::Changed;
-        }
-
-        // A GEP of a phi of GEPs: the phi is replaced by one GEP and a phi of
-        // the index they differ in.
-        if let Some(phi) = self.definition_of(ptr).filter(|&def| self.function.instruction(def).opcode == Opcode::Phi)
-            && let Some(new_ptr) = self.fold_gep_of_phi(inst, phi)
-        {
-            crate::combine_shared::replace_operand(self, inst, 0, new_ptr);
-            return Visit::Changed;
-        }
-
-        // A GEP of a GEP.
-        if let Some(src) = self.definition_of(ptr).filter(|&def| self.gep_of(def).is_some()) {
-            let gep = Gep { source, ptr, indices, flags, ty };
-            let found = self.visit_gep_of_gep(inst, &gep, src);
-            if !matches!(found, Visit::None) {
-                return found;
-            }
-        }
-        Visit::None
+        let Some(gep) = self.gep_of(inst) else { return Visit::None };
+        FOLDS.iter().find_map(|fold| fold(self, inst, &gep)).unwrap_or(Visit::None)
     }
+}
+
+/// One rewrite of `visitGetElementPtrInst`: `Some` when it applies.
+pub(crate) type Fold = fn(&mut Combiner, InstId, &Gep) -> Option<Visit>;
+
+/// The rewrites in the order the pin tries them (:3321-3707). A new one is a
+/// function and an entry here.
+const FOLDS: &[Fold] = &[
+    normalize_indices,
+    constant_gep_to_ptr_add,
+    canonicalize_to_ptr_add,
+    strip_trailing_zero_index,
+    strip_leading_zero_index,
+    split_non_zero_indices,
+    canonical_source_type,
+    gep_of_phi,
+    gep_of_gep,
+    scaled_single_index,
+    infer_in_bounds,
+    nusw_nneg_is_nuw,
+    split_added_index,
+    select_of_constants,
+    srem_is_urem,
+];
+
+/// Replaces the indices over a zero-size type by zero, and casts each to the
+/// layout's index type.
+fn normalize_indices(
+    c: &mut Combiner,
+    inst: InstId,
+    gep: &Gep,
+) -> Option<Visit> {
+    let index_ty = c.index_type(gep.ty);
+    let steps = c.steps(gep.source, &gep.indices)?;
+    let nw = GepFlags::of(gep.flags);
+    let mut changed = false;
+    for (slot, (&index, step)) in gep.indices.iter().zip(&steps).enumerate() {
+        let Step::Sequence(element) = *step else { continue };
+        let mut current = index;
+        if c.alloc_size(element) == 0 && !c.is_zero_constant(index) {
+            current = c.int(index_ty, 0);
+            changed = true;
+        }
+        let from = c.type_of(index);
+        if from != index_ty {
+            current = if c.context.types.int_bits(from) < c.context.types.int_bits(index_ty) {
+                // zext nneg where the GEP cannot wrap either way, else sext
+                if nw.nuw && nw.nusw {
+                    c.create_cast(inst, CastOp::ZExt, current, index_ty, Flags::NNEG)
+                } else {
+                    c.create_cast(inst, CastOp::SExt, current, index_ty, Flags::default())
+                }
+            } else {
+                let mut wrap = Flags::default();
+                if nw.nuw {
+                    wrap.insert(Flags::NUW);
+                }
+                if nw.nusw {
+                    wrap.insert(Flags::NSW);
+                }
+                c.create_cast(inst, CastOp::Trunc, current, index_ty, wrap)
+            };
+            changed = true;
+        }
+        if current != index {
+            c.function.set_operand(inst, slot + 1, current);
+        }
+    }
+    changed.then_some(Visit::Changed)
+}
+
+/// Canonicalizes constant GEPs to i8.
+fn constant_gep_to_ptr_add(
+    c: &mut Combiner,
+    inst: InstId,
+    gep: &Gep,
+) -> Option<Visit> {
+    let byte = c.context.types.int(8);
+    let index_ty = c.index_type(gep.ty);
+    let constants: Vec<ConstantId> = gep
+        .indices
+        .iter()
+        .map(|&index| match index {
+            Operand::Constant(id) => Some(id),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    if gep.source == byte {
+        return None;
+    }
+    let width = c.context.types.int_bits(index_ty).expect("an integer");
+    let offset = accumulate_constant_offset(c.context, c.env.layout, gep.source, &constants, width)?;
+    let offset = c.int(index_ty, offset);
+    Some(Visit::Replace(c.create_ptr_add(inst, gep.ptr, offset, gep.flags)))
+}
+
+/// `shouldCanonicalizeGEPToPtrAdd`: the GEP as a `ptradd` of its byte offset.
+fn canonicalize_to_ptr_add(
+    c: &mut Combiner,
+    inst: InstId,
+    gep: &Gep,
+) -> Option<Visit> {
+    if !c.should_canonicalize_gep_to_ptr_add(gep) {
+        return None;
+    }
+    let offset = c.emit_gep_offset(inst, false);
+    Some(Visit::Replace(c.create_ptr_add(inst, gep.ptr, offset, gep.flags)))
+}
+
+fn strip_trailing_zero_index(
+    c: &mut Combiner,
+    inst: InstId,
+    gep: &Gep,
+) -> Option<Visit> {
+    let (&last, front) = gep.indices.split_last()?;
+    c.is_zero_constant(last).then(|| Visit::Replace(c.create_gep(inst, gep.source, gep.ptr, front, gep.flags)))
+}
+
+fn strip_leading_zero_index(
+    c: &mut Combiner,
+    inst: InstId,
+    gep: &Gep,
+) -> Option<Visit> {
+    let &first = gep.indices.first()?;
+    if !c.is_zero_constant(first) {
+        return None;
+    }
+    // The second index steps over the source's element (not a struct field).
+    let Some(Step::Sequence(element)) = c.steps(gep.source, &gep.indices)?.get(1).copied() else { return None };
+    Some(Visit::Replace(c.create_gep(inst, element, gep.ptr, &gep.indices[1..], gep.flags)))
+}
+
+/// A GEP with several non-zero indices is split in two.
+fn split_non_zero_indices(
+    c: &mut Combiner,
+    inst: InstId,
+    gep: &Gep,
+) -> Option<Visit> {
+    // The first index may be a zero that steps over nothing.
+    let skipped = usize::from(gep.indices.first().is_some_and(|&first| c.is_zero_constant(first)));
+    let at = gep.indices.iter().enumerate().skip(skipped + 1).map(|(at, _)| at).next()?;
+    let front = c.create_gep(inst, gep.source, gep.ptr, &gep.indices[..at], gep.flags);
+    let reached = c.indexed_type(gep.source, &gep.indices[..at])?;
+    let zero = c.int(c.index_type(gep.ty), 0);
+    let operands = [front, zero].into_iter().chain(gep.indices[at..].iter().copied()).collect();
+    Some(c.replace_with_new(inst, Opcode::GetElementPtr { source: reached }, gep.ty, operands, gep.flags))
+}
+
+/// Canonicalizes `gep %T` to `gep [sizeof(%T) x i8]`.
+fn canonical_source_type(
+    c: &mut Combiner,
+    inst: InstId,
+    gep: &Gep,
+) -> Option<Visit> {
+    if gep.indices.len() != 1 {
+        return None;
+    }
+    let element = match c.context.types.get(gep.source) {
+        Type::Array { element, .. } => *element,
+        _ => gep.source,
+    };
+    let byte = c.context.types.int(8);
+    if element == byte {
+        return None;
+    }
+    let scale = c.alloc_size(gep.source);
+    let new_source =
+        if scale == 1 { byte } else { c.context.types.intern(Type::Array { element: byte, count: scale }) };
+    c.function.set_opcode(inst, Opcode::GetElementPtr { source: new_source });
+    Some(Visit::Changed)
+}
+
+/// A GEP of a phi of GEPs: the phi is replaced by one GEP and a phi of the
+/// index they differ in.
+fn gep_of_phi(
+    c: &mut Combiner,
+    inst: InstId,
+    gep: &Gep,
+) -> Option<Visit> {
+    let phi = c.definition_of(gep.ptr).filter(|&def| c.function.instruction(def).opcode == Opcode::Phi)?;
+    let new_ptr = c.fold_gep_of_phi(inst, phi)?;
+    crate::combine_shared::replace_operand(c, inst, 0, new_ptr);
+    Some(Visit::Changed)
+}
+
+fn gep_of_gep(
+    c: &mut Combiner,
+    inst: InstId,
+    gep: &Gep,
+) -> Option<Visit> {
+    let src = c.definition_of(gep.ptr).filter(|&def| c.gep_of(def).is_some())?;
+    Some(c.visit_gep_of_gep(inst, gep, src)).filter(|found| !matches!(found, Visit::None))
 }
 
 #[cfg(test)]

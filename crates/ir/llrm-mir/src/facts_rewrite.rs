@@ -326,6 +326,7 @@ mod tests {
             // `emitGEPOffset` read a GEP's `inbounds`/`nusw`/`nuw` to give the
             // replacement GEPs and the offset arithmetic the flags the GEP had.
             "combine_gep.rs",
+            "combine_gep_index.rs",
             "combine_gep_merge.rs",
             "combine_gep_phi.rs",
             // MemCpyOptimizer.cpp's `CreateInBoundsPtrAdd` makes an inbounds
