@@ -21,6 +21,8 @@ pub struct Lowered {
 #[derive(Debug)]
 struct Layout {
     size: u64,
+    /// The stack pointer moves in the body: objects are addressed from `x29`.
+    dynamic: bool,
     /// Each frame object's offset from the stack pointer.
     slots: Vec<u64>,
     /// The register pairs saved, with their offsets.
@@ -69,7 +71,27 @@ fn layout(
                 at
             },
         );
-    Layout { size: top, slots, saves, frame_record }
+    Layout { size: top, dynamic: function.dynamic, slots, saves, frame_record }
+}
+
+impl Layout {
+    /// The register and the offset from it that address byte `offset` of frame
+    /// object `slot` (or of the caller's argument area): the stack pointer, or
+    /// the frame pointer where the stack pointer moves.
+    fn place(
+        &self,
+        slot: u32,
+        offset: i64,
+    ) -> (Gpr, i64) {
+        let from_sp = if slot == INCOMING_ARGUMENTS { self.size } else { self.slots[slot as usize] };
+        if !self.dynamic {
+            return (Gpr::R31, from_sp as i64 + offset);
+        }
+        // `x29` is where the frame record is: that many bytes above the stack
+        // pointer the frame was made with.
+        let record = self.frame_record.expect("a moving stack has a frame record");
+        (Gpr::FP, from_sp as i64 + offset - record as i64)
+    }
 }
 
 struct Emitter {
@@ -178,8 +200,8 @@ pub fn lower(
                     emitter.insts.push(Inst::Ret { rn: Gpr::LR });
                 }
                 Op::FrameAddress { dst, slot, offset } => {
-                    let base = if *slot == INCOMING_ARGUMENTS { frame.size } else { frame.slots[*slot as usize] };
-                    emitter.add_to(*dst, Gpr::R31, false, (base as i64 + offset) as u64, Gpr(16));
+                    let (base, total) = frame.place(*slot, *offset);
+                    emitter.add_to(*dst, base, total < 0, total.unsigned_abs(), Gpr(16));
                 }
             }
         }
@@ -203,6 +225,10 @@ fn epilogue(
     frame: &Layout,
     emitter: &mut Emitter,
 ) {
+    // A moving stack pointer is put back from the frame pointer first.
+    if let (true, Some(record)) = (frame.dynamic, frame.frame_record) {
+        emitter.add_to(Gpr::R31, Gpr::FP, true, record, Gpr(16));
+    }
     save_registers(frame, emitter, false);
     emitter.adjust_sp(frame.size as i64);
 }
@@ -264,20 +290,16 @@ fn lower_inst(
     emitter: &mut Emitter,
 ) -> Result<(), String> {
     let mut inst = inst.clone();
-    let resolve = |slot: u32, offset: i64| -> i64 {
-        let base = if slot == INCOMING_ARGUMENTS { frame.size } else { frame.slots[slot as usize] };
-        base as i64 + offset
-    };
     match &mut inst {
         Inst::Load { mem, addr } | Inst::Store { mem, addr } => {
             if let Addr::Slot { slot, offset } = *addr {
                 let bytes = accessed_bytes(mem);
-                let total = resolve(slot, offset);
+                let (base, total) = frame.place(slot, offset);
                 let scaled = total >= 0 && total % bytes == 0 && total / bytes < 4096;
                 if scaled || (-256..256).contains(&total) {
-                    *addr = Addr::Offset { base: Gpr::R31, imm: total };
+                    *addr = Addr::Offset { base, imm: total };
                 } else {
-                    emitter.add_to(Gpr(16), Gpr::R31, false, total as u64, Gpr(17));
+                    emitter.add_to(Gpr(16), base, total < 0, total.unsigned_abs(), Gpr(17));
                     *addr = Addr::Offset { base: Gpr(16), imm: 0 };
                 }
             }

@@ -165,6 +165,9 @@ impl<'a> Selector<'a> {
         if self.order.is_empty() {
             return refuse("a function with no body");
         }
+        self.mf.dynamic = self.function.walk().any(|(_, inst)| {
+            matches!(self.function.instruction(inst).opcode, Opcode::Alloca { .. }) && !self.is_static_alloca(inst)
+        });
         self.phi_registers()?;
         self.current = 0;
         self.parameters()?;
@@ -428,7 +431,7 @@ impl<'a> Selector<'a> {
                 let value = self.src(instruction.operands[0])?;
                 self.define(result, value)
             }
-            Opcode::Alloca { allocated, align, .. } => self.alloca(&instruction, *allocated, *align),
+            Opcode::Alloca { allocated, align, .. } => self.alloca(inst, &instruction, *allocated, *align),
             Opcode::Load { .. } => self.load(&instruction),
             Opcode::Store { .. } => self.store(&instruction),
             Opcode::GetElementPtr { source } => self.gep(&instruction, *source),

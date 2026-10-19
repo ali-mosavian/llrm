@@ -31,6 +31,9 @@ fn pure(op: &Op) -> bool {
                     | Inst::Adr { .. }
                     | Inst::FpMoveImm { .. }
             ) && !matches!(inst, Inst::AddSubImm { rd, .. } if !rd.is_virtual())
+                // Reading the stack pointer (stacksave, a dynamic alloca's
+                // object) depends on where it is.
+                && !matches!(inst, Inst::AddSubImm { rn, .. } if rn.0 == 31)
         }
         _ => false,
     }
@@ -428,6 +431,29 @@ mod tests {
             function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
         };
         assert_eq!((movzs(0), movzs(1)), (2, 0), "{function:#?}");
+    }
+
+    /// `sp + 0` before a dynamic allocation and after it are different values:
+    /// a `stacksave` and the object were made one (the array read the saved
+    /// stack pointer, and a C variable-length array's loop printed
+    /// garbage).
+    #[test]
+    fn two_reads_of_the_stack_pointer_are_not_one_value() {
+        let read = |rd: u32| {
+            Op::I(Inst::AddSubImm {
+                op: AddSub { subtract: false, set_flags: false },
+                width: Width::X,
+                rd: Gpr(rd),
+                rn: Gpr::R31,
+                imm12: 0,
+                shift12: false,
+            })
+        };
+        let mut function = function();
+        function.blocks[0].ops = vec![read(64), movz(65, 1), read(66), branch_to("loop")];
+        run(&mut function);
+        let reads = function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::AddSubImm { .. }))).count();
+        assert_eq!(reads, 2, "{function:#?}");
     }
 
     /// A constant only the loop makes goes to the preheader.

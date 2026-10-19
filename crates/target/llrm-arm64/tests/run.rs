@@ -187,6 +187,11 @@ fn a_switch_that_stays_a_switch() {
     compare("dispatch");
 }
 
+#[test]
+fn variable_length_arrays() {
+    compare("vla");
+}
+
 /// Every program as the Darwin target builds it is an object the pinned
 /// `llvm-objdump` reads whole: each word of its code is an instruction, and
 /// the relocations name symbols the object defines or imports.

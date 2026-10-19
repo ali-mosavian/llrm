@@ -149,6 +149,10 @@ pub struct MFunc {
     /// The bytes of incoming arguments the caller put on the stack are above
     /// the frame at this offset from the frame pointer.
     pub exported: bool,
+    /// The stack pointer moves in the body (`alloca` of a run-time size): frame
+    /// objects are addressed from the frame pointer and outgoing arguments are
+    /// made room for around each call.
+    pub dynamic: bool,
 }
 
 impl MFunc {

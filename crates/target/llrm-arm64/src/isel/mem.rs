@@ -11,24 +11,89 @@ use crate::mc::inst::*;
 use crate::mfunc::Op;
 
 impl Selector<'_> {
+    /// Whether `inst`, an `alloca`, is a frame object: a constant count, in the
+    /// entry block.
+    pub(super) fn is_static_alloca(
+        &self,
+        inst: llrm_mir::InstId,
+    ) -> bool {
+        let instruction = self.function.instruction(inst);
+        self.function.parent(inst) == self.function.entry()
+            && instruction.operands.first().is_none_or(|operand| {
+                matches!(
+                    operand,
+                    Operand::Constant(id) if matches!(self.module.context.get(*id).kind, llrm_mir::ConstantKind::Int(_))
+                )
+            })
+    }
+
     pub(super) fn alloca(
         &mut self,
+        inst: llrm_mir::InstId,
         instruction: &Instruction,
         allocated: TypeId,
         align: Option<u64>,
     ) -> Selected<()> {
-        // A static alloca: a constant count of one.
-        let count = match instruction.operands.first() {
-            None => 1,
-            Some(operand) => match self.src(*operand)? {
-                Src::Int { value, .. } => value as u64,
-                _ => return refuse("a dynamic alloca"),
-            },
-        };
-        let size = self.layout.alloc_size(self.types(), allocated) * count;
+        let element = self.layout.alloc_size(self.types(), allocated);
         let align = align.unwrap_or(0).max(self.layout.align(self.types(), allocated)).max(1);
-        let slot = self.mf.slot(size.max(1), align);
-        self.define(instruction.result, Src::Val(Val::Ptr(AddrExpr::of(Base::Slot(slot)))))
+        if self.is_static_alloca(inst) {
+            let count = match instruction.operands.first() {
+                None => 1,
+                Some(operand) => match self.src(*operand)? {
+                    Src::Int { value, .. } => value as u64,
+                    _ => unreachable!("a static alloca has a constant count"),
+                },
+            };
+            let slot = self.mf.slot((element * count).max(1), align);
+            return self.define(instruction.result, Src::Val(Val::Ptr(AddrExpr::of(Base::Slot(slot)))));
+        }
+        if align > 16 {
+            return refuse("a dynamic alloca aligned past 16");
+        }
+        // `sp -= (count * size + 15) & -16`, the object at the new `sp`.
+        let count = self.operand_g(instruction.operands[0])?;
+        let count = self.widened(count, 64, false);
+        let bytes = self.mf.gpr();
+        let size = self.mf.gpr();
+        self.load_immediate(size, 64, element);
+        self.inst(Inst::ThreeSource {
+            op: Mul3::Madd,
+            width: Width::X,
+            rd: bytes,
+            rn: count.reg,
+            rm: size,
+            ra: Gpr::R31,
+        });
+        let rounded = self.mf.gpr();
+        self.inst(Inst::AddSubImm {
+            op: AddSub { subtract: false, set_flags: false },
+            width: Width::X,
+            rd: rounded,
+            rn: bytes,
+            imm12: 15,
+            shift12: false,
+        });
+        let aligned = self.mf.gpr();
+        self.inst(Inst::LogicImm { op: Logic::And, width: Width::X, rd: aligned, rn: rounded, imm: !15u64 });
+        self.inst(Inst::AddSubExtended {
+            op: AddSub { subtract: true, set_flags: false },
+            width: Width::X,
+            rd: Gpr::R31,
+            rn: Gpr::R31,
+            rm: aligned,
+            extend: Extend::Uxtx,
+            amount: 0,
+        });
+        let object = self.mf.gpr();
+        self.inst(Inst::AddSubImm {
+            op: AddSub { subtract: false, set_flags: false },
+            width: Width::X,
+            rd: object,
+            rn: Gpr::R31,
+            imm12: 0,
+            shift12: false,
+        });
+        self.define(instruction.result, Src::Val(Val::Ptr(AddrExpr::of(Base::Reg(object)))))
     }
 
     /// `base + offset` as a register: the instructions that make an address a

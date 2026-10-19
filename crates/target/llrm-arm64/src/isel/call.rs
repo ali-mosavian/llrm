@@ -332,13 +332,31 @@ impl Selector<'_> {
         returns: llrm_mir::TypeId,
     ) -> Selected<Option<Val>> {
         let mut uses = Vec::new();
+        // With a moving stack pointer the room for the stack arguments is made
+        // around the call.
+        let room = stack.next_multiple_of(16);
+        let adjust = |this: &mut Self, subtract: bool| {
+            if this.mf.dynamic && room > 0 {
+                this.inst(Inst::AddSubImm {
+                    op: AddSub { subtract, set_flags: false },
+                    width: Width::X,
+                    rd: Gpr::R31,
+                    rn: Gpr::R31,
+                    imm12: room as u16,
+                    shift12: false,
+                });
+            }
+        };
+        adjust(self, true);
         // The stack arguments are stored first.
         for (value, places) in &passed {
             for (place, leaf) in places.iter().zip(value.leaves()) {
                 self.store_outgoing(*place, leaf)?;
             }
         }
-        self.mf.outgoing = self.mf.outgoing.max(stack.next_multiple_of(16));
+        if !self.mf.dynamic {
+            self.mf.outgoing = self.mf.outgoing.max(room);
+        }
         for (value, places) in &passed {
             for (place, leaf) in places.iter().zip(value.leaves()) {
                 self.copy_out(*place, leaf, &mut uses)?;
@@ -360,6 +378,7 @@ impl Selector<'_> {
             (places, defs)
         };
         self.emit(Op::Call { callee, uses, defs: defs.clone() });
+        adjust(self, false);
         if result_places.is_empty() {
             return Ok(None);
         }
@@ -488,6 +507,30 @@ impl Selector<'_> {
                     false => base.to_owned(),
                 });
                 self.emit_call(callee, passed, assigner.stack_bytes(), void)?;
+                Ok(())
+            }
+            "stacksave" => {
+                let reg = self.mf.gpr();
+                self.inst(Inst::AddSubImm {
+                    op: AddSub { subtract: false, set_flags: false },
+                    width: Width::X,
+                    rd: reg,
+                    rn: Gpr::R31,
+                    imm12: 0,
+                    shift12: false,
+                });
+                self.define(result, Src::Val(Val::Ptr(AddrExpr::of(Base::Reg(reg)))))
+            }
+            "stackrestore" => {
+                let saved = self.operand_g(arguments[0])?;
+                self.inst(Inst::AddSubImm {
+                    op: AddSub { subtract: false, set_flags: false },
+                    width: Width::X,
+                    rd: Gpr::R31,
+                    rn: saved.reg,
+                    imm12: 0,
+                    shift12: false,
+                });
                 Ok(())
             }
             "va_start" => self.va_start(arguments[0]),
