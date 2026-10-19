@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sccpsolver.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sccpsolver.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sccpsolver.rs sha256:20d3a366b6015d49de6c828f3425dafc7dbff618ca185517e7ac20a115081e89 -->
+<!-- src: crates/opt/llrm-transforms/src/sccpsolver.rs sha256:a05de951b581dbaefd76fe11184ec7911301c7672e24212bb669bb4848b2c6be -->
 
 # sccpsolver
 
@@ -28,10 +28,8 @@ turns signed operations that cannot be negative into unsigned ones, adds
 ```
 
 ## DEVIATEs
-1. No PredicateInfo: `addPredicateInfo`, `handlePredicate` and
-   `removeSSACopies` are absent, so the facts a branch condition gives its
-   targets (`ssa.copy`) are not used. Fact: llrm has no PredicateInfo
-   translation. Exit: PredicateInfo translation (scalar-cleanup-port, next).
+1. `PredicateInfo` has no operand-bundle assumes ([`crate::predicateinfo`](predicateinfo.md)
+   DEVIATE 1); `removeSSACopies` is in [`crate::sccp`](sccp.md).
 2. Nothing interprocedural: `TrackedGlobals`, the argument-tracking set,
    `MustPreserveReturnsInFunctions`, the specialisation entry points and
    `MRVFunctionsTracked` are not translated; `runSCCP` never fills them. The
