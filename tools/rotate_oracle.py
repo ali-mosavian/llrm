@@ -28,6 +28,7 @@ REQUIRED = {
     "weights_exit_heavy", "weights_zero_exit", "weights_never", "loop_id_malformed", "join_latch", "three_blocks_body", "select_in_header",
 }
 PINNED = Path.home() / "scratch/llvm-build/bin/opt"
+TARGET = ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"]  # llrm's m32 target: a dump has no `target triple`, and opt costs for x86-64 without one
 COMMIT = "24.0.0git"
 ROOT = Path(__file__).resolve().parent.parent
 LLRM = ROOT / "target/debug/llrm-mir"
@@ -152,7 +153,7 @@ def canonical(ir, nodes=None, body=None):
 
 
 def opt_rotated(ir, passes=PASS):
-    r = run([str(PINNED), f"-passes={passes}", "-S"], stdin=ir)
+    r = run([str(PINNED), *TARGET, f"-passes={passes}", "-S"], stdin=ir)
     return r.stdout if r.returncode == 0 else None
 
 
@@ -178,7 +179,7 @@ def main():
         ir = Path(f).read_text()
         # The loop pass manager hands its passes loops in simplified, LCSSA form;
         # both sides start from the same one.
-        prepared = run([str(PINNED), "-passes=loop-simplify,lcssa", "-S"], stdin=ir).stdout
+        prepared = run([str(PINNED), *TARGET, "-passes=loop-simplify,lcssa", "-S"], stdin=ir).stdout
         tmp = Path(tempfile.mkdtemp()) / "prepared.ll"
         tmp.write_text(to_mir(prepared))
         want = opt_rotated(prepared)

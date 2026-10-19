@@ -258,6 +258,50 @@ def test_llrm_only_attributes_reach_opt_as_strings():
     assert difftest.normalise(text) == 'declare i16 @_strcmp(ptr, ptr) addrspace(1) "threeway" "nearcode"\n@s = constant [8 x i8] c"threeway"\n'
 
 
+def test_every_opt_command_line_carries_llrms_triple_and_cpu(monkeypatch):
+    """inlinediff priced 30 i32 GEPs at 5 each with opt's host default, 370 vs 215 at i486: a dump has no `target triple`, so opt costs for x86-64 unless told."""
+    import inlinediff
+
+    seen = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "", ""
+
+    monkeypatch.setattr(difftest.subprocess, "run", lambda command, *a, **k: (seen.append(list(command)), Done())[1])
+    monkeypatch.setattr(inlinediff.subprocess, "run", lambda command, *a, **k: (seen.append(list(command)), Done())[1])
+    difftest.opt("sroa", "")
+    inlinediff.llvm_verdicts("", "inline", None)
+    difftest.licm_counts("")
+    assert len(seen) == 3 and all("-mtriple=i486-unknown-linux-gnu" in c and "-mcpu=i486" in c for c in seen), seen
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m16")
+    seen.clear()
+    difftest.opt("sroa", "")
+    assert "-mtriple=i386-unknown-linux-gnu" in seen[0] and "-mcpu=i386" in seen[0]
+
+
+def test_the_m16_runs_read_a_datalayout_with_16_bit_pointers(monkeypatch):
+    """opt used 32-bit pointers for m16 dumps: a pointer-width fold compared at the wrong width. The layout comes from the target's own datalayout.toml."""
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m16")
+    args = difftest.target_args()
+    layout = next(a for a in args if a.startswith("--data-layout="))
+    assert "p:16:16" in layout and "-mtriple=i386-unknown-linux-gnu" in args
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m32")
+    assert "p:32:32" in next(a for a in difftest.target_args() if a.startswith("--data-layout="))
+
+
+def test_export_writes_input_both_answers_and_the_diff_of_a_differing_function(tmp_path, monkeypatch):
+    """Owners with a 'unit tests only' rule cannot run the oracle: the differing bodies are written for them."""
+    src = tmp_path / "in.ll"
+    src.write_text("define i32 @f() {\n  ret i32 1\n}\n")
+    row = {"config": "c", "fn": "01", "pass": "sroa", "run": 1, "file": str(src)}
+    monkeypatch.setattr(difftest, "isolated", lambda replay, row, source: "define i32 @f() {\n  ret i32 2\n}\n")
+    monkeypatch.setattr(difftest, "opt", lambda passes, text: type("R", (), {"returncode": 0, "stdout": "define i32 @f() {\n  ret i32 3\n}\n", "stderr": ""})())
+    assert difftest.export([(row, None)], "sroa", Path("x"), tmp_path / "out") == 1
+    folder = next((tmp_path / "out" / "sroa").iterdir())
+    assert {p.name for p in folder.iterdir()} == {"input.ll", "llrm.ll", "opt.ll", "diff.txt"}
+    assert "ret i32 2" in (folder / "diff.txt").read_text() and "ret i32 3" in (folder / "diff.txt").read_text()
+
+
 def test_the_replay_gets_the_targets_layout_so_pointer_width_answers_are_the_targets(monkeypatch, tmp_path):
     """LoopIdiom formed `memset.p0.i64` where opt at i486 forms `.i32`: llrm-pass ran on the Neutral 64-bit layout and the dumps carry no `target datalayout`."""
     seen = []

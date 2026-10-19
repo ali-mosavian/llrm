@@ -68,17 +68,26 @@ COUNTERPART = {
     "instsimplify": "instsimplify",
     "loopidiom": "loop(loop-idiom)",
     "loopdeletion": "loop(loop-deletion)",
+    "rotate": "loop-mssa(loop-rotate<header-duplication;no-prepare-for-lto>)",
+    "licm": "loop-mssa(licm<allowspeculation>)",
 }
+
+
+# A slot whose pipeline differs from its pass key's: the first LICM of LPM1 does not speculate (PassBuilderPipelines.cpp#L724).
+SLOT_COUNTERPART = {"licm@724": "loop-mssa(licm<no-allowspeculation>)"}
 
 
 def counterpart(name: str) -> str:
     """The opt pipeline of a pass key or of a slot of LLVM's order (`sroa@1179` is `sroa`)."""
-    return COUNTERPART[name.split("@")[0]]
+    return SLOT_COUNTERPART.get(name) or COUNTERPART[name.split("@")[0]]
 
 
 # The C++ each counterpart is, under llvm/lib at d1106deb71cc: a difference belongs to the function of that file that does the work.
 SOURCE = {
     "instsimplify": "Transforms/Scalar/InstSimplifyPass.cpp",
+    "loop-mssa(loop-rotate<header-duplication;no-prepare-for-lto>)": "Transforms/Scalar/LoopRotation.cpp",
+    "loop-mssa(licm<allowspeculation>)": "Transforms/Scalar/LICM.cpp",
+    "loop-mssa(licm<no-allowspeculation>)": "Transforms/Scalar/LICM.cpp",
     "loop(loop-idiom)": "Transforms/Scalar/LoopIdiomRecognize.cpp",
     "loop(loop-deletion)": "Transforms/Scalar/LoopDeletion.cpp",
     "sroa": "Transforms/Scalar/SROA.cpp",
@@ -129,8 +138,31 @@ def normalise(text: str) -> str:
     return "".join(out)
 
 
+# The target opt costs for: a dump carries no `target triple`, so opt used its host default (x86-64) and every TTI-dependent answer (unroll, LSR, inline cost, SimplifyCFG
+# speculation, LoopIdiom ...) was priced for the wrong machine (30 i32 GEPs cost 5 each at i386/i486, not the x86-64 figure: inline cost 370 vs 215). Nor does it carry a
+# datalayout: opt used the triple's 32-bit pointers, where m16 has 16-bit near pointers (`--data-layout` below, read from the target's own datalayout.toml, not copied).
+TARGETS = {"m32": ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"], "m16": ["-mtriple=i386-unknown-linux-gnu", "-mcpu=i386"], "host": []}  # host: opt's default, to restate an old claim
+
+
+def datalayout(mode: int) -> str:
+    """LLVM's datalayout string of the target whose `datalayout.toml` says `mode = N` (crates/target/*/src/machines/)."""
+    import tomllib
+
+    for path in sorted((HERE.parents[1] / "crates/target").glob("*/src/machines/datalayout.toml")):
+        data = tomllib.loads(path.read_text())
+        if data.get("mode") == mode:
+            return data["datalayout"]
+    raise SystemExit(f"no datalayout.toml with mode = {mode}")
+
+
+def target_args() -> list[str]:
+    """`-mtriple`, `-mcpu` and `--data-layout` of llrm's target (LLRM_DIFFTEST_TARGET m32 (default) or m16)."""
+    which = os.environ.get("LLRM_DIFFTEST_TARGET", "m32")
+    return [*TARGETS[which], f"--data-layout={datalayout(int(which[1:]))}"] if which != "host" else []
+
+
 def opt(passes: str, text: str) -> subprocess.CompletedProcess:
-    return subprocess.run([str(LLVM_BIN / "opt"), f"-passes={passes}", "-S", "-"], input=text, capture_output=True, text=True)
+    return subprocess.run([str(LLVM_BIN / "opt"), *target_args(), f"-passes={passes}", "-S", "-"], input=text, capture_output=True, text=True)
 
 
 def functions(text: str) -> dict[str, list[str]]:
@@ -289,6 +321,35 @@ def compare(source: str, llrm_out: str, passes: str) -> dict:
     return out
 
 
+def export(todo: list[tuple[dict, Path | None]], name: str, replay: Path, dest: Path) -> int:
+    """For every function whose canonical text differs between llrm's pass and opt's counterpart: `dest/<name>/<config>__<body>/{input,llrm,opt}.ll` and `diff.txt`
+    (llrm's answer, opt's answer at llrm's target, the unified diff of their canonical forms). Owners who cannot run the oracle diagnose from these. Returns the count."""
+    written = 0
+    for row, _ in todo:
+        source = Path(row["file"])
+        try:
+            ours = isolated(replay, row, source)
+        except RuntimeError:
+            continue
+        given = normalise(source.read_text())
+        run = opt(counterpart(name), given)
+        if run.returncode:
+            continue
+        mine, llvm, before = functions(normalise(ours)), functions(run.stdout), functions(given)
+        for fn in sorted(before.keys() | mine.keys() | llvm.keys()):
+            a, b = canonical(mine.get(fn, [])), canonical(llvm.get(fn, []))
+            if a == b:
+                continue
+            out = dest / name / f"{row['config']}__{row['fn']}__{fn}".replace("/", "_")
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "input.ll").write_text("\n".join(before.get(fn, [])) + "\n")
+            (out / "llrm.ll").write_text("\n".join(a) + "\n")
+            (out / "opt.ll").write_text("\n".join(b) + "\n")
+            (out / "diff.txt").write_text("\n".join(difflib.unified_diff(a, b, "llrm", "opt", n=3, lineterm="")) + "\n")
+            written += 1
+    return written
+
+
 def manifest(root: Path, configs: list[str] | None) -> list[dict]:
     rows = []
     for config in sorted(p.name for p in root.iterdir() if (p / "MANIFEST.tsv").is_file()):
@@ -356,7 +417,7 @@ def licm_counts(text: str) -> dict[str, collections.Counter]:
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "remarks.yaml"
         done = subprocess.run(
-            [str(LLVM_BIN / "opt"), "-passes=loop-mssa(licm)", "-disable-output", f"-pass-remarks-output={out}", "-"], input=normalise(text), capture_output=True, text=True
+            [str(LLVM_BIN / "opt"), *target_args(), "-passes=loop-mssa(licm)", "-disable-output", f"-pass-remarks-output={out}", "-"], input=normalise(text), capture_output=True, text=True
         )
         if done.returncode:
             raise RuntimeError("opt licm: " + (done.stderr.strip().splitlines() or ["failed"])[0])
@@ -498,6 +559,7 @@ def main() -> int:
     inputs.add_argument("--json", type=Path)
     inputs.add_argument("--allow-env", nargs="*", default=[], metavar="NAME", help="the LLRM_CHECK_*/LLRM_EXP_* switch under test; any other in the environment is refused")
     inputs.add_argument("--llrm-pass", type=Path, required=True, help="llrm-pass: llrm's answer is the pass run alone on each input")
+    inputs.add_argument("--export", type=Path, metavar="DIR", help="write input, llrm and opt text and the diff of every differing function under DIR/<slot>/")
     licm = sub.add_parser("licm", help="the LICM remarks of opt on FILE, per function")
     licm.add_argument("input", type=Path)
     pair = sub.add_parser("pair")
@@ -523,6 +585,8 @@ def main() -> int:
     todo = pairs(relabelled(manifest(root, args.config), args.pass_name, args.inputs_of), args.pass_name, root) if args.command == "run" else [x for d in args.directory for x in (input_pairs if args.command == "inputs" else dump_pairs)(d, args.pass_name)]
     if args.limit:
         todo = todo[: args.limit]
+    if getattr(args, "export", None):
+        print(f"exported {export(todo, args.pass_name, args.llrm_pass, args.export)} differing function(s) to {args.export / args.pass_name}")
     report = analyse(todo, root, args.pass_name, replay=args.llrm_pass)
     version = subprocess.run([str(LLVM_BIN / "opt"), "--version"], capture_output=True, text=True).stdout.split("\n")[1].strip()
     print(f"opt: {LLVM_BIN / 'opt'} ({version})")
