@@ -40,6 +40,7 @@ use llrm_mir::context::{Constant, ConstantId, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
+use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::module::{BlockId, Function, InstId, Linkage, MetadataNode, Operand, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
@@ -526,7 +527,7 @@ impl Rewrite<'_> {
             Operand::Value(value) => value,
             _ => return None,
         };
-        let one_use = function.users(lhs_value).len() == 1;
+        let one_use = function.users(lhs_value).only().is_some();
         let q = self.query(function);
         let mut matched: Option<(Operand, ConstantRange)> = None;
         if one_use && let Some((x, offset)) = add_like(&q, lhs, Flags::default()) {
@@ -759,9 +760,9 @@ impl Rewrite<'_> {
         if value.is_not_constant()
             && matches!(self.context.types.get(returns), Type::Pointer(_))
             && value.get_not_constant().is_null_value()
-            && !function.return_attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == "nonnull"))
+            && !Facts::of(&function.return_attrs).non_null()
         {
-            function.return_attrs.push(Attribute::Flag("nonnull".to_string()));
+            function.return_attrs.push(Fact::NonNull.attribute().expect("nonnull is an attribute"));
             return true;
         }
         false

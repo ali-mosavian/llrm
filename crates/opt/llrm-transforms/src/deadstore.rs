@@ -1084,7 +1084,8 @@ impl<'a> Dse<'a> {
         let mut work: Vec<(BlockId, bool)> = vec![(second_block, true)];
         while let Some((block, is_first)) = work.pop() {
             // The block after `first` where it holds it, up to `second` where
-            // that is the block's end of the walk; empty if `first` is not before.
+            // that is the block's end of the walk; empty if `first` is not
+            // before.
             let backwards = block == first_block && is_first && !self.function.comes_before(first, second);
             let rest: Box<dyn Iterator<Item = InstId> + '_> = match (backwards, block == first_block) {
                 (true, _) => Box::new(std::iter::empty()),

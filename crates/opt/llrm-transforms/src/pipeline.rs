@@ -581,8 +581,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
 
 /// Under LLVM's order the translated LICM does the moving of code out of and
 /// into loops, in its three slots: the passes after the fixed point that
-/// stood in for MachineLICM and gcc's `pass_sink_code` (`hoist` again) have no counterpart
-/// there, and run only without the order or the LICM.
+/// stood in for MachineLICM and gcc's `pass_sink_code` (`hoist` again) have no
+/// counterpart there, and run only without the order or the LICM.
 pub fn llvm_motion(applied: &Applied) -> bool {
     applied.options.llvm_order && applied.options.licm
 }
