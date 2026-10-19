@@ -145,6 +145,9 @@ mod instworklist_tests;
 pub mod interprocedural;
 pub mod ipacp;
 pub mod jumpthread;
+pub mod jumpthreading;
+#[cfg(test)]
+mod jumpthreading_tests;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod licm;

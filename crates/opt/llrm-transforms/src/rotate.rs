@@ -338,9 +338,17 @@ impl Forest {
         function: &Function,
     ) {
         if cfg!(test) || llrm_support::env_flag!("LLRM_CHECK_SHAPE") {
+            // Loops of equal size are disjoint, so the order the layout gives
+            // them (it moves as blocks are copied) does not matter: only which
+            // loops there are.
+            let by_size = |loops: &[Loop]| {
+                let mut sorted = loops.to_vec();
+                sorted.sort_by_key(|one| (one.body.len(), one.header));
+                sorted
+            };
             let fresh = cfg::Shape::of(function).loops;
             assert!(
-                self.loops.as_ref() == Some(&fresh),
+                self.loops.as_deref().map(by_size) == Some(by_size(&fresh)),
                 "the loops held through a rotation are not those of the function as it stands"
             );
         }
