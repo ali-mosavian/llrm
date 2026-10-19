@@ -481,10 +481,12 @@ fn test_nested_integer_division_keeps_each_dividend() {
     let assembly = listing(&source);
     let scale = between(&assembly, "SCALE proc far\n", "SCALE endp\n");
 
-    assert!(scale.contains("mov eax, 80\n"));
-    assert!(scale.contains("mov eax, 30\n"));
-    assert_eq!(scale.matches("idiv e").count(), 2);
-    assert!(!scale.contains("idiv ax"));
+    // CVP narrows both quotients (80 \\ x fits 16 bits, then 8): two word
+    // divisions in place of two dword ones, each with its own dividend.
+    assert!(scale.contains("mov ax, 80\n"));
+    assert!(scale.contains("mov bx, 30\n"));
+    assert_eq!(scale.matches("idiv").count(), 2);
+    assert!(!scale.contains("idiv e"));
 }
 
 /// -2 ^ 3 printed 8: the exponent's parity sat in eax across `fnstsw ax`.
@@ -1951,7 +1953,13 @@ fn test_a_sum_read_after_its_loop_is_copied_out_where_the_loop_ends() {
     // segld's sum is printed after both loops, across a runtime call, so as
     // one value with the loop's it could only live in SI: the loop added into
     // SI and copied back to CX on a split back edge, `mov cx, si` and `jmp`.
-    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/segld.bas");
+    // The loops are too long to unroll: at segld's 5 by 20 they are folded away.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "SEGLD.BAS",
+        b"REM $DYNAMIC\nDEFINT A-Z\nDIM a(100)\nDIM i, j, t\nt = 0\nFOR j = 1 TO 2\n    FOR i = 1 TO 100\n        a(i) = i\n        t = t + a(i)\n    NEXT i\nNEXT j\nPRINT \"T=\"; t\nPRINT \"DONE\"\n",
+    );
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let body = backward_loop(&listing(&program));
     let copies = regex::Regex::new(r"mov [a-z]{2}, [a-z]{2}\n").unwrap();

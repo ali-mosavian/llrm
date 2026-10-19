@@ -149,3 +149,71 @@ fn test_a_volatile_memcpy_is_left_alone() {
         "define void @f() {\nb0:\n  call void @llvm.memcpy.p0.p0.i64(ptr @a, ptr @a, i64 16, i1 true)\n  ret void\n}\n";
     assert_eq!(after_f(text), text.replace("b0:\n", ""));
 }
+
+/// `@f` of `text` after the pass.
+fn after(text: &str) -> String {
+    let mut module = parsed(&format!("{DECLARES}\n{GLOBALS}\n{text}"));
+    managed(&mut module, MemCpyOpt)
+}
+
+fn copy_aligned(
+    to: &str,
+    from: &str,
+    bytes: u32,
+) -> String {
+    format!("  call void @llvm.memcpy.p0.p0.i64(ptr align 1 {to}, ptr align 1 {from}, i64 {bytes}, i1 false)\n")
+}
+
+/// An aggregate loaded and stored right after is one memcpy (`h` of
+/// `opt -passes=memcpyopt`): the load and the store were two 16-byte moves.
+#[test]
+fn test_a_loaded_aggregate_stored_is_a_memcpy() {
+    let before =
+        "define void @f() {\nb0:\n  %v = load [16 x i8], ptr @a\n  store [16 x i8] %v, ptr @b\n  ret void\n}\n";
+    let text = after(before);
+    assert!(
+        text.contains(&copy_aligned("@b", "@a", 16)) && !text.contains("load") && !text.contains("store"),
+        "{text}"
+    );
+}
+
+/// Pointers that may meet make the copy a memmove (`g`).
+#[test]
+fn test_a_loaded_aggregate_stored_through_a_pointer_that_may_meet_is_a_memmove() {
+    let before = "define void @f(ptr %p, ptr %q) {\nb0:\n  %v = load [16 x i8], ptr %q\n  store [16 x i8] %v, ptr %p\n  ret void\n}\n";
+    let text = after(before);
+    assert!(
+        text.contains("call void @llvm.memmove.p0.p0.i64(ptr align 1 %p, ptr align 1 %q, i64 16, i1 false)")
+            && !text.contains("load")
+            && !text.contains("store"),
+        "{text}"
+    );
+}
+
+/// A write to the loaded bytes between the load and the store: the store is
+/// lifted above it and the copy goes there (`moveUp`, `f`).
+#[test]
+fn test_the_store_of_a_loaded_aggregate_is_lifted_above_a_write_to_what_was_loaded() {
+    let before = "define void @f() {\nb0:\n  %v = load [16 x i8], ptr @a\n  call void @llvm.memset.p0.i64(ptr @a, i8 0, i64 16, i1 false)\n  store [16 x i8] %v, ptr @b\n  ret void\n}\n";
+    let text = after(before);
+    let copy = text.find(&copy_aligned("@b", "@a", 16)).unwrap_or_else(|| panic!("{text}"));
+    let set = text.find("@llvm.memset.p0.i64(ptr @a").expect("the memset");
+    assert!(copy < set && !text.contains("load") && !text.contains("store"), "{text}");
+}
+
+/// The first write to the loaded bytes reads what the store writes: the store
+/// cannot move above it (`moveUp`'s first check), and the load and store stay.
+#[test]
+fn test_a_store_the_write_in_between_reads_is_not_lifted() {
+    let before = "define void @f() {\nb0:\n  %v = load [16 x i8], ptr @a\n  call void @llvm.memcpy.p0.p0.i64(ptr @a, ptr @b, i64 16, i1 false)\n  store [16 x i8] %v, ptr @b\n  ret void\n}\n";
+    let text = after(before);
+    assert!(text.contains("load [16 x i8]") && text.contains("store [16 x i8]"), "{text}");
+}
+
+/// A scalar load and store are not a copy (the pin takes aggregates only).
+#[test]
+fn test_a_loaded_scalar_stored_stays() {
+    let before = "define void @f() {\nb0:\n  %v = load i32, ptr @a\n  store i32 %v, ptr @b\n  ret void\n}\n";
+    let text = after(before);
+    assert!(text.contains("load i32") && text.contains("store i32"), "{text}");
+}

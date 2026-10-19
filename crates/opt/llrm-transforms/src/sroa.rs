@@ -76,6 +76,10 @@ impl FunctionPass for Sroa {
         "sroa-real"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("sroa")
+    }
+
     fn reads(&self) -> llrm_mir::footprint::Footprint {
         llrm_mir::footprint::Footprint::MEMORY | llrm_mir::footprint::Footprint::STRUCTURE
     }
@@ -1163,9 +1167,9 @@ impl llrm_analysis::loadstorepromoter::Promotion for BasicPromotion {
 struct State<'a, 'b, 'c> {
     unit: &'a mut passes::Unit<'b>,
     analyses: &'c mut Analyses,
-    worklist: Vec<InstId>,
-    post_promotion_worklist: Vec<InstId>,
-    promotable_allocas: Vec<InstId>,
+    worklist: llrm_mir::dense::IdSetVector<InstId>,
+    post_promotion_worklist: llrm_mir::dense::IdSetVector<InstId>,
+    promotable_allocas: llrm_mir::dense::IdSetVector<InstId>,
     dead_insts: Vec<InstId>,
     globals: std::rc::Rc<Vec<llrm_mir::module::GlobalValue>>,
     /// `SpeculatablePHIs`, `PHIsWithStoreToRewrite`, `SelectsToRewrite`.
@@ -1211,9 +1215,9 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             unit,
             analyses,
             globals,
-            worklist: Vec::new(),
-            post_promotion_worklist: Vec::new(),
-            promotable_allocas: Vec::new(),
+            worklist: Default::default(),
+            post_promotion_worklist: Default::default(),
+            promotable_allocas: Default::default(),
             dead_insts: Vec::new(),
             speculatable_phis: Vec::new(),
             phis_with_store_to_rewrite: Vec::new(),
@@ -1270,9 +1274,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             .filter(|inst| !declared.contains(inst))
             .collect();
         for inst in allocas {
-            if !self.worklist.contains(&inst) {
-                self.worklist.push(inst);
-            }
+            self.worklist.push(inst);
         }
         let mut changed = false;
         loop {
@@ -1281,12 +1283,12 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     continue;
                 }
                 changed |= self.run_on_alloca(alloca);
-                let mut deleted: llrm_mir::dense::IdSet<InstId> = Default::default();
+                let mut deleted: Vec<InstId> = Vec::new();
                 changed |= self.delete_dead_instructions(&mut deleted);
                 if !deleted.is_empty() {
-                    self.worklist.retain(|one| !deleted.contains(one));
-                    self.post_promotion_worklist.retain(|one| !deleted.contains(one));
-                    self.promotable_allocas.retain(|one| !deleted.contains(one));
+                    self.worklist.set_subtract(deleted.iter().copied());
+                    self.post_promotion_worklist.set_subtract(deleted.iter().copied());
+                    self.promotable_allocas.set_subtract(deleted.iter().copied());
                 }
             }
             changed |= self.promote_allocas();
@@ -1300,11 +1302,12 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
 
     /// `SROA::promoteAllocas`. SROA.cpp#L6414
     fn promote_allocas(&mut self) -> bool {
-        self.promotable_allocas.retain(|&one| !self.unit.function.is_erased(one));
+        let function = &*self.unit.function;
+        self.promotable_allocas.retain(|&one| !function.is_erased(one));
         if self.promotable_allocas.is_empty() {
             return false;
         }
-        let allocas = std::mem::take(&mut self.promotable_allocas);
+        let allocas: Vec<InstId> = std::mem::take(&mut self.promotable_allocas).iter().collect();
         let outer = std::rc::Rc::clone(self.analyses.outer());
         crate::mem2reg::promote_mem_to_reg(
             self.unit.context,
@@ -1377,7 +1380,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     /// `SROA::deleteDeadInstructions`. SROA.cpp#L6374
     fn delete_dead_instructions(
         &mut self,
-        deleted_allocas: &mut llrm_mir::dense::IdSet<InstId>,
+        deleted_allocas: &mut Vec<InstId>,
     ) -> bool {
         let mut changed = false;
         while let Some(inst) = self.dead_insts.pop() {
@@ -1388,7 +1391,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 self.function().instruction(inst).opcode,
                 Opcode::Alloca { .. }
             ) {
-                deleted_allocas.insert(inst);
+                deleted_allocas.push(inst);
             }
             if let Some(result) = self.function().instruction(inst).result {
                 if !self.function().users(result).is_empty() {
@@ -1846,7 +1849,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         }
         let layout = self.unit.layout;
         let mut new_slices: Vec<Slice> = Vec::new();
-        let mut resplit_promotable: llrm_mir::dense::IdSet<InstId> = Default::default();
+        let mut resplit_promotable: Vec<InstId> = Vec::new();
         let load_align = |this: &Self, inst: InstId, offset: u64| -> u64 {
             let instruction = this.function().instruction(inst);
             let base = match instruction.opcode {
@@ -1943,14 +1946,10 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 }
                 // Look again at any alloca this store reached.
                 if let Some(other) = is_alloca(self, store_base) {
-                    resplit_promotable.insert(other);
-                    if !self.worklist.contains(&other) {
-                        self.worklist.push(other);
-                    }
+                    resplit_promotable.push(other);
+                    self.worklist.push(other);
                 } else if let Some(other) = self.strip_in_bounds_offsets(store_base) {
-                    if !self.worklist.contains(&other) {
-                        self.worklist.push(other);
-                    }
+                    self.worklist.push(other);
                 }
                 self.dead_insts.push(store);
             }
@@ -2025,14 +2024,10 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             // Look again at the other alloca a load not already split reached.
             if already.is_none() {
                 if let Some(other) = is_alloca(self, load_base) {
-                    resplit_promotable.insert(other);
-                    if !self.worklist.contains(&other) {
-                        self.worklist.push(other);
-                    }
+                    resplit_promotable.push(other);
+                    self.worklist.push(other);
                 } else if let Some(other) = self.strip_in_bounds_offsets(load_base) {
-                    if !self.worklist.contains(&other) {
-                        self.worklist.push(other);
-                    }
+                    self.worklist.push(other);
                 }
             }
             // The original load goes with its only user.
@@ -2049,7 +2044,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         alloca_slices.slices.extend(new_slices);
         alloca_slices.slices.sort_by(Slice::order);
         // The allocas that need re-splitting are not promoted yet.
-        self.promotable_allocas.retain(|one| !resplit_promotable.contains(one));
+        self.promotable_allocas.set_subtract(resplit_promotable.iter().copied());
         let _ = alloca;
         true
     }
@@ -2212,18 +2207,14 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             }
             if new_speculatable_phis.is_empty() && new_phis_with_store.is_empty() && select_users.is_empty() {
                 // Promote the alloca.
-                if !self.promotable_allocas.contains(&new_ai) {
-                    self.promotable_allocas.push(new_ai);
-                }
+                self.promotable_allocas.push(new_ai);
             } else {
                 // The phis and selects to rewrite are queued and the new
                 // alloca is looked at again to promote it next time.
                 self.speculatable_phis.extend(new_speculatable_phis);
                 self.phis_with_store_to_rewrite.extend(new_phis_with_store);
                 self.selects_to_rewrite.extend(new_selects);
-                if !self.worklist.contains(&new_ai) {
-                    self.worklist.push(new_ai);
-                }
+                self.worklist.push(new_ai);
             }
         } else {
             // Drop any post-promotion work items if promotion didn't happen.
@@ -2232,9 +2223,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             if new_ai == alloca {
                 return None;
             }
-            if !self.worklist.contains(&new_ai) {
-                self.worklist.push(new_ai);
-            }
+            self.worklist.push(new_ai);
         }
         Some(new_ai)
     }
@@ -2720,9 +2709,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         // A pointer stored may reach an alloca again once this one is promoted.
         if is_pointer(self.context(), value_ty) {
             if let Some(root) = self.strip_in_bounds_offsets(value) {
-                if !self.post_promotion_worklist.contains(&root) {
-                    self.post_promotion_worklist.push(root);
-                }
+                self.post_promotion_worklist.push(root);
             }
         }
         let store_size = layout.store_size(&self.context().types, value_ty);
@@ -2948,9 +2935,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         // rewritten.
         let other = if is_dest { operands[1] } else { operands[0] };
         if let Some(root) = self.strip_in_bounds_offsets(other) {
-            if !self.worklist.contains(&root) {
-                self.worklist.push(root);
-            }
+            self.worklist.push(root);
         }
         let other_offset = rewriter.new_begin - rewriter.begin;
         if emit_memcpy {
@@ -3330,9 +3315,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             seen.push(pred);
             // Revisit the alloca exposed by removing the pointer phi.
             if let Some(root) = self.strip_in_bounds_offsets(pair[0]) {
-                if !self.worklist.contains(&root) {
-                    self.worklist.push(root);
-                }
+                self.worklist.push(root);
             }
             let terminator = self.function().terminator(pred).expect("a terminated block");
             let mut operands = self.function().instruction(store).operands.clone();
