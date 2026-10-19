@@ -15,6 +15,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::Outer;
 
+use super::hoist::Reassociation;
 use super::sink::Sinking;
 
 /// The memory graph the edits keep right (`MemorySSAUpdater` and the accesses
@@ -131,6 +132,49 @@ fn hoist(
     Ok(())
 }
 
+/// The edit of
+/// [`hoistBOAssociation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2686):
+/// `c1 op c2` before the preheader's terminator, `bo` replaced by `lv op` that,
+/// and `bo0`, which only `bo` read, erased. DEVIATE: `c1 op c2` is made even
+/// where both are constants (no folding builder).
+fn reassociate(
+    function: &mut Function,
+    context: &Context,
+    graph: &mut Graph,
+    preheader: BlockId,
+    one: &Reassociation,
+) -> Result<(), String> {
+    let terminator = function.terminator(preheader).ok_or("a preheader with no terminator")?;
+    let ty = function.instruction(one.bo).ty;
+    let inv =
+        function.create_instruction(Opcode::Binary(one.op), ty, vec![one.c1, one.c2], one.flags, Some("invariant.op"));
+    function.insert(inv, Position::Before(terminator))?;
+    graph.created(context, function, inv, preheader, Created::End);
+    let inv_result = function.instruction(inv).result.ok_or("an invariant op with no result")?;
+    let name = function
+        .instruction(one.bo)
+        .result
+        .and_then(|result| function.value(result).name.clone())
+        .map(|name| format!("{name}.reass"));
+    let new = function.create_instruction(
+        Opcode::Binary(one.op),
+        ty,
+        vec![one.lv, Operand::Value(inv_result)],
+        one.flags,
+        name.as_deref(),
+    );
+    function.insert(new, Position::Before(one.bo))?;
+    let home = function.parent(one.bo).ok_or("an instruction in no block")?;
+    graph.created(context, function, new, home, Created::End);
+    let old = function.instruction(one.bo).result.ok_or("an associative op with no result")?;
+    let new_result = function.instruction(new).result.ok_or("a reassociated op with no result")?;
+    function.replace_all_uses_with(old, Operand::Value(new_result));
+    graph.erase(function, one.bo);
+    function.erase(one.bo)?;
+    graph.erase(function, one.bo0);
+    function.erase(one.bo0)
+}
+
 /// The first instruction of `block` that is not a phi.
 fn first_insertion_point(
     function: &Function,
@@ -234,6 +278,7 @@ pub fn apply_loop(
     preheader: Option<BlockId>,
     sunk: &[(InstId, Sinking)],
     hoisted: &[(InstId, BlockId)],
+    reassociated: &[Reassociation],
 ) -> Result<bool, String> {
     let mut changed = false;
     for &(inst, how) in sunk {
@@ -249,6 +294,11 @@ pub fn apply_loop(
     for &(inst, _) in hoisted {
         let preheader = preheader.ok_or("a hoist with no preheader")?;
         hoist(function, graph, inst, preheader)?;
+        changed = true;
+    }
+    for one in reassociated {
+        let preheader = preheader.ok_or("a reassociation with no preheader")?;
+        reassociate(function, context, graph, preheader, one)?;
         changed = true;
     }
     Ok(changed)
