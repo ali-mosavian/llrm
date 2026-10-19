@@ -181,6 +181,9 @@ pub mod lsr;
 pub mod ivusers;
 #[cfg(test)]
 mod ivusers_tests;
+pub mod lsr_collect;
+#[cfg(test)]
+mod lsr_collect_tests;
 pub mod lsr_formula;
 pub mod lsr_use;
 #[cfg(test)]
