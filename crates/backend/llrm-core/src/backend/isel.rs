@@ -2199,9 +2199,26 @@ impl Selector<'_, '_, '_> {
         if let Some(only) = function.users(result).only()
             && function.terminator(block) == Some(only.user)
             && function.instruction(only.user).opcode == Opcode::Br
+            // A call's flags are read where the call leaves them: a compare
+            // with anything between it and the branch is not fused.
+            && (function.next_in_block(inst) == Some(only.user) || !self.reads_call_flags(inst))
         {
             self.fused.insert(inst);
         }
+    }
+
+    /// Whether the comparison `inst` reads the flags a call returns.
+    fn reads_call_flags(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        let function = self.function;
+        let Some(&Operand::Value(value)) = function.instruction(inst).operands.first() else { return false };
+        let ValueDef::Instruction(call) = function.value(value).def else { return false };
+        let Some(&Operand::Constant(callee)) = function.instruction(call).operands.last() else { return false };
+        let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return false };
+        let name = self.module.global(global).name.as_deref().unwrap_or_default();
+        llrm_qbruntime::flags_result(name.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(name))
     }
 
     /// A dword load read only through its words is those words loaded, as

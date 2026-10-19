@@ -1627,6 +1627,30 @@ other:
     assert!(got[call + 1].starts_with("jg ") || got[call + 1].starts_with("jle "), "{got:?}");
 }
 
+/// A loop rotated left the counter's increment between B$SCMP's compare and
+/// the branch: the compare was fused, the flags no longer reached it and the
+/// function was refused (qbdemo at every level).
+#[test]
+fn test_a_flags_result_compare_with_an_add_before_the_branch_still_selects() {
+    let text = "declare cc1000 i16 @llrm.qb.B$SCMP(ptr, ptr) addrspace(1)
+define i16 @f(ptr %a, ptr %b, i16 %n) addrspace(1) {
+entry:
+  %s = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
+  %c = icmp sgt i16 %s, 0
+  %m = add i16 %n, 1
+  br i1 %c, label %greater, label %other
+greater:
+  ret i16 %m
+other:
+  ret i16 0
+}
+";
+    let got = listing(text, "f");
+    let call = got.iter().position(|line| line == "call far ptr B$SCMP").expect("the call");
+    // The flags are taken before the add can disturb them.
+    assert!(got[call + 1].starts_with("set") || got[call + 1].starts_with("j"), "{got:?}");
+}
+
 /// A float function no x87 instruction is stays one operation on st(0),
 /// which the frontend's finalizer spells.
 #[test]
