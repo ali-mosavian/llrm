@@ -838,3 +838,15 @@ fn a_gep_of_a_global_and_constants_is_a_constant_expression() {
     assert!(bytes.as_deref().is_some_and(|one| one.starts_with("Expr(GetElementPtr")), "{bytes:?}");
     assert_eq!(simplified(&text("  %r = getelementptr [4 x i16], ptr @g, i16 0, i16 %x\n"), "r"), None);
 }
+
+/// Old: `addrspacecast @g` and `ptrtoint @g` of a constant were left casts
+/// (`simplifyCastInst` folded through `constfold::cast`, which makes no
+/// constant expression); the pin's `ConstantFoldCastOperand` does (5 on bench/lru).
+#[test]
+fn a_cast_of_a_global_is_a_constant_expression() {
+    let text = |body: &str| format!("@g = global i16 0\ndefine void @f(i16 %x) {{\nb0:\n{body}  ret void\n}}\n");
+    for body in ["  %r = addrspacecast ptr @g to ptr addrspace(1)\n", "  %r = ptrtoint ptr @g to i16\n"] {
+        let folded = simplified(&text(body), "r");
+        assert!(folded.as_deref().is_some_and(|one| one.starts_with("Expr(Cast")), "{body}: {folded:?}");
+    }
+}

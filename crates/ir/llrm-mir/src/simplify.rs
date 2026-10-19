@@ -2791,7 +2791,7 @@ fn simplify_cast(
     _max_recurse: u32,
 ) -> Option<Operand> {
     if let Some(c) = q.constant(op) {
-        return constfold::cast(q.context, cast_opc, c, ty).map(Operand::Constant);
+        return constantfolding::constant_fold_cast_operand(q.context, q.layout, cast_opc, c, ty).map(Operand::Constant);
     }
     // A cast of a cast back to the source type that is eliminable
     // (`isEliminableCastPair == BitCast`): trunc (zext X) and trunc (sext X) to
