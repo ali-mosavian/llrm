@@ -1,6 +1,7 @@
 """#2329 squashed a stale head and reverted decide's LVI step (a82b332be): the squash must refuse what a bare `gh pr merge` merged."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -134,6 +135,24 @@ def test_an_own_commit_that_deletes_a_file_and_its_tests_is_refused_unless_the_d
     why = ps.refusals(head, "", base="main", cwd=repo)
     assert why and "scev/expand_iv.rs" in why[0] and "whole file" in why[0] and "1 test function" in why[0], why
     assert ps.refusals(head, "Deletes: scev/expand_iv.rs, the old expander", base="main", cwd=repo) == []
+
+
+def test_a_rewritten_generated_page_is_not_a_deletion(tmp_path):
+    """#2760, #2873 and #2925 were refused as 'deletes docs/optimizations/backend/jumps.md' (30-35 lines) for a regenerated page: three PRs sat out of the queue."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sh(repo, "init", "-q", "-b", "main")
+    page = "> Generated from the `//!` header of [`a.rs`](x); edit the header, not this file.\n" + "".join(f"line {i}\n" for i in range(60))
+    hand = "".join(f"line {i}\n" for i in range(60))
+    commit(repo, "gen.md", page, "page")
+    commit(repo, "hand.md", hand, "hand page")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "gen.md").write_text(page.split("\n", 1)[0] + "\nshort\n")
+    (repo / "hand.md").write_text("short\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "docs: rewrite")
+    why = ps.refusals(sh(repo, "rev-parse", "HEAD"), "", base="main", cwd=repo)
+    assert len(why) == 1 and why[0].startswith("hand.md"), why
 
 
 def test_a_squash_that_touches_files_the_pr_never_listed_is_detected_after_landing(tmp_path):
@@ -438,6 +457,13 @@ def test_a_red_head_file_refuses_neither_a_clean_pr_nor_the_fix_but_a_new_red_fi
     assert run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, set()), number="2") == "2: PASS"  # the PR fixes A
     line = run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, {"a.rs", "b.rs"}), number="3")  # the PR adds B
     assert line.startswith("3: REFUSED: fmt") and "b.rs" in line and "a.rs" not in line, line
+
+
+def test_a_precheck_logs_the_seconds_each_check_took(tmp_path, monkeypatch):
+    """A precheck pass took ~16 minutes for 16 PRs and nothing said where: the ratchets, the merge or fmt. One log line per PR now names each."""
+    run_precheck(tmp_path, monkeypatch, Tree(set(), set()), number="7")
+    row = json.loads((tmp_path / "precheck-times.log").read_text().splitlines()[-1])
+    assert row["pr"] == "7" and {"merge", "fmt", "ratchets"} <= row.keys(), row
 
 
 def test_a_precheck_verdict_is_cached_per_pr_head_and_feat_parity_sha(tmp_path, monkeypatch):

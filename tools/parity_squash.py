@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -76,13 +77,22 @@ def outside_files(base: str, head: str, cwd: Path = ROOT) -> list[str]:
     return sorted(net - own)
 
 
+DOCS_PAGE = re.compile(r"^> Generated from the `//!` headers? of ")
+
+
+def is_generated(base: str, path: str, cwd: Path = ROOT) -> bool:
+    """Whether `path` at `base` is a docsbuild page: the docs check regenerates it on the merged tree, so a rewrite of its source is not a deletion."""
+    done = subprocess.run(["git", "show", f"{base}:{path}"], cwd=cwd, capture_output=True, text=True)
+    return done.returncode == 0 and bool(DOCS_PAGE.match(done.stdout.split("\n", 1)[0]))
+
+
 def losses(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, int, int, bool]]:
     """(path, deleted lines, test functions removed, whole file gone) for each file of the net diff base..head that loses more than LIMIT lines, loses a test or goes.
     Own commits or not: #2443's own commit deleted scev/expand_iv.rs (855 lines) from a stale tree, and 'outside its own commits' let it through."""
     out = []
     for line in git("diff", "--numstat", base, head, cwd=cwd).splitlines():
         added, gone, path = line.split("\t", 2)
-        if gone == "-":
+        if gone == "-" or is_generated(base, path, cwd):
             continue
         diff = git("diff", base, head, "--", path, cwd=cwd)
         tests = len(removed_tests(diff))
@@ -147,12 +157,15 @@ def precheck_checks(dev: Path, target: Path):
     return [("ratchets", ratchets), ("fmt", fmt), ("docs", docs)]
 
 
-def precheck_items(dev: Path, checks, deletions_of=None) -> dict[str, set[str]]:
-    """Every check's failing items on the checkout in `dev`, merged by check name."""
+def precheck_items(dev: Path, checks, deletions_of=None, seconds: dict[str, float] | None = None) -> dict[str, set[str]]:
+    """Every check's failing items on the checkout in `dev`, merged by check name; `seconds` collects each check's wall time."""
     found: dict[str, set[str]] = {}
-    for _, check in checks:
+    for label, check in checks:
+        started = time.monotonic()
         for name, items in check(dev).items():
             found.setdefault(name, set()).update(items)
+        if seconds is not None:
+            seconds[label] = round(time.monotonic() - started, 1)
     return found
 
 
@@ -196,10 +209,15 @@ def _precheck(number, info, dev, target, checks, merge, deletions, head_failed, 
     git("fetch", "-q", "origin", info["headRefOid"], cwd=dev)
     checks = list(checks) if checks is not None else precheck_checks(dev, target)
     before = precheck_baseline(dev, checks, base_sha, cache)
+    seconds: dict[str, float] = {}
+    started = time.monotonic()
     sha, why = (merge or merged_result)(info["headRefOid"], BASE, dev)
+    seconds["merge"] = round(time.monotonic() - started, 1)
     if sha is None:
         return f"{number}: REFUSED: {why}"
-    after = precheck_items(dev, checks)
+    after = precheck_items(dev, checks, seconds=seconds)
+    with (cache.parent / "precheck-times.log").open("a") as log:  # where a precheck's minutes go, per PR
+        log.write(json.dumps({"pr": number, "at": datetime.datetime.now().strftime("%H:%M:%S"), **seconds}) + "\n")
     if problems := (deletions or refusals)(sha, info["body"] or "", BASE, dev):
         after["deletes"] = {problem.split(":")[0] for problem in problems}
     new = {name: items - before.get(name, set()) for name, items in after.items() if name not in (head_failed or set())}
