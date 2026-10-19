@@ -404,6 +404,20 @@ impl<'d> SplitEditor<'d> {
         (mbb, first.id())
     }
 
+    /// A pseudo-op that names the x87 value a call left in ST0.
+    fn takes_call_result(one: &crate::model::lir::Insn) -> bool {
+        use crate::model::ir::{Loc, Operation};
+        one.what
+            .as_ref()
+            .is_some_and(
+                |what| what.op == Operation::FloatLoad
+                    && what.name.as_deref().is_none_or(str::is_empty)
+                    && what.sources.is_empty()
+                    && !what.dests.is_empty()
+                    && what.dests.iter().all(|place| matches!(place, Loc::Held(held) if held.width == 10)),
+            )
+    }
+
     /// The instruction after `mi` in `mbb`, None at the end (`std::next`),
     /// after every member of a parallel copy that shares its index.
     fn next_instr(
@@ -445,7 +459,16 @@ impl<'d> SplitEditor<'d> {
             return idx;
         };
         let (mbb, mi) = Self::instr_at(cx, &idx);
-        let next = Self::next_instr(cx, mbb, mi);
+        let mut next = Self::next_instr(cx, mbb, mi);
+        // DEVIATE S-RFP1 (RFP-5): a copy after a call goes after the pseudo-ops
+        // that take its x87 results, which `X86FloatingPoint` finds right
+        // after the call (a `fld` between them left the result under it).
+        // Exit: the x87 results copied out of ST0 by the call's lowering.
+        if cx.lis.instr(mi).what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Call) {
+            while let Some(key) = next.filter(|key| Self::takes_call_result(cx.lis.instr(*key))) {
+                next = Self::next_instr(cx, mbb, key);
+            }
+        }
         self.def_from_parent(cx, self.open_idx, &parent_vni, idx, mbb, next).def()
     }
 
