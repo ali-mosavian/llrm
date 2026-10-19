@@ -1019,6 +1019,7 @@ def test_a_step_log_is_a_new_file_so_an_orphan_of_a_killed_gate_cannot_write_int
 
 def test_a_gate_killed_by_sigterm_kills_its_running_steps(tmp_path):
     """A gate killed by SIGTERM left its step's cargo running, which then wrote to the log of the next run."""
+    import contextlib
     import os
     import signal
     import subprocess as sp
@@ -1031,7 +1032,8 @@ def test_a_gate_killed_by_sigterm_kills_its_running_steps(tmp_path):
     sleeper = f"sleep 62.{os.getpid()}"
     here = str(Path(gate.__file__).parent)
     ready = tmp_path / "ready"
-    command = f"touch {ready}; {sleeper}"
+    sleeper_pid = tmp_path / "sleeper.pid"
+    command = f"{sleeper} & echo $! > {sleeper_pid}; touch {ready}; wait"
     code = f"import sys, os, pathlib; sys.path.insert(0, {here!r}); import gate; gate.kill_on_term(); gate.run_step('s', {command!r}, pathlib.Path({str(tmp_path)!r}), dict(os.environ), stall=600)"
     gate_proc = sp.Popen([_sys.executable, "-c", code])
     try:
@@ -1048,7 +1050,11 @@ def test_a_gate_killed_by_sigterm_kills_its_running_steps(tmp_path):
         _time.sleep(0.3)
         assert sleeper not in ps().splitlines(), "the step outlived the gate"
     finally:
-        sp.run(["pkill", "-f", sleeper])
+        # Only what this test started: the gate it ran, and the sleeper whose pid the step wrote down (no kill by name or pattern).
+        gate_proc.kill()
+        if sleeper_pid.exists():
+            with contextlib.suppress(ProcessLookupError, ValueError):
+                os.kill(int(sleeper_pid.read_text()), signal.SIGKILL)
 
 
 def test_the_gate_scope_is_omitted_from_systemd_oomd(tmp_path):
