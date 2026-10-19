@@ -5815,8 +5815,8 @@ define i16 @f() addrspace(1) {
     assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
 }
 
-/// More constant-expression operands (alias/farstruct.c, textfill): the dword of
-/// a far pointer to near data (`ptrtoint (addrspacecast @g)`), and a segment
+/// More constant-expression operands (alias/farstruct.c, textfill): the dword
+/// of a far pointer to near data (`ptrtoint (addrspacecast @g)`), and a segment
 /// constant widened to far (`addrspacecast (inttoptr N to ptr addrspace(2))`),
 /// which is `N:0`. Both were refused, "an address of no global".
 #[test]
@@ -5832,7 +5832,8 @@ define i16 @f(i16 %i) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    // DGROUP:offset joined into the dword; -18432 is the selector 0xB800 in `pushw`.
+    // DGROUP:offset joined into the dword; -18432 is the selector 0xB800 in
+    // `pushw`.
     let has = |text: &str| got.iter().any(|one| one == text);
     assert!(has("mov ax, DGROUP") && has("mov bx, offset g") && has("shl eax, 16") && has("pushw 47104"), "{got:?}");
 }
