@@ -705,6 +705,17 @@ impl Selector<'_, '_, '_> {
         )
     }
 
+    /// Whether the load fold runs: under `LLRM_TRYFOLD=1`, and in unit tests.
+    /// Off by default since #2663 left the load of an address unselected in m16
+    /// BASIC (`dynsz.bas`: "value is read but never defined").
+    pub fn is_tryfold(
+        &self,
+        _: &Match,
+    ) -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        cfg!(test) || *ON.get_or_init(|| std::env::var_os("LLRM_TRYFOLD").is_some())
+    }
+
     pub fn is_nonvolatile(
         &self,
         _: &Match,
