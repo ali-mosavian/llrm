@@ -350,6 +350,14 @@ pub fn optimized(
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
+    timed("mir bit counts", || {
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(
+                |module| crate::backend::bitcounts::expanded(module, |operation| options.arch.expands(operation)),
+            )
+    })?;
     timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
     if options.arch.expands("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
