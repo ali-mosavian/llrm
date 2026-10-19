@@ -526,7 +526,7 @@ impl Rewrite<'_> {
             Operand::Value(value) => value,
             _ => return None,
         };
-        let one_use = function.users(lhs_value).len() == 1;
+        let one_use = function.users(lhs_value).only().is_some();
         let q = self.query(function);
         let mut matched: Option<(Operand, ConstantRange)> = None;
         if one_use && let Some((x, offset)) = add_like(&q, lhs, Flags::default()) {
