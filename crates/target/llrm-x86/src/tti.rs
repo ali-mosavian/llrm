@@ -41,7 +41,7 @@
 use llrm_mir::tti::*;
 
 /// X86's scalar profile: which tables its CPU reads.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct X86 {
     pub sse1: bool,
     pub sse2: bool,
@@ -56,11 +56,11 @@ pub struct X86 {
 
 /// T6: the 16-bit target's address forms and registers, from its description
 /// (`Machine::address_forms`, `Machine::registers`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RealMode {
     /// What an address `base + scale * index` costs above the native form,
-    /// for scales 1, 2, 4 and 8: none where no form has the scale.
-    pub scale_costs: [Option<i64>; 4],
+    /// for each scale some address form holds.
+    pub scale_costs: Vec<(i64, i64)>,
     /// General registers a value may sit in.
     pub registers: u32,
 }
@@ -70,8 +70,7 @@ impl RealMode {
         &self,
         scale: i64,
     ) -> Option<i64> {
-        let at = [1, 2, 4, 8].iter().position(|one| *one == scale)?;
-        self.scale_costs[at]
+        self.scale_costs.iter().find(|(held, _)| *held == scale).map(|(_, cost)| *cost)
     }
 }
 
@@ -89,10 +88,10 @@ impl X86 {
 
     /// The profile of 16-bit code (T6).
     pub fn in_real_mode(
-        self,
+        &self,
         real_mode: RealMode,
     ) -> X86 {
-        X86 { real_mode: Some(real_mode), ..self }
+        X86 { real_mode: Some(real_mode), ..self.clone() }
     }
 }
 
@@ -647,7 +646,7 @@ impl Tti for X86 {
         if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) {
             // T6: real mode's native form (bx + si/di) is free at scale 1; the
             // others take the address-size prefix and its stall.
-            if let Some(cost) = self.real_mode.and_then(|real| real.scale_cost(scale)) {
+            if let Some(cost) = self.real_mode.as_ref().and_then(|real| real.scale_cost(scale)) {
                 return Cost::of(cost);
             }
             Cost::of(i64::from(scale != 0))
@@ -686,7 +685,7 @@ impl Tti for X86 {
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L173
     /// 32-bit: eight general registers.
     fn number_of_gpr_registers(&self) -> u32 {
-        self.real_mode.map_or(8, |real| real.registers)
+        self.real_mode.as_ref().map_or(8, |real| real.registers)
     }
 
     /// `X86TTIImpl::getCastInstrCost`, scalars:

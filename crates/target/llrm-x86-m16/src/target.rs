@@ -128,11 +128,17 @@ impl Machine for Dos {
     /// subtarget, operand-size prefixes), and every CPU the target accepts
     /// reads the x87 tables as on m32 (`llrm_x86::tti`, T3).
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        let scale_cost = |scale: i64| {
-            self.address_forms.iter().filter(|form| form.scales.contains(&scale)).map(|form| form.use_cost).min()
-        };
-        let real =
-            llrm_x86::tti::RealMode { scale_costs: [1, 2, 4, 8].map(scale_cost), registers: self.registers as u32 };
+        let scales: std::collections::BTreeSet<i64> =
+            self.address_forms.iter().flat_map(|form| form.scales.iter().copied()).collect();
+        let scale_costs = scales
+            .into_iter()
+            .filter_map(|scale| {
+                let cheapest =
+                    self.address_forms.iter().filter(|form| form.scales.contains(&scale)).map(|form| form.use_cost);
+                Some((scale, cheapest.min()?))
+            })
+            .collect();
+        let real = llrm_x86::tti::RealMode { scale_costs, registers: self.registers as u32 };
         llrm_x86::tti::X86::of_cpu("i486")
             .map(|one| std::rc::Rc::new(one.in_real_mode(real)) as std::rc::Rc<dyn llrm_mir::tti::Tti>)
     }
