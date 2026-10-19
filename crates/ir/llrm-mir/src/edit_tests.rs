@@ -767,3 +767,36 @@ fn a_cloned_block_reads_its_own_values_once_remapped() {
     assert_eq!(f.instruction(y).operands[0], Operand::Value(x));
     assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
 }
+
+const JOIN: &str = "define i16 @f(i1 %c, i16 %a, i16 %b) {\nentry:\n  br i1 %c, label %p1, label %p2\np1:\n  switch i16 %a, label %join [\n    i16 0, label %p3\n  ]\np2:\n  br label %join\np3:\n  br label %join\njoin:\n  %m = phi i16 [ %a, %p1 ], [ %b, %p2 ], [ 7, %p3 ]\n  ret i16 %m\n}\n";
+
+/// `removeIncomingValue` moves the LAST input into the removed one's slot; the
+/// order-preserving removal left `[%b, %p2], [7, %p3]` where `opt` leaves
+/// `[7, %p3], [%b, %p2]`, so every later phi walk differed from LLVM's.
+#[test]
+fn removing_a_predecessor_moves_the_last_phi_input_into_its_slot() {
+    let mut module = module(JOIN);
+    let (context, f) = module.function_mut("f").expect("@f");
+    let block = |f: &Function, name: &str| {
+        f.layout().iter().copied().find(|&b| f.block(b).name.as_deref() == Some(name)).expect(name)
+    };
+    let (join, p1) = (block(f, "join"), block(f, "p1"));
+    let (m, _) = named(f, "m");
+    f.predecessor_removed(context, join, p1, true);
+    let from: Vec<Operand> = f.instruction(m).operands.chunks(2).map(|pair| pair[1]).collect();
+    assert_eq!(from, vec![Operand::Block(block(f, "p3")), Operand::Block(block(f, "p2"))]);
+}
+
+/// With every other input the phi itself, `hasConstantValue` is poison and
+/// the phi goes; the skip-self version returned nothing and left the phi.
+#[test]
+fn a_phi_left_with_only_itself_becomes_poison() {
+    let text = "define i16 @f(i1 %c, i16 %a) {\nentry:\n  br i1 %c, label %loop, label %out\nloop:\n  %m = phi i16 [ %a, %entry ], [ %m, %loop ], [ %m, %loop ]\n  br i1 %c, label %loop, label %out\nout:\n  ret i16 %a\n}\n";
+    let mut module = module(text);
+    let (context, f) = module.function_mut("f").expect("@f");
+    let loop_block = f.layout().iter().copied().find(|&b| f.block(b).name.as_deref() == Some("loop")).unwrap();
+    let entry = f.entry().unwrap();
+    let (m, _) = named(f, "m");
+    f.predecessor_removed(context, loop_block, entry, false);
+    assert!(f.is_erased(m), "the phi of itself alone is replaced by poison and erased");
+}
