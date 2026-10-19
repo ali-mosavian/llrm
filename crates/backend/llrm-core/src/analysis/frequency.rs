@@ -6,12 +6,17 @@
 //! `BranchProbabilityInfo` over the MIR (an edge made by splitting one
 //! inherits its odds, `BlockOdds::redirected`); a loop's proven
 //! trips, which induction left in `loop_trip_counts`, replace the heuristic's
-//! 31 in 32; and `branchprob::propagated` turns them into frequencies.
+//! 31 in 32 (DEVIATE 1, `trip_adjusted`); and `BlockFrequencyInfoImpl` turns
+//! them into frequencies (`propagated`).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use llrm_analysis::branchprob;
+use llrm_mir::blockfrequency::{BlockFrequencyInfo, BranchProbability, EdgeProbabilities, FlowGraph};
+use llrm_mir::blocklist::BlockList;
+use llrm_mir::cycleinfo::CycleInfo;
+use llrm_mir::domtree::DomGraph;
+use llrm_mir::module::BlockId;
 
 use crate::analysis::facts::Fact;
 use crate::analysis::loops;
@@ -373,24 +378,8 @@ impl Frequency {
         }
         let natural = loops::loops(&kept, Some(body.entry));
         let trips: IndexMap<i64, i64> = body.loop_trip_counts.iter().copied().collect();
-        let cycles: Vec<branchprob::Cycle> = natural
-            .iter()
-            .map(|one| branchprob::Cycle {
-                header: one.header,
-                latches: &one.latches,
-                body: &one.body,
-                trips: trips.get(&one.header).copied(),
-            })
-            .collect();
-        let order =
-            branchprob::reverse_postorder_of(body.entry, &|at| successors.get(&at).cloned().unwrap_or_default());
-        let (mut block, edges) = branchprob::propagated_edges(
-            &order,
-            &|at| predecessors.get(&at).cloned().unwrap_or_default(),
-            &|at| successors.get(&at).cloned().unwrap_or_default(),
-            &cycles,
-            &|from, to| shared.get(&(from, to)).copied().unwrap_or(0.0),
-        );
+        let edges = trip_adjusted(&natural, &trips, &successors, &shared);
+        let mut block = propagated(body.entry, &successors, &predecessors, &edges);
         // A bridge runs as often as the edges into it are taken; a chain of
         // them is settled from its first.
         let mut pending: Vec<i64> = blocks.iter().map(|one| one.at).filter(|at| bridge(*at).is_some()).collect();
@@ -464,6 +453,147 @@ impl Frequency {
         self.block(from) * self.taken.get(&(from, to)).copied().unwrap_or(0.0)
     }
 }
+
+/// DEVIATE 1: a loop whose trips induction proved leaves by its exit test
+/// one time in `trips + 1 - tested` (`tested` is 1 for a test after the trip,
+/// at a latch, 0 for one before it, at the header), where it has one exiting
+/// block; LLVM's probabilities know no trip count. Exit: none measured yet.
+fn trip_adjusted(
+    natural: &[loops::Loop],
+    trips: &IndexMap<i64, i64>,
+    successors: &IndexMap<i64, Vec<i64>>,
+    shared: &IndexMap<(i64, i64), f64>,
+) -> IndexMap<(i64, i64), f64> {
+    let mut edges = shared.clone();
+    for one in natural {
+        let Some(&count) = trips.get(&one.header) else { continue };
+        let exiting: Vec<i64> = successors
+            .iter()
+            .filter(|(from, to)| one.body.contains(from) && to.iter().any(|at| !one.body.contains(at)))
+            .map(|(from, _)| *from)
+            .collect();
+        let [from] = exiting[..] else { continue };
+        let tested = if one.latches.contains(&from) {
+            1
+        } else if from == one.header {
+            0
+        } else {
+            continue;
+        };
+        let out = 1.0 / (count + 1 - tested).max(1) as f64;
+        let list = &successors[&from];
+        let (leaving, staying): (Vec<i64>, Vec<i64>) = list.iter().partition(|at| !one.body.contains(at));
+        let left: f64 = leaving.iter().map(|to| shared.get(&(from, *to)).copied().unwrap_or(0.0)).sum();
+        let stayed: f64 = staying.iter().map(|to| shared.get(&(from, *to)).copied().unwrap_or(0.0)).sum();
+        for to in &leaving {
+            let p = shared.get(&(from, *to)).copied().unwrap_or(0.0);
+            let share = if left > 0.0 { p / left } else { 1.0 / leaving.len() as f64 };
+            edges.insert((from, *to), out * share);
+        }
+        for to in &staying {
+            let p = shared.get(&(from, *to)).copied().unwrap_or(0.0);
+            let share = if stayed > 0.0 { p / stayed } else { 1.0 / staying.len() as f64 };
+            edges.insert((from, *to), (1.0 - out) * share);
+        }
+    }
+    edges
+}
+
+/// The blocks between `entry` and the rest, as `BlockFrequencyInfoImpl` runs
+/// over a `MachineFunction` (`MachineBlockFrequencyInfo`): each block's
+/// frequency per call, `edges` its edges' probabilities.
+struct Flow<'a> {
+    blocks: Vec<BlockId>,
+    at: Vec<i64>,
+    succs: Vec<BlockList>,
+    preds: Vec<BlockList>,
+    edges: &'a IndexMap<(i64, i64), f64>,
+}
+
+impl DomGraph for Flow<'_> {
+    fn entry(&self) -> Option<BlockId> {
+        (!self.blocks.is_empty()).then_some(BlockId(0))
+    }
+
+    fn max_number(&self) -> usize {
+        self.blocks.len()
+    }
+
+    fn nodes(&self) -> &[BlockId] {
+        &self.blocks
+    }
+
+    fn successors(
+        &self,
+        block: BlockId,
+    ) -> BlockList {
+        self.succs[block.0 as usize].clone()
+    }
+
+    fn predecessors(
+        &self,
+        block: BlockId,
+    ) -> BlockList {
+        self.preds[block.0 as usize].clone()
+    }
+}
+
+impl FlowGraph for Flow<'_> {}
+
+impl EdgeProbabilities for Flow<'_> {
+    fn get_edge_probability(
+        &self,
+        src: BlockId,
+        index: usize,
+    ) -> BranchProbability {
+        let from = self.at[src.0 as usize];
+        let mut probs: Vec<BranchProbability> = self.succs[src.0 as usize]
+            .iter()
+            .map(|to| {
+                let p = self.edges.get(&(from, self.at[to.0 as usize])).copied().unwrap_or(0.0);
+                BranchProbability::get_branch_probability_f64(p.clamp(0.0, 1.0))
+            })
+            .collect();
+        BranchProbability::normalize_probabilities(&mut probs);
+        probs[index]
+    }
+}
+
+/// Each block's runs per call over `successors` and `edges`.
+fn propagated(
+    entry: i64,
+    successors: &IndexMap<i64, Vec<i64>>,
+    predecessors: &IndexMap<i64, Vec<i64>>,
+    edges: &IndexMap<(i64, i64), f64>,
+) -> IndexMap<i64, f64> {
+    // A LIR entry may be a loop's header, as a function's entry block may
+    // not: a block before it enters it once, as a call does.
+    let looped = predecessors.get(&entry).is_some_and(|from| !from.is_empty());
+    let mut at: Vec<i64> = if looped { vec![BEFORE_ENTRY, entry] } else { vec![entry] };
+    at.extend(successors.keys().copied().filter(|one| *one != entry));
+    let index: IndexMap<i64, u32> = at.iter().enumerate().map(|(i, one)| (*one, i as u32)).collect();
+    let list = |of: &IndexMap<i64, Vec<i64>>, one: &i64| -> BlockList {
+        of.get(one).into_iter().flatten().filter_map(|to| index.get(to)).map(|&i| BlockId(i)).collect()
+    };
+    let mut succs: Vec<BlockList> = at.iter().map(|one| list(successors, one)).collect();
+    let mut preds: Vec<BlockList> = at.iter().map(|one| list(predecessors, one)).collect();
+    if looped {
+        succs[0] = [BlockId(1)].into_iter().collect();
+        preds[1].push(BlockId(0));
+    }
+    let flow = Flow { blocks: (0..at.len() as u32).map(BlockId).collect(), succs, preds, at: at.clone(), edges };
+    let cycles = CycleInfo::compute(&flow);
+    let bfi = BlockFrequencyInfo::calculate(&flow, &flow, &cycles);
+    let entry_freq = bfi.get_entry_freq().get_frequency().max(1) as f64;
+    at.iter()
+        .enumerate()
+        .filter(|(_, one)| **one != BEFORE_ENTRY)
+        .map(|(i, one)| (*one, bfi.get_block_freq(BlockId(i as u32)).get_frequency() as f64 / entry_freq))
+        .collect()
+}
+
+/// The block `propagated` puts before an entry that is a loop's header.
+const BEFORE_ENTRY: i64 = i64::MIN;
 
 #[cfg(test)]
 mod tests {
@@ -600,6 +730,48 @@ mod tests {
         assert_eq!(*kept, fresh, "a block with work in it was still a bridge (bridge flow {:?})", bridge.table());
     }
 
+    /// With no proven trips, the frequencies are `MachineBlockFrequencyInfo`'s
+    /// over the odds: a loop of two exits, a nest, and one that never leaves
+    /// (BFI's 4096). They were `branchprob`'s GCC-style propagation.
+    #[test]
+    fn test_frequencies_are_machine_block_frequency_infos() {
+        let shapes: [&[(i64, &[i64], &[f64])]; 3] = [
+            &[(1, &[2], &[]), (2, &[3, 5], &[0.9, 0.1]), (3, &[2, 4], &[0.8, 0.2]), (4, &[5], &[]), (5, &[], &[])],
+            &[(1, &[2], &[]), (2, &[3, 5], &[0.9, 0.1]), (3, &[3, 4], &[0.75, 0.25]), (4, &[2], &[]), (5, &[], &[])],
+            &[(1, &[2], &[]), (2, &[2, 3], &[1.0, 0.0]), (3, &[], &[])],
+        ];
+        for shape in shapes {
+            let blocks: Vec<LirBlock> = shape
+                .iter()
+                .map(|(at, succ, _)| {
+                    let op = match succ.len() {
+                        0 => Operation::Return,
+                        1 => Operation::Move,
+                        _ => Operation::Branch,
+                    };
+                    block(*at, "op", op, succ.to_vec())
+                })
+                .collect();
+            let mut body =
+                LirBody::new("f", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
+            for (at, succ, odds) in shape {
+                for (to, p) in succ.iter().zip(*odds) {
+                    body.odds.taken.insert((*at, *to), (p * BlockOdds::CERTAIN).round() as u32);
+                }
+            }
+            let ours = Frequency::of(&body);
+            let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(&body);
+            for (index, (at, _, _)) in shape.iter().enumerate() {
+                let want = mbfi.get_block_freq_relative_to_entry_block(index);
+                assert!(
+                    (ours.block(*at) - want).abs() <= 1e-6 * want.max(1.0),
+                    "{shape:?} block {at}: {} against {want}",
+                    ours.block(*at)
+                );
+            }
+        }
+    }
+
     fn counted(
         trips: Option<i64>,
         stay: f64,
@@ -718,8 +890,9 @@ mod tests {
         for at in [1, 2, 3] {
             assert_eq!(before.block(at), after.block(at), "block {at}");
         }
-        // 5 runs of the header, one of them leaving: 4 take the back edge.
-        assert!((after.block(9) - 4.0).abs() < 1e-9, "the copies run {}", after.block(9));
+        // 5 runs of the header, one of them leaving: 4 take the back edge, to
+        // the precision of `BlockFrequencyInfo`'s integer frequencies.
+        assert!((after.block(9) - 4.0).abs() < 1e-6, "the copies run {}", after.block(9));
     }
 
     /// Each bridge looked through every block for what enters it: N cases, N
