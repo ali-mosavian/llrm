@@ -348,9 +348,6 @@ impl<'a> AliasQuery<'a> {
         one: &MemRef,
         other: &MemRef,
     ) -> bool {
-        if self.basic_no_alias(one, other) {
-            return false;
-        }
         if one.space == other.space
             && let (Some(left), Some(right)) = (self.identified_object(one), self.identified_object(other))
             && left != right
@@ -360,7 +357,8 @@ impl<'a> AliasQuery<'a> {
         if self.unreachable_from(one, other) || self.unreachable_from(other, one) {
             return false;
         }
-        memoryssa::may_clobber(self.unit, None, one, other)
+        // The cheap tests first: BasicAA is asked only of what they leave.
+        memoryssa::may_clobber(self.unit, None, one, other) && !self.basic_no_alias(one, other)
     }
 
     /// `BasicAA` says the two references, each a pointer and a size, do not
