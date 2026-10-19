@@ -27,9 +27,10 @@
 //!    compares the wide one with that value extended
 //!    (`WidenIV::widenLoopCompare`); other readers of the narrow one read its
 //!    low part.
-//! 2. `congruent`: header counters with one start and one step are one counter
-//!    (`SCEVExpander::replaceCongruentIVs`); the later ones' readers read the
-//!    first, and `dead` removes them.
+//! 2. `congruentiv::replaced` (`SCEVExpander::replaceCongruentIVs`; the older
+//!    `congruent` under `LLRM_NO_SCEV_CONGRUENT`): header phis SCEV proves
+//!    equal, a narrow one a truncation of a wide one included, are one, and
+//!    `dead` removes the rest.
 //! 3. `canonexit::canonicalized` (`canonicalizeExitCondition`;
 //!    `LLRM_NO_SCEV_CANONEXIT`), then `exitfold::folded`: exits their counts
 //!    decide are folded.
@@ -247,7 +248,15 @@ impl FunctionPass for IndVars {
                 &mut standing,
                 if self.exit_values { None } else { self.unrolls },
             );
-        let merged = congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        let merged = if crate::congruentiv::enabled() {
+            let merged = crate::congruentiv::replaced(unit.context, unit.layout, unit.function, &outer);
+            if merged {
+                standing.changed();
+            }
+            merged
+        } else {
+            congruent(unit.context, unit.layout, unit.function, &outer, &mut standing)
+        };
         let canonical = crate::canonexit::enabled()
             && crate::canonexit::canonicalized(unit.context, unit.layout, unit.function, &outer);
         if canonical {
@@ -628,7 +637,7 @@ fn _rewinding(
 
 #[cfg(test)]
 #[path = "indvars_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 /// A counter read through `zext` to the default address's index width is a
 /// counter of that width, where `induction` proves its values never pass its
