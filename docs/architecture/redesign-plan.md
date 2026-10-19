@@ -315,7 +315,7 @@ State: **translated** = the pass at the pin exists in llrm (a switch-gated or sh
 | 17 | jump-table-to-switch | O2 | none | missing | scalar-cleanup-port |
 | 18 | aggressive-instcombine | O2 | none | missing | scalar-cleanup-port |
 | 19 | libcalls-shrinkwrap | all | none | n/a | |
-| 20 | tailcallelim (twice) | O2 (once O1) | `tailrec` | old | scalar-cleanup-port |
+| 20 | tailcallelim (twice) | O2 (once O1) | `tailrec` | translated | gvn-ci-2160-2172 |
 | 21 | reassociate | all | `algebraic` | old | fold-poc |
 | 22 | constraint-elimination | O2 | none | missing | domtree-port |
 | 23 | loop-instsimplify, loop-simplifycfg | all | none | missing | loop-passes-port |

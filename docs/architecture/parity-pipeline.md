@@ -42,30 +42,13 @@ The run count per slot must match LLVM's. `parity::RUNS_PER_BODY` states it and 
 
 ## Recount of the registry
 
-`LLRM_DEBUG=counts llrm-c -O2 f.c -S -o /dev/null 2>&1 | grep '^\[parity\]'` prints the registry's recount from `parity.rs` of the build it runs, the same at every level (it counts the registry, not the built list): all slots by state (Partial counted apart from Translated), each phase's slots, the analyses.
+The count of record is the registry's own recount: `LLRM_DEBUG=counts llrm-c -O2 f.c -S -o /dev/null 2>&1 | grep '^\[parity\]'` prints it from `parity.rs` of the build it runs, the same at every level (it counts the registry, not the built list): all slots by state (Partial counted apart from Translated), each phase's slots, the analyses. No page or test pins a number: `parity_tests.rs` checks that the tally and the printed lines are the recount of the rows by kind, so a PR that moves a slot edits its row and nothing else.
 
-At `a94491462` (read from the binary and from `parity.rs`, which agree):
-
-| | translated | partial | old | missing |
-|---|---|---|---|---|
-| all 88 slots | 23 | 6 | 51 | 8 |
-| early | 2 | 0 | 2 | 0 |
-| cleanup | 1 | 0 | 4 | 0 |
-| simplify | 18 | 4 | 31 | 5 |
-| late | 1 | 0 | 0 | 0 |
-| module | 0 | 0 | 0 | 0 |
-| backend | 1 | 2 | 14 | 3 |
-| analyses | 2 | 0 | 0 | 0 |
-
-After the analyses rows (every analysis the manager names has one) and the LSR row: 89 slots 24 / 9 / 49 / 7, analyses 7 / 1 / 37 / 0. `dfajumpthreading@806` is Translated since stage S3. `decide@1178` is Partial since the translated SimplifyCFG runs in it (#2907). `parity::check_phase` now fails when a slot the registry calls Old or Missing holds a translated pass (`FunctionPass::translation`), so a wiring PR updates its row in the same commit.
-
-Since `d92949c1e` (22/6/52/8) one slot changed state: `gvn@787` Old to Translated. The Partial notes of `jumpthreading@668/@809` and `dse@820` moved their stage. Stage landings in slots the registry counts as one row (SimplifyCFG pieces under `decide@N`, `indvars@738`, LSR, jumps) do not move the count until the row's own criterion is met.
-
-Off by default: `rotate@728` (`LLRM_ROTATE`). `jumpthreading@668/@809` run by default; `LLRM_NO_JUMPTHREADING` (set) turns them off. Every other Translated or Partial slot runs under the order; `LLRM_NO_LLVM_ORDER` turns the order off.
-
-Callers of analyses (`callers-total`, joined / old / analyses with old callers): x_hanoi2 -O1 157 / 365 / 34, -O2 167 / 387 / 34, -O3 224 / 565 / 34; `d_faces` -O2 767 / 1701 / 37.
+`parity::check_phase` fails when a slot the registry calls Old or Missing holds a translated pass (`FunctionPass::translation`), and when a Translated or Partial slot is not run, so a wiring PR updates its row in the same commit. A Partial row says what is done and what is left (`criterion:` and `exit:`); stage landings inside a row the registry counts as one slot (SimplifyCFG pieces under `decide@N`, LSR, jumps) do not move the count until the row's own criterion is met.
 
 Every analysis the manager computes has a row in `parity::ANALYSES` and a `[parity] analysis <key> <kind> <type>` line. An Old row says what replaces it (`replaced_by`; "none" is a DEVIATE or delete candidate). `tools/old_analysis_callers.py` reads its list of old analyses from these lines, not from a file of its own.
+
+Off by default: `rotate@728` (`LLRM_ROTATE`). `jumpthreading@668/@809` run by default; `LLRM_NO_JUMPTHREADING` (set) turns them off. Every other Translated or Partial slot runs under the order; `LLRM_NO_LLVM_ORDER` turns the order off.
 
 ## Scoreboard
 

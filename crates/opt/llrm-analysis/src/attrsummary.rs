@@ -10,6 +10,21 @@
 //!   read or write.
 //! - A pointer parameter without `nocapture` is captured.
 //!
+//! # Example
+//! A function that only reads through its pointer parameter:
+//!
+//! ```mir
+//! define void @f(ptr readonly %p) memory(argmem: readwrite) {
+//! b0:
+//!   ret void
+//! }
+//! ```
+//!
+//! `summaries(module)["f"]` reads parameter 0 and writes nothing.
+//!
+//! From unit test `a_readonly_parameter_is_read_not_written` in
+//! `attrsummary_tests.rs`.
+//!
 //! DEVIATE A1: no slices of tracked globals. `GlobalsModRef` answers those per
 //! global; here they are the unknown access. Checked by
 //! `the_unknown_access_stands_for_globals`.

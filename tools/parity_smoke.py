@@ -195,15 +195,15 @@ def ratchet_name(command: list[str]) -> str:
     return command[-1]
 
 
-RATCHET_WORKERS = 4  # cargo's build lock serializes the compiles; the links and the runs overlap
+RATCHET_WORKERS = int(os.environ.get("RATCHET_WORKERS", "1"))  # 4 made no gain: each `cargo test -p X --test Y` unifies features differently and rebuilds, the build lock serializes the compiles, and 4 links at load 70 cost 600-750 s a PR
 
 
 def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[str, str]:
     """name -> why, for EVERY ratchet that fails on the tree in `root` (the subset rule compares whole failure sets, not the first failure).
-    The commands run RATCHET_WORKERS at a time (10 in a row cost ~45 s of every precheck); the result is in command order."""
+    The commands run RATCHET_WORKERS at a time (default 1); the result is in command order."""
     run = run or (lambda command: subprocess.run(slotted(command), cwd=root, capture_output=True, text=True))
     commands = ratchet_commands(tiers)
-    with ThreadPoolExecutor(max_workers=RATCHET_WORKERS) as pool:
+    with ThreadPoolExecutor(max_workers=RATCHET_WORKERS) as pool:  # read per call: the env and the tests set it
         done = list(pool.map(run, commands))
     failed = {}
     for command, result in zip(commands, done):
