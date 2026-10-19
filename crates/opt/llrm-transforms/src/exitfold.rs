@@ -458,9 +458,8 @@ fn _leaving(
     from: i64,
 ) -> Option<(i64, Vec<(InstId, Operand)>)> {
     let block = cfg::block(exit);
-    let body = function.block(block).instructions();
     let (phis, rest): (Vec<InstId>, Vec<InstId>) =
-        body.iter().copied().partition(|&inst| function.instruction(inst).opcode == Opcode::Phi);
+        function.iter_block(block).partition(|&inst| function.instruction(inst).opcode == Opcode::Phi);
     let arriving = |phi: InstId, from: llrm_mir::module::BlockId| {
         function.instruction(phi).operands.chunks(2).find(|pair| pair[1] == Operand::Block(from)).map(|pair| pair[0])
     };
@@ -469,8 +468,7 @@ fn _leaving(
                map: &dyn Fn(Operand) -> Option<Operand>|
      -> Option<Vec<(InstId, Operand)>> {
         function
-            .block(to)
-            .iter()
+            .iter_block(to)
             .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
             .map(|phi| Some((phi, map(arriving(phi, through)?)?)))
             .collect()
@@ -539,11 +537,12 @@ fn _silent(
     at: i64,
 ) -> bool {
     let function = unit.function;
-    let body = function.block(cfg::block(at)).instructions();
-    body[..body.len().saturating_sub(1)]
-        .iter()
+    let block = cfg::block(at);
+    function
+        .iter_block(block)
+        .take(function.block(block).len().saturating_sub(1))
         .all(
-            |&inst| {
+            |inst| {
                 let op = function.instruction(inst);
                 match op.opcode {
                     Opcode::Load { volatile: false, align } => {
@@ -630,7 +629,7 @@ fn _predicated(
     for exit in exits {
         let condition = function.instruction(exit.branch).operands.first().copied();
         let phis =
-            function.block(cfg::block(exit.exit)).iter().any(|inst| function.instruction(inst).opcode == Opcode::Phi);
+            function.iter_block(cfg::block(exit.exit)).any(|inst| function.instruction(inst).opcode == Opcode::Phi);
         let Some(count) = exit.taken.clone().filter(|count| count.iter().all(|one| one.width == width)) else { break };
         if !innermost(exit.block) || matches!(condition, Some(Operand::Constant(_))) || phis {
             break;
@@ -643,7 +642,7 @@ fn _predicated(
     // Only plain stores, and only where every chosen exit crashes quietly.
     let mut stores = false;
     for &at in &loop_.body {
-        for inst in function.block(cfg::block(at)).iter() {
+        for inst in function.iter_block(cfg::block(at)) {
             let op = function.instruction(inst);
             let effects = llrm_mir::memory::of(unit.context, outer.callees(), function, inst);
             match op.opcode {
@@ -677,7 +676,7 @@ fn _values_out(
     loop_
         .body
         .iter()
-        .flat_map(|&at| function.block(cfg::block(at)).iter())
+        .flat_map(|&at| function.iter_block(cfg::block(at)))
         .filter_map(|inst| function.instruction(inst).result)
         .any(|value| {
             function
@@ -713,9 +712,8 @@ fn _crashes(
         .any(
             |to| {
                 let Operand::Block(to) = *to else { return false };
-                let body = function.block(to).instructions();
-                body.last().is_some_and(|&last| function.instruction(last).opcode == Opcode::Unreachable)
-                    && body[..body.len() - 1].iter().all(|&inst| {
+                function.block(to).last().is_some_and(|last| function.instruction(last).opcode == Opcode::Unreachable)
+                    && function.iter_block(to).take(function.block(to).len() - 1).all(|inst| {
                         matches!(function.instruction(inst).opcode, Opcode::Call(_))
                             && llrm_mir::memory::accessible(unit.context, outer.callees(), function, inst)
                                 == llrm_mir::memory::Effects::NONE
@@ -775,7 +773,7 @@ fn _early(
         unit.shape().loops.iter().filter(|one| one.body.contains(&at)).all(|one| one.body.len() >= loop_.body.len())
     };
     if !innermost(exit.block)
-        || function.block(cfg::block(exit.exit)).iter().any(|inst| function.instruction(inst).opcode == Opcode::Phi)
+        || function.iter_block(cfg::block(exit.exit)).any(|inst| function.instruction(inst).opcode == Opcode::Phi)
         || _values_out(function, loop_)
     {
         return false;

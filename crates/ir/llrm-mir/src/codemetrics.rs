@@ -177,7 +177,7 @@ impl CodeMetrics {
         eph: &IdSet<InstId>,
         prepare_for_lto: bool,
     ) {
-        for inst in function.block(block).iter() {
+        for inst in function.iter_block(block) {
             // Skip ephemeral values.
             if eph.contains(&inst) {
                 continue;

@@ -464,8 +464,7 @@ pub fn rewound_with(
     let reset =
         function.create_instruction(Opcode::Binary(BinaryOp::Add), ty, vec![exit_value, back], Flags::default(), None);
     let after = function
-        .block(plan.exit)
-        .iter()
+        .iter_block(plan.exit)
         .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
         .expect("a terminator");
     function.insert(reset, Position::Before(after)).expect("a placed block");

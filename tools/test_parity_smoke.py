@@ -175,3 +175,25 @@ def test_a_qcport_module_that_fails_at_o2_fails_the_step_whatever_d_faces_does(t
     assert verdict == "fail" and "sound/snd.c" in detail and "BitCast of a float" in detail, detail
     compiler.write_text("#!/bin/sh\nexit 0\n")
     assert ps.qc_modules(tmp_path)[0] == "ok"
+
+
+def test_the_ratchets_run_whichever_crate_the_merge_touches_and_a_failing_one_refuses_it():
+    """A reader added in llrm-transforms never ran llrm-mir's ratchets (loopdeletion +3, simpleloopunswitch +5 slipped in): the smoke ran a crate's unit tests only when
+    the PR touched it."""
+    commands = [" ".join(c) for c in ps.ratchet_commands()]
+    assert any("-p llrm-mir --lib -- no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id" in c for c in commands), commands
+    assert any("--test block_list_ratchet" in c for c in commands) and any("facts_rewrite" in c for c in commands)
+
+    class Done:
+        def __init__(self, code, err=""):
+            self.returncode, self.stdout, self.stderr = code, "", err
+
+    ran = []
+
+    def fails_the_dense_id_ratchet(command):
+        ran.append(command)
+        return Done(1, "thread panicked: loopdeletion gained 3 readers") if "no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id" in " ".join(command) else Done(0)
+
+    why = ps.ratchets(run=fails_the_dense_id_ratchet)
+    assert "no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id" in why and "loopdeletion" in why, why
+    assert ps.ratchets(run=lambda command: Done(0)) == ""

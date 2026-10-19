@@ -921,7 +921,7 @@ impl LazyValueInfoImpl {
         let max = Self::max_block_number(env);
         self.the_cache.is_non_null_at_end_of_block(val, bb, max, |bb| {
             let mut non_null_pointers = NonNullPointerSet::default();
-            for i in env.function.block(bb).iter() {
+            for i in env.function.iter_block(bb) {
                 add_non_null_pointers_by_instruction(env, i, &mut non_null_pointers);
             }
             non_null_pointers
@@ -1048,9 +1048,7 @@ impl LazyValueInfoImpl {
         // If guards are not used in the module, don't spend time looking for
         // them
         if self.guard_decl && function.block(bb).first() != Some(bbi) {
-            let instructions = function.block(bb).instructions();
-            let at = instructions.iter().position(|&i| i == bbi).expect("bbi is in its block");
-            for &i in instructions[..at].iter().rev() {
+            for i in std::iter::successors(function.prev_in_block(bbi), |&one| function.prev_in_block(one)) {
                 let q = env.query();
                 if intrinsic_id(&q, i) == Some(IntrinsicId::ExperimentalGuard)
                     && matches!(function.instruction(i).opcode, Opcode::Call(_))
@@ -3073,7 +3071,7 @@ impl LazyValueInfoImpl {
         let mut out = Vec::new();
         for &bb in function.layout() {
             self.emit_basic_block_start_annot(env, bb, &mut out);
-            for i in function.block(bb).iter() {
+            for i in function.iter_block(bb) {
                 self.emit_instruction_annot(env, dtree, i, &mut out);
             }
         }

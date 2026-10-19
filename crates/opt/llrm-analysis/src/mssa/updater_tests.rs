@@ -168,7 +168,7 @@ impl Body {
     ) {
         let access = mssa.get_memory_access(inst).expect("an access");
         self.mutate(|function| {
-            let others: Vec<InstId> = function.block(block).iter().filter(|&one| one != inst).collect();
+            let others: Vec<InstId> = function.iter_block(block).filter(|&one| one != inst).collect();
             let before = others[index.min(others.len() - 1)];
             function.move_to(inst, Position::Before(before)).expect("moved");
         });
@@ -193,7 +193,7 @@ impl Body {
     ) -> InstId {
         let copy = self.mutate(|function| {
             let copy = function.clone_instruction(like);
-            let before = function.block(block).iter().nth(index.min(function.block(block).len() - 1)).unwrap();
+            let before = function.iter_block(block).nth(index.min(function.block(block).len() - 1)).unwrap();
             function.insert(copy, Position::Before(before)).expect("inserted");
             copy
         });
@@ -235,7 +235,7 @@ fn find(
     block: &str,
     at: usize,
 ) -> InstId {
-    body.function().block(body.block(block)).iter().nth(at).unwrap()
+    body.function().iter_block(body.block(block)).nth(at).unwrap()
 }
 
 /// A store the loop does not read leaves it for the preheader: the loads after

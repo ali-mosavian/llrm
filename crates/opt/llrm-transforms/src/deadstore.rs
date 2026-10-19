@@ -285,7 +285,7 @@ impl<'a> Dse<'a> {
         // Post-order numbers, and the defs that could kill.
         for (number, block) in post_order_of(function).into_iter().enumerate() {
             state.post_order.insert(block, number as u32);
-            for &inst in function.block(block).instructions() {
+            for inst in function.iter_block(block) {
                 let Some(access) = state.mssa.get_memory_access(inst) else { continue };
                 if state.mssa.access(access).kind == Kind::Def
                     && state.mem_defs.len() < DEFS_PER_BLOCK_LIMIT
@@ -1083,18 +1083,16 @@ impl<'a> Dse<'a> {
         let mut visited: Vec<BlockId> = Vec::new();
         let mut work: Vec<(BlockId, bool)> = vec![(second_block, true)];
         while let Some((block, is_first)) = work.pop() {
-            let instructions = self.function.block(block).instructions();
-            let start = if block == first_block {
-                instructions.iter().position(|one| *one == first).map_or(0, |at| at + 1)
-            } else {
-                0
+            // The block after `first` where it holds it, up to `second` where
+            // that is the block's end of the walk; empty if `first` is not before.
+            let backwards = block == first_block && is_first && !self.function.comes_before(first, second);
+            let rest: Box<dyn Iterator<Item = InstId> + '_> = match (backwards, block == first_block) {
+                (true, _) => Box::new(std::iter::empty()),
+                (false, true) => Box::new(self.function.iter_after(first)),
+                (false, false) => Box::new(self.function.iter_block(block)),
             };
-            let end = if is_first {
-                instructions.iter().position(|one| *one == second).unwrap_or(instructions.len())
-            } else {
-                instructions.len()
-            };
-            for &inst in &instructions[start.min(end)..end] {
+            let until = is_first.then_some(second);
+            for inst in rest.take_while(|&one| Some(one) != until) {
                 if inst != second
                     && !self.to_remove.contains(&inst)
                     && self.may_write(inst)
