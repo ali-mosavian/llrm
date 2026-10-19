@@ -2293,6 +2293,30 @@ impl Selector<'_, '_, '_> {
             && function.parent(definition) == function.parent(user)
     }
 
+    /// Whether `value` is read once, by `user`, and is not live around a loop
+    /// `user` is in (`only_reader`, for an argument or a value made elsewhere
+    /// too): its register is free after `user`, so a two-address operation
+    /// updates it in place and needs no copy.
+    fn dies_at(
+        &self,
+        value: ValueId,
+        user: InstId,
+    ) -> bool {
+        let function = self.function;
+        if self.only_reader(value, user) {
+            return true;
+        }
+        if !function.users(value).only().is_some_and(|only| only.user == user) {
+            return false;
+        }
+        let Some(at) = function.parent(user).map(cfg::id) else { return false };
+        let made = match function.value(value).def {
+            ValueDef::Instruction(definition) => function.parent(definition).map(cfg::id),
+            ValueDef::Argument(_) => None,
+        };
+        self.shape.loops.iter().all(|one| !one.body.contains(&at) || made.is_some_and(|made| one.body.contains(&made)))
+    }
+
     /// Whether nothing after `from` and before `to`, in one block, may write
     /// memory.
     fn unwritten(
@@ -3302,10 +3326,11 @@ impl Selector<'_, '_, '_> {
         let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id)
             .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
         let space = crate::backend::globals::space(self.module, global);
-        // A near global cast to a far pointer (`addrspacecast (ptr @g to ptr addrspace(1))`)
-        // is its DGROUP selector and its offset, as the cast instruction makes it.
-        let widened = self.module.global(global).address_space == self.spaces.near
-            && self.is_far(self.module.context.get(id).ty);
+        // A near global cast to a far pointer (`addrspacecast (ptr @g to ptr
+        // addrspace(1))`) is its DGROUP selector and its offset, as the
+        // cast instruction makes it.
+        let widened =
+            self.module.global(global).address_space == self.spaces.near && self.is_far(self.module.context.get(id).ty);
         if self.module.global(global).address_space != self.spaces.near || widened {
             let Some(block) = self.current else { return refuse("a far global outside a block") };
             // A carried pointer is canonical: whole 64K strides of its offset
@@ -4676,10 +4701,14 @@ impl Selector<'_, '_, '_> {
     ) -> Result<(Held, Held), Unselected> {
         // A numeric constant, null among them: selector:offset as one dword.
         // An `inttoptr` constant is one as well.
-        let numeric = self.constant(operand, 4).or_else(|| match operand {
-            Operand::Constant(id) => crate::backend::globals::absolute(self.module, &self.layout, id),
-            _ => None,
-        });
+        let numeric = self
+            .constant(operand, 4)
+            .or_else(
+                || match operand {
+                    Operand::Constant(id) => crate::backend::globals::absolute(self.module, &self.layout, id),
+                    _ => None,
+                },
+            );
         if let Some(bits) = numeric {
             let halves = [bits & 0xFFFF, (bits >> 16) & 0xFFFF].map(|value| {
                 let held = self.fresh_held(2);

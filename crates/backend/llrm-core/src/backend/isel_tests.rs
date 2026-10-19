@@ -5619,6 +5619,35 @@ define i16 @f(i16 %a) addrspace(1) {
     assert!(got.iter().any(|line| line.starts_with("xor ") && line.contains("ptr g")), "{got:?}");
 }
 
+/// The other operand live around a loop: folding the load made `mov esi, r;
+/// add esi, [m]` (3 clocks on a 486) of `mov esi, [m]; add esi, r` (2):
+/// `x_transpose` +7.6% clocks, `x_bigadd` +3.7%, `nbody_fixed` +1.0%.
+#[test]
+fn test_a_load_is_not_folded_into_an_operation_whose_other_operand_lives_on() {
+    let text = "@g = global [8 x i16] zeroinitializer
+@h = global [8 x i16] zeroinitializer
+define void @f(i16 %r, i16 %n) addrspace(1) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %loop ]
+  %p = getelementptr i16, ptr @g, i16 %i
+  %q = getelementptr i16, ptr @h, i16 %i
+  %v = load i16, ptr %p
+  %s = add i16 %v, %r
+  store i16 %s, ptr %q
+  %next = add i16 %i, 1
+  %c = icmp ult i16 %next, %n
+  br i1 %c, label %loop, label %done
+done:
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(!got.iter().any(|line| line.starts_with("add ") && line.contains("[")), "{got:?}");
+    assert!(got.iter().any(|line| line.contains("g[")), "the premise: the cell is read: {got:?}");
+}
+
 /// A store to the cell between the load and its reader: the load keeps the old
 /// value, so it stays where it was made.
 #[test]
@@ -5651,14 +5680,15 @@ define void @f() addrspace(1) {
 ";
     let got = listing(text, "f");
     assert!(
-        got.iter().any(|line| line.starts_with("add ") && line.split(',').next().is_some_and(|dest| dest.contains("ptr g"))),
+        got.iter()
+            .any(|line| line.starts_with("add ") && line.split(',').next().is_some_and(|dest| dest.contains("ptr g"))),
         "the update is not an add to the cell: {got:?}"
     );
 }
 
 /// An `and` a comparison with zero reads is a `test` (`and_tested`), whose
-/// operands are not given a memory operand by the add's pattern (the covered load
-/// was left unselected: `d_faces` aborted in the allocator).
+/// operands are not given a memory operand by the add's pattern (the covered
+/// load was left unselected: `d_faces` aborted in the allocator).
 #[test]
 fn test_a_tested_and_of_a_load_still_selects_the_load() {
     let text = "@g = global i16 5
@@ -5732,8 +5762,9 @@ define i16 @f() addrspace(1) {
 
 /// Constant expressions as operands, the shapes `simplifyCastInst` and the GEP
 /// fold make since #2614/#2610: each was refused, "an address of no global".
-/// `ptrtoint` of a global (and of a GEP off one) is its link-time address; a far
-/// `inttoptr` constant is a selector:offset pair, whether stored or read through.
+/// `ptrtoint` of a global (and of a GEP off one) is its link-time address; a
+/// far `inttoptr` constant is a selector:offset pair, whether stored or read
+/// through.
 #[test]
 fn test_ptrtoint_of_a_global_is_its_address_as_an_operand() {
     let text = "@g = internal global [8 x i16] zeroinitializer

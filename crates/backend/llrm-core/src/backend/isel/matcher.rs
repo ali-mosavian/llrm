@@ -693,6 +693,18 @@ impl Selector<'_, '_, '_> {
         )
     }
 
+    /// Whether `value` is free after the root (`dies_at`).
+    pub fn is_dies(
+        &self,
+        m: &Match,
+        value: Operand,
+    ) -> bool {
+        matches!(
+            value,
+            Operand::Value(value) if self.dies_at(value, m.inst)
+        )
+    }
+
     pub fn is_nonvolatile(
         &self,
         _: &Match,
@@ -708,7 +720,8 @@ impl Selector<'_, '_, '_> {
     /// Whether the root's value is stored back to where one of its operands
     /// was loaded from: a read-modify-write, which `rmw` makes one instruction
     /// of the load, the operation and the store, and not a memory operand of
-    /// this operation (that leaves the other operand's load and the store apart).
+    /// this operation (that leaves the other operand's load and the store
+    /// apart).
     pub fn is_stored_back(
         &self,
         m: &Match,
@@ -721,12 +734,16 @@ impl Selector<'_, '_, '_> {
         if !matches!(store.opcode, Opcode::Store { .. }) || only.index != 0 {
             return false;
         }
-        function.instruction(m.inst).operands.iter().any(|&operand| {
-            self.definition(operand).is_some_and(|inst| {
-                let read = function.instruction(inst);
-                matches!(read.opcode, Opcode::Load { .. }) && self.same_address(read.operands[0], store.operands[1])
-            })
-        })
+        function
+            .instruction(m.inst)
+            .operands
+            .iter()
+            .any(
+                |&operand| self.definition(operand).is_some_and(|inst| {
+                    let read = function.instruction(inst);
+                    matches!(read.opcode, Opcode::Load { .. }) && self.same_address(read.operands[0], store.operands[1])
+                }),
+            )
     }
 
     /// Whether `load` reads a local: an alloca, or a GEP from one.
@@ -759,8 +776,10 @@ impl Selector<'_, '_, '_> {
         }
         let (Some(first), Some(second)) = (self.definition(one), self.definition(other)) else { return false };
         let (first, second) = (self.function.instruction(first), self.function.instruction(second));
-        matches!((&first.opcode, &second.opcode), (Opcode::GetElementPtr { source: a }, Opcode::GetElementPtr { source: b }) if a == b)
-            && first.operands.len() == second.operands.len()
+        matches!(
+            (&first.opcode, &second.opcode),
+            (Opcode::GetElementPtr { source: a }, Opcode::GetElementPtr { source: b }) if a == b
+        ) && first.operands.len() == second.operands.len()
             && self.same_address(first.operands[0], second.operands[0])
             && first.operands[1..] == second.operands[1..]
     }
