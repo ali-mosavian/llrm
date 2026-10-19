@@ -1671,6 +1671,10 @@ fn _cell_move(
     let (held, cell) = if load { (&what.dests[0], &what.sources[0]) } else { (&what.sources[0], &what.dests[0]) };
     let (Loc::Held(held), Loc::Mem(cell)) = (held, cell) else { return None };
     let addr = cell.addr.filter(|addr| addr.space == Space::Frame)?;
+    // An element of an array is no slot: the index says which cell it is.
+    if cell.index.is_some() || cell.index_through != RegId::None {
+        return None;
+    }
     (held.width == cell.width).then_some((held.value, (addr.disp, cell.width)))
 }
 
@@ -6216,6 +6220,25 @@ mod tests {
         ]
     }
 
+    /// A load of one element of a frame array stored to another (`a[i] = a[j]`)
+    /// is not a slot copied to itself: sharing slots dropped both as an
+    /// identity, and quicksort -O3 left half of its swap out.
+    #[test]
+    fn test_a_copy_between_elements_of_a_frame_array_is_not_a_slot_identity() {
+        let element = |index: u32| {
+            Loc::Mem(Mem {
+                index: Some(Held { value: index, width: 4 }),
+                scale: 4,
+                ..mem(Addr::new(Space::Frame, -256), 4, RegId::BP, 0, 2)
+            })
+        };
+        let load = insn(0, (0, 0), semantics(Operation::Move, "mov", vec![held(1, 4)], vec![element(10)]), &[1], &[10]);
+        let store =
+            insn(1, (1, 1), semantics(Operation::Move, "mov", vec![element(11)], vec![held(1, 4)]), &[], &[1, 11]);
+        let body = _body(vec![load, store]);
+        assert_eq!(super::_identities_dropped(&body).insns().len(), 2);
+    }
+
     #[test]
     fn test_later_narrow_spill_reuses_a_dead_wider_slot() {
         let mut frame = Frame::new(0);
@@ -7378,15 +7401,13 @@ mod tests {
     /// m16 printed 43 for 60).
     #[test]
     fn test_a_spilled_word_index_is_not_folded_into_a_literal_base() {
-        let base =
-            insn(0, (0, 3), semantics(Operation::Move, "mov", vec![held(5, 2)], vec![imm(20, 2)]), &[5], &[]);
+        let base = insn(0, (0, 3), semantics(Operation::Move, "mov", vec![held(5, 2)], vec![imm(20, 2)]), &[5], &[]);
         let read = _read(0x102, 4, _far(0, Some(1)), &[5, 1]);
         let result = _out(&_body(vec![base, _add(1, 2, 0x100), read]), &[1, 5]);
         let read = result.iter().rev().find(|one| matches!(&what(one).sources[0], Loc::Mem(_))).unwrap();
         let cell = as_mem(&what(read).sources[0]);
-        let rebuilt = cell.base.is_some_and(|base| {
-            result.iter().any(|one| one.defines == [base.value] && one.rematerialized)
-        });
+        let rebuilt =
+            cell.base.is_some_and(|base| result.iter().any(|one| one.defines == [base.value] && one.rematerialized));
         assert!(cell.index.is_some() || !rebuilt, "{result:?}");
     }
 

@@ -2927,8 +2927,8 @@ impl Selector<'_, '_, '_> {
 
     /// A far pointer constant that is a number: selector:offset as one
     /// dword. A plain address constant, or a segment's selector widened to a
-    /// far pointer (`addrspacecast (ptr addrspace(2) inttoptr N to ptr addrspace(1))`,
-    /// `N:0`).
+    /// far pointer (`addrspacecast (ptr addrspace(2) inttoptr N to ptr
+    /// addrspace(1))`, `N:0`).
     fn far_number(
         &self,
         id: llrm_mir::context::ConstantId,
@@ -3057,9 +3057,7 @@ impl Selector<'_, '_, '_> {
         operand: Operand,
     ) -> Result<Option<[Loc; 2]>, Unselected> {
         if let Some(bits) = self.constant(operand, 4) {
-            return Ok(Some(
-                dword_halves(bits).map(|value| Loc::Imm(Imm { value, width: 2, address: None })),
-            ));
+            return Ok(Some(dword_halves(bits).map(|value| Loc::Imm(Imm { value, width: 2, address: None }))));
         }
         let Operand::Value(value) = operand else { return Ok(None) };
         let ValueDef::Instruction(inst) = self.function.value(value).def else { return Ok(None) };

@@ -1,4 +1,5 @@
 #!/bin/bash
+ulimit -v "${LLRM_MEMORY_LIMIT_KB:-8000000}"  # a runaway compile dies at 8 GB instead of taking the host (datetime.c grew to 50 GB)
 # The identity gate: two builds of a compiler make byte-identical objects for every program of a
 # corpus. A change that must not move a target's output (a refactor, another target's work) runs
 # this against a build of the base, and fails on any DIFF, or STATUS (one build refused what the
