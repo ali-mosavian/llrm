@@ -49,7 +49,7 @@ use crate::instworklist::InstWorklist;
 
 /// `handleUseCountDecrement`: an operand that lost a user, and the one user it
 /// has left, are looked at again.
-fn handle_use_count_decrement(
+pub(crate) fn handle_use_count_decrement(
     worklist: &mut InstWorklist,
     function: &Function,
     operand: Operand,
@@ -414,7 +414,7 @@ pub fn combine(
     combine_with(context, globals, metadata, layout, function, visit)
 }
 
-fn combine_with(
+pub(crate) fn combine_with(
     context: &mut Context,
     globals: &[GlobalValue],
     metadata: &[MetadataNode],
