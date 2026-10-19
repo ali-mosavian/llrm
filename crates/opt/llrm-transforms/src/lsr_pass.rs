@@ -271,7 +271,7 @@ pub fn reduced_with(
         for _ in 0..6 {
             // The expressions of the loop as it was are not those of now.
             session.forget_expressions();
-            let mut split = false;
+            let split;
             {
                 let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
                 let plan = match plan_loop(
