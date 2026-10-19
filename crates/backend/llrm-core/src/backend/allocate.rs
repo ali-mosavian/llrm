@@ -1802,7 +1802,7 @@ fn greedy_check(
     let values: Vec<(&u32, &RegId)> = placed.iter().collect();
     for (at, (a, ra)) in values.iter().enumerate() {
         let Some(ia) = live(**a) else { continue };
-        let width = facts.widths.get(*a).copied().unwrap_or(2);
+        let width = facts.widths.get(*a).copied().unwrap_or(4);
         if _clobbered(ia, **ra, &facts.masks, width) {
             eprintln!("greedy-check {}: v{a} in {} is live across a point that destroys it", body.name, ra.repr());
         }

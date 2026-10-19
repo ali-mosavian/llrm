@@ -340,7 +340,10 @@ impl PhysInterference for CallMasks {
             return None;
         }
         let mut found: Option<Vec<RegId>> = None;
-        let wide = self.widths.widths.borrow().get(&li.reg()).copied().unwrap_or(0) > 2;
+        // Every allocated value has a width (the table, or the clone it was
+        // made from, `note_split_from`); a missing one is the safe side, wide.
+        let width = self.widths.widths.borrow().get(&li.reg()).copied();
+        let wide = width.is_none_or(|width| width > 2);
         let mut at = self.calls.partition_point(|(slot, ..)| *slot < li.begin_index());
         let mut segment = 0usize;
         while at < self.calls.len() && segment < li.segments.len() {
