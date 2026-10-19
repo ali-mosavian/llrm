@@ -64,7 +64,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Operand};
+use llrm_mir::module::{Function, GlobalKind, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, Declared, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
 use llrm_mir::types::TypeId;
