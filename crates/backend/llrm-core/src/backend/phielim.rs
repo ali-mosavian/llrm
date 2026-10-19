@@ -2123,9 +2123,10 @@ mod tests {
                 block(2, vec![], vec![], vec![Phi { result: 3, incoming: vec![(0, 1), (1, 5)] }]).into(),
             ],
         );
-        OLD_STAGE.with(|runs| runs.set(0));
-        let done = PhiElimination { prices: None }.transform(join).expect("lowers");
+        use crate::model::passes::LIRTransform;
+        super::OLD_STAGE.with(|runs| runs.set(0));
+        let done = super::PhiElimination { prices: None }.transform(join).expect("lowers");
         assert!(done.blocks.iter().all(|block| block.phis.is_empty()), "the premise: no phi is left");
-        assert_eq!(OLD_STAGE.with(std::cell::Cell::get), 0);
+        assert_eq!(super::OLD_STAGE.with(std::cell::Cell::get), 0);
     }
 }
