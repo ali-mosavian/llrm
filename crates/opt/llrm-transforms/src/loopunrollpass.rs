@@ -1545,6 +1545,10 @@ impl FunctionPass for LoopFullUnroll {
         "loopfullunroll"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("loop-unroll-full")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,
