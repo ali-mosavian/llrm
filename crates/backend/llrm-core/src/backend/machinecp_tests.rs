@@ -300,3 +300,23 @@ fn test_a_copy_is_not_forwarded_across_a_string_store_that_writes_its_source() {
     ));
     assert_eq!(lines(&got)[2], "add BX,BX,SI", "{:?}", lines(&got));
 }
+
+/// `rep movsd` writes `si` and `di` the same way: a copy of either is dead after it.
+#[test]
+fn test_a_copy_is_not_forwarded_across_a_string_move_that_writes_its_source() {
+    use crate::model::ir::Mem;
+    let what = Semantics {
+        name: Some("movsd".to_owned()),
+        dests: vec![Loc::Mem(Mem::new(None, 0)), rl(RegId::SI, 2), rl(RegId::DI, 2), rl(RegId::CX, 2)],
+        sources: vec![Loc::Mem(Mem::new(None, 0)), rl(RegId::CX, 2), rl(RegId::SI, 2), rl(RegId::DI, 2)],
+        ..Semantics::new(Operation::Copy)
+    };
+    let movsd = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![], vec![]));
+    for (copy, read) in [(RegId::SI, RegId::DI), (RegId::DI, RegId::SI)] {
+        let got = propagated(&body(
+            vec![mov(0, rl(copy, 2), rl(read, 2)), Arc::clone(&movsd), add(2, rl(RegId::BX, 2), rl(copy, 2))],
+            &[RegId::BX],
+        ));
+        assert_eq!(lines(&got)[2], format!("add BX,BX,{copy:?}"), "{:?}", lines(&got));
+    }
+}
