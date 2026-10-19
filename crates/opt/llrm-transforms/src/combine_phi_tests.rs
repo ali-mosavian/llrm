@@ -178,3 +178,154 @@ fn identical_users_of_a_phi_all_read_the_new_phi() {
     // `sub %n, %n` is 0 on each edge only if both users read the same phi.
     assert!(out.contains("phi i16 [ 0, %a ], [ 0, %b ]"), "{out}");
 }
+
+/// `visit` that does only `foldBinopWithPhiOperands`.
+fn visit_binop(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    c.fold_binop_with_phi_operands(inst)
+}
+
+fn combined_binop(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit_binop);
+    printed(&module)
+}
+
+fn joined(
+    phis: &str,
+    op: &str,
+) -> String {
+    format!(
+        "define i16 @f(i1 %c, i16 %i, i16 %j) {{
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %m
+
+b:
+  br label %m
+
+m:
+{phis}  %r = {op}
+  ret i16 %r
+}}
+"
+    )
+}
+
+/// `0` on one side of every pair: the add is a phi of the other sides, not a
+/// binary operator of two phis (the pin's `%phi0 [0, %bb0], [%i, %bb1]`
+/// example).
+#[test]
+fn an_identity_in_each_pair_leaves_a_phi_of_the_others() {
+    let text = joined("  %p = phi i16 [ 0, %a ], [ %i, %b ]\n  %q = phi i16 [ %j, %a ], [ 0, %b ]\n", "add i16 %p, %q");
+    assert_eq!(
+        combined_binop(&text),
+        "define i16 @f(i1 %c, i16 %i, i16 %j) {
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %m
+
+b:
+  br label %m
+
+m:
+  %0 = phi i16 [ %j, %a ], [ %i, %b ]
+  ret i16 %0
+}
+"
+    );
+}
+
+/// A pair of constants folds in its predecessor; the add on the unknowns
+/// moves to the other predecessor.
+#[test]
+fn a_constant_pair_folds_and_the_operation_moves_to_the_other_predecessor() {
+    let text = joined("  %p = phi i16 [ 3, %a ], [ %i, %b ]\n  %q = phi i16 [ 4, %a ], [ %j, %b ]\n", "add i16 %p, %q");
+    assert_eq!(
+        combined_binop(&text),
+        "define i16 @f(i1 %c, i16 %i, i16 %j) {
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %m
+
+b:
+  %0 = add i16 %i, %j
+  br label %m
+
+m:
+  %1 = phi i16 [ %0, %b ], [ 7, %a ]
+  ret i16 %1
+}
+"
+    );
+}
+
+/// The other predecessor ends in a conditional branch: the add would run on a
+/// path that never reads it, so nothing moves.
+#[test]
+fn a_predecessor_that_can_go_elsewhere_gets_no_copy() {
+    let text = "define i16 @f(i1 %c, i16 %i, i16 %j) {
+b0:
+  br i1 %c, label %m, label %a
+
+a:
+  br label %m
+
+m:
+  %p = phi i16 [ 3, %a ], [ %i, %b0 ]
+  %q = phi i16 [ 4, %a ], [ %j, %b0 ]
+  %r = add i16 %p, %q
+  ret i16 %r
+}
+";
+    assert_eq!(combined_binop(text), text);
+}
+
+/// Two counters stepped by constants and added: one counter stepped by the
+/// sum, started at the sum.
+#[test]
+fn two_recurrences_become_one() {
+    let text = "define i16 @f(i1 %c) {
+b0:
+  br label %l
+
+l:
+  %p = phi i16 [ 1, %b0 ], [ %p.next, %l ]
+  %q = phi i16 [ 10, %b0 ], [ %q.next, %l ]
+  %p.next = add i16 %p, 2
+  %q.next = add i16 %q, 3
+  %r = add i16 %p.next, %q.next
+  br i1 %c, label %l, label %x
+
+x:
+  ret i16 %r
+}
+";
+    assert_eq!(
+        combined_binop(text),
+        "define i16 @f(i1 %c) {
+b0:
+  br label %l
+
+l:
+  %0 = phi i16 [ 11, %b0 ], [ %r, %l ]
+  %r = add i16 %0, 5
+  br i1 %c, label %l, label %x
+
+x:
+  ret i16 %r
+}
+"
+    );
+}
