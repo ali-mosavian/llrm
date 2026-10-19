@@ -40,11 +40,13 @@ use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Operand, ValueDef};
-use llrm_mir::opcode::{Flags, Opcode};
+use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::FunctionAnalyses;
 
+use crate::combine_addsub::visit_add;
+use crate::combine_compares::visit_icmp;
 use crate::instworklist::InstWorklist;
 
 /// `handleUseCountDecrement`: an operand that lost a user, and the one user it
@@ -346,18 +348,38 @@ impl Combiner<'_> {
     }
 }
 
-/// `InstCombinerImpl::visit`: what the instruction simplifies to, else the
-/// `visit*` of its opcode.
+/// One family's `visit*` of an opcode.
+type Visitor = fn(&mut Combiner, InstId) -> Visit;
+
+/// `InstCombinerImpl::visit`'s switch (InstCombineInternal.h): the `visit*`
+/// of the translated families, per opcode, tried in order until one acts. A
+/// family that lands adds its function here and nowhere else.
+fn visitors(opcode: &Opcode) -> &'static [Visitor] {
+    match opcode {
+        Opcode::Binary(BinaryOp::Add) => &[visit_add],
+        Opcode::ICmp(_) => &[visit_icmp],
+        Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
+        Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],
+        _ => &[],
+    }
+}
+
+/// `InstCombinerImpl::run`'s per-instruction step: what the instruction
+/// simplifies to, else the first `visit*` of its opcode that acts.
 pub fn visit(
     c: &mut Combiner,
     inst: InstId,
 ) -> Visit {
-    let Some(result) = c.function.instruction(inst).result else { return Visit::None };
     let env = c.env;
-    match simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst) {
-        Some(found) if found != Operand::Value(result) => Visit::Replace(found),
-        _ => Visit::None,
+    if let Some(result) = c.function.instruction(inst).result
+        && let Some(found) =
+            simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst)
+        && found != Operand::Value(result)
+    {
+        return Visit::Replace(found);
     }
+    let opcode = c.function.instruction(inst).opcode.clone();
+    visitors(&opcode).iter().map(|visitor| visitor(c, inst)).find(|found| *found != Visit::None).unwrap_or(Visit::None)
 }
 
 /// `InstCombinerImpl::run` (:5780): drain the worklist. Whether anything

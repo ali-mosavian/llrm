@@ -700,6 +700,7 @@ pub(crate) fn llvm_order(
     let decide = |name| slot(name, Box::new(decide::Decide));
     let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
     let fold = |name| slot(name, Box::new(fold::Fold));
+    let combine = |name| slot(name, Box::new(crate::combine_pass::Combine::from_env()));
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
@@ -752,6 +753,7 @@ pub(crate) fn llvm_order(
                     vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)]
                 },
             }),
+            combine("combine@1242"),
             fold("fold@1242"),
             dead("dead@1242"),
             decide("decide@1244"),
@@ -767,6 +769,7 @@ pub(crate) fn llvm_order(
                 slot("cvp@669", Box::new(crate::cvp::Cvp)),
                 decide("decide@675"),
                 phiopt("phiopt@675"),
+                combine("combine@677"),
                 fold("fold@677"),
                 dead("dead@677"),
                 slot("tailrec@688", Box::new(tailrec::TailRecursion)),
@@ -803,6 +806,7 @@ pub(crate) fn llvm_order(
                 slot("trivialunswitch@732", Box::new(simpleloopunswitch::SimpleLoopUnswitch)),
                 decide("decide@766"),
                 phiopt("phiopt@766"),
+                combine("combine@768"),
                 fold("fold@768"),
                 dead("dead@768"),
             ]);
@@ -834,6 +838,7 @@ pub(crate) fn llvm_order(
                 slot("gvn@787", Box::new(gvn::Gvn { pre: applied.options.pre })),
                 slot("sccp@792", Box::new(sccp::Sccp)),
                 slot("bdce@797", Box::new(bdce::Bdce)),
+                combine("combine@801"),
                 fold("fold@801"),
                 dead("dead@801"),
                 slot("jumpthreading@809", Box::new(crate::jumpthreading::JumpThreading::from_env())),
@@ -849,6 +854,7 @@ pub(crate) fn llvm_order(
                 licm("licm@823", true),
                 decide("decide@832"),
                 phiopt("phiopt@832"),
+                combine("combine@837"),
                 fold("fold@837"),
                 dead("dead@837"),
             ]);
