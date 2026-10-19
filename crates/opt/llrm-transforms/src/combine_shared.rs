@@ -67,6 +67,7 @@ pub fn query<'a>(
         globals: c.env.globals,
         dt: Some(c.env.analyses.dominator_tree()),
         assumptions: Some(c.env.analyses.assumption_cache()),
+        dom_conditions: c.env.analyses.dom_conditions(),
         cxt,
         ..Query::bare(c.context, c.function, c.env.layout)
     }
