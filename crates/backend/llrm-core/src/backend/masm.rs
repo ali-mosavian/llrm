@@ -1216,7 +1216,7 @@ fn stack_addressed(
         || procedure.far
         || procedure.interrupt.is_some()
         || procedure.entry != 0
-        || procedure.body.bits != 32
+        || procedure.body.bits < 32
         || (!procedure.body.variables.is_empty() && !procedure.body.cfa_variables)
         || procedure.callees.values().any(|one| !inert(one))
     {
@@ -1379,7 +1379,7 @@ fn addressed_pass(
                             if what.op == Operation::Push { (&what.sources, 1) } else { (&what.dests, -1) };
                         let [place] = &places[..] else { return Err(stop(procedure, &format!("{what:?}"))) };
                         match width_of(place) {
-                            Some(bytes @ (2 | 4)) => depth = Some(here + sign * bytes),
+                            Some(bytes @ (2 | 4 | 8)) => depth = Some(here + sign * bytes),
                             _ => return Err(stop(procedure, &format!("{what:?}"))),
                         }
                     }

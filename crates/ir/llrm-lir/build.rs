@@ -17,7 +17,8 @@ fn main() {
     for register in iced_x86::Register::values() {
         let whole = register.full_register();
         let root = if register.is_gpr() && whole.is_gpr64() { whole.full_register32() } else { register };
-        // The registers iced marks unusable are no family's, and are not named (they are deprecated variants).
+        // The registers iced marks unusable are no family's, and are not named
+        // (they are deprecated variants).
         let root = if format!("{root:?}").starts_with("DontUse") { iced_x86::Register::None } else { root };
         code.push_str(&format!("    Register::{root:?},\n"));
     }

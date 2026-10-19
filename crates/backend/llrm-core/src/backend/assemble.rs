@@ -1053,7 +1053,9 @@ fn staged(
             target.cpu.size,
         ) {
         registers.free = true;
-        registers.saved.push((registers.pointer, registers.pointer));
+        // Saved as any kept register is: its root, and the register a prologue
+        // pushes.
+        registers.saved.push((body.regs().root(registers.pointer), registers.pointer));
         Rc::new(target.classes.with_frame_free())
     } else {
         Rc::clone(target.classes)

@@ -282,3 +282,24 @@ fn a_struct_of_two_quadwords_returns_in_rax_and_rdx() {
         "{listing}"
     );
 }
+
+/// A frame register given to a value is a callee-saved register like rbx: `fib`
+/// kept its argument in rbp across the recursive call and never saved it (it
+/// listed `(rbp, rbp)` where the others list a root), so its caller's frame was
+/// garbage.
+#[test]
+fn a_freed_frame_register_holding_a_value_is_saved() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @fib(i32 %n) {\n\
+                  %c = icmp slt i32 %n, 2\n  br i1 %c, label %done, label %rec\n\
+                done:\n  ret i32 %n\n\
+                rec:\n  %a = sub i32 %n, 1\n  %x = call i32 @fib(i32 %a)\n  %b = sub i32 %n, 2\n  %y = call i32 @fib(i32 %b)\n  %s = add i32 %x, %y\n  ret i32 %s\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "fib").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let body: Vec<&str> = listing.lines().map(str::trim).collect();
+    let uses_rbp = body.iter().any(|line| line.contains("ebp") && !line.starts_with("push"));
+    let saved = body.contains(&"push rbp") && body.contains(&"pop rbp");
+    assert!(uses_rbp, "premise: the frame register holds a value\n{listing}");
+    assert!(saved, "{listing}");
+}

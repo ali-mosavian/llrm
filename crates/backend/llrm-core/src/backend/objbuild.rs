@@ -78,6 +78,7 @@ pub const OFFSET: Kind = Kind::Abs { width: 2 };
 pub const BASE: Kind = Kind::SegmentBase;
 pub const POINTER: Kind = Kind::FarPointer;
 pub const OFFSET32: Kind = Kind::Abs { width: 4 };
+pub const OFFSET64: Kind = Kind::Abs { width: 8 };
 
 /// A call's field: relative to its own end.
 fn relative(width: usize) -> Kind {
@@ -368,7 +369,9 @@ fn pack_field(
     kind: Kind,
     value: i64,
 ) {
-    if kind.width() == 4 && kind != POINTER {
+    if kind.width() == 8 {
+        buffer[at..at + 8].copy_from_slice(&value.to_le_bytes());
+    } else if kind.width() == 4 && kind != POINTER {
         buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
     } else {
         pack_into(buffer, at, value & 0xFFFF);
@@ -382,7 +385,9 @@ fn field(
     at: usize,
     kind: Kind,
 ) -> i64 {
-    if kind.width() == 4 && kind != POINTER {
+    if kind.width() == 8 {
+        i64::from_le_bytes(buffer[at..at + 8].try_into().expect("eight bytes"))
+    } else if kind.width() == 4 && kind != POINTER {
         i64::from(i32::from_le_bytes([buffer[at], buffer[at + 1], buffer[at + 2], buffer[at + 3]]))
     } else {
         i64::from(i16::from_le_bytes([buffer[at], buffer[at + 1]]))
@@ -615,15 +620,21 @@ pub fn _data(
                 // (a 32-bit object's is a dword).
                 let loc = if *far {
                     POINTER
-                } else if bits == 32 {
-                    OFFSET32
                 } else {
-                    OFFSET
+                    match bits {
+                        64 => OFFSET64,
+                        32 => OFFSET32,
+                        _ => OFFSET,
+                    }
                 };
                 assert_eq!(loc.width(), *bytes as usize, "a {bytes}-byte pointer in a {bits}-bit object");
                 segment.put(&vec![0; loc.width()], &[Fixup::new(0, loc, name.clone())]);
                 let at = segment.image.len() - loc.width();
-                pack_into(&mut segment.image, at, offset & ((1_i64 << (8 * (*bytes).min(4))) - 1));
+                if loc == OFFSET64 {
+                    pack_field(&mut segment.image, at, loc, *offset);
+                } else {
+                    pack_into(&mut segment.image, at, offset & ((1_i64 << (8 * (*bytes).min(4))) - 1));
+                }
             }
             masm::Datum::Align(masm::Align { to }) => {
                 segment.align = segment.align.max(*to as usize);
@@ -824,7 +835,7 @@ pub fn _encoded(
 ) -> Result<Piece, Unencodable> {
     let relocated = what.sources.iter().any(|one| matches!(one, Loc::Imm(ir::Imm { address: Some(_), .. })));
     // A near address is the `bits`-bit offset.
-    let near = if bits == 32 { OFFSET32 } else { OFFSET };
+    let near = if bits >= 32 { OFFSET32 } else { OFFSET };
     let Some(made) = select::emit_in(bits, what, 0, None, false, relocated, None) else {
         return Err(Unencodable(what.repr()));
     };
