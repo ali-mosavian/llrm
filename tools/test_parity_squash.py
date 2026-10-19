@@ -298,3 +298,12 @@ def test_a_smoke_that_exits_non_zero_without_a_summary_line_names_its_stderr(mon
     monkeypatch.setattr(ps.subprocess, "run", lambda *a, **k: Done())
     failed, last = ps.smoke_failures()
     assert failed == {"smoke-did-not-finish"} and "stale binaries in /x" in last and "exited 1" in last, last
+
+
+def test_a_new_failing_test_inside_a_red_crate_is_refused_and_one_the_head_fails_too_is_not():
+    """Head red in llrm-qb (test_a); a PR adds test_b that fails: the check-level rule saw `unit llrm-qb` fail on both sides and landed it."""
+    head = {"unit llrm-qb::test_a"}
+    merged = {"unit llrm-qb::test_a", "unit llrm-qb::test_b"}
+    on_head = lambda crate, tests: {t for t in tests if t == "test_a"}  # test_b passes on the head
+    assert ps.subset_refusals(ps.head_expanded(head, merged, on_head), merged, False) != []
+    assert ps.subset_refusals(ps.head_expanded(head, merged, lambda crate, tests: set(tests)), merged, False) == []  # the head fails test_b too

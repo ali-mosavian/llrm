@@ -136,11 +136,18 @@ def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[s
 
 
 def failing_names(line: str) -> list[str]:
-    """The failed step names of a `PARITY SMOKE FAIL name: detail; name: detail | ...` line."""
+    """The failed step names of a `PARITY SMOKE FAIL name: detail; name: detail | ...` line; a unit step names each failed test (`unit llrm-qb::test_x`)."""
     if not line.startswith("PARITY SMOKE FAIL "):
         return []
     head = line[len("PARITY SMOKE FAIL "):].split(" | ")[0]
-    return [part.split(":")[0].strip() for part in head.split("; ") if part.strip()]
+    return [part.split(": ")[0].strip() for part in head.split("; ") if part.strip()]
+
+
+def failed_tests(output: str) -> list[str]:
+    """The tests a `cargo test` output lists in its last `failures:` block (the indented names after the stdout of each), once each; the earlier blocks hold the
+    tests' own prints, whose indented words are not tests."""
+    block = output.split("\nfailures:\n")[-1].split("\ntest result")[0] if "\nfailures:\n" in output else ""
+    return list(dict.fromkeys(line.strip() for line in block.splitlines() if re.fullmatch(r"    [\w:]+", line)))
 
 
 def selection() -> dict:
@@ -313,7 +320,7 @@ def unit_step(package: str, allowance: float):
             return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
         if code:
             lines = [line for line in output.splitlines() if "FAILED" in line or "panicked" in line or "error" in line]
-            return "fail", f"{package}: {' / '.join(lines[:3])[:300] or 'cargo test failed'}"
+            return "fail", f"{package}: {' / '.join(lines[:3])[:300] or 'cargo test failed'}", [f"unit {package}::{test}" for test in failed_tests(output)]
         return "ok", f"{package}: {len(names) or 'all'} tests"
     return step
 
@@ -341,10 +348,11 @@ def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET, known_red: f
     started, wall, parts, failed, skipped = clock(), time.monotonic(), [], [], []
     for name, step, _ in steps:
         began = clock()
-        verdict, detail = ("skipped", "known red, not run") if name in known_red else step(bins)
+        verdict, detail, *tests = ("skipped", "known red, not run") if name in known_red else step(bins)
         parts.append(f"{name} {verdict} {clock() - began:.1f} s")
         if verdict == "fail":
-            failed.append(f"{name}: {detail}")
+            # a step that names the tests it failed is listed by them: the subset rule compares test names, not crates
+            failed.extend(f"{one}: {detail}" for one in (tests[0] if tests and tests[0] else [name]))
         elif verdict == "skipped":
             skipped.append(f"{name}: {detail}")
     spent = clock() - started

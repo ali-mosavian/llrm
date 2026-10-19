@@ -234,3 +234,13 @@ def test_a_compile_that_outgrows_the_memory_limit_is_reported_as_a_memory_limit(
     monkeypatch.setattr(ps.cpulimit, "MEMORY_KB", 200_000)
     why = ps.compile_ok([_sys.executable, "-c", "x = bytearray(900 * 1024 * 1024)"], dict(__import__("os").environ))
     assert why and why.startswith("memory limit"), why
+
+
+def test_a_failed_unit_step_names_each_failed_test_not_its_crate():
+    """The subset rule compared checks: a PR adding one failing test inside an already-red crate failed `unit llrm-qb`, which the red head failed too, and landed."""
+    out = "running 3 tests\\nfailures:\\n\\n---- t::a stdout ----\\n    printed\\n\\nfailures:\\n    t::a\\n    t::b\\n\\ntest result: FAILED. 1 passed; 2 failed\\n".replace("\\n", "\n")
+    assert ps.failed_tests(out) == ["t::a", "t::b"]
+    step = lambda bins: ("fail", "llrm-qb: x", ["unit llrm-qb::t::a", "unit llrm-qb::t::b"])
+    ok, line = ps.run_steps([("unit llrm-qb", step, 1.0)], Path("."), clock=lambda: 0.0)
+    assert not ok and ps.failing_names(line) == ["unit llrm-qb::t::a", "unit llrm-qb::t::b"]
+    assert ps.failing_names("PARITY SMOKE FAIL run: a: b | x") == ["run"]
