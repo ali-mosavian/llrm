@@ -42,14 +42,13 @@
 //!   `threadlocal_address` are not in the MIR.
 //! - D4. No `llvm.experimental.deoptimize`.
 
-use std::collections::HashMap;
-
 use llrm_mir::context::Context;
 use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags, Opcode};
 use llrm_mir::types::Type;
+use llrm_support::hash::HashMap;
 
 use crate::twoentryphi::Speculation;
 
@@ -368,7 +367,7 @@ pub fn sunk(
     if jumps.len() < 2 {
         return false;
     }
-    let mut phi_operands = PhiOperands::new();
+    let mut phi_operands = PhiOperands::default();
     for phi in crate::edges::phis(function, block) {
         let arms = llrm_analysis::occurrence::arms(function, phi);
         let at = |from: BlockId| arms.iter().position(|&(_, one)| one == from).expect("an arm");
