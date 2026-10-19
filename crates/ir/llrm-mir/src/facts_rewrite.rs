@@ -318,6 +318,17 @@ mod tests {
             // and a sub's `nsw`/`nuw` where LLVM does, to give the
             // replacement the flags the operands prove.
             "combine_addsub.rs",
+            // InstructionCombining.cpp's `foldBinopWithRecurrence` merges the
+            // `nuw`/`nsw` of the three adds (`OverflowTracking`) so the new add
+            // has them only if all had them, and drops the rest.
+            "combine_phi.rs",
+            // InstructionCombining.cpp's `visitGetElementPtrInst` and
+            // `emitGEPOffset` read a GEP's `inbounds`/`nusw`/`nuw` to give the
+            // replacement GEPs and the offset arithmetic the flags the GEP had.
+            "combine_gep.rs",
+            "combine_gep_index.rs",
+            "combine_gep_merge.rs",
+            "combine_gep_phi.rs",
             // MemCpyOptimizer.cpp's `CreateInBoundsPtrAdd` makes an inbounds
             // GEP; it reads no flag.
             "memcpyopt.rs",

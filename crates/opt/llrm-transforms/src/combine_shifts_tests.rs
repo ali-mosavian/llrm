@@ -49,18 +49,21 @@ fn check(
     body: &str,
     after: &str,
 ) {
-    let text = format!(
-        "define {ret} @f({params}) {{
-b0:
-{body}}}
-"
-    );
-    let want = format!(
-        "define {ret} @f({params}) {{
-b0:
-{after}}}
-"
-    );
+    check_declared("", "", ret, params, body, after);
+}
+
+/// [`check`] of a function that calls the intrinsic `declared` declares,
+/// which the printed module shows as `printed_declaration`.
+fn check_declared(
+    declared: &str,
+    printed_declaration: &str,
+    ret: &str,
+    params: &str,
+    body: &str,
+    after: &str,
+) {
+    let text = format!("{declared}define {ret} @f({params}) {{\nb0:\n{body}}}\n");
+    let want = format!("{printed_declaration}define {ret} @f({params}) {{\nb0:\n{after}}}\n");
     let got = combined(&text);
     assert_eq!(got, want);
     let all = inputs(params);
@@ -821,4 +824,75 @@ fn a_not_under_a_logical_shift_is_left_alone() {
   ret i32 %r
 ";
     check("i32", "i32 %x", text, text);
+}
+
+const CTLZ: &str = "declare i32 @llvm.ctlz.i32(i32, i1)\n";
+const CTTZ: &str = "declare i32 @llvm.cttz.i32(i32, i1)\n";
+const CTPOP: &str = "declare i32 @llvm.ctpop.i32(i32)\n";
+const PURE: &str = "nocallback nofree nosync nounwind speculatable willreturn memory(none)";
+
+/// The declaration as the printed module shows it, with `PURE`.
+fn printed_declaration(declared: &str) -> String {
+    let (head, rest) = declared.trim_end().split_once('(').expect("a declaration");
+    let rest = rest.replace("i1)", "i1 immarg)");
+    format!("{head}({rest} {PURE}\n\n")
+}
+
+/// [`check`] of a function with the call it makes of one intrinsic, which the
+/// combine leaves (a call is never trivially dead here).
+fn check_calling(
+    declared: &str,
+    params: &str,
+    body: &str,
+    after: &str,
+) {
+    check_declared(declared, &printed_declaration(declared), "i32", params, body, after);
+}
+
+/// `visitLShr`: a count shifted right by the log of the width is a compare:
+/// `ctlz.i32(x) >> 5` and `cttz` are `zext (x == 0)`, `ctpop` is `zext (x ==
+/// -1)`.
+#[test]
+fn lshr_of_a_bit_count_by_the_log_of_the_width_is_a_compare() {
+    for (declared, name, flag, constant) in
+        [(CTLZ, "ctlz", ", i1 false", 0), (CTTZ, "cttz", ", i1 false", 0), (CTPOP, "ctpop", "", -1)]
+    {
+        let call = format!("  %c = call i32 @llvm.{name}.i32(i32 %x{flag})\n");
+        check_calling(
+            declared,
+            "i32 %x",
+            &format!("{call}  %r = lshr i32 %c, 5\n  ret i32 %r\n"),
+            &format!("{call}  %0 = icmp eq i32 %x, {constant}\n  %1 = zext i1 %0 to i32\n  ret i32 %1\n"),
+        );
+    }
+}
+
+/// `visitShl`: `1 << cttz x` is the lowest set bit, `-x & x`; `y << cttz x`
+/// is `(x & -x) * y`, `nuw` kept (`opt` agrees).
+#[test]
+fn shl_by_a_cttz_is_a_multiply_by_the_lowest_set_bit() {
+    let call = "  %c = call i32 @llvm.cttz.i32(i32 %x, i1 false)\n";
+    check_calling(
+        CTTZ,
+        "i32 %x",
+        &format!("{call}  %r = shl i32 1, %c\n  ret i32 %r\n"),
+        &format!("{call}  %0 = sub i32 0, %x\n  %1 = and i32 %0, %x\n  ret i32 %1\n"),
+    );
+    check_calling(
+        CTTZ,
+        "i32 %x, i32 %y",
+        &format!("{call}  %r = shl nuw i32 %y, %c\n  ret i32 %r\n"),
+        &format!("{call}  %0 = sub i32 0, %x\n  %1 = and i32 %0, %x\n  %2 = mul nuw i32 %1, %y\n  ret i32 %2\n"),
+    );
+}
+
+/// `visitLShr`: `(pow2 << x) >>u cttz (pow2 << y)` is `(1 << x) >>u y`.
+#[test]
+fn lshr_by_the_cttz_of_a_shifted_power_of_two_is_a_shift_by_the_amount() {
+    check_calling(
+        CTTZ,
+        "i32 %x, i32 %y",
+        "  %a = shl nuw i32 1, %x\n  %b = shl nuw i32 1, %y\n  %c = call i32 @llvm.cttz.i32(i32 %b, i1 false)\n  %r = lshr i32 %a, %c\n  ret i32 %r\n",
+        "  %b = shl nuw i32 1, %y\n  %c = call i32 @llvm.cttz.i32(i32 %b, i1 false)\n  %0 = shl nuw i32 1, %x\n  %1 = lshr i32 %0, %y\n  ret i32 %1\n",
+    );
 }

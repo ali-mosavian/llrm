@@ -4321,6 +4321,24 @@ pub fn simplify_binop_at(
     simplify_binop_flags(&mut q, opcode, lhs, rhs, Flags::default(), RECURSION_LIMIT)
 }
 
+/// `simplifyBinOp(Opcode, LHS, RHS, FMF, SQ.getWithInstruction(&cxt))`:
+/// `simplify_binop_at` with the fast-math flags of the operation.
+pub fn simplify_binop_with_flags_at(
+    context: &Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+    analyses: Option<&FunctionAnalyses>,
+    function: &Function,
+    cxt: InstId,
+    opcode: BinaryOp,
+    flags: Flags,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: true };
+    simplify_binop_flags(&mut q, opcode, lhs, rhs, flags, RECURSION_LIMIT)
+}
+
 /// `simplifyInstructionWithOperands(&I, Ops, SQ.getWithInstruction(&cxt))`:
 /// what `inst` equals with `operands` in place of its own, asked at `cxt`
 /// (none: `SQ` of the data layout alone).

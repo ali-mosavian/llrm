@@ -30,9 +30,8 @@
 //! (which LLVM folds to a poison mask) is left alone; an `undef` or `poison`
 //! constant amount is no constant sum, where LLVM replaces the undefs.
 //!
-//! DEVIATE 5: the folds that match `ctlz`, `cttz`, `ctpop`, `scmp` and `ucmp`
-//! are translated, but MIR has none of those intrinsics, so no test reaches
-//! them until it has.
+//! DEVIATE 5: the folds that match `scmp` and `ucmp` are translated, but MIR
+//! has neither intrinsic yet, so no test reaches them.
 //!
 //! # Used by
 //! `combine::visit`, once the shift family's slot is flipped.
