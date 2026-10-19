@@ -23,3 +23,4 @@ Method `est`: executed instructions from llrm's own cost estimate (`--dump` cost
 
 - `bench/grep/grep.c` -O2 m16 (bench.py, DOSBox cycles): base 276,458,982, head 276,458,788 (before the fix +3.7% kernel time).
 - `bench/jpeg_fixed/jpeg_fixed.c` -O2 m16 (bench.py): kernel 345.7 ms to 347.0 ms (+0.4%), est +0.2% (row 1).
+- `bench/jpeg_single/jpeg_single.c` -O2 m16 (bench.py --time, m16-narrow-66h-ops): 16,476,908 to 16,475,093 cycles (-0.01%), code 3870 to 3854 B.
