@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 
 use crate::context::{Constant, ConstantKind, Context};
+use crate::hash::HashMap;
 use crate::module::{
     Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, NameIndex, Names,
     Operand, Use, ValueData, ValueDef, ValueId,
@@ -1108,6 +1109,50 @@ impl Function {
         copy
     }
 
+    /// `CloneBasicBlock(BB, VMap)`
+    /// ([CloneFunction.cpp:40](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/CloneFunction.cpp#L40)):
+    /// a copy of `block` in the layout nowhere yet, its instructions copied in
+    /// order. `map` gets `block` and each result of the original (not the
+    /// `void` ones) with the copy's. The copies still read the original's
+    /// values: `remap_instruction` rewrites them.
+    pub fn clone_block(
+        &mut self,
+        block: BlockId,
+        map: &mut ValueMap,
+    ) -> BlockId {
+        let copy = self.create_block(None);
+        map.blocks.insert(block, copy);
+        for inst in self.iter_block(block).collect::<Vec<_>>() {
+            let duplicate = self.clone_instruction(inst);
+            self.insert(duplicate, Position::End(copy)).expect("a new block takes its instructions");
+            if let (Some(from), Some(to)) = (self.instruction(inst).result, self.instruction(duplicate).result) {
+                map.values.insert(from, Operand::Value(to));
+            }
+        }
+        copy
+    }
+
+    /// `RemapInstruction(I, VMap)`
+    /// ([ValueMapper.cpp:1014](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ValueMapper.cpp#L1014)):
+    /// the operands `map` has an entry for are replaced; the rest stay.
+    pub fn remap_instruction(
+        &mut self,
+        inst: InstId,
+        map: &ValueMap,
+    ) {
+        let operands = self
+            .instruction(inst)
+            .operands
+            .iter()
+            .map(|&one| match one {
+                Operand::Value(value) => map.values.get(&value).copied().unwrap_or(one),
+                Operand::Block(block) => map.blocks.get(&block).map_or(one, |&copy| Operand::Block(copy)),
+                Operand::Constant(_) => one,
+            })
+            .collect();
+        self.set_operands(inst, operands);
+    }
+
     /// A new, empty block, in the layout nowhere yet.
     pub fn create_block(
         &mut self,
@@ -1272,4 +1317,11 @@ thread_local! {
 /// test that erasing k of n blocks does not scan k times n.
 pub fn layout_scanned() -> usize {
     LAYOUT_SCANNED.with(std::cell::Cell::get)
+}
+
+/// `ValueToValueMapTy`: what `clone_block` copied, original to copy.
+#[derive(Default)]
+pub struct ValueMap {
+    pub values: HashMap<ValueId, Operand>,
+    pub blocks: HashMap<BlockId, BlockId>,
 }

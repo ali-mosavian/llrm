@@ -42,7 +42,6 @@ use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{Declared, Outer};
-use llrm_support::hash::HashSet;
 
 use crate::edges;
 use crate::local;

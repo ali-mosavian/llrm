@@ -104,6 +104,7 @@ pub mod deadargs;
 #[cfg(test)]
 mod deadargs_tests;
 pub mod decide;
+pub mod deadstore;
 pub mod dse;
 pub mod earlycse;
 pub mod edges;

@@ -63,7 +63,6 @@ pub struct Speculation<'a> {
 /// `br c, T, F` and the arms it chooses between.
 struct IfCondition {
     branch: InstId,
-    block: BlockId,
     if_true: BlockId,
     if_false: BlockId,
 }
@@ -121,7 +120,7 @@ fn if_condition(
             } else {
                 return None;
             };
-            Some(IfCondition { branch: inst, block: first, if_true, if_false })
+            Some(IfCondition { branch: inst, if_true, if_false })
         }
         Ending::Jump => {
             let common = single_predecessor(function, first)?;
@@ -130,7 +129,7 @@ fn if_condition(
             }
             let Ending::Branch { inst, on_true, .. } = ending(function, common) else { return None };
             let (if_true, if_false) = if on_true == first { (first, second) } else { (second, first) };
-            Some(IfCondition { branch: inst, block: common, if_true, if_false })
+            Some(IfCondition { branch: inst, if_true, if_false })
         }
         Ending::Other => None,
     }

@@ -77,7 +77,7 @@ use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::valuetracking::{AssumptionCache, Query};
 
-use crate::edges::phis;
+use crate::edges::{self, phis};
 use crate::lcssa::{arms, from_arms};
 
 /// What the pass reads and changes.
@@ -338,66 +338,6 @@ fn remove_predecessor(
             run.function.erase(phi).expect("an unused phi");
         }
     }
-}
-
-/// `SplitEdge(from, to)`: a new block on the edges `from` has to `to`.
-fn split_edge(
-    run: &mut Run,
-    from: BlockId,
-    to: BlockId,
-) -> BlockId {
-    let term = run.function.terminator(from).expect("a terminated block");
-    let void = run.function.instruction(term).ty;
-    let bridge = run.function.create_block(None);
-    run.function.insert_block(bridge, None).expect("a new block");
-    let jump = run.function.create_instruction(Opcode::Br, void, vec![Operand::Block(to)], Flags::default(), None);
-    run.function.insert(jump, Position::End(bridge)).expect("a placed block");
-    crate::edges::retarget(run.function, term, to, bridge);
-    for phi in phis(run.function, to) {
-        let mut incoming = arms(run.function, phi);
-        let mut seen = false;
-        incoming.retain_mut(|(_, source)| {
-            if *source != from {
-                return true;
-            }
-            *source = bridge;
-            !std::mem::replace(&mut seen, true)
-        });
-        run.function.set_operands(phi, from_arms(&incoming));
-    }
-    bridge
-}
-
-/// `SplitBlock(old, old->begin())`: the instructions of `old` after its phis
-/// move to a new block, `old` jumps to; the successors' phis name the new one.
-fn split_block(
-    run: &mut Run,
-    old: BlockId,
-) -> BlockId {
-    let list = run.function.iter_block(old).collect::<Vec<_>>();
-    let first = list
-        .iter()
-        .position(|&inst| !matches!(
-            run.function.instruction(inst).opcode,
-            Opcode::Phi | Opcode::LandingPad { .. }
-        ))
-        .expect("a terminated block");
-    let new = run.function.create_block(None);
-    run.function.insert_block(new, None).expect("a new block");
-    run.function.splice(&list[first..], Position::End(new)).expect("a placed run");
-    let void = run.context.types.void();
-    let jump = run.function.create_instruction(Opcode::Br, void, vec![Operand::Block(new)], Flags::default(), None);
-    run.function.insert(jump, Position::End(old)).expect("a placed block");
-    for succ in run.function.successors(new).into_iter().collect::<Vec<_>>() {
-        for phi in phis(run.function, succ) {
-            let incoming: Vec<_> = arms(run.function, phi)
-                .into_iter()
-                .map(|(value, from)| (value, if from == old { new } else { from }))
-                .collect();
-            run.function.set_operands(phi, from_arms(&incoming));
-        }
-    }
-    new
 }
 
 /// `rewritePHINodesForUnswitchedExitBlock`: the exit is the unswitched block;
@@ -681,7 +621,7 @@ fn unswitch_trivial_branch(
     // insert the conditional branch. We will change the preheader to have a
     // conditional branch on LoopCond.
     let old_ph = lp.get_loop_preheader(run.function).expect("a preheader");
-    let new_ph = split_edge(run, old_ph, header);
+    let new_ph = edges::split_edge(run.function, old_ph, header);
 
     // Now that we have a place to insert the conditional branch, create a place
     // to branch to: this is the exit block out of the loop that we are
@@ -696,7 +636,7 @@ fn unswitch_trivial_branch(
         debug_assert_eq!(unique_predecessor(run, loop_exit_bb), Some(parent), "a branch's parent isn't a predecessor");
         loop_exit_bb
     } else {
-        split_block(run, loop_exit_bb)
+        edges::split_block(run.function, loop_exit_bb)
     };
 
     // Actually move the invariant uses into the unswitched position. If
@@ -860,7 +800,7 @@ fn unswitch_trivial_switch(
     // Split the preheader, so that we know that there is a safe place to
     // insert the switch.
     let old_ph = lp.get_loop_preheader(run.function).expect("a preheader");
-    let new_ph = split_edge(run, old_ph, header);
+    let new_ph = edges::split_edge(run.function, old_ph, header);
     let old_term = run.function.terminator(old_ph).expect("a terminated preheader");
     run.function.set_operands(old_term, Vec::new());
     run.function.erase(old_term).expect("the jump had no users");
@@ -879,7 +819,7 @@ fn unswitch_trivial_switch(
             unswitched_exit_bbs.push(default_exit);
             rewrite_phi_nodes_for_unswitched_exit_block(run, lp, default_exit, parent, old_ph);
         } else {
-            let split = split_block(run, default_exit);
+            let split = edges::split_block(run.function, default_exit);
             rewrite_phi_nodes_for_exit_and_unswitched_blocks(run, lp, default_exit, split, parent, old_ph, true);
             split_exit_bb_map.push((default_exit, split));
             default_exit_bb = Some(split);
@@ -904,7 +844,7 @@ fn unswitch_trivial_switch(
         let split = match split_exit_bb_map.iter().find(|&&(from, _)| from == exit_bb) {
             Some(&(_, split)) => split,
             None => {
-                let split = split_block(run, exit_bb);
+                let split = edges::split_block(run.function, exit_bb);
                 rewrite_phi_nodes_for_exit_and_unswitched_blocks(run, lp, exit_bb, split, parent, old_ph, true);
                 split_exit_bb_map.push((exit_bb, split));
                 split
