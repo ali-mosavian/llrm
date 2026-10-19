@@ -95,7 +95,7 @@ const fn partial(
     Entry { slot, phase, llvm, kind: Partial, replaced_by: "", note }
 }
 
-use Phase::{Backend, Cleanup, Early, Late, Simplify};
+use Phase::{Backend, Cleanup, Early, Late, Module, Simplify};
 use SlotKind::{Missing, Old, Partial, Translated};
 
 /// Every slot of the -O2 function pipeline in `llvm_order` (-O1 builds a
@@ -195,10 +195,10 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
     // LSR runs in llc's IR preparation (`TargetPassConfig::addIRPasses`,
-    // l.874), after this pipeline; the translated pieces (stage 1-3: Formula,
-    // LSRUse, IVUsers and fixups) are called by no pass yet, so the old `lsr`
-    // is the slot.
-    entry("lsr", Late, "loop-reduce (LoopStrengthReduce.cpp)", Old, "loop-passes-port"),
+    // l.874), after this pipeline, so a Module slot (it follows the
+    // interprocedural step):
+    // `lsr_pass::LoopStrengthReduce`.
+    entry("lsr", Module, "loop-reduce (LoopStrengthReduce.cpp)", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@728", Simplify, "lcssa", Old, "lcssa-port"),

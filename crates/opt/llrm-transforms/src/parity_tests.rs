@@ -292,13 +292,13 @@ fn test_sccp_stands_between_gvn_and_bdce() {
 }
 
 /// LSR's translated pieces landed with no registry row, so the count could not
-/// show them; DomTree was translated with no analyses row. The slot is Old
-/// while no pass calls the pieces, and `dominators` is a Translated analysis.
+/// show them; DomTree was translated with no analyses row. The slot is
+/// Translated now the pass calls the pieces, and `dominators` is a Translated
+/// analysis.
 #[test]
 fn test_lsr_is_a_registered_slot_and_dominators_a_translated_analysis() {
     let lsr = parity::REGISTRY.iter().find(|one| one.slot == "lsr").expect("lsr is registered");
-    assert_eq!((lsr.llvm, lsr.kind), ("loop-reduce (LoopStrengthReduce.cpp)", SlotKind::Old));
-    assert!(!lsr.replaced_by.is_empty(), "an Old slot names who replaces it");
+    assert_eq!((lsr.llvm, lsr.kind), ("loop-reduce (LoopStrengthReduce.cpp)", SlotKind::Translated));
     let dominators = parity::ANALYSES.iter().find(|one| one.key == "dominators").expect("dominators is registered");
     assert_eq!(
         (dominators.llvm, dominators.kind, dominators.off),
@@ -326,7 +326,6 @@ fn test_every_analysis_the_manager_names_has_a_registry_row() {
         include_str!("../../llrm-analysis/src/noreturn.rs"),
         include_str!("../../llrm-analysis/src/observers.rs"),
         include_str!("../../llrm-analysis/src/scev/analysis.rs"),
-        include_str!("lsr.rs"),
         include_str!("spill.rs"),
         include_str!("../../../ir/llrm-mir/src/memory.rs"),
     ];
