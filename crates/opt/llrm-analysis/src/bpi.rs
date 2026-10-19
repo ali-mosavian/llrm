@@ -15,6 +15,18 @@
 //! DEVIATE B2: `getTerminatingDeoptimizeCall`: MIR has no deoptimize
 //! intrinsic, so a block is unreachable only by its `unreachable`.
 //!
+//! # Example
+//! `pointer` in `bpi_golden.ll`, `if (p == NULL)`: the pointer heuristic takes
+//! the equal edge 12 times in 32, as `opt -passes='print<branch-prob>'` does:
+//!
+//! ```text
+//! edge %entry -> %yes probability is 0x30000000 / 0x80000000 = 37.50%
+//! edge %entry -> %no probability is 0x50000000 / 0x80000000 = 62.50%
+//! ```
+//!
+//! From unit test `test_probabilities_are_llvms_on_every_heuristic` in
+//! `bpi_tests.rs`.
+//!
 //! # Used by
 //! `blockfreq` (`BlockFrequencyInfo`'s edge probabilities, once its callers
 //! move from `branchprob`).
