@@ -461,3 +461,49 @@ fn test_the_inserted_instructions_are_what_the_expansion_made() {
     assert_eq!(made.len(), 2);
     assert!(made.iter().all(|one| expander.is_inserted_instruction(one)));
 }
+
+/// `%i2` of `LOOP` expanded before the `ret` after the loop, and the body
+/// printed.
+fn loop_value_expanded_after_the_loop() -> String {
+    let module = llrm_mir::parse::module(LOOP).expect("a module");
+    let (_, _, original) = module.functions().next().expect("a function");
+    let mut function = original.clone();
+    let mut context = module.context.clone();
+    let layout = DataLayout::default();
+    let tree = DomTree::of(&function);
+    let loops = LoopInfo::analyze(&function, || &tree);
+    let assumptions = AssumptionCache::new(&module, &function);
+    let env = Env {
+        globals: &module.globals,
+        metadata: &module.metadata,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let mut se = ScalarEvolution::new();
+    let header = *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("h")).expect("%h");
+    let exit =
+        *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("exit")).expect("%exit");
+    let i2 = function.iter_block(header).nth(1).expect("%i2");
+    let s = unknown(
+        &mut se,
+        &env.cx(&context, &function),
+        Operand::Value(function.instruction(i2).result.expect("a value")),
+    );
+    let ret = function.terminator(exit).expect("a ret");
+    let mut expander = Expander::new("t");
+    expander.set_insert_point(ret);
+    let mut declared = Declared::of(&module);
+    expander.expand_code_for(&env, &mut context, &mut declared, &mut function, &mut se, s.scev, None);
+    llrm_mir::print::body(&context, &function)
+}
+
+/// A loop's value expanded after the loop panicked on `todo!("S6: ...")` in
+/// `fixupLCSSAFormFor`; it is now read through an exit phi (planets, m32).
+#[test]
+fn test_a_loop_value_read_after_the_loop_is_read_through_an_exit_phi() {
+    let text = loop_value_expanded_after_the_loop();
+    assert!(lines(&text).contains(&"%i2.lcssa = phi i32 [ %i2, %h ]"), "{text}");
+    assert!(!text.contains("tmp.lcssa"), "{text}");
+}

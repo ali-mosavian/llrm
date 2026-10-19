@@ -32,6 +32,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
+from buildslot import slotted  # noqa: E402
 
 SELECTION = HERE / "parity_smoke.toml"
 BUDGET = 10.0
@@ -75,7 +76,7 @@ def run_cut(command: list[str], seconds: float, cwd: Path) -> tuple[int | None, 
 def workspace_check(root: Path = ROOT) -> str:
     """"" when the whole workspace, tests and benches included, compiles; else the first errors. Built before the clock starts, like the unit tests: two halves
     that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke feat/parity's head for every build)."""
-    done = subprocess.run(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"], cwd=root, capture_output=True, text=True)
+    done = subprocess.run(slotted(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"]), cwd=root, capture_output=True, text=True)
     if done.returncode == 0:
         return ""
     errors = [line for line in done.stderr.splitlines() if "error" in line]
@@ -103,7 +104,7 @@ def ratchet_commands(tiers: Path = TIERS) -> list[list[str]]:
 
 def ratchets(root: Path = ROOT, tiers: Path = TIERS, run=None) -> str:
     """"" when every ratchet passes on the tree in `root`; else the first that fails. Run before the clock starts, whatever the merge touches."""
-    run = run or (lambda command: subprocess.run(command, cwd=root, capture_output=True, text=True))
+    run = run or (lambda command: subprocess.run(slotted(command), cwd=root, capture_output=True, text=True))
     for command in ratchet_commands(tiers):
         done = run(command)
         if done.returncode:
@@ -272,7 +273,7 @@ def unit_step(package: str, allowance: float):
         ranking = selection().get("units", {})
         names = unit_tests(package, allowance, {k: [(n, s) for n, s in v.get("tests", [])] for k, v in ranking.items()})
         command = ["cargo", "test", "-q", "--lib", "-p", package] + (["--", "--exact", *names] if names else [])
-        code, output = run_cut(command, allowance + CARGO_OVERHEAD, ROOT)
+        code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT)
         if code is None:
             return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
         if code:
@@ -323,7 +324,7 @@ def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET, known_red: f
 def rank(package: str) -> None:
     """Measure `package`'s unit tests once and write the cheapest into parity_smoke.toml (not per merge)."""
     env = {**os.environ, "RUSTC_BOOTSTRAP": "1"}
-    done = subprocess.run(["cargo", "test", "--lib", "-p", package, "--", "-Z", "unstable-options", "--report-time", "--test-threads", "1"], cwd=ROOT, capture_output=True, text=True, env=env)
+    done = subprocess.run(slotted(["cargo", "test", "--lib", "-p", package, "--", "-Z", "unstable-options", "--report-time", "--test-threads", "1"]), cwd=ROOT, capture_output=True, text=True, env=env)
     tests = [(n, s) for n, s in ranked(done.stdout) if s <= 0.5][:40]
     data = selection()
     data.setdefault("units", {})[package] = {"tests": [[n, s] for n, s in tests]}
@@ -359,7 +360,7 @@ def main() -> int:
         return 1
     packages = touched(args.base)
     for package in packages:  # built first, untimed
-        subprocess.run(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"], cwd=ROOT, capture_output=True)
+        subprocess.run(slotted(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"]), cwd=ROOT, capture_output=True)
     ok, line = run_steps(plan(packages), args.bin or llrmbin.bin_dir(), known_red=frozenset(args.skip))
     print(line)
     return 0 if ok else 1
