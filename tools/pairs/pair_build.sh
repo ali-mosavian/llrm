@@ -5,7 +5,7 @@
 set -e
 S=$1; SHA=$2; T=$S/sbp-$SHA; W=$(basename "$PWD")
 [ -x "$T/dist/llrm-c" ] && [ -e "$T/ok" ] && exit 0
-flock "$S/tgt-dist-pair.lock" bash -c '
+flock "$S/tgt-dist-$W.lock" bash -c '
   S=$0; T=$1; B=$S/tgt-dist-$2
   nice -n 10 env -u RUSTFLAGS CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=$B ${PAIR_CARGO:-buildslot cargo} build --profile dist -q --bin llrm-c --bin llrm-qb --bin llrm-nib --bin nibfront
   mkdir -p $T/dist && cp -p $B/dist/llrm-c $B/dist/llrm-qb $B/dist/llrm-nib $B/dist/nibfront $B/dist/*.d $T/dist/ && touch $T/ok
