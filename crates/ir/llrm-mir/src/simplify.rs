@@ -68,7 +68,7 @@ const RECURSION_LIMIT: u32 = 3;
 
 /// The `SimplifyQuery`: what an operand is, looked up in `function`.
 struct Query<'a> {
-    context: &'a mut Context,
+    context: &'a Context,
     function: &'a Function,
     layout: &'a DataLayout,
     /// The module's globals, which name the callees; empty where the caller has
@@ -3923,7 +3923,7 @@ fn simplify_gep(
 /// ([:7741](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L7741),
 /// `simplifyInstructionWithOperands`): the value `inst` equals, or None.
 pub fn simplify_instruction(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     inst: InstId,
@@ -3938,7 +3938,7 @@ pub fn simplify_instruction(
 /// so the intrinsics (`llvm.smax`...) are known, and `analyses` give the
 /// dominator tree and the assumptions.
 pub fn simplify_instruction_in(
-    context: &mut Context,
+    context: &Context,
     globals: &[GlobalValue],
     layout: &DataLayout,
     analyses: Option<&FunctionAnalyses>,
@@ -3997,7 +3997,7 @@ fn simplify_instruction_with_operands(
 /// `simplifyBinOp` for a caller that has operands and no instruction (a
 /// builder).
 pub fn simplify_binop_operands(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     opcode: BinaryOp,
@@ -4011,7 +4011,7 @@ pub fn simplify_binop_operands(
 
 /// `simplifyICmpInst` for operands.
 pub fn simplify_icmp_operands(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     predicate: IntPredicate,
@@ -4024,7 +4024,7 @@ pub fn simplify_icmp_operands(
 
 /// `simplifyCastInst` for operands.
 pub fn simplify_cast_operand(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     op: CastOp,
@@ -4037,7 +4037,7 @@ pub fn simplify_cast_operand(
 
 /// `simplifyGEPInst` for operands.
 pub fn simplify_gep_operands(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     ptr: Operand,
@@ -4049,7 +4049,7 @@ pub fn simplify_gep_operands(
 
 /// `simplifySelectInst` for operands.
 pub fn simplify_select_operands(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &Function,
     condition: Operand,
