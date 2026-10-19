@@ -319,6 +319,7 @@ def test_the_ratchets_run_side_by_side_and_report_in_command_order(monkeypatch):
     import threading
 
     monkeypatch.setattr(ps, "RATCHET_WORKERS", 4)
+    monkeypatch.setattr(ps, "ratchet_commands", lambda tiers=None: [["cargo", "test", "a"], ["cargo", "test", "b"], ["cargo", "test", "facts_rewrite"], ["cargo", "test", "d"]])  # an even count: the barrier takes pairs
     gate = threading.Barrier(2, timeout=5)  # a serial runner never reaches 2 parties: the barrier breaks (10 ratchets: pairs)
 
     class Done:
