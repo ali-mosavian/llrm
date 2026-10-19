@@ -269,6 +269,7 @@ fn reads(
 
 #[test]
 fn test_truncation_saves_the_control_word_once_per_body() {
+    let _old = crate::backend::allocate::RfpOn::off();
     // Every `(int)f` saved the control word and built the truncating one again.
     let insn = |at: i64, what: Semantics| Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]));
     let store = |at: i64, disp: i64| {
@@ -295,7 +296,7 @@ fn test_truncation_saves_the_control_word_once_per_body() {
     assert_eq!(names, vec![(0, vec!["fnstcw", "mov", "or", "mov", "fldcw"]), (5, vec!["fistp", "fistp", "fldcw"])]);
 }
 
-/// With the registers allocated (`LLRM_GREEDY_RFP`) no value is left to hold
+/// With the registers allocated (RFP) no value is left to hold
 /// the control word: the truncating word is made in memory alone. A `mov` of a
 /// value the allocator never saw reached the encoder as an unplaced value.
 #[test]
@@ -354,6 +355,7 @@ fn names_of(
 
 #[test]
 fn test_a_loop_of_conversions_switches_the_rounding_mode_on_its_edges_not_every_trip() {
+    let _old = crate::backend::allocate::RfpOn::off();
     // `x_elemf64_usesquare`: `fldcw` before and after each `fistp`, two control
     // words loaded every trip (4 clocks each on a 486, 7 on a P5).
     let result = truncating_loop(vec![]);
@@ -364,6 +366,7 @@ fn test_a_loop_of_conversions_switches_the_rounding_mode_on_its_edges_not_every_
 
 #[test]
 fn test_a_loop_that_rounds_outside_a_conversion_keeps_its_switches() {
+    let _old = crate::backend::allocate::RfpOn::off();
     // An `fadd` between conversions rounds in the caller's mode, so the loop
     // cannot run in the truncating one.
     let add = sem(Operation::FloatArith, "fadd", vec![st(0)], vec![st(0), st(1)]);
@@ -1832,6 +1835,7 @@ fn names_in_order(result: &LirBody) -> Vec<String> {
 /// LLVM's X86FloatingPoint do.
 #[test]
 fn test_a_conversion_store_of_a_value_read_again_does_not_copy_it() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let cells = _cells([-4, -8, -12], 4);
     let body = _body(vec![
         _load(1, &cells[0]),
@@ -1845,6 +1849,7 @@ fn test_a_conversion_store_of_a_value_read_again_does_not_copy_it() {
 /// A quadword has only the popping form: a copy is made.
 #[test]
 fn test_a_quadword_conversion_store_of_a_live_value_keeps_its_copy() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let (x, wide, out) = (frame_cell(-8, 8), frame_cell(-16, 8), frame_cell(-24, 8));
     let body =
         _body(vec![_load(1, &x), sem(Operation::FloatStore, "fisttp", vec![m(&wide)], vec![fl(1)]), _store(&out, 1)]);
