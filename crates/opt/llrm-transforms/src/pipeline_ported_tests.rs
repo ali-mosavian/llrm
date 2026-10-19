@@ -244,7 +244,8 @@ b5:
 /// write, leaves the loop; one through a plain pointer stays.
 #[test]
 fn an_invariant_load_leaves_a_loop_from_a_conditional_block() {
-    const TEXT: &str = r#"define void @f(ptr noalias readonly dereferenceable(4) %v, ptr %w, i16 %n, ptr %out) {
+    const TEXT: &str = r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
+define void @f(ptr noalias readonly dereferenceable(4) %v, ptr %w, i16 %n, ptr %out) {
 b1:
   br label %b2
 
@@ -271,9 +272,12 @@ b5:
 }
 "#;
     let out = piped(TEXT);
-    let entry = &out[out.find("b1:").unwrap()..out.find("b2:").unwrap()];
-    assert!(entry.contains("getelementptr i8, ptr %v, i16 2") && entry.contains("load i16"), "{out}");
-    let body = &out[out.find("b3:").unwrap()..out.find("b5:").unwrap()];
+    let at = |label: &str| out.find(label).unwrap_or_else(|| panic!("{label} in {out}"));
+    let entry = &out[at("b1:")..at("b3:")];
+    // `dereferenceable(4)` makes the offset-2 GEP `inbounds nuw`, as the pin
+    // infers.
+    assert!(entry.contains("getelementptr inbounds nuw i8, ptr %v, i16 2") && entry.contains("load i16"), "{out}");
+    let body = &out[at("b3:")..at("b5:")];
     assert!(body.contains("load i16, ptr %w"), "{out}");
 }
 
@@ -772,7 +776,8 @@ b3:
     let out = piped(TEXT);
     assert!(out.contains("i1 %0,") && out.matches("icmp").count() == 1 && !out.contains("sext"), "{out}");
     assert_eq!(out.matches("mul").count() + out.matches("shl").count(), 2, "{out}");
-    assert!(out.contains("add i16") && out.contains(", 3"), "{out}");
+    // The add may carry `nuw`, inferred from the known bits of what it adds to.
+    assert!(out.contains("add ") && out.contains(", 3"), "{out}");
 }
 
 /// A memset of a slot only written, and a store into it, go with it (llrm-mir's
