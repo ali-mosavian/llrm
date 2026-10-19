@@ -1,6 +1,7 @@
 //! Runs `simplifycfg` over the defined functions of the given modules and
 //! prints each module, for `tools/llvmport/simplifycfgcompare.py`.
-//! usage: simplifycfg [--hoist-common-insts] [--sink-common-insts] FILE.ll...
+//! usage: simplifycfg [--no-keep-loops] [--hoist-common-insts]
+//! [--sink-common-insts] FILE.ll...
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::parse;
@@ -11,6 +12,10 @@ use llrm_transforms::twoentryphi::Speculation;
 fn main() {
     let mut options = Options::default();
     for path in std::env::args().skip(1) {
+        if path == "--no-keep-loops" {
+            options.need_canonical_loop = false;
+            continue;
+        }
         if path == "--hoist-common-insts" {
             options.hoist_common_insts = true;
             continue;
