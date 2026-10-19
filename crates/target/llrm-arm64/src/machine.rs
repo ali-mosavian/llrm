@@ -1,13 +1,17 @@
 //! What the mid-end asks of the arm64 target (`llrm_mir::target::Machine`): its
-//! register budget, address forms and what an operation costs. The prices are a
-//! stand-in until `AArch64TargetTransformInfo` is translated
-//! (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp>):
-//! the mid-end reads a `Tti` first where the machine has one.
+//! register budget, address forms and what an operation costs. The mid-end
+//! reads the `Tti` (`AArch64TargetTransformInfo`, translated in `tti`) first;
+//! the prices here are the fallback for what it does not answer.
 
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
+use llrm_mir::lowering::Lowering;
 use llrm_mir::spaces::Spaces;
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
+use llrm_mir::tti::Tti;
+
+use crate::tti::{AArch64, AArch64Lowering};
 
 /// The OS and ABI arm64 code is built for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,6 +42,15 @@ impl Platform {
         }
     }
 
+    /// The `-mcpu` the platform's cost model is for: Apple's M1 on Darwin, the
+    /// generic cpu elsewhere.
+    pub fn cpu(self) -> &'static str {
+        match self {
+            Platform::Darwin => "apple-m1",
+            Platform::Linux => "generic",
+        }
+    }
+
     /// Whether a global's symbol is spelled with a leading underscore.
     pub fn underscore(self) -> bool {
         self == Platform::Darwin
@@ -58,6 +71,14 @@ impl Machine for Arm64Machine {
         _width: i64,
     ) -> Option<(i64, i64)> {
         None
+    }
+
+    fn tti(&self) -> Option<Rc<dyn Tti>> {
+        Some(Rc::new(AArch64::of_cpu(self.platform.cpu()).expect("a cpu the platform names")))
+    }
+
+    fn lowering(&self) -> Option<Rc<dyn Lowering>> {
+        Some(Rc::new(AArch64Lowering))
     }
 
     fn spaces(&self) -> Spaces {
