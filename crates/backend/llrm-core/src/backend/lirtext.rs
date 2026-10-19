@@ -145,8 +145,7 @@ fn _operand(one: &Loc) -> String {
         Loc::Mem(mem) => {
             let addr = mem.addr.map_or_else(|| "None".to_owned(), |addr| addr.repr());
             let index = mem.index.map_or_else(String::new, |held| {
-                let placed =
-                    if mem.index_through == RegId::None { "unplaced".to_owned() } else { _name_of(mem.index_through) };
+                let placed = if mem.index_through == RegId::None { "unplaced".to_owned() } else { _name_of(mem.index_through) };
                 format!(" + v{}*{}@{placed}", held.value, mem.scale)
             });
             match mem.base {

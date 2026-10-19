@@ -9,11 +9,11 @@
 //! guaranteed loop invariant, its size becomes unknown, which is LLVM's own
 //! result when the translation fails.
 
+use llrm_support::hash::HashSet;
 use std::rc::Rc;
 
 use llrm_mir::module::{BlockId, InstId};
 use llrm_mir::opcode::Opcode;
-use llrm_support::hash::HashSet;
 
 use super::alias::{AliasQuery, Location};
 use super::{AccessId, Kind, LIVE_ON_ENTRY, Mssa};
