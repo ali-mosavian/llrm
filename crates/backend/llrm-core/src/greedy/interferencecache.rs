@@ -592,7 +592,7 @@ mod tests {
         fn reg_mask_clobbered(
             &self,
             _li: &LiveInterval,
-        ) -> Option<Vec<RegId>> {
+        ) -> Option<llrm_lir::registers::RegSet> {
             None
         }
 
