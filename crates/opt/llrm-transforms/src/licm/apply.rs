@@ -334,8 +334,8 @@ pub fn promote(
         ssa.add_available_value(site.preheader, Operand::Value(function.instruction(load).result.expect("a load")));
         preheader_load = Some(load);
     } else {
-        let poison = context.constant(Constant { ty, kind: ConstantKind::Poison });
-        ssa.add_available_value(site.preheader, Operand::Constant(poison));
+        let undef = context.constant(Constant { ty, kind: ConstantKind::Undef });
+        ssa.add_available_value(site.preheader, Operand::Constant(undef));
     }
     // Bucket up the uses by the block they occur in: the SSA updater is for
     // references across blocks, a block's own order is ours.
