@@ -1,7 +1,7 @@
-> Generated from the `//!` header of [`crates/opt/llrm-transforms/src/fill.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fill.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/fill.rs sha256:840fbe51bc46440f437a01ab89bee1040f59b12d96e22f7445453238339d66e5 -->
+> Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopidioms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopidioms.rs); edit the header, not this file.
+<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:f8c9689fa0311b7c19e25461d111b26584ee065d41ff8730afcc90c318f97398 -->
 
-# fill
+# loopidioms
 
 Loop idiom recognition and store merging: a counted loop that fills or
 copies memory becomes one `llvm.memset`, `llvm.memcpy` or `llvm.memmove`
@@ -11,11 +11,12 @@ MemCpyOpt `tryMergingIntoMemset`, MergeConsecutiveStores; gcc's store
 merging).
 
 ## How it works
-`Fill` rewrites one loop at a time, then looks again, with two shapes of
-loop: tested before its trips, or tested after them (a loop entered behind a
-copy of its test, `-ftree-ch`). The loop has one latch, a straight-line
-body, and a trip count `induction::counted` proves; what it does besides
-arithmetic is stores, loads and memsets that follow one of these forms:
+`LoopIdioms` rewrites one loop at a time, then looks again, with two shapes
+of loop: tested before its trips, or tested after them (a loop entered
+behind a copy of its test, `-ftree-ch`). The loop has one latch, a
+straight-line body, and a trip count `induction::counted` proves; what it
+does besides arithmetic is stores, loads and memsets that follow one of
+these forms:
 
 - A fill: a store, or a memset, of a loop-invariant value that is one byte
   repeated, through an address `induction` derives as a GEP off an invariant
@@ -116,12 +117,12 @@ Ten word stores are one memset of 20 bytes; the loop stays as one trip and
 the counter leaves with its exit value 10.
 
 From unit test `a_counted_word_loop_is_one_memset_of_its_bytes` in
-`fill_tests.rs` (first case; the printed text was taken from a run).
+`loopidioms_tests.rs` (first case; the printed text was taken from a run).
 
 ## Runs
-Last in the function fixed point: `Fill`, then `Merge`, after `unroll` and
-`peel`. On with `-ftree-loop-distribute-patterns`; off at -O0 and -Og, on
-from -O1. `size` is set at -Os and -Oz.
+Last in the function fixed point: `LoopIdioms`, then `Merge`, after `unroll`
+and `peel`. On with `-ftree-loop-distribute-patterns`; off at -O0 and -Og,
+on from -O1. `size` is set at -Os and -Oz.
 
 ## Needs
 `induction` (`counted`, `trips`, `recurrences`, `derived` addresses),

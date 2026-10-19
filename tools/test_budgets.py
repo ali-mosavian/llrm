@@ -12,10 +12,11 @@ Two kinds:
 - events, exact and the same on any host (`LLRM_DEBUG=counts`: analysis misses, copies of a function, allocations, builders of
   dominators, loops, shapes): every count at 2N is at most `linear` times its count at N, plus `slack`, and the counts of a program of
   one function that make one thing per function do not grow at all;
-- steps, which need an instruction counter (`LLRM_DEBUG=time`'s `[instr]` rows): each step with `share` of the compile's work at 2N is
+- steps, which need an instruction counter (`LLRM_DEBUG=time`'s `[instr]` rows): each step with at least `floor_minstr` Minstr of work at 2N (any share of the compile: a share is a cliff that build flags and neighbours move) is
   at most `steps` times its own work at N. Both less the empty file's.
 """
 import os
+import math
 import re
 import subprocess
 import sys
@@ -44,10 +45,40 @@ DEFAULT = BUDGETS["default"]
 PAID_MARGIN = 0.97
 ONE_FUNCTION = ("straight", "mulconst", "branches", "live", "nest", "cells", "cases", "joins", "fjoins", "unrolled")
 PER_FUNCTION = ("function_clones", "function_forks", "machinings", "selections", "allocations")
-# The gate's N per axis, but `branches` larger: its steps are small at the gate's 32 (analysis bounded is 1 Minstr there), and #1771 made
+# The gate's N per axis, but nest 32 and unrolled 16 (their steps change regime between N=16 and 32, N=8 and 16: the readings below read 8x jumps, not
+# slopes, #2260), and `branches` larger: its steps are small at the gate's 32 (analysis bounded is 1 Minstr there), and #1771 made
 # `analysis bounded` quadratic in it (108 -> 982 Minstr from N=256 to 512) unseen by a size where the step is under the floor.
-SIZES = {**scaling_gate.SIZES, "branches": 256}
+SIZES = {**scaling_gate.SIZES, "branches": 256, "nest": 32, "unrolled": 16}
 AXES = tuple(SIZES)
+
+
+DIP = 0.3  # the exponent N -> 2N is this much under N/2 -> N: the step may have settled, or be about to grow again
+
+
+def dips(work_half: float, work_small: float, work_big: float) -> bool:
+    """A step whose growth slowed after N/2 -> N: from three readings a settled step (a switch behind it) and a hump (it grows again) look alike."""
+    return work_half >= 0.3 and work_small > 0 and exponent(work_small, work_big) < exponent(work_half, work_small) - DIP
+
+
+def judged_ratio(work_small: float, work_big: float, work_quad: float | None) -> float:
+    """The growth per doubling a step is judged on: the larger of N -> 2N and, where the step dips and a 4N reading exists, 2N -> 4N."""
+    ratio = work_big / max(work_small, 1e-9)
+    return ratio if work_quad is None else max(ratio, work_quad / max(work_big, 1e-9))
+
+
+def test_a_dip_is_judged_by_the_exponent_it_grows_again_at():
+    """nest intervals walk: 3.2 (N/2), 13.9 (N), 24.1 (2N), 86.9 (4N): x1.7 at N -> 2N, x3.6 at 2N -> 4N. Judged by the larger; a step with no 4N reading
+    (no dip) by N -> 2N."""
+    assert dips(3.2, 13.9, 24.1) and dips(0.9, 8.2, 17.5)
+    assert judged_ratio(13.9, 24.1, 86.9) > 3.5
+    assert judged_ratio(13.9, 24.1, None) < 1.8
+    assert not dips(1.0, 2.0, 4.1)
+
+
+@cache
+def quad_steps(axis: str) -> dict[str, float]:
+    """The steps of the compile at 4N: a third doubling, compiled only for the axes that hold a step whose growth dipped."""
+    return parsed_steps(run(source_of(axis, 4 * SIZES[axis]), axis, "time"))
 
 
 def still_rising(work_small: float, work_big: float) -> bool:
@@ -55,23 +86,36 @@ def still_rising(work_small: float, work_big: float) -> bool:
     return work_big > PAID_MARGIN * DEFAULT["steps"] * max(work_small, 1e-9)
 
 
+def onset(work_small: float) -> bool:
+    """A step whose work at N is under `onset_minstr` begins only at 2N: lazily built data (`siblings interference`, 0.0 -> 17.3) or a branch first taken
+    (`peep facts exits`, 0.2 -> 10.2). Its ratio to a base of nothing is a number of the base, not a slope."""
+    return work_small < DEFAULT["onset_minstr"]
+
+
+def test_a_step_that_begins_between_the_two_sizes_has_no_slope_to_judge():
+    """#2260 listed 'siblings interference' (0.0 -> 17.3, x1.7e10) and 'peep facts exits' (0.2 -> 10.2, x63) as debts: both are built on first use and
+    absent at the small size."""
+    assert onset(0.0) and onset(0.2)
+    assert not onset(1.0) and not onset(11.3)
+
+
 def read(work_big: float, total: float) -> bool:
-    """Whether the test reads a step: it has the share of the compile's work and the floor."""
-    return work_big >= DEFAULT["share"] * total and work_big >= DEFAULT["floor_minstr"]
+    """Whether the test reads a step: its own work at 2N reaches the floor, whatever share of the compile that is."""
+    return work_big >= DEFAULT["floor_minstr"]
 
 
 def near_read(work_big: float, total: float) -> bool:
-    """Within 10% under the share or the floor: a step that hovers there is read on one build and not on the next."""
-    return work_big >= 0.9 * DEFAULT["share"] * total and work_big >= 0.9 * DEFAULT["floor_minstr"]
+    """Within 10% under the floor: a step that hovers there is read on one build and not on the next."""
+    return work_big >= 0.9 * DEFAULT["floor_minstr"]
 
 
-def test_a_debt_step_hovering_at_the_share_threshold_does_not_flip_the_result():
-    """lir pressuresink was 2.03% of the compile (limit 2%): it entered the test at one commit (blamed on #2195) and could leave it, 'paid' by dipping."""
-    total = 1850.0
-    for work_big in (0.0205 * total, 0.0199 * total, 0.0195 * total):
-        assert read(work_big, total) == (work_big >= 0.02 * total)
-        assert near_read(work_big, total), "within 10% under the share: still held to its debt"
-    assert not near_read(0.015 * total, total)
+def test_a_step_is_judged_by_its_own_slope_whatever_share_of_the_compile_it_is():
+    """lir pressuresink (x3.3) sat at 2.03% of the compile against a 2% share: it entered the test at one commit (blamed on #2195) and read paid on
+    an incremental build (1.72%). The same step at a 1.9% and a 2.1% share, with the same work, gets the same verdict."""
+    work_small, work_big = 11.3, 37.6
+    for total in (work_big / 0.019, work_big / 0.021):
+        assert read(work_big, total) and still_rising(work_small, work_big)
+    assert not read(4.0, 100.0), "under the floor in Minstr: not read, whatever its share"
 
 
 def test_a_step_at_the_limit_is_not_paid_and_one_well_under_it_is():
@@ -113,6 +157,62 @@ def parsed_steps(text: str) -> dict[str, float]:
     if not rows or any(unit != "Minstr" for _, unit, _ in rows):
         pytest.skip("no instruction counter on this host: the rows are CPU time")
     return {name: float(own) for own, _, name in rows}
+
+
+REGIME_JUMP = 1.0  # the exponent N -> 2N may exceed the one N/2 -> N by this much
+
+
+def exponent(small: float, big: float) -> float:
+    return math.log(big / small) / math.log(2)
+
+
+def regime_change(work_half: float, work_small: float, work_big: float) -> float:
+    """How much faster a step grows from N to 2N than from N/2 to N. A large number means something size-dependent switches on inside the window the
+    slope is read in (spilling starts, an analysis is rerun per loop): the ratio is then the switch, not a slope. A step that settles before N (the
+    exponent falls) is fine: that is the window being clear of the switch."""
+    return exponent(work_small, work_big) - exponent(work_half, work_small)
+
+
+def test_a_size_placed_across_a_regime_change_moves_the_exponent_up():
+    """nest at N=16 read analysis loop-products 0.36 (N=8), 0.97, 8.16 (N=32): k 1.4 then 3.1, the x8.4 of a switch (#2260). At N=32 it is 0.97, 8.16,
+    36.2: k 3.1 then 2.2, the switch behind it. A linear step does not move."""
+    assert regime_change(0.36, 0.97, 8.16) > REGIME_JUMP
+    assert regime_change(0.97, 8.16, 36.2) < 0
+    assert abs(regime_change(1.0, 2.0, 4.1)) < 0.2
+
+
+@cache
+def half_steps(axis: str) -> dict[str, float]:
+    """The steps of the compile at N/2: the premise's third point."""
+    return parsed_steps(run(source_of(axis, SIZES[axis] // 2), axis, "time"))
+
+
+@pytest.mark.parametrize("axis", AXES)
+def test_no_step_switches_on_between_the_two_sizes_of_an_axis(axis):
+    """The premise of the slope test: a step grows no faster from N to 2N than from N/2 to N (by more than REGIME_JUMP in the exponent). A regime
+    change inside the window fails here loudly, naming the step, instead of reading as a slope (a debt) or as paid; the fix is a larger N."""
+    _, _, small_text, big_text = measured(axis)
+    empty, half = empty_steps(axis), half_steps(axis)
+    small, big = parsed_steps(small_text), parsed_steps(big_text)
+    switched = {}
+    for name in big:
+        wb, ws, wh = (max(table.get(name, 0.0) - empty.get(name, 0.0), 0.0) for table in (big, small, half))
+        if wb < DEFAULT["floor_minstr"] or ws < 1.0 or wh < 0.3:
+            continue
+        if (jump := regime_change(wh, ws, wb)) > REGIME_JUMP:
+            switched[name] = round(jump, 2)
+    assert not switched, f"{axis} at N={SIZES[axis]}: exponent N -> 2N exceeds N/2 -> N by: {switched}: a regime change in the window; use a larger N"
+
+
+def test_the_nest_axis_has_no_loop_products_onset():
+    """`analysis loop-products` misses are 1 at N/2, N and 2N, with `analysis pressure` equal: no switch inside the window. The onset at N=20
+    the axis used to straddle (1, 1, 4, 4, 3, 8, 9, 12 at N=16..32) was profit's loop products wrapping past i64 (10 trips a loop, 10^19 at
+    19 loops); with the weights capped at MAX_FREQUENCY (#2374) it is gone."""
+    size = SIZES["nest"]
+    half = parsed_counts(run(source_of("nest", size // 2), "nest", "counts"))
+    small, big, _, _ = measured("nest")
+    for counts in (half, small, big):
+        assert counts["analysis loop-products"] == 1 and counts["analysis pressure"] == 1, counts
 
 
 @cache
@@ -173,17 +273,26 @@ def test_no_step_grows_faster_than_the_program_does(axis):
     small, big = parsed_steps(small_text), parsed_steps(big_text)
     total = sum(max(value - empty.get(name, 0.0), 0.0) for name, value in big.items())
     grown, rising = [], set()
+    half = half_steps(axis)
+    work = lambda table, name: max(table.get(name, 0.0) - empty.get(name, 0.0), 0.0)  # noqa: E731
+    dipping = {name for name in big if work(big, name) >= DEFAULT["floor_minstr"] and dips(work(half, name), work(small, name), work(big, name))}
+    quad = quad_steps(axis) if dipping else {}
     for name, value in big.items():
         work_small, work_big = max(small.get(name, 0.0) - empty.get(name, 0.0), 0.0), max(value - empty.get(name, 0.0), 0.0)
+        work_quad = work(quad, name) if name in dipping else None
+        if onset(work_small):
+            continue  # the step starts between N and 2N: no slope to judge from a base of nothing
         if not read(work_big, total):
             if near_read(work_big, total) and work_big > DEFAULT["steps"] * max(work_small, 1e-9):
-                rising.add(name)  # a debt's step that dips under the share is not paid by dipping
+                rising.add(name)  # a debt's step that dips under the floor is not paid by dipping
             continue
         ratio, debt = allowed("steps", axis, name, DEFAULT["steps"])
-        if still_rising(work_small, work_big):
+        widest = judged_ratio(work_small, work_big, work_quad)
+        if widest > PAID_MARGIN * DEFAULT["steps"]:
             rising.add(name)
-        if work_big > ratio * max(work_small, 1e-9):
-            grown.append(f"{name} {work_small:.1f} -> {work_big:.1f} Minstr (limit {ratio} per doubling{debt})")
+        if widest > ratio:
+            readings = f"{work_small:.1f} -> {work_big:.1f}" + (f" -> {work_quad:.1f} (4N)" if work_quad is not None else "")
+            grown.append(f"{name} {readings} Minstr (x{widest:.2f}, limit {ratio} per doubling{debt})")
     paid = [one["name"] for one in debts("steps", axis) if one["name"] not in rising]
     assert not grown, f"{axis} at N={SIZES[axis]} -> 2N: " + "; ".join(grown)
     assert not paid, f"{axis}: paid, so out of budgets.toml: {paid}"

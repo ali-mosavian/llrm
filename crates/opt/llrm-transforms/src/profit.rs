@@ -77,12 +77,12 @@
 //!
 //! # Used by
 //! Each of [`crate::lsr`], [`crate::hoist`], [`crate::gvn`],
-//! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`], [`crate::fill`],
-//! [`crate::window`], [`crate::gepoffset`], [`crate::indvars`],
-//! [`crate::tailrec`], [`crate::ipacp`], [`crate::inline`] and
-//! [`crate::interprocedural`] asks it, before a rewrite that trades code size
-//! or registers for speed, whether the rewrite pays. Not a pass: it runs only
-//! inside those.
+//! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`],
+//! [`crate::loopidioms`], [`crate::window`], [`crate::gepoffset`],
+//! [`crate::indvars`], [`crate::tailrec`], [`crate::ipacp`], [`crate::inline`]
+//! and [`crate::interprocedural`] asks it, before a rewrite that trades code
+//! size or registers for speed, whether the rewrite pays. Not a pass: it runs
+//! only inside those.
 //!
 //! # Needs
 //! The target's `OperationCosts` and registers, [`crate::spill`] for the
@@ -370,6 +370,11 @@ pub fn proven_trips(
 /// third of the time weighs a third of it.
 pub const UNIT: i64 = 256;
 
+/// The most a block weighs, as BlockFrequencyInfo saturates its frequencies:
+/// 11 nested loops of 32 trips overflow i64, and spill traffic, a sum that
+/// `TrafficLess` subtracts from, cannot saturate.
+pub const MAX_FREQUENCY: i64 = 1 << 48;
+
 /// Block frequencies as `branchprob` estimates them (the heuristics, a loop's
 /// proven `trips` by latch), per entry, in `UNIT`ths of an execution and never
 /// below one, so a cold arm is near free but still ordered. `None`
@@ -434,7 +439,9 @@ fn _odds_in(
             .map(|block| {
                 (
                     block.at,
-                    odds.frequency.get(&block.at).map_or(UNIT, |one| ((one * UNIT as f64).round() as i64).max(1)),
+                    odds.frequency
+                        .get(&block.at)
+                        .map_or(UNIT, |one| ((one * UNIT as f64).round() as i64).clamp(1, MAX_FREQUENCY)),
                 )
             })
             .collect(),
@@ -471,7 +478,7 @@ pub fn _loop_products_in(
         let factor = exact.iter().next().copied().unwrap_or(UNKNOWN_TRIPS);
         for at in &loop_.body {
             if let Some(count) = frequency.get_mut(at) {
-                *count *= factor;
+                *count = count.saturating_mul(factor).min(MAX_FREQUENCY);
             }
         }
     }
@@ -524,10 +531,20 @@ pub fn _products_with_odds_in(
         let trip: i64 = innermost.latches.iter().map(|latch| odds.get(latch).copied().unwrap_or(UNIT)).sum();
         let here = odds.get(at).copied().unwrap_or(UNIT);
         if here < trip {
-            *count = (*count * here / trip).max(1);
+            *count = ((*count as i128 * here as i128 / trip as i128) as i64).max(1);
         }
     }
     Some((weight, taken))
+}
+
+/// `total` plus `price` run `frequency` times, saturating: 40 nested loops
+/// weigh more than an i64 holds.
+fn weigh(
+    total: i64,
+    frequency: i64,
+    price: i64,
+) -> i64 {
+    total.saturating_add(frequency.saturating_mul(price))
 }
 
 /// Profile-free expected work at `frequency`, a block's executions per entry
@@ -545,7 +562,7 @@ pub fn weighted(
     let mut total = 0;
     for &block in function.layout() {
         let priced = _block(context, layout, function, callees, cfg::id(block), costs)?;
-        total += frequency[&cfg::id(block)] * priced;
+        total = weigh(total, frequency[&cfg::id(block)], priced);
     }
     Some(total)
 }
@@ -643,7 +660,7 @@ pub fn pressure_adjusted(
     frequency: &BTreeMap<i64, i64>,
 ) -> Option<i64> {
     let work = weighted(context, layout, function, callees, costs, frequency)?;
-    Some(work + spill_forecast(context, layout, function, costs, room, across, frequency)?.cost)
+    Some(work.saturating_add(spill_forecast(context, layout, function, costs, room, across, frequency)?.cost))
 }
 
 /// What `function` costs at `frequency` under `costs` and `room`: the one

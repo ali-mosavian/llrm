@@ -1057,8 +1057,8 @@ fn test_dictionary_comprehension_deduplicates_and_has_explicit_lookup() {
 
 #[test]
 fn test_a_repeat_literal_in_the_frame_is_one_string_fill() {
-    // The fill loop stepped its byte address to zero under `!=`, which `fill`
-    // missed: 64 stores in a loop.
+    // The fill loop stepped its byte address to zero under `!=`, which
+    // `loopidioms` missed: 64 stores in a loop.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,

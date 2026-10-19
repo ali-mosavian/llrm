@@ -29,3 +29,27 @@ def test_perf_may_only_be_missing_on_a_hosted_runner():
 def test_the_verdict_line_keeps_its_form_and_names_the_runners():
     """Parity needs `GATE <tier> PASS at <head12>` (a pull request's adds ` on <parent12>`); the runners follow it, so one PR passing on tinytim and failing hosted is legible."""
     assert 'line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}$on"' in CI and "[runners: ${{ needs.plan.outputs.runner_summary }}]" in CI
+
+
+def test_nothing_runs_on_a_push_and_a_pull_request_runs_only_when_labelled_merge_candidate():
+    """The gate runs in CI, only to merge into main: a run per push of every pull request queued behind the merge loop on a host at load 97."""
+    pr = CI.split("pull_request:")[1].split("push:")[0]
+    assert "types: [labeled]" in pr and "opened" not in pr and "synchronize" not in pr
+    plan = CI.split("  plan:")[1].split("outputs:")[0]
+    assert "github.event.label.name == 'merge-candidate'" in plan, "any other label would start a run"
+    assert "github.event_name != 'pull_request' ||" in plan, "a push to main keeps the full gate: main records the bench counts"
+    assert "branches: [main]" in CI.split("push:")[1].split("workflow_dispatch")[0]
+
+
+def test_the_verdict_line_of_a_pull_request_is_the_candidate_pass_and_no_cheap_form_exists():
+    """cimerge.sh reads this line through tools/ci/candidate_ok.py."""
+    import candidate_ok
+
+    assert 'CANDIDATE PASS at ${head:0:12}$on"' in CI and "cheap" not in CI.lower().replace("cheaper", "")
+    assert candidate_ok.CANDIDATE.search("GATE full CANDIDATE PASS at 0123456789ab on ba9876543210")
+    assert not candidate_ok.CANDIDATE.search("GATE full PASS at 0123456789ab on ba9876543210")
+
+
+def test_only_a_pull_request_into_main_starts_the_gate():
+    """A parity pull request into feat/parity merges on a build and a smoke set (tools/parity_smoke.py); its CI runs were cancelled by hand."""
+    assert "branches: [main]" in CI.split("pull_request:")[1].split("push:")[0]
