@@ -2887,6 +2887,24 @@ fn test_an_i64_to_a_float_is_filds_qword() {
     );
 }
 
+/// A float's bits are an integer's through a stack temporary (SROA turns a
+/// double stored and read as an i32 into `bitcast double to i64`; isel refused
+/// "BitCast to an i64" and "BitCast of a float", 48 of 260 QCport compiles).
+#[test]
+fn test_a_float_bitcast_to_an_integer_goes_through_the_stack() {
+    let text = |from: &str, to: &str| {
+        inner(&format!("define {to} @f({from} %x) addrspace(1) {{\n  %b = bitcast {from} %x to {to}\n  ret {to} %b\n}}\n"))
+    };
+    let single = text("float", "i32");
+    assert!(single.iter().any(|line| line.starts_with("fstp dword ptr [bp-")), "{single:?}");
+    let double = text("double", "i64");
+    assert!(double.iter().any(|line| line.starts_with("fstp qword ptr [bp-")), "{double:?}");
+    let back = text("i32", "float");
+    assert!(back.iter().any(|line| line.starts_with("fld dword ptr [bp-")), "{back:?}");
+    let back = text("i64", "double");
+    assert!(back.iter().any(|line| line.starts_with("fld qword ptr [bp-")), "{back:?}");
+}
+
 /// A zeroed array descriptor was `mov dword ptr [bp-n], 0` each, 8 bytes each:
 /// qbdemo's WHITEFADE spent 45 bytes clearing 22. Two dwords, the most the
 /// 486's ratio allows as stores, hold the zero in one register.

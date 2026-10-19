@@ -101,13 +101,14 @@ fn test_an_add_of_a_constant_folds_with_an_add_on_the_translated_left() {
 }
 
 #[test]
-fn test_a_gep_off_a_global_base_is_not_found_among_users() {
+fn test_a_gep_off_a_global_base_folds_to_a_constant_expression() {
     let text = diamond(
         "  %a4 = getelementptr i8, ptr @g, i16 4",
         "",
         "  %p = phi ptr [ @g, %b0 ], [ %y, %b1 ]\n  %q = getelementptr i8, ptr %p, i16 4",
     );
-    assert_eq!(translated(&text, "q", "b0", true), "none");
+    // `simplifyGEPInst` makes `gep @g, 4` a constant expression, as in LLVM.
+    assert_eq!(translated(&text, "q", "b0", true), "constant");
 }
 
 #[test]

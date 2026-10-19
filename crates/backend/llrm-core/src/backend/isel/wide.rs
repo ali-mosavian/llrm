@@ -279,11 +279,33 @@ impl Selector<'_, '_, '_> {
             self.integer_made_float(8, result, to, cell, 8, at, out)?;
             return Ok(());
         }
+        // A double's bits are an i64's: fstp stores a qword, read back as the
+        // halves; and the halves stored, fld reads them as a double.
+        if op == CastOp::BitCast && self.is_wide(from) && self.is_float(to) && self.size(to)? == 8 {
+            let (low, high) = self.wide(operand, at, out)?;
+            let cell = self.temporary(8);
+            for (half, held) in self.wide_halves()?.into_iter().zip([low, high]) {
+                self.put(
+                    semantics(
+                        Operation::Move,
+                        "mov",
+                        vec![Loc::Mem(Self::memory(regs, cell.moved(half.offset), half.bytes))],
+                        vec![Loc::Held(held)],
+                    ),
+                    at,
+                    out,
+                );
+            }
+            let into = Held { value: self.value(result), width: super::FLOAT };
+            self.float_loaded(into, "fld", cell, 8, false, at, out);
+            return Ok(());
+        }
         // fistp stores a qword, truncating as the control word is set: read
         // back as the halves.
-        if op == CastOp::FPToSI && self.is_float(from) {
+        if (op == CastOp::FPToSI || op == CastOp::BitCast) && self.is_float(from) {
             let held = self.float(operand, at, out)?;
-            let cell = self.float_stored(held, "fisttp", 8, at, out);
+            let name = if op == CastOp::BitCast { "fstp" } else { "fisttp" };
+            let cell = self.float_stored(held, name, 8, at, out);
             let (low, high) = (self.half(), self.half());
             for (half, held) in self.wide_halves()?.into_iter().zip([low, high]) {
                 self.put(
