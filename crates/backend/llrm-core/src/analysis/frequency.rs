@@ -4,10 +4,10 @@
 //!
 //! The edge probabilities are `LirBody::odds`, which isel made from
 //! `BranchProbabilityInfo` over the MIR (an edge made by splitting one
-//! inherits its odds, `BlockOdds::redirected`); a loop's proven
-//! trips, which induction left in `loop_trip_counts`, replace the heuristic's
-//! 31 in 32 (DEVIATE 1, `trip_adjusted`); and `BlockFrequencyInfoImpl` turns
-//! them into frequencies (`propagated`).
+//! inherits its odds, `BlockOdds::redirected`); and `BlockFrequencyInfoImpl`
+//! turns them into frequencies (`propagated`). Only `counted`, `executed`'s
+//! estimate, lets a loop's proven trips (`loop_trip_counts`) replace the
+//! heuristic's 31 in 32.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -319,10 +319,27 @@ impl Frequency {
         std::sync::Arc::new(crate::model::lir::BlockFrequencies(self.block.clone()))
     }
 
-    /// `blocks`, a later arrangement of `body`'s, on `body`'s odds and trips.
+    /// `blocks`, a later arrangement of `body`'s, on `body`'s odds: LLVM's
+    /// `MachineBlockFrequencyInfo`, which knows no trip count.
     pub fn over(
         body: &LirBody,
         blocks: &[Block],
+    ) -> Self {
+        Self::over_counting(body, blocks, false)
+    }
+
+    /// `body`'s blocks with each proven loop leaving one time in `trips + 1 -
+    /// tested` (`trip_adjusted`): what `executed` estimates a body's run by.
+    /// The frequencies a translated pass reads are `of`'s, without trips: a
+    /// bench pair measured nothing for them there (#2731).
+    pub fn counted(body: &LirBody) -> Self {
+        Self::over_counting(body, &body.blocks, true)
+    }
+
+    fn over_counting(
+        body: &LirBody,
+        blocks: &[Block],
+        counting: bool,
     ) -> Self {
         let mut taken = IndexMap::default();
         for block in blocks {
@@ -378,7 +395,7 @@ impl Frequency {
         }
         let natural = loops::loops(&kept, Some(body.entry));
         let trips: IndexMap<i64, i64> = body.loop_trip_counts.iter().copied().collect();
-        let edges = trip_adjusted(&natural, &trips, &successors, &shared);
+        let edges = if counting { trip_adjusted(&natural, &trips, &successors, &shared) } else { shared.clone() };
         let mut block = propagated(body.entry, &successors, &predecessors, &edges);
         // A bridge runs as often as the edges into it are taken; a chain of
         // them is settled from its first.
@@ -454,10 +471,9 @@ impl Frequency {
     }
 }
 
-/// DEVIATE 1: a loop whose trips induction proved leaves by its exit test
-/// one time in `trips + 1 - tested` (`tested` is 1 for a test after the trip,
-/// at a latch, 0 for one before it, at the header), where it has one exiting
-/// block; LLVM's probabilities know no trip count. Exit: none measured yet.
+/// A loop whose trips induction proved leaves by its exit test one time in
+/// `trips + 1 - tested` (`tested` is 1 for a test after the trip, at a latch,
+/// 0 for one before it, at the header), where it has one exiting block.
 fn trip_adjusted(
     natural: &[loops::Loop],
     trips: &IndexMap<i64, i64>,
@@ -791,8 +807,8 @@ mod tests {
     }
 
     /// Spill weights and the instrument read 10 per loop level, whatever the
-    /// branch said; the loop's heuristic odds make it 32, and a proven count
-    /// its own.
+    /// branch said; the loop's heuristic odds make it 32, and in `counted`
+    /// (the estimate) a proven count its own.
     #[test]
     fn test_a_loop_runs_as_its_odds_and_proven_trips_say_not_ten() {
         let guessed = Frequency::of(&counted(None, 124.0 / 128.0));
@@ -802,7 +818,7 @@ mod tests {
             guessed.block(2),
             guessed.block(3)
         );
-        let proven = Frequency::of(&counted(Some(5), 124.0 / 128.0));
+        let proven = Frequency::counted(&counted(Some(5), 124.0 / 128.0));
         assert!(
             (proven.block(2) - 5.0).abs() < 1e-6 && (proven.block(3) - 1.0).abs() < 1e-6,
             "{} {}",
@@ -890,9 +906,10 @@ mod tests {
         for at in [1, 2, 3] {
             assert_eq!(before.block(at), after.block(at), "block {at}");
         }
-        // 5 runs of the header, one of them leaving: 4 take the back edge, to
-        // the precision of `BlockFrequencyInfo`'s integer frequencies.
-        assert!((after.block(9) - 4.0).abs() < 1e-6, "the copies run {}", after.block(9));
+        // The copies run as often as the back edge was taken, to the
+        // precision of `BlockFrequencyInfo`'s integer frequencies.
+        let back = before.edge(2, 2);
+        assert!((after.block(9) - back).abs() < 1e-6 * back, "the copies run {} against {back}", after.block(9));
     }
 
     /// Each bridge looked through every block for what enters it: N cases, N
@@ -995,8 +1012,8 @@ mod tests {
             more.odds.taken.insert((from, to), (probability * BlockOdds::CERTAIN).round() as u32);
         }
         let busy = Frequency::of(&more);
-        // The loop of 5 trips leaves once in 5 of its runs.
-        let entering = busy.block(2) / 5.0;
+        // The loop leaves by its 1-in-32 edge.
+        let entering = busy.block(2) / 32.0;
         assert!((busy.block(8) - entering).abs() < 1e-6, "{} {}", busy.block(8), entering);
         assert!(
             (busy.block(9) - entering * 32.0).abs() < 1e-3 * entering * 32.0,
