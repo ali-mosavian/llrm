@@ -397,6 +397,20 @@ pub(crate) fn retarget(
     }
 }
 
+/// Whether the first instruction of `block` after its phis is a `landingpad`:
+/// a copy of it would be a second pad, and the one module handler
+/// (`ehprepare`) cannot choose between two. Jump threading does not copy such
+/// a block (J10 of `jumpthreading.rs`, DF3 of `dfajumpthreading.rs`).
+pub(crate) fn starts_with_landing_pad(
+    function: &Function,
+    block: BlockId,
+) -> bool {
+    function
+        .iter_block(block)
+        .find(|&one| function.instruction(one).opcode != Opcode::Phi)
+        .is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+}
+
 /// `block`'s phis, in order.
 pub(crate) fn phis(
     function: &Function,

@@ -116,22 +116,31 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
 }
 
 /// A Partial slot that is not run fails like a Translated one, but it is never
-/// counted as joined: `jumps@17` is TailMergeBlocks only.
+/// counted as joined. Held for every Partial row of a registry, so a row that
+/// moves to Translated or leaves Partial needs no edit here.
+fn partial_rows_are_required_and_never_joined(registry: &[Entry]) {
+    for row in registry.iter().filter(|one| one.kind == SlotKind::Partial) {
+        let built: Vec<&str> = registry.iter().filter(|one| one.phase == row.phase).map(|one| one.slot).collect();
+        assert_eq!(parity::check(registry, row.phase, &built), Ok(()), "{}", row.slot);
+        let without: Vec<&str> = built.iter().copied().filter(|one| *one != row.slot).collect();
+        let why = parity::check(registry, row.phase, &without).expect_err("a Partial slot left out");
+        assert!(why.contains(row.slot), "{why}");
+        assert!(parity::joined_slots(registry, &built).all(|one| one != row.slot), "{}", row.slot);
+    }
+}
+
 #[test]
 fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined() {
-    let built: Vec<&str> =
-        parity::REGISTRY.iter().filter(|one| one.phase == Phase::Backend).map(|one| one.slot).collect();
-    let without: Vec<&str> = built.iter().copied().filter(|one| *one != "jumps@17").collect();
-    let why = parity::check(parity::REGISTRY, Phase::Backend, &without).expect_err("jumps@17 left out");
-    assert!(why.contains("jumps@17"), "{why}");
-    assert!(parity::joined_slots(parity::REGISTRY, &built).all(|one| one != "jumps@17"));
-    let count = parity::tally(parity::REGISTRY);
-    // jumps@17, allocate@11 (greedy by default under LLVM's order) and
-    // merge@818 (MemCpyOpt's memsets), dse@820 (stage 1) and the two
-    // jumpthreading slots (stage S1), indvars@738, coalesce@10, and decide@1178
-    // and decide@1244 (SimplifyCfg).
-    assert_eq!(count.partial, 10);
-    assert!(parity::report().contains("jumps@17") && parity::report().contains("10 partial"));
+    let fixture = [Entry {
+        slot: "fixture@1",
+        phase: Phase::Early,
+        llvm: "fixture",
+        kind: SlotKind::Partial,
+        replaced_by: "",
+        note: "criterion: c; exit: e",
+    }];
+    partial_rows_are_required_and_never_joined(&fixture);
+    partial_rows_are_required_and_never_joined(parity::REGISTRY);
 }
 
 /// A Partial slot without its criterion and exit says what is done and not what
@@ -408,4 +417,123 @@ fn test_no_old_slot_of_the_built_lists_runs_a_translated_pass() {
             assert_eq!(checked, Ok(()), "{phase:?} {level:?}");
         }
     }
+}
+
+fn recount(registry: &[Entry]) -> parity::Tally {
+    let of = |kind| registry.iter().filter(|one| one.kind == kind).count();
+    parity::Tally {
+        translated: of(SlotKind::Translated),
+        partial: of(SlotKind::Partial),
+        old: of(SlotKind::Old),
+        missing: of(SlotKind::Missing),
+    }
+}
+
+fn line(
+    what: &str,
+    count: parity::Tally,
+) -> String {
+    format!(
+        "[parity] {what} translated {} partial {} old {} missing {}",
+        count.translated, count.partial, count.old, count.missing
+    )
+}
+
+/// The registry's tally and the `[parity]` lines `LLRM_DEBUG=counts` prints are
+/// the recount of its rows by kind. A pinned number (`assert_eq!(partial, 14)`)
+/// made every slot-moving PR edit the same line, so every second one
+/// conflicted; the number to read lives in `LLRM_DEBUG=counts`, not in a test.
+fn the_counts_are_the_recount_of_the_rows(
+    registry: &[Entry],
+    analyses: &[parity::AnalysisEntry],
+) {
+    let all = recount(registry);
+    assert_eq!(parity::tally(registry), all);
+    assert_eq!(all.translated + all.partial + all.old + all.missing, registry.len());
+    let lines = parity::tally_lines_of(registry, analyses);
+    assert_eq!(lines[0], line("slots", all) + &format!(" (of {})", registry.len()));
+    let phases = [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late, Phase::Module, Phase::Backend];
+    let mut by_phase = 0;
+    for phase in phases {
+        let rows: Vec<Entry> = registry.iter().filter(|one| one.phase == phase).copied().collect();
+        by_phase += rows.len();
+        let name = format!("{phase:?}").to_lowercase();
+        let wanted = line(&format!("phase {name}"), recount(&rows));
+        assert!(lines.contains(&wanted), "{wanted}\n{lines:?}");
+    }
+    assert_eq!(by_phase, registry.len(), "a phase is missing from this test's list");
+    let of = |kind| analyses.iter().filter(|one| one.kind == kind).count();
+    let analyses_count = parity::Tally {
+        translated: of(SlotKind::Translated),
+        partial: of(SlotKind::Partial),
+        old: of(SlotKind::Old),
+        missing: of(SlotKind::Missing),
+    };
+    assert!(lines.contains(&line("analyses", analyses_count)), "{lines:?}");
+}
+
+#[test]
+fn test_the_registry_counts_are_the_recount_of_its_rows() {
+    the_counts_are_the_recount_of_the_rows(parity::REGISTRY, parity::ANALYSES);
+    let first = parity::report().lines().next().unwrap_or_default().to_owned();
+    let all = recount(parity::REGISTRY);
+    assert_eq!(
+        first,
+        format!(
+            "slots: {} translated, {} partial, {} old, {} missing",
+            all.translated, all.partial, all.old, all.missing
+        )
+    );
+}
+
+/// Moving a row's kind moves the recount and nothing pinned: the same
+/// invariants hold for the registry before and after, with no literal to edit.
+#[test]
+fn test_moving_a_row_changes_the_recount_and_no_literal() {
+    let row = |slot, kind| Entry {
+        slot,
+        phase: Phase::Simplify,
+        llvm: "fixture",
+        kind,
+        replaced_by: "",
+        note: "criterion: c; exit: e",
+    };
+    let before = [row("a@1", SlotKind::Old), row("b@2", SlotKind::Translated)];
+    let after = [row("a@1", SlotKind::Partial), row("b@2", SlotKind::Translated)];
+    for registry in [&before, &after] {
+        the_counts_are_the_recount_of_the_rows(registry, &[]);
+    }
+    assert_eq!(recount(&before), parity::Tally { translated: 1, partial: 0, old: 1, missing: 0 });
+    assert_eq!(recount(&after), parity::Tally { translated: 1, partial: 1, old: 0, missing: 0 });
+    assert_eq!(parity::tally(&after), recount(&after));
+}
+
+/// Marking a wired row Old without the runtime changing is the drift the
+/// check exists for: take the real built lists, mark one slot that holds a
+/// translated pass Old in a copy of the registry, and the check names it.
+#[test]
+fn test_marking_a_wired_row_old_is_caught_on_the_real_lists() {
+    let on = Applied {
+        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
+        ..Applied::default()
+    };
+    let mut checked = 0;
+    for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late] {
+        let passes = pipeline::llvm_order(&on, phase);
+        let held: Vec<_> = passes.iter().map(|one| (one.name(), one.translations())).collect();
+        assert_eq!(parity::check_old_slots(parity::REGISTRY, &held), Ok(()), "{phase:?}");
+        for (slot, translations) in held.iter().filter(|one| !one.1.is_empty()) {
+            let marked: Vec<Entry> = parity::REGISTRY
+                .iter()
+                .map(|one| Entry { kind: if one.slot == *slot { SlotKind::Old } else { one.kind }, ..*one })
+                .collect();
+            if marked.iter().all(|one| one.slot != *slot) {
+                continue;
+            }
+            let why = parity::check_old_slots(&marked, &held).expect_err("a wired row marked Old");
+            assert!(why.contains(slot) && why.contains(translations[0]), "{slot}: {why}");
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no slot of the built lists holds a translated pass: the scan checks nothing");
 }
