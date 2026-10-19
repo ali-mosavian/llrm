@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dfajumpthreading.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dfajumpthreading.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dfajumpthreading.rs sha256:fe0bec83c66f7a5c5cc54b6f6eac1d3407c2dd5be9f45a7296eaca766a073cde -->
+<!-- src: crates/opt/llrm-transforms/src/dfajumpthreading.rs sha256:feb56fd3d7c88f784fcb859696854fbf7c482061b671da1d21cb37859e8aeb10 -->
 
 # dfajumpthreading
 
@@ -31,21 +31,17 @@ to the clones, and SSA is restored.
                     sw: switch s      det, sw stay for the paths nobody decided
 ```
 
-DEVIATE (DF2..DF4; DF1, a `select` in the chain rejecting the switch, was
-closed by S2):
+DEVIATE (DF2, DF3; DF1, a `select` in the chain rejecting the switch, was
+closed by S2, and DF4, the loop info rebuilt after the unfolding, by S3):
 - DF2. No `DomTreeUpdater`: the pass returns `none()` when it threaded
   anything and the manager rebuilds the dominator tree and the loop info
   (the pin keeps the dominator tree, and the loop info unless it cloned);
   `updateSSA` reads a dominator tree built after the threading. No noalias
   scopes to clone (J8 of `jumpthreading.rs`), no optimization remarks,
-  `!prof` is not carried.
+  `!prof` or debug location is carried to the new branches.
 - DF3. A path through a block that starts with a `landingpad` is not
   threaded: the copy would be a second pad, and the one module handler
   (`ehprepare`) cannot choose between two (J10 of `jumpthreading.rs`).
-- DF4. The loop info is rebuilt after the `select`s are unfolded (the pin
-  adds the new blocks to the loop of the start block): `LoopInfo` has no
-  `addBasicBlockToLoop` (T3, S3). Once per switch with `select`s, linear in
-  the function. No `!prof` or debug location is carried to the new branches.
 
 ## Example
 The state is set to 1 on one path and to 2 on the other, and the `switch`

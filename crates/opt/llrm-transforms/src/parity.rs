@@ -161,12 +161,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("bdce@797", Simplify, "bdce", Translated, ""),
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@801", Simplify, "instcombine", Old, "instcombine-port"),
-    partial(
-        "dfajumpthreading@806",
-        Simplify,
-        "dfa-jump-threading",
-        "criterion: the S1 and S2 shapes of docs/architecture/dfajumpthreading-translation.md (state machines, unfolded selects) thread as tools/difftest/difftest.py (opt -passes=dfa-jump-threading) does; exit: S3 (loop-info update, DF4) landed, and the switch half of the old jumpthread.rs deleted; on by default, LLRM_NO_DFAJUMPTHREADING turns it off",
-    ),
+    entry("dfajumpthreading@806", Simplify, "dfa-jump-threading", Translated, ""),
     partial(
         "jumpthreading@809",
         Simplify,

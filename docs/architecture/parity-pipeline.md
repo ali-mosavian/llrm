@@ -57,7 +57,7 @@ At `a94491462` (read from the binary and from `parity.rs`, which agree):
 | backend | 1 | 2 | 14 | 3 |
 | analyses | 2 | 0 | 0 | 0 |
 
-After the analyses rows (every analysis the manager names has one) and the LSR row: 89 slots 23 / 9 / 49 / 8, analyses 7 / 1 / 37 / 0. `decide@1178` is Partial since the translated SimplifyCFG runs in it (#2907). `parity::check_phase` now fails when a slot the registry calls Old or Missing holds a translated pass (`FunctionPass::translation`), so a wiring PR updates its row in the same commit.
+After the analyses rows (every analysis the manager names has one) and the LSR row: 89 slots 24 / 9 / 49 / 7, analyses 7 / 1 / 37 / 0. `dfajumpthreading@806` is Translated since stage S3. `decide@1178` is Partial since the translated SimplifyCFG runs in it (#2907). `parity::check_phase` now fails when a slot the registry calls Old or Missing holds a translated pass (`FunctionPass::translation`), so a wiring PR updates its row in the same commit.
 
 Since `d92949c1e` (22/6/52/8) one slot changed state: `gvn@787` Old to Translated. The Partial notes of `jumpthreading@668/@809` and `dse@820` moved their stage. Stage landings in slots the registry counts as one row (SimplifyCFG pieces under `decide@N`, `indvars@738`, LSR, jumps) do not move the count until the row's own criterion is met.
 
