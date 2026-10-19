@@ -54,6 +54,9 @@ use crate::interprocedural::{function_mut, managers, private, procedures, report
 /// -O3), and a parameter nothing reads is not passed (`ipa-deadargs`).
 pub struct ModuleIpo {
     pub inline: crate::inline::Threshold,
+    /// The range every caller passes a parameter is stated on it (`ipa-range`,
+    /// gcc's `-fipa-vrp`).
+    pub ranges: bool,
 }
 
 impl ProgramPass for ModuleIpo {
@@ -107,6 +110,12 @@ impl ProgramPass for ModuleIpo {
                     &mut function_mut(&mut program.modules[at], id).1.attrs,
                     llrm_mir::memory::Moved::OutOfArguments,
                 );
+                modules[at].changed(id);
+                changed = true;
+            }
+        }
+        if self.ranges {
+            for (at, id) in llrm_analysis::parameter_ranges::stamp(program, &unexported) {
                 modules[at].changed(id);
                 changed = true;
             }
