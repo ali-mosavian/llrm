@@ -12,7 +12,7 @@ use llrm_x86::tti::X86;
 use crate::ivusers::{Env, IvUsers};
 use crate::lsr_collect::*;
 use crate::lsr_formula::Immediate;
-use crate::lsr_use::{Kind, Rating};
+use crate::lsr_use::Kind;
 
 const STORE: &str = "define void @f(ptr %p, i32 %n) {
 entry:
