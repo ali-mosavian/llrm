@@ -76,6 +76,7 @@
 pub mod adce;
 pub mod addresssink;
 pub mod algebraic;
+pub mod alwaysundef;
 pub mod argpromotion;
 #[cfg(test)]
 mod argpromotion_tests;
@@ -272,6 +273,7 @@ pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
 pub mod twoentryphi;
+pub mod undefpred;
 pub mod unroll;
 pub mod unroll_jam;
 pub mod unswitch;
