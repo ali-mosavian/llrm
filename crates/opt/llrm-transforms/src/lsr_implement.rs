@@ -48,6 +48,8 @@ pub struct Plan {
     /// The equality compares whose operands are exchanged first, so the operand
     /// to replace is the left one.
     pub swapped_compares: Vec<InstId>,
+    /// Where the increments of the loop's induction variables go.
+    pub iv_inc_insert_pos: InstId,
 }
 
 /// The phis that a fixup of `plan` rewrites, with the incoming edges whose
@@ -710,6 +712,12 @@ impl crate::lsr_collect::Collection<'_, '_> {
         self,
         solution: Vec<usize>,
     ) -> Plan {
-        Plan { l: self.l, uses: self.uses, solution, swapped_compares: self.swapped_compares }
+        Plan {
+            l: self.l,
+            uses: self.uses,
+            solution,
+            swapped_compares: self.swapped_compares,
+            iv_inc_insert_pos: self.iv_inc_insert_pos,
+        }
     }
 }

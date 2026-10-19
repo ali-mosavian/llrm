@@ -191,6 +191,7 @@ pub mod lsr_implement;
 mod lsr_generate_tests;
 pub mod lsr_narrow;
 pub mod lsr_pass;
+pub mod lsr_prepare;
 #[cfg(test)]
 mod lsr_pass_tests;
 pub mod lsr_solve;

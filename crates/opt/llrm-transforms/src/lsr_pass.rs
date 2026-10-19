@@ -36,6 +36,7 @@ use llrm_mir::tti::Tti;
 use crate::ivusers::{Env, IvUsers};
 use crate::lsr_collect::Collection;
 use crate::lsr_implement::{Implement, Plan, split_phi_edges};
+use crate::lsr_prepare::{self, ExitEdit};
 
 /// `MaxIVUsers`.
 const MAX_IV_USERS: usize = 200;
@@ -89,8 +90,38 @@ fn assume_calls(
         .collect()
 }
 
+/// What the constructor of `LSRInstance` makes of a loop.
+enum Outcome {
+    /// The loop is left as it is, or this is its plan.
+    Planned(Option<Plan>),
+    /// Exit tests to edit first; the loop is then analysed again.
+    Edit(Vec<ExitEdit>),
+}
+
+/// `DominatorTree::findNearestCommonDominator(Instruction *, Instruction *)`.
+fn nearest_common_dominator(
+    cx: &llrm_analysis::scev::Cx,
+    a: InstId,
+    b: InstId,
+) -> InstId {
+    let (block_a, block_b) = (cx.function.parent(a).expect("placed"), cx.function.parent(b).expect("placed"));
+    if block_a == block_b {
+        return if cx.tree.instruction_dominates(cx.function, a, b) { a } else { b };
+    }
+    let common = cx.tree.find_nearest_common_dominator(cx.function, block_a, block_b).expect("a common dominator");
+    if common == block_a {
+        a
+    } else if common == block_b {
+        b
+    } else {
+        cx.function.terminator(common).expect("a terminator")
+    }
+}
+
 /// What `LSRInstance`'s constructor decides for the loop with header `header`:
-/// the plan, or none where the loop is left as it is.
+/// the plan, or none where the loop is left as it is. `marked` are the exit
+/// tests already edited to take the post-incremented value; none until the
+/// first look has found edits to make.
 #[allow(clippy::too_many_arguments)]
 fn plan_loop(
     context: &Context,
@@ -101,9 +132,11 @@ fn plan_loop(
     se: &mut ScalarEvolution,
     env: &ExpandEnv,
     header: BlockId,
-) -> Option<Plan> {
+    marked: Option<&[InstId]>,
+) -> Outcome {
+    let planned = |plan| Outcome::Planned(plan);
     let cx = env.cx(context, function);
-    let lp = cx.loops.get_loop_for(header)?;
+    let Some(lp) = cx.loops.get_loop_for(header) else { return planned(None) };
     // Loop simplify form, or stay out of trouble; and the innermost loops
     // only: the outer ones wait for a model of them.
     if lp.get_loop_preheader(function).is_none()
@@ -111,7 +144,7 @@ fn plan_loop(
         || !lp.has_dedicated_exits(function)
         || !lp.is_innermost()
     {
-        return None;
+        return planned(None);
     }
     let mut rewriter = Expander::new("lsr");
     rewriter.set_canonical_mode(false);
@@ -125,19 +158,37 @@ fn plan_loop(
     let safe_to_speculate =
         |inst: InstId| crate::licm::hoist::is_safe_to_speculatively_execute_in(context, layout, function, outer, inst);
     let is_ephemeral = |inst: InstId| ephemeral.contains(&inst);
-    let users = IvUsers::of(se, &cx, header, &Env { safe_to_speculate: &safe_to_speculate, ephemeral: &is_ephemeral });
+    let mut users =
+        IvUsers::of(se, &cx, header, &Env { safe_to_speculate: &safe_to_speculate, ephemeral: &is_ephemeral });
     // No interesting work, or too much analysis to model it.
     if users.uses.is_empty() || users.uses.len() > MAX_IV_USERS {
-        return None;
+        return planned(None);
+    }
+    // The exit tests: the first look finds what to edit, the second marks the
+    // tests it made.
+    let mut iv_inc_insert_pos = function.terminator(lp.get_loop_latch(function).expect("a latch")).expect("a terminator");
+    match marked {
+        None => {
+            let edits = lsr_prepare::analyze(se, &cx, tti, header, &users);
+            if edits.iter().any(|edit| edit.max.is_some() || edit.post_inc) {
+                return Outcome::Edit(edits);
+            }
+        }
+        Some(conds) => {
+            for &cond in conds {
+                users.transform_to_post_inc(cond, header);
+                iv_inc_insert_pos = nearest_common_dominator(&cx, iv_inc_insert_pos, cond);
+            }
+        }
     }
 
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
-    let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false);
+    let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
     lsr.collect_interesting_types_and_factors(se, &users);
     lsr.collect_fixups_and_initial_formulae(se, &users);
     lsr.collect_loop_invariant_fixups_and_formulae(se);
     if lsr.uses.is_empty() {
-        return None;
+        return planned(None);
     }
     // The formulae for each use, and the search space made small enough.
     lsr.generate_all_reuse_formulae(se);
@@ -145,9 +196,9 @@ fn plan_loop(
     lsr.narrow_search_space_using_heuristics(se);
     let solution = lsr.solve(se);
     if solution.is_empty() {
-        return None;
+        return planned(None);
     }
-    Some(lsr.into_plan(solution))
+    planned(Some(lsr.into_plan(solution)))
 }
 
 /// `ReduceLoopStrength` over every loop of `function`, innermost first;
@@ -169,27 +220,32 @@ pub fn reduced(
     };
     let mut changed = false;
     for header in headers {
-        // At most twice: the first plan may split edges, and the blocks it made
-        // are in the analyses of the second.
-        for _ in 0..2 {
+        // The first look may find exit tests to edit, and the plan may split
+        // edges: each is followed by an analysis of the loop as it is then.
+        let mut marked: Option<Vec<InstId>> = None;
+        for _ in 0..4 {
             let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
             let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
-            let Some(plan) = plan_loop(context, layout, function, outer, tti, se, &env, header) else { break };
+            let plan = match plan_loop(context, layout, function, outer, tti, se, &env, header, marked.as_deref()) {
+                Outcome::Planned(None) => break,
+                Outcome::Edit(edits) => {
+                    marked = Some(lsr_prepare::apply(function, &context.types, header, &edits));
+                    changed = true;
+                    continue;
+                }
+                Outcome::Planned(Some(plan)) => plan,
+            };
             let lp_blocks: llrm_support::hash::HashSet<BlockId> = env
                 .loops
                 .get_loop_for(header)
                 .map(|lp| lp.get_blocks().iter().copied().collect())
                 .unwrap_or_default();
-            if split_phi_edges(function, &plan, &|block| env.loops.is_loop_header(block), &|block| lp_blocks.contains(&block)) {
+            if split_phi_edges(function, &plan, &|block| env.loops.is_loop_header(block), &|block| lp_blocks.contains(&block))
+            {
                 changed = true;
                 continue;
             }
             // Expand and rewrite.
-            let latch = {
-                let cx = env.cx(&*context, &*function);
-                let lp = cx.loops.get_loop_for(header).expect("a loop");
-                function.terminator(lp.get_loop_latch(function).expect("a latch")).expect("a terminator")
-            };
             let mut rewriter = Expander::new("lsr");
             rewriter.set_canonical_mode(false);
             rewriter.enable_lsr_mode();
@@ -202,7 +258,7 @@ pub fn reduced(
                 rewriter: &mut rewriter,
                 tti,
                 l: header,
-                iv_inc_insert_pos: latch,
+                iv_inc_insert_pos: plan.iv_inc_insert_pos,
                 dead: Vec::new(),
                 changed: false,
             };

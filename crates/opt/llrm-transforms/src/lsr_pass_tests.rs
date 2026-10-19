@@ -51,6 +51,7 @@ exit:
 #[test]
 fn an_array_walk_is_a_pointer_and_a_counter_to_zero() {
     let (changed, after) = reduced(ARRAY, "i486", &[&[1], &[5], &[17], &[40]]);
+    eprintln!("{after}");
     assert!(changed, "{after}");
     assert!(after.contains("getelementptr i8, ptr"), "{after}");
     assert!(!after.contains("getelementptr i32"), "{after}");

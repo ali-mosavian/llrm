@@ -442,7 +442,9 @@ pub struct Collection<'a, 'b> {
     /// `Rewriter.isSafeToExpand`.
     pub safe_to_expand: &'a dyn Fn(&mut ScalarEvolution, Scev) -> bool,
     pub hardware_loop_profitable: bool,
-    /// The block of the IV increment's insert position: the latch.
+    /// Where the IV increments go: the latch's terminator, or a point that
+    /// dominates the post-increment tests.
+    pub iv_inc_insert_pos: InstId,
     pub iv_inc_block: BlockId,
     pub uses: Vec<Use>,
     use_map: HashMap<(Scev, Kind), usize>,
@@ -467,9 +469,9 @@ impl<'a, 'b> Collection<'a, 'b> {
         l: BlockId,
         safe_to_expand: &'a dyn Fn(&mut ScalarEvolution, Scev) -> bool,
         hardware_loop_profitable: bool,
+        iv_inc_insert_pos: InstId,
     ) -> Self {
-        let lp = cx.loops.get_loop_for(l).expect("a loop");
-        let iv_inc_block = lp.get_loop_latch(cx.function).expect("a loop with one latch");
+        let iv_inc_block = cx.function.parent(iv_inc_insert_pos).expect("a placed instruction");
         Self {
             cx,
             tti,
@@ -477,6 +479,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             safe_to_expand,
             hardware_loop_profitable,
             iv_inc_block,
+            iv_inc_insert_pos,
             uses: Vec::new(),
             use_map: HashMap::default(),
             reg_uses: RegUseTracker::default(),

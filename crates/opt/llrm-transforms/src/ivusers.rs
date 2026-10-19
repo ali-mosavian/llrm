@@ -240,6 +240,20 @@ impl IvUsers {
         true
     }
 
+    /// `transformToPostInc`: the use of `cond` takes the post-incremented value
+    /// of loop `l`.
+    pub fn transform_to_post_inc(
+        &mut self,
+        cond: InstId,
+        l: BlockId,
+    ) {
+        if let Some(u) = self.uses.iter_mut().find(|u| u.user == cond)
+            && !u.post_inc_loops.contains(&l)
+        {
+            u.post_inc_loops.push(l);
+        }
+    }
+
     /// `getReplacementExpr`: the expression that computes the replaced operand.
     pub fn replacement_expr(
         se: &mut ScalarEvolution,
