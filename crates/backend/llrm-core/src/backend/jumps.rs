@@ -93,7 +93,7 @@ use std::sync::Arc;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::frequency::Frequency;
-use crate::analysis::loops as loopy;
+use crate::analysis::loops::{self as loopy, Loop};
 use crate::backend::layout::_OPPOSITE;
 use crate::backend::{cpu, machinedce, masm, select};
 use crate::model::ir::{Operation, Semantics};
@@ -183,7 +183,7 @@ pub fn optimized(
         };
         placed = machinedce::eliminated(threaded(&merged));
     }
-    let done = inverted(&placed);
+    let done = aligned(&inverted(&placed, size), cpu);
     // Every block leaves by a way the printer can read.
     #[cfg(test)]
     for block in &done.blocks {
@@ -192,13 +192,57 @@ pub fn optimized(
     Ok(done)
 }
 
+/// `alignBlocks`: a block of a loop that is entered other than by falling
+/// through, or only rarely so, starts at the target's preferred loop alignment,
+/// unless it is cold against the function or its loop. Not for size.
+fn aligned(
+    body: &LirBody,
+    cpu: &cpu::Profile,
+) -> LirBody {
+    if cpu.size || cpu.loop_alignment == 0 || body.blocks.len() < 2 {
+        return body.clone();
+    }
+    const COLD: f64 = 0.2;
+    let found = loopy::loops(&body.blocks, Some(body.entry));
+    if found.is_empty() {
+        return body.clone();
+    }
+    let busy = Frequency::of(body);
+    let entry = busy.block(body.entry);
+    // The loop nearest round each block: the smallest first.
+    let mut nearest: IndexMap<i64, &Loop> = IndexMap::default();
+    for one in found.iter().rev() {
+        for at in one.body.to_set() {
+            nearest.insert(at, one);
+        }
+    }
+    let mut blocks = body.blocks.clone();
+    for place in 1..blocks.len() {
+        let at = blocks[place].at;
+        let Some(round) = nearest.get(&at) else { continue };
+        let here = busy.block(at);
+        if here < entry * COLD || here < busy.block(round.header) * COLD {
+            continue;
+        }
+        let before = &blocks[place - 1];
+        let enters = before.succ.contains(&at);
+        if !enters || busy.edge(before.at, at) <= here * COLD {
+            blocks[place] = LirBlock { align: cpu.loop_alignment, ..blocks[place].clone().into_inner() }.into();
+        }
+    }
+    body.with_blocks(blocks)
+}
+
 /// A conditional branch taken to the block laid out next, followed by a jump:
 /// the opposite branch to the jump's target, and no jump (LLVM's
 /// `analyzeBranch` / `reverseBranchCondition` in BranchFolding). `_step` does
 /// this while it places blocks; copying a tail afterwards (`duplicated`) makes
 /// more of them. Where neither way is laid out next, the likelier one becomes
 /// the conditional jump, so the trip that goes on pays one taken branch.
-fn inverted(body: &LirBody) -> LirBody {
+fn inverted(
+    body: &LirBody,
+    size: bool,
+) -> LirBody {
     let mut blocks = body.blocks.clone();
     let mut changed = false;
     let mut odds: Option<std::sync::Arc<crate::analysis::frequency::Frequency>> = None;
@@ -226,6 +270,10 @@ fn inverted(body: &LirBody) -> LirBody {
             // conditional jump, so that the trip that goes on pays one taken
             // branch, not a branch not taken and a jump (the loop that went
             // round by `je exit; jmp top`).
+            // For size the branch keeps its condition (`optimizeBranches`).
+            if size {
+                continue;
+            }
             let (taken, onward) = (branch_what.target.expect("a target"), last_what.target.expect("a target"));
             let busy = odds.get_or_insert_with(|| crate::analysis::frequency::Frequency::of(body));
             if after == last_what.target || busy.edge(blocks[index].at, onward) <= busy.edge(blocks[index].at, taken) {
