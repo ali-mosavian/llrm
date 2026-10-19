@@ -119,6 +119,7 @@ pub fn machine_with<'a>(
             prices: ssaspill::Prices::of(target),
             run: spilling.clone().unwrap_or_default(),
         }),
+        Box::new(crate::backend::precse::ShadowCse),
         Box::new(phielim::PhiElimination { prices: phielim::EdgePrices::of(target) }),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
