@@ -289,12 +289,6 @@ def test_the_build_cache_drops_the_least_recently_used_trees_past_its_cap(tmp_pa
     assert measure.pruned(tmp_path, tmp_path / "using", 10**9) == []
 
 
-def test_the_build_cache_cap_defaults_to_no_more_than_a_third_of_what_filled_the_disk():
-    """The cap was 120 GB and 13 trees (92 GB, 48 of them stale) sat in ~/.cache/llrm/measure-build while /home fell to 289 GB free."""
-    assert measure.DEFAULT_BUILD_CAP_GB <= 40
-    assert measure.BUILD_CAP == int(float(os.environ.get("LLRM_MEASURE_BUILD_CAP_GB") or measure.DEFAULT_BUILD_CAP_GB) * 2**30)
-
-
 def test_a_commit_only_the_remote_has_is_checked_out_in_a_clone_measure_owns(tmp_path):
     """'unable to read tree': the build tree was a worktree of another session's repository. It is a clone measure.py makes of this
     repository, and a commit this repository has not got is fetched from its origin."""

@@ -204,15 +204,16 @@ def test_no_step_switches_on_between_the_two_sizes_of_an_axis(axis):
     assert not switched, f"{axis} at N={SIZES[axis]}: exponent N -> 2N exceeds N/2 -> N by: {switched}: a regime change in the window; use a larger N"
 
 
-def test_the_nest_axis_has_no_loop_products_onset():
-    """`analysis loop-products` misses are 1 at N/2, N and 2N, with `analysis pressure` equal: no switch inside the window. The onset at N=20
-    the axis used to straddle (1, 1, 4, 4, 3, 8, 9, 12 at N=16..32) was profit's loop products wrapping past i64 (10 trips a loop, 10^19 at
-    19 loops); with the weights capped at MAX_FREQUENCY (#2374) it is gone."""
+def test_the_nest_axis_straddles_the_loop_products_onset():
+    """The counter of the switch (not its cause): `analysis loop-products` misses are 1 up to N=18 and more from N=20 (1, 1, 4, 4, 3, 8, 9, 12 at N=16,
+    18, 20, 22, 24, 26, 28, 32; 26 at 64; `analysis pressure` equal at every N). N/2 must sit before the onset and N after it, or the slope read
+    from N to 2N is partly the switch."""
     size = SIZES["nest"]
     half = parsed_counts(run(source_of("nest", size // 2), "nest", "counts"))
     small, big, _, _ = measured("nest")
-    for counts in (half, small, big):
-        assert counts["analysis loop-products"] == 1 and counts["analysis pressure"] == 1, counts
+    assert half["analysis loop-products"] == 1 and half["analysis pressure"] == half["analysis loop-products"], half
+    assert small["analysis loop-products"] > 1 and big["analysis loop-products"] > small["analysis loop-products"], (small, big)
+    assert small["analysis pressure"] == small["analysis loop-products"] and big["analysis pressure"] == big["analysis loop-products"]
 
 
 @cache
