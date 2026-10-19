@@ -80,6 +80,7 @@
 //! | [`simplifyUncondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8800) | `jump_simplified` | the empty-block half; D2 |
 //! | [`TryToSimplifyUncondBranchFromEmptyBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L1147) | `empty_block_removed` | MIRROR; D6 |
 //! | [`SimplifyCFGOptions::NeedCanonicalLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/SimplifyCFGOptions.h#L29), read at [`simplifyUncondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8812) | `Options::need_canonical_loop` | MIRROR: true by default and at the early slot, cleared at the one after vectorization ([`PassBuilderPipelines.cpp#L1443`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L1443)); D7 |
+//! | [`hoistCommonCodeFromSuccessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L1873), called from `simplifyCondBranch` ([L9016](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9016)) and `simplifySwitch` ([L8647](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8647)) | `branch_hoisted`, `hoistcommon::hoisted`, `Options::hoist_common_insts` | MIRROR for the calls; see that module |
 //! | [`foldTwoEntryPHINode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3834), called from `simplifyOnce` ([L9351](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9351)) under `SpeculateBlocks` | `twoentryphi::folded`, `Options::speculate_blocks` | MIRROR; see that module |
 //! | [`speculativelyExecuteBB`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3244), called from `simplifyCondBranch` ([L9060](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9060)) | `branch_speculated`, `speculate::executed` | MIRROR for the call; see that module |
 //! | [`FindFunctionBackedges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L236) | `loop_headers` | MIRROR |
@@ -182,9 +183,9 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
-use crate::speculate;
 use crate::twoentryphi::{self, Speculation};
 use crate::{cfg, dead, edges, transform};
+use crate::{hoistcommon, speculate};
 
 /// LLVM's `SimplifyCFGPass` at the options of the early function pipeline
 /// slot (`SimplifyCFGOptions()`: `PassBuilderPipelines.cpp`).
@@ -223,11 +224,14 @@ pub struct Options {
     pub need_canonical_loop: bool,
     /// `SpeculateBlocks`: true by default and at every slot.
     pub speculate_blocks: bool,
+    /// `HoistCommonInsts`: hoist the code the arms of a branch share even
+    /// where the arms differ; off, only arms that are the same entirely.
+    pub hoist_common_insts: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { need_canonical_loop: true, speculate_blocks: true }
+        Options { need_canonical_loop: true, speculate_blocks: true, hoist_common_insts: false }
     }
 }
 
@@ -327,6 +331,9 @@ fn block_simplified(
     if options.speculate_blocks && function.is_placed(block) && twoentryphi::folded(context, spec, function, block) {
         return true;
     }
+    if function.is_placed(block) && branch_hoisted(options, context, spec, function, block) {
+        return true;
+    }
     if options.speculate_blocks && function.is_placed(block) && branch_speculated(context, spec, function, block) {
         return true;
     }
@@ -334,6 +341,28 @@ fn block_simplified(
         | (function.is_placed(block)
             && !form.contains(&llrm_analysis::cfg::id(block))
             && jump_simplified(context, function, block, headers))
+}
+
+/// The code the two arms of the branch ending `block` share, run before it:
+/// `simplifyCondBranch`'s call of `hoistCommonCodeFromSuccessors`, where both
+/// arms have no other predecessor.
+fn branch_hoisted(
+    options: &Options,
+    context: &Context,
+    spec: &Speculation,
+    function: &mut Function,
+    block: BlockId,
+) -> bool {
+    let Some(last) = function.terminator(block) else { return false };
+    if function.instruction(last).opcode == Opcode::Switch {
+        return hoistcommon::hoisted(context, spec, function, last, !options.hoist_common_insts);
+    }
+    let &[_, Operand::Block(first), Operand::Block(second)] = &function.instruction(last).operands[..] else {
+        return false;
+    };
+    function.predecessors(first).len() == 1
+        && function.predecessors(second).len() == 1
+        && hoistcommon::hoisted(context, spec, function, last, !options.hoist_common_insts)
 }
 
 /// The one-armed `if` ending `block` run before its branch: the speculation
