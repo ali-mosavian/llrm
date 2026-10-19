@@ -132,11 +132,12 @@ fn hoist(
     Ok(())
 }
 
-/// The edit of
-/// [`hoistBOAssociation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2686):
-/// `c1 op c2` before the preheader's terminator, `bo` replaced by `lv op` that,
-/// and `bo0`, which only `bo` read, erased. DEVIATE: `c1 op c2` is made even
-/// where both are constants (no folding builder).
+/// The edit of a [`Reassociation`]. For `hoistBOAssociation`, `c1 op c2` goes
+/// before the preheader's terminator, `bo` is replaced by `lv op` that, and
+/// `bo0`, which only `bo` read, is erased. DEVIATE: `c1 op c2` is made even
+/// where both are constants (no folding builder). For `hoistGEP`, the GEP of
+/// the outer indices goes there and `gep` is replaced by one of the inner
+/// indices on it.
 fn reassociate(
     function: &mut Function,
     context: &Context,
@@ -145,34 +146,58 @@ fn reassociate(
     one: &Reassociation,
 ) -> Result<(), String> {
     let terminator = function.terminator(preheader).ok_or("a preheader with no terminator")?;
-    let ty = function.instruction(one.bo).ty;
-    let inv =
-        function.create_instruction(Opcode::Binary(one.op), ty, vec![one.c1, one.c2], one.flags, Some("invariant.op"));
+    let old = one.inst();
+    let ty = function.instruction(old).ty;
+    // The invariant instruction, then the new one: its opcode and flags, the
+    // operands before the invariant one, and those after it.
+    let (invariant, rebuilt) = match one {
+        Reassociation::BinaryOp { op, lv, c1, c2, flags, .. } => (
+            (Opcode::Binary(*op), vec![*c1, *c2], *flags, "invariant.op"),
+            (Opcode::Binary(*op), *flags, vec![*lv], vec![]),
+        ),
+        Reassociation::Gep { gep, src, in_bounds } => {
+            let (gep, src) = (function.instruction(*gep), function.instruction(*src));
+            let (Opcode::GetElementPtr { source: outer }, Opcode::GetElementPtr { source: inner }) =
+                (&gep.opcode, &src.opcode)
+            else {
+                return Err("a GEP reassociation of a non-GEP".into());
+            };
+            let flags = if *in_bounds { Flags::INBOUNDS } else { Flags::default() };
+            let outer_operands = [&src.operands[..1], &gep.operands[1..]].concat();
+            (
+                (Opcode::GetElementPtr { source: *outer }, outer_operands, flags, "invariant.gep"),
+                (Opcode::GetElementPtr { source: *inner }, flags, vec![], src.operands[1..].to_vec()),
+            )
+        }
+    };
+    let (opcode, operands, flags, name) = invariant;
+    let inv = function.create_instruction(opcode, ty, operands, flags, Some(name));
     function.insert(inv, Position::Before(terminator))?;
     graph.created(context, function, inv, preheader, Created::End);
     let inv_result = function.instruction(inv).result.ok_or("an invariant op with no result")?;
-    let name = function
-        .instruction(one.bo)
-        .result
-        .and_then(|result| function.value(result).name.clone())
-        .map(|name| format!("{name}.reass"));
-    let new = function.create_instruction(
-        Opcode::Binary(one.op),
-        ty,
-        vec![one.lv, Operand::Value(inv_result)],
-        one.flags,
-        name.as_deref(),
-    );
-    function.insert(new, Position::Before(one.bo))?;
-    let home = function.parent(one.bo).ok_or("an instruction in no block")?;
+    let (opcode, flags, head, tail) = rebuilt;
+    let operands = [head, vec![Operand::Value(inv_result)], tail].concat();
+    // LLVM names the new GEP "gep".
+    let name = match one {
+        Reassociation::BinaryOp { .. } => function
+            .instruction(old)
+            .result
+            .and_then(|result| function.value(result).name.clone())
+            .map(|name| format!("{name}.reass")),
+        Reassociation::Gep { .. } => Some("gep".to_string()),
+    };
+    let new = function.create_instruction(opcode, ty, operands, flags, name.as_deref());
+    function.insert(new, Position::Before(old))?;
+    let home = function.parent(old).ok_or("an instruction in no block")?;
     graph.created(context, function, new, home, Created::End);
-    let old = function.instruction(one.bo).result.ok_or("an associative op with no result")?;
+    let old_result = function.instruction(old).result.ok_or("a reassociated op with no result")?;
     let new_result = function.instruction(new).result.ok_or("a reassociated op with no result")?;
-    function.replace_all_uses_with(old, Operand::Value(new_result));
-    graph.erase(function, one.bo);
-    function.erase(one.bo)?;
-    graph.erase(function, one.bo0);
-    function.erase(one.bo0)
+    function.replace_all_uses_with(old_result, Operand::Value(new_result));
+    for gone in [old, one.erased()] {
+        graph.erase(function, gone);
+        function.erase(gone)?;
+    }
+    Ok(())
 }
 
 /// The first instruction of `block` that is not a phi.

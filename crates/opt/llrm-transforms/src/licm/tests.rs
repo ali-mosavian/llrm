@@ -1018,3 +1018,47 @@ c60:
     let looked = super::sink::CHILDREN_EXAMINED.with(|one| one.get());
     assert!(looked <= 10, "{looked} blocks looked at for a loop of two blocks in a function of 64");
 }
+
+/// `hoistGEP`: matmul's `gep i16, (gep [16 x i8], %a, %j), %i` read the
+/// invariant index only after the variant one, so the row address was rebuilt
+/// every trip. Not for constant indices, nor when the inner GEP has another
+/// user.
+#[test]
+fn test_a_gep_of_a_variant_gep_is_reassociated_to_leave_the_loop() {
+    let text = |outer: &str, extra: &str| {
+        format!(
+            "define i16 @f(ptr %a, i16 %n, i16 %k) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %p = getelementptr inbounds i16, ptr %a, i16 %i
+  %q = getelementptr inbounds [16 x i8], ptr %p, i16 {outer}
+  {extra}
+  store i8 1, ptr %q
+  %i1 = add nuw i16 %i, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        )
+    };
+    let after = licm_printed(&text("%k", ""));
+    assert!(
+        block_of(&after, "b0")
+            .iter()
+            .any(|line| line.contains("%invariant.gep = getelementptr [16 x i8], ptr %a, i16 %k")),
+        "{after}"
+    );
+    assert!(
+        block_of(&after, "b1").iter().any(|line| line.contains("%gep = getelementptr i16, ptr %invariant.gep, i16 %i")),
+        "{after}"
+    );
+    assert!(!after.contains("%p ="), "{after}");
+    assert!(!licm_printed(&text("3", "")).contains("invariant.gep"));
+    assert!(!licm_printed(&text("%k", "store ptr %p, ptr %a")).contains("invariant.gep"));
+}

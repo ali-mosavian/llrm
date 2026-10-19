@@ -327,7 +327,7 @@ fn record_edits(
         count(inst, decisions);
     }
     for one in reassociated {
-        decisions.reassociated.push(Hoisted { function: unit.id, header, inst: one.bo });
+        decisions.reassociated.push(Hoisted { function: unit.id, header, inst: one.inst() });
     }
 }
 
