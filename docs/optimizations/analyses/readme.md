@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 56 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 57 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -31,9 +31,10 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 56 documented, 0 undoc
 | floatbounds | Floating operations that are exact over bounded, not necessarily known, integers. | `exact`, `evaluated`, `_memory`. No pass consumes them: only this module's | [floatbounds](floatbounds.md) |
 | floatfacts | Exact finite values of floating-point operations, and the memory they pass through. | `Solved { integers, facts }`, `solved_with`, `solved_over`, `known`, | [floatfacts](floatfacts.md) |
 | frameescape | Which frame objects' addresses reach where, and which are exposed. | `exposed_allocas`, `exposes`, `framed`, `analysed`. Consumers: | [frameescape](frameescape.md) |
-| functionattrs | `norecurse`, `nounwind`, `willreturn` and `noreturn` of one call-graph SCC, as LLVM's `PostOrderFunctionAttrs` infers them from a body and the attributes of its callees. | `interprocedural::stamped` once per SCC, callees first, for the four flags. | [functionattrs](functionattrs.md) |
+| functionattrs | `norecurse`, `nounwind`, `willreturn` and `noreturn` of one call-graph SCC, as LLVM's `PostOrderFunctionAttrs` infers them from a body and the attributes of its callees. | `interprocedural::stamped` calls `post_order` once per SCC, callees first: | [functionattrs](functionattrs.md) |
 | generated | Random loops for checking the recurrence form (`induction::Scev`) against the interpreter. | `case`, `seeds`, `observed`, `Inputs`, `Rng`, `Tracked`, built only for | [generated](generated.md) |
 | globalsaa | Which globals no code outside the program reaches but by name: LLVM's GlobalsAA, GCC's ipa-reference. | `Globals` (`tracked`, `unsummarized`, `entries`, `covers`), `analysis`, | [globalsaa](globalsaa.md) |
+| globalsmodref | What each function does to the globals no code reaches but by name: LLVM's `GlobalsModRef.cpp` (`GlobalsAAResult`), translated at the pin (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/GlobalsModRef.cpp>). | `GlobalsModRef`, `FunctionInfo`, `compute`. | [globalsmodref](globalsmodref.md) |
 | graph | Block-graph algorithms (loops, depth, reducibility, dominators) over any IR whose blocks implement `loops::Node`. | The algorithms of `loops`. Consumers: [`crate::cfg`](cfg.md) (`Loop`, `Node`, | [graph](graph.md) |
 | guards | What the branches that dominate a block prove on entry to it. | Guard facts and the implication queries above. Consumers: `decide`, | [guards](guards.md) |
 | induction | Which values are affine functions of a loop's counter, and how many trips a loop makes. | `AffineOperand`, `Affine`, `CountedLoop`, `Counted`, `ExitCount`, `Scev`, | [induction](induction.md) |

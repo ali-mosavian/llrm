@@ -141,7 +141,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
     entry("inferspace@787", Simplify, "infer-address-spaces (target)", Old, ""),
     entry("gvn@787", Simplify, "gvn", Old, "gvn-port"),
-    entry("sccp@792", Simplify, "sccp", Missing, ""),
+    entry("sccp@792", Simplify, "sccp", Translated, ""),
     entry("bdce@797", Simplify, "bdce", Translated, ""),
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@801", Simplify, "instcombine", Old, "instcombine-port"),

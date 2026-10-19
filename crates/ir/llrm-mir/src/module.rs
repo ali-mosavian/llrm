@@ -617,7 +617,7 @@ impl Function {
         &self.blocks[id.0 as usize]
     }
 
-    /// `BasicBlock::begin` to `end` without the view: a cursor over the links.
+    /// `BasicBlock::begin` to `end`: a cursor over the links.
     pub fn iter_block(
         &self,
         id: BlockId,

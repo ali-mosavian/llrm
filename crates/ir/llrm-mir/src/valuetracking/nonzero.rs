@@ -1540,13 +1540,16 @@ pub fn strip_and_accumulate_constant_offsets(
             }
             offset = offset.wrapping_add(sext_or_trunc(gep_offset, gep_width, width)) & mask(width);
             current = gep.pointer;
-        } else if operator.instruction.opcode == Opcode::Cast(CastOp::BitCast) {
+        } else if matches!(operator.instruction.opcode, Opcode::Cast(CastOp::BitCast)) {
             let source = operator.instruction.operands[0];
             if !q.is_pointer(source) {
                 return (current, offset);
             }
             current = source;
-        } else if operator.instruction.opcode == Opcode::Cast(CastOp::AddrSpaceCast) {
+        } else if matches!(
+            operator.instruction.opcode,
+            Opcode::Cast(CastOp::AddrSpaceCast)
+        ) {
             current = operator.instruction.operands[0];
         } else if call_info(&operator.instruction).is_some() {
             if let Some(returned) = returned_argument_operand(q, &operator.instruction) {
@@ -1726,7 +1729,7 @@ fn is_known_non_equal_demanded(
     let ptr_to_int_same_size = |v: Operand| {
         let operator = operator(q, v)?;
         let source = operator.instruction.operands.first().copied()?;
-        let same = operator.instruction.opcode == Opcode::Cast(CastOp::PtrToInt)
+        let same = matches!(operator.instruction.opcode, Opcode::Cast(CastOp::PtrToInt))
             && q.layout.size_bits(&q.context.types, operator.instruction.ty)
                 == q.layout.size_bits(&q.context.types, q.type_of(source)?);
         same.then_some(source)

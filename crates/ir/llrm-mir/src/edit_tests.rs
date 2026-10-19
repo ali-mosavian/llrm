@@ -731,6 +731,19 @@ fn test_unannotate_logs_the_rewrite_of_the_instruction() {
     assert!(f.take_changes().is_empty(), "nothing was taken off the second time");
 }
 
+/// `take_name` is `Value::takeName`: the new value is named what the old one
+/// was and the old one has none, as SCCP's `sext` -> `zext nneg` keeps `%s`.
+#[test]
+fn test_take_name_moves_the_name_to_the_other_value() {
+    let mut module =
+        module("define i16 @f(i16 %a) {\nentry:\n  %s = add i16 %a, 1\n  %t = add i16 %a, 2\n  ret i16 %t\n}\n");
+    let f = function(&mut module);
+    let ((s, sv), (t, tv)) = (named(f, "s"), named(f, "t"));
+    f.take_name(sv, tv);
+    assert_eq!((f.value(sv).name.clone(), f.value(tv).name.clone()), (None, Some("s".to_string())));
+    let _ = (s, t);
+}
+
 /// A block cloned without a remap reads the original's values; after the
 /// remap its instructions read the copy's, and the original is untouched.
 #[test]
@@ -753,4 +766,37 @@ fn a_cloned_block_reads_its_own_values_once_remapped() {
     let (y, _) = named(f, "y");
     assert_eq!(f.instruction(y).operands[0], Operand::Value(x));
     assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
+}
+
+const JOIN: &str = "define i16 @f(i1 %c, i16 %a, i16 %b) {\nentry:\n  br i1 %c, label %p1, label %p2\np1:\n  switch i16 %a, label %join [\n    i16 0, label %p3\n  ]\np2:\n  br label %join\np3:\n  br label %join\njoin:\n  %m = phi i16 [ %a, %p1 ], [ %b, %p2 ], [ 7, %p3 ]\n  ret i16 %m\n}\n";
+
+/// `removeIncomingValue` moves the LAST input into the removed one's slot; the
+/// order-preserving removal left `[%b, %p2], [7, %p3]` where `opt` leaves
+/// `[7, %p3], [%b, %p2]`, so every later phi walk differed from LLVM's.
+#[test]
+fn removing_a_predecessor_moves_the_last_phi_input_into_its_slot() {
+    let mut module = module(JOIN);
+    let (context, f) = module.function_mut("f").expect("@f");
+    let block = |f: &Function, name: &str| {
+        f.layout().iter().copied().find(|&b| f.block(b).name.as_deref() == Some(name)).expect(name)
+    };
+    let (join, p1) = (block(f, "join"), block(f, "p1"));
+    let (m, _) = named(f, "m");
+    f.predecessor_removed(context, join, p1, true);
+    let from: Vec<Operand> = f.instruction(m).operands.chunks(2).map(|pair| pair[1]).collect();
+    assert_eq!(from, vec![Operand::Block(block(f, "p3")), Operand::Block(block(f, "p2"))]);
+}
+
+/// With every other input the phi itself, `hasConstantValue` is poison and
+/// the phi goes; the skip-self version returned nothing and left the phi.
+#[test]
+fn a_phi_left_with_only_itself_becomes_poison() {
+    let text = "define i16 @f(i1 %c, i16 %a) {\nentry:\n  br i1 %c, label %loop, label %out\nloop:\n  %m = phi i16 [ %a, %entry ], [ %m, %loop ], [ %m, %loop ]\n  br i1 %c, label %loop, label %out\nout:\n  ret i16 %a\n}\n";
+    let mut module = module(text);
+    let (context, f) = module.function_mut("f").expect("@f");
+    let loop_block = f.layout().iter().copied().find(|&b| f.block(b).name.as_deref() == Some("loop")).unwrap();
+    let entry = f.entry().unwrap();
+    let (m, _) = named(f, "m");
+    f.predecessor_removed(context, loop_block, entry, false);
+    assert!(f.is_erased(m), "the phi of itself alone is replaced by poison and erased");
 }
