@@ -479,3 +479,29 @@ def test_a_precheck_verdict_is_cached_per_pr_head_and_feat_parity_sha(tmp_path, 
     assert ps.precheck("5", base_sha="p1", **args) == "5: PASS" and ps.precheck("5", base_sha="p1", **args) == "5: PASS" and len(merges) == 1
     assert ps.precheck("5", base_sha="p2", **args) == "5: PASS" and len(merges) == 2
     assert ps.precheck("9", base_sha="p2", **args) == "9: PASS" and len(merges) == 2  # the verdict is for the head sha, whichever number asks
+
+
+def test_the_precheck_formats_only_the_prs_own_rust_files(tmp_path, monkeypatch):
+    """fmt --check over the whole tree took ~13 s of a ~70 s precheck for a PR that touches a handful of files; the PR side checks only its changed .rs files."""
+    for name, text in {"ok.rs": "fn a() {}\n", "bad.rs": "fn  b( ) {}\n", "notes.md": "x\n"}.items():
+        (tmp_path / name).write_text(text)
+
+    class Done:
+        def __init__(self, out, code=0):
+            self.stdout, self.returncode = out, code
+
+    run = lambda cmd, cwd=None, input=None, **kw: Done("fn b() {}\n" if cmd[-1] == "bad.rs" else input)  # noqa: E731
+    assert ps.fmt_differs(tmp_path, ["ok.rs", "bad.rs", "notes.md", "gone.rs"], run=run) == {"bad.rs"}
+
+    seen = []
+
+    def checks_with_only():
+        def fmt(root, only=None):
+            seen.append(only)
+            return {}
+
+        fmt.takes_only = True
+        return [("fmt", fmt)]
+
+    ps.precheck_items(tmp_path, checks_with_only(), only=["a.rs"])
+    assert seen == [["a.rs"]], seen

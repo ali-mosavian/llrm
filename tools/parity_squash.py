@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -129,6 +130,19 @@ PRECHECK_DIR = Path(os.environ.get("PRECHECK_DIR", Path.home() / "scratch/preche
 PRECHECK_DIR = Path(os.environ.get("PRECHECK_DIR", Path.home() / "scratch/precheck"))  # a persistent dev checkout + target dir: no dist build, seconds per PR after the first
 
 
+def fmt_differs(root: Path, files: list[str], run=subprocess.run) -> set[str]:
+    """The `.rs` files of `files` that `tools/fmt.sh --stdin` would change: --check on only the PR's own files, ~1 s where the whole tree takes ~13."""
+
+    def one(path: str) -> str | None:
+        text = (root / path).read_text()
+        done = run(["tools/fmt.sh", "--stdin", path], cwd=root, input=text, capture_output=True, text=True)
+        return path if done.returncode or done.stdout != text else None
+
+    rust = [f for f in files if f.endswith(".rs") and (root / f).is_file()]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return {path for path in pool.map(one, rust) if path}
+
+
 def precheck_checks(dev: Path, target: Path):
     """The cheap static checks of the gate, each `(name, root -> {check: the set of items failing})`: a ratchet's name, fmt's files, the docs' stale pages. Run on the
     dev checkout against the persistent dev target; the items are what a head's own failures are told apart from a PR's by."""
@@ -142,7 +156,10 @@ def precheck_checks(dev: Path, target: Path):
         failed = parity_smoke.ratchet_failures(root, run=lambda command: subprocess.run(slotted(command), cwd=root, env=env, capture_output=True, text=True))
         return {name: {name} for name in failed}
 
-    def fmt(root: Path) -> dict[str, set[str]]:
+    def fmt(root: Path, only: list[str] | None = None) -> dict[str, set[str]]:
+        if only is not None:  # the PR side: its own files only (the baseline, computed once per feat/parity sha, checks them all)
+            files = fmt_differs(root, only)
+            return {"fmt": files} if files else {}
         done = subprocess.run(["tools/fmt.sh", "--check"], cwd=root, env=env, capture_output=True, text=True)
         files = {line.strip() for line in done.stdout.splitlines() if re.fullmatch(r"\S+\.(rs|py|toml)", line.strip())}
         return {"fmt": files or {"fmt --check failed"}} if done.returncode else {}
@@ -154,15 +171,17 @@ def precheck_checks(dev: Path, target: Path):
         out = (done.stdout + done.stderr).splitlines()
         return {"docs": {line.strip() for line in out if line.strip().startswith("docs/")} or {"docsbuild --check failed"}}
 
+    fmt.takes_only = True
     return [("ratchets", ratchets), ("fmt", fmt), ("docs", docs)]
 
 
-def precheck_items(dev: Path, checks, deletions_of=None, seconds: dict[str, float] | None = None) -> dict[str, set[str]]:
-    """Every check's failing items on the checkout in `dev`, merged by check name; `seconds` collects each check's wall time."""
+def precheck_items(dev: Path, checks, deletions_of=None, seconds: dict[str, float] | None = None, only: list[str] | None = None) -> dict[str, set[str]]:
+    """Every check's failing items on the checkout in `dev`, merged by check name; `seconds` collects each check's wall time; `only` (the PR's changed
+    files) goes to the checks that can use it (`takes_only`)."""
     found: dict[str, set[str]] = {}
     for label, check in checks:
         started = time.monotonic()
-        for name, items in check(dev).items():
+        for name, items in (check(dev, only=only) if only is not None and getattr(check, "takes_only", False) else check(dev)).items():
             found.setdefault(name, set()).update(items)
         if seconds is not None:
             seconds[label] = round(time.monotonic() - started, 1)
@@ -215,7 +234,7 @@ def _precheck(number, info, dev, target, checks, merge, deletions, head_failed, 
     seconds["merge"] = round(time.monotonic() - started, 1)
     if sha is None:
         return f"{number}: REFUSED: {why}"
-    after = precheck_items(dev, checks, seconds=seconds)
+    after = precheck_items(dev, checks, seconds=seconds, only=git("diff", "--name-only", base_sha, sha, cwd=dev).split())
     with (cache.parent / "precheck-times.log").open("a") as log:  # where a precheck's minutes go, per PR
         log.write(json.dumps({"pr": number, "at": datetime.datetime.now().strftime("%H:%M:%S"), **seconds}) + "\n")
     if problems := (deletions or refusals)(sha, info["body"] or "", BASE, dev):
