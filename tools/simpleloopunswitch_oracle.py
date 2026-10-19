@@ -183,6 +183,11 @@ def marked_partial(body, nodes):
     return False
 
 
+def llrm_command(path):
+    """llrm's run of `path`: at the target opt priced for, or the loops differ in cost and in decision."""
+    return [str(LLRM), "--simple-loop-unswitch", *(["--non-trivial"] if NON_TRIVIAL else []), "--mode", MODE, str(path)]
+
+
 def opt_unswitched(ir, passes=PASS):
     r = run([str(PINNED), *TARGET, f"-passes={passes}", "-S"], stdin=ir)
     return r.stdout if r.returncode == 0 else None
@@ -214,7 +219,7 @@ def main():
         tmp = Path(tempfile.mkdtemp()) / "prepared.ll"
         tmp.write_text(to_mir(prepared))
         want = opt_unswitched(prepared)
-        got = run([str(LLRM), "--simple-loop-unswitch", *(["--non-trivial"] if NON_TRIVIAL else []), "--mode", MODE, str(tmp)])
+        got = run(llrm_command(tmp))
         if want is None or got.returncode != 0:
             missing += 1
             bad.append(f"{name}: " + ("opt failed" if want is None else "llrm-mir failed: " + got.stderr.strip()[:300]))
@@ -261,4 +266,5 @@ def main():
     return 1 if failed or missing else 0
 
 
-sys.exit(main())
+if __name__ == "__main__":
+    sys.exit(main())
