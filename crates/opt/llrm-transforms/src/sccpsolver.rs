@@ -62,9 +62,10 @@ use llrm_mir::context::GlobalId;
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
+use llrm_mir::facts::Facts;
 use llrm_mir::lazyvalueinfo::constant_range_from_metadata;
 use llrm_mir::module::{BlockId, Function, InstId, MetadataNode, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuelattice::{LatticeConstant, MergeOptions, ValueLatticeElement};
@@ -143,7 +144,7 @@ pub struct Solver<'a> {
     /// `KnownFeasibleEdges`.
     feasible: HashSet<(BlockId, BlockId)>,
     /// `AdditionalUsers`.
-    additional_users: HashMap<ValueId, Vec<InstId>>,
+    additional_users: IdMap<ValueId, Vec<InstId>>,
 }
 
 impl<'a> Solver<'a> {
@@ -178,7 +179,7 @@ impl<'a> Solver<'a> {
             current: None,
             bb_work: Vec::new(),
             feasible: HashSet::new(),
-            additional_users: HashMap::new(),
+            additional_users: IdMap::new(),
         };
         if let Some(entry) = function.entry() {
             solver.mark_block_executable(entry);
@@ -961,7 +962,7 @@ impl<'a> Solver<'a> {
         user: InstId,
     ) {
         if let Operand::Value(value) = value {
-            let users = self.additional_users.entry(value).or_default();
+            let users = self.additional_users.get_or_insert_with(value, Vec::new);
             if !users.contains(&user) {
                 users.push(user);
             }
@@ -1843,10 +1844,7 @@ fn param_has_non_null(
     function: &Function,
     index: u32,
 ) -> bool {
-    function
-        .parameter_attrs
-        .get(index as usize)
-        .is_some_and(|attrs| attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == "nonnull")))
+    function.parameter_attrs.get(index as usize).is_some_and(|attrs| Facts::of(attrs).non_null())
 }
 
 /// `CallBase::isReturnNonNull`.
@@ -1854,9 +1852,8 @@ fn call_returns_non_null(
     q: &Query,
     instruction: &llrm_mir::module::Instruction,
 ) -> bool {
-    let has = |attrs: &[Attribute]| attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == "nonnull"));
-    call_info(instruction).is_some_and(|info| has(&info.return_attrs))
-        || called_function(q, instruction).is_some_and(|callee| has(&callee.return_attrs))
+    call_info(instruction).is_some_and(|info| Facts::of(&info.return_attrs).non_null())
+        || called_function(q, instruction).is_some_and(|callee| Facts::of(&callee.return_attrs).non_null())
 }
 
 /// The function a call names.

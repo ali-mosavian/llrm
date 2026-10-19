@@ -408,3 +408,20 @@ fn jump(target: i64) -> Arc<Insn> {
     let what = Semantics { name: Some("jmp".to_owned()), target: Some(target), ..Semantics::new(Operation::Jump) };
     Arc::new(Insn::new(0, None, Some(what), vec![], vec![]))
 }
+
+/// A join verified both ranges and the joined one (`assert(verify())` of
+/// LiveInterval.cpp is compiled out of LLVM's release builds): each is linear
+/// in the range, so a run of joins was quadratic in the body (`diamond` 800:
+/// `LiveRange::verify` 14 M of the coalescer's 86 M). Only
+/// `LLRM_CHECK_LIVEINTERVALS` asks.
+#[test]
+fn test_a_join_does_not_verify_the_ranges() {
+    let (a, c, r) = (def(1), copy(2, 1), read(2));
+    let was = body(&[(&[a, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let before = crate::liveness::liverange::verifies();
+    assert_eq!(join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id()), JoinResult::Joined);
+    assert_eq!(crate::liveness::liverange::verifies() - before, 0, "a join verified a range");
+}
