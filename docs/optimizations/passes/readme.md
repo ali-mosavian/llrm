@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 113 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 114 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -14,6 +14,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | argpromotion | Argument promotion (LLVM's ArgumentPromotion): a pointer parameter a function only reads at fixed offsets is replaced by the fields read. | In the interprocedural step, once, after its inlining loop and before | [argpromotion](argpromotion.md) |
 | availableexternally | LLVM's EliminateAvailableExternally: a body held only to inline from becomes a declaration again once inlining is done. | A program pass. At -O1 and above it runs after the interprocedural step and | [availableexternally](availableexternally.md) |
 | bdce | Bit-tracking dead code elimination: a translation of LLVM's BDCE (`BDCE.cpp` at d1106deb71cc). | LLVM runs it after SCCP, before ADCE (slot 34 of the pipeline). Not in | [bdce](bdce.md) |
+| branchtocommon | A block that is only a comparison (and a few instructions that can run early) and a branch is folded into a predecessor that branches to it and to one of its successors: SimplifyCFG's `foldBranchToCommonDest`. |  | [branchtocommon](branchtocommon.md) |
 | calleepop | Callee-pops calling convention (LLVM's GlobalOpt giving an internal function a `fastcc`): an internal function all of whose callers are seen pops its own stack arguments. | A module pass, once, after the interprocedural step, `globaldce` and | [calleepop](calleepop.md) |
 | candidate | Trying a rewrite on a copy of the body: the copy is cleaned by the pipeline's own passes and replaces the body only if it is better. | `adopted`, `priced`, `priced_at`, `frequencies`, `Pricing`, `Gain`, | [candidate](candidate.md) |
 | canonexit | A loop's exit compare of a zero-extended counter is made unsigned, and the extension is moved off the counter onto the invariant side. | Not wired in: [`crate::indvars`](indvars.md) will run `canonicalized` after the | [canonexit](canonexit.md) |
