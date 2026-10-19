@@ -336,6 +336,14 @@ mod tests {
             // proves; `narrowBinOp` keeps an add's or sub's flags only where
             // they still hold.
             "combine_casts.rs",
+            // Reassociate.cpp's `OverflowTracking` (`mergeFlags`, `applyFlags`)
+            // merges the `nuw`/`nsw` of the nodes of a tree so the rewritten
+            // tree keeps them only if all had them; `ConvertShiftToMul` and
+            // `NegateValue` read a shift's and an add's, and clear or give
+            // them where LLVM does.
+            "reassociate_forms.rs",
+            "reassociate_negate.rs",
+            "reassociate_tree.rs",
             // MemCpyOptimizer.cpp's `CreateInBoundsPtrAdd` makes an inbounds
             // GEP; it reads no flag.
             "memcpyopt.rs",

@@ -569,8 +569,8 @@ impl<'a> Reassociator<'a> {
     fn pinned_instructions(
         &self,
         order: &[BlockId],
-    ) -> std::collections::HashSet<InstId> {
-        let mut pinned = std::collections::HashSet::new();
+    ) -> llrm_mir::dense::IdSet<InstId> {
+        let mut pinned = llrm_mir::dense::IdSet::new();
         for &block in order {
             for inst in self.function.iter_block(block) {
                 if self.may_have_non_def_use_dependency(inst) {
