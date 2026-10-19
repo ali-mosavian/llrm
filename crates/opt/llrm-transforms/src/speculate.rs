@@ -16,8 +16,10 @@
 //! value of the branch's block that only that instruction reads counts as one
 //! more.
 //!
-//! - D1. Stores, loads that fault conditionally and `HoistCondStores` are not
-//!   ported: a block with a store or a load that may trap is left alone.
+//! - D1. Loads that fault conditionally (`HoistLoadsStoresWithCondFaulting`, a
+//!   target option) are not ported: a load runs early only where it is safe to
+//!   speculate. A store runs early (`HoistCondStores`) with
+//!   `isSafeToSpeculateStore` (D6).
 //! - D2. No branch weights or `!unpredictable` (`isProfitableToSpeculate` is
 //!   true), no ephemeral values (no assumption cache), no pseudo probes, no
 //!   `minsize` (costs are `SizeAndLatency`).
@@ -25,6 +27,10 @@
 //!   the rest, as in [`twoentryphi`](crate::twoentryphi) (D4 there).
 //! - D4. No constant expressions in function bodies: LLVM's price of one is not
 //!   needed.
+//!
+//! - D6. `isSafeToSpeculateStore` finds a writable object only among the
+//!   allocas that are not captured: `isWritableObject` of a global would need
+//!   `PointerMayBeCaptured` over the module.
 //!
 //! # Example
 //! The arm's one cheap instruction runs before the branch and the phi becomes a
@@ -44,14 +50,16 @@ use llrm_mir::instructioncost::instruction_cost;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::tti::{CmpSel, Cost, CostKind, Ty};
+use llrm_mir::valuetracking::Query;
+use llrm_mir::valuetracking::underlying::get_underlying_object;
 
 use crate::twoentryphi::{Speculation, metadata_dropped};
 
 /// `phi-node-folding-threshold`, in `TCC_Basic`.
 const THRESHOLD: i64 = 2;
 
-/// The cost of the selects `end`'s phis need once `then` runs early, or None
-/// where a phi cannot be a select.
+/// The cost of the selects `end`'s phis need once `then` runs early, and
+/// whether any phi needs one; None where a phi cannot be a select.
 fn selects_priced(
     context: &Context,
     spec: &Speculation,
@@ -59,7 +67,7 @@ fn selects_priced(
     block: BlockId,
     then: BlockId,
     end: BlockId,
-) -> Option<Cost> {
+) -> Option<(Cost, bool)> {
     let mut cost = Cost::FREE;
     let mut rewritable = false;
     for phi in crate::edges::phis(function, end) {
@@ -74,11 +82,13 @@ fn selects_priced(
         if crate::alwaysundef::always_undefined(context, spec, function, original, phi, false)
             || crate::alwaysundef::always_undefined(context, spec, function, speculated, phi, false)
         {
-            return None;
+            // `validateAndCostRequiredSelects` is false, a speculated store
+            // converts regardless.
+            return Some((cost, false));
         }
         rewritable = true;
     }
-    rewritable.then_some(cost)
+    Some((cost, rewritable))
 }
 
 /// `then` (reached only by the branch ending `block`, and jumping to `end`,
@@ -105,6 +115,8 @@ pub fn executed(
     }
 
     let mut speculated = 0;
+    // The store that runs early, and the value the location holds without it.
+    let mut stored: Option<(InstId, Operand)> = None;
     // Uses in `then` of the values of `block` that nothing else reads.
     let mut sinkable: IdMap<InstId, usize> = IdMap::new();
     let body = function.iter_block(then).collect::<Vec<_>>();
@@ -113,25 +125,27 @@ pub fn executed(
         if speculated > 1 {
             return false;
         }
-        if !crate::licm::hoist::is_safe_to_speculatively_execute_in(context, spec.layout, function, spec.outer, inst)
-            || matches!(
-                function.instruction(inst).opcode,
-                Opcode::Load { .. } | Opcode::Store { .. }
-            )
-        {
-            return false;
+        // Don't hoist the instruction if it's unsafe or expensive.
+        if !crate::licm::hoist::is_safe_to_speculatively_execute_in(context, spec.layout, function, spec.outer, inst) {
+            if stored.is_some() {
+                return false;
+            }
+            let Some(held) = store_speculated(context, spec, function, inst, block) else { return false };
+            stored = Some((inst, held));
         }
-        let price = instruction_cost(
-            spec.tti,
-            context,
-            spec.layout,
-            &spec.outer.globals,
-            function,
-            inst,
-            CostKind::SizeAndLatency,
-        );
-        if !price.valid || price.value > THRESHOLD {
-            return false;
+        if stored.is_none() {
+            let price = instruction_cost(
+                spec.tti,
+                context,
+                spec.layout,
+                &spec.outer.globals,
+                function,
+                inst,
+                CostKind::SizeAndLatency,
+            );
+            if !price.valid || price.value > THRESHOLD {
+                return false;
+            }
         }
         // An operand of `block` that only `then` reads stays behind otherwise.
         for &operand in &function.instruction(inst).operands {
@@ -156,9 +170,27 @@ pub fn executed(
         }
     }
 
-    let Some(cost) = selects_priced(context, spec, function, block, then, end) else { return false };
-    if cost.value > THRESHOLD * Cost::BASIC.value || !cost.valid {
+    let Some((cost, rewritable)) = selects_priced(context, spec, function, block, then, end) else { return false };
+    if !(stored.is_some() || rewritable) || cost.value > THRESHOLD * Cost::BASIC.value || !cost.valid {
         return false;
+    }
+
+    // The stored value is the one the location already holds unless the
+    // branch is taken.
+    if let Some((store, held)) = stored {
+        let value = function.instruction(store).operands[0];
+        let (on_true, on_false) = if invert { (held, value) } else { (value, held) };
+        let ty = function.operand_type(context, value).expect("a stored value");
+        let select = function.create_instruction(
+            Opcode::Select,
+            ty,
+            vec![condition, on_true, on_false],
+            Default::default(),
+            Some("spec.store.select"),
+        );
+        function.insert(select, Position::Before(branch)).expect("a new instruction");
+        let chosen = Operand::Value(function.instruction(select).result.expect("a select's value"));
+        function.set_operand(store, 0, chosen);
     }
 
     for &inst in &body[..body.len() - 1] {

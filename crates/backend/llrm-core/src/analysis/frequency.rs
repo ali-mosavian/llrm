@@ -387,20 +387,28 @@ impl Frequency {
                 }
             }
         }
-        let kept: Vec<Block> = blocks
-            .iter()
-            .filter(|block| successors.contains_key(&block.at))
-            .map(|block| LirBlock { succ: successors[&block.at].clone().into(), ..LirBlock::new(block.at, Vec::new()) })
-            .collect();
         let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
         for (from, list) in &successors {
             for to in list {
                 predecessors.entry(*to).or_default().push(*from);
             }
         }
-        let natural = loops::loops(&kept, Some(body.entry));
-        let trips: IndexMap<i64, i64> = body.loop_trip_counts.iter().copied().collect();
-        let edges = if counting { trip_adjusted(&natural, &trips, &successors, &shared) } else { shared.clone() };
+        // The loops are found only for the trips that scale them.
+        let edges = if counting {
+            let kept: Vec<Block> = blocks
+                .iter()
+                .filter(|block| successors.contains_key(&block.at))
+                .map(|block| LirBlock {
+                    succ: successors[&block.at].clone().into(),
+                    ..LirBlock::new(block.at, Vec::new())
+                })
+                .collect();
+            let natural = loops::loops(&kept, Some(body.entry));
+            let trips: IndexMap<i64, i64> = body.loop_trip_counts.iter().copied().collect();
+            trip_adjusted(&natural, &trips, &successors, &shared)
+        } else {
+            shared.clone()
+        };
         let mut block = propagated(body.entry, &successors, &predecessors, &edges);
         // A bridge runs as often as the edges into it are taken; a chain of
         // them is settled from its first.
@@ -668,6 +676,20 @@ mod tests {
         moved.odds.taken.insert((2, 2), 1);
         Frequency::of(&moved);
         assert_eq!(runs(&moved) - before, 2, "other odds were answered from the old frequencies");
+    }
+
+    /// The natural loops are read only to scale proven trips, but were found
+    /// for every frequency question without them: 7.1 M of 1953 M
+    /// instructions on d_faces.
+    #[test]
+    fn test_frequencies_without_trips_find_no_loops() {
+        use llrm_mir::counts::{Event, get};
+        let body = counted(Some(5), 124.0 / 128.0);
+        let before = get(Event::LirLoops);
+        Frequency::of(&body);
+        assert_eq!(get(Event::LirLoops) - before, 0, "Frequency::of found the loops");
+        Frequency::counted(&body);
+        assert!(get(Event::LirLoops) > before, "premise: the trips are scaled over the loops");
     }
 
     /// A body that carries its frequencies is asked for them by every fact of

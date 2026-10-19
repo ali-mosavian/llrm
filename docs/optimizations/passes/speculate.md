@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/speculate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/speculate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:19d89ca3818ef069d6ce894effd23af45b3c4f70eeae8bd86cecf57b14948a20 -->
+<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:2e30b88fe4199cd866c65dd3e92287bfe8087e3b969ec90ea6e0aa100a788e08 -->
 
 # speculate
 
@@ -21,8 +21,10 @@ behind `SpeculateBlocks`. One instruction at most runs early, and a
 value of the branch's block that only that instruction reads counts as one
 more.
 
-- D1. Stores, loads that fault conditionally and `HoistCondStores` are not
-  ported: a block with a store or a load that may trap is left alone.
+- D1. Loads that fault conditionally (`HoistLoadsStoresWithCondFaulting`, a
+  target option) are not ported: a load runs early only where it is safe to
+  speculate. A store runs early (`HoistCondStores`) with
+  `isSafeToSpeculateStore` (D6).
 - D2. No branch weights or `!unpredictable` (`isProfitableToSpeculate` is
   true), no ephemeral values (no assumption cache), no pseudo probes, no
   `minsize` (costs are `SizeAndLatency`).
@@ -30,6 +32,10 @@ more.
   the rest, as in [`twoentryphi`](twoentryphi.md) (D4 there).
 - D4. No constant expressions in function bodies: LLVM's price of one is not
   needed.
+
+- D6. `isSafeToSpeculateStore` finds a writable object only among the
+  allocas that are not captured: `isWritableObject` of a global would need
+  `PointerMayBeCaptured` over the module.
 
 ## Example
 The arm's one cheap instruction runs before the branch and the phi becomes a
