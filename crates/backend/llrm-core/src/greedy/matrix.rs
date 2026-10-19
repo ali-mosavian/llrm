@@ -65,7 +65,7 @@ pub trait PhysInterference {
     fn reg_mask_clobbered(
         &self,
         li: &LiveInterval,
-    ) -> Option<Vec<RegId>>;
+    ) -> Option<llrm_lir::registers::RegSet>;
     /// `checkRegUnitInterference`: `li` overlaps a fixed live range of one of
     /// the units of `phys`.
     fn reg_unit_interferes(
@@ -127,7 +127,7 @@ impl PhysInterference for NoFixed {
     fn reg_mask_clobbered(
         &self,
         _li: &LiveInterval,
-    ) -> Option<Vec<RegId>> {
+    ) -> Option<llrm_lir::registers::RegSet> {
         None
     }
 
@@ -153,7 +153,7 @@ pub struct LiveRegMatrix {
     user_tag: u32,
     /// `RegMaskVirtReg`, `RegMaskTag`, `RegMaskUsable`: the registers a call
     /// destroys under the last range asked about, kept for the next ask of it.
-    reg_mask: Option<(VReg, u32, Option<Vec<RegId>>)>,
+    reg_mask: Option<(VReg, u32, Option<llrm_lir::registers::RegSet>)>,
     num_assigned: usize,
     num_unassigned: usize,
 }
@@ -296,12 +296,20 @@ impl LiveRegMatrix {
         virt: &LiveInterval,
         phys: RegId,
     ) -> bool {
+        self.reg_mask_of(virt).is_some_and(|roots| roots.contains(&crate::model::ir::root(phys)))
+    }
+
+    /// The registers `virt` loses to the instructions it is live across, kept
+    /// for `virt` until the next assignment (`RegMaskVirtReg`, `RegMaskTag`).
+    fn reg_mask_of(
+        &mut self,
+        virt: &LiveInterval,
+    ) -> Option<llrm_lir::registers::RegSet> {
         let valid = self.reg_mask.as_ref().is_some_and(|(reg, tag, _)| *reg == virt.reg() && *tag == self.user_tag);
         if !valid {
             self.reg_mask = Some((virt.reg(), self.user_tag, self.fixed.reg_mask_clobbered(virt)));
         }
-        let (_, _, clobbered) = self.reg_mask.as_ref().expect("just made");
-        clobbered.as_ref().is_some_and(|roots| roots.contains(&crate::model::ir::root(phys)))
+        self.reg_mask.as_ref().expect("just made").2
     }
 
     /// `checkRegMaskInterference(VirtReg)` with no register: the range is live
@@ -310,7 +318,7 @@ impl LiveRegMatrix {
         &mut self,
         virt: &LiveInterval,
     ) -> bool {
-        self.fixed.reg_mask_clobbered(virt).is_some()
+        self.reg_mask_of(virt).is_some()
     }
 
     /// `checkInterference(VirtReg, PhysReg)` (LiveRegMatrix.cpp#L178).
@@ -488,8 +496,8 @@ mod tests {
         fn reg_mask_clobbered(
             &self,
             _li: &LiveInterval,
-        ) -> Option<Vec<RegId>> {
-            Some(vec![crate::model::ir::root(RegId::AX)])
+        ) -> Option<llrm_lir::registers::RegSet> {
+            Some([crate::model::ir::root(RegId::AX)].into_iter().collect())
         }
 
         fn reg_unit_interferes(

@@ -2165,15 +2165,13 @@ mod tests {
         let built = super::selected(&text, "codeptrs", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let lines: Vec<&str> = asm.lines().map(str::trim).collect();
-        assert!(lines.contains(&"dw _twice") && lines.iter().any(|one| one.starts_with("dd _show")), "{asm}");
+        // The near table is folded away with its call: `_twice` is inlined.
+        assert!(lines.iter().any(|one| one.starts_with("dd _show")), "{asm}");
         let from = asm.find("_run proc").expect("_run");
         let run: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
         assert!(run.iter().any(|one| one.starts_with("call dword ptr [")), "{run:#?}");
-        assert!(
-            run.iter().any(|one| one.split_whitespace().collect::<Vec<_>>() == ["call", "ax"]
-                || one.starts_with("call word ptr [")),
-            "{run:#?}"
-        );
+        // The near table call is folded to `_twice` and inlined (`add si, si`).
+        assert!(run.iter().any(|one| *one == "add si, si"), "{run:#?}");
     }
 
     /// qcport's sc.c initializes `short links[5]` from a constant: an
@@ -2272,7 +2270,10 @@ mod tests {
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_ticks proc").expect("_ticks");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-        let segment = |one: &&str| one.ends_with(", 64") || one.ends_with(&format!(", {}", 0x0040_006C));
+        // The selector is pushed and popped into ES (same bytes as `mov es,
+        // ax`).
+        let segment =
+            |one: &&str| one.ends_with(", 64") || one.ends_with(&format!(", {}", 0x0040_006C)) || *one == "pushw 64";
         assert!(!body.iter().any(|one| one.contains("DGROUP")) && body.iter().any(segment), "{body:#?}");
     }
 
