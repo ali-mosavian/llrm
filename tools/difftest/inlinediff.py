@@ -57,6 +57,17 @@ def verdicts(remarks: str) -> tuple[dict, dict]:
     return inlined, refused
 
 
+def inferred_target(module: str, cpu: str = "i486") -> tuple[str, str]:
+    """(triple, cpu) of the target the module's data layout is llrm's for: m16 (16-bit pointers) or m32. opt prices with that
+    target's TTI; without one it is generic and counts a scaled address as work."""
+    layout = re.search(r'^target datalayout = "([^"]*)"', module, re.M)
+    pointer = re.search(r"(?:^|-)p:(\d+)", layout[1]) if layout else None
+    triple = {"16": "i386-unknown-unknown-code16", "32": "i386-unknown-unknown"}.get(pointer[1] if pointer else "")
+    if triple is None:
+        raise SystemExit(f"inlinediff: no target for data layout {layout[1] if layout else 'none'}: pass --mtriple")
+    return triple, cpu
+
+
 def llvm_verdicts(before: str, pipeline: str, threshold: int | None, target: tuple[str, str] | None = None) -> tuple[dict, dict, str]:
     """(inlined, refused, the module LLVM wrote): (caller, callee) -> [(cost, threshold)] and -> [(reason, cost, threshold)]. `target` is
     (triple, cpu): without one, opt's TTI is generic and prices a scaled address as work where llrm's x86 model does not."""
@@ -156,7 +167,7 @@ def main() -> int:
     parser.add_argument("--pipeline", default="inline")
     parser.add_argument("--threshold", type=int)
     parser.add_argument("--json", type=Path)
-    parser.add_argument("--mtriple", help="opt's target, as llrm's: i386-unknown-unknown for m32, i386-unknown-unknown-code16 for m16")
+    parser.add_argument("--mtriple", help="opt's target; read off the module's data layout when not given (m16: i386-unknown-unknown-code16, m32: i386-unknown-unknown)")
     parser.add_argument("--mcpu", default="i486")
     args = parser.parse_args()
     if args.paths[0] == "dumps":
@@ -169,8 +180,9 @@ def main() -> int:
         pairs = [(args.paths[0], Path(args.paths[0]), Path(args.paths[1]))]
     merged: dict = {}
     for name, before, remarks in pairs:
-        target = (args.mtriple, args.mcpu) if args.mtriple else None
-        report = compare(before.read_text(), remarks.read_text(), args.pipeline, args.threshold, target)
+        text = before.read_text()
+        target = (args.mtriple, args.mcpu) if args.mtriple else inferred_target(text, args.mcpu)
+        report = compare(text, remarks.read_text(), args.pipeline, args.threshold, target)
         merged[name] = report
         print(f"## {name}\n{table(report)}\n")
     if args.json:

@@ -106,3 +106,14 @@ def test_opt_prices_with_the_target_given():
     targeted = inlinediff.compare(before, "", "inline", target=("i386-unknown-unknown", "i486"))
     assert generic["llvm_inlined"] == 0, generic["rows"]
     assert targeted["llvm_inlined"] == 2, targeted["rows"]
+
+
+def test_the_oracle_targets_what_the_module_was_built_for():
+    """A run without --mtriple asked opt for its generic TTI: every QCport agreement before #2746 was taken that way. The target
+    is read off the module's data layout; a layout it does not know is refused, not priced generically."""
+    m16 = 'target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-n8:16:32"\n'
+    m32 = 'target datalayout = "e-p:32:32-i8:8-i16:16-i32:32-n8:16:32-S32"\n'
+    assert inlinediff.inferred_target(m16) == ("i386-unknown-unknown-code16", "i486")
+    assert inlinediff.inferred_target(m32) == ("i386-unknown-unknown", "i486")
+    with pytest.raises(SystemExit):
+        inlinediff.inferred_target("define void @f() {\n  ret void\n}\n")
