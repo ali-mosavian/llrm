@@ -854,3 +854,18 @@ fn a_use_list_answers_has_n_uses_at_its_boundaries() {
     f.set_operand(ret, 0, Operand::Value(named(f, "y").1));
     assert!(f.users(named(f, "y").1).has_one_use() && f.users(a).has_n_uses(3), "{y:?}");
 }
+
+/// `BasicBlock::takeName` and `setName`: the block that takes a name is named
+/// it, the other goes unnamed, and a name in use gets a number appended.
+#[test]
+fn a_block_takes_the_name_of_another_and_a_taken_name_gets_a_number() {
+    let mut parsed = module("define i16 @f(i16 %a) {\nentry:\n  br label %next\n\nnext:\n  ret i16 %a\n}\n");
+    let f = function(&mut parsed);
+    let (entry, next) = (f.layout()[0], f.layout()[1]);
+    let fresh = f.create_block(None);
+    f.take_block_name(entry, fresh);
+    assert_eq!((f.block(entry).name.as_deref(), f.block(fresh).name.as_deref()), (None, Some("entry")));
+    f.set_block_name(entry, "next");
+    assert_eq!(f.block(entry).name.as_deref(), Some("next1"));
+    assert_eq!(f.block(next).name.as_deref(), Some("next"));
+}

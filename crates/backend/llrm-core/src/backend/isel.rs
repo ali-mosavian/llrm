@@ -228,6 +228,7 @@ pub use matcher::selector;
 #[cfg(test)]
 pub(crate) use matcher::{HOOKED, m16};
 mod expand;
+mod huge;
 mod wide;
 
 /// Where one parameter arrives: a cell in the frame, by its displacement from
@@ -2720,9 +2721,20 @@ impl Selector<'_, '_, '_> {
             .then_some(def)
         };
         let join = only_in_block(condition, inst)?;
-        let conjunction = match function.instruction(join).opcode {
-            Opcode::Binary(BinaryOp::And) => true,
-            Opcode::Binary(BinaryOp::Or) => false,
+        // `m_LogicalAnd` and `m_LogicalOr`: the two operands that are compared,
+        // for an `and` or `or` of them or for the `select` form of either.
+        let operands = &function.instruction(join).operands;
+        let one = |operand: Operand, value: u128| {
+            matches!(
+                operand,
+                Operand::Constant(id) if self.module.context.get(id).kind == ConstantKind::Int(value)
+            )
+        };
+        let (conjunction, first, second) = match function.instruction(join).opcode {
+            Opcode::Binary(BinaryOp::And) => (true, operands[0], operands[1]),
+            Opcode::Binary(BinaryOp::Or) => (false, operands[0], operands[1]),
+            Opcode::Select if one(operands[1], 1) => (false, operands[0], operands[2]),
+            Opcode::Select if one(operands[2], 0) => (true, operands[0], operands[1]),
             _ => return None,
         };
         let compare = |operand: Operand| -> Option<InstId> {
@@ -2750,8 +2762,7 @@ impl Selector<'_, '_, '_> {
                 );
             (matches!(compared.opcode, Opcode::ICmp(_)) && narrow && !called).then_some(def)
         };
-        let operands = &function.instruction(join).operands;
-        Some((conjunction, join, compare(operands[0])?, compare(operands[1])?))
+        Some((conjunction, join, compare(first)?, compare(second)?))
     }
 
     /// A branch on two compares as a compare and a branch each: the first
@@ -3154,12 +3165,17 @@ impl Selector<'_, '_, '_> {
             && let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::PtrToInt, value }) =
                 self.module.context.get(id).kind.clone()
             && self.is_far(self.module.context.get(value).ty)
-            && width == 4
         {
             let (offset, selector) = self.far(Operand::Constant(value), at, out)?;
-            let joined = Held { value: self.fresh(), width };
-            self.joined(joined, offset, selector, at, out);
-            return Ok(joined);
+            // Narrower than the pair, the integer is its offset word.
+            if width == offset.width {
+                return Ok(offset);
+            }
+            if width == 4 {
+                let joined = Held { value: self.fresh(), width };
+                self.joined(joined, offset, selector, at, out);
+                return Ok(joined);
+            }
         }
         let operand = self.through_ptrtoint(operand);
         let pointer = match operand {
@@ -3410,12 +3426,14 @@ impl Selector<'_, '_, '_> {
         {
             let Some(block) = self.current else { return refuse("a far constant outside a block") };
             let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
-            let (base, selector) = (self.fresh_held(2), self.fresh_held(2));
-            for (into, value) in [base, selector].into_iter().zip(dword_halves(bits)) {
-                let word = Loc::Imm(Imm { value, width: 2, address: None });
-                self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![word])));
-            }
-            return Ok(Pointer::Far { selector, base: Some(base), index: None, scale: 1, offset: 0 });
+            // The offset is the displacement of whatever address the pointer
+            // ends up in (`matchAddress` of a constant: `AM.Disp += Val`),
+            // not a register that holds it.
+            let [offset, high] = dword_halves(bits);
+            let selector = self.fresh_held(2);
+            let word = Loc::Imm(Imm { value: high, width: 2, address: None });
+            self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(selector)], vec![word])));
+            return Ok(Pointer::Far { selector, base: None, index: None, scale: 1, offset });
         }
         // An address no global owns, near: its number, read as a direct
         // address.
@@ -5314,6 +5332,25 @@ impl Selector<'_, '_, '_> {
                 _ => return refuse("a far result the convention has no registers for"),
             }
         } else if let Some(&value) = operands.first() {
+            // A constant in a register pair is a half each: the second is its
+            // high half, not a shift of the register that holds the whole.
+            if let ([low, high], Operand::Constant(id)) = (&convention.returns[..], value)
+                && let Ok(whole) = self.width(type_of(value))
+                && whole % 2 == 0
+                && let ConstantKind::Int(bits) = self.module.context.get(id).kind
+            {
+                let half = whole / 2;
+                let (shift, mask) = (8 * half, (1i128 << (8 * half)) - 1);
+                let word = |part: i128| Loc::Imm(Imm { value: (part & mask) as i64, width: half, address: None });
+                let (low_word, high_word) = (self.fresh_held(half), self.fresh_held(half));
+                for (into, part) in [(low_word, bits as i128), (high_word, (bits >> shift) as i128)] {
+                    out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![word(part)])));
+                }
+                one.requires = vec![(low_word, *low), (high_word, *high)];
+                one.uses = vec![low_word.value, high_word.value];
+                out.push(Arc::new(one));
+                return Ok(());
+            }
             let held = self.held(value, type_of(value), at, out)?;
             one.requires = match convention.returns[..] {
                 [register] => vec![(held, register)],
@@ -6234,6 +6271,9 @@ impl Selector<'_, '_, '_> {
         let &[destination, source, length, volatile] = arguments else {
             return refuse("a memcpy of other than four operands");
         };
+        if self.is_huge(destination) || self.is_huge(source) {
+            return self.huge_copy(destination, source, length, backward, at, out);
+        }
         let volatile = self.constant(volatile, 1) != Some(0);
         let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
         let constant = self.length(length);
@@ -6533,6 +6573,9 @@ impl Selector<'_, '_, '_> {
         let &[destination, value, length, volatile] = arguments else {
             return refuse("a memset of other than four operands");
         };
+        if self.is_huge(destination) {
+            return self.huge_fill(destination, value, length, at, out);
+        }
         let volatile = self.constant(volatile, 1) != Some(0);
         let byte = self.constant(value, 1);
         let pattern = |byte: i64, width: u32| (0..width).fold(0i64, |word, _| (word << 8) | (byte & 0xFF));
@@ -6659,6 +6702,9 @@ impl Selector<'_, '_, '_> {
         let &[destination, value, count, volatile] = arguments else {
             return refuse("a pattern fill of other than four operands");
         };
+        if self.is_huge(destination) {
+            return self.huge_fill(destination, value, count, at, out);
+        }
         let volatile = self.constant(volatile, 1) != Some(0);
         let ty = self.function.operand_type(&self.module.context, value).expect("a typed cell");
         let width = match self.module.context.types.int_bits(ty) {

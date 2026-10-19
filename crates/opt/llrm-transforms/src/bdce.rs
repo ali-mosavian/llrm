@@ -80,6 +80,10 @@ impl FunctionPass for Bdce {
         "bdce"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("bdce")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,
