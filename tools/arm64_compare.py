@@ -89,9 +89,47 @@ def build(source, work, mode, runtime):
         run(LLD, "-static", "-o", work / name, work / f"{name}.o", runtime)
 
 
+def instructions(*command):
+    """User instructions the command runs (`perf stat`), the least of 3 runs."""
+    best = None
+    for _ in range(3):
+        done = subprocess.run(
+            ["perf", "stat", "-x,", "-e", "instructions:u", *[str(c) for c in command]], capture_output=True, text=True
+        )
+        if done.returncode != 0:
+            sys.exit(f"{command}: {done.stderr}")
+        count = int(re.search(r"^(\d+),,instructions:u", done.stderr, re.M)[1])
+        best = count if best is None else min(best, count)
+    assert best > 0, "perf counted nothing"
+    return best
+
+
+def compile_time():
+    """Compile-time cost per program: this compiler (mid-end and backend) against
+    the pinned `opt -O2` then `llc -O2`, on the same un-optimized IR. Plain
+    `perf stat instructions:u`, own plus inclusive of both tools; the front end is
+    in neither."""
+    release = ROOT / "target/release/llrm-arm64-llc"
+    print(f"{'program':12} {'ours':>12} {'opt+llc':>12} {'ratio':>6}")
+    total = [0, 0]
+    for source in sorted((CRATE / "tests/programs").glob("*.c")):
+        work = Path(tempfile.mkdtemp())
+        ir = work / "p.ll"
+        run(CLANG, "-target", TRIPLE, "-O2", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-lifetime-markers",
+            "-S", "-emit-llvm", "-o", ir, source)
+        ours = instructions(release, "-o", work / "ours.o", ir)
+        opt = instructions(BUILD / "bin/opt", "-O2", "-S", "-o", work / "o.ll", ir)
+        llc = instructions(BUILD / "bin/llc", "-mtriple=" + TRIPLE, "-O2", "-filetype=obj", "-o", work / "l.o", work / "o.ll")
+        print(f"{source.stem:12} {ours:12} {opt + llc:12} {ours / (opt + llc):6.2f}")
+        total = [total[0] + ours, total[1] + opt + llc]
+    print(f"{'total':12} {total[0]:12} {total[1]:12} {total[0] / total[1]:6.2f}")
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "whole"
-    assert mode in ("whole", "backend"), "usage: arm64_compare.py [whole|backend]"
+    assert mode in ("whole", "backend", "compile"), "usage: arm64_compare.py [whole|backend|compile]"
+    if mode == "compile":
+        return compile_time()
     runtime = tempfile.mkdtemp() + "/rt.o"
     run(CLANG, "-target", TRIPLE, "-O2", "-ffreestanding", "-fno-builtin", "-c", "-o", runtime, CRATE / "tests/rt/rt.c")
     print(f"{'program':12} {'code ours':>10} {'code clang':>10} {'exec ours':>10} {'exec clang':>10}  output")
