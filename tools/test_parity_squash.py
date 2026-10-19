@@ -231,3 +231,39 @@ def test_four_passing_prs_cost_one_test_and_land_in_order():
     landed, tested = [], []
     ps.batch(["1", "2", "3", "4"], lambda group: (tested.append(group), True)[1], landed.append, lambda pr: None)
     assert landed == ["1", "2", "3", "4"] and len(tested) == 1
+
+
+def test_a_fix_for_a_red_head_is_accepted_and_a_new_failure_is_refused():
+    """The gate deadlocked on a red head: the fix for it failed the same checks the head did, so it could not land. The merged tree may fail a SUBSET of the head's failures."""
+    red = {"ratchet:block_list_ratchet", "qc_modules"}
+    assert ps.subset_refusals(red, {"qc_modules"}, fixes=True) == []
+    assert ps.subset_refusals(red, set(), fixes=True) == []
+    why = ps.subset_refusals(red, {"qc_modules", "run"}, fixes=False)
+    assert why and "run" in why[0] and "ratchet:block_list_ratchet" in why[0] and "qc_modules" in why[0], why
+    assert ps.subset_refusals(set(), {"run"}, fixes=False)
+
+
+def test_an_equal_failure_set_lands_only_without_the_fixes_claim():
+    red = {"qc_modules"}
+    assert ps.subset_refusals(red, set(red), fixes=False) == []
+    assert ps.subset_refusals(red, set(red), fixes=True)
+    assert ps.claims_fix("Fixes red: the ratchet\n") and ps.claims_fix("TL;DR\nFixes a red head\n") and not ps.claims_fix("This fixes reds nothing")
+
+
+def test_the_head_failure_set_is_computed_once_per_sha_and_never_guessed(tmp_path):
+    import pytest
+
+    calls = []
+    assert ps.head_failures("abc", lambda: (calls.append(1), {"x"})[1], tmp_path) == {"x"}
+    assert ps.head_failures("abc", lambda: (calls.append(1), {"y"})[1], tmp_path) == {"x"} and len(calls) == 1
+    with pytest.raises(SystemExit, match="no failure set is cached"):
+        ps.head_failures("other", None, tmp_path)
+
+
+def test_a_feat_parity_commit_absent_from_the_landing_log_is_listed(tmp_path):
+    """Direct pushes bypassed the lock; the log is what every landing writes, so a commit with no line in it is a landing that did not go through the squash."""
+    log = tmp_path / "landed.log"
+    ps.log_landed("aaaaaaa1111", "2700", "gate-ok", log)
+    ps.log_landed("bbbbbbb2222", "2701", "gate-ok", log)
+    assert ps.unlogged(log, ["aaaaaaa", "ccccccc", "bbbbbbb"]) == ["ccccccc"]
+    assert ps.unlogged(tmp_path / "none.log", ["ddddddd"]) == ["ddddddd"]

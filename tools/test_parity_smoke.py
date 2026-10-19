@@ -197,3 +197,18 @@ def test_the_ratchets_run_whichever_crate_the_merge_touches_and_a_failing_one_re
     why = ps.ratchets(run=fails_the_dense_id_ratchet)
     assert "no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id" in why and "loopdeletion" in why, why
     assert ps.ratchets(run=lambda command: Done(0)) == ""
+
+
+def test_every_failing_ratchet_is_named_not_only_the_first():
+    """The subset rule compares failure sets: a head red on two ratchets must show both, or a merge that fixes one looks like it adds the other."""
+    class Done:
+        def __init__(self, code):
+            self.returncode, self.stdout, self.stderr = code, "", "thread panicked: x" if code else ""
+
+    failed = ps.ratchet_failures(run=lambda command: Done(1 if ("block_list_ratchet" in " ".join(command) or "facts_rewrite" in " ".join(command)) else 0))
+    assert set(failed) == {"ratchet:block_list_ratchet", "ratchet:facts_rewrite"}, failed
+
+
+def test_the_failed_steps_come_out_of_the_smoke_line_by_name():
+    assert ps.failing_names("PARITY SMOKE FAIL qc_modules: QCport game/combat.c -O2: x; run: y: z | programs ok 0.3 s") == ["qc_modules", "run"]
+    assert ps.failing_names("PARITY SMOKE PASS programs ok 0.3 s") == []

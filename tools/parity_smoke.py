@@ -113,6 +113,33 @@ def ratchets(root: Path = ROOT, tiers: Path = TIERS, run=None) -> str:
     return ""
 
 
+def ratchet_name(command: list[str]) -> str:
+    """The name a ratchet is listed by in a failure set: the test (`--test NAME`, or the lib filter after `--`), else the filter word."""
+    if "--test" in command:
+        return command[command.index("--test") + 1]
+    return command[-1]
+
+
+def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[str, str]:
+    """name -> why, for EVERY ratchet that fails on the tree in `root` (the subset rule compares whole failure sets, not the first failure)."""
+    run = run or (lambda command: subprocess.run(slotted(command), cwd=root, capture_output=True, text=True))
+    failed = {}
+    for command in ratchet_commands(tiers):
+        done = run(command)
+        if done.returncode:
+            lines = [line for line in (done.stdout + done.stderr).splitlines() if "panicked" in line or "FAILED" in line or "error" in line]
+            failed[f"ratchet:{ratchet_name(command)}"] = " / ".join(lines[:2])[:240] or "failed"
+    return failed
+
+
+def failing_names(line: str) -> list[str]:
+    """The failed step names of a `PARITY SMOKE FAIL name: detail; name: detail | ...` line."""
+    if not line.startswith("PARITY SMOKE FAIL "):
+        return []
+    head = line[len("PARITY SMOKE FAIL "):].split(" | ")[0]
+    return [part.split(":")[0].strip() for part in head.split("; ") if part.strip()]
+
+
 def selection() -> dict:
     return tomllib.loads(SELECTION.read_text()) if SELECTION.exists() else {}
 
@@ -352,16 +379,23 @@ def main() -> int:
         for package in args.rank:
             rank(package)
         return 0
+    failing: list[str] = []
+    pre: list[str] = []
     if broken := workspace_check():
-        print(f"PARITY SMOKE FAIL the workspace does not compile: {broken}")
-        return 1
-    if broken := ratchets():
-        print(f"PARITY SMOKE FAIL a ratchet fails on the merged tree: {broken}")
-        return 1
+        failing.append("workspace")
+        pre.append(f"workspace: {broken}")
+    for name, why in ratchet_failures().items():
+        failing.append(name)
+        pre.append(f"{name}: {why}")
     packages = touched(args.base)
     for package in packages:  # built first, untimed
         subprocess.run(slotted(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"]), cwd=ROOT, capture_output=True)
     ok, line = run_steps(plan(packages), args.bin or llrmbin.bin_dir(), known_red=frozenset(args.skip))
+    failing += failing_names(line)
+    print(f"FAILING: {','.join(failing)}")
+    if pre:
+        print(f"PARITY SMOKE FAIL {'; '.join(pre)} | {line}")
+        return 1
     print(line)
     return 0 if ok else 1
 

@@ -5,6 +5,8 @@
     tools/parity_squash.py merge-batch N1..N4 [--known-red STEP=ISSUE]...   up to four ready PRs: ONE fast set on the base with all merged in; on failure halve (the passing half lands first)
     tools/parity_squash.py audit [SINCE] every squash on origin/feat/parity since SINCE (default 96468410e): what it deleted without a Deletes:/Reverts: line in its PR's description
 
+Subset rule: the fast set runs on the head (origin/feat/parity, failure set cached per sha by `head-failures`) AND on the merged tree; the merged tree may fail only checks the head fails, and strictly fewer
+when the description has a `Fixes red` line; both sets are in the refusal. Every landing appends `<sha> #PR gate-ok <date>` to ~/scratch/coordwork/landed.log; `unlogged` lists feat/parity commits with no line.
 Refused unless: the PR head contains the current origin/feat/parity; the squash diff deletes no file, no test function (`#[test] fn`, `def test_`, unless re-added) and no more than
 LIMIT lines of a file, unless a `Deletes:` or `Reverts:` line of the description names the path (own commits or not: #2443's deleted scev/expand_iv.rs); parity_smoke passes on that exact head.
 PARITY_BIN names the directory of the built release llrm-c, llrm-qb and llrm-nib (parity_smoke needs them); unset, it is the repo target dir's release
@@ -15,6 +17,7 @@ PARITY_BIN names the directory of the built release llrm-c, llrm-qb and llrm-nib
 from __future__ import annotations
 
 import contextlib
+import datetime
 import fcntl
 import json
 import os
@@ -26,6 +29,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LIMIT = 20  # deleted lines allowed in files the PR's own commits did not touch
 BASE = "origin/feat/parity"
+HEAD_FAILURES = Path.home() / "scratch/results/headfail"  # <sha>.json: the failing checks of the fast set on that head
+LANDED_LOG = Path(os.environ.get("LANDED_LOG", Path.home() / "scratch/coordwork/landed.log"))
+FIXES_RED = re.compile(r"(?im)^\s*fixes\s+(?:a\s+)?red\b")
 LAND_LOCK = "/tmp/land.lock"  # the coordinator's land.sh holds the same file: one landing at a time, whoever lands
 TEST_RUST = re.compile(r"^-\s*#\[test\]")
 TEST_PY = re.compile(r"^-\s*def (test_\w+)")
@@ -278,13 +284,19 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or ""):
                 print(f"#{number}: " + "; ".join(why))
                 return False
-        ok, last = run_smoke(known)
+        merged_failed, last = smoke_failures(known)
         print(f"{' '.join('#' + n for n in group)}: {last}")
-        return ok
+        why = subset_refusals(head_failures(git("rev-parse", BASE).strip()), merged_failed, any(claims_fix(infos[n]["body"] or "") for n in group))
+        if why:
+            print("\n".join(f"REFUSED: {w}" for w in why))
+        return not why
 
     def land(number: str) -> None:
         done = subprocess.run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", infos[number]["headRefOid"], "--subject", infos[number]["title"], "--body", known_red_line(known)])
         (landed if done.returncode == 0 else refused).append(number)
+        if done.returncode == 0:
+            git("fetch", "-q", "origin", "feat/parity")
+            log_landed(git("rev-parse", BASE).strip(), number, "gate-ok")
 
     with land_lock():
         if git("status", "--porcelain", "--untracked-files=no").strip():
@@ -292,6 +304,67 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         batch(list(numbers), passes, land, lambda number: refused.append(number))
     print(f"LANDED: {' '.join('#' + n for n in landed) or '-'}  REFUSED: {' '.join('#' + n for n in refused) or '-'}")
     return 1 if refused else 0
+
+
+def claims_fix(description: str) -> bool:
+    """Whether the PR says it fixes a red: a line `Fixes red` / `Fixes a red ...` in its description."""
+    return bool(FIXES_RED.search(description or ""))
+
+
+def subset_refusals(head: set[str], merged: set[str], fixes: bool) -> list[str]:
+    """Why the merged tree may not land on a head that fails `head`: it fails a check the head passes, or (a PR that says it fixes a red) fails as many as the head.
+    The gate must not deadlock on a red head, and must not let a PR add a red. Both sets are in the reason."""
+    shown = f"head fails {{{', '.join(sorted(head)) or '-'}}}, merged tree fails {{{', '.join(sorted(merged)) or '-'}}}"
+    if new := sorted(merged - head):
+        return [f"the merged tree fails {', '.join(new)}, which the head passes ({shown})"]
+    if fixes and head and len(merged) >= len(head):
+        return [f"the PR says it fixes a red but the merged tree fails as many checks as the head ({shown})"]
+    return []
+
+
+def smoke_failures(known: dict[str, str] | None = None) -> tuple[set[str], str]:
+    """(the failing checks, the smoke's last line) of parity_smoke on this checkout: its `FAILING:` line."""
+    smoke = subprocess.run(
+        ["uv", "run", "-q", "--project", "tools", "python", "tools/parity_smoke.py", "--bin", smoke_bins(), "--base", BASE, *[a for step in (known or {}) for a in ("--skip", step)]],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    lines = smoke.stdout.strip().splitlines()
+    names = next((line[len("FAILING:"):].strip() for line in reversed(lines) if line.startswith("FAILING:")), None)
+    if names is None:
+        names = "smoke-did-not-finish" if smoke.returncode else ""
+    return {n for n in names.split(",") if n}, (lines or [""])[-1]
+
+
+def head_failures(sha: str, compute=None, cache: Path = HEAD_FAILURES) -> set[str]:
+    """The failing checks of the fast set on the head `sha`, computed once per sha (`compute()` on a checkout of it with ITS binaries; `head-failures` stores it)."""
+    file = cache / f"{sha}.json"
+    if file.exists():
+        return set(json.loads(file.read_text()))
+    if compute is None:
+        raise SystemExit(f"no failure set is cached for the head {sha[:9]}: check the head out, build its binaries, set PARITY_BIN to them and run `tools/parity_squash.py head-failures`")
+    failed = compute()
+    cache.mkdir(parents=True, exist_ok=True)
+    file.write_text(json.dumps(sorted(failed)))
+    return failed
+
+
+def log_landed(sha: str, number: str, result: str, path: Path | None = None) -> None:
+    """One line per landed squash for the coordinator's log: `<sha> <PR> <gate result> <date>`."""
+    path = path or LANDED_LOG
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as log:
+        log.write(f"{sha} #{number} {result} {datetime.date.today().isoformat()}\n")
+
+
+def unlogged(log: Path, commits: list[str]) -> list[str]:
+    """The commits (sha prefixes of the first-parent history since the cut, the log's first line) with no line in the log."""
+    seen = set()
+    for line in log.read_text().splitlines() if log.exists() else []:
+        if line.strip():
+            seen.add(line.split()[0])
+    return [c for c in commits if not any(c.startswith(x) or x.startswith(c) for x in seen)]
 
 
 def merge(number: str, known: dict[str, str] | None = None) -> int:
@@ -316,10 +389,11 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     if why := refusals(merged, info["body"] or ""):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
-    ok, last = run_smoke(known)
+    merged_failed, last = smoke_failures(known)
     print(last)
-    if not ok:
-        print("REFUSED: the fast set fails on this head")
+    head_failed = head_failures(git("rev-parse", BASE).strip())
+    if why := subset_refusals(head_failed, merged_failed, claims_fix(info["body"] or "")):
+        print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
     files = {f["path"] for f in json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "files"], capture_output=True, text=True, check=True).stdout)["files"]}
     if why := stale_at_the_call(merged):
@@ -334,6 +408,7 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     git("fetch", "-q", "origin", "feat/parity")
     squash = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "mergeCommit"], capture_output=True, text=True, check=True).stdout)["mergeCommit"]["oid"]
     git("fetch", "-q", "origin", squash)
+    log_landed(squash, number, "gate-ok" + (f" (head red: {','.join(sorted(head_failed))})" if head_failed else ""))
     if strays := squash_strays(squash, files):
         print(f"REVERT-DETECTED: squash {squash[:9]} of #{number} touches files the PR never listed (a stale tree reverting other work?); restore them NOW:")
         print("\n".join(f"  {path} {change}" for path, change in strays))
@@ -345,6 +420,19 @@ def main() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "merge":
         rest = sys.argv[3:]
         return merge(sys.argv[2], parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))
+    if len(sys.argv) >= 2 and sys.argv[1] == "head-failures":
+        sha = git("rev-parse", "HEAD").strip()
+        (HEAD_FAILURES / f"{sha}.json").unlink(missing_ok=True)
+        failed = head_failures(sha, lambda: smoke_failures()[0])
+        print(f"{sha[:9]}: fails {{{', '.join(sorted(failed)) or '-'}}}")
+        return 0
+    if len(sys.argv) >= 2 and sys.argv[1] == "unlogged":
+        cut = LANDED_LOG.read_text().splitlines()[0].split()[0] if LANDED_LOG.exists() else BASE
+        shas = git("log", "--first-parent", "--format=%h", f"{cut}..{BASE}").split()
+        missing = unlogged(LANDED_LOG, shas)
+        for sha in missing:
+            print(f"UNLOGGED {sha} {git('log', '-1', '--format=%an: %s', sha).strip()[:90]}")
+        return 1 if missing else 0
     if len(sys.argv) >= 3 and sys.argv[1] == "merge-batch":
         numbers = [a for a in sys.argv[2:] if not a.startswith("--") and a.isdigit()]
         rest = sys.argv[2:]
