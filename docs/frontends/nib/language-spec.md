@@ -347,6 +347,10 @@ defined result, such as `inf - inf` or `0.0 / 0.0`, gives `nan`; division by
 zero gives `inf` or `-inf`. Nothing traps: the exceptions are masked, as
 the BIOS leaves them. `%` and `//` are not defined on floats.
 
+Floats follow C's fast default. "Stored" means a memory store: a variable promoted to a
+register may keep extended precision across statements. `-fexcess-precision=standard` rounds every
+`f32` assignment to single.
+
 ### 3.7 Conversions
 
 A conversion names its target type as a function: `i32(narrow)`,
