@@ -5,7 +5,8 @@
 
 Static: reads the source under crates/, no build. Lists, per old analysis (tools/old_analyses.toml), the callers as
 file:line grouped by pass (the file), then ends with the one number:
-`old-analysis callers under parity: N (analyses with old callers: M)`, N call sites, M analyses with at least one.
+`old-analysis callers under parity: N (X 222; without it N-222); analyses with old callers: M (M-1 without X)`: N call sites, M analyses
+with at least one, X the entries flagged `moves_last` (MemRef: the shared location type that moves last), split out.
 A caller is a code line in the entry's `scope` (default crates/) outside the analysis' own files, tests (`*_tests.rs`, `tests/`, a `#[cfg(test)]` module at
 column 0), comments and `use` lines. A file an entry lists in `defined_in` is not a caller of it.
 """
@@ -64,16 +65,25 @@ def callers(root: Path, entries: list[dict]) -> dict[str, dict[str, list[int]]]:
     return found
 
 
-def report(found: dict[str, dict[str, list[int]]]) -> list[str]:
+def report(found: dict[str, dict[str, list[int]]], last: frozenset[str] = frozenset()) -> list[str]:
+    """The per-analysis table, then the headline; `last` names the analyses that move last (MemRef), split out."""
     lines: list[str] = []
     for name, passes in found.items():
         total = sum(len(rows) for rows in passes.values())
         lines.append(f"{name}: {total} callers in {len(passes)} passes")
         for relative, rows in passes.items():
             lines.append(f"  {relative}: {', '.join(str(row) for row in rows)}")
-    sites = sum(len(rows) for passes in found.values() for rows in passes.values())
-    open_ = sum(1 for passes in found.values() if passes)
-    lines.append(f"old-analysis callers under parity: {sites} (analyses with old callers: {open_})")
+    sites = {name: sum(len(rows) for rows in passes.values()) for name, passes in found.items()}
+    total, open_ = sum(sites.values()), sum(1 for count in sites.values() if count)
+    head = f"old-analysis callers under parity: {total}"
+    tail = f"analyses with old callers: {open_}"
+    if last & found.keys():
+        held = sum(sites[name] for name in last & found.keys())
+        open_held = sum(1 for name in last & found.keys() if sites[name])
+        names = "/".join(sorted(last & found.keys()))
+        head += f" ({names} {held}; without it {total - held})"
+        tail += f" ({open_ - open_held} without {names})"
+    lines.append(f"{head}; {tail}")
     return lines
 
 
@@ -83,7 +93,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", type=Path, default=LIST)
     args = parser.parse_args(argv)
     entries = tomllib.loads(args.list.read_text())["analysis"]
-    print("\n".join(report(callers(args.root, entries))))
+    last = frozenset(entry["name"] for entry in entries if entry.get("moves_last"))
+    print("\n".join(report(callers(args.root, entries), last)))
     return 0
 
 

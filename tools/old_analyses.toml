@@ -1,6 +1,7 @@
 # The OLD analyses of the parity pipeline: stand-ins that a translation replaces. `tools/old_analysis_callers.py`
 # counts their callers. The list is the registry's (parity-pipeline owns it); `ask` is a manager analysis asked by
 # `get::<T>`, `require::<T>` and the like, `use` a type or function named in code, `module` a module whose functions are called.
+# `moves_last`: reported apart (the shared location type, which moves last).
 # `scope`: path prefixes searched (default crates/).
 # `defined_in`: files that define it or are its own plumbing; they are not callers.
 
@@ -33,6 +34,7 @@ defined_in = ["crates/opt/llrm-transforms/src/interprocedural.rs"]
 [[analysis]]
 name = "MemRef"
 use = "MemRef"
+moves_last = true
 defined_in = ["crates/opt/llrm-analysis/src/memory.rs", "crates/opt/llrm-analysis/src/manager.rs"]
 
 [[analysis]]

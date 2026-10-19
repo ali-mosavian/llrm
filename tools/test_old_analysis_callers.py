@@ -43,5 +43,13 @@ def test_only_code_callers_in_scope_are_counted(tmp_path):
 def test_the_last_line_is_the_one_number(tmp_path):
     tree(tmp_path, {"crates/opt/a/src/gvn.rs": "fn f() { x.get::<Sums>(); y.get::<Sums>(); }\n"})
     lines = oac.report(oac.callers(tmp_path, ENTRIES))
-    assert lines[-1] == "old-analysis callers under parity: 1 (analyses with old callers: 1)"
+    assert lines[-1] == "old-analysis callers under parity: 1; analyses with old callers: 1"
     assert "  crates/opt/a/src/gvn.rs: 1" in lines
+
+
+def test_the_analysis_that_moves_last_is_split_out(tmp_path):
+    """MemRef was 222 of 315 callers: one number hid the other 93, and the trend with it."""
+    tree(tmp_path, {"crates/opt/a/src/gvn.rs": "fn f() {\n    x.get::<Sums>();\n    ranges::a();\n    ranges::b();\n}\n"})
+    entries = [ENTRIES[0], {"name": "ranges", "module": "ranges", "moves_last": True}]
+    lines = oac.report(oac.callers(tmp_path, entries), frozenset({"ranges"}))
+    assert lines[-1] == "old-analysis callers under parity: 3 (ranges 2; without it 1); analyses with old callers: 2 (1 without ranges)"
