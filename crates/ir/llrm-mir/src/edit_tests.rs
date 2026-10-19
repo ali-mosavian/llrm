@@ -1,3 +1,4 @@
+use crate::edit::ValueMap;
 use crate::module::{BlockId, Change, Function, InstId, Module, Operand, Use, ValueId};
 use crate::opcode::{BinaryOp, Flags, Opcode};
 use crate::{Position, parse, print};
@@ -757,4 +758,28 @@ fn test_take_name_moves_the_name_to_the_other_value() {
     f.take_name(sv, tv);
     assert_eq!((f.value(sv).name.clone(), f.value(tv).name.clone()), (None, Some("s".to_string())));
     let _ = (s, t);
+}
+
+/// A block cloned without a remap reads the original's values; after the
+/// remap its instructions read the copy's, and the original is untouched.
+#[test]
+fn a_cloned_block_reads_its_own_values_once_remapped() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let entry = f.entry().unwrap();
+    let (_, x) = named(f, "x");
+    let mut map = ValueMap::default();
+    let copy = f.clone_block(entry, &mut map);
+    f.insert_block(copy, Some(entry)).expect("placed");
+    let Operand::Value(x_copy) = map.values[&x] else { panic!("a value") };
+    assert_ne!(x_copy, x);
+    assert_eq!(map.blocks[&entry], copy);
+    for inst in f.iter_block(copy).collect::<Vec<_>>() {
+        f.remap_instruction(inst, &map);
+    }
+    let mul = f.iter_block(copy).nth(1).unwrap();
+    assert_eq!(f.instruction(mul).operands[0], Operand::Value(x_copy));
+    let (y, _) = named(f, "y");
+    assert_eq!(f.instruction(y).operands[0], Operand::Value(x));
+    assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
 }

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/cfgwalk.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/cfgwalk.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/cfgwalk.rs sha256:030460119de60964e0c7b82bfb2c5af430c610e67f66e35371806f5ccdcd72f9 -->
+<!-- src: crates/opt/llrm-analysis/src/cfgwalk.rs sha256:152f0797f66955f11845084d242aaeacc8b99d0d917dce091bd95f717fd27c5f -->
 
 # cfgwalk
 
@@ -17,3 +17,10 @@ linear.
 
 ## Used by
 `adce` in llrm-transforms.
+
+## Example
+In a loop the edge to a block still on the stack is the back edge:
+
+```text
+entry -> head -> body -> head   ; body -> head is the back edge
+```

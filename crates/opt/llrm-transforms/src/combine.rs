@@ -27,6 +27,15 @@
 //!
 //! # Used by
 //! `fold` (its number step).
+//!
+//! # Example
+//! An instruction that simplifies is replaced, and what read it is visited
+//! again:
+//!
+//! ```text
+//! %a = add i32 %x, 0
+//! %b = mul i32 %a, 1   ; %a becomes %x, then %b becomes %x
+//! ```
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;

@@ -48,7 +48,7 @@ use llrm_mir::simplify::{simplify_binop_operands, simplify_cast_operand, simplif
 /// What a translation reads: the context and layout the simplifier folds with,
 /// the function, and the dominator tree (`DT`, absent where C++ passes null).
 pub struct Env<'a> {
-    pub context: &'a mut Context,
+    pub context: &'a Context,
     pub layout: &'a DataLayout,
     pub function: &'a Function,
     pub dt: Option<&'a DomTree>,

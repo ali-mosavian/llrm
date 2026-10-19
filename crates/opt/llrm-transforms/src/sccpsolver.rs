@@ -1517,7 +1517,7 @@ impl<'a> Solver<'a> {
             // If we can constant fold this, mark the result of the call as a
             // constant.
             if let Some(folded) =
-                constantfolding::constant_fold_call(self.context, Some(self.function), info, callee, &name, &operands)
+                constantfolding::constant_fold_call(&*self.context, Some(self.function), info, callee, &name, &operands)
             {
                 let lv = Lattice::get(&LatticeConstant::of(self.context, folded));
                 self.merge_in_value(result, &lv, MergeOptions::default());

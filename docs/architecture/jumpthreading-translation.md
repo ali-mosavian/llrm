@@ -43,9 +43,9 @@ T = missing translation, a TODO row (section 3). Present and used as they are: L
 | piece | LLVM | in the repo |
 |---|---|---|
 | `FindAvailableLoadedValue` | `Loads.cpp` | none (grep `available_loaded`/`find_available` finds only `SsaUpdater` internals) |
-| `SplitBlockPredecessors`, `SplitEdge` | `BasicBlockUtils.cpp` | private copies in `looprotate.rs`, `simpleloopunswitch.rs`; none shared |
-| value-mapped block clone (`CloneBasicBlock`, `ValueMapper`) | `CloneFunction.cpp`, `ValueMapper.cpp` | `Edit::clone_instruction` only; `looprotate.rs` maps by hand |
-| `ConstantFoldTerminator` | `Local.cpp` | private method of `Cvp` (`cvp.rs:2667`) |
+| `SplitBlockPredecessors`, `SplitEdge`, `SplitBlock` | `BasicBlockUtils.cpp` | done: `edges.rs` (`split_block_predecessors`, `split_edge`, `split_block`); the private copies in `simpleloopunswitch.rs` are gone |
+| value-mapped block clone (`CloneBasicBlock`, `ValueMapper`) | `CloneFunction.cpp`, `ValueMapper.cpp` | done: `Function::clone_block` and `remap_instruction` with `ValueMap` (`edit.rs`); `looprotate.rs` still maps by hand |
+| `ConstantFoldTerminator` | `Local.cpp` | open: a switch-only method of `Cvp` (`cvp.rs:2667`) on 14 `Cvp` helpers, among them its own `BasicBlock::removePredecessor`, of which `looprotate.rs`, `simpleloopunswitch.rs` and `loopdeletion.rs` hold three more private copies; the move starts with one shared `remove_predecessor` |
 | `TryToSimplifyUncondBranchFromEmptyBlock`, `DeleteDeadBlock` | `Local.cpp`, `BasicBlockUtils.cpp` | `simplifycfg.rs:467` (`empty_block_removed`, not a translation); `loopdeletion.rs` erases its own |
 
 ## 4. Slots, preserved analyses, switch
