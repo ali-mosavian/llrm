@@ -381,3 +381,13 @@ def test_a_lifetime_marker_with_the_size_operand_reads_as_the_pins_without_it():
     opt = [line.replace("(i64 4, ptr", "(ptr") for line in llrm]
     assert difftest.canonical(llrm) == difftest.canonical(opt)
     assert difftest.canonical(["declare void @llvm.lifetime.start.p0(i64, ptr)"]) == difftest.canonical(["declare void @llvm.lifetime.start.p0(ptr)"])
+
+
+def test_a_calls_attributes_are_not_the_code_whether_written_out_or_named_as_a_group():
+    """`opt` prints `call void @bar() #4` where llrm writes `call void @bar() nounwind`: the phi-undef-loadstore bodies differed on those
+    lines alone (and sink-cb-diff-attrs, hoist-cb-diff-attrs)."""
+    llrm = ["define void @f() {", "b0:", "  tail call void @bar() nounwind", "  %r = call i32 @g(i32 1) nocallback nofree memory(none)", "  ret void", "}"]
+    opt = [line.replace(" nounwind", " #4").replace(" nocallback nofree memory(none)", " #5") for line in llrm]
+    assert difftest.canonical(llrm) == difftest.canonical(opt)
+    kept = difftest.canonical(["define void @f() {", "b0:", "  %r = call i32 @g(i32 1)", "  ret void", "}"])
+    assert any("call i32 @g(i32 1)" in line for line in kept)
