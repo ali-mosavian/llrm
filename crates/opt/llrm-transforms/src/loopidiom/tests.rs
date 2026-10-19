@@ -390,3 +390,35 @@ fn test_a_loop_that_shifts_a_buffer_the_safe_way_is_a_memmove() {
     assert!(after.contains("llvm.memmove"), "{after}");
     assert!(after.contains("!llrm.backward"), "{after}");
 }
+
+/// A copy loop over `__huge` arrays became a memmove, which the backend lowers
+/// as `rep movs`: it does not carry into the selector past 64K, and
+/// tests/run/huge/copyw printed 732590080 for 427417504 once LoopRotate was on.
+#[test]
+fn test_a_copy_of_a_huge_pointer_is_not_a_memcpy() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+
+@a = addrspace(3) global [40000 x i16] zeroinitializer
+@b = addrspace(3) global [40000 x i16] zeroinitializer
+
+define void @f() {
+entry:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %next, %h ]
+  %from = getelementptr inbounds i16, ptr addrspace(3) @a, i32 %i
+  %to = getelementptr inbounds i16, ptr addrspace(3) @b, i32 %i
+  %v = load i16, ptr addrspace(3) %from
+  store i16 %v, ptr addrspace(3) %to
+  %next = add i32 %i, 1
+  %c = icmp ult i32 %next, 40000
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret void
+}
+";
+    let after = pass_output(text);
+    assert!(!after.contains("llvm.memcpy") && !after.contains("llvm.memmove"), "{after}");
+}

@@ -2,10 +2,8 @@
 //! `processInstruction`, `propagateEquality`, `findLeader` and the dead-block
 //! handling of
 //! [`GVN.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp)
-//! at d1106deb71cc. Loads, load PRE and scalar PRE are the later stages of
-//! `docs/architecture/gvn-port.md`; where `processInstruction` would call
-//! them a load is numbered and entered as a leader, as LLVM does when
-//! `processLoad` finds nothing.
+//! at d1106deb71cc. Loads, load PRE and scalar PRE are in `pass/loads.rs`,
+//! `pass/loadpre.rs` and `pass/scalarpre.rs`.
 //!
 //! DEVIATE 1, the analyses: `DominatorTree` is rebuilt after a pass of CFG
 //! edits (`MergeBlockIntoPredecessor`, a split critical edge); LLVM keeps it
@@ -51,6 +49,7 @@ use crate::local;
 
 mod loadpre;
 mod loads;
+mod scalarpre;
 
 /// DEVIATE 17 (temporary): what a taken compare says of its operands (`A == B`
 /// replaces `A` by `B`; `A >= B` makes `A < B` false) is not propagated. A
@@ -89,6 +88,10 @@ pub struct GvnPass<'a> {
     /// `LI`, made when a load PRE asks and dropped when the CFG changes.
     loops: Option<llrm_mir::loopinfo::LoopInfo>,
     dead_blocks: IdSet<BlockId>,
+    /// `BlockRPONumber`, none while `InvalidBlockRPONumbers`.
+    block_rpo_number: Option<IdMap<BlockId, u32>>,
+    /// `ToSplit`: the critical edges scalar PRE found, as (pred, succ).
+    to_split: Vec<(BlockId, BlockId)>,
     /// A block was merged or an edge split.
     cfg_changed: bool,
 }
@@ -114,6 +117,8 @@ pub fn run_impl_cfg(
     dominators: Option<&DomTree>,
 ) -> (bool, bool) {
     let tables = TABLES.with(|pool| pool.take()).unwrap_or_else(|| (ValueTable::new(), LeaderMap::default()));
+    let mut tables = tables;
+    tables.0.translating = pre;
     let dt = dominators.map_or_else(|| std::borrow::Cow::Owned(DomTree::of(function)), std::borrow::Cow::Borrowed);
     let mut pass = GvnPass {
         context,
@@ -127,6 +132,8 @@ pub fn run_impl_cfg(
         pre,
         loops: None,
         dead_blocks: IdSet::new(),
+        block_rpo_number: None,
+        to_split: Vec::new(),
         cfg_changed: false,
     };
     let mark = pass.function.mark();
@@ -187,6 +194,17 @@ impl GvnPass<'_> {
             changed |= should_continue;
         }
 
+        if self.pre {
+            // Fabricate val-num for dead-code in order to suppress assertion
+            // in performPRE().
+            self.assign_val_num_for_dead_code();
+            let mut pre_changed = true;
+            while pre_changed {
+                pre_changed = self.perform_pre();
+                changed |= pre_changed;
+            }
+        }
+
         self.cleanup_global_sets();
         // Do not cleanup DeadBlocks in cleanupGlobalSets() as it's called for
         // each iteration.
@@ -210,6 +228,7 @@ impl GvnPass<'_> {
     fn cleanup_global_sets(&mut self) {
         self.vn.clear();
         self.leader_table.clear();
+        self.block_rpo_number = None;
     }
 
     /// `processBlock`
@@ -997,6 +1016,7 @@ impl GvnPass<'_> {
     ) -> Option<BlockId> {
         let block = crate::edges::split_critical_edge(self.function, pred, succ)?;
         self.md.invalidate_cached_predecessors();
+        self.block_rpo_number = None;
         self.cfg_changed = true;
         self.refresh_dominators();
         Some(block)

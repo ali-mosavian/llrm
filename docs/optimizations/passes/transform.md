@@ -1,39 +1,16 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/transform.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/transform.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/transform.rs sha256:96717b2c98d1a129385bd0470f7b4288630ae9a06b67813f79e9ae469f104b41 -->
+<!-- src: crates/opt/llrm-transforms/src/transform.rs sha256:a98a18e141a43801e48c069f4c36fe4b1b42070f5bebbc0454082b4f19bcff7a -->
 
 # transform
 
 The helpers [`crate::gvn`](gvn.md), [`crate::dead`](dead.md), [`crate::decide`](decide.md),
-[`crate::unswitch`](unswitch.md) and [`crate::loopexit`](loopexit.md) share: value reuse, liveness of
+[`crate::unswitch`](unswitch.md) and [`crate::loopexit`](loopexit.md) share: equal calls, liveness of
 values, and cleanup of phis after an edge goes.
 
 ## How it works
-`subexpressions` reuses a load: blocks are taken in layout order, and a
-non-volatile load gets a key (`_computation`): its opcode, flags and type,
-and its pointer as earlier replacements leave it. A load whose key an
-earlier one has in its block, with nothing between the two that may write
-its bytes (`_undisturbed`, from `memoryssa::Accesses`), reads the earlier
-result and is erased; with `avoid_store_crossing` a store between them
-refuses it too. Arithmetic, comparisons, addresses and casts are numbered
-by `gvn::table`, as LLVM's GVN does; `joined` keys them with `_computation`
-until scalar PRE replaces it.
-
 `equal_calls` makes two calls with one callee and arguments one when the
 caller's `silent` says they touch no memory: the later takes the earlier's
 result where the earlier has certainly run.
-
-`forwarded` is store-to-load forwarding across blocks: each load that
-`avail::forwardable_walk` says a known value serves becomes that value.
-`Crossings` answers whether a store lies on some path between the value's
-definition and the load, for `avoid_store_crossing`; `Forwarding` keeps the
-walk for the second numbering of one function.
-
-```text
-  before                        after
-  %b = load %p                  %b = load %p
-  store %v, %q                  store %v, %q   ; may not write %p's bytes
-  %d = load %p                  (uses of %d read %b)
-```
 
 `live` marks, to a fixed point, every value that something staying reads;
 `dead` removes the rest. `_comparison` finds the `icmp` in a block that
@@ -47,17 +24,17 @@ No honest example: these are helpers shared by passes, and none changes a
 function on its own. Read [`crate::gvn`](gvn.md) and its tests for them in use.
 
 ## Provides
-`subexpressions`, `equal_calls`, `forwarded` ([`crate::gvn`](gvn.md)); `live` and
-`live_except` ([`crate::dead`](dead.md), [`crate::floatloop`](floatloop.md)); `_comparison`
-([`crate::decide`](decide.md), [`crate::unswitch`](unswitch.md)); `_trivial_phis`
-([`crate::decide`](decide.md), [`crate::loopexit`](loopexit.md), [`crate::unswitch`](unswitch.md)).
+`equal_calls` ([`crate::gvn`](gvn.md)); `live` and `live_except` ([`crate::dead`](dead.md),
+[`crate::floatloop`](floatloop.md)); `_comparison` ([`crate::decide`](decide.md),
+[`crate::unswitch`](unswitch.md)); `_trivial_phis` ([`crate::decide`](decide.md),
+[`crate::loopexit`](loopexit.md), [`crate::unswitch`](unswitch.md)).
 
 ## Used by
-[`crate::gvn`](gvn.md) calls `subexpressions`, `equal_calls` and `forwarded` on each
-function it numbers; [`crate::dead`](dead.md) and [`crate::floatloop`](floatloop.md) call `live`
-to decide what to delete; [`crate::decide`](decide.md), [`crate::loopexit`](loopexit.md) and
+[`crate::gvn`](gvn.md) calls `equal_calls` on each function it numbers;
+[`crate::dead`](dead.md) and [`crate::floatloop`](floatloop.md) call `live` to decide what to
+delete; [`crate::decide`](decide.md), [`crate::loopexit`](loopexit.md) and
 [`crate::unswitch`](unswitch.md) call `_trivial_phis` after they drop an edge. Not a
 pass: it runs only inside those.
 
 ## Needs
-`memoryssa::Accesses`, `avail` and `cfg::Dominance` (`llrm_analysis`).
+`cfg::Dominance` (`llrm_analysis`).
