@@ -351,3 +351,13 @@ def test_llrm_pass_unrolls_matmul_on_the_targets_machine_not_neutral(tmp_path):
     assert blocks()[0] == 36
     count, stderr = blocks("--mode", "32")
     assert count == 216 and "target x86-m32 cpu 486 tti X86 " in stderr
+
+
+def test_a_failed_replay_names_the_panic_not_the_header_line_llrm_pass_printed_first():
+    """Two bodies panicked in expand_iv.rs and difftest reported "llrm-pass: slot indvars@738 Simplify Old", the first stderr line."""
+    stderr = (
+        "llrm-pass: slot indvars@738 Simplify Old (LLVM: indvars)\nllrm-pass: target x86-m32 cpu 486 tti X86 datalayout d\n"
+        "thread 'main' panicked at crates/opt/x.rs:74:22:\na SCEVable type, not Float(Float)\nnote: run with `RUST_BACKTRACE=1`\n"
+    )
+    assert difftest.failure_line(stderr) == "crates/opt/x.rs:74:22: a SCEVable type, not Float(Float)"
+    assert difftest.failure_line("llrm-pass: target x\nno such file\n") == "no such file"

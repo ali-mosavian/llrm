@@ -441,11 +441,20 @@ def isolated(replay: Path, row: dict, source: Path) -> str:
     except OSError as error:
         raise RuntimeError(f"{replay}: {error}") from error
     if done.returncode:
-        raise RuntimeError("llrm-pass " + row["pass"] + ": " + (done.stderr.strip().splitlines() or ["failed"])[0])
+        raise RuntimeError("llrm-pass " + row["pass"] + ": " + failure_line(done.stderr))
     SEEN.add(llrm_target(done.stderr, mode))
     if order:
         KINDS[row["pass"]] = next((line.split("slot ", 1)[1] for line in done.stderr.splitlines() if "slot " in line), "?")
     return done.stdout
+
+
+def failure_line(stderr: str) -> str:
+    """What llrm-pass failed with: the panic's message or the last line, not the `slot`/`target` header lines it prints first (two panics read as "slot indvars@738 Simplify Old")."""
+    lines = [line for line in stderr.strip().splitlines() if line.strip()]
+    for i, line in enumerate(lines):
+        if "panicked at" in line and i + 1 < len(lines):
+            return f"{line.split('panicked at ', 1)[1].rstrip(':')}: {lines[i + 1].strip()}"
+    return next((line for line in reversed(lines) if not line.startswith("note: run with")), "failed")
 
 
 SEEN: set[str] = set()  # the target line llrm-pass printed, one per distinct answer
