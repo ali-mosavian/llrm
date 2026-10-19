@@ -298,11 +298,31 @@ impl FunctionPass for IndVars {
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
-        let dead = (compared || rewrote || canonical || optimized || predicated || tested || sunk || rewound || widened || merged)
+        let dead = (compared
+            || rewrote
+            || canonical
+            || optimized
+            || predicated
+            || tested
+            || sunk
+            || rewound
+            || widened
+            || merged)
             && dead::dead(unit.context, outer.callees(), unit.function);
         if folded {
             PreservedAnalyses::none()
-        } else if compared || rewrote || canonical || optimized || predicated || tested || sunk || rewound || widened || merged || dead {
+        } else if compared
+            || rewrote
+            || canonical
+            || optimized
+            || predicated
+            || tested
+            || sunk
+            || rewound
+            || widened
+            || merged
+            || dead
+        {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
         } else {

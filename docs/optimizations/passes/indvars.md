@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/indvars.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/indvars.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:1fe5fbe6869548a6f700c9e8362f171dd25a2557fa8dce74445c8c3e2cadcc01 -->
+<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:6d71bfac897fe12338fa83d268c1ba130ec9106e97da0f970bbf811e0d2022a1 -->
 
 # indvars
 
@@ -17,9 +17,7 @@ changed the body.
    of the loop's count where the loop is left (`rewriteLoopExitValues`,
    ScalarEvolution's exit values, from every exit of the loop, a rotated
    loop's latch included); `LLRM_NO_SCEV_EXITVALUES` turns it off.
-1. `exitfold::folded`: exits their counts decide are folded.
-2. `exitsink::sunk`: final updates only exit phis read move to the exits.
-3. `widened`: a counter read through `zext` (or, where it is signed and
+1. `widened`: a counter read through `zext` (or, where it is signed and
    tested by `slt`, `sext`) to the address's index width, where `induction`
    proves its values never pass its own (`rises_unsigned`, `rises_signed`),
    becomes a counter of that width. C's `unsigned short i` reads `a[zext
@@ -34,10 +32,19 @@ changed the body.
    compares the wide one with that value extended
    (`WidenIV::widenLoopCompare`); other readers of the narrow one read its
    low part.
-4. `congruent`: header counters with one start and one step are one counter
-   (`SCEVExpander::replaceCongruentIVs`); the later ones' readers read the
-   first, and `dead` removes them.
-5. `rewound`: see below.
+2. `congruentiv::replaced` (`SCEVExpander::replaceCongruentIVs`; the older
+   `congruent` under `LLRM_NO_SCEV_CONGRUENT`): header phis SCEV proves
+   equal, a narrow one a truncation of a wide one included, are one, and
+   `dead` removes the rest.
+3. `canonexit::canonicalized` (`canonicalizeExitCondition`;
+   `LLRM_NO_SCEV_CANONEXIT`), `exitopt::optimized` (`optimizeLoopExits`;
+   `LLRM_NO_SCEV_EXITOPT`), `exitpredicate::predicated`
+   (`predicateLoopExits`; `LLRM_NO_SCEV_PREDICATE`), then
+   `exitfold::folded`: exits their counts decide are folded.
+4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
+   exit tests a counter against the value it has at the last trip.
+5. `exitsink::sunk`: final updates only exit phis read move to the exits.
+6. `rewound`: see below.
 
 `rewound` carries an exact inner recurrence's exit value around the outer
 loop. An inner loop running exactly `count` trips leaves as

@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 112 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 115 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -25,6 +25,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_compares | InstCombine's `visitICmpInst` and the helpers it calls, from [`InstCombineCompares.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp) at d1106deb71cc. | `combine::visit`, once the compares slot is flipped. | [combine_compares](combine_compares.md) |
 | combine_shared | What InstCombine's integer `visit*` functions share from `InstructionCombining.cpp`: the complexity order that puts constants on the right, and the reassociation of an associative or commutative operation. | `combine_addsub` (`visitAdd`, `visitSub`) and the families after it. | [combine_shared](combine_shared.md) |
 | combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
+| congruentiv | Phis of a loop header that ScalarEvolution proves equal are one phi. | [`crate::indvars`](indvars.md), which leaves the phis it replaced to `dead`. | [congruentiv](congruentiv.md) |
 | constraintelim | `constraint-elimination`: conditions the dominating branches, assumes and memory accesses already decide become constants, by Fourier-Motzkin elimination on a system of linear constraints over the values compared. | Nothing yet: `difference` and `guards::Given::holds` move here. | [constraintelim](constraintelim.md) |
 | counting | What a counted-loop rewrite places before the loop: its seeds, skip test and exit values (LLVM's SCEVExpander, as IndVarSimplify and LoopRotate use it). | [`crate::loopidioms`](loopidioms.md), [`crate::window`](window.md) and | [counting](counting.md) |
 | cvp | Correlated value propagation: a value is replaced, narrowed or given a flag when the branches and ranges around it prove the fact, as LLVM's `correlated-propagation`. | Alone, through `llrm-pass cvp`; not in the pipeline. `tools/difftest` | [cvp](cvp.md) |
@@ -36,6 +37,8 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | earlycse | LLVM's EarlyCSE with MemorySSA (`early-cse<memssa>`): one walk down the dominator tree, scoped tables of what is available, and a generation count that memory operations advance. | [`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`), | [earlycse](earlycse.md) |
 | edges | Edge surgery on conditional branches: a new block on one arm of a `br i1`, holding the operations that belong to that edge and not to either arm's block. | Not a pass: a library. `split` is called by `rotate` and | [edges](edges.md) |
 | exitfold | Exits their counts decide, folded: LLVM IndVarSimplify's `optimizeLoopExits`, with its exit-test hoisting and exit predication. | Step 2 of [`crate::indvars`](indvars.md), so on whenever `indvars` is, in the fixed | [exitfold](exitfold.md) |
+| exitopt | A loop's exits are folded by what ScalarEvolution knows of their counts. | Not wired in: [`crate::indvars`](indvars.md) will run `optimized` before | [exitopt](exitopt.md) |
+| exitpredicate | A read-only loop's exits are rewritten to tests on the loop's trip count made before it. | Not wired in: [`crate::indvars`](indvars.md) will run `predicated` after | [exitpredicate](exitpredicate.md) |
 | exitsink | An add, subtract or extension in a loop that only exit phis read, moved to those exits: LLVM's LICM sinking an instruction only used outside the loop. | Step 4 of [`crate::indvars`](indvars.md): on whenever `indvars` is, in the fixed point | [exitsink](exitsink.md) |
 | exitvalues | A value a loop computes and the code after it reads becomes an expression of the loop's trip count, written where the loop is left. | [`crate::indvars`](indvars.md), first of its steps. It replaced indvars' own | [exitvalues](exitvalues.md) |
 | expand | Values placed from their sums (LLVM's `SCEVExpander`): a `Scev` is built from its terms, each scaled and added once, before one instruction. | [`crate::lsr`](lsr.md) and [`crate::exitfold`](exitfold.md), while they rewrite a loop, and | [expand](expand.md) |
@@ -78,6 +81,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | loopunrollpass | `LoopFullUnrollPass`: a loop whose trip count is known and small enough, or whose unrolled form simplifies enough, is copied out completely. |  | [loopunrollpass](loopunrollpass.md) |
 | loopversion | Loop versioning: a loop is copied for what is true of it only at run time, and the copy is entered behind a test of that. | Once per body, after `unswitch`, `split`, `fuse` and `distribute` and | [loopversion](loopversion.md) |
 | lsr | Strength reduction: replaces a loop's induction variables, and the address arithmetic built from them, with the cheapest set of counters the target can address, so the loop carries few registers and no multiply (LLVM's LoopStrengthReduce, gcc's ivopts). | Once per body, after the interprocedural step and `fixednarrow`, before | [lsr](lsr.md) |
+| lsr_formula | The data of LLVM's loop strength reduction: `Immediate`, `RegUseTracker` and `Formula` (LoopStrengthReduce.cpp at `d1106deb71cc`, l.212-793). | Nothing runs it yet: stage 1 of the translation of LSR (the old pass in | [lsr_formula](lsr_formula.md) |
 | mem2reg | `mem2reg`: an alloca read and written only by direct loads and stores becomes SSA values and phis, and its loads, stores and the alloca go. | [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when | [mem2reg](mem2reg.md) |
 | memcpyopt | MemCpyOpt on MemorySSA: LLVM's `MemCpyOptPass` apart from the memset merging of `processStore` and `processMemSet`, which [`crate::memcpyoptimizer`] does (stage 1). | In the slot of `memcpyopt@818`. | [memcpyopt](memcpyopt.md) |
 | memcpyoptimizer | Adjacent stores of one repeated byte become a `llvm.memset`: LLVM's `MemCpyOptPass`, stage 1 (`runImpl`, `iterateOnFunction`, `processStore`, `processMemSet`, `tryMergingIntoMemset`, `MemsetRanges`). | In the slot of `merge@818`, where `loopidioms::Merge` ran. | [memcpyoptimizer](memcpyoptimizer.md) |
