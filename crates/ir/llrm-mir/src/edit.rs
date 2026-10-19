@@ -741,7 +741,11 @@ impl Function {
         if let Some(result) = self.instruction(inst).result
             && !self.users(result).is_empty()
         {
-            return Err(format!("instruction {}'s result still has {} users", inst.0, self.users(result).iter().count()));
+            return Err(format!(
+                "instruction {}'s result still has {} users",
+                inst.0,
+                self.users(result).iter().count()
+            ));
         }
         let operands = self.instructions[inst.0 as usize].operands.clone();
         for (index, operand) in operands.into_iter().enumerate() {
@@ -1176,11 +1180,8 @@ impl Function {
         predecessor: BlockId,
         keep_one_input_phis: bool,
     ) {
-        let phis: Vec<InstId> = self
-            .block(block)
-            .iter()
-            .take_while(|&one| self.instruction(one).opcode == Opcode::Phi)
-            .collect();
+        let phis: Vec<InstId> =
+            self.block(block).iter().take_while(|&one| self.instruction(one).opcode == Opcode::Phi).collect();
         for phi in phis {
             let mut operands = self.instruction(phi).operands.clone();
             let Some(at) = operands.chunks(2).position(|pair| pair[1] == Operand::Block(predecessor)) else {
