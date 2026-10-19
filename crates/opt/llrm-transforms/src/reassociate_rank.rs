@@ -44,6 +44,27 @@ struct Frame {
 }
 
 impl Ranks {
+    pub fn empty() -> Self {
+        Self { blocks: IdMap::new(), values: IdMap::new() }
+    }
+
+    /// `ValueRankMap.contains(V)`: `V` has an entry, as every value `getRank`
+    /// has looked at does (upstream's `operator[]` inserts a zero).
+    pub fn knows(
+        &self,
+        value: ValueId,
+    ) -> bool {
+        self.values.contains_key(&value)
+    }
+
+    /// `ValueRankMap.erase(V)`.
+    pub fn forget(
+        &mut self,
+        value: ValueId,
+    ) {
+        self.values.remove(&value);
+    }
+
     /// `BuildRankMap` over `order`, the reachable blocks in reverse post-order;
     /// `pinned` says which instructions cannot move
     /// (`mayHaveNonDefUseDependency`).
@@ -52,7 +73,7 @@ impl Ranks {
         order: &[BlockId],
         pinned: impl Fn(InstId) -> bool,
     ) -> Self {
-        let mut ranks = Self { blocks: IdMap::new(), values: IdMap::new() };
+        let mut ranks = Self::empty();
         let mut rank = 2_u32;
         for &parameter in function.parameters() {
             rank += 1;
@@ -88,9 +109,10 @@ impl Ranks {
         loop {
             let frame = stack.last().expect("a frame");
             let rank = match function.value(frame.value).def {
-                ValueDef::Argument(_) => self.values.get(&frame.value).copied().unwrap_or(0),
+                ValueDef::Argument(_) => *self.values.get_or_insert_with(frame.value, || 0),
                 ValueDef::Instruction(inst) => {
-                    if let Some(&known) = self.values.get(&frame.value) {
+                    let known = *self.values.get_or_insert_with(frame.value, || 0);
+                    if known != 0 {
                         known
                     } else {
                         let instruction = function.instruction(inst);
