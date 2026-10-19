@@ -253,32 +253,6 @@ end
 
 # What the target would rather run on the whole register (`promote` in its datalayout.toml): the word
 # operation is run as a dword, which reads and writes what lies above the word and does not care.
-# A load only this reads is its memory operand (X86DAGToDAGISel::tryFoldLoad:
-# `ADD32rm`): nothing writes memory between, and the load has no other reader.
-# DEVIATE F1: only where the other operand is free after (`dies`); the pin folds
-# either way and leaves the copy to the coalescer, which cost `x_transpose` 7.6%,
-# `x_bigadd` 3.7% and `nbody_fixed` 1.0% in clocks (bench's rows pair, 486).
-# Not `and`: `and_tested` covers an AND a comparison with zero reads, and a load
-# covered here would be left unselected under it.
-pattern arithmetic_cell for add=add sub=sub or=or xor=xor
-  match $mir.i16|i32(a:value, v=load(p))
-  when !promoted, nonvolatile(v), only_reader(v), dies(a), unwritten(v), !stored_back(v), !local(v)
-  cover v
-  let x = held(a)
-  let y = access(p)
-  emit $x86 result <- x, y
-end
-
-# The same with the load first, for the operations that commute.
-pattern arithmetic_cell_first for add=add or=or xor=xor
-  match $mir.i16|i32(v=load(p), b:value)
-  when !promoted, nonvolatile(v), only_reader(v), dies(b), unwritten(v), !stored_back(v), !local(v)
-  cover v
-  let x = held(b)
-  let y = access(p)
-  emit $x86 result <- x, y
-end
-
 pattern arithmetic_promoted for add=add sub=sub and=and or=or xor=xor
   match $mir(a, b)
   when promoted
