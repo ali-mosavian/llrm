@@ -712,8 +712,7 @@ impl Selector<'_, '_, '_> {
         &self,
         _: &Match,
     ) -> bool {
-        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        cfg!(test) || *ON.get_or_init(|| std::env::var_os("LLRM_TRYFOLD").is_some())
+        cfg!(test) || llrm_support::env_flag!("LLRM_TRYFOLD")
     }
 
     pub fn is_nonvolatile(
