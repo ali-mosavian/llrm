@@ -1,11 +1,11 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/deadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/deadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:8c8b4576c02d67025693105eebf91a2a26f435558151f958c258469db53bbc96 -->
+<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:0776389167e1d9919581a4316a81e48405e237fe5daf3d197e5b5bea1b101fd7 -->
 
 # deadstore
 
 Dead store elimination: LLVM's `DSEPass`, stage 1 (`DSEState`,
-`eliminateDeadDefs`, `getDomMemoryDef`, `eliminateDeadWritesAtEndOfFunction`,
-`storeIsNoop`).
+`eliminateDeadDefs`, `getDomMemoryDef`,
+`eliminateDeadWritesAtEndOfFunction`, `storeIsNoop`).
 
 ## How it works
 MemorySSA is built once. Every store and every `llvm.memset` of a constant
@@ -43,15 +43,16 @@ semantics), not BasicAA's address-space view; the underlying object of a
 location is the one object of its provenance, and "must alias with an
 offset" is the same address with sizes (`AliasResult::Partial`). Exit:
 none; the model is llrm's.
-DEVIATE 2: nothing throws (no unwinding in MIR), so `ThrowingBlocks` is empty
-and every local object is invisible on unwind. Exit: when MIR has EH.
+DEVIATE 2: nothing throws (no unwinding in MIR), so `ThrowingBlocks` is
+empty and every local object is invisible on unwind. Exit: when MIR has EH.
 DEVIATE 3: an object is invisible after the function returns when it is
 a stack or frame object (`isa<AllocaInst>`); `dead_on_return` and byval
 arguments (stage 3), and non-alloca objects with no capture (malloc) are
 absent. Exit: stage 3.
 DEVIATE 4: memory terminators (`lifetime.end`, `free`), the `initializes`
-attribute, `tryFoldIntoCalloc` and `eliminateRedundantStoresViaDominatingConditions`
-are stage 2 and 3. Partial overwrites (`isPartialOverwrite`, `IOLs`,
+attribute, `tryFoldIntoCalloc` and
+`eliminateRedundantStoresViaDominatingConditions` are stage 2 and 3. Partial
+overwrites (`isPartialOverwrite`, `IOLs`,
 `tryToMergePartialOverlappingStores`, `tryToShorten` of memsets) and
 `eliminateRedundantStoresOfExistingValues` are in. Exit: stage 2.
 DEVIATE 5: only stores and constant-length memsets are candidates, and
@@ -78,4 +79,5 @@ loops.
 The blocks and edges: only instructions are removed.
 
 ## See also
-LLVM [`DeadStoreElimination.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp).
+LLVM
+[`DeadStoreElimination.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp).

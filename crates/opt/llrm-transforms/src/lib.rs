@@ -103,8 +103,8 @@ pub mod dead;
 pub mod deadargs;
 #[cfg(test)]
 mod deadargs_tests;
-pub mod decide;
 pub mod deadstore;
+pub mod decide;
 pub mod dse;
 pub mod earlycse;
 pub mod edges;
@@ -188,6 +188,8 @@ pub mod ports;
 pub mod profit;
 pub mod promote;
 pub mod rotate;
+pub mod sccp;
+pub mod sccpsolver;
 pub mod settled;
 pub mod simpleloopunswitch;
 pub mod simplifycfg;

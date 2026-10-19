@@ -587,6 +587,17 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// `Value::takeName`: `to` is named what `from` was, which goes unnamed;
+    /// the name stays taken in the function.
+    pub fn take_name(
+        &mut self,
+        from: ValueId,
+        to: ValueId,
+    ) {
+        let name = self.values[from.0 as usize].name.take();
+        self.values[to.0 as usize].name = name;
+    }
+
     /// Replaces an instruction's flags.
     pub fn set_flags(
         &mut self,
