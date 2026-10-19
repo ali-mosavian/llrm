@@ -704,18 +704,22 @@ pub(crate) fn llvm_order(
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
     let translated = applied.options.sroa;
+    // DEVIATE, -O1 and -Og only (no GVN `pre`): the write-through `Promote`
+    // after PromoteMemToReg forwards a store of a global to the load after it,
+    // which LLVM's InstCombine does in `visitLoadInst` (FindAvailableLoadedValue,
+    // not translated); GVN does it at the other levels. Exit: that translation.
+    let write_through = || -> Vec<Box<dyn FunctionPass>> {
+        if applied.options.pre {
+            Vec::new()
+        } else {
+            vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)]
+        }
+    };
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
         let parts: Vec<Box<dyn FunctionPass>> = if translated {
-            // DEVIATE: PromoteMemToReg promotes allocas only; the write-through
-            // `Promote` after it still promotes the cells it declines (an
-            // internal global only `main` uses: LLVM localizes it to an alloca
-            // in GlobalOpt, which llrm's does not yet).
-            vec![
-                Box::new(crate::sroa::Sroa),
-                Box::new(crate::mem2reg::Mem2Reg),
-                Box::new(promote::Promote),
-                Box::new(promote::DeadSlots),
-            ]
+            let mut parts: Vec<Box<dyn FunctionPass>> = vec![Box::new(crate::sroa::Sroa), Box::new(crate::mem2reg::Mem2Reg)];
+            parts.extend(write_through());
+            parts
         } else {
             vec![Box::new(promote::Sroa), Box::new(promote::Promote), Box::new(promote::DeadSlots)]
         };
@@ -744,10 +748,11 @@ pub(crate) fn llvm_order(
         Phase::Cleanup => vec![
             Box::new(Together {
                 name: "promote@1241",
-                // DEVIATE as in the SROA slot: `Promote` keeps promoting the
-                // cells (globals) PromoteMemToReg does not.
+                // DEVIATE as in the SROA slot.
                 parts: if applied.options.mem2reg {
-                    vec![Box::new(mem2reg::Mem2Reg), Box::new(promote::Promote), Box::new(promote::DeadSlots)]
+                    let mut parts: Vec<Box<dyn FunctionPass>> = vec![Box::new(mem2reg::Mem2Reg)];
+                    parts.extend(write_through());
+                    parts
                 } else {
                     vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)]
                 },
