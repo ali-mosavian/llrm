@@ -139,21 +139,22 @@ fn delete_dead_instruction(
 
 /// The `i8` constant a `Byte` stands for, as an operand.
 fn byte_operand(
-    context: &mut Context,
+    context: &Context,
     byte: Byte,
 ) -> Operand {
     let ty = context.types.int(8);
     match byte {
         Byte::Value(value) => value,
         Byte::Constant(value) => Operand::Constant(context.int(ty, i128::from(value))),
-        Byte::Undef | Byte::Poison => Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison })),
+        Byte::Undef => Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Undef })),
+        Byte::Poison => Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison })),
     }
 }
 
 /// `Builder.CreateMul(TripCount, getIntN(Width, Reps))`, folded as the
 /// `IRBuilder`'s constant folder does.
 fn create_mul(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     before: InstId,
     value: Operand,

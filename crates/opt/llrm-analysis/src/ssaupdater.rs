@@ -249,7 +249,7 @@ impl SsaUpdater {
 
     fn poison(
         &self,
-        context: &mut Context,
+        context: &Context,
     ) -> Operand {
         Operand::Constant(context.constant(Constant { ty: self.proto_type, kind: ConstantKind::Poison }))
     }

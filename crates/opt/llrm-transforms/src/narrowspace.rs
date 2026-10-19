@@ -252,7 +252,7 @@ fn narrow(
         }
         // What else reads it reads the far pointer it was.
         let entry = function.entry().expect("a body");
-        let first = function.block(entry).instructions()[0];
+        let first = function.block(entry).first().expect("a block with an instruction");
         let cast = function.create_instruction(
             Opcode::Cast(CastOp::AddrSpaceCast),
             wide,

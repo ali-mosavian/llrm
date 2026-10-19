@@ -134,14 +134,14 @@ pub struct WidenIv {
     narrow_iv_users: Vec<NarrowIvDefUse>,
 }
 
-fn result_of(
+pub(crate) fn result_of(
     function: &Function,
     inst: InstId,
 ) -> ValueId {
     function.instruction(inst).result.expect("an instruction with a value")
 }
 
-fn defining(
+pub(crate) fn defining(
     function: &Function,
     operand: Operand,
 ) -> Option<InstId> {
@@ -152,7 +152,7 @@ fn defining(
     }
 }
 
-fn operand_type(
+pub(crate) fn operand_type(
     e: &Edit,
     operand: Operand,
 ) -> TypeId {
@@ -185,7 +185,7 @@ fn ir_ty(
 
 /// `Builder.Create<op>(V, Ty)` before `before`: a constant folds, a value of
 /// the type already is itself.
-fn build_cast(
+pub(crate) fn build_cast(
     e: &mut Edit,
     op: CastOp,
     value: Operand,
@@ -370,7 +370,7 @@ fn replace_uses_of_with(
     }
 }
 
-fn value_op(
+pub(crate) fn value_op(
     e: &Edit,
     inst: InstId,
 ) -> Operand {
@@ -1628,15 +1628,13 @@ fn find_common_dominator(
 }
 
 /// `BasicBlock::getFirstInsertionPt`.
-fn first_insertion_point(
+pub(crate) fn first_insertion_point(
     function: &Function,
     block: BlockId,
 ) -> InstId {
     function
         .block(block)
-        .instructions()
         .iter()
-        .copied()
         .find(|&inst| !matches!(
             function.instruction(inst).opcode,
             Opcode::Phi | Opcode::LandingPad { .. }

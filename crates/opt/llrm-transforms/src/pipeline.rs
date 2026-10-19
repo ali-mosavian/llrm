@@ -154,11 +154,11 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fixednarrow, floatloop, fold, gepoffset,
-    globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdeletion, loopdistribute,
-    loopfuse, loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit, loopunrollpass,
-    loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simpleloopunswitch, simplifycfg, sink,
-    switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fixednarrow, floatloop, fold,
+    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdeletion,
+    loopdistribute, loopfuse, loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit,
+    loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simpleloopunswitch,
+    simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -230,9 +230,9 @@ pub struct Options {
     /// turns it off.
     pub llvm_order: bool,
     /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
-    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating;
-    /// `LLRM_EXP_ROTATE` sets it, off by default until `indvars` and
-    /// `loopidioms` take a rotated loop.
+    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on by
+    /// default, `LLRM_NO_ROTATE` turns it off. Not run where `unroll_jam` is
+    /// (see [`Options::rotating`]).
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); on by default, `LLRM_NO_MEM2REG` turns it off.
@@ -241,6 +241,10 @@ pub struct Options {
     /// [`crate::sroa`], with [`crate::mem2reg`]); on by default,
     /// `LLRM_NO_SROA` turns it off.
     pub sroa: bool,
+    /// The loop-invariant passes are the translated LICM ([`crate::licm`]):
+    /// `licm` in the LICM slots and where `hoist` ran; on by default,
+    /// `LLRM_NO_LICM` brings back `hoist` and `loopmotion`.
+    pub licm: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -309,6 +313,7 @@ impl Default for Options {
             interchange: false,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
+            licm: !llrm_support::env_flag!("LLRM_NO_LICM"),
             copy_headers: true,
             for_size: false,
             expensive: true,
@@ -378,6 +383,13 @@ impl Options {
             version: false,
             ..Self::default()
         }
+    }
+
+    /// Whether the rotate slot runs: it does not where `unroll_jam` does,
+    /// whose nests are the header-tested form (RJ1: `loopnest.rs` and
+    /// `loopclone::chained` take a loop that leaves only from its header).
+    pub fn rotating(&self) -> bool {
+        self.rotate_slot && !self.unroll_jam
     }
 
     /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the
@@ -474,7 +486,7 @@ impl Options {
             "simplifycfg" => self.simplifycfg,
             "decide" => self.decide,
             "dead" => self.dead,
-            "hoist" | "loopmotion" => self.hoist,
+            "hoist" | "loopmotion" | "licm" => self.hoist,
             "gvn" | "equalcalls" | "earlycse" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sink" => self.sink,
@@ -568,12 +580,12 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
 
-/// The pass that moves loop invariants: `hoist`, or with `LLRM_EXP_LICM=1` the
-/// translation of LLVM's LICM (`licm`), which also sinks and promotes. An
-/// experiment: not part of the pipeline.
+/// The pass that moves loop invariants outside the LLVM-order slots: LLVM's
+/// LICM translated (`licm`), which also sinks and promotes, or `hoist` under
+/// `LLRM_NO_LICM`.
 fn hoisting(applied: &Applied) -> Box<dyn FunctionPass> {
-    if llrm_support::env_flag!("LLRM_EXP_LICM") {
-        Box::new(crate::licm::Licm { apply: true })
+    if applied.options.licm {
+        Box::new(crate::licm::Licm { apply: true, speculate: true })
     } else {
         Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true })
     }
@@ -583,7 +595,7 @@ fn hoisting(applied: &Applied) -> Box<dyn FunctionPass> {
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
 fn translated() -> Vec<Box<dyn FunctionPass>> {
-    vec![Box::new(crate::cvp::Cvp)]
+    vec![Box::new(bdce::Bdce), Box::new(crate::cvp::Cvp)]
 }
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`).
@@ -662,10 +674,10 @@ impl FunctionPass for Together {
     }
 }
 
-/// `LLRM_EXP_ROTATE`, read once: set, the rotate slot of [`llvm_order`] runs
-/// (it stays off until the loop passes accept a rotated loop).
+/// `LLRM_NO_ROTATE`, read once: set, the rotate slot of [`llvm_order`] does
+/// not run.
 fn rotate_default() -> bool {
-    llrm_support::env_flag!("LLRM_EXP_ROTATE")
+    !llrm_support::env_flag!("LLRM_NO_ROTATE")
 }
 
 /// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by
@@ -708,8 +720,20 @@ pub(crate) fn llvm_order(
         Box::new(Together { name, parts })
     };
     let earlycse = |name| slot(name, Box::new(crate::earlycse::EarlyCse));
-    let hoist = |name, speculate| slot(name, Box::new(hoist::Hoist { size, speculate, priced: false }));
-    let loopmotion = |name| slot(name, Box::new(loopmotion::LoopMotion));
+    // `licm<allowspeculation>` or `licm<no-allowspeculation>`; under
+    // `LLRM_NO_LICM` the slot holds what ran there before, `hoist` and, in the
+    // places that had it, `loopmotion`.
+    let licm = |name, speculate, motion| {
+        if applied.options.licm {
+            slot(name, Box::new(crate::licm::Licm { apply: true, speculate }))
+        } else {
+            let mut parts: Vec<Box<dyn FunctionPass>> = vec![Box::new(hoist::Hoist { size, speculate, priced: false })];
+            if motion {
+                parts.push(Box::new(loopmotion::LoopMotion));
+            }
+            Box::new(Together { name, parts })
+        }
+    };
     let canonical = |a: &'static str, b: &'static str| {
         [slot(a, Box::new(loopsimplify::LoopSimplify)), slot(b, Box::new(lcssa::LoopClosedSSA))]
     };
@@ -755,7 +779,7 @@ pub(crate) fn llvm_order(
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
             // Without the rotate slot the first LICM keeps speculating, as the
             // single hoist did.
-            let rotating = applied.options.rotate_slot;
+            let rotating = applied.options.rotating();
             list.extend([
                 slot("floatloop@724", Box::new(floatloop::FloatLoop)),
                 // LPM1
@@ -766,8 +790,7 @@ pub(crate) fn llvm_order(
                 // not proven to run, so that the second hoists into a preheader
                 // behind it (#2194). llrm skips the header copy at -Os, as
                 // gcc's -ftree-ch.
-                hoist("hoist@724", !rotating),
-                loopmotion("loopmotion@724"),
+                licm("licm@724", !rotating, true),
             ]);
             if rotating {
                 list.push(slot(
@@ -777,7 +800,7 @@ pub(crate) fn llvm_order(
                 list.extend(canonical("loopsimplify@728", "lcssa@728"));
             }
             list.extend([
-                hoist("hoist@730", true),
+                licm("licm@730", true, false),
                 slot("trivialunswitch@732", Box::new(simpleloopunswitch::SimpleLoopUnswitch)),
                 decide("decide@766"),
                 phiopt("phiopt@766"),
@@ -819,8 +842,7 @@ pub(crate) fn llvm_order(
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
             list.extend([
-                hoist("hoist@823", true),
-                loopmotion("loopmotion@823"),
+                licm("licm@823", true, true),
                 decide("decide@832"),
                 phiopt("phiopt@832"),
                 fold("fold@837"),
@@ -981,7 +1003,7 @@ pub fn recorded(
                     declared: &mut declared,
                 };
                 alone.run(&mut unit, &mut Analyses::new(std::rc::Rc::clone(&outer)));
-                function
+                (function, declared)
             })
         },
         proved: None,
@@ -1299,7 +1321,7 @@ impl Fixed {
             level,
             applied.options.sroa,
             applied.options.mem2reg,
-            applied.options.rotate_slot,
+            applied.options.rotating(),
         );
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
@@ -1600,7 +1622,7 @@ impl FunctionPass for Fixed {
 /// The instructions in the function's layout: erased ones stay in the arena
 /// and are not counted.
 fn placed_instructions(function: &llrm_mir::module::Function) -> usize {
-    function.layout().iter().map(|&block| function.block(block).instructions().len()).sum()
+    function.layout().iter().map(|&block| function.block(block).len()).sum()
 }
 
 thread_local! {

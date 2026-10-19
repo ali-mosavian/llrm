@@ -98,6 +98,13 @@ fn main() -> ExitCode {
         })
         .is_some()
     };
+    let unroll_full_os = {
+        let at = arguments.iter().position(|one| one == "--unroll-full-os");
+        at.inspect(|&at| {
+            arguments.remove(at);
+        })
+        .is_some()
+    };
     let unroll_full = {
         let at = arguments.iter().position(|one| one == "--unroll-full");
         at.inspect(|&at| {
@@ -218,11 +225,11 @@ fn main() -> ExitCode {
                 print!("{}", llrm_mir::print::module(&module));
                 return ExitCode::SUCCESS;
             }
-            if unroll_full {
+            if unroll_full || unroll_full_os {
                 let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu");
                 let options = llrm_transforms::loopunrollpass::Options {
                     opt_level: 2,
-                    opt_size: false,
+                    opt_size: unroll_full_os,
                     min_size: false,
                     only_when_forced: false,
                     prepare_for_lto: false,

@@ -227,7 +227,7 @@ fn constant_memset(
 
 /// `byte` as the operand a memset takes.
 fn byte_operand(
-    context: &mut Context,
+    context: &Context,
     byte: Byte,
 ) -> Operand {
     match byte {

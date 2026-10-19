@@ -264,6 +264,81 @@ fn test_two_parameters_live_on_entry_are_not_joined() {
     assert_eq!(names(&lis).len(), 4, "no instruction was erased");
 }
 
+/// Two arms each copy their own value into `v2`, read after the join: the
+/// copies join (or not) so that every value read is one something defines.
+/// (Ported from the old coalescer's
+/// `two_copies_into_one_value_leave_every_read_defined`.)
+#[test]
+fn test_two_copies_into_one_value_leave_every_read_defined() {
+    let arm = |value: u32, at: i64| block_at(at, vec![def(value), copy(2, value), jump(0x20)], &[0x20]);
+    let was = body_of(vec![arm(61, 0), arm(63, 0x10), block_at(0x20, vec![read(2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    let stats = super::driver::run(&mut lis, &AnyClass, &[0, 0, 0]);
+    assert!(stats.joined >= 1, "premise: something joined: {stats:?}");
+    let after = lis.body_like(&was);
+    let made: std::collections::BTreeSet<u32> =
+        after.blocks.iter().flat_map(|one| one.insns.iter()).flat_map(|one| one.defines.clone()).collect();
+    let read: std::collections::BTreeSet<u32> =
+        after.blocks.iter().flat_map(|one| one.insns.iter()).flat_map(|one| one.uses.clone()).collect();
+    let missing: Vec<u32> = read.difference(&made).copied().collect();
+    assert!(missing.is_empty(), "read with nothing defining it: {missing:?}");
+    assert!(lis.assert_intervals_cover_afresh(&after) >= 1);
+}
+
+/// A joined copy's destination is the address of a later load: the load's
+/// memory operand names the surviving value, which something still defines.
+#[test]
+fn test_a_coalesced_address_keeps_its_memory_operand_defined() {
+    use crate::model::ir::Mem;
+    let memory = Mem { base: Some(Held { value: 2, width: 2 }), ..Mem::new(None, 2) };
+    let what = Semantics {
+        name: Some("mov".to_owned()),
+        dests: vec![held(3)],
+        sources: vec![Loc::Mem(memory)],
+        ..Semantics::new(Operation::Move)
+    };
+    let load = Arc::new(Insn::new(0, None, Some(what), vec![3], vec![2]));
+    let was = body(&[(&[def(1), copy(2, 1), load, read(1), read(3)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    let stats = super::driver::run(&mut lis, &AnyClass, &[0]);
+    assert!(stats.joined >= 1, "{stats:?}");
+    let after = lis.body_like(&was);
+    let made: std::collections::BTreeSet<u32> =
+        after.blocks.iter().flat_map(|one| one.insns.iter()).flat_map(|one| one.defines.clone()).collect();
+    for one in after.blocks.iter().flat_map(|one| one.insns.iter()) {
+        for value in one.uses.iter().chain(&one.defines) {
+            assert!(made.contains(value), "v{value} is named and defined by nothing");
+        }
+    }
+}
+
+/// Values pinned to different registers are not joined, whatever their
+/// intervals: the environment says they cannot share.
+#[test]
+fn test_values_pinned_to_different_registers_are_not_joined() {
+    use llrm_lir::registers::RegId;
+    struct Pinned;
+    impl CoalescerEnv for Pinned {
+        fn can_share(
+            &self,
+            a: u32,
+            b: u32,
+        ) -> bool {
+            let pin = |value: u32| match value {
+                1 => Some(RegId::ES),
+                2 => Some(RegId::FS),
+                _ => None,
+            };
+            !matches!((pin(a), pin(b)), (Some(x), Some(y)) if x != y)
+        }
+    }
+    let (c, r) = (copy(2, 1), read(2));
+    let was = body(&[(&[def(1), Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    assert_eq!(join_copy(&mut lis, &Pinned, &mut State::new(), &mut Default::default(), c.id()), JoinResult::Rejected);
+    assert_eq!(names(&lis).len(), 3);
+}
+
 /// `a, b = b, t` at the end of a loop, as one parallel copy (`gcd`'s
 /// `a = b; b = a % b`): after the group `a` is the old `b`, and `b` the new
 /// value, both live round the loop. Joining `a` with `b` (the first copy then

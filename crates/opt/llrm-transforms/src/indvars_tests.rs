@@ -570,6 +570,43 @@ b4:
     assert!(text.contains("ret i32 32") && !text.contains("%last"), "{text}");
 }
 
+/// The counter's step leaves a loop that also breaks, on `i + 1 < 32` false.
+/// The old step read the exit's own count and wrote 32 (mandel: `lea; or; je;
+/// mov` where `inc; je` does). `rewriteLoopExitValues` asks `getSCEVAtExit`,
+/// which takes the value at the loop's one count, `umin(31, n + 1)`, once
+/// `simplifyAndExtend` has given the step `nuw nsw`: invariant, so not
+/// evaluated at the exit's count (the per-exit retry is for a variant one), and
+/// too dear to write under the budget. The exit keeps reading the counter.
+#[test]
+fn test_an_exit_phi_of_a_stepped_counter_in_a_loop_with_a_second_exit_keeps_its_value_when_extending() {
+    crate::simplifyindvar::tests_forced(true);
+    let text = with_exit_values(
+        "define i32 @f(i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp sgt i32 %i, %n
+  br i1 %c, label %b3, label %b2
+
+b2:
+  %next = add i32 %i, 1
+  %again = icmp slt i32 %next, 32
+  br i1 %again, label %b1, label %b4
+
+b3:
+  ret i32 -1
+
+b4:
+  %last = phi i32 [ %next, %b2 ]
+  ret i32 %last
+}
+",
+    );
+    assert!(text.contains("phi i32 [ %next, %b2 ]"), "{text}");
+}
+
 /// An exit whose count is not a number is written from the count, as
 /// `rewriteLoopExitValues` writes it: the loop runs `smax(n, 1)` times, two
 /// instructions, under the budget.
