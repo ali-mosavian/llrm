@@ -754,6 +754,6 @@ impl MemmoveVerifier {
         // Ensure that LoadBasePtr is after StoreBasePtr or before StoreBasePtr
         // for negative stride. LoadBasePtr shouldn't overlap with
         // StoreBasePtr.
-        if is_neg_stride { off_val < load_size } else { off_val > -load_size }
+        !(if is_neg_stride { off_val < load_size } else { off_val > -load_size })
     }
 }
