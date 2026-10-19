@@ -36,6 +36,7 @@ pub enum Created {
     Beginning,
     End,
     After(AccessId),
+    Before(AccessId),
 }
 
 impl Graph<'_> {
@@ -74,6 +75,20 @@ impl Graph<'_> {
         block: BlockId,
         at: Created,
     ) -> Option<AccessId> {
+        self.created_renaming(context, function, inst, block, at, true)
+    }
+
+    /// As [`created`](Self::created), where `rename_uses` says whether
+    /// `insertDef` renames the uses the new def now clobbers.
+    pub fn created_renaming(
+        &mut self,
+        context: &Context,
+        function: &Function,
+        inst: InstId,
+        block: BlockId,
+        at: Created,
+        rename_uses: bool,
+    ) -> Option<AccessId> {
         {
             let unit = llrm_analysis::memory::Unit::within(context, self.layout, function, self.outer);
             self.accesses.add_instruction(&unit, inst);
@@ -89,11 +104,12 @@ impl Graph<'_> {
             Created::After(previous) => {
                 self.updater.create_memory_access_after(self.mssa, inst, None, previous, &effect)?
             }
+            Created::Before(next) => self.updater.create_memory_access_before(self.mssa, inst, None, next, &effect)?,
         };
         if self.mssa.access(access).kind == Kind::Def {
-            self.updater.insert_def(self.mssa, function, access, true);
+            self.updater.insert_def(self.mssa, function, access, rename_uses);
         } else {
-            self.updater.insert_use(self.mssa, function, access, true);
+            self.updater.insert_use(self.mssa, function, access, rename_uses);
         }
         Some(access)
     }
