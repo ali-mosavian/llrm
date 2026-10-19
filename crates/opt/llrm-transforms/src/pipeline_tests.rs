@@ -2285,12 +2285,21 @@ out:
     let entry_branches = |options: pipeline::Options| {
         let mut module = llrm_analysis::testing::parsed(text);
         let applied = Applied { only: Some("trivialunswitch@732".to_owned()), options, ..Applied::default() };
+        assert!(pipeline::slot_built(&applied, "trivialunswitch@732"));
         let mut manager = llrm_mir::passes::PassManager::default();
         manager.add(pipeline::Fixed::new(&applied));
         manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the slot runs");
         let after = llrm_mir::print::module(&module);
         after[after.find("b0:").expect("b0")..].split("\n\n").next().expect("a block").contains("br i1 %z")
     };
-    assert!(entry_branches(pipeline::Options::standard()), "-O2 unswitches the header test");
-    assert!(entry_branches(pipeline::Options::speed()), "-O3 ran the peeler instead");
+    // -O1 to -Omax: the ones with `peel` on ran the peeler in the slot's place.
+    for (level, options) in [
+        ("-O1", pipeline::Options::basic()),
+        ("-O2", pipeline::Options::standard()),
+        ("-Os", pipeline::Options::size()),
+        ("-O3", pipeline::Options::speed()),
+        ("-Omax", pipeline::Options::aggressive()),
+    ] {
+        assert!(entry_branches(options), "{level}: the slot did not unswitch the header test");
+    }
 }
