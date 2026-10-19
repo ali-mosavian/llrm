@@ -156,20 +156,17 @@
 //! LLVM's FunctionAttrs and IPSCCP; GCC's `ipa-inline.cc`, `ipa-cp.cc` and
 //! `ipa-modref.cc`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use llrm_analysis::aa::MemoryEffects;
-use llrm_analysis::alias::{self, Procedure, Summary};
+use llrm_analysis::alias::{self, Procedure};
 use llrm_analysis::cfg::Shape;
-use llrm_analysis::effects;
 use llrm_analysis::functionattrs;
 use llrm_analysis::interprocedural as facts;
 use llrm_analysis::manager::{Callbacks, GlobalsAA, ProgramSummaries, Summaries};
-use llrm_analysis::memory::{Identity, MemoryKind, Slice, Unit};
+use llrm_analysis::memory::{Identity, MemoryKind, Unit};
 use llrm_mir::callgraph::{CallGraph, CallGraphAnalysis, Defined};
 use llrm_mir::context::GlobalId;
 use llrm_mir::facts::{Fact, Facts};
-use llrm_mir::memory::Effects;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{CalleeEffects, Declarations, Declared, ModuleAnalyses, PreservedAnalyses};
@@ -1829,86 +1826,38 @@ fn published(
     changed
 }
 
-/// Each body whose definition is exact stamped with what it is proved to
-/// do, as LLVM's FunctionAttrs states it, callees first so a caller sees
-/// what they state:
-/// - `memory(...)`: alias's summary through the pointer parameters and
-///   elsewhere, its own frame aside; volatile accesses and callees reach
-///   inaccessible memory. A stated one only narrows.
-/// - on each pointer parameter it keeps no copy of, `nocapture`, then
-///   `readnone`, `readonly` or `writeonly`, and `initializes`.
-/// - `willreturn` as LLVM's `addWillReturn` (`functionattrs::infer`), or where
-///   a loop's trip count is proved, or the language promises each loop ends
-///   (`mustprogress` on the function, `llvm.loop.mustprogress` on each loop) of
-///   a function that does nothing observable;
-/// - `norecurse` and `nounwind` as `functionattrs::infer` has them.
-///
-/// Any other attribute already stated stays. The bodies stamped; the
-/// caller drops `analyses` when there are any.
+/// Each body whose definition is exact stamped as LLVM's
+/// `deriveAttrsInPostOrder` does (`functionattrs::post_order`, callees first
+/// so a caller sees what they state), and `initializes` on each pointer
+/// parameter it keeps no copy of, from alias's summary (DEVIATE F6: it also
+/// states `nocapture` and `readnone`/`readonly`/`writeonly` where `post_order`
+/// did not, until bodies are simplified when they are stamped: the first run is
+/// on raw bodies, whose pointers are spilled). Any other attribute
+/// already stated stays. The bodies stamped; the caller drops `analyses` when
+/// there are any.
 pub fn stamped(
     module: &mut Module,
     analyses: &mut ModuleAnalyses,
 ) -> Result<Vec<GlobalId>, String> {
     let program = std::rc::Rc::clone(analyses.program());
     let layout = &program.layout;
+    let spaces = program.target.spaces();
     let known = analyses.get::<Summaries>(module);
     let known = Result::as_ref(&*known).map_err(String::clone)?;
     let globals = analyses.get::<GlobalsAA>(module);
     let globals = Result::as_ref(&*globals).map_err(String::clone)?;
     let callbacks = analyses.get::<Callbacks>(module);
     let callbacks = Result::as_ref(&*callbacks).map_err(String::clone)?;
-    let mut declarations = (*analyses.get::<Declarations>(module)).clone();
-    let mut changed = Vec::new();
     let graph = analyses.get::<CallGraphAnalysis>(module);
-    let callees = llrm_mir::memory::callees(module);
-    let cycles: Vec<Vec<GlobalId>> =
-        graph.bottom_up_components().into_iter().filter(|(_, cyclic)| *cyclic).map(|(members, _)| members).collect();
-    let cycle: BTreeMap<GlobalId, usize> =
-        cycles.iter().enumerate().flat_map(|(at, members)| members.iter().map(move |&member| (member, at))).collect();
-    // `llrm_analysis::functionattrs::infer` of each cycle, from the attributes
-    // as they stand when its first member is reached: LLVM stamps an SCC at
-    // once.
-    let mut inferred: BTreeMap<Vec<GlobalId>, BTreeMap<GlobalId, functionattrs::Inferred>> = BTreeMap::new();
-    let shadow_memory = llrm_support::env_set("LLRM_SHADOW_MEMORY");
-    // Shadow of `functionattrs::stamp_memory`: the same bodies stamped
-    // callees first from no memory attribute at all, against what `_narrowed`
-    // states; one line per body that differs.
-    let shadow = shadow_memory.then(|| {
-        let mut copy = module.clone();
-        for global in &mut copy.globals {
-            if let GlobalKind::Function(function) = &mut global.kind {
-                let derived = |one: &Attribute| match one {
-                    Attribute::Memory(_) => true,
-                    other => matches!(
-                        Fact::of_attribute(other),
-                        Some(
-                            Fact::ReadNone
-                                | Fact::ReadOnly
-                                | Fact::WriteOnly
-                                | Fact::NoRecurse
-                                | Fact::NoUnwind
-                                | Fact::WillReturn
-                                | Fact::NoReturn
-                        )
-                    ),
-                };
-                function.attrs.retain(|one| !derived(one));
-                for attrs in &mut function.parameter_attrs {
-                    attrs.retain(|one| {
-                        !matches!(
-                            Fact::of_attribute(one),
-                            Some(Fact::NoCapture | Fact::ReadNone | Fact::ReadOnly | Fact::WriteOnly)
-                        )
-                    });
-                }
+    let mut changed: Vec<GlobalId> = Vec::new();
+    let mut seen: BTreeSet<GlobalId> = BTreeSet::new();
+    for (members, _) in graph.bottom_up_components() {
+        for id in functionattrs::post_order(module, layout, spaces, &members) {
+            if seen.insert(id) {
+                changed.push(id);
             }
         }
-        for (members, _) in graph.bottom_up_components() {
-            functionattrs::post_order(&mut copy, &members);
-        }
-        copy
-    });
-    let mut compared = 0_usize;
+    }
     for id in graph.bottom_up() {
         let global = module.global(id);
         let exact = matches!(
@@ -1923,9 +1872,7 @@ pub fn stamped(
         }
         let Some(summary) = known.get(name) else { continue };
         let shape = analyses.function::<Shape>(module, id);
-        let exposed = llrm_analysis::memory::exposed_frames(
-            &Unit::of(module, layout, function).with_spaces(program.target.spaces()),
-        );
+        let exposed = llrm_analysis::memory::exposed_frames(&Unit::of(module, layout, function).with_spaces(spaces));
         let procedure = Procedure::of(
             Unit { program: Some(&program), ..Unit::of(module, layout, function) }
                 .with_globals_aa(globals)
@@ -1934,82 +1881,6 @@ pub fn stamped(
                 .with_callbacks(callbacks),
         );
         let initialized = alias::initialized(&procedure, known)?;
-        let calls = function
-            .walk()
-            .map(|(_, inst)| inst)
-            .filter(|&inst| matches!(
-                function.instruction(inst).opcode,
-                Opcode::Call(_) | Opcode::Invoke(_)
-            ))
-            .collect::<Vec<_>>();
-        let states = |fact: Fact| {
-            calls.iter().all(|&inst| effects::states(&module.context, &declarations, function, inst, fact))
-        };
-        let volatile = function
-            .walk()
-            .any(
-                |(_, inst)| matches!(
-                    function.instruction(inst).opcode,
-                    Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
-                ),
-            );
-        let members = cycle.get(&id).map_or_else(|| vec![id], |at| cycles[*at].clone());
-        let stamped = *inferred
-            .entry(members.clone())
-            .or_insert_with(|| functionattrs::infer(module, &declarations, &members).into_iter().collect())
-            .get(&id)
-            .unwrap_or(&functionattrs::Inferred::default());
-        let norecurse = stamped.no_recurse || Facts::of(&function.attrs).no_recurse();
-        // The language's word that its loops end holds where nothing a loop
-        // that never ended could be seen by.
-        let unobserved = !volatile
-            && calls.iter().all(|&inst| !llrm_mir::memory::of(&module.context, &callees, function, inst).writes);
-        let promised = norecurse
-            && unobserved
-            && states(Fact::WillReturn)
-            && llrm_mir::loopinfo::ends_by_promise(
-                &module.metadata,
-                function,
-                Facts::of(&function.attrs).must_progress(),
-            );
-        let counted = || {
-            let shape = Shape::of(function);
-            // Found once for the function, not for each loop: the proofs of
-            // every loop ask the same.
-            let registers =
-                llrm_analysis::consts::known(&unit_of(module, layout, function).with_spaces(program.target.spaces()));
-            let proofs = |one| {
-                llrm_analysis::induction::counted(
-                    &unit_of(module, layout, function)
-                        .with_spaces(program.target.spaces())
-                        .with_registers(&registers)
-                        .with_shape(&shape),
-                    one,
-                    Some(&registers),
-                    false,
-                )
-            };
-            shape
-                .loops
-                .iter()
-                .all(
-                    |one| proofs(one).iter().any(|proof| {
-                        !proof.stops
-                            && (proof.count.is_some() || proof.step.magnitude() == llrm_analysis::num::Num::from(1_u8))
-                    }),
-                )
-        };
-        // DEVIATE F1: a loop whose trip count induction proves, or the
-        // language's word that it ends, returns too; LLVM's rule is a
-        // body without back edges.
-        let returns = stamped.will_return || (counted() && states(Fact::WillReturn)) || promised;
-        let nounwind = stamped.no_unwind;
-        // A cycle of calls is stamped together, as LLVM's
-        // PostOrderFunctionAttrs takes an SCC: each member does what
-        // all of them do besides calling one another.
-        let hidden = members
-            .iter()
-            .fold(Effects::NONE, |all, &member| _either(all, hidden_by(module, member, &declarations, &graph)));
         let pointers = function
             .parameters()
             .iter()
@@ -2018,28 +1889,16 @@ pub fn stamped(
                 Type::Pointer(_)
             ))
             .collect::<Vec<_>>();
-        let shadow = shadow.as_ref().map(|one| one.global(id).function().expect("a procedure").clone());
-        let shown = module.global(id).name.clone().unwrap_or_default();
         let function = function_mut(module, id).1;
-        let before = (function.attrs.clone(), function.parameter_attrs.clone());
-        _narrowed(&mut function.attrs, summary, hidden);
-        if let Some(expected) = shadow.as_ref().map(|one| MemoryEffects::of_attrs(&one.attrs)) {
-            compared += 1;
-            let stated = MemoryEffects::of_attrs(&function.attrs);
-            if stated != expected {
-                eprintln!("shadow-memory disagree @{}: stamp {stated:?} infer_memory {expected:?}", shown);
-            }
-        }
-        for (fact, proved) in [(Fact::WillReturn, returns), (Fact::NoUnwind, nounwind), (Fact::NoRecurse, norecurse)] {
-            if proved && !Facts::of(&function.attrs).contains(fact) {
-                function.attrs.extend(fact.attribute());
-            }
-        }
+        let before = function.parameter_attrs.clone();
         for (index, attrs) in function.parameter_attrs.iter_mut().enumerate().filter(|(index, _)| pointers[*index]) {
             let identity = Some(Identity::Int(index as i64));
             if summary.captures.contains(&identity) {
                 continue;
             }
+            // DEVIATE F6: what alias's summary proves of the parameter where
+            // `post_order` did not, until it runs on simplified bodies: the
+            // first run is on raw bodies, whose pointers are spilled.
             if !Facts::of(attrs).no_capture() {
                 attrs.extend(Fact::NoCapture.attribute());
             }
@@ -2069,150 +1928,11 @@ pub fn stamped(
                 attrs.push(Attribute::Initializes(initialized[index].clone()));
             }
         }
-        if let Some(expected) = &shadow {
-            for (index, attrs) in function.parameter_attrs.iter().enumerate().filter(|(index, _)| pointers[*index]) {
-                let kind = |attrs: &[Attribute]| {
-                    let facts = Facts::of(attrs);
-                    (facts.no_capture(), facts.read_only(), facts.write_only(), facts.read_none())
-                };
-                if kind(attrs) != kind(&expected.parameter_attrs[index]) {
-                    eprintln!(
-                        "shadow-args disagree @{shown} p{index}: stamp {:?} post_order {:?}",
-                        kind(attrs),
-                        kind(&expected.parameter_attrs[index])
-                    );
-                }
-            }
-        }
-        if before != (function.attrs.clone(), function.parameter_attrs.clone()) {
-            declarations[id.0 as usize] = module.global(id).declaration();
+        if before != function.parameter_attrs && seen.insert(id) {
             changed.push(id);
         }
     }
-    if shadow_memory {
-        eprintln!("shadow-memory compared {compared} bodies");
-    }
     Ok(changed)
-}
-
-/// What body `id` does to inaccessible memory itself or through the calls it
-/// makes outside the cycle it is in: a volatile access, or a call whose callee
-/// and site do not rule it out.
-fn hidden_by(
-    module: &Module,
-    id: GlobalId,
-    declarations: &[GlobalValue],
-    graph: &CallGraph,
-) -> Effects {
-    let Some(function) = module.global(id).function() else { return Effects::ANY };
-    let volatile = function
-        .walk()
-        .any(
-            |(_, inst)| matches!(
-                function.instruction(inst).opcode,
-                Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
-            ),
-        );
-    let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
-    for (_, inst) in function.walk() {
-        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { continue };
-        let callee = llrm_mir::memory::callee(&module.context, function, inst);
-        if callee.is_some_and(|one| graph.together(id, one)) {
-            continue;
-        }
-        let declared = callee
-            .and_then(|one| declarations.get(one.0 as usize))
-            .and_then(GlobalValue::function)
-            .map_or(Effects::ANY, |one| llrm_mir::memory::inaccessible(&one.attrs));
-        hidden = _either(hidden, _both(declared, llrm_mir::memory::inaccessible(&info.attrs)));
-    }
-    hidden
-}
-
-fn unit_of<'a>(
-    module: &'a Module,
-    layout: &'a llrm_mir::datalayout::DataLayout,
-    function: &'a llrm_mir::module::Function,
-) -> Unit<'a> {
-    Unit::of(module, layout, function)
-}
-
-fn _both(
-    one: Effects,
-    other: Effects,
-) -> Effects {
-    Effects { reads: one.reads && other.reads, writes: one.writes && other.writes }
-}
-
-fn _either(
-    one: Effects,
-    other: Effects,
-) -> Effects {
-    Effects { reads: one.reads || other.reads, writes: one.writes || other.writes }
-}
-
-/// `attrs`' `memory(...)` narrowed to what `summary` reads and writes
-/// through the pointer parameters and elsewhere, its own frame aside, and
-/// to `hidden` on inaccessible memory.
-fn _narrowed(
-    attrs: &mut Vec<Attribute>,
-    summary: &Summary,
-    hidden: Effects,
-) {
-    let local = |one: &Slice| matches!(one.object.kind, MemoryKind::Frame | MemoryKind::Stack);
-    let found = |slices: &llrm_analysis::sliceset::SliceSet, parameter: bool| {
-        slices.iter().filter(|one| !local(one)).any(|one| (one.object.kind == MemoryKind::Parameter) == parameter)
-    };
-    let (stated_arguments, stated_other) = llrm_mir::memory::located(attrs);
-    // What the attribute allows anywhere bounds what is allowed at each
-    // location, but its split between them does not: the body may have been
-    // rewritten since (argument promotion takes `sc->faces` as a parameter, so
-    // a write that was `other` memory is now `argmem`), and a location the
-    // old split forbade would lose the write. LLVM meets the same split
-    // (FunctionAttrs.cpp:298, `ME & OldME`) but runs once per SCC, after
-    // ArgumentPromotion.
-    let stated = _either(_either(stated_arguments, stated_other), llrm_mir::memory::inaccessible(attrs));
-    let arguments = _both(stated, Effects { reads: found(&summary.reads, true), writes: found(&summary.writes, true) });
-    let other = _both(
-        stated,
-        Effects {
-            reads: found(&summary.reads, false) || summary.unknown_read,
-            writes: found(&summary.writes, false) || summary.unknown_write,
-        },
-    );
-    let hidden = _both(llrm_mir::memory::inaccessible(attrs), hidden);
-    if (arguments, hidden, other) == (stated_arguments, llrm_mir::memory::inaccessible(attrs), stated_other) {
-        return;
-    }
-    let access = |one: Effects| {
-        match (one.reads, one.writes) {
-            (true, true) => "readwrite",
-            (true, false) => "read",
-            (false, true) => "write",
-            (false, false) => "none",
-        }
-        .to_owned()
-    };
-    let named = [("argmem", arguments), ("inaccessiblemem", hidden)]
-        .into_iter()
-        .filter(|(_, one)| *one != other)
-        .map(|(location, one)| (Some(location.to_owned()), access(one)))
-        .collect::<Vec<_>>();
-    let mut locations = Vec::new();
-    if other != Effects::NONE || named.is_empty() {
-        locations.push((None, access(other)));
-    }
-    locations.extend(named);
-    // What `readnone`, `readonly` or `writeonly` said, it now says.
-    attrs.retain(|one| match one {
-        Attribute::Memory(_) => false,
-        // Said again by the `memory` attribute that replaces them.
-        other => !matches!(
-            Fact::of_attribute(other),
-            Some(Fact::ReadNone | Fact::ReadOnly | Fact::WriteOnly)
-        ),
-    });
-    attrs.push(Attribute::Memory(locations));
 }
 
 /// The procedure `id`, with the context its types and constants live in.
