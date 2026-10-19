@@ -101,7 +101,12 @@ use SlotKind::{Missing, Old, Partial, Translated};
 /// Every slot of the -O2 function pipeline in `llvm_order` (-O1 builds a
 /// subset), then the slots LLVM has that llrm does not.
 pub(crate) const REGISTRY: &[Entry] = &[
-    entry("decide@1178", Early, "simplifycfg", Old, "simplifycfg-port"),
+    partial(
+        "decide@1178",
+        Early,
+        "simplifycfg",
+        "translated SimplifyCfg at the pin's default options runs here and Decide does not (#2907); untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@1178) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     entry("phiopt@1178", Early, "simplifycfg", Old, "simplifycfg-port"),
     entry("sroa@1179", Early, "sroa<modify-cfg>", Translated, "sroa.rs"),
     entry("earlycse@1180", Early, "early-cse", Translated, ""),
