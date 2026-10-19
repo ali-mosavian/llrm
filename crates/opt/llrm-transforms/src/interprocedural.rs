@@ -211,7 +211,7 @@ fn reporting<T>(
 
 /// `reporting`, and where each body it changed was before: what a stage that
 /// vouches for its edit (`Settled::vouch`) says it from.
-fn reporting_marked<T>(
+pub(crate) fn reporting_marked<T>(
     module: &mut Module,
     modules: &mut ModuleAnalyses,
     edit: impl FnOnce(&mut Module) -> T,
@@ -235,7 +235,7 @@ fn reporting_marked<T>(
 /// The edits `bodies` had since `before` are ones the pipeline's passes need
 /// not look at again: each is a call that names another function that says the
 /// same, or one that takes fewer arguments (`Settled`).
-fn vouched(
+pub(crate) fn vouched(
     module: &Module,
     bodies: impl IntoIterator<Item = GlobalId>,
     before: &llrm_support::hash::IndexMap<GlobalId, llrm_mir::module::Mark>,

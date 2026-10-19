@@ -2072,7 +2072,9 @@ declare cc 1005 void @N$PN() addrspace(1) memory(inaccessiblemem: readwrite)
 /// module below): each of the order's three function stages started from a
 /// dropped one. LLVM keeps it past every function pass, so the stages add no
 /// computation. What is left are the program passes (the first ask, `ports`,
-/// `Stamp`, the interprocedural stage); 6 here, which this holds at.
+/// `Stamp`, the interprocedural stage, and `ModuleIpo` between Early and the
+/// Simplify list, a module pass LLVM's GlobalsAA does not survive either); 7
+/// here, which this holds at.
 #[test]
 fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() {
     let mut files = corpus_files();
@@ -2093,7 +2095,7 @@ fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() 
     .and_then(|done| done)
     .unwrap_or_else(|error| panic!("{name}: {error}"));
     let made = llrm_mir::counts::analysed("globals-aa").1 - before;
-    assert!(made <= 6, "{name}: globals-aa made {made} times, 8 before it was held past the function stages");
+    assert!(made <= 7, "{name}: globals-aa made {made} times, 8 before it was held past the function stages");
 }
 
 /// The fixed point hashed the body before it ran even when its list runs once

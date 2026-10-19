@@ -193,6 +193,7 @@ pub mod speculate;
 pub mod spill;
 pub mod splitcopy;
 pub mod sroa;
+pub mod walk;
 pub mod switchcg;
 pub mod switchlower;
 pub mod tailrec;

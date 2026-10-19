@@ -63,6 +63,13 @@ use llrm_mir::memory;
 use llrm_mir::module::{GlobalKind, InstId, Module};
 use llrm_mir::opcode::Opcode;
 
+/// Whether `removed` would change `module`, without changing it.
+pub fn any_dead(module: &Module) -> bool {
+    let only = direct_only(module);
+    let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
+    only.iter().filter(|id| !refused.contains(id)).any(|id| sites.contains_key(id) && !dead(module, *id).is_empty())
+}
+
 /// The functions of `module` that lost a parameter, and the functions that call
 /// them.
 pub fn removed(module: &mut Module) -> Vec<GlobalId> {
