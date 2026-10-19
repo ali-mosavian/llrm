@@ -5283,6 +5283,22 @@ impl Selector<'_, '_, '_> {
                 _ => return refuse("a far result the convention has no registers for"),
             }
         } else if let Some(&value) = operands.first() {
+            // A dword constant in a word pair is a word each: DX is its high
+            // word, not a shift of the register that holds the whole.
+            if let ([low, high], Operand::Constant(id)) = (&convention.returns[..], value)
+                && self.width(type_of(value))? == 4
+                && let ConstantKind::Int(bits) = self.module.context.get(id).kind
+            {
+                let word = |part: i64| Loc::Imm(Imm { value: part & 0xFFFF, width: 2, address: None });
+                let (low_word, high_word) = (self.fresh_held(2), self.fresh_held(2));
+                for (into, part) in [(low_word, bits as i64), (high_word, (bits >> 16) as i64)] {
+                    out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![word(part)])));
+                }
+                one.requires = vec![(low_word, *low), (high_word, *high)];
+                one.uses = vec![low_word.value, high_word.value];
+                out.push(Arc::new(one));
+                return Ok(());
+            }
             let held = self.held(value, type_of(value), at, out)?;
             one.requires = match convention.returns[..] {
                 [register] => vec![(held, register)],
