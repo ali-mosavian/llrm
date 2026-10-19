@@ -448,16 +448,16 @@ end:
     );
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(AsksBounds);
-    manager.add(super::IndVars { exit_values: false, unrolls: None });
+    manager.add(super::IndVars { exit_values: false, unrolls: None, lftr: true });
     let before = llrm_analysis::ranges::loops_solved();
     manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
-    // The pass that asks, indvars's evaluation of the loop, and the body the
-    // widening (which runs first, as LLVM's `simplifyAndExtend` does) changed:
-    // widening itself asks ScalarEvolution, not the bounds.
+    // The pass that asks: the manager's one solve. The evaluation of the loop
+    // that asked for a second (`loopexit`) is `exitvalues` now, from
+    // ScalarEvolution.
     assert_eq!(
         llrm_analysis::ranges::loops_solved() - before,
-        3,
-        "the loop's bounds were worked out more than the manager's three times"
+        1,
+        "the loop's bounds were worked out more than the manager's once"
     );
 }
 
@@ -482,7 +482,7 @@ fn test_indvars_brings_the_registers_up_to_date_and_does_not_derive_them_again_f
     text += "end:\n  ret i32 0\n}\n";
     let mut module = parsed(&text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(super::IndVars { exit_values: false, unrolls: None });
+    manager.add(super::IndVars { exit_values: false, unrolls: None, lftr: true });
     let before = llrm_analysis::consts::scratch_derivations();
     manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
     let derived = llrm_analysis::consts::scratch_derivations() - before;
@@ -532,7 +532,7 @@ b3:
 fn with_exit_values(text: &str) -> String {
     let mut module = crate::testing::parsed(text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(super::IndVars { exit_values: true, unrolls: None });
+    manager.add(super::IndVars { exit_values: true, unrolls: None, lftr: true });
     manager.run_module(&mut module, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     crate::testing::printed(&module)
 }
@@ -686,7 +686,7 @@ fn header_phis(module: &mut Module) -> usize {
 #[test]
 fn counters_with_one_start_and_one_step_are_one_counter() {
     let mut module = parsed(&two_counters(0, 1));
-    managed(&mut module, IndVars { exit_values: false, unrolls: None });
+    managed(&mut module, IndVars { exit_values: false, unrolls: None, lftr: true });
     assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
     let mut other = parsed(&two_counters(0, 1));
     assert_eq!(results(&module, &[&[0], &[3], &[9]]), results(&other, &[&[0], &[3], &[9]]));
@@ -698,7 +698,7 @@ fn counters_with_one_start_and_one_step_are_one_counter() {
 fn counters_that_start_or_step_otherwise_stay_two() {
     for (start, step) in [(1, 1), (0, 2)] {
         let mut module = parsed(&two_counters(start, step));
-        managed(&mut module, IndVars { exit_values: false, unrolls: None });
+        managed(&mut module, IndVars { exit_values: false, unrolls: None, lftr: true });
         assert_eq!(header_phis(&mut module), 2, "{start} {step}: {}", printed(&module));
     }
 }
@@ -757,7 +757,7 @@ fn a_run_that_changes_no_block_finds_the_loops_once() {
         managed(module, AsksWhatIndVarsDoes);
     }));
     let indvars = derived(Box::new(|module| {
-        managed(module, IndVars { exit_values: true, unrolls: None });
+        managed(module, IndVars { exit_values: true, unrolls: None, lftr: true });
     }));
     assert_eq!(indvars, manager);
 }
@@ -920,8 +920,48 @@ e:
 ",
     );
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(IndVars { exit_values: true, unrolls: None });
+    manager.add(IndVars { exit_values: true, unrolls: None, lftr: true });
     manager.run_module(&mut module, m32()).unwrap();
     let after = printed(&module);
     assert_eq!(leaks_a_loop_value(&module), None, "{after}");
+}
+
+/// `for (i = 2; i < limit; i++)` tested at the loop's top (not rotated).
+const TOP_TESTED: &str = "target datalayout = \"e-p:32:32-n8:16:32\"
+
+define i32 @f(i16 %limit) {
+b0:
+  %buf = alloca [64 x i8]
+  br label %h
+
+h:
+  %i = phi i16 [ 2, %b0 ], [ %inc, %b1 ]
+  %c = icmp ult i16 %i, %limit
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %z = zext i16 %i to i32
+  %p = getelementptr inbounds i8, ptr %buf, i32 %z
+  store i8 1, ptr %p
+  %inc = add i16 %i, 1
+  br label %h
+
+b2:
+  ret i32 0
+}
+";
+
+/// A loop tested at its top got `icmp ne %i, umax(limit, 2)` and a `umax` call
+/// before it (+16 B at sieve.c -O1): LFTR is for rotated loops (D22), where
+/// loop-rotate's guard makes the limit plain. `lftr: false` leaves the test.
+#[test]
+fn test_lftr_off_leaves_the_test_of_a_loop_not_rotated() {
+    let mut off = parsed(TOP_TESTED);
+    managed(&mut off, IndVars { exit_values: true, unrolls: None, lftr: false });
+    let off = printed(&off);
+    assert!(!off.contains("umax") && !off.contains("exitcond"), "{off}");
+    let mut on = parsed(TOP_TESTED);
+    managed(&mut on, IndVars { exit_values: true, unrolls: None, lftr: true });
+    let on = printed(&on);
+    assert!(on.contains("exitcond"), "{on}");
 }
