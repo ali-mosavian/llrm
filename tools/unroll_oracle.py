@@ -15,6 +15,7 @@ corpus must hold each shape the translation claims (REQUIRED). Prints
 on any failure or a missing side.
 """
 import collections
+import targetdesc
 import glob
 import re
 import subprocess
@@ -26,6 +27,7 @@ REQUIRED = {
     "lcssa_used_outside", "three_exits",
 }
 PINNED = Path.home() / "scratch/llvm-build/bin/opt"
+TARGET = targetdesc.triple_cpu()  # llrm's default target (crates/target/*/datalayout.toml): a dump has no `target triple`, and opt costs for x86-64 without one
 COMMIT = "24.0.0git"
 ROOT = Path(__file__).resolve().parent.parent
 LLRM = ROOT / "target/debug/llrm-mir"
@@ -48,12 +50,12 @@ def shape(ir):
 
 
 def cleaned(ir):
-    r = run([str(PINNED), "-passes=instcombine,simplifycfg,adce", "-S"], stdin=ir)
+    r = run([str(PINNED), *TARGET, "-passes=instcombine,simplifycfg,adce", "-S"], stdin=ir)
     return r.stdout if r.returncode == 0 else None
 
 
 def loops_of(ir):
-    return run([str(PINNED), "-passes=print<loops>", "-disable-output"], stdin=ir).stderr.count("Loop at depth")
+    return run([str(PINNED), *TARGET, "-passes=print<loops>", "-disable-output"], stdin=ir).stderr.count("Loop at depth")
 
 
 def llrm_unrolled(path, header, count, exits):
@@ -86,9 +88,9 @@ def main():
             continue
         header, count = spec.group(1), int(spec.group(2))
         exits = [(b, int(n)) for b, n in re.findall(r"(\S+)=(\d+)", spec.group(3))]
-        scev = run([str(PINNED), "-passes=print<scalar-evolution>", "-disable-output", f])
+        scev = run([str(PINNED), *TARGET, "-passes=print<scalar-evolution>", "-disable-output", f])
         maxes = dict(re.findall(r"Loop %(\S+): constant max backedge-taken count is i\d+ (\d+)", scev.stderr))
-        want = run([str(PINNED), "-passes=loop-unroll", "-S", f])
+        want = run([str(PINNED), *TARGET, "-passes=loop-unroll", "-S", f])
         if scev.returncode or want.returncode or header not in maxes:
             missing += 1
             bad.append(f"{f}: opt rc {scev.returncode}/{want.returncode}, no constant max count for %{header}")

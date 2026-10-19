@@ -95,7 +95,7 @@ fn listing_float_store(
     name: &str,
 ) -> Vec<String> {
     let profile =
-        crate::backend::cpu::tuned_optimizing(&llrm_x86_m16::M16, "486", false, true, false, true, true, true)
+        crate::backend::cpu::tuned_optimizing(&llrm_x86_m16::M16, "486", false, true, false, true, true, true, false)
             .expect("the 486 profile");
     let module = assemble::assembled(
         &parsed(text),
@@ -182,7 +182,6 @@ done:
             "mov bx, word ptr [bp+6]",
             "xor ax, ax",
             "xor cx, cx",
-            "L0_1:",
             "cmp cx, bx",
             "jge L0_8",
             "L0_5:",
@@ -5859,6 +5858,19 @@ define i16 @f() addrspace(1) {
     let got = listing(text, "f");
     // 1342177280 is 0x5000:0000 stored, 1358954496 is 0x5100:0000 read through.
     assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
+}
+
+/// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
+/// address of no global": 13 llrm-qb tests failed to assemble a POKE.
+#[test]
+fn test_a_gep_off_a_segment_constant_is_a_far_number() {
+    let text = "define i8 @f() addrspace(1) {
+  %v = load i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 -24576 to ptr addrspace(2)) to ptr addrspace(1)), i16 1)
+  ret i8 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov bx, 1".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
 }
 
 /// More constant-expression operands (alias/farstruct.c, textfill): the dword

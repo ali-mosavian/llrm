@@ -342,7 +342,7 @@ pub fn absolute(
 }
 
 /// What a constant GEP's `indices` into `source` add.
-fn constant_offset(
+pub fn constant_offset(
     module: &Module,
     layout: &DataLayout,
     source: TypeId,

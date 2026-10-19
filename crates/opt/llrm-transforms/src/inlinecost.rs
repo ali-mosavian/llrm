@@ -2119,7 +2119,7 @@ pub fn shadow(
             continue;
         }
         let caller_id = GlobalId(at as u32);
-        let frequencies = block_frequencies(module, layout, caller);
+        let frequencies = caller_frequencies(module, layout, caller);
         let caller_recursive = caller
             .layout()
             .iter()
@@ -2218,7 +2218,7 @@ pub fn remark(
 
 /// `BlockFrequencyInfo` of `caller` as the inliner's `GetBFI` gives it: over
 /// `BranchProbabilityInfo` (D1).
-fn block_frequencies(
+pub fn caller_frequencies(
     module: &Module,
     layout: &DataLayout,
     caller: &Function,
@@ -2405,38 +2405,15 @@ pub fn sites(
 ) -> llrm_support::hash::SparseIdMap<InstId, crate::inline::Candidate> {
     let mut out = llrm_support::hash::SparseIdMap::default();
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
-    let caller_recursive = recursive.contains(&caller_id);
-    let frequencies = block_frequencies(module, layout, caller);
-    for (block, inst) in caller.walk() {
-        let Some(callee_id) = llrm_mir::memory::callee(&module.context, caller, inst) else { continue };
-        let callee_global = module.global(callee_id);
-        let GlobalKind::Function(callee) = &callee_global.kind else { continue };
-        if callee.layout().is_empty() || !crate::inline::cloneable(module, recursive, callee_id, callee) {
-            continue;
-        }
-        let site = Site {
-            module,
-            layout,
-            caller,
-            caller_id,
-            call: inst,
-            callee,
-            callee_id,
-            sole_call_to_local: local_linkage(callee_global.linkage)
-                && counts.get(&callee_id).copied() == Some(1)
-                && !addressed.contains(&callee_id),
-            caller_recursive,
-            caller_size: size,
-            relative_frequency: relative_to_entry(&frequencies, block),
-            tti,
-        };
-        // `-fno-inline-functions`: clang's pipeline is the always-inliner
-        // alone.
-        let cost = inline_cost(&site, params);
+    let context = DecideContext { counts, addressed, recursive, params, size, always_only, tti };
+    let frequencies = caller_frequencies(module, layout, caller);
+    for (_, inst) in caller.walk() {
+        let Some(decision) = decide(module, layout, caller_id, inst, &context, &frequencies) else { continue };
         if let Some(decided) = decided.as_deref_mut() {
-            decided.push((inst, callee_id, cost.clone()));
+            decided.push((inst, decision.callee, decision.cost.clone()));
         }
-        if if always_only { matches!(cost, InlineCost::Always("always inline attribute")) } else { cost.is_ok() } {
+        if decision.inline {
+            let GlobalKind::Function(callee) = &module.global(decision.callee).kind else { continue };
             out.insert(
                 inst,
                 crate::inline::Candidate {
@@ -2448,4 +2425,69 @@ pub fn sites(
         }
     }
     out
+}
+
+/// What `decide` reads of the module besides the site.
+pub struct DecideContext<'a> {
+    /// Direct calls by callee (`inline::call_counts`).
+    pub counts: &'a crate::inline::Counter,
+    /// The functions whose address is taken.
+    pub addressed: &'a BTreeSet<GlobalId>,
+    pub recursive: &'a BTreeSet<GlobalId>,
+    pub params: InlineParams,
+    pub size: CallerSize,
+    /// `-fno-inline-functions`: only `alwaysinline` is inlined.
+    pub always_only: bool,
+    pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
+}
+
+/// One call site's verdict.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Decision {
+    pub callee: GlobalId,
+    pub inline: bool,
+    pub cost: InlineCost,
+}
+
+/// `InlinerPass`'s question of the call `call` in `caller`: whether to
+/// inline it and at what cost (`getInlineCost`, `shouldInline`).
+/// `frequencies` is `caller_frequencies` of the caller as it stands. None
+/// where `call` is no direct call of a body that can be copied.
+pub fn decide(
+    module: &Module,
+    layout: &DataLayout,
+    caller_id: GlobalId,
+    call: InstId,
+    context: &DecideContext,
+    frequencies: &llrm_analysis::blockfreq::BlockFrequencies,
+) -> Option<Decision> {
+    let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return None };
+    let callee_id = llrm_mir::memory::callee(&module.context, caller, call)?;
+    let callee_global = module.global(callee_id);
+    let GlobalKind::Function(callee) = &callee_global.kind else { return None };
+    if callee.layout().is_empty() || !crate::inline::cloneable(module, context.recursive, callee_id, callee) {
+        return None;
+    }
+    let site = Site {
+        module,
+        layout,
+        caller,
+        caller_id,
+        call,
+        callee,
+        callee_id,
+        sole_call_to_local: local_linkage(callee_global.linkage)
+            && context.counts.get(&callee_id).copied() == Some(1)
+            && !context.addressed.contains(&callee_id),
+        caller_recursive: context.recursive.contains(&caller_id),
+        caller_size: context.size,
+        relative_frequency: caller.parent(call).and_then(|block| relative_to_entry(frequencies, block)),
+        tti: context.tti,
+    };
+    let cost = inline_cost(&site, context.params);
+    // `-fno-inline-functions`: clang's pipeline is the always-inliner
+    // alone.
+    let inline =
+        if context.always_only { matches!(cost, InlineCost::Always("always inline attribute")) } else { cost.is_ok() };
+    Some(Decision { callee: callee_id, inline, cost })
 }
