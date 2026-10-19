@@ -298,3 +298,28 @@ def test_a_smoke_that_exits_non_zero_without_a_summary_line_names_its_stderr(mon
     monkeypatch.setattr(ps.subprocess, "run", lambda *a, **k: Done())
     failed, last = ps.smoke_failures()
     assert failed == {"smoke-did-not-finish"} and "stale binaries in /x" in last and "exited 1" in last, last
+
+
+def test_a_new_failing_test_inside_a_red_crate_is_refused_and_one_the_head_fails_too_is_not():
+    """Head red in llrm-qb (test_a); a PR adds test_b that fails: the check-level rule saw `unit llrm-qb` fail on both sides and landed it."""
+    head = {"unit llrm-qb::test_a"}
+    merged = {"unit llrm-qb::test_a", "unit llrm-qb::test_b"}
+    on_head = lambda crate, tests: {t for t in tests if t == "test_a"}  # test_b passes on the head
+    assert ps.subset_refusals(ps.head_expanded(head, merged, on_head), merged, False) != []
+    assert ps.subset_refusals(ps.head_expanded(head, merged, lambda crate, tests: set(tests)), merged, False) == []  # the head fails test_b too
+
+
+def test_a_refusal_after_a_rebuild_names_the_newest_source_the_oldest_binary_and_a_failed_build(monkeypatch):
+    """#2764 was refused "binaries still older than the merged tree after a rebuild" with nothing to say whether the build failed or a source was newer."""
+    import llrmbin
+
+    monkeypatch.setattr(ps, "smoke_bins", lambda env=None: "/x")
+    monkeypatch.setattr(llrmbin, "stale_binaries", lambda directory, cwd=None: ["llrm-c", "llrm-qb"])
+    monkeypatch.setattr(llrmbin, "stale_found", lambda directory, repo=None: [("llrm-c", 100.0, "crates/a/src/x.rs", 160.0), ("llrm-qb", 90.0, "crates/b/src/y.rs", 130.0)])
+
+    class Failed:
+        returncode, stderr, stdout = 101, "error[E0425]: cannot find type\nerror: could not compile `llrm-nib`", ""
+
+    why = ps.ensure_bins(build=lambda: Failed())
+    assert "oldest binary llrm-qb" in why and "newest source crates/a/src/x.rs" in why and "70 s later" in why, why
+    assert "the rebuild exited 101" in why and "could not compile `llrm-nib`" in why, why

@@ -234,6 +234,21 @@ fn the_x86_model_makes_a_scaled_address_and_a_narrow_trunc_free() {
     assert_eq!(generic - target, 5, "generic {generic}, x86 {target}");
 }
 
+/// m16 priced every instruction with the generic rules (`Machine::tti` was
+/// none): a scaled address cost 5 more per use than the i386 X86 model LLVM
+/// prices `-code16` with, so a callee the walk inlines under it was refused.
+#[test]
+fn test_m16_prices_a_scaled_address_with_the_x86_model() {
+    use llrm_mir::target::Machine;
+    let gep = format!(
+        "{GLOBAL}define internal i32 @callee(ptr %p, i32 %i) {{\nb0:\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  ret i32 %v\n}}\n\ndefine i32 @f(ptr %a, i32 %j) {{\nb0:\n  %r = call i32 @callee(ptr %a, i32 %j)\n  %s = call i32 @callee(ptr %a, i32 %r)\n  ret i32 %s\n}}\n"
+    );
+    let m16 = llrm_x86_m16::Dos::default().tti();
+    let generic = priced_with(&gep, 0, false, CallerSize::Speed, None).0;
+    let target = priced_with(&gep, 0, false, CallerSize::Speed, m16.as_deref()).0;
+    assert_eq!(generic - target, 5, "generic {generic}, m16 {target}");
+}
+
 #[test]
 fn test_a_decided_site_is_remarked_as_opt_remarks_it() {
     let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0 };
@@ -250,4 +265,43 @@ fn test_a_decided_site_is_remarked_as_opt_remarks_it() {
         crate::inlinecost::remark("g", "f", &priced, false),
         "'f' not inlined into 'g' because the copy was not made (cost=40, threshold=225)"
     );
+}
+
+/// A site eight `strcmp(..) == 0` tests deep is 0.625^8 = 2.3% of the entry
+/// in LLVM's `BlockFrequencyInfo` over `BranchProbabilityInfo` (the zero
+/// heuristic of a three-way compare): above the 2% cold cut, so `opt` holds
+/// `leaf` to 337 (225 and the single-block bonus). `profit`'s frequencies put
+/// it under the cut, cold, threshold 45 (`_cvar_find` in QCport's `_cmd_run`).
+#[test]
+fn test_a_site_llvms_frequencies_keep_warm_is_not_held_to_the_cold_threshold() {
+    let mut text = String::from(
+        "declare i16 @strcmp(ptr, ptr) threeway\n\n\
+         define internal i16 @leaf(i16 %x) {\nentry:\n  %r = add i16 %x, 1\n  ret i16 %r\n}\n\n\
+         define i16 @main(ptr %p, ptr %q, i16 %x) {\nentry:\n  br label %t0\n\n",
+    );
+    for i in 0..8 {
+        text += &format!(
+            "t{i}:\n  %s{i} = call i16 @strcmp(ptr %p, ptr %q)\n  %c{i} = icmp eq i16 %s{i}, 0\n  br i1 %c{i}, label %out, label %t{}\n\n",
+            i + 1
+        );
+    }
+    text += "t8:\n  %v = call i16 @leaf(i16 %x)\n  ret i16 %v\n\nout:\n  ret i16 0\n}\n";
+    let module = parsed(&text);
+    let main = module.globals.iter().position(|one| one.name.as_deref() == Some("main")).unwrap();
+    let mut decided = Vec::new();
+    crate::inlinecost::sites(
+        &module,
+        &DataLayout::default(),
+        llrm_mir::context::GlobalId(main as u32),
+        &crate::inline::call_counts(&module),
+        &Default::default(),
+        &Default::default(),
+        InlineParams::from_level(2),
+        CallerSize::Speed,
+        false,
+        None,
+        Some(&mut decided),
+    );
+    let [(_, _, InlineCost::Cost { threshold, .. })] = decided[..] else { panic!("one priced site: {decided:?}") };
+    assert_eq!(threshold, 337);
 }
