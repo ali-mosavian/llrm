@@ -12,11 +12,9 @@ pub mod parse;
 use std::fmt::Write as _;
 
 use automaton::{Automaton, State};
-use parse::{Call, Expr, OperandPattern, Pattern, Step};
-
 /// The instruction description's reader.
-#[path = "../../../target/llrm-x86/src/parse.rs"]
-pub mod description;
+pub use llrm_instr as description;
+use parse::{Call, Expr, OperandPattern, Pattern, Step};
 
 /// What each operand constructor may make, as `x86.instr` spells kinds,
 /// and how many arguments it takes.

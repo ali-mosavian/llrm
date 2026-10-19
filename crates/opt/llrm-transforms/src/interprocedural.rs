@@ -1183,23 +1183,26 @@ pub fn optimized_with<E: From<String>>(
             // `LLRM_EXP_INLINEDECIDE`: LLVM's decision per call site, in place
             // of the per-callee budget (inlinecost.rs).
             let llvm = llrm_support::env_flag!("LLRM_EXP_INLINEDECIDE");
-            let (available, more) = if llvm {
-                Default::default()
-            } else {
-                candidates(
-                    module,
-                    &callees(&mut modules[at], module),
-                    &program.layout,
-                    &counts,
-                    &private[at],
-                    costs,
-                    loose,
-                    reach,
-                    threshold,
-                    &recursive,
-                    &addressed,
-                )
+            let pick = |module: &Module, modules: &mut ModuleAnalyses, counts: &inline::Counter| {
+                if llvm {
+                    Default::default()
+                } else {
+                    candidates(
+                        module,
+                        &callees(modules, module),
+                        &program.layout,
+                        counts,
+                        &private[at],
+                        costs,
+                        loose,
+                        reach,
+                        threshold,
+                        &recursive,
+                        &addressed,
+                    )
+                }
             };
+            let (mut available, more) = pick(module, &mut modules[at], &counts);
             // What only the clocks admit of a callee stays where its copies,
             // as the pipeline over each alone leaves them, come to no more.
             if !llvm
@@ -1221,6 +1224,9 @@ pub fn optimized_with<E: From<String>>(
                 )?
             {
                 changed = true;
+                // The candidates hold the bodies as they were: a callee
+                // that took its own callees in is spliced as it is now.
+                available = pick(module, &mut modules[at], &inline::call_counts(module)).0;
             }
             // gcc's order (`inline_small_functions`): callers before callees,
             // the calls each leaves counted as they go, so that a
