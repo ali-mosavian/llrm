@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 99 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 101 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
