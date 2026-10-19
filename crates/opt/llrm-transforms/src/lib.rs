@@ -54,7 +54,7 @@
 //! `trivialunswitch`, `unswitch`, `loopsplit`, `loopfuse`, `loopdistribute`
 //! (with `loopshape`), `indvars` (with `exitvalues`, `exitfold`, `exitsink`),
 //! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`, `unroll_jam`,
-//! `loopidioms`, `floatloop`, `tailrec`.
+//! `loopidioms`, `floatloop`, `tailcallelim`.
 //!
 //! Whole program: `globalopt`, `globaldce`, `availableexternally`, `inline`,
 //! `ipacp`, `argpromotion`, `deadargs`, `narrowspace`, `calleepop`; and
@@ -135,6 +135,9 @@ pub mod deadargs;
 mod deadargs_tests;
 pub mod deadstore;
 pub mod decide;
+pub mod dfajumpthreading;
+#[cfg(test)]
+mod dfajumpthreading_tests;
 pub mod dse;
 pub mod earlycse;
 pub mod edges;
@@ -160,6 +163,7 @@ mod gvn_load_tests;
 mod gvn_scalar_tests;
 pub mod hoistcommon;
 pub mod homes;
+pub mod icmpchain;
 pub mod indvars;
 pub mod inferspace;
 #[cfg(test)]
@@ -181,6 +185,7 @@ pub mod jumpthread;
 pub mod jumpthreading;
 #[cfg(test)]
 mod jumpthreading_tests;
+pub mod knownpred;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod lftr;
@@ -203,13 +208,23 @@ pub mod loopsplit;
 pub mod loopunroll;
 pub mod loopunrollpass;
 pub mod loopversion;
-pub mod lsr;
+pub mod lsr_chain;
 pub mod lsr_collect;
 #[cfg(test)]
 mod lsr_collect_tests;
 pub mod lsr_formula;
 #[cfg(test)]
 mod lsr_formula_tests;
+pub mod lsr_generate;
+#[cfg(test)]
+mod lsr_generate_tests;
+pub mod lsr_implement;
+pub mod lsr_narrow;
+pub mod lsr_pass;
+#[cfg(test)]
+mod lsr_pass_tests;
+pub mod lsr_prepare;
+pub mod lsr_solve;
 pub mod lsr_use;
 #[cfg(test)]
 mod lsr_use_tests;
@@ -217,7 +232,6 @@ pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
 pub mod mergestores;
-pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
@@ -258,9 +272,8 @@ pub mod splitcopy;
 pub mod sroa;
 pub mod switchcg;
 pub mod switchlower;
-pub mod tailmerge;
-pub mod tailrec;
 pub mod tailcallelim;
+pub mod tailmerge;
 #[cfg(test)]
 pub mod testing;
 pub mod transform;

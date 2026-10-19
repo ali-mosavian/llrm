@@ -51,7 +51,11 @@
 //! carries `n` and `x`; see `tailcallelim_tests.rs`.
 //!
 //! # Runs
-//! Not in the pipeline yet; `tailrec` still runs.
+//! As `tailrec`, the name its option (`sibcalls`) and slot (`tailrec@688`)
+//! keep: in the function pipeline after `gvn::EqualCalls`, so two equal calls
+//! are one first, and before `loopsimplify`, so the loop it makes goes to the
+//! loop passes. Once per round of the fixed point; at -O2 and above, off at -O0
+//! and -O1 and by `-fno-optimize-sibling-calls`.
 //!
 //! # Needs
 //! `BasicAA` for the mod/ref of a call on a load that moves above it.
@@ -83,7 +87,7 @@ pub struct TailCallElim;
 
 impl FunctionPass for TailCallElim {
     fn name(&self) -> &'static str {
-        "tailcallelim"
+        "tailrec"
     }
 
     fn translation(&self) -> Option<&'static str> {

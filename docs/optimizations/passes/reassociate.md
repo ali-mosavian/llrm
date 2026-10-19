@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/reassociate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/reassociate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/reassociate.rs sha256:24e867823a68ebf05fcd700575fd2137990fbd1df0d0a377e09d9309ebf898a5 -->
+<!-- src: crates/opt/llrm-transforms/src/reassociate.rs sha256:556270a56b5f9983f69c8826f723c64ce4fac3a0f4abffec5ffe4c30100f316d -->
 
 # reassociate
 
@@ -32,6 +32,13 @@ constant `sub` in MIR.
 
 DEVIATE 5: a constant has no use list, so the negates of one are kept in
 `constant_negates`, to find the one `NegateValue` reuses.
+
+DEVIATE 6: `reassociate` reports a change only if the body differs, not
+`MadeChange` (which is also true for an add swapped and swapped back). The
+pipeline repeats its body until no pass changes it, so a pass that reports
+a no-op never settles it. Exit: the pipeline's rounds compare body
+fingerprints themselves (as its cycle history already does), and
+`reassociate` returns `MadeChange`.
 
 ## How it works
 The files are split by job: `reassociate_rank` (ranks),

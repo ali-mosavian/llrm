@@ -316,7 +316,7 @@ def test_a_smoke_that_exits_non_zero_without_a_summary_line_names_its_stderr(mon
         returncode, stdout, stderr = 1, "", "stale binaries in /x: llrm-c older than the source\nrun cargo build"
 
     monkeypatch.setattr(ps, "smoke_bins", lambda env=None: "/x")
-    monkeypatch.setattr(ps.subprocess, "run", lambda *a, **k: Done())
+    monkeypatch.setattr(ps, "run_streaming", lambda command, cwd: Done())
     failed, last = ps.smoke_failures()
     assert failed == {"smoke-did-not-finish"} and "stale binaries in /x" in last and "exited 1" in last, last
 
@@ -419,6 +419,28 @@ def test_eight_passing_prs_cost_one_smoke_and_nine_are_refused(monkeypatch):
         ps.merge_batch([str(n) for n in range(1, 10)])
 
 
+def test_the_smoke_stage_lines_reach_the_squash_log_as_they_happen(capsys):
+    """The 16:16 batch logged every stage at 16:23:48: the log was printed at the end. A STAGE line of the smoke is echoed the moment it arrives."""
+    import sys
+
+    child = [sys.executable, "-c", "import sys,time\nprint('12:00:00 STAGE step programs', flush=True)\ntime.sleep(0.3)\nprint('FAILING:')\nprint('PARITY SMOKE PASS x')"]
+    done = ps.run_streaming(child, Path("."))
+    shown = capsys.readouterr().out
+    assert shown.strip() == "12:00:00 STAGE step programs" and done.returncode == 0 and done.stdout.splitlines()[-1] == "PARITY SMOKE PASS x"
+
+
+def test_every_squash_stage_prints_a_flushed_timestamped_line_before_its_work(capsys, monkeypatch):
+    import stages
+
+    stages.stage("build")
+    line = capsys.readouterr().out
+    assert line.strip().endswith(" STAGE build") and line[2] == ":" and line[5] == ":"
+    monkeypatch.setattr(ps, "smoke_bins", lambda env=None: "/x")
+    monkeypatch.setattr(ps, "run_streaming", lambda command, cwd: type("D", (), {"returncode": 0, "stdout": "FAILING:\nPARITY SMOKE PASS x\n", "stderr": ""})())
+    ps.smoke_failures()
+    assert " STAGE smoke" in capsys.readouterr().out
+
+
 class Tree:
     """A fake dev checkout: `state` is "head" until the merge, then "merged"; each check reports the files the state fails."""
 
@@ -479,6 +501,13 @@ def test_a_precheck_verdict_is_cached_per_pr_head_and_feat_parity_sha(tmp_path, 
     assert ps.precheck("5", base_sha="p1", **args) == "5: PASS" and ps.precheck("5", base_sha="p1", **args) == "5: PASS" and len(merges) == 1
     assert ps.precheck("5", base_sha="p2", **args) == "5: PASS" and len(merges) == 2
     assert ps.precheck("9", base_sha="p2", **args) == "9: PASS" and len(merges) == 2  # the verdict is for the head sha, whichever number asks
+
+
+def test_a_fast_batch_leaves_out_the_pr_that_cannot_join_and_keeps_the_rest():
+    """The user's call: merge everything, skip the tests. One PR that conflicts or deletes unnamed code is left out with its reason; it does not fail or halve the batch."""
+    why = {"2": "conflicts with an earlier PR of the batch", "4": "deletes 31 lines"}
+    kept, left_out = ps.fast_merge(["1", "2", "3", "4", "5"], lambda number: why.get(number, ""))
+    assert kept == ["1", "3", "5"] and left_out == why, (kept, left_out)
 
 
 def test_the_precheck_formats_only_the_prs_own_rust_files(tmp_path, monkeypatch):
