@@ -237,12 +237,7 @@ impl ProgramPass for Walk {
                 };
                 let mut declared = declared(&mut modules[at], module);
                 let (context, function) = function_mut(module, id);
-                let by = crate::inline::Caller {
-                    layout: &program.layout,
-                    recursive: recursive.contains(&id),
-                    base: 0,
-                    limits: false,
-                };
+                let by = crate::inline::Caller { layout: &program.layout, recursive: recursive.contains(&id) };
                 let spliced = crate::inline::expanded_all(
                     context,
                     function,

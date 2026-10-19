@@ -1331,11 +1331,11 @@ fn test_a_body_run_again_after_a_call_is_sent_to_an_equal_copy_starts_no_pass() 
 }
 
 /// -O1 inlined small functions called more than once, searched allocations and
-/// made the spiller's second route, none of which gcc's -O1 does: 34% of
-/// d_faces' -O1 compile (5,643 -> 3,718 Minstr) for 0 rows of vsgcc. A function
-/// called once still goes in (`-finline-functions-called-once`).
+/// made the spiller's second route: 34% of d_faces' -O1 compile (5,643 -> 3,718
+/// Minstr). clang's -O1 runs the always-inliner alone
+/// (`OnlyAlwaysInlining`), so a function called once stays a call too.
 #[test]
-fn o1_inlines_only_the_last_call_and_has_no_allocation_search_or_second_route() {
+fn o1_inlines_nothing_and_has_no_allocation_search_or_second_route() {
     let text = "
 define internal i16 @twice(i16 %x) {
 entry:
@@ -1367,7 +1367,7 @@ entry:
         2,
         "-O1 inlined a function called twice:\n{kept}"
     );
-    assert!(!kept.contains("@once"), "@once, called once, is inlined at -O1:\n{kept}");
+    assert!(kept.contains("@once"), "@once is inlined at -O1, which clang's always-inliner does not:\n{kept}");
     let (gone, _) = pipelined(text, o2);
     assert!(!crate::testing::printed(&gone).contains("@twice"), "premise: -O2 inlines it");
 }
