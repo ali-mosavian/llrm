@@ -123,11 +123,11 @@ Each step is its own PR with "LLVM structure: X; ours: Y; mirror or deviate beca
 | `alias.rs` | 7 | all of them | the old points-to tower | deleted with the tower (funcattrs-port's call effects, then A7) | funcattrs-port |
 | `memory.rs` | 5 | all of them | defines `MemRef`, `ObjectRef`, `classes_may_alias` | last; deleted when the rest are gone | none needed |
 
-Fields with no LLVM counterpart, each needing a numbered DEVIATE or a home before its reader moves:
+Fields with no LLVM counterpart, decided (2026-10-24):
 
-- F1 `lineage`, `typed`: TBAA. MIR has `llrm_mir::tbaa::Tbaa`; `TypeBasedAliasAnalysis.cpp` is not translated. The home is that translation, as an `AAResults`.
-- F2 `segment`, `selector`, `origin`, `linear`: DOS far pointers and integer constants made into pointers. To be decided in the first reader PR that needs them (`floatbounds.rs` or `consts.rs`).
-- F3 `provenance`, `object`: the object sets of the old tower; the home is `getUnderlyingObjects` and the capture query.
+- **F1 `typed`, `lineage` (TBAA).** Home: a translation of `TypeBasedAliasAnalysis.cpp` as an `AAResults` provider over `AAInfo::tbaa`, which every load and store already carries (the C front end emits clang's scalar `!tbaa` tree; `llrm_mir::tbaa::Tbaa` is that tree). It needs the aggregate LLVM's `AAResults` has (`addAAResult`: the first answer that is not MayAlias wins, mod/ref intersect), which is the first step. DEVIATE F1: scalar tags only (type, parent, offset 0); LLVM's struct-path tags are not emitted by any front end here. Exit: a front end that emits struct-path tags. `isel.rs` reads `AAInfo::tbaa.is_some()` meanwhile.
+- **F2 `segment`, `selector`, `origin`, `linear` (far pointers and integer addresses).** Home: the target description, not a pass: `DataLayout::is_pair` and `offset_bits` already say how a pair splits into selector and offset, and `Spaces` says which space is far, huge, a lone segment or fixed. `pair_constant` becomes a `DataLayout` method; `linear` becomes a `Spaces` fact (one flat address space). DEVIATE F2: LLVM has no far pointers; the split is a target fact stated once and tested at the boundary. No exit: it is a property of the DOS targets. Oversight call needed: whether `DataLayout` or `Spaces` holds the split (I propose `DataLayout`, which owns `offset_bits`).
+- **F3 `provenance`, `object` (object sets).** Home: `getUnderlyingObjects` (ValueTracking), which is not translated; only `getUnderlyingObject` is. Translate it with its 6-object cap, and take "is a root an object's own address" from `isIdentifiedObject`. Exit: none; the old sets go with the tower.
 
 ### Item 5: the global-variable cells (S2)
 
