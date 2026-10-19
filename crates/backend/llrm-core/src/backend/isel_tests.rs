@@ -2675,7 +2675,7 @@ done:
     // Greedy's register choice (#2312): the old pin's instructions, memory
     // operands, prefixes and adjacent dependencies, other registers.
     let read = element(&sum("inbounds"));
-    assert_eq!(read, "add ax, word ptr a[esi+esi]");
+    assert_eq!(read, "add ax, word ptr a[ebx+ebx]");
     assert_eq!(counts(&[&read]), (1, 1));
     // Without `inbounds` nothing places the start: the offset may wrap.
     assert_eq!(element(&sum("")), "add ax, word ptr a[si]");
@@ -5567,4 +5567,91 @@ fn test_an_undef_initializer_is_zero_bytes() {
     };
     assert_eq!(datums("u"), [Datum::Label(Label { name: "u".to_owned() }), Datum::Bytes(vec![0, 0])]);
     assert_eq!(datums("s"), [Datum::Label(Label { name: "s".to_owned() }), Datum::Bytes(vec![0, 0, 0, 0])]);
+}
+
+/// A load only an add reads is the add's memory operand, as `ADD32rm` is
+/// X86DAGToDAGISel's: `add ax, [g]`, no register made to hold the load.
+#[test]
+fn test_a_load_only_an_add_reads_is_its_memory_operand() {
+    let text = "@g = global i16 5
+define i16 @f(i16 %a) addrspace(1) {
+  %v = load i16, ptr @g
+  %r = add i16 %a, %v
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("add ") && line.contains("ptr g")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("mov ") && line.contains("ptr g")), "a separate load: {got:?}");
+}
+
+/// The load first, for an operation that commutes.
+#[test]
+fn test_a_load_first_in_a_commutative_operation_is_its_memory_operand() {
+    let text = "@g = global i16 5
+define i16 @f(i16 %a) addrspace(1) {
+  %v = load i16, ptr @g
+  %r = xor i16 %v, %a
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("xor ") && line.contains("ptr g")), "{got:?}");
+}
+
+/// A store to the cell between the load and its reader: the load keeps the old
+/// value, so it stays where it was made.
+#[test]
+fn test_a_store_between_the_load_and_the_add_keeps_the_load_apart() {
+    let text = "@g = global i16 5
+define i16 @f(i16 %a) addrspace(1) {
+  %v = load i16, ptr @g
+  store i16 1, ptr @g
+  %r = add i16 %a, %v
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("mov ") && line.contains("ptr g")), "{got:?}");
+}
+
+/// `*p += x` stays one instruction on the memory: the load folded into the
+/// add would leave the store to be a second instruction.
+#[test]
+fn test_an_update_in_place_is_not_split_by_a_memory_operand() {
+    let text = "@g = global i16 5
+@h = global i16 7
+define void @f() addrspace(1) {
+  %a = load i16, ptr @g
+  %b = load i16, ptr @h
+  %s = add i16 %a, %b
+  store i16 %s, ptr @g
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(
+        got.iter().any(|line| line.starts_with("add ") && line.split(',').next().is_some_and(|dest| dest.contains("ptr g"))),
+        "the update is not an add to the cell: {got:?}"
+    );
+}
+
+/// An `and` a comparison with zero reads is a `test` (`and_tested`), whose
+/// operands are not given a memory operand by the add's pattern (the covered load
+/// was left unselected: `d_faces` aborted in the allocator).
+#[test]
+fn test_a_tested_and_of_a_load_still_selects_the_load() {
+    let text = "@g = global i16 5
+define i16 @f(i16 %a) addrspace(1) {
+  %v = load i16, ptr @g
+  %m = and i16 %v, 1
+  %c = icmp ne i16 %m, 0
+  br i1 %c, label %yes, label %no
+yes:
+  ret i16 %a
+no:
+  ret i16 0
+}
+";
+    assert!(!listing(text, "f").is_empty());
 }
