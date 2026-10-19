@@ -76,13 +76,22 @@ def outside_files(base: str, head: str, cwd: Path = ROOT) -> list[str]:
     return sorted(net - own)
 
 
+DOCS_PAGE = re.compile(r"^> Generated from the `//!` headers? of ")
+
+
+def is_generated(base: str, path: str, cwd: Path = ROOT) -> bool:
+    """Whether `path` at `base` is a docsbuild page: the docs check regenerates it on the merged tree, so a rewrite of its source is not a deletion."""
+    done = subprocess.run(["git", "show", f"{base}:{path}"], cwd=cwd, capture_output=True, text=True)
+    return done.returncode == 0 and bool(DOCS_PAGE.match(done.stdout.split("\n", 1)[0]))
+
+
 def losses(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, int, int, bool]]:
     """(path, deleted lines, test functions removed, whole file gone) for each file of the net diff base..head that loses more than LIMIT lines, loses a test or goes.
     Own commits or not: #2443's own commit deleted scev/expand_iv.rs (855 lines) from a stale tree, and 'outside its own commits' let it through."""
     out = []
     for line in git("diff", "--numstat", base, head, cwd=cwd).splitlines():
         added, gone, path = line.split("\t", 2)
-        if gone == "-":
+        if gone == "-" or is_generated(base, path, cwd):
             continue
         diff = git("diff", base, head, "--", path, cwd=cwd)
         tests = len(removed_tests(diff))
