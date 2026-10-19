@@ -216,6 +216,24 @@ pub fn source_with(
     Ok(code)
 }
 
+/// The id constants of a target that numbers its own file: `pub const X0: Reg
+/// = Reg::from_raw(1);`, one per register, numbered in the file's order from 1
+/// (0 is no register).
+pub fn constants(
+    text: &str,
+    id: &str,
+) -> Result<String, String> {
+    let registers = parse(text)?;
+    if registers.len() > 255 {
+        return Err(format!("registers.regs: {} registers, ids are one byte and 0 is none", registers.len()));
+    }
+    let mut code = String::new();
+    for (at, one) in registers.iter().enumerate() {
+        code.push_str(&format!("pub const {}: {id} = {id}::from_raw({});\n", one.name.to_uppercase(), at + 1));
+    }
+    Ok(code)
+}
+
 /// The most register widths a description may state.
 const WIDTH_COLUMNS: usize = 8;
 
@@ -253,6 +271,16 @@ mod source_tests {
         assert!(made.contains("regs::FP.index()"), "{made}");
         assert!(made.contains("&'static [Reg] ="), "{made}");
         assert!(!made.contains("Reg::FP"), "{made}");
+    }
+
+    /// A target that numbers its own file gets one constant per register, in
+    /// the file's order, and none for more than a byte holds.
+    #[test]
+    fn a_target_numbers_its_registers_from_one() {
+        let made = super::constants("fp 64 fp 0 frame - 29\nsp 64 sp 0 stack - 31\n", "Reg").expect("made");
+        assert_eq!(made, "pub const FP: Reg = Reg::from_raw(1);\npub const SP: Reg = Reg::from_raw(2);\n");
+        let many: String = (0..256).map(|at| format!("r{at} 64 r{at} 0 gpr - -\n")).collect();
+        assert!(super::constants(&many, "Reg").is_err());
     }
 
     /// Two frame registers (or none) are no role: the table is not made.
