@@ -1972,7 +1972,7 @@ pub fn _operand(
         Loc::Address(ir::AddressRef { through, index_through: index, scale, offset, .. }) => {
             format!("[{}{}]", _registers(regs, *through, *index, *scale), _signed(*offset))
         }
-        Loc::Held(_) => return Err(Unprintable(format!("operand {}", r#where.repr()))),
+        Loc::Held(_) | Loc::Field(_) => return Err(Unprintable(format!("operand {}", r#where.repr()))),
     })
 }
 
