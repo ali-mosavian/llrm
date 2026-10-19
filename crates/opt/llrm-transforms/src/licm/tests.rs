@@ -144,6 +144,27 @@ fn test_a_call_that_may_throw_stays() {
     assert_eq!(decided(&call(" nounwind readnone")), ["v"]);
 }
 
+/// A speculatable call that is handed a `noundef` argument stayed in the loop:
+/// `isSafeToSpeculativelyExecute` ignores UB-implying attributes by default,
+/// and LICM strips them from a call it moves that was not certain to run.
+#[test]
+fn test_a_call_with_a_noundef_argument_is_hoisted_without_it() {
+    use crate::testing::printed;
+    let text = looped(
+        "declare i16 @pure(i16 noundef) speculatable nounwind readnone\n\n",
+        ", i16 %a",
+        "",
+        "  %v = call i16 @pure(i16 noundef %a)\n",
+    );
+    assert_eq!(decided(&text), ["v"]);
+    let mut module = parsed(&text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("licm");
+    let after = printed(&module);
+    assert_eq!(block_of(&after, "b0"), ["%v = call i16 @pure(i16 %a)", "br label %b1"], "{after}");
+}
+
 /// An exit's LCSSA phi reading `body`'s `%v` out of a loop that counts `%i` up
 /// to `%n`: the value is read only after the loop.
 fn sinking(body: &str) -> String {

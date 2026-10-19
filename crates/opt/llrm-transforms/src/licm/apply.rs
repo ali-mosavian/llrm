@@ -119,7 +119,8 @@ impl Graph<'_> {
 /// [`hoist`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1460):
 /// `inst` moved before the preheader's terminator. Every fact an instruction
 /// carries survives running where it did not run
-/// (`Fact::survives_speculation`), so none is dropped.
+/// (`Fact::survives_speculation`), so none is dropped; a call's attributes on
+/// its arguments and result are dropped by the caller.
 fn hoist(
     function: &mut Function,
     graph: &mut Graph,
@@ -285,7 +286,7 @@ pub fn apply_loop(
     loop_: &Loop,
     preheader: Option<BlockId>,
     sunk: &[(InstId, Sinking)],
-    hoisted: &[(InstId, BlockId)],
+    hoisted: &[super::hoist::Hoist],
     reassociated: &[Reassociation],
 ) -> Result<bool, String> {
     let mut changed = false;
@@ -300,8 +301,13 @@ pub fn apply_loop(
         }
         changed = true;
     }
-    for &(inst, _) in hoisted {
+    for &super::hoist::Hoist { inst, guaranteed, .. } in hoisted {
         let preheader = preheader.ok_or("a hoist with no preheader")?;
+        // Hoisting a call that was not guaranteed to execute strips what would
+        // make it undefined where it did not run (`LICM.cpp:1478`).
+        if !guaranteed {
+            function.drop_ub_implying_attrs(inst);
+        }
         hoist(function, graph, inst, preheader)?;
         changed = true;
     }

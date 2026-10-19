@@ -305,7 +305,7 @@ fn record_edits(
     decisions: &mut Decisions,
     header: BlockId,
     sunk: &[(InstId, sink::Sinking)],
-    hoisted: &[(InstId, BlockId)],
+    hoisted: &[hoist::Hoist],
     reassociated: &[hoist::Reassociation],
 ) {
     let count = |inst: InstId, decisions: &mut Decisions| match unit.function.instruction(inst).opcode {
@@ -322,7 +322,7 @@ fn record_edits(
             }
         }
     }
-    for &(inst, _) in hoisted {
+    for &hoist::Hoist { inst, .. } in hoisted {
         decisions.hoisted.push(Hoisted { function: unit.id, header, inst });
         count(inst, decisions);
     }
@@ -611,7 +611,7 @@ fn sink_and_hoist(
     mssa: &mut Mssa,
     aa: &AliasQuery,
     accesses: &Accesses,
-) -> (Vec<(InstId, sink::Sinking)>, Vec<(InstId, BlockId)>, Vec<hoist::Reassociation>) {
+) -> (Vec<(InstId, sink::Sinking)>, Vec<hoist::Hoist>, Vec<hoist::Reassociation>) {
     use llrm_analysis::cfg::Around;
     let preheader = ctx.loop_.preheader(unit.function).map(cfg::block);
     let mut flags = Flags::new(

@@ -903,6 +903,37 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// `CallBase::removeUBImplyingAttrs` of
+    /// `Instruction::dropUBImplyingAttrsAndMetadata`: the call `inst` keeps
+    /// no attribute of its result or arguments that makes it undefined (a
+    /// fact's `implies_ub`, and `dereferenceable_or_null`). Whether any was
+    /// dropped.
+    pub fn drop_ub_implying_attrs(
+        &mut self,
+        inst: InstId,
+    ) -> bool {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
+            return false;
+        };
+        let implies_ub = |attr: &crate::opcode::Attribute| {
+            crate::facts::Fact::of_attribute(attr).is_some_and(crate::facts::Fact::implies_ub)
+                || matches!(
+                    attr,
+                    crate::opcode::Attribute::Int(name, _) if name == "dereferenceable_or_null"
+                )
+        };
+        let before = info.return_attrs.len() + info.argument_attrs.iter().map(Vec::len).sum::<usize>();
+        info.return_attrs.retain(|attr| !implies_ub(attr));
+        for attrs in &mut info.argument_attrs {
+            attrs.retain(|attr| !implies_ub(attr));
+        }
+        let changed = before != info.return_attrs.len() + info.argument_attrs.iter().map(Vec::len).sum::<usize>();
+        if changed {
+            self.log(Change::Rewritten(inst));
+        }
+        changed
+    }
+
     /// Gives the call `inst` calling convention `convention`.
     pub fn set_call_convention(
         &mut self,
