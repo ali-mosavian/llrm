@@ -76,14 +76,18 @@ hint 325; locally hot 525; the cost-benefit analysis is off (`inline-enable-cost
   of them in llrm; none.
 - D5 The SROA bonus (`handleSROA`, `onInitializeSROAArg`) needs alloca-derived arguments: translated, tested on
   dumps.
-- D6 The gcc growth limits (caller growth, unit growth, frame) stay while `Plan` splices; LLVM has none but
-  `inline-max-stacksize`. Each is removed only with rows.
+- D6 The gcc growth limits (caller growth, unit growth, frame) stay on the gcc path. On sites `inline_cost`
+  decided, caller growth (#2622) and the frame limit (#2656, once copies carry lifetime markers) are off.
 - D7 `shouldBeDeferred` needs the other callers of the callee with their costs: translated over the module call
   graph the interprocedural stage holds.
 
 - D9 `noipa` (GCC's attribute; LLVM has no IR equivalent: `optnone`/`noinline` keep a function from being changed
   or inlined, not from being read by its callers' passes). A bench kernel is a real procedure its callers cannot
   fold away. Scope: functions the source marks `noipa`, nothing else; no `-O` flag sets it.
+- D10 `InsertLifetime` skips an alloca whose address, or one derived from it, is returned or stored as a value; LLVM
+  marks every static alloca, as C makes such code undefined. QB's runtime bodies return their own allocas
+  (`B$FMID`'s view): the end at the return made the read through it undef (#2625, SUM= 0). Exit: the lifetime ends
+  after the copy's last use of the address, not at its return.
 
 ## INLINEDECIDE: what turning it on does (#2140, off by default)
 

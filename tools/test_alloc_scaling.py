@@ -65,6 +65,20 @@ def test_the_allocators_passes_grow_as_the_program_does():
     assert all(grown[name] < LIMITS[name] for name in PASSES), f"4x the statements cost {grown} times as much (limits {LIMITS}): {best}"
 
 
+def test_a_split_finds_its_instruction_by_index_not_by_walking_the_block():
+    """`rewrite_instr`, `instr_at` and `next_instr` looked for an instruction by walking its block: with trySplit on, `regalloc base`
+    cost 143.8 / 400.3 Minstr on the ladder's `mem` at N=800 / 1600 (3.08x per doubling, 2.66x before). A block is in slot order,
+    so the position is bisected."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "ladder"))
+    import gen
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "mem800.c"
+        source.write_text(gen.generate("mem", 800))
+        run = steps(compiler, source, "-O2", "-mabi=sysv", "-fno-inline-functions")
+    assert run["regalloc base"] < 125, f"mem N=800 -O2: regalloc base cost {run['regalloc base']} Minstr (125 allowed; 143.8 before): {run}"
+
+
 def test_a_rewrite_finds_what_it_changed_by_pointer_not_by_looking_up_every_instruction():
     """`facts intervals` and `intervals homes` hashed every instruction of an edited block, old and new, at each of a function's
     ~430 rewrites to find the few that changed: 380 + 71 Minstr became 625 + 74 on `cells` at N=224 (one block, ~900 spills),
