@@ -133,6 +133,7 @@ pub mod arithmetic;
 pub mod arrival;
 pub mod asm;
 pub mod assemble;
+pub mod bitcounts;
 pub mod calleefacts;
 pub mod callregs;
 pub mod cfi;
@@ -178,6 +179,7 @@ pub mod selectors {
 
     include!(concat!(env!("OUT_DIR"), "/selectors.rs"));
 }
+pub mod edges;
 pub mod incremental;
 pub mod intbits;
 #[cfg(test)]
@@ -196,6 +198,7 @@ pub mod lower_int64;
 pub mod machinecp;
 pub mod machinecse;
 pub mod machinedce;
+pub mod machinesink;
 pub mod masm;
 pub mod nativeframe;
 pub mod nearcode;

@@ -3,21 +3,23 @@ use llrm_mir::module::InstId;
 use llrm_mir::opcode::{CastOp, Opcode};
 
 use crate::combine::{Combiner, Visit, combine_with};
-use crate::combine_casts::visit_trunc;
+use crate::combine_casts::{visit_sext, visit_trunc, visit_zext};
 use crate::testing::{parsed, printed};
 
-/// `visitTrunc` alone, through the driver.
+/// The casts' `visit*` alone, through the driver.
 fn visit(
     c: &mut Combiner,
     inst: InstId,
 ) -> Visit {
     match c.function.instruction(inst).opcode {
         Opcode::Cast(CastOp::Trunc) => visit_trunc(c, inst),
+        Opcode::Cast(CastOp::ZExt) => visit_zext(c, inst),
+        Opcode::Cast(CastOp::SExt) => visit_sext(c, inst),
         _ => Visit::None,
     }
 }
 
-/// `@f` after `visitTrunc` alone, under `layout`.
+/// `@f` after the casts' `visit*` alone, under `layout`.
 fn combined_under(
     layout: &str,
     text: &str,
@@ -31,8 +33,8 @@ fn combined_under(
     printed(&module)
 }
 
-/// `define RET @f(PARAMS)` with `body` before and `after` after `visitTrunc`,
-/// with i8, i16, i32 and i64 native (as `opt` is run here).
+/// `define RET @f(PARAMS)` with `body` before and `after` after the casts'
+/// `visit*`, with i8, i16, i32 and i64 native (as `opt` is run here).
 fn check(
     ret: &str,
     params: &str,
@@ -42,6 +44,19 @@ fn check(
     let text = format!("define {ret} @f({params}) {{\nb0:\n{body}}}\n");
     let want = format!("define {ret} @f({params}) {{\nb0:\n{after}}}\n");
     assert_eq!(combined_under("n8:16:32:64", &text), want);
+}
+
+/// `check` with no native integer, where an extension is never worth widening
+/// an expression for.
+fn check_plain(
+    ret: &str,
+    params: &str,
+    body: &str,
+    after: &str,
+) {
+    let text = format!("define {ret} @f({params}) {{\nb0:\n{body}}}\n");
+    let want = format!("define {ret} @f({params}) {{\nb0:\n{after}}}\n");
+    assert_eq!(combined_under("", &text), want);
 }
 
 /// `EvaluateInDifferentType`: `trunc (zext x) + 1` is computed in the narrow
@@ -74,15 +89,21 @@ fn a_value_the_tree_reads_twice_is_evaluated_once() {
     );
 }
 
-/// `commonCastTransforms`: a trunc of a trunc is one trunc (`opt` agrees); a
-/// trunc of a phi of numbers is a phi of numbers.
+/// `commonCastTransforms`: a trunc of a trunc is one trunc, a zext of a zext
+/// one zext (`opt` agrees); a trunc of a phi of numbers is a phi of numbers.
 #[test]
-fn a_trunc_of_a_trunc_is_one_trunc_and_a_trunc_of_a_phi_folds_into_it() {
+fn a_cast_of_a_cast_is_one_cast_and_a_cast_of_a_phi_folds_into_it() {
     check(
         "i8",
         "i64 %x",
         "  %e = trunc i64 %x to i32\n  %r = trunc i32 %e to i8\n  ret i8 %r\n",
         "  %0 = trunc i64 %x to i8\n  ret i8 %0\n",
+    );
+    check(
+        "i32",
+        "i8 %x",
+        "  %e = zext i8 %x to i16\n  %r = zext i16 %e to i32\n  ret i32 %r\n",
+        "  %0 = zext i8 %x to i32\n  ret i32 %0\n",
     );
     let text = "define i8 @f(i1 %c) {
 b0:
@@ -213,4 +234,177 @@ fn a_trunc_learns_its_wrap_flags() {
     assert_eq!(combined_under("n8:16:32:64", &same.replace("trunc nuw", "trunc")), same);
     let signed = "define i8 @f(i32 %x) {\nb0:\n  %s = ashr i32 %x, 24\n  %r = trunc nsw i32 %s to i8\n  ret i8 %r\n}\n";
     assert_eq!(combined_under("n8:16:32:64", &signed.replace("trunc nsw", "trunc")), signed);
+}
+
+/// `canEvaluateZExtd`: `zext (trunc x + 1)` is the wide add under a mask
+/// (`opt` agrees); a zext of a trunc is a mask.
+#[test]
+fn a_zext_of_a_narrow_tree_is_the_wide_tree_masked() {
+    check(
+        "i32",
+        "i32 %x",
+        "  %t = trunc i32 %x to i8\n  %a = add i8 %t, 1\n  %r = zext i8 %a to i32\n  ret i32 %r\n",
+        "  %0 = add i32 %x, 1\n  %1 = and i32 %0, 255\n  ret i32 %1\n",
+    );
+    check(
+        "i32",
+        "i64 %a",
+        "  %t = trunc i64 %a to i8\n  %r = zext i8 %t to i32\n  ret i32 %r\n",
+        "  %0 = trunc i64 %a to i32\n  %1 = and i32 %0, 255\n  ret i32 %1\n",
+    );
+}
+
+/// `zext (trunc A)` when the tree is not widened (no native integer): a mask,
+/// before or after a cast (`opt` agrees; its `zext` of the i16 mask is `nneg`).
+#[test]
+fn a_zext_of_a_trunc_is_a_mask_when_not_widened() {
+    check_plain(
+        "i32",
+        "i32 %a",
+        "  %t = trunc i32 %a to i8\n  %r = zext i8 %t to i32\n  ret i32 %r\n",
+        "  %0 = and i32 %a, 255\n  ret i32 %0\n",
+    );
+    check_plain(
+        "i32",
+        "i16 %a",
+        "  %t = trunc i16 %a to i8\n  %r = zext i8 %t to i32\n  ret i32 %r\n",
+        "  %0 = and i16 %a, 255\n  %1 = zext nneg i16 %0 to i32\n  ret i32 %1\n",
+    );
+    check_plain(
+        "i32",
+        "i64 %a",
+        "  %t = trunc i64 %a to i8\n  %r = zext i8 %t to i32\n  ret i32 %r\n",
+        "  %0 = trunc i64 %a to i32\n  %1 = and i32 %0, 255\n  ret i32 %1\n",
+    );
+}
+
+/// The late `zext` folds over a trunc: `(trunc X & C) ^ C`, `0 - trunc X`,
+/// `trunc X & C`, and a bitwise operation with a `trunc nuw` (`opt` agrees).
+#[test]
+fn a_zext_of_a_masked_or_negated_trunc_is_wide() {
+    check_plain(
+        "i32",
+        "i32 %x",
+        "  %t = trunc i32 %x to i8\n  %a = and i8 %t, 12\n  %b = xor i8 %a, 12\n  %r = zext i8 %b to i32\n  ret i32 %r\n",
+        "  %0 = and i32 %x, 12\n  %1 = xor i32 %0, 12\n  ret i32 %1\n",
+    );
+    check_plain(
+        "i32",
+        "i32 %x",
+        "  %t = trunc i32 %x to i8\n  %n = sub i8 0, %t\n  %r = zext i8 %n to i32\n  ret i32 %r\n",
+        "  %0 = sub i32 0, %x\n  %1 = and i32 %0, 255\n  ret i32 %1\n",
+    );
+    check_plain(
+        "i32",
+        "i32 %x",
+        "  %t = trunc i32 %x to i8\n  %a = and i8 %t, 12\n  %r = zext i8 %a to i32\n  ret i32 %r\n",
+        "  %0 = and i32 %x, 12\n  ret i32 %0\n",
+    );
+    check(
+        "i64",
+        "i64 %x, i8 %y",
+        "  %t = trunc nuw i64 %x to i8\n  %q = and i8 %t, %y\n  %r = zext i8 %q to i64\n  ret i64 %r\n",
+        "  %0 = zext i8 %y to i64\n  %1 = and i64 %x, %0\n  ret i64 %1\n",
+    );
+}
+
+/// `transformZExtICmp`: the sign test is a shift; a compare of a one-bit value
+/// with zero is the bit; a shifted-one mask test is a shift and a mask (`opt`
+/// agrees on the sign test and the mask test; it masks the single bit too).
+#[test]
+fn a_zext_of_a_compare_is_bitwise() {
+    check(
+        "i32",
+        "i32 %x",
+        "  %c = icmp slt i32 %x, 0\n  %r = zext i1 %c to i32\n  ret i32 %r\n",
+        "  %0 = lshr i32 %x, 31\n  ret i32 %0\n",
+    );
+    check(
+        "i32",
+        "i32 %x",
+        "  %m = and i32 %x, 4\n  %c = icmp ne i32 %m, 0\n  %r = zext i1 %c to i32\n  ret i32 %r\n",
+        "  %m = and i32 %x, 4\n  %0 = lshr i32 %m, 2\n  ret i32 %0\n",
+    );
+    check(
+        "i32",
+        "i32 %x",
+        "  %m = and i32 %x, 4\n  %c = icmp eq i32 %m, 0\n  %r = zext i1 %c to i32\n  ret i32 %r\n",
+        "  %m = and i32 %x, 4\n  %0 = lshr i32 %m, 2\n  %1 = xor i32 %0, 1\n  ret i32 %1\n",
+    );
+    check(
+        "i32",
+        "i32 %x, i32 %s",
+        "  %sh = shl i32 1, %s\n  %m = and i32 %x, %sh\n  %c = icmp ne i32 %m, 0\n  %r = zext i1 %c to i32\n  ret i32 %r\n",
+        "  %0 = lshr i32 %x, %s\n  %1 = and i32 %0, 1\n  ret i32 %1\n",
+    );
+}
+
+/// A zext of a non-negative value gets `nneg` (`opt` agrees); a sext of one is
+/// that zext.
+#[test]
+fn a_zext_or_sext_of_a_non_negative_is_zext_nneg() {
+    let body = |ext: &str| format!("  %a = lshr i8 %x, 1\n  %r = {ext} i8 %a to i32\n  ret i32 %r\n");
+    check("i32", "i8 %x", &body("zext"), "  %a = lshr i8 %x, 1\n  %r = zext nneg i8 %a to i32\n  ret i32 %r\n");
+    check("i32", "i8 %x", &body("sext"), "  %a = lshr i8 %x, 1\n  %0 = zext nneg i8 %a to i32\n  ret i32 %0\n");
+}
+
+/// `canEvaluateSExtd`: `sext (trunc x + 1)` is the wide add, shifted up and
+/// back down (from the C++; `opt` goes on to fold the shifts into an add).
+#[test]
+fn a_sext_of_a_narrow_tree_is_the_wide_tree_sign_extended_in_register() {
+    check(
+        "i32",
+        "i32 %x",
+        "  %t = trunc i32 %x to i8\n  %a = add i8 %t, 1\n  %r = sext i8 %a to i32\n  ret i32 %r\n",
+        "  %0 = add i32 %x, 1\n  %1 = shl i32 %0, 24\n  %2 = ashr i32 %1, 24\n  ret i32 %2\n",
+    );
+}
+
+/// `transformSExtICmp`: the sign test is an `ashr`; a one-bit test is a shift
+/// pair or an add (from the C++; `opt` simplifies further).
+#[test]
+fn a_sext_of_a_compare_is_bitwise() {
+    check(
+        "i64",
+        "i32 %x",
+        "  %c = icmp slt i32 %x, 0\n  %r = sext i1 %c to i64\n  ret i64 %r\n",
+        "  %0 = ashr i32 %x, 31\n  %1 = sext i32 %0 to i64\n  ret i64 %1\n",
+    );
+    check(
+        "i32",
+        "i32 %x",
+        "  %m = and i32 %x, 4\n  %c = icmp ne i32 %m, 0\n  %r = sext i1 %c to i32\n  ret i32 %r\n",
+        "  %m = and i32 %x, 4\n  %0 = shl i32 %m, 29\n  %1 = ashr i32 %0, 31\n  ret i32 %1\n",
+    );
+    check(
+        "i32",
+        "i32 %x",
+        "  %m = and i32 %x, 4\n  %c = icmp eq i32 %m, 0\n  %r = sext i1 %c to i32\n  ret i32 %r\n",
+        "  %m = and i32 %x, 4\n  %0 = lshr i32 %m, 2\n  %1 = add i32 %0, -1\n  ret i32 %1\n",
+    );
+}
+
+/// `sext (trunc nsw x)` is `sext x`; a shl/ashr pair under a trunc is a shift
+/// pair on x (`opt` agrees, and marks the `ashr` `exact`); a splat of the sign
+/// bit is a shift pair (`opt` agrees).
+#[test]
+fn a_sext_of_a_trunc_is_a_sext_or_a_shift_pair() {
+    check_plain(
+        "i64",
+        "i32 %x",
+        "  %t = trunc nsw i32 %x to i8\n  %r = sext i8 %t to i64\n  ret i64 %r\n",
+        "  %0 = sext i32 %x to i64\n  ret i64 %0\n",
+    );
+    check_plain(
+        "i32",
+        "i32 %x",
+        "  %t = trunc i32 %x to i8\n  %s = shl i8 %t, 3\n  %a = ashr i8 %s, 3\n  %r = sext i8 %a to i32\n  ret i32 %r\n",
+        "  %0 = shl i32 %x, 27\n  %1 = ashr i32 %0, 27\n  ret i32 %1\n",
+    );
+    check(
+        "i32",
+        "i32 %x",
+        "  %t = trunc i32 %x to i8\n  %a = ashr i8 %t, 7\n  %r = sext i8 %a to i32\n  ret i32 %r\n",
+        "  %0 = shl i32 %x, 24\n  %1 = ashr i32 %0, 31\n  ret i32 %1\n",
+    );
 }

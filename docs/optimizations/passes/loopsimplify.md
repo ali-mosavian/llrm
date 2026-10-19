@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopsimplify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopsimplify.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopsimplify.rs sha256:1557dfc32d32a566cd8130ca98119595135e3511acdc4dbd89b83719d88c6f86 -->
+<!-- src: crates/opt/llrm-transforms/src/loopsimplify.rs sha256:985da0d563bd88b735350a4859e04959f2ea3e692041d658ac6b6e5628a6e926 -->
 
 # loopsimplify
 
@@ -146,7 +146,7 @@ From unit test `test_grouping_preserves_each_phi_edge_value` in
 In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `tailrec` and before
 `lcssa`; again after the header copy of `-ftree-ch`, where it
 re-simplifies the loops that copy made; `simplified` is called by
-[`crate::lsr`](lsr.md) after it guards a loop. On at every level above -O0.
+[`crate::lsr_pass`](lsr_pass.md) after it guards a loop. On at every level above -O0.
 
 ## Keeps
 Nothing where it changes a body; it reads only the CFG's structure.

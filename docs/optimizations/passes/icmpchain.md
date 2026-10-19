@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/icmpchain.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/icmpchain.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/icmpchain.rs sha256:87c02d258bdcaff4738d47dd359a5d9efedc8e9e366a4bd92b987117b9da6efd -->
+<!-- src: crates/opt/llrm-transforms/src/icmpchain.rs sha256:9d9efdd4998caa655d8351505c314c40b3b37536d0cba00fd2039bae7a9d766e -->
 
 # icmpchain
 
@@ -9,6 +9,7 @@ turned into a switch (or a range check): LLVM's
 with `ConstantComparesGatherer`
 ([L580](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L580)).
 
+## Example
 ```text
   %a = icmp eq i16 %x, 1                 switch i16 %x, label %f [
   %b = icmp eq i16 %x, 5                   i16 5, label %t
