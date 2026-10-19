@@ -1,7 +1,5 @@
-//! `todo!()` and `unimplemented!()` in non-test code are a compile that panics
-//! on input nobody tried: the SCEV expander's `isSafeToExpand` was a `todo!`
-//! and a loop's value expanded after the loop crashed `llrm-c`. No crate code
-//! may hold one; the baseline is empty and may only stay so.
+//! `todo!()` and `unimplemented!()` in non-test code are a compile that panics on input nobody tried: the SCEV expander's `isSafeToExpand` was a `todo!` and
+//! a loop's value expanded after the loop crashed `llrm-c`. No crate code may hold one; the baseline is empty and may only stay so.
 
 use std::fs;
 use std::path::Path;
@@ -27,9 +25,7 @@ fn sources(
     }
 }
 
-/// The lines (1-based) of `text` that call `todo!` or `unimplemented!` in code:
-/// not a comment, not after the first `#[cfg(test)]` (the tests module that
-/// closes a file).
+/// The lines (1-based) of `text` that call `todo!` or `unimplemented!` in code: not a comment, not after the first `#[cfg(test)]` (the tests module that closes a file).
 fn found(text: &str) -> Vec<usize> {
     let mut hits = Vec::new();
     for (number, line) in text.lines().enumerate() {
@@ -66,9 +62,5 @@ fn test_no_crate_code_holds_a_todo_or_unimplemented() {
             hits.push(format!("{file}:{number}"));
         }
     }
-    assert!(
-        hits.is_empty(),
-        "todo!/unimplemented! in code that ships; make it an error the caller can report:\n{}",
-        hits.join("\n")
-    );
+    assert!(hits.is_empty(), "todo!/unimplemented! in code that ships; make it an error the caller can report:\n{}", hits.join("\n"));
 }
