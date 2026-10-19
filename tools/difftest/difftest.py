@@ -321,6 +321,35 @@ def compare(source: str, llrm_out: str, passes: str) -> dict:
     return out
 
 
+def export(todo: list[tuple[dict, Path | None]], name: str, replay: Path, dest: Path) -> int:
+    """For every function whose canonical text differs between llrm's pass and opt's counterpart: `dest/<name>/<config>__<body>/{input,llrm,opt}.ll` and `diff.txt`
+    (llrm's answer, opt's answer at llrm's target, the unified diff of their canonical forms). Owners who cannot run the oracle diagnose from these. Returns the count."""
+    written = 0
+    for row, _ in todo:
+        source = Path(row["file"])
+        try:
+            ours = isolated(replay, row, source)
+        except RuntimeError:
+            continue
+        given = normalise(source.read_text())
+        run = opt(counterpart(name), given)
+        if run.returncode:
+            continue
+        mine, llvm, before = functions(normalise(ours)), functions(run.stdout), functions(given)
+        for fn in sorted(before.keys() | mine.keys() | llvm.keys()):
+            a, b = canonical(mine.get(fn, [])), canonical(llvm.get(fn, []))
+            if a == b:
+                continue
+            out = dest / name / f"{row['config']}__{row['fn']}__{fn}".replace("/", "_")
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "input.ll").write_text("\n".join(before.get(fn, [])) + "\n")
+            (out / "llrm.ll").write_text("\n".join(a) + "\n")
+            (out / "opt.ll").write_text("\n".join(b) + "\n")
+            (out / "diff.txt").write_text("\n".join(difflib.unified_diff(a, b, "llrm", "opt", n=3, lineterm="")) + "\n")
+            written += 1
+    return written
+
+
 def manifest(root: Path, configs: list[str] | None) -> list[dict]:
     rows = []
     for config in sorted(p.name for p in root.iterdir() if (p / "MANIFEST.tsv").is_file()):
@@ -528,6 +557,7 @@ def main() -> int:
     inputs.add_argument("--json", type=Path)
     inputs.add_argument("--allow-env", nargs="*", default=[], metavar="NAME", help="the LLRM_CHECK_*/LLRM_EXP_* switch under test; any other in the environment is refused")
     inputs.add_argument("--llrm-pass", type=Path, required=True, help="llrm-pass: llrm's answer is the pass run alone on each input")
+    inputs.add_argument("--export", type=Path, metavar="DIR", help="write input, llrm and opt text and the diff of every differing function under DIR/<slot>/")
     licm = sub.add_parser("licm", help="the LICM remarks of opt on FILE, per function")
     licm.add_argument("input", type=Path)
     pair = sub.add_parser("pair")
@@ -553,6 +583,8 @@ def main() -> int:
     todo = pairs(relabelled(manifest(root, args.config), args.pass_name, args.inputs_of), args.pass_name, root) if args.command == "run" else [x for d in args.directory for x in (input_pairs if args.command == "inputs" else dump_pairs)(d, args.pass_name)]
     if args.limit:
         todo = todo[: args.limit]
+    if getattr(args, "export", None):
+        print(f"exported {export(todo, args.pass_name, args.llrm_pass, args.export)} differing function(s) to {args.export / args.pass_name}")
     report = analyse(todo, root, args.pass_name, replay=args.llrm_pass)
     version = subprocess.run([str(LLVM_BIN / "opt"), "--version"], capture_output=True, text=True).stdout.split("\n")[1].strip()
     print(f"opt: {LLVM_BIN / 'opt'} ({version})")

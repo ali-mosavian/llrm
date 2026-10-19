@@ -287,3 +287,16 @@ def test_the_m16_runs_read_a_datalayout_with_16_bit_pointers(monkeypatch):
     assert "p:16:16" in layout and "-mtriple=i386-unknown-linux-gnu" in args
     monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m32")
     assert "p:32:32" in next(a for a in difftest.target_args() if a.startswith("--data-layout="))
+
+
+def test_export_writes_input_both_answers_and_the_diff_of_a_differing_function(tmp_path, monkeypatch):
+    """Owners with a 'unit tests only' rule cannot run the oracle: the differing bodies are written for them."""
+    src = tmp_path / "in.ll"
+    src.write_text("define i32 @f() {\n  ret i32 1\n}\n")
+    row = {"config": "c", "fn": "01", "pass": "sroa", "run": 1, "file": str(src)}
+    monkeypatch.setattr(difftest, "isolated", lambda replay, row, source: "define i32 @f() {\n  ret i32 2\n}\n")
+    monkeypatch.setattr(difftest, "opt", lambda passes, text: type("R", (), {"returncode": 0, "stdout": "define i32 @f() {\n  ret i32 3\n}\n", "stderr": ""})())
+    assert difftest.export([(row, None)], "sroa", Path("x"), tmp_path / "out") == 1
+    folder = next((tmp_path / "out" / "sroa").iterdir())
+    assert {p.name for p in folder.iterdir()} == {"input.ll", "llrm.ll", "opt.ll", "diff.txt"}
+    assert "ret i32 2" in (folder / "diff.txt").read_text() and "ret i32 3" in (folder / "diff.txt").read_text()
