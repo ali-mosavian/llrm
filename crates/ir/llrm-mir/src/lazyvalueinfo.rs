@@ -3160,7 +3160,7 @@ impl LazyValueInfoImpl {
         }
 
         // Print LVI in blocks where `I` is used.
-        for u in result_id.map(|result| function.users(result).to_vec()).unwrap_or_default().iter() {
+        for u in result_id.into_iter().flat_map(|result| function.users(result).iter()) {
             let use_i = function.instruction(u.user);
             let use_bb = function.parent(u.user).expect("a placed user");
             if use_i.opcode != Opcode::Phi || dt.dominates(parent_bb, use_bb) {
