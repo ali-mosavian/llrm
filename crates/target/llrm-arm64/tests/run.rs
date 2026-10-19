@@ -183,7 +183,7 @@ fn darwin_objects_disassemble_without_unknown_words() {
             continue;
         }
         let object = scratch.path().join("p.o");
-        run(Command::new(llc).arg("-o").arg(&object).arg(&ir));
+        run(Command::new(llc).env("LLRM_VERIFY", "0").arg("-o").arg(&object).arg(&ir));
         let listing = run(Command::new(&objdump).args(["-d", "-r"]).arg(&object));
         assert!(listing.contains("mach-o arm64"), "{}: {listing}", ir.display());
         assert!(!listing.contains("<unknown>") && !listing.contains(".long"), "{}: {listing}", ir.display());

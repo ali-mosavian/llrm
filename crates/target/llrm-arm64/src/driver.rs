@@ -29,6 +29,40 @@ pub fn without_triple(text: &str) -> (Option<String>, String) {
     (triple, kept)
 }
 
+/// `text` with each `va_arg` instruction written out, as the backend lowers it
+/// for Apple's arm64: the list is a pointer to the next 8-byte slot of unnamed
+/// arguments.
+///
+/// DEVIATE 2: MIR's subset has no `va_arg` instruction, which clang emits for
+/// this ABI (AAPCS64 gets its list walked in the IR clang writes). Until MIR
+/// has it the driver expands the instruction in the text: a load of the
+/// pointer, the value read from it, the pointer advanced by one slot. Exit: MIR
+/// reads `va_arg` and the selector lowers it
+/// (`AArch64TargetLowering::LowerVAARG`).
+pub fn without_va_arg(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (number, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        let Some((result, rest)) = trimmed.split_once(" = va_arg ptr ") else {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        };
+        let Some((list, ty)) = rest.split_once(", ") else {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        };
+        let ty = ty.split(',').next().unwrap_or(ty).trim();
+        let slot = format!("%va.{number}");
+        out.push_str(&format!("  {slot}.cur = load ptr, ptr {list}, align 8\n"));
+        out.push_str(&format!("  {slot}.next = getelementptr inbounds i8, ptr {slot}.cur, i64 8\n"));
+        out.push_str(&format!("  store ptr {slot}.next, ptr {list}, align 8\n"));
+        out.push_str(&format!("  {result} = load {ty}, ptr {slot}.cur, align 8\n"));
+    }
+    out
+}
+
 /// The platform whose triple `triple` is.
 pub fn platform_of(triple: &str) -> Option<Platform> {
     if triple.starts_with("arm64-apple-") || triple.starts_with("aarch64-apple-") {
@@ -46,6 +80,7 @@ pub fn program(
     platform: Platform,
 ) -> Result<Program, String> {
     let (_, text) = without_triple(text);
+    let text = if platform == Platform::Darwin { without_va_arg(&text) } else { text };
     let module = llrm_mir::parse::module(&text).map_err(|error| error.to_string())?;
     match module.datalayout.as_deref() {
         Some(stated) if stated == platform.datalayout() => {}
@@ -156,5 +191,23 @@ pub fn object_file(
     match platform {
         Platform::Darwin => llrm_macho::write(&object).map_err(|error| error.to_string()),
         Platform::Linux => llrm_elf_arm64::write(&object).map_err(|error| error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Clang writes Apple's variadic reads as `va_arg`, which MIR does not read
+    /// ("`va_arg` is not an instruction of MIR's subset"): each becomes the
+    /// load of the pointer, the value, and the pointer advanced by a slot.
+    #[test]
+    fn va_arg_is_written_out_as_loads_and_a_slot_step() {
+        let text = "  %12 = va_arg ptr %3, i32\n  ret i32 %12\n";
+        let out = without_va_arg(text);
+        assert!(!out.contains("va_arg"), "{out}");
+        assert!(out.contains("%12 = load i32, ptr %va.0.cur"), "{out}");
+        assert!(out.contains("getelementptr inbounds i8, ptr %va.0.cur, i64 8"), "{out}");
+        assert!(out.ends_with("  ret i32 %12\n"), "{out}");
     }
 }
