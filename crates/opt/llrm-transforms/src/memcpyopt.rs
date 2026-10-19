@@ -85,6 +85,10 @@ impl FunctionPass for MemCpyOpt {
         "memcpyopt"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("memcpyopt")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,

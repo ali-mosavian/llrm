@@ -3604,6 +3604,41 @@ no:
     }
 }
 
+/// The `select` form of the same `and` and `or` (`select %x, true, %y`,
+/// `select %x, %y, false`) is split too. The middle end makes it where the
+/// second compare may be poison, as every C parameter's is: rectwo's
+/// `n == 0 || m == 0` kept `sete; test; jne; test; jne` where clang has two
+/// compare-and-branch pairs (+314 bytes at m16).
+#[test]
+fn test_a_branch_on_the_select_form_of_two_compares_branches_on_each() {
+    for join in ["select i1 %x, i1 true, i1 %y", "select i1 %x, i1 %y, i1 false"] {
+        let text = format!(
+            "declare void @g() addrspace(1)
+define void @f(i16 %a, i16 %b) addrspace(1) {{
+entry:
+  %x = icmp eq i16 %a, 0
+  %y = icmp slt i16 %b, 5
+  %c = {join}
+  br i1 %c, label %yes, label %no
+yes:
+  call addrspace(1) void @g()
+  ret void
+no:
+  ret void
+}}
+"
+        );
+        let got = listing_on("386", &text, "f");
+        assert!(
+            !got.iter().any(|line| line.starts_with("set") || line.starts_with("and") || line.starts_with("or ")),
+            "{join}: {got:?}"
+        );
+        let branches: Vec<&String> =
+            got.iter().filter(|line| line.starts_with('j') && !line.starts_with("jmp")).collect();
+        assert_eq!(branches.len(), 2, "{join}: {got:?}");
+    }
+}
+
 /// A 32-bit counter proven small indexes every frame array at its own
 /// scale, `[ebp+esi*4-disp]` with one register, and EBP's upper half zeroed
 /// once before the loop: truncated, each array took a shift and a register of
@@ -5900,6 +5935,21 @@ define i16 @f() addrspace(1) {
     assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
 }
 
+/// `ptrtoint` of a far global's GEP to a word is its offset: `at < messages +
+/// sizeof messages` (runtime/qb/error.c at -O2) was refused, "an address of no
+/// global".
+#[test]
+fn test_ptrtoint_of_a_far_global_to_a_word_is_its_offset() {
+    let text = "@messages = internal addrspace(1) global [8 x i8] zeroinitializer
+define i1 @f(i16 %x) addrspace(1) {
+  %c = icmp ult i16 %x, ptrtoint (ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) @messages, i16 8) to i16)
+  ret i1 %c
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov ax, offset messages".to_owned()) && got.contains(&"add ax, 8".to_owned()), "{got:?}");
+}
+
 /// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
 /// address of no global": 13 llrm-qb tests failed to assemble a POKE.
 #[test]
@@ -5949,4 +5999,19 @@ fn test_a_branchs_odds_are_llvms_branch_probabilities() {
     let mut taken: Vec<u32> = body.odds.taken.values().copied().collect();
     taken.sort();
     assert_eq!(taken, vec![0x3000_0000, 0x5000_0000], "{:?}", body.odds.taken);
+}
+
+/// A dword constant returned in a word pair: DX is its high word as a
+/// constant. It was a shift of the register that holds the whole
+/// (`mov edx, 42; shr edx, 16` for a high word of 0).
+#[test]
+fn test_a_dword_constant_returned_in_a_word_pair_is_a_word_each() {
+    let text = "define cc1000 i32 @f() addrspace(1) {
+  ret i32 70000
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line == "mov ax, 4464"), "the premise: the low word: {got:?}");
+    assert!(got.iter().any(|line| line == "mov dx, 1"), "the high word is its own constant: {got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("shr ")), "{got:?}");
 }

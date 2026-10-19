@@ -1,8 +1,8 @@
 //! The pass: InstCombine as a function pass of the pipeline.
 //!
 //! [`combine::combine`](crate::combine::combine) over the function, with the
-//! module's globals and metadata from the pass manager. `LLRM_NO_COMBINE`
-//! turns it off.
+//! module's globals and metadata from the pass manager. It runs only where
+//! `Options::combine` is set (`LLRM_NO_COMBINE` clears it).
 //!
 //! # Used by
 //! `pipeline` (`combine@N`, in front of the old `fold@N` of each InstCombine
@@ -13,14 +13,8 @@ use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use crate::combine;
 
 pub struct Combine {
-    pub(crate) enabled: bool,
-}
-
-impl Combine {
-    /// On unless `LLRM_NO_COMBINE` is set.
-    pub fn from_env() -> Self {
-        Self { enabled: !llrm_support::env_flag!("LLRM_NO_COMBINE") }
-    }
+    /// `Options::combine`: off, the pass changes nothing.
+    pub enabled: bool,
 }
 
 impl FunctionPass for Combine {
