@@ -186,7 +186,7 @@ use llrm_mir::memory::{Callees, Effects, callee};
 use llrm_mir::module::{Function, InstId, Linkage, Module, Operand, ValueDef};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::Declared;
-use llrm_mir::splice::{carries, splice, splice_before};
+use llrm_mir::splice::{Spliced, carries, splice, spliced};
 use llrm_mir::types::Type;
 use llrm_support::hash::{IndexMap, SparseIdMap};
 
@@ -289,16 +289,10 @@ fn stated(body: &Function) -> Option<Inlining> {
 
 /// The stack, in bytes, inlining may add to one function: a copy's frame is
 /// a cell of its own wherever it sits, so copies add up, and in a recursive
-/// function they add up per level.
-///
-/// DEVIATE 1: LLVM bounds only a recursive caller's allocas
-/// (`TotalAllocaSizeRecursiveCaller`, in `inlinecost`); this holds on sites
-/// LLVM's cost decided too. Fact: no copy carries lifetime markers (the C
-/// frontend emits none, the inliner adds none), so sibling copies share no
-/// slot; without the limit QCport's `_menu_draw` frame grew 266 -> 3548 bytes
-/// and `_host_frame`'s by 742, past its stack's 2.5 KB margin. Exit:
-/// `InlineFunction`'s `InsertLifetime` translated, so `lifetimes` shares the
-/// copies' slots.
+/// function they add up per level. Not held where LLVM's cost decided the
+/// site (`Caller::limits` off): LLVM bounds only a recursive caller's allocas
+/// (`TotalAllocaSizeRecursiveCaller`, in `inlinecost`), and each copy's
+/// lifetime markers let the backend share sibling copies' slots.
 const FRAME_LIMIT: u64 = 256;
 
 /// Where the register allocator's cost leaves linear. gcc bounds a caller's
@@ -360,8 +354,8 @@ pub struct Caller<'a> {
     /// that is not known: the growth its inlines may come to is measured
     /// against it (`LARGE_FUNCTION`).
     pub base: i64,
-    /// gcc's `caller_growth_limits` hold. Off where LLVM's `InlineCost`
-    /// decided the site: LLVM bounds no caller's growth.
+    /// gcc's `caller_growth_limits` and `FRAME_LIMIT` hold. Off where LLVM's
+    /// `InlineCost` decided the site: LLVM bounds neither.
     pub limits: bool,
 }
 
@@ -949,7 +943,9 @@ pub fn expanded(
         };
         if fits(context, function, caller, own, call, candidate) {
             copy_byval_arguments(context, function, caller.layout, call, &candidate.body, declared, None)?;
-            splice(context, function, call, &candidate.body);
+            let made = spliced(context, function, call, &candidate.body, None);
+            let lifetimes = unmarked_allocas(context, caller.layout, &candidate.body, &made, declared);
+            insert_lifetimes(context, function, caller.layout, &lifetimes, declared);
             return Ok(true);
         }
     }
@@ -1112,6 +1108,112 @@ struct Placed {
     base: Option<InstId>,
     stack: std::collections::BTreeMap<usize, InstId>,
     copies: std::collections::BTreeMap<usize, InstId>,
+    /// The copies' lifetimes, marked once every copy is made.
+    lifetimes: Vec<Lifetimes>,
+}
+
+/// The static allocas of a copy no marker bounds, and where the copy begins
+/// and returns.
+struct Lifetimes {
+    allocas: Vec<InstId>,
+    entry: llrm_mir::module::BlockId,
+    returns: Vec<InstId>,
+}
+
+/// `lifetime.start` and `lifetime.end`'s name and type for an alloca in
+/// `space`, declared where the module has none.
+fn lifetime_markers(
+    context: &mut Context,
+    declared: &mut Declared,
+    space: u32,
+) -> ([GlobalId; 2], llrm_mir::types::TypeId) {
+    let types = &mut context.types;
+    let (void, pointer, size) = (types.void(), types.ptr(space), types.int(64));
+    let ty = types.intern(Type::Function { returns: void, parameters: vec![size, pointer], variadic: false });
+    let start = declared.declare(&format!("llvm.lifetime.start.p{space}"), ty);
+    let end = declared.declare(&format!("llvm.lifetime.end.p{space}"), ty);
+    ([start, end], ty)
+}
+
+/// The static allocas of `body`'s copy that `InsertLifetime` marks: those of
+/// its entry no lifetime marker of `body`'s bounds already
+/// (`hasLifetimeMarkers`), of a size other than 0.
+fn unmarked_allocas(
+    context: &mut Context,
+    layout: &DataLayout,
+    body: &Function,
+    made: &Spliced,
+    declared: &mut Declared,
+) -> Lifetimes {
+    let entry = body.entry();
+    let originals = body.walk().filter(|&(_, inst)| body.instruction(inst).opcode != Opcode::Ret);
+    let mut allocas = Vec::new();
+    for ((block, inst), &copy) in originals.zip(&made.copies) {
+        let Opcode::Alloca { allocated, address_space, .. } = body.instruction(inst).opcode else { continue };
+        if Some(block) != entry || layout.alloc_size(&context.types, allocated) == 0 {
+            continue;
+        }
+        let markers = lifetime_markers(context, declared, address_space).0;
+        let pointer = body.instruction(inst).result.map(Operand::Value);
+        let marked = body
+            .walk()
+            .any(
+                |(_, one)| callee(context, body, one).is_some_and(|id| markers.contains(&id))
+                    && body.instruction(one).operands.get(1).copied() == pointer,
+            );
+        if !marked {
+            allocas.push(copy);
+        }
+    }
+    Lifetimes { allocas, entry: made.entry, returns: made.returns.clone() }
+}
+
+/// `InlineFunction`'s `InsertLifetime`: each alloca of `lifetimes` begins at
+/// the copy's first instruction and ends before each of its returns, so that
+/// copies whose code does not overlap may share a slot (`lifetimes` in the
+/// backend).
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/InlineFunction.cpp>
+fn insert_lifetimes(
+    context: &mut Context,
+    function: &mut Function,
+    layout: &DataLayout,
+    lifetimes: &Lifetimes,
+    declared: &mut Declared,
+) {
+    let void = context.types.void();
+    let i64_ty = context.types.int(64);
+    for &alloca in &lifetimes.allocas {
+        let Opcode::Alloca { allocated, address_space, .. } = function.instruction(alloca).opcode else { continue };
+        let ([start, end], ty) = lifetime_markers(context, declared, address_space);
+        let size = Operand::Constant(context.int(i64_ty, layout.alloc_size(&context.types, allocated) as i128));
+        let pointer = Operand::Value(function.instruction(alloca).result.expect("an alloca's value"));
+        let marker = |context: &Context, function: &mut Function, id: GlobalId| {
+            let target = context
+                .constant(llrm_mir::context::Constant { ty: context.types.ptr(0), kind: ConstantKind::Global(id) });
+            let info = CallInfo {
+                function_type: ty,
+                calling_convention: 0,
+                return_attrs: Vec::new(),
+                argument_attrs: vec![Vec::new(); 2],
+                attrs: Vec::new(),
+                tail: Default::default(),
+            };
+            function.create_instruction(
+                Opcode::Call(Box::new(info)),
+                void,
+                vec![size, pointer, Operand::Constant(target)],
+                Flags::default(),
+                None,
+            )
+        };
+        let first = function.block(lifetimes.entry).first().expect("a copied entry");
+        let begin = marker(context, function, start);
+        function.insert(begin, Position::Before(first)).expect("a placed block");
+        for &back in &lifetimes.returns {
+            let finish = marker(context, function, end);
+            function.insert(finish, Position::Before(back)).expect("a placed block");
+        }
+    }
 }
 
 /// `planned` at `call`, then what is inlined into the copy.
@@ -1131,7 +1233,9 @@ fn executed(
         placed.copies.insert(seq, copy);
     }
     let anchor = placed.stack.range(..seq).next_back().map(|(_, &one)| one).or(placed.base);
-    let copies = splice_before(context, function, call, &planned.candidate.body, anchor);
+    let made = spliced(context, function, call, &planned.candidate.body, anchor);
+    placed.lifetimes.push(unmarked_allocas(context, layout, &planned.candidate.body, &made, declared));
+    let copies = made.copies;
     // The call was the entry's first instruction and is gone: the copies that
     // come out of this one are anchored on what the entry starts with now.
     if placed.base == Some(call) {
@@ -1197,6 +1301,9 @@ pub fn expanded_all(
     }
     assert_eq!(end.0, semantic_count(function), "the size kept is not the body's");
     assert_eq!(end.1, frame(context, caller.layout, function), "the stack kept is not the body's");
+    for lifetimes in &placed.lifetimes {
+        insert_lifetimes(context, function, caller.layout, lifetimes, declared);
+    }
     Ok(sites.len())
 }
 
@@ -1241,7 +1348,7 @@ fn fits_with(
             context.types.get(callee.ty),
             Type::Function { variadic: true, .. }
         )
-        && (candidate.frame == 0 || (!caller.recursive && stack + candidate.frame <= FRAME_LIMIT))
+        && (candidate.frame == 0 || (!caller.recursive && (!caller.limits || stack + candidate.frame <= FRAME_LIMIT)))
         && grows_within_limits(own, caller, callee, candidate.moved)
         && callee
             .parameters()
