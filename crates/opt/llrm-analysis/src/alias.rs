@@ -3985,20 +3985,24 @@ pub fn annotated_with(
                 let stride = modulus * reference.scale;
                 let zero = BigInt::from(0_u8);
                 if low < high && source.object.extent.is_none_or(|extent| zero <= low && end <= BigInt::from(extent)) {
-                    let model = |number: &BigInt| {
-                        i64::try_from(number).map_err(|_| format!("slice bound {number} exceeds the i64 slice model"))
-                    };
-                    got = Some(Provenance {
-                        slices: crate::memory::Sorted::from([Slice::new(
-                            source.object.clone(),
-                            model(&low)?,
-                            model(&high)?,
-                            model(&stride)?,
-                            width,
-                        )
-                        .expect("a nonempty positive-stride slice is valid")]),
-                        restrict: current.restrict.clone(),
-                    });
+                    // A bound past the i64 slice model (an index spanning 2^63
+                    // elements of a run-time sized object)
+                    // is left as the object's whole extent.
+                    if let (Ok(low), Ok(high), Ok(stride)) =
+                        (i64::try_from(&low), i64::try_from(&high), i64::try_from(&stride))
+                    {
+                        got = Some(Provenance {
+                            slices: crate::memory::Sorted::from([Slice::new(
+                                source.object.clone(),
+                                low,
+                                high,
+                                stride,
+                                width,
+                            )
+                            .expect("a nonempty positive-stride slice is valid")]),
+                            restrict: current.restrict.clone(),
+                        });
+                    }
                 }
             }
         }
