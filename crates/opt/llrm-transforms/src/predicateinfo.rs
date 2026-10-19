@@ -39,7 +39,6 @@
 //! - Used by: [`crate::sccp`]
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
 
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, Context};
 use llrm_mir::dense::IdMap;
@@ -50,6 +49,7 @@ use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Ope
 use llrm_mir::opcode::{CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::valuetracking::pattern::{logical_and, logical_or};
 use llrm_mir::valuetracking::{AssumptionCache, Query};
+use llrm_support::hash::HashSet;
 
 use crate::local::{BasicBlockEdge, dominates_edge_use, dominates_instruction_use};
 
@@ -393,7 +393,7 @@ impl Builder<'_> {
         assume: InstId,
     ) {
         let mut worklist = vec![function.instruction(assume).operands[0]];
-        let mut visited: HashSet<Operand> = HashSet::new();
+        let mut visited: HashSet<Operand> = HashSet::default();
         while let Some(cond) = worklist.pop() {
             if !visited.insert(cond) {
                 continue;
@@ -438,7 +438,7 @@ impl Builder<'_> {
                 continue;
             }
             let mut worklist = vec![operands[0]];
-            let mut visited: HashSet<Operand> = HashSet::new();
+            let mut visited: HashSet<Operand> = HashSet::default();
             while let Some(cond) = worklist.pop() {
                 if !visited.insert(cond) {
                     continue;
