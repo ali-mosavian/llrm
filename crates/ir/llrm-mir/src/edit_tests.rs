@@ -434,19 +434,53 @@ fn erasing_users_of_one_value_reads_none_of_its_other_uses() {
         let mut module = module(&adds(400));
         let f = function(&mut module);
         let gone: Vec<InstId> = (0..400).step_by(2).map(|i| named(f, &format!("x{i}")).0).collect();
-        crate::edit::USES_SCANNED.with(|scanned| scanned.set(0));
+        crate::uselist::WALKED.with(|walked| walked.set(0));
         if batch {
             f.erase_all(&gone).expect("unused");
         } else {
             gone.iter().rev().for_each(|&one| f.erase(one).expect("unused"));
         }
+        let walked = crate::uselist::WALKED.with(|walked| walked.get());
         assert!(f.check_uses().is_empty());
-        (print::module(&module), crate::edit::USES_SCANNED.with(|scanned| scanned.get()))
+        (print::module(&module), walked)
     };
     let (one_by_one, many_scans) = erase(false);
     let (together, few_scans) = erase(true);
     assert_eq!(together, one_by_one);
     assert_eq!((many_scans, few_scans), (0, 0), "list entries read erasing 200 of 400 users of one value");
+}
+
+fn branches(n: usize) -> String {
+    let body: String = (0..n).map(|i| format!("b{i}:\n  br label %end\n")).collect();
+    format!("define void @f() {{\nentry:\n  br label %end\n{body}end:\n  ret void\n}}\n")
+}
+
+/// The terminators naming one block were looked for in its list of uses, as
+/// the values' were: 200 branches to `%end` that go were 200 scans of up to
+/// 400 uses. A block's uses unlink through their own links too.
+#[test]
+fn erasing_branches_to_one_block_reads_none_of_its_other_uses() {
+    let mut module = module(&branches(400));
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    let gone: Vec<InstId> = (0..400).step_by(2).map(|i| f.terminator(layout[1 + i]).expect("a branch")).collect();
+    crate::uselist::WALKED.with(|walked| walked.set(0));
+    gone.iter().rev().for_each(|&one| f.erase(one).expect("unused"));
+    let walked = crate::uselist::WALKED.with(|walked| walked.get());
+    assert!(f.check_uses().is_empty());
+    // `sole_successor_start` looks at two entries of the list, never the whole.
+    assert!(walked <= 2 * 200, "{walked} list entries read erasing 200 of 400 branches to one block");
+}
+
+/// A block is a `Value` in LLVM and its predecessors are its use list, the
+/// newest use first: `predecessors` ran oldest first.
+#[test]
+fn predecessors_run_newest_first() {
+    let mut module = module(&branches(3));
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    let end = *layout.last().expect("the end block");
+    assert_eq!(f.predecessors(end).iter().copied().collect::<Vec<_>>(), [layout[3], layout[2], layout[1], layout[0]]);
 }
 
 /// LLVM's `Value::addUse` puts the new use at the head: `users()` runs newest

@@ -288,7 +288,7 @@ fn test_a_recurrence_written_literally_has_its_own_phi() {
     assert_eq!(
         lines(&text),
         [
-            "%0 = phi i32 [ %a, %entry ], [ %1, %h ]",
+            "%0 = phi i32 [ %1, %h ], [ %a, %entry ]",
             "%i = phi i32 [ 0, %entry ], [ %i2, %h ]",
             "%i2 = add i32 %i, 1",
             "%c = icmp slt i32 %i2, %n",
@@ -311,7 +311,7 @@ fn test_a_post_increment_recurrence_starts_one_step_back() {
         lines(&text),
         [
             "%0 = sub i32 %a, %b",
-            "%1 = phi i32 [ %0, %entry ], [ %3, %h ]",
+            "%1 = phi i32 [ %3, %h ], [ %0, %entry ]",
             "%i = phi i32 [ 0, %entry ], [ %i2, %h ]",
             "%2 = add i32 %1, %b",
             "%i2 = add i32 %i, 1",
