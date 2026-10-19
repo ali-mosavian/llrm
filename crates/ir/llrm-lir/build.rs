@@ -8,7 +8,7 @@ fn main() {
         if name.starts_with("DontUse") {
             continue;
         }
-        code.push_str(&format!("    pub const {name}: RegId = RegId(Register::{name});\n"));
+        code.push_str(&format!("    pub const {name}: RegId = RegId(Register::{name} as u8);\n"));
     }
     code.push_str("}\n");
     std::fs::write(std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("reg_consts.rs"), code).unwrap();

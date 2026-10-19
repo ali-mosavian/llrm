@@ -7,16 +7,20 @@
 
 use iced_x86::Register;
 
-/// A register's id: iced's number for it today, behind a type that is ours.
+/// A register's id: a number in the table of the target being compiled
+/// (`Info`). The x86 targets number theirs as iced does, so the encoder and
+/// decoder convert; any other target numbers its own file. Only the target's
+/// `Info` says what an id means: `Debug` and the x86 helpers below read an id
+/// as iced's.
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct RegId(Register);
+pub struct RegId(u8);
 
 impl std::fmt::Debug for RegId {
     fn fmt(
         &self,
         formatter: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        self.0.fmt(formatter)
+        self.iced().fmt(formatter)
     }
 }
 
@@ -26,24 +30,32 @@ impl RegId {
     /// The register iced names, for the encoder and the decoder.
     #[inline]
     pub const fn new(register: Register) -> Self {
-        RegId(register)
+        RegId(register as u8)
     }
 
+    /// The id numbered `number` in a target's own register file.
     #[inline]
-    pub const fn iced(self) -> Register {
-        self.0
+    pub const fn from_raw(number: u8) -> Self {
+        RegId(number)
+    }
+
+    /// The register iced numbers so; `None` for a number iced has no register
+    /// for, which only a non-x86 target uses.
+    #[inline]
+    pub fn iced(self) -> Register {
+        Register::try_from(usize::from(self.0)).unwrap_or(Register::None)
     }
 
     /// Every register iced names.
     #[inline]
     pub fn values() -> impl Iterator<Item = RegId> + DoubleEndedIterator + ExactSizeIterator {
-        Register::values().map(RegId)
+        Register::values().map(RegId::new)
     }
 
     /// The register of iced's number `index`.
     #[inline]
     pub fn from_index(index: usize) -> RegId {
-        RegId(Register::values().nth(index).expect("an iced register number"))
+        RegId(u8::try_from(index).expect("a register id below 256"))
     }
 
     /// iced's number of the register: the index into the tables.
@@ -54,52 +66,52 @@ impl RegId {
 
     #[inline]
     pub fn full_register32(self) -> RegId {
-        RegId(self.0.full_register32())
+        RegId::new(self.iced().full_register32())
     }
 
     #[inline]
     pub fn full_register(self) -> RegId {
-        RegId(self.0.full_register())
+        RegId::new(self.iced().full_register())
     }
 
     #[inline]
     pub fn size(self) -> usize {
-        self.0.size()
+        self.iced().size()
     }
 
     #[inline]
     pub fn number(self) -> usize {
-        self.0.number()
+        self.iced().number()
     }
 
     #[inline]
     pub fn is_gpr(self) -> bool {
-        self.0.is_gpr()
+        self.iced().is_gpr()
     }
 
     #[inline]
     pub fn is_gpr8(self) -> bool {
-        self.0.is_gpr8()
+        self.iced().is_gpr8()
     }
 
     #[inline]
     pub fn is_gpr16(self) -> bool {
-        self.0.is_gpr16()
+        self.iced().is_gpr16()
     }
 
     #[inline]
     pub fn is_gpr32(self) -> bool {
-        self.0.is_gpr32()
+        self.iced().is_gpr32()
     }
 
     #[inline]
     pub fn is_segment_register(self) -> bool {
-        self.0.is_segment_register()
+        self.iced().is_segment_register()
     }
 
     #[inline]
     pub fn is_st(self) -> bool {
-        self.0.is_st()
+        self.iced().is_st()
     }
 }
 
@@ -113,7 +125,7 @@ impl From<Register> for RegId {
 impl From<RegId> for Register {
     #[inline]
     fn from(register: RegId) -> Self {
-        register.0
+        register.iced()
     }
 }
 
@@ -704,12 +716,12 @@ impl std::fmt::Debug for RegSet {
 /// A register as its number, which is how every dump names it.
 impl llrm_support::pyrepr::Repr for RegId {
     fn repr(&self) -> String {
-        self.0.repr()
+        self.iced().repr()
     }
 }
 
 impl llrm_support::pyset::PyHash for RegId {
     fn py_hash(&self) -> i64 {
-        self.0.py_hash()
+        self.iced().py_hash()
     }
 }
