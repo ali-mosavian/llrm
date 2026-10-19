@@ -323,3 +323,64 @@ def test_a_refusal_after_a_rebuild_names_the_newest_source_the_oldest_binary_and
     why = ps.ensure_bins(build=lambda: Failed())
     assert "oldest binary llrm-qb" in why and "newest source crates/a/src/x.rs" in why and "70 s later" in why, why
     assert "the rebuild exited 101" in why and "could not compile `llrm-nib`" in why, why
+
+
+GENERATOR = """import sys
+from pathlib import Path
+root = Path(__file__).resolve().parents[2]
+pages = sorted(p.stem for p in (root / "docs/optimizations/passes").glob("page_*.md"))
+want = "".join(f"- {name}\\n" for name in ["a", *pages])
+index = root / "docs/optimizations/passes/readme.md"
+if "--sync" in sys.argv:
+    index.write_text(want)
+elif "--check" in sys.argv and index.read_text() != want:
+    print("stale index"); sys.exit(1)
+"""
+
+
+def generated_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "r"
+    (repo / "tools/docsbuild").mkdir(parents=True)
+    (repo / "docs/optimizations/passes").mkdir(parents=True)
+    sh(repo, "init", "-q", "-b", "main")
+    (repo / "tools/docsbuild/build.py").write_text(GENERATOR)
+    (repo / "docs/optimizations/passes/readme.md").write_text("- a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    return repo
+
+
+def test_two_prs_that_each_add_a_page_merge_by_regenerating_the_index(tmp_path):
+    """Both PRs rewrote the generated index at the same line: git conflicted, a human merged generated text, and #2790, the LSR stack and indvars waited on it."""
+    repo = generated_repo(tmp_path)
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "docs/optimizations/passes/page_c.md").write_text("# c\n")
+    (repo / "docs/optimizations/passes/readme.md").write_text("- a\n- page_c\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "c")
+    head = sh(repo, "rev-parse", "HEAD")
+    sh(repo, "checkout", "-q", "main")
+    (repo / "docs/optimizations/passes/page_b.md").write_text("# b\n")
+    (repo / "docs/optimizations/passes/readme.md").write_text("- a\n- page_b\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "b")
+    sha, why = ps.merged_result(head, base="main", cwd=repo)
+    assert why == "" and sha, why
+    assert (repo / "docs/optimizations/passes/readme.md").read_text() == "- a\n- page_b\n- page_c\n"
+    assert sh(repo, "status", "--porcelain") == ""
+
+
+def test_a_conflict_in_a_file_nothing_generates_is_still_refused(tmp_path):
+    repo = generated_repo(tmp_path)
+    (repo / "x.rs").write_text("fn x() {}\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "x")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "x.rs").write_text("fn x() { 1 }\n")
+    sh(repo, "commit", "-qam", "pr x")
+    head = sh(repo, "rev-parse", "HEAD")
+    sh(repo, "checkout", "-q", "main")
+    (repo / "x.rs").write_text("fn x() { 2 }\n")
+    sh(repo, "commit", "-qam", "main x")
+    sha, why = ps.merged_result(head, base="main", cwd=repo)
+    assert sha is None and "x.rs" in why
