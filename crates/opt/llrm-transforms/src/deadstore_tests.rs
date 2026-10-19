@@ -129,3 +129,15 @@ fn the_first_target_of_a_branch_is_walked_first() {
     );
     assert!(after.contains("store i16 1, ptr @g"), "{after}");
 }
+
+/// A local whose address is returned, or stored into another returned local,
+/// is read by the caller: its stores stay. All of `%view`'s and `%slot`'s went
+/// (QB view descriptors), six BASIC programs read zeros.
+#[test]
+fn a_returned_local_keeps_its_stores() {
+    let mut module = parsed(&format!(
+        "{DOS}define ptr @f(i8 %x) addrspace(1) {{\nb0:\n  %slot = alloca i8\n  %view = alloca [4 x i8]\n  store i8 %x, ptr %slot\n  store i16 1, ptr %view\n  %p = getelementptr i8, ptr %view, i16 2\n  store ptr %slot, ptr %p\n  ret ptr %view\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(after.contains("store i8 %x") && after.contains("store i16 1") && after.contains("store ptr %slot"), "{after}");
+}
