@@ -212,3 +212,22 @@ def test_a_second_landing_waits_for_the_first_one_to_release_the_lock(tmp_path):
             pass
     with ps.land_lock(lock, wait=False):
         pass
+
+
+def test_a_failing_pr_in_four_is_isolated_and_the_other_three_land():
+    """One smoke on the combined tree; when it fails the set is halved: 1+2 pass and land, 3 fails alone and is refused, 4 is tested on top and lands."""
+    landed, refused, tested = [], [], []
+
+    def passes(group):
+        tested.append(list(group))
+        return "3" not in group
+
+    ps.batch(["1", "2", "3", "4"], passes, landed.append, refused.append)
+    assert landed == ["1", "2", "4"] and refused == ["3"], (landed, refused)
+    assert tested[0] == ["1", "2", "3", "4"] and ["1", "2"] in tested and ["3"] in tested and ["4"] in tested
+
+
+def test_four_passing_prs_cost_one_test_and_land_in_order():
+    landed, tested = [], []
+    ps.batch(["1", "2", "3", "4"], lambda group: (tested.append(group), True)[1], landed.append, lambda pr: None)
+    assert landed == ["1", "2", "3", "4"] and len(tested) == 1
