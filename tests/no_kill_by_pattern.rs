@@ -10,7 +10,7 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// Files that still kill by pattern. Only shrinks: a file that no longer does
 /// must come off this list.
-const BASELINE: &[&str] = &["tools/gate/test_gate.py"];
+const BASELINE: &[&str] = &[];
 
 fn flagged(files: &[String]) -> Vec<String> {
     let out = Command::new("bash")
