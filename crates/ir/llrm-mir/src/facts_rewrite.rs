@@ -264,6 +264,10 @@ mod tests {
             // reads the flags the operation has and adds the ones the
             // no-wrap proofs give (`willNotOverflow`); it never drops one.
             "how_many.rs",
+            // IndVarSimplify.cpp's `linearFunctionTestReplace` clears the
+            // increment's `nuw`/`nsw` that SCEV did not prove for its
+            // post-inc add recurrence; it never adds one.
+            "lftr.rs",
             // PHITransAddr.cpp's `translateSubExpr` reads an add's
             // `nsw`/`nuw` for `simplifyAddInst`, and `insertTranslatedSubExpr`
             // copies a GEP's no-wrap flags to the GEP it makes.
