@@ -117,6 +117,8 @@ pub mod dse;
 pub mod earlycse;
 pub mod edges;
 pub mod exitfold;
+pub mod exitopt;
+pub mod exitpredicate;
 pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;

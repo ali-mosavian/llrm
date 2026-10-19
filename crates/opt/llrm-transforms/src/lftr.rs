@@ -115,7 +115,7 @@ pub fn replaced(
 }
 
 /// The condition of `block`'s conditional branch.
-fn branch_of(
+pub(crate) fn branch_of(
     function: &Function,
     block: BlockId,
 ) -> Option<(InstId, Operand)> {
@@ -125,7 +125,7 @@ fn branch_of(
 }
 
 /// The instruction that defines `value`.
-fn def_of(
+pub(crate) fn def_of(
     function: &Function,
     value: Operand,
 ) -> Option<InstId> {
