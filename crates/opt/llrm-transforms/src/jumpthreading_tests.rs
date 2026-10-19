@@ -253,9 +253,10 @@ fn a_block_placed_after_the_current_one_is_visited_in_the_same_sweep() {
 }
 
 /// Threading away the only way into a loop leaves the loop, unreachable and
-/// with `%c = add %c, 1` in it, as `opt -passes=jump-threading` does (it deletes
-/// only a block with no predecessor): datetime.c -Os saw this and `decide`
-/// walked the self-reaching chain forever (#2739). Not JumpThreading's fault.
+/// with `%c = add %c, 1` in it, as `opt -passes=jump-threading` does (it
+/// deletes only a block with no predecessor): datetime.c -Os saw this and
+/// `decide` walked the self-reaching chain forever (#2739). Not JumpThreading's
+/// fault.
 #[test]
 fn a_loop_whose_only_way_in_is_threaded_away_is_left_unreachable_as_opt_leaves_it() {
     let after = run(&fixture("unreachable_cycle"));
