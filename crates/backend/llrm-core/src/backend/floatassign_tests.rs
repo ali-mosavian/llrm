@@ -75,6 +75,7 @@ fn before(
 /// refused.
 #[test]
 fn test_a_compare_crowded_before_its_branches_spills() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let (body, mut frame) = before_float_assign();
     let cpu = crate::backend::cpu::profile("486").unwrap();
 
@@ -102,6 +103,7 @@ fn test_a_compare_crowded_before_its_branches_spills() {
 /// A block is written again only when a victim reaches it.
 #[test]
 fn test_a_round_writes_only_the_blocks_a_new_spill_reaches() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let (body, mut frame) = before_float_assign();
     let cpu = crate::backend::cpu::profile("486").unwrap();
     WRITTEN.with(|one| one.set(0));
@@ -169,6 +171,7 @@ fn refuses_nothing(
 /// `floatassign` on it. A block's are worked out once.
 #[test]
 fn test_a_blocks_steps_and_liveness_are_worked_out_once() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let (body, mut frame) = before_float_assign();
     let cpu = crate::backend::cpu::profile("486").unwrap();
     SHAPED.with(|one| one.set(0));
@@ -184,6 +187,7 @@ fn test_a_blocks_steps_and_liveness_are_worked_out_once() {
 /// spill state of a root it touches changed.
 #[test]
 fn test_a_round_writes_only_the_steps_a_new_spill_reaches() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let (body, mut frame) = before_float_assign();
     let cpu = crate::backend::cpu::profile("486").unwrap();
     STEPPED.with(|one| one.set(0));
@@ -201,6 +205,7 @@ fn test_a_round_writes_only_the_steps_a_new_spill_reaches() {
 /// the victim is in.
 #[test]
 fn test_a_round_looks_for_the_crowded_block_from_where_the_last_left_off() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let (body, mut frame) = before_float_assign();
     let cpu = crate::backend::cpu::profile("486").unwrap();
     CROWDED_BLOCKS.with(|one| one.set(0));

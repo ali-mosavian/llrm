@@ -242,11 +242,25 @@ def floats_alike(line: str) -> str:
     return HEX_DOUBLE.sub(spelled, line)
 
 
+def lifetime_alike(line: str) -> str:
+    """`llvm.lifetime.start/end` without the size operand: the pin's signature. llrm's text still gives the size first (`(i64 4, ptr %p)`), which
+    opt's reader upgrades; the call and its declaration read alike on both sides."""
+    line = re.sub(r"(@llvm\.lifetime\.(?:start|end)\.p\d+)\(i64 (?:-?\d+|%[\w.$-]+), ", r"\1(", line)
+    return re.sub(r"(declare void @llvm\.lifetime\.(?:start|end)\.p\d+)\(i64, ", r"\1(", line)
+
+
+def call_attributes_alike(line: str) -> str:
+    """A call without the attributes after its arguments: llrm writes them (`) nounwind`), opt names a group (`) #4`); neither is the code."""
+    if " call " not in line and not line.lstrip().startswith(("call ", "tail call ", "musttail call ", "notail call ")):
+        return line
+    return re.sub(r"\)((?: [a-z_]+(?:\([^)]*\))?| #\d+)+)$", ")", line)
+
+
 def canonical(lines: list[str]) -> list[str]:
     """The function with its blocks in control-flow order, its local names numbered by first appearance, and what is not the code left out
     (comments, function and parameter attributes, `align`, metadata attachments, the order of a phi's incoming pairs). Two bodies that differ
     only in those read alike."""
-    lines = [floats_alike(re.sub(r"\bcc (\d+)", r"cc\1", line)) for line in trimmed(lines)]
+    lines = [call_attributes_alike(lifetime_alike(floats_alike(re.sub(r"\bcc (\d+)", r"cc\1", line)))) for line in trimmed(lines)]
     names: dict[str, str] = {}
     out = []
     head = next((n for n, line in enumerate(lines) if line.startswith("define ")), None)
