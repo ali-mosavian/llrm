@@ -59,7 +59,7 @@ At `a94491462` (read from the binary and from `parity.rs`, which agree):
 
 Since `d92949c1e` (22/6/52/8) one slot changed state: `gvn@787` Old to Translated. The Partial notes of `jumpthreading@668/@809` and `dse@820` moved their stage. Stage landings in slots the registry counts as one row (SimplifyCFG pieces under `decide@N`, `indvars@738`, LSR, jumps) do not move the count until the row's own criterion is met.
 
-Off by default: `jumpthreading@668/@809` (`LLRM_JUMPTHREADING`), `rotate@728` (`LLRM_ROTATE`). Every other Translated or Partial slot runs under the order; `LLRM_NO_LLVM_ORDER` turns the order off.
+Off by default: `rotate@728` (`LLRM_ROTATE`). `jumpthreading@668/@809` run by default; `LLRM_NO_JUMPTHREADING` (set) turns them off. Every other Translated or Partial slot runs under the order; `LLRM_NO_LLVM_ORDER` turns the order off.
 
 Callers of analyses (`callers-total`, joined / old / analyses with old callers): x_hanoi2 -O1 157 / 365 / 34, -O2 167 / 387 / 34, -O3 224 / 565 / 34; `d_faces` -O2 767 / 1701 / 37.
 
