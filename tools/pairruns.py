@@ -4,11 +4,14 @@
     tools/pairruns.py BASE_RUNS.txt NEW_RUNS.txt      prints `NEW FAIL program [config]: reason` for each failure only in NEW (wrong outputs named as such),
                                                       `FIXED program [config]` for each only in BASE; exit 1 if NEW has a failure BASE lacks
 
+    tools/pairruns.py --tree DIR SHA                  exit 2 unless the checkout in DIR is at SHA: run_groups takes tests/run and the runtime from its tree, not from the binaries
+
 A pair that measures clocks and bytes alone read a flip that miscompiles two programs (JumpThreading on by default: logical_value, compare_to_int64) as a win.
 """
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -41,7 +44,17 @@ def compare(base: str, new: str) -> tuple[list[str], list[str]]:
     return added, [name for name in before if name not in after]
 
 
+def tree_mismatch(tree: Path, sha: str) -> str:
+    """Why `tree` is not at `sha` (empty when it is). A tree at another sha ran the wrong expected outputs against the binaries: planets.nib failed on both sides of a pair and the 11 real failures were buried in it."""
+    head = subprocess.run(["git", "-C", str(tree), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    return "" if head and head.startswith(sha) or sha.startswith(head) and head else f"TREE MISMATCH: {tree} is at {head[:9] or 'no commit'}, the binaries are {sha[:9]}; check it out first"
+
+
 def main() -> int:
+    if sys.argv[1] == "--tree":
+        why = tree_mismatch(Path(sys.argv[2]), sys.argv[3])
+        print(why or "tree matches")
+        return 2 if why else 0
     added, fixed = compare(Path(sys.argv[1]).read_text(), Path(sys.argv[2]).read_text())
     print("\n".join(added) or "no new tests/run failure")
     if added and added[0].startswith("PREMISE BROKEN"):

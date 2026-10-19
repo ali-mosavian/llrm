@@ -45,3 +45,20 @@ def test_a_side_that_ran_nothing_is_a_broken_premise_not_no_new_failure():
     ran = "[c] 350 programs: 350 pass, 0 known, 0 fail\n"
     added, _ = pairruns.compare("stale binaries in /x: llrm-c older than the source\ndone\n", ran)
     assert len(added) == 1 and added[0].startswith("PREMISE BROKEN: the base run printed no group line") and "stale binaries" in added[0]
+
+
+def test_a_tree_at_another_sha_than_the_binaries_is_refused(tmp_path):
+    """planets.nib failed on both sides of a pair (want 10.0375, got 10.037499) because the tests came from another commit than the binaries; it read as a failure of the base."""
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t", *args], capture_output=True, text=True, check=True).stdout.strip()
+
+    git("init", "-q")
+    git("commit", "-q", "--allow-empty", "-m", "a")
+    first = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-m", "b")
+    second = git("rev-parse", "HEAD")
+    assert pairruns.tree_mismatch(tmp_path, second) == ""
+    assert pairruns.tree_mismatch(tmp_path, second[:9]) == ""
+    assert "TREE MISMATCH" in pairruns.tree_mismatch(tmp_path, first)
