@@ -63,7 +63,6 @@ COUNTERPART = {
     "sccp": "sccp",
     "bdce": "bdce",
     "tailrec": "tailcallelim",
-    "tailcallelim": "tailcallelim",
     "memcpyopt": "memcpyopt",
     "cvp": "correlated-propagation",
     "jumpthreading": "jump-threading",

@@ -158,7 +158,7 @@ use crate::{
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, jumpthread, lcssa,
     loopdeletion, loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit,
     loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp,
-    simpleloopunswitch, simplifycfg, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -551,7 +551,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Before a call is made a loop: two equal calls are one first, as
         // LLVM's EarlyCSE and gcc's FRE precede tail-recursion elimination.
         Box::new(gvn::EqualCalls),
-        Box::new(tailrec::TailRecursion),
+        Box::new(tailcallelim::TailCallElim),
         Box::new(loopsimplify::LoopSimplify),
         Box::new(lcssa::LoopClosedSSA),
         // Strict floating recurrences must retain their original iteration
@@ -598,11 +598,7 @@ pub fn llvm_motion(applied: &Applied) -> bool {
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
 fn translated() -> Vec<Box<dyn FunctionPass>> {
-    vec![
-        Box::new(crate::cvp::Cvp),
-        Box::new(crate::jumpthreading::JumpThreading::from_env()),
-        Box::new(crate::tailcallelim::TailCallElim),
-    ]
+    vec![Box::new(crate::cvp::Cvp), Box::new(crate::jumpthreading::JumpThreading::from_env())]
 }
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`).
@@ -785,7 +781,7 @@ pub(crate) fn llvm_order(
                 phiopt("phiopt@675"),
                 fold("fold@677"),
                 dead("dead@677"),
-                slot("tailrec@688", Box::new(tailrec::TailRecursion)),
+                slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
                 decide("decide@690"),
                 phiopt("phiopt@690"),
                 slot("algebraic@696", Box::new(algebraic::Algebraic { size, llvm: true })),

@@ -128,7 +128,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("phiopt@675", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("fold@677", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@677", Simplify, "instcombine", Old, "instcombine-port"),
-    entry("tailrec@688", Simplify, "tailcallelim", Old, "tailcallelim-port"),
+    entry("tailrec@688", Simplify, "tailcallelim", Translated, ""),
     entry("decide@690", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("phiopt@690", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("algebraic@696", Simplify, "reassociate", Old, "reassociate-port"),
@@ -541,10 +541,10 @@ impl Level {
     }
 }
 
-/// Registry slots the pin's `default<O1>` does not have (no GVN or
-/// JumpThreading at -O1: `buildO1FunctionSimplificationPipeline`), so a
-/// Translated one is not required in a -O1 list.
-pub const ABSENT_AT_O1: &[&str] = &["gvn@787", "jumpthreading@668", "jumpthreading@809"];
+/// Registry slots the pin's `default<O1>` does not have (no GVN,
+/// JumpThreading or TailCallElim at -O1: `buildO1FunctionSimplificationPipeline`),
+/// so a Translated one is not required in a -O1 list.
+pub const ABSENT_AT_O1: &[&str] = &["gvn@787", "jumpthreading@668", "jumpthreading@809", "tailrec@688"];
 
 /// Run counts LLVM does not match yet, stated and not checked:
 /// `loopsimplify`/`lcssa` run at three unconditional slots per body at every

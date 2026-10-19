@@ -54,7 +54,7 @@
 //! `trivialunswitch`, `unswitch`, `loopsplit`, `loopfuse`, `loopdistribute`
 //! (with `loopshape`), `indvars` (with `exitvalues`, `exitfold`, `exitsink`),
 //! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`, `unroll_jam`,
-//! `loopidioms`, `floatloop`, `tailrec`.
+//! `loopidioms`, `floatloop`, `tailcallelim`.
 //!
 //! Whole program: `globalopt`, `globaldce`, `availableexternally`, `inline`,
 //! `ipacp`, `argpromotion`, `deadargs`, `narrowspace`, `calleepop`; and
@@ -243,7 +243,6 @@ pub mod sroa;
 pub mod switchcg;
 pub mod switchlower;
 pub mod tailmerge;
-pub mod tailrec;
 pub mod tailcallelim;
 #[cfg(test)]
 pub mod testing;
