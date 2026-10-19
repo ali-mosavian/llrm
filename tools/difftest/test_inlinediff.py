@@ -89,3 +89,20 @@ def test_a_refusal_keeps_its_threshold():
     """The cost's optional tail took `, threshold=T` before the threshold group could: every refusal read threshold None."""
     _, refused = inlinediff.verdicts("'f' not inlined into 'g' because too costly to inline (cost=300, threshold=225)\n")
     assert refused[("g", "f")] == [("too costly to inline", "300", "225")]
+
+
+@needs_opt
+def test_opt_prices_with_the_target_given():
+    """opt without a triple priced a scaled address as work: _clip_w in d_faces cost 365, refused, where i486 makes its 30
+    `getelementptr i32, ptr, i32` free (215, inlined) as llrm's x86 model does. The target goes to opt."""
+    loads = "".join(f"  %g{i} = getelementptr inbounds i32, ptr %p, i32 %i{i}\n  %v{i} = load i32, ptr %g{i}\n" for i in range(48))
+    adds = "".join(f"  %s{i} = add i32 %s{i - 1}, %v{i}\n" for i in range(1, 48))
+    params = ", ".join(f"i32 %i{i}" for i in range(48))
+    callee = f"define internal i32 @sum(ptr %p, {params}) {{\nentry:\n{loads}  %s0 = add i32 %v0, 0\n{adds}  ret i32 %s47\n}}\n"
+    args = ", ".join(f"i32 %x{i}" for i in range(48))
+    caller = f"define i32 @main(ptr %p, {args}) {{\nentry:\n  %r = call i32 @sum(ptr %p, {args})\n  %t = call i32 @sum(ptr %p, {args})\n  %u = add i32 %r, %t\n  ret i32 %u\n}}\n"
+    before = callee + caller
+    generic = inlinediff.compare(before, "", "inline")
+    targeted = inlinediff.compare(before, "", "inline", target=("i386-unknown-unknown", "i486"))
+    assert generic["llvm_inlined"] == 0, generic["rows"]
+    assert targeted["llvm_inlined"] == 2, targeted["rows"]

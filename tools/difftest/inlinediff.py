@@ -57,10 +57,13 @@ def verdicts(remarks: str) -> tuple[dict, dict]:
     return inlined, refused
 
 
-def llvm_verdicts(before: str, pipeline: str, threshold: int | None) -> tuple[dict, dict, str]:
-    """(inlined, refused, the module LLVM wrote): (caller, callee) -> [(cost, threshold)] and -> [(reason, cost, threshold)]."""
+def llvm_verdicts(before: str, pipeline: str, threshold: int | None, target: tuple[str, str] | None = None) -> tuple[dict, dict, str]:
+    """(inlined, refused, the module LLVM wrote): (caller, callee) -> [(cost, threshold)] and -> [(reason, cost, threshold)]. `target` is
+    (triple, cpu): without one, opt's TTI is generic and prices a scaled address as work where llrm's x86 model does not."""
     passes = f"-passes={pipeline}"
     flags = ["-pass-remarks=inline", "-pass-remarks-missed=inline", "-pass-remarks-analysis=inline", *([f"-inline-threshold={threshold}"] if threshold is not None else [])]
+    if target:
+        flags += [f"-mtriple={target[0]}", f"-mcpu={target[1]}"]
     done = subprocess.run([str(difftest.LLVM_BIN / "opt"), passes, "-S", *flags, "-"], input=difftest.normalise(before), capture_output=True, text=True)
     if done.returncode:
         raise SystemExit(f"opt {passes}: " + (done.stderr.strip().splitlines() or ["failed"])[0])
@@ -68,12 +71,12 @@ def llvm_verdicts(before: str, pipeline: str, threshold: int | None) -> tuple[di
     return inlined, refused, done.stdout
 
 
-def compare(before: str, remarks: str, pipeline: str = "inline", threshold: int | None = None) -> dict:
+def compare(before: str, remarks: str, pipeline: str = "inline", threshold: int | None = None, target: tuple[str, str] | None = None) -> dict:
     """The sites of `before` and of the copies either inliner made, by (caller, callee): llrm's inlined count from its remarks, LLVM's from opt's,
     and the classes of the sites."""
     was = sites(before)
     ours_in, ours_out = verdicts(remarks)
-    inlined, refused, _ = llvm_verdicts(before, pipeline, threshold)
+    inlined, refused, _ = llvm_verdicts(before, pipeline, threshold, target)
     size = sizes(before)
     calls_of = collections.Counter()
     for (_, callee), n in was.items():
@@ -153,6 +156,8 @@ def main() -> int:
     parser.add_argument("--pipeline", default="inline")
     parser.add_argument("--threshold", type=int)
     parser.add_argument("--json", type=Path)
+    parser.add_argument("--mtriple", help="opt's target, as llrm's: i386-unknown-unknown for m32, i386-unknown-unknown-code16 for m16")
+    parser.add_argument("--mcpu", default="i486")
     args = parser.parse_args()
     if args.paths[0] == "dumps":
         found = [(d, stage_files(Path(d))) for d in args.paths[1:]]
@@ -164,7 +169,8 @@ def main() -> int:
         pairs = [(args.paths[0], Path(args.paths[0]), Path(args.paths[1]))]
     merged: dict = {}
     for name, before, remarks in pairs:
-        report = compare(before.read_text(), remarks.read_text(), args.pipeline, args.threshold)
+        target = (args.mtriple, args.mcpu) if args.mtriple else None
+        report = compare(before.read_text(), remarks.read_text(), args.pipeline, args.threshold, target)
         merged[name] = report
         print(f"## {name}\n{table(report)}\n")
     if args.json:
