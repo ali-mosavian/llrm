@@ -15,7 +15,6 @@ crates/opt/llrm-transforms/src/exitfold.rs	1
 crates/opt/llrm-transforms/src/gvn/pass.rs	1
 crates/opt/llrm-transforms/src/inferspace.rs	1
 crates/opt/llrm-transforms/src/local.rs	1
-crates/opt/llrm-transforms/src/loopexit.rs	1
 crates/opt/llrm-transforms/src/loopidiom/process.rs	1
 crates/opt/llrm-transforms/src/loopidioms.rs	1
 crates/opt/llrm-transforms/src/loopinterchange.rs	2

@@ -12,11 +12,9 @@
 //!    of the loop's count where the loop is left (`rewriteLoopExitValues`,
 //!    ScalarEvolution's exit values, from every exit of the loop, a rotated
 //!    loop's latch included); `LLRM_NO_SCEV_EXITVALUES` turns it off.
-//! 1. `loopexit::evaluated`: values after a counted loop computed from its
-//!    trips.
-//! 2. `exitfold::folded`: exits their counts decide are folded.
-//! 4. `exitsink::sunk`: final updates only exit phis read move to the exits.
-//! 5. `widened`: a counter read through `zext` (or, where it is signed and
+//! 1. `exitfold::folded`: exits their counts decide are folded.
+//! 2. `exitsink::sunk`: final updates only exit phis read move to the exits.
+//! 3. `widened`: a counter read through `zext` (or, where it is signed and
 //!    tested by `slt`, `sext`) to the address's index width, where `induction`
 //!    proves its values never pass its own (`rises_unsigned`, `rises_signed`),
 //!    becomes a counter of that width. C's `unsigned short i` reads `a[zext
@@ -31,10 +29,10 @@
 //!    compares the wide one with that value extended
 //!    (`WidenIV::widenLoopCompare`); other readers of the narrow one read its
 //!    low part.
-//! 6. `congruent`: header counters with one start and one step are one counter
+//! 4. `congruent`: header counters with one start and one step are one counter
 //!    (`SCEVExpander::replaceCongruentIVs`); the later ones' readers read the
 //!    first, and `dead` removes them.
-//! 7. `rewound`: see below.
+//! 5. `rewound`: see below.
 //!
 //! `rewound` carries an exact inner recurrence's exit value around the outer
 //! loop. An inner loop running exactly `count` trips leaves as
@@ -126,7 +124,7 @@
 //!
 //! # Needs
 //! `Registers`, `Bounded` (for a `sext` counter), `induction`, `liveness`,
-//! [`crate::loopexit`], [`crate::exitfold`], [`crate::exitsink`],
+//! [`crate::exitvalues`], [`crate::exitfold`], [`crate::exitsink`],
 //! [`crate::profit`].
 //!
 //! # Keeps
@@ -158,7 +156,7 @@ use crate::lcssa::{arms, from_arms};
 use crate::profit::OperationCosts;
 
 /// What IndVarSimplify leaves a loop's counters: values after a loop
-/// computed from its trips (`loopexit::evaluated`), final updates sunk to
+/// computed from its trips (`exitvalues`), final updates sunk to
 /// the exits (`exitsink`), and an inner recurrence's exit value carried
 /// round the loop outside (`rewound`). Which counters the loop keeps is
 /// `lsr`'s.
@@ -234,12 +232,6 @@ impl FunctionPass for IndVars {
         if rewrote {
             standing.changed();
         }
-        let evaluated =
-            crate::loopexit::evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing)
-                .unwrap_or_else(|error| panic!("indvars: {error}"));
-        if evaluated {
-            standing.reshaped();
-        }
         let folded = crate::exitfold::folded_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
         if folded {
             standing.reshaped();
@@ -270,7 +262,7 @@ impl FunctionPass for IndVars {
         );
         let dead = (compared || rewrote || sunk || rewound || widened || merged)
             && dead::dead(unit.context, outer.callees(), unit.function);
-        if evaluated || folded {
+        if folded {
             PreservedAnalyses::none()
         } else if compared || rewrote || sunk || rewound || widened || merged || dead {
             // Blocks and edges are as they were.

@@ -451,13 +451,13 @@ end:
     manager.add(super::IndVars { exit_values: false, unrolls: None });
     let before = llrm_analysis::ranges::loops_solved();
     manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
-    // The pass that asks, and the one indvars's evaluation of the loop leaves
-    // the body needing; by hand it was a third. (`simplifyAndExtend`, opt-in,
-    // widens first and the changed body is solved a third time.)
+    // The pass that asks: the manager's one solve. The evaluation of the loop
+    // that asked for a second (`loopexit`) is `exitvalues` now, from
+    // ScalarEvolution.
     assert_eq!(
         llrm_analysis::ranges::loops_solved() - before,
-        2,
-        "the loop's bounds were worked out more than the manager's twice"
+        1,
+        "the loop's bounds were worked out more than the manager's once"
     );
 }
 
