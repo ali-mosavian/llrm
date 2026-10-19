@@ -2251,3 +2251,46 @@ fn test_the_llvm_order_runs_licm_in_its_three_slots_and_once_after_the_header_co
     };
     assert_eq!(ran(true), 4, "licm@724, licm@730, licm@823 and the one after the header copy");
 }
+
+/// `llrm-pass -O3 --order SLOT` ran the peeler in the slot's place:
+/// `transacted` runs a peeler first when `only`, and `Fixed::slot` kept it.
+/// Every oracle comparing a Simplify-phase slot at -O3 or -Omax compared the
+/// peeler's output.
+#[test]
+fn test_a_slot_run_alone_at_o3_is_the_slot_and_not_the_peeler() {
+    let text = "define i16 @f(i16 %n, i16 %m) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br label %head
+
+head:
+  %i = phi i16 [ %m, %b0 ], [ %next, %body ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %body ]
+  br i1 %z, label %out, label %test
+
+test:
+  %done = icmp eq i16 %i, 0
+  br i1 %done, label %out, label %body
+
+body:
+  %next = sub i16 %i, 1
+  %sum = add i16 %acc, %i
+  br label %head
+
+out:
+  %r = phi i16 [ %acc, %head ], [ %acc, %test ]
+  ret i16 %r
+}
+";
+    let entry_branches = |options: pipeline::Options| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied { only: Some("trivialunswitch@732".to_owned()), options, ..Applied::default() };
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the slot runs");
+        let after = llrm_mir::print::module(&module);
+        after[after.find("b0:").expect("b0")..].split("\n\n").next().expect("a block").contains("br i1 %z")
+    };
+    assert!(entry_branches(pipeline::Options::standard()), "-O2 unswitches the header test");
+    assert!(entry_branches(pipeline::Options::speed()), "-O3 ran the peeler instead");
+}
