@@ -435,7 +435,9 @@ def isolated(replay: Path, row: dict, source: Path) -> str:
     """llrm's answer to the input alone: `llrm-pass` runs the one pass PASS once on `source`."""
     try:
         order = ["--order"] if "@" in row["pass"] else []
-        done = subprocess.run([str(replay), level_of(row["config"]), *order, row["pass"], str(source)], capture_output=True, text=True)
+        mode = os.environ.get("LLRM_DIFFTEST_TARGET", "m32")
+        layout = ["--mode", mode[1:]] if mode != "host" else []
+        done = subprocess.run([str(replay), level_of(row["config"]), *layout, *order, row["pass"], str(source)], capture_output=True, text=True)
     except OSError as error:
         raise RuntimeError(f"{replay}: {error}") from error
     if done.returncode:

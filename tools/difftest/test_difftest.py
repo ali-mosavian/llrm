@@ -300,3 +300,21 @@ def test_export_writes_input_both_answers_and_the_diff_of_a_differing_function(t
     folder = next((tmp_path / "out" / "sroa").iterdir())
     assert {p.name for p in folder.iterdir()} == {"input.ll", "llrm.ll", "opt.ll", "diff.txt"}
     assert "ret i32 2" in (folder / "diff.txt").read_text() and "ret i32 3" in (folder / "diff.txt").read_text()
+
+
+def test_the_replay_gets_the_targets_layout_so_pointer_width_answers_are_the_targets(monkeypatch, tmp_path):
+    """LoopIdiom read 0/5 identical at i486 for an hour: opt had the target's layout and llrm-pass ran on the Neutral 64-bit one (memset.i64 vs .i32). Both sides get the target."""
+    seen = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "", ""
+
+    monkeypatch.setattr(difftest.subprocess, "run", lambda command, *a, **k: (seen.append(list(command)), Done())[1])
+    src = tmp_path / "x.ll"
+    src.write_text("")
+    difftest.isolated(Path("llrm-pass"), {"config": "c-O2", "pass": "loopidiom@737"}, src)
+    assert "--mode" in seen[0] and seen[0][seen[0].index("--mode") + 1] == "32", seen
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m16")
+    seen.clear()
+    difftest.isolated(Path("llrm-pass"), {"config": "c-O2", "pass": "loopidiom@737"}, src)
+    assert seen[0][seen[0].index("--mode") + 1] == "16"
