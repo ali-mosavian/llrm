@@ -240,14 +240,25 @@ pub fn split_block(
     function: &mut Function,
     old: BlockId,
 ) -> BlockId {
-    let list: Vec<InstId> = function.iter_block(old).collect();
-    let first = list
-        .iter()
-        .position(|&inst| !matches!(
+    let first = function
+        .iter_block(old)
+        .find(|&inst| !matches!(
             function.instruction(inst).opcode,
             Opcode::Phi | Opcode::LandingPad { .. }
         ))
         .expect("a terminated block");
+    split_block_at(function, old, first)
+}
+
+/// `Block::splitBasicBlock(at)`: the instructions of `old` from `at` on move
+/// to a new block, `old` jumps to; the successors' phis name the new one.
+pub fn split_block_at(
+    function: &mut Function,
+    old: BlockId,
+    at: InstId,
+) -> BlockId {
+    let list: Vec<InstId> = function.iter_block(old).collect();
+    let first = list.iter().position(|&inst| inst == at).expect("an instruction of the block");
     let void = function.instruction(*list.last().expect("a terminated block")).ty;
     let new = function.create_block(None);
     function.insert_block(new, None).expect("a new block");

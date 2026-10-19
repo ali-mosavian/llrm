@@ -794,7 +794,8 @@ pub(crate) fn llvm_order(
                 licm("licm@724", !rotating),
             ]);
             if rotating {
-                // DEVIATE (D10 R7): the pin duplicates headers at -Os; `size` is -Os and -Oz.
+                // DEVIATE (D10 R7): the pin duplicates headers at -Os; `size`
+                // is -Os and -Oz.
                 list.push(slot(
                     "rotate@728",
                     Box::new(looprotate::LoopRotate { duplicate_headers: applied.options.copy_headers && !size }),
