@@ -121,7 +121,7 @@ impl GvnPass<'_> {
 
     /// `isDominatedByICFIFromSameBlock`: some instruction before `inst` in its
     /// block need not return to its successor.
-    fn is_dominated_by_icf_from_same_block(
+    pub(super) fn is_dominated_by_icf_from_same_block(
         &self,
         inst: InstId,
     ) -> bool {
