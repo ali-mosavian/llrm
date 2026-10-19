@@ -175,7 +175,7 @@ pub const BINARY: [(BinaryOp, &str); 18] = [
     (BinaryOp::FRem, "frem"),
 ];
 
-pub const CAST: [(CastOp, &str); 14] = [
+pub const CAST: [(CastOp, &str); 15] = [
     (CastOp::Trunc, "trunc"),
     (CastOp::ZExt, "zext"),
     (CastOp::SExt, "sext"),
@@ -187,6 +187,11 @@ pub const CAST: [(CastOp, &str); 14] = [
     (CastOp::UIToFP, "uitofp"),
     (CastOp::SIToFP, "sitofp"),
     (CastOp::PtrToInt, "ptrtoint"),
+    // Newer LLVM's `ptrtoaddr`: the address of a pointer as an integer, read as
+    // `ptrtoint` (the same where pointer and address have one width); written
+    // as
+    // `ptrtoint`, the first spelling of the operation.
+    (CastOp::PtrToInt, "ptrtoaddr"),
     (CastOp::IntToPtr, "inttoptr"),
     (CastOp::BitCast, "bitcast"),
     (CastOp::AddrSpaceCast, "addrspacecast"),
