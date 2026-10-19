@@ -17,11 +17,11 @@ Replacement: what the pin asks instead. Date: the owner's stated date or conditi
 | decide threading engine | `decide.rs:192`, `:206` (`_threaded`, `_phi_threaded`, `_settled`) | LVI settling, threading | JumpThreading (translated) | vt-constantfolding | 2026-10-21, estimate, vt-constantfolding (needs the S4-only check on d_faces branch counts and a rows pair) |
 | fixednarrow | `fixednarrow.rs:13`, `:158`, `:168`, `:195` | `scoped` bounds, operand, `product` | LVI `getConstantRange`, SCEV `getRange` | vt-constantfolding | 2026-10-23, estimate, vt-constantfolding (after Promote removal and the LVI-vs-SCEV table) |
 | ports | `ports.rs:170-171` | operand intervals | LVI `getConstantRange` | vt-constantfolding | 2026-10-27, estimate, vt-constantfolding (same conditions) |
-| `manager::Bounded`, `DominatedEdges` | `manager.rs:1993`, `:2065`, `:2105`, `:2200` | solved intervals, dominating edges | LVI, ConstraintElimination | vt-constantfolding | no date yet (after fixednarrow, ports, and the LVI API covering loop-carried values) |
-| consts, floatbounds | `consts.rs:722-726`, `floatbounds.rs:147` | intervals, declared bounds | LVI, ConstraintElimination | vt-constantfolding and basicaa-port-2163 (both) | 2026-11-10, estimate, basicaa-port-2163 (with `observers.rs`); vt-constantfolding: no date yet (same) |
-| guards | `guards.rs:80`, `:99` | intervals, declared bounds | LVI, ConstraintElimination | vt-constantfolding | no date yet (same) |
-| ranger | `ranger.rs:289`, `:323`, `:400`, `:566`, `:772`, `:880` | edge intervals, computed bounds | LVI | vt-constantfolding | no date yet (same) |
-| parameter ranges | `parameter_ranges.rs:140`, `:158`, `:271` | operand and computed bounds | LVI `getConstantRange` | vt-constantfolding | no date yet (same) |
+| `manager::Bounded`, `DominatedEdges` | `manager.rs:1993`, `:2065`, `:2105`, `:2200` | solved intervals, dominating edges | LVI, ConstraintElimination | vt-constantfolding | 2026-11-13, estimate, vt-constantfolding (the `DominatedEdges` and `Bounded` wrappers go after every consumer; registry rows: dominated-edges 2026-10-30, bounded 2026-11-06 if scev `getRange` lands by 2026-11-03, else it slips) |
+| consts, floatbounds | `consts.rs:722-726`, `floatbounds.rs:147` | intervals, declared bounds | LVI, ConstraintElimination | vt-constantfolding and basicaa-port-2163 (both) | `consts.rs:722` and `floatbounds.rs:147`: 2026-11-06, estimate, vt-constantfolding (`consts.rs` is MemorySSA-fed, so mssa-green-2127 is a co-dependency: mssa may need to change something); 2026-11-10, estimate, basicaa-port-2163 (with `observers.rs`) |
+| guards | `crates/opt/llrm-analysis/src/guards.rs:80`, `:99` | `ranges::declared` | LVI, ConstraintElimination | vt-constantfolding (confirmed; `declared` moves to ValueTracking and `ConstantRange`, `_implied_by_guards` to LVI and ConstraintElimination) | 2026-11-10, estimate, vt-constantfolding |
+| ranger | `ranger.rs:289`, `:323`, `:400`, `:566`, `:772`, `:880` | edge intervals, computed bounds | LVI | vt-constantfolding | 2026-11-10, estimate, vt-constantfolding |
+| parameter ranges | `parameter_ranges.rs:140`, `:158`, `:271` | operand and computed bounds | LVI `getConstantRange` | vt-constantfolding | 2026-11-10, estimate, vt-constantfolding |
 | indvars, exitfold, widen (via `Bounded`) | `indvars.rs`, exit fold | `Bounded` | SCEV `getRange` | scev-createscev-2239 | first reader PR 2026-10-20, estimate, scev-createscev-2239; the old widen path (`LLRM_NO_SCEV_WIDEN`) is deleted after it, no date |
 | induction | `induction.rs:1815-1817` | `_computed`, `_operand` | SCEV `getRange` | scev-createscev-2239 | 2026-10-22, estimate, scev-createscev-2239 (after the trip-count readers: peel, unroll, loopsplit, the others) |
 | alias bounds | `alias.rs:3921`, `:3958`, `:3964` | `bounded` for alias queries | BasicAA with LVI | basicaa-port-2163, blocked by funcattrs-port | after 2026-10-26, estimate, funcattrs-port (the old points-to tower goes after funcattrs-port's old call-effects path is deleted; basicaa-port-2163 gives no date for `alias.rs` and the final MemRef delete until funcattrs-port's call-effects PR is dated: PR 2026-10-22, old path deleted 2026-10-26) |
@@ -32,13 +32,13 @@ Replacement: what the pin asks instead. Date: the owner's stated date or conditi
 | avail, cellmap | `avail.rs:83`, `cellmap.rs:49` | `regions` imports, `ByteRange` | `MemoryLocation` | mssa-green-2127 | 2026-10-29, estimate, mssa-green-2127; the `avail.rs` overlap moves with the DSE swap, no date (waits on the `deadstore.rs` fixes, #2861) |
 | loopidioms | `loopidioms.rs:1239` | `regions::overlapping` | BasicAA / `MemoryLocation` | loopidioms-rename-unroll-2238 | 2026-10-27, estimate, loopidioms-rename-unroll-2238 (after the non-trivial SimpleLoopUnswitch wiring PR) |
 | old `Promote` | `promote.rs:29`, `:733-849` | overlap buckets, `overlapping` | none: `Promote` is removed | parity-pipeline | after #2840 |
-| isel | `isel.rs:914-915`, `llrm-lir/lib.rs:136` | `scoped`, `exact_offsets_given` | KnownBits / ConstantRange address-mode match | lir-cleanup-port (the coordinator asks directly) | no date given |
+| isel | `isel.rs:914-915`, `llrm-lir/lib.rs:136` | `scoped`, `exact_offsets_given` | `ValueFacts` table from the lowering (known bits, `ConstantRange`, LVI) | parity-pipeline (taken over from lir-cleanup-port) | moved to `ValueFacts` in #2966 (queued); after it lands only `fixednarrow.rs` and `nib/test_borrowck.rs` still call `scoped` |
 | homes | `homes.rs:255`, `:471` | `regions::overlapping` | BasicAA | basicaa-port-2163 (to confirm for `homes.rs`; joins the MemRef survey #2931) | 2026-11-03, estimate, basicaa-port-2163 (with `floatfacts.rs`) |
 | floatloop | `floatloop.rs:327` | `regions::overlapping` | BasicAA | basicaa-port-2163 (MemRef survey #2931) | first reader PR 2026-10-28, estimate, basicaa-port-2163 (with `slotstores.rs`) |
 | floatfacts | `floatfacts.rs:829` | `regions::overlapping` | BasicAA | basicaa-port-2163 (MemRef survey #2931) | 2026-11-03, estimate, basicaa-port-2163 |
 | tests | `llrm-x86-bc/tests/memory.rs:6`, `llrm-nib/src/test_borrowck.rs:1028`, `no_hand_solved_bounds.rs` | direct calls | move with their callers | whoever deletes the caller | after the callers |
 
-The old `jumpthread.rs` calls no `ranges::` function. Neither do `versionalias.rs` (scev-createscev-2239's LAA/LoopVersioning translation: first PR 2026-10-27, `versionalias` deleted 2026-11-05, estimates, scev-createscev-2239), `observers.rs` or `slotstores.rs`: grep finds no `ranges::` or `regions::` read in them, so they have no row; basicaa-port-2163's dates for them (`slotstores.rs` 2026-10-28, `observers.rs` 2026-11-10) are their MemRef moves. Registry ties from the coordinator's schedule (not owners' estimates): Followers and Counted deletes 2026-10-23, Registers 2026-10-24.
+Not callers: `backend/allocate.rs`, `twoaddr.rs` and the other backend files that write `ranges::` import the live-interval module as `use crate::analysis::intervals::{self as ranges, ...}`; it is not this module. The old `jumpthread.rs` calls no `ranges::` function. Neither do `versionalias.rs` (scev-createscev-2239's LAA/LoopVersioning translation: first PR 2026-10-27, `versionalias` deleted 2026-11-05, estimates, scev-createscev-2239), `observers.rs` or `slotstores.rs`: grep finds no `ranges::` or `regions::` read in them, so they have no row; basicaa-port-2163's dates for them (`slotstores.rs` 2026-10-28, `observers.rs` 2026-11-10) are their MemRef moves. Registry ties from the coordinator's schedule (not owners' estimates): Followers and Counted deletes 2026-10-23, Registers 2026-10-24.
 
 Translated pieces that exist now: LazyValueInfo (#2344, #2551), `ConstantRange`, ScalarEvolution, BasicAA, MemorySSA (#2516), GlobalsModRef (#2636). `FindAvailableLoadedValue` (`loads.rs`, mir-undef) is due 2026-10-26.
 
@@ -55,13 +55,17 @@ Translated pieces that exist now: LazyValueInfo (#2344, #2551), `ConstantRange`,
 
 None. `homes.rs`, `floatloop.rs` and `floatfacts.rs` went to basicaa-port-2163 (`homes.rs` to confirm), `isel.rs` to lir-cleanup-port.
 
+## Open dependencies
+
+vt-constantfolding's dates are per file, from reading the call sites, and all depend on the LVI and SCEV API: scev `getRange` by 2026-11-03 (else `Bounded` slips), and the LVI-versus-SCEV table for `fixednarrow` (2026-10-23). Registry rows, same owner: float-facts, floating-point InstSimplify half 2026-11-06 (the MemorySSA half is mssa-green-2127's); `simplifyFCmpInst` 2026-10-28, after m16-narrow-66h-ops's `compare_in`. Neither is a `ranges::` caller row.
+
 ## Blocking estimates
 
 funcattrs-port blocks the points-to tower rows. Its estimates (each its own): the call-effects flip (attrs and GlobalsModRef) PR 2026-10-22; the old call-effects path deleted 2026-10-26; Stamp and Summaries deleted 2026-10-28, and Stamp's early run also waits for the W2 walk (cycles-queue), so that date may slip with it. jumps-tailmerge-2241 owns no row here; no date given.
 
 ## Final deletion date
 
-unknown: no date given for the `manager.rs`, `guards.rs`, `ranger.rs` and `parameter_ranges.rs` rows and the vt-constantfolding side of `consts.rs` and `floatbounds.rs` (vt-constantfolding promised dates before 2026-10-23), `alias.rs` and the final MemRef delete (basicaa-port-2163, after funcattrs-port's dates), `classes_may_alias`, and `isel` (lir-cleanup-port). The latest dated row so far is 2026-11-10 (basicaa-port-2163: `consts.rs`, `floatbounds.rs`, `observers.rs`, `memory.rs:15`).
+2026-11-13 (estimate, vt-constantfolding's `manager.rs` rows), the latest dated row. No caller row is left without a date or an owner, with two conditional rows: `alias.rs` and the final MemRef delete (after funcattrs-port's old call-effects path is deleted, 2026-10-26, estimate, funcattrs-port; basicaa-port-2163 gives no date of its own) and the `classes_may_alias` helper (after `regions.rs` stops calling it and mssa-green-2127's DSE swap). The date holds only if those land by it.
 
 ## Fork instructions
 
