@@ -10,10 +10,6 @@
 //! a block, skipping blocks the caller's set has seen, which it fills. Both are
 //! linear.
 //!
-//! DEVIATE: LLVM walks a block's predecessors in use-list order, newest use
-//! first; MIR lists them in use order, oldest first, so the walk takes them
-//! reversed.
-//!
 //! # Used by
 //! `adce` in llrm-transforms.
 
@@ -73,7 +69,7 @@ pub fn inverse_post_order_ext(
     if !visited.insert(start) {
         return order;
     }
-    let walk = |block: BlockId| function.predecessors(block).iter().rev().copied().collect::<Vec<_>>();
+    let walk = |block: BlockId| function.predecessors(block).iter().copied().collect::<Vec<_>>();
     let mut stack = vec![(start, walk(start), 0_usize)];
     while let Some((block, predecessors, next)) = stack.last_mut() {
         if let Some(&predecessor) = predecessors.get(*next) {

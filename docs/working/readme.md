@@ -15,6 +15,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [codegen-improvements](codegen-improvements.md) | Backend ideas drawn from other compilers |
 | [fold-split](fold-split.md) | The plan splitting the fold work between valuetracking-port and fold-poc |
 | [value-tracking-port](value-tracking-port.md) | Evidence for the ValueTracking, KnownBits and ConstantRange port: agreement with LLVM, deviations, owed work |
+| [undef-table](undef-table.md) | MIR `undef`: each pass and pin function that treats it apart from poison, and its state |
 
 ## Docs with the change
 
