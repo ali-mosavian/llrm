@@ -535,7 +535,7 @@ impl<'m> Machine<'m> {
             Intrinsic::VaStart | Intrinsic::VaEnd | Intrinsic::VaCopy => {
                 return unsupported("a variadic argument list");
             }
-            Intrinsic::StackSave | Intrinsic::StackRestore => return unsupported("the stack pointer"),
+            Intrinsic::StackSave | Intrinsic::StackRestore => return unsupported("a stack pointer"),
             Intrinsic::Code => return unsupported("inline code"),
             Intrinsic::Asm => return unsupported("inline assembly"),
         })

@@ -86,12 +86,13 @@ pub enum Intrinsic {
     VaStart,
     /// `llvm.va_end`: the list is finished with; no code.
     VaEnd,
-    /// `llvm.stacksave`: the stack pointer, as a value.
-    StackSave,
-    /// `llvm.stackrestore`: the stack pointer set to a value `stacksave` made.
-    StackRestore,
     /// `llvm.va_copy`: the second list copied into the first.
     VaCopy,
+    /// `llvm.stacksave`: the stack pointer, to give back to `stackrestore`.
+    StackSave,
+    /// `llvm.stackrestore`: the stack pointer `stacksave` returned made the
+    /// stack pointer again, releasing what was allocated since.
+    StackRestore,
     /// Inline machine code, laid down where it is called: its name carries
     /// the bytes, and each argument is a frame place whose displacement it
     /// reads at a byte offset the name gives. It answers what it leaves in
