@@ -28,7 +28,7 @@ Each cap is a named constant at its `cl::opt` default; a different value is a DE
 | `gvn.rs` (`Gvn`, `EqualCalls`; `propagated`, `numbered`, `joined` deleted in 6) | 685 | 1 (numbering, branch equality), 6 (`joined`) |
 | `transform::subexpressions`, `forwarded` (deleted in 6); `equal_calls` stays | in `transform.rs` | 1, 4 |
 | `loadjoins.rs` | 478 | 4, 5 |
-| `avail::forwardable_walk`, `Forward` | in `avail.rs` (1,066) | 4, if no other client remains |
+| `avail::forwardable_walk`, `Forward` (deleted) | in `avail.rs` (1,066) | 4 |
 | `profit::motion_price` use inside `Gvn` (crossing/avoiding double numbering) | | 5 (D8) |
 | tests: `gvn_tests.rs`, `loadjoins_tests.rs` | 1,187 + 492 | kept as regression tests; deleted only where the translation's own test covers the same symptom |
 
