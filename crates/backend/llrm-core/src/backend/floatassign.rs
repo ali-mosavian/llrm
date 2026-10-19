@@ -2128,7 +2128,99 @@ pub fn prepared(
     if live_in[&body.entry].iter().any(|value| floating.contains(&value)) {
         return Err(unlowered("floating stack input is unavailable"));
     }
-    Ok(_aliased_by(&body, &live_out).0)
+    Ok(_sequenced(&_aliased_by(&body, &live_out).0))
+}
+
+/// The x87 copies of each parallel-copy group as plain moves in an order that
+/// reads before it writes, a temporary breaking a cycle: LLVM's PHI
+/// elimination writes the copies one at a time, and greedy cannot place the
+/// ten values a rotation of ten floats reads at once in seven registers.
+fn _sequenced(body: &LirBody) -> LirBody {
+    let float_copy = |one: &Insn| -> Option<(u32, u32)> {
+        let what = one.what.as_ref()?;
+        one.group?;
+        if what.op != Operation::Move || what.name.as_deref() != Some("mov") {
+            return None;
+        }
+        match (what.dests.as_slice(), what.sources.as_slice()) {
+            ([Loc::Held(d)], [Loc::Held(s)]) if d.width == 10 && s.width == 10 => Some((d.value, s.value)),
+            _ => None,
+        }
+    };
+    if !body.insns().iter().any(|one| float_copy(one).is_some()) {
+        return body.clone();
+    }
+    let mut fresh = _next_value(body);
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut groups: Vec<i64> = Vec::new();
+            for one in block.insns.iter() {
+                if float_copy(one).is_some() {
+                    let group = one.group.expect("a group");
+                    if !groups.contains(&group) {
+                        groups.push(group);
+                    }
+                }
+            }
+            if groups.is_empty() {
+                return block.clone();
+            }
+            let mut insns: Vec<Arc<Insn>> = Vec::new();
+            for one in block.insns.iter() {
+                let Some((_, _)) = float_copy(one) else {
+                    insns.push(Arc::clone(one));
+                    continue;
+                };
+                let group = one.group.expect("a group");
+                // The group is written out at its first float member.
+                let Some(at) = groups.iter().position(|&g| g == group) else { continue };
+                groups.remove(at);
+                let members: Vec<Arc<Insn>> =
+                    block.insns.iter().filter(|m| m.group == Some(group) && float_copy(m).is_some()).cloned().collect();
+                let mut pending: Vec<(Arc<Insn>, u32, u32)> = members
+                    .iter()
+                    .filter_map(|m| float_copy(m).map(|(d, s)| (Arc::clone(m), d, s)))
+                    .filter(|(_, d, s)| d != s)
+                    .collect();
+                let copy_of = |model: &Insn, d: u32, s: u32| -> Arc<Insn> {
+                    let mut made = model.clone();
+                    let what = made.what.as_mut().expect("a copy");
+                    what.dests = vec![Loc::Held(Held { value: d, width: 10 })];
+                    what.sources = vec![Loc::Held(Held { value: s, width: 10 })];
+                    made.defines = vec![d];
+                    made.uses = vec![s];
+                    made.widths = vec![(d, 10), (s, 10)];
+                    made.group = None;
+                    Arc::new(made)
+                };
+                while !pending.is_empty() {
+                    let ready = pending
+                        .iter()
+                        .position(|(_, d, _)| !pending.iter().any(|(_, _, source)| source == d));
+                    if let Some(at) = ready {
+                        let (model, d, s) = pending.remove(at);
+                        insns.push(copy_of(&model, d, s));
+                        continue;
+                    }
+                    // Every destination is still read: save one, and read the
+                    // saved copy where it was read.
+                    let (model, d, _) = (Arc::clone(&pending[0].0), pending[0].1, pending[0].2);
+                    let saved = fresh;
+                    fresh += 1;
+                    insns.push(copy_of(&model, saved, d));
+                    for (_, _, source) in pending.iter_mut() {
+                        if *source == d {
+                            *source = saved;
+                        }
+                    }
+                }
+            }
+            block.with_insns(insns.into())
+        })
+        .collect();
+    body.with_blocks(blocks)
 }
 
 /// `prepared` as a machine phase: floatassign's slot under `LLRM_GREEDY_RFP`.

@@ -5416,6 +5416,11 @@ fn _settled(
     let Some(register) = held.get(&value.value) else {
         return Err(Unplaced(format!("value#{} at width {} has no register", value.value, value.width)));
     };
+    // An x87 value is placed in FP0..FP6 but stays a value: the stackifier
+    // puts it on the stack and its operands become st(i).
+    if regs.in_class(*register, llrm_lir::registers::class::RFP) {
+        return Ok(place);
+    }
     Ok(Loc::Reg(Reg { register: regs.named(*register, i64::from(value.width)), width: value.width }))
 }
 
