@@ -305,3 +305,56 @@ fn test_a_site_llvms_frequencies_keep_warm_is_not_held_to_the_cold_threshold() {
     let [(_, _, InlineCost::Cost { threshold, .. })] = decided[..] else { panic!("one priced site: {decided:?}") };
     assert_eq!(threshold, 337);
 }
+
+/// `decide`, the walk's question of one site, is the verdict `sites` gives it,
+/// and no verdict for a call of a routine with no body.
+#[test]
+fn test_one_site_is_decided_as_the_site_list_decides_it() {
+    let text = "declare i16 @ext(i16)\n\n\
+        define internal i16 @leaf(i16 %x) {\nentry:\n  %r = add i16 %x, 1\n  ret i16 %r\n}\n\n\
+        define i16 @main(i16 %x) {\nentry:\n  %a = call i16 @leaf(i16 %x)\n  %b = call i16 @ext(i16 %a)\n  ret i16 %b\n}\n";
+    let module = parsed(text);
+    let layout = DataLayout::default();
+    let main = llrm_mir::context::GlobalId(
+        module.globals.iter().position(|one| one.name.as_deref() == Some("main")).unwrap() as u32,
+    );
+    let counts = crate::inline::call_counts(&module);
+    let none = Default::default();
+    let context = crate::inlinecost::DecideContext {
+        counts: &counts,
+        addressed: &none,
+        recursive: &none,
+        params: InlineParams::from_level(2),
+        size: CallerSize::Speed,
+        always_only: false,
+        tti: None,
+    };
+    let llrm_mir::module::GlobalKind::Function(caller) = &module.global(main).kind else { panic!("main") };
+    let frequencies = crate::inlinecost::caller_frequencies(&module, &layout, caller);
+    let calls: Vec<_> = caller
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(
+            caller.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Call(_)
+        ))
+        .collect();
+    let one =
+        crate::inlinecost::decide(&module, &layout, main, calls[0], &context, &frequencies).expect("leaf has a body");
+    let mut listed = Vec::new();
+    crate::inlinecost::sites(
+        &module,
+        &layout,
+        main,
+        &counts,
+        &none,
+        &none,
+        InlineParams::from_level(2),
+        CallerSize::Speed,
+        false,
+        None,
+        Some(&mut listed),
+    );
+    assert_eq!((one.inline, &one.cost), (true, &listed[0].2));
+    assert_eq!(crate::inlinecost::decide(&module, &layout, main, calls[1], &context, &frequencies), None);
+}
