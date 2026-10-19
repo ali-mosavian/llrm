@@ -258,6 +258,9 @@ fn handle_only_live_successor(
 pub enum Visit {
     None,
     Changed,
+    /// `eraseInstFromFunction(I)` already done by the visit; counts as a
+    /// change. The driver does not touch the instruction again.
+    Erased,
     Replace(Operand),
 }
 
@@ -390,6 +393,7 @@ fn drain(
         }
         match visit(c, inst) {
             Visit::None => {}
+            Visit::Erased => changed = true,
             // Changed in place: it and its users are looked at again.
             Visit::Changed => {
                 let result = c.function.instruction(inst).result;

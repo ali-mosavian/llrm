@@ -1,0 +1,9 @@
+[package]
+name = "llrm-instr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The reader of a target's instruction description (.instr)"
+
+[dependencies]
+llrm-lir = { workspace = true }
