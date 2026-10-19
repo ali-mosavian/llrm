@@ -27,10 +27,9 @@
 //! In `a*b*c` and `a*b*d`, the pair `a*b` counts 2: `a*b` is formed first in
 //! both and the second is a common subexpression.
 
-use std::collections::HashMap;
-
 use llrm_mir::module::{BlockId, Operand};
 use llrm_mir::opcode::BinaryOp;
+use llrm_support::hash::HashMap;
 
 use crate::reassociate::{Reassociator, ValueEntry};
 
