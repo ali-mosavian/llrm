@@ -50,7 +50,7 @@ fn fixture(name: &str) -> String {
 #[test]
 fn every_fixture_comes_out_as_its_after_file() {
     let fixtures = fixtures();
-    assert!(fixtures.len() >= 15, "{} fixtures", fixtures.len());
+    assert!(fixtures.len() >= 16, "{} fixtures", fixtures.len());
     for path in fixtures {
         let before = std::fs::read_to_string(&path).expect("readable");
         let after = run(&before);
@@ -238,4 +238,16 @@ e:
 }
 ");
     assert_eq!(after.matches("landingpad").count(), 1, "{after}");
+}
+
+/// The copy `threadEdge` places after `PredBB` is visited in the same sweep
+/// (LLVM walks the live block list), so it is removed as an empty block before
+/// `%b59` is reached and `%b59` keeps the one-input `phi` of `%t` that `opt`
+/// leaves. Walking a snapshot of the layout reached `%b59` first, merged it
+/// into the copy, folded the `phi` and put the constant in `%b58`'s `phi`:
+/// one `phi` fewer than `opt` on d_faces -O2 (body 11, decide@1244).
+#[test]
+fn a_block_placed_after_the_current_one_is_visited_in_the_same_sweep() {
+    let after = run(&fixture("new_block_visited"));
+    assert!(after.contains("%t3 = phi i16 [ 2, %b50 ]"), "{after}");
 }

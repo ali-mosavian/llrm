@@ -73,7 +73,7 @@ Fail-first tests for S1, one per shape, each seen failing with the shape's code 
 
 The instrument is the slot oracle, not the `decide` inputs the first S1 count used: `difftest.py inputs jumpthreading@668|@809` over `llrm-c -O2 --dump` of `d_faces` (`LLRM_DUMP_INPUTS=1`), 3 functions per slot. After S1 three differed (`668/03`, `809/02`, `809/03`); after S3 all changed functions are identical (2 of 2 at each slot).
 
-The four `decide` inputs of the first count, rerun on the S2+S3 build: the numbering moved when the JT slots came in (`10/0046` and `11/0046` are now run 0047 of `decide@832`; there is no run 0067 in bodies 10 and 11). All five `decide` slots (`@1244 @675 @766 @809 @832`) of bodies 10 and 11 were run through `llrm-pass jumpthreading` against `opt -passes=jump-threading`: 9 of 10 identical, among them both 0047 runs. `11/0004` (now `decide@1244`) differs, shape below.
+The four `decide` inputs of the first count, rerun on the S2+S3 build: the numbering moved when the JT slots came in (`10/0046` and `11/0046` are now run 0047 of `decide@832`; there is no run 0067 in bodies 10 and 11). All five `decide` slots (`@1244 @675 @766 @809 @832`) of bodies 10 and 11 were run through `llrm-pass jumpthreading` against `opt -passes=jump-threading`: 9 of 10 identical, among them both 0047 runs. `11/0004` (now `decide@1244`) differed; the cause and fix are in the table below. With the fix it is identical; the other nine were not rerun.
 
 Shapes of the four (the first three each a fixture that `opt` changes and S1 left alone):
 
@@ -82,7 +82,7 @@ Shapes of the four (the first three each a fixture that `opt` changes and S1 lef
 | `668/03`, `809/03` | `PredBB` (conditional branch, several predecessors) then `BB` testing a value the edge into `PredBB` decides, through LVI or a `phi` of `PredBB`; `opt` copies `PredBB` for that edge and threads it through `BB` | S2 `maybethreadThroughTwoBasicBlocks` | `two_block`, `two_block_phi` |
 | `668/03`, `809/03` | after that, `BB` is reached only through `PredBB`, whose one predecessor branches on the same condition | S3 `processImpliedCondition` (LVI answers "unknown" on both sides, so it is not an LVI gap) | `implied_condition` |
 | `809/02` | a `br i1` on a `phi i1` of two compares, each predecessor ending in `br` | S2 `duplicateCondBranchOnPHIIntoPred` via `processBranchOnPHI` | `dup_cond_branch` |
-| `11/0004` (`decide@1244`) | `opt` leaves `%p = phi i16 [ 2, %pred ]` in a block threaded down to one predecessor; the pass has the constant `2` at the use (same meaning; a later cleanup removes it). Read from the diff of the two answers | UNEXPLAINED by S2-S4; `updateSSA` (S1) suspected, not confirmed | none yet: a hand-made fixture of the shape reads identical, and the function is not reduced (`llvm-reduce` 20 cannot read the dump) |
+| `11/0004` (`decide@1244`) | `opt` leaves `%t = phi i16 [ 2, %pred ]` in a block that threading reduced to one predecessor; the pass had the constant at the use | not a stage: `runImpl` walked a snapshot of the layout, `opt` the live list, so the `.thread` copy placed after `PredBB` was not visited before the next block merged into it and folded the phi. Fixed: the walk follows the live layout | `new_block_visited` |
 
 The fixtures `select_unfold_cmp`, `select_unfold_switch`, `select_in_curr_bb` and `branch_on_xor` cover the rest of S2; no input of `d_faces` needs them.
 

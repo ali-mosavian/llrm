@@ -508,50 +508,13 @@ impl State<'_, '_> {
         let mut ever_changed = false;
         loop {
             let mut changed = false;
-            for block in self.function().layout().to_vec() {
-                if self.unreachable.contains(&block) || !self.function().is_placed(block) {
-                    continue;
+            let mut at = 0;
+            while let Some(&block) = self.function().layout().get(at) {
+                let after = self.function().layout().get(at + 1).copied();
+                if !self.unreachable.contains(&block) {
+                    changed |= self.sweep_block(block);
                 }
-                while self.process_block(block) {
-                    changed = true;
-                }
-
-                // Stop processing BB if it's the entry or is now deleted.
-                if !self.function().is_placed(block) || Some(block) == self.function().entry() {
-                    continue;
-                }
-                if self.pred_edges(block).is_empty() {
-                    // When processBlock makes BB unreachable it doesn't bother
-                    // to fix up the instructions in it. We must remove BB to
-                    // prevent invalid IR.
-                    self.loop_headers.remove(&block);
-                    self.lvi.erase_block(block);
-                    crate::simplifycfg::dead_blocks_deleted(self.unit.context, self.unit.function, &[block]);
-                    changed = true;
-                    continue;
-                }
-
-                // processBlock doesn't thread BBs with unconditional TIs.
-                // However, if BB is "almost empty", we attempt to merge BB
-                // with its sole successor.
-                let term = self.function().terminator(block).expect("a terminated block");
-                let instruction = self.function().instruction(term);
-                if instruction.opcode == Opcode::Br && instruction.operands.len() == 1 {
-                    let Operand::Block(succ) = instruction.operands[0] else { unreachable!("a jump's target") };
-                    let only_terminator = self
-                        .function()
-                        .iter_block(block)
-                        .find(|&inst| self.function().instruction(inst).opcode != Opcode::Phi)
-                        == Some(term);
-                    if only_terminator
-                        && !self.loop_headers.contains(&block)
-                        && !self.loop_headers.contains(&succ)
-                        && crate::simplifycfg::empty_block_removed(self.unit.context, self.unit.function, block, succ)
-                    {
-                        self.lvi.erase_block(block);
-                        changed = true;
-                    }
-                }
+                at = self.next_in_layout(block, at, after);
             }
             ever_changed |= changed;
             if !changed {
@@ -560,6 +523,80 @@ impl State<'_, '_> {
         }
         self.loop_headers.clear();
         ever_changed
+    }
+
+    /// The body of `runImpl`'s `for (auto &BB : *F)`: whether anything
+    /// changed.
+    fn sweep_block(
+        &mut self,
+        block: BlockId,
+    ) -> bool {
+        let mut changed = false;
+        if self.unreachable.contains(&block) || !self.function().is_placed(block) {
+            return false;
+        }
+        while self.process_block(block) {
+            changed = true;
+        }
+
+        // Stop processing BB if it's the entry or is now deleted.
+        if !self.function().is_placed(block) || Some(block) == self.function().entry() {
+            return changed;
+        }
+        if self.pred_edges(block).is_empty() {
+            // When processBlock makes BB unreachable it doesn't bother
+            // to fix up the instructions in it. We must remove BB to
+            // prevent invalid IR.
+            self.loop_headers.remove(&block);
+            self.lvi.erase_block(block);
+            crate::simplifycfg::dead_blocks_deleted(self.unit.context, self.unit.function, &[block]);
+            return true;
+        }
+
+        // processBlock doesn't thread BBs with unconditional TIs.
+        // However, if BB is "almost empty", we attempt to merge BB
+        // with its sole successor.
+        let term = self.function().terminator(block).expect("a terminated block");
+        let instruction = self.function().instruction(term);
+        if instruction.opcode == Opcode::Br && instruction.operands.len() == 1 {
+            let Operand::Block(succ) = instruction.operands[0] else { unreachable!("a jump's target") };
+            let only_terminator =
+                self.function().iter_block(block).find(|&inst| self.function().instruction(inst).opcode != Opcode::Phi)
+                    == Some(term);
+            if only_terminator
+                && !self.loop_headers.contains(&block)
+                && !self.loop_headers.contains(&succ)
+                && crate::simplifycfg::empty_block_removed(self.unit.context, self.unit.function, block, succ)
+            {
+                self.lvi.erase_block(block);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Where the walk of the layout goes after `block`, found at `at`: LLVM
+    /// walks the live block list, so a block the pass placed after the
+    /// current one is visited in the same sweep. `after` is the block that
+    /// followed `block` before it was processed, for when it is gone.
+    fn next_in_layout(
+        &self,
+        block: BlockId,
+        at: usize,
+        after: Option<BlockId>,
+    ) -> usize {
+        let layout = self.function().layout();
+        let near = |wanted: BlockId| {
+            (0..layout.len())
+                .flat_map(|distance| [at.checked_sub(distance), Some(at + distance)])
+                .flatten()
+                .find(|&index| layout.get(index) == Some(&wanted))
+        };
+        match (near(block), after) {
+            (Some(index), _) => index + 1,
+            (None, Some(after)) => near(after).unwrap_or(layout.len()),
+            (None, None) => layout.len(),
+        }
     }
 
     /// The blocks reachable from `entry`.
