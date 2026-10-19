@@ -91,6 +91,7 @@
 
 pub mod aa;
 pub mod access;
+pub mod aggregate;
 pub mod alias;
 pub mod aliassets;
 pub mod argumentattrs;
