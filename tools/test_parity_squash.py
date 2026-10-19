@@ -136,6 +136,24 @@ def test_an_own_commit_that_deletes_a_file_and_its_tests_is_refused_unless_the_d
     assert ps.refusals(head, "Deletes: scev/expand_iv.rs, the old expander", base="main", cwd=repo) == []
 
 
+def test_a_rewritten_generated_page_is_not_a_deletion(tmp_path):
+    """#2760, #2873 and #2925 were refused as 'deletes docs/optimizations/backend/jumps.md' (30-35 lines) for a regenerated page: three PRs sat out of the queue."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sh(repo, "init", "-q", "-b", "main")
+    page = "> Generated from the `//!` header of [`a.rs`](x); edit the header, not this file.\n" + "".join(f"line {i}\n" for i in range(60))
+    hand = "".join(f"line {i}\n" for i in range(60))
+    commit(repo, "gen.md", page, "page")
+    commit(repo, "hand.md", hand, "hand page")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "gen.md").write_text(page.split("\n", 1)[0] + "\nshort\n")
+    (repo / "hand.md").write_text("short\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "docs: rewrite")
+    why = ps.refusals(sh(repo, "rev-parse", "HEAD"), "", base="main", cwd=repo)
+    assert len(why) == 1 and why[0].startswith("hand.md"), why
+
+
 def test_a_squash_that_touches_files_the_pr_never_listed_is_detected_after_landing(tmp_path):
     repo, head = squash_of_a_stale_tree(tmp_path)
     sh(repo, "checkout", "-q", "main")
