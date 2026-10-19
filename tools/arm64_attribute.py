@@ -2,7 +2,7 @@
 """Where llc's advantage comes from: the pinned `llc -O2` on clang's -O2 IR with one pass
 switched off at a time, executed instructions summed over tests/programs. A pass's
 contribution is how much worse llc gets without it; ours is the same IR through this
-backend. Usage: tools/arm64_attribute.py"""
+backend. Usage: tools/arm64_attribute.py [programs-dir]"""
 import sys
 import tempfile
 from pathlib import Path
@@ -37,7 +37,7 @@ def main():
     c.run(c.CLANG, "-target", c.TRIPLE, "-O2", "-ffreestanding", "-fno-builtin", "-c", "-o", runtime, c.CRATE / "tests/rt/rt.c")
     sums = {name: 0 for name in ["ours", "llc"] + [n for n, _ in OFF]}
     sizes = dict(sums)
-    for source in sorted((c.CRATE / "tests/programs").glob("*.c")):
+    for source in sorted(Path(sys.argv[1] if len(sys.argv) > 1 else c.CRATE / "tests/programs").glob("*.c")):
         work = Path(tempfile.mkdtemp())
         ir = work / "p.ll"
         c.run(c.CLANG, "-target", c.TRIPLE, "-O2", "-fno-vectorize", "-fno-slp-vectorize", "-fno-unroll-loops",
