@@ -2077,28 +2077,30 @@ impl Selector<'_, '_, '_> {
         Ok(body)
     }
 
-    /// `branchprob`'s probabilities over the LIR blocks each MIR block
-    /// became: a branch takes its MIR edges', shared out among the
-    /// successors it has.
+    /// `BranchProbabilityInfo` over the LIR blocks each MIR block became
+    /// (`MachineBranchProbabilityInfo` from the IR's, as SelectionDAG builds
+    /// it): a branch takes its MIR edges', shared out among the successors it
+    /// has.
     fn odds(
         &self,
         made: &IndexMap<BlockId, Vec<Block>>,
         block_at: &IndexMap<BlockId, i64>,
     ) -> BlockOdds {
-        let estimated = llrm_analysis::branchprob::estimated(
-            &self.module.context,
-            &self.module.metadata,
-            &self.module.globals,
+        let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+            llrm_analysis::bpi::Module {
+                context: &self.module.context,
+                declarations: &self.module.globals,
+                metadata: &self.module.metadata,
+                layout: &self.layout,
+            },
             self.function,
-            &self.shape,
-            &std::collections::BTreeMap::new(),
         );
         let mut odds = BlockOdds::default();
         for (block, chain) in made {
             let taken: IndexMap<i64, f64> = self
                 .successors(*block)
                 .into_iter()
-                .filter_map(|to| Some((block_at[&to], estimated.probability(cfg::id(*block), cfg::id(to))?)))
+                .map(|to| (block_at[&to], bpi.get_edge_probability_to(self.function, *block, to).to_f64()))
                 .collect();
             // An edge within the chain, as a switch's compares make, carries
             // what the block's own MIR edges do not.
