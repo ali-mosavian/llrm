@@ -22,18 +22,26 @@ pub enum Sinking {
     Cloned,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The blocks `collect_children_in_loop` has looked at, for the test that
+    /// holds its work to the loop's size.
+    pub static CHILDREN_EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// [`collectChildrenInLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L486):
 /// the loop's blocks from the header, a block before the blocks it immediately
 /// dominates.
 fn collect_children_in_loop(ctx: &LoopCtx) -> Vec<BlockId> {
+    let tree = ctx.shape.dominance.tree(ctx.function);
     let mut worklist = vec![cfg::block(ctx.loop_.header)];
     let mut at = 0;
     while at < worklist.len() {
-        let parent = cfg::id(worklist[at]);
-        for &block in ctx.function.layout() {
-            if ctx.contains_block(block) && ctx.shape.dominance.immediate(ctx.function, cfg::id(block)) == Some(parent)
-            {
-                worklist.push(block);
+        for child in tree.children(Some(worklist[at])) {
+            #[cfg(test)]
+            CHILDREN_EXAMINED.with(|one| one.set(one.get() + 1));
+            if ctx.contains_block(child) {
+                worklist.push(child);
             }
         }
         at += 1;

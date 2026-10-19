@@ -254,6 +254,12 @@ pub struct UnrollingPreferences {
 
 /// The target a cost is for.
 pub trait Tti {
+    /// The implementation's name, for what reports which target priced a
+    /// decision.
+    fn name(&self) -> &'static str {
+        "generic"
+    }
+
     /// The cost of an integer-to-float cast whose operand is a load, where the
     /// target prices it apart (X86: the extension of a narrow integer to i32 is
     /// free for a load, `FILD` reads it from memory); none: as any cast (T4).
@@ -396,7 +402,11 @@ pub trait Tti {
         has_base_reg: bool,
         scale: i64,
     ) -> Cost {
-        if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) { Cost::FREE } else { Cost::INVALID }
+        if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) {
+            Cost::FREE
+        } else {
+            Cost::INVALID
+        }
     }
 
     /// `isLSRCostLess`: registers first, then the add-recurrence cost, the IV

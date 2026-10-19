@@ -4198,6 +4198,9 @@ fn simplify_gep(
     // Check to see if this is constant foldable.
     let ptr_c = q.constant(ptr)?;
     let indices_c = indices.iter().map(|&index| q.constant(index)).collect::<Option<Vec<_>>>()?;
+    if !constantfolding::integer_indices(q.context, &indices_c) {
+        return None;
+    }
     let nw = constantfolding::nw_of_flags(flags);
     let env = constantfolding::Env { globals: q.globals, layout: q.layout };
     let folded =

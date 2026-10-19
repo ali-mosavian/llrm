@@ -44,8 +44,18 @@ pub enum ConstantKind {
 /// The constant expressions MIR keeps, for global initializers only.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum ConstantExpr {
-    GetElementPtr { source: TypeId, inbounds: bool, operands: Vec<ConstantId> },
-    Cast { op: CastOp, value: ConstantId },
+    /// `nusw` includes what `inbounds` implies.
+    GetElementPtr {
+        source: TypeId,
+        inbounds: bool,
+        nusw: bool,
+        nuw: bool,
+        operands: Vec<ConstantId>,
+    },
+    Cast {
+        op: CastOp,
+        value: ConstantId,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
