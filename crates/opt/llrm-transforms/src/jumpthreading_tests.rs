@@ -1,6 +1,6 @@
 //! JumpThreading against LLVM's `jump-threading` on `tests/jumpthreading/*.ll`,
-//! one fixture per shape of stage S1, and the boundary of each DEVIATE of
-//! `jumpthreading.rs`.
+//! one fixture per shape of stages S1 to S3, and the boundary of each DEVIATE
+//! of `jumpthreading.rs`.
 //!
 //! Each `NAME.ll` is run through the pass and must come out as
 //! `NAME.after.ll` (written by `LLRM_BLESS=1`); `tools/difftest/difftest.py`
@@ -50,7 +50,7 @@ fn fixture(name: &str) -> String {
 #[test]
 fn every_fixture_comes_out_as_its_after_file() {
     let fixtures = fixtures();
-    assert!(fixtures.len() >= 7, "{} fixtures", fixtures.len());
+    assert!(fixtures.len() >= 15, "{} fixtures", fixtures.len());
     for path in fixtures {
         let before = std::fs::read_to_string(&path).expect("readable");
         let after = run(&before);
@@ -128,4 +128,78 @@ fn a_block_left_with_no_predecessor_is_deleted() {
 fn a_condition_lvi_proves_on_one_edge_is_threaded_from_it() {
     let after = run(&fixture("lvi_on_edge"));
     assert!(after.contains(".thread"), "{after}");
+}
+
+/// `%c` is decided on both edges into `%m` (true from the entry, false through
+/// `%z`), which `%b` tests again: before S2 the test of `%c` in `%b` stayed.
+#[test]
+fn a_test_decided_by_the_edge_into_the_block_before_is_threaded_through_both() {
+    let after = run(&fixture("two_block"));
+    assert!(after.contains("m.thread"), "{after}");
+    assert_eq!(after.matches("br i1 %c").count(), 1, "only the entry tests %c:\n{after}");
+}
+
+/// A branch on a phi of two compares stayed a phi of `i1` and one branch; it
+/// is a branch on each compare, in each predecessor.
+#[test]
+fn a_branch_on_a_phi_is_copied_into_the_predecessors_that_jump_to_it() {
+    let after = run(&fixture("dup_cond_branch"));
+    assert!(!after.contains("phi i1"), "{after}");
+    assert!(after.contains("br i1 %a, label %t, label %e"), "{after}");
+    assert!(after.contains("br i1 %b, label %t, label %e"), "{after}");
+}
+
+/// `a < b` holds on the way into `%m`, which implies `a <= b` in `%w`;
+/// LazyValueInfo has no range for either side, so the test stayed.
+#[test]
+fn a_branch_implied_by_a_dominating_branch_is_folded() {
+    let after = run(&fixture("implied_condition"));
+    assert!(!after.contains("br i1 %d"), "{after}");
+    assert!(after.contains("br i1 %t, label %x, label %y"), "{after}");
+}
+
+/// The select in `%p1` has an arm that decides the compare in `%bb`: it is
+/// expanded to a branch, so that `%p1` can skip the test.
+#[test]
+fn a_select_whose_arm_decides_the_compare_is_unfolded_to_a_branch() {
+    let after = run(&fixture("select_unfold_cmp"));
+    assert!(!after.contains("select"), "{after}");
+    assert!(after.contains("br i1 %s, label %t, label %bb"), "{after}");
+}
+
+/// A select on a phi of constants in its own block is expanded to a branch
+/// and a phi.
+#[test]
+fn a_select_on_a_phi_with_constant_inputs_is_unfolded_in_its_block() {
+    let after = run(&fixture("select_in_curr_bb"));
+    assert!(!after.contains("select"), "{after}");
+    assert!(after.contains("phi i32"), "{after}");
+}
+
+/// The xor of a phi that is `true` from `%p1` is copied into `%p1` with the
+/// phi's value in place.
+#[test]
+fn a_branch_on_a_xor_with_a_known_input_is_copied_into_that_predecessor() {
+    let after = run(&fixture("branch_on_xor"));
+    assert!(after.contains("%z1 = xor i1 true, %y1"), "{after}");
+    assert!(!after.contains("phi i1"), "{after}");
+}
+
+/// The select in `%p1` feeds a phi that a `switch` reads: it is expanded to a
+/// branch, so that `%p1` can skip the switch.
+#[test]
+fn a_select_feeding_a_switch_is_unfolded_to_a_branch() {
+    let after = run(&fixture("select_unfold_switch"));
+    assert!(!after.contains("select"), "{after}");
+    assert!(after.contains("br i1 %s, label %t, label %bb"), "{after}");
+}
+
+/// `%var` is a phi of constants in `%pred` and `%b` compares it: each
+/// predecessor of `%pred` knows the compare, so the one that makes it true
+/// skips both blocks.
+#[test]
+fn a_compare_of_a_phi_in_the_block_before_is_evaluated_on_each_edge() {
+    let after = run(&fixture("two_block_phi"));
+    assert!(after.contains("pred.thread"), "{after}");
+    assert!(after.matches("icmp eq i32 %var, 0").count() == 0, "the compare of %var is gone:\n{after}");
 }
