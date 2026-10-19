@@ -725,9 +725,9 @@ pub fn _code_by(
                 segment.put(&_jump(name, labels[label], at, *long, bits)?.code, &[])
             }
             Encoded::Near(Near { name }) if labels.contains_key(name) => {
-                let distance = labels[name] - (at as i64 + 1 + i64::from(bits) / 8);
+                let distance = labels[name] - (at as i64 + 1 + displacement_bytes(bits) as i64);
                 let far = || Unencodable(format!("a near call to {name} {distance} bytes away"));
-                let displacement = if bits == 32 {
+                let displacement = if bits >= 32 {
                     i32::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
                 } else {
                     i16::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
@@ -736,7 +736,7 @@ pub fn _code_by(
             }
             Encoded::Near(Near { name }) => {
                 segment
-                    .put(&vec![0; 1 + bits as usize / 8], &[Fixup::new(1, relative(bits as usize / 8), name.clone())]);
+                    .put(&vec![0; 1 + displacement_bytes(bits)], &[Fixup::new(1, relative(displacement_bytes(bits)), name.clone())]);
                 segment.image[at] = 0xE8;
             }
         }
@@ -844,12 +844,18 @@ pub fn _encoded(
             Loc::Imm(ir::Imm { address: Some(addr), .. }) if addr.space == Space::Group => {
                 (made.immediate_at, BASE, 0, addr)
             }
+            // Long mode loads a symbol's address with `lea` from the instruction pointer.
+            Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if bits == 64 => {
+                (made.displacement_at, near, addr.disp + value, addr)
+            }
             Loc::Imm(ir::Imm { address: Some(addr), value, .. }) => (made.immediate_at, near, addr.disp + value, addr),
             _ => continue,
         };
         let Some(at) = at else {
             return Err(Unencodable(format!("{}: no field for {}", what.repr(), one.repr())));
         };
+        // Long mode reaches a symbol from the instruction pointer: the field is relative to the instruction's end.
+        let loc = if bits == 64 { Kind::PcRel { width: 4, from: code.len() - at } } else { loc };
         pack_field(&mut code, at, loc, addend);
         let name = names
             .get(&(addr.space, addr.index))
@@ -995,7 +1001,13 @@ pub fn _trampolined(
     }
 }
 
-/// An item's bytes in `bits`-bit mode: a near displacement is `bits` wide.
+/// The bytes of a near branch's displacement: a word in real mode, a dword from 32-bit mode up (long mode's is
+/// `rel32` too).
+fn displacement_bytes(bits: u32) -> usize {
+    if bits == 16 { 2 } else { 4 }
+}
+
+/// An item's bytes in `bits`-bit mode: a near displacement is `displacement_bytes` wide.
 pub fn _length(
     item: &Encoded,
     bits: u32,
@@ -1009,12 +1021,12 @@ pub fn _length(
             if !long {
                 SHORT_JUMP as usize
             } else if name == "jmp" {
-                1 + bits as usize / 8
+                1 + displacement_bytes(bits)
             } else {
-                2 + bits as usize / 8
+                2 + displacement_bytes(bits)
             }
         }
-        Encoded::Near(_) => 1 + bits as usize / 8,
+        Encoded::Near(_) => 1 + displacement_bytes(bits),
     }
 }
 

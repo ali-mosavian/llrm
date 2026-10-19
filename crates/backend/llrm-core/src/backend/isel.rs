@@ -5845,7 +5845,7 @@ impl Selector<'_, '_, '_> {
         // above them, and the caller removes it with them. A callee that pops
         // its own arguments cannot be told to leave a pad.
         let align = self.callee_facts.stack_alignment(self.arch, &name);
-        let pad = if pops || align <= self.arch.stack_slot_bytes() || self.arch.object().bitness != 32 {
+        let pad = if pops || align <= self.arch.stack_slot_bytes() || self.arch.object().bitness < 32 {
             0
         } else {
             (align - pushed % align) % align

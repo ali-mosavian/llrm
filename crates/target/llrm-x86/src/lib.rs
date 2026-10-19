@@ -164,6 +164,10 @@ pub mod registers {
                 widths.insert(one, size);
             }
         }
+        // The registers only 64-bit mode has (REX): their width is iced's.
+        for one in RegId::values().filter(|one| one.is_gpr()) {
+            widths.entry(one).or_insert(one.size() as i64);
+        }
         widths
     });
 
@@ -178,6 +182,14 @@ pub mod registers {
         for (row, size) in [(&DWORDS, 4), (&WORDS, 2), (&BYTES, 1)] {
             for one in in_order(row) {
                 at_width.entry(llrm_lir::root(one)).or_default().entry(size).or_insert(one);
+            }
+        }
+        // The views of each 64-bit register, which long mode's targets root their families at: the first
+        // register of each width by iced's number (AL before AH).
+        for one in RegId::values().filter(|one| one.is_gpr()) {
+            let whole = one.full_register();
+            if whole.is_gpr64() {
+                at_width.entry(whole).or_default().entry(one.size() as i64).or_insert(one);
             }
         }
         at_width

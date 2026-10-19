@@ -718,7 +718,7 @@ fn parts(
     // frame register and the reserve a multiple of it.
     let align = procedure.registers.align;
     let calls = align > slot
-        && procedure.body.bits == 32
+        && procedure.body.bits >= 32
         && !procedure.far
         && procedure.interrupt.is_none()
         && procedure.entry == 0

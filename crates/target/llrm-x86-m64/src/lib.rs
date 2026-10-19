@@ -105,6 +105,10 @@ impl llrm_target::Target for M64 {
         CALLING.native().slot_bytes
     }
 
+    fn aligned_calls(&self) -> bool {
+        CALLING.native().aligned_calls
+    }
+
     fn stack_alignment(&self) -> i64 {
         CALLING.native().stack_alignment.unwrap_or(CALLING.native().slot_bytes)
     }

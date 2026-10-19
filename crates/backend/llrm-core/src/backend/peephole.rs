@@ -194,6 +194,19 @@ fn reg(
     Reg { register, width }
 }
 
+/// The low `width` bytes of an `i64` as a mask: all of it from eight bytes.
+fn low_mask(width: u32) -> i64 {
+    if width >= 8 { -1 } else { (1i64 << (width * 8)) - 1 }
+}
+
+/// `value` as a signed integer of `bits` bits, wrapped.
+fn wrap_to(
+    value: i64,
+    bits: i64,
+) -> i64 {
+    if bits >= 64 { value } else { (value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1)) }
+}
+
 /// The root `register` is a view of, in the target's register file.
 fn full32(
     regs: Regs,
@@ -2142,7 +2155,7 @@ fn _affine_address(
     };
     let z = full32(regs, dest.register);
     let bits = i64::from(dest.width) * 8;
-    let wrapped = |value: i64| (value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1));
+    let wrapped = |value: i64| wrap_to(value, bits);
     let mut best: Option<(usize, AddressRef, i64, bool, Reg)> = None;
     for (at, one) in parts.iter().enumerate().skip(1) {
         let Some((written, step, cost)) = affine::step(regs, one, cpu) else {
@@ -2227,7 +2240,7 @@ fn _affine_address(
                 // By the register's width: 1 and -1 (0xFFFF in a word) are the
                 // unit.
                 let bits = i64::from(register.width) * 8;
-                let step = match (*value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1)) {
+                let step = match wrap_to(*value, bits) {
                     1 => Some(name == "add"),
                     -1 => Some(name != "add"),
                     _ => None,
@@ -3032,7 +3045,7 @@ pub fn constants(body: &LirBody) -> LirBody {
                     );
                     if emit(body.bits, &made).is_some() {
                         folded.insert(id(one), Arc::new(with_what(one, made)));
-                        candidate = Some((*dest, Known::Value(value & ((1i64 << (dest.width * 8)) - 1))));
+                        candidate = Some((*dest, Known::Value(value & low_mask(dest.width))));
                     }
                 }
             }
@@ -3048,7 +3061,7 @@ pub fn constants(body: &LirBody) -> LirBody {
                         match source {
                             Loc::Imm(source) if source.address.is_none() => {
                                 candidate =
-                                    Some((*dest, Known::Value(source.value & ((1i64 << (dest.width * 8)) - 1))));
+                                    Some((*dest, Known::Value(source.value & low_mask(dest.width))));
                             }
                             Loc::Reg(source) if regs.integer(source.register) => {
                                 let value = *held
@@ -3128,7 +3141,7 @@ fn extended_constant(
         .iter()
         .find(|(one, _)| full32(regs, one.register) == full32(regs, source.register) && one.width >= source.width)
         .and_then(|(_, known)| if let Known::Value(value) = known { Some(*value) } else { None })?;
-    let mask = (1i64 << (source.width * 8)) - 1;
+    let mask = low_mask(source.width);
     let low = value & mask;
     Some(if what.name.as_deref() == Some("movsx") && low >> (source.width * 8 - 1) & 1 == 1 {
         low | !mask

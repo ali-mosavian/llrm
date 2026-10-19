@@ -18,6 +18,8 @@ convention = "sysv64"
 cc = "cdecl"
 slot_bytes = 8
 stack_alignment = 16
+# Every call finds the stack aligned: the frame is sized for it in any function that calls.
+aligned_calls = true
 order = "right-to-left"
 cleanup = "caller"
 argument_registers = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]

@@ -93,6 +93,11 @@ impl RegId {
     }
 
     #[inline]
+    pub fn is_gpr64(self) -> bool {
+        self.0.is_gpr64()
+    }
+
+    #[inline]
     pub fn is_segment_register(self) -> bool {
         self.0.is_segment_register()
     }

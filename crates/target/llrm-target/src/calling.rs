@@ -65,6 +65,9 @@ pub struct Convention {
     pub wide_pairs: Vec<[String; 2]>,
     /// Whether a register an argument skipped is free for a later one.
     pub backfill: bool,
+    /// The ABI guarantees the stack is a multiple of `stack_alignment` at every call, whatever the callee holds:
+    /// every function that calls frames itself to it.
+    pub aligned_calls: bool,
     /// The most bytes of an integer one argument register holds, where that is
     /// more than a stack slot (a long in a 32-bit register on a 16-bit
     /// target); a slot's worth where the file gives none.
@@ -176,6 +179,7 @@ const KEYS: &[&str] = &[
     "cc",
     "wide_pairs",
     "backfill",
+    "aligned_calls",
     "register_bytes",
     "sized_arguments",
     "skip_memory",
@@ -568,6 +572,7 @@ impl Convention {
             cc: table.contains_key("cc").then(|| text("cc")).transpose()?,
             wide_pairs,
             backfill: flag("backfill")?,
+            aligned_calls: flag("aligned_calls")?,
             register_bytes: table.contains_key("register_bytes").then(|| integer("register_bytes")).transpose()?,
             sized_arguments: flag("sized_arguments")?,
             skip_memory: flag("skip_memory")?,

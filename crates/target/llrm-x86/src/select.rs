@@ -6,7 +6,7 @@
 
 use std::sync::LazyLock;
 
-use iced_x86::{Code, Decoder, DecoderOptions, Encoder, Instruction, MemoryOperand, RepPrefixKind};
+use iced_x86::{Code, Decoder, DecoderOptions, Encoder, Instruction, MemoryOperand, Register, RepPrefixKind};
 use llrm_lir::registers::RegId;
 use llrm_lir::{self as ir, Loc, Operation, Semantics, Space};
 use llrm_support::hash::IndexMap;
@@ -364,6 +364,11 @@ pub fn place_operand(
         return None;
     };
     match addr.space {
+        // Long mode reaches a symbol through the instruction pointer: `[rip + disp32]`, the displacement a PC32
+        // relocation. A symbol plus a register has no such form.
+        Space::Segment | Space::External if bits == 64 => {
+            (!based && addr.base == (RegId::None).iced()).then(|| (rip_operand(), true))
+        }
         Space::Segment | Space::External => {
             // Once a pass makes a value of the offset, `through` is where the
             // allocation put it. The relocation fills the displacement, which
@@ -419,6 +424,21 @@ pub fn place_operand(
         }
         _ => None,
     }
+}
+
+/// `[rip + disp32]` with the displacement left for the relocation: iced's operand is the target address, and
+/// the field it writes is replaced by the caller's addend.
+fn rip_operand() -> MemoryOperand {
+    MemoryOperand::new(Register::RIP, Register::None, 1, 0, 8, false, Register::None)
+}
+
+/// `lea into, [rip + symbol]`: the address of a symbol as a value in long mode.
+pub fn lea_symbol(
+    into: RegId,
+    at: At,
+) -> Option<Emitted> {
+    (width_of(into)? == 8).then_some(())?;
+    _assemble(&raised(create_reg_mem(Code::Lea_r64_m, into, rip_operand())), at, true)
 }
 
 pub const _WORD_BASES: [RegId; 2] = crate::addressing16::BASES;
@@ -497,14 +517,14 @@ pub fn r#move(
         // a move to itself is no instruction at all
         return Some(Emitted::new(Vec::new()));
     }
-    let code = if crate::registers::DWORDS.contains(&into) && crate::registers::DWORDS.contains(&outof) {
-        Code::Mov_r32_rm32
-    } else if crate::registers::WORDS.contains(&into) && crate::registers::WORDS.contains(&outof) {
-        Code::Mov_r16_rm16
-    } else if crate::registers::BYTES.contains(&into) && crate::registers::BYTES.contains(&outof) {
-        Code::Mov_r8_rm8
-    } else {
-        return None;
+    let code = match (width_of(into)?, width_of(outof)?) {
+        (8, 8) => Code::Mov_r64_rm64,
+        (4, 4) if crate::registers::DWORDS.contains(&into) || into.is_gpr64() == outof.is_gpr64() => {
+            Code::Mov_r32_rm32
+        }
+        (2, 2) => Code::Mov_r16_rm16,
+        (1, 1) => Code::Mov_r8_rm8,
+        _ => return None,
     };
     _assemble(&raised(create_reg_reg(code, into, outof)), at, true)
 }
@@ -697,9 +717,29 @@ pub fn load(
     at: At,
 ) -> Option<Emitted> {
     let width = width_of(into)?;
+    if width == 8 {
+        return load_quadword(into, value, at);
+    }
     let code = _code(&format!("MOV_R{}_IMM{}", width * 8, width * 8))?;
     let made = create_reg_i32(code, into, _immediate(value, width)).ok()?;
     _assemble(&made, at, true)
+}
+
+/// `mov r64, imm` in the shortest form that makes `value`: a dword load zero-extends (`mov r32, imm32`, 5 bytes),
+/// a sign-extended dword is `mov r/m64, imm32` (7), else the 10-byte `movabs`.
+fn load_quadword(
+    into: RegId,
+    value: i64,
+    at: At,
+) -> Option<Emitted> {
+    if let Ok(low) = u32::try_from(value) {
+        let made = create_reg_i32(Code::Mov_r32_imm32, into.full_register32(), i64::from(low as i32)).ok()?;
+        return _assemble(&made, at, true);
+    }
+    if let Ok(signed) = i32::try_from(value) {
+        return _assemble(&create_reg_i32(Code::Mov_rm64_imm32, into, i64::from(signed)).ok()?, at, true);
+    }
+    _assemble(&Instruction::with2(Code::Mov_r64_imm64, into.iced(), value as u64).ok()?, at, true)
 }
 
 /// `<name> dest, source`, both registers, at the width they name.
@@ -730,7 +770,7 @@ pub fn fits_in_a_byte(value: i64) -> bool {
 /// Python binds `ACCUMULATOR` twice, `{2: AX, 4: EAX}` and later this; every
 /// function reads the global at call time, so only this binding is ever seen.
 pub static ACCUMULATOR: LazyLock<IndexMap<i64, RegId>> =
-    LazyLock::new(|| IndexMap::from_iter([(1, RegId::AL), (2, RegId::AX), (4, RegId::EAX)]));
+    LazyLock::new(|| IndexMap::from_iter([(1, RegId::AL), (2, RegId::AX), (4, RegId::EAX), (8, RegId::RAX)]));
 
 /// `<name> dest, imm`, in the shortest form the value and register allow.
 pub fn arith_imm(
@@ -750,11 +790,17 @@ pub fn arith_imm(
     if fits_in_a_byte(value) && !relocated {
         shapes.push((format!("{upper}_RM{}_IMM8", width * 8), 8));
     }
+    // A quadword operation takes a sign-extended dword.
+    let immediate = (width * 8).min(32);
     if Some(&dest) == ACCUMULATOR.get(&width) {
-        let accumulator = if width == 2 { "AX" } else { "EAX" };
-        shapes.push((format!("{upper}_{accumulator}_IMM{}", width * 8), width * 8));
+        let accumulator = match width {
+            2 => "AX",
+            4 => "EAX",
+            _ => "RAX",
+        };
+        shapes.push((format!("{upper}_{accumulator}_IMM{immediate}"), immediate));
     }
-    shapes.push((format!("{upper}_RM{}_IMM{}", width * 8, width * 8), width * 8));
+    shapes.push((format!("{upper}_RM{}_IMM{immediate}", width * 8), immediate));
     for (shape, _bits) in shapes {
         let Some(code) = _code(&shape) else {
             continue;
@@ -897,11 +943,15 @@ pub fn store_imm(
     at: At,
 ) -> Option<Emitted> {
     let built = operand_of(cell, at.bits);
-    if built.is_none() || ![1, 2, 4].contains(&cell.width) {
+    if built.is_none() || ![1, 2, 4, 8].contains(&cell.width) {
         return None;
     }
     let width = i64::from(cell.width);
-    let code = _code(&format!("MOV_RM{}_IMM{}", width * 8, width * 8))?;
+    // A quadword store takes a sign-extended dword.
+    let code = _code(&format!("MOV_RM{}_IMM{}", width * 8, (width * 8).min(32)))?;
+    if width == 8 && i32::try_from(value).is_err() {
+        return None;
+    }
     let (r#where, relocated) = built?;
     let made = create_mem_i32(code, r#where, _immediate(value, width)).ok()?;
     _assemble(&made, at, relocated)
@@ -1129,11 +1179,11 @@ pub fn test_immediate(
         Loc::Mem(one) => one.width,
         _ => return None,
     };
-    if ![1, 2, 4].contains(&width) {
+    if ![1, 2, 4, 8].contains(&width) {
         return None;
     }
     let width = i64::from(width);
-    let code = _code(&format!("TEST_RM{}_IMM{}", width * 8, width * 8))?;
+    let code = _code(&format!("TEST_RM{}_IMM{}", width * 8, (width * 8).min(32)))?;
     let value = _immediate(value, width);
     match dest {
         Loc::Reg(one) => _assemble(&raised(create_reg_i32(code, one.register, value)), at, true),
@@ -1419,7 +1469,7 @@ pub fn funnel(
 /// A count in cx or ecx is one in cl: every shift and rotate reads only `count
 /// & 31`.
 fn _cl(count: Option<RegId>) -> bool {
-    matches!(count, Some(RegId::CL | RegId::CX | RegId::ECX))
+    matches!(count, Some(RegId::CL | RegId::CX | RegId::ECX | RegId::RCX))
 }
 
 /// Shift a register or spill cell. `count` of None means by cl.
@@ -2004,6 +2054,7 @@ pub fn emit_in(
             // `mov sreg,imm` the machine has no encoding for.
             (Loc::Reg(into), Loc::Imm(imm)) if seg(into.register) => load_segment(into.register, imm.value, at),
             (Loc::Reg(into), Loc::Reg(outof)) => r#move(into.register, outof.register, at),
+            (Loc::Reg(into), Loc::Imm(imm)) if at.bits == 64 && imm.address.is_some() => lea_symbol(into.register, at),
             (Loc::Reg(into), Loc::Imm(imm)) => load(into.register, imm.value, at),
             (Loc::Reg(into), Loc::Mem(cell)) => move_from(into.register, cell, at),
             (Loc::Mem(cell), Loc::Reg(outof)) => move_into(cell, outof.register, at),
@@ -2549,3 +2600,7 @@ mod sweep;
 #[cfg(test)]
 #[path = "select_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "select64_tests.rs"]
+mod tests64;
