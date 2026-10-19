@@ -252,17 +252,19 @@ fn an_untracked_file_is_not_a_reader() {
     assert!(found.contains("tracked_key") && !found.contains("unread_key"), "{found}");
 }
 
-/// `x86.instr` is read by one parser, in the family crate every x86 target
-/// shares: m16's copy was `#[path]`-included by the build script and the rule
-/// generator, and a second reader would be a second schema.
+/// A target's `.instr` is read by one parser, in `llrm-instr`: m16's copy was
+/// `#[path]`-included by the build script and the rule generator, and a second
+/// reader would be a second schema.
 #[test]
-fn x86_instr_has_one_reader_in_the_family_crate() {
+fn an_instr_description_has_one_reader_in_llrm_instr() {
     let root = Path::new(ROOT);
     let readers: Vec<PathBuf> = tracked(root, &["crates/target"])
         .into_iter()
-        .filter(|path| path.file_name().is_some_and(|name| name == "parse.rs"))
-        .filter(|path| fs::read_to_string(path).is_ok_and(|text| text.contains("`x86.instr`'s reader")))
+        .filter(|path| path.file_name().is_some_and(|name| name == "parse.rs" || name == "lib.rs"))
+        .filter(|path| {
+            fs::read_to_string(path).is_ok_and(|text| text.contains("The reader of a target's instruction description"))
+        })
         .map(|path| path.strip_prefix(root).unwrap().to_path_buf())
         .collect();
-    assert_eq!(readers, [PathBuf::from("crates/target/llrm-x86/src/parse.rs")]);
+    assert_eq!(readers, [PathBuf::from("crates/target/llrm-instr/src/lib.rs")]);
 }
