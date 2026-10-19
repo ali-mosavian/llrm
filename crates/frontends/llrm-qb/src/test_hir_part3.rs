@@ -1309,11 +1309,9 @@ fn far_selectors_loaded(function: &str) -> Vec<bool> {
         .lines()
         .filter_map(|line| line.trim().strip_prefix("store volatile i8 "))
         .map(|store| {
-            // An address that is a constant expression (a known segment) has
-            // no value to follow: its selector is not loaded.
-            let address = store.rsplit_once(", ptr ").map_or(store, |(_, address)| address);
-            let Some(last) = pointer.captures_iter(address).last() else { return false };
-            let mut value = last[1].to_owned();
+            // A constant address reloads nothing.
+            let Some(address) = pointer.captures_iter(store).last() else { return false };
+            let mut value = address[1].to_owned();
             while let Some(defined) = definition(function, &value) {
                 if defined.starts_with("load i16, ptr @b$seg") {
                     return true;
@@ -1434,9 +1432,9 @@ SUB b\r\nPOKE 5, PEEK(4)\r\nEND SUB\r\n";
     assert_eq!(loads, 0, "{optimized}");
     let kept =
         optimized.lines().filter(|line| line.trim().starts_with("store i16 ") && line.contains("ptr @b$seg")).count();
-    // VARSEG's `ptrtoint` of the array folds into the address of the PEEK and
-    // POKE (`addrspacecast (ptr @"ARR%" ...)`): no cast instruction is left.
-    assert!(optimized.contains("addrspacecast (ptr @\"ARR%\" to ptr addrspace(1))") && (1..=2).contains(&kept), "{optimized}");
+    // VARSEG's selector is now a constant address, so a's first b$seg store is
+    // dead too (-1 store, -3 instructions).
+    assert!(optimized.contains("addrspacecast (ptr @\"ARR%\"") && kept == 1, "{optimized}");
 }
 
 #[test]
@@ -2469,7 +2467,7 @@ fn a_subs_error_lands_on_its_own_pad_and_runs_the_module_handler() {
         .1
         .attrs
         .push(llrm_mir::Attribute::Flag("nounwind".to_owned()));
-    llrm_core::backend::ehprepare::prepared(&mut emitted.module, llrm_x86_m16::layout().spaces.far).expect("prepared");
+    llrm_core::backend::ehprepare::prepared(&mut emitted.module, &llrm_x86_m16::layout()).expect("prepared");
     let text = llrm_mir::print::module(&emitted.module);
     let handler = &text[text.find("@__main$handler(i16 %0").expect("the handler function")..];
     let handler = &handler[..handler.find("\n}\n").expect("its end")];

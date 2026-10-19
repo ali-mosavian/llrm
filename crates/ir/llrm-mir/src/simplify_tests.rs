@@ -1184,3 +1184,13 @@ declare i16 @llvm.usub.sat.i16(i16, i16)
         assert_eq!(simplified(&format!("{decls}{}", of(body)), "r").as_deref(), expected, "{body}");
     }
 }
+
+/// A GEP indexed by `ptrtoint` became a constant expression the backend could
+/// not lower: llrm-qb
+/// `test_runtime_entry_reserves_the_complete_live_local_extent` reported
+/// "a constant address with no constant offset".
+#[test]
+fn a_gep_with_a_relocatable_index_stays_an_instruction() {
+    let text = "@g = global [4 x i16] zeroinitializer\ndefine void @f() {\nb0:\n  %r = getelementptr i8, ptr @g, i16 ptrtoint (ptr @g to i16)\n  ret void\n}\n";
+    assert_eq!(simplified(text, "r"), None);
+}
