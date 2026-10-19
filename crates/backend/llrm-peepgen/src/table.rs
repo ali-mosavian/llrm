@@ -5,9 +5,7 @@
 use iced_x86::RflagsBits;
 use indexmap::IndexMap;
 
-#[path = "../../../target/llrm-x86/src/parse.rs"]
-#[allow(dead_code)]
-mod parse;
+use llrm_instr as parse;
 
 /// The six arithmetic flags.
 pub const ARITHMETIC: u32 =
