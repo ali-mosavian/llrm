@@ -116,7 +116,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "jumpthreading@668",
         Simplify,
         "jump-threading",
-        "criterion: the S1-S3 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; exit: stage S4 (load PRE, guards, profile) and the old threading of decide@675 gone",
+        "criterion: the S1-S3 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; exit: the old threading of decide@675 deleted (vt-constantfolding, after the flip), stage S4 (load PRE, guards, profile) open; on by default, LLRM_NO_JUMPTHREADING turns it off",
     ),
     entry("cvp@669", Simplify, "correlated-propagation", Translated, ""),
     entry("decide@675", Simplify, "simplifycfg, jump-threading, correlated-propagation", Old, "simplifycfg-port"),
@@ -141,7 +141,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("lcssa@772", Simplify, "lcssa", Old, "lcssa-port"),
     entry("loopidiom@737", Simplify, "loop-idiom", Translated, ""),
     entry("loopidioms@737", Simplify, "loop-idiom", Old, "loop-idiom-port (the pricing, noncountable half)"),
-    entry("indvars@738", Simplify, "indvars", Old, "scev-port"),
+    partial(
+        "indvars@738",
+        Simplify,
+        "indvars",
+        "SimplifyIndvar, WidenIV, exit values, congruent IVs, canonicalizeExitCondition; optimizeLoopExits and predicateLoopExits once indvars.rs calls exitopt/exitpredicate; LFTR behind LLRM_LFTR (D22); criterion: identical to opt on d_faces -O2 with LLRM_LFTR=1, D22 deleted when the translated LSR lands; exit: exitfold, congruent/twin_phis (rows pair on #2773 first) and the old widen path (LLRM_NO_SCEV_WIDEN) deleted, rewound/exitsink deleted or DEVIATE-numbered",
+    ),
     entry("loopdeletion@749", Simplify, "loop-deletion", Translated, ""),
     entry("unroll@753", Simplify, "loop-unroll-full", Translated, ""),
     entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
@@ -155,7 +160,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "jumpthreading@809",
         Simplify,
         "jump-threading",
-        "criterion: the S1-S3 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; exit: stage S4 and the old threading of decide@809 gone",
+        "criterion: the S1-S3 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; exit: the old threading of decide@809 deleted (vt-constantfolding, after the flip), stage S4 open; on by default, LLRM_NO_JUMPTHREADING turns it off",
     ),
     entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
@@ -184,10 +189,15 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
+    // LSR runs in llc's IR preparation (`TargetPassConfig::addIRPasses`,
+    // l.874), after this pipeline; the translated pieces (stage 1-3: Formula,
+    // LSRUse, IVUsers and fixups) are called by no pass yet, so the old `lsr`
+    // is the slot.
+    entry("lsr", Late, "loop-reduce (LoopStrengthReduce.cpp)", Old, "loop-passes-port"),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@728", Simplify, "lcssa", Old, "lcssa-port"),
-    entry("dfa-jump-threading", Simplify, "dfa-jump-threading", Missing, ""),
+    entry("dfa-jump-threading", Simplify, "dfa-jump-threading", Missing, "parity-pipeline"),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
     // (`module@row`, the row of the table in `backend/mod.rs`).
@@ -212,12 +222,17 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("floatassign@7", Backend, "x87 stack slots (regalloc, target)", Old, "regalloc-core-poc"),
     entry("floatalloc@8", Backend, "x86-fp-stackifier (X86FloatingPoint.cpp)", Translated, ""),
     entry("twoaddr@9", Backend, "two-address-instruction", Old, "lir-cleanup-poc"),
-    entry("coalesce@10", Backend, "register-coalescer", Old, "lir-cleanup-poc"),
+    partial(
+        "coalesce@10",
+        Backend,
+        "register-coalescer",
+        "RegisterCoalescer translated and the only coalescer (902b53576); graph helpers stay in coalesce.rs for twoaddr and the spiller; untranslated: adjustCopiesBackFrom, removeCopyByCommutingDef, removePartialRedundancy (DEVIATE C4); reMaterializeDef in #2807; join_copy costs 2-3.6x the pin per join; criterion: identical to llc on the rows, bodies with phis included; exit: the interference graph of coalesce.rs gone from twoaddr and the spiller",
+    ),
     partial(
         "allocate@11",
         Backend,
         "greedy, spill-code-placement, virtregrewriter, stack-slot-coloring",
-        "greedy by default under LLVM's order (#2312); criterion: LLRM_CHECK_LIVEINTERVALS and LLRM_GREEDY_CHECK pass; exit: SplitKit translated and rows at or below the old allocator per row",
+        "greedy by default under LLVM's order (#2312) with SplitKit (SplitEditor, trySplit) and InlineSpiller; criterion: LLRM_CHECK_LIVEINTERVALS and LLRM_GREEDY_CHECK pass and rows at or below the old allocator per row; exit: rematerialization at a split (#2513), sub-registers, tryInstructionSplit, hint splitting translated (trySplitAroundHintReg, tryHintsRecoloring: splitkit-port, D-RS3); the fallback gone: greedy_rewritten's rounds and the old `rewritten` (allocate.rs, taken when greedy fails a range); `spiller::_folded_reads` replaced by MachineSink + PeepholeOptimizer::foldLoad (lir-cleanup-port)",
     ),
     entry("parcopy@12", Backend, "phi-node-elimination copies, virtregrewriter", Old, ""),
     entry("prologue@13", Backend, "prologepilog", Old, ""),
@@ -228,7 +243,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "jumps@17",
         Backend,
         "branch-folder, block-placement, tailduplication",
-        "TailMergeBlocks only (#2241); criterion: rows vs min(gcc,pin) + oracle sweep (J1, #2307); exit: identity vs llc after placement and tail duplication",
+        "TailMergeBlocks (#2241), block placement chains and loops (#2629); criterion: rows vs min(gcc,pin) per bench pair + oracle sweep (J1, #2307); exit: identity vs llc after placement, branch folding and tail duplication; open: trellises and tail duplication (#2745) and alignBlocks/optimizeBranches (#2760) once landed, irreducible loops after tail dup (D16), BranchFolder merge parts, MBFI/MBPI replaced by BlockOdds (D7)",
     ),
     entry("early-tailduplication", Backend, "early-tailduplication", Missing, ""),
     entry("stack-coloring", Backend, "stack-coloring", Missing, ""),
@@ -254,6 +269,14 @@ pub struct AnalysisEntry {
 /// The analyses with a translation or a stand-in the registry follows. The
 /// result of `mssa` is handed out mutable (the walker lives inside it).
 pub const ANALYSES: &[AnalysisEntry] = &[
+    AnalysisEntry {
+        key: "dominators",
+        llvm: "DominatorTreeAnalysis",
+        kind: Translated,
+        off: false,
+        deps: &[],
+        oracle: "tools/llvmport/domcompare.py: DomTree against the pinned LLVM on the corpus (#2292)",
+    },
     AnalysisEntry {
         key: "loops",
         llvm: "LoopAnalysis",
