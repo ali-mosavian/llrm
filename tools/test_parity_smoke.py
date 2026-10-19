@@ -306,6 +306,14 @@ def test_the_budget_is_instructions_so_a_loaded_host_passes_and_a_doubled_step_f
     assert not ok and "perf unavailable" in line
 
 
+def test_each_smoke_step_prints_its_stage_line_before_it_runs(capsys):
+    """The smoke's stage times were only in the final line: a step announces itself, flushed, when it starts."""
+    order = []
+    step = lambda bins: (order.append(capsys.readouterr().out.strip().splitlines()[-1]), ("ok", ""))[1]
+    ps.run_steps([("sc", step, 1.0)], Path("."), clock=lambda: 0.0)
+    assert order and order[0].endswith(" STAGE step sc")
+
+
 def test_the_ratchets_run_side_by_side_and_report_in_command_order():
     """A precheck spent ~45 s of its ~70 s running ten cargo test ratchets one after another; four at a time they overlap their links and runs."""
     import threading
