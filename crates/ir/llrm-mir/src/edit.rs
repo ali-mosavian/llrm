@@ -585,6 +585,17 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// `Value::setName`: `value` is named `name`, or `name` with the least
+    /// number appended that nothing live holds.
+    pub fn set_name(
+        &mut self,
+        value: ValueId,
+        name: &str,
+    ) {
+        let name = self.unique_name(name);
+        self.values[value.0 as usize].name = Some(name);
+    }
+
     /// `Value::takeName`: `to` is named what `from` was, which goes unnamed;
     /// the name stays taken in the function.
     pub fn take_name(
@@ -1196,6 +1207,31 @@ impl Function {
         };
         self.layout.insert(at, block);
         self.blocks[block.0 as usize].placed = true;
+        Ok(())
+    }
+
+    /// `BasicBlock::moveAfter`: the placed `block` moved to stand right after
+    /// the placed `after`.
+    pub fn move_block_after(
+        &mut self,
+        block: BlockId,
+        after: BlockId,
+    ) -> Result<(), String> {
+        if block == after {
+            return Ok(());
+        }
+        let from = self
+            .layout
+            .iter()
+            .position(|one| *one == block)
+            .ok_or_else(|| format!("block {} is not placed", block.0))?;
+        self.layout.remove(from);
+        let at = self
+            .layout
+            .iter()
+            .position(|one| *one == after)
+            .ok_or_else(|| format!("block {} is not placed", after.0))?;
+        self.layout.insert(at + 1, block);
         Ok(())
     }
 

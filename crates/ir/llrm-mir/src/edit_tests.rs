@@ -801,6 +801,37 @@ fn a_phi_left_with_only_itself_becomes_poison() {
     assert!(f.is_erased(m), "the phi of itself alone is replaced by poison and erased");
 }
 
+/// `setName` on a name a live value holds appends a number; the unnumbered
+/// copy of a cloned instruction would otherwise share its original's name and
+/// print as two definitions of `%x`.
+#[test]
+fn a_name_a_value_holds_gets_a_number_when_set_again() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let (_, x) = named(f, "x");
+    let (copy, _) = named(f, "y");
+    let duplicate = f.clone_instruction(copy);
+    f.insert(duplicate, Position::Before(copy)).expect("placed");
+    let value = f.instruction(duplicate).result.expect("a value");
+    f.set_name(value, "x");
+    assert_eq!(f.value(x).name.as_deref(), Some("x"));
+    assert_eq!(f.value(value).name.as_deref(), Some("x1"));
+}
+
+/// `moveAfter` puts a block right behind another: merging an entry block into
+/// its successor leaves the successor first in the layout, or the function has
+/// no entry.
+#[test]
+fn a_block_moved_after_another_stands_right_behind_it() {
+    let mut module = module("define void @f() {\na:\n  br label %b\nb:\n  br label %c\nc:\n  ret void\n}\n");
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    f.move_block_after(layout[2], layout[0]).expect("placed");
+    assert_eq!(f.layout(), &[layout[0], layout[2], layout[1]]);
+    f.move_block_after(layout[0], layout[1]).expect("placed");
+    assert_eq!(f.layout(), &[layout[2], layout[1], layout[0]]);
+}
+
 /// LLVM's `hasOneUse`, `hasNUses` and `hasNUsesOrMore` on a value with 0, 1, 2
 /// and 3 uses: the counts are read from the list at its boundaries, `len` is
 /// not there.

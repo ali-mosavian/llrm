@@ -51,8 +51,6 @@
 //!   [`llrm_mir::constantfolding`], [`llrm_mir::simplify`]
 //! - Used by: [`crate::sccp`]
 
-use std::collections::{HashMap, HashSet};
-
 use llrm_analysis::occurrence::arms;
 use llrm_mir::constantfolding::{self, Env as FoldEnv};
 use llrm_mir::constantrange::{ConstantRange, NO_SIGNED_WRAP, NO_UNSIGNED_WRAP, PreferredRangeType, RangeIntrinsic};
@@ -71,6 +69,7 @@ use llrm_mir::valuetracking::Query;
 use llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef_or_poison;
 use llrm_mir::valuetracking::nonzero::null_pointer_is_defined;
 use llrm_mir::valuetracking::pattern::{self, IntrinsicId, call_arguments, call_info, called_function};
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::predicateinfo::{CmpPredicate, PredicateBase, PredicateInfo};
 
@@ -176,13 +175,13 @@ impl<'a> Solver<'a> {
             bb_executable: IdSet::new(),
             bb_visited: IdSet::new(),
             value_state: IdMap::new(),
-            struct_state: HashMap::new(),
+            struct_state: HashMap::default(),
             tracked_return: (returns_value && tracks_returns).then(Lattice::default),
             inst_work: Vec::new(),
             in_work: IdSet::new(),
             current: None,
             bb_work: Vec::new(),
-            feasible: HashSet::new(),
+            feasible: HashSet::default(),
             additional_users: IdMap::new(),
         };
         if let Some(entry) = function.entry() {

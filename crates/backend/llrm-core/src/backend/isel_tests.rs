@@ -5645,8 +5645,9 @@ define i16 @f() addrspace(1) {
 
 /// Constant expressions as operands, the shapes `simplifyCastInst` and the GEP
 /// fold make since #2614/#2610: each was refused, "an address of no global".
-/// `ptrtoint` of a global (and of a GEP off one) is its link-time address; a far
-/// `inttoptr` constant is a selector:offset pair, whether stored or read through.
+/// `ptrtoint` of a global (and of a GEP off one) is its link-time address; a
+/// far `inttoptr` constant is a selector:offset pair, whether stored or read
+/// through.
 #[test]
 fn test_ptrtoint_of_a_global_is_its_address_as_an_operand() {
     let text = "@g = internal global [8 x i16] zeroinitializer
