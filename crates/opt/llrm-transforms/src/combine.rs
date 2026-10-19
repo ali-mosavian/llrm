@@ -64,7 +64,7 @@ pub(crate) fn handle_use_count_decrement(
 }
 
 /// The instruction in the body that defines `operand`.
-fn defining(
+pub(crate) fn defining(
     function: &Function,
     operand: Operand,
 ) -> Option<InstId> {

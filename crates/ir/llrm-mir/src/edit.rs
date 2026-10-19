@@ -560,6 +560,21 @@ impl Function {
         }
     }
 
+    /// `AllocaInst::setAlignment`.
+    pub fn set_alloca_align(
+        &mut self,
+        inst: InstId,
+        align: u64,
+    ) {
+        let Opcode::Alloca { align: held, .. } = &mut self.instructions[inst.0 as usize].opcode else {
+            panic!("an alloca")
+        };
+        if *held != Some(align) {
+            *held = Some(align);
+            self.log(Change::Rewritten(inst));
+        }
+    }
+
     /// Makes the store `inst` volatile.
     pub fn make_store_volatile(
         &mut self,
