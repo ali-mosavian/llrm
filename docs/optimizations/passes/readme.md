@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 130 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 132 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -63,6 +63,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | gvn | Reuses a value the function already has, so the same operation is not computed twice and the same bytes are not read again: LLVM's GVN and gcc's FRE/PRE. | `EqualCalls` runs early in the body pipeline, before `tailrec`; `Gvn` after | [gvn](gvn.md) |
 | hoistcommon | The code that opens the arms of a branch in the same way runs before the branch once: `hoistCommonCodeFromSuccessors` of SimplifyCFG. |  | [hoistcommon](hoistcommon.md) |
 | homes | Marks each phi whose value also sits in a memory cell with `!llrm.home`, naming a store of that cell, so a spill of the phi reads the cell instead of paying for a slot. | Last in the module pipeline, after `spares`, so the instruction ids it names | [homes](homes.md) |
+| icmpchain | A branch on an or/and chain of compares of one value with constants, turned into a switch (or a range check): LLVM's [`SimplifyCFGOpt::simplifyBranchOnICmpChain`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5469) with `ConstantComparesGatherer` ([L580](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L580)). |  | [icmpchain](icmpchain.md) |
 | indvars | Settles what a loop's counters are worth: a counter's value after its loop becomes a number, and a narrow counter read as a wider index becomes a counter of that width. | In the body pipeline after `promote`, with `exit_values: false`. With | [indvars](indvars.md) |
 | inferspace | Replaces a far pointer made from a near one by the near one where its users allow it, so an access needs no segment register loaded and held for it. | In every body's pipeline before `gvn`, so a far pointer cast from a near one | [inferspace](inferspace.md) |
 | inline | Whole-module MIR inlining: chooses the calls worth replacing by a copy of the callee's body, and makes the copies. | Library of [`crate::interprocedural`](../analyses/interprocedural.md), which runs it once every body has | [inline](inline.md) |
@@ -74,6 +75,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | ivusers | The users of a loop's induction variables (`IVUsers.cpp` at `d1106deb71cc`), which loop strength reduction rewrites. | Nothing runs it yet: stage 3 of the translation of LSR. | [ivusers](ivusers.md) |
 | jumpthread | Threads a path through a branch or switch that the way into it decides: the blocks between the deciding value and the test are copied for that path, which jumps straight to its target and does not run the test. | After the loop passes and `rotate`, before the last `hoist`. Switch state | [jumpthread](jumpthread.md) |
 | jumpthreading | Jump threading: a block that ends in a branch or switch on a condition some of its predecessors decide is bypassed for those predecessors, which jump straight to the target; as LLVM's `jump-threading`. | `pipeline` (`jumpthreading@668`, `jumpthreading@809`), the `Partial` | [jumpthreading](jumpthreading.md) |
+| knownpred | A branch on a value known in some predecessors, threaded: LLVM's [`SimplifyCFGOpt::foldCondBranchOnValueKnownInPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3814) and its `Impl` ([L3624](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3624)). |  | [knownpred](knownpred.md) |
 | lcssa | Puts every natural loop in loop-closed SSA form, so loop passes can change a loop without rewriting the readers of its values elsewhere. | In every body's pipeline after `loopsimplify`, unless `lcssa` is turned off, | [lcssa](lcssa.md) |
 | lcssamerges | Close a loop with several exits: a phi at each exit, merged by phis where the exits' paths join. | Called from [`crate::lcssa`](lcssa.md) for each multi-exit loop, so wherever `lcssa` | [lcssamerges](lcssamerges.md) |
 | lftr | A loop's exit test is rewritten to compare a counter with the value it has when the loop's trip count is spent. | Not wired in: [`crate::indvars`](indvars.md) will run `replaced` after | [lftr](lftr.md) |

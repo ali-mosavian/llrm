@@ -330,6 +330,11 @@ impl Builder<'_> {
         name: &str,
     ) -> Operand {
         let ty = self.context.types.int(1);
+        if let (Operand::Constant(x), Operand::Constant(y)) = (a, b)
+            && let Some(folded) = constfold::compare_float(self.context, predicate, x, y)
+        {
+            return Operand::Constant(folded);
+        }
         self.value(Opcode::FCmp(predicate), ty, vec![a, b], Flags::default(), name)
     }
 
