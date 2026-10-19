@@ -212,6 +212,7 @@ pub mod splitcopy;
 pub mod sroa;
 pub mod switchcg;
 pub mod switchlower;
+pub mod tailmerge;
 pub mod tailrec;
 #[cfg(test)]
 pub mod testing;

@@ -134,20 +134,22 @@ impl<'a> InlineSpiller<'a> {
         lis: &LiveIntervals,
         reg: u32,
     ) -> Vec<(usize, Vec<InstrKey>)> {
-        let mut keys: Vec<InstrKey> = Vec::new();
-        for operand in lis.operands(reg) {
-            if !keys.contains(&operand.instr) {
-                keys.push(operand.instr);
-            }
-        }
+        let mut seen: crate::support::hash::HashSet<InstrKey> = Default::default();
+        let keys: Vec<InstrKey> =
+            lis.operands(reg).iter().map(|operand| operand.instr).filter(|key| seen.insert(*key)).collect();
+        let mut covered: crate::support::hash::HashSet<InstrKey> = Default::default();
         let mut units: Vec<(usize, Vec<InstrKey>)> = Vec::new();
         for key in keys {
-            if units.iter().any(|(_, members)| members.contains(&key)) {
+            if covered.contains(&key) {
                 continue;
             }
-            let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
+            let index = lis.indexes.get_instruction_index(key);
+            let block = lis.indexes.get_mbb_from_index(&index);
             let insns = lis.block_insns(block);
-            let at = insns.iter().position(|one| one.id() == key).expect("in its block");
+            // The block is in slot order: the run sharing `key`'s index starts
+            // here.
+            let first = lis.partition_at(block, &index, false);
+            let at = first + insns[first..].iter().position(|one| one.id() == key).expect("in its block");
             let members = match insns[at].group {
                 None => vec![key],
                 Some(group) => {
@@ -161,6 +163,7 @@ impl<'a> InlineSpiller<'a> {
                     insns[from..=to].iter().map(|one| one.id()).collect()
                 }
             };
+            covered.extend(members.iter().copied());
             units.push((block, members));
         }
         units
