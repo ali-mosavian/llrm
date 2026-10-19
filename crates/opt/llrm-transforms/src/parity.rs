@@ -637,6 +637,32 @@ fn check_without(
     Ok(())
 }
 
+/// A slot the registry calls Old (or Missing) that runs a translated pass
+/// (`FunctionPass::translation`): the row lags the wiring. `held` is each built
+/// slot with the translations it runs.
+pub(crate) fn check_old_slots(
+    registry: &[Entry],
+    held: &[(&str, Vec<&'static str>)],
+) -> Result<(), String> {
+    let lagging: Vec<String> = held
+        .iter()
+        .filter_map(|(slot, translations)| {
+            let row = registry.iter().find(|one| one.slot == *slot)?;
+            let pass = translations.first()?;
+            matches!(row.kind, Old | Missing)
+                .then(|| format!("{slot} ({}) runs the translated {pass}", row.kind.name()))
+        })
+        .collect();
+    if lagging.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "slots the registry calls unfinished run translated passes, mark them Partial or Translated: {}",
+            lagging.join("; ")
+        ))
+    }
+}
+
 /// The Translated slots of `REGISTRY` that `built` runs: a Partial slot is not
 /// one of them, it is never joined.
 pub(crate) fn joined_slots<'a>(
@@ -662,7 +688,7 @@ pub fn check_phase_at(
     built: &[&str],
     level: Level,
 ) -> Result<(), String> {
-    check_phase_with(phase, built, level, true, true, crate::pipeline::Options::default().rotate_slot)
+    check_phase_with(phase, built, level, true, true, crate::pipeline::Options::default().rotate_slot, &[])
 }
 
 /// [`check_phase_at`] with the explicit off switches: the slots whose
@@ -676,6 +702,7 @@ pub(crate) fn check_phase_with(
     sroa: bool,
     mem2reg: bool,
     rotate: bool,
+    held: &[(&str, Vec<&'static str>)],
 ) -> Result<(), String> {
     let absent = if level == Level::O1 { ABSENT_AT_O1 } else { &[] };
     // The translated `loop-rotate` is in the order only with `LLRM_ROTATE`.
@@ -689,6 +716,7 @@ pub(crate) fn check_phase_with(
         })
         .collect();
     check_without(&registry, phase, built, absent)?;
+    check_old_slots(&registry, held)?;
     llrm_mir::counts::joined(joined_slots(&registry, built));
     Ok(())
 }
