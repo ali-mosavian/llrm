@@ -378,7 +378,8 @@ impl Frequency {
         }
         let natural = loops::loops(&kept, Some(body.entry));
         let trips: IndexMap<i64, i64> = body.loop_trip_counts.iter().copied().collect();
-        let edges = trip_adjusted(&natural, &trips, &successors, &shared);
+        let _ = (&natural, &trips);
+        let edges = shared.clone();
         let mut block = propagated(body.entry, &successors, &predecessors, &edges);
         // A bridge runs as often as the edges into it are taken; a chain of
         // them is settled from its first.
