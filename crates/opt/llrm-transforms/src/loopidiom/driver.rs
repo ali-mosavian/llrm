@@ -245,7 +245,12 @@ impl LoopIdiomRecognize {
         };
         let is_undef = |run: &Run, written: Written| match written {
             Written::Splat(byte) => matches!(byte, Some(Byte::Undef | Byte::Poison)),
-            Written::Pattern(Some(id)) => matches!(run.context.get(id).kind, ConstantKind::Poison | ConstantKind::Undef),
+            Written::Pattern(Some(id)) => {
+                matches!(
+                    run.context.get(id).kind,
+                    ConstantKind::Poison | ConstantKind::Undef
+                )
+            }
             Written::Pattern(None) => false,
         };
 
@@ -410,7 +415,7 @@ impl LoopIdiomRecognize {
         kind: MemKind,
     ) -> bool {
         let mut made_change = false;
-        let mut insts: Vec<InstId> = run.function.block(block).instructions().to_vec();
+        let mut insts: Vec<InstId> = run.function.block(block).iter().collect::<Vec<_>>();
         let mut at = 0;
         while at < insts.len() {
             let inst = insts[at];
@@ -446,7 +451,7 @@ impl LoopIdiomRecognize {
             // If processing the instruction invalidated our iterator, start
             // over from the top of the block.
             if next.is_some_and(|next| run.function.is_erased(next)) {
-                insts = run.function.block(block).instructions().to_vec();
+                insts = run.function.block(block).iter().collect::<Vec<_>>();
                 at = 0;
             }
         }

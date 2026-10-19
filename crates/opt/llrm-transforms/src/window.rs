@@ -482,8 +482,7 @@ fn _phi(
     name: &str,
 ) -> (InstId, Operand) {
     let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), Some(name));
-    let at =
-        function.block(block).instructions().first().map_or(Position::End(block), |&first| Position::Before(first));
+    let at = function.block(block).first().map_or(Position::End(block), Position::Before);
     function.insert(phi, at).expect("a placed phi");
     (phi, Operand::Value(function.instruction(phi).result.expect("a phi's value")))
 }
@@ -681,11 +680,8 @@ fn _split(
     // a walk's huge pointer, past its last window. A skipped loop leaves with
     // the starts.
     let test = if found.proof.posttested { found.latch } else { found.header };
-    let exit_phis: Vec<InstId> = function
-        .block(found.exit)
-        .iter()
-        .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
-        .collect();
+    let exit_phis: Vec<InstId> =
+        function.block(found.exit).iter().take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect();
     for phi in exit_phis {
         let mut arms = function.instruction(phi).operands.clone();
         let mut skipped = None;

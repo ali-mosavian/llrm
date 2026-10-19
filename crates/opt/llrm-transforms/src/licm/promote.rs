@@ -384,7 +384,7 @@ pub fn promote_loop_accesses_to_scalars(
     let mut access_ty = None;
     for &pointer in pointers {
         for &at in ctx.loop_.body.iter() {
-            for &inst in function.block(cfg::block(at)).instructions() {
+            for inst in function.block(cfg::block(at)).iter() {
                 if ctx.state.gone.borrow().contains(&inst) || !ctx.contains(inst) {
                     continue;
                 }

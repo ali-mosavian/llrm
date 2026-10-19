@@ -257,8 +257,7 @@ fn insertable(
     {
         return false;
     }
-    let prefix = &function.block(join).instructions()[..index];
-    if prefix.iter().any(|&prior| {
+    if function.block(join).iter().take(index).any(|prior| {
         !only_value(unit.context, callees, function, prior)
             || matches!(function.instruction(prior).opcode, Opcode::Load { .. })
     }) {

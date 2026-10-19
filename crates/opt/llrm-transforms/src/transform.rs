@@ -303,7 +303,7 @@ pub fn subexpressions(
     let mut verified: llrm_mir::dense::IdMap<InstId, Verified> = llrm_mir::dense::IdMap::new();
     for block in dominators_first(function, &dominance) {
         let here = order[&block];
-        let instructions = function.block(block).instructions();
+        let instructions: Vec<InstId> = function.block(block).iter().collect();
         for (index, &inst) in instructions.iter().enumerate() {
             let op = function.instruction(inst);
             // Arithmetic is `gvn::table`'s; `joined` still keys it, with
@@ -391,7 +391,7 @@ pub fn equal_calls(
     // are looked at again.
     let mut groups: IndexMap<(TypeId, &[Operand]), Vec<(usize, usize, InstId)>> = IndexMap::default();
     for (at, &block) in function.layout().iter().enumerate() {
-        for (index, &inst) in function.block(block).instructions().iter().enumerate() {
+        for (index, inst) in function.block(block).iter().enumerate() {
             let op = function.instruction(inst);
             if matches!(op.opcode, Opcode::Call(_)) && op.result.is_some() {
                 groups.entry((op.ty, &op.operands[..])).or_default().push((at, index, inst));
@@ -673,7 +673,7 @@ impl<'f> Crossings<'f> {
         let mut stores = BTreeMap::new();
         for &block in function.layout() {
             let mut counted = vec![0u32];
-            for (index, &inst) in function.block(block).instructions().iter().enumerate() {
+            for (index, inst) in function.block(block).iter().enumerate() {
                 places.insert(inst, (block, index as i64));
                 counted.push(
                     counted[index] + u32::from(matches!(function.instruction(inst).opcode, Opcode::Store { .. })),
@@ -1159,10 +1159,7 @@ b2:
         };
         let place = |inst: InstId| {
             let block = function.parent(inst).expect("placed");
-            (
-                block,
-                function.block(block).instructions().iter().position(|&one| one == inst).expect("in its block") as i64,
-            )
+            (block, function.block(block).iter().position(|one| one == inst).expect("in its block") as i64)
         };
         let source = match function.value(holder).def {
             ValueDef::Instruction(inst) => place(inst),
@@ -1170,13 +1167,14 @@ b2:
         };
         let destination = place(load);
         let stores_in = |block: BlockId, low: i64, high: i64| {
-            let instructions = function.block(block).instructions();
-            let range = low.max(0) as usize..(high.max(0) as usize).min(instructions.len());
-            instructions
-                .get(range)
-                .is_some_and(
-                    |run| run.iter().any(|&one| matches!(function.instruction(one).opcode, Opcode::Store { .. })),
-                )
+            let instructions = function.block(block);
+            let (from, to) = (low.max(0) as usize, (high.max(0) as usize).min(instructions.len()));
+            from < to
+                && instructions
+                    .iter()
+                    .skip(from)
+                    .take(to - from)
+                    .any(|one| matches!(function.instruction(one).opcode, Opcode::Store { .. }))
         };
         if source.0 == destination.0 {
             return source.1 >= destination.1 || stores_in(source.0, source.1 + 1, destination.1);

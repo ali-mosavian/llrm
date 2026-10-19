@@ -252,12 +252,7 @@ pub fn _block(
     block: i64,
     costs: &OperationCosts,
 ) -> Option<i64> {
-    function
-        .block(cfg::block(block))
-        .instructions()
-        .iter()
-        .map(|&one| operation(context, layout, function, callees, one, costs))
-        .sum()
+    function.block(cfg::block(block)).iter().map(|one| operation(context, layout, function, callees, one, costs)).sum()
 }
 
 /// Semantic work present once in the body, independent of frequency.
@@ -303,7 +298,7 @@ pub fn site(
         .iter()
         .flat_map(|&at| {
             let block = cfg::block(at);
-            unit.function.block(block).instructions().iter().map(move |&inst| (block, inst))
+            unit.function.block(block).iter().map(move |inst| (block, inst))
         })
         .any(|(_, inst)| {
             unit.calls_out(inst)

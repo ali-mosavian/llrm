@@ -140,7 +140,7 @@ pub fn merged(
         for block in function.layout() {
             let mut pending: Vec<(InstId, MemRef, i64)> = Vec::new();
             let mut open: Vec<Pair> = Vec::new();
-            for &inst in function.block(*block).instructions() {
+            for inst in function.block(*block).iter() {
                 if let Some(pending_load) = _load(&unit, inst) {
                     pending.push(pending_load);
                 } else if let Some((load, from, bytes)) = _paired(&unit, inst, &pending) {

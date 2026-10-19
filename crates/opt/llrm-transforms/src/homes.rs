@@ -394,9 +394,12 @@ fn survives(
         return false;
     }
     let after = |block: BlockId, from: Option<InstId>| {
-        let insts = function.block(block).instructions();
-        let start = from.and_then(|one| insts.iter().position(|&other| other == one)).map_or(0, |index| index + 1);
-        insts[start..].iter().all(|&one| !overlaps(cell, one))
+        let following = from.filter(|&one| function.parent(one) == Some(block));
+        let rest: Box<dyn Iterator<Item = InstId> + '_> = match following {
+            Some(one) => Box::new(function.iter_after(one)),
+            None => Box::new(function.block(block).iter()),
+        };
+        rest.into_iter().all(|one| !overlaps(cell, one))
     };
     // What follows the store in its block, then every block on a path from it
     // to `at` that does not return to it.
@@ -547,9 +550,12 @@ fn survives_scanning(
         return false;
     }
     let after = |block: BlockId, from: Option<InstId>| {
-        let insts = function.block(block).instructions();
-        let start = from.and_then(|one| insts.iter().position(|&other| other == one)).map_or(0, |index| index + 1);
-        insts[start..].iter().all(|&one| !overlaps(cell, one))
+        let following = from.filter(|&one| function.parent(one) == Some(block));
+        let rest: Box<dyn Iterator<Item = InstId> + '_> = match following {
+            Some(one) => Box::new(function.iter_after(one)),
+            None => Box::new(function.block(block).iter()),
+        };
+        rest.into_iter().all(|one| !overlaps(cell, one))
     };
     // What follows the store in its block, then every block on a path from it
     // to `at` that does not return to it.

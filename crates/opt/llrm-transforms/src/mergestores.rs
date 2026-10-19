@@ -203,7 +203,7 @@ pub fn merged_copies(
                     loads.remove(&value);
                 }
             };
-            for (order, &inst) in function.block(*block).instructions().iter().enumerate() {
+            for (order, inst) in function.block(*block).iter().enumerate() {
                 let op = function.instruction(inst);
                 match op.opcode {
                     Opcode::Load { volatile: false, .. } => {
@@ -461,7 +461,7 @@ pub fn merged_constants(
         let mut spans: Vec<Vec<Constant>> = Vec::new();
         for block in function.layout() {
             let mut open: Vec<Constant> = Vec::new();
-            for (order, &inst) in function.block(*block).instructions().iter().enumerate() {
+            for (order, inst) in function.block(*block).iter().enumerate() {
                 if let Some(one) = constant(&unit, inst, order) {
                     *stored.entry((one.value, (one.high - one.low) as u32)).or_default() += 1;
                     open.push(one);

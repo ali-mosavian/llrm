@@ -458,9 +458,8 @@ fn _leaving(
     from: i64,
 ) -> Option<(i64, Vec<(InstId, Operand)>)> {
     let block = cfg::block(exit);
-    let body = function.block(block).instructions();
     let (phis, rest): (Vec<InstId>, Vec<InstId>) =
-        body.iter().copied().partition(|&inst| function.instruction(inst).opcode == Opcode::Phi);
+        function.block(block).iter().partition(|&inst| function.instruction(inst).opcode == Opcode::Phi);
     let arriving = |phi: InstId, from: llrm_mir::module::BlockId| {
         function.instruction(phi).operands.chunks(2).find(|pair| pair[1] == Operand::Block(from)).map(|pair| pair[0])
     };
@@ -539,11 +538,11 @@ fn _silent(
     at: i64,
 ) -> bool {
     let function = unit.function;
-    let body = function.block(cfg::block(at)).instructions();
-    body[..body.len().saturating_sub(1)]
-        .iter()
+    let body = function.block(cfg::block(at));
+    body.iter()
+        .take(body.len().saturating_sub(1))
         .all(
-            |&inst| {
+            |inst| {
                 let op = function.instruction(inst);
                 match op.opcode {
                     Opcode::Load { volatile: false, align } => {
@@ -713,9 +712,9 @@ fn _crashes(
         .any(
             |to| {
                 let Operand::Block(to) = *to else { return false };
-                let body = function.block(to).instructions();
-                body.last().is_some_and(|&last| function.instruction(last).opcode == Opcode::Unreachable)
-                    && body[..body.len() - 1].iter().all(|&inst| {
+                let body = function.block(to);
+                body.last().is_some_and(|last| function.instruction(last).opcode == Opcode::Unreachable)
+                    && body.iter().take(body.len() - 1).all(|inst| {
                         matches!(function.instruction(inst).opcode, Opcode::Call(_))
                             && llrm_mir::memory::accessible(unit.context, outer.callees(), function, inst)
                                 == llrm_mir::memory::Effects::NONE

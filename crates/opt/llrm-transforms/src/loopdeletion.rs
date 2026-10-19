@@ -128,9 +128,8 @@ fn is_eh_pad(
 ) -> bool {
     function
         .block(block)
-        .instructions()
         .iter()
-        .map(|&inst| &function.instruction(inst).opcode)
+        .map(|inst| &function.instruction(inst).opcode)
         .find(|opcode| **opcode != Opcode::Phi)
         .is_some_and(|opcode| matches!(opcode, Opcode::LandingPad { .. }))
 }
@@ -300,7 +299,7 @@ fn is_loop_dead(
     // This includes instructions that could write to memory, and loads that
     // are marked volatile.
     for &block in lp.get_blocks() {
-        for &inst in run.function.block(block).instructions() {
+        for inst in run.function.block(block).iter() {
             if has_side_effects(run, inst) && !is_droppable(run, inst) {
                 return false;
             }
@@ -765,7 +764,7 @@ fn delete_dead_loop(
     // unreachable uses into account: they are made poison here.
     let mut insts = Vec::new();
     for &block in &blocks {
-        for inst in run.function.block(block).instructions().to_vec() {
+        for inst in run.function.block(block).iter().collect::<Vec<_>>() {
             insts.push(inst);
             if let Some(result) = run.function.instruction(inst).result {
                 let ty = run.function.instruction(inst).ty;

@@ -59,7 +59,7 @@ pub fn hoist_region(
         if ctx.in_sub_loop(block) {
             continue;
         }
-        for inst in unit.function.block(block).instructions().to_vec() {
+        for inst in unit.function.block(block).iter().collect::<Vec<_>>() {
             // Erased or sunk by `sinkRegion`.
             if ctx.state.gone.borrow().contains(&inst) {
                 continue;

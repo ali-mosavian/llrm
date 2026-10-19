@@ -368,13 +368,7 @@ fn _phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-        .collect()
+    function.block(block).iter().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
 }
 
 /// Whether an instruction may be skipped on entry: it computes, and nothing
@@ -473,9 +467,7 @@ fn _shape_of(
     }
     let work = function
         .block(header)
-        .instructions()
         .iter()
-        .copied()
         .filter(
             |&inst| {
                 let op = function.instruction(inst);
@@ -563,7 +555,7 @@ pub(crate) fn _rotate(
                 Flags::default(),
                 function.value(value).name.clone().as_deref(),
             );
-            let top = function.block(shape.first).instructions().first().copied();
+            let top = function.block(shape.first).first();
             function.insert(phi, top.map_or(Position::End(shape.first), Position::Before)).expect("a placed block");
             (phi, Operand::Value(function.instruction(phi).result.expect("a phi's value")))
         })
@@ -715,9 +707,8 @@ fn copied(
         };
         let insns = function
             .block(shape.header)
-            .instructions()
             .iter()
-            .filter(|&&inst| function.instruction(inst).opcode != Opcode::Phi)
+            .filter(|&inst| function.instruction(inst).opcode != Opcode::Phi)
             .count();
         if insns > MAX_HEADER_INSNS {
             continue;
@@ -794,12 +785,7 @@ fn _chained(
     if loop_.entering(function) != BTreeSet::from([preheader]) {
         return Ok(None);
     }
-    let insns = function
-        .block(first)
-        .instructions()
-        .iter()
-        .filter(|&&inst| function.instruction(inst).opcode != Opcode::Phi)
-        .count();
+    let insns = function.block(first).iter().filter(|&inst| function.instruction(inst).opcode != Opcode::Phi).count();
     if insns > remaining {
         return Ok(None);
     }
@@ -893,9 +879,7 @@ fn _copy_test(
     let entering = function.terminator(shape.preheader).expect("a terminated preheader");
     let work: Vec<InstId> = function
         .block(shape.header)
-        .instructions()
         .iter()
-        .copied()
         .filter(|&inst| {
             function.instruction(inst).opcode != Opcode::Phi && !function.instruction(inst).opcode.is_terminator()
         })

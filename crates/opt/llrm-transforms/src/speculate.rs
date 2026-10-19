@@ -67,8 +67,8 @@ fn passing_value_always_undefined(
         return false;
     }
     let block = function.parent(phi).expect("a placed phi");
-    let body = function.block(block).instructions();
-    let at = |inst: InstId| body.iter().position(|&one| one == inst);
+    let body = function.block(block);
+    let at = |inst: InstId| body.iter().position(|one| one == inst);
     let Some(phi_at) = at(phi) else { return false };
     // The first use in the block after the phi.
     let user = function
@@ -94,8 +94,8 @@ fn passing_value_always_undefined(
     ) {
         return false;
     }
-    let between = &body[phi_at + 1..at(inst).expect("a placed user")];
-    if between.iter().any(|&one| matches!(
+    let mut between = function.iter_after(phi).take_while(|&one| one != inst);
+    if between.any(|one| matches!(
         function.instruction(one).opcode,
         Opcode::Call(_) | Opcode::Invoke(_)
     )) {
@@ -168,7 +168,7 @@ pub fn executed(
     let mut speculated = 0;
     // Uses in `then` of the values of `block` that nothing else reads.
     let mut sinkable: IdMap<InstId, usize> = IdMap::new();
-    let body = function.block(then).instructions().to_vec();
+    let body = function.block(then).iter().collect::<Vec<_>>();
     for &inst in body[..body.len() - 1].iter().rev() {
         speculated += 1;
         if speculated > 1 {

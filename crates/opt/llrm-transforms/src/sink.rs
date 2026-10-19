@@ -264,7 +264,7 @@ pub fn sunk(
     let blocks: Vec<BlockId> = unit.function.layout().to_vec();
     let mut sunk_set: IdSet<InstId> = IdSet::new();
     for &home in blocks.iter().rev() {
-        let insts: Vec<InstId> = trial.block(home).instructions().to_vec();
+        let insts: Vec<InstId> = trial.block(home).iter().collect::<Vec<_>>();
         for (at, &inst) in insts.iter().enumerate().rev() {
             let Some(load) = _kind(&trial, inst) else { continue };
             let Some(readers) = _readers(&trial, inst) else { continue };
@@ -308,9 +308,8 @@ pub fn sunk(
                     && !matches!(
                         trial
                             .block(candidate)
-                            .instructions()
                             .iter()
-                            .map(|&one| &trial.instruction(one).opcode)
+                            .map(|one| &trial.instruction(one).opcode)
                             .find(|opcode| **opcode != Opcode::Phi),
                         Some(Opcode::LandingPad { .. }) | None
                     )
@@ -408,7 +407,7 @@ fn _unwritten(
     let Some(read) = accesses.references.get(&inst) else { return false };
     let mut between: Vec<InstId> = rest.to_vec();
     for block in edges.between(home, target) {
-        between.extend(function.block(block).instructions());
+        between.extend(function.block(block).iter());
     }
     Writers::of(accesses, &between).spare(accesses, Some(outer.program()), read)
 }

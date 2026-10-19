@@ -374,7 +374,7 @@ fn split_block(
     run: &mut Run,
     old: BlockId,
 ) -> BlockId {
-    let list = run.function.block(old).instructions().to_vec();
+    let list = run.function.block(old).iter().collect::<Vec<_>>();
     let first = list
         .iter()
         .position(|&inst| !matches!(
@@ -433,7 +433,7 @@ fn rewrite_phi_nodes_for_exit_and_unswitched_blocks(
     old_ph: BlockId,
     full_unswitch: bool,
 ) {
-    let first = run.function.block(unswitched).instructions().first().copied().expect("a terminated block");
+    let first = run.function.block(unswitched).first().expect("a terminated block");
     for phi in phis(run.function, exit) {
         let ty = run.function.instruction(phi).ty;
         let new = run.function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), None);
@@ -605,7 +605,7 @@ fn unswitch_trivial_branch(
     // side effects.
     if let (Some(index), Some(latch), Some(exit)) = (latch_idx, loop_latch, ul_exit)
         && are_loop_exit_phis_trivial(run, lp, latch, exit, false)
-        && !run.function.block(latch).instructions().iter().any(|&inst| has_side_effects(run, inst))
+        && !run.function.block(latch).iter().any(|inst| has_side_effects(run, inst))
     {
         // We need to prove the loop is finite, otherwise this change will
         // convert it to a finite loop. This conservative check is good enough
@@ -793,9 +793,9 @@ fn unswitch_trivial_switch(
         }
         // We do not unswitch a block that only has an unreachable statement,
         // as it's possible this is a previously unswitched block.
-        let list = run.function.block(block).instructions();
-        let term = *list.last().expect("a terminated block");
-        let only = list.iter().find(|&&inst| run.function.instruction(inst).opcode != Opcode::Phi) == Some(&term);
+        let list = run.function.block(block);
+        let term = list.last().expect("a terminated block");
+        let only = list.iter().find(|&inst| run.function.instruction(inst).opcode != Opcode::Phi) == Some(term);
         run.function.instruction(term).opcode != Opcode::Unreachable || !only
     };
 
@@ -1007,7 +1007,7 @@ fn unswitch_all_trivial_conditions(
         // Check if there are any side-effecting instructions (e.g. stores,
         // calls, volatile loads) in the part of the loop that the code *would*
         // execute without unswitching.
-        if run.function.block(current).instructions().to_vec().into_iter().any(|inst| has_side_effects(run, inst)) {
+        if run.function.block(current).iter().collect::<Vec<_>>().into_iter().any(|inst| has_side_effects(run, inst)) {
             return changed;
         }
         let term = run.function.terminator(current).expect("a terminated block");

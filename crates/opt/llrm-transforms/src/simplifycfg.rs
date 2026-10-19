@@ -407,9 +407,7 @@ fn jump_simplified(
     else {
         return false;
     };
-    if function.entry() == Some(block)
-        || function.block(block).len() != edges::phis(function, block).len() + 1
-    {
+    if function.entry() == Some(block) || function.block(block).len() != edges::phis(function, block).len() + 1 {
         return false;
     }
     let canonical = edge_sources(function, block).len() >= 2
@@ -516,11 +514,8 @@ fn empty_block_removed(
 
     if alone {
         function.erase(last).expect("a jump defines nothing");
-        let anchor = function
-            .block(successor)
-            .iter()
-            .find(|&one| function.instruction(one).opcode != Opcode::Phi);
-        for inst in function.block(block).instructions().to_vec() {
+        let anchor = function.block(successor).iter().find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        for inst in function.block(block).iter().collect::<Vec<_>>() {
             function.move_to(inst, anchor.map_or(Position::End(successor), Position::Before)).expect("a placed phi");
         }
     } else {
@@ -703,10 +698,16 @@ fn values_redirected(
             }
         }
     }
-    // Both undef and poison incoming for one block is invalid: all become undef.
+    // Both undef and poison incoming for one block is invalid: all become
+    // undef.
     let poisons = true_undef
         .iter()
-        .filter(|&&at| matches!(operands[2 * at], Operand::Constant(id) if context.get(id).kind == ConstantKind::Poison))
+        .filter(|&&at| {
+            matches!(
+                operands[2 * at],
+                Operand::Constant(id) if context.get(id).kind == ConstantKind::Poison
+            )
+        })
         .count();
     if poisons != 0 && poisons != true_undef.len() {
         let ty = function.instruction(phi).ty;
@@ -763,7 +764,7 @@ fn dead_blocks_deleted(
         for successor in edges_out_of(&operands.unwrap_or_default()) {
             function.predecessor_removed(context, successor, block, true);
         }
-        for inst in function.block(block).instructions().to_vec().into_iter().rev() {
+        for inst in function.block(block).iter().collect::<Vec<_>>().into_iter().rev() {
             if let Some(result) = function.instruction(inst).result {
                 let poison = context.constant(Constant { ty: function.value(result).ty, kind: ConstantKind::Poison });
                 function.replace_all_uses_with(result, Operand::Constant(poison));
@@ -796,10 +797,9 @@ fn only_unreachable(
 ) -> bool {
     function
         .block(block)
-        .instructions()
         .iter()
-        .find(|&&inst| function.instruction(inst).opcode != Opcode::Phi)
-        .is_some_and(|&inst| function.instruction(inst).opcode == Opcode::Unreachable)
+        .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
+        .is_some_and(|inst| function.instruction(inst).opcode == Opcode::Unreachable)
 }
 
 /// `last`, a terminator, replaced by `opcode` over `operands`; the new one

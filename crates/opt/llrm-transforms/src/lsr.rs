@@ -3246,27 +3246,26 @@ fn _realized(
         // At the block's top, or after the register where the block steps it.
         let at = match shared {
             Some(block) => {
-                let order = function.block(block).instructions();
                 let defined = match register {
                     Operand::Value(value) => match function.value(value).def {
-                        ValueDef::Instruction(def) => order
-                            .iter()
-                            .position(|&one| one == def)
-                            .filter(|_| function.instruction(def).opcode != Opcode::Phi),
+                        ValueDef::Instruction(def) => Some(def)
+                            .filter(|&def| function.parent(def) == Some(block))
+                            .filter(|&def| function.instruction(def).opcode != Opcode::Phi),
                         _ => None,
                     },
                     _ => None,
                 };
                 let first = defined.map_or_else(
                     || {
-                        order
+                        function
+                            .block(block)
                             .iter()
-                            .position(|&one| function.instruction(one).opcode != Opcode::Phi)
+                            .find(|&one| function.instruction(one).opcode != Opcode::Phi)
                             .expect("a terminator")
                     },
-                    |def| def + 1,
+                    |def| function.next_in_block(def).expect("a terminator follows"),
                 );
-                Position::Before(order[first])
+                Position::Before(first)
             }
             None => at,
         };

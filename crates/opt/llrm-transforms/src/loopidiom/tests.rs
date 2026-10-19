@@ -44,9 +44,7 @@ fn kinds(
     let idiom = LoopIdiomRecognize::new(options, library);
     function
         .block(header)
-        .instructions()
         .iter()
-        .copied()
         .filter(|&inst: &InstId| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
         .map(|inst| idiom.is_legal_store(&cx, &mut se, cur_loop, inst))
         .collect()
@@ -155,9 +153,7 @@ fn same_byte(text: &str) -> Vec<bool> {
     let cur_loop = loops.get_loop_for(header).expect("a loop");
     let stores: Vec<InstId> = function
         .block(header)
-        .instructions()
         .iter()
-        .copied()
         .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
         .collect();
     let splat = llrm_mir::valuetracking::bytewise::is_bytewise_value(

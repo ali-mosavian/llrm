@@ -262,7 +262,7 @@ pub fn folded(
     function: &mut Function,
     block: BlockId,
 ) -> bool {
-    let Some(&first) = function.block(block).instructions().first() else { return false };
+    let Some(first) = function.block(block).first() else { return false };
     if function.instruction(first).opcode != Opcode::Phi || arms(function, first).len() != 2 {
         return false;
     }
@@ -311,8 +311,7 @@ pub fn folded(
         }
     }
     // Every phi folded away.
-    let Some(&first) =
-        function.block(block).instructions().first().filter(|&&one| function.instruction(one).opcode == Opcode::Phi)
+    let Some(first) = function.block(block).first().filter(|&one| function.instruction(one).opcode == Opcode::Phi)
     else {
         return true;
     };
@@ -326,8 +325,8 @@ pub fn folded(
     }
     // Unless the arms are emptied, the control flow stays.
     for &arm in &if_blocks {
-        let body = function.block(arm).instructions();
-        if body[..body.len() - 1].iter().any(|&one| !seen.contains(&one)) {
+        let body = function.block(arm);
+        if body.iter().take(body.len() - 1).any(|one| !seen.contains(&one)) {
             return changed;
         }
     }
@@ -363,7 +362,7 @@ fn hoisted_into(
     before: InstId,
     arm: BlockId,
 ) {
-    let body = function.block(arm).instructions().to_vec();
+    let body = function.block(arm).iter().collect::<Vec<_>>();
     for &inst in &body[..body.len() - 1] {
         function.move_to(inst, Position::Before(before)).expect("a placed instruction");
         metadata_dropped(function, inst);

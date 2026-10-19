@@ -102,7 +102,7 @@ pub fn sink_region(
         if ctx.in_sub_loop(block) {
             continue;
         }
-        for &inst in function.block(block).instructions().iter().rev() {
+        for inst in function.block(block).iter().rev() {
             if ctx.state.gone.borrow().contains(&inst) {
                 continue;
             }
@@ -184,10 +184,6 @@ fn can_split_predecessors(
 ) -> bool {
     let function = ctx.function;
     let Some(block) = function.parent(phi) else { return false };
-    let first = function
-        .block(block)
-        .instructions()
-        .iter()
-        .find(|&&one| !matches!(function.instruction(one).opcode, Opcode::Phi));
-    !first.is_some_and(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+    let first = function.block(block).iter().find(|&one| !matches!(function.instruction(one).opcode, Opcode::Phi));
+    !first.is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
 }

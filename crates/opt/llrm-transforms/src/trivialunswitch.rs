@@ -204,9 +204,8 @@ fn planned(
     let instruction = function.instruction(branch);
     let [condition, Operand::Block(first), Operand::Block(second)] = instruction.operands[..] else { return None };
     let Operand::Value(value) = condition else { return None };
-    let defined_in = |block: BlockId| {
-        function.block(block).instructions().iter().any(|&one| function.instruction(one).result == Some(value))
-    };
+    let defined_in =
+        |block: BlockId| function.block(block).iter().any(|one| function.instruction(one).result == Some(value));
     if loop_.body.iter().any(|&at| defined_in(cfg::block(at))) {
         return None;
     }
