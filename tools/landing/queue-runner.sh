@@ -3,9 +3,10 @@
 # stacked PRs (same STACKS group) and a batch that does not merge land one at a time with land.sh. Prints `N: MERGED ...` / `N: REFUSED: ...` lines
 # (the format refusals-report.sh reads). Waits for any running land.sh/runner first.
 export BUILDSLOT_BYPASS=1
+mkdir -p "${LAND_TMP:-/tmp/landing}"
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
-echo $$ > "${LAND_PIDFILE:-/tmp/claude-1000/land-runner.pgid}"
+echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
 HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/retry-singly.sh"; source "$HERE/pick-disjoint.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
 STACKS="2752 2773 2776|2785 2789 2797|2713 2738 2764|2753 2757 2763|2672 2683"
@@ -31,7 +32,7 @@ while true; do
     [ "$3" = feat/parity ] || gh pr edit $m --repo $R --base feat/parity >/dev/null
     [ "$2" = true ] && gh pr ready $m --repo $R >/dev/null
   done
-  log=/tmp/claude-1000/sqb-${batch[0]}.log
+  log=${LAND_TMP:-/tmp/landing}/sqb-${batch[0]}.log
   ( cd $W && git fetch -q origin && git reset -q --hard && git checkout -q --detach origin/feat/parity \
     && PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}" 2>&1 \
       | awk '{print strftime("%H:%M:%S"), $0; fflush()}' > $log )
