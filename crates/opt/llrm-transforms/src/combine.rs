@@ -22,7 +22,7 @@
 //! them; LLVM's `removeAllNonTerminatorAndEHPadInstructions` is a CFG edit
 //! this pass does not make); a call is never trivially dead here (`dead` knows
 //! what a call does not write); `visit` runs only the families translated so
-//! far (`visitors`: add, mul, icmp, getelementptr, store): the other `visit*`
+//! far (`visitors`: add, mul, div, rem, shifts, trunc, zext, sext, icmp, getelementptr, store): the other `visit*`
 //! rewrites are `algebraic`'s, to move in as they are translated.
 //!
 //! # Used by
@@ -41,14 +41,16 @@ use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Operand, ValueDef};
-use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::FunctionAnalyses;
 
 use crate::combine_addsub::visit_add;
 use crate::combine_compares::visit_icmp;
-use crate::combine_muldivrem::visit_mul;
+use crate::combine_casts::{visit_sext, visit_trunc, visit_zext};
+use crate::combine_muldivrem::{visit_mul, visit_sdiv, visit_srem, visit_udiv, visit_urem};
+use crate::combine_shifts::{visit_ashr, visit_lshr, visit_shl};
 use crate::instworklist::InstWorklist;
 
 /// `handleUseCountDecrement`: an operand that lost a user, and the one user it
@@ -360,6 +362,16 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
     match opcode {
         Opcode::Binary(BinaryOp::Add) => &[visit_add],
         Opcode::Binary(BinaryOp::Mul) => &[visit_mul],
+        Opcode::Binary(BinaryOp::UDiv) => &[visit_udiv],
+        Opcode::Binary(BinaryOp::SDiv) => &[visit_sdiv],
+        Opcode::Binary(BinaryOp::URem) => &[visit_urem],
+        Opcode::Binary(BinaryOp::SRem) => &[visit_srem],
+        Opcode::Binary(BinaryOp::Shl) => &[visit_shl],
+        Opcode::Binary(BinaryOp::LShr) => &[visit_lshr],
+        Opcode::Binary(BinaryOp::AShr) => &[visit_ashr],
+        Opcode::Cast(CastOp::Trunc) => &[visit_trunc],
+        Opcode::Cast(CastOp::ZExt) => &[visit_zext],
+        Opcode::Cast(CastOp::SExt) => &[visit_sext],
         Opcode::ICmp(_) => &[visit_icmp],
         Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
         Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],

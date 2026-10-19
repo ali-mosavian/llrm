@@ -98,6 +98,8 @@ pub mod combine_casts;
 #[cfg(test)]
 mod combine_casts_tests;
 pub mod combine_compares;
+#[cfg(test)]
+mod combine_dispatch_tests;
 pub mod combine_gep;
 pub mod combine_gep_index;
 pub mod combine_gep_merge;
