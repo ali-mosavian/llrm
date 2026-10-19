@@ -35,7 +35,7 @@ use std::rc::Rc;
 use llrm_lir::registers::RegId;
 
 use super::matrix::LiveRegMatrix;
-use crate::liveness::liveintervalunion::LiveIntervalUnion;
+use crate::liveness::liveintervalunion::{LiveIntervalUnion, Pos};
 use crate::liveness::slotindex::{SlotIndex, SlotIndexes};
 
 /// `CacheEntries`.
@@ -62,8 +62,8 @@ struct RegUnitInfo {
     unit: u32,
     /// The union's tag when this entry last looked.
     virt_tag: u32,
-    /// `VirtI`: the (start, stop) of an entry of the union; None at the end.
-    virt_i: Option<(SlotIndex, SlotIndex)>,
+    /// `VirtI`: an entry of the union; None at the end.
+    virt_i: Option<Pos>,
     /// `FixedI`: index into the fixed range's segments.
     fixed_i: usize,
 }
@@ -173,12 +173,12 @@ impl Entry {
         if self.prev_pos != start {
             if !self.prev_pos.is_valid() || start < self.prev_pos {
                 for rui in &mut self.reg_units {
-                    rui.virt_i = liu(rui.unit).find_entry(&start);
+                    rui.virt_i = liu(rui.unit).find(&start);
                     rui.fixed_i = fixed.fixed_range(rui.unit).map_or(0, |f| f.find(&start));
                 }
             } else {
                 for rui in &mut self.reg_units {
-                    rui.virt_i = liu(rui.unit).advance_entry(rui.virt_i, &start);
+                    rui.virt_i = liu(rui.unit).advance_to(rui.virt_i, &start);
                     if let Some(f) = fixed.fixed_range(rui.unit) {
                         if rui.fixed_i != f.segments.len() {
                             rui.fixed_i = f.advance_to(rui.fixed_i, &start);
@@ -198,7 +198,7 @@ impl Entry {
 
             // Check for first interference from virtregs.
             for rui in &self.reg_units {
-                let Some((i, _)) = rui.virt_i else { continue };
+                let Some(i) = rui.virt_i.map(|at| liu(rui.unit).entry(at).start) else { continue };
                 if i >= stop {
                     continue;
                 }
@@ -260,12 +260,13 @@ impl Entry {
         for rui in &mut self.reg_units {
             let u = liu(rui.unit);
             let Some(at) = rui.virt_i else { continue };
-            if at.0 >= stop {
+            if u.entry(at).start >= stop {
                 continue;
             }
-            let (moved, before) = u.advance_to_last_before(at, &stop);
-            rui.virt_i = moved;
-            let stop_i = before.1;
+            rui.virt_i = u.advance_to(Some(at), &stop);
+            let backup = rui.virt_i.is_none_or(|at| u.entry(at).start >= stop);
+            let at = if backup { u.prev(rui.virt_i) } else { rui.virt_i };
+            let stop_i = u.entry(at.expect("an entry before the end")).stop;
             if !last.is_valid() || stop_i > last {
                 last = stop_i;
             }
@@ -551,8 +552,8 @@ mod tests {
         assert_eq!(read(&mut cache, &env, RegId::AX, 2), (true, at[0][5], at[2][3]));
     }
 
-    /// `advanceTo` and `--I` searched the union's map once per step: walking 3
-    /// blocks of 9 entries each took 68 searches (d_faces -O2
+    /// `advanceTo` and `--I` searched the union's `BTreeMap` for each step it
+    /// made: walking 3 blocks of 9 entries each took 20 searches (d_faces -O2
     /// m32, `Cursor::move_to_block` 20.0 Minstr against LLVM's 4.0 for
     /// `Entry::update`). An iterator held with its stop steps for free.
     #[test]
@@ -568,15 +569,15 @@ mod tests {
         let mut cache = InterferenceCache::new(3);
         let mut c = Cursor::new();
         c.set_phys_reg(&mut cache, &env, Some(RegId::AX));
-        let before = crate::liveness::liveintervalunion::lookups();
+        let before = crate::liveness::intervalmap::searches();
         for b in 0..3 {
             c.move_to_block(&mut cache, &env, b);
             assert_eq!((c.first(), c.last()), (at[b][0], at[b][9]));
         }
-        let searched = crate::liveness::liveintervalunion::lookups() - before;
+        let searched = crate::liveness::intervalmap::searches() - before;
         assert!(
-            searched <= 24,
-            "3 blocks of 9 entries searched the map {searched} times (24 allowed; 68 stepping with a search each)"
+            searched <= 10,
+            "3 blocks of 9 entries searched the map {searched} times (10 allowed; 20 when the map is a BTreeMap)"
         );
     }
 
@@ -603,7 +604,7 @@ mod tests {
         fn reg_mask_clobbered(
             &self,
             _li: &LiveInterval,
-        ) -> Option<Vec<RegId>> {
+        ) -> Option<llrm_lir::registers::RegSet> {
             None
         }
 

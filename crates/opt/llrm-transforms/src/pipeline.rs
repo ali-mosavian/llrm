@@ -468,6 +468,12 @@ impl Options {
         self.for_size
     }
 
+    /// Whether the code generator may grow code for speed: -O3 and -Omax
+    /// (`CodeGenOptLevel::Aggressive`).
+    pub fn aggressive_codegen(&self) -> bool {
+        self.limits.target_percent >= 200
+    }
+
     /// -Oz: no loop is copied.
     pub fn min_size() -> Self {
         Self { unroll: false, peel: false, ..Self::size() }
@@ -567,6 +573,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(indvars::IndVars {
             exit_values: false,
             unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
+            lftr: indvars::lftr_default(),
         }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size(), llvm: false }),
         Box::new(dead::Dead),
@@ -807,6 +814,7 @@ pub(crate) fn llvm_order(
                     Box::new(indvars::IndVars {
                         exit_values: false,
                         unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
+                        lftr: indvars::lftr_default(),
                     }),
                 ),
                 slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
@@ -1139,7 +1147,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(algebraic::Algebraic { size: false, llvm: false }));
     // A counted exit's values are numbers where the copy made its test the one
     // that leaves.
-    passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None }));
+    passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None, lftr: indvars::lftr_default() }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
         passes.push(Box::new(crate::licm::Licm { apply: true, speculate: true }));

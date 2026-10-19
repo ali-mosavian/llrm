@@ -430,8 +430,13 @@ impl<'a> InlineSpiller<'a> {
             .flat_map(|one| one.requires.iter().chain(&one.delivers))
             .find(|(held, _)| held.value == new)
             .map(|(_, register)| crate::model::ir::root(*register));
-        let mut order: Vec<RegId> = (self.order_of)(reg).into_iter().map(crate::model::ir::root).collect();
-        order.dedup();
+        // The class of the value it stands for, which a split may have changed.
+        let held = self.tables.orders.borrow().get(&reg).cloned();
+        let mut order: Vec<RegId> = held.unwrap_or_else(|| {
+            let mut order: Vec<RegId> = (self.order_of)(reg).into_iter().map(crate::model::ir::root).collect();
+            order.dedup();
+            order
+        });
         if let Some(only) = pinned {
             order = vec![only];
         }
