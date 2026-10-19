@@ -598,7 +598,11 @@ pub fn llvm_motion(applied: &Applied) -> bool {
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
 fn translated() -> Vec<Box<dyn FunctionPass>> {
-    vec![Box::new(crate::cvp::Cvp), Box::new(crate::jumpthreading::JumpThreading::from_env())]
+    vec![
+        Box::new(crate::cvp::Cvp),
+        Box::new(crate::jumpthreading::JumpThreading::from_env()),
+        Box::new(crate::tailcallelim::TailCallElim),
+    ]
 }
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`).
