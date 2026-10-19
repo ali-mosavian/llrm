@@ -58,8 +58,9 @@ impl RegId {
         RegId(u8::try_from(index).expect("a register id below 256"))
     }
 
-    /// The dword register of this one's family (see [`crate::root::root`]): x86's numbering, which an x86 target's
-    /// ids have; another target's `Info` says its own roots.
+    /// The dword register of this one's family (see [`crate::root::root`]):
+    /// x86's numbering, which an x86 target's ids have; another target's
+    /// `Info` says its own roots.
     #[inline]
     pub fn root(self) -> RegId {
         RegId(ROOT_OF[self.0 as usize])

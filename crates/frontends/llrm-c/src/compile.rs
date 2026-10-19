@@ -511,7 +511,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         (None, Some(_)) => PathBuf::new(),
         (None, None) => return Err("the following arguments are required: source".to_owned()),
     };
-    let bound = llrm_driver::target(&flags, Some(&["x86-m16", "x86-m32", "x86-m64"]))?;
+    let bound = llrm_driver::target(&flags, Some(&["x86-m16", "x86-m32"]))?;
     let os_layer =
         os_layer.map(|field| {
             bound
