@@ -8,6 +8,10 @@
 //! register, an address base or index, a selector) or the x87 stack, and loads
 //! of different classes differ in nothing but those sets.
 //!
+//! A call is no float-region boundary when x87 values live in registers the
+//! allocator spills (`rfp_on`): a float argument is read after the call
+//! instead of spilled across it.
+//!
 //! Within a block, from the last instruction up, a load `d = load [a]` is a
 //! candidate when it is plain (a move or float load of a cell, not volatile, no
 //! group, no fixed registers or clobbers, not a call), `d` is defined once and
@@ -56,7 +60,7 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::backend::allocate::{LiveAt, live_rows};
+use crate::backend::allocate::{LiveAt, live_rows, rfp_on};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::regclass;
 use crate::backend::storedhomes::may_write;
@@ -218,7 +222,7 @@ fn _reader(
     let addresses: BTreeSet<u32> = insns[at].uses.iter().copied().collect();
     for between in &insns[at + 1..reader] {
         let Some(what) = &between.what else { return None };
-        if crate::backend::floatregions::boundary(regs, between)
+        if (crate::backend::floatregions::boundary(regs, between) && !(rfp_on() && what.op == Operation::Call))
             || between.volatile()
             || may_write(between, cell, body.sealed_arguments)
             || between.defines.iter().any(|defined| addresses.contains(defined) || *defined == value)

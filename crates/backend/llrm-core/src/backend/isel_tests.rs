@@ -5958,3 +5958,22 @@ fn test_a_branchs_odds_are_llvms_branch_probabilities() {
     taken.sort();
     assert_eq!(taken, vec![0x3000_0000, 0x5000_0000], "{:?}", body.odds.taken);
 }
+
+/// A float argument read after a call is read from its cell there, as the
+/// pin does (`fadds 20(%esp)`): a call bounded the load's move down to its
+/// reader, so both arguments were loaded first and spilled across the call.
+#[test]
+fn test_a_float_argument_read_after_a_call_is_loaded_after_it() {
+    let _on = crate::backend::allocate::RfpOn::set();
+    let text = "declare void @g() addrspace(1)
+define float @f(float %x, float %y) addrspace(1) {
+  call addrspace(1) void @g()
+  %s = fadd float %x, %y
+  ret float %s
+}
+";
+    let got = listing(text, "f");
+    let call = got.iter().position(|line| line.starts_with("call ")).expect("the premise: a call");
+    assert!(got[call..].iter().any(|line| line.starts_with("fadd dword ptr [bp+")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("fstp")), "{got:?}");
+}
