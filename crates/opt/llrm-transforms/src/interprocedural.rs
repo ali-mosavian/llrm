@@ -1933,7 +1933,7 @@ pub fn stamped(
             changed.push(id);
         }
     }
-    if llrm_support::env_set("LLRM_SHADOW_GMR") {
+    if llrm_support::env_flag!("LLRM_SHADOW_GMR") {
         shadow_globalsmodref(module, known);
     }
     Ok(changed)
