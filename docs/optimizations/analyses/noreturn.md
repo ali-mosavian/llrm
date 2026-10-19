@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/noreturn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/noreturn.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/noreturn.rs sha256:362a571e2cf07997436fdae14106dd7d0558faef55c41316d3b09e0909cef3a5 -->
+<!-- src: crates/opt/llrm-analysis/src/noreturn.rs sha256:74f32ff810441bcc8141ed6cdce7750569817362891756ebb581c70f1ca74958 -->
 
 # noreturn
 
@@ -76,7 +76,6 @@ From unit test `test_terminal_call_removes_its_newly_unreachable_successor`
 in `noreturn_tests.rs`.
 
 ## Provides
-`TerminalSites` (analysis of the function with no body proven noreturn),
 `terminal_sites`, `inferred`, `inferred_in`, `cold`, `stranded`,
 `after_terminal_calls`. Consumers: [`crate::interprocedural`](interprocedural.md)
 (`noreturn_procedures`, `terminal_calls`), [`crate::branchprob`](branchprob.md) (`cold`),
