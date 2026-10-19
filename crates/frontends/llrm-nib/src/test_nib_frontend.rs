@@ -1327,8 +1327,7 @@ fn column(m: &[i32, 2], j: i16) -> i32:
 
 fn main() -> i16:
     let m: i32[4, 4] = [[1] * 4] * 4
-    column(&m, 1)
-    return 0
+    return i16(column(&m, 1))
 ";
 
 fn column_loop() -> String {
