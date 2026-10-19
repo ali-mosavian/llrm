@@ -261,7 +261,9 @@ fn an_instr_description_has_one_reader_in_llrm_instr() {
     let readers: Vec<PathBuf> = tracked(root, &["crates/target"])
         .into_iter()
         .filter(|path| path.file_name().is_some_and(|name| name == "parse.rs" || name == "lib.rs"))
-        .filter(|path| fs::read_to_string(path).is_ok_and(|text| text.contains("The reader of a target's instruction description")))
+        .filter(|path| {
+            fs::read_to_string(path).is_ok_and(|text| text.contains("The reader of a target's instruction description"))
+        })
         .map(|path| path.strip_prefix(root).unwrap().to_path_buf())
         .collect();
     assert_eq!(readers, [PathBuf::from("crates/target/llrm-instr/src/lib.rs")]);

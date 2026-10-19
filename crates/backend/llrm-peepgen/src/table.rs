@@ -4,7 +4,6 @@
 
 use iced_x86::RflagsBits;
 use indexmap::IndexMap;
-
 use llrm_instr as parse;
 
 /// The six arithmetic flags.
