@@ -2,6 +2,7 @@
 """The one way to squash a pull request into feat/parity: a bare `gh pr merge` merged stale heads that reverted other PRs' work (#2329 reverted decide's LVI step).
 
     [PARITY_BIN=DIR] tools/parity_squash.py merge PR [--known-red STEP=ISSUE]...   under /tmp/land.lock (land.sh's): merge feat/parity into the PR head here (not pushed), refuse or run the fast set on THAT, then `gh pr merge --squash --match-head-commit`
+    tools/parity_squash.py merge-batch N1..N4 [--known-red STEP=ISSUE]...   up to four ready PRs: ONE fast set on the base with all merged in; on failure halve (the passing half lands first)
     tools/parity_squash.py audit [SINCE] every squash on origin/feat/parity since SINCE (default 96468410e): what it deleted without a Deletes:/Reverts: line in its PR's description
 
 Refused unless: the PR head contains the current origin/feat/parity; the squash diff deletes no file, no test function (`#[test] fn`, `def test_`, unless re-added) and no more than
@@ -223,6 +224,76 @@ def _workspace_check(cwd: Path) -> str:
     return parity_smoke.workspace_check(cwd)
 
 
+def run_smoke(known: dict[str, str] | None = None) -> tuple[bool, str]:
+    """(passed, the last line) of parity_smoke on this checkout; the known-red steps are skipped by name."""
+    known = known or {}
+    smoke = subprocess.run(
+        ["uv", "run", "-q", "--project", "tools", "python", "tools/parity_smoke.py", "--bin", smoke_bins(), "--base", BASE, *[a for step in known for a in ("--skip", step)]],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    return smoke.returncode == 0, (smoke.stdout.strip().splitlines() or [""])[-1]
+
+
+def batch(prs: list, passes, land, refuse) -> None:
+    """Land `prs` (up to four, ready, in order) with ONE test of the combined tree. `passes(prs)` merges them all into the base and runs the fast set; when it fails the
+    set is halved (2+2, then singles): the passing half lands, then the other half is tested on top of what landed. `refuse(pr)` names a PR that fails alone."""
+    if not prs:
+        return
+    if passes(prs):
+        for pr in prs:
+            land(pr)
+        return
+    if len(prs) == 1:
+        refuse(prs[0])
+        return
+    middle = len(prs) // 2
+    batch(prs[:middle], passes, land, refuse)
+    batch(prs[middle:], passes, land, refuse)
+
+
+def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
+    """`parity_squash.py merge-batch N1..N4`: the PRs in order, one smoke on the base with all of them merged in, each squashed with its head lease."""
+    known = known or {}
+    infos = {}
+    for number in numbers:
+        info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
+        if info["baseRefName"] != "feat/parity":
+            raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
+        infos[number] = info
+    landed, refused = [], []
+
+    def passes(group: list[str]) -> bool:
+        git("fetch", "-q", "origin", "feat/parity")
+        git("checkout", "-q", "--detach", BASE)
+        for number in group:
+            git("fetch", "-q", "origin", infos[number]["headRefOid"])
+            merge = subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True, text=True)
+            if merge.returncode:
+                subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+                print(f"#{number}: does not merge with the others: {merge.stdout.strip()[:120] or merge.stderr.strip()[:120]}")
+                return False
+        for number in group:
+            if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or ""):
+                print(f"#{number}: " + "; ".join(why))
+                return False
+        ok, last = run_smoke(known)
+        print(f"{' '.join('#' + n for n in group)}: {last}")
+        return ok
+
+    def land(number: str) -> None:
+        done = subprocess.run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", infos[number]["headRefOid"], "--subject", infos[number]["title"], "--body", known_red_line(known)])
+        (landed if done.returncode == 0 else refused).append(number)
+
+    with land_lock():
+        if git("status", "--porcelain", "--untracked-files=no").strip():
+            raise SystemExit("this checkout has uncommitted changes")
+        batch(list(numbers), passes, land, lambda number: refused.append(number))
+    print(f"LANDED: {' '.join('#' + n for n in landed) or '-'}  REFUSED: {' '.join('#' + n for n in refused) or '-'}")
+    return 1 if refused else 0
+
+
 def merge(number: str, known: dict[str, str] | None = None) -> int:
     with land_lock():
         return _merge(number, known)
@@ -245,11 +316,9 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     if why := refusals(merged, info["body"] or ""):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
-    bins = smoke_bins()
-    smoke = subprocess.run(["uv", "run", "-q", "--project", "tools", "python", "tools/parity_smoke.py", "--bin", bins, "--base", BASE, *[a for step in known for a in ("--skip", step)]], cwd=ROOT, capture_output=True, text=True)
-    last = (smoke.stdout.strip().splitlines() or [""])[-1]
+    ok, last = run_smoke(known)
     print(last)
-    if smoke.returncode:
+    if not ok:
         print("REFUSED: the fast set fails on this head")
         return 1
     files = {f["path"] for f in json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "files"], capture_output=True, text=True, check=True).stdout)["files"]}
@@ -276,6 +345,10 @@ def main() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "merge":
         rest = sys.argv[3:]
         return merge(sys.argv[2], parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))
+    if len(sys.argv) >= 3 and sys.argv[1] == "merge-batch":
+        numbers = [a for a in sys.argv[2:] if not a.startswith("--") and a.isdigit()]
+        rest = sys.argv[2:]
+        return merge_batch(numbers, parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))
     if len(sys.argv) >= 2 and sys.argv[1] == "audit":
         since = sys.argv[2] if len(sys.argv) > 2 else "96468410e"
         rows = audit(since)
