@@ -5,8 +5,8 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 
 use llrm_mir::context::Context;
-use llrm_mir::dense::IdSet;
-use llrm_mir::hash::{HashMap, HashSet};
+use llrm_mir::dense::{IdMap, IdSet};
+use llrm_mir::hash::HashMap;
 use llrm_mir::loopinfo::{Loop, LoopInfo};
 use llrm_mir::module::{BlockId, Function, InstId};
 
@@ -93,7 +93,7 @@ pub(super) fn find(
 }
 
 /// Value: the `phi` that defines a switch state; key: the block of that `phi`.
-type StateDefMap = HashMap<BlockId, InstId>;
+type StateDefMap = IdMap<BlockId, InstId>;
 
 struct AllSwitchPaths<'a> {
     function: &'a Function,
@@ -248,7 +248,7 @@ impl AllSwitchPaths<'_> {
 
         // Some blocks have multiple edges to the same successor, and this set
         // is used to prevent a duplicate path from being generated.
-        let mut successors = HashSet::<BlockId>::default();
+        let mut successors = IdSet::<BlockId>::new();
         for succ in successor_edges(self.function, bb) {
             if res.len() >= paths_limit {
                 break;
@@ -296,22 +296,19 @@ impl AllSwitchPaths<'_> {
     /// walk the use-def chain and collect all the state-defining blocks and
     /// the `phi` in each that defines the state.
     fn state_def_map(&self) -> StateDefMap {
-        let mut res = StateDefMap::default();
-        let mut multiple_def_bbs = HashSet::<BlockId>::default();
+        let mut res = StateDefMap::new();
+        let mut multiple_def_bbs = IdSet::<BlockId>::new();
         let first_def = self.switch_phi();
 
         let mut stack = vec![first_def];
-        let mut seen_values = HashSet::<InstId>::default();
+        let mut seen_values = IdSet::<InstId>::new();
 
         while let Some(cur_phi) = stack.pop() {
             let cur_def_block = self.function.parent(cur_phi).expect("a placed phi");
-            match res.entry(cur_def_block) {
-                std::collections::hash_map::Entry::Vacant(slot) => {
-                    slot.insert(cur_phi);
-                }
-                std::collections::hash_map::Entry::Occupied(_) => {
-                    multiple_def_bbs.insert(cur_def_block);
-                }
+            if res.contains_key(&cur_def_block) {
+                multiple_def_bbs.insert(cur_def_block);
+            } else {
+                res.insert(cur_def_block, cur_phi);
             }
             seen_values.insert(cur_phi);
 
@@ -330,7 +327,7 @@ impl AllSwitchPaths<'_> {
         // the paths with such block by simple cloning: it is impossible to
         // diverge then->det into then->det.0 and then->det.1 by simple path
         // cloning.
-        for bb in multiple_def_bbs {
+        for bb in multiple_def_bbs.iter() {
             res.remove(&bb);
         }
         res
@@ -365,7 +362,10 @@ impl AllSwitchPaths<'_> {
 
         let mut temp_list = Vec::new();
         for path in &paths_to_phi_def {
-            let path_set: HashSet<BlockId> = path.path.iter().copied().collect();
+            let mut path_set = IdSet::<BlockId>::new();
+            for &bb in &path.path {
+                path_set.insert(bb);
+            }
             for path_to_sw in &paths_to_switch_bb {
                 if path_to_sw.iter().skip(1).any(|bb| path_set.contains(bb)) {
                     continue;
@@ -398,17 +398,15 @@ impl AllSwitchPaths<'_> {
     /// two states are equivalent if they have the same switch destination;
     /// unify the states in different threading paths if they are.
     fn unify_t_paths(&mut self) {
-        let mut dest_to_state = HashMap::<BlockId, u128>::default();
+        let mut dest_to_state = IdMap::<BlockId, u128>::new();
         for index in 0..self.paths.len() {
             let next_state = self.paths[index].exit_value;
             let dest = self.next_case_successor(next_state);
-            match dest_to_state.entry(dest) {
-                std::collections::hash_map::Entry::Vacant(slot) => {
-                    slot.insert(next_state);
+            match dest_to_state.get(&dest) {
+                None => {
+                    dest_to_state.insert(dest, next_state);
                 }
-                std::collections::hash_map::Entry::Occupied(state) => {
-                    self.paths[index].exit_value = *state.get();
-                }
+                Some(&state) => self.paths[index].exit_value = state,
             }
         }
     }

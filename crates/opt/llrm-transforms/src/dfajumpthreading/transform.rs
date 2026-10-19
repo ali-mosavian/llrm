@@ -4,10 +4,9 @@
 use llrm_analysis::ssaupdaterbulk::SsaUpdaterBulk;
 use llrm_mir::codemetrics::{CodeMetrics, Convergence};
 use llrm_mir::context::{Constant, ConstantKind};
-use llrm_mir::dense::IdSet;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::{Position, ValueMap};
-use llrm_mir::hash::HashMap;
 use llrm_mir::module::{BlockId, InstId, Operand, Use};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::types::Type;
@@ -25,14 +24,14 @@ struct ClonedBlock {
 
 /// `DuplicateBlockMap`: every block that has been cloned. If two threading
 /// paths clone the same block for a certain state it is reused.
-type DuplicateMap = HashMap<BlockId, Vec<ClonedBlock>>;
+type DuplicateMap = IdMap<BlockId, Vec<ClonedBlock>>;
 
 /// `DefMap`: the new definitions of an instruction, in the order they were
 /// made. Needed when restoring SSA form after cloning blocks.
 #[derive(Default)]
 struct DefMap {
     order: Vec<InstId>,
-    cloned: HashMap<InstId, Vec<InstId>>,
+    cloned: IdMap<InstId, Vec<InstId>>,
 }
 
 impl DefMap {
@@ -41,13 +40,10 @@ impl DefMap {
         inst: InstId,
         copy: InstId,
     ) {
-        self.cloned
-            .entry(inst)
-            .or_insert_with(|| {
-                self.order.push(inst);
-                Vec::new()
-            })
-            .push(copy);
+        if !self.cloned.contains_key(&inst) {
+            self.order.push(inst);
+        }
+        self.cloned.get_or_insert_with(inst, Vec::new).push(copy);
     }
 }
 
@@ -114,7 +110,7 @@ impl TransformDfa<'_, '_, '_> {
 
         // Note that DuplicateBlockMap is not being used as intended here. It is
         // just being used to ensure (BB, State) pairs are only counted once.
-        let mut duplicate_map = DuplicateMap::default();
+        let mut duplicate_map = DuplicateMap::new();
         let query = self.run.cost_query();
         for tpath in &self.paths.paths {
             let path_bbs = &tpath.path;
@@ -126,7 +122,7 @@ impl TransformDfa<'_, '_, '_> {
             if cloned_bb(&duplicate_map, bb, next_state).is_none() {
                 metrics.analyze_basic_block(&query, function, bb, &self.eph, false);
                 num_cloned_inst += self.size(bb);
-                duplicate_map.entry(bb).or_default().push(ClonedBlock { bb, state: next_state });
+                duplicate_map.get_or_insert_with(bb, Vec::new).push(ClonedBlock { bb, state: next_state });
             }
 
             // If the switch block is the determinator, then we can continue
@@ -150,7 +146,7 @@ impl TransformDfa<'_, '_, '_> {
                 }
                 metrics.analyze_basic_block(&query, function, bb, &self.eph, false);
                 num_cloned_inst += self.size(bb);
-                duplicate_map.entry(bb).or_default().push(ClonedBlock { bb, state: next_state });
+                duplicate_map.get_or_insert_with(bb, Vec::new).push(ClonedBlock { bb, state: next_state });
             }
 
             if metrics.not_duplicatable {
@@ -169,7 +165,7 @@ impl TransformDfa<'_, '_, '_> {
         // especially SLPVectorizer.
         let mut num_orig_inst = 0u64;
         let mut num_outer_use_block = 0u64;
-        for &bb in duplicate_map.keys() {
+        for bb in duplicate_map.keys() {
             num_orig_inst += self.size(bb);
             // Only unduplicated blocks with single predecessor require new phi
             // nodes.
@@ -237,7 +233,7 @@ impl TransformDfa<'_, '_, '_> {
         }
 
         // Transform the ThreadingPaths and keep track of the cloned values.
-        let mut duplicate_map = DuplicateMap::default();
+        let mut duplicate_map = DuplicateMap::new();
         let mut new_defs = DefMap::default();
 
         let mut blocks_to_clean = BlocksToClean::default();
@@ -305,7 +301,7 @@ impl TransformDfa<'_, '_, '_> {
             // Clone the BB and update the successor of Prev to jump to the new
             // block.
             let new_bb = self.clone_block_and_update_predecessor(bb, prev_bb, next_state, duplicate_map, new_defs);
-            duplicate_map.entry(bb).or_default().push(ClonedBlock { bb: new_bb, state: next_state });
+            duplicate_map.get_or_insert_with(bb, Vec::new).push(ClonedBlock { bb: new_bb, state: next_state });
             blocks_to_clean.insert(new_bb);
             prev_bb = new_bb;
         }
@@ -326,7 +322,7 @@ impl TransformDfa<'_, '_, '_> {
         let function = self.run.function();
 
         for &inst in &new_defs.order {
-            let cloned = &new_defs.cloned[&inst];
+            let cloned = new_defs.cloned.get(&inst).expect("a definition with copies");
             let bb = function.parent(inst).expect("a placed definition");
             let value = function.instruction(inst).result.expect("a cloned definition has a value");
 

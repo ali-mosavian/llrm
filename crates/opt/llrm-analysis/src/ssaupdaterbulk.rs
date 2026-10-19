@@ -40,10 +40,9 @@
 //! [`SSAUpdaterBulk::RewriteAllUses`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SSAUpdaterBulk.cpp#L111).
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
-use llrm_mir::dense::IdSet;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
-use llrm_mir::hash::HashMap;
 use llrm_mir::idf;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, Use};
 use llrm_mir::opcode::{Flags, Opcode};
@@ -135,9 +134,9 @@ impl SsaUpdaterBulk {
             let live_in_blocks = compute_live_in_blocks(function, &using_blocks, &def_blocks);
             let idf_blocks = idf::forward(dt, &*function, &def_blocks, Some(&live_in_blocks));
 
-            let mut infos: HashMap<BlockId, BbValueInfo> = HashMap::default();
+            let mut infos = IdMap::<BlockId, BbValueInfo>::new();
             for &(block, value) in &rewrite.defines {
-                infos.entry(block).or_default().live_out_value = Some(value);
+                infos.get_or_insert_with(block, BbValueInfo::default).live_out_value = Some(value);
             }
 
             // We've computed IDF, now insert new phi-nodes there.
@@ -152,7 +151,7 @@ impl SsaUpdaterBulk {
                 let first = function.block(frontier).first();
                 function.insert(phi, first.map_or(Position::End(frontier), Position::Before)).expect("a placed block");
                 let value = Operand::Value(function.instruction(phi).result.expect("a phi has a value"));
-                infos.entry(frontier).or_default().live_in_value = Some(value);
+                infos.get_or_insert_with(frontier, BbValueInfo::default).live_in_value = Some(value);
                 if let Some(found) = inserted_phis.as_deref_mut() {
                     found.push(phi);
                 }
@@ -240,12 +239,12 @@ fn compute_value(
     context: &mut Context,
     function: &Function,
     dt: &DomTree,
-    infos: &mut HashMap<BlockId, BbValueInfo>,
+    infos: &mut IdMap<BlockId, BbValueInfo>,
     ty: TypeId,
     bb: BlockId,
     is_live_out: bool,
 ) -> Operand {
-    let info = infos.entry(bb).or_default();
+    let info = infos.get_or_insert_with(bb, BbValueInfo::default);
     if is_live_out && let Some(value) = info.live_out_value {
         return value;
     }
@@ -259,7 +258,7 @@ fn compute_value(
     while dt.is_reachable_from_entry(at) && !function.predecessors(at).is_empty() {
         let Some(idom) = dt.immediate_dominator(at) else { break };
         at = idom;
-        let info = infos.entry(at).or_default();
+        let info = infos.get_or_insert_with(at, BbValueInfo::default);
         if let Some(value) = info.live_out_value {
             found = Some(value);
             break;
@@ -274,7 +273,7 @@ fn compute_value(
     let value =
         found.unwrap_or_else(|| Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Undef })));
     for block in stack {
-        infos.entry(block).or_default().live_in_value = Some(value);
+        infos.get_or_insert_with(block, BbValueInfo::default).live_in_value = Some(value);
     }
     value
 }
