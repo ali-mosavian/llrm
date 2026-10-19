@@ -1,4 +1,2 @@
 # owner waits: PRs not to land until the owner fixes them (number # reason)
-2757 # jumps.md deletion, hir-branch
-2763 # jumps.md deletion, hir-branch
 2697 # parked by user: open, unowned, not queued, not closed
