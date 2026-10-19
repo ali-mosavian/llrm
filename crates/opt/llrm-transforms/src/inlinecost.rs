@@ -41,10 +41,11 @@
 //!
 //! # Deviations from LLVM (numbered, measured when the diff against
 //! `opt -passes=inline` has rows)
-//! - D1: block frequencies: `BlockFrequencyInfo` translated
-//!   (`llrm_analysis::blockfreq`) over `branchprob`'s estimated odds, not
-//!   LLVM's `BranchProbabilityInfo` (that module's D1b). The caller passes the
-//!   site's frequency relative to its entry (`Site::relative_frequency`).
+//! - D1: block frequencies: `BlockFrequencyInfo` over `BranchProbabilityInfo`,
+//!   both translated (`llrm_analysis::blockfreq`, `llrm_analysis::bpi`). The
+//!   caller passes the site's frequency relative to its entry
+//!   (`Site::relative_frequency`), a ratio where LLVM compares
+//!   `BlockFrequency`s.
 //! - D2: `TargetTransformInfo`: `getInstructionCost`, `isLoweredToCall`,
 //!   `getFPOpCost`, `getEstimatedNumberOfCaseClusters` are the generic
 //!   (BasicTTIImpl) answers with the x86 legal addressing modes, in
@@ -2118,7 +2119,7 @@ pub fn shadow(
             continue;
         }
         let caller_id = GlobalId(at as u32);
-        let frequencies = block_frequencies(module, caller);
+        let frequencies = block_frequencies(module, layout, caller);
         let caller_recursive = caller
             .layout()
             .iter()
@@ -2215,22 +2216,23 @@ pub fn remark(
     }
 }
 
-/// `BlockFrequencyInfo` of `caller` as the inliner's `GetBFI` gives it: LLVM's
-/// `BlockFrequencyInfoImpl` over `branchprob`'s odds (D1).
+/// `BlockFrequencyInfo` of `caller` as the inliner's `GetBFI` gives it: over
+/// `BranchProbabilityInfo` (D1).
 fn block_frequencies(
     module: &Module,
+    layout: &DataLayout,
     caller: &Function,
 ) -> llrm_analysis::blockfreq::BlockFrequencies {
-    let shape = llrm_analysis::cfg::Shape::of(caller);
-    let odds = llrm_analysis::branchprob::estimated(
-        &module.context,
-        &module.metadata,
-        &module.globals,
+    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+        llrm_analysis::bpi::Module {
+            context: &module.context,
+            declarations: &module.globals,
+            metadata: &module.metadata,
+            layout,
+        },
         caller,
-        &shape,
-        &Default::default(),
     );
-    llrm_analysis::blockfreq::BlockFrequencies::of(caller, &odds)
+    llrm_analysis::blockfreq::BlockFrequencies::of_bpi(caller, &bpi)
 }
 
 /// `block`'s frequency over the entry's, as `isColdCallSite` and
@@ -2404,7 +2406,7 @@ pub fn sites(
     let mut out = llrm_support::hash::SparseIdMap::default();
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
     let caller_recursive = recursive.contains(&caller_id);
-    let frequencies = block_frequencies(module, caller);
+    let frequencies = block_frequencies(module, layout, caller);
     for (block, inst) in caller.walk() {
         let Some(callee_id) = llrm_mir::memory::callee(&module.context, caller, inst) else { continue };
         let callee_global = module.global(callee_id);
