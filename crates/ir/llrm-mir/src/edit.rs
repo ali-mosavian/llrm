@@ -1243,6 +1243,26 @@ impl Function {
         Ok(())
     }
 
+    /// Puts `block` in the layout right before the placed `before`
+    /// (`BasicBlock::Create(..., InsertBefore)`).
+    pub fn insert_block_before(
+        &mut self,
+        block: BlockId,
+        before: BlockId,
+    ) -> Result<(), String> {
+        if self.is_placed(block) || self.block(block).erased {
+            return Err(format!("block {} is already placed or erased", block.0));
+        }
+        let at = self
+            .layout
+            .iter()
+            .position(|one| *one == before)
+            .ok_or_else(|| format!("block {} is not placed", before.0))?;
+        self.layout.insert(at, block);
+        self.blocks[block.0 as usize].placed = true;
+        Ok(())
+    }
+
     /// `BasicBlock::moveAfter`: the placed `block` moved to stand right after
     /// the placed `after`.
     pub fn move_block_after(

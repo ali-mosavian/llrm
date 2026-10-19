@@ -10,7 +10,6 @@ use llrm_mir::hash::HashMap;
 use llrm_mir::loopinfo::{Loop, LoopInfo};
 use llrm_mir::module::{BlockId, Function, InstId};
 
-use super::mainswitch::MainSwitch;
 use super::{
     DfaJumpThreadingOptions, constant_int, default_dest, incoming_per_block, phi_of, successor_edges, switch_cases,
 };
@@ -71,16 +70,16 @@ pub(super) fn find(
     context: &Context,
     loops: &LoopInfo,
     options: &DfaJumpThreadingOptions,
-    main: MainSwitch,
+    switch: InstId,
     outermost: Loop<'_>,
 ) -> SwitchPaths {
-    let switch_block = function.parent(main.switch).expect("a placed switch");
+    let switch_block = function.parent(switch).expect("a placed switch");
     let mut all = AllSwitchPaths {
         function,
         context,
         loops,
         options,
-        switch: main.switch,
+        switch,
         switch_block,
         outermost,
         num_visited: 0,
@@ -89,7 +88,7 @@ pub(super) fn find(
     };
     all.find_t_paths();
     all.unify_t_paths();
-    SwitchPaths { switch: main.switch, switch_block, paths: all.paths }
+    SwitchPaths { switch, switch_block, paths: all.paths }
 }
 
 /// Value: the `phi` that defines a switch state; key: the block of that `phi`.
