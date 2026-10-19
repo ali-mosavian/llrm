@@ -12,9 +12,8 @@ tti = "X86"
 # LLVM syntax, as the pin's clang prints it for x86_64-linux-gnu. i64 is native; long double is 80 bits.
 datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 
-# SSE2 is the baseline, so no operation expands: a conditional move and fptoui to i64 exist (the latter
-# as a sequence selection owns).
-expand = []
+# `select` becomes a branch and a phi before selection: the conditional move (`cmov`, which every x86-64 has) is not selected yet.
+expand = ["select"]
 
 # X86TargetLowering::isTypeDesirableForOp: a word operation costs an operand-size prefix and, read as a
 # dword after, an extension.

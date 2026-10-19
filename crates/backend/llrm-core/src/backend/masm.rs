@@ -744,7 +744,7 @@ fn parts(
     let (bp, sp) = (reg(FRAME), reg(STACK));
     // Inline code that moves SP (`alloca`) leaves the saved registers below an
     // unknown distance: SP is set from the frame register first.
-    let moved = !omit && framed && !saved.is_empty() && moves_stack(&procedure.body);
+    let moved = !omit && framed && moves_stack(&procedure.body);
     let mut leave: Vec<Semantics> = Vec::new();
     if moved {
         let below = reserve + slot * saved.len() as i64;
