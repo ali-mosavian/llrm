@@ -817,7 +817,7 @@ pub fn merge_block_into_predecessor(
     let sti = function.terminator(bb).expect("a block ends in a terminator");
 
     // Move all definitions in the successor to the predecessor...
-    let moved: Vec<InstId> = function.block(bb).iter().filter(|one| *one != sti).collect();
+    let moved: Vec<InstId> = function.iter_block(bb).filter(|one| *one != sti).collect();
     for inst in moved {
         function.move_to(inst, Position::Before(pti)).expect("a placed instruction");
     }
