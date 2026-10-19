@@ -77,7 +77,10 @@ impl Pairs {
                 let op = r.binop(inst).expect("a binary operator");
                 // Ignore nodes that are not the root of a tree.
                 let value = r.result(inst);
-                if r.has_one_use(value) && r.only_user(value).is_some_and(|user| r.function.instruction(user).opcode == r.function.instruction(inst).opcode) {
+                if r.has_one_use(value)
+                    && r.only_user(value)
+                        .is_some_and(|user| r.function.instruction(user).opcode == r.function.instruction(inst).opcode)
+                {
                     continue;
                 }
                 // Collect all operands of a single reassociable expression.
@@ -88,7 +91,10 @@ impl Pairs {
                 {
                     let node = r
                         .inst_of(operand)
-                        .filter(|&n| r.function.instruction(n).opcode == r.function.instruction(inst).opcode && r.has_one_use(operand));
+                        .filter(
+                            |&n| r.function.instruction(n).opcode == r.function.instruction(inst).opcode
+                                && r.has_one_use(operand),
+                        );
                     let Some(node) = node else {
                         ops.push(operand);
                         continue;

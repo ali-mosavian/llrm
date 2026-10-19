@@ -22,6 +22,11 @@
 //! DEVIATE 2: a leaf that is an `invoke` result keeps no reusable negate (the
 //! insertion point after its definition is in another block).
 //!
+//! Complexity: `NegateValue` visits the whole one-use add tree under the value
+//! it negates, as upstream does, so a chain of n *right*-nested subtracts
+//! (`a0 - (a1 - (a2 - ...))`, each broken up in turn over the tree the last
+//! made) takes O(n^2) steps; a left-nested chain takes O(n).
+//!
 //! # Used by
 //! `crate::reassociate_tree` (`lower_negate_to_multiply`) and
 //! `crate::reassociate` (`OptimizeInst`).
@@ -32,6 +37,7 @@
 use llrm_mir::edit::Position;
 use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+use llrm_mir::valuetracking::pattern;
 
 use crate::reassociate::Reassociator;
 use crate::reassociate_fp::{float_constant, float_value};
@@ -152,11 +158,7 @@ impl Reassociator<'_> {
                             Some(folded) => folded,
                             // `-undef` is undef, `-poison` poison.
                             None if self.is_undef_or_poison(c) => v,
-                            None => {
-                                let neg = self.create_neg(v, Position::Before(bi), bi);
-                                self.redo.insert(neg);
-                                self.result(neg)
-                            }
+                            None => self.negate_leaf(v, bi),
                         });
                     } else if let Some(add) = self.reassociable(v, &[BinaryOp::Add, BinaryOp::FAdd]) {
                         steps.push(Step::Finish(add));
@@ -196,15 +198,7 @@ impl Reassociator<'_> {
         bi: InstId,
     ) -> Operand {
         // Scan the use list of `v` for a negate of it.
-        let Operand::Value(value) = v else { unreachable!("a leaf that is not a constant is a value") };
-        let query = self.query();
-        let found = self.function.users(value).iter().map(|one| one.user).find(|&user| {
-            let result = self.function.instruction(user).result.map(Operand::Value);
-            result.is_some_and(|r| {
-                llrm_mir::valuetracking::pattern::neg(&query, r).is_some()
-                    || llrm_mir::valuetracking::pattern::fneg(&query, r).is_some()
-            }) && self.insertion_point_after_def(v).is_some()
-        });
+        let found = self.negate_of(v);
         if let Some(the_neg) = found {
             let at = self.insertion_point_after_def(v).expect("checked");
             self.function.move_to(the_neg, at).expect("placed instructions");
@@ -222,8 +216,49 @@ impl Reassociator<'_> {
         }
         // Insert a `neg` that subtracts the value from zero.
         let new_neg = self.create_neg(v, Position::Before(bi), bi);
+        self.note_constant_negate(new_neg);
         self.redo.insert(new_neg);
         self.result(new_neg)
+    }
+
+    /// Record `neg` as a user of the constant it negates.
+    pub fn note_constant_negate(
+        &mut self,
+        neg: InstId,
+    ) {
+        let result = self.result(neg);
+        let negated =
+            pattern::neg(&self.query(), result).map(|(_, x, _)| x).or_else(|| pattern::fneg(&self.query(), result));
+        if let Some(Operand::Constant(constant)) = negated {
+            self.constant_negates.get_or_insert_with(constant.index(), Vec::new).push(neg);
+        }
+    }
+
+    /// The first user of `v` that negates it and can be moved after the
+    /// definition of `v`.
+    fn negate_of(
+        &self,
+        v: Operand,
+    ) -> Option<InstId> {
+        let query = self.query();
+        let negates = |user: InstId| {
+            let result = self.function.instruction(user).result.map(Operand::Value);
+            result.is_some_and(|r| pattern::neg(&query, r).is_some() || pattern::fneg(&query, r).is_some())
+                && self.insertion_point_after_def(v).is_some()
+        };
+        match v {
+            Operand::Value(value) => self.function.users(value).iter().map(|one| one.user).find(|&user| negates(user)),
+            // A constant has no use list here: the negates of it are kept in
+            // `constant_negates`, the newest first as upstream's list is.
+            Operand::Constant(constant) => self
+                .constant_negates
+                .get(&constant.index())?
+                .iter()
+                .rev()
+                .copied()
+                .find(|&user| self.function.parent(user).is_some() && negates(user)),
+            Operand::Block(_) => None,
+        }
     }
 
     /// `getInsertionPointAfterDef` for the definition of `v`, or the first
@@ -233,7 +268,14 @@ impl Reassociator<'_> {
         &self,
         v: Operand,
     ) -> Option<Position> {
-        let Operand::Value(value) = v else { return None };
+        let Operand::Value(value) = v else {
+            // Not an instruction: the first non-phi of the entry block.
+            let first = self
+                .function
+                .iter_block(self.function.entry()?)
+                .find(|&inst| self.function.instruction(inst).opcode != Opcode::Phi)?;
+            return Some(Position::Before(first));
+        };
         match self.function.value(value).def {
             ValueDef::Argument(_) => {
                 let entry = self.function.entry()?;
@@ -307,7 +349,10 @@ impl Reassociator<'_> {
         &self,
         c: llrm_mir::context::ConstantId,
     ) -> bool {
-        matches!(self.context.get(c).kind, llrm_mir::context::ConstantKind::Undef)
+        matches!(
+            self.context.get(c).kind,
+            llrm_mir::context::ConstantKind::Undef
+        )
     }
 
     fn is_undef_or_poison(

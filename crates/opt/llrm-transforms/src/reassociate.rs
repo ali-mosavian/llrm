@@ -36,7 +36,7 @@
 //! `(x + 5) + 4` is `x + 9`; `(a * b) + (a * c)` is `a * (b + c)`.
 
 use llrm_mir::constantfolding::Env;
-use llrm_mir::context::{Context, ConstantKind};
+use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
@@ -239,8 +239,18 @@ pub(crate) struct Reassociator<'a> {
     pub ranks: Ranks,
     pub pairs: Pairs,
     pub redo: OrderedSet,
+    /// The negates of each constant, in program order: a constant has no use
+    /// list to scan (`NegateValue` looks for a negate of the value).
+    pub constant_negates: IdMap<usize, Vec<InstId>>,
     /// `MadeChange`.
     pub changed: bool,
+    /// The climb to a tree's root in `EraseInst` marks the nodes it passes
+    /// with the stamp of the call.
+    stamp: u32,
+    visited: IdMap<InstId, u32>,
+    /// Steps taken, for the slope test: each loop that could be super-linear
+    /// counts one per turn.
+    work: std::cell::Cell<u64>,
 }
 
 impl<'a> Reassociator<'a> {
@@ -258,7 +268,11 @@ impl<'a> Reassociator<'a> {
             ranks: Ranks::empty(),
             pairs: Pairs::default(),
             redo: OrderedSet::default(),
+            constant_negates: IdMap::new(),
             changed: false,
+            stamp: 0,
+            visited: IdMap::new(),
+            work: std::cell::Cell::new(0),
         }
     }
 
@@ -273,6 +287,13 @@ impl<'a> Reassociator<'a> {
         let pinned = self.pinned_instructions(&order);
         self.ranks = Ranks::build(self.function, &order, |inst| pinned.contains(&inst));
         self.pairs = Pairs::build(self, &order);
+        for &block in &order {
+            for inst in self.function.iter_block(block).collect::<Vec<_>>() {
+                if self.function.instruction(inst).result.is_some() {
+                    self.note_constant_negate(inst);
+                }
+            }
+        }
         self.changed = false;
         for &block in &order {
             self.visit_block(block);
@@ -288,6 +309,7 @@ impl<'a> Reassociator<'a> {
             if self.function.is_erased(inst) || self.function.parent(inst).is_none() {
                 continue;
             }
+            self.tick();
             if self.is_trivially_dead(inst) {
                 self.erase_inst(inst);
             } else {
@@ -314,6 +336,17 @@ impl<'a> Reassociator<'a> {
     }
 
     // ---- shared helpers -------------------------------------------------
+
+    /// One step of a loop that could be super-linear.
+    pub fn tick(&self) {
+        self.work.set(self.work.get() + 1);
+    }
+
+    /// The steps taken so far, the ranks' too.
+    #[cfg(test)]
+    pub fn work_done(&self) -> u64 {
+        self.work.get() + self.ranks.steps()
+    }
 
     pub fn query(&self) -> Query<'_> {
         Query::bare(self.context, self.function, self.env.layout)
@@ -383,7 +416,10 @@ impl<'a> Reassociator<'a> {
         &self,
         v: Operand,
     ) -> bool {
-        matches!(v, Operand::Value(value) if self.function.users(value).has_one_use())
+        matches!(
+            v,
+            Operand::Value(value) if self.function.users(value).has_one_use()
+        )
     }
 
     /// `user_back()` of a value with one use.
@@ -434,10 +470,12 @@ impl<'a> Reassociator<'a> {
         inst: InstId,
     ) -> bool {
         match self.function.instruction(inst).opcode {
-            Opcode::Binary(op) => matches!(
-                op,
-                BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem
-            ),
+            Opcode::Binary(op) => {
+                matches!(
+                    op,
+                    BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem
+                )
+            }
             Opcode::FNeg => true,
             _ => false,
         }
@@ -612,7 +650,10 @@ impl<'a> Reassociator<'a> {
         &self,
         v: Operand,
     ) -> bool {
-        matches!(v, Operand::Value(value) if matches!(self.function.value(value).def, ValueDef::Argument(_)))
+        matches!(
+            v,
+            Operand::Value(value) if matches!(self.function.value(value).def, ValueDef::Argument(_))
+        )
     }
 
     /// `isa<UndefValue>` (an `undef` or a `poison`).
@@ -620,7 +661,10 @@ impl<'a> Reassociator<'a> {
         &self,
         v: Operand,
     ) -> bool {
-        matches!(v, Operand::Constant(c) if matches!(self.context.get(c).kind, ConstantKind::Undef | ConstantKind::Poison))
+        matches!(
+            v,
+            Operand::Constant(c) if matches!(self.context.get(c).kind, ConstantKind::Undef | ConstantKind::Poison)
+        )
     }
 
     /// `Value::replaceAllUsesWith`.
@@ -664,15 +708,17 @@ impl<'a> Reassociator<'a> {
         let operands = self.function.instruction(inst).operands.clone();
         self.forget(inst);
         self.function.erase(inst).expect("nothing reads a dead instruction");
-        let mut visited: Vec<InstId> = Vec::new();
+        // Detect self-referential nodes with a stamp, not a set made per call.
+        self.stamp += 1;
         for operand in operands {
             let Some(mut op) = self.inst_of(operand) else { continue };
             let opcode = self.function.instruction(op).opcode.clone();
             while let Some(user) = self.only_user(self.result(op)) {
-                if self.function.instruction(user).opcode != opcode || visited.contains(&op) {
+                self.tick();
+                if self.function.instruction(user).opcode != opcode || self.visited.get(&op) == Some(&self.stamp) {
                     break;
                 }
-                visited.push(op);
+                self.visited.insert(op, self.stamp);
                 op = user;
             }
             // A node of a dead block is not ranked: its tree is not visited.
@@ -719,3 +765,7 @@ impl<'a> Reassociator<'a> {
 #[cfg(test)]
 #[path = "reassociate_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "reassociate_lit_tests.rs"]
+mod lit_tests;

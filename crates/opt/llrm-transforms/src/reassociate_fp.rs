@@ -7,7 +7,7 @@
 //! # Used by
 //! `crate::reassociate_optimize`, `crate::reassociate_negate`.
 
-use llrm_mir::context::Context;
+use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::module::Operand;
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
@@ -37,6 +37,12 @@ pub fn float_value(
     context: &Context,
     v: Operand,
 ) -> Option<f64> {
+    if let Operand::Constant(id) = v
+        && matches!(context.get(id).kind, ConstantKind::Zero | ConstantKind::Null)
+        && matches!(context.types.get(context.get(id).ty), Type::Float(_))
+    {
+        return Some(0.0);
+    }
     floatfold::float(context, v).map(|(_, value)| value)
 }
 

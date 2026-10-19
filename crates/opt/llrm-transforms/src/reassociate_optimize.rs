@@ -35,8 +35,8 @@
 //! # Example
 //! `x + x + y` has leaves `x, x, y` and becomes `x*2 + y`.
 
-use llrm_mir::context::mask;
 use llrm_mir::constantfolding::constant_fold_binary_op_operands;
+use llrm_mir::context::mask;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 
@@ -135,6 +135,7 @@ impl Reassociator<'_> {
         let rank = ops[i].rank;
         let same = |j: usize| ops[j].op == x || self.is_identical_to(ops[j].op, x);
         for j in i + 1..ops.len() {
+            self.tick();
             if ops[j].rank != rank {
                 break;
             }
@@ -239,6 +240,7 @@ impl Reassociator<'_> {
         let mut i: isize = 0;
         let mut e = ops.len() as isize;
         while i != e {
+            self.tick();
             let at = i as usize;
             // `X` and `~X`: `X & ~X` is 0, `X | ~X` is -1.
             if let Some(x) = self.match_not(ops[at].op) {
@@ -362,7 +364,8 @@ impl Reassociator<'_> {
         let all = mask(width);
         let res;
         if opnd1.is_or != opnd2.is_or {
-            // Xor-Rule 2: `(x | c1) ^ (x & c2)` is `(x & c3) ^ c1`, `c3 = ~c1 ^ c2`.
+            // Xor-Rule 2: `(x | c1) ^ (x & c2)` is `(x & c3) ^ c1`, `c3 = ~c1 ^
+            // c2`.
             let (o1, o2) = if opnd2.is_or { (opnd2, opnd1) } else { (opnd1, opnd2) };
             let (c1, c2) = (o1.constant, o2.constant);
             let c3 = (!c1 & all) ^ c2;
@@ -376,7 +379,8 @@ impl Reassociator<'_> {
             res = self.create_and(at, x, c3, width);
             *const_opnd ^= c1;
         } else if opnd1.is_or {
-            // Xor-Rule 3: `(x | c1) ^ (x | c2)` is `(x & c3) ^ c3`, `c3 = c1 ^ c2`.
+            // Xor-Rule 3: `(x | c1) ^ (x | c2)` is `(x & c3) ^ c3`, `c3 = c1 ^
+            // c2`.
             let c3 = opnd1.constant ^ opnd2.constant;
             if c3 != 0 && c3 != all {
                 let new = if *const_opnd != 0 { 1 } else { 2 };
@@ -540,18 +544,15 @@ impl Reassociator<'_> {
         let mut i: isize = 0;
         let mut e = ops.len() as isize;
         while i != e {
+            self.tick();
             let at = i as usize;
             let the_op = ops[at].op;
             // A value seen before: the instances are next to each other.
             if at + 1 != ops.len() && ops[at + 1].op == the_op {
-                let mut found = 0u64;
-                loop {
-                    ops.remove(at);
-                    found += 1;
-                    if at == ops.len() || ops[at].op != the_op {
-                        break;
-                    }
-                }
+                // Remove every instance of the operand in one move.
+                let end = at + ops[at..].iter().take_while(|entry| entry.op == the_op).count();
+                let found = (end - at) as u64;
+                ops.drain(at..end);
                 let the_ty = self.type_of(the_op);
                 let count = if self.is_float(the_ty) {
                     float_constant(self.context, the_ty, found as f64)
@@ -668,17 +669,14 @@ impl Reassociator<'_> {
         // the next.
         let dummy_opcode = Opcode::Binary(if self.is_float(ty) { BinaryOp::FAdd } else { BinaryOp::Add });
         let dummy_ty = self.type_of(max_occ_val);
-        let dummy = self.function.create_instruction(
-            dummy_opcode,
-            dummy_ty,
-            vec![max_occ_val, max_occ_val],
-            Flags::default(),
-            None,
-        );
+        let dummy = self
+            .function
+            .create_instruction(dummy_opcode, dummy_ty, vec![max_occ_val, max_occ_val], Flags::default(), None);
 
         let mut new_mul_ops: Vec<Operand> = Vec::new();
         let mut at = 0;
         while at < ops.len() {
+            self.tick();
             if self.reassociable(ops[at].op, &[BinaryOp::Mul, BinaryOp::FMul]).is_none() {
                 at += 1;
                 continue;
@@ -749,9 +747,9 @@ impl Reassociator<'_> {
                 (value < 0 && value != minimum)
                     .then(|| Operand::Constant(self.context.int(self.type_of(factor), -value)))
             } else {
-                float_value(self.context, factor).filter(|x| x.is_sign_negative()).map(|x| {
-                    float_constant(self.context, self.type_of(factor), -x)
-                })
+                float_value(self.context, factor)
+                    .filter(|x| x.is_sign_negative())
+                    .map(|x| float_constant(self.context, self.type_of(factor), -x))
             };
             if let Some(negated) = negated {
                 if stamps.get(negated) == Some(&stamp) {

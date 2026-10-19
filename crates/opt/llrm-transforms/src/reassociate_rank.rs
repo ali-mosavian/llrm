@@ -33,6 +33,8 @@ use llrm_mir::valuetracking::{Query, pattern};
 pub struct Ranks {
     blocks: IdMap<BlockId, u32>,
     values: IdMap<ValueId, u32>,
+    /// Turns of the operand walk, for the slope test.
+    steps: u64,
 }
 
 /// One suspended `getRank` call: the instruction, the operand it waits on and
@@ -45,7 +47,12 @@ struct Frame {
 
 impl Ranks {
     pub fn empty() -> Self {
-        Self { blocks: IdMap::new(), values: IdMap::new() }
+        Self { blocks: IdMap::new(), values: IdMap::new(), steps: 0 }
+    }
+
+    #[cfg(test)]
+    pub fn steps(&self) -> u64 {
+        self.steps
     }
 
     /// `ValueRankMap.contains(V)`: `V` has an entry, as every value `getRank`
@@ -83,12 +90,14 @@ impl Ranks {
             rank += 1;
             let mut block_rank = rank << 16;
             ranks.blocks.insert(block, block_rank);
+            // Every instruction that cannot move counts, one with no value
+            // too, so that the ranks in the block differ.
             for inst in function.iter_block(block) {
-                if let Some(result) = function.instruction(inst).result
-                    && pinned(inst)
-                {
+                if pinned(inst) {
                     block_rank += 1;
-                    ranks.values.insert(result, block_rank);
+                    if let Some(result) = function.instruction(inst).result {
+                        ranks.values.insert(result, block_rank);
+                    }
                 }
             }
         }
@@ -107,6 +116,7 @@ impl Ranks {
         let query = Query::bare(context, function, layout);
         let mut stack = vec![Frame { value: root, next: 0, rank: 0 }];
         loop {
+            self.steps += 1;
             let frame = stack.last().expect("a frame");
             let rank = match function.value(frame.value).def {
                 ValueDef::Argument(_) => *self.values.get_or_insert_with(frame.value, || 0),

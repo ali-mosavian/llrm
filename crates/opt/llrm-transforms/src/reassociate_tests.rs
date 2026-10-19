@@ -3,7 +3,9 @@
 //! the file's CHECK lines (new instructions are unnamed here, so the printer
 //! numbers them).
 
+use llrm_mir::interpret::Val;
 use llrm_mir::module::Module;
+use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::Outer;
 
 use super::reassociate;
@@ -15,6 +17,119 @@ fn reassociated(module: &mut Module) -> bool {
     let layout = llrm_analysis::testing::layout(module);
     let (context, function) = module.function_mut("f").expect("@f");
     reassociate(context, &layout, &outer, function)
+}
+
+/// Names of values and blocks by first appearance, so that two bodies compare
+/// by structure.
+fn canonical(text: &str) -> String {
+    let mut names: Vec<String> = Vec::new();
+    let mut id = |name: &str| {
+        let name = name.to_lowercase();
+        let at = names
+            .iter()
+            .position(|seen| *seen == name)
+            .unwrap_or_else(
+                || {
+                    names.push(name);
+                    names.len() - 1
+                },
+            );
+        format!("%v{at}")
+    };
+    let word = |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '-');
+    let mut out = String::new();
+    for line in text.lines() {
+        // MIR has no `align` on a load or a store.
+        let line = line.trim();
+        let line = match line.rfind(", align ") {
+            Some(at) if line[at + 8..].chars().all(|c| c.is_ascii_digit()) => &line[..at],
+            _ => line,
+        };
+        if let Some(label) = line.strip_suffix(':').filter(|label| !label.is_empty() && label.chars().all(word)) {
+            out += &format!("{}:\n", id(label));
+            continue;
+        }
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c != '%' {
+                out.push(c);
+                continue;
+            }
+            let mut name = String::new();
+            while let Some(&next) = chars.peek().filter(|&&next| word(next)) {
+                name.push(next);
+                chars.next();
+            }
+            out += &id(&name);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// `@f` of `text`: from `define` to its closing brace.
+fn function_text(text: &str) -> String {
+    let from = text.find("define ").expect("a definition");
+    let to = text[from..].find("\n}").expect("a closing brace");
+    text[from..from + to + 2].to_owned()
+}
+
+/// `text` after Reassociate has the structure of `expected` (up to names),
+/// and computes what it did on `inputs`, where there are any.
+pub(super) fn check_lit(
+    text: &str,
+    expected: &str,
+    inputs: &[&[i128]],
+) {
+    lit(text, expected, inputs, false);
+}
+
+/// `check_lit` after `dce` (the file's `-passes=reassociate,dce`).
+pub(super) fn check_lit_dce(
+    text: &str,
+    expected: &str,
+    inputs: &[&[i128]],
+) {
+    lit(text, expected, inputs, true);
+}
+
+fn lit(
+    text: &str,
+    expected: &str,
+    inputs: &[&[i128]],
+    dce: bool,
+) {
+    let mut module = parsed(text);
+    let before = (!inputs.is_empty()).then(|| results(&module, inputs));
+    reassociated(&mut module);
+    if dce {
+        let (_, function) = module.function_mut("f").expect("@f");
+        loop {
+            let dead: Vec<_> = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .filter(|&inst| {
+                    let instruction = function.instruction(inst);
+                    matches!(instruction.opcode, Opcode::Binary(_) | Opcode::Cast(_))
+                        && instruction.result.is_some_and(|result| function.users(result).is_empty())
+                })
+                .collect();
+            if dead.is_empty() {
+                break;
+            }
+            for inst in dead {
+                function.erase(inst).expect("unused");
+            }
+        }
+    }
+    let after = printed(&module);
+    assert_eq!(canonical(&function_text(&after)), canonical(expected), "{after}");
+    if let Some(before) = before {
+        // The result may refine poison to a value; it may not change a value.
+        for (after, before) in results(&module, inputs).into_iter().zip(before) {
+            assert!(before == Val::Poison || after == before, "{after:?} for {before:?}\n{text}");
+        }
+    }
 }
 
 /// `text` after Reassociate is `expected`.
@@ -86,7 +201,9 @@ b0:
 /// identity add nothing, so no instruction is made.
 #[test]
 fn test_constants_that_combine_to_the_identity_leave_the_operand() {
-    for (op, c1, c2) in [("add", "-30", "30"), ("mul", "-1", "-1"), ("and", "-1", "-1"), ("or", "0", "0"), ("xor", "42", "42")] {
+    for (op, c1, c2) in
+        [("add", "-30", "30"), ("mul", "-1", "-1"), ("and", "-1", "-1"), ("or", "0", "0"), ("xor", "42", "42")]
+    {
         check(
             &format!(
                 "define i8 @f(i8 %x) {{
@@ -466,4 +583,95 @@ b0:
 ",
         &[&[2, 3, 5, 7]],
     );
+}
+
+/// The steps the pass takes on `text`'s `@f`.
+fn work(text: &str) -> u64 {
+    let mut module = parsed(text);
+    let outer = Outer::of(&module, None);
+    let layout = llrm_analysis::testing::layout(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let env = llrm_mir::constantfolding::Env { globals: &outer.globals, layout: &layout };
+    let mut run = super::Reassociator::new(context, env, &outer, function);
+    run.run();
+    run.work_done()
+}
+
+/// Four times the input takes at most 4.5 times the steps: a quadratic one
+/// takes 16 times.
+fn assert_linear(text: impl Fn(usize) -> String) {
+    let (small, large) = (work(&text(100)), work(&text(400)));
+    assert!(large * 10 <= small * 45, "{small} steps for 100, {large} for 400");
+}
+
+fn params(n: usize) -> String {
+    (0..n).map(|k| format!("i32 %a{k}")).collect::<Vec<_>>().join(", ")
+}
+
+/// A sum of n arguments added one at a time: a tree of n nodes, linearized
+/// once, not once per node.
+#[test]
+fn test_a_long_add_chain_takes_linear_steps() {
+    assert_linear(|n| {
+        let mut body = String::from("  %s1 = add i32 %a0, %a1\n");
+        for k in 2..n {
+            body += &format!("  %s{k} = add i32 %s{}, %a{k}\n", k - 1);
+        }
+        format!("define i32 @f({}) {{\nb0:\n{body}  ret i32 %s{}\n}}\n", params(n), n - 1)
+    });
+}
+
+/// `x + x + ... + x`: the repeats are removed in one move, not one shift
+/// each.
+#[test]
+fn test_a_sum_of_one_value_n_times_takes_linear_steps() {
+    assert_linear(|n| {
+        let mut body = String::from("  %s1 = add i32 %a0, %a0\n");
+        for k in 2..n {
+            body += &format!("  %s{k} = add i32 %s{}, %a0\n", k - 1);
+        }
+        format!("define i32 @f(i32 %a0) {{\nb0:\n{body}  ret i32 %s{}\n}}\n", n - 1)
+    });
+}
+
+/// `((a0 - a1) - a2) - ...`: each subtract is broken up into an add of a
+/// negate once.
+#[test]
+fn test_a_left_nested_subtract_chain_takes_linear_steps() {
+    assert_linear(|n| {
+        let mut body = String::from("  %s1 = sub i32 %a0, %a1\n");
+        for k in 2..n {
+            body += &format!("  %s{k} = sub i32 %s{}, %a{k}\n", k - 1);
+        }
+        format!("define i32 @f({}) {{\nb0:\n{body}  ret i32 %s{}\n}}\n", params(n), n - 1)
+    });
+}
+
+/// `x * x * ... * x`: the factors are counted once.
+#[test]
+fn test_a_product_of_one_value_n_times_takes_linear_steps() {
+    assert_linear(|n| {
+        let mut body = String::from("  %s1 = mul i32 %a0, %a0\n");
+        for k in 2..n {
+            body += &format!("  %s{k} = mul i32 %s{}, %a0\n", k - 1);
+        }
+        format!("define i32 @f(i32 %a0) {{\nb0:\n{body}  ret i32 %s{}\n}}\n", n - 1)
+    });
+}
+
+/// n independent small expressions in one block: each is visited once, and
+/// the pair map is built once.
+#[test]
+fn test_many_small_expressions_take_linear_steps() {
+    assert_linear(|n| {
+        let mut body = String::new();
+        for k in 0..n {
+            body +=
+                &format!("  %p{k} = add i32 %a0, 5\n  %q{k} = add i32 %p{k}, %a1\n  %r{k} = mul i32 %q{k}, %q{k}\n");
+        }
+        let sum = (0..n).fold(String::from("  %t0 = add i32 0, 0\n"), |text, k| {
+            format!("{text}  %t{} = xor i32 %t{k}, %r{k}\n", k + 1)
+        });
+        format!("define i32 @f(i32 %a0, i32 %a1) {{\nb0:\n{body}{sum}  ret i32 %t{n}\n}}\n")
+    });
 }

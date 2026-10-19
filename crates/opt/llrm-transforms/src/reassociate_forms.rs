@@ -82,8 +82,7 @@ impl Reassociator<'_> {
                 .any(|&op| self.reassociable(v, &[op]).is_some())
         };
         let value = self.result(or);
-        (0..2).any(|index| interesting(self.operand(or, index)))
-            || self.only_user_value(value).is_some_and(interesting)
+        (0..2).any(|index| interesting(self.operand(or, index))) || self.only_user_value(value).is_some_and(interesting)
     }
 
     /// `isLoadCombineCandidate`: `or` of `shl`, `zext` and `load` nodes only.
@@ -159,7 +158,8 @@ impl Reassociator<'_> {
             return false;
         }
         let sum = self.operand(mul, 0);
-        let Some(add_sub) = self.reassociable(sum, &[BinaryOp::Add]).or_else(|| self.reassociable(sum, &[BinaryOp::Sub]))
+        let Some(add_sub) =
+            self.reassociable(sum, &[BinaryOp::Add]).or_else(|| self.reassociable(sum, &[BinaryOp::Sub]))
         else {
             return false;
         };
@@ -173,19 +173,23 @@ impl Reassociator<'_> {
         if !matches!(self.binop(user), Some(BinaryOp::Add | BinaryOp::Sub)) {
             return false;
         }
-        (0..2).map(|index| self.operand(user, index)).any(|sibling| {
-            if sibling == value || !self.has_one_use(sibling) {
-                return false;
-            }
-            // The sibling must be `NonConst * C'`.
-            let Some(sib) = self.inst_of(sibling).filter(|&s| self.binop(s) == Some(BinaryOp::Mul)) else {
-                return false;
-            };
-            let non_constant = self.operand(sib, 0);
-            pattern::imm_constant(&query, self.operand(sib, 1))
-                && (non_constant == a || non_constant == b)
-                && !self.is_constant(non_constant)
-        })
+        (0..2)
+            .map(|index| self.operand(user, index))
+            .any(
+                |sibling| {
+                    if sibling == value || !self.has_one_use(sibling) {
+                        return false;
+                    }
+                    // The sibling must be `NonConst * C'`.
+                    let Some(sib) = self.inst_of(sibling).filter(|&s| self.binop(s) == Some(BinaryOp::Mul)) else {
+                        return false;
+                    };
+                    let non_constant = self.operand(sib, 0);
+                    pattern::imm_constant(&query, self.operand(sib, 1))
+                        && (non_constant == a || non_constant == b)
+                        && !self.is_constant(non_constant)
+                },
+            )
     }
 
     /// `BreakUpDistribute`: `(X+Y)*C` is `X*C + Y*C`, and `(X-Y)*C` is

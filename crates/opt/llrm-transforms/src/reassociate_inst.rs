@@ -56,7 +56,10 @@ impl Reassociator<'_> {
         mut i: InstId,
     ) {
         // Only the operations understood: unary and binary operators.
-        if !matches!(self.function.instruction(i).opcode, Opcode::Binary(_) | Opcode::FNeg) {
+        if !matches!(
+            self.function.instruction(i).opcode,
+            Opcode::Binary(_) | Opcode::FNeg
+        ) {
             return;
         }
 
@@ -243,9 +246,7 @@ impl Reassociator<'_> {
             let hoist = (self.binop(i) == Some(BinaryOp::Mul)
                 && user_op == Some(BinaryOp::Add)
                 && minus_one(self, last))
-                || (self.binop(i) == Some(BinaryOp::FMul)
-                    && user_op == Some(BinaryOp::FAdd)
-                    && minus_one(self, last));
+                || (self.binop(i) == Some(BinaryOp::FMul) && user_op == Some(BinaryOp::FAdd) && minus_one(self, last));
             if hoist {
                 let last = ops.pop().expect("a leaf");
                 ops.insert(0, last);
@@ -271,4 +272,3 @@ impl Reassociator<'_> {
         self.rewrite_expr_tree(i, &ops, flags);
     }
 }
-

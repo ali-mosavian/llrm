@@ -46,26 +46,27 @@ impl Reassociator<'_> {
             // Only one-use instructions: combining negations does not justify
             // replicating instructions.
             let Some(inst) = self.inst_of(v).filter(|_| self.has_one_use(v)) else { continue };
-            let (a, b) = (self.operand(inst, 0), self.operand(inst, 1));
-            match self.function.instruction(inst).opcode {
-                Opcode::Binary(BinaryOp::FMul) => {
-                    // Not expecting non-canonical code here: wait.
-                    if self.is_constant(a) {
-                        continue;
-                    }
-                    if self.is_negative_float(b) {
-                        candidates.push(inst);
-                    }
-                }
-                Opcode::Binary(BinaryOp::FDiv) => {
-                    if self.is_constant(a) && self.is_constant(b) {
-                        continue;
-                    }
-                    if self.is_negative_float(a) || self.is_negative_float(b) {
-                        candidates.push(inst);
-                    }
+            let (op, a, b) = match self.function.instruction(inst).opcode {
+                Opcode::Binary(op @ (BinaryOp::FMul | BinaryOp::FDiv)) => {
+                    (op, self.operand(inst, 0), self.operand(inst, 1))
                 }
                 _ => continue,
+            };
+            if op == BinaryOp::FMul {
+                // Not expecting non-canonical code here: wait.
+                if self.is_constant(a) {
+                    continue;
+                }
+                if self.is_negative_float(b) {
+                    candidates.push(inst);
+                }
+            } else {
+                if self.is_constant(a) && self.is_constant(b) {
+                    continue;
+                }
+                if self.is_negative_float(a) || self.is_negative_float(b) {
+                    candidates.push(inst);
+                }
             }
             stack.push(b);
             stack.push(a);

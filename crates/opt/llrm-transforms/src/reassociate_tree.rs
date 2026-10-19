@@ -15,8 +15,8 @@
 //! longer hold are cleared from the first changed node up to the root.
 //!
 //! # How it works
-//! `linearize_expr_tree` is one pass over the tree: O(size). `rewrite_expr_tree`
-//! walks the new leaf list once, O(leaves).
+//! `linearize_expr_tree` is one pass over the tree: O(size).
+//! `rewrite_expr_tree` walks the new leaf list once, O(leaves).
 //!
 //! # Used by
 //! `crate::reassociate` (`ReassociateExpression`) and
@@ -46,13 +46,7 @@ pub(crate) struct OverflowTracking {
 
 impl Default for OverflowTracking {
     fn default() -> Self {
-        Self {
-            has_nuw: true,
-            has_nsw: true,
-            is_disjoint: true,
-            all_known_non_negative: true,
-            all_known_non_zero: true,
-        }
+        Self { has_nuw: true, has_nsw: true, is_disjoint: true, all_known_non_negative: true, all_known_non_zero: true }
     }
 }
 
@@ -63,7 +57,10 @@ impl OverflowTracking {
         op: BinaryOp,
         flags: Flags,
     ) {
-        if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl) {
+        if matches!(
+            op,
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl
+        ) {
             self.has_nuw &= flags.contains(Flags::NUW);
             self.has_nsw &= flags.contains(Flags::NSW);
         }
@@ -140,9 +137,11 @@ impl Reassociator<'_> {
         let mut leaf_order: Vec<Operand> = Vec::new();
 
         while let Some((inst, mut weight)) = worklist.pop() {
+            self.tick();
             flags.merge_flags(self.binop(inst).expect("a binary operator"), self.flags(inst));
 
             for index in 0..self.function.instruction(inst).operands.len() {
+                self.tick();
                 let op = self.operand(inst, index);
 
                 // A one-use operator of the right kind: its operands join.
@@ -262,8 +261,12 @@ impl Reassociator<'_> {
             }
         }
         let rewritable = |this: &Self, v: Operand| {
-            this.reassociable(v, &[opcode])
-                .filter(|&node| !matches!(this.result(node), Operand::Value(value) if not_rewritable.contains(&value)))
+            this.reassociable(v, &[opcode]).filter(|&node| {
+                !matches!(
+                    this.result(node),
+                    Operand::Value(value) if not_rewritable.contains(&value)
+                )
+            })
         };
 
         // Non-null when the new tree differs from the old in more than operand
@@ -272,6 +275,7 @@ impl Reassociator<'_> {
         let mut expression_changed_end: Option<InstId> = None;
         let mut i = 0;
         loop {
+            self.tick();
             // The last operation (the earliest in the IR) takes both operands
             // from `ops`.
             if i + 2 == ops.len() {
@@ -349,8 +353,8 @@ impl Reassociator<'_> {
         }
 
         // A tree that changed in more than order loses its optional flags from
-        // the changed node to the root, and its nodes are packed just before the
-        // root so that the tree is dominated by every leaf.
+        // the changed node to the root, and its nodes are packed just before
+        // the root so that the tree is dominated by every leaf.
         if let Some(mut node) = expression_changed_start {
             let mut clear_flags = true;
             loop {
