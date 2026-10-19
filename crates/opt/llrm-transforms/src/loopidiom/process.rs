@@ -667,7 +667,7 @@ impl LoopIdiomRecognize {
             Some(int_idx_ty),
         );
 
-        build::create_mem_copy(
+        let copy = build::create_mem_copy(
             run.context,
             run.declared,
             run.function,
@@ -679,6 +679,16 @@ impl LoopIdiomRecognize {
             args.load_align,
             num_bytes,
         );
+        // LD6 llrm's code generator lowers a `memmove` only with its direction
+        // stated (`llrm.forward`, `llrm.backward`), and no libc `memmove` to
+        // call: the starts are a constant apart, so the copy runs backward
+        // where the destination is after the source.
+        if use_mem_move && let Some(off) = verifier.off {
+            let kind =
+                if off.sext_value() > 0 { llrm_mir::intrinsics::BACKWARD } else { llrm_mir::intrinsics::FORWARD };
+            let node = run.declared.node(llrm_mir::module::MetadataNode { distinct: false, operands: Vec::new() });
+            run.function.annotate(copy, kind, node);
+        }
 
         // Okay, a new call to memcpy/memmove has been formed. Zap the original
         // store and anything that feeds into it.
