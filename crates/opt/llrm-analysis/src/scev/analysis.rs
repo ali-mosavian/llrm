@@ -192,6 +192,12 @@ impl ScevSession {
         Self { tree, loops, assumptions, scev: ScalarEvolution::new() }
     }
 
+    /// The expressions dropped: after the function changed in ways that leave
+    /// the CFG, and so the tree and loops, as they were.
+    pub fn forget_expressions(&mut self) {
+        self.scev = ScalarEvolution::new();
+    }
+
     /// Runs `query` with the expressions and the context they are read in.
     pub fn ask<R>(
         &mut self,

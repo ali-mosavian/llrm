@@ -16,11 +16,10 @@
 //!
 //! DEVIATE 2 (temporary, `uselist-port`): steps that call a helper another
 //! family owns are left out and named where they stood:
-//! `foldBinopWithPhiOperands` (phi family), `foldUsingDistributiveLaws` and
-//! `foldBinOpShiftWithShift` (shared helpers, next in `combine_shared`),
-//! `foldBinOpIntoSelectOrPhi` and `foldBinOpSelectBinOp` inside
-//! `foldAddWithConstant` (select family). Each is a `// DEVIATE 2:` comment at
-//! its place in the order.
+//! `foldUsingDistributiveLaws` and `foldBinOpShiftWithShift` (shared helpers,
+//! next in `combine_shared`). Each is a `// DEVIATE 2:` comment at its place in
+//! the order. `foldBinopWithPhiOperands`, `foldBinOpIntoSelectOrPhi` and
+//! `foldBinOpSelectBinOp` are the phi and select families'.
 //!
 //! DEVIATE 3 (temporary): the folds that build an intrinsic call (`usub.sat`,
 //! `uadd.sat`, `umax`, `umin`, `scmp`, `ctpop`...) are left out until the
@@ -413,8 +412,11 @@ pub fn fold_add_with_constant(
             return None;
         }
     }
-    // DEVIATE 2: foldBinOpIntoSelectOrPhi.
-    // DEVIATE 2: foldBinOpSelectBinOp.
+    for found in [c.fold_bin_op_into_select_or_phi(inst), c.fold_bin_op_select_bin_op(inst)] {
+        if !matches!(found, Visit::None) {
+            return Some(found);
+        }
+    }
 
     // add (sub C1, X), C2 --> sub (add C1, C2), X
     let sub_of_constant = {
@@ -756,7 +758,10 @@ pub fn visit_add(
         return Visit::Changed;
     }
     // DEVIATE 1: foldVectorBinop.
-    // DEVIATE 2: foldBinopWithPhiOperands.
+    let found = c.fold_binop_with_phi_operands(inst);
+    if !matches!(found, Visit::None) {
+        return found;
+    }
     // DEVIATE 2: foldUsingDistributiveLaws.
     if let Some(r) = fold_box_multiply(c, inst) {
         return r;

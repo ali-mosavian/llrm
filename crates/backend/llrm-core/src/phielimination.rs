@@ -22,11 +22,17 @@
 //! DEVIATE P1 (no number): a phi with an edge from outside the body is left
 //! alone, as before. Fact: LLVM's phis list only blocks of their function.
 //!
-//! DEVIATE P4 (exit: the x87 pair after allocation, plan step 4): a phi of an
-//! x87 value is left for `phielim`'s own lowering. Fact: `FloatAssign` and
-//! `FloatAlloc` run before the coalescer here, where LLVM's FPS runs after
+//! DEVIATE P4 (exit: floatassign deleted): without RFP a phi of an x87 value
+//! is left for `phielim`'s own lowering. Fact: `FloatAssign` and `FloatAlloc`
+//! run before the coalescer on that route, where LLVM's FPS runs after
 //! register allocation, so a copy of an x87 value costs an `fld` and an `fstp`
-//! that nothing joins away.
+//! that nothing joins away. Under RFP the phis are lowered like any other.
+//!
+//! DEVIATE P4 (exit: floatassign deleted): a phi of a value no general
+//! register holds is left for `phielim`'s own lowering, except an x87 value
+//! under RFP. Fact: on the floatassign route `FloatAssign` and `FloatAlloc` run
+//! before the coalescer, where LLVM's FPS runs after register allocation, so a
+//! copy of an x87 value costs an `fld` and an `fstp` that nothing joins away.
 //!
 //! DEVIATE P2 (no number): `IMPLICIT_DEF` and undef incoming values do not
 //! exist in LIR, so `allPhiOperandsUndefined`, `ImpDefs` and `SrcUndef` are not
@@ -154,6 +160,13 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             *preds.entry(to).or_insert(0) += 1;
         }
     }
+    // Values no general register holds, but not the x87 ones under RFP: the
+    // stackifier follows allocation there.
+    let x87 = if crate::backend::allocate::rfp_on() {
+        crate::backend::floatassign::_floating_values(body)
+    } else {
+        Default::default()
+    };
     let floating = crate::backend::ssaspill::floating(body);
     for block in &body.blocks {
         let mut stays = Vec::new();
@@ -163,7 +176,9 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             && body.blocks.iter().filter(|one| one.succ.contains(&block.at)).all(|one| one.succ.len() >= 2);
         let mut lowered_phis: HashMap<Vec<(i64, u32)>, u32> = HashMap::default();
         for phi in block.phis.iter() {
-            if phi.incoming.iter().any(|(pre, _)| !at_of.contains_key(pre)) || floating.contains(&phi.result) {
+            if phi.incoming.iter().any(|(pre, _)| !at_of.contains_key(pre))
+                || (floating.contains(&phi.result) && !x87.contains(&phi.result))
+            {
                 stays.push(phi.clone());
                 continue;
             }
@@ -277,6 +292,43 @@ mod tests {
 
     fn copies(block: &Block) -> Vec<(u32, u32)> {
         block.insns.iter().filter_map(|one| copy_of(one)).collect()
+    }
+
+    /// The x87 phi of a loop: floatassign's route leaves it for `phielim`'s own
+    /// lowering, RFP lowers it like any other. The skip was removed for both
+    /// routes at once and nbody -O3 ran 10.5% more instructions on the old one.
+    #[test]
+    fn test_an_x87_phi_is_left_alone_only_without_rfp() {
+        let float = |value: u32| Loc::Held(Held { value, width: 10 });
+        let load = |value: u32| {
+            let what = Semantics {
+                name: Some("fldz".to_owned()),
+                dests: vec![float(value)],
+                ..Semantics::new(Operation::FloatLoad)
+            };
+            Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![value], vec![]))
+        };
+        let store = |value: u32| {
+            let what = Semantics {
+                name: Some("fstp".to_owned()),
+                dests: vec![Loc::Reg(crate::model::ir::Reg { register: llrm_lir::registers::RegId::BX, width: 4 })],
+                sources: vec![float(value)],
+                ..Semantics::new(Operation::FloatStore)
+            };
+            Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![value]))
+        };
+        let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (1, 12)] }];
+        let was = body(vec![
+            block(0, vec![load(1), jump(1)], &[1], vec![]),
+            block(1, vec![load(12), store(10), branch(1)], &[1, 2], phis),
+            block(2, vec![store(10)], &[], vec![]),
+        ]);
+        let phis_left = |now: &LirBody| now.blocks.iter().map(|one| one.phis.len()).sum::<usize>();
+        let old = crate::backend::allocate::RfpOn::off();
+        assert_eq!(phis_left(&lowered(&was).expect("lowers")), 1, "left for phielim");
+        drop(old);
+        let _rfp = crate::backend::allocate::RfpOn::set();
+        assert_eq!(phis_left(&lowered(&was).expect("lowers")), 0, "lowered");
     }
 
     /// Two counters carried round a loop: each phi gets a register of its own,

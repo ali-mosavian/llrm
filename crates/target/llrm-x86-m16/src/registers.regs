@@ -3,7 +3,11 @@
 # sit in it), byte (has 8-bit views), base and index (what a word
 # address `[bx+si]` is made of), frame (the frame pointer: no value is held in it), positional (a position in a
 # stack, st(i): an exchange of it is an effect and it is no register a pass renames or removes).
-# Allocation order is file order. The segment registers carry the class of the address space they mean (data_segment, stack_segment, code_segment, far_segment).
+# Allocation order is file order: the registers a call destroys first (eax ecx edx ebx), the ones it keeps last (esi edi), as
+# X86RegisterInfo.td lists GR32 with the callee-saved registers last. DEVIATE D-RO1: ebx comes before esi and edi, where the pin
+# has it last (it is callee-saved there). The fact: this ABI destroys bx and keeps si and di, and the pin's literal order cost
+# QCport -Os +511 B against -174 B for this one (65 modules). Exit: none.
+# The segment registers carry the class of the address space they mean (data_segment, stack_segment, code_segment, far_segment).
 #
 # dwarf and codeview: the register's number in each debug format, `-` for none. CodeView's are
 # CV_HREG_e (llvm's CodeViewRegisters.def). Real-mode x86 has no psABI DWARF map; the numbers are Open Watcom's
@@ -16,9 +20,9 @@
 #
 # name  bits root lane classes dwarf codeview [load: the mnemonic that loads a far pointer into a segment register]
 eax     32   eax  0    gpr,byte,int  0  17
-ebx     32   ebx  0    gpr,byte,base,int  3  20
 ecx     32   ecx  0    gpr,byte,int  1  18
 edx     32   edx  0    gpr,byte,int  2  19
+ebx     32   ebx  0    gpr,byte,base,int  3  20
 esi     32   esi  0    gpr,index,int  6  23
 edi     32   edi  0    gpr,index,int  7  24
 ebp     32   ebp  0    reserved,frame,base,int  5  22
