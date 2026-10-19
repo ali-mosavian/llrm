@@ -591,7 +591,7 @@ pub fn llvm_motion(applied: &Applied) -> bool {
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
 fn translated() -> Vec<Box<dyn FunctionPass>> {
-    vec![Box::new(crate::cvp::Cvp)]
+    vec![Box::new(crate::cvp::Cvp), Box::new(crate::jumpthreading::JumpThreading)]
 }
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`).
@@ -756,6 +756,7 @@ pub(crate) fn llvm_order(
         Phase::Simplify => {
             let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
             list.extend([
+                slot("jumpthreading@668", Box::new(crate::jumpthreading::JumpThreading)),
                 slot("cvp@669", Box::new(crate::cvp::Cvp)),
                 decide("decide@675"),
                 phiopt("phiopt@675"),
@@ -826,6 +827,7 @@ pub(crate) fn llvm_order(
                 slot("bdce@797", Box::new(bdce::Bdce)),
                 fold("fold@801"),
                 dead("dead@801"),
+                slot("jumpthreading@809", Box::new(crate::jumpthreading::JumpThreading)),
                 decide("decide@809"),
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("adce@815", Box::new(adce::Adce)),
@@ -846,7 +848,7 @@ pub(crate) fn llvm_order(
     };
     list.into_iter()
         .filter(|one| applied.options.wanted(one.name()))
-        .filter(|one| applied.options.pre || one.name() != "gvn@787")
+        .filter(|one| applied.options.pre || !crate::parity::ABSENT_AT_O1.contains(&one.name()))
         .collect()
 }
 
