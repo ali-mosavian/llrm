@@ -30,9 +30,11 @@
 //!    target is a separate decision.
 //! 3. Floating-point folds, `bitcast (uitofp X)` included: #2246.
 //! 4. Loads, pointer compares, `addrspacecast`: #2247.
-//! 5. Calls and intrinsics, `simplifyICmpWithIntrinsicOnLHS`, the call arm of
-//!    `simplifyWithOpsReplaced`: #2248. Only the `llvm.smax` family is folded,
-//!    matched by `simplify_instruction_in`, whose caller passes the globals.
+//! 5. `simplifyICmpWithIntrinsicOnLHS`, the call arm of
+//!    `simplifyWithOpsReplaced`, the floating-point intrinsics: #2248, #2246.
+//!    `simplifyCall`'s integer intrinsics are `simplify_calls.rs`; the callee
+//!    is found by name, so `simplify_instruction_in`'s caller passes the
+//!    globals.
 //! 6. `simplifySelectWithICmpCond`, `simplifySelectBitTest`/`WithBitTest`,
 //!    `simplifySelectWithEquivalence`, `simplifyCmpSelOfMaxMin`,
 //!    `simplifyICmpWithDominatingAssume`: #2249.
@@ -4003,6 +4005,7 @@ fn simplify_instruction_with_operands(
         Opcode::Cast(op) => simplify_cast(q, *op, operands[0], instruction.ty, max_recurse),
         Opcode::Phi => simplify_phi(q, inst),
         Opcode::Freeze => simplify_freeze(q, operands[0]),
+        Opcode::Call(_) => calls::simplify_call(q, inst, operands),
         Opcode::GetElementPtr { source } => simplify_gep(q, *source, operands[0], &operands[1..], flags),
         _ => None,
     }
@@ -4075,6 +4078,9 @@ pub fn simplify_select_operands(
     let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None, can_use_undef: true };
     simplify_select(&mut q, condition, if_true, if_false)
 }
+
+#[path = "simplify_calls.rs"]
+mod calls;
 
 #[cfg(test)]
 #[path = "simplify_tests.rs"]
