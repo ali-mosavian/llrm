@@ -954,3 +954,117 @@ fn a_cast_of_a_global_is_a_constant_expression() {
         assert!(folded.as_deref().is_some_and(|one| one.starts_with("Expr(Cast")), "{body}: {folded:?}");
     }
 }
+
+/// `simplifySelectWithICmpCond` and its helpers: a select on a compare, each
+/// rule of `simplifyCmpSelOfMaxMin`, `simplifySelectBitTest`,
+/// `simplifySelectWithEquivalence`, `decomposeBitTest` at its LLVM result.
+#[test]
+fn selects_on_a_compare() {
+    let decls = "declare i16 @llvm.smax.i16(i16, i16)
+declare i16 @llvm.umin.i16(i16, i16)
+declare i16 @llvm.abs.i16(i16, i1)
+declare i16 @llvm.fshl.i16(i16, i16, i16)
+";
+    for (body, expected) in [
+        // (X > Y) ? X : max(X, Y) --> max(X, Y); (X != Y) ? X : max --> X
+        (
+            "  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %k = icmp sgt i16 %x, %y\n  %r = select i1 %k, i16 %x, i16 %m\n",
+            Some("%m"),
+        ),
+        (
+            "  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %k = icmp ne i16 %x, %y\n  %r = select i1 %k, i16 %x, i16 %m\n",
+            Some("%x"),
+        ),
+        (
+            "  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %k = icmp slt i16 %x, %y\n  %r = select i1 %k, i16 %x, i16 %m\n",
+            Some("%x"),
+        ),
+        (
+            "  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %k = icmp slt i16 %x, %y\n  %r = select i1 %k, i16 %m, i16 %x\n",
+            Some("%m"),
+        ),
+        // X > MIN ? X : MIN --> X
+        ("  %k = icmp sgt i16 %x, -32768\n  %r = select i1 %k, i16 %x, i16 -32768\n", Some("%x")),
+        ("  %k = icmp slt i16 %x, 32767\n  %r = select i1 %k, i16 %x, i16 32767\n", Some("%x")),
+        ("  %k = icmp ugt i16 %x, 0\n  %r = select i1 %k, i16 %x, i16 0\n", Some("%x")),
+        ("  %k = icmp sgt i16 %x, 0\n  %r = select i1 %k, i16 %x, i16 0\n", None),
+        // an equality gives the value of one arm
+        ("  %k = icmp eq i16 %x, %y\n  %r = select i1 %k, i16 %x, i16 %y\n", Some("%y")),
+        ("  %k = icmp eq i16 %x, 5\n  %r = select i1 %k, i16 %x, i16 5\n", Some("5")),
+        ("  %k = icmp ne i16 %x, 5\n  %r = select i1 %k, i16 5, i16 %x\n", Some("5")),
+        ("  %k = icmp eq i16 %x, 5\n  %r = select i1 %k, i16 6, i16 %x\n", None),
+        // (X | Y) == 0 implies X == 0
+        ("  %o = or i16 %x, %y\n  %k = icmp eq i16 %o, 0\n  %r = select i1 %k, i16 %x, i16 0\n", Some("0")),
+        ("  %o = and i16 %x, %y\n  %k = icmp eq i16 %o, -1\n  %r = select i1 %k, i16 %y, i16 -1\n", Some("65535")),
+        // bit tests: (X & Y) == 0 ? X & ~Y : X --> X
+        (
+            "  %a = and i16 %x, 3\n  %k = icmp eq i16 %a, 0\n  %m = and i16 %x, -4\n  %r = select i1 %k, i16 %m, i16 %x\n",
+            Some("%x"),
+        ),
+        (
+            "  %a = and i16 %x, 3\n  %k = icmp ne i16 %a, 0\n  %m = and i16 %x, -4\n  %r = select i1 %k, i16 %m, i16 %x\n",
+            Some("%m"),
+        ),
+        (
+            "  %a = and i16 %x, 4\n  %k = icmp ne i16 %a, 0\n  %o = or i16 %x, 4\n  %r = select i1 %k, i16 %x, i16 %o\n",
+            Some("%o"),
+        ),
+        (
+            "  %a = and i16 %x, 4\n  %k = icmp eq i16 %a, 0\n  %o = or i16 %x, 4\n  %r = select i1 %k, i16 %o, i16 %x\n",
+            Some("%o"),
+        ),
+        // the same through a sign test and a truncation
+        ("  %k = icmp slt i16 %x, 0\n  %m = and i16 %x, 32767\n  %r = select i1 %k, i16 %x, i16 %m\n", Some("%x")),
+        ("  %t = trunc i16 %x to i1\n  %o = or i16 %x, 1\n  %r = select i1 %t, i16 %x, i16 %o\n", Some("%o")),
+        // zero-shift guards of rotates and funnel shifts
+        (
+            "  %f = call i16 @llvm.fshl.i16(i16 %x, i16 %x, i16 %y)\n  %k = icmp eq i16 %y, 0\n  %r = select i1 %k, i16 %x, i16 %f\n",
+            Some("%f"),
+        ),
+        (
+            "  %f = call i16 @llvm.fshl.i16(i16 %x, i16 %x, i16 %y)\n  %s = and i16 %y, 15\n  %k = icmp eq i16 %s, 0\n  %r = select i1 %k, i16 %x, i16 %f\n",
+            Some("%f"),
+        ),
+        (
+            "  %f = call i16 @llvm.fshl.i16(i16 %x, i16 %x, i16 %y)\n  %s = urem i16 %y, 16\n  %k = icmp eq i16 %s, 0\n  %r = select i1 %k, i16 %x, i16 %f\n",
+            Some("%f"),
+        ),
+        (
+            "  %f = call i16 @llvm.fshl.i16(i16 %x, i16 %y, i16 %y)\n  %k = icmp eq i16 %y, 0\n  %r = select i1 %k, i16 %x, i16 %f\n",
+            None,
+        ),
+        // X == 0 ? abs(X) : -abs(X) --> -abs(X)
+        (
+            "  %a = call i16 @llvm.abs.i16(i16 %x, i1 false)\n  %n = sub i16 0, %a\n  %k = icmp eq i16 %x, 0\n  %r = select i1 %k, i16 %a, i16 %n\n",
+            Some("%n"),
+        ),
+        (
+            "  %a = call i16 @llvm.abs.i16(i16 %x, i1 false)\n  %n = sub i16 0, %a\n  %k = icmp eq i16 %x, 0\n  %r = select i1 %k, i16 %n, i16 %a\n",
+            Some("%a"),
+        ),
+    ] {
+        assert_eq!(simplified(&format!("{decls}{}", of(body)), "r").as_deref(), expected, "{body}");
+    }
+}
+
+/// `isSelectWithIdenticalPHI`: two phis that differ only by a select between
+/// them are one.
+#[test]
+fn a_select_of_two_phis_that_are_always_equal() {
+    let text = "define i32 @f(i32 %n, i1 %c, i1 %cmp1, i1 %cmp2) {
+entry:
+  br label %loop
+loop:
+  %phi = phi i32 [ 0, %entry ], [ %sel1, %loop ]
+  %id = phi i32 [ 0, %entry ], [ %sel2, %loop ]
+  %to_fold = select i1 %cmp2, i32 %id, i32 %phi
+  %sel1 = select i1 %cmp1, i32 5, i32 %to_fold
+  %sel2 = select i1 %cmp1, i32 5, i32 %id
+  %r = select i1 %c, i32 %phi, i32 %id
+  br i1 %cmp1, label %loop, label %exit
+exit:
+  ret i32 %r
+}
+";
+    assert_eq!(simplified(text, "r").as_deref(), Some("%id"));
+}

@@ -108,7 +108,6 @@ use llrm_analysis::induction::{self, Scev};
 use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::num::Num as BigInt;
-use llrm_analysis::ranges;
 use llrm_analysis::scev::analysis::LazyScevView;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
@@ -213,7 +212,7 @@ fn _decided(
     }
     for (block, target) in decisions {
         let last = function.terminator(block).expect("a terminator");
-        _jump(function, last, target);
+        _jump(context, function, last, target);
     }
     cfg::_unreachable(context, function);
     transform::_trivial_phis(function)?;
@@ -382,12 +381,20 @@ fn _implied_by_scev(
     })
 }
 
-/// `last`, a terminator, replaced by a jump to `target`.
+/// `last`, a terminator, replaced by a jump to `target`. `br i1 %c, T, T` has
+/// two edges to `T` and a phi of `T` two inputs from the block: a jump has one
+/// edge, so the phi loses one.
 fn _jump(
+    context: &Context,
     function: &mut Function,
     last: InstId,
     target: BlockId,
 ) {
+    let block = function.parent(last).expect("a placed terminator");
+    let edges = function.instruction(last).operands.iter().filter(|one| **one == Operand::Block(target)).count();
+    for _ in 1..edges {
+        function.predecessor_removed(context, target, block, true);
+    }
     let jump = function.create_instruction(
         Opcode::Br,
         function.instruction(last).ty,
@@ -713,8 +720,7 @@ pub fn _threaded(
         if let [_, Operand::Block(taken), Operand::Block(other)] = function.instruction(last).operands[..]
             && taken == other
         {
-            function.predecessor_removed(context, taken, block, true);
-            _jump(function, last, taken);
+            _jump(context, function, last, taken);
             changed = true;
         }
     }
