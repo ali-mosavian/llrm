@@ -465,6 +465,9 @@ pub struct Collection<'a, 'b> {
     /// How many formulae were offered to `insert_formula`: the work generation
     /// did.
     pub insert_attempts: usize,
+    /// How many formulae were rated: the work the filter, narrowing and solver
+    /// did.
+    pub rated: std::cell::Cell<usize>,
     /// The operands that IV chains take over (user and operand index): not
     /// fixups.
     pub chain_uses: HashSet<(InstId, usize)>,
@@ -497,6 +500,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             changed: false,
             swapped_compares: Vec::new(),
             insert_attempts: 0,
+            rated: std::cell::Cell::new(0),
             chain_uses: HashSet::default(),
         }
     }

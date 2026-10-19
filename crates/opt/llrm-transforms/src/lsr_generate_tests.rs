@@ -283,3 +283,35 @@ fn uses_that_can_share_a_register_do() {
         assert_eq!(chosen, [r2, r2]);
     });
 }
+
+/// Work grows with the uses as the solver prunes it: the formulae offered and
+/// the formulae rated by the filter, the narrowing and the solver, at 8, 16 and
+/// 32 pointers walked together, each at most about double when the uses double.
+#[test]
+fn the_whole_search_is_linear_in_the_uses() {
+    let looped = |n: usize| {
+        let mut text = String::from("define void @f(");
+        for k in 0..n {
+            text += &format!("ptr %p{k}, ");
+        }
+        text += "i32 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i32 [ 0, %entry ], [ %next, %loop ]\n";
+        for k in 0..n {
+            text += &format!("  %a{k} = getelementptr i32, ptr %p{k}, i32 %i\n  store i32 0, ptr %a{k}\n");
+        }
+        text += "  %next = add i32 %i, 1\n  %c = icmp eq i32 %next, %n\n  br i1 %c, label %exit, label %loop\nexit:\n  ret void\n}\n";
+        text
+    };
+    let mut work = Vec::new();
+    for n in [8usize, 16, 32] {
+        generated_for("i486", &looped(n), |_, se, lsr, _| {
+            lsr.filter_out_undesirable_dedicated_registers(se);
+            lsr.narrow_search_space_using_heuristics(se);
+            let solution = lsr.solve(se);
+            assert_eq!(solution.len(), n + 1);
+            work.push((lsr.insert_attempts, lsr.rated.get()));
+        });
+    }
+    for pair in work.windows(2) {
+        assert!(pair[1].0 <= 2 * pair[0].0 + 8 && pair[1].1 <= 2 * pair[0].1 + 8, "{work:?}");
+    }
+}
