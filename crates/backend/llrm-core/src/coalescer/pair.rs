@@ -44,7 +44,10 @@ pub trait CoalescerEnv {
         let Some(what) = &insn.what else { return false };
         what.op == Operation::Move
             && what.name.as_deref() == Some("mov")
-            && matches!((what.dests.as_slice(), what.sources.as_slice()), ([Loc::Held(_)], [Loc::Imm(_)]))
+            && matches!(
+                (what.dests.as_slice(), what.sources.as_slice()),
+                ([Loc::Held(_)], [Loc::Imm(_)])
+            )
             && insn.defines.len() == 1
             && insn.uses.is_empty()
             && insn.clobbers.is_empty()
