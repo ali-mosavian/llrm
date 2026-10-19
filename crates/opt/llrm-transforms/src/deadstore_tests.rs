@@ -201,3 +201,44 @@ fn a_call_reading_the_buffer_it_fills_keeps_the_earlier_fill() {
     );
     assert!(after.contains("llvm.memset.p0.i16(ptr %a"), "{after}");
 }
+
+/// Only a store, or a call that fills bytes, can be dead: a body with neither
+/// built the memory graph and solved what escapes for nothing.
+#[test]
+fn a_body_with_no_store_asks_nothing() {
+    use llrm_analysis::manager::Summaries;
+    use llrm_mir::passes::PassManager;
+    let mut module =
+        parsed("declare i16 @g(i16)\n\ndefine i16 @f(i16 %x) {\nb0:\n  %y = call i16 @g(i16 %x)\n  ret i16 %y\n}\n");
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(DeadStoreElimination);
+    llrm_mir::passes::trace_recomputes(true);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let counts = llrm_mir::passes::recomputes();
+    llrm_mir::passes::trace_recomputes(false);
+    let asked: Vec<_> =
+        counts.iter().filter(|(name, ..)| matches!(*name, "points-to" | "published" | "accesses")).collect();
+    assert!(asked.is_empty(), "{asked:?}");
+}
+
+/// The cells of one array, each stored twice, cost in proportion to their
+/// number (the old solver compared every cell with all of its object's, and
+/// LLVM's walk is capped).
+#[test]
+fn the_stores_of_one_array_cost_in_proportion_to_their_number() {
+    let work = |cells: usize| {
+        let stores: String =
+            (0..cells).map(|i| format!("  store i16 {i}, ptr getelementptr (i8, ptr @arr, i16 {})\n", 2 * i)).collect();
+        let text = format!(
+            "@arr = global [{} x i8] zeroinitializer\n\ndefine i16 @f() {{\nb0:\n{stores}{stores}  ret i16 0\n}}\n",
+            2 * cells
+        );
+        let before = super::steps();
+        let after = eliminated(&text, &[&[]]);
+        let _ = after;
+        super::steps() - before
+    };
+    let (small, large) = (work(100), work(400));
+    assert!(large as f64 <= 5.0 * small as f64, "{small} steps for 100 cells, {large} for 400");
+}
