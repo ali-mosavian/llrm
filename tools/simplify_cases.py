@@ -19,7 +19,7 @@ for k in range(N):
     derived+=[('au',f'add nuw {ty} %x, %y'),('as',f'add nsw {ty} %x, %y'),('a1',f'add nuw {ty} %x, 1'),('an1',f'add nsw {ty} %x, 1'),('a2',f'add nsw {ty} %x, 2'),('am',f'add {ty} %x, -1'),
               ('ur',f'urem {ty} %x, %y'),('lx',f'lshr {ty} %x, 2'),('ud',f'udiv {ty} %x, 3'),('ue',f'udiv exact {ty} %x, %y'),('le',f'lshr exact {ty} %x, %y'),('sc',f'sub {ty} 5, %x'),('s6',f'sub {ty} 6, %x'),
               ('s4',f'shl {ty} 4, %x'),('sq',f'shl nuw {ty} 4, %x'),('mu',f'mul {ty} %x, 3'),('um',f'udiv {ty} %mu0, 5'),('sn',f'shl nuw {ty} %x, %y'),('sn2',f'shl nuw {ty} %y, %y'),('o8',f'or {ty} %x, 8'),('o9',f'or {ty} %x, 9'),
-              ('a3',f'and {ty} %x, 3'),('a7',f'and {ty} %x, 7'),('sd',f'sdiv exact {ty} %x, %y'),('ae',f'ashr exact {ty} %x, %y'),('zn',f'sub {ty} 0, %zz')]
+              ('a3',f'and {ty} %x, 3'),('a7',f'and {ty} %x, 7'),('us',f'call {ty} @llvm.uadd.sat.{ty}({ty} %x, {ty} %y)'),('ub',f'call {ty} @llvm.usub.sat.{ty}({ty} %x, {ty} %y)'),('sd',f'sdiv exact {ty} %x, %y'),('ae',f'ashr exact {ty} %x, %y'),('zn',f'sub {ty} 0, %zz')]
     derived=[d for d in derived if '%mu0' not in d[1] and '%zz' not in d[1]]
     use=random.sample(derived,random.randint(0,5))
     # min/max idioms: a compare and the select on it (both kept alive)
