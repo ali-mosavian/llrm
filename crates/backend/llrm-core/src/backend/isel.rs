@@ -4504,6 +4504,52 @@ impl Selector<'_, '_, '_> {
         let (at, ty) = (self.ats[&inst], instruction.ty);
         let wide = self.cpu.operand_bytes as u32;
         let signed = matches!(op, BinaryOp::SDiv | BinaryOp::SRem);
+        // CVP narrows `udiv i32 x, 5` to a byte: as LLVM promotes the byte to
+        // a legal width before multiplying by the reciprocal, so is the
+        // dividend taken to a dword here.
+        if let Some(constant) = self.constant(instruction.operands[1], 1).filter(|_| !signed) {
+            let byte = self.held(instruction.operands[0], ty, at, out)?;
+            let (dividend, quotient, remainder) = (self.fresh_held(4), self.fresh_held(4), self.fresh_held(4));
+            let mut parts =
+                vec![semantics(Operation::Extend, "movzx", vec![Loc::Held(dividend)], vec![Loc::Held(byte)])];
+            let mut next = self.next;
+            let mut fresh = || {
+                next += 1;
+                next
+            };
+            let both = self.paired.contains_key(&inst) || matches!(op, BinaryOp::URem);
+            let bits = self.significant_bits(instruction.operands[0], false, inst);
+            let reciprocal = division::unsigned_reciprocal(
+                dividend,
+                i64::from(constant as u8),
+                &[quotient, remainder],
+                &mut fresh,
+                self.cpu,
+                both,
+                bits,
+            )
+            .map_err(Unselected)?;
+            self.next = next;
+            if let Some(reciprocal) = reciprocal {
+                parts.extend(reciprocal);
+                out.extend(parts.into_iter().map(|what| insn(at, what)));
+                let quotient_of = matches!(op, BinaryOp::UDiv);
+                let keep = |value: u32, from: Held, out: &mut Vec<Arc<Insn>>| {
+                    let low = Held { width: 1, ..from };
+                    let into = Held { value, width: 1 };
+                    out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Held(low)])));
+                };
+                keep(
+                    self.value(instruction.result.expect("a result")),
+                    if quotient_of { quotient } else { remainder },
+                    out,
+                );
+                if let Some(&partner) = self.paired.get(&inst) {
+                    keep(self.value(partner), if quotient_of { remainder } else { quotient }, out);
+                }
+                return Ok(());
+            }
+        }
         let extend = if signed { "movsx" } else { "movzx" };
         let mut widened = |this: &mut Self, operand: Operand| -> Result<Held, Unselected> {
             let byte = this.held(operand, ty, at, out)?;
