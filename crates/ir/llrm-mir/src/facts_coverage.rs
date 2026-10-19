@@ -29,6 +29,7 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("readonly", By(&["test_a_load_from_a_readonly_noalias_parameter_leaves_past_a_store"])),
     ("readnone", By(&["a_readnone_or_memory_none_callee_touches_nothing"])),
     ("nonnull", By(&["a_frame_object_is_nonnull_and_a_parameter_is_not"])),
+    ("noundef", By(&["test_scalar_parameters_are_noundef", "test_noundef_parameters_make_the_or_form"])),
     (
         "nocapture",
         By(&[
