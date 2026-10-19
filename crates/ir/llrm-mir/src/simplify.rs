@@ -4322,8 +4322,8 @@ pub fn simplify_binop_at(
 }
 
 /// `simplifyInstructionWithOperands(&I, Ops, SQ.getWithInstruction(&cxt))`:
-/// what `inst` equals with `operands` in place of its own, asked at `cxt` (none:
-/// `SQ` of the data layout alone).
+/// what `inst` equals with `operands` in place of its own, asked at `cxt`
+/// (none: `SQ` of the data layout alone).
 pub fn simplify_instruction_operands_at(
     context: &mut Context,
     globals: &[GlobalValue],
