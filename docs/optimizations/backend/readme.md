@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 99 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 101 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -38,6 +38,8 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 99 documented,
 | floatfold | A float load that only one arithmetic instruction reads becomes that instruction's memory operand: `fld [m]; faddp` is `fadd [m]`. | Machine phase after `pressuresink` and before `floatassign`, once per | [floatfold](floatfold.md) |
 | floatregions | Where the x87 stack cannot reach, and the error type the x87 allocator raises. | `floatassign`, `floatalloc`, `pressuresink`. | [floatregions](floatregions.md) |
 | fpconvert | Rewrites a float converted to an unsigned 64-bit integer as signed conversions and a select, in MIR before instruction selection. | `mir fp to unsigned` in `driver::optimized`, after `ehprepare` and before | [fpconvert](fpconvert.md) |
+| fpcopyprop | Copy propagation over the x87 registers FP0..FP6: LLVM's `MachineCopyPropagation` for the RFP class. | At the start of `FloatAlloc`, under RFP. | [fpcopyprop](fpcopyprop.md) |
+| fpregs | The x87 registers FP0..FP6 as the values the stackifier tracks. | At the start of `fpstack::converted`; a body with no x87 register operand | [fpregs](fpregs.md) |
 | fpstack | The x87 stackifier: flat floating values in stack form, as LLVM's `X86FloatingPoint` does it. | As the body of `floatalloc` (slot `floatalloc@8`), after `floatassign`, once | [fpstack](fpstack.md) |
 | frame | The stack frame of one function body: where each spill slot, temporary and selector-made stack object lives, and how many bytes the prologue reserves. | `lir frame` in `assemble::staged`, once per function after selection and | [frame](frame.md) |
 | framefree | Decides, before allocation, whether a function can do without its frame register, which is then one more value register. | In `assemble::staged`, after isel and before `frame::of`, once per function. | [framefree](framefree.md) |
@@ -45,7 +47,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 99 documented,
 | hintwalk | The register each value is wanted in because of the copies that lead to it from a pinned value, kept up to date by what a rewrite names. | `HintWalk`: `fresh`, `update`, `wanted`. | [hintwalk](hintwalk.md) |
 | incremental | A dataflow answer over a body's blocks, held between asks and brought up to date from the blocks that changed. | `liveness`, `upperzero` and `peephole` (flag liveness). | [incremental](incremental.md) |
 | inline_asm | Names the QB runtime's registers for inline assembly operands and clobbers. | `abi/qb.rs` and the nib frontend (`llrm-nib` `semantic/assembly.rs`). | [inline_asm](inline_asm.md) |
-| intbits | Integers of a given width held in an `i64`: the masks and wraps that stay defined at eight bytes, where `1 << 64` is not. |  | [intbits](intbits.md) |
+| intbits | Integers of a given width held in an `i64`: the masks and wraps that stay defined at eight bytes, where `1 << 64` is not. | `stepflags` (the constant of a compare against a step) and `peephole` | [intbits](intbits.md) |
 | isel | Instruction selection: one MIR function becomes LIR over virtual registers, as LLVM's SelectionDAG makes MachineInstrs. | First of the staged phases in `assemble::staged`, once per function and | [isel](isel.md) |
 | jumps | Orders the blocks of an allocated body and removes the jumps and blocks the order makes redundant; merges and copies tails. | `ControlFlow` is the last machine phase, because this physical order | [jumps](jumps.md) |
 | lanes | A set of register and flag lanes, as a 128-bit mask. | `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`, | [lanes](lanes.md) |

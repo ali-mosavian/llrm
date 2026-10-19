@@ -105,6 +105,11 @@ impl llrm_target::Target for M16 {
         0
     }
 
+    /// DEVIATE E2-1: no loop is aligned (the pin's is 16 bytes).
+    fn pref_loop_alignment(&self) -> u8 {
+        0
+    }
+
     /// 16-bit mode has the four forms of `Nops16Bit`.
     fn max_nop_bytes(&self) -> u8 {
         4
@@ -259,9 +264,10 @@ mod tests {
     }
 
     #[test]
-    fn test_m16_aligns_no_function() {
+    fn test_m16_aligns_no_function_or_loop() {
         use llrm_target::Target;
         assert_eq!(super::M16.pref_function_alignment(), 0);
+        assert_eq!(super::M16.pref_loop_alignment(), 0);
     }
 
     /// gcc's by-pieces ratios of a constant memset where its algorithm is `rep
