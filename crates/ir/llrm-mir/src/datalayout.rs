@@ -328,6 +328,73 @@ impl DataLayout {
         largest.max(self.aggregate_align)
     }
 
+    /// `Type::getPrimitiveSizeInBits`: 0 for a pointer, an aggregate, or a
+    /// vector of them.
+    fn primitive_bits(
+        &self,
+        types: &Types,
+        ty: TypeId,
+    ) -> u64 {
+        match types.get(ty) {
+            Type::Int(bits) => u64::from(*bits),
+            Type::Float(kind) => u64::from(float_bits(*kind)),
+            Type::Vector { element, count } => self.primitive_bits(types, *element) * u64::from(*count),
+            _ => 0,
+        }
+    }
+
+    /// `CastInst::isBitCastable`
+    /// ([Instructions.cpp:3223](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L3223)).
+    pub fn is_bit_castable(
+        &self,
+        types: &Types,
+        src: TypeId,
+        dest: TypeId,
+    ) -> bool {
+        let first_class = |ty| {
+            !matches!(
+                types.get(ty),
+                Type::Void | Type::Function { .. } | Type::Label | Type::Metadata | Type::Token
+            )
+        };
+        if !first_class(src) || !first_class(dest) {
+            return false;
+        }
+        if src == dest {
+            return true;
+        }
+        // An element by element cast of two vectors of one count.
+        let (src, dest) = match (types.get(src), types.get(dest)) {
+            (Type::Vector { element: a, count: m }, Type::Vector { element: b, count: n }) if m == n => (*a, *b),
+            _ => (src, dest),
+        };
+        if let (Type::Pointer(a), Type::Pointer(b)) = (types.get(src), types.get(dest)) {
+            return a == b;
+        }
+        let (src_bits, dest_bits) = (self.primitive_bits(types, src), self.primitive_bits(types, dest));
+        src_bits != 0 && src_bits == dest_bits
+    }
+
+    /// `CastInst::isBitOrNoopPointerCastable`
+    /// ([Instructions.cpp:3260](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L3260)):
+    /// a bitcast, or a `ptrtoint` or `inttoptr` between a pointer and an
+    /// integer as wide as it that is not of a non-integral space.
+    pub fn is_bit_or_noop_pointer_castable(
+        &self,
+        types: &Types,
+        src: TypeId,
+        dest: TypeId,
+    ) -> bool {
+        let integral_pointer_as_wide_as =
+            |pointer: u32, int: u32| int == self.pointer(pointer).bits && !self.is_non_integral_address_space(pointer);
+        match (types.get(src), types.get(dest)) {
+            (Type::Pointer(space), Type::Int(bits)) | (Type::Int(bits), Type::Pointer(space)) => {
+                integral_pointer_as_wide_as(*space, *bits)
+            }
+            _ => self.is_bit_castable(types, src, dest),
+        }
+    }
+
     /// The bits a value of `ty` holds.
     pub fn size_bits(
         &self,
@@ -444,6 +511,25 @@ mod tests {
         let layout = DataLayout::parse("e-p:16:16-p1:32:16:16:16-p3:32:16:16:32").unwrap();
         assert_eq!((layout.offset_bits(0), layout.offset_bits(1)), (16, 16));
         assert_eq!(layout.offset_bits(3), 16);
+    }
+
+    /// `isBitOrNoopPointerCastable`: a bitcast of one size, a pointer and an
+    /// integer as wide as it only in an integral space (`p1` here is a far
+    /// pointer of 32 bits with a 16-bit index: not integral), and two pointers
+    /// of one space.
+    #[test]
+    fn a_pointer_is_castable_to_an_integer_as_wide_as_it_in_an_integral_space_only() {
+        use crate::types::{FloatKind, Type};
+        let module = crate::parse::module("").unwrap();
+        let types = &module.context.types;
+        let layout = DataLayout::parse("e-p:16:16-p1:32:16:16:16").unwrap();
+        let (i16_, i32_, float) = (types.int(16), types.int(32), types.intern(Type::Float(FloatKind::Float)));
+        let (near, far, near2) = (types.ptr(0), types.ptr(1), types.ptr(0));
+        let castable = |a, b| layout.is_bit_or_noop_pointer_castable(types, a, b);
+        assert!(castable(near, i16_) && castable(i16_, near), "a near pointer and an i16");
+        assert!(!castable(far, i32_) && !castable(i32_, far), "a far pointer is not integral");
+        assert!(castable(i32_, float) && !castable(i16_, float), "a bitcast is of one size");
+        assert!(castable(near, near2) && !castable(near, far), "pointers of one space");
     }
 
     /// `getPrefTypeAlign`: LLVM's defaults prefer an aggregate 8-byte
