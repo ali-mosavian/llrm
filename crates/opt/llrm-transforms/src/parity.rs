@@ -129,7 +129,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: the S1-S3 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; exit: the old threading of decide@675 deleted (vt-constantfolding, after the flip), stage S4 (load PRE, guards, profile) open; on by default, LLRM_NO_JUMPTHREADING turns it off",
     ),
     entry("cvp@669", Simplify, "correlated-propagation", Translated, ""),
-    entry("decide@675", Simplify, "simplifycfg, jump-threading, correlated-propagation", Old, "simplifycfg-port"),
+    partial(
+        "decide@675",
+        Simplify,
+        "simplifycfg, jump-threading, correlated-propagation",
+        "translated SimplifyCfg at the default options (convertSwitchRangeToICmp is read by simplifySwitch, untranslated) runs here and Decide does not (the jump threading and CVP before it have their own slots; what Decide decided here by value facts they do not is now lost until rows say it matters); untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@675) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     entry("phiopt@675", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("fold@677", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@677", Simplify, "instcombine", Old, "instcombine-port"),
@@ -149,7 +154,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("licm@724", Simplify, "licm<no-allowspeculation>", Translated, ""),
     entry("licm@730", Simplify, "licm<allowspeculation>", Translated, ""),
     entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial>", Translated, ""),
-    entry("decide@766", Simplify, "simplifycfg", Old, "simplifycfg-port"),
+    partial(
+        "decide@766",
+        Simplify,
+        "simplifycfg",
+        "translated SimplifyCfg at the default options (convertSwitchRangeToICmp is read by simplifySwitch, untranslated) runs here and Decide does not; untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@766) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     entry("phiopt@766", Simplify, "simplifycfg", Old, "simplifycfg-port"),
     entry("fold@768", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@768", Simplify, "instcombine", Old, "instcombine-port"),
@@ -172,6 +182,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("bdce@797", Simplify, "bdce", Translated, ""),
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@801", Simplify, "instcombine", Old, "instcombine-port"),
+    entry("dfajumpthreading@806", Simplify, "dfa-jump-threading", Translated, ""),
     partial(
         "jumpthreading@809",
         Simplify,
@@ -218,7 +229,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@728", Simplify, "lcssa", Old, "lcssa-port"),
-    entry("dfa-jump-threading", Simplify, "dfa-jump-threading", Missing, "parity-pipeline"),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
     // (`module@row`, the row of the table in `backend/mod.rs`).
@@ -533,7 +543,7 @@ pub const TODO: &[&str] = &[
 /// function (`PassBuilderPipelines.cpp`: the function simplification pipeline
 /// runs once per function, so `gvn` once; llvm-difftest counted 11 on d_faces
 /// -O2 for its 11 functions). The slot name is as in `llvm_order`.
-pub const RUNS_PER_BODY: &[(&str, [usize; 4])] = &[("gvn@787", [0, 1, 1, 1])];
+pub const RUNS_PER_BODY: &[(&str, [usize; 4])] = &[("gvn@787", [0, 1, 1, 1]), ("dfajumpthreading@806", [0, 1, 1, 1])];
 
 /// The level a list is built for: the pin's `default<O1>`, `default<O2>`,
 /// `default<O3>`; -Os is the -O2 list on optsize IR (`opt` rejects `-Os`).
@@ -554,7 +564,7 @@ impl Level {
 /// Registry slots the pin's `default<O1>` does not have (no GVN or
 /// JumpThreading at -O1: `buildO1FunctionSimplificationPipeline`), so a
 /// Translated one is not required in a -O1 list.
-pub const ABSENT_AT_O1: &[&str] = &["gvn@787", "jumpthreading@668", "jumpthreading@809"];
+pub const ABSENT_AT_O1: &[&str] = &["gvn@787", "jumpthreading@668", "jumpthreading@809", "dfajumpthreading@806"];
 
 /// Run counts LLVM does not match yet, stated and not checked:
 /// `loopsimplify`/`lcssa` run at three unconditional slots per body at every
