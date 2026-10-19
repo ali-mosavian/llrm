@@ -283,10 +283,11 @@ def test_the_budget_is_instructions_so_a_loaded_host_passes_and_a_doubled_step_f
     assert not ok and "perf unavailable" in line
 
 
-def test_the_ratchets_run_side_by_side_and_report_in_command_order():
+def test_the_ratchets_run_side_by_side_and_report_in_command_order(monkeypatch):
     """A precheck spent ~45 s of its ~70 s running ten cargo test ratchets one after another; four at a time they overlap their links and runs."""
     import threading
 
+    monkeypatch.setattr(ps, "RATCHET_WORKERS", 4)
     gate = threading.Barrier(2, timeout=5)  # a serial runner never reaches 2 parties: the barrier breaks (10 ratchets: pairs)
 
     class Done:
@@ -299,3 +300,8 @@ def test_the_ratchets_run_side_by_side_and_report_in_command_order():
 
     failed = ps.ratchet_failures(run=run)
     assert list(failed) == ["ratchet:facts_rewrite"], failed
+
+
+def test_the_ratchets_run_one_at_a_time_by_default():
+    """Four at a time cost 600-750 s a PR at load 70 against ~57 s in a row (cargo's lock serializes the compiles; the links collide): serial is the default, RATCHET_WORKERS overrides."""
+    assert ps.RATCHET_WORKERS == 1
