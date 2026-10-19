@@ -1320,6 +1320,8 @@ impl Fixed {
         quiet.options.llvm_order = true;
         let mut one = Self::linear(&quiet, phase);
         one.passes.retain(|pass| pass.name() == slot);
+        // A slot is the one pass: -O3's peeler ran in its place.
+        one.peelers.clear();
         one.only = true;
         one
     }
