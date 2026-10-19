@@ -2272,6 +2272,16 @@ pub trait FunctionPass {
     fn parts(&self) -> Vec<&'static str> {
         vec![self.name()]
     }
+    /// The LLVM pass this one translates; `None` for an llrm stand-in. The
+    /// parity registry refuses an Old slot that runs one
+    /// (`parity::check_phase`).
+    fn translation(&self) -> Option<&'static str> {
+        None
+    }
+    /// [`translation`](Self::translation) of each pass that runs under `name`.
+    fn translations(&self) -> Vec<&'static str> {
+        self.translation().into_iter().collect()
+    }
     /// Whether the pass may add a memory operation a function did not have (a
     /// load speculated, a call made). The module analyses frozen at a point
     /// of the pipeline (`PassManager::freeze`) are held past a pass that says

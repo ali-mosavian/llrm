@@ -1451,6 +1451,7 @@ fn test_sroa_and_mem2reg_are_on_by_default_and_the_registry_calls_their_slots_tr
                 applied.options.sroa,
                 applied.options.mem2reg,
                 applied.options.rotating(),
+                &[],
             );
             assert_eq!(checked, Ok(()), "{phase:?} sroa {} mem2reg {}", applied.options.sroa, applied.options.mem2reg);
         }
