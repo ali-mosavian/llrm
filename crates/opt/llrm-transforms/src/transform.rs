@@ -1,5 +1,5 @@
 //! The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`],
-//! [`crate::unswitch`] and [`crate::loopexit`] share: value reuse, liveness of
+//! and [`crate::unswitch`] share: value reuse, liveness of
 //! values, and cleanup of phis after an edge goes.
 //!
 //! # How it works
@@ -45,12 +45,12 @@
 //! `subexpressions`, `equal_calls`, `forwarded` ([`crate::gvn`]); `live` and
 //! `live_except` ([`crate::dead`], [`crate::floatloop`]); `_comparison`
 //! ([`crate::decide`], [`crate::unswitch`]); `_trivial_phis`
-//! ([`crate::decide`], [`crate::loopexit`], [`crate::unswitch`]).
+//! ([`crate::decide`], [`crate::unswitch`]).
 //!
 //! # Used by
 //! [`crate::gvn`] calls `subexpressions`, `equal_calls` and `forwarded` on each
 //! function it numbers; [`crate::dead`] and [`crate::floatloop`] call `live`
-//! to decide what to delete; [`crate::decide`], [`crate::loopexit`] and
+//! to decide what to delete; [`crate::decide`] and
 //! [`crate::unswitch`] call `_trivial_phis` after they drop an edge. Not a
 //! pass: it runs only inside those.
 //!

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/indvars.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/indvars.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:0ff526ed5c504d42c0ebce558586f414047e408c86401677559c4f04a54aa879 -->
+<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:1fe5fbe6869548a6f700c9e8362f171dd25a2557fa8dce74445c8c3e2cadcc01 -->
 
 # indvars
 
@@ -17,11 +17,9 @@ changed the body.
    of the loop's count where the loop is left (`rewriteLoopExitValues`,
    ScalarEvolution's exit values, from every exit of the loop, a rotated
    loop's latch included); `LLRM_NO_SCEV_EXITVALUES` turns it off.
-1. `loopexit::evaluated`: values after a counted loop computed from its
-   trips.
-2. `exitfold::folded`: exits their counts decide are folded.
-4. `exitsink::sunk`: final updates only exit phis read move to the exits.
-5. `widened`: a counter read through `zext` (or, where it is signed and
+1. `exitfold::folded`: exits their counts decide are folded.
+2. `exitsink::sunk`: final updates only exit phis read move to the exits.
+3. `widened`: a counter read through `zext` (or, where it is signed and
    tested by `slt`, `sext`) to the address's index width, where `induction`
    proves its values never pass its own (`rises_unsigned`, `rises_signed`),
    becomes a counter of that width. C's `unsigned short i` reads `a[zext
@@ -36,10 +34,10 @@ changed the body.
    compares the wide one with that value extended
    (`WidenIV::widenLoopCompare`); other readers of the narrow one read its
    low part.
-6. `congruent`: header counters with one start and one step are one counter
+4. `congruent`: header counters with one start and one step are one counter
    (`SCEVExpander::replaceCongruentIVs`); the later ones' readers read the
    first, and `dead` removes them.
-7. `rewound`: see below.
+5. `rewound`: see below.
 
 `rewound` carries an exact inner recurrence's exit value around the outer
 loop. An inner loop running exactly `count` trips leaves as
@@ -131,7 +129,7 @@ leaves (a number is a `mov` where the counter's register already holds it).
 
 ## Needs
 `Registers`, `Bounded` (for a `sext` counter), `induction`, `liveness`,
-[`crate::loopexit`](loopexit.md), [`crate::exitfold`](exitfold.md), [`crate::exitsink`](exitsink.md),
+[`crate::exitvalues`](exitvalues.md), [`crate::exitfold`](exitfold.md), [`crate::exitsink`](exitsink.md),
 [`crate::profit`](profit.md).
 
 ## Keeps

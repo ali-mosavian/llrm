@@ -176,6 +176,7 @@ Module `scev/expander.rs`, replacing `llrm-transforms/src/expand.rs`.
 | 19 | `eliminateIdentitySCEV` reuses the operand only if `impliesPoison(IVOperand, UseInst)`; `canReuseInstruction` is not translated | the same fact as D12: the call only widens the cases where a poison-generating flag can be dropped |
 | 20 | `optimizeLoopExits` and `getLoopInvariantExitCondDuringFirstIterations` ignore `samesign` on an `icmp`; `predicateLoopExits` has no token check | `IntPredicate` carries no `samesign` (the flag is on the instruction) and SCEV's predicate queries do not read it; llrm has no token type | `exitopt.rs`, `invariant.rs`, `exitpredicate.rs` |
 | 21 | `computeExitCountExhaustively` answers CouldNotCompute (`exit_value.rs`, D-T4) | owed: `getConstantEvolvingPHI` and `EvaluateExpression` are not translated; a loop of constant-evolving values (`udiv iv, 10 <u 2`) has no exit count | `compute_exit_count_exhaustively`; `exitopt_tests.rs` uses `iv <u 20` for LLVM's `ult_const_max` |
+| 22 | `IndVars.lftr`: LFTR runs only where loop-rotate runs before indvars (`Options::rotating()`, `LLRM_ROTATE`) | LLVM rotates before indvars; ours is off by default (#2585), and on a loop tested at its top LFTR adds `umax(limit, start)` and a call before the loop (+16 B at sieve.c -O1 m16, +4.4% bytes over the corpus) | delete the field when rotate is on by default (#2751) |
 
 Container idioms (`FoldingSet` -> interner, `SmallVector` -> `Vec`, `DenseMap` -> `IdMap`) are not DEVIATEs.
 
