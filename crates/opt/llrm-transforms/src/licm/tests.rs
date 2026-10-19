@@ -853,6 +853,77 @@ b3:
     assert!(block_of(&stated, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{stated}");
 }
 
+/// A GEP the target folds into the loop's load, also read by an exit phi: LLVM
+/// copies it into the exit and keeps it in the loop. llrm left the exit phi
+/// reading the loop's pointer, where `opt -passes=licm` re-forms the address
+/// there from the index (five bodies at the i486 target).
+#[test]
+fn test_a_gep_folded_into_a_load_is_copied_into_the_exit() {
+    struct I486(llrm_mir::target::Neutral);
+    impl llrm_mir::target::Machine for I486 {
+        fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+            Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap()))
+        }
+
+        fn foreign_span(
+            &self,
+            selectors: (i64, i64),
+            offsets: (i64, i64),
+            width: i64,
+        ) -> Option<(i64, i64)> {
+            self.0.foreign_span(selectors, offsets, width)
+        }
+
+        fn spaces(&self) -> llrm_mir::spaces::Spaces {
+            self.0.spaces()
+        }
+
+        fn costs(&self) -> llrm_mir::target::OperationCosts {
+            self.0.costs()
+        }
+
+        fn registers(&self) -> i64 {
+            self.0.registers()
+        }
+
+        fn call_registers(&self) -> i64 {
+            self.0.call_registers()
+        }
+
+        fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+            self.0.address_forms()
+        }
+    }
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+
+define i32 @f(ptr %p, i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b1 ]
+  %a = getelementptr i32, ptr %p, i32 %i
+  %v = load i32, ptr %a
+  %i1 = add i32 %i, %v
+  %c = icmp eq i32 %v, 0
+  br i1 %c, label %b2, label %b1
+
+b2:
+  %e = phi ptr [ %a, %b1 ]
+  store i32 %n, ptr %e
+  ret i32 0
+}
+";
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(I486(llrm_mir::target::Neutral))).unwrap();
+    let after = crate::testing::printed(&module);
+    assert!(!after.contains("phi ptr"), "{after}");
+    assert!(after.contains("%a = getelementptr"), "{after}");
+}
+
 /// `(LV + a) + 1` with `a` invariant: `LV + (a + 1)`, the sum made in the
 /// preheader. llrm left the add in the loop, where `opt -passes=licm` hoists
 /// it (matmul at the i486 target). Flags: `nuw` kept only if both had it, `nsw`

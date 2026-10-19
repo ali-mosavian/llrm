@@ -222,6 +222,11 @@ impl LoopIdiomRecognize {
         run: &mut Run,
         args: &Strided,
     ) -> bool {
+        // DEVIATE: a huge pointer's step carries into its selector, which no
+        // `rep stos`/`movs` does past 64K.
+        if run.env.layout.carries(pointer_space(run.context, run.function, args.dest_ptr)) {
+            return false;
+        }
         // The trip count of the loop and the base pointer of the addrec SCEV
         // is guaranteed to be loop invariant, which means that it should
         // dominate the header. This allows us to insert code for it in the
@@ -487,6 +492,11 @@ impl LoopIdiomRecognize {
         run: &mut Run,
         args: &StoreOfLoad,
     ) -> bool {
+        // DEVIATE: a huge pointer's step carries into its selector, which no
+        // `rep stos`/`movs` does past 64K.
+        if run.env.layout.carries(pointer_space(run.context, run.function, args.dest_ptr)) {
+            return false;
+        }
         // FIXME (LLVM): until llvm.memcpy.inline supports dynamic sizes, we
         // need to conservatively bail here, since otherwise we may have to
         // transform llvm.memcpy.inline into llvm.memcpy which is illegal.

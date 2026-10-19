@@ -316,7 +316,7 @@ fn record_edits(
     for &(inst, how) in sunk {
         match how {
             sink::Sinking::Erased => decisions.erased.push(Hoisted { function: unit.id, header, inst }),
-            sink::Sinking::Sunk => {
+            sink::Sinking::Sunk | sink::Sinking::Cloned => {
                 decisions.sunk.push(Hoisted { function: unit.id, header, inst });
                 count(inst, decisions);
             }
@@ -554,10 +554,10 @@ pub fn run(
 
 /// Whether the loop has an instruction any of the three could start from: one
 /// that may be hoisted (every operand outside the loop), one read only outside
-/// it or by no one (sunk or erased), an operation on one of its own kind
-/// (reassociated), or a load or store through a pointer the loop does not
-/// change (promoted). The cheap look LLVM's passes have in the instructions
-/// they walk, ahead of the graph they would ask.
+/// it or by no one (sunk or erased), a GEP also read outside it, an operation
+/// on one of its own kind (reassociated), or a load or store through a pointer
+/// the loop does not change (promoted). The cheap look LLVM's passes have in
+/// the instructions they walk, ahead of the graph they would ask.
 fn seeded(
     function: &Function,
     shape: &Shape,
@@ -578,6 +578,15 @@ fn seeded(
                 let outside_only = instruction
                     .result
                     .is_some_and(|result| function.users(result).iter().all(|one| !ctx.contains(one.user)));
+                // A GEP read outside the loop may be copied there
+                // (`FoldableInLoop`).
+                let foldable = matches!(
+                    instruction.opcode,
+                    llrm_mir::opcode::Opcode::GetElementPtr { .. }
+                )
+                    && instruction
+                        .result
+                        .is_some_and(|result| function.users(result).iter().any(|one| !ctx.contains(one.user)));
                 let reassociable = hoist::may_reassociate(function, inst);
                 let access = match instruction.opcode {
                     llrm_mir::opcode::Opcode::Load { .. } => Some(instruction.operands[0]),
@@ -586,6 +595,7 @@ fn seeded(
                 };
                 invariant
                     || outside_only
+                    || foldable
                     || reassociable
                     || access.is_some_and(|pointer| ctx.is_loop_invariant(pointer))
             })
