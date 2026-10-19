@@ -113,3 +113,16 @@ fn a_long_chain_of_overwrites_is_linear() {
     let (small, large) = (work(100), work(200));
     assert!(large as f64 <= 2.5 * small as f64, "{small} steps for 100 stores, {large} for 200");
 }
+
+/// Blocks are walked in LLVM's post-order, a branch's first target first. Walked
+/// the other way, the memset arm killed the word store (through the bytes the
+/// final store and the memset cover) before the first arm's byte store had
+/// killed the dword store, which the read in the join then needs; `opt` keeps it.
+#[test]
+fn the_first_target_of_a_branch_is_walked_first() {
+    let after = eliminated(
+        "@g = global [64 x i8] zeroinitializer\n\ndefine i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  %c = icmp eq i16 %x, 0\n  br i1 %c, label %b1, label %b2\nb1:\n  store i32 3, ptr @g\n  %p1 = getelementptr i8, ptr @g, i16 1\n  store i8 1, ptr %p1\n  br label %b3\nb2:\n  %p2 = getelementptr i8, ptr @g, i16 1\n  call void @llvm.memset.p0.i16(ptr %p2, i8 1, i16 2, i1 false)\n  br label %b3\nb3:\n  store i8 0, ptr @g\n  %p3 = getelementptr i8, ptr @g, i16 2\n  store i16 1, ptr %p3\n  %r = load i16, ptr @g\n  ret i16 %r\n}\n\ndeclare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n",
+        &[&[0], &[1]],
+    );
+    assert!(after.contains("store i16 1, ptr @g"), "{after}");
+}

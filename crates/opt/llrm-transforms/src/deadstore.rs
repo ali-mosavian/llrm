@@ -44,11 +44,11 @@
 //! a stack or frame object (`isa<AllocaInst>`); `dead_on_return` and byval
 //! arguments (stage 3), and non-alloca objects with no capture (malloc) are
 //! absent. Exit: stage 3.
-//! DEVIATE 4: partial overwrites (`isPartialOverwrite`, `tryToShorten`,
-//! `IOLs`), memory terminators (`lifetime.end`, `free`), the `initializes`
-//! attribute, `tryFoldIntoCalloc`, `eliminateRedundantStoresOfExistingValues`
-//! and `...ViaDominatingConditions` are stage 2 and 3: an `OW_MaybePartial`
-//! answer removes nothing here. Exit: stage 2.
+//! DEVIATE 4: memory terminators (`lifetime.end`, `free`), the `initializes`
+//! attribute, `tryFoldIntoCalloc` and `eliminateRedundantStoresViaDominatingConditions`
+//! are stage 2 and 3. Partial overwrites (`isPartialOverwrite`, `IOLs`,
+//! `tryToMergePartialOverlappingStores`, `tryToShorten` of memsets) and
+//! `eliminateRedundantStoresOfExistingValues` are in. Exit: stage 2.
 //! DEVIATE 5: only stores and constant-length memsets are candidates, and
 //! `storeIsNoop` knows no `getInitialValueOfAllocation` (it needs `calloc`
 //! and friends). Exit: stage 2.
@@ -63,7 +63,7 @@
 //! ```
 //!
 //! # Runs
-//! In the slot of `dse@820`.
+//! In the slot of `dse@820` (LLVM's order); the older `dse.rs` runs elsewhere.
 //!
 //! # Needs
 //! MemorySSA (`mssa`), its alias query, dominators and post-dominators, the
@@ -1475,13 +1475,15 @@ fn post_order_of(function: &Function) -> Vec<BlockId> {
     let Some(entry) = function.entry() else { return Vec::new() };
     let mut seen: HashSet<BlockId> = HashSet::default();
     let mut order = Vec::new();
-    let mut stack: Vec<(BlockId, Vec<BlockId>)> = vec![(entry, function.successors(entry).iter().copied().collect())];
+    // A block's first successor is visited first, as LLVM's `post_order`: the
+    // lists are popped from the back.
+    let successors_of = |block| -> Vec<BlockId> { function.successors(block).iter().rev().copied().collect() };
+    let mut stack: Vec<(BlockId, Vec<BlockId>)> = vec![(entry, successors_of(entry))];
     seen.insert(entry);
     while let Some((block, successors)) = stack.last_mut() {
         if let Some(next) = successors.pop() {
             if seen.insert(next) {
-                let following: Vec<BlockId> = function.successors(next).iter().copied().collect();
-                stack.push((next, following));
+                stack.push((next, successors_of(next)));
             }
         } else {
             order.push(*block);
