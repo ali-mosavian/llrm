@@ -82,11 +82,6 @@ const SLOTS: [(&str, &str); 18] = [
     ("ControlFlow", "jumps@17"),
 ];
 
-/// The registry slot of the machine phase `class`.
-fn slot_of(class: &str) -> Option<&'static str> {
-    SLOTS.iter().find(|(name, _)| *name == class).map(|(_, slot)| *slot)
-}
-
 /// `machine`, its peephole made of the rules `rules` holds; the spiller, where
 /// `spilling` names a run, reports to it.
 #[allow(clippy::too_many_arguments)]
@@ -146,7 +141,7 @@ pub fn machine_with<'a>(
         },
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
         Box::new(twoaddr::TwoAddress),
-        Box::new(coalesce::Coalescer::new(None, segments, classes)),
+        Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
         Box::new(allocate::RegAlloc::new(
             Some(&pinned),
             frame.clone(),
@@ -181,15 +176,8 @@ pub fn machine_with<'a>(
         phases.retain(|phase| phase.class_name() != "SsaSpill");
     }
     // -O0: gcc and clang improve nothing after selection and allocation.
-    let mut left_out: Vec<&str> = Vec::new();
     if !target.optimized {
-        phases.retain(|phase| {
-            let left = UNOPTIMIZED.contains(&phase.class_name());
-            if left {
-                left_out.extend(slot_of(phase.class_name()));
-            }
-            !left
-        });
+        phases.retain(|phase| !UNOPTIMIZED.contains(&phase.class_name()));
     }
     // Under `LLRM_GREEDY_RFP` the stackifier runs after allocation, on the FP
     // registers greedy assigned, as X86FloatingPoint does.
@@ -201,10 +189,12 @@ pub fn machine_with<'a>(
         phases.insert(after, moved);
     }
     if cfg!(debug_assertions) {
-        // At -O0 the optional phases are not run: a slot that is Translated
-        // or Partial must be, but those.
-        let built: Vec<&str> = phases.iter().map(|phase| slot_of(phase.class_name()).unwrap_or("unknown")).collect();
-        llrm_transforms::parity::check_backend(&built, &left_out)?;
+        // At -O0 the optional phases are not run; a slot that is Translated
+        // must be, and none of those is.
+        let slot_of = |class: &str| SLOTS.iter().find(|(one, _)| *one == class).map_or("unknown", |(_, slot)| *slot);
+        let built: Vec<&str> = phases.iter().map(|phase| slot_of(phase.class_name())).collect();
+        let off: Vec<&str> = if target.optimized { Vec::new() } else { UNOPTIMIZED.iter().map(|one| slot_of(one)).collect() };
+        llrm_transforms::parity::check_backend(&built, &off)?;
     }
     Ok(phases)
 }

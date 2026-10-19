@@ -241,7 +241,7 @@ impl Combiner<'_> {
     }
 
     /// `m_Select(m_Value(A), m_Value(B), m_Value(C))`.
-    fn select_of(
+    pub(crate) fn select_of(
         &self,
         v: Operand,
     ) -> Option<(InstId, [Operand; 3])> {
@@ -253,7 +253,7 @@ impl Combiner<'_> {
 
     /// The new select the folds here make: before `at`, with `select`'s
     /// `prof` and `unpredictable` (`CreateSelect(.., MDFrom = SI)`).
-    fn select_like(
+    pub(crate) fn select_like(
         &mut self,
         at: InstId,
         select: InstId,

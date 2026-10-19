@@ -3231,6 +3231,37 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// `llvm.stacksave`: the stack pointer, a near data pointer.
+    fn stack_save(
+        &mut self,
+        inst: InstId,
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let width = self.address_bytes();
+        let value = self.function.instruction(inst).result.expect("a saved stack pointer");
+        let saved = Held { value: self.value(value), width };
+        let sp = Loc::Reg(Reg { register: RegId::SP, width });
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(saved)], vec![sp])));
+        Ok(())
+    }
+
+    /// `llvm.stackrestore`: the stack pointer a `stacksave` returned made the
+    /// stack pointer again.
+    fn stack_restore(
+        &mut self,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let width = self.address_bytes();
+        let ty = self.function.operand_type(&self.module.context, arguments[0]).expect("a typed pointer");
+        let saved = self.held(arguments[0], ty, at, out)?;
+        let sp = Loc::Reg(Reg { register: RegId::SP, width });
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![sp], vec![Loc::Held(saved)])));
+        Ok(())
+    }
+
     /// `held` made the address `pointer` names.
     fn address(
         &self,
@@ -5389,6 +5420,8 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::PtrDiff) => self.pointer_difference(inst, arguments, at, out),
                 Some(Intrinsic::Window) => self.window(inst, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
+                Some(Intrinsic::StackSave) => self.stack_save(inst, at, out),
+                Some(Intrinsic::StackRestore) => self.stack_restore(arguments, at, out),
                 // Where a local's bytes are live: read by the frame layout, no
                 // code.
                 Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),
