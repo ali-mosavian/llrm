@@ -48,7 +48,7 @@ pub fn handled(
     lines: &[i64],
     local: bool,
 ) -> Result<Handled, String> {
-    let name = module.global(function).name.clone().unwrap_or_default();
+    let name = module.global(function).name.owned().unwrap_or_default();
     let i16 = module.context.types.int(16);
     let table = module.context.types.intern(Type::Array { element: i16, count: lines.len() as u64 });
     let members = lines.iter().map(|&line| module.context.int(i16, i128::from(line as u16 as i16))).collect();
