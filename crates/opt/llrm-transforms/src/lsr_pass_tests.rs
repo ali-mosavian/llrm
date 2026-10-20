@@ -308,3 +308,16 @@ fn a_zip_loop_with_three_element_exits_keeps_the_element_counter_as_opt_does() {
     assert_eq!(after.matches(" = phi i").count(), 4, "the element index, the sum and the two joins: {after}");
     assert_eq!(after.matches("shl i16 %8, 1").count(), 2, "{after}");
 }
+
+/// `LLRM_DEBUG=counts` could not say whether LSR still rewrote anything on a
+/// bench (d_faces read 11 runs and a fraction of the old cost): the loop it
+/// looked at, the solution it chose and the rewrite it made are counted.
+#[test]
+fn lsr_counts_the_loops_it_looks_at_solves_and_rewrites() {
+    use llrm_mir::counts::{Event, get};
+    let before = [Event::LsrLoops, Event::LsrSolutions, Event::LsrRewritten].map(get);
+    let (changed, after) = reduced(ARRAY, "i486", &[&[5]]);
+    assert!(changed, "{after}");
+    let now = [Event::LsrLoops, Event::LsrSolutions, Event::LsrRewritten].map(get);
+    assert_eq!(now.iter().zip(&before).map(|(now, before)| now - before).collect::<Vec<_>>(), [1, 1, 1], "{after}");
+}
