@@ -66,14 +66,16 @@
 //! # Keeps
 //! Blocks and edges are unchanged; dominators and loops are preserved.
 
-use llrm_analysis::memory::Unit;
-use llrm_analysis::num::Num as BigInt;
-use llrm_analysis::{cfg, ranges};
+use std::rc::Rc;
+
+use llrm_mir::constantrange::ConstantRange;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::lazyvalueinfo::{Env, LazyValueInfo, LviCache};
+use llrm_mir::module::{GlobalValue, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
+use llrm_mir::valuetracking::AssumptionCache;
 
 pub struct FixedNarrow;
 
@@ -91,36 +93,37 @@ impl FunctionPass for FixedNarrow {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let narrow = narrowable(unit, analyses);
-        // The operands were taken before any rewrite: one that is an earlier
-        // product's result reads its replacement.
-        let mut replaced: llrm_support::hash::HashMap<Operand, Operand> = Default::default();
-        for product in &narrow {
-            let product = &Narrow {
-                a: *replaced.get(&product.a).unwrap_or(&product.a),
-                b: *replaced.get(&product.b).unwrap_or(&product.b),
-                ..*product
-            };
-            let ty = unit.function.instruction(product.inst).ty;
-            let make = |unit: &mut passes::Unit, opcode, operands| {
-                let new = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
-                unit.function.insert(new, Position::Before(product.inst)).expect("a placed instruction");
-                Operand::Value(unit.function.instruction(new).result.expect("a value"))
-            };
-            let mut result = make(unit, Opcode::Binary(BinaryOp::Mul), vec![product.a, product.b]);
-            if product.scale > 0 {
-                let by = Operand::Constant(unit.context.int(ty, i128::from(product.scale)));
-                result = make(unit, Opcode::Binary(BinaryOp::AShr), vec![result, by]);
-            }
-            let old = unit.function.instruction(product.inst).result.expect("a value");
-            replaced.insert(Operand::Value(old), result);
-            unit.function.replace_all_uses_with(old, result);
-            unit.function.erase(product.inst).expect("its uses were replaced");
+        let globals = Rc::clone(&analyses.outer().globals);
+        let calls: Vec<InstId> = unit
+            .function
+            .walk()
+            .map(|(_, inst)| inst)
+            .filter(|&inst| {
+                llrm_mir::memory::callee(unit.context, unit.function, inst)
+                    .and_then(|callee| globals.get(callee.0 as usize)?.name.as_deref().and_then(Intrinsic::named))
+                    == Some(Intrinsic::Fixed { divide: false })
+            })
+            .collect();
+        if calls.is_empty() {
+            return PreservedAnalyses::all();
         }
-        if narrow.is_empty() {
-            PreservedAnalyses::all()
-        } else {
+        let assumptions = AssumptionCache::of(unit.context, &globals, unit.metadata, unit.function);
+        let shared = analyses.get::<LviCache>(unit.context, unit.layout, unit.function);
+        let mut lvi = shared.take();
+        let mut changed = false;
+        // One product at a time, rewritten before the next is asked: a product
+        // that reads an earlier one's result asks LazyValueInfo about the
+        // `mul` and `ashr` that replaced it.
+        for inst in calls {
+            let Some(product) = narrowable(unit, &globals, &assumptions, &mut lvi, inst) else { continue };
+            rewrite(unit, &mut lvi, &product);
+            changed = true;
+        }
+        shared.put(lvi);
+        if changed {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+        } else {
+            PreservedAnalyses::all()
         }
     }
 }
@@ -133,69 +136,99 @@ struct Narrow {
     scale: u32,
 }
 
-/// The products whose operands, less the shifts they carry, multiply within
-/// their width.
-fn narrowable(
-    unit: &passes::Unit,
-    analyses: &mut Analyses,
-) -> Vec<Narrow> {
-    let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
-    let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-    let memory = Unit::within(unit.context, unit.layout, unit.function, analyses.outer())
-        .with_registers(&held)
-        .with_shape(&shape);
-    let calls: Vec<_> = unit
-        .function
-        .walk()
-        .filter(|&(_, inst)| matches!(
-            memory.intrinsic(inst),
-            Some(Intrinsic::Fixed { divide: false })
-        ))
-        .collect();
-    if calls.is_empty() {
-        return Vec::new();
+/// `product` replaced by the `mul` and `ashr` that compute it.
+fn rewrite(
+    unit: &mut passes::Unit,
+    lvi: &mut LazyValueInfo,
+    product: &Narrow,
+) {
+    let ty = unit.function.instruction(product.inst).ty;
+    let make = |unit: &mut passes::Unit, opcode, operands| {
+        let new = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
+        unit.function.insert(new, Position::Before(product.inst)).expect("a placed instruction");
+        Operand::Value(unit.function.instruction(new).result.expect("a value"))
+    };
+    let mut result = make(unit, Opcode::Binary(BinaryOp::Mul), vec![product.a, product.b]);
+    if product.scale > 0 {
+        let by = Operand::Constant(unit.context.int(ty, i128::from(product.scale)));
+        result = make(unit, Opcode::Binary(BinaryOp::AShr), vec![result, by]);
     }
-    let facts = ranges::scoped(&memory).unwrap_or_default();
-    let registers = &*held;
-    calls
-        .into_iter()
-        .filter_map(|(block, inst)| {
-            let operands = &unit.function.instruction(inst).operands;
-            let width = memory.int_bits(operands[0]).filter(|&width| width == 32)?;
-            let mut scale = u32::try_from(memory.int_constant(operands[2])?).ok().filter(|&scale| scale < width)?;
-            let scope = facts.get(&cfg::id(block)).cloned().unwrap_or_default();
-            let interval = |one: Operand| {
-                ranges::_operand(&memory, one, &scope, &registers).filter(|interval| interval.width == width)
-            };
-            let limit = BigInt::from(1) << (width - 1);
-            let fits = |low: &BigInt, high: &BigInt| -&limit <= *low && *high < limit;
-            // `v << k` or `v + v` where `v`'s interval keeps it from wrapping:
-            // `v * 2^k`.
-            let doubled = |one: Operand, scale: u32| -> Option<(Operand, u32)> {
-                let (_, op) = memory.defining(one)?;
-                let (source, bits) = match (&op.opcode, &op.operands[..]) {
-                    (Opcode::Binary(BinaryOp::Shl), &[source, count]) => {
-                        (source, u32::try_from(memory.int_constant(count)?).ok()?)
-                    }
-                    (Opcode::Binary(BinaryOp::Add), &[source, other]) if source == other => (source, 1),
-                    _ => return None,
-                };
-                let v = interval(source)?;
-                (1..=scale).contains(&bits).then_some(())?;
-                fits(&(&v.low << bits), &(&v.high << bits)).then_some((source, bits))
-            };
-            let mut taken = [operands[0], operands[1]];
-            for one in &mut taken {
-                while let Some((source, bits)) = doubled(*one, scale) {
-                    *one = source;
-                    scale -= bits;
+    let old = unit.function.instruction(product.inst).result.expect("a value");
+    unit.function.replace_all_uses_with(old, result);
+    lvi.forget_value(Operand::Value(old));
+    unit.function.erase(product.inst).expect("its uses were replaced");
+}
+
+/// The 32-bit width the product is taken in: only dwords are narrowed.
+const WIDTH: u32 = 32;
+
+/// `inst` as a `mul` and a shift, if its operands, less the shifts they
+/// carry, multiply within their width.
+fn narrowable(
+    unit: &mut passes::Unit,
+    globals: &[GlobalValue],
+    assumptions: &AssumptionCache,
+    lvi: &mut LazyValueInfo,
+    inst: InstId,
+) -> Option<Narrow> {
+    let operands = unit.function.instruction(inst).operands.clone();
+    let mut scale = u32::try_from(int_constant(unit, operands[2])?).ok().filter(|&scale| scale < WIDTH)?;
+    let mut range = |unit: &mut passes::Unit, one: Operand| -> Option<ConstantRange> {
+        let mut env = Env::new(&mut *unit.context, globals, unit.metadata, &*unit.function, unit.layout, assumptions);
+        Some(lvi.get_constant_range(&mut env, one, inst, false)).filter(|range| range.width == WIDTH)
+    };
+    // `v << k` or `v + v` where `v`'s range keeps it from wrapping: `v * 2^k`.
+    let doubled = |unit: &mut passes::Unit,
+                   range: &mut dyn FnMut(&mut passes::Unit, Operand) -> Option<ConstantRange>,
+                   one: Operand,
+                   scale: u32|
+     -> Option<(Operand, u32)> {
+        let Operand::Value(value) = one else { return None };
+        let ValueDef::Instruction(def) = unit.function.value(value).def else { return None };
+        let (source, bits) =
+            match (&unit.function.instruction(def).opcode, &unit.function.instruction(def).operands[..]) {
+                (Opcode::Binary(BinaryOp::Shl), &[source, count]) => {
+                    (source, u32::try_from(int_constant(unit, count)?).ok()?)
                 }
-            }
-            let (a, b) = (interval(taken[0])?, interval(taken[1])?);
-            let (low, high) = ranges::product(&a, &b, taken[0] == taken[1]);
-            fits(&low, &high).then_some(Narrow { inst, a: taken[0], b: taken[1], scale })
-        })
-        .collect()
+                (Opcode::Binary(BinaryOp::Add), &[source, other]) if source == other => (source, 1),
+                _ => return None,
+            };
+        (1..=scale).contains(&bits).then_some(())?;
+        let v = range(unit, source)?;
+        fits(&v.sign_extend(2 * WIDTH).multiply(&ConstantRange::single(2 * WIDTH, 1 << bits), 0))?
+            .then_some((source, bits))
+    };
+    let mut taken = [operands[0], operands[1]];
+    for one in &mut taken {
+        while let Some((source, bits)) = doubled(unit, &mut range, *one, scale) {
+            *one = source;
+            scale -= bits;
+        }
+    }
+    let wide = |range: ConstantRange| range.sign_extend(2 * WIDTH);
+    let product = wide(range(unit, taken[0])?).multiply(&wide(range(unit, taken[1])?), 0);
+    fits(&product)?.then_some(Narrow { inst, a: taken[0], b: taken[1], scale })
+}
+
+/// Whether `range`, taken in twice the width, lies within the signed width.
+fn fits(range: &ConstantRange) -> Option<bool> {
+    let limit = 1_i128 << (WIDTH - 1);
+    let sign = |bits: u128| i128::from(bits as u64 as i64);
+    Some(-limit <= sign(range.get_signed_min()) && sign(range.get_signed_max()) < limit)
+}
+
+/// An integer constant's bits, if `operand` is one.
+fn int_constant(
+    unit: &passes::Unit,
+    operand: Operand,
+) -> Option<u128> {
+    match operand {
+        Operand::Constant(id) => match unit.context.get(id).kind {
+            llrm_mir::context::ConstantKind::Int(bits) => Some(bits),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 #[cfg(test)]
