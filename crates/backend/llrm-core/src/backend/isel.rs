@@ -150,8 +150,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use llrm_analysis::aa::MemoryLocation;
 use llrm_analysis::cfg;
-use llrm_analysis::memory::{MemRef, Unit};
+use llrm_analysis::memory::Unit;
 use llrm_lir::registers::Regs;
 use llrm_lir::registers::{RegId, STACK};
 use llrm_mir::datalayout::DataLayout;
@@ -1003,7 +1004,7 @@ pub fn selected_with<'c>(
             let typed = function
                 .walk()
                 .map(|(_, inst)| inst)
-                .filter(|&inst| MemRef::of(&unit, inst).is_some_and(|one| one.typed.is_some()))
+                .filter(|&inst| MemoryLocation::get(&unit, inst).is_some_and(|place| place.aa_info.tbaa.is_some()))
                 .collect();
             (table, typed)
         }

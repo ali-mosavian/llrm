@@ -4277,7 +4277,7 @@ fn simplify_instruction_with_operands(
         }
         Opcode::FCmp(pred) => {
             let [lhs, rhs] = operands[..] else { return None };
-            fp::simplify_fcmp(q, *pred, lhs, rhs)
+            fp::simplify_fcmp(q, *pred, lhs, rhs, flags)
         }
         Opcode::Select => {
             let [cond, a, b] = operands[..] else { return None };

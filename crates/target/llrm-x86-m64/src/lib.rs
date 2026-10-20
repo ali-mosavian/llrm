@@ -64,6 +64,29 @@ impl llrm_target::Target for M64 {
         llrm_x86::instructions::dialect()
     }
 
+    fn register_op_bytes(
+        &self,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::register_bytes(width, 4)
+    }
+
+    fn shift_op_bytes(
+        &self,
+        count: i64,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::shift_bytes(count, width, 4)
+    }
+
+    fn multiply_immediate_bytes(
+        &self,
+        number: i64,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::imul_immediate_bytes(number, width, 4)
+    }
+
     fn register_named(
         &self,
         name: &str,
@@ -202,6 +225,28 @@ impl llrm_target::Target for M64 {
 
     fn operand_bytes(&self) -> i64 {
         8
+    }
+
+    fn huge_fill_routine(
+        &self,
+        _cell: u32,
+    ) -> Result<llrm_target::routines::HugeString, String> {
+        Err("long mode has no huge pointers".to_owned())
+    }
+
+    fn huge_copy_routine(
+        &self,
+        _down: bool,
+    ) -> Result<llrm_target::routines::HugeString, String> {
+        Err("long mode has no huge pointers".to_owned())
+    }
+
+    fn divide_routine(
+        &self,
+        _signed: bool,
+        _wide_divisor: bool,
+    ) -> Result<llrm_target::routines::Divide, String> {
+        Err("long mode divides 64 bits natively".to_owned())
     }
 
     fn default_cpu(&self) -> &'static str {

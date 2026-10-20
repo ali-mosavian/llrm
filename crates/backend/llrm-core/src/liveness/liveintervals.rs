@@ -561,20 +561,46 @@ impl LiveIntervals {
         &mut self,
         key: InstrKey,
     ) -> Vec<InstrKey> {
-        let at = self.indexes.get_instruction_index(key);
-        let block = self.indexes.get_mbb_from_index(&at);
-        let (defined, sources) = {
-            let insn = self.instr(key);
-            (insn.defines.clone(), insn.uses.clone())
-        };
-        for reg in defined {
-            if self.has_interval(reg) {
-                Self::remove_vreg_def_at(self.interval_mut(reg), &at.get_reg_slot(false));
+        self.erase_dead_defs(&[key])
+    }
+
+    /// `LiveRangeEdit::eliminateDeadDefs`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveRangeEdit.cpp#L367>)
+    /// for one round: every instruction of `keys` goes, then each register they
+    /// read is cut back once, however many of them read it (`ToShrink` is a
+    /// set). Returns the instructions that now define a value nothing reads.
+    ///
+    /// DEVIATE (no number): LLVM shrinks one register, erases the dead defs
+    /// that makes, and shrinks the next; here a round shrinks them all and
+    /// the caller erases the new dead defs as the next round. `foldAsLoad`
+    /// and `splitSeparateComponents` are the callers' (the spill's and the
+    /// editor's).
+    pub fn erase_dead_defs(
+        &mut self,
+        keys: &[InstrKey],
+    ) -> Vec<InstrKey> {
+        let mut to_shrink: Vec<u32> = Vec::new();
+        for &key in keys {
+            let at = self.indexes.get_instruction_index(key);
+            let block = self.indexes.get_mbb_from_index(&at);
+            let (defined, sources) = {
+                let insn = self.instr(key);
+                (insn.defines.clone(), insn.uses.clone())
+            };
+            for reg in defined {
+                if self.has_interval(reg) {
+                    Self::remove_vreg_def_at(self.interval_mut(reg), &at.get_reg_slot(false));
+                }
+            }
+            self.remove_instr(block, key);
+            for source in sources {
+                if !to_shrink.contains(&source) {
+                    to_shrink.push(source);
+                }
             }
         }
-        self.remove_instr(block, key);
         let mut dead = Vec::new();
-        for source in sources {
+        for source in to_shrink {
             if self.has_interval(source) {
                 dead.extend(self.shrink_to_uses(source).1);
             }
@@ -791,6 +817,8 @@ impl LiveIntervals {
         &mut self,
         reg: u32,
     ) -> (bool, Vec<InstrKey>) {
+        #[cfg(test)]
+        SHRUNK.with(|one| one.borrow_mut().push(reg));
         let mut li = (*self.interval_rc(reg)).clone();
         // Find all the values used, including PHI kills.
         let mut work: Vec<(SlotIndex, Vn)> = Vec::new();
@@ -1071,6 +1099,23 @@ mod tests {
         assert_eq!(lis.assert_intervals_equal_afresh(&edited), 1);
     }
 
+    /// Three dead copies that all read `%1` cut `%1` back once, not three times
+    /// (`eliminateDeadDefs` shrinks each register of a round once): d_faces
+    /// -O2 shrank one interval 22 times, each walk longer than the last, 6 M of
+    /// the 17 M `SplitEditor::finish` cost against the pin's 0.35 M.
+    #[test]
+    fn test_dead_copies_reading_one_register_shrink_it_once() {
+        let insns =
+            [insn(&[1], &[]), insn(&[2], &[1]), insn(&[3], &[1]), insn(&[4], &[1]), insn(&[], &[1]), insn(&[], &[])];
+        let mut lis = LiveIntervals::new(&body(&insns));
+        for reg in 1..=4 {
+            lis.interval(reg);
+        }
+        SHRUNK.with(|one| one.borrow_mut().clear());
+        lis.erase_dead_defs(&[insns[1].id(), insns[2].id(), insns[3].id()]);
+        assert_eq!(SHRUNK.with(|one| one.borrow().clone()), [1]);
+    }
+
     fn blocks(shape: &[(&[Arc<Insn>], &[i64])]) -> LirBody {
         let made = shape
             .iter()
@@ -1164,6 +1209,12 @@ mod tests {
 
 // The registers `compute_virt_reg_interval` worked out, for a test that a spill
 // works out only the registers it makes.
+#[cfg(test)]
+thread_local! {
+    /// The registers `shrink_to_uses` was asked about, in order.
+    static SHRUNK: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 #[cfg(test)]
 thread_local! {
     pub(crate) static COMPUTED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };

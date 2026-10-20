@@ -27,8 +27,8 @@
 //! DEVIATE 4: an `x86_fp80` constant is held as a double: it is matched
 //! (`m_NaN`, `m_AnyZeroFP`...) but never folded.
 //!
-//! `simplifyFCmpInst` is translated down to the undef rule (DEVIATE 5, on
-//! `simplify_fcmp`).
+//! `simplifyFCmpInst` is translated down to the constant, `x fcmp x`, `nnan`
+//! and NaN-constant folds (DEVIATE 5, on `simplify_fcmp`).
 
 use super::*;
 use crate::apfloat::{ApFloat, IEEE_DOUBLE, IEEE_SINGLE, Sem};
@@ -355,37 +355,68 @@ pub(super) fn simplify_fneg(
 }
 
 /// `simplifyFCmpInst`
-/// ([:4198](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L4198)),
-/// down to the undef rule: two constants fold, then the trivial predicates,
-/// poison, and an undef operand (a NaN, so true where the predicate is
-/// unordered). DEVIATE 5: the rest of it (`x fcmp x`, the NaN and class
-/// folds, `simplifyFCmpWithSelect`...) is not translated, and a vector
-/// compare is left alone.
+/// ([:4198](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L4198)):
+/// two constants fold, a constant moves to the right, then the trivial
+/// predicates, poison, an undef operand (a NaN, so true where the predicate
+/// is unordered), `x fcmp x`, `ord`/`uno` under `nnan`, and a NaN on the
+/// right. DEVIATE 5: the folds that read `computeKnownFPClass` of a value
+/// (`ord`/`uno` of two values, `fcmpToClassTest`, the compares against a
+/// negative or zero constant), `isImpliedByDomCondition` (the integer
+/// predicates only), `min/maxnum` with a constant, and the select and phi
+/// threading are not translated; a vector compare is left alone.
 pub(super) fn simplify_fcmp(
     q: &Query,
     pred: FloatPredicate,
     lhs: Operand,
     rhs: Operand,
+    flags: Flags,
 ) -> Option<Operand> {
     let Some(Type::Float(_)) = q.function.operand_type(q.context, lhs).map(|ty| q.context.types.get(ty)) else {
         return None;
     };
-    if let (Some(left), Some(right)) = (q.constant(lhs), q.constant(rhs))
-        && let Some(folded) = constfold::compare_float(q.context, pred, left, right)
-    {
-        return Some(Operand::Constant(folded));
+    let (mut pred, mut lhs, mut rhs) = (pred, lhs, rhs);
+    if let Some(left) = q.constant(lhs) {
+        if let Some(right) = q.constant(rhs) {
+            if let Some(folded) = constfold::compare_float(q.context, pred, left, right) {
+                return Some(Operand::Constant(folded));
+            }
+        } else {
+            // A constant goes on the right.
+            std::mem::swap(&mut lhs, &mut rhs);
+            pred = pred.swapped();
+        }
     }
     let i1 = q.context.types.int(1);
     let answer = |held: bool| {
         Operand::Constant(q.context.constant(Constant { ty: i1, kind: ConstantKind::Int(u128::from(held)) }))
     };
+    // Fold trivial predicates.
     if matches!(pred, FloatPredicate::False | FloatPredicate::True) {
         return Some(answer(pred == FloatPredicate::True));
     }
     if q.is_poison(lhs) || q.is_poison(rhs) {
         return Some(poison(q, i1));
     }
-    (q.is_undef(lhs) || q.is_undef(rhs)).then(|| answer(pred.holds(None)))
+    if q.is_undef(lhs) || q.is_undef(rhs) {
+        return Some(answer(pred.holds(None)));
+    }
+    // `CmpInst::isTrueWhenEqual` and `isFalseWhenEqual`: not every predicate
+    // is decided by `x` against itself (a NaN is unordered).
+    if lhs == rhs {
+        match pred {
+            FloatPredicate::Ueq | FloatPredicate::Uge | FloatPredicate::Ule => return Some(answer(true)),
+            FloatPredicate::One | FloatPredicate::Ogt | FloatPredicate::Olt => return Some(answer(false)),
+            _ => {}
+        }
+    }
+    if matches!(pred, FloatPredicate::Ord | FloatPredicate::Uno) && flags.contains(Flags::NNAN) {
+        return Some(answer(pred == FloatPredicate::Ord));
+    }
+    // `C->isNaN()`.
+    if value(q, rhs).is_some_and(|c| c.is_nan()) {
+        return Some(answer(pred.holds(None)));
+    }
+    None
 }
 
 /// `simplifyFAddInst`.

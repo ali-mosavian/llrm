@@ -7,6 +7,11 @@
 //! instructions the rewrite makes right before the call, in one integer type.
 //! The bit counts, `bswap` and the three-way compares are each a rewrite.
 //!
+//! # Example
+//! A `call i32 @llvm.bswap.i32(i32 %x)` is replaced, in front of the call, by
+//! the shifts and masks that move each byte, and the call's uses read the
+//! result.
+//!
 //! # Runs
 //! Under [`crate::backend::bitcounts`], [`crate::backend::bytes`] and
 //! [`crate::backend::compares`], from `driver::optimized`.

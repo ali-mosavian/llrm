@@ -325,10 +325,19 @@ def pr_owner(number: int) -> str:
     return owner_of(done.stdout)
 
 
+def merging_pr(sha: str, pulls: list[dict]) -> int | None:
+    """The PR whose merge commit is `sha`. GitHub lists every PR that contains the commit, so a PR that merely merged the head into its own branch (#2137) came first."""
+    mine = [one["number"] for one in pulls if one.get("merge_commit_sha") == sha]
+    return mine[0] if mine else None
+
+
 def pr_of_commit(sha: str) -> int | None:
-    """The PR a landed commit came from, by GitHub's own link, for a squash whose subject carries no number."""
-    done = subprocess.run(["gh", "api", f"repos/{{owner}}/{{repo}}/commits/{sha}/pulls", "-q", ".[0].number"], capture_output=True, text=True)
-    return int(done.stdout) if done.stdout.strip().isdigit() else None
+    """The PR a landed commit came from, for a squash whose subject carries no number."""
+    done = subprocess.run(["gh", "api", f"repos/{{owner}}/{{repo}}/commits/{sha}/pulls"], capture_output=True, text=True)
+    try:
+        return merging_pr(sha, json.loads(done.stdout))
+    except ValueError:
+        return None
 
 
 def verified_pr(pr: int | None, state_of=None) -> tuple[int | None, str]:
