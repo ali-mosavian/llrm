@@ -379,7 +379,7 @@ impl Combiner<'_> {
 
     /// `A == B` for two constants, a zero spelled `Null`/`Zero` or as a
     /// number alike.
-    fn same_constant(
+    pub(crate) fn same_constant(
         &self,
         a: Operand,
         b: Operand,
