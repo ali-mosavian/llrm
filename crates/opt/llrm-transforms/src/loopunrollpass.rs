@@ -18,8 +18,8 @@
 //! unrolled by [`crate::loopunroll::unroll_loop_blocks`].
 //!
 //! # Deviations
-//! - U3 `computePeelCount` is not translated: peeling is the plan's stage S2
-//!   (`PP.PeelCount` stays 0), and `peel` still runs where it did.
+//! - U3 `computePeelCount` is `looppeel.rs` (S2); its deviations are PL1 to PL5
+//!   there.
 //! - U4 The pragma metadata (`llvm.loop.unroll.*`) is read from the loop ID on
 //!   the latch's branch; no frontend of llrm writes it yet. Remarks (the
 //!   `OptimizationRemarkEmitter`), `UniformityInfo` and profile data are left

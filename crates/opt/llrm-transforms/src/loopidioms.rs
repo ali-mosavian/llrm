@@ -114,8 +114,8 @@
 //! `loopidioms_tests.rs` (first case; the printed text was taken from a run).
 //!
 //! # Runs
-//! Last in the function fixed point: `LoopIdioms`, then `Merge`, after `unroll`
-//! and `peel`. On with `-ftree-loop-distribute-patterns`; off at -O0 and -Og,
+//! Last in the function fixed point: `LoopIdioms`, then `Merge`, after the
+//! unroller. On with `-ftree-loop-distribute-patterns`; off at -O0 and -Og,
 //! on from -O1. `size` is set at -Os and -Oz.
 //!
 //! # Needs
@@ -128,8 +128,8 @@
 //! invalidated when anything was rewritten.
 //!
 //! # See also
-//! [`crate::counting`] builds the count and exit values; [`crate::unroll`],
-//! [`crate::peel`] precede it.
+//! [`crate::counting`] builds the count and exit values;
+//! [`crate::loopunrollpass`], [`crate::looppeel`] precede it.
 
 use std::collections::BTreeSet;
 

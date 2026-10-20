@@ -51,9 +51,8 @@
 //! *The mir pipeline, stages A to F*
 //!
 //! The order of B is the `every` list of [`pipeline`]; [`passes`] returns it
-//! as names. [`Fixed`] takes four passes out of it: `sroa` runs at structural
-//! boundaries, `unroll` and `peel` run at the places drawn above, `merge`
-//! once at the end. A pass that is off is not in the list.
+//! as names. [`Fixed`] takes two passes out of it: `sroa` runs at structural
+//! boundaries, `merge` once at the end. A pass that is off is not in the list.
 //!
 //! A round runs the remaining passes in order. The body is at a fixed point
 //! when a round changes nothing; a pass reports a change by preserving less
@@ -71,7 +70,7 @@
 //!
 //! In E, `lsr` is after the interprocedural step because nothing after it may
 //! choose a loop's counters again; `rotate{proven}` is last of the loop
-//! passes because `unroll` and `peel` refuse a rotated loop; `hoist`
+//! passes; `hoist`
 //! runs again to lift what a rotated loop (run at least once) may now leave;
 //! `gepoffset` follows it because it would move a constant `gep` out of its
 //! loop; `addresssink` follows the last `gvn`, which makes the phis it sinks;
@@ -104,7 +103,6 @@
 //! | `sink` | `sink` |
 //! | `promote` | `sroa`, `promote` |
 //! | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
-//! | `unroll`, `peel` | the pass of that name |
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
@@ -114,8 +112,8 @@
 //! `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
 //! `hoist`, `algebraic`, `loopidioms`, `lsr`, `window` and
 //! `calleepop` in bytes; `loop_intervals` lets alias and branch decisions use
-//! the intervals of counted loops. `limits` are the copy budgets of `unroll`
-//! and `peel`.
+//! the intervals of counted loops. `limits` are the copy budgets of the
+//! unroller.
 //!
 //! # Needs
 //! `Summaries`, `GlobalsAA`, `Callbacks` and `ProgramSummaries` are required
@@ -145,8 +143,8 @@ use crate::settled::{self, Settled};
 use crate::{
     adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
-    loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollpass, mem2reg, memcpyopt, peel, ports, promote,
-    rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, window,
+    loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollpass, mem2reg, memcpyopt, ports, promote, rotate,
+    sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -480,7 +478,6 @@ fn experiment_mem2reg() -> bool {
 /// A pass that is off is not in it, rather than in it and skipped, so what
 /// runs is what this returns.
 pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
-    let limits = || applied.options.limits.clone();
     let every: Vec<Box<dyn FunctionPass>> = vec![
         // Aggregate/object leaves become ordinary SSA before any scalar or
         // CFG pass asks what is constant, redundant, or loop invariant.
@@ -519,8 +516,6 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(indvars::IndVars { lftr: indvars::lftr_default() }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size(), llvm: false }),
         Box::new(dead::Dead),
-        Box::new(unroll::Unroll { limits: limits() }),
-        Box::new(peel::Peel { limits: limits() }),
         Box::new(loopidioms::LoopIdioms { size: applied.options.prefers_size() }),
         Box::new(loopidioms::Merge { size: applied.options.prefers_size() }),
         Box::new(memcpyopt::MemCpyOpt),
@@ -1177,8 +1172,6 @@ fn rerun(
 pub struct Fixed {
     boundary: Vec<Box<dyn FunctionPass>>,
     passes: Vec<Box<dyn FunctionPass>>,
-    unrollers: Vec<Box<dyn FunctionPass>>,
-    peelers: Vec<Box<dyn FunctionPass>>,
     /// Once, after everything else.
     last: Vec<Box<dyn FunctionPass>>,
     unswitch: Option<simpleloopunswitch::SimpleLoopUnswitch>,
@@ -1207,16 +1200,12 @@ impl Fixed {
         // SROA establishes the scalar memory shape at structural
         // boundaries; it is no member of the scalar fixed point.
         let (boundary, passes): (Vec<_>, Vec<_>) = passes.partition(|one| one.name() == "sroa");
-        let (unrollers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "unroll");
-        let (peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "peel");
         let (last, passes): (Vec<_>, Vec<_>) =
             passes.into_iter().partition(|one| matches!(one.name(), "merge" | "memcpyopt"));
         let unswitch = applied.options.unswitch.then_some(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: true });
         Self {
             boundary,
             passes,
-            unrollers,
-            peelers,
             last,
             unswitch,
             interchange: (applied.options.interchange && only.is_none()).then_some(loopinterchange::Interchange),
@@ -1240,8 +1229,6 @@ impl Fixed {
         quiet.options.llvm_order = true;
         let mut one = Self::linear(&quiet, phase);
         one.passes.retain(|pass| pass.name() == slot);
-        // A slot is the one pass: -O3's peeler ran in its place.
-        one.peelers.clear();
         one.only = true;
         one
     }
@@ -1256,7 +1243,6 @@ impl Fixed {
         // in the rounds.
         let mut linear = Self::new(applied);
         linear.boundary.clear();
-        linear.unrollers.clear();
         linear.last.clear();
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
@@ -1282,7 +1268,6 @@ impl Fixed {
         // The slot of the order unswitches, where the pin does.
         linear.unswitch = None;
         if !matches!(phase, Phase::Simplify) {
-            linear.peelers.clear();
             linear.interchange = None;
         }
         linear
@@ -1298,29 +1283,7 @@ impl Fixed {
         if self.only && !self.boundary.is_empty() {
             return Ok(run.settled(unit, analyses));
         }
-        if self.only && !self.unrollers.is_empty() {
-            run.step(&mut *self.unrollers[0], "r01-unroll", unit, analyses);
-            return Ok(run.settled(unit, analyses));
-        }
-        if self.only && !self.peelers.is_empty() {
-            run.step(&mut *self.peelers[0], "r01-peel", unit, analyses);
-            return Ok(run.settled(unit, analyses));
-        }
         self.fixed(unit, analyses, run, "")?;
-        // Again while a peel leaves fewer loops, as LLVM's loop pass manager
-        // revisits a parent once its child is gone: a loop whose inner loop
-        // was peeled may then be peeled itself.
-        let loops = |unit: &Unit| cfg::loops_of(unit.function).len();
-        let mut before = loops(unit);
-        while !self.peelers.is_empty() && run.step(&mut *self.peelers[0], "peel", unit, analyses) {
-            self.scalarized(unit, analyses, run, "peeled");
-            self.fixed(unit, analyses, run, "peeled-")?;
-            let after = loops(unit);
-            if after >= before {
-                break;
-            }
-            before = after;
-        }
         if let Some(unswitch) = &mut self.unswitch {
             run.step(unswitch, "unswitch", unit, analyses);
         }
@@ -1364,7 +1327,6 @@ impl Fixed {
         // The change each pass last left the body at, unchanged: handed that
         // body again it would change nothing, so it is skipped.
         let mut settled: Vec<Option<(usize, usize)>> = vec![None; self.passes.len()];
-        let mut unroll_settled = None;
         // Separately reject a repeated state, so an oscillator fails at once
         // instead of consuming the limit.
         // Only a list that rounds more than once can come back to a state, so
@@ -1372,12 +1334,8 @@ impl Fixed {
         let mut history = (self.rounds > 1).then(|| BTreeSet::from([print::fingerprint(unit.function)]));
 
         run.fixed += 1;
-        // The last round unrolled a loop: the straight line it made is cleaned
-        // by the round after the budget, as gcc's cleanup follows its complete
-        // unroll.
-        let mut unrolled = false;
         for iteration in 0..limit {
-            if iteration >= self.rounds && !unrolled {
+            if iteration >= self.rounds {
                 self.report_unspent(unit, analyses, iteration);
                 run.settled(unit, analyses);
                 return Ok(());
@@ -1405,21 +1363,6 @@ impl Fixed {
                 }
                 let name = format!("{prefix}r{:02}-{}", iteration + 1, one.name());
                 *settled = (!run.step(&mut **one, &name, unit, analyses)).then(|| (run.version, run.stretches.len()));
-            }
-            // Ask at the original pipeline boundary: fully converging the
-            // scalar passes first destroys matmul's exact counted-loop shape.
-            unrolled = false;
-            if !self.unrollers.is_empty() && unroll_settled != Some(run.version) {
-                let name = format!("{prefix}r{:02}-unroll", iteration + 1);
-                if run.step(&mut *self.unrollers[0], &name, unit, analyses) {
-                    unrolled = true;
-                    // A copy's constant indices are new exact leaves, so it
-                    // crosses the structural boundary before the scalar
-                    // passes settle it.
-                    self.scalarized(unit, analyses, run, &format!("{prefix}unrolled"));
-                } else {
-                    unroll_settled = Some(run.version);
-                }
             }
             if self.only || run.version == before {
                 run.settled(unit, analyses);

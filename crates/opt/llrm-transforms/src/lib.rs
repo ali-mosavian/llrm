@@ -242,7 +242,6 @@ mod narrowspace_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;
-pub mod peel;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
@@ -285,7 +284,6 @@ pub mod trunc_inst_combine;
 pub mod twoentryphi;
 pub mod uncondicmp;
 pub mod undefpred;
-pub mod unroll;
 pub mod vncoercion;
 #[cfg(test)]
 mod vncoercion_tests;
