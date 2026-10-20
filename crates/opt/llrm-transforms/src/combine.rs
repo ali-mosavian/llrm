@@ -47,8 +47,8 @@ use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::FunctionAnalyses;
 
 use crate::combine_addsub::visit_add;
-use crate::combine_compares::visit_icmp;
 use crate::combine_casts::{visit_sext, visit_trunc, visit_zext};
+use crate::combine_compares::visit_icmp;
 use crate::combine_muldivrem::{visit_mul, visit_sdiv, visit_srem, visit_udiv, visit_urem};
 use crate::combine_shifts::{visit_ashr, visit_lshr, visit_shl};
 use crate::combine_sink::{droppable_uses, sink, sink_block, sinkable};

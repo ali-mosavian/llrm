@@ -85,8 +85,8 @@
 //! decided or merged.
 //!
 //! # See also
-//! [`crate::cfg`], [`crate::fold`], [`crate::jumpthreading`]; LLVM JumpThreading,
-//! SimplifyCFG.
+//! [`crate::cfg`], [`crate::fold`], [`crate::jumpthreading`]; LLVM
+//! JumpThreading, SimplifyCFG.
 
 use std::collections::{BTreeMap, BTreeSet};
 

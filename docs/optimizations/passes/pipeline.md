@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:78967ed1818ffe7876e3a882284014395d874b6867362d4ce3b36a5b1ab735f3 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:0d5b77d2e5e5bfd97e99fced483925721d1e06af64be197f09eeae972dd65e70 -->
 
 # pipeline
 
@@ -127,10 +127,11 @@ LLVM counterpart of each limit, is
 | `fuse` | `fuse` (off by default; on at -Omax) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 
-`pre` makes `gvn` insert on the path that lacks a value; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
-`lsr`, `window` and `calleepop` in bytes; `loop_intervals`
-lets alias and branch decisions use the intervals of counted loops. `limits`
-are the copy budgets of `unroll` and `peel`.
+`pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
+`phiopt`, `hoist`, `algebraic`, `loopidioms`, `lsr`, `window` and
+`calleepop` in bytes; `loop_intervals` lets alias and branch decisions use
+the intervals of counted loops. `limits` are the copy budgets of `unroll`
+and `peel`.
 
 ## Needs
 `Summaries`, `GlobalsAA`, `Callbacks` and `ProgramSummaries` are required
