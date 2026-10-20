@@ -368,3 +368,34 @@ fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
     assert!(after.contains("getelementptr i8, ptr %0, i16 2"), "{after}");
     assert!(!after.contains(" shl nuw nsw i16 %i, 1"), "{after}");
 }
+
+/// planets.nib and flat_containers.nib (m16 and m32) panicked at
+/// `intrinsic_name`: a call to a function declared after the globals LSR was
+/// handed were read indexed past their end.
+#[test]
+fn a_call_to_a_global_the_outer_snapshot_lacks_is_no_intrinsic() {
+    let text = "declare void @h(ptr)\n\ndefine i32 @f(i32 %n) {
+entry:
+  %buf = alloca [64 x i32]
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %a = getelementptr i32, ptr %buf, i32 %i
+  store i32 7, ptr %a
+  call void @h(ptr %a)
+  %next = add i32 %i, 1
+  %c = icmp eq i32 %next, %n
+  br i1 %c, label %exit, label %loop
+exit:
+  ret i32 %next
+}
+";
+    let mut module = parsed(&format!("{FLAT}{text}"));
+    let (layout, mut outer) = (layout(&module), Outer::of(&module, None));
+    let known = module.globals.iter().position(|global| global.name.as_deref() == Some("h")).unwrap();
+    outer.globals = std::rc::Rc::new(outer.globals[..known].to_vec());
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap();
+    crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+}

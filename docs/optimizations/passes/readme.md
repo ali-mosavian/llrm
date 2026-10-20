@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 160 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 161 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -50,6 +50,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_sub | `InstCombinerImpl::visitSub`: the integer subtraction folds. | `combine::visit` (the `Sub` arm). | [combine_sub](combine_sub.md) |
 | combine_visit_select | `visitSelectInst`: the canonical forms of a `select`. |  | [combine_visit_select](combine_visit_select.md) |
 | condstores | Two conditional stores to one address, one in each of two if-then-else diamonds or triangles in a row, are one store after them, predicated on either condition: SimplifyCFG's `mergeConditionalStores`. |  | [condstores](condstores.md) |
+| condtocond | A conditional branch in an empty block that a conditional branch predecessor shares a destination with, folded into the predecessor: LLVM's [`SimplifyCondBranchToCondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4773). |  | [condtocond](condtocond.md) |
 | congruentiv | Phis of a loop header that ScalarEvolution proves equal are one phi. | [`crate::indvars`](indvars.md), which leaves the phis it replaced to `dead`. | [congruentiv](congruentiv.md) |
 | constraintelim | `constraint-elimination`: conditions the dominating branches, assumes and memory accesses already decide become constants, by Fourier-Motzkin elimination on a system of linear constraints over the values compared. | Nothing yet: `difference` and `guards::Given::holds` move here. | [constraintelim](constraintelim.md) |
 | counting | What a counted-loop rewrite places before the loop: its seeds, skip test and exit values (LLVM's SCEVExpander, as IndVarSimplify and LoopRotate use it). | [`crate::loopidioms`](loopidioms.md), [`crate::window`](window.md) and | [counting](counting.md) |
@@ -156,7 +157,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | tailmerge | The blocks that end the function with the same terminator become one block each: SimplifyCFG's `tailMergeBlocksWithSimilarFunctionTerminators`. |  | [tailmerge](tailmerge.md) |
 | transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], share: equal calls, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `equal_calls` on each function it numbers; | [transform](transform.md) |
 | trivialunswitch | A branch in a loop's header on a loop-invariant condition, one side of which leaves the loop, is decided in the preheader instead of on every trip. | In the function pipeline's fixed point, after `loopmotion` and before | [trivialunswitch](trivialunswitch.md) |
-| trunc_inst_combine | An expression graph that ends in a `trunc` is evaluated at the narrow width, as LLVM's `TruncInstCombine` (a part of `AggressiveInstCombine`). | Not in the pipeline yet. | [trunc_inst_combine](trunc_inst_combine.md) |
+| trunc_inst_combine | An expression graph that ends in a `trunc` is evaluated at the narrow width, as LLVM's `TruncInstCombine` (a part of `AggressiveInstCombine`). | As `aggressive-instcombine@678`, after `instcombine` and before `tailrec` | [trunc_inst_combine](trunc_inst_combine.md) |
 | twoentryphi | A two-entry phi that a branch chooses between becomes a `select`, the arms' cheap code hoisted into the branch's block: the `foldTwoEntryPHINode` step of SimplifyCFG. |  | [twoentryphi](twoentryphi.md) |
 | uncondicmp | A block that holds an equality compare of a switch's value with a constant (and perhaps a `select` on it), and jumps on, folded into the switch: LLVM's [`tryToSimplifyUncondBranchWithICmpSelectInIt`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5328) and its `ICmpInIt` form (a compare alone), the parts of `simplifyUncondBranch` ([L8800](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8800)) after the empty block's removal. |  | [uncondicmp](uncondicmp.md) |
 | undefpred | A predecessor that gives a block a value that is undefined behavior to use there stops reaching it: SimplifyCFG's `removeUndefIntroducingPredecessor`. |  | [undefpred](undefpred.md) |

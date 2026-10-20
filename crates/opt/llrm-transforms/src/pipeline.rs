@@ -223,9 +223,8 @@ pub struct Options {
     /// turns it off.
     pub llvm_order: bool,
     /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
-    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on by
-    /// default, `LLRM_NO_ROTATE` turns it off. Not run
-    /// where `unroll_jam` is (see [`Options::rotating`]).
+    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
+    /// in the pin. Not run where `unroll_jam` is (see [`Options::rotating`]).
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); on by default, `LLRM_NO_MEM2REG` turns it off.
@@ -277,7 +276,7 @@ impl Default for Options {
         Self {
             optimize: true,
             llvm_order: llvm_order_default(),
-            rotate_slot: rotate_default(),
+            rotate_slot: true,
             limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default(),
             lcssa: true,
@@ -586,7 +585,6 @@ fn translated() -> Vec<Box<dyn FunctionPass>> {
         Box::new(crate::jumpthreading::JumpThreading::from_env()),
         Box::new(crate::dfajumpthreading::DfaJumpThreading::from_env()),
         Box::new(crate::tailcallelim::TailCallElim),
-        Box::new(crate::trunc_inst_combine::TruncInstCombine),
     ]
 }
 
@@ -672,11 +670,6 @@ impl FunctionPass for Together {
         }
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
-}
-
-/// `LLRM_NO_ROTATE`, read once: set, the rotate slot of [`llvm_order`] is off.
-fn rotate_default() -> bool {
-    !llrm_support::env_flag!("LLRM_NO_ROTATE")
 }
 
 /// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by
@@ -800,6 +793,7 @@ pub(crate) fn llvm_order(
                 combine("combine@677"),
                 fold("fold@677"),
                 dead("dead@677"),
+                slot("aggressive-instcombine@678", Box::new(crate::trunc_inst_combine::TruncInstCombine)),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L691:
                 // the option is read by `simplifySwitch`, untranslated.

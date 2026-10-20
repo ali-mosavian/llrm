@@ -438,7 +438,8 @@ fn a_multiply_by_a_constant_is_one_imul_at_x86_64() {
 
 /// A call was said to destroy the upper half of every callee-saved register
 /// (`rbx` is not `ebx`, so the convention "kept only the pushed part"): values
-/// live across it fought over `ebp`, and `f` spilled three of four to the stack.
+/// live across it fought over `ebp`, and `f` spilled three of four to the
+/// stack.
 #[test]
 fn values_live_across_a_call_take_the_callee_saved_registers() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\

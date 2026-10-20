@@ -305,7 +305,7 @@ impl Selector<'_, '_, '_> {
         }
     }
 
-    fn type_of(
+    pub(super) fn type_of(
         &self,
         operand: Operand,
     ) -> TypeId {
@@ -561,7 +561,8 @@ impl Selector<'_, '_, '_> {
         _: &mut Vec<Arc<Insn>>,
     ) -> Result<Loc, Unselected> {
         let result = self.function.instruction(m.inst).result.expect("a result");
-        Ok(Loc::Held(Held { value: self.value(result), width: FLOAT }))
+        let bytes = self.size(self.function.instruction(m.inst).ty)?;
+        Ok(Loc::Held(Held { value: self.value(result), width: self.arch.float_width(bytes) }))
     }
 
     /// The cell a float load or store reaches: its bytes in memory.
@@ -923,6 +924,33 @@ impl Selector<'_, '_, '_> {
             let width = self.width(self.function.instruction(m.inst).ty).expect("a held width");
             chain.iter().all(|&(name, count)| !["shl", "fadd", "fsub"].contains(&name) || count < i64::from(width) * 8)
         })
+    }
+
+    /// Whether the integer operand `k` is a shift amount of the root
+    /// instruction's type: a constant in `0..bits`, on a 32- or 64-bit type.
+    pub fn is_shift_amount(
+        &self,
+        m: &Match,
+        k: Operand,
+    ) -> bool {
+        let Some(bits) = self.types().int_bits(self.function.instruction(m.inst).ty) else { return false };
+        if bits != 32 && bits != 64 {
+            return false;
+        }
+        let Operand::Constant(id) = k else { return false };
+        match self.module.context.get(id).kind {
+            ConstantKind::Int(value) => value < u128::from(bits),
+            _ => false,
+        }
+    }
+
+    /// Whether the root instruction carries the fast-math `contract` flag: a
+    /// multiply it reads may fuse into one rounding.
+    pub fn is_contract(
+        &self,
+        m: &Match,
+    ) -> bool {
+        self.function.instruction(m.inst).flags.contains(llrm_mir::opcode::Flags::CONTRACT)
     }
 
     pub fn is_same_width(
@@ -1451,9 +1479,10 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    /// `select c, a, b` as a conditional move: the flags of `c`, made here, then `cmov` of `a` over `b` into the
-    /// result (X86's `CMOV`; the compare of a comparison nothing else reads is its flags, and any other condition is
-    /// tested).
+    /// `select c, a, b` as a conditional move: the flags of `c`, made here,
+    /// then `cmov` of `a` over `b` into the result (X86's `CMOV`; the
+    /// compare of a comparison nothing else reads is its flags, and any other
+    /// condition is tested).
     pub fn hook_select(
         &mut self,
         m: &Match,

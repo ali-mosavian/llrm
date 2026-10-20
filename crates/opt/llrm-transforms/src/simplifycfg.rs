@@ -89,7 +89,8 @@
 //! | [`tailMergeBlocksWithSimilarFunctionTerminators`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L142), called from `simplifyFunctionCFGImpl` after the first `removeUnreachableBlocks` | `tailmerge::merged` | MIRROR; see that module |
 //! | [`sinkCommonCodeFromPredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L2425) and [`simplifyDuplicatePredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8573), called from `simplifyOnce` ([L9336](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9336)) under `SinkCommonInsts` | `sinkcommon::sunk`, `sinkcommon::duplicate_predecessors_merged`, `Options::sink_common_insts` | MIRROR for the calls; see that module |
 //! | [`foldBranchToCommonDest`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4231), called from `simplifyCondBranch` ([L9005](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9005)) under `SpeculateBlocks` | `branchtocommon::folded` | MIRROR for the call; see that module |
-//! | [`mergeConditionalStores`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4604), called from `simplifyCondBranch` ([L9083](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9083)) and `SimplifyCondBranchToCondBranch` ([L4805](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4805)) | `stores_merged`, `condstores::merged` | MIRROR for the calls, both in `stores_merged` until `SimplifyCondBranchToCondBranch` is ported |
+//! | [`mergeConditionalStores`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4604), called from `simplifyCondBranch` ([L9083](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9083)) and `SimplifyCondBranchToCondBranch` ([L4805](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4805)) | `stores_merged` (the diamond), `condtocond::simplified` (the `MergeCondStores` step) | MIRROR for the calls |
+//! | [`SimplifyCondBranchToCondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4773), called from `simplifyCondBranch` ([L9075](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9075)) | `cond_to_cond_simplified`, `condtocond::simplified` | MIRROR; D1-D2 there |
 //! | [`removeUndefIntroducingPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9230), called from `simplifyOnce` ([L9327](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9327)) | `undefpred::removed` | MIRROR; D1 there |
 //! | [`FindFunctionBackedges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L236) | `loop_headers` | MIRROR |
 //! | [`removeUnreachableBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2912) and `markAliveBlocks` | `unreachable_removed` | the terminator folding and the deletion; D3 |
@@ -190,8 +191,8 @@ use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
 use crate::twoentryphi::{self, Speculation};
 use crate::{
-    branchtocommon, condstores, hoistcommon, icmpchain, knownpred, sinkcommon, speculate, tailmerge, uncondicmp,
-    undefpred,
+    branchtocommon, condstores, condtocond, hoistcommon, icmpchain, knownpred, sinkcommon, speculate, tailmerge,
+    uncondicmp, undefpred,
 };
 use crate::{cfg, dead, edges, transform};
 
@@ -413,10 +414,13 @@ fn block_simplified(
     if options.speculate_blocks && function.is_placed(block) && branch_speculated(context, spec, function, block) {
         return true;
     }
-    if function.is_placed(block) && stores_merged(context, spec, function, block) {
+    if function.is_placed(block) && knownpred::folded(context, spec, function, block, headers) {
         return true;
     }
-    if function.is_placed(block) && knownpred::folded(context, spec, function, block, headers) {
+    if function.is_placed(block) && cond_to_cond_simplified(context, spec, function, block) {
+        return true;
+    }
+    if function.is_placed(block) && stores_merged(context, spec, function, block) {
         return true;
     }
     if function.is_placed(block)
@@ -493,21 +497,38 @@ fn stores_merged(
             && function.instruction(last).opcode == Opcode::Br
             && last != qbi
     };
-    // `SimplifyCondBranchToCondBranch`'s `MergeCondStores` step, for each
-    // predecessor that is a conditional branch.
-    for pred in function.predecessors(block).iter().copied().collect::<Vec<_>>() {
-        if let Some(pbi) = function.terminator(pred).filter(|&last| conditional(function, last))
-            && condstores::merged(context, spec, function, pbi, qbi)
-        {
-            return true;
-        }
-    }
     // The diamond patterns: the predecessors all come from one block.
     let Some(previous) = all_predecessors_come_from_same_source(function, block) else { return false };
     let Some(pbi) = function.terminator(previous).filter(|&last| conditional(function, last)) else {
         return false;
     };
     condstores::merged(context, spec, function, pbi, qbi)
+}
+
+/// `simplifyCondBranch`'s loop over the predecessors that end in a
+/// conditional branch: `SimplifyCondBranchToCondBranch` with each.
+fn cond_to_cond_simplified(
+    context: &Context,
+    spec: &Speculation,
+    function: &mut Function,
+    block: BlockId,
+) -> bool {
+    let Some(bi) = function.terminator(block).filter(|&last| {
+        function.instruction(last).opcode == Opcode::Br && function.instruction(last).operands.len() == 3
+    }) else {
+        return false;
+    };
+    for pred in function.predecessors(block).iter().copied().collect::<Vec<_>>() {
+        if let Some(pbi) = function.terminator(pred).filter(|&last| {
+            last != bi
+                && function.instruction(last).opcode == Opcode::Br
+                && function.instruction(last).operands.len() == 3
+        }) && condtocond::simplified(context, spec, function, pbi, bi)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// The one-armed `if` ending `block` run before its branch: the speculation
