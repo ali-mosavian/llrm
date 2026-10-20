@@ -162,6 +162,16 @@ impl DataLayout {
         self.legal.contains(&bits)
     }
 
+    /// `DataLayout::fitsInLegalInteger`
+    /// ([DataLayout.h](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/DataLayout.h)):
+    /// whether some native integer is at least `bits` wide.
+    pub fn fits_in_legal_integer(
+        &self,
+        bits: u32,
+    ) -> bool {
+        self.legal.iter().any(|&legal| bits <= legal)
+    }
+
     /// The widest native integer, in bits: LLVM's
     /// `getLargestLegalIntTypeSizeInBits`, 0 where none is stated.
     pub fn largest_legal_integer(&self) -> u32 {

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchopt.rs sha256:0714e90efda97c1711a65954c9881d51bd166e765c24d5653a7899a688f330f9 -->
+<!-- src: crates/opt/llrm-transforms/src/switchopt.rs sha256:e394db9e5db399f024aa10f2cf269a12a2b7d2573d917b88dc20743f8db5ed70 -->
 
 # switchopt
 
@@ -23,6 +23,14 @@ block ends the visit (`requestResimplify`):
 | 8 | `reduceSwitchRange` | [`switchreduce`](switchreduce.md) | |
 | 9 | `hoistCommonCodeFromSuccessors` | `simplifycfg::branch_hoisted` | `hoist_common_insts` |
 | 10 | `simplifyDuplicateSwitchArms`, `simplifySwitchWhenUMin`, `simplifySwitchDefaultBranch` | [`switcharms`](switcharms.md) | |
+
+## How it works
+`simplified` returns at the first step that changes the block, as
+`requestResimplify` does; the block is visited again.
+
+## Example
+A `switch` whose cases all go to one block and the default goes elsewhere
+is rewritten by step 2 (`switchrange`) to a range check and a branch.
 
 DEVIATE 1: step 9 runs where the branch's `hoistCommonCodeFromSuccessors`
 does, before this dispatcher, not between 8 and 10.

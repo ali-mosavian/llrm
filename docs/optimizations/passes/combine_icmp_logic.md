@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_logic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_logic.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_logic.rs sha256:080641da9fbb0a4fa422ff5f18d4b079bb8b9598e472206ecdd67f29ca1a3a45 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_logic.rs sha256:6addb7cf2032f9eae0993da10a97eb8255adfee511a438ac9263a506c987dc69 -->
 
 # combine_icmp_logic
 
@@ -15,6 +15,16 @@ with `getMaskedTypeForICmpPair`
 and its two helpers, then the part of `foldAndOrOfICmps`
 ([L3445](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L3445))
 listed below.
+
+## How it works
+Both operands are `i1` compares. `getMaskedTypeForICmpPair` views each as
+`(A & B) ==/!= C` (a compare of a mask, a bit test, or a compare with an
+all-ones mask), finds the `A` they share and classifies each side
+(all-ones, all-zeros, mixed). The classes both sides satisfy say how to
+merge: OR the masks, AND them, or one side implies the other. The part of
+`foldAndOrOfICmps` kept merges two compares of the same operands by their
+compare codes and turns pairs of zero, all-ones and sign tests into one
+test of the OR, AND or XOR.
 
 ## Example
 A sign test of each of two values is one test of their `or`
