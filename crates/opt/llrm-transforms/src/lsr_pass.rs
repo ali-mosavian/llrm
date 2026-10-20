@@ -243,6 +243,10 @@ pub fn reduced_with(
     tti: &dyn Tti,
     stress_chains: bool,
 ) -> bool {
+    // The pass requires `LoopSimplify` (`getAnalysisUsage`): an outer loop
+    // entered by a conditional branch gets the preheader its invariants'
+    // induction variables are made in.
+    let mut changed = crate::loopsimplify::simplified(function);
     // The dominator tree, loops and assumptions of the function are made once:
     // an edit of the loop does not change the CFG. Only splitting an edge does;
     // then they are made again.
@@ -258,7 +262,6 @@ pub fn reduced_with(
         headers.reverse();
         headers
     };
-    let mut changed = false;
     for header in headers {
         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrLoops);
         // The first look may find exit tests to edit, and the plan may split
