@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/decide.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/decide.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:affa89cb0194c780d56953100e8b1674f936d9c164f5f88adbdfc09a205ed12e -->
+<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:56f6fc7408fd1134eaa6b2dbc63a25c1b04e8ad3b462276dbcd94406433f8d35 -->
 
 # decide
 
@@ -68,8 +68,8 @@ From unit test `test_a_branch_on_known_numbers_is_a_jump` in
 `decide_tests.rs`.
 
 ## Runs
-Once per pass of the function fixed point, after `fold` and `ports` and
-before `phiopt`. `Options::decide` turns it off (no `-f` flag); nothing runs
+Once per pass of the function fixed point, after `fold` and `ports`.
+`Options::decide` turns it off (no `-f` flag); nothing runs
 at -O0. `jumpthreading` and `dfajumpthreading` are the separate passes that
 thread edges.
 

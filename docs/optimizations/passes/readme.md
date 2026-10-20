@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 159 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 158 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -54,7 +54,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | dead | Instructions nothing needs, removed: LLVM's ADCE and DCE. | Once per pass of the function fixed point, after `algebraic`, and again | [dead](dead.md) |
 | deadargs | Dead argument elimination (LLVM's DeadArgumentElimination): a parameter nothing reads goes, and with it the argument at every call. | In the interprocedural step, after the callers' arguments have been | [deadargs](deadargs.md) |
 | deadstore | Dead store elimination: LLVM's `DSEPass`, stage 1 (`DSEState`, `eliminateDeadDefs`, `getDomMemoryDef`, `eliminateDeadWritesAtEndOfFunction`, `storeIsNoop`). | In the slot of `dse@820` (LLVM's order); the older `dse.rs` runs elsewhere. | [deadstore](deadstore.md) |
-| decide | Branches whose way is known, decided: LLVM's JumpThreading and SimplifyCFG on known conditions. | Once per pass of the function fixed point, after `fold` and `ports` and | [decide](decide.md) |
+| decide | Branches whose way is known, decided: LLVM's JumpThreading and SimplifyCFG on known conditions. | Once per pass of the function fixed point, after `fold` and `ports`. | [decide](decide.md) |
 | dfajumpthreading | DFA jump threading: a loop whose `switch` runs on a state variable that each path of the loop sets to a constant, as the body of a state machine does, is threaded: every such path gets its own copy of the blocks from where the state is set to the `switch`, and the copy of the `switch` is a jump to the case the constant picks; as LLVM's `dfa-jump-threading`. | `pipeline` (`dfajumpthreading@806`), a `Partial` slot of the parity | [dfajumpthreading](dfajumpthreading.md) |
 | dse | Dead store elimination: LLVM's DSE. | Once per pass of the function fixed point, after `trivialunswitch` and | [dse](dse.md) |
 | earlycse | LLVM's EarlyCSE with MemorySSA (`early-cse<memssa>`): one walk down the dominator tree, scoped tables of what is available, and a generation count that memory operations advance. | [`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`), | [earlycse](earlycse.md) |
@@ -122,7 +122,6 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | narrowspace | A far pointer parameter that every call fills from one near space becomes a near pointer parameter: the caller passes the offset, and neither segment is pushed or loaded. | In [`crate::interprocedural`](../analyses/interprocedural.md) as stage `narrow.`, after argument promotion | [narrowspace](narrowspace.md) |
 | parity | The parity pipeline's slot registry: for each slot of LLVM's function pipeline that `Options::llvm_order` builds, whether llrm's pass there is translated from LLVM's, an older stand-in, or missing. | `pipeline` (`Fixed::linear`), the registry tests. | [parity](parity.md) |
 | peel | Whole-loop peeling: clone every iteration of a loop with a known trip count ahead of it, priced before anything is cloned, and let Fold, Decide and Dead prove the residual loop unreachable. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point `Fixed`, after the scalar | [peel](peel.md) |
-| phiopt | A phi of two constants that a branch chooses between becomes arithmetic of the branch's condition, where that costs no more than the branch. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `decide`. On at every | [phiopt](phiopt.md) |
 | ports | Each I/O port call narrowed to the memory its device reaches, as the target describes the port. | Twice: once over every body before the per-body pipeline, so a caller's | [ports](ports.md) |
 | predicateinfo | PredicateInfo: what a branch, switch or assume says about a value where it holds, as a copy of the value that only the code it holds for reads. |  | [predicateinfo](predicateinfo.md) |
 | profit | Machine-neutral profitability shared by the MIR transforms: what an instruction, a block and a function cost under a target's prices, how often each block runs, and what registers cost past the target's. | Each of [`crate::lsr_pass`](lsr_pass.md), [`crate::hoist`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/licm/hoist.rs), [`crate::gvn`](gvn.md), | [profit](profit.md) |
