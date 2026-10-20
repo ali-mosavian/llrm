@@ -2,6 +2,7 @@
 
 pub mod cc;
 pub mod data;
+pub mod divconst;
 pub mod driver;
 pub mod emit;
 pub mod expand_imm;
@@ -11,6 +12,7 @@ pub mod layout;
 pub mod machine;
 pub mod mc;
 pub mod mfunc;
+pub mod pairs;
 pub mod prepass;
 pub mod regalloc;
 pub mod tti;

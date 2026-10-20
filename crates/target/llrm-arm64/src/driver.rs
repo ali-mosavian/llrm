@@ -23,7 +23,10 @@ pub fn without_triple(text: &str) -> (Option<String>, String) {
         if line.starts_with(';') {
             continue;
         }
-        kept.push_str(&line.replace(" dso_local", ""));
+        // DEVIATE 4: newer clang's `ptrtoaddr` is read as `ptrtoint` (the same
+        // where a pointer and its address are one width); MIR refuses the
+        // instruction on purpose.
+        kept.push_str(&line.replace(" dso_local", "").replace(" = ptrtoaddr ", " = ptrtoint "));
         kept.push('\n');
     }
     (triple, kept)
@@ -100,7 +103,7 @@ pub fn program(
 
 /// `program` through the shared mid-end at -O2.
 pub fn optimized(program: &mut Program) -> Result<(), String> {
-    let dump = std::env::var_os("LLRM_MIR_STAGES").map(Into::into);
+    let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
     llrm_transforms::pipeline::applied(program, &Applied { dump, ..Applied::default() })
 }
 
@@ -121,6 +124,7 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
         let allocation = crate::regalloc::allocate(&mut machine);
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
         let blocks = crate::layout::fold(blocks);
+        let blocks = crate::pairs::fold(blocks);
         out.push(crate::emit::Function {
             symbol: crate::data::symbol_name(platform, &name),
             public: !matches!(
@@ -202,6 +206,12 @@ mod tests {
     /// Clang writes Apple's variadic reads as `va_arg`, which MIR does not read
     /// ("`va_arg` is not an instruction of MIR's subset"): each becomes the
     /// load of the pointer, the value, and the pointer advanced by a slot.
+    #[test]
+    fn ptrtoaddr_is_read_as_ptrtoint() {
+        let (_, text) = without_triple("  %a = ptrtoaddr ptr %p to i64\n");
+        assert_eq!(text, "  %a = ptrtoint ptr %p to i64\n");
+    }
+
     #[test]
     fn va_arg_is_written_out_as_loads_and_a_slot_step() {
         let text = "  %12 = va_arg ptr %3, i32\n  ret i32 %12\n";
