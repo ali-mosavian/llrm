@@ -5078,7 +5078,7 @@ impl Selector<'_, '_, '_> {
         let context = &self.module.context;
         let width = i64::from(self.function.operand_type(context, operand).and_then(|ty| context.types.int_bits(ty))?);
         let bits = if signed {
-            width - i64::from(self.sign_bits(operand)) + 1
+            width - i64::from(llrm_mir::valuetracking::sign_bits(context, self.function, operand)) + 1
         } else {
             // The leading bits proven zero: the mask's top ones within the
             // width.
