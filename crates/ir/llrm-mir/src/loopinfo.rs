@@ -47,6 +47,19 @@ struct LoopData {
     /// A slice of the `LoopInfo`'s block layout (`BlockLayout`).
     start: u32,
     len: u32,
+    /// `isLoopSimplifyForm`, once asked: true for as long as the graph is as
+    /// it was when the loops were found.
+    simple: std::cell::Cell<Option<bool>>,
+}
+
+thread_local! {
+    static EXIT_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times a loop's form was worked out on this thread: a test counts
+/// what a pass asks afresh.
+pub fn simplify_form_scans() -> usize {
+    EXIT_SCANS.with(std::cell::Cell::get)
 }
 
 /// `LoopInfoBase<BlockT, LoopT>`, over blocks `B`.
@@ -451,6 +464,7 @@ impl<B: BlockNumber> LoopInfo<B> {
                     sub_loops: Vec::new(),
                     start: 0,
                     len: 0,
+                    simple: std::cell::Cell::new(None),
                 });
                 loop_headers.push(bb);
             }
@@ -1017,6 +1031,24 @@ impl<'a, B: BlockNumber> Loop<'a, B> {
         graph: &impl LoopGraph<Block = B>,
     ) -> Option<B> {
         single(self.get_exit_blocks(graph).into_iter(), true)
+    }
+
+    /// `isLoopSimplifyForm`: a preheader, one latch and dedicated exits. Worked
+    /// out once per loop, for passes that ask it of each loop at every step
+    /// and leave the graph as it is (the answer is kept with the loops).
+    pub fn is_loop_simplify_form(
+        &self,
+        graph: &impl LoopGraph<Block = B>,
+    ) -> bool {
+        if let Some(known) = self.data().simple.get() {
+            return known;
+        }
+        EXIT_SCANS.with(|made| made.set(made.get() + 1));
+        let simple = self.get_loop_preheader(graph).is_some()
+            && self.get_loop_latch(graph).is_some()
+            && self.has_dedicated_exits(graph);
+        self.data().simple.set(Some(simple));
+        simple
     }
 
     /// `hasDedicatedExits`.
