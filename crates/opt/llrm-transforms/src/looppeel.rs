@@ -59,10 +59,9 @@
 //! [`countToEliminateCompares`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopPeel.cpp#L549),
 //! [`PhiAnalyzer`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopPeel.cpp#L195).
 
-use std::collections::{HashMap, HashSet};
-
 use llrm_analysis::scev::expr::{Kind, Scev, Use};
 use llrm_analysis::scev::{Cx, Flags, ScalarEvolution};
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
@@ -107,7 +106,7 @@ struct PhiAnalyzer<'a, 'b> {
     lp: Loop<'b>,
     max_iterations: u32,
     peel_for_iv: bool,
-    known: HashMap<ValueId, Counter>,
+    known: IdMap<ValueId, Counter>,
 }
 
 impl<'a, 'b> PhiAnalyzer<'a, 'b> {
@@ -118,7 +117,7 @@ impl<'a, 'b> PhiAnalyzer<'a, 'b> {
         peel_for_iv: bool,
     ) -> Self {
         debug_assert!(max_iterations > 0, "no peeling is allowed?");
-        Self { cx, lp, max_iterations, peel_for_iv, known: HashMap::new() }
+        Self { cx, lp, max_iterations, peel_for_iv, known: IdMap::new() }
     }
 
     fn add_one(
@@ -526,7 +525,7 @@ fn peel_to_turn_invariant_loads_dereferenceable(
         return 0;
     }
     let (Some(header), Some(latch)) = (Some(lp.get_header()), lp.get_loop_latch(function)) else { return 0 };
-    let mut load_users: HashSet<InstId> = HashSet::new();
+    let mut load_users: IdSet<InstId> = IdSet::new();
     let mut sizes = None;
     for &block in lp.get_blocks() {
         for inst in function.iter_block(block) {
@@ -576,7 +575,7 @@ fn peel_to_turn_invariant_loads_dereferenceable(
 fn add_users(
     function: &llrm_mir::module::Function,
     inst: InstId,
-    users: &mut HashSet<InstId>,
+    users: &mut IdSet<InstId>,
 ) {
     if let Some(result) = function.instruction(inst).result {
         users.extend(function.users(result).iter().map(|one| one.user));
