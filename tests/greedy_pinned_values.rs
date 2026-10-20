@@ -18,7 +18,6 @@ fn a_value_an_instruction_requires_in_one_register_is_not_moved_by_the_greedy_al
     std::fs::write(scratch.path().join("a.c"), CENTROID).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
         .current_dir(scratch.path())
-        .env("LLRM_GREEDY", "1")
         .env("LLRM_GREEDY_CHECK", "1")
         .args(["-O2", "-march=i486", "-mabi=watcom", "-S", "-o", "a.s", "a.c"])
         .output()

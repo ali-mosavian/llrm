@@ -30,9 +30,9 @@
 //! `mod_ref_for_global` says, and `globals_listed` keeps the unknown access
 //! from reaching it. Without a `FunctionInfo` the unknown access reaches it.
 
-use llrm_mir::facts::Facts;
 use llrm_mir::GlobalId;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::facts::Facts;
 use llrm_mir::module::{GlobalKind, Module};
 use llrm_mir::types::Type;
 use llrm_support::hash::IndexMap;

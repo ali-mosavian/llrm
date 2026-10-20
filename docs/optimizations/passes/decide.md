@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/decide.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/decide.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:fbdfadac23be0134c18945edd808268821340e2be998bd19f862e93bc2e2689d -->
+<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:56f6fc7408fd1134eaa6b2dbc63a25c1b04e8ad3b462276dbcd94406433f8d35 -->
 
 # decide
 
@@ -68,8 +68,8 @@ From unit test `test_a_branch_on_known_numbers_is_a_jump` in
 `decide_tests.rs`.
 
 ## Runs
-Once per pass of the function fixed point, after `fold` and `ports` and
-before `phiopt`. `Options::decide` turns it off (no `-f` flag); nothing runs
+Once per pass of the function fixed point, after `fold` and `ports`.
+`Options::decide` turns it off (no `-f` flag); nothing runs
 at -O0. `jumpthreading` and `dfajumpthreading` are the separate passes that
 thread edges.
 
@@ -90,5 +90,5 @@ Blocks and edges change: every analysis is invalidated when anything was
 decided or merged.
 
 ## See also
-[`crate::cfg`](../analyses/cfg.md), [`crate::fold`](fold.md), [`crate::jumpthreading`](jumpthreading.md); LLVM JumpThreading,
-SimplifyCFG.
+[`crate::cfg`](../analyses/cfg.md), [`crate::fold`](fold.md), [`crate::jumpthreading`](jumpthreading.md); LLVM
+JumpThreading, SimplifyCFG.

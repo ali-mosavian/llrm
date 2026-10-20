@@ -69,11 +69,11 @@
 //! which this follows with the multiply-free `ctpop`.
 
 use llrm_mir::context::{Context, mask};
-use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::{BitCount, Intrinsic};
-use llrm_mir::module::{Function, GlobalKind, InstId, Module, Operand};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
-use llrm_mir::types::TypeId;
+use llrm_mir::module::{Function, InstId, Module, Operand};
+use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
+
+use super::expansion::{self, Emitter};
 
 /// The operation name a target lists under `expand` for `count`.
 fn operation(count: BitCount) -> &'static str {
@@ -90,84 +90,18 @@ pub fn expanded(
     module: &mut Module,
     expands: impl Fn(&str) -> bool,
 ) -> Result<(), String> {
-    let names: Vec<Option<String>> = module.globals.iter().map(|global| global.name.clone()).collect();
-    let context = &mut module.context;
-    for global in &mut module.globals {
-        let GlobalKind::Function(function) = &mut global.kind else { continue };
-        let found: Vec<(InstId, BitCount)> = function
-            .walk()
-            .filter_map(|(_, inst)| {
-                let callee = llrm_mir::memory::callee(context, function, inst)?;
-                match Intrinsic::named(names[callee.0 as usize].as_deref()?)? {
-                    Intrinsic::BitCount(count) if expands(operation(count)) => Some((inst, count)),
-                    _ => None,
-                }
-            })
-            .collect();
-        for (inst, count) in found {
-            expand(context, function, inst, count)?;
-        }
-    }
-    Ok(())
+    expansion::expand_calls(
+        module,
+        |intrinsic| match intrinsic {
+            Intrinsic::BitCount(count) if expands(operation(count)) => Some(count),
+            _ => None,
+        },
+        expand,
+    )
 }
 
-/// The instructions of one expansion, made before the call they replace.
-struct Emitter<'a> {
-    context: &'a Context,
-    function: &'a mut Function,
-    at: InstId,
-    /// The type the expansion computes in, `bits` wide.
-    ty: TypeId,
-    bits: u32,
-}
-
+/// What the bit counts add to an [`Emitter`]: the parallel count and its kin.
 impl Emitter<'_> {
-    fn emit(
-        &mut self,
-        opcode: Opcode,
-        ty: TypeId,
-        operands: Vec<Operand>,
-    ) -> Result<Operand, String> {
-        let made = self.function.create_instruction(opcode, ty, operands, Flags::default(), None);
-        self.function.insert(made, Position::Before(self.at))?;
-        Ok(Operand::Value(self.function.instruction(made).result.expect("a value")))
-    }
-
-    fn binary(
-        &mut self,
-        op: BinaryOp,
-        a: Operand,
-        b: Operand,
-    ) -> Result<Operand, String> {
-        self.emit(Opcode::Binary(op), self.ty, vec![a, b])
-    }
-
-    /// `value` in the computing type.
-    fn constant(
-        &self,
-        value: u128,
-    ) -> Operand {
-        Operand::Constant(self.context.int(self.ty, value as i128))
-    }
-
-    fn shift_right(
-        &mut self,
-        x: Operand,
-        by: u32,
-    ) -> Result<Operand, String> {
-        let by = self.constant(u128::from(by));
-        self.binary(BinaryOp::LShr, x, by)
-    }
-
-    fn mask(
-        &mut self,
-        x: Operand,
-        bits: u128,
-    ) -> Result<Operand, String> {
-        let bits = self.constant(bits);
-        self.binary(BinaryOp::And, x, bits)
-    }
-
     /// `x` with every byte of the computing width `byte`.
     fn splat(
         &self,
