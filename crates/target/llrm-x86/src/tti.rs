@@ -454,6 +454,13 @@ impl Tti for X86 {
         "X86"
     }
 
+    /// SZ1: no growth over the call removed, where the pin's 50 let crc, tile
+    /// and recchop copy an external callee into `main` at -Os (+52, +42, +15
+    /// bytes).
+    fn opt_size_inline_threshold(&self) -> Option<i64> {
+        Some(0)
+    }
+
     fn is_type_legal(
         &self,
         ty: Ty,

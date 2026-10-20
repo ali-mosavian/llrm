@@ -172,6 +172,40 @@ b0:
     assert_eq!(priced(&text, 0, false, CallerSize::OptSize).1, 75);
 }
 
+/// An external callee that stays after the inline is not copied into an
+/// `optsize` caller on x86 (D11): crc, tile and recchop grew 52, 42 and 15
+/// bytes at -Os (cost 45, 30 and 40 against the pin's threshold of 50).
+#[test]
+fn an_optsize_caller_does_not_copy_a_callee_that_stays_on_x86() {
+    let text = format!(
+        "{GLOBAL}define i32 @callee(i32 %x) {{
+b0:
+  %a = load i32, ptr @g
+  %b = add i32 %a, %x
+  %c = add i32 %b, %a
+  %d = mul i32 %c, %x
+  %e = add i32 %d, %b
+  %f = mul i32 %e, %a
+  %g = add i32 %f, %c
+  %h = mul i32 %g, %d
+  store i32 %h, ptr @g
+  ret i32 %h
+}}
+
+define i32 @f(i32 %y) {{
+b0:
+  %r = call i32 @callee(i32 %y)
+  ret i32 %r
+}}
+"
+    );
+    let x86 = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let (generic, bound) = priced_with(&text, 0, false, CallerSize::OptSize, None);
+    let (target, held) = priced_with(&text, 0, false, CallerSize::OptSize, Some(&x86));
+    assert!(generic < bound, "premise: the pin inlines it, cost {generic} threshold {bound}");
+    assert!(target >= held, "x86 inlined it, cost {target} threshold {held}");
+}
+
 /// A `noipa` callee is never inlined, whatever its cost (`alwaysinline`
 /// included): the same callee without it costs -20 and is inlined (the
 /// premise).
