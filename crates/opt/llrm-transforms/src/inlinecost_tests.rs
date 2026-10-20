@@ -470,3 +470,14 @@ b0:
     let verdict = inline_cost(&site, InlineParams::from_level(2));
     assert!(matches!(verdict, InlineCost::Never(_)), "{verdict:?}");
 }
+
+/// stft_single.bas -Os: a call in front of `unreachable` is held to threshold
+/// 0, and the walk stopped at cost 0; `cost < max(1, threshold)` is
+/// `finalizeAnalysis`'s, the verdict is `Cost < Threshold` (InlineCost.h:138), so
+/// the 350-instruction benchmark body was copied into `__main` and kept.
+#[test]
+fn test_a_verdict_of_cost_zero_at_threshold_zero_does_not_pay() {
+    assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0 }.is_ok());
+    assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0 }.is_ok());
+    assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0 }.is_ok());
+}
