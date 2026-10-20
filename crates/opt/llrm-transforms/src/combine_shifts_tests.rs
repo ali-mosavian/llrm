@@ -942,3 +942,19 @@ m:
     );
     assert!(out.contains("shl i16 %i, %j") && out.contains("[ 6, %a ]"), "{out}");
 }
+
+/// easing.nib: `lshr (zext i8 X), 15` became a poison `lshr i8 X, 15`; the
+/// pin makes it 0 (a shift past the source width leaves only zeros).
+#[test]
+fn a_shift_of_a_zext_past_the_source_width_is_zero() {
+    let out = combined(
+        "define i16 @f(i8 %x) {
+b0:
+  %z = zext i8 %x to i16
+  %r = lshr i16 %z, 15
+  ret i16 %r
+}
+",
+    );
+    assert!(out.contains("ret i16 0"), "{out}");
+}

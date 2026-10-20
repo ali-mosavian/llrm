@@ -271,19 +271,12 @@ pub fn _closed_loop(
         return Ok(false);
     }
 
-    // A phi has an input per edge: a switch with two cases to the exit enters it twice.
-    let mut edges_in = function
-        .block_users(cfg::block(exit_at))
-        .into_iter()
-        .filter(|one| function.instruction(one.user).opcode.is_terminator())
-        .filter_map(|one| function.parent(one.user).map(cfg::id))
-        .collect::<Vec<_>>();
-    edges_in.sort_unstable();
+    let edges_in = function.edge_predecessors(cfg::block(exit_at));
     let mut swap: BTreeMap<ValueId, Operand> = BTreeMap::new();
     let mut phis = Vec::new();
     for &value in &crossing {
         let phi = exit_phi(function, value);
-        let incoming = edges_in.iter().map(|&source| (Operand::Value(value), cfg::block(source))).collect::<Vec<_>>();
+        let incoming = edges_in.iter().map(|&source| (Operand::Value(value), source)).collect::<Vec<_>>();
         function.set_operands(phi, from_arms(&incoming));
         swap.insert(value, Operand::Value(function.instruction(phi).result.expect("a phi's value")));
         phis.push(phi);
