@@ -10,8 +10,8 @@ use llrm_mir::module::{InstId, Module, ValueId};
 use llrm_support::hash::IndexMap;
 
 use super::{
-    _computed, _recurrence_span, Interval, bounded, covering, dominated_edges, edge_deltas, edges_solved,
-    exact_offsets, exact_offsets_given, on_edge, operations_applied, scoped, singletons,
+    _computed, _recurrence_span, Interval, bounded, covering, dominated_edges, edge_deltas, edges_solved, on_edge,
+    operations_applied, singletons,
 };
 use crate::cfg;
 use crate::memory::{MemRef, Unit};
@@ -770,75 +770,6 @@ b4:
             }
         }
     }
-}
-
-/// An access into a global indexed by `index`, computed as `offset` from
-/// counter `%i` (0 ..= 49).
-fn indexed(
-    offset: &str,
-    gep: &str,
-) -> Parsed {
-    Parsed::new(&format!(
-        "@a = global [100 x i8] zeroinitializer
-
-define void @f(ptr %q) {{
-b0:
-  br label %b1
-
-b1:
-  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
-  %c = icmp slt i16 %i, 50
-  br i1 %c, label %b2, label %b3
-
-b2:
-  %off = {offset}
-  %p = {gep}
-  store i8 0, ptr %p
-  %next = add i16 %i, 1
-  br label %b1
-
-b3:
-  ret void
-}}
-"
-    ))
-}
-
-#[test]
-fn an_offset_is_exact_only_when_every_partial_sum_is_a_nonnegative_index() {
-    for (offset, gep, exact) in [
-        ("mul i16 %i, 2", "getelementptr inbounds i8, ptr @a, i16 %off", true),
-        ("add i16 %i, 3", "getelementptr inbounds i16, ptr @a, i16 %off", true),
-        // no promise
-        ("mul i16 %i, 2", "getelementptr i8, ptr @a, i16 %off", false),
-        // below 0
-        ("sub i16 %i, 5", "getelementptr inbounds i8, ptr @a, i16 %off", false),
-        // past 64K
-        ("mul i16 %i, 2000", "getelementptr inbounds i8, ptr @a, i16 %off", false),
-        // no object start
-        ("mul i16 %i, 2", "getelementptr inbounds i8, ptr %q, i16 %off", false),
-    ] {
-        let parsed = indexed(offset, gep);
-        let found = exact_offsets(&parsed.unit()).unwrap();
-        assert_eq!(found.contains(&parsed.value("off")), exact, "{offset} {gep}");
-    }
-}
-
-/// Instruction selection solved the scoped bounds twice for a function with
-/// dword-indexed accesses: once inside `exact_offsets` and once for its own use
-/// (80% of isel for a 16-deep nest, 160 M). Given the facts,
-/// `exact_offsets_given` solves no loop again and says what `exact_offsets`
-/// does.
-#[test]
-fn the_exact_offsets_given_the_scoped_facts_solve_nothing_again() {
-    let parsed = indexed("mul i16 %i, 2", "getelementptr inbounds i8, ptr @a, i16 %off");
-    let unit = parsed.unit();
-    let facts = scoped(&unit).unwrap();
-    let before = super::loops_solved();
-    let found = exact_offsets_given(&unit, &facts).unwrap();
-    assert_eq!(super::loops_solved(), before, "the bounds were solved again");
-    assert_eq!(found, exact_offsets(&unit).unwrap());
-    assert!(found.contains(&parsed.value("off")), "premise: the offset is exact");
 }
 
 /// A `range` a callee states of its result, or a parameter states of itself,
