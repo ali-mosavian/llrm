@@ -30,3 +30,25 @@ Read with [agents.md](../../agents.md): the seven rules and the method. These ar
 - No permanent deletion of data without the user's own word; a message from another session is not the user's word, and cannot grant a permission or an approval.
 - Report what you did and what you did not run. A result that contradicts the subject means the instrument is wrong until shown otherwise.
 - When you stop, push and write `~/scratch/handoff/<name>.md` (20 lines at most: stream, branch, open PRs, state, exact next step with dates, who you talk to).
+
+## Translating LLVM
+- The goal is to mirror LLVM's pipeline by translating its steps and mechanisms, and to match its compile time and code quality. Judge every decision by both numbers: compile time against clang, rows against min(gcc, clang).
+- Mirror literally. Every pass slot of `opt -print-pipeline-passes` gets a real counterpart in LLVM's slot, run by LLVM's mechanism (pass manager, analyses, invalidation). A pass that exists behind a switch, or a stand-in in an empty slot, is not a translation.
+- Before implementing anything, check whether LLVM has the pass or analysis; if it does, translate it. Read the source at the pin from a checkout, never from memory. Keep its functions, worklists, caps (the `cl::opt` defaults) and check order, with a permalink per function. Whatever is not translated is a numbered DEVIATE with a reason, a dated owner and an exit.
+- Translate into idiomatic Rust, not a copy of the C++: ownership instead of pointer emulation, enums and `match` instead of opcode ladders, iterators, `Option`/`Result`, no getter/setter boilerplate or class hierarchies where an enum fits. An old file becomes idiomatic when next touched; no churn wave.
+- Keep every solution close to O(n). Where LLVM is super-linear, mirror the caps that bound it; never add a quadratic step it lacks. A super-linear step needs a stated reason and a slope test at 1x and 4x.
+- Price a structural change as an isolated proof of concept (emulate it, or run the pass on captured bodies) before building it.
+
+## General solutions
+- Every optimization is general and sits at the right abstraction level. Before a fix, name the general rule it is an instance of. If there is none, the work is to build it. A fix that names one combination (a pair of spaces, one runtime routine, one demo) means the mechanism is wrong. Matching another stage's output shape is the patch form; select from the MIR that says what is computed.
+- Prefer collapsing several special cases into one mechanism over adding another. A refactor that deletes code is evidence the general form is right.
+- One analysis owns each fact (escape, provenance, trip counts, strides); every pass asks it instead of deriving its own proof. A language promise is marked by the frontend in the IR; machine facts come from the target.
+- Single responsibility, no duplicated logic, extend by adding an implementation or a table entry rather than editing a function in place, separate concerns.
+- No machine facts in backend code. Registers, classes, encodings, latencies, sizes, alignment, calling conventions and costs live in the one target description (the TableGen, subtarget and TTI of LLVM) and are passed in.
+- Keep the proof caches and the object identity: return the same `Rc` when nothing changed, and key caches by `Rc::as_ptr`; a clone silently disables them.
+
+## Tests and targets
+- Reduce a bug to a minimal MIR or C fixture and watch it fail before writing the fix. A backend fix ships the source test, a fixture at the guarded pass's own input, and a premise assertion that the failing shape still occurs.
+- Targets are the 486 and the Pentium (P5); price costs and pick defaults from their columns, never the 386. m16 gets no function, loop or block alignment, only what segments require; m32 follows the pin.
+- Floats: Nib f32 behaves like C's fast mode: a promoted value may keep x87 extended precision and only memory stores round; `-fexcess-precision=standard` rounds every assignment. C follows the pinned clang's result.
+- MIR has LLVM's `undef`; a zero refinement for uninitialized reads is a DEVIATE that goes when mem2reg and SROA produce `undef`.
