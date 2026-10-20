@@ -70,6 +70,9 @@ pub struct RegisterClasses {
     pub addressing: BTreeSet<RegId>,
     /// The bases the encoding permits, the frame's included.
     pub encodable_bases: BTreeSet<RegId>,
+    /// The SSE registers a `float` or `double` may be placed in, in
+    /// allocation order; none where the target keeps floats on the x87 stack.
+    pub xmm: Vec<RegId>,
     /// The words whose low byte has a register of its own.
     pub byte_words: BTreeSet<RegId>,
     /// Where the x87 status word is stored (`fnstsw`'s register).
@@ -147,6 +150,7 @@ impl RegisterClasses {
             frame: arch.frame_register(),
             addressing,
             encodable_bases,
+            xmm: held("xmm"),
             byte_words: {
                 let regs = llrm_lir::registers::Regs(arch.registers());
                 regs.entries()

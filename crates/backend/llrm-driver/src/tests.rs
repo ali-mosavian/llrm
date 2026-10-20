@@ -462,3 +462,15 @@ fn a_quadword_zero_is_a_dword_xor() {
     let listing = llrm_core::backend::masm::text(&built).unwrap();
     assert!(listing.contains("xor edi, edi") && !listing.contains(", 0\n"), "{listing}");
 }
+
+/// x86-64 describes sixteen xmm registers in a class of their own: none of them
+/// is a general register, and the 32-bit targets have none.
+#[test]
+fn xmm_registers_are_a_class_apart_from_the_general_ones() {
+    use llrm_core::backend::classes::RegisterClasses;
+    let m64 = RegisterClasses::of(&*crate::by_triple("x86_64-unknown-linux-gnu").unwrap());
+    assert_eq!(m64.xmm.len(), 16);
+    assert!(m64.xmm.iter().all(|one| !m64.available.contains(one)));
+    assert_eq!(m64.available.len(), 14);
+    assert!(RegisterClasses::of(&llrm_x86_m16::M16).xmm.is_empty());
+}
