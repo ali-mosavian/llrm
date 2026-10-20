@@ -38,7 +38,6 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode, Tail};
 use llrm_mir::passes::Declared;
-
 use llrm_mir::types::{Type, TypeId};
 
 use crate::simplifycfg::Options;
@@ -65,7 +64,7 @@ pub fn simplified(
         || switchselect::folded(options, context, spec, function, block)
         || (options.forward_switch_cond_to_phi && switchphi::folded(options, context, spec, function, block))
         || ((options.convert_switch_to_arithmetic || options.convert_switch_to_lookup_table)
-            && switchlookup::folded(options, context, spec, function, block))
+            && switchlookup::folded(options, context, spec, declared, function, block))
         || switchpow2::folded(options, context, spec, declared, function, block)
         || switchreduce::folded(options, context, spec, declared, function, block)
         || switcharms::folded(options, context, spec, function, block)
