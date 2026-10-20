@@ -29,8 +29,6 @@
 //! - U6 The loop pass manager's update of loops (`addSiblingLoops`) is the
 //!   driver's: the loops a complete unroll makes of the inner loops are visited
 //!   next, in program order.
-//! - U7 The cost of a simulated instruction is asked of the instruction itself,
-//!   not of its simplified operands.
 //! - U8 `simplifyLoopAfterUnroll` simplifies without a dominator tree or
 //!   assumptions.
 //! - U9 Blocks an unroll merges away are erased once, when the pass ends.
@@ -61,7 +59,7 @@ use llrm_mir::context::{ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
-use llrm_mir::instructioncost::instruction_cost;
+use llrm_mir::instructioncost::{instruction_cost, instruction_cost_with};
 use llrm_mir::loopinfo::{Loop, LoopInfo};
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{
@@ -111,6 +109,10 @@ pub struct Run<'a> {
     pub options: Options,
     /// Blocks an unroll merged away, erased when the pass is done.
     pub emptied: Vec<BlockId>,
+    /// The module's analyses, and what the pass declares in it, for the IV
+    /// simplifier (PL5).
+    pub outer: &'a llrm_mir::passes::Outer,
+    pub declared: &'a mut llrm_mir::passes::Declared,
     /// The iterations peeled off the loop headed by a block in this run (PL1).
     pub peeled: IdMap<BlockId, u32>,
 }
@@ -783,12 +785,26 @@ fn add_cost_recursively(
 
             // First accumulate the cost of this instruction.
             if !is_free {
-                // Operands are considered as simplified, but the instruction
-                // cost of this translation is asked of the
-                // instruction itself (U7).
-                let _ = simplified_values;
+                // Operands are considered as simplified.
+                let operands: Vec<Operand> = operation
+                    .operands
+                    .iter()
+                    .map(|&operand| match operand {
+                        Operand::Value(value) => simplified_values.get(&value).copied().unwrap_or(operand),
+                        other => other,
+                    })
+                    .collect();
                 *unrolled_cost = *unrolled_cost
-                    + instruction_cost(run.tti, run.context, run.layout, run.globals, run.function, inst, kind);
+                    + instruction_cost_with(
+                        run.tti,
+                        run.context,
+                        run.layout,
+                        run.globals,
+                        run.function,
+                        inst,
+                        &operands,
+                        kind,
+                    );
             }
 
             // The cost of every operand that is not free must be counted,
@@ -1561,6 +1577,16 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             crate::loopsimplify::simplified(run.function);
             let _ = crate::lcssa::closed(run.function);
             analyzed = Analyzed::of(run);
+            // `simplifyLoopAfterUnroll(L, SimplifyIVs = true)`: the IVs first
+            // (PL5).
+            let _ = crate::simplifyindvar::simplified_loop_ivs(
+                run.context,
+                run.layout,
+                run.function,
+                run.declared,
+                run.outer,
+                header,
+            );
             let after = unrolled_blocks(run, capacity, &body);
             simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
             analyzed = Analyzed::of(run);
@@ -1638,6 +1664,8 @@ impl FunctionPass for LoopFullUnroll {
             this: unit.id,
             tti: &*tti,
             function: unit.function,
+            outer: &outer,
+            declared: unit.declared,
             emptied: Vec::new(),
             peeled: Default::default(),
             options: Options {
@@ -1663,6 +1691,8 @@ pub fn unroll_function(
     let layout =
         DataLayout::parse(module.datalayout.as_deref().unwrap_or("e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128"))?;
     let callees = llrm_mir::memory::callees(module);
+    let outer = llrm_mir::passes::Outer::of(module, None);
+    let mut declared = llrm_mir::passes::Declared::default();
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
     let id = module
@@ -1683,6 +1713,8 @@ pub fn unroll_function(
         this: Some(id),
         tti,
         function,
+        outer: &outer,
+        declared: &mut declared,
         options,
         emptied: Vec::new(),
         peeled: Default::default(),

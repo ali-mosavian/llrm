@@ -100,6 +100,15 @@ impl Emitter<'_> {
         self.binary(BinaryOp::LShr, x, by)
     }
 
+    pub fn shift_right_arithmetic(
+        &mut self,
+        x: Operand,
+        by: u32,
+    ) -> Result<Operand, String> {
+        let by = self.constant(u128::from(by));
+        self.binary(BinaryOp::AShr, x, by)
+    }
+
     pub fn shift_left(
         &mut self,
         x: Operand,

@@ -484,11 +484,7 @@ impl ProgramAnalysis for ProgramSummaries {
             })
             .collect();
         let globals = (0..count)
-            .map(|at| {
-                globalsaa::found(&program.modules[at], &proxies[at], &elsewhere[at], &mut |id| {
-                    Rc::clone(&shapes[at][&id])
-                })
-            })
+            .map(|at| globalsaa::found(&program.modules[at], &proxies[at], &elsewhere[at]))
             .collect::<Result<Vec<_>, String>>()?;
         // A body defined elsewhere starts as a call no summary describes,
         // the most any call does: each round only narrows.
