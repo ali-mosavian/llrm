@@ -18,7 +18,7 @@ def load(name: str):
 
 def fake_llrm(path: Path, body: str) -> str:
     """A stand-in llrm-c: writes `body` to the -o file; a source containing FAIL makes it exit 1."""
-    path.write_text(f'#!/bin/bash\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ngrep -q FAIL "$a" && {{ echo "llrm-c: boom" >&2; exit 1; }}\necho {body} > "$o"\n')
+    path.write_text(f'#!/bin/bash\n# {'#' * 5000 * (1 + ord(body[0]) % 2)}\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ngrep -q FAIL "$a" && {{ echo "llrm-c: boom" >&2; exit 1; }}\necho {body} > "$o"\n')
     path.chmod(0o755)
     return str(path)
 
@@ -52,3 +52,17 @@ def test_the_stub_defines_strlen(tmp_path):
     subprocess.run(["gcc", "-m32", "-c", str(stub), "-o", str(tmp_path / "s.o")], check=True)
     symbols = subprocess.run(["nm", str(tmp_path / "s.o")], capture_output=True, text=True, check=True).stdout
     assert " T strlen" in symbols
+
+
+def test_a_pair_of_one_build_relinked_is_void(tmp_path):
+    """Two llrm-c built into one shared target dir differed by 83 path bytes; objsweep read 0 objects changed of two copies of one compiler."""
+    voidpair = load("voidpair")
+    base = bytes(range(256)) * 1024
+    a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
+    a.write_bytes(base)
+    b.write_bytes(base[:100] + b"x" * 83 + base[183:])
+    c.write_bytes(bytes(reversed(base)))
+    assert voidpair.void(str(a), str(b)).startswith("VOID PAIR")
+    assert voidpair.void(str(a), str(c)) == ""
+    done = subprocess.run([sys.executable, str(HERE / "objsweep.py"), str(a), str(b), "--src", str(tmp_path)], capture_output=True, text=True)
+    assert done.returncode == 2 and "VOID PAIR" in done.stdout

@@ -46,6 +46,12 @@ def main() -> int:
     parser.add_argument("--programs", default="", help="comma-separated names; default every .c in --src")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
     args = parser.parse_args()
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import voidpair
+
+    if why := voidpair.void(args.old, args.new):
+        print(why)
+        return 2
     sources = sorted(Path(args.src).glob("*.c"))
     if args.programs:
         keep = set(args.programs.split(","))
