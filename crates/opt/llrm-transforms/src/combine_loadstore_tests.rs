@@ -15,12 +15,13 @@ fn visit(
 ) -> Visit {
     match c.function.instruction(inst).opcode {
         Opcode::Store { .. } => c.visit_store(inst),
+        Opcode::Alloca { .. } => c.visit_alloca(inst),
         _ => Visit::None,
     }
 }
 
 /// `@f`'s body (between the braces' first block label and the end) after
-/// `visitStoreInst` alone, through the driver.
+/// `visitStoreInst` and `visitAllocaInst` alone, through the driver.
 fn combined(text: &str) -> String {
     let mut module = parsed(text);
     let globals = module.globals.clone();
@@ -182,4 +183,71 @@ b0:
 ",
     );
     assert_eq!(n, 1);
+}
+
+/// An alloca with a count of 4 stayed a count: it is `alloca [4 x i16]`.
+#[test]
+fn a_constant_count_is_an_array_type() {
+    let out = combined("define ptr @f() {\nb0:\n  %a = alloca i16, i32 4\n  ret ptr %a\n}\n");
+    assert!(out.contains("alloca [4 x i16]") && !out.contains("i32 4"), "{out}");
+}
+
+/// A count of 1 is no count.
+#[test]
+fn a_count_of_one_is_dropped() {
+    let out = combined("define ptr @f() {\nb0:\n  %a = alloca i16, i32 1\n  ret ptr %a\n}\n");
+    assert!(out.contains("alloca i16\n"), "{out}");
+}
+
+/// A count of `undef` makes the pointer poison.
+#[test]
+fn an_undef_count_is_a_poison_pointer() {
+    let out = combined("define ptr @f() {\nb0:\n  %a = alloca i16, i32 undef\n  ret ptr %a\n}\n");
+    assert!(out.contains("ret ptr poison"), "{out}");
+}
+
+/// A count not as wide as an index is widened where it is made, so the cast
+/// is seen early.
+#[test]
+fn a_narrow_count_is_widened_to_an_index() {
+    let out = combined("define ptr @f(i8 %n) {\nb0:\n  %a = alloca i16, i8 %n\n  ret ptr %a\n}\n");
+    assert!(out.contains("zext i8 %n to i64") && out.contains("alloca i16, i64"), "{out}");
+}
+
+/// A zero-size alloca in a later block goes to the top of the entry block.
+#[test]
+fn a_zero_size_alloca_moves_to_the_entry_block() {
+    let out = combined(
+        "define ptr @f(i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %z = alloca [0 x i16]
+  ret ptr %z
+
+b2:
+  ret ptr null
+}
+",
+    );
+    let (entry, rest) = out.split_once("b1:").expect("b1");
+    assert!(entry.contains("alloca [0 x i16]") && !rest.contains("alloca"), "{out}");
+}
+
+/// Two zero-size allocas are one, aligned for both.
+#[test]
+fn two_zero_size_allocas_merge_with_the_larger_alignment() {
+    let out = combined(
+        "define i1 @f() {
+b0:
+  %a = alloca [0 x i16], align 2
+  %b = alloca [0 x i32], align 8
+  %e = icmp eq ptr %a, %b
+  ret i1 %e
+}
+",
+    );
+    assert_eq!(out.matches("alloca").count(), 1, "{out}");
+    assert!(out.contains("align 8"), "{out}");
 }

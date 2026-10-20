@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_use.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_use.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_use.rs sha256:774a1fa44fc62133cca6882c99c20d218b496a13ea2796c7611733815824a08b -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_use.rs sha256:809b13699145578317e13cad03ece3d8d68ff88aa7c166c4b2535fed0cdab67f -->
 
 # lsr_use
 
@@ -21,7 +21,7 @@ formula `{%p,+,4}` costs one register and one recurrence (1 instruction).
 
 ## Runs
 Nothing runs it yet: stage 2 of the translation of LSR (the old pass in
-[`crate::lsr`](lsr.md) is gcc's ivopts and stays the default).
+[`crate::lsr_pass`](lsr_pass.md) is the pass that runs them).
 
 ## Limits
 DEVIATE: the target hooks have no access type or address space on the

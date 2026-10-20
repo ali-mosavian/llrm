@@ -1,3 +1,7 @@
+---
+architecture-index: Target facts in backend code: audit
+architecture-order: 530
+---
 # Target facts in backend code: audit
 
 Rule: a register, class, encoding, latency, size, alignment, calling convention or cost lives in

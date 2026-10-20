@@ -212,6 +212,11 @@ fn a_declaration_takes_the_attributes_intrinsics_td_gives_its_intrinsic() {
         "declare void @llvm.va_start.p0(ptr) nocallback nofree nosync nounwind willreturn\n"
     );
     assert_eq!(
+        print("declare void @llvm.va_end.p0(ptr)\ndeclare void @llvm.va_copy.p0.p0(ptr, ptr)\n"),
+        "declare void @llvm.va_end.p0(ptr) nocallback nofree nosync nounwind willreturn\n\n\
+         declare void @llvm.va_copy.p0.p0(ptr, ptr) nocallback nofree nosync nounwind willreturn\n"
+    );
+    assert_eq!(
         print("declare i64 @llvm.x86.sse42.crc32.64.64(i64, i64)\n"),
         "declare i64 @llvm.x86.sse42.crc32.64.64(i64, i64) nocallback nofree nosync nounwind willreturn memory(none)\n"
     );
@@ -338,6 +343,26 @@ b0:
         crate::memory::of(&module.context, &callees, function, calls[0]).writes,
         "it still writes what it can reach"
     );
+}
+
+/// Verifier.cpp: `llvm.bswap` takes whole 16-bit units; an `i8` or an `i24` is
+/// reported at the call, an `i16` is not.
+#[test]
+fn a_bswap_of_an_odd_number_of_bytes_is_reported() {
+    let problems = |bits: u32| {
+        crate::verify::verify(
+            &parse::module(&format!(
+                "declare i{bits} @llvm.bswap.i{bits}(i{bits})\n\
+                 define i{bits} @f(i{bits} %x) {{\nb0:\n  %r = call i{bits} @llvm.bswap.i{bits}(i{bits} %x)\n  ret i{bits} %r\n}}\n"
+            ))
+            .unwrap_or_else(|error| panic!("{error}")),
+        )
+    };
+    assert_eq!(problems(16), Vec::<String>::new());
+    for bits in [8, 24] {
+        let found = problems(bits);
+        assert!(found.iter().any(|one| one.contains("bswap must be an even number of bytes")), "i{bits}: {found:?}");
+    }
 }
 
 fn dominance_problems(text: &str) -> Vec<String> {
