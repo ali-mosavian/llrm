@@ -135,6 +135,7 @@ for ty in INTS:
         intr(f"llvm.{m}.with.overflow.{ty}", "{ " + ty + ", i1 }", [ty, ty])
     intr(f"llvm.ctpop.{ty}", ty, [ty]); intr(f"llvm.bswap.{ty}", ty, [ty]) if ty != "i8" else None
     intr(f"llvm.abs.{ty}", ty, [ty, "i1"])
+    intr(f"llvm.cttz.{ty}", ty, [ty, "i1"])
     intr(f"llvm.smul.fix.{ty}", ty, [ty, ty, "i32"])
     intr(f"llvm.fshl.{ty}", ty, [ty, ty, ty]); intr(f"llvm.fshr.{ty}", ty, [ty, ty, ty])
 for f, t in FLOATS:
@@ -156,6 +157,8 @@ for n, (name, ret, args) in enumerate(INTRINSICS):
     vals = {"i8": "%b", "i16": "%a", "i32": "%w", "i64": "%q", "double": "%d", "float": "%f", "i1": "false",
             "ptr": "%p", "ptr addrspace(1)": "%p1", "ptr addrspace(2)": "%p2"}
     cargs = ", ".join(f"{t} {vals[t]}" for t in args)
+    # SimplifyCFG's switch-of-powers-of-two prices `cttz(x, true)`.
+    if name.startswith("llvm.cttz."): cargs = f"{args[0]} {vals[args[0]]}, i1 true"
     if ".fix." in name: cargs = f"{args[0]} {vals[args[0]]}, {args[1]} {vals[args[1]]}, i32 3"
     body.append(f"  {'' if ret == 'void' else f'%v{n} = '}call {ret} @{name}({cargs})")
     decls.append(f"declare {ret} @{name}({', '.join(args)})")

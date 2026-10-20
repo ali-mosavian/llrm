@@ -33,15 +33,14 @@
 use llrm_mir::context::{Constant, ConstantKind, Context, signed};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, Operand};
-use llrm_mir::opcode::{Attribute, CallInfo, Flags, Opcode, Tail};
+use llrm_mir::opcode::{Attribute, Flags, Opcode};
 use llrm_mir::passes::Declared;
-use llrm_mir::types::Type;
 
 use crate::simplifycfg::Options;
 use crate::twoentryphi::Speculation;
 
 /// `isSwitchDense(NumCases, CaseRange, OptSize)`.
-fn is_dense(
+pub(crate) fn is_dense(
     cases: u64,
     range: u64,
     opt_size: bool,
@@ -145,20 +144,8 @@ pub fn folded(
         let amount = int(base as u128 & mask);
         sub = at(function, Opcode::Binary(llrm_mir::opcode::BinaryOp::Sub), vec![cond, amount]);
     }
-    let function_type = context.types.intern(Type::Function { returns: ty, parameters: vec![ty; 3], variadic: false });
-    let callee = declared.declare(&format!("llvm.fshl.i{width}"), function_type);
-    let pointer = context.types.ptr(0);
-    let callee = Operand::Constant(context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
-    let info = CallInfo {
-        function_type,
-        calling_convention: 0,
-        return_attrs: Vec::new(),
-        argument_attrs: vec![Vec::new(); 3],
-        attrs: Vec::new(),
-        tail: Tail::default(),
-    };
     let rotate = int(u128::from(width - shift));
-    let rot = at(function, Opcode::Call(Box::new(info)), vec![sub, sub, rotate, callee]);
+    let rot = crate::switchopt::intrinsic_call(context, declared, function, last, "fshl", ty, vec![sub, sub, rotate]);
 
     let mut now = operands;
     now[0] = rot;

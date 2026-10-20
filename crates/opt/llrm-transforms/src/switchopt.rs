@@ -33,10 +33,13 @@
 //! # Used by
 //! `simplifycfg::block_simplified`.
 
-use llrm_mir::context::Context;
-use llrm_mir::module::{BlockId, Function};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::context::{Constant, ConstantKind, Context};
+use llrm_mir::edit::Position;
+use llrm_mir::module::{BlockId, Function, InstId, Operand};
+use llrm_mir::opcode::{CallInfo, Flags, Opcode, Tail};
 use llrm_mir::passes::Declared;
+
+use llrm_mir::types::{Type, TypeId};
 
 use crate::simplifycfg::Options;
 use crate::twoentryphi::Speculation;
@@ -63,7 +66,40 @@ pub fn simplified(
         || (options.forward_switch_cond_to_phi && switchphi::folded(options, context, spec, function, block))
         || ((options.convert_switch_to_arithmetic || options.convert_switch_to_lookup_table)
             && switchlookup::folded(options, context, spec, function, block))
-        || switchpow2::folded(options, context, spec, function, block)
+        || switchpow2::folded(options, context, spec, declared, function, block)
         || switchreduce::folded(options, context, spec, declared, function, block)
         || switcharms::folded(options, context, spec, function, block)
+}
+
+/// `Builder.CreateIntrinsic(ty, ID, args)` before `at`: a call of
+/// `llvm.<base>.i<width of ty>` returning `ty`, declared in the module where
+/// it has none.
+pub(crate) fn intrinsic_call(
+    context: &Context,
+    declared: &mut Declared,
+    function: &mut Function,
+    at: InstId,
+    base: &str,
+    ty: TypeId,
+    args: Vec<Operand>,
+) -> Operand {
+    let parameters = args.iter().map(|&arg| function.operand_type(context, arg).expect("a value")).collect();
+    let function_type = context.types.intern(Type::Function { returns: ty, parameters, variadic: false });
+    let width = context.types.int_bits(ty).expect("an integer");
+    let callee = declared.declare(&format!("llvm.{base}.i{width}"), function_type);
+    let pointer = context.types.ptr(0);
+    let callee = Operand::Constant(context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
+    let info = CallInfo {
+        function_type,
+        calling_convention: 0,
+        return_attrs: Vec::new(),
+        argument_attrs: vec![Vec::new(); args.len()],
+        attrs: Vec::new(),
+        tail: Tail::default(),
+    };
+    let mut operands = args;
+    operands.push(callee);
+    let call = function.create_instruction(Opcode::Call(Box::new(info)), ty, operands, Flags::default(), None);
+    function.insert(call, Position::Before(at)).expect("a placed terminator");
+    Operand::Value(function.instruction(call).result.expect("a call's value"))
 }

@@ -15,6 +15,10 @@ nosse code-size llvm.ctpop.i16 17
 nosse code-size llvm.ctpop.i32 15
 nosse code-size llvm.ctpop.i64 30
 nosse code-size llvm.ctpop.i8 6
+nosse code-size llvm.cttz.i16 1
+nosse code-size llvm.cttz.i32 1
+nosse code-size llvm.cttz.i64 2
+nosse code-size llvm.cttz.i8 1
 nosse code-size llvm.exp2.f32 1
 nosse code-size llvm.exp2.f64 1
 nosse code-size llvm.fabs.f32 1
@@ -143,6 +147,10 @@ nosse latency llvm.ctpop.i16 8
 nosse latency llvm.ctpop.i32 7
 nosse latency llvm.ctpop.i64 14
 nosse latency llvm.ctpop.i8 6
+nosse latency llvm.cttz.i16 2
+nosse latency llvm.cttz.i32 2
+nosse latency llvm.cttz.i64 4
+nosse latency llvm.cttz.i8 2
 nosse latency llvm.exp2.f32 10
 nosse latency llvm.exp2.f64 10
 nosse latency llvm.fabs.f32 1
@@ -271,6 +279,10 @@ nosse size-latency llvm.ctpop.i16 17
 nosse size-latency llvm.ctpop.i32 15
 nosse size-latency llvm.ctpop.i64 30
 nosse size-latency llvm.ctpop.i8 6
+nosse size-latency llvm.cttz.i16 2
+nosse size-latency llvm.cttz.i32 2
+nosse size-latency llvm.cttz.i64 4
+nosse size-latency llvm.cttz.i8 2
 nosse size-latency llvm.exp2.f32 10
 nosse size-latency llvm.exp2.f64 10
 nosse size-latency llvm.fabs.f32 1
@@ -399,6 +411,10 @@ nosse throughput llvm.ctpop.i16 9
 nosse throughput llvm.ctpop.i32 8
 nosse throughput llvm.ctpop.i64 16
 nosse throughput llvm.ctpop.i8 7
+nosse throughput llvm.cttz.i16 2
+nosse throughput llvm.cttz.i32 1
+nosse throughput llvm.cttz.i64 2
+nosse throughput llvm.cttz.i8 2
 nosse throughput llvm.exp2.f32 10
 nosse throughput llvm.exp2.f64 10
 nosse throughput llvm.fabs.f32 1
@@ -527,6 +543,10 @@ sse2 code-size llvm.ctpop.i16 17
 sse2 code-size llvm.ctpop.i32 15
 sse2 code-size llvm.ctpop.i64 30
 sse2 code-size llvm.ctpop.i8 6
+sse2 code-size llvm.cttz.i16 1
+sse2 code-size llvm.cttz.i32 1
+sse2 code-size llvm.cttz.i64 2
+sse2 code-size llvm.cttz.i8 1
 sse2 code-size llvm.exp2.f32 1
 sse2 code-size llvm.exp2.f64 1
 sse2 code-size llvm.fabs.f32 2
@@ -655,6 +675,10 @@ sse2 latency llvm.ctpop.i16 8
 sse2 latency llvm.ctpop.i32 7
 sse2 latency llvm.ctpop.i64 14
 sse2 latency llvm.ctpop.i8 6
+sse2 latency llvm.cttz.i16 2
+sse2 latency llvm.cttz.i32 2
+sse2 latency llvm.cttz.i64 4
+sse2 latency llvm.cttz.i8 2
 sse2 latency llvm.exp2.f32 10
 sse2 latency llvm.exp2.f64 10
 sse2 latency llvm.fabs.f32 2
@@ -783,6 +807,10 @@ sse2 size-latency llvm.ctpop.i16 17
 sse2 size-latency llvm.ctpop.i32 15
 sse2 size-latency llvm.ctpop.i64 30
 sse2 size-latency llvm.ctpop.i8 6
+sse2 size-latency llvm.cttz.i16 2
+sse2 size-latency llvm.cttz.i32 2
+sse2 size-latency llvm.cttz.i64 4
+sse2 size-latency llvm.cttz.i8 2
 sse2 size-latency llvm.exp2.f32 10
 sse2 size-latency llvm.exp2.f64 10
 sse2 size-latency llvm.fabs.f32 2
@@ -911,6 +939,10 @@ sse2 throughput llvm.ctpop.i16 9
 sse2 throughput llvm.ctpop.i32 8
 sse2 throughput llvm.ctpop.i64 16
 sse2 throughput llvm.ctpop.i8 7
+sse2 throughput llvm.cttz.i16 2
+sse2 throughput llvm.cttz.i32 1
+sse2 throughput llvm.cttz.i64 2
+sse2 throughput llvm.cttz.i8 2
 sse2 throughput llvm.exp2.f32 10
 sse2 throughput llvm.exp2.f64 10
 sse2 throughput llvm.fabs.f32 2
