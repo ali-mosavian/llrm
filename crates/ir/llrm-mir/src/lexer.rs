@@ -129,6 +129,12 @@ pub fn lex(text: &str) -> Result<Vec<(Token, usize)>, ParseError> {
                 out.push((Token::Dots, line));
                 at += 3;
             }
+            // `+inf`, `-qnan`, `+nan(0x1)`: LLVM's special floating-point values.
+            b'+' | b'-' if special_float_at(text, at).is_some() => {
+                let (bits, next) = special_float_at(text, at).expect("checked by the guard");
+                out.push((Token::HexFloat(bits), line));
+                at = next;
+            }
             b'-' | b'0'..=b'9' => {
                 let (token, next) = number_at(text, at).map_err(|message| ParseError { line, message })?;
                 at = next;
@@ -240,6 +246,38 @@ fn string_at(
                 here += 1;
             }
         }
+    }
+}
+
+/// `[-+](inf|qnan|nan(0xP)|snan(0xP))` at `at` (LLParser's `LexFloatStr`), as a
+/// double's bits and the end of the token. `qnan` is a quiet NaN of payload
+/// zero; `snan(0xP)` has its quiet bit clear.
+///
+/// DEVIATE: a float or half read from this keeps the double's payload only as
+/// far as the conversion keeps it; LLVM re-makes a signalling NaN in the
+/// narrow type (`LLParser.cpp` convertValIDToValue).
+fn special_float_at(
+    text: &str,
+    at: usize,
+) -> Option<(u64, usize)> {
+    let bytes = text.as_bytes();
+    let sign = u64::from(bytes[at] == b'-') << 63;
+    let start = at + 1;
+    let end = scan(bytes, start, |b| b.is_ascii_alphabetic());
+    let word = &text[start..end];
+    const EXPONENT: u64 = 0x7ff0_0000_0000_0000;
+    const QUIET: u64 = 0x0008_0000_0000_0000;
+    match word {
+        "inf" => Some((sign | EXPONENT, end)),
+        "qnan" => Some((sign | EXPONENT | QUIET, end)),
+        "nan" | "snan" if bytes.get(end) == Some(&b'(') => {
+            let close = end + text[end..].find(')')?;
+            let payload = text[end + 1..close].strip_prefix("0x")?;
+            let payload = u64::from_str_radix(payload, 16).ok()? & (QUIET - 1);
+            let bits = if word == "nan" { EXPONENT | QUIET | payload } else { EXPONENT | payload.max(1) };
+            Some((sign | bits, close + 1))
+        }
+        _ => None,
     }
 }
 

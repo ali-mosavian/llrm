@@ -1,0 +1,138 @@
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::module::InstId;
+use llrm_mir::opcode::{BinaryOp, Opcode};
+
+use crate::combine::{Combiner, Visit, combine_with};
+use crate::testing::{parsed, printed};
+
+/// `visit` that does only `visitAnd` and `visitOr`.
+fn visit(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    match c.function.instruction(inst).opcode {
+        Opcode::Binary(BinaryOp::And) => crate::combine_and::visit_and(c, inst),
+        Opcode::Binary(BinaryOp::Or) => crate::combine_or::visit_or(c, inst),
+        _ => Visit::None,
+    }
+}
+
+/// `@f(params)` returning i1 after the `and`/`or` visits alone.
+fn combined(
+    params: &str,
+    body: &str,
+) -> String {
+    let mut module = parsed(&format!("define i1 @f({params}) {{\nb0:\n{body}  ret i1 %r\n}}\n"));
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    printed(&module)
+}
+
+/// `body` must come out with each of `wanted`, the shape pinned
+/// `opt -passes=instcombine` gives.
+fn check(
+    params: &str,
+    body: &str,
+    wanted: &[&str],
+) {
+    let out = combined(params, body);
+    for one in wanted {
+        assert!(out.contains(one), "`{one}` missing\n{out}");
+    }
+}
+
+const AB: &str = "i16 %a, i16 %b";
+
+/// stft: `(a < 0) | (b < 0)` stayed two compares and a combining `or`; the
+/// sign bit is the common mask of the two bit tests. The pin's `icmp` visit
+/// then turns `(x & signbit) != 0` into `x < 0` (`foldICmpAndConstant`, not yet
+/// translated), so the test stops at the masked form.
+#[test]
+fn two_sign_tests_ored_are_one_test_of_the_or() {
+    check(
+        AB,
+        "  %x = icmp slt i16 %a, 0\n  %y = icmp slt i16 %b, 0\n  %r = or i1 %x, %y\n",
+        &["or i16 %a, %b", "and i16 %", ", -32768", "icmp ne i16 %"],
+    );
+}
+
+#[test]
+fn two_non_negative_tests_anded_are_one_test_of_the_or() {
+    check(
+        AB,
+        "  %x = icmp sgt i16 %a, -1\n  %y = icmp sgt i16 %b, -1\n  %r = and i1 %x, %y\n",
+        &["or i16 %a, %b", "and i16 %", ", -32768", "icmp eq i16 %"],
+    );
+}
+
+#[test]
+fn two_zero_tests_anded_are_one_test_of_the_or() {
+    check(
+        AB,
+        "  %x = icmp eq i16 %a, 0\n  %y = icmp eq i16 %b, 0\n  %r = and i1 %x, %y\n",
+        &["or i16 %a, %b", "icmp eq i16 %", ", 0"],
+    );
+}
+
+#[test]
+fn two_all_ones_tests_ored_are_one_test_of_the_and() {
+    check(
+        AB,
+        "  %x = icmp ne i16 %a, -1\n  %y = icmp ne i16 %b, -1\n  %r = or i1 %x, %y\n",
+        &["and i16 %a, %b", "icmp ne i16 %", ", -1"],
+    );
+}
+
+#[test]
+fn masks_of_zero_tests_merge() {
+    check(
+        "i16 %a",
+        "  %m1 = and i16 %a, 3\n  %m2 = and i16 %a, 12\n  %x = icmp eq i16 %m1, 0\n  %y = icmp eq i16 %m2, 0\n  %r = and i1 %x, %y\n",
+        &["and i16 %a, 15", "icmp eq i16 %", ", 0"],
+    );
+}
+
+#[test]
+fn masks_of_all_ones_tests_merge() {
+    check(
+        "i16 %a",
+        "  %m1 = and i16 %a, 3\n  %m2 = and i16 %a, 12\n  %x = icmp eq i16 %m1, 3\n  %y = icmp eq i16 %m2, 12\n  %r = and i1 %x, %y\n",
+        &["and i16 %a, 15", "icmp eq i16 %", ", 15"],
+    );
+}
+
+/// `(A & 12) != 0 && (A & 7) == 1` is `(A & 15) == 9`.
+#[test]
+fn a_nonzero_test_and_a_mixed_test_merge() {
+    check(
+        "i16 %a",
+        "  %m1 = and i16 %a, 12\n  %m2 = and i16 %a, 7\n  %x = icmp ne i16 %m1, 0\n  %y = icmp eq i16 %m2, 1\n  %r = and i1 %x, %y\n",
+        &["and i16 %a, 15", "icmp eq i16 %", ", 9"],
+    );
+}
+
+#[test]
+fn contradicting_mask_tests_are_false() {
+    check(
+        "i16 %a",
+        "  %m1 = and i16 %a, 3\n  %m2 = and i16 %a, 7\n  %x = icmp ne i16 %m1, 0\n  %y = icmp eq i16 %m2, 0\n  %r = and i1 %x, %y\n",
+        &["ret i1 false"],
+    );
+}
+
+#[test]
+fn compare_codes_of_one_pair_merge() {
+    check(AB, "  %x = icmp slt i16 %a, %b\n  %y = icmp eq i16 %a, %b\n  %r = or i1 %x, %y\n", &["icmp sle i16 %a, %b"]);
+}
+
+/// `(X & Y) < 0 || (X | Y) > -1`: the sign bits are equal.
+#[test]
+fn a_naive_same_sign_test_is_an_xor() {
+    check(
+        AB,
+        "  %n = and i16 %a, %b\n  %o = or i16 %a, %b\n  %x = icmp slt i16 %n, 0\n  %y = icmp sgt i16 %o, -1\n  %r = or i1 %x, %y\n",
+        &["xor i16 %a, %b", "icmp sgt i16 %", ", -1"],
+    );
+}

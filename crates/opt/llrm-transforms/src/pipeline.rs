@@ -838,11 +838,15 @@ pub(crate) fn llvm_order(
             list.extend([
                 licm("licm@823", true),
                 // L832: hoistCommonInsts and sinkCommonInsts on, besides
-                // convertSwitchRangeToICmp and convertSwitchToArithmetic
-                // (read by `simplifySwitch`, untranslated).
+                // convertSwitchRangeToICmp and convertSwitchToArithmetic.
                 simplify_cfg_with(
                     "decide@832",
-                    simplifycfg::Options { hoist_common_insts: true, sink_common_insts: true, ..Default::default() },
+                    simplifycfg::Options {
+                        hoist_common_insts: true,
+                        sink_common_insts: true,
+                        convert_switch_to_arithmetic: true,
+                        ..Default::default()
+                    },
                 ),
                 combine("combine@837"),
                 fold("fold@837"),

@@ -149,6 +149,19 @@ fn test_multiple_edges_to_one_dedicated_exit_are_closed() {
     ));
 }
 
+/// qcport keybind: a switch with two cases to the exit got an exit phi with one
+/// input for its two edges, which the verifier refused.
+#[test]
+fn test_a_switch_with_two_cases_to_the_exit_gives_the_exit_phi_two_inputs() {
+    let text = LOOP_WITH_EXIT_USE.replace(
+        "  %stepped = add i16 %carried, 1\n  br label %b1",
+        "  %stepped = add i16 %carried, 1\n  switch i16 %stepped, label %b1 [\n    i16 5, label %b3\n    i16 9, label %b3\n  ]",
+    );
+    assert!(
+        closed_once(&text).contains("%carried.lcssa = phi i16 [ %carried, %b1 ], [ %carried, %b2 ], [ %carried, %b2 ]")
+    );
+}
+
 /// Not SSA in either MIR: `%stepped` does not reach the exit from `%b1`.
 #[test]
 fn test_exit_phi_cannot_read_a_value_missing_on_one_edge() {
