@@ -212,6 +212,18 @@ pub fn simplified_and_extended(
     outer: &Outer,
 ) -> bool {
     let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
+    simplified_and_extended_in(&mut session, context, layout, function, declared, outer)
+}
+
+/// [`simplified_and_extended`] over `session`, whose expressions are valid for `function`.
+pub fn simplified_and_extended_in(
+    session: &mut ScevSession,
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    outer: &Outer,
+) -> bool {
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let headers: Vec<BlockId> = {
         let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
@@ -236,9 +248,7 @@ pub fn simplified_and_extended(
             cx.loops
                 .get_loop_for(header)
                 .is_some_and(
-                    |found| found.get_loop_preheader(cx.function).is_some()
-                        && found.get_loop_latch(cx.function).is_some()
-                        && found.has_dedicated_exits(cx.function),
+                    |found| found.is_loop_simplify_form(cx.function),
                 )
         };
         if simple {

@@ -102,6 +102,7 @@
 //! LLVM `IndVarSimplify.cpp`. Tests: `indvars_tests.rs`.
 
 use llrm_analysis::cfg;
+use llrm_analysis::scev::analysis::ScevSession;
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 
 use crate::dead;
@@ -110,16 +111,30 @@ use crate::dead;
 /// computed from its trips (`exitvalues`), final updates sunk to
 /// the exits (`exitsink`). Which counters the loop keeps is `lsr`'s.
 pub struct IndVars {
-    /// Whether LFTR runs: on in the pipeline, `LLRM_NO_LFTR` turns it off.
+    /// Whether LFTR runs: on in the pipeline; `false` is `indvars<no-lftr>`.
     pub lftr: bool,
 }
 
-/// `LLRM_NO_LFTR`, read once: LFTR runs in the pipeline, as the pin's
-/// IndVarSimplify does. The exit test becomes `eq`/`ne` for the translated LSR
-/// to take against zero (it was opt-in while the old `lsr` could not reduce
-/// the counter LFTR leaves, D22).
-pub fn lftr_default() -> bool {
-    !llrm_support::env_flag!("LLRM_NO_LFTR")
+/// LFTR runs in the pipeline, as in the pin (`indvars<no-lftr>` is a pass
+/// parameter no pipeline sets). The exit test becomes `eq`/`ne` for the
+/// translated LSR to take against zero.
+pub const fn lftr_default() -> bool {
+    true
+}
+
+/// After a step: what its edits touched is dropped from the expressions.
+fn settled(
+    session: &mut ScevSession,
+    mark: &mut llrm_mir::module::Mark,
+    unit: &passes::Unit,
+    outer: &passes::Outer,
+    changed: bool,
+) -> bool {
+    if changed {
+        session.forget_since(unit.context, unit.layout, &outer.globals, &outer.metadata, unit.function, *mark);
+        *mark = unit.function.mark();
+    }
+    changed
 }
 
 impl FunctionPass for IndVars {
@@ -141,26 +156,67 @@ impl FunctionPass for IndVars {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        let compared = crate::simplifyindvar::simplified_and_extended(
+        // One session for the run, as LLVM holds one ScalarEvolution for the
+        // pass: a loop's trip count is worked out once, not once for each step.
+        // A step that changed the body drops the expressions its edits touched;
+        // the blocks and edges stay, so the tree and the loops do not.
+        let mut session = ScevSession::of(unit.context, unit.function, &outer);
+        let mut mark = unit.function.mark();
+        let compared = crate::simplifyindvar::simplified_and_extended_in(
+            &mut session,
             unit.context,
             unit.layout,
             unit.function,
             unit.declared,
             &outer,
         );
-        let rewrote = crate::exitvalues::enabled()
-            && crate::exitvalues::rewritten(unit.context, unit.layout, unit.function, unit.declared, &outer);
-        let merged = crate::congruentiv::enabled()
-            && crate::congruentiv::replaced(unit.context, unit.layout, unit.function, &outer);
-        let canonical = crate::canonexit::enabled()
-            && crate::canonexit::canonicalized(unit.context, unit.layout, unit.function, &outer);
-        let optimized = crate::exitopt::enabled()
-            && crate::exitopt::optimized(unit.context, unit.layout, unit.function, unit.declared, &outer);
-        let predicated = crate::exitpredicate::enabled()
-            && crate::exitpredicate::predicated(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        let compared = settled(&mut session, &mut mark, unit, &outer, compared);
+        let rewrote = crate::exitvalues::enabled() && {
+            let changed = crate::exitvalues::rewritten_in(
+                &mut session,
+                unit.context,
+                unit.layout,
+                unit.function,
+                unit.declared,
+                &outer,
+            );
+            settled(&mut session, &mut mark, unit, &outer, changed)
+        };
+        let merged = crate::congruentiv::enabled() && {
+            let changed =
+                crate::congruentiv::replaced_in(&mut session, unit.context, unit.layout, unit.function, &outer);
+            settled(&mut session, &mut mark, unit, &outer, changed)
+        };
+        let canonical = crate::canonexit::enabled() && {
+            let changed =
+                crate::canonexit::canonicalized_in(&mut session, unit.context, unit.layout, unit.function, &outer);
+            settled(&mut session, &mut mark, unit, &outer, changed)
+        };
+        let optimized = crate::exitopt::enabled() && {
+            let changed = crate::exitopt::optimized_in(
+                &mut session,
+                unit.context,
+                unit.layout,
+                unit.function,
+                unit.declared,
+                &outer,
+            );
+            settled(&mut session, &mut mark, unit, &outer, changed)
+        };
+        let predicated = crate::exitpredicate::enabled() && {
+            let changed = crate::exitpredicate::predicated_in(
+                &mut session,
+                unit.context,
+                unit.layout,
+                unit.function,
+                unit.declared,
+                &outer,
+            );
+            settled(&mut session, &mut mark, unit, &outer, changed)
+        };
         let tested = self.lftr
             && crate::lftr::enabled()
-            && crate::lftr::replaced(unit.context, unit.layout, unit.function, unit.declared, &outer);
+            && crate::lftr::replaced_in(&mut session, unit.context, unit.layout, unit.function, unit.declared, &outer);
         let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
         let loops = cfg::natural(unit.function, &found);
         let sunk = crate::exitsink::sunk(unit.function, &loops);

@@ -50,6 +50,17 @@
 //! - G4: no `TargetLibraryInfo`: a call to `free` is not recognised, so a
 //!   global passed to it is not tracked.
 //! - G5: `hasOptNone` is `noipa` (`llrm_mir::facts::opaque`).
+//! - G6: `escaping_among` (GlobalsAA's use) does not count a global named in an
+//!   initializer as escaped; GlobalsAA reads an initializer only through its
+//!   holder (`globalsaa::held`). QB's `REDIM` descriptor held every array's
+//!   address in a constant nothing read: deedlines +128 memory operands without
+//!   it
+//!   (test
+//!   `a_private_initializer_nothing_names_does_not_leak_the_address_it_holds`).
+//!   Exit: the pin's rule, once a rows pair shows no row worse.
+//! - G7: `llrm.ia16.window` and `llrm.ia16.restrict` return their operand's
+//!   bytes, so the scan follows the call's result as it follows a `gep`, as the
+//!   pin follows `threadlocal.address`.
 //! - G6: a declaration needs `nocallback` only, not `nosync` as well
 //!   (`MaySyncOrCallIntoModule`): MIR has no `nosync` and the targets no
 //!   threads.
@@ -69,7 +80,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::GlobalId;
 use llrm_mir::callgraph::CallGraph;
-use llrm_mir::context::{ConstantKind, Context};
+use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context};
 use llrm_mir::facts::Facts;
 use llrm_mir::module::{Function, GlobalKind, GlobalValue, InstId, Linkage, Module, Operand, ValueId};
 use llrm_mir::opcode::{CastOp, Opcode};
@@ -164,21 +175,64 @@ enum Root {
 /// Every instruction operand that names a global, and the globals some
 /// initializer names (a constant user: the global's address escapes).
 struct Sites {
+    /// An operand that is the global, or a constant `gep` or pointer cast of
+    /// it: the pin's scan recurses into those operators, so the use is the
+    /// instruction's.
     named: BTreeMap<GlobalId, Vec<(GlobalId, InstId, u32)>>,
     in_initializer: BTreeSet<GlobalId>,
+    /// Globals in any other constant operand (`ptrtoint`, an aggregate, a
+    /// `gep` index): a live constant user, so escaped.
+    in_operand: BTreeSet<GlobalId>,
+}
+
+/// The global `c` is, or is a constant `gep` or pointer cast of.
+fn derived_from(
+    context: &Context,
+    c: ConstantId,
+) -> Option<GlobalId> {
+    match &context.get(c).kind {
+        ConstantKind::Global(global) => Some(*global),
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => {
+            derived_from(context, *operands.first()?)
+        }
+        ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
+            derived_from(context, *value)
+        }
+        _ => None,
+    }
+}
+
+/// Every global named anywhere inside `c`.
+fn named_inside(
+    context: &Context,
+    c: ConstantId,
+    into: &mut BTreeSet<GlobalId>,
+) {
+    let mut work = vec![c];
+    while let Some(c) = work.pop() {
+        match &context.get(c).kind {
+            ConstantKind::Global(g) => {
+                into.insert(*g);
+            }
+            ConstantKind::Aggregate(members) => work.extend(members.iter().copied()),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => work.extend(operands.iter().copied()),
+            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => work.push(*value),
+            _ => {}
+        }
+    }
 }
 
 impl Sites {
     fn of(module: &Module) -> Self {
         let mut named: BTreeMap<GlobalId, Vec<(GlobalId, InstId, u32)>> = BTreeMap::new();
-        let mut in_initializer = BTreeSet::new();
+        let (mut in_initializer, mut in_operand) = (BTreeSet::new(), BTreeSet::new());
         for (id, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
             for (_, inst) in function.walk() {
                 for (at, operand) in function.instruction(inst).operands.iter().enumerate() {
-                    if let Operand::Constant(c) = operand
-                        && let ConstantKind::Global(global) = module.context.get(*c).kind
-                    {
-                        named.entry(global).or_default().push((id, inst, at as u32));
+                    let Operand::Constant(c) = operand else { continue };
+                    match derived_from(&module.context, *c) {
+                        Some(global) => named.entry(global).or_default().push((id, inst, at as u32)),
+                        None => named_inside(&module.context, *c, &mut in_operand),
                     }
                 }
             }
@@ -187,29 +241,19 @@ impl Sites {
             if let GlobalKind::Variable(variable) = &global.kind
                 && let Some(initializer) = variable.initializer
             {
-                let mut work = vec![initializer];
-                while let Some(c) = work.pop() {
-                    match &module.context.get(c).kind {
-                        ConstantKind::Global(g) => {
-                            in_initializer.insert(*g);
-                        }
-                        ConstantKind::Aggregate(members) => work.extend(members.iter().copied()),
-                        ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr { operands, .. }) => {
-                            work.extend(operands.iter().copied());
-                        }
-                        ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { value, .. }) => work.push(*value),
-                        _ => {}
-                    }
-                }
+                named_inside(&module.context, initializer, &mut in_initializer);
             }
         }
-        Self { named, in_initializer }
+        Self { named, in_initializer, in_operand }
     }
 }
 
 struct Analysis<'a> {
     module: &'a Module,
     sites: Sites,
+    /// A global in an initializer escapes (the pin's `isConstantUsed` rule).
+    /// GlobalsAA turns it off and reads initializers through their holders.
+    initializers_escape: bool,
 }
 
 impl Analysis<'_> {
@@ -239,7 +283,13 @@ impl Analysis<'_> {
         writers: &mut Option<&mut BTreeSet<GlobalId>>,
     ) -> bool {
         if let Root::Global(g) = root
+            && self.initializers_escape
             && self.sites.in_initializer.contains(&g)
+        {
+            return true;
+        }
+        if let Root::Global(g) = root
+            && self.sites.in_operand.contains(&g)
         {
             return true;
         }
@@ -276,6 +326,20 @@ impl Analysis<'_> {
                     }
                     let callee = llrm_mir::memory::callee(self.context(), function, inst);
                     let Some(callee) = callee else { return true };
+                    // What these return is the operand's bytes: followed as
+                    // the pin follows `threadlocal.address`.
+                    if at == 0
+                        && matches!(
+                            self.module.global(callee).name.as_deref().and_then(llrm_mir::intrinsics::Intrinsic::named),
+                            Some(llrm_mir::intrinsics::Intrinsic::Window | llrm_mir::intrinsics::Intrinsic::Restrict)
+                        )
+                    {
+                        let Some(result) = op.result else { return true };
+                        if self.escapes(Root::Value(f, result), readers, writers) {
+                            return true;
+                        }
+                        continue;
+                    }
                     let callee_function = self.module.global(callee).function();
                     let Some(callee_function) = callee_function.filter(|one| one.is_declaration()) else {
                         return true;
@@ -312,6 +376,18 @@ impl Analysis<'_> {
     }
 }
 
+/// The globals among `candidates` whose address escapes (`AnalyzeUsesOfPointer`
+/// at each, true meaning escaped): the use scan of `AnalyzeGlobals`, asked of
+/// any global and not only the internal ones, with one pass over the module's
+/// uses.
+pub fn escaping_among(
+    module: &Module,
+    candidates: &BTreeSet<GlobalId>,
+) -> BTreeSet<GlobalId> {
+    let analysis = Analysis { module, sites: Sites::of(module), initializers_escape: false };
+    candidates.iter().copied().filter(|&id| analysis.escapes(Root::Global(id), &mut None, &mut None)).collect()
+}
+
 /// `GlobalsAAResult::analyzeModule`.
 /// What a call to the declaration `function` does, from its attributes alone
 /// (the `F->isDeclaration()` arm of `AnalyzeCallGraph`); None where it may
@@ -342,7 +418,7 @@ fn declaration_info(function: &Function) -> Option<FunctionInfo> {
 }
 
 pub fn compute(module: &Module) -> GlobalsModRef {
-    let analysis = Analysis { module, sites: Sites::of(module) };
+    let analysis = Analysis { module, sites: Sites::of(module), initializers_escape: true };
     let mut result = GlobalsModRef::default();
     let mut tracked_functions: BTreeSet<GlobalId> = BTreeSet::new();
     let mut infos: BTreeMap<GlobalId, FunctionInfo> = BTreeMap::new();

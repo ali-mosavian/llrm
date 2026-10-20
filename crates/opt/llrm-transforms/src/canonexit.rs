@@ -52,6 +52,17 @@ pub fn canonicalized(
     outer: &Outer,
 ) -> bool {
     let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
+    canonicalized_in(&mut session, context, layout, function, outer)
+}
+
+/// [`canonicalized`] over `session`, whose expressions are valid for `function`.
+pub fn canonicalized_in(
+    session: &mut ScevSession,
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+) -> bool {
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let headers: Vec<BlockId> = {
         let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
@@ -66,9 +77,7 @@ pub fn canonicalized(
             let cx = env.cx(&*context, &*function);
             match cx.loops.get_loop_for(header) {
                 Some(found) => (
-                    found.get_loop_preheader(cx.function).is_some()
-                        && found.get_loop_latch(cx.function).is_some()
-                        && found.has_dedicated_exits(cx.function),
+                    found.is_loop_simplify_form(cx.function),
                     found.get_exiting_blocks(cx.function),
                 ),
                 None => continue,

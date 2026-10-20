@@ -92,7 +92,11 @@ impl FunctionPass for Combine {
         let changed =
             combine::combine(unit.context, &outer.globals, &outer.metadata, unit.layout, unit.function, unit.declared);
         last.instcombine.set(true);
-        if changed { PreservedAnalyses::none().preserve::<LastRunTracking>() } else { PreservedAnalyses::all() }
+        if changed {
+            PreservedAnalyses::none().preserve_cfg().preserve::<LastRunTracking>()
+        } else {
+            PreservedAnalyses::all()
+        }
     }
 }
 

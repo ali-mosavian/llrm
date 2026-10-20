@@ -1,7 +1,11 @@
+//! The expected text is the whole pass's result: the switch folds that landed
+//! after these were written (select, range) run on what the step under test
+//! leaves, as in the pin.
+
 //! Each body is MIR text run by llrm-mir's interpreter before and after.
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::passes::Outer;
+use llrm_mir::passes::{Declared, Outer};
 
 use crate::simplifycfg::simplified;
 use crate::testing::{parsed, printed, results};
@@ -18,8 +22,9 @@ fn check(
     let outer = Outer::of(&module, None);
     let layout = DataLayout::default();
     let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    assert_eq!(simplified(context, &spec, function), text != expected, "{text}");
+    assert_eq!(simplified(context, &spec, &mut declared, function), text != expected, "{text}");
     assert_eq!(printed(&module), expected);
     assert_eq!(results(&module, inputs), before);
 }
@@ -158,20 +163,12 @@ b2:
         "define i16 @f(i16 %x, i1 %y) {
 b0:
   %0 = freeze i1 %y
-  br i1 %0, label %common.ret, label %switch.early.test
-
-switch.early.test:
-  switch i16 %x, label %b2 [
-    i16 5, label %common.ret
-    i16 1, label %common.ret
-  ]
-
-common.ret:
-  %common.op = phi i16 [ 0, %b2 ], [ 1, %switch.early.test ], [ 1, %switch.early.test ], [ 1, %b0 ]
-  ret i16 %common.op
-
-b2:
-  br label %common.ret
+  %1 = sub i16 %x, 1
+  %2 = and i16 %1, -5
+  %3 = icmp eq i16 %2, 0
+  %4 = select i1 %3, i16 1, i16 0
+  %5 = select i1 %0, i16 1, i16 %4
+  ret i16 %5
 }
 ",
         &[&[0, 0], &[1, 0], &[5, 0], &[2, 1], &[2, 0]],
@@ -199,17 +196,11 @@ b2:
 ",
         "define i16 @f(i16 %x) {
 b0:
-  switch i16 %x, label %b2 [
-    i16 5, label %b1
-    i16 1, label %b1
-  ]
-
-b1:
-  %r = phi i16 [ 7, %b0 ], [ 3, %b2 ], [ 7, %b0 ]
-  ret i16 %r
-
-b2:
-  br label %b1
+  %0 = sub i16 %x, 1
+  %1 = and i16 %0, -5
+  %2 = icmp eq i16 %1, 0
+  %3 = select i1 %2, i16 7, i16 3
+  ret i16 %3
 }
 ",
         &[&[0], &[1], &[5], &[2]],

@@ -838,11 +838,15 @@ pub(crate) fn llvm_order(
             list.extend([
                 licm("licm@823", true),
                 // L832: hoistCommonInsts and sinkCommonInsts on, besides
-                // convertSwitchRangeToICmp and convertSwitchToArithmetic
-                // (read by `simplifySwitch`, untranslated).
+                // convertSwitchRangeToICmp and convertSwitchToArithmetic.
                 simplify_cfg_with(
                     "decide@832",
-                    simplifycfg::Options { hoist_common_insts: true, sink_common_insts: true, ..Default::default() },
+                    simplifycfg::Options {
+                        hoist_common_insts: true,
+                        sink_common_insts: true,
+                        convert_switch_to_arithmetic: true,
+                        ..Default::default()
+                    },
                 ),
                 combine("combine@837"),
                 fold("fold@837"),
@@ -990,7 +994,8 @@ pub fn recorded(
             // from ranges (`trunc nsw`, `zext nneg`, `add nuw nsw`), which the
             // first InstCombine reads. DEVIATE: what flows between bodies is
             // `ModuleIpo`'s (`ipa-args`, `ipa-range`), not the solver's.
-            // Exit: `ModuleIpo` runs the solver over the program.
+            // Exit: `ModuleIpo` runs the solver over the program (owner:
+            // funcattrs-port, the IPO analyses).
             manager.add(sccp::Sccp);
             // A program pass abandons it.
             manager.hold::<GlobalsAA>();

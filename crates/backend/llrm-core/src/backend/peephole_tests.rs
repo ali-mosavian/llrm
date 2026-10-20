@@ -3688,6 +3688,43 @@ fn test_unit_add_selects_inc_only_when_carry_is_dead() {
     assert_eq!(names(&increments(rules(), &live).insns())[0], "add");
 }
 
+/// The combiner's canonical `x - 1` is `add x, -1`: INC and DEC were chosen
+/// only for `sub x, 1`, so recmany and recfloat grew (`dec ecx` became `add
+/// edx, -1`, 3 bytes against 1). X86's patterns select DEC for `add x, -1` as
+/// well.
+#[test]
+fn test_add_of_minus_one_selects_dec_only_when_carry_is_dead() {
+    for width in [2, 4] {
+        let counter = rl(RegId::CX, width);
+        let add = Arc::new(insn(
+            1,
+            Some((1, 1)),
+            Some(sem(Operation::Binary, "add", vec![counter.clone()], vec![counter.clone(), im(-1, width)])),
+            vec![1],
+            vec![1],
+        ));
+        let compare = Arc::new(insn(
+            2,
+            Some((2, 2)),
+            Some(sem(Operation::Compare, "cmp", vec![], vec![counter, im(8, width)])),
+            vec![],
+            vec![1],
+        ));
+        let dead = body("counter", 1, vec![block(1, vec![Arc::clone(&add), compare], vec![]).into()]);
+        let branch = Arc::new(insn(
+            2,
+            Some((2, 2)),
+            Some(semt(Operation::Branch, "jb", vec![], vec![], Some(3))),
+            vec![],
+            vec![],
+        ));
+        let live = body("carry", 1, vec![block(1, vec![add, branch], vec![3]).into(), block(3, vec![], vec![]).into()]);
+
+        assert_eq!(names(&increments(rules(), &dead).insns())[0], "dec", "width {width}");
+        assert_eq!(names(&increments(rules(), &live).insns())[0], "add", "width {width}");
+    }
+}
+
 fn _pair(
     operation: Operation,
     name: &str,
