@@ -6385,7 +6385,7 @@ done:
 }
 ";
     let lines = listing(text, "f");
-    let borrow = lines.iter().position(|line| line.starts_with("sbb ") && line.ends_with(", ax") || line.starts_with("sbb ")).expect("the selector compare");
+    let borrow = lines.iter().rposition(|line| line.starts_with("sbb ")).expect("the selector compare");
     let before = &lines[..borrow];
     assert!(
         before.iter().rev().take(4).any(|line| line.starts_with("sub ") || line.starts_with("cmp ")),

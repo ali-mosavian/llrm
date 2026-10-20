@@ -588,6 +588,14 @@ impl Sinker {
         if !safe_to_move(&one, saw_store) {
             return false;
         }
+        // The flags it sets are read below it in its block (a `sub` and the
+        // `sbb` after it): moving it away leaves that reader with another's.
+        let writes_flags = liveness::effect(self.regs, self.bits, &one).is_none_or(|effect| {
+            effect.writes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+        });
+        if writes_flags && crate::backend::precse::flags_read_in(self.regs, self.bits, &self.insns[block][index + 1..]) {
+            return false;
+        }
         let mut break_phi_edge = false;
         let Some(sink_to) = self.find_succ_to_sink_to(&one, block, &mut break_phi_edge) else { return false };
         if self.size && !one.uses.is_empty() {
