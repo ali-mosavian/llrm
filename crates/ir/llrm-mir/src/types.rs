@@ -1,5 +1,8 @@
 //! Types, uniqued by the context as LLVM's are, so a type is a copyable id.
 
+use std::cell::RefCell;
+
+use crate::arena::Arena;
 use crate::hash::HashMap;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -87,37 +90,42 @@ pub struct StructBody {
 
 #[derive(Clone, Debug, Default)]
 pub struct Types {
-    types: Vec<Type>,
-    interned: HashMap<Type, TypeId>,
+    types: Arena<Type>,
+    interned: Box<RefCell<HashMap<Type, TypeId>>>,
     /// Identified structs in definition order.
     pub named: Vec<(String, Option<StructBody>)>,
 }
 
 impl Types {
+    /// LLVM's `IntegerType::get` and kin: `ty`, made on the first ask. The
+    /// table is borrowed for the lookup and again for the insert, never across
+    /// a call.
+    #[inline]
     pub fn intern(
-        &mut self,
+        &self,
         ty: Type,
     ) -> TypeId {
-        if let Some(&id) = self.interned.get(&ty) {
+        let found = self.interned.borrow().get(&ty).copied();
+        if let Some(id) = found {
             return id;
         }
-        let id = TypeId(self.types.len() as u32);
-        self.types.push(ty.clone());
-        self.interned.insert(ty, id);
+        let id = TypeId(self.types.push(ty.clone()) as u32);
+        self.interned.borrow_mut().insert(ty, id);
         id
     }
 
+    #[inline]
     pub fn get(
         &self,
         id: TypeId,
     ) -> &Type {
-        &self.types[id.0 as usize]
+        self.types.get(id.0 as usize)
     }
 
     /// `ty` of `from`, interned here: none for an identified struct, whose
     /// body is `from`'s own.
     pub fn imported(
-        &mut self,
+        &self,
         from: &Types,
         ty: TypeId,
     ) -> Option<TypeId> {
@@ -139,24 +147,25 @@ impl Types {
         Some(self.intern(one))
     }
 
-    pub fn void(&mut self) -> TypeId {
+    pub fn void(&self) -> TypeId {
         self.intern(Type::Void)
     }
 
     pub fn int(
-        &mut self,
+        &self,
         bits: u32,
     ) -> TypeId {
         self.intern(Type::Int(bits))
     }
 
     pub fn ptr(
-        &mut self,
+        &self,
         space: u32,
     ) -> TypeId {
         self.intern(Type::Pointer(space))
     }
 
+    #[inline]
     pub fn int_bits(
         &self,
         id: TypeId,
@@ -167,6 +176,7 @@ impl Types {
         }
     }
 
+    #[inline]
     pub fn is_void(
         &self,
         id: TypeId,

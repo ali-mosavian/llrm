@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/unroll.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unroll.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/unroll.rs sha256:0546c0beae0864cdd6a7390e84e449aea6974d70da4d4629d40152ece04f3433 -->
+<!-- src: crates/opt/llrm-transforms/src/unroll.rs sha256:052ed9110374887073fcba4ac2fc89ac34bca80d5665c130c990f5d514148dd0 -->
 
 # unroll
 
@@ -14,10 +14,10 @@ chain of single-successor blocks from the header to the latch with no
 phis; and every header phi has exactly the two arms, entry and latch.
 The body and latch may not call out (`calls_out`) or touch volatile memory.
 The header's work runs once more than the body, so it may not store, call
-or allocate. `induction::trip_count` must prove the count, and
-`peelsize::admitted` (in `llrm_analysis`) must price it as worth copying:
-the budgets, the hint a language may state, and the reasons it refuses are
-documented there.
+or allocate. ScalarEvolution (`getSmallConstantTripCount`) must prove the
+count, and `peelsize::admitted` (in `llrm_analysis`) must price it as worth
+copying: the budgets, the hint a language may state, and the reasons it
+refuses are documented there.
 
 The first trip is the original blocks. Each later trip is a clone of the
 header's work and of the body's, appended in the latch before its jump,

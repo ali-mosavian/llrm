@@ -17,13 +17,13 @@
 //!   a["<b>globalopt, ports, Stamp</b><br/><small>(module / program)</small>"]:::mid
 //!   subgraph g_body["PER BODY, REPEATED TO A FIXED POINT"]
 //!     s1["<b>sroa (+ splitcopy)</b><br/><small>at boundaries</small>"]:::mid
-//!     s2["<b>cleanup: fold decide dead</b><br/><small>algebraic phiopt dse gvn<br/>promote inferspace<br/>calls: tailrec<br/>loops: loopsimplify lcssa<br/>hoist loopmotion<br/>trivialunswitch indvars<br/>floatloop fill</small>"]:::mid
+//!     s2["<b>cleanup: fold decide dead</b><br/><small>algebraic dse gvn<br/>promote inferspace<br/>calls: tailrec<br/>loops: loopsimplify lcssa<br/>licm<br/>trivialunswitch indvars<br/>floatloop fill</small>"]:::mid
 //!     s3["<b>after each round: unroll</b>"]:::mid
 //!     s4["<b>after it settles: peel,</b><br/><small>unswitch, split, fuse, distribute, unroll-jam, merge</small>"]:::mid
 //!   end
 //!   ipa["<b>interprocedural: inline,</b><br/><small>ipacp, argpromotion,<br/>deadargs, narrowspace</small>"]:::mid
 //!   dce["<b>globaldce</b><br/><small>availableexternally<br/>calleepop</small>"]:::mid
-//!   ch["<b>copy headers (rotate,</b><br/><small>loopsimplify, lcssa, fold,<br/>algebraic, indvars, dead)<br/>fixednarrow lsr window<br/>rotate jumpthread hoist<br/>gepoffset addresssink<br/>spares homes</small>"]:::mid
+//!   ch["<b>copy headers (rotate,</b><br/><small>loopsimplify, lcssa, fold,<br/>algebraic, indvars, dead)<br/>fixednarrow lsr window<br/>rotate hoist<br/>gepoffset addresssink<br/>spares homes</small>"]:::mid
 //!   sel["selection"]:::note
 //!   a -->|"Fixed (per body)"| s1
 //!   s1 --> s2
@@ -46,15 +46,15 @@
 //! judges a rewrite tried on a copy of the body.
 //!
 //! Scalar and memory: `fold` (with `canonical` and `floatfold`), `decide`,
-//! `dead`, `algebraic`, `phiopt`, `cfg`, `dse`, `gvn` (with `loadjoins`),
-//! `promote` (`Sroa`, `Promote`, with `splitcopy`), `inferspace`, `jumpthread`,
+//! `dead`, `algebraic`, `cfg`, `dse`, `gvn`,
+//! `promote` (`Sroa`, `Promote`, with `splitcopy`), `inferspace`,
 //! `gepoffset`, `addresssink`, `fixednarrow`, `ports`.
 //!
 //! Loops: `loopsimplify`, `lcssa` (with `lcssamerges`), `hoist`, `loopmotion`,
 //! `trivialunswitch`, `unswitch`, `loopsplit`, `loopfuse`, `loopdistribute`
-//! (with `loopshape`), `indvars` (with `loopexit`, `exitfold`, `exitsink`),
+//! (with `loopshape`), `indvars` (with `exitvalues`, `exitsink`),
 //! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`, `unroll_jam`,
-//! `loopidioms`, `floatloop`, `tailrec`.
+//! `loopidioms`, `floatloop`, `tailcallelim`.
 //!
 //! Whole program: `globalopt`, `globaldce`, `availableexternally`, `inline`,
 //! `ipacp`, `argpromotion`, `deadargs`, `narrowspace`, `calleepop`; and
@@ -73,34 +73,90 @@
 //! `docs/reference/levels.md` for which pass runs at which level, and each
 //! module's own header.
 
+pub mod adce;
 pub mod addresssink;
 pub mod algebraic;
+pub mod alwaysundef;
 pub mod argpromotion;
 #[cfg(test)]
 mod argpromotion_tests;
 pub mod availableexternally;
 #[cfg(test)]
 mod availableexternally_tests;
+pub mod bdce;
+pub mod branchtocommon;
 pub mod calleepop;
 #[cfg(test)]
 mod calleepop_tests;
 pub mod candidate;
+pub mod canonexit;
 pub mod canonical;
 pub mod cfg;
+pub mod combine;
+pub mod combine_add_idioms;
+pub mod combine_and;
+pub mod combine_addsub;
+pub mod combine_build;
+pub mod combine_casts;
+#[cfg(test)]
+mod combine_casts_tests;
+pub mod combine_compares;
+pub mod combine_demanded;
+#[cfg(test)]
+mod combine_dispatch_tests;
+pub mod combine_gep;
+pub mod combine_gep_index;
+pub mod combine_gep_merge;
+pub mod combine_gep_phi;
+pub mod combine_loadstore;
+pub mod combine_muldivrem;
+#[cfg(test)]
+mod combine_muldivrem_tests;
+pub mod combine_negator;
+pub mod combine_pass;
+pub mod combine_phi;
+pub mod combine_select;
+pub mod combine_select_bools;
+pub mod combine_select_ext_const;
+pub mod combine_select_into_op;
+pub mod combine_select_op_op;
+pub mod combine_shared;
+pub mod combine_shifts;
+pub mod combine_sink;
+#[cfg(test)]
+mod combine_sink_tests;
+pub mod combine_sub;
+pub mod combine_visit_select;
+pub mod condstores;
+pub mod congruentiv;
+pub mod constraintelim;
+#[cfg(test)]
+mod constraintelim_tests;
 #[cfg(test)]
 mod corpus_tests;
 pub mod counting;
+pub mod cvp;
+#[cfg(test)]
+mod cvp_tests;
 pub mod dead;
 pub mod deadargs;
 #[cfg(test)]
 mod deadargs_tests;
+pub mod deadstore;
 pub mod decide;
+pub mod dfajumpthreading;
+#[cfg(test)]
+mod dfajumpthreading_tests;
 pub mod dse;
+pub mod earlycse;
 pub mod edges;
-pub mod exitfold;
+pub mod exitopt;
+pub mod exitpredicate;
 pub mod exitsink;
+pub mod exitvalues;
 pub mod expand;
 pub mod fixednarrow;
+pub mod float2int;
 pub mod floatfold;
 pub mod floatloop;
 pub mod fold;
@@ -110,8 +166,13 @@ pub mod globaldce;
 mod globaldce_tests;
 pub mod globalopt;
 pub mod gvn;
-pub mod hoist;
+#[cfg(test)]
+mod gvn_load_tests;
+#[cfg(test)]
+mod gvn_scalar_tests;
+pub mod hoistcommon;
 pub mod homes;
+pub mod icmpchain;
 pub mod indvars;
 pub mod inferspace;
 #[cfg(test)]
@@ -120,59 +181,123 @@ pub mod inline;
 pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;
+pub mod instsimplify;
+pub mod instworklist;
+#[cfg(test)]
+mod instworklist_tests;
 pub mod interprocedural;
 pub mod ipacp;
-pub mod jumpthread;
+pub mod ivusers;
+#[cfg(test)]
+mod ivusers_tests;
+pub mod jumpthreading;
+#[cfg(test)]
+mod jumpthreading_tests;
+pub mod knownpred;
 pub mod lcssa;
 pub mod lcssamerges;
-pub mod loadjoins;
+pub mod lftr;
+pub mod licm;
 pub mod local;
 #[cfg(test)]
 mod local_tests;
 pub mod loopclone;
+pub mod loopdeletion;
 pub mod loopdistribute;
-pub mod loopexit;
 pub mod loopfuse;
+pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;
-pub mod loopmotion;
 pub mod loopnest;
+pub mod looprotate;
 pub mod loopshape;
 pub mod loopsimplify;
 pub mod loopsplit;
+pub mod loopunroll;
+pub mod loopunrollpass;
 pub mod loopversion;
-pub mod lsr;
+pub mod lsr_chain;
+pub mod lsr_collect;
+#[cfg(test)]
+mod lsr_collect_tests;
+pub mod lsr_formula;
+#[cfg(test)]
+mod lsr_formula_tests;
+pub mod lsr_generate;
+#[cfg(test)]
+mod lsr_generate_tests;
+pub mod lsr_implement;
+pub mod lsr_narrow;
+pub mod lsr_pass;
+#[cfg(test)]
+mod lsr_pass_tests;
+pub mod lsr_prepare;
+pub mod lsr_solve;
+pub mod lsr_use;
+#[cfg(test)]
+mod lsr_use_tests;
 pub mod mem2reg;
 pub mod memcpyopt;
-pub mod mirror;
+pub mod memcpyoptimizer;
+pub mod mergestores;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
+pub mod parity;
+#[cfg(test)]
+mod parity_tests;
 pub mod peel;
-pub mod phiopt;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
 pub mod ports;
+pub mod predicateinfo;
 pub mod profit;
 pub mod promote;
+pub mod reassociate;
+pub mod reassociate_fneg;
+pub mod reassociate_forms;
+pub mod reassociate_fp;
+pub mod reassociate_inst;
+pub mod reassociate_negate;
+pub mod reassociate_optimize;
+pub mod reassociate_pairs;
+pub mod reassociate_rank;
+pub mod reassociate_tree;
 pub mod rotate;
+pub mod sccp;
+pub mod sccpsolver;
 pub mod settled;
-pub mod sink;
+pub mod simpleloopunswitch;
+pub mod simplifycfg;
+pub mod simplifyindvar;
+pub mod sinkcommon;
 pub mod spares;
+pub mod speculate;
 pub mod spill;
 pub mod splitcopy;
+pub mod sroa;
+pub mod switchcg;
 pub mod switchlower;
-pub mod tailrec;
+pub mod tailcallelim;
+pub mod tailmerge;
 #[cfg(test)]
 pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
+pub mod trunc_inst_combine;
+pub mod twoentryphi;
+pub mod uncondicmp;
+pub mod undefpred;
 pub mod unroll;
 pub mod unroll_jam;
-pub mod unswitch;
 pub mod versionalias;
 pub mod versionstride;
+pub mod vncoercion;
+#[cfg(test)]
+mod vncoercion_tests;
+pub mod walk;
+pub mod widen;
 pub mod window;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called

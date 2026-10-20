@@ -126,6 +126,7 @@ use llrm_analysis::manager::Held;
 use llrm_analysis::memory::{Identity, MemRef, ObjectRef, Provenance, Slice, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, regions, ssa};
+use llrm_mir::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::footprint::Footprint;
@@ -133,7 +134,6 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_mir::types::TypeId;
-use llrm_mir::{Constant, ConstantKind, Context};
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
 
@@ -387,10 +387,87 @@ fn run(
     }
 }
 
+/// The alloca nothing loads, deleted with its stores, as a pass of its own:
+/// LLVM's PromoteMemToReg and SROA leave none (`removeIntrinsicUsers`, and
+/// `deleteDeadInstructions` for a slot whose loads were all forwarded). It runs
+/// with the slots of `llvm_order` (`Options::llvm_order`).
+pub struct DeadSlots;
+
+impl FunctionPass for DeadSlots {
+    fn name(&self) -> &'static str {
+        "deadslots"
+    }
+
+    fn reads(&self) -> Footprint {
+        Footprint::MEMORY
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        if emptied_slots(unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
+
+/// Every alloca that nothing loads and whose address goes nowhere (only stores
+/// through it, and addresses derived by `gep` or a bitcast that are the same),
+/// erased with those stores and addresses; whether any was.
+pub fn emptied_slots(function: &mut Function) -> bool {
+    let allocas: Vec<(InstId, ValueId)> = function
+        .walk()
+        .filter_map(|(_, inst)| {
+            let op = function.instruction(inst);
+            matches!(op.opcode, Opcode::Alloca { .. }).then(|| op.result.map(|result| (inst, result))).flatten()
+        })
+        .collect();
+    let mut changed = false;
+    for (alloca, root) in allocas {
+        let mut erase: Vec<InstId> = Vec::new();
+        let mut pending = vec![root];
+        let mut dead = true;
+        'walk: while let Some(value) = pending.pop() {
+            for one in function.users(value) {
+                let user = function.instruction(one.user);
+                match &user.opcode {
+                    Opcode::Store { volatile: false, .. }
+                        if one.index == 1 && user.operands[0] != Operand::Value(value) =>
+                    {
+                        erase.push(one.user);
+                    }
+                    Opcode::GetElementPtr { .. } | Opcode::Cast(llrm_mir::opcode::CastOp::BitCast) | Opcode::Freeze
+                        if one.index == 0 =>
+                    {
+                        erase.push(one.user);
+                        pending.extend(user.result);
+                    }
+                    _ => {
+                        dead = false;
+                        break 'walk;
+                    }
+                }
+            }
+        }
+        if !dead {
+            continue;
+        }
+        // Stores first, then the addresses (a user before what it uses), then
+        // the alloca.
+        for inst in erase.into_iter().rev().chain([alloca]) {
+            if !function.is_erased(inst) {
+                function.erase(inst).expect("nothing reads it");
+            }
+        }
+        changed = true;
+    }
+    changed
+}
+
 /// `function` promoted, or with `aggregate_only` only its aggregates'
 /// leaves; `outer` is its module and target. Whether it changed.
 pub fn promoted(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -401,7 +478,7 @@ pub fn promoted(
 
 /// `promoted`, `analyses` holding what is known of `function`.
 fn _promoted(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
@@ -614,7 +691,11 @@ fn _available(
     let Some(entry) = function.entry().map(cfg::id) else { return HashSet::default() };
     let graph = cfg::graph(function);
     let dominance = cfg::Dominance::of(function);
-    let reachable = graph.iter().map(|block| block.at).filter(|&at| dominance.reachable(at)).collect::<BTreeSet<_>>();
+    let reachable = graph
+        .iter()
+        .map(|block| block.at)
+        .filter(|&at| dominance.reachable(unit.function, at))
+        .collect::<BTreeSet<_>>();
     let predecessors = loops::predecessors(&graph);
     let refs = cells
         .iter()
@@ -712,7 +793,7 @@ fn _available(
     };
 
     let through = |at: i64, mut available: Bits, mut reads: Option<&mut HashSet<InstId>>| {
-        for &inst in function.block(cfg::block(at)).instructions() {
+        for inst in function.iter_block(cfg::block(at)) {
             let instruction = function.instruction(inst);
             let store = matches!(instruction.opcode, Opcode::Store { .. });
             // A volatile access writes its own bytes: it orders, it does not
@@ -850,7 +931,7 @@ fn live_in(
     let mut reads = vec![llrm_support::bits::Bits::new(cells); blocks.len()];
     let mut kills = vec![llrm_support::bits::Bits::new(cells); blocks.len()];
     for (at, &block) in blocks.iter().enumerate() {
-        for &inst in function.block(block).instructions() {
+        for inst in function.iter_block(block) {
             if let Some(&slot) = plan.loads.get(&inst) {
                 if !kills[at].contains(slot) {
                     reads[at].insert(slot);
@@ -892,7 +973,7 @@ fn live_in(
 /// `function` with each planned load its cell's stored value: phis where
 /// the stores' dominance frontiers put them, named down the dominator tree.
 fn rewrite(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     plan: &Plan,
 ) {
@@ -906,10 +987,15 @@ fn rewrite(
         .filter(|one| one.opcode == Opcode::Phi)
         .filter_map(|one| one.result)
         .collect::<llrm_mir::dense::IdSet<ValueId>>();
+    // The entry value of a cell is `UndefValue` of its type.
     let poison = plan
         .types
         .iter()
-        .map(|&ty| Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison })))
+        .map(|&ty| {
+            Operand::Constant(
+                context.constant(llrm_mir::context::Constant { ty, kind: llrm_mir::context::ConstantKind::Undef }),
+            )
+        })
         .collect::<Vec<_>>();
 
     // Where each cell is live on entering a block: LLVM's PromoteMemToReg
@@ -943,7 +1029,7 @@ fn rewrite(
                 let from = edges(function, block);
                 let operands = from.iter().flat_map(|&one| [poison[slot], Operand::Block(one)]).collect();
                 let phi = function.create_instruction(Opcode::Phi, ty, operands, Flags::default(), None);
-                let first = function.block(block).instructions().first().copied();
+                let first = function.block(block).first();
                 function.insert(phi, first.map_or(Position::End(block), Position::Before)).expect("a placed block");
                 phis.insert((frontier, slot), (phi, from));
                 if let Some(named) = plan.variables.get(slot).copied().flatten() {
@@ -960,12 +1046,7 @@ fn rewrite(
     // from the top of the block on.
     for (block, phi, named) in named_phis {
         let value = function.instruction(phi).result.expect("a phi's value");
-        let first = function
-            .block(block)
-            .instructions()
-            .iter()
-            .copied()
-            .find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        let first = function.iter_block(block).find(|&one| function.instruction(one).opcode != Opcode::Phi);
         if let Some(first) = first {
             function.add_debug_record_first(first, named.variable, named.is(Operand::Value(value)));
         }
@@ -1013,7 +1094,7 @@ fn rewrite(
             undo.push((slot, current[slot]));
             current[slot] = Operand::Value(function.instruction(*phi).result.expect("a phi's value"));
         }
-        for inst in function.block(block).instructions().to_vec() {
+        for inst in function.iter_block(block).collect::<Vec<_>>() {
             if let Some(&slot) = plan.loads.get(&inst) {
                 function.replace_value(function.instruction(inst).result.expect("a load's value"), current[slot]);
                 dead.push(inst);
@@ -1022,8 +1103,7 @@ fn rewrite(
                 current[slot] = function.instruction(inst).operands[0];
                 // And the value it stores, from the instruction after it on.
                 if let Some(named) = plan.variables.get(slot).copied().flatten()
-                    && let Some(next) =
-                        function.block(block).instructions().iter().copied().skip_while(|&one| one != inst).nth(1)
+                    && let Some(next) = function.next_in_block(inst)
                 {
                     function.add_debug_record_first(next, named.variable, named.is(current[slot]));
                 }

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/framefree.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/framefree.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/framefree.rs sha256:f0bc04d7212ca809bfbe4da187603755209ab04b308f0ae53e5677ace543101f -->
+<!-- src: crates/backend/llrm-core/src/backend/framefree.rs sha256:b5062e9b145c5a2e989d98c578e6c92013648af842c3803d13d6b6e7aed2f1a1 -->
 
 # framefree
 
@@ -7,7 +7,12 @@ Decides, before allocation, whether a function can do without its frame
 register, which is then one more value register.
 
 ## How it works
-This is LLVM's `hasFP`. The frame register is free when `masm` can address
+`has_fp` is LLVM's `X86FrameLowering::hasFPImpl`: a function keeps its
+frame register when `MachineFrameInfo` says so, and `pinned_by` names which
+fact does (`Pinned`): the frame address is taken, there are variable
+sized objects, or the stack adjustment is opaque. The rest of the
+function's facts (`far`, inline code, a landing pad) are read by `has_fp`.
+The register is free when `masm` can address
 every frame cell through the stack pointer, which needs the stack depth at
 every instruction. The depth is computed here from the LIR before
 allocation, reading the same things `masm::stack_addressed` reads; spill

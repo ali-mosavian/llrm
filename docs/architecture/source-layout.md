@@ -1,3 +1,7 @@
+---
+architecture-index: source layout
+architecture-order: 20
+---
 # Source layout
 
 For contributors finding where something lives. Every top-level directory and
@@ -17,6 +21,7 @@ in [readme.md](readme.md).
 | Path | Holds |
 | --- | --- |
 | `support/llrm-alloc` | The compilers' global allocator (`Slab`): per-thread free lists by size class over mimalloc; the binaries declare it |
+| `support/llrm-env` | The one reading of an `LLRM_*` switch: off when unset, empty, `0`, `false` or `off` |
 | `support/llrm-support` | Helpers every crate shares: hashing, JSON and repr helpers, code pages, debug channels and diagnostics |
 | `ir/llrm-hir` | The common HIR: model, JSON codec, verifier, escape facts, emission to MIR, `hir-mir` |
 | `ir/llrm-mir` | MIR: types, text, verifier, interpreter, dominators, loops, pass manager. No dependencies |

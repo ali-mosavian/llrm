@@ -70,6 +70,9 @@ pub struct Options {
     /// `-fexcess-precision=standard` or `-ffloat-store`: a float conversion
     /// rounds to its type.
     pub float_store: bool,
+    /// `-mcode-segment=`: the segment every module's code is in, where it is
+    /// not its own `<MODULE>_TEXT`.
+    pub code_segment: Option<String>,
 }
 
 impl Options {
@@ -92,6 +95,7 @@ impl Options {
             debug_format: Default::default(),
             abi: None,
             float_store: false,
+            code_segment: None,
         }
     }
 
@@ -137,6 +141,7 @@ impl Options {
             self.pipeline.compares_routes(),
             self.pipeline.optimize,
             self.float_store,
+            self.pipeline.aggressive_codegen(),
         )
     }
 }
@@ -171,7 +176,7 @@ pub fn compiled(
             assemble::assembled_by(
                 module,
                 &abi,
-                &format!("{}_TEXT", hir.name.to_uppercase()),
+                &options.code_segment.clone().unwrap_or_else(|| format!("{}_TEXT", hir.name.to_uppercase())),
                 ProfileOrName::Profile(options.cpu()?),
                 &segments,
                 options.selection,
@@ -238,7 +243,7 @@ fn spill_model(program: &Program) {
                 .with_spaces(program.target.spaces())
                 .with_registers(&registers)
                 .with_shape(&shape);
-            let trips = profit::proven_trips(&unit, &registers);
+            let trips = profit::proven_trips(&unit);
             let Some(frequency) =
                 profit::_frequencies(&module.context, &module.metadata, &module.globals, function, Some(&trips))
             else {
@@ -303,9 +308,8 @@ pub fn emitted(
                 module.globals.iter().filter_map(|global| global.function()).filter(|one| !one.is_declaration())
             })
         };
-        let instructions: usize = bodies()
-            .map(|one| one.layout().iter().map(|&block| one.block(block).instructions().len()).sum::<usize>())
-            .sum();
+        let instructions: usize =
+            bodies().map(|one| one.layout().iter().map(|&block| one.block(block).len()).sum::<usize>()).sum();
         llrm_support::debug!("mir", "functions {} instructions {}", bodies().count(), instructions);
     }
     Ok((linked, data))
@@ -340,15 +344,49 @@ pub fn optimized(
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
     timed("mir ehprepare", || {
-        program.modules.iter_mut().try_for_each(|module| {
-            crate::backend::ehprepare::prepared(module, llrm_target::Target::layout(&*options.arch).spaces.far)
-        })
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(
+                |module| crate::backend::ehprepare::prepared(module, &llrm_target::Target::layout(&*options.arch)),
+            )
     })?;
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
+    timed("mir bit counts", || {
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(
+                |module| crate::backend::bitcounts::expanded(module, |operation| options.arch.expands(operation)),
+            )
+    })?;
+    timed("mir byte swaps", || {
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(|module| crate::backend::bytes::expanded(module, |operation| options.arch.expands(operation)))
+    })?;
+    timed("mir compares", || {
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(
+                |module| crate::backend::compares::expanded(module, |operation| options.arch.expands(operation)),
+            )
+    })?;
+    timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
     if options.arch.expands("select") {
-        timed("mir selects", || program.modules.iter_mut().try_for_each(crate::backend::selects::lowered))?;
+        let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
+        let pricing = crate::backend::selects::Pricing {
+            target: Some(program.target.clone()),
+            layout: &program.layout,
+            tti: &*tti,
+        };
+        timed("mir selects", || {
+            program.modules.iter_mut().try_for_each(|module| crate::backend::selects::lowered(module, &pricing))
+        })?;
     }
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {
         timed("mir spill model", || spill_model(program));

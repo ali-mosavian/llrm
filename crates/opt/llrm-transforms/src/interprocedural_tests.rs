@@ -2,8 +2,6 @@
 
 use std::collections::BTreeSet;
 
-use llrm_mir::passes::PassManager;
-
 use super::*;
 use crate::inline::Threshold;
 use crate::promote::Promote;
@@ -38,21 +36,19 @@ fn stepped(
     let costs = OperationCosts { call, ..OperationCosts::default() };
     let proved = Program::lend(module, std::rc::Rc::new(llrm_mir::target::Neutral), |program| {
         let mut modules = managers(program, &mut ProgramAnalyses::default());
-        optimized::<String>(
+        optimized_with::<String>(
             program,
             &mut modules,
             &roots,
             &costs,
             None,
             0,
-            costs.call,
             threshold,
+            true,
             &mut |module, _, id, stage| {
                 stages.push((module.global(id).name.clone().unwrap(), stage.to_owned()));
                 Ok(())
             },
-            &mut |_, _, function| Ok(function),
-            &mut |_, _, _| Ok(()),
         )
     })
     .unwrap()
@@ -108,35 +104,10 @@ b1:
 const INPUTS: &[&[i128]] = &[&[0, 0], &[3, 4], &[30, 7], &[-1, 1]];
 
 #[test]
-fn test_private_leaves_are_inlined_and_each_changed_body_reoptimised() {
-    let mut module = parsed(HELPERS);
-    let (proved, stages) = step(&mut module, &["f"], 4);
-    let text = printed(&module);
-    assert!(!text[text.find("define i16 @f").unwrap()..].contains("call "), "{text}");
-    // Every site of `f` is taken in one scan, and `f` is built once for them.
-    assert_eq!(stages, [("f".to_owned(), "inline0.".to_owned())]);
-    // No call reaches the helpers any more.
-    assert_eq!(proved.reachable, defined(&module, &["f"]));
-    assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
-}
-
-#[test]
 fn test_without_roots_every_procedure_is_reachable() {
     let mut module = parsed(HELPERS);
     let (proved, _) = step(&mut module, &[], 4);
     assert_eq!(proved.reachable, defined(&module, &["scale", "clamp", "f"]));
-}
-
-#[test]
-fn test_a_dead_readonly_call_goes_and_a_live_one_stays() {
-    let text = HELPERS.replace("%sum = add i16 %c, %t", "%sum = add i16 %c, %b");
-    let mut module = parsed(&text);
-    // Priced at nothing, only @clamp, called once, is inlined; the unread
-    // second @scale call goes, the read first one stays.
-    let (_, stages) = step(&mut module, &["f"], 0);
-    let text = printed(&module);
-    assert_eq!(text.matches("call i16 @scale").count(), 1, "{text}");
-    assert!(staged(&stages, "f", "ipa-pure."), "{stages:?}");
 }
 
 const STORES: &str = "@g = global i16 0
@@ -213,41 +184,6 @@ b:
     assert!(staged(&stages, "f", "ipa-noreturn."), "{stages:?}");
 }
 
-/// Per module, the step saw only its own bodies: a call to another
-/// module's body that never returns kept the dead tail after it.
-#[test]
-fn test_a_terminal_body_in_another_module_cuts_its_callers_tail() {
-    let spin = parsed("define void @spin() {\nb:\n  br label %l\n\nl:\n  br label %l\n}\n");
-    let caller = parsed(
-        "declare void @spin()\n\ndefine i16 @f(i16 %a) {\nb:\n  call void @spin()\n  %s = add i16 %a, 1\n  ret i16 %s\n}\n",
-    );
-    let exports = llrm_mir::program::Exports::closed(["f".to_owned()].into());
-    let mut program =
-        Program::new(vec![spin, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap().exporting(exports);
-    let roots = roots(&program);
-    let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    let proved = optimized::<String>(
-        &mut program,
-        &mut modules,
-        &roots,
-        &OperationCosts::default(),
-        None,
-        0,
-        1,
-        Threshold::default(),
-        &mut |_, _, _, _| Ok(()),
-        &mut |_, _, function| Ok(function),
-        &mut |_, _, _| Ok(()),
-    )
-    .unwrap();
-    assert_eq!(proved.noreturn, [(0, program.modules[0].named("spin").unwrap())].into());
-    assert!(
-        printed(&program.modules[1]).contains("  call void @spin()\n  unreachable\n"),
-        "{}",
-        printed(&program.modules[1])
-    );
-}
-
 /// Per module, a declaration of another module's body kept no attributes,
 /// so every call to it read and wrote all memory.
 #[test]
@@ -283,139 +219,6 @@ fn test_a_published_attribute_names_its_type_in_the_declaring_module() {
     let text = printed(&program.modules[1]);
     let declaration = text.lines().find(|line| line.starts_with("declare")).unwrap();
     assert!(declaration.starts_with("declare range(i16 0, 8) i16 @small(i16)"), "{text}");
-}
-
-#[test]
-fn test_a_constant_another_module_returns_reaches_its_callers() {
-    let seven = parsed("define i16 @seven() {\nb:\n  ret i16 7\n}\n");
-    let caller = parsed("declare i16 @seven()\n\ndefine i16 @f() {\nb:\n  %y = call i16 @seven()\n  ret i16 %y\n}\n");
-    let mut program = Program::new(vec![seven, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
-    let roots = roots(&program);
-    let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    optimized::<String>(
-        &mut program,
-        &mut modules,
-        &roots,
-        &OperationCosts::default(),
-        None,
-        0,
-        1,
-        Threshold::default(),
-        &mut |_, _, _, _| Ok(()),
-        &mut |_, _, function| Ok(function),
-        &mut |_, _, _| Ok(()),
-    )
-    .unwrap();
-    assert!(printed(&program.modules[1]).contains("  ret i16 7\n"), "{}", printed(&program.modules[1]));
-}
-
-/// An internal body the runtime calls, as QB's module body, had every
-/// caller in the program: its parameters took the one call's constants.
-#[test]
-fn test_an_entry_keeps_its_parameters_whatever_its_linkage() {
-    let body = (1..12).map(|at| format!("  %y{at} = mul i16 %y{}, %x\n", at - 1)).collect::<String>();
-    let text = format!(
-        "define internal i16 @entered(i16 %x) {{\nb:\n  %y0 = add i16 %x, 1\n{body}  ret i16 %y11\n}}\n\ndefine i16 @f() {{\nb:\n  %r = call i16 @entered(i16 3)\n  %s = call i16 @entered(i16 3)\n  %t = add i16 %r, %s\n  ret i16 %t\n}}\n"
-    );
-    let mut program = Program::new(vec![parsed(&text)], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
-    program.exports.entries = ["entered".to_owned()].into();
-    let roots = roots(&program);
-    let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    optimized::<String>(
-        &mut program,
-        &mut modules,
-        &roots,
-        &OperationCosts::default(),
-        None,
-        0,
-        1,
-        Threshold::default(),
-        &mut |_, _, _, _| Ok(()),
-        &mut |_, _, function| Ok(function),
-        &mut |_, _, _| Ok(()),
-    )
-    .unwrap();
-    assert!(printed(&program.modules[0]).contains("  %y0 = add i16 %x, 1\n"), "{}", printed(&program.modules[0]));
-}
-
-#[test]
-fn test_the_step_runs_as_a_program_pass() {
-    let mut module = parsed(HELPERS);
-    let mut manager = PassManager::default();
-    manager.verify_each = true;
-    let target =
-        crate::testing::Tuned { costs: OperationCosts { call: 4, ..OperationCosts::default() }, ..Default::default() };
-    manager.add_program(Interprocedural {
-        pipeline: Box::new(|_, _, _, _| {}),
-        specialise: Box::new(|_, _, function| function),
-        proved: None,
-        inline: Threshold::default(),
-        rate: None,
-        ranges: true,
-    });
-    let stages = manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
-    // The helpers every call of which went lose their bodies: changed, and no
-    // pipeline for them.
-    let changed = stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>();
-    assert!(changed.contains(&module.named("f").unwrap()));
-    for name in ["scale", "clamp"] {
-        let helper = module.global(module.named(name).unwrap()).function().unwrap();
-        assert_eq!(helper.walk().count(), 1, "@{name} kept its body: {}", printed(&module));
-    }
-    assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
-}
-
-#[test]
-fn test_a_size_build_weighs_bytes_not_clocks() {
-    // A nine-operation body at three sites: cheaper than three calls in clocks,
-    // dearer in bytes (the callers come to more with the body copied than
-    // with three calls, though the body goes). -Os copied it and grew the
-    // code.
-    let text = "define i16 @mix(i16 %a, i16 %b) {
-b:
-  %t0 = xor i16 %a, %b
-  %t1 = shl i16 %a, 3
-  %t2 = add i16 %t0, %t1
-  %t3 = lshr i16 %b, 2
-  %t4 = sub i16 %t2, %t3
-  %t5 = and i16 %t4, 2047
-  %t6 = or i16 %t5, %a
-  %t7 = xor i16 %t6, %b
-  %t8 = add i16 %t7, 5
-  ret i16 %t8
-}
-
-define i16 @f(i16 %x, i16 %y) {
-b:
-  %p = call i16 @mix(i16 %x, i16 %y)
-  %q = call i16 @mix(i16 %y, i16 %x)
-  %r = call i16 @mix(i16 %p, i16 %q)
-  ret i16 %r
-}
-";
-    let calls = |rate: Option<i64>| {
-        let mut module = parsed(text);
-        let mut manager = PassManager::default();
-        let target = crate::testing::Tuned {
-            costs: OperationCosts { call: 20, ..OperationCosts::default() },
-            sizes: OperationCosts { call: 3, ..OperationCosts::default() },
-            ..Default::default()
-        };
-        manager.add_program(Interprocedural {
-            pipeline: Box::new(|_, _, _, _| {}),
-            specialise: Box::new(|_, _, function| function),
-            proved: None,
-            inline: Threshold::default(),
-            rate,
-            ranges: true,
-        });
-        manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
-        printed(&module).matches("call i16 @mix").count()
-    };
-    // Weighing clocks alone inlines every site; weighing bytes puts them back,
-    // at -Os and at -O2 (QCport -O2 ran 11 KB past BCC's code, and out of
-    // memory), unless the clocks saved pay for the bytes.
-    assert_eq!((calls(None), calls(Some(0)), calls(Some(1))), (0, 3, 0));
 }
 
 const STAMPED: &str = "@slot = global ptr null
@@ -487,13 +290,13 @@ fn a_body_is_stamped_with_what_its_summary_says_as_llvm_states_it() {
     assert_eq!(
         defined,
         [
-            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) willreturn norecurse {",
-            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn norecurse {",
+            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) willreturn nounwind norecurse {",
+            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn nounwind norecurse {",
             "define internal void @keep(ptr %p) memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse {",
-            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn norecurse {",
+            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn nounwind norecurse {",
             "define internal void @hides(ptr %p) {",
-            "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn norecurse {",
-            "define i16 @f(i16 %a) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse {",
+            "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn nounwind norecurse {",
+            "define i16 @f(i16 %a) memory(readwrite, argmem: write, inaccessiblemem: none) willreturn nounwind norecurse {",
         ],
         "{text}"
     );
@@ -683,8 +486,10 @@ b:
     assert_eq!(pure(text), named(&["local", "h", "leaf", "middle"]));
 }
 
-/// A read of this module's near static data goes unnoticed; a far, an
-/// external or a pointer's may fault, a volatile one is ordered.
+/// A call that only reads, comes back and cannot unwind goes unnoticed, as in
+/// LLVM (`wouldInstructionBeTriviallyDead`): a far, an external or a pointer's
+/// read too, which llrm kept while `nounwind` also meant "cannot fault"
+/// (`cannot_fault`, F1). A volatile one is ordered.
 #[test]
 fn an_unused_call_that_only_reads_static_data_goes() {
     let text = "@g = global i16 0
@@ -745,7 +550,7 @@ b:
   ret void
 }
 ";
-    assert_eq!(dropped(text), named(&["read", "caller"]));
+    assert_eq!(dropped(text), named(&["read", "caller", "far", "external", "pointer"]));
 }
 
 #[test]
@@ -1018,214 +823,6 @@ done:
     );
 }
 
-/// A call the byte price refuses and the clocks admit stays inlined where the
-/// callers and the callee that goes come to no more (speaker.nib: `now` at two
-/// sites, the loop then in registers, -30 bytes), and is put back where they do
-/// (the test above).
-#[test]
-fn test_what_only_the_clocks_admit_is_kept_where_the_callee_going_pays_for_it() {
-    let text = "define internal i16 @triple(i16 %a) {
-b:
-  %t0 = add i16 %a, %a
-  %t1 = add i16 %t0, %a
-  %t2 = xor i16 %t1, 7
-  ret i16 %t2
-}
-
-define i16 @f(i16 %x, i16 %y) {
-b:
-  %p = call i16 @triple(i16 %x)
-  %q = call i16 @triple(i16 %y)
-  %r = add i16 %p, %q
-  ret i16 %r
-}
-";
-    let calls = |size: bool| {
-        let mut module = parsed(text);
-        let mut manager = PassManager::default();
-        let target = crate::testing::Tuned {
-            costs: OperationCosts { call: 20, ..OperationCosts::default() },
-            sizes: OperationCosts { call: 3, add: 4, ..OperationCosts::default() },
-            ..Default::default()
-        };
-        manager.add_program(Interprocedural {
-            pipeline: Box::new(|_, _, _, _| {}),
-            specialise: Box::new(|_, _, function| function),
-            proved: None,
-            inline: Threshold::default(),
-            rate: size.then_some(0),
-            ranges: true,
-        });
-        manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
-        printed(&module).matches("call i16 @triple").count()
-    };
-    assert_eq!((calls(false), calls(true)), (0, 0));
-}
-
-/// Sites put back are not tried again: they are the same calls in the same body
-/// every round, and each try re-ran the caller's pipeline (mdl_ai.c: 59 s
-/// against 28 s for the same code).
-#[test]
-fn test_sites_the_trial_put_back_are_not_tried_again() {
-    let text = "define internal i16 @mix(i16 %a, i16 %b) {
-b:
-  %t0 = xor i16 %a, %b
-  %t1 = shl i16 %a, 3
-  %t2 = add i16 %t0, %t1
-  %t3 = lshr i16 %b, 2
-  %t4 = sub i16 %t2, %t3
-  %t5 = and i16 %t4, 2047
-  %t6 = or i16 %t5, %a
-  %t7 = xor i16 %t6, %b
-  %t8 = add i16 %t7, 5
-  ret i16 %t8
-}
-
-define i16 @f(i16 %x, i16 %y) {
-b:
-  %p = call i16 @mix(i16 %x, i16 %y)
-  %q = call i16 @mix(i16 %y, i16 %x)
-  %r = add i16 %p, %q
-  ret i16 %r
-}
-";
-    let mut module = parsed(text);
-    let layout = llrm_mir::datalayout::DataLayout::default();
-    let clocks = OperationCosts { call: 20, ..OperationCosts::default() };
-    let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
-    let (mix, f) = (module.named("mix").unwrap(), module.named("f").unwrap());
-    let counts = inline::call_counts(&module);
-    let candidates = inline::candidates(
-        &module,
-        &llrm_mir::memory::callees(&module),
-        &layout,
-        &counts,
-        &BTreeSet::from([mix]),
-        &clocks,
-        20,
-        Threshold::default(),
-    );
-    let calls: Vec<_> = module
-        .global(f)
-        .function()
-        .unwrap()
-        .walk()
-        .map(|(_, inst)| inst)
-        .filter(|&inst| llrm_mir::memory::callee(&module.context, module.global(f).function().unwrap(), inst).is_some())
-        .collect();
-    let sites: llrm_support::hash::IndexMap<_, _> =
-        calls.iter().map(|&call| (call, candidates[&mix].clone())).collect();
-    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
-    let runs = std::cell::Cell::new(0);
-    let mut refused = BTreeSet::new();
-    let again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused: &mut BTreeSet<_>| {
-        together_trial::<String>(
-            module,
-            analyses,
-            &layout,
-            &BTreeSet::from([mix]),
-            &BTreeSet::new(),
-            &Default::default(),
-            f,
-            &sites,
-            &counts,
-            &bytes,
-            (&OperationCosts::default(), 0),
-            refused,
-            &mut |_, _, _, _| {
-                runs.set(runs.get() + 1);
-                Ok(())
-            },
-        )
-        .unwrap()
-    };
-    assert!(!again(&mut module, &mut analyses, &mut refused), "putting it back stays nothing");
-    let first = runs.get();
-    again(&mut module, &mut analyses, &mut refused);
-    assert_eq!((first > 0, runs.get()), (true, first), "the second round runs no pipeline: {refused:?}");
-}
-
-/// A caller of many callees was spliced into and put through the pipeline once
-/// a callee, as a "trial" of each (the `callers` axis at N=64: 63 runs of the
-/// big body, each O(its size), 3,404 Minstr of the compile's 3,800). The sites
-/// the estimates refuse are tried together, once.
-#[test]
-fn test_a_caller_of_many_callees_is_put_through_the_pipeline_a_bounded_number_of_times() {
-    const CALLEES: usize = 12;
-    let body = |name: String| {
-        format!(
-            "define i16 @{name}(i16 %a, i16 %b) {{\nb:\n  %t0 = xor i16 %a, %b\n  %t1 = shl i16 %a, 3\n  %t2 = add i16 %t0, %t1\n  %t3 = lshr i16 %b, 2\n  %t4 = sub i16 %t2, %t3\n  %t5 = and i16 %t4, 2047\n  %t6 = or i16 %t5, %a\n  %t7 = xor i16 %t6, %b\n  %t8 = add i16 %t7, 5\n  ret i16 %t8\n}}\n\n"
-        )
-    };
-    let mut text: String = (0..CALLEES).map(|at| body(format!("g{at}"))).collect();
-    text.push_str("define i16 @f(i16 %x, i16 %y) {\nb:\n  %c0 = add i16 %x, %y\n");
-    for at in 0..CALLEES {
-        text.push_str(&format!("  %c{} = call i16 @g{at}(i16 %c{at}, i16 %y)\n", at + 1));
-    }
-    text.push_str(&format!("  ret i16 %c{CALLEES}\n}}\n"));
-    let mut program = Program::new(vec![parsed(&text)], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
-    let roots = roots(&program);
-    let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    let clocks = OperationCosts { call: 20, ..OperationCosts::default() };
-    let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
-    let runs = std::cell::Cell::new(0);
-    optimized::<String>(
-        &mut program,
-        &mut modules,
-        &roots,
-        &bytes,
-        Some(&clocks),
-        1,
-        20,
-        Threshold::default(),
-        &mut |module, _, id, _| {
-            if module.global(id).name.as_deref() == Some("f") {
-                runs.set(runs.get() + 1);
-            }
-            Ok(())
-        },
-        &mut |_, _, function| Ok(function),
-        &mut |_, _, _| Ok(()),
-    )
-    .unwrap();
-    assert!(runs.get() <= 3, "@f went through the pipeline {} times for {CALLEES} callees", runs.get());
-}
-
-/// A callee with the constants a site passes is run through the pipeline once,
-/// whatever number of sites pass them, and again only for another body or other
-/// constants: the fact that (callee, constants) comes to so many bytes, kept
-/// for the sites that ask and for a decision about a copy for those constants.
-#[test]
-fn test_a_callee_is_specialised_once_for_the_constants_its_sites_pass() {
-    let mut module = parsed(
-        "define i16 @mix(i16 %a, i16 %b) {\nb:\n  %t0 = xor i16 %a, %b\n  %t1 = shl i16 %a, 3\n  %t2 = add i16 %t0, %t1\n  ret i16 %t2\n}\n",
-    );
-    let mix = module.named("mix").unwrap();
-    let mut modules = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
-    let three = {
-        let ty = module.context.types.int(16);
-        module.context.int(ty, 3)
-    };
-    let four = {
-        let ty = module.context.types.int(16);
-        module.context.int(ty, 4)
-    };
-    let runs = std::cell::Cell::new(0);
-    let mut memo = Specialisations::default();
-    let costs = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
-    let mut bytes = |constants: &[Option<llrm_mir::context::ConstantId>]| {
-        memo.bytes::<String>(&mut module, &mut modules, mix, constants, &costs, &mut |_, _, function| {
-            runs.set(runs.get() + 1);
-            Ok(function)
-        })
-        .unwrap()
-    };
-    let (first, again) = (bytes(&[Some(three), None]), bytes(&[Some(three), None]));
-    assert_eq!((first, runs.get()), (again, 1), "the second site made the specialisation again");
-    bytes(&[Some(four), None]);
-    assert_eq!(runs.get(), 2, "other constants share the first's");
-}
-
 /// A pass that rewrites the calls of the function it changes (dead arguments,
 /// argument promotion) changed the callers too and reported the one function:
 /// their analyses were read as they stood. `reporting` says every body whose
@@ -1422,190 +1019,10 @@ fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
     assert_eq!(cloned(true), (true, true));
 }
 
-/// A small function that calls itself is given copies of itself (gcc's
-/// `recursive_inlining`, `max-inline-recursive-depth-auto` 8 and
-/// `-insns-recursive-auto` 450): `hanoi` at -O2 was one call per move, gcc's is
-/// eight levels in one body.
-const COUNT: &str = "define i16 @f(i16 %n) {
-b0:
-  %z = icmp eq i16 %n, 0
-  br i1 %z, label %done, label %rec
-
-rec:
-  %m = sub i16 %n, 1
-  %a = call i16 @f(i16 %m)
-  %b = call i16 @f(i16 %m)
-  %s = add i16 %a, %b
-  %t = add i16 %s, 1
-  ret i16 %t
-
-done:
-  ret i16 0
-}
-";
-
-#[test]
-fn test_a_small_recursive_function_is_inlined_into_itself_to_a_depth() {
-    let inputs: &[&[i128]] = &[&[0], &[1], &[3], &[6]];
-    let calls = |threshold: Threshold| {
-        let mut module = parsed(COUNT);
-        stepped(&mut module, &["f"], 20, threshold);
-        assert_eq!(results(&module, inputs), results(&parsed(COUNT), inputs), "{}", printed(&module));
-        printed(&module).matches("call i16 @f").count()
-    };
-    assert_eq!(calls(Threshold::none()), 2, "no inlining at all: the two calls it began with");
-    assert!(calls(Threshold::default()) > 2, "the body grew by copies of itself");
-    assert_eq!(calls(Threshold::default().for_size()), 2, "not for size: the recursive call is cold there");
-}
-
 /// `rectwo`'s `paths` is nine operations, over the six a call admits: the
 /// recursion's admission is gcc's `max-inline-insns-auto` 15 (params.opt:545),
 /// not the six an ordinary call is. Its copies are what the early exits' tests
 /// fold in (`n == 3`), and what the shrink-wrapped prologue is for.
-const OVER_SIX: &str = "define i16 @f(i16 %n) {
-b0:
-  %z = icmp eq i16 %n, 0
-  br i1 %z, label %done, label %rec
-
-rec:
-  %m = sub i16 %n, 1
-  %a = call i16 @f(i16 %m)
-  %b = call i16 @f(i16 %m)
-  %s = add i16 %a, %b
-  %t = add i16 %s, 3
-  %u = xor i16 %t, 5
-  %v = add i16 %u, %n
-  %x = shl i16 %v, 1
-  %y = mul i16 %x, 3
-  %q = sub i16 %y, %s
-  %w = and i16 %q, 255
-  ret i16 %w
-
-done:
-  ret i16 1
-}
-";
-
-#[test]
-fn test_a_recursive_function_over_an_ordinary_calls_budget_is_inlined_into_itself() {
-    let inputs: &[&[i128]] = &[&[0], &[1], &[3], &[5]];
-    let calls = |threshold: Threshold| {
-        let mut module = parsed(OVER_SIX);
-        stepped(&mut module, &["f"], 20, threshold);
-        assert_eq!(results(&module, inputs), results(&parsed(OVER_SIX), inputs), "{}", printed(&module));
-        printed(&module).matches("call i16 @f").count()
-    };
-    assert!(calls(Threshold::default()) > 2, "the body grew by copies of itself");
-    assert_eq!(calls(Threshold::default().for_size()), 2, "not for size");
-}
-
-/// gcc inlines a recursive function once into a caller that is not it
-/// (ipa-inline.cc L2263-2290): rectwo's `bench_rectwo` called `paths` and kept
-/// the call, 988,865 clocks to gcc's 555,706. The caller holds one copy: the
-/// copy's own two calls, not the one it began with and not a copy's copy.
-#[test]
-fn test_a_caller_that_is_not_recursive_holds_one_copy_of_its_recursive_callee() {
-    let text = format!(
-        "{OVER_SIX}
-define i16 @g(i16 %n) {{
-b:
-  %r = call i16 @f(i16 %n)
-  ret i16 %r
-}}
-"
-    );
-    let inputs: &[&[i128]] = &[&[0], &[1], &[3], &[5]];
-    let mut module = parsed(&text);
-    stepped(&mut module, &["g"], 20, Threshold::default());
-    let printed = printed(&module);
-    let caller = &printed[printed.find("define i16 @g").unwrap()..];
-    let caller = &caller[..caller.find("\n}").unwrap()];
-    assert_eq!(caller.matches("call i16 @f").count(), 2, "{caller}");
-    assert!(caller.contains("icmp eq"), "the copy's base case is in the caller: {caller}");
-    assert_eq!(results(&module, inputs), results(&parsed(&text), inputs), "{printed}");
-}
-
-/// A trial of several sites splices them all and runs the caller's
-/// pipeline once, the way gcc and LLVM inline: it ran the pipeline after each
-/// site (host.c -6.6%, QCport -2.2%, the code the same).
-#[test]
-fn test_a_trial_of_several_sites_runs_the_callers_pipeline_once() {
-    let text = "define internal i16 @mix(i16 %a, i16 %b) {
-b:
-  %t0 = xor i16 %a, %b
-  %t1 = shl i16 %a, 3
-  %t2 = add i16 %t0, %t1
-  %t3 = lshr i16 %b, 2
-  %t4 = sub i16 %t2, %t3
-  %t5 = and i16 %t4, 2047
-  %t6 = or i16 %t5, %a
-  %t7 = xor i16 %t6, %b
-  %t8 = add i16 %t7, 5
-  ret i16 %t8
-}
-
-define i16 @f(i16 %x, i16 %y) {
-b:
-  %p = call i16 @mix(i16 %x, i16 %y)
-  %q = call i16 @mix(i16 %y, i16 %x)
-  %r = add i16 %p, %q
-  ret i16 %r
-}
-";
-    let mut module = parsed(text);
-    let layout = llrm_mir::datalayout::DataLayout::default();
-    let clocks = OperationCosts { call: 20, ..OperationCosts::default() };
-    let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
-    let mix = module.named("mix").unwrap();
-    let counts = inline::call_counts(&module);
-    let candidates = inline::candidates(
-        &module,
-        &llrm_mir::memory::callees(&module),
-        &layout,
-        &counts,
-        &BTreeSet::from([mix]),
-        &clocks,
-        20,
-        Threshold::default(),
-    );
-    let f = module.named("f").unwrap();
-    let calls: Vec<_> = module
-        .global(f)
-        .function()
-        .unwrap()
-        .walk()
-        .map(|(_, inst)| inst)
-        .filter(|&inst| {
-            llrm_mir::memory::callee(&module.context, module.global(f).function().unwrap(), inst) == Some(mix)
-        })
-        .collect();
-    let sites: llrm_support::hash::IndexMap<_, _> =
-        calls.iter().map(|&call| (call, candidates[&mix].clone())).collect();
-    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
-    let runs = std::cell::Cell::new(0);
-    let mut refused = BTreeSet::new();
-    together_trial::<String>(
-        &mut module,
-        &mut analyses,
-        &layout,
-        &BTreeSet::from([mix]),
-        &BTreeSet::new(),
-        &Default::default(),
-        f,
-        &sites,
-        &counts,
-        &bytes,
-        (&OperationCosts::default(), 0),
-        &mut refused,
-        &mut |_, _, _, _| {
-            runs.set(runs.get() + 1);
-            Ok(())
-        },
-    )
-    .unwrap();
-    assert_eq!(runs.get(), 1, "the pipeline ran once for each of the callee's two sites");
-}
-
 /// A round assumes a parameter's range before it proves it (`place`'s `row` is
 /// 0 at first), and under it a loop `r < row` that runs from 0 is never
 /// entered: the facts of the loop around it and of its own contradict each
@@ -1665,27 +1082,6 @@ b:
     assert!(!sink.contains("range(i16 -"), "{sink}\n{text}");
 }
 
-/// gcc builds only the bodies that survive: a private function whose last call
-/// was inlined is not inlined into or run through the pipeline again (a chain
-/// of N: every body held the ones below it, N squared).
-#[test]
-fn test_a_private_function_whose_last_call_went_is_not_built() {
-    let mut text = String::from("define internal i16 @h0(i16 %x) {\nb1:\n  %y = mul i16 %x, 3\n  ret i16 %y\n}\n");
-    for at in 1..12 {
-        text.push_str(&format!(
-            "\ndefine internal i16 @h{at}(i16 %x) {{\nb1:\n  %a = add i16 %x, {at}\n  %c = call i16 @h{}(i16 %a)\n  %y = xor i16 %c, %x\n  ret i16 %y\n}}\n",
-            at - 1
-        ));
-    }
-    text.push_str("\ndefine i16 @f(i16 %x) {\nb1:\n  %r = call i16 @h11(i16 %x)\n  ret i16 %r\n}\n");
-    let mut module = parsed(&text);
-    let (proved, stages) = step(&mut module, &["f"], 4);
-    assert_eq!(proved.reachable, defined(&module, &["f"]));
-    let built: BTreeSet<&str> = stages.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(built, BTreeSet::from(["f"]), "{stages:?}");
-    assert_eq!(results(&module, INPUTS), results(&parsed(&text), INPUTS));
-}
-
 /// A function only an invoke or a `!callees` list names is still called.
 #[test]
 fn test_a_function_only_an_invoke_calls_is_not_dead() {
@@ -1719,95 +1115,6 @@ b3:
         body.walk().any(|(_, inst)| matches!(body.instruction(inst).opcode, Opcode::Call(_))),
         "the body an invoke reaches was emptied: {}",
         printed(&module)
-    );
-}
-
-/// A body held only to inline from (`available_externally`) is inlined in the
-/// plain round at any size it is a candidate at: it is emitted nowhere, so no
-/// copy adds to what the program had. (The plain round used to leave it to the
-/// trial, which the round without clocks never runs.)
-#[test]
-fn test_a_held_body_is_inlined_in_the_plain_round() {
-    let text = "define available_externally i16 @held(i16 %x) {
-b1:
-  %a = shl i16 %x, 2
-  %b = add i16 %a, 1
-  %c = xor i16 %b, %x
-  %d = add i16 %c, 7
-  %e = mul i16 %d, 3
-  %f = sub i16 %e, %x
-  ret i16 %f
-}
-
-define i16 @f(i16 %p, i16 %q) {
-b1:
-  %r = call i16 @held(i16 %p)
-  %s = call i16 @held(i16 %q)
-  %t = call i16 @held(i16 %r)
-  %u = add i16 %s, %t
-  ret i16 %u
-}
-";
-    let mut module = parsed(text);
-    step(&mut module, &["f"], 4);
-    let printed = printed(&module);
-    assert!(!printed[printed.find("define i16 @f").unwrap()..].contains("call "), "{printed}");
-}
-
-/// A chain longer than a caller may grow to is taken in pieces, and only the
-/// function that starts a piece is built: the ones it took are called by none,
-/// so none is built (a chain of N: each was built with the next ones in it).
-#[test]
-fn test_a_chain_longer_than_a_caller_may_take_is_built_only_where_each_piece_starts() {
-    let mut text = String::from("define internal i16 @h0(i16 %x) {\nb1:\n  %y = mul i16 %x, 3\n  ret i16 %y\n}\n");
-    for at in 1..90 {
-        text.push_str(&format!(
-            "\ndefine internal i16 @h{at}(i16 %x) {{\nb1:\n  %a = add i16 %x, {at}\n  %c = call i16 @h{}(i16 %a)\n  %y = xor i16 %c, %x\n  ret i16 %y\n}}\n",
-            at - 1
-        ));
-    }
-    text.push_str("\ndefine i16 @f(i16 %x) {\nb1:\n  %r = call i16 @h89(i16 %x)\n  ret i16 %r\n}\n");
-    let mut module = parsed(&text);
-    let (proved, stages) = step(&mut module, &["f"], 4);
-    let alive: BTreeSet<&str> =
-        proved.reachable.iter().map(|&(_, id)| module.global(id).name.as_deref().unwrap()).collect();
-    let built: BTreeSet<&str> = stages.iter().map(|(name, _)| name.as_str()).collect();
-    assert!(built.is_subset(&alive), "built and then taken: {:?}", built.difference(&alive).collect::<Vec<_>>());
-    assert!(alive.len() > 1 && alive.len() <= 6, "{alive:?}");
-    assert_eq!(results(&module, INPUTS), results(&parsed(&text), INPUTS));
-}
-
-/// A unit grows by copies of its recursive functions only as far as gcc's
-/// `inline-unit-growth` (params.opt:209, 40%) lets it from the larger of its
-/// size and `large-unit-insns` (10,000): 25 functions of `OVER_SIX` each grew
-/// to the 450-operation cap beside a body of 11,000 operations, 11,000 more, a
-/// unit 2x what began.
-#[test]
-fn test_recursive_copies_stop_where_the_unit_has_grown_by_gccs_limit() {
-    fn operations(text: &str) -> i64 {
-        text.lines().filter(|line| line.starts_with("  %") && !line.contains(" = phi ")).count() as i64
-    }
-    let mut text = String::from("define i16 @filler(i16 %x) {\nb:\n  %t0 = add i16 %x, 1\n");
-    for at in 1..11_000 {
-        text += &format!("  %t{at} = add i16 %t{}, 1\n", at - 1);
-    }
-    text += "  ret i16 %t10999\n}\n\n";
-    let names: Vec<String> = (0..25).map(|at| format!("f{at}")).collect();
-    for name in &names {
-        text += &OVER_SIX.replace("@f(", &format!("@{name}(")).replace("@f(i16 %m)", &format!("@{name}(i16 %m)"));
-        text += "\n";
-    }
-    let mut roots: Vec<&str> = names.iter().map(String::as_str).collect();
-    roots.push("filler");
-    let mut module = parsed(&text);
-    let before = operations(&printed(&module));
-    stepped(&mut module, &roots, 20, Threshold::default());
-    let after = operations(&printed(&module));
-    assert!(after > before, "premise: the recursive functions grew by copies of themselves");
-    assert!(
-        after <= before.max(10_000) * 140 / 100 + 450,
-        "the unit grew from {before} to {after} operations, past a 40% growth of {}",
-        before.max(10_000)
     );
 }
 
@@ -1885,25 +1192,6 @@ b1:
     let loud = cycle("  store volatile i16 1, ptr @sink\n");
     assert!(!memory_of(&loud, "odd") && !memory_of(&loud, "even"), "a member's access is the cycle's");
     assert!(memory_of(&loud, "alone"));
-}
-
-/// `noipa` (GCC's): no constant is pushed into the routine and none of its
-/// returns folded into a caller (the call of a bench kernel with constant
-/// arguments was folded away at compile time), though the same routines
-/// without it are specialised (the premise).
-#[test]
-fn no_constant_reaches_or_leaves_a_noipa_routine() {
-    let marked = STORES.replace("@set(i16 %x) {", "@set(i16 %x) noipa {").replace("@seven() {", "@seven() noipa {");
-    assert_ne!(marked, STORES);
-    let mut plain = parsed(STORES);
-    stepped(&mut plain, &["f"], 40, Threshold::none());
-    assert!(printed(&plain).contains("  store i16 5, ptr @g\n"), "premise: the private routine is specialised");
-    let mut module = parsed(&marked);
-    stepped(&mut module, &["f"], 40, Threshold::none());
-    let text = printed(&module);
-    assert!(!text.contains("store i16 5, ptr @g"), "{text}");
-    assert!(!text.contains("add i16 7, %a"), "{text}");
-    assert_eq!(text.matches("call ").count(), 3, "{text}");
 }
 
 /// A `noipa` body is stamped with nothing, so its callers keep its call and

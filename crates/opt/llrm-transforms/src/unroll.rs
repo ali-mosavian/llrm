@@ -9,10 +9,10 @@
 //! phis; and every header phi has exactly the two arms, entry and latch.
 //! The body and latch may not call out (`calls_out`) or touch volatile memory.
 //! The header's work runs once more than the body, so it may not store, call
-//! or allocate. `induction::trip_count` must prove the count, and
-//! `peelsize::admitted` (in `llrm_analysis`) must price it as worth copying:
-//! the budgets, the hint a language may state, and the reasons it refuses are
-//! documented there.
+//! or allocate. ScalarEvolution (`getSmallConstantTripCount`) must prove the
+//! count, and `peelsize::admitted` (in `llrm_analysis`) must price it as worth
+//! copying: the budgets, the hint a language may state, and the reasons it
+//! refuses are documented there.
 //!
 //! The first trip is the original blocks. Each later trip is a clone of the
 //! header's work and of the body's, appended in the latch before its jump,
@@ -162,7 +162,8 @@ use llrm_analysis::graph::loops::{self, Loop};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::peelsize::{self, Limits};
-use llrm_analysis::{cfg, induction, memory};
+use llrm_analysis::scev::analysis::ScevSession;
+use llrm_analysis::{cfg, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -267,6 +268,8 @@ pub fn expanded(
     let mut found = None;
     let found_shape = cfg::Shape::of(function);
     let frequencies = profit::Frequencies::default();
+    let mut scevs = (!found_shape.loops.is_empty())
+        .then(|| ScevSession::within(context, &analyses.outer().globals, &analyses.outer().metadata, function));
     for loop_ in found_shape.loops.clone() {
         let unit = memory::Unit::within(context, layout, function, analyses.outer())
             .with_registers(&facts)
@@ -274,13 +277,14 @@ pub fn expanded(
         let Some(shape) = _shape(&unit, &graph, &loop_) else {
             continue;
         };
-        let Some(count) = induction::trip_count(&unit, &loop_, &facts) else {
+        let counted = scevs.as_mut().and_then(|session| profit::scev_trips(session, &unit, &loop_)).map(BigInt::from);
+        let Some(count) = counted else {
             continue;
         };
         let name = (
             loop_.header,
             loop_.body.iter().copied().collect::<Vec<_>>(),
-            loop_.body.iter().map(|&block| function.block(cfg::block(block)).instructions().len()).sum::<usize>(),
+            loop_.body.iter().map(|&block| function.block(cfg::block(block)).len()).sum::<usize>(),
         );
         if count < BigInt::from(2) || refused.contains(&name) {
             continue;
@@ -314,13 +318,7 @@ fn _phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-        .collect()
+    function.iter_block(block).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
 }
 
 /// A block's instructions, its phis and terminator aside.
@@ -504,7 +502,7 @@ fn _expanded(
     let header_values =
         header_phis.iter().chain(&header_work).filter_map(|&inst| value(function, inst)).collect::<Vec<_>>();
     for &defined in &header_values {
-        for one in function.users(defined).to_vec() {
+        for one in function.users(defined).snapshot() {
             let outside = function.parent(one.user).is_some_and(|block| !body.contains(&cfg::id(block)));
             if outside {
                 function.set_operand(one.user, one.index as usize, _provided(Operand::Value(defined), &swap));

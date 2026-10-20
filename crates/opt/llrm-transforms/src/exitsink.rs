@@ -62,7 +62,7 @@
 //! Blocks and edges are unchanged; dominators and loops are preserved.
 //!
 //! # See also
-//! [`crate::exitfold`], [`crate::lcssa`]; LLVM LICM `sinkRegion`.
+//! [`crate::lcssa`]; LLVM LICM `sinkRegion`.
 
 use llrm_analysis::cfg;
 use llrm_analysis::graph::loops::Loop;
@@ -161,12 +161,8 @@ fn _sink(
     let instruction = function.instruction(op);
     let moved =
         function.create_instruction(instruction.opcode.clone(), instruction.ty, operands, instruction.flags, None);
-    let first = *function
-        .block(exit)
-        .instructions()
-        .iter()
-        .find(|&&one| function.instruction(one).opcode != Opcode::Phi)
-        .expect("a terminator");
+    let first =
+        function.iter_block(exit).find(|&one| function.instruction(one).opcode != Opcode::Phi).expect("a terminator");
     function.insert(moved, Position::Before(first)).expect("a placed block");
     let result = function.instruction(phi).result.expect("a phi's value");
     function.replace_all_uses_with(result, Operand::Value(function.instruction(moved).result.expect("a value")));

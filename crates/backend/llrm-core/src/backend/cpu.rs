@@ -112,6 +112,8 @@ pub struct Profile {
     pub ports: llrm_target::PortTable,
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
+    /// `getPrefLoopAlignment` as a power of two; 0: loops are not aligned.
+    pub loop_alignment: u8,
     pub call_register_capacity: i64,
     /// The floating values it holds in registers at once.
     pub float_register_capacity: i64,
@@ -145,6 +147,9 @@ pub struct Profile {
     /// and clang's nothing is improved after selection and allocation
     /// (`flow::machine_with`).
     pub optimized: bool,
+    /// `CodeGenOptLevel::Aggressive` (-O3): tail duplication in placement
+    /// copies blocks of four instructions, not two.
+    pub aggressive: bool,
     /// `-fexcess-precision=standard` (`-ffloat-store`): a float conversion
     /// rounds to its type, where otherwise x87 keeps the wider value in its
     /// register, as gcc's `-fexcess-precision=fast` does.
@@ -279,6 +284,7 @@ impl Profile {
             foreign: arch.flat_foreign(),
             ports: arch.flat_ports(),
             operand_bytes: arch.operand_bytes(),
+            loop_alignment: arch.pref_loop_alignment(),
             call_register_capacity: arch.callee_saved().len() as i64,
             float_register_capacity: arch.float_stack() as i64,
             address_scales: BTreeSet::from([1]),
@@ -294,6 +300,7 @@ impl Profile {
             search: true,
             routes: true,
             optimized: true,
+            aggressive: false,
             float_store: false,
             exhaustive: false,
             model: arch.cost_model(),
@@ -422,7 +429,10 @@ fn _profile(
 /// passes hold them.
 static _MADE: LazyLock<
     std::sync::Mutex<
-        crate::support::hash::HashMap<(&'static str, String, bool, bool, bool, bool, bool, bool), &'static Profile>,
+        crate::support::hash::HashMap<
+            (&'static str, String, bool, bool, bool, bool, bool, bool, bool),
+            &'static Profile,
+        >,
     >,
 > = LazyLock::new(Default::default);
 
@@ -477,7 +487,7 @@ pub fn tuned_routing(
     exhaustive: bool,
     routes: bool,
 ) -> Result<&'static Profile, String> {
-    tuned_optimizing(arch, name, size, search, exhaustive, routes, true, false)
+    tuned_optimizing(arch, name, size, search, exhaustive, routes, true, false, false)
 }
 
 /// `tuned_routing`, the backend's optional phases left out where not
@@ -491,12 +501,13 @@ pub fn tuned_optimizing(
     routes: bool,
     optimized: bool,
     float_store: bool,
+    aggressive: bool,
 ) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
     }
     let mut made = _MADE.lock().expect("the profiles are not poisoned");
-    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes, optimized, float_store);
+    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes, optimized, float_store, aggressive);
     if let Some(&one) = made.get(&key) {
         return Ok(one);
     }
@@ -507,6 +518,7 @@ pub fn tuned_optimizing(
         routes,
         optimized,
         float_store,
+        aggressive,
         ..(_profile(arch, name)).expect("every listed CPU has a profile")
     }));
     made.insert(key, one);
@@ -676,6 +688,44 @@ mod tests {
         };
         let target = crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi);
         assert_eq!((target.costs().call, target.size_costs().call), (18, 5));
+    }
+
+    /// The target every frontend lowers to states its LLVM cost model: the
+    /// flat 32-bit target's and real mode's. `tti` was not forwarded, so
+    /// `LLRM_EXP_INLINEDECIDE` priced with the generic rules whatever the
+    /// target said (the rows with and without the model were the same run).
+    #[test]
+    fn test_the_lowered_target_forwards_its_cost_model() {
+        use llrm_mir::target::Machine;
+        let abi = || crate::abi::qb::HirAbi {
+            runtime: crate::hir::model::RuntimeProfile::Freestanding,
+            objects: Default::default(),
+            preserved: Default::default(),
+            stack_check: None,
+        };
+        let flat: &'static Profile = Box::leak(Box::new(Profile::new(&llrm_x86_m32::M32, "486", 1, true, 1, 0)));
+        assert!(crate::abi::qb::LoweredTarget::of(flat, abi()).tti().is_some());
+        assert!(crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi()).tti().is_some());
+    }
+
+    /// The target every frontend lowers to states X86's `TargetLowering`
+    /// facts on both word sizes. `lowering` was not forwarded (and `mask_test`
+    /// priced the sink of a masked compare): the sink never ran on QB's
+    /// target once the price was gone.
+    #[test]
+    fn test_the_lowered_target_forwards_its_lowering_facts() {
+        use llrm_mir::target::Machine;
+        let abi = || crate::abi::qb::HirAbi {
+            runtime: crate::hir::model::RuntimeProfile::Freestanding,
+            objects: Default::default(),
+            preserved: Default::default(),
+            stack_check: None,
+        };
+        let flat: &'static Profile = Box::leak(Box::new(Profile::new(&llrm_x86_m32::M32, "486", 1, true, 1, 0)));
+        for cpu in [flat, profile("486").unwrap()] {
+            let lowering = crate::abi::qb::LoweredTarget::of(cpu, abi()).lowering().expect("x86 states them");
+            assert!(lowering.is_mask_and_cmp0_folding_beneficial());
+        }
     }
 
     /// Real mode indexes by a dword behind the address-size prefix; a flat

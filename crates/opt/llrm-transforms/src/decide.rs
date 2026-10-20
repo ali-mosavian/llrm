@@ -2,18 +2,10 @@
 //! on known conditions.
 //!
 //! # How it works
-//! `decided` runs three steps, then `cfg::merged` joins the chains that result.
+//! `decided` runs two steps. Threading is `jumpthreading`'s and
+//! `simplifycfg`'s.
 //!
-//! 1. Threading. A block holding only a `br` is bypassed (`_threaded`): each
-//!    branch or switch edge to it goes to what it jumps to, where that has no
-//!    phis to tell the edges apart. A loop's one entry edge, one latch and
-//!    dedicated exits are kept, so the loop stays in simplify form. A
-//!    conditional branch whose two arms go one way becomes a jump. Separately
-//!    (`_phi_threaded`), a predecessor that only jumps to a block holding just
-//!    a phi and a branch on it, and gives the phi a constant, goes straight to
-//!    where that constant leads (LLVM's `ProcessBranchOnPHI`); a loop header
-//!    keeps its edges.
-//! 2. Deciding. For each block ending in a `br i1` or a `switch`, the way is
+//! 1. Deciding. For each block ending in a `br i1` or a `switch`, the way is
 //!    found from, in order: `consts`' answer for the condition, or for the two
 //!    operands of the `icmp` it is, carried across loops by `constant_cycles`
 //!    along only the edges that run; a pointer compared with null that
@@ -21,7 +13,7 @@
 //!    if exactly one successor is possible; the guards that hold at the block
 //!    and the loops around it (`guards::Given`, over `induction` terms). A
 //!    switch is decided by a known condition with distinct cases.
-//! 3. The decided terminator is replaced by a `br` to the chosen block; blocks
+//! 2. The decided terminator is replaced by a `br` to the chosen block; blocks
 //!    no longer reachable go and phis left with one value are replaced by it.
 //!
 //!
@@ -71,13 +63,21 @@
 //! `decide_tests.rs`.
 //!
 //! # Runs
-//! Once per pass of the function fixed point, after `fold` and `ports` and
-//! before `phiopt`. `Options::decide` turns it off (no `-f` flag); nothing runs
-//! at -O0. `jumpthread` is the separate pass that threads a state variable's
-//! edges.
+//! Once per pass of the function fixed point, after `fold` and `ports`.
+//! `Options::decide` turns it off (no `-f` flag); nothing runs
+//! at -O0. `jumpthreading` and `dfajumpthreading` are the separate passes that
+//! thread edges.
+//!
+//! # ScalarEvolution
+//! A branch the other engines leave is asked of ScalarEvolution
+//! (`isKnownPredicateAt` at the branch, then its inverse), then of the `guards`
+//! engine for what it cannot prove (the partition index: not an add
+//! recurrence). `LLRM_NO_SCEV_DECIDE` asks the `guards` engine alone.
 //!
 //! # Needs
-//! `consts`, `constant_cycles`, `ranges`, `guards`, `induction`, points-to
+//! `consts`, `constant_cycles`, LazyValueInfo (a branch the dominating
+//! branches, assumes and `!range`s settle), `ranges` (the counted loops' facts,
+//! until indvars decides them as LLVM does), `guards`, `induction`, points-to
 //! (`pointers`), the CFG shape.
 //!
 //! # Keeps
@@ -85,8 +85,8 @@
 //! decided or merged.
 //!
 //! # See also
-//! [`crate::cfg`], [`crate::fold`], [`crate::jumpthread`]; LLVM JumpThreading,
-//! SimplifyCFG.
+//! [`crate::cfg`], [`crate::fold`], [`crate::jumpthreading`]; LLVM
+//! JumpThreading, SimplifyCFG.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -100,7 +100,7 @@ use llrm_analysis::induction::{self, Scev};
 use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::num::Num as BigInt;
-use llrm_analysis::ranges;
+use llrm_analysis::scev::analysis::LazyScevView;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -110,8 +110,16 @@ use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
 
-use crate::edges;
 use crate::transform;
+
+/// Read once: `decide` asks ScalarEvolution (`isKnownPredicateAt`) what the
+/// guards over a branch prove, then the old guard engine for what it cannot
+/// (the partition index, `PARTITION_CHECK`: not an add recurrence, so LLVM
+/// drops it only in the loop passes). `LLRM_NO_SCEV_DECIDE` asks the old
+/// engine alone.
+fn scev_enabled() -> bool {
+    !llrm_support::env_flag!("LLRM_NO_SCEV_DECIDE")
+}
 
 /// `decided`, then its chains merged, as the old Decide.
 pub struct Decide;
@@ -133,7 +141,7 @@ impl FunctionPass for Decide {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let decided = _decided(unit.context, unit.layout, unit.function, analyses)
+        let decided = _decided(unit.context, unit.layout, unit.function, analyses, scev_enabled())
             .unwrap_or_else(|error| panic!("decide: {error}"));
         if decided | crate::cfg::merged(unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -147,7 +155,18 @@ pub fn decided(
     function: &mut Function,
     outer: &Outer,
 ) -> Result<bool, String> {
-    _decided(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())))
+    decided_using(context, layout, function, outer, scev_enabled())
+}
+
+/// [`decided`], asking ScalarEvolution (`scev`) or the old guard engine.
+pub fn decided_using(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    scev: bool,
+) -> Result<bool, String> {
+    _decided(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), scev)
 }
 
 /// `decided`, `analyses` holding what is known of `function`.
@@ -156,11 +175,8 @@ fn _decided(
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
+    use_scev: bool,
 ) -> Result<bool, String> {
-    let threaded = _threaded(context, function) | _phi_threaded(context, function)?;
-    if threaded {
-        analyses.invalidate(function, &PreservedAnalyses::none());
-    }
     // What the values say, as LLVM's SimplifyCFG decides a branch: a number
     // memory gave is `fold`'s to put in the condition first. Solving memory
     // here decided none of 574 branches at d_faces -O2 and was a quarter of
@@ -168,13 +184,15 @@ fn _decided(
     let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
     let held =
         Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
-    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), &registers)?;
+    let outer = std::rc::Rc::clone(analyses.outer());
+    let scev = LazyScevView::new(analyses);
+    let decisions = _decisions(&held.unit(context, layout, function, &outer), &registers, &scev, use_scev)?;
     if decisions.is_empty() {
-        return Ok(threaded);
+        return Ok(false);
     }
     for (block, target) in decisions {
         let last = function.terminator(block).expect("a terminator");
-        _jump(function, last, target);
+        _jump(context, function, last, target);
     }
     cfg::_unreachable(context, function);
     transform::_trivial_phis(function)?;
@@ -185,6 +203,8 @@ fn _decided(
 fn _decisions(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
+    scev: &LazyScevView,
+    use_scev: bool,
 ) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
     // Points-to only for a pointer compared with null, as LLVM asks
@@ -228,7 +248,6 @@ fn _decisions(
         Some(constant_cycles::Successors { choose: &successors, reads: &reads }),
         None,
     );
-    let scoped = ranges::bounds(unit)?;
     let mut out = Vec::new();
     for &block in function.layout() {
         let Some(last) = function.terminator(block) else {
@@ -244,19 +263,11 @@ fn _decisions(
         };
         let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
         if answer.is_none() {
-            let scope = scoped.scope(unit, cfg::id(block));
-            let mut possible = Vec::new();
-            for target in function.successors(block) {
-                if ranges::on_edge_over(unit, block, target, &scope, Some(&facts))?.is_some() {
-                    possible.push(target);
-                }
-            }
-            if let [one] = possible[..] {
-                answer = Some(one == taken);
-            }
-        }
-        if answer.is_none() {
-            answer = _implied(unit, block, last);
+            answer = if use_scev {
+                _implied_by_scev(unit, scev, last).or_else(|| _implied_by_guards(unit, block, last))
+            } else {
+                _implied_by_guards(unit, block, last)
+            };
         }
         out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
     }
@@ -265,7 +276,7 @@ fn _decisions(
 
 /// Whether the compare `last` branches on holds or fails there, by what the
 /// guards over `block` and the loops holding it prove of its two sides.
-fn _implied(
+fn _implied_by_guards(
     unit: &Unit,
     block: BlockId,
     last: InstId,
@@ -285,12 +296,42 @@ fn _implied(
     given.holds(unit, predicate.inverse(), &left, &right).then_some(false)
 }
 
-/// `last`, a terminator, replaced by a jump to `target`.
+/// Whether the compare `last` branches on holds or fails there, by what
+/// ScalarEvolution proves of its two sides at `last` (`isKnownPredicateAt`,
+/// which reads the guards over its block and the loops holding it).
+fn _implied_by_scev(
+    unit: &Unit,
+    scev: &LazyScevView,
+    last: InstId,
+) -> Option<bool> {
+    let function = unit.function;
+    let Some(Operand::Value(condition)) = function.instruction(last).operands.first().copied() else { return None };
+    let (_, compare) = unit.defining(Operand::Value(condition))?;
+    let (Opcode::ICmp(predicate), [left, right]) = (&compare.opcode, &compare.operands[..]) else { return None };
+    unit.int_bits(*left)?;
+    scev.ask(unit.context, unit.layout, function, |scev, cx| {
+        let (left, right) = (scev.get_scev(cx, *left), scev.get_scev(cx, *right));
+        if scev.is_known_predicate_at(cx, *predicate, left, right, Some(last)) {
+            return Some(true);
+        }
+        scev.is_known_predicate_at(cx, predicate.inverse(), left, right, Some(last)).then_some(false)
+    })
+}
+
+/// `last`, a terminator, replaced by a jump to `target`. `br i1 %c, T, T` has
+/// two edges to `T` and a phi of `T` two inputs from the block: a jump has one
+/// edge, so the phi loses one.
 fn _jump(
+    context: &Context,
     function: &mut Function,
     last: InstId,
     target: BlockId,
 ) {
+    let block = function.parent(last).expect("a placed terminator");
+    let edges = function.instruction(last).operands.iter().filter(|one| **one == Operand::Block(target)).count();
+    for _ in 1..edges {
+        function.predecessor_removed(context, target, block, true);
+    }
     let jump = function.create_instruction(
         Opcode::Br,
         function.instruction(last).ty,
@@ -419,111 +460,11 @@ pub fn _executable_successors(
     Some(all)
 }
 
-/// `value` as a constant in `from`, a block whose one predecessor branches on
-/// it: false where `from` is the branch's false side, true where it is the true
-/// side (LLVM JumpThreading's `getKnownConstant` of an edge).
-fn known_on_edge(
-    context: &mut Context,
-    function: &Function,
-    value: ValueId,
-    from: BlockId,
-) -> Option<Operand> {
-    let [only] = function.predecessors(from)[..] else { return None };
-    let branch = function.instruction(function.terminator(only)?);
-    let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
-        return None;
-    };
-    if branch.opcode != Opcode::Br || condition != value || taken == other {
-        return None;
-    }
-    let ty = function.value(value).ty;
-    let bit = if from == taken {
-        1
-    } else if from == other {
-        0
-    } else {
-        return None;
-    };
-    Some(Operand::Constant(context.int(ty, bit)))
-}
-
-/// A predecessor that only jumps to a block holding just a phi and a
-/// branch on it, and gives the phi a constant, goes straight where that
-/// constant leads: LLVM JumpThreading's `ProcessBranchOnPHI`. A loop's
-/// header keeps its edges. Whether anything changed.
-pub fn _phi_threaded(
-    context: &mut Context,
-    function: &mut Function,
-) -> Result<bool, String> {
-    let headers = cfg::Shape::of(function).loops.iter().map(|one| one.header).collect::<BTreeSet<_>>();
-    let mut changed = false;
-    for block in function.layout().to_vec() {
-        let instructions = function.block(block).instructions().to_vec();
-        let [phi, last] = instructions[..] else { continue };
-        let branch = function.instruction(last);
-        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
-            continue;
-        };
-        let reads_only = function.users(condition).len() == 1;
-        let is_phi = function.instruction(phi).opcode == Opcode::Phi;
-        if headers.contains(&cfg::id(block))
-            || branch.opcode != Opcode::Br
-            || !is_phi
-            || function.instruction(phi).result != Some(condition)
-            || !reads_only
-        {
-            continue;
-        }
-        for (value, from) in crate::lcssa::arms(function, phi) {
-            // A condition is its own answer on the edge that its branch
-            // settles.
-            let value = match value {
-                Operand::Value(one) => known_on_edge(context, function, one, from).unwrap_or(value),
-                other => other,
-            };
-            let Operand::Constant(id) = value else { continue };
-            let ConstantKind::Int(bits) = context.get(id).kind else { continue };
-            let target = if bits & 1 == 1 { taken } else { other };
-            let jump = function.terminator(from).expect("a terminator");
-            let only_jumps = function.instruction(jump).operands == [Operand::Block(block)];
-            if !only_jumps || target == block || function.predecessors(target).contains(&from) {
-                continue;
-            }
-            // What the target's phis took from `block` they now take from
-            // `from` too.
-            for one in edges::phis(function, target) {
-                let mut incoming = crate::lcssa::arms(function, one);
-                let (carried, _) =
-                    *incoming.iter().find(|(_, source)| *source == block).expect("an arm from the block");
-                incoming.push((if carried == Operand::Value(condition) { value } else { carried }, from));
-                function.set_operands(one, crate::lcssa::from_arms(&incoming));
-            }
-            let kept =
-                crate::lcssa::arms(function, phi).into_iter().filter(|(_, source)| *source != from).collect::<Vec<_>>();
-            function.set_operands(phi, crate::lcssa::from_arms(&kept));
-            function.set_operands(jump, vec![Operand::Block(target)]);
-            changed = true;
-        }
-    }
-    if changed {
-        cfg::_unreachable(context, function);
-        transform::_trivial_phis(function)?;
-    }
-    Ok(changed)
-}
-
-/// Blocks holding only a jump bypassed, where what they jump to has no
-/// phis to tell the edges apart. Whether anything changed.
-///
-/// Loop-simplify form keeps a loop's one entry edge, its one back edge and
-/// its dedicated exits as blocks of their own.
-pub fn _threaded(
-    context: &mut Context,
-    function: &mut Function,
-) -> bool {
-    if function.entry().is_none() {
-        return false;
-    }
+/// The blocks that hold a loop's simple form up: a jump alone in the block
+/// before the header (its one entry), the one latch, or an exit block only the
+/// loop reaches. A pass that takes them out meets `loopsimplify` putting them
+/// back, round after round.
+pub(crate) fn loop_form_blocks(function: &Function) -> BTreeSet<i64> {
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let known = graph.iter().map(|block| (block.at, &block.succ)).collect::<BTreeMap<_, _>>();
@@ -547,74 +488,21 @@ pub fn _threaded(
         {
             loop_edges.insert(latch);
         }
-        loop_edges.extend(
-            graph
-                .iter()
-                .filter(|block| {
-                    let parents = predecessors.get(&block.at).unwrap_or(none);
-                    !loop_.body.contains(&block.at)
-                        && !parents.is_empty()
-                        && parents.iter().all(|at| loop_.body.contains(at))
-                        && block.succ.len() == 1
-                        && !loop_.body.contains(&block.succ[0])
-                })
-                .map(|block| block.at),
-        );
-    }
-    let mut redirects = BTreeMap::new();
-    for &block in function.layout() {
-        let at = cfg::id(block);
-        let [only] = function.block(block).instructions()[..] else {
-            continue;
-        };
-        let instruction = function.instruction(only);
-        if let (Opcode::Br, [Operand::Block(next)]) = (&instruction.opcode, &instruction.operands[..])
-            && !loop_edges.contains(&at)
-            && edges::phis(function, *next).is_empty()
-        {
-            redirects.insert(at, cfg::id(*next));
-        }
-    }
-    let destination = |start: i64, source: i64| {
-        let (mut target, mut seen) = (start, BTreeSet::from([source]));
-        while let Some(&next) = redirects.get(&target) {
-            if !seen.insert(target) {
-                break;
-            }
-            target = next;
-        }
-        if seen.contains(&target) { start } else { target }
-    };
-
-    let mut changed = false;
-    for block in function.layout().to_vec() {
-        let Some(last) = function.terminator(block) else {
-            continue;
-        };
-        if !matches!(function.instruction(last).opcode, Opcode::Br | Opcode::Switch) {
-            continue;
-        }
-        for (index, operand) in function.instruction(last).operands.clone().into_iter().enumerate() {
-            if let Operand::Block(target) = operand {
-                let to = destination(cfg::id(target), cfg::id(block));
-                if to != cfg::id(target) {
-                    function.set_operand(last, index, Operand::Block(cfg::block(to)));
-                    changed = true;
+        // Only a successor of the body can have all its predecessors in it.
+        for &inside in &loop_.body {
+            for &exit in known[&inside].iter() {
+                let parents = predecessors.get(&exit).unwrap_or(none);
+                if !loop_.body.contains(&exit)
+                    && parents.iter().all(|at| loop_.body.contains(at))
+                    && known[&exit].len() == 1
+                    && !loop_.body.contains(&known[&exit][0])
+                {
+                    loop_edges.insert(exit);
                 }
             }
         }
-        // Both arms one way: the condition chooses nothing.
-        if let [_, Operand::Block(taken), Operand::Block(other)] = function.instruction(last).operands[..]
-            && taken == other
-        {
-            _jump(function, last, taken);
-            changed = true;
-        }
     }
-    if changed {
-        cfg::_unreachable(context, function);
-    }
-    changed
+    loop_edges
 }
 
 #[cfg(test)]

@@ -166,8 +166,8 @@ b0:
   br label %b1
 
 b1:
-  %0 = phi i16 [ 0, %b0 ], [ %j, %b2 ]
-  %1 = phi i16 [ 0, %b0 ], [ %t, %b2 ]
+  %0 = phi i16 [ %j, %b2 ], [ 0, %b0 ]
+  %1 = phi i16 [ %t, %b2 ], [ 0, %b0 ]
   %more = icmp slt i16 %0, %n
   br i1 %more, label %b2, label %b3
 
@@ -212,7 +212,7 @@ b3:
 fn test_stores_on_both_arms_join_in_a_phi() {
     forwarded(DIAMOND, INPUTS);
     assert!(
-        promote(DIAMOND).contains("b3:\n  %0 = phi i16 [ 7, %b1 ], [ %d, %b2 ]\n  %y = add i16 %0, 1\n"),
+        promote(DIAMOND).contains("b3:\n  %0 = phi i16 [ %d, %b2 ], [ 7, %b1 ]\n  %y = add i16 %0, 1\n"),
         "{}",
         promote(DIAMOND)
     );
@@ -960,6 +960,39 @@ fn liveness_visits_a_block_a_few_times_whatever_the_cells() {
     assert!(spent <= 3 * blocks, "{blocks} blocks took {spent} visits");
 }
 
+/// LLVM's PromoteMemToReg and SROA delete an alloca left with no load together
+/// with its stores; `Promote` left 175 allocas and 336 stores in the 11 bodies
+/// of d_faces -O2 for `dse` to find. A slot whose address leaves the function
+/// stays.
+#[test]
+fn test_an_alloca_nothing_loads_goes_with_its_stores_and_one_that_is_read_or_escapes_stays() {
+    let mut module = parsed(
+        "declare void @sink(ptr)
+
+define i32 @f(i32 %a) {
+b0:
+  %dead = alloca i32
+  %pair = alloca [2 x i32]
+  %read = alloca i32
+  %out = alloca i32
+  store i32 %a, ptr %dead
+  %second = getelementptr i32, ptr %pair, i32 1
+  store i32 %a, ptr %second
+  store i32 %a, ptr %read
+  store i32 %a, ptr %out
+  call void @sink(ptr %out)
+  %x = load i32, ptr %read
+  ret i32 %x
+}
+",
+    );
+    managed(&mut module, Promote);
+    let after = managed(&mut module, super::DeadSlots);
+    assert!(!after.contains("%dead") && !after.contains("%pair") && !after.contains("%second"), "{after}");
+    assert!(after.contains("%out = alloca i32") && after.contains("store i32 %a, ptr %out"), "{after}");
+    assert_eq!(after.matches("store").count(), 1, "{after}");
+}
+
 /// `sroa` split a copy into an array nothing reads (the copy goes) and then
 /// asked the manager for facts of the body, which held what had been asked of
 /// it before the split: `Pointers` made from the exposed frames of the body
@@ -993,4 +1026,45 @@ fn test_what_sroa_asks_after_it_split_a_copy_is_derived_from_the_body_it_left() 
     analyses.invalidate(function, &preserved);
     let stale = analyses.held_stale(context, &layout, function);
     assert!(stale.is_empty(), "held but stale: {stale:?}");
+}
+
+/// A C variable-length array after the loop passes: an alloca whose element
+/// count is a run-time value, indexed by a 64-bit counter that runs to a
+/// sign-extended 32-bit bound, so the index spans 2^63 elements and the slice
+/// bound 2^65. `annotated` refused it ("slice bound 36893488147419103225
+/// exceeds the i64 slice model") and SROA panicked on any such function.
+#[test]
+fn a_dynamic_alloca_with_a_wide_index_range_is_promoted_without_failing() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"
+
+define i32 @vla(i32 %n) {
+entry:
+  %wide = zext i32 %n to i64
+  %a = alloca i32, i64 %wide, align 4
+  %bound = sext i32 %n to i64
+  br label %head
+
+head:
+  %i = phi i64 [ %next, %body ], [ 0, %entry ]
+  %more = icmp slt i64 %i, %bound
+  br i1 %more, label %body, label %done
+
+body:
+  %sq = mul nsw i64 %i, %i
+  %p = getelementptr inbounds i32, ptr %a, i64 %i
+  %v = trunc nsw i64 %sq to i32
+  store i32 %v, ptr %p, align 4
+  %next = add nuw nsw i64 %i, 1
+  br label %head
+
+done:
+  %m = sub nsw i32 %n, 1
+  %e = sext i32 %m to i64
+  %q = getelementptr inbounds i32, ptr %a, i64 %e
+  %r = load i32, ptr %q, align 4
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    promote_all(&mut module, true).unwrap();
 }

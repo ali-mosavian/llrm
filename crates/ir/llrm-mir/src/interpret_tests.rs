@@ -22,7 +22,7 @@ fn int(
 #[test]
 fn the_datalayout_places_fields_and_far_pointers_as_stated() {
     let layout = DataLayout::parse(LAYOUT).expect("parses");
-    let mut types = Types::default();
+    let types = Types::default();
     let (i16, i32) = (types.int(16), types.int(32));
     let pair = types.intern(Type::Struct { fields: vec![i16, i32], packed: false });
     assert_eq!(layout.struct_layout(&types, pair), (6, vec![0, 2]), "i32 aligned to 2 bytes");
@@ -224,6 +224,76 @@ fn fixed_point_intrinsics_are_their_expansions() {
     }
 }
 
+/// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop` count as the machine integers
+/// do: a zero has as many zeros as the type has bits, and is poison where the
+/// second argument of the first two says so.
+#[test]
+fn bit_count_intrinsics_count_what_the_machine_integers_do() {
+    let call = |name: &str, width: u32, value: u32, flag: bool| {
+        let (parameters, arguments) =
+            if name == "ctpop" { (String::new(), String::new()) } else { (", i1".to_owned(), format!(", i1 {flag}")) };
+        result(&format!(
+            "declare i{width} @llvm.{name}.i{width}(i{width}{parameters})\n\
+             define i{width} @f() {{\n  %r = call i{width} @llvm.{name}.i{width}(i{width} {value}{arguments})\n  ret i{width} %r\n}}\n"
+        ))
+    };
+    for value in [0_u32, 1, 2, 3, 0x80, 0x1234, 0x7fff, 0x8000, 0xffff] {
+        let narrow = value as u16;
+        assert_eq!(call("ctpop", 16, value, false), int(u128::from(narrow.count_ones()), 16));
+        for wide in [value, value << 8 | 1, u32::MAX] {
+            assert_eq!(call("ctpop", 32, wide, false), int(u128::from(wide.count_ones()), 32));
+        }
+        if value == 0 {
+            assert_eq!(call("ctlz", 16, 0, false), int(16, 16));
+            assert_eq!(call("cttz", 16, 0, false), int(16, 16));
+            assert_eq!(call("ctlz", 16, 0, true), Ok(Val::Poison));
+            assert_eq!(call("cttz", 16, 0, true), Ok(Val::Poison));
+        } else {
+            for flag in [false, true] {
+                assert_eq!(call("ctlz", 16, value, flag), int(u128::from(narrow.leading_zeros()), 16));
+                assert_eq!(call("cttz", 16, value, flag), int(u128::from(narrow.trailing_zeros()), 16));
+            }
+        }
+    }
+}
+
+/// `llvm.bswap` reverses the bytes of an integer of any whole number of 16-bit
+/// units.
+#[test]
+fn bswap_reverses_the_bytes() {
+    let call = |bits: u32, value: u128| {
+        result(&format!(
+            "declare i{bits} @llvm.bswap.i{bits}(i{bits})\n\
+             define i{bits} @f() {{\n  %r = call i{bits} @llvm.bswap.i{bits}(i{bits} {value})\n  ret i{bits} %r\n}}\n"
+        ))
+    };
+    assert_eq!(call(16, 0x1234), int(0x3412, 16));
+    assert_eq!(call(32, 0x1234_5678), int(0x7856_3412, 32));
+    assert_eq!(call(64, 0x0123_4567_89ab_cdef), int(0xefcd_ab89_6745_2301, 64));
+    assert_eq!(call(48, 0x0123_4567_89ab), int(0xab89_6745_2301, 48));
+    assert_eq!(call(128, 1), int(1 << 120, 128));
+}
+
+/// `llvm.scmp` and `llvm.ucmp` give -1, 0 or 1 at the result's width, comparing
+/// as signed or unsigned integers.
+#[test]
+fn compare_intrinsics_give_minus_one_zero_or_one() {
+    let call = |name: &str, a: u8, b: u8| {
+        result(&format!(
+            "declare i8 @llvm.{name}.i8.i8(i8, i8)\n\
+             define i8 @f() {{\n  %r = call i8 @llvm.{name}.i8.i8(i8 {a}, i8 {b})\n  ret i8 %r\n}}\n"
+        ))
+    };
+    for a in [0_u8, 1, 5, 127, 128, 200, 255] {
+        for b in [0_u8, 1, 5, 127, 128, 200, 255] {
+            let signed = (a as i8).cmp(&(b as i8)) as i8 as u8;
+            let unsigned = a.cmp(&b) as i8 as u8;
+            assert_eq!(call("scmp", a, b), int(u128::from(signed), 8), "scmp {a} {b}");
+            assert_eq!(call("ucmp", a, b), int(u128::from(unsigned), 8), "ucmp {a} {b}");
+        }
+    }
+}
+
 #[test]
 fn near_memory_stays_below_64k_whatever_is_far() {
     // Globals were laid out in order, allocas after them, so a far array
@@ -400,4 +470,11 @@ fn a_value_outside_its_stated_range_is_reported() {
     // Unchecked, the promise is not looked at.
     let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n{parameter}")).unwrap();
     assert_eq!(crate::interpret::run(&module, "g", vec![small(5)], 100), Ok(small(5)));
+}
+
+/// An `undef` operand reads as some value: the interpreter picks zero, so
+/// `undef + 5` is 5 and not poison.
+#[test]
+fn undef_reads_as_a_value_not_poison() {
+    assert_eq!(result("define i16 @f() {\nentry:\n  %a = add i16 undef, 5\n  ret i16 %a\n}\n"), int(5, 16));
 }

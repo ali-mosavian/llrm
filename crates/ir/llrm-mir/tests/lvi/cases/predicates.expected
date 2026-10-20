@@ -1,0 +1,173 @@
+val merge 0 cr=i1:full-set cst=- pn=-
+val merge 1 cr=i32:full-set cst=- pn=-
+val merge 2 cr=i32:[0,4) cst=- pn=-
+val merge 3 cr=i32:[0,8) cst=- pn=-
+val merge 4 cr=i32:[10,18) cst=- pn=-
+val merge 5 cr=i32:[0,18) cst=- pn=-
+val merge 6 cr=i1:full-set cst=- pn=-
+rval merge 6 cr=i1:full-set
+rval merge 5 cr=i32:[0,18)
+rval merge 4 cr=i32:[10,18)
+rval merge 3 cr=i32:[0,8)
+rval merge 2 cr=i32:[0,4)
+edge merge 0 1 1 cr=i32:full-set
+edge merge 0 2 1 cr=i32:full-set
+edge merge 1 3 2 cr=i32:[0,4)
+edge merge 2 3 4 cr=i32:[10,18)
+pred merge 7 a=F b=F
+use merge 0 0 cr=i1:full-set
+use merge 1 0 cr=i32:full-set
+use merge 3 0 cr=i32:full-set
+use merge 4 0 cr=i32:[0,8)
+use merge 7 0 cr=i32:[0,18)
+use merge 8 0 cr=i1:full-set
+lat merge arg0 bb0 overdefined
+lat merge arg0 bb1 constantrange<-1, 0>
+lat merge arg0 bb2 constantrange<0, -1>
+lat merge arg0 bb3 overdefined
+lat merge arg1 bb0 overdefined
+lat merge arg1 bb1 overdefined
+lat merge arg1 bb2 overdefined
+lat merge arg1 bb3 overdefined
+lat merge i0 bb0 overdefined
+lat merge i0 bb1 overdefined
+lat merge i0 bb2 overdefined
+lat merge i1 bb1 constantrange<0, 4>
+lat merge i2 bb1 overdefined
+lat merge i3 bb2 constantrange<0, 8>
+lat merge i4 bb2 constantrange<10, 18>
+lat merge i5 bb2 overdefined
+lat merge i6 bb3 constantrange<0, 18>
+lat merge i7 bb3 overdefined
+lat merge i8 bb3 overdefined
+val outside_block 0 cr=i32:full-set cst=- pn=-
+val outside_block 1 cr=i1:full-set cst=- pn=-
+val outside_block 2 cr=i1:full-set cst=- pn=-
+val outside_block 3 cr=i1:full-set cst=- pn=-
+rval outside_block 3 cr=i1:full-set
+rval outside_block 2 cr=i1:full-set
+rval outside_block 1 cr=i1:full-set
+edge outside_block 1 3 0 cr=i32:[0,10)
+edge outside_block 2 3 0 cr=i32:[10,0)
+pred outside_block 0 a=- b=-
+pred outside_block 4 a=- b=-
+pred outside_block 5 a=- b=-
+epred outside_block 0 0 0 T
+epred outside_block 0 1 0 F
+use outside_block 0 0 cr=i32:full-set
+use outside_block 1 0 cr=i1:full-set
+use outside_block 4 0 cr=i32:full-set
+use outside_block 5 0 cr=i32:full-set
+use outside_block 6 0 cr=i1:full-set
+lat outside_block arg0 bb0 overdefined
+lat outside_block arg0 bb1 constantrange<0, 10>
+lat outside_block arg0 bb2 constantrange<10, 0>
+lat outside_block arg0 bb3 overdefined
+lat outside_block i0 bb0 overdefined
+lat outside_block i0 bb1 constantrange<-1, 0>
+lat outside_block i0 bb2 constantrange<0, -1>
+lat outside_block i1 bb0 overdefined
+lat outside_block i1 bb1 overdefined
+lat outside_block i1 bb2 overdefined
+lat outside_block i2 bb1 overdefined
+lat outside_block i3 bb2 overdefined
+lat outside_block i4 bb3 overdefined
+lat outside_block i5 bb3 overdefined
+lat outside_block i6 bb3 overdefined
+val two_values 0 cr=i32:full-set cst=- pn=-
+val two_values 1 cr=i32:full-set cst=- pn=-
+val two_values 2 cr=i1:full-set cst=- pn=-
+val two_values 3 cr=i1:full-set cst=- pn=-
+val two_values 4 cr=i1:full-set cst=- pn=-
+val two_values 5 cr=i1:full-set cst=- pn=-
+val two_values 6 cr=i1:full-set cst=- pn=-
+val two_values 7 cr=i1:full-set cst=- pn=-
+rval two_values 7 cr=i1:full-set
+rval two_values 6 cr=i1:full-set
+rval two_values 5 cr=i1:full-set
+rval two_values 4 cr=i1:full-set
+rval two_values 3 cr=i1:full-set
+rval two_values 2 cr=i1:full-set
+edge two_values 0 1 0 cr=i32:[0,10)
+edge two_values 0 1 1 cr=i32:[21,0)
+pred two_values 0 a=- b=-
+pred two_values 1 a=- b=-
+pred two_values 4 a=T b=-
+pred two_values 5 a=F b=-
+pred two_values 6 a=- b=-
+use two_values 0 0 cr=i32:full-set
+use two_values 1 0 cr=i32:full-set
+use two_values 2 0 cr=i1:full-set
+use two_values 2 1 cr=i1:full-set
+use two_values 3 0 cr=i1:full-set
+use two_values 4 0 cr=i32:[0,10)
+use two_values 4 1 cr=i32:[21,0)
+use two_values 5 0 cr=i32:[0,10)
+use two_values 5 1 cr=i32:[21,0)
+use two_values 6 0 cr=i32:[0,10)
+use two_values 6 1 cr=i32:[21,0)
+use two_values 7 0 cr=i1:full-set
+lat two_values arg0 bb0 overdefined
+lat two_values arg0 bb1 constantrange<0, 10>
+lat two_values arg0 bb2 overdefined
+lat two_values arg1 bb0 overdefined
+lat two_values arg1 bb1 constantrange<21, 0>
+lat two_values arg1 bb2 overdefined
+lat two_values i0 bb0 overdefined
+lat two_values i0 bb1 overdefined
+lat two_values i0 bb2 overdefined
+lat two_values i1 bb0 overdefined
+lat two_values i1 bb1 overdefined
+lat two_values i1 bb2 overdefined
+lat two_values i2 bb0 overdefined
+lat two_values i2 bb1 constantrange<-1, 0>
+lat two_values i2 bb2 constantrange<0, -1>
+lat two_values i3 bb0 overdefined
+lat two_values i3 bb1 overdefined
+lat two_values i3 bb2 overdefined
+lat two_values i4 bb1 overdefined
+lat two_values i5 bb1 overdefined
+lat two_values i6 bb1 overdefined
+lat two_values i7 bb1 overdefined
+lat two_values i8 bb2 overdefined
+val ptr_null 0 cr=- cst=- pn=-
+val ptr_null 1 cr=i1:full-set cst=- pn=-
+val ptr_null 2 cr=i1:full-set cst=- pn=-
+val ptr_null 3 cr=i1:full-set cst=- pn=-
+rval ptr_null 3 cr=i1:full-set
+rval ptr_null 2 cr=i1:full-set
+rval ptr_null 1 cr=i1:full-set
+pred ptr_null 0 a=- b=-
+pred ptr_null 2 a=T b=T
+pred ptr_null 4 a=T b=T
+epred ptr_null 0 0 0 T
+epred ptr_null 0 1 0 F
+use ptr_null 1 0 cr=i1:full-set
+use ptr_null 3 0 cr=i1:full-set
+use ptr_null 5 0 cr=i1:full-set
+lat ptr_null arg0 bb0 overdefined
+lat ptr_null arg0 bb1 constant<ptr null>
+lat ptr_null arg0 bb2 notconstant<ptr null>
+lat ptr_null i0 bb0 overdefined
+lat ptr_null i0 bb1 constantrange<-1, 0>
+lat ptr_null i0 bb2 constantrange<0, -1>
+lat ptr_null i1 bb0 overdefined
+lat ptr_null i1 bb1 overdefined
+lat ptr_null i1 bb2 overdefined
+lat ptr_null i2 bb1 overdefined
+lat ptr_null i3 bb1 overdefined
+lat ptr_null i4 bb2 overdefined
+lat ptr_null i5 bb2 overdefined
+val fold_const 0 cr=i32:full-set cst=- pn=-
+val fold_const 1 cr=i1:full-set cst=- pn=-
+val fold_const 2 cr=i1:full-set cst=- pn=-
+rval fold_const 2 cr=i1:full-set
+rval fold_const 1 cr=i1:full-set
+pred fold_const 0 a=T b=T
+pred fold_const 1 a=- b=-
+use fold_const 1 0 cr=i32:full-set
+use fold_const 2 0 cr=i1:full-set
+lat fold_const arg0 bb0 overdefined
+lat fold_const i0 bb0 overdefined
+lat fold_const i1 bb0 overdefined
+lat fold_const i2 bb0 overdefined

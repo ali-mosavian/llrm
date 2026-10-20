@@ -34,6 +34,8 @@ import proctree
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+sys.path.insert(0, str(HERE.parent))
+import envflag  # noqa: E402
 LANGUAGES = ("qb", "c", "nib")
 TREE_ONLY = {"fmt", "docs", "products"}  # steps that read the tree and build nothing: the `static` group
 NO_BINARIES = {"pytest", "pytest-perf", "fmt", "rfmt-post", "docs", "facts"}  # steps that do not run the release binaries, so need no build first
@@ -572,6 +574,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         "pytest-quick": cfg_pytest(skip_py + tuple(cfg["smoke"]["slow_pytest"]), "pytest-quick-durations"),
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
         "qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/qcport-run.py',
+        "oracle-qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/oracle_qcport.py --jobs ${JOBS:-8}',
         "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
         "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} --test run -- test_every_program_under_tests_run_prints_its_out",
     }
@@ -632,7 +635,7 @@ def missing_capabilities(environ: dict | None = None) -> dict[str, str]:
     for name, cap in load().get("capability", {}).items():
         if allowed != "1" and name not in allowed.split(","):
             continue
-        if any(environ.get(v) for v in cap["require"]):
+        if any(envflag.flag(v, environ) for v in cap["require"]):
             continue
         for need in cap["needs"]:
             if "run" in need:  # a probe: the command must succeed
@@ -826,7 +829,7 @@ def snapshot_binaries(release: Path, into: Path) -> Path:
 
 
 # The steps that run the compiler's binaries (the others build what they test, or read the tree).
-USES_BINARIES = ("pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "oracle-sweep", "oracle-premise", "identity", "measure", "qcport", "turbo", "cv4", "dos-slow")
+USES_BINARIES = ("pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "oracle-sweep", "oracle-premise", "oracle-qcport", "identity", "measure", "qcport", "turbo", "cv4", "dos-slow")
 
 
 def group_plan(p: Plan, group: str) -> Plan:
@@ -901,7 +904,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     jobs = default_jobs(os.environ)
     with ThreadPoolExecutor(jobs) as pool:
         # The longest steps start first.
-        order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "measure", "pytest-programs", "turbo", "bench", "dos-slow"))
+        order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "oracle-qcport", "measure", "pytest-programs", "turbo", "bench", "dos-slow"))
         for future in as_completed([pool.submit(run_step, s, cmds[s], logs, env, checks.get(s), unset) for s in order]):
             report(*future.result())
     for name in alone:

@@ -40,7 +40,7 @@ use super::signbits::compute_num_sign_bits;
 use crate::apint;
 use crate::constantrange::{ConstantRange, OverflowResult as RangeOverflow, PreferredRangeType};
 use crate::context::{ConstantKind, mask};
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::knownbits::KnownBits;
 use crate::module::{BlockId, Function, GlobalKind, InstId, Instruction, MetadataOperand, Operand, Use, ValueDef};
 use crate::opcode::{Attribute, BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
@@ -272,7 +272,7 @@ pub fn compute_overflow_for_signed_sub(
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L162>
 fn edge_dominates_block(
     function: &Function,
-    dt: &DominatorTree,
+    dt: &DomTree,
     start: BlockId,
     end: BlockId,
     use_block: BlockId,
@@ -304,9 +304,9 @@ fn edge_dominates_block(
 
 /// `DominatorTree::dominates(BasicBlockEdge, Use)`.
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L213>
-fn edge_dominates_use(
+pub fn edge_dominates_use(
     function: &Function,
-    dt: &DominatorTree,
+    dt: &DomTree,
     start: BlockId,
     end: BlockId,
     used: &Use,
@@ -328,7 +328,7 @@ fn edge_dominates_use(
 pub fn is_overflow_intrinsic_no_wrap(
     q: &Query,
     wo: InstId,
-    dt: &DominatorTree,
+    dt: &DomTree,
 ) -> bool {
     let function = q.function;
     let Some(wo_result) = function.instruction(wo).result else { return true };
@@ -661,7 +661,7 @@ fn m_binary<'a>(
     op: BinaryOp,
 ) -> Option<(&'a Instruction, SelectOperand, SelectOperand)> {
     let (_, instruction) = instruction_of(q, v)?;
-    (instruction.opcode == Opcode::Binary(op))
+    (matches!(instruction.opcode, Opcode::Binary(kind) if kind == op))
         .then(|| (instruction, instruction.operands[0].into(), instruction.operands[1].into()))
 }
 
@@ -695,7 +695,7 @@ fn m_sext(
     v: SelectOperand,
 ) -> Option<SelectOperand> {
     let (_, instruction) = instruction_of(q, v)?;
-    (instruction.opcode == Opcode::Cast(CastOp::SExt)).then(|| instruction.operands[0].into())
+    (matches!(instruction.opcode, Opcode::Cast(CastOp::SExt))).then(|| instruction.operands[0].into())
 }
 
 /// `m_Intrinsic<id>(...)`: the call's arguments.
@@ -1615,7 +1615,7 @@ pub fn can_convert_to_min_or_max_intrinsic(
                         |(_, select)| select.opcode == Opcode::Select
                             && matches!(
                                 select.operands[0],
-                                Operand::Value(cond) if q.function.users(cond).len() == 1
+                                Operand::Value(cond) if q.function.users(cond).only().is_some()
                             ),
                     );
                 all_cmp_single_use &= one_use;

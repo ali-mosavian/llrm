@@ -20,7 +20,7 @@
 //! ```
 //!
 //! # Example
-//! None: a library. [`crate::unswitch`] judges a specialised loop by work
+//! None: a library. [`crate::loopversion`] judges a specialised loop by work
 //! alone, [`crate::loopfuse`] a fused one with the spills, and
 //! [`crate::loopdistribute`] a split one by its price alone.
 //!
@@ -86,7 +86,7 @@ pub fn frequencies(
     let registers = llrm_analysis::consts::known(&within);
     let shape = cfg::Shape::of(state);
     let within = within.with_registers(&registers).with_shape(&shape);
-    let trips = profit::proven_trips(&within, &registers);
+    let trips = profit::proven_trips(&within);
     // The nodes the passes made on the copy are numbered after the module's.
     let metadata = [unit.metadata, unit.declared.nodes()].concat();
     profit::_frequencies(unit.context, &metadata, &outer.globals, state, Some(&trips))

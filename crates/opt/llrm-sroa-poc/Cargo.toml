@@ -1,0 +1,17 @@
+[package]
+name = "llrm-sroa-poc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "A spike: SROA + PromoteMemToReg in LLVM's shape, run in isolation on dumped pass inputs"
+publish = false
+
+[[bin]]
+name = "sroa-poc"
+path = "src/main.rs"
+
+[dependencies]
+llrm-mir = { workspace = true }
+llrm-analysis = { workspace = true }
+llrm-transforms = { workspace = true }
+llrm-support = { workspace = true }

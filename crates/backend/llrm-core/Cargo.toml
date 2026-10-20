@@ -21,6 +21,7 @@ llrm-macho = { workspace = true }
 llrm-x86-bcmachine = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-hir = { workspace = true }
+llrm-instr = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }

@@ -1,88 +1,279 @@
-//! Each body MIR text run by llrm-mir's interpreter before and after.
-
-use llrm_analysis::testing::DOS;
+//! Each body is MIR text run by llrm-mir's interpreter before and after; the
+//! expected text is what `opt -passes=memcpyopt` makes of the same body
+//! (checked with `tools/difftest`).
 
 use super::MemCpyOpt;
-use crate::testing::{managed, parsed, results};
+use crate::testing::{managed, parsed};
 
-/// `text` through the pass: its printed form, run as before on `inputs`.
-fn merged(
-    text: &str,
-    inputs: &[&[i128]],
-) -> String {
-    let before = parsed(&format!("{DOS}{text}"));
-    let mut module = before.clone();
-    let after = managed(&mut module, MemCpyOpt { size: false });
-    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
-    after
+const DECLARES: &str = "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
+declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+";
+
+const GLOBALS: &str = "@a = global [64 x i8] zeroinitializer
+@b = global [64 x i8] zeroinitializer
+@c = global [64 x i8] zeroinitializer
+@k = constant [64 x i8] zeroinitializer
+";
+
+/// @f after the pass, from `define void @f`.
+fn after_f(body: &str) -> String {
+    let mut module = parsed(&format!("{DECLARES}\n{GLOBALS}\n{body}"));
+    let text = managed(&mut module, MemCpyOpt);
+    text[text.find("define void @f").expect("@f")..].replace("b0:\n", "")
 }
 
-/// `count` pairs of `bits`-bit cells from @s to `to` (`delta` bytes on), each
-/// load before its store.
-fn pairs_to(
-    count: usize,
-    bits: u32,
+fn memcpy(
     to: &str,
-    delta: u32,
+    from: &str,
+    bytes: u32,
 ) -> String {
-    let step = bits / 8;
-    let mut body = String::new();
-    for at in 0..count {
-        body += &format!(
-            "  %ps{at} = getelementptr i8, ptr @s, i16 {off}\n  %v{at} = load i{bits}, ptr %ps{at}\n  %pd{at} = getelementptr i8, ptr {to}, i16 {on}\n  store i{bits} %v{at}, ptr %pd{at}\n",
-            off = at as u32 * step,
-            on = at as u32 * step + delta
-        );
-    }
-    format!(
-        "@s = global [64 x i8] zeroinitializer\n@d = global [64 x i8] zeroinitializer\n\ndefine i16 @f(i16 %x) {{\nb0:\n  store i16 %x, ptr @s\n{body}  %r = load i16, ptr @d\n  ret i16 %r\n}}\n"
-    )
+    format!("  call void @llvm.memcpy.p0.p0.i64(ptr {to}, ptr {from}, i64 {bytes}, i1 false)\n")
 }
 
-fn pairs(
-    count: usize,
-    bits: u32,
+fn body(lines: &[String]) -> String {
+    format!("define void @f() {{\nb0:\n{}  ret void\n}}\n", lines.concat())
+}
+
+/// A memcpy of a pointer to itself is a no-op: gone.
+#[test]
+fn test_a_memcpy_to_itself_is_removed() {
+    assert_eq!(after_f(&body(&[memcpy("@a", "@a", 16)])), "define void @f() {\n  ret void\n}\n");
+}
+
+/// A memcpy of no bytes is gone.
+#[test]
+fn test_a_memcpy_of_no_bytes_is_removed() {
+    assert_eq!(after_f(&body(&[memcpy("@b", "@a", 0)])), "define void @f() {\n  ret void\n}\n");
+}
+
+/// A memcpy of what a memcpy copied copies from the first one's source.
+#[test]
+fn test_a_memcpy_of_a_memcpy_copies_from_its_source() {
+    let before = body(&[memcpy("@b", "@a", 16), memcpy("@c", "@b", 16)]);
+    let expected =
+        "define void @f() {\n".to_owned() + &memcpy("@b", "@a", 16) + &memcpy("@c", "@a", 16) + "  ret void\n}\n";
+    assert_eq!(after_f(&before), expected);
+}
+
+/// A write to the first copy's source between the two copies keeps the second
+/// reading the first copy's destination.
+#[test]
+fn test_a_write_to_the_source_between_stops_the_forwarding() {
+    let before = body(&[memcpy("@b", "@a", 16), "  store i8 1, ptr @a\n".to_owned(), memcpy("@c", "@b", 16)]);
+    assert_eq!(after_f(&before), before.replace("b0:\n", ""));
+}
+
+/// A copy out of a constant that repeats one byte is a memset of that byte.
+#[test]
+fn test_a_memcpy_from_a_zero_constant_is_a_memset() {
+    assert_eq!(
+        after_f(&body(&[memcpy("@b", "@k", 16)])),
+        "define void @f() {\n  call void @llvm.memset.p0.i64(ptr @b, i8 0, i64 16, i1 false)\n  ret void\n}\n"
+    );
+}
+
+/// A memset followed by a memcpy over its start only needs to set the rest.
+#[test]
+fn test_a_memset_only_sets_what_the_memcpy_after_it_leaves() {
+    let before =
+        body(&["  call void @llvm.memset.p0.i64(ptr @a, i8 0, i64 64, i1 false)\n".to_owned(), memcpy("@a", "@b", 16)]);
+    assert_eq!(
+        after_f(&before),
+        "define void @f() {
+  %0 = getelementptr i8, ptr @a, i64 16
+  call void @llvm.memset.p0.i64(ptr align 1 %0, i8 0, i64 48, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr @a, ptr @b, i64 16, i1 false)
+  ret void
+}
+"
+    );
+}
+
+/// A memset as long as the memcpy after it is overwritten whole: gone.
+#[test]
+fn test_a_memset_the_memcpy_overwrites_whole_is_removed() {
+    let before =
+        body(&["  call void @llvm.memset.p0.i64(ptr @a, i8 0, i64 16, i1 false)\n".to_owned(), memcpy("@a", "@b", 16)]);
+    assert_eq!(after_f(&before), "define void @f() {\n".to_owned() + &memcpy("@a", "@b", 16) + "  ret void\n}\n");
+}
+
+/// A memcpy of bytes a memset set is a memset of them.
+#[test]
+fn test_a_memcpy_of_a_memset_is_a_memset() {
+    let before =
+        body(&["  call void @llvm.memset.p0.i64(ptr @a, i8 1, i64 32, i1 false)\n".to_owned(), memcpy("@b", "@a", 16)]);
+    assert_eq!(
+        after_f(&before),
+        "define void @f() {
+  call void @llvm.memset.p0.i64(ptr @a, i8 1, i64 32, i1 false)
+  call void @llvm.memset.p0.i64(ptr @b, i8 1, i64 16, i1 false)
+  ret void
+}
+"
+    );
+}
+
+/// A copy out of an alloca nothing wrote reads undefined bytes: gone.
+#[test]
+fn test_a_memcpy_of_an_unwritten_alloca_is_removed() {
+    let before =
+        "define void @f() {\nb0:\n  %t = alloca [16 x i8]\n".to_owned() + &memcpy("@b", "%t", 16) + "  ret void\n}\n";
+    assert_eq!(after_f(&before), "define void @f() {\n  %t = alloca [16 x i8]\n  ret void\n}\n");
+}
+
+/// A memmove whose source cannot meet its destination is a memcpy.
+#[test]
+fn test_a_memmove_between_distinct_objects_is_a_memcpy() {
+    let before = body(&["  call void @llvm.memmove.p0.p0.i64(ptr @b, ptr @a, i64 16, i1 false)\n".to_owned()]);
+    assert_eq!(after_f(&before), "define void @f() {\n".to_owned() + &memcpy("@b", "@a", 16) + "  ret void\n}\n");
+}
+
+/// A memmove over its own source stays a memmove.
+#[test]
+fn test_a_memmove_over_its_own_source_stays() {
+    let text = "define void @f() {
+b0:
+  %p = getelementptr i8, ptr @a, i64 4
+  call void @llvm.memmove.p0.p0.i64(ptr %p, ptr @a, i64 16, i1 false)
+  ret void
+}
+";
+    assert_eq!(after_f(text), text.replace("b0:\n", ""));
+}
+
+/// A volatile memcpy is left alone.
+#[test]
+fn test_a_volatile_memcpy_is_left_alone() {
+    let text =
+        "define void @f() {\nb0:\n  call void @llvm.memcpy.p0.p0.i64(ptr @a, ptr @a, i64 16, i1 true)\n  ret void\n}\n";
+    assert_eq!(after_f(text), text.replace("b0:\n", ""));
+}
+
+/// `@f` of `text` after the pass.
+fn after(text: &str) -> String {
+    let mut module = parsed(&format!("{DECLARES}\n{GLOBALS}\n{text}"));
+    managed(&mut module, MemCpyOpt)
+}
+
+fn copy_aligned(
+    to: &str,
+    from: &str,
+    bytes: u32,
 ) -> String {
-    pairs_to(count, bits, "@d", 0)
+    format!("  call void @llvm.memcpy.p0.p0.i64(ptr align 1 {to}, ptr align 1 {from}, i64 {bytes}, i1 false)\n")
 }
 
-/// Twenty word pairs were forty moves; past what isel expands, one `rep movsw`.
+/// An aggregate loaded and stored right after is one memcpy (`h` of
+/// `opt -passes=memcpyopt`): the load and the store were two 16-byte moves.
 #[test]
-fn ten_dword_pairs_are_one_memcpy() {
-    let after = merged(&pairs(20, 16), &[&[7]]);
-    assert!(after.contains("@llvm.memcpy.p0.p0.i16(ptr %pd0, ptr %ps0, i16 40, i1 false)"), "{after}");
-    assert!(!after.contains("load i16, ptr %ps1"), "{after}");
+fn test_a_loaded_aggregate_stored_is_a_memcpy() {
+    let before =
+        "define void @f() {\nb0:\n  %v = load [16 x i8], ptr @a\n  store [16 x i8] %v, ptr @b\n  ret void\n}\n";
+    let text = after(before);
+    assert!(
+        text.contains(&copy_aligned("@b", "@a", 16)) && !text.contains("load") && !text.contains("store"),
+        "{text}"
+    );
 }
 
-/// Two dword pairs are what isel makes of a memcpy: nothing is gained, and a
-/// call in their place would be no better.
+/// Pointers that may meet make the copy a memmove (`g`).
 #[test]
-fn two_pairs_stay_as_they_are() {
-    let after = merged(&pairs(2, 32), &[&[7]]);
-    assert!(!after.contains("llvm.memcpy"), "{after}");
+fn test_a_loaded_aggregate_stored_through_a_pointer_that_may_meet_is_a_memmove() {
+    let before = "define void @f(ptr %p, ptr %q) {\nb0:\n  %v = load [16 x i8], ptr %q\n  store [16 x i8] %v, ptr %p\n  ret void\n}\n";
+    let text = after(before);
+    assert!(
+        text.contains("call void @llvm.memmove.p0.p0.i64(ptr align 1 %p, ptr align 1 %q, i64 16, i1 false)")
+            && !text.contains("load")
+            && !text.contains("store"),
+        "{text}"
+    );
 }
 
-/// Eight byte pairs are sixteen moves, and two dword pairs once copied.
+/// A write to the loaded bytes between the load and the store: the store is
+/// lifted above it and the copy goes there (`moveUp`, `f`).
 #[test]
-fn eight_byte_pairs_are_one_copy_of_two_dwords() {
-    let after = merged(&pairs(8, 8), &[&[7]]);
-    assert!(after.contains("llvm.memcpy") && after.contains("i16 8, i1 false"), "{after}");
+fn test_the_store_of_a_loaded_aggregate_is_lifted_above_a_write_to_what_was_loaded() {
+    let before = "define void @f() {\nb0:\n  %v = load [16 x i8], ptr @a\n  call void @llvm.memset.p0.i64(ptr @a, i8 0, i64 16, i1 false)\n  store [16 x i8] %v, ptr @b\n  ret void\n}\n";
+    let text = after(before);
+    let copy = text.find(&copy_aligned("@b", "@a", 16)).unwrap_or_else(|| panic!("{text}"));
+    let set = text.find("@llvm.memset.p0.i64(ptr @a").expect("the memset");
+    assert!(copy < set && !text.contains("load") && !text.contains("store"), "{text}");
 }
 
-/// A store to the bytes a later pair loads, between them, makes the order of
-/// the loads and stores the result: nothing is merged across it.
+/// The first write to the loaded bytes reads what the store writes: the store
+/// cannot move above it (`moveUp`'s first check), and the load and store stay.
 #[test]
-fn a_store_between_pairs_ends_the_run() {
-    let text = pairs(20, 16).replace("  %pd10 =", "  store i16 9, ptr @s\n  %pd10 =");
-    let after = merged(&text, &[&[7]]);
-    assert!(!after.contains("i16 40, i1 false"), "{after}");
+fn test_a_store_the_write_in_between_reads_is_not_lifted() {
+    let before = "define void @f() {\nb0:\n  %v = load [16 x i8], ptr @a\n  call void @llvm.memcpy.p0.p0.i64(ptr @a, ptr @b, i64 16, i1 false)\n  store [16 x i8] %v, ptr @b\n  ret void\n}\n";
+    let text = after(before);
+    assert!(text.contains("load [16 x i8]") && text.contains("store [16 x i8]"), "{text}");
 }
 
-/// Source and destination that are one object, the destination a word on, make
-/// each pair read what the one before wrote: not a memcpy.
+/// A scalar load and store are not a copy (the pin takes aggregates only).
 #[test]
-fn pairs_that_overlap_are_not_a_memcpy() {
-    let text = pairs_to(20, 16, "@s", 2);
-    let after = merged(&text, &[&[7]]);
-    assert!(!after.contains("llvm.memcpy"), "{after}");
+fn test_a_loaded_scalar_stored_stays() {
+    let before = "define void @f() {\nb0:\n  %v = load i32, ptr @a\n  store i32 %v, ptr @b\n  ret void\n}\n";
+    let text = after(before);
+    assert!(text.contains("load i32") && text.contains("store i32"), "{text}");
+}
+
+const SLOT_DECLARES: &str = "declare void @f(ptr nocapture) nounwind willreturn memory(argmem: write)
+declare void @use(ptr)
+";
+
+/// The call, its alloca `%tmp` and the copy of it to `%dst`, after the pass.
+fn slot(body: &str) -> String {
+    let mut module = parsed(&format!("{DECLARES}{SLOT_DECLARES}\n{body}"));
+    managed(&mut module, MemCpyOpt)
+}
+
+/// A call that fills a fresh alloca, copied to another: the call fills the
+/// destination and the copy is gone (`opt -passes=memcpyopt` `@a`).
+#[test]
+fn test_a_call_slot_is_the_copys_destination() {
+    let text = slot(
+        "define void @f2() {\nb0:\n  %dst = alloca [16 x i8]\n  %tmp = alloca [16 x i8]\n  call void @f(ptr nocapture %tmp)\n  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %tmp, i64 16, i1 false)\n  call void @use(ptr %dst)\n  ret void\n}\n",
+    );
+    assert!(
+        text.contains("call void @f(ptr nocapture %dst)") && !text.contains("@llvm.memcpy.p0.p0.i64(ptr %dst"),
+        "{text}"
+    );
+}
+
+/// The same through a load and a store of a scalar (`@scalar`).
+#[test]
+fn test_a_call_slot_through_a_loaded_scalar_stored() {
+    let text = slot(
+        "define void @f2() {\nb0:\n  %dst = alloca i32\n  %tmp = alloca i32\n  call void @f(ptr nocapture %tmp)\n  %v = load i32, ptr %tmp\n  store i32 %v, ptr %dst\n  call void @use(ptr %dst)\n  ret void\n}\n",
+    );
+    assert!(
+        text.contains("call void @f(ptr nocapture %dst)") && !text.contains("load") && !text.contains("store"),
+        "{text}"
+    );
+}
+
+/// The destination is used between the call and the copy: the call may not
+/// write it early (`@between`).
+#[test]
+fn test_a_call_slot_is_not_taken_when_the_destination_is_used_between() {
+    let text = slot(
+        "define void @f2() {\nb0:\n  %dst = alloca [16 x i8]\n  %tmp = alloca [16 x i8]\n  call void @f(ptr nocapture %tmp)\n  call void @use(ptr %dst)\n  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %tmp, i64 16, i1 false)\n  call void @use(ptr %dst)\n  ret void\n}\n",
+    );
+    assert!(
+        text.contains("call void @f(ptr nocapture %tmp)") && text.contains("@llvm.memcpy.p0.p0.i64(ptr %dst"),
+        "{text}"
+    );
+}
+
+/// The source is read elsewhere (`@other`): it holds more than the call wrote.
+#[test]
+fn test_a_call_slot_is_not_taken_when_the_source_is_read_elsewhere() {
+    let text = slot(
+        "define void @f2() {\nb0:\n  %dst = alloca [16 x i8]\n  %tmp = alloca [16 x i8]\n  call void @f(ptr nocapture %tmp)\n  %x = load i8, ptr %tmp\n  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %tmp, i64 16, i1 false)\n  call void @use(ptr %dst)\n  ret void\n}\n",
+    );
+    assert!(
+        text.contains("call void @f(ptr nocapture %tmp)") && text.contains("@llvm.memcpy.p0.p0.i64(ptr %dst"),
+        "{text}"
+    );
 }

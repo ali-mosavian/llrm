@@ -142,8 +142,8 @@
 //! `Bounded`; module entries `GlobalsAA`, `Summaries`, `Callbacks`; program
 //! entry `ProgramSummaries`; `Held`, `Ranges`, `Touched::reach`,
 //! `call_effects`, `writes`. [`crate::cfg`]'s `Shape`, [`crate::memoryssa`]'s
-//! `Accesses`, [`crate::observers`]'s `Published` and [`crate::noreturn`]'s
-//! `TerminalSites` are entries defined beside their analyses.
+//! `Accesses` and [`crate::observers`]'s `Published` are entries defined
+//! beside their analyses.
 //!
 //! # Needs
 //! [`crate::alias`], [`crate::consts`], [`crate::globalsaa`],
@@ -308,6 +308,9 @@ impl ModuleAnalysis for Summaries {
     ) -> Self::Result {
         let globals_held = analyses.get::<GlobalsAA>(module);
         let globals = Result::as_ref(&*globals_held).map_err(String::clone)?;
+        if crate::attrsummary::enabled() {
+            return Ok(crate::attrsummary::summaries(module, &analyses.program().layout, globals.tracked_globals()));
+        }
         let program = Rc::clone(analyses.program());
         let known = match program.cached::<ProgramSummaries>() {
             Some(all) => Some(Result::as_ref(&*all).map_err(String::clone)?[program.module].clone()),
@@ -1182,6 +1185,31 @@ impl Analysis for Pointers {
     type Result = Result<PointsTo, String>;
     const NAME: &'static str = "points-to";
     const SKIPS: bool = true;
+    const AUDITED: bool = true;
+    fn audit(
+        result: &Self::Result,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) {
+        if let Ok(facts) = result {
+            let unit = Unit::within(context, layout, function, analyses.outer());
+            // A callee the module defines is read in its body as it stood
+            // before this pass.
+            let snapshot = llrm_mir::passes::MODULE_SNAPSHOT.with(|held| held.borrow().clone());
+            let verify = snapshot
+                .as_ref()
+                .map(
+                    |module| {
+                        let mut verify = crate::capturecheck::Verify::new(module, layout, 8);
+                        verify.trust_external = true;
+                        verify
+                    },
+                );
+            crate::capturecheck::check_with(&unit, facts, verify.as_ref());
+        }
+    }
     fn depends() -> Option<Depends> {
         Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at), edges: true })
     }
@@ -1712,7 +1740,7 @@ impl Analysis for Counted {
             one.body.iter().any(|at| reached.contains(&crate::cfg::block(*at)))
                 || (cfg_changed
                     && (function.predecessors(crate::cfg::block(one.header)).iter().any(|pred| reached.contains(pred))
-                        || reached.iter().any(|r| shape.dominance.dominates(crate::cfg::id(r), one.header))))
+                        || reached.iter().any(|r| shape.dominance.dominates(function, crate::cfg::id(r), one.header))))
         }))
     }
 }
@@ -1806,6 +1834,56 @@ impl Analysis for PlainAccesses {
             outer: std::rc::Rc::clone(analyses.outer()),
         };
         Ok(std::rc::Rc::new(memoryssa::Accesses::plain(&unit, &calls).with_plain_source(source)))
+    }
+}
+
+/// A body's translated MemorySSA with the accesses it was made from.
+pub struct MssaGraph {
+    pub mssa: crate::mssa::Mssa,
+    pub accesses: std::rc::Rc<memoryssa::Accesses>,
+}
+
+/// Two graphs are equal when every access says the same (`shadow::said`): the
+/// manager's check of a preserved set compares a graph with the one made again.
+impl PartialEq for MssaGraph {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        std::ptr::eq(self, other) || crate::mssa::shadow::said(&self.mssa) == crate::mssa::shadow::said(&other.mssa)
+    }
+}
+
+impl std::fmt::Debug for MssaGraph {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        f.write_str("MssaGraph")
+    }
+}
+
+/// `MemorySSAAnalysis`: the graph `mssa::Mssa::build` makes of a body, once per
+/// body state. A pass that edits it takes a clone (`Mssa: Clone`) and updates
+/// that; the manager drops the cached graph with the pass's edit.
+pub struct MemorySsa;
+
+impl Analysis for MemorySsa {
+    type Result = Result<std::rc::Rc<MssaGraph>, String>;
+    const NAME: &'static str = "mssa";
+
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let plain = analyses.get::<PlainAccesses>(context, layout, function);
+        let accesses = Result::as_ref(&*plain).map_err(String::clone)?;
+        let shape = analyses.get::<Shape>(context, layout, function);
+        let mssa =
+            crate::mssa::Mssa::build(function, &shape.dominance, &crate::mssa::shadow::effect_of(accesses, function));
+        Ok(std::rc::Rc::new(MssaGraph { mssa, accesses: std::rc::Rc::clone(accesses) }))
     }
 }
 
@@ -1965,13 +2043,14 @@ impl Analysis for DominatedEdges {
         let shape = analyses.get::<Shape>(context, layout, function);
         let reached: llrm_mir::dense::IdSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
         let held = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone()).ok()?;
-        Some(Ok(held.keeping(|at| !dominated_by(&shape, &reached, at))))
+        Some(Ok(held.keeping(|at| !dominated_by(&shape, function, &reached, at))))
     }
 }
 
 /// Whether `at`, or a block above it, is one of `reached`.
 pub fn dominated_by(
     shape: &Shape,
+    function: &Function,
     reached: &llrm_mir::dense::IdSet<i64>,
     at: i64,
 ) -> bool {
@@ -1980,7 +2059,7 @@ pub fn dominated_by(
         if reached.contains(&one) {
             return true;
         }
-        above = shape.dominance.immediate(one);
+        above = shape.dominance.immediate(function, one);
     }
     false
 }
@@ -2027,7 +2106,7 @@ impl Analysis for Bounded {
         // block a change reached or one it dominates may have changed.
         let reached: llrm_mir::dense::IdSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
         let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, &|at| {
-            dominated_by(&shape, &reached, at)
+            dominated_by(&shape, function, &reached, at)
         });
         Some(Self::solved(context, layout, function, analyses, Some((bounds, &dirty))))
     }

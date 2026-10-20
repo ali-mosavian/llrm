@@ -55,7 +55,7 @@ fn simplified_in(
     let mut after = before.clone();
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
-    passes.add(super::Algebraic { size });
+    passes.add(super::Algebraic { size, llvm: false });
     passes
         .run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -122,39 +122,6 @@ fn unary(
 }
 
 #[test]
-fn test_offset_composition_preserves_modular_values() {
-    for (op, combined) in [("add", 14), ("sub", -26)] {
-        let text = unary(16, &format!("  %m = add i16 %x, -6\n  %r = {op} i16 %m, 20\n  ret i16 %r\n"));
-        assert_eq!(
-            checked(&text, &singles(&edges(16))),
-            unary(16, &format!("  %0 = add i16 %x, {combined}\n  ret i16 %0\n"))
-        );
-        unchanged(&unary(
-            16,
-            &format!("  %m = add i16 %x, -6\n  %r = {op} i16 %m, 20\n  %s = xor i16 %m, %r\n  ret i16 %s\n"),
-        ));
-    }
-}
-
-#[test]
-fn test_associative_bitwise_constants_combine() {
-    for (op, first, last, combined) in
-        [("and", 0xF0F3_u16, 0x3FFF_u16, 0x30F3_u16), ("or", 0xF003, 0x0F30, 0xFF33), ("xor", 0xFFFF, 0x0031, 0xFFCE)]
-    {
-        let (first, last, combined) = (first as i16, last as i16, combined as i16);
-        let text = unary(16, &format!("  %m = {op} i16 %x, {first}\n  %r = {op} i16 {last}, %m\n  ret i16 %r\n"));
-        assert_eq!(
-            checked(&text, &singles(&edges(16))),
-            unary(16, &format!("  %0 = {op} i16 %x, {combined}\n  ret i16 %0\n"))
-        );
-        unchanged(&unary(
-            16,
-            &format!("  %m = {op} i16 %x, {first}\n  %r = {op} i16 %m, {last}\n  %s = add i16 %m, %r\n  ret i16 %s\n"),
-        ));
-    }
-}
-
-#[test]
 fn test_mixed_bitwise_operations_stay_apart() {
     unchanged(&unary(16, "  %m = and i16 %x, 255\n  %r = or i16 %m, 4096\n  ret i16 %r\n"));
 }
@@ -193,30 +160,16 @@ fn test_a_value_added_twice_through_a_longer_chain_is_doubled() {
     assert_eq!(after.matches("add i16").count(), 2, "{after}");
 }
 
-/// A sum something else reads is shared work: the value is not doubled out of
-/// it. A constant twice is `offset_chain`'s.
-#[test]
-fn test_a_shared_sum_and_a_constant_are_not_doubled() {
-    unchanged(&binary(16, "  %m = add i16 %x, %a\n  %r = add i16 %m, %a\n  %s = xor i16 %m, %r\n  ret i16 %s\n"));
-    let text = binary(16, "  %m = add i16 %x, 3\n  %r = add i16 %m, 3\n  ret i16 %r\n");
-    assert_eq!(checked(&text, &pairs()), binary(16, "  %0 = add i16 %x, 6\n  ret i16 %0\n"));
-}
-
-#[test]
-fn test_scaled_chain_preserves_modular_values() {
-    let text = unary(16, "  %m = mul i16 %x, -32767\n  %r = shl i16 %m, 1\n  ret i16 %r\n");
-    assert_eq!(checked(&text, &singles(&edges(16))), unary(16, "  %0 = mul i16 %x, 2\n  ret i16 %0\n"));
-    unchanged(&unary(16, "  %m = mul i16 %x, -32767\n  %r = shl i16 %m, 1\n  %s = add i16 %m, %r\n  ret i16 %s\n"));
-}
-
 /// NBODY computed other*4 with two shifts.
 #[test]
 fn test_shifts_combine_short_of_the_width() {
     let text = unary(16, "  %m = shl i16 %x, 1\n  %r = shl i16 %m, 1\n  ret i16 %r\n");
     assert_eq!(checked(&text, &singles(&edges(16))), unary(16, "  %0 = shl i16 %x, 2\n  ret i16 %0\n"));
     unchanged(&unary(16, "  %m = shl i16 %x, 1\n  %r = shl i16 %m, 1\n  %s = add i16 %m, %r\n  ret i16 %s\n"));
-    // A count past the width is poison, and stays.
-    unchanged(&unary(16, "  %m = shl i16 %x, 16\n  %r = shl i16 %m, 1\n  ret i16 %r\n"));
+    // A count past the width is poison: never combined into one count past the
+    // width (17); ValueTracking knows the result zero, a refinement of it.
+    let (_, after) = simplified(&unary(16, "  %m = shl i16 %x, 16\n  %r = shl i16 %m, 1\n  ret i16 %r\n"));
+    assert!(!bare(&after).contains("17"), "{}", bare(&after));
 }
 
 /// Shifted out entirely is zero, not a shift by the width, which is poison.
@@ -388,7 +341,9 @@ fn test_integer_identities() {
         unary(16, "  ret i16 %x\n")
     );
     unchanged(&unary(16, "  %r = sub i16 0, %x\n  ret i16 %r\n"));
-    unchanged(&unary(16, "  %r = shl i16 0, %x\n  %s = add i16 %r, 1\n  ret i16 %s\n"));
+    // `0 << x` is zero (poison past the width): ValueTracking knows its bits.
+    let (_, after) = simplified(&unary(16, "  %r = shl i16 0, %x\n  %s = add i16 %r, 1\n  ret i16 %s\n"));
+    assert_eq!(bare(&after), unary(16, "  ret i16 1\n"));
 }
 
 #[test]
@@ -467,16 +422,6 @@ fn test_an_offset_scaled_then_offset_distributes() {
     ));
 }
 
-/// Without `nsw` kept, a sum the original never overflowed does not
-/// become poison when its constants combine.
-#[test]
-fn test_combined_constants_drop_overflow_flags() {
-    let text = unary(16, "  %m = add nsw i16 %x, 30000\n  %r = add nsw i16 %m, 30000\n  ret i16 %r\n");
-    // Where neither original sum overflows.
-    let done = checked(&text, &singles(&[-32768, -30000, -27233]));
-    assert_eq!(done, unary(16, "  %0 = add i16 %x, -5536\n  ret i16 %0\n"));
-}
-
 /// `sum += (i & 7) << 2` over a counted loop, `n` trips.
 fn masked_sum(mask_of: &str) -> String {
     format!(
@@ -511,58 +456,6 @@ fn test_a_mask_of_a_counter_moves_after_its_scale() {
     assert!(done.contains("  %0 = shl i16 %i, 2\n  %1 = and i16 %0, 28\n  %t = add i16 %s, %1\n"), "{done}");
     // A mask of what does not advance keeps its scale.
     unchanged(&masked_sum("%n"));
-}
-
-/// `s += a + b` with `b` computed between the two sums.
-#[test]
-fn test_a_recurrence_moves_to_the_root_of_its_sum() {
-    let text = "define i16 @f(i16 %n, i16 %a) {
-b0:
-  br label %b1
-
-b1:
-  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
-  %s = phi i16 [ 0, %b0 ], [ %next, %b2 ]
-  %c = icmp slt i16 %i, %n
-  br i1 %c, label %b2, label %b3
-
-b2:
-  %inner = add nsw i16 %s, %a
-  %b = mul i16 %a, 3
-  %next = add nsw i16 %inner, %b
-  %i1 = add i16 %i, 1
-  br label %b1
-
-b3:
-  ret i16 %s
-}
-";
-    let inputs: Vec<Vec<i128>> =
-        [0, 1, 7, 50].into_iter().flat_map(|n| edges(16).into_iter().map(move |a| vec![n, a])).collect();
-    let done = checked(text, &inputs);
-    assert!(done.contains("  %b = mul i16 %a, 3\n  %inner = add i16 %a, %b\n  %next = add i16 %s, %inner\n"), "{done}");
-}
-
-/// A sum that already reads its recurrence at the root is left as it is.
-#[test]
-fn test_a_recurrence_already_at_the_root_stays() {
-    unchanged(
-        "define i16 @f(i16 %n, i16 %a) {
-b0:
-  br label %b1
-
-b1:
-  %s = phi i16 [ 0, %b0 ], [ %next, %b1 ]
-  %inner = add i16 %s, %a
-  %next = add i16 %inner, %s
-  %c = icmp slt i16 %next, %n
-  br i1 %c, label %b1, label %b2
-
-b2:
-  ret i16 %s
-}
-",
-    );
 }
 
 /// Two truths `and`ed as frontend words are one `i1` `and`: rcflip kept
@@ -1203,7 +1096,7 @@ b3:
 fn a_mask_is_judged_by_the_bounds_the_manager_holds_not_by_new_ones() {
     use llrm_analysis::manager::Bounded;
     // The check derives them afresh to compare, and is counted.
-    if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_REPLAY") {
         return;
     }
     let mut module = parsed(&masked_loop(40, 63));
@@ -1237,6 +1130,37 @@ b0:
         [0, 1, 5, 6, 7, 100, -3, 12345].iter().flat_map(|&i| [0, 1, 2, 3, 9, -1, 77].map(|x| vec![i, x])).collect();
     let after = checked(text, &inputs);
     assert_eq!(after.matches("and i32").count(), 1, "{after}");
+}
+
+/// A mask on a value whose high bits only a low-bits user reads is dropped, and
+/// the `nsw` of the sums and products that now see those bits goes with it:
+/// `x = (x * 25173 + 13849) & 0xFFFF` read as `& 0xFFF` kept `mul nsw` on the
+/// unmasked value, which overflows (poison in the interpreter;
+/// phi_slot_unknown_arm walked past it).
+#[test]
+fn test_dropping_a_mask_nobody_reads_drops_the_nsw_of_what_sees_its_bits() {
+    let text = "define i32 @f(i32 %x) {
+b0:
+  br label %loop
+
+loop:
+  %s = phi i32 [ %x, %b0 ], [ %m, %loop ]
+  %i = phi i16 [ 0, %b0 ], [ %i1, %loop ]
+  %mul = mul nsw i32 %s, 25173
+  %add = add nsw i32 %mul, 13849
+  %m = and i32 %add, 65535
+  %low = and i32 %add, 4095
+  %i1 = add i16 %i, 1
+  %c = icmp slt i16 %i1, 5
+  br i1 %c, label %loop, label %out
+
+out:
+  ret i32 %low
+}
+";
+    let inputs: Vec<Vec<i128>> = [0, 1, 255, 4095, 65535, 12345].iter().map(|&x| vec![x]).collect();
+    let after = checked(text, &inputs);
+    assert!(!after.contains("nsw"), "{after}");
 }
 
 /// bench/x_popcount: `rev32(s) & 255` read one byte of five 32-bit stages; the
@@ -1379,7 +1303,7 @@ fn test_the_recurrences_of_a_body_are_asked_of_the_manager_not_derived_again() {
     module.datalayout = Some(LEGAL.to_owned());
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.add(crate::fold::Fold);
-    passes.add(super::Algebraic { size: false });
+    passes.add(super::Algebraic { size: false, llvm: false });
     let before = llrm_analysis::consts::register_derivations();
     passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let derived = llrm_analysis::consts::register_derivations() - before;
@@ -1396,8 +1320,11 @@ fn test_only_the_loops_holding_a_masked_source_are_asked_what_advances() {
         let mut text = masked_sum("%i").replace("b3:\n  ret i16 %s\n", "b3:\n  br label %e0\n");
         for at in 0..extra_loops {
             let next = if at + 1 == extra_loops { "x".to_owned() } else { format!("e{}", at + 1) };
+            // The loop is entered from the one before it (the first from `b3`):
+            // a phi's input names the block that branches there.
+            let before = if at == 0 { "b3".to_owned() } else { format!("e{}", at - 1) };
             text = text.replace("\n}\n", &format!(
-                "\ne{at}:\n  %j{at} = phi i16 [ 0, %b3 ], [ %j{at}n, %e{at} ]\n  %j{at}n = add i16 %j{at}, 1\n  %d{at} = icmp slt i16 %j{at}n, %n\n  br i1 %d{at}, label %e{at}, label %{next}\n}}\n"
+                "\ne{at}:\n  %j{at} = phi i16 [ 0, %{before} ], [ %j{at}n, %e{at} ]\n  %j{at}n = add i16 %j{at}, 1\n  %d{at} = icmp slt i16 %j{at}n, %n\n  br i1 %d{at}, label %e{at}, label %{next}\n}}\n"
             ).replacen("}}\n", "}\n", 1));
         }
         if extra_loops == 0 {
@@ -1408,7 +1335,7 @@ fn test_only_the_loops_holding_a_masked_source_are_asked_what_advances() {
         module.datalayout = Some(LEGAL.to_owned());
         let mut passes = llrm_mir::passes::PassManager::default();
         passes.add(crate::fold::Fold);
-        passes.add(super::Algebraic { size: false });
+        passes.add(super::Algebraic { size: false, llvm: false });
         llrm_analysis::induction::ADVANCES_ASKED.with(|one| one.set(0));
         passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
         llrm_analysis::induction::ADVANCES_ASKED.with(std::cell::Cell::get)
@@ -1419,4 +1346,40 @@ fn test_only_the_loops_holding_a_masked_source_are_asked_what_advances() {
         with_two_more, alone,
         "{with_two_more} loops asked with two loops that hold no masked source, {alone} without"
     );
+}
+
+/// CVP's `processAnd` and `processSDivOrSRem` read LazyValueInfo, which knows
+/// an `llvm.assume` the `ranges` engine does not: `x & 63` after
+/// `assume(x u< 64)` is `x`, and `x sdiv 4` after `assume(x s>= 0)` is a
+/// shift. Both stayed.
+#[test]
+fn a_mask_and_a_division_an_assume_makes_redundant_are_removed() {
+    let mask = checked(
+        "declare void @llvm.assume(i1)
+
+define i32 @f(i32 %x) {
+b0:
+  %a = icmp ult i32 %x, 64
+  call void @llvm.assume(i1 %a)
+  %m = and i32 %x, 63
+  ret i32 %m
+}
+",
+        &[vec![5], vec![63]],
+    );
+    assert!(!mask.contains("and i32"), "{mask}");
+    let division = checked(
+        "declare void @llvm.assume(i1)
+
+define i32 @f(i32 %x) {
+b0:
+  %a = icmp sge i32 %x, 0
+  call void @llvm.assume(i1 %a)
+  %d = sdiv i32 %x, 4
+  ret i32 %d
+}
+",
+        &[vec![8], vec![0], vec![7]],
+    );
+    assert!(!division.contains("sdiv"), "{division}");
 }

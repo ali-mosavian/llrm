@@ -84,6 +84,11 @@ why = "builds and runs QCport against the all-Borland build: 100 s"
 owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**"]
 
 [[heavy]]
+step = "oracle-qcport"
+why = "QCport's modules under every LLRM_CHECK_* oracle, then built and run against the Borland build: the C corpus the oracle sweep lacks"
+owners = ["tools/oracle_qcport.py", "tools/oracle_sweep.py", "tools/oracle_expected.toml", "tools/qcport*", "tools/qcport/**", "crates/frontends/llrm-c/**", "crates/backend/**", "crates/opt/**"]
+
+[[heavy]]
 step = "rfmt-post"
 why = "the formatter's own tests (cold build of its parser dependency: 40 s)"
 owners = ["tools/rfmt-post/**", "tools/fmt.sh", "rustfmt.toml"]
@@ -111,12 +116,17 @@ filter = "test_the_identity_gate_passes"
 # skipped llrm-mir's dense-key ratchet and main's full run went red on it). A test that reads sources and is not listed here fails
 # test_gate. `step = "integration"`: a root test binary the integration step runs on every code change anyway.
 [scan_inputs]
-paths = ["**/*.rs", "tools/**/*.py", "tools/**/*.sh", "crates/**/*.py", "crates/**/*.sh", "src/**/*.py", "src/**/*.sh", "crates/ir/llrm-mir/dense-keys.txt", "tests/target_facts.baseline"]
+paths = ["**/*.rs", "tools/**/*.py", "tools/**/*.sh", "crates/**/*.py", "crates/**/*.sh", "src/**/*.py", "src/**/*.sh", "crates/ir/llrm-mir/dense-keys.txt", "crates/ir/llrm-mir/slice-users.txt", "tests/target_facts.baseline"]
 
 [[scan]]
 file = "crates/ir/llrm-mir/src/tests.rs"
 package = "llrm-mir"
 lib = "no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id"
+
+[[scan]]
+file = "crates/ir/llrm-mir/src/tests.rs"
+package = "llrm-mir"
+lib = "no_file_gains_a_slice_read_of_a_use_list"
 
 [[scan]]
 file = "crates/opt/llrm-transforms/tests/no_hand_solved_bounds.rs"
@@ -133,11 +143,19 @@ file = "tests/seeded_maps.rs"
 step = "integration"
 
 [[scan]]
+file = "tests/no_todo.rs"
+step = "integration"
+
+[[scan]]
 file = "tests/target_facts.rs"
 step = "integration"
 
 [[scan]]
 file = "tests/no_local_paths.rs"
+step = "integration"
+
+[[scan]]
+file = "tests/no_kill_by_pattern.rs"
 step = "integration"
 
 # Whole binaries that are heavy: every test in them is slow.
@@ -205,7 +223,7 @@ perf = ["pytest-perf", "oracle-premise"]  # steps that read hardware counters: t
 oracle = ["oracle-sweep"]  # CI runs it as `oracle-1` .. `oracle-N` ([oracle] shards): every LLRM_CHECK_* oracle over a slice of the BASIC and Nib programs
 tools = ["torture"]
 bench = ["bench"]  # CI runs it as `bench-1` .. `bench-N` ([bench] shards): one slice of the benchmarks each, judged together by bench.py --merge
-reference = ["turbo", "cv4", "qcport"]
+reference = ["turbo", "cv4", "qcport", "oracle-qcport"]
 dos = ["dos-slow"]
 cost = ["measure"]
 
@@ -259,6 +277,7 @@ group_env = { reference = { QCPORT = "rm-quake/src" }, cost = { QCPORT = "rm-qua
 turbo = ["turbo"]
 cv4 = ["codeview"]
 qcport = ["qcport"]
+oracle-qcport = ["qcport"]
 dos-slow = ["qb45", "qb45demos"]
 pytest-perf = ["perf"]
 oracle-premise = ["perf"]
@@ -309,6 +328,43 @@ high = 0.025         # a step needs this share of the compile's work to fail (th
 
 # Rows the user accepted a rise on, each at a ceiling equal to what the decision measured: a row above its ceiling fails as ever.
 # A row names a prefix (`nest O1` is also its steps); the limits it gives replace the general ones for it. Tighten as the follow-up lands.
+
+# A row with `branch` is a decision for that PR alone (tools/measure.py drops it for any other head and lays its limits over the
+# first matching row, the higher standing). T-1, https://github.com/ali-mosavian/llrm/issues/2295: the scalar GVN (#2179) costs +1.0% of
+# a compile and gvn's own cost is x1.1 to x1.6 of the base's while the old forwarding and pricing machinery still runs beside it
+# (a constant factor: gvn at 512, 1024, 2048, 4096 statements of `straight` O1 is x1.414, x1.414, x1.413, x1.410 of the base's).
+# Exit, the same for each of the four: stages 4-6 of docs/architecture/gvn-port.md delete spill_forecast, loadjoins, motion_price and
+# joined and Gvn::run reaches <= 25,680 instructions per IR instruction per run; the four are deleted in that PR.
+[[measure.accepted]]
+row = "qcport -Os"
+branch = "alim/feat/gvn-scalar-pr"
+geomean = 1.0145
+why = "T-1: qcport geomean at -Os."
+
+[[measure.accepted]]
+suffix = "mir gvn"
+branch = "alim/feat/gvn-scalar-pr"
+pass_slack = 1.65
+step_rise = 1.6
+why = "T-1: gvn's own cost at 2N against the base's, on every axis and level (widest read: cells O1 x1.626, straight O1 x1.583)."
+
+[[measure.accepted]]
+row = "straight Os"
+branch = "alim/feat/gvn-scalar-pr"
+worst = 1.0225
+why = "T-1: the whole compile at 2N=1024 of the straight axis (read x1.0220)."
+
+[[measure.accepted]]
+row = "callers Os analysis call-effects"
+branch = "alim/feat/gvn-scalar-pr"
+pass_slack = 1.15
+why = "T-1: call-effects at 2N (read x1.133), asked more often by the scalar pass's callers."
+
+[[measure.accepted]]
+row = "callers-m16 Os analysis call-effects"
+branch = "alim/feat/gvn-scalar-pr"
+pass_slack = 1.15
+why = "T-1: call-effects at 2N (read x1.132)."
 
 [[measure.accepted]]
 row = "fjoins O1 analysis through-memory"

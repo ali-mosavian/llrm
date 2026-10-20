@@ -831,3 +831,70 @@ def test_the_build_the_bench_takes_its_base_from_makes_every_tool_the_bench_runs
     named = set(re.findall(r"--bin (llrm-[a-z]+)", recipe))
     assert "--bins" in recipe or ran <= named, (measure.BENCH_BASE_PROFILE, recipe, ran)
     assert "--bins" not in measure.MEASURE_BUILDS["dist"], "the dist build is the compiler's cost alone: the bench does not take its base from it"
+
+
+MINE = "alim/feat/gvn-scalar-pr"
+
+
+def gvn_readings():
+    """The T-1 classes (#2295, #2179), each as (what it is, a call that says whether it fails under a tolerance table)."""
+    qcport = lambda scale: made({f"qcport/m{i} -Os": int(1_000_000 * scale) for i in range(65)})
+    qbase = made({f"qcport/m{i} -Os": 1_000_000 for i in range(65)})
+    step = lambda key, ratio, whole=400.0: ({key: [50.0, 100.0, 200.0, whole]}, {key: [50.0 * ratio, 100.0 * ratio, 200.0 * ratio, whole]})
+    return {
+        "qcport -Os geomean": (1.0140, 1.0146, lambda tol, x: measure.rises(qbase, qcport(x), tol)[1]),
+        "gvn at 2N": (1.64, 1.66, lambda tol, x: measure.step_rises(*step("cells O1 mir gvn", x), tol)[1]),
+        "gvn step rise": (1.58, 1.70, lambda tol, x: measure.step_rises(*step("straight O1 mir gvn", x), tol)[1]),
+        "straight Os compile": (
+            1.0222,
+            1.0230,
+            lambda tol, x: measure.axis_rises({"straight Os": [500, 1000, 2000]}, {"straight Os": [500, 1000, 2000 * x]}, tol)[1],
+        ),
+        "callers Os call-effects": (1.14, 1.16, lambda tol, x: measure.step_rises(*step("callers Os analysis call-effects", x, 2000.0), tol)[1]),
+    }
+
+
+def test_each_gvn_exception_class_passes_on_its_pr_up_to_its_ceiling_and_fails_above_it_and_elsewhere():
+    """T-1 (#2295): the scalar GVN's PR (#2179) alone may read these up to the ceilings; the same reading on another head fails at the
+    normal limit, and above its ceiling it fails on the PR too."""
+    mine, other = measure.tolerances(branch=MINE), measure.tolerances(branch="alim/feat/something-else")
+    for name, (inside, above, fails) in gvn_readings().items():
+        assert not fails(mine, inside), f"{name}: {inside} is inside the ceiling on its PR"
+        assert fails(other, inside), f"{name}: {inside} fails on any other head"
+        assert fails(mine, above), f"{name}: {above} is above the ceiling on its PR"
+
+
+def test_the_gvn_gvn_exception_leaves_every_other_step_at_the_normal_limits():
+    """The suffix rule is `mir gvn`, not every step: a fold step at the same reading fails on the PR."""
+    mine = measure.tolerances(branch=MINE)
+    base = {"cells O1 mir fold": [50.0, 100.0, 200.0, 400.0]}
+    assert measure.step_rises(base, {"cells O1 mir fold": [80.0, 160.0, 320.0, 400.0]}, mine)[1]
+    assert not [one for one in measure.tolerances(branch="x")["accepted"] if "branch" in one]
+
+def test_a_step_rise_line_says_it_is_an_own_reading_on_this_build_profile(monkeypatch):
+    """#2318: the gate read gvn x1.583 where a direct reading said x1.41, and neither said what it was: the same binaries give 1.583
+    (own, dist), 1.507 (total, dist), 1.523 (own, release) and 1.460 (total, release)."""
+    monkeypatch.setattr(measure, "PROFILE", "dist")
+    key = "straight O1 mir gvn"
+    base, now = {key: [10.0, 20.0, 44.3, 400.0]}, {key: [15.0, 30.0, 70.1, 410.0]}
+    lines, bad = measure.step_rises(base, now, measure.tolerances())
+    assert "(own, dist)" in lines[0] and "(own, dist)" in bad[0], (lines, bad)
+
+
+def test_the_gate_reads_a_step_as_the_own_column_of_its_row_not_the_total(monkeypatch, tmp_path):
+    """The same compile's `[instr]` row read by the gate and by hand (`awk '{print $2}'` own, `$5` total) is one number for each definition:
+    the gate's is the own column, less the empty file's."""
+    rows = lambda own, total: f"[instr]  {own:8.3f} Minstr own  {total:8.3f} Minstr total  1x mir gvn\n"
+    seen = {}
+
+    def sample(command, env):
+        text = Path(command[-1]).read_text()
+        own = 0.1 * len(text) ** 0.5 if text else 0.0
+        seen[len(text)] = rows(own, own * 1.15)
+        return 0, "", seen[len(text)]
+
+    monkeypatch.setattr(measure.scaling_gate.scaling, "sample", sample)
+    got = measure.scaling_gate.pass_costs("straight", "O1", tmp_path, command=lambda compiler, level, source: ["cc", str(source)])
+    big = got["straight O1 mir gvn"][2]
+    by_hand = seen[max(seen)].split()  # [instr] OWN Minstr own TOTAL Minstr total ...
+    assert big == float(by_hand[1]) and big != float(by_hand[4]), got

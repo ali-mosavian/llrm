@@ -22,6 +22,10 @@ A count above the base's fails unless a waiver (`tools/bench/waivers`) names it;
 
 It is an executed-instruction count. It models no latency, so it ranks code for an in-order machine and says nothing about a Pentium's pairing or a 486's cache.
 
+## The 486 clock model: `vsgcc/harness.py`
+
+The rows table's clocks are the i486 data sheet's per-instruction counts (Intel 240440-002, table 10.1) summed over the instructions executed, plus three clocks for each misaligned memory operand. It is blind to code alignment, the prefetch queue and cache-line fills: a change that only moves code (function and block alignment, E2) cannot change a clock, and that is by construction. "No clock gain" from such a change is not evidence that it gains nothing on hardware; its cost, in bytes, is the only thing the rows show. Judge such a change by the bytes and by a hardware or cycle-accurate measurement, not by the clocks column.
+
 ## What the compiler expects: `tools/sizes.py`
 
 Object code bytes of every program, for two builds side by side. It prints no instruction or memory-operand column: the backend's per-call cost estimate, summed, was not comparable across builds (#390, #433, #481). `tools/bench` counts what runs.

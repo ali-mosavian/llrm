@@ -197,6 +197,12 @@ def test_a_tool_the_caller_requires_is_never_skipped(tmp_path):
     assert "turbo" not in gate.missing_capabilities(env)
 
 
+def test_a_require_variable_set_to_zero_does_not_require_the_tool(tmp_path):
+    """LLRM_REQUIRE_TURBO=0 counted as set (a truthy string), so a host without Turbo failed instead of skipping; the compilers read `0` as off (#2279)."""
+    env = {"HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "0", "GATE_ALLOW_MISSING": "1"}
+    assert "turbo" in gate.missing_capabilities(env)
+
+
 def test_a_tool_that_is_present_is_not_missing(tmp_path):
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin/TCC.EXE").touch()
@@ -207,7 +213,7 @@ def test_a_tool_that_is_present_is_not_missing(tmp_path):
 
 def test_ci_groups_hold_only_the_steps_that_can_run_here():
     p = gate.plan(["crates/ir/llrm-mir/src/lib.rs"])
-    skipped = {"turbo": "x", "cv4": "x", "qcport": "x"}
+    skipped = {"turbo": "x", "cv4": "x", "qcport": "x", "oracle-qcport": "x"}
     groups = gate.groups_of(p, skipped)
     assert "reference" not in groups and "turbo" not in sum(groups.values(), [])
 
@@ -216,7 +222,7 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
     env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
     out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
     got = __import__("json").loads(out)
-    assert set(got["skipped"]) - {"measure", "pytest-perf", "oracle-premise"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
+    assert set(got["skipped"]) - {"measure", "pytest-perf", "oracle-premise"} == {"turbo", "cv4", "qcport", "oracle-qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
     assert "run" in got["groups"]["run"]
 
 
@@ -400,7 +406,7 @@ def test_every_test_that_reads_the_trees_sources_is_a_listed_scan():
 def test_a_failing_scan_does_not_hide_the_ones_after_it(tmp_path):
     """&& stopped at the first red scan; the step runs every scan and fails if any did."""
     command = gate.commands(gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]), gate.load(), gate.packages())["scans"]
-    assert "&&" not in command.replace("cargo test", "") and command.count("|| rc=1") == 3 and command.endswith("exit $rc")
+    assert "&&" not in command.replace("cargo test", "") and command.count("|| rc=1") == command.count("cargo test") > 0 and command.endswith("exit $rc")
 
 
 def test_a_diff_that_selects_only_the_root_crate_runs_no_lib_or_doc_tests():
@@ -1019,6 +1025,7 @@ def test_a_step_log_is_a_new_file_so_an_orphan_of_a_killed_gate_cannot_write_int
 
 def test_a_gate_killed_by_sigterm_kills_its_running_steps(tmp_path):
     """A gate killed by SIGTERM left its step's cargo running, which then wrote to the log of the next run."""
+    import contextlib
     import os
     import signal
     import subprocess as sp
@@ -1031,7 +1038,8 @@ def test_a_gate_killed_by_sigterm_kills_its_running_steps(tmp_path):
     sleeper = f"sleep 62.{os.getpid()}"
     here = str(Path(gate.__file__).parent)
     ready = tmp_path / "ready"
-    command = f"touch {ready}; {sleeper}"
+    sleeper_pid = tmp_path / "sleeper.pid"
+    command = f"{sleeper} & echo $! > {sleeper_pid}; touch {ready}; wait"
     code = f"import sys, os, pathlib; sys.path.insert(0, {here!r}); import gate; gate.kill_on_term(); gate.run_step('s', {command!r}, pathlib.Path({str(tmp_path)!r}), dict(os.environ), stall=600)"
     gate_proc = sp.Popen([_sys.executable, "-c", code])
     try:
@@ -1048,7 +1056,11 @@ def test_a_gate_killed_by_sigterm_kills_its_running_steps(tmp_path):
         _time.sleep(0.3)
         assert sleeper not in ps().splitlines(), "the step outlived the gate"
     finally:
-        sp.run(["pkill", "-f", sleeper])
+        # Only what this test started: the gate it ran, and the sleeper whose pid the step wrote down (no kill by name or pattern).
+        gate_proc.kill()
+        if sleeper_pid.exists():
+            with contextlib.suppress(ProcessLookupError, ValueError):
+                os.kill(int(sleeper_pid.read_text()), signal.SIGKILL)
 
 
 def test_the_gate_scope_is_omitted_from_systemd_oomd(tmp_path):
@@ -1228,7 +1240,7 @@ def test_the_checks_that_build_nothing_run_alone_before_the_build():
 def test_a_draft_runs_plan_and_static_only_and_is_never_reported_as_a_pass():
     """Forty drafts running the full gate would swamp the runners: ready_for_review starts it, the merge loop reads only `PASS at`."""
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
-    assert "types: [opened, synchronize, reopened, ready_for_review]" in workflow
+    assert "types: [labeled]" in workflow
     assert "needs.plan.outputs.draft != 'true' && needs.plan.outputs.any" in workflow
     assert "DRAFT at ${head:0:12}" in workflow
 
@@ -1363,7 +1375,7 @@ def test_a_group_of_tree_only_checks_has_no_build_and_a_group_that_runs_binaries
 def test_the_bench_shards_and_regroupings_keep_the_job_count_down():
     """The account runs 20 hosted jobs at once; each job costs 70-140 s of set-up. A group under ~2 minutes of work is not its own job."""
     cfg = gate.load()
-    assert cfg["bench"]["shards"] == 3 and "identity" in cfg["groups"]["unit"] and cfg["groups"]["reference"] == ["turbo", "cv4", "qcport"]
+    assert cfg["bench"]["shards"] == 3 and "identity" in cfg["groups"]["unit"] and cfg["groups"]["reference"] == ["turbo", "cv4", "qcport", "oracle-qcport"]
 
 
 def test_the_draft_verdict_comes_from_the_api_at_plan_time_and_is_checked_again_at_the_end():

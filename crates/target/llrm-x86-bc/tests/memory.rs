@@ -47,7 +47,13 @@ fn printed(
         module
             .add_variable(
                 name,
-                GlobalVariable { ty, constant: false, initializer: Some(zero), align: None },
+                GlobalVariable {
+                    externally_initialized: false,
+                    ty,
+                    constant: false,
+                    initializer: Some(zero),
+                    align: None,
+                },
                 Linkage::Internal,
             )
             .expect("free");

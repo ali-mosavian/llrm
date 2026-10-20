@@ -147,7 +147,19 @@ pub fn described_by_size(
     prices: &CpuPrices,
     sizes: Option<OperationCosts>,
 ) -> Rc<dyn llrm_mir::target::Machine> {
+    described_with(prices, sizes, None, None)
+}
+
+/// `described_by_size`, with the target's LLVM cost model (`Machine::tti`).
+pub fn described_with(
+    prices: &CpuPrices,
+    sizes: Option<OperationCosts>,
+    tti: Option<Rc<dyn llrm_mir::tti::Tti>>,
+    lowering: Option<Rc<dyn llrm_mir::lowering::Lowering>>,
+) -> Rc<dyn llrm_mir::target::Machine> {
     Rc::new(Described {
+        tti,
+        lowering,
         registers: prices.registers,
         call_registers: prices.call_registers,
         float_registers: prices.float_registers,
@@ -170,6 +182,8 @@ pub fn described_by_size(
 }
 
 struct Described {
+    tti: Option<Rc<dyn llrm_mir::tti::Tti>>,
+    lowering: Option<Rc<dyn llrm_mir::lowering::Lowering>>,
     registers: i64,
     call_registers: i64,
     float_registers: i64,
@@ -237,6 +251,14 @@ impl llrm_mir::target::Machine for Described {
 
     fn costs(&self) -> OperationCosts {
         self.operations.clone()
+    }
+
+    fn tti(&self) -> Option<Rc<dyn llrm_mir::tti::Tti>> {
+        self.tti.clone()
+    }
+
+    fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
+        self.lowering.clone()
     }
 
     fn size_costs(&self) -> OperationCosts {
@@ -360,6 +382,27 @@ pub trait Target {
     /// a value in: each by its full register and by the one a prologue pushes.
     fn callee_saved(&self) -> Vec<(RegId, RegId)>;
 
+    /// The register `calling.toml` or a description names `name` (`ebx`,
+    /// `st0`, `x19`), as the family spells it.
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId;
+
+    /// The registers a result `width` bytes wide leaves in under `convention`.
+    fn convention_results(
+        &self,
+        convention: &calling::Convention,
+        width: u32,
+    ) -> Vec<RegId>;
+
+    /// What `convention` keeps for its caller: each register by its full
+    /// register and the one pushed.
+    fn convention_callee_saved(
+        &self,
+        convention: &calling::Convention,
+    ) -> Vec<(RegId, RegId)>;
+
     /// One CPU's timings (a column of the target's `timings.times`), if the
     /// target prices it.
     fn cpu_table(
@@ -374,11 +417,53 @@ pub trait Target {
     /// `x86.instr`'s format.
     fn forms_text(&self) -> String;
 
+    /// What the reader of `forms_text` must know of this target's family.
+    fn dialect(&self) -> &'static llrm_instr::Dialect;
+
     /// The operand size an instruction has without a size prefix, in bytes.
     fn operand_bytes(&self) -> i64;
 
+    /// Bytes of a two-register operation on `width`-byte registers.
+    fn register_op_bytes(
+        &self,
+        width: i64,
+    ) -> i64;
+
+    /// Bytes of a shift of a `width`-byte register by `count`.
+    fn shift_op_bytes(
+        &self,
+        count: i64,
+        width: i64,
+    ) -> i64;
+
+    /// Bytes of a multiply of a `width`-byte register by the immediate
+    /// `number`.
+    fn multiply_immediate_bytes(
+        &self,
+        number: i64,
+        width: i64,
+    ) -> i64;
+
     /// The CPU a compile is priced for where none is asked.
     fn default_cpu(&self) -> &'static str;
+
+    /// `TargetLowering::getPrefFunctionAlignment` as a power of two (X86: 16
+    /// bytes, 4); 0: functions are not aligned.
+    fn pref_function_alignment(&self) -> u8 {
+        0
+    }
+
+    /// `TargetLowering::getPrefLoopAlignment` as a power of two (X86: 16
+    /// bytes, 4); 0: loops are not aligned.
+    fn pref_loop_alignment(&self) -> u8 {
+        0
+    }
+
+    /// `X86AsmBackend::getMaximumNopSize`: the longest single no-operation
+    /// the padding of this target's code may use.
+    fn max_nop_bytes(&self) -> u8 {
+        1
+    }
 
     /// The operations priced by `price` (the CPU's clocks of a form), as the
     /// target's `opcosts.txt` makes them of forms; `prefix` is the CPU's

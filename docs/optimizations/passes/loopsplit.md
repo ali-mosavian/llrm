@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopsplit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopsplit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopsplit.rs sha256:1ac9666413401300c6e7036b945876af09532f049bba7e43b3e3fd121e166cdc -->
+<!-- src: crates/opt/llrm-transforms/src/loopsplit.rs sha256:487aa7e2fa82c98ae47feed71dc377fd30193be25edd89d511ac006d2a915ccd -->
 
 # loopsplit
 
@@ -122,4 +122,4 @@ Nothing when it splits: the function is replaced by the candidate.
 ## See also
 Implements gcc's `tree-ssa-loop-split.cc` (`split_loop`, `-fsplit-loops`).
 LLVM has no scalar counterpart (IRCE splits for range checks, #1194).
-[`crate::unswitch`](unswitch.md) does the same for a test that does not change.
+[`crate::simpleloopunswitch`](simpleloopunswitch.md) does the same for a test that does not change.

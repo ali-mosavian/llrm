@@ -3,7 +3,7 @@
 
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::memory;
 use llrm_mir::module::{BlockId, InstId, Module, Operand, Use, ValueId};
 use llrm_mir::types::Type;
@@ -345,9 +345,9 @@ fn a_noundef_replacement_that_stays_keeps_its_range() {
 
 // ---- the dominator tree queries and replaceDominatedUsesWith
 
-fn tree_of(module: &Module) -> DominatorTree {
+fn tree_of(module: &Module) -> DomTree {
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-    DominatorTree::new(function)
+    DomTree::of(function)
 }
 
 fn block(
@@ -895,6 +895,37 @@ b2:
 }
 ";
 
+/// The records said before the predecessor's branch go with the terminator that
+/// takes its place: the merge redirected the uses of the block before it erased
+/// the branch, which then named its own block, and the records stayed standing
+/// before the erased branch (nib: "a debug record of !8 stands before
+/// instruction 5, which is no longer in the function").
+#[test]
+fn merging_leaves_the_records_of_the_old_branch_before_the_new_terminator() {
+    let (merged, module) = merged(
+        "define i16 @f(i16 %x) {
+b0:
+  %a = add i16 %x, 1
+  #dbg_value(i16 %a, !0)
+  br label %b1
+
+b1:
+  ret i16 %a
+}
+
+!0 = !{!\"v\"}
+",
+        "b1",
+        false,
+    );
+    assert!(merged);
+    assert!(llrm_mir::verify::verify(&module).is_empty(), "{:?}", llrm_mir::verify::verify(&module));
+    let (_, _, function) = module.functions().next().expect("@f");
+    let ret = function.terminator(function.entry().expect("entry")).expect("a terminator");
+    assert!(function.debug_records().iter().all(|one| one.before == ret), "{:?}", function.debug_records());
+    assert_eq!(function.debug_records().len(), 1);
+}
+
 /// A block its predecessor alone enters joins it: the phi is its one value,
 /// the instructions follow the predecessor's, and the block is gone.
 #[test]
@@ -1359,4 +1390,43 @@ b1:
     assert!(merged);
     assert_eq!(lines(&body(&after), "br"), Vec::<String>::new());
     assert_eq!(results(&after, &[&[1, 1], &[1, 2]]), results(&before, &[&[1, 1], &[1, 2]]));
+}
+
+/// `changeToUnreachable`: the instruction and what follows it in its block go,
+/// the block ends in `unreachable`, uses of what went are poison, and the
+/// successor's phi loses its input from the block.
+#[test]
+fn test_change_to_unreachable_cuts_the_block_and_the_successors_phi() {
+    let mut module = parsed(
+        "define i16 @f(i1 %c, i16 %x) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %d = add i16 %x, 1
+  br label %b2
+
+b2:
+  %p = phi i16 [ %x, %b0 ], [ %d, %b1 ]
+  ret i16 %p
+}
+",
+    );
+    let at = inst(&module, "d");
+    let (context, function) = module.function_mut("f").expect("@f");
+    assert_eq!(change_to_unreachable(context, function, at), 2);
+    assert_eq!(
+        printed(&module),
+        "define i16 @f(i1 %c, i16 %x) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  unreachable
+
+b2:
+  ret i16 %x
+}
+"
+    );
 }
