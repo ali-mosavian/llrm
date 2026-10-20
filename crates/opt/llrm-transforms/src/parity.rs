@@ -782,7 +782,7 @@ pub(crate) fn check_phase_with(
 ) -> Result<(), String> {
     let absent: Vec<&str> =
         if level == Level::O1 { ABSENT_AT_O1.iter().chain(off).copied().collect() } else { off.to_vec() };
-    // The translated `loop-rotate` is in the order only with `LLRM_ROTATE`.
+    // The translated `loop-rotate` is in the order unless `LLRM_NO_ROTATE`.
     let registry: Vec<Entry> = REGISTRY
         .iter()
         .map(|one| {
