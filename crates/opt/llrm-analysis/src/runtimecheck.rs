@@ -998,7 +998,9 @@ impl RuntimePointerChecking {
         let indent = |out: &mut String, by: usize| out.push_str(&" ".repeat(by));
         let pointers = |out: &mut String, group: &RuntimeCheckingPtrGroup| {
             for &k in &group.members {
-                indent(out, depth + 2);
+                // `OS.indent(Depth + 2) << *PointerValue`, and an instruction
+                // prints with two spaces of its own.
+                indent(out, depth + 4);
                 out.push_str(&operand_text(se, cx, labels, self.pointers[k].pointer_value));
                 out.push('\n');
             }

@@ -230,3 +230,38 @@ Grouped accesses:
     // A group of two pointers has no difference check.
     assert!(diffs.is_empty());
 }
+
+/// `c[i] = a[i] + a[i + 1] + ... + a[i + n - 1]`: `n` reads a constant apart.
+fn window(n: usize) -> String {
+    let mut text = String::from(
+        "define void @f(ptr %a, ptr %c, i64 %n) {\nentry:\n  %g = icmp sgt i64 %n, 0\n  br i1 %g, label %loop, label %exit\nloop:\n  %i = phi i64 [ 0, %entry ], [ %i.next, %loop ]\n",
+    );
+    for k in 0..n {
+        text += &format!(
+            "  %k{k} = add nuw nsw i64 %i, {k}\n  %pa{k} = getelementptr inbounds i32, ptr %a, i64 %k{k}\n  %v{k} = load i32, ptr %pa{k}, align 4\n"
+        );
+    }
+    text += "  %pc = getelementptr inbounds i32, ptr %c, i64 %i\n";
+    text += &format!("  store i32 %v{}, ptr %pc, align 4\n", n - 1);
+    text + "  %i.next = add nuw nsw i64 %i, 1\n  %c1 = icmp eq i64 %i.next, %n\n  br i1 %c1, label %exit, label %loop\nexit:\n  ret void\n}\n"
+}
+
+/// The reads a constant apart share one group, and the grouping is linear in
+/// them: four times the reads cost about four times, not sixteen (a slope test
+/// at 1x and 4x, the least of three runs of each).
+#[test]
+fn the_time_grows_with_the_reads_not_with_their_square() {
+    let least = |n: usize| {
+        let text = window(n);
+        (0..3)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                let (checks, _) = analysed(&text, &[]);
+                assert!(checks.contains("Group GRP1"), "{checks}");
+                start.elapsed().as_secs_f64()
+            })
+            .fold(f64::MAX, f64::min)
+    };
+    let (small, large) = (least(40), least(160));
+    assert!(large < small * 6.0, "40 reads {small:.4} s, 160 reads {large:.4} s: a ratio of {:.1}", large / small);
+}
