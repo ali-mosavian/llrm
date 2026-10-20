@@ -126,7 +126,7 @@ impl LIRTransform for MachineSink {
 /// How an instruction that is not a store, a call or a barrier may move:
 /// `MachineInstr::isSafeToMove`. A store seen sets `saw_store`; a load is
 /// movable only while none has been seen.
-fn safe_to_move(
+pub(crate) fn safe_to_move(
     one: &Insn,
     saw_store: &mut bool,
 ) -> bool {

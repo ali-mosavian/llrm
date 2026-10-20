@@ -63,6 +63,7 @@ use llrm_lir::registers::RegId;
 
 use crate::analysis::intervals as ranges;
 use crate::backend::allocate::LiveAt;
+use crate::backend::liveness;
 use crate::backend::{allocate, coalesce, spiller};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
@@ -97,7 +98,7 @@ impl LIRTransform for TwoAddress {
 
 /// `body` with every tied instruction reading what it writes.
 pub fn tied(body: &LirBody) -> LirBody {
-    let reused = _reused(body);
+    let reused = _rescheduled(&_reused(body));
     let body = &reused;
     let mut changed = false;
     let mut counter = spiller::_next_value(body);
@@ -197,6 +198,158 @@ pub fn tied(body: &LirBody) -> LirBody {
         blocks.push(block.with_insns(insns));
     }
     if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
+/// `rescheduleMIBelowKill`: a tied instruction whose first source dies at a
+/// later instruction of its block moves below that one (with the copies of its
+/// result that follow it), so the source is dead where the instruction is and
+/// the coalescer joins the copy `_untied` makes. Tried for an instruction that
+/// has no commuted form, which the pin tries first (DEVIATE T1).
+fn _rescheduled(body: &LirBody) -> LirBody {
+    let rows = allocate::live_rows(body);
+    let regs = body.regs();
+    let mut changed = false;
+    let blocks: Vec<_> = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
+            let mut at = 0;
+            while at < insns.len() {
+                let Some((kill, end)) = _below_kill(&insns, at, |value| rows.live_out(block.at, value), regs, body.bits)
+                else {
+                    at += 1;
+                    continue;
+                };
+                // `at..end` goes after `kill`; what was after it comes up.
+                let moved: Vec<Arc<Insn>> = insns.drain(at..end).collect();
+                let kill = kill - moved.len();
+                for (offset, one) in moved.into_iter().enumerate() {
+                    insns.insert(kill + 1 + offset, one);
+                }
+                changed = true;
+            }
+            block.with_insns(insns)
+        })
+        .collect();
+    if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
+/// Where the tied instruction at `at` goes: the index of the instruction after
+/// which it and the copies of its result (up to `end`, exclusive) are placed,
+/// if `rescheduleMIBelowKill` allows it.
+fn _below_kill(
+    insns: &[Arc<Insn>],
+    at: usize,
+    live_out: impl Fn(u32) -> bool,
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+) -> Option<(usize, usize)> {
+    let one = &insns[at];
+    let what = one.what.as_ref()?;
+    // Tried when the sources cannot swap (the pin commutes first).
+    if !ties(what) || _swappable(one).is_some() || !matches!(what.op, Operation::Binary | Operation::Unary) {
+        return None;
+    }
+    let Some(Loc::Held(first)) = what.sources.first() else { return None };
+    let reg = first.value;
+    if live_out(reg) || one.defines.contains(&reg) {
+        return None;
+    }
+    // The last reader of the register in the block, below the instruction.
+    let kill = (at + 1..insns.len()).rev().find(|&index| insns[index].uses.contains(&reg))?;
+    let killer = &insns[kill];
+    let kill_what = killer.what.as_ref()?;
+    let is_copy = kill_what.op == Operation::Move && matches!(kill_what.sources.as_slice(), [Loc::Held(_)]);
+    if is_copy
+        || killer.call.is_some()
+        || killer.volatile()
+        || matches!(
+            kill_what.op,
+            Operation::Call | Operation::Branch | Operation::Jump | Operation::Return | Operation::Barrier
+        )
+        || ties(kill_what) && matches!(kill_what.sources.first(), Some(Loc::Held(held)) if held.value == reg)
+    {
+        return None;
+    }
+    // Loads are not moved (`isSafeToMove(SeenStore = true)`), and only a
+    // one-cycle operation is.
+    if !crate::backend::machinesink::safe_to_move(one, &mut true) {
+        return None;
+    }
+    let mut defs: Vec<u32> = one.defines.clone();
+    let mut end = at + 1;
+    while let Some(next) = insns.get(end) {
+        let Some(copy) = next.what.as_ref() else { break };
+        let from = match copy.sources.as_slice() {
+            [Loc::Held(from)] if copy.op == Operation::Move => from.value,
+            _ => break,
+        };
+        if !defs.contains(&from) {
+            break;
+        }
+        defs.extend(next.defines.iter().copied());
+        end += 1;
+    }
+    if end > kill {
+        return None;
+    }
+    let mine = liveness::effect(regs, bits, one)?;
+    let kills: Vec<u32> = one
+        .uses
+        .iter()
+        .copied()
+        .filter(|&value| value != reg && !live_out(value) && !insns[at + 1..].iter().any(|later| later.uses.contains(&value)))
+        .collect();
+    let mut visited = 0;
+    for (index, other) in insns.iter().enumerate().take(kill + 1).skip(end) {
+        visited += 1;
+        if visited > 10 {
+            return None;
+        }
+        let other_what = other.what.as_ref()?;
+        if other.call.is_some()
+            || other.volatile()
+            || matches!(
+                other_what.op,
+                Operation::Call | Operation::Branch | Operation::Jump | Operation::Return | Operation::Barrier
+            )
+        {
+            return None;
+        }
+        // The instruction's results are read below it, or a register it uses
+        // is written there: a dependence.
+        if other.uses.iter().any(|value| defs.contains(value)) {
+            return None;
+        }
+        for &value in &other.uses {
+            if value == reg {
+                // No read of the register but the kill is crossed.
+                if index != kill {
+                    return None;
+                }
+                continue;
+            }
+            let killed_here = !live_out(value) && !insns[index + 1..].iter().any(|later| later.uses.contains(&value));
+            // Another live range is not extended, and one the instruction
+            // kills is not read below it.
+            if (killed_here && one.uses.contains(&value)) || kills.contains(&value) {
+                return None;
+            }
+        }
+        // Flags and fixed registers: the two must not touch each other's.
+        let theirs = liveness::effect(regs, bits, other)?;
+        let conflict = |left: &crate::backend::lanes::Lanes, right: &crate::backend::lanes::Lanes| {
+            left.iter().any(|&(register, _)| right.iter().any(|&(other, _)| other == register))
+        };
+        if conflict(&mine.writes, &theirs.all_reads())
+            || conflict(&mine.writes, &theirs.writes)
+            || conflict(&mine.all_reads(), &theirs.writes)
+        {
+            return None;
+        }
+    }
+    Some((kill, end))
 }
 
 /// An update in place: `c := a + b` then `a := c`, with `a` dead between,
