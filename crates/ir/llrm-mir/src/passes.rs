@@ -2248,6 +2248,53 @@ impl ModuleAnalyses {
     }
 }
 
+thread_local! {
+    /// The first body a pass left with a short phi since the manager last
+    /// asked (#3016), as "after <pass>: ...".
+    static PHI_PROBLEM: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `pass`, then (in a build with debug assertions: dev, the unit tests)
+/// checks that every phi of the body it left has one input per edge, and notes
+/// the first pass that left one short for [`take_phi_problem`]. Passes that run
+/// others (a slot of several, the fixed-point rounds) run them through here, so
+/// the member is named and not the slot. A release build pays nothing: LLVM
+/// verifies only under `-verify-each`.
+pub fn run_checked(
+    pass: &mut dyn FunctionPass,
+    unit: &mut Unit,
+    analyses: &mut Analyses,
+) -> PreservedAnalyses {
+    let preserved = pass.run(unit, analyses);
+    check_phi_arity(pass.name(), unit.function);
+    preserved
+}
+
+/// [`run_checked`]'s check, for a pass that edits in steps and names a step
+/// that is not a pass of its own.
+pub fn check_phi_arity(
+    step: &str,
+    function: &Function,
+) {
+    #[cfg(debug_assertions)]
+    PHI_PROBLEM.with(|problem| {
+        let mut problem = problem.borrow_mut();
+        if problem.is_none() {
+            let found = crate::verify::phi_arity(function);
+            if !found.is_empty() {
+                *problem = Some(format!("after {step}: {}", found.join("; ")));
+            }
+        }
+    });
+    #[cfg(not(debug_assertions))]
+    let _ = (step, function);
+}
+
+/// The problem [`run_checked`] noted, if any, and forgets it.
+pub fn take_phi_problem() -> Option<String> {
+    PHI_PROBLEM.with(|problem| problem.borrow_mut().take())
+}
+
 pub trait FunctionPass {
     fn name(&self) -> &'static str;
     /// The names of the passes that run under `name` (a slot that stands for
@@ -2645,7 +2692,8 @@ impl PassManager {
                 let running = crate::counts::pass_run_over(name, function);
                 let preserved = in_function(global.name.as_deref().unwrap_or_default(), || {
                     spanned(name, || {
-                        pass.run(
+                        run_checked(
+                            pass.as_mut(),
                             &mut Unit {
                                 context,
                                 layout: &layout,
@@ -2659,6 +2707,9 @@ impl PassManager {
                     })
                 });
                 drop(running);
+                if let Some(problem) = take_phi_problem() {
+                    return Err(problem);
+                }
                 kept.retain(|one| preserved.keeps(*one));
                 spanned("invalidate", || cache.invalidate(function, &preserved));
                 cache.check_kept(name, context, &layout, function);

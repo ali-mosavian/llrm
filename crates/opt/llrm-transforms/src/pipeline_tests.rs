@@ -2344,6 +2344,41 @@ out:
     }
 }
 
+/// Drops one of the two inputs of the phi that two edges feed (#3016).
+struct ShortPhi;
+
+impl llrm_mir::passes::FunctionPass for ShortPhi {
+    fn name(&self) -> &'static str {
+        "short-phi"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        let function = &mut *unit.function;
+        let block = function.layout()[1];
+        let phi = function.iter_block(block).next().unwrap();
+        let first = function.instruction(phi).operands[..2].to_vec();
+        function.set_operands(phi, first);
+        llrm_mir::passes::PreservedAnalyses::none()
+    }
+}
+
+/// A slot of several passes names the member that left a phi short of an
+/// edge, not the slot: SROA's `Promote` and not "sroa@646".
+#[test]
+#[cfg(debug_assertions)]
+fn a_slot_names_the_member_that_left_a_phi_short() {
+    let text = "define i16 @p(i1 %c) {\nentry:\n  br i1 %c, label %b, label %b\nb:\n  %x = phi i16 [ 1, %entry ], [ 1, %entry ]\n  ret i16 %x\n}\n";
+    let mut module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(super::Together { name: "slot@1", parts: vec![Box::new(ShortPhi)] });
+    let error = passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap_err();
+    assert!(error.starts_with("after short-phi: "), "{error}");
+}
+
 /// `ret` took `frame` in, and `selftest` was then given the body `ret` had
 /// before, with its calls to `frame`, which had no body left: the load of
 /// `b.draw` was folded past them and `selftest` returned 0, not 1.

@@ -23,6 +23,16 @@
 //! `sinkSelectOperand`. A cheap one stays, as in LLVM. Where the target states
 //! no cost model every instruction costs one, and nothing moves.
 //!
+//! DEVIATE S2 (no number): the pin keeps the select to instruction selection.
+//! CodeGenPrepare's `optimizeSelectInst` forms no branch where
+//! `isPredictableSelectExpensive` is false (in-order i486, `CodeGenPrepare.cpp`
+//! `isFormingBranchFromSelectProfitable`), and `X86TargetLowering::
+//! EmitLoweredSelect` then expands the select to a diamond on machine IR, with
+//! both operands computed before it. Ours expands in MIR and moves an
+//! expensive operand into its arm. Exit: move the expansion to selection and
+//! drop the operand sinking: the registry slot `emit-lowered-select`
+//! (lir-cleanup-port, PR by 2026-11-13, rows pair after it lands; #3052).
+//!
 //! The loop is repeated until no select is left in any function, so two selects
 //! in one block each get their own split. The result is checked by an
 //! interpreter test that runs a function before and after.

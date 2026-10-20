@@ -685,7 +685,7 @@ impl FunctionPass for Together {
     ) -> PreservedAnalyses {
         let mut changed = false;
         for part in &mut self.parts {
-            let preserved = part.run(unit, analyses);
+            let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
             if !preserved.are_all_preserved() {
                 changed = true;
                 analyses.invalidate(unit.function, &preserved);
@@ -1911,7 +1911,8 @@ impl Run {
             (llrm_support::debug::work(), llrm_support::debug::analysed_work(), placed_instructions(unit.function))
         });
         let running = llrm_mir::counts::pass_run_over(pass.name(), unit.function);
-        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses));
+        let preserved =
+            llrm_mir::passes::spanned(pass.name(), || llrm_mir::passes::run_checked(&mut *pass, unit, analyses));
         drop(running);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);

@@ -1431,8 +1431,11 @@ fn test_only_the_loops_holding_a_masked_source_are_asked_what_advances() {
         let mut text = masked_sum("%i").replace("b3:\n  ret i16 %s\n", "b3:\n  br label %e0\n");
         for at in 0..extra_loops {
             let next = if at + 1 == extra_loops { "x".to_owned() } else { format!("e{}", at + 1) };
+            // The loop is entered from the one before it (the first from `b3`):
+            // a phi's input names the block that branches there.
+            let before = if at == 0 { "b3".to_owned() } else { format!("e{}", at - 1) };
             text = text.replace("\n}\n", &format!(
-                "\ne{at}:\n  %j{at} = phi i16 [ 0, %b3 ], [ %j{at}n, %e{at} ]\n  %j{at}n = add i16 %j{at}, 1\n  %d{at} = icmp slt i16 %j{at}n, %n\n  br i1 %d{at}, label %e{at}, label %{next}\n}}\n"
+                "\ne{at}:\n  %j{at} = phi i16 [ 0, %{before} ], [ %j{at}n, %e{at} ]\n  %j{at}n = add i16 %j{at}, 1\n  %d{at} = icmp slt i16 %j{at}n, %n\n  br i1 %d{at}, label %e{at}, label %{next}\n}}\n"
             ).replacen("}}\n", "}\n", 1));
         }
         if extra_loops == 0 {
