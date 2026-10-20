@@ -1,3 +1,7 @@
+---
+architecture-index: LIR vocabulary, one and target-generic
+architecture-order: 540
+---
 # LIR vocabulary: one, target-generic
 
 Agreed by backend-two, arm64-spike and lir-cleanup-port. It is the shape llrm-core's machine
