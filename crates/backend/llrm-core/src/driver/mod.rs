@@ -424,17 +424,12 @@ pub fn optimized(
     let layout = options.arch.layout();
     if layout.expands_some("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
-        let pricing = crate::backend::selects::Pricing {
-            target: Some(program.target.clone()),
-            layout: &program.layout,
-            tti: &*tti,
-        };
         timed("mir selects", || {
             program
                 .modules
                 .iter_mut()
                 .try_for_each(
-                    |module| crate::backend::selects::lowered(module, &pricing, &|ty| layout.expands_for("select", ty)),
+                    |module| crate::backend::selects::lowered(module, &*tti, &|ty| layout.expands_for("select", ty)),
                 )
         })?;
     }
