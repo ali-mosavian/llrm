@@ -216,6 +216,8 @@ def probe(failure: str, sha: str) -> bool:
         return failure in run_groups(at, dist(at, sha), Path(name).stem)[0]
     if sha not in UNIT_SETS:
         UNIT_SETS[sha] = unit_failures(at)[0]
+        if NAMELESS in UNIT_SETS[sha]:  # one retry: a build killed by load or a memory cap reads like a broken commit
+            UNIT_SETS[sha] = unit_failures(at)[0]
     if NAMELESS in UNIT_SETS[sha]:
         raise Inconclusive(f"{sha[:9]} does not build")
     return failure in UNIT_SETS[sha]

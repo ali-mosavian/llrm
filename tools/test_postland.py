@@ -181,3 +181,12 @@ def test_a_smoke_failure_has_an_honest_repro_and_is_not_bisected_as_a_cargo_pack
 
     with pytest.raises(postland.Inconclusive):
         postland.probe("smoke ratchet:x", "c" * 40)
+
+
+def test_a_nameless_failure_is_retried_once_before_a_commit_is_called_unbuildable(monkeypatch, tmp_path):
+    """The first workspace run at 2abaf530f failed nameless under load, its rerun named 62 failures; 55 bisects read 'does not build'."""
+    answers = iter([({postland.NAMELESS}, ""), ({"unit a::t"}, "")])
+    monkeypatch.setattr(postland, "tree", lambda sha: tmp_path)
+    monkeypatch.setattr(postland, "unit_failures", lambda at, name=None: next(answers))
+    postland.UNIT_SETS.clear()
+    assert postland.probe("unit a::t", "c" * 40) is True
