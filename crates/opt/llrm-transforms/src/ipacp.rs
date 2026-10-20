@@ -454,9 +454,7 @@ fn time_saved(
     }
     // `INLINE_HINT_loop_iterations`: a loop's exit tests a value the known
     // actuals make constant against one that varies.
-    let shape = cfg::Shape::of(body);
-    let hint = shape
-        .loops
+    let hint = cfg::loops_of(body)
         .iter()
         .any(
             |one| one.body.iter().any(|&at| {

@@ -28,6 +28,13 @@
 # A constant first operand is taken second.
 commutative add and or xor mul
 
+# An element count that is a value reserves its bytes when it runs.
+pattern dynamic_alloca
+  match alloca
+  when dynamic
+  call dynamic_alloca
+end
+
 pattern alloca
   match alloca
   nothing
@@ -103,53 +110,63 @@ end
 
 pattern wide_cast_to
   match cast.i64
+  when splits_i64
   call wide_cast
 end
 
 pattern wide_cast_from
   match cast(_.i64)
+  when splits_i64
   call wide_cast
 end
 
-# An i64 as its halves, low first (isel/expand.rs): the first form for the lowest, the second for each above it,
+# Where the datalayout has no legal i64 (`splits_i64`), an i64 is its halves, low first (isel/expand.rs): the first form for the lowest, the second for each above it,
 # which takes the carry of the half below.
 pattern wide_add
   match add.i64(a, b)
+  when splits_i64
   chain add adc <- a, b
 end
 
 pattern wide_sub
   match sub.i64(a, b)
+  when splits_i64
   chain sub sbb <- a, b
 end
 
 pattern wide_and
   match and.i64(a, b)
+  when splits_i64
   chain and and <- a, b
 end
 
 pattern wide_or
   match or.i64(a, b)
+  when splits_i64
   chain or or <- a, b
 end
 
 pattern wide_xor
   match xor.i64(a, b)
+  when splits_i64
   chain xor xor <- a, b
 end
 
 pattern wide_binary
   match binary.i64
+  when splits_i64
   call wide_binary
 end
 
 pattern wide_load
   match load.i64(p)
+  when splits_i64
   call wide_load(p)
 end
 
 pattern wide_store
   match store(v.i64, p)
+  when splits_i64
   call wide_store(v, p)
 end
 
@@ -307,6 +324,12 @@ end
 pattern extractvalue
   match extractvalue
   call extractvalue
+end
+
+# An aggregate of scalars is its fields, each in a register of its own, as a call answers it.
+pattern insertvalue
+  match insertvalue
+  call insertvalue
 end
 
 # Where a target's own casts go: after the i64 and float casts, which are not

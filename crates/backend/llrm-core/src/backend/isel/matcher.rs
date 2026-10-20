@@ -158,6 +158,14 @@ fn choose<E>(
     Ok(Some(best.1))
 }
 
+/// The type of field `index` of a struct's `types`.
+fn instruction_field(
+    types: &[llrm_mir::TypeId],
+    index: u32,
+) -> Result<llrm_mir::TypeId, Unselected> {
+    types.get(index as usize).copied().ok_or_else(|| Unselected(format!("field {index} of an aggregate")))
+}
+
 impl Selector<'_, '_, '_> {
     /// The opcode's name, for a pattern that refuses an instruction by it.
     pub fn mnemonic(
@@ -297,7 +305,7 @@ impl Selector<'_, '_, '_> {
         }
     }
 
-    fn type_of(
+    pub(super) fn type_of(
         &self,
         operand: Operand,
     ) -> TypeId {
@@ -553,7 +561,8 @@ impl Selector<'_, '_, '_> {
         _: &mut Vec<Arc<Insn>>,
     ) -> Result<Loc, Unselected> {
         let result = self.function.instruction(m.inst).result.expect("a result");
-        Ok(Loc::Held(Held { value: self.value(result), width: FLOAT }))
+        let bytes = self.size(self.function.instruction(m.inst).ty)?;
+        Ok(Loc::Held(Held { value: self.value(result), width: self.arch.float_width(bytes) }))
     }
 
     /// The cell a float load or store reaches: its bytes in memory.
@@ -874,6 +883,15 @@ impl Selector<'_, '_, '_> {
         self.definition(call).is_some_and(|inst| self.lrint(inst))
     }
 
+    /// Whether an i64 is held as two halves: the datalayout names no legal
+    /// integer as wide.
+    pub fn is_splits_i64(
+        &self,
+        _: &Match,
+    ) -> bool {
+        self.layout.largest_legal_integer() < 64
+    }
+
     pub fn is_narrowed(
         &self,
         m: &Match,
@@ -906,6 +924,33 @@ impl Selector<'_, '_, '_> {
             let width = self.width(self.function.instruction(m.inst).ty).expect("a held width");
             chain.iter().all(|&(name, count)| !["shl", "fadd", "fsub"].contains(&name) || count < i64::from(width) * 8)
         })
+    }
+
+    /// Whether the integer operand `k` is a shift amount of the root
+    /// instruction's type: a constant in `0..bits`, on a 32- or 64-bit type.
+    pub fn is_shift_amount(
+        &self,
+        m: &Match,
+        k: Operand,
+    ) -> bool {
+        let Some(bits) = self.types().int_bits(self.function.instruction(m.inst).ty) else { return false };
+        if bits != 32 && bits != 64 {
+            return false;
+        }
+        let Operand::Constant(id) = k else { return false };
+        match self.module.context.get(id).kind {
+            ConstantKind::Int(value) => value < u128::from(bits),
+            _ => false,
+        }
+    }
+
+    /// Whether the root instruction carries the fast-math `contract` flag: a
+    /// multiply it reads may fuse into one rounding.
+    pub fn is_contract(
+        &self,
+        m: &Match,
+    ) -> bool {
+        self.function.instruction(m.inst).flags.contains(llrm_mir::opcode::Flags::CONTRACT)
     }
 
     pub fn is_same_width(
@@ -1431,6 +1476,132 @@ impl Selector<'_, '_, '_> {
         let Some(field) = field else { return refuse("an extractvalue of no answer in registers") };
         let result = Held { value: self.value(instruction.result.expect("a field")), width: field.width };
         out.push(insn(m.at, semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(field)])));
+        Ok(())
+    }
+
+    /// `select c, a, b` as a conditional move: the flags of `c`, made here,
+    /// then `cmov` of `a` over `b` into the result (X86's `CMOV`; the
+    /// compare of a comparison nothing else reads is its flags, and any other
+    /// condition is tested).
+    pub fn hook_select(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(m.inst);
+        let [condition, yes, no] = instruction.operands[..] else { return refuse("a select of three operands") };
+        let ty = instruction.ty;
+        let width = self.width(ty)?;
+        let code = match condition {
+            Operand::Value(value) if self.fused_compare(value).is_some() => {
+                let compare = self.fused_compare(value).expect("a fused comparison");
+                match self.compare(compare, m.at, out)? {
+                    Test::One(code) => code,
+                    _ => return refuse("a select on a float comparison"),
+                }
+            }
+            _ => {
+                let bit_ty = self.function.operand_type(&self.module.context, condition).expect("a typed condition");
+                let held = self.held(condition, bit_ty, m.at, out)?;
+                let test = semantics(Operation::Compare, "test", vec![], vec![Loc::Held(held), Loc::Held(held)]);
+                out.push(insn(m.at, test));
+                "jne"
+            }
+        };
+        let (no, yes) = (self.held(no, ty, m.at, out)?, self.held(yes, ty, m.at, out)?);
+        let result = Held { value: self.value(instruction.result.expect("a select's value")), width };
+        let name = format!("cmov{}", &code[1..]);
+        out.push(insn(
+            m.at,
+            semantics(Operation::Select, &name, vec![Loc::Held(result)], vec![Loc::Held(no), Loc::Held(yes)]),
+        ));
+        Ok(())
+    }
+
+    /// Whether an `alloca` takes its bytes from the stack when it runs (an
+    /// element count that is a value).
+    pub fn is_dynamic(
+        &self,
+        m: &Match,
+    ) -> bool {
+        self.alloca_bytes(m.inst).is_none()
+    }
+
+    /// `alloca T, %n`: the stack pointer lowered by `n * sizeof T` rounded up
+    /// to the stack's alignment (and to the alloca's, where that is more),
+    /// the new stack pointer being the address (X86's
+    /// `LowerDYNAMIC_STACKALLOC`).
+    pub fn hook_dynamic_alloca(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(m.inst);
+        let Opcode::Alloca { allocated, align, .. } = instruction.opcode else { unreachable!("an alloca") };
+        let element = self.layout.alloc_size(self.types(), allocated) as i64;
+        let count = instruction.operands[0];
+        let ty = self.function.operand_type(&self.module.context, count).expect("a typed count");
+        let width = self.address_bytes();
+        let held = self.held(count, ty, m.at, out)?;
+        let count = self.extended(held, width, false, m.at, out);
+        let at = m.at;
+        let stack = Loc::Reg(llrm_lir::Reg { register: self.arch.stack_pointer(), width });
+        let step = |this: &mut Self, name: &str, op: Operation, from: Held, with: i64, out: &mut Vec<Arc<Insn>>| {
+            let into = this.fresh_held(width);
+            let what = Imm { value: with, width, address: None };
+            out.push(insn(at, semantics(op, name, vec![Loc::Held(into)], vec![Loc::Held(from), Loc::Imm(what)])));
+            into
+        };
+        let bytes = if element.count_ones() == 1 {
+            step(self, "shl", Operation::Binary, count, i64::from(element.trailing_zeros()), out)
+        } else {
+            step(self, "imul", Operation::Multiply, count, element, out)
+        };
+        let keep = self.arch.stack_alignment().max(align.map_or(1, |align| align as i64));
+        let padded = step(self, "add", Operation::Binary, bytes, keep - 1, out);
+        let rounded = step(self, "and", Operation::Binary, padded, -keep, out);
+        out.push(insn(
+            at,
+            semantics(Operation::Binary, "sub", vec![stack.clone()], vec![stack.clone(), Loc::Held(rounded)]),
+        ));
+        let result = Held { value: self.value(instruction.result.expect("an address")), width };
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![stack])));
+        Ok(())
+    }
+
+    /// An aggregate with one field replaced: the fields of the aggregate it is
+    /// made of, each in a register, and the new one. An undefined aggregate
+    /// has fields nothing set, loaded as zero (a field that is never read is
+    /// dead code).
+    pub fn hook_insertvalue(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(m.inst);
+        let Opcode::InsertValue(indices) = &instruction.opcode else { unreachable!("an insertvalue") };
+        let &[index] = &indices[..] else { return refuse("an insertvalue into a nested aggregate") };
+        let llrm_mir::types::Type::Struct { fields: types, .. } = self.types().get(instruction.ty).clone() else {
+            return refuse("an insertvalue into other than a struct");
+        };
+        let mut fields = match instruction.operands[0] {
+            Operand::Value(aggregate) => self.fields.get(&aggregate).cloned(),
+            _ => None,
+        }
+        .unwrap_or_default();
+        if fields.len() != types.len() {
+            fields = Vec::new();
+            for &ty in &types {
+                let field = self.fresh_held(self.width(ty)?);
+                let zero = Loc::Imm(Imm { value: 0, width: field.width, address: None });
+                out.push(insn(m.at, semantics(Operation::Move, "mov", vec![Loc::Held(field)], vec![zero])));
+                fields.push(field);
+            }
+        }
+        let ty = instruction_field(&types, index)?;
+        fields[index as usize] = self.held(instruction.operands[1], ty, m.at, out)?;
+        let result = instruction.result.expect("an insertvalue's value");
+        self.fields.insert(result, fields);
         Ok(())
     }
 

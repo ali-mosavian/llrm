@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopnest.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopnest.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopnest.rs sha256:30017a52acf4c2e1833d74a673ffaa52407dbe30d96d7c68f985081e33e012f2 -->
+<!-- src: crates/opt/llrm-transforms/src/loopnest.rs sha256:beb46cedd6a044a250c7f5aba7387145c36016c242e34fc6cb3bb1156ff37246 -->
 
 # loopnest
 
@@ -44,8 +44,8 @@ b5:  %j.next = add %j, 1; br b1          ; post, the outer latch
 `pre` is `[b2]`, `post` `[b5]`; the inner count is the same each outer trip.
 
 ## Provides
-`Nest`, `nest_of`, `inner_is_invariant`, `accesses`. Consumers: `unroll_jam`
-and `loopinterchange`.
+`Nest`, `nest_of`, `inner_is_invariant`, `accesses`. Consumer:
+`loopinterchange`.
 
 ## See also
-[`crate::unroll_jam`](unroll_jam.md), [`crate::loopinterchange`](loopinterchange.md).
+[`crate::loopinterchange`](loopinterchange.md).

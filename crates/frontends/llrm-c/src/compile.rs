@@ -703,6 +703,21 @@ mod tests {
         assert!(!listing(None).contains("cmp sp"));
     }
 
+    /// The first line of a loop in `body`: a label some later conditional jump
+    /// returns to (the exit test is `jne`, `jb` or `jl` by what the loop
+    /// counts).
+    fn loop_start<S: AsRef<str>>(body: &[S]) -> Option<usize> {
+        body.iter().position(|line| {
+            let label = line.as_ref().trim_end_matches(':');
+            line.as_ref().starts_with('L')
+                && line.as_ref().ends_with(':')
+                && body
+                    .iter()
+                    .skip_while(|one| one.as_ref() != line.as_ref())
+                    .any(|one| one.as_ref().starts_with('j') && one.as_ref().ends_with(&format!(" {label}")))
+        })
+    }
+
     /// The innermost loop's counting: its steps by a constant and its compares.
     fn loop_counting(fixture: &str) -> Vec<String> {
         let constant = |one: &str| one.rsplit(", ").next().is_some_and(|last| last.parse::<i64>().is_ok());
@@ -1272,6 +1287,30 @@ mod tests {
         assert!(format!("{other:?}").contains("register calling convention"), "{other:?}");
     }
 
+    /// A branch on `a && b && c`, its compares of a pointer with the addresses
+    /// of two functions, made each address in the block after the branch: the
+    /// coalescer stopped on a value without a definition ("a unique value"),
+    /// compiling clib's `sigsy`.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_branch_on_compares_with_two_function_addresses_makes_each_before_its_compare() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("cond.c");
+        std::fs::write(
+            &source,
+            "extern int rwd;\nextern void (*exitp)(void);\nextern void nullexit(void);\nvoid restore(void) { }\n\
+             extern void chain(void);\n\
+             void h(void) { if (rwd == 0 && exitp != nullexit && exitp != restore) chain(); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::of(&llrm_x86_m16::M16).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records cond.c");
+        let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "cond", None, &options).unwrap()).unwrap();
+        assert!(asm.contains("call"), "{asm}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`
@@ -1543,14 +1582,7 @@ mod tests {
             .expect("the default convention spells its symbols");
         let from = asm.find(&format!("{name} proc")).expect("the function");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-        let loop_at = body
-            .iter()
-            .position(|line| {
-                line.ends_with(':')
-                    && line.starts_with('L')
-                    && body.iter().any(|one| one.starts_with("jne") && line.starts_with(&one[4..]))
-            })
-            .expect("the loop");
+        let loop_at = loop_start(&body).expect("the loop");
         assert!(
             body.iter().filter(|line| line.starts_with("mov es,")).count() == 1
                 && !body[loop_at..].iter().any(|line| line.starts_with("mov es,")),
@@ -1998,17 +2030,7 @@ mod tests {
     fn test_m16_regparm3_a_far_pointer_returned_in_eax_loads_es_once_before_the_loop() {
         let body = regparm3("_fill");
         assert_eq!(body.iter().filter(|line| line.starts_with("mov es,")).count(), 1, "{body:?}");
-        let loop_start = body
-            .iter()
-            .position(|line| {
-                line.starts_with("L")
-                    && line.ends_with(':')
-                    && body
-                        .iter()
-                        .skip_while(|one| *one != line)
-                        .any(|one| one.starts_with("jne") && one.ends_with(line.trim_end_matches(':')))
-            })
-            .expect("the loop");
+        let loop_start = loop_start(&body).expect("the loop");
         assert!(body[loop_start..].iter().all(|line| !line.starts_with("mov es,")), "{body:?}");
     }
 
@@ -2034,8 +2056,8 @@ mod tests {
         let body = regparm3_at("_chop", llrm_core::driver::flags::Level::Os);
         let stored = body
             .iter()
-            .position(|line| line.starts_with("mov word ptr [bp-") && line.ends_with(", dx"))
-            .expect("dx is stored at entry");
+            .position(|line| line.contains("ptr [bp-") && (line.ends_with(", dx") || line.ends_with(", edx")))
+            .expect("dx is stored to a slot");
         let slot = body[stored].split(']').next().unwrap().rsplit(' ').next().unwrap().to_owned();
         let until_dx_changes = body[stored + 1..]
             .iter()
@@ -2114,9 +2136,10 @@ mod tests {
 
     /// `wcc -ecw` took the first four words in AX, DX, BX and CX and the rest
     /// from the stack, lowest first, popped with `retf 4`; the stack
-    /// convention read all six from [bp+6]... Reassociate puts the product's
-    /// operands highest rank first (`imul cx, bx`): same instructions as
-    /// before, commuted.
+    /// convention read all six from [bp+6]... The sum is reassociated
+    /// (`a + c*d - (b + e) + f`): the same ten instructions and two memory
+    /// operands as the previous association, no `neg`. The pin has no Watcom
+    /// convention to compare with.
     #[test]
     fn test_m16_watcom_words_arrive_in_ax_dx_bx_cx_and_the_callee_pops_the_rest() {
         let body = watcall16("six_");
@@ -2126,10 +2149,10 @@ mod tests {
                 "push bp",
                 "mov bp, sp",
                 "L0_0:",
-                "sub ax, dx",
                 "imul cx, bx",
                 "add ax, cx",
-                "sub ax, word ptr [bp+6]",
+                "add dx, word ptr [bp+6]",
+                "sub ax, dx",
                 "add ax, word ptr [bp+8]",
                 "pop bp",
                 "retf 4"

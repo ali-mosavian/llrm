@@ -1,0 +1,10 @@
+# arm64 Darwin: Mach-O objects, linked by the system linker.
+formats = ["macho"]
+default = "macho"
+bitness = 64
+pc_relative = true
+got_external = true
+header = []
+
+[link.macho]
+emulation = "arm64"

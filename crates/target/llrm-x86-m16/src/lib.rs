@@ -97,6 +97,35 @@ impl llrm_target::Target for M16 {
         2
     }
 
+    fn huge_fill_routine(
+        &self,
+        cell: u32,
+    ) -> Result<llrm_target::routines::HugeString, String> {
+        llrm_x86::helpers::huge_fill(cell).map_err(|refused| refused.message)
+    }
+
+    fn huge_copy_routine(
+        &self,
+        down: bool,
+    ) -> Result<llrm_target::routines::HugeString, String> {
+        llrm_x86::helpers::huge_copy(down).map_err(|refused| refused.message)
+    }
+
+    fn divide_routine(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+    ) -> Result<llrm_target::routines::Divide, String> {
+        llrm_x86::helpers::divide(signed, wide_divisor, 16).map_err(|refused| refused.message)
+    }
+
+    fn float_width(
+        &self,
+        _: u32,
+    ) -> u32 {
+        llrm_x86::X87_WIDTH
+    }
+
     fn register_op_bytes(
         &self,
         width: i64,

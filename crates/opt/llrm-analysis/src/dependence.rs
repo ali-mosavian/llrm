@@ -90,10 +90,8 @@
 //!
 //! # Provides
 //! `distances`, `factor`, `fusable`, `meetings`, `interchangeable`,
-//! `walk_cost`. Consumers: `unroll_jam` (`crates/opt/llrm-transforms/src/
-//! unroll_jam.rs`) and `loopfuse` (`crates/opt/llrm-transforms/src/loopfuse.
-//! rs`) and `loopdistribute` (`crates/opt/llrm-transforms/src/loopdistribute.
-//! rs`) and `loopinterchange`.
+//! `walk_cost`. Consumers: `loopdistribute`
+//! (`crates/opt/llrm-transforms/src/loopdistribute. rs`) and `loopinterchange`.
 //!
 //! # See also
 //! gcc `tree-data-ref.cc` distance vectors read by `adjust_unroll_factor`

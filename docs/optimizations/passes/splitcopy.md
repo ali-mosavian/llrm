@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/splitcopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/splitcopy.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/splitcopy.rs sha256:fe8e68173e860e2a4fcd03bb800faf7bf6128e5996fcb5a682cca3e8af0d9193 -->
+<!-- src: crates/opt/llrm-transforms/src/splitcopy.rs sha256:b27c70ccc4055c441c8acc4bfa4ed7040e61ce9a945cf2e6945f5aa5556b6c79 -->
 
 # splitcopy
 
@@ -85,7 +85,7 @@ From unit test
 Inside [`crate::promote`](promote.md)'s `Sroa`, before it scalarizes the aggregate's
 leaves, so the new loads and stores are promoted by the same run. `Sroa`
 is a structural-boundary pass: it runs at the start of the body's
-pipeline and again after unroll, peel and unroll-jam copy a loop. It is
+pipeline and again after unroll and peel copy a loop. It is
 off by `-fno-tree-sra` and at
 -O0.
 

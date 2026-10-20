@@ -400,6 +400,7 @@ impl Insn {
         self: &Arc<Self>,
         rename: &dyn Fn(u32) -> Result<u32, E>,
     ) -> Result<Arc<Self>, E> {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LirRenameAsks);
         let moves = |value: u32| -> Result<bool, E> { Ok(rename(value)? != value) };
         let mut any = false;
         for &value in self.defines.iter().chain(&self.uses) {
@@ -421,6 +422,7 @@ impl Insn {
         if !any {
             return Ok(Arc::clone(self));
         }
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LirRenameRebuilds);
         let mut made = (**self).clone();
         if let Some(what) = &self.what {
             let settled = |place: &Loc| -> Result<Loc, E> {
@@ -1504,6 +1506,24 @@ mod tests {
             crate::analysis::intervals::key(&other),
             "a clone is another instruction"
         );
+    }
+
+    /// How many renames rebuild an instruction was invisible, so the cost of
+    /// the immutable model (`docs/architecture/lir-data-model.md`) was a guess:
+    /// `LLRM_DEBUG=counts` now says how many asks (`lir_rename_asks`) moved a
+    /// value (`lir_rename_rebuilds`). An ask that moves nothing shares the
+    /// instruction and does not count as a rebuild.
+    #[test]
+    fn test_a_rename_that_moves_a_value_counts_as_a_rebuild_and_one_that_does_not_does_not() {
+        use llrm_mir::counts::{Event, get};
+        let one = Arc::new(Insn::new(1, None, None, vec![5], vec![6]));
+        let (asks, rebuilds) = (get(Event::LirRenameAsks), get(Event::LirRenameRebuilds));
+        let same = one.renamed(&|value| if value == 9 { 10 } else { value });
+        assert!(Arc::ptr_eq(&one, &same), "nothing moved: the allocation is kept");
+        assert_eq!((get(Event::LirRenameAsks) - asks, get(Event::LirRenameRebuilds) - rebuilds), (1, 0));
+        let moved = one.renamed(&|value| if value == 5 { 7 } else { value });
+        assert_eq!(moved.defines, vec![7]);
+        assert_eq!((get(Event::LirRenameAsks) - asks, get(Event::LirRenameRebuilds) - rebuilds), (2, 1));
     }
 
     /// A copy of a body copied every block's instruction list (a block clone

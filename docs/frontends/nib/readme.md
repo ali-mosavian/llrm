@@ -118,6 +118,20 @@ error.
 
 `cargo test -p llrm-nib` runs the frontend's tests.
 
+## `noundef` (note N1)
+
+llrm-c states `noundef` on scalar parameters and arguments as clang does
+(`DetermineNoUndef`, CGCall.cpp). llrm-nib states none yet.
+
+What guarantees a defined value: a binding needs an initializer
+(`language-spec.md`, section 2), so a scalar, a pointer, an `&T` or a `string`
+or `vec` pointer is never `undef` when it is passed.
+
+What does not: the result slot (uninitialized storage the callee only writes,
+`language-spec.md` section 9.2: the hidden pointer to it is defined, what it
+points to is not), a struct or enum passed whole (its padding and unused payload bytes are not
+shown defined). Those stay unmarked, as clang leaves aggregates.
+
 ## Documents
 
 | Document | Content |

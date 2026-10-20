@@ -4,20 +4,20 @@
 //!
 //! # How it works
 //! A translation of LLVM `d1106deb71cc` `JumpThreading.cpp`, one Rust function
-//! per C++ function, each linking its line. This is stages S1 to S3 of
+//! per C++ function, each linking its line. This is stages S1 to S4 of
 //! `docs/architecture/jumpthreading-translation.md`: `runImpl`,
 //! `findLoopHeaders`, `processBlock`, `computeValueKnownInPredecessors`,
 //! `processThreadableEdges`, `tryThreadEdge`, `threadEdge`, `splitBlockPreds`,
 //! `cloneInstructions`, `updateSSA`, `maybeMergeBasicBlockIntoOnlyPred`,
 //! `processBranchOnPHI`/`XOR`, `duplicateCondBranchOnPHIIntoPred`,
 //! `maybethreadThroughTwoBasicBlocks`, the select unfolding and
-//! `processImpliedCondition`.
-//! For each block the pass folds a terminator whose condition is a constant,
-//! asks what the condition is on each edge into the block (a `phi` of
-//! constants, `LazyValueInfo` on the edge, a compare of a `phi`, `and`/`or` of
-//! known parts, a `select`), and copies the block (without its terminator)
-//! for the predecessors that agree on where it goes next: the copy jumps to
-//! that target and the predecessors jump to the copy.
+//! `processImpliedCondition` and `simplifyPartiallyRedundantLoad`
+//! (`loadpre.rs`). For each block the pass folds a terminator whose condition
+//! is a constant, asks what the condition is on each edge into the block (a
+//! `phi` of constants, `LazyValueInfo` on the edge, a compare of a `phi`,
+//! `and`/`or` of known parts, a `select`), and copies the block (without its
+//! terminator) for the predecessors that agree on where it goes next: the copy
+//! jumps to that target and the predecessors jump to the copy.
 //!
 //! ```text
 //!   p1: br b            p1: br b.thread       b.thread: ..; br t
@@ -26,15 +26,24 @@
 //!       br i1 %c, t, e
 //! ```
 //!
-//! DEVIATE (J1..J14; stage S4 is not ported yet, which is not a deviation of
-//! the finished pass):
+//! DEVIATE (J1..J15):
 //! - J1. No `indirectbr` or `blockaddress` in MIR: `processBlock`'s
 //!   `IndirectBrInst` arm, `hasAddressTakenAndUsed` and the block-address
 //!   preference of `getKnownConstant` are absent.
-//! - J2. No guards: `processGuards` is skipped; no input has
-//!   `llvm.experimental.guard`.
+//! - J2. No guards: `processGuards` and `threadGuard` are skipped. A guard call
+//!   needs exactly one `"deopt"` operand bundle (`opt`'s verifier rejects it
+//!   without), MIR has no operand bundles, and no front end emits the
+//!   intrinsic: a well-formed guard cannot reach the pass, and `opt` has
+//!   nothing to compare a translation with.
+//!   `DuplicateInstructionsInSplitBetween` is not translated either.
 //! - J3. No `!prof`, `BlockFrequencyInfo` or `BranchProbabilityInfo` updates
-//!   (`updateBlockFreqAndEdgeWeight`, `getBPI`).
+//!   (`updateBlockFreqAndEdgeWeight`, `updatePredecessorProfileMetadata`,
+//!   `getBPI`, `getBFI`). The pin keeps BPI and BFI up to date as it threads
+//!   and does not preserve them; what outlives the pass is the branch weights
+//!   it writes, and only where a threaded block's terminator has valid ones. No
+//!   front end writes `!prof`; `loopversion`'s dispatch branch (-O3) does,
+//!   `window` after this pass. `difftest.py` leaves metadata out of the
+//!   comparison, so the weights cannot be read against `opt` there.
 //! - J4. `DomTreeUpdater` is not used: the pass returns `none()` when it
 //!   changed anything and the manager rebuilds the dominator tree. The
 //!   reachable set at the start is a walk from the entry.
@@ -80,12 +89,18 @@
 //!   the early return pays frame setup (shrink-wrap) and the constant copy sits
 //!   before the test (pre-RA MachineSink). Exit: the ShrinkWrap port
 //!   (backend-two) and the MachineSink translation (lir-cleanup-port).
+//! - J15. `simplifyPartiallyRedundantLoad`: a load is never atomic in MIR
+//!   (`isUnordered` is `!volatile`), debug locations are not set on the new
+//!   instructions (J7), and `CanSpeculateInto` asks the LICM translation of
+//!   `isSafeToSpeculativelyExecute` (a load is safe where its bytes are
+//!   dereferenceable or the target does not trap), which does not read the
+//!   context instruction (`Pred->getTerminator()`).
 //!
-//! Rows pair, one binary, on against off (feat/parity 846c0c0c6): clocks
-//! geomean llrm/min(gcc,clang) O2 .9149 -> .9161 (+0.1%), O3 .8851 -> .8889
-//! (+0.4%), Os .9280 -> .9333 (+0.6%); 13 rows worse, 16 better. Code bytes m16
-//! -184/-286/-401 (O2/O3/Os), m32 -470/-890/-152.
-//! - Not yet ported (later stage): `simplifyPartiallyRedundantLoad`.
+//! Rows pair at S3, before the load PRE, one binary, on against off
+//! (feat/parity 846c0c0c6): clocks geomean llrm/min(gcc,clang) O2 .9149 ->
+//! .9161 (+0.1%), O3 .8851 -> .8889 (+0.4%), Os .9280 -> .9333 (+0.6%); 13 rows
+//! worse, 16 better. Code bytes m16 -184/-286/-401 (O2/O3/Os), m32
+//! -470/-890/-152.
 //!
 //! # Example
 //! `%c` is `true` from `p1`, so `p1` skips `b`:
@@ -115,7 +130,7 @@ use llrm_mir::instructioncost::instruction_cost;
 use llrm_mir::lazyvalueinfo::{Env, LazyValueInfo};
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, Use, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags, IntPredicate, Opcode};
-use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::simplify::{simplify_icmp_operands, simplify_instruction};
 use llrm_mir::tti::{Cost, CostKind, Tti};
 use llrm_mir::valuelattice::LatticeConstant;
@@ -128,6 +143,8 @@ use llrm_mir::valuetracking::{AssumptionCache, Query};
 
 use crate::lcssa::{arms, from_arms};
 use crate::local::{is_instruction_trivially_dead, may_have_side_effects};
+
+mod loadpre;
 
 /// The `cl::opt` limits of the pass, so a level or a target can set them
 /// without editing it; `Default` is the pin's values.
@@ -218,6 +235,7 @@ impl FunctionPass for JumpThreading {
             globals,
             callees: outer.callees(),
             tti: &*tti,
+            outer: Rc::clone(&outer),
             assumptions,
             lvi: LazyValueInfo::new(),
             loop_headers: IdSet::new(),
@@ -267,6 +285,7 @@ struct State<'a, 'u> {
     globals: Rc<Vec<GlobalValue>>,
     callees: &'a llrm_mir::memory::Callees,
     tti: &'a dyn Tti,
+    outer: Rc<Outer>,
     assumptions: AssumptionCache,
     lvi: LazyValueInfo,
     loop_headers: IdSet<BlockId>,
@@ -1414,8 +1433,28 @@ impl State<'_, '_> {
             return true;
         }
 
-        // Not yet ported: the load of simplifyPartiallyRedundantLoad (S4),
-        // updatePredecessorProfileMetadata (J3).
+        // Check for some cases that are worth simplifying. Right now we want
+        // to look for loads that are used by a switch or by the condition for
+        // the branch. If we see one, check to see if it's partially
+        // redundant. If so, insert a PHI which can then be used to thread the
+        // values.
+        let mut simplify_value = cond_without_freeze;
+        if let Some(cmp) = self.instruction_of(simplify_value)
+            && matches!(self.opcode(cmp), Opcode::ICmp(_) | Opcode::FCmp(_))
+            && matches!(self.op(cmp, 1), Operand::Constant(_))
+        {
+            simplify_value = self.op(cmp, 0);
+        }
+        // TODO (as the pin): there are other places where load PRE would be
+        // profitable, such as more complex comparisons.
+        if let Some(load) = self.instruction_of(simplify_value)
+            && matches!(self.opcode(load), Opcode::Load { .. })
+            && self.simplify_partially_redundant_load(load)
+        {
+            return true;
+        }
+
+        // Not yet ported: updatePredecessorProfileMetadata (J3).
 
         // Handle a variety of cases where we are branching on something
         // derived from a PHI node in the current block. If we can prove that

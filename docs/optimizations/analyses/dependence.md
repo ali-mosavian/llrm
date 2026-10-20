@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/dependence.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/dependence.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/dependence.rs sha256:4318024fc3aae80fd4f1676579705a2b1c73e905b6582f11a30d23d8ad91d99f -->
+<!-- src: crates/opt/llrm-analysis/src/dependence.rs sha256:a72928fc56af6578660012ab3dcb3abebf20a75d5db3536ecd7fdb0706550ebd -->
 
 # dependence
 
@@ -95,10 +95,8 @@ at most a cache line, none where it does not move.
 
 ## Provides
 `distances`, `factor`, `fusable`, `meetings`, `interchangeable`,
-`walk_cost`. Consumers: `unroll_jam` (`crates/opt/llrm-transforms/src/
-unroll_jam.rs`) and `loopfuse` (`crates/opt/llrm-transforms/src/loopfuse.
-rs`) and `loopdistribute` (`crates/opt/llrm-transforms/src/loopdistribute.
-rs`) and `loopinterchange`.
+`walk_cost`. Consumers: `loopdistribute`
+(`crates/opt/llrm-transforms/src/loopdistribute. rs`) and `loopinterchange`.
 
 ## See also
 gcc `tree-data-ref.cc` distance vectors read by `adjust_unroll_factor`

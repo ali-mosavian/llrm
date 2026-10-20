@@ -1142,81 +1142,6 @@ fn a_round_follows_an_unroll_that_changed_the_body_past_the_budget() {
     assert_eq!(rounds(2), 3, "a third round runs after the unroll of the second, none after the third");
 }
 
-/// Sixty sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them
-/// (six sweeps are completely unrolled by `LoopFullUnroll`, which LLVM's order
-/// runs before the jam, and leave no nest to jam),
-/// through the whole pipeline at -O3 with and without unroll-and-jam, and at
-/// -O2: the jam changes the code of -O3 alone, and the nest computes what it
-/// did. Before the pass was in the pipeline the first two were the same text.
-#[test]
-fn only_o3_jams_a_nest_that_sweeps_the_same_cells() {
-    let cells = |base: i32| (0..100).map(|at| format!("i16 {}", base + at % 7)).collect::<Vec<_>>().join(", ");
-    let text = format!(
-        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
-@p = global [100 x i16] [{}]
-@v = global [100 x i16] [{}]
-
-define i16 @main() {{
-b0:
-  br label %outer
-
-outer:
-  %t = phi i16 [ 0, %b0 ], [ %tn, %outerlatch ]
-  %go = icmp slt i16 %t, 60
-  br i1 %go, label %pre, label %done
-
-pre:
-  br label %inner
-
-inner:
-  %j = phi i16 [ 0, %pre ], [ %jn, %body ]
-  %more = icmp slt i16 %j, 100
-  br i1 %more, label %body, label %outerlatch
-
-body:
-  %o = mul i16 %j, 2
-  %pp = getelementptr i8, ptr @p, i16 %o
-  %pv = getelementptr i8, ptr @v, i16 %o
-  %a = load i16, ptr %pp
-  %b = load i16, ptr %pv
-  %s = add i16 %a, %b
-  store i16 %s, ptr %pp
-  %jn = add i16 %j, 1
-  br label %inner
-
-outerlatch:
-  %tn = add i16 %t, 1
-  br label %outer
-
-done:
-  %q = getelementptr i8, ptr @p, i16 40
-  %w = load i16, ptr %q
-  ret i16 %w
-}}
-",
-        cells(1),
-        cells(3)
-    );
-    let through = |options: pipeline::Options| {
-        let mut module = llrm_analysis::testing::parsed(&text);
-        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
-            pipeline::applied(program, &Applied { options, ..Applied::default() })
-        })
-        .and_then(|done| done)
-        .unwrap();
-        (llrm_mir::print::module(&module), interpret::run(&module, "main", Vec::new(), FUEL))
-    };
-    let before = interpret::run(&llrm_analysis::testing::parsed(&text), "main", Vec::new(), FUEL);
-    let (jammed, result) = through(pipeline::Options::speed());
-    let (plain, plain_result) = through(pipeline::Options { unroll_jam: false, ..pipeline::Options::speed() });
-    assert_eq!((&result, &plain_result), (&before, &before), "{jammed}");
-    assert_ne!(jammed, plain);
-    assert_eq!(
-        through(pipeline::Options::default()).0,
-        through(pipeline::Options { unroll_jam: false, ..Default::default() }).0
-    );
-}
-
 /// Reads what the module says each function does to memory, and finds nothing
 /// to do; counts how often it was asked.
 struct ReadsCallees {
@@ -1456,7 +1381,7 @@ fn test_sroa_and_mem2reg_are_on_by_default_and_the_registry_calls_their_slots_tr
                 level,
                 applied.options.sroa,
                 applied.options.mem2reg,
-                applied.options.rotating(),
+                applied.options.rotate_slot,
                 &[],
                 &[],
             );
@@ -1489,7 +1414,10 @@ fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translat
 fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
-    assert_eq!(late, ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@2376"]);
+    assert_eq!(
+        late,
+        ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
+    );
     let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
     assert_eq!(kind, Some(crate::parity::SlotKind::Translated));
 }
@@ -2219,19 +2147,16 @@ fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
     assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
 }
 
-/// LoopRotate is off by default (it miscompiled with the passes after it,
-/// #2585; `LLRM_ROTATE` turns it on), and off where unroll-and-jam runs, whose
-/// nests are the header-tested form (RJ1).
+/// The rotate slot (the pin's LPM1 `loop-rotate`, L728) used to be left out
+/// where unroll-and-jam ran, so -O3 and -Omax ran no loop-rotate that the pin
+/// runs. It is in the order at every level.
 #[test]
-fn test_the_rotate_slot_is_off_by_default_and_off_where_unroll_jam_is() {
-    // Off until #2585 is fixed (`LLRM_ROTATE` sets it); the option still gates
-    // the slot.
-    let on = pipeline::Options { rotate_slot: true, ..pipeline::Options::default() };
-    assert!(on.rotating());
-    assert_eq!(pipeline::Options::default().rotating(), std::env::var_os("LLRM_ROTATE").is_some());
-    assert!(!pipeline::Options { unroll_jam: true, ..on }.rotating());
-    assert!(!pipeline::Options::speed().rotating());
-    assert!(!pipeline::Options::aggressive().rotating());
+fn test_the_rotate_slot_runs_at_every_level() {
+    for options in [pipeline::Options::default(), pipeline::Options::speed(), pipeline::Options::aggressive()] {
+        let applied = Applied { options, ..Applied::default() };
+        let built = pipeline::llvm_order(&applied, crate::parity::Phase::Simplify);
+        assert!(built.iter().any(|one| one.name() == "rotate@728"), "no rotate@728 in the order");
+    }
 }
 
 /// `llrm-pass --order` could not name a slot of LLVM's order: the oracle ran
@@ -2257,12 +2182,15 @@ fn test_a_slot_of_the_order_can_be_run_alone_when_the_level_builds_it() {
 #[test]
 fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     let o2 = Applied::default();
-    for slot in ["simplifycfg@1438", "simplifycfg@2376"] {
+    for slot in ["simplifycfg@1438", "simplifycfg@1682", "simplifycfg@2376"] {
         assert!(pipeline::slot_built(&o2, slot), "{slot}");
     }
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
-    assert_eq!(late, ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@2376"]);
+    assert_eq!(
+        late,
+        ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
+    );
 }
 
 /// d_faces -O2 under the LLVM order ran `hoist` three times in its slots and

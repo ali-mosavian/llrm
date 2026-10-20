@@ -32,7 +32,11 @@ llrm-target = { path = "crates/target/llrm-target" }
 llrm-instr = { path = "crates/target/llrm-instr" }
 llrm-x86 = { path = "crates/target/llrm-x86" }
 llrm-x86-m32 = { path = "crates/target/llrm-x86-m32" }
+llrm-arm64 = { path = "crates/target/llrm-arm64" }
+llrm-elf-arm64 = { path = "crates/target/llrm-elf-arm64" }
 llrm-x86-m32-select = { path = "crates/target/llrm-x86-m32-select" }
+llrm-x86-m64 = { path = "crates/target/llrm-x86-m64" }
+llrm-x86-m64-select = { path = "crates/target/llrm-x86-m64-select" }
 llrm-omf = { path = "crates/target/llrm-omf" }
 llrm-object = { path = "crates/target/llrm-object" }
 llrm-elf = { path = "crates/target/llrm-elf" }
@@ -108,6 +112,10 @@ path = "src/bin/llrm-qb.rs"
 [[bin]]
 name = "llrm-c"
 path = "src/bin/llrm-c.rs"
+
+[[bin]]
+name = "llrm-llc"
+path = "src/bin/llrm-llc.rs"
 
 [[bin]]
 name = "llrm-omf"

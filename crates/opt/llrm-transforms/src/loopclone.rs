@@ -3,7 +3,7 @@
 //! bodies inside it, keeping the loop and every exit.
 //!
 //! # How it works
-//! This is the mechanism for peeling, unswitching and unroll-and-jam; it makes
+//! This is the mechanism for peeling and unswitching; it makes
 //! no profitability decision. Both functions return each copy's map from an
 //! original block to its clone, or `None` having changed nothing when the loop
 //! is not one they can clone. Both need
@@ -132,8 +132,8 @@
 //! peeled once where the test peels twice.
 //!
 //! # Runs
-//! Called by [`crate::peel`] and [`crate::loopsplit`] (`peeled`),
-//! [`crate::unroll_jam`] (`chained`) and [`crate::loopdistribute`] (`copied`);
+//! Called by [`crate::peel`] (`peeled`),
+//! [`crate::loopdistribute`] (`copied`);
 //! not a pass.
 //!
 //! # Needs
@@ -236,11 +236,32 @@ pub fn peeled(
     loop_: &Loop,
     count: i64,
 ) -> Result<Option<Vec<BTreeMap<i64, BlockId>>>, String> {
+    peeled_from(function, loop_, count, false)
+}
+
+/// `peeled` for a loop that may also leave from its latch, as `peelLoop` takes
+/// any loop in simplified form.
+pub fn peeled_any_latch(
+    function: &mut Function,
+    loop_: &Loop,
+    count: i64,
+) -> Result<Option<Vec<BTreeMap<i64, BlockId>>>, String> {
+    peeled_from(function, loop_, count, true)
+}
+
+fn peeled_from(
+    function: &mut Function,
+    loop_: &Loop,
+    count: i64,
+    leaves_from_latch: bool,
+) -> Result<Option<Vec<BTreeMap<i64, BlockId>>>, String> {
     if count < 1 {
         return Err("peeling needs a positive iteration count".to_owned());
     }
     let count = count as usize;
-    let Some(Plan { graph, entry, latch, originals }) = plan(function, loop_, false) else { return Ok(None) };
+    let Some(Plan { graph, entry, latch, originals }) = plan(function, loop_, leaves_from_latch) else {
+        return Ok(None);
+    };
     let mut labels: Vec<BTreeMap<i64, BlockId>> = Vec::new();
     let mut copies: Vec<BTreeMap<ValueId, ValueId>> = Vec::new();
     let mut cloned = Vec::new();

@@ -1623,7 +1623,7 @@ pub fn slots_colored(
     }
     let mut ranked: Vec<usize> = (0..shared.len()).collect();
     ranked.sort_by_key(|color| (std::cmp::Reverse(uses[*color]), *color));
-    if body.bits == 32 {
+    if body.bits >= 32 {
         ranked.reverse();
     }
     let mut again = Frame { slots: IndexMap::default(), capacities: IndexMap::default(), ..frame.clone() };
@@ -5865,7 +5865,8 @@ mod tests {
                 vec![Loc::Address(source)],
             );
             let names: IndexMap<(Space, i64), String> = IndexMap::from_iter([((space, 7), "_descriptor".to_owned())]);
-            let emitted = objbuild::_encoded(regs, &lea, &names, 16).expect("encodes");
+            let emitted =
+                objbuild::_encoded(regs, &lea, &names, llrm_target::object::CodeModel::Segmented16).expect("encodes");
             assert_eq!(emitted.code, [0x8D, 0x1E, 0x0C, 0x00]);
             assert_eq!(emitted.fixups, [objbuild::Fixup::new(2, objbuild::OFFSET, "_descriptor")]);
         }
