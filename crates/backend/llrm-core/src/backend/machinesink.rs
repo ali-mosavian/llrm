@@ -38,16 +38,16 @@
 //! instruction inside a cycle; no instruction here sinks on that ground.
 //! Exit: the target description's pressure limits.
 //!
-//! DEVIATE M4 (#2903): in a build for size an instruction moves only if each
-//! value it reads is read again after it (a later instruction of its block, or
-//! a phi reading it at the block's end), so that no range grows; LLVM moves
-//! any, and its allocator splits the ranges around the stretch. Rows with every
-//! instruction movable at -Os: `bench/jpeg_single` m16 +61 bytes, `jpeg_fixed`
-//! m16 +50, `huge_runs` +29 (all 36 -Os objects that differ: 8 larger, +163, 21
-//! smaller, -998). Otherwise (-O1 to -O3) every safe instruction moves;
-//! `bench/quicksort` -O2 m16 costs +985 clocks (+0.3%, a reload more per trip).
-//! Exit: the greedy allocator with SplitKit as the default allocator (target
-//! 2026-11-05).
+//! DEVIATE M4 (#2903): in a build for size an instruction moves only where it
+//! is the last reader of each value it reads on its path, so that the
+//! two-address form needs no copy (`x > C ? x - C : x`: the `add` in the arm
+//! is in place). LLVM moves any, and its allocator splits the ranges around
+//! the stretch. Rows with every instruction movable at -Os: `bench/jpeg_single`
+//! m16 +61 bytes, `jpeg_fixed` m16 +50, `huge_runs` +29 (all 36 -Os objects
+//! that differ: 8 larger, +163, 21 smaller, -998). Otherwise (-O1 to -O3) every
+//! safe instruction moves; `bench/quicksort` -O2 m16 costs +985 clocks (+0.3%,
+//! a reload more per trip). Exit: the greedy allocator with SplitKit as the
+//! default allocator (target 2026-11-05).
 //!
 //! DEVIATE M5 (#2903): in a build for size no edge is broken. The block
 //! costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
@@ -674,25 +674,20 @@ impl Sinker {
         false
     }
 
-    /// Whether `value` is not read after the instruction at `index` of `block`
-    /// on any path: a later instruction of the block, or a phi reading it at the
-    /// block's end, keeps it alive. Moving the instruction down would then make
-    /// `value` live longer (DEVIATE M4: in a build for size only an instruction
-    /// whose operands live on moves).
-    fn dies_at(
+    /// Whether `value` is read by something other than `one` in a block
+    /// `sink_to` dominates (a phi reads it at the end of its predecessor). Moved
+    /// into `sink_to`, `one` would then leave `value` live below it, and the
+    /// two-address form needs a copy (DEVIATE M4: in a build for size an
+    /// instruction moves only where it is the last reader on its path).
+    fn read_below(
         &self,
         value: u32,
-        block: usize,
-        index: usize,
+        one: &Insn,
+        sink_to: usize,
     ) -> bool {
-        let later = self.insns[block][index + 1..].iter().any(|one| one.uses.contains(&value));
-        let at_end = self
-            .uses
-            .get(&value)
-            .into_iter()
-            .flatten()
-            .any(|&used| matches!(used, Use::Phi { from, .. } if self.position[&from] == block));
-        !later && !at_end
+        self.uses.get(&value).into_iter().flatten().any(|&used| {
+            !matches!(used, Use::Insn(id) if id == one.id()) && self.dom.dominates(sink_to, self.use_block(used))
+        })
     }
 
     /// `SinkInstruction`: the instruction at `index` of `block`, moved into a
@@ -717,7 +712,7 @@ impl Sinker {
         if self.flags_live_in[sink_to] && self.writes_flags(&one) {
             return false;
         }
-        if self.size && one.uses.iter().any(|&value| self.dies_at(value, block, index)) {
+        if self.size && one.uses.iter().any(|&value| self.read_below(value, &one, sink_to)) {
             return false;
         }
         // A successor with other predecessors: sink along the edge, or break
@@ -945,7 +940,7 @@ mod tests {
         };
         let arm = LirBlock {
             succ: vec![2].into(),
-            ..LirBlock::new(1, vec![insn(3, Operation::Move, "mov", vec![held(5)], vec![held(1)], vec![5], vec![1])])
+            ..LirBlock::new(1, vec![insn(3, Operation::Move, "mov", vec![held(5)], vec![held(2)], vec![5], vec![2])])
         };
         let join = LirBlock {
             phis: vec![crate::model::lir::Phi { result: 4, incoming: vec![(1, 3), (0, 1)] }].into(),
@@ -958,7 +953,7 @@ mod tests {
             IndexMap::default(),
             IndexMap::default(),
         );
-        body.inputs = [1].into_iter().collect();
+        body.inputs = [1, 2].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let names = |body: &LirBody, block: usize| -> Vec<String> {
             body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
@@ -968,5 +963,49 @@ mod tests {
         let moved = sunk(&body, true);
         assert_eq!(names(&moved, 0), ["cmp", "jbe"], "the add left the block");
         assert_eq!(names(&moved, 1), ["add", "mov"], "and went into the arm");
+    }
+
+    /// The same, with the operand read again in the arm: the `add` then needs
+    /// a copy there (`mov; add` for the `lea` it was: bench/control -Os +2
+    /// bytes), so it stays.
+    #[test]
+    fn test_in_a_size_build_an_instruction_whose_operand_is_read_below_stays() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Binary, "add", vec![held(3)], vec![held(1), imm(7)], vec![3], vec![1]),
+                    insn(1, Operation::Compare, "cmp", vec![], vec![held(2), imm(0)], vec![], vec![2]),
+                    insn(2, Operation::Branch, "je", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let arm = LirBlock {
+            succ: vec![2].into(),
+            ..LirBlock::new(1, vec![insn(3, Operation::Move, "mov", vec![held(5)], vec![held(1)], vec![5], vec![1])])
+        };
+        let join = LirBlock {
+            phis: vec![crate::model::lir::Phi { result: 4, incoming: vec![(1, 3), (0, 2)] }].into(),
+            ..LirBlock::new(2, vec![insn(4, Operation::Move, "mov", vec![held(6)], vec![held(4)], vec![6], vec![4])])
+        };
+        let mut body = LirBody::new(
+            "stays",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let names = |body: &LirBody, block: usize| -> Vec<String> {
+            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+        };
+        assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
+        let moved = sunk(&body, true);
+        assert_eq!(names(&moved, 0), ["add", "cmp", "je"], "the add stays");
+        // Outside a build for size it moves, so the premise is the rule's.
+        assert_eq!(names(&sunk(&body, false), 0), ["cmp", "je"], "the premise: it can move");
     }
 }
