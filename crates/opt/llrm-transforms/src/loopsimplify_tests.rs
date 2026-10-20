@@ -436,7 +436,7 @@ fn corpus_simplified() -> Vec<(String, Vec<usize>, Vec<usize>, bool)> {
         let names: Vec<String> = module
             .functions()
             .filter(|(_, _, one)| one.entry().is_some())
-            .filter_map(|(_, global, _)| global.name.clone())
+            .filter_map(|(_, global, _)| global.name.owned())
             .collect();
         for function_name in names {
             let (_, function) = module.function_mut(&function_name).unwrap();

@@ -277,14 +277,17 @@ b2:
     assert_eq!(seen[1], seen[2]);
 }
 
-/// Summaries and GlobalsAA ran points-to over every body with a shape of
-/// its own: 100k shapes a pipeline run. Each is its body's manager's.
+/// Summaries and GlobalsAA ran points-to over every body with a shape of its
+/// own: 100k shapes a pipeline run. Neither solves a body now (GlobalsAA is one
+/// use scan of the module), so neither makes a shape, its own or its manager's.
 #[test]
-fn summaries_read_each_bodys_shape_from_its_manager() {
+fn summaries_and_globals_aa_make_no_shape() {
     let module = parsed("define i16 @f(ptr %p) {\nentry:\n  %x = load i16, ptr %p\n  ret i16 %x\n}\n");
     let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::Shapes);
     analyses.get::<Summaries>(&module);
-    assert!(analyses.cached_function::<Shape>(module.named("f").unwrap()).is_some());
+    assert_eq!(llrm_mir::counts::get(llrm_mir::counts::Event::Shapes) - before, 0, "a shape was derived");
+    assert!(analyses.cached_function::<Shape>(module.named("f").unwrap()).is_none(), "a manager's shape was asked");
 }
 
 /// A body that calls something unknown may call back into any entry, so its
@@ -348,29 +351,6 @@ fn test_a_functions_exposed_frames_are_found_once_not_per_access() {
     let exposed = analyses.get::<super::ExposedFrames>(&module.context, &layout, function);
     let names: Vec<_> = exposed.iter().map(|one| function.value(*one).name.clone()).collect();
     assert_eq!(names.len(), 1, "only @hidden's address is handed out: {names:?}");
-}
-
-/// The observers analysis (dse) built its unit without the exposure table, so
-/// every access it resolved scanned its alloca's uses: slope 2 in a function's
-/// accesses, 4% of compiling 2,000 stores at -O2 (#924).
-#[test]
-fn test_the_published_objects_analysis_asks_the_exposed_frames_once() {
-    let accesses: String =
-        (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
-    let module = parsed(&format!(
-        "{DOS}declare void @out(ptr)\n\ndefine i16 @f() {{\nentry:\n  %slot = alloca i16\n  %hidden = alloca i16\n{accesses}  call void @out(ptr %hidden)\n  ret i16 %v39\n}}\n"
-    ));
-    let layout = layout(&module);
-    let function = function(&module, "f");
-    let mut analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
-    analyses.get::<super::ExposedFrames>(&module.context, &layout, function);
-    let before = crate::frameescape::scans();
-    analyses
-        .get::<crate::observers::Published>(&module.context, &layout, function)
-        .as_ref()
-        .as_ref()
-        .expect("publishes");
-    assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
 }
 
 /// GlobalsAA ran points-to over every body without the exposure table, so each
@@ -862,12 +842,11 @@ fn test_a_store_s_cell_is_decoded_once_however_many_loads_it_reaches() {
     assert!(decoded <= 2 * joins, "{decoded} decodes for {joins} stores and {joins} loads");
 }
 
-/// `Summaries` solved where every pointer points for the direct summary, for
-/// the calls' facts and for each summarized call: 4 to 5 value solves a body
-/// state, 11.0% of QCport's -O1 compile with the rest of the family. One a
-/// body.
+/// `Summaries` solved where every pointer points for a body (4 to 5 value
+/// solves a body, 11.0% of QCport's -O1 compile); it reads attributes, which
+/// solve none.
 #[test]
-fn summaries_solve_the_pointer_values_of_a_body_once() {
+fn summaries_solve_no_pointer_values_of_a_body() {
     let module = parsed(
         "declare void @g(ptr)\n\ndefine void @f(ptr %a) {\nentry:\n  %p = getelementptr i8, ptr %a, i16 2\n  call void @g(ptr %p)\n  call void @g(ptr %a)\n  ret void\n}\n",
     );
@@ -875,7 +854,7 @@ fn summaries_solve_the_pointer_values_of_a_body_once() {
     analyses.get::<GlobalsAA>(&module);
     let before = crate::alias::value_solves();
     analyses.get::<Summaries>(&module);
-    assert_eq!(crate::alias::value_solves() - before, 1, "Summaries solved a body's pointer values again");
+    assert_eq!(crate::alias::value_solves() - before, 0, "Summaries solved a body's pointer values");
 }
 
 /// What calling back into the module does was added up from every entry's

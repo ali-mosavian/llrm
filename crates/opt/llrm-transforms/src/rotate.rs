@@ -77,9 +77,9 @@
 //! `analysis registers` on nests and many-loop functions are #1559.
 //!
 //! A rotated loop is no longer the pre-tested shape the counted-loop
-//! analyses, [`crate::peel`] and [`crate::unroll`] read, so rotation goes
-//! after them. [`crate::lsr_pass`] enters a loop it counts to zero at its body
-//! too, behind a skip guard, with the same `_rotate`.
+//! analyses, [`crate::looppeel`] and [`crate::loopunrollpass`] read, so
+//! rotation goes after them. [`crate::lsr_pass`] enters a loop it counts to
+//! zero at its body too, behind a skip guard, with the same `_rotate`.
 //!
 //! # Example
 //! Before:

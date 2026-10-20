@@ -16,7 +16,8 @@ fn combined(
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
     let (context, function) = module.function_mut("f").expect("@f");
-    combine(context, &globals, &metadata, &DataLayout::default(), function);
+    let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
+    combine(context, &globals, &metadata, &DataLayout::default(), function, &mut declared);
     printed(&module)
 }
 
@@ -152,5 +153,17 @@ fn visit_xor_hoists_a_constant_out_of_the_inner_xor() {
         "  %e = xor i32 %x, 77\n  %r = xor i32 %e, %y\n  ret i32 %r\n",
         &["xor i32 %x, %y", ", 77"],
         &[],
+    );
+}
+
+#[test]
+fn visit_or_isolates_the_lowest_set_bit() {
+    check(
+        "or",
+        "i32",
+        "i32 %x",
+        "  %n = xor i32 %x, -1\n  %d = add i32 %x, -1\n  %r = or i32 %n, %d\n  ret i32 %r\n",
+        &["sub i32 0, %x", "and i32 %x, %"],
+        &[" or i32"],
     );
 }

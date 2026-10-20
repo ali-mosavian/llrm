@@ -17,21 +17,16 @@
 //!                                        rest
 //! ```
 //!
-//! An operand of the select that only the select uses, is safe to execute
-//! speculatively and costs `TCC_Expensive` or more (a division) moves into the
-//! block of its own side, so the other path does not run it: CodeGenPrepare's
-//! `sinkSelectOperand`. A cheap one stays, as in LLVM. Where the target states
-//! no cost model every instruction costs one, and nothing moves.
-//!
 //! DEVIATE S2 (no number): the pin keeps the select to instruction selection.
 //! CodeGenPrepare's `optimizeSelectInst` forms no branch where
 //! `isPredictableSelectExpensive` is false (in-order i486, `CodeGenPrepare.cpp`
 //! `isFormingBranchFromSelectProfitable`), and `X86TargetLowering::
 //! EmitLoweredSelect` then expands the select to a diamond on machine IR, with
-//! both operands computed before it. Ours expands in MIR and moves an
-//! expensive operand into its arm. Exit: move the expansion to selection and
-//! drop the operand sinking: the registry slot `emit-lowered-select`
-//! (lir-cleanup-port, PR by 2026-11-13, rows pair after it lands; #3052).
+//! both operands computed before it. Ours expands in MIR. The operand sinking
+//! of `sinkSelectOperand`, which the pin does not do here, is deleted: it
+//! moved nothing over 834 objects. Exit: the expansion at selection, the
+//! registry slot `emit-lowered-select` (lir-cleanup-port, PR by 2026-11-13;
+//! #3052).
 //!
 //! The loop is repeated until no select is left in any function, so two selects
 //! in one block each get their own split. The result is checked by an
@@ -90,15 +85,14 @@
 use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Module, Operand};
-use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
-use llrm_mir::passes::Outer;
-use llrm_mir::tti::{Cost, CostKind, Tti};
+use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalValue, InstId, Module, Operand};
+use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
+use llrm_mir::tti::Tti;
 
 /// Every `llvm.{s,u}{min,max}` call of `module` made a compare and a select,
 /// as LLVM expands ISD::SMAX where the target has no such instruction.
 pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
-    let names: Vec<Option<String>> = module.globals.iter().map(|global| global.name.clone()).collect();
+    let intrinsics: Vec<Option<Intrinsic>> = module.globals.iter().map(GlobalValue::intrinsic).collect();
     let context = &mut module.context;
     for global in &mut module.globals {
         let GlobalKind::Function(function) = &mut global.kind else { continue };
@@ -108,8 +102,7 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
                 let instruction = function.instruction(inst);
                 let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return None };
                 let ConstantKind::Global(callee) = context.get(callee).kind else { return None };
-                let name = names[callee.0 as usize].as_deref()?;
-                match (matches!(instruction.opcode, Opcode::Call(_)), Intrinsic::named(name)) {
+                match (matches!(instruction.opcode, Opcode::Call(_)), intrinsics[callee.0 as usize]) {
                     (true, Some(Intrinsic::MinMax { signed, max })) => Some((inst, signed, max)),
                     _ => None,
                 }
@@ -139,23 +132,34 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
     Ok(())
 }
 
-/// What the sinking of a select's operands asks of the target.
-pub struct Pricing<'a> {
-    pub target: Option<std::rc::Rc<dyn llrm_mir::target::Machine>>,
-    pub layout: &'a llrm_mir::datalayout::DataLayout,
-    pub tti: &'a dyn Tti,
-}
-
 /// Every select of `module`'s functions made a branch and a phi.
 pub fn lowered(
     module: &mut Module,
-    pricing: &Pricing,
+    tti: &dyn Tti,
     wanted: &dyn Fn(&str) -> bool,
 ) -> Result<(), String> {
-    let outer = Outer::of(module, pricing.target.clone());
     let context = &module.context;
     for global in &mut module.globals {
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
+        // Arithmetic on the condition where the constants allow it, as the
+        // DAG combiner makes it before any conditional move.
+        let all: Vec<InstId> = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .filter(|&inst| function.instruction(inst).opcode == Opcode::Select)
+            .collect();
+        for select in all {
+            if wanted(&context.types.display(function.instruction(select).ty).to_string()) {
+                if !crate::backend::selectconstants::boolean(context, function, select)? {
+                    crate::backend::selectconstants::folded(
+                        context,
+                        function,
+                        select,
+                        tti.convert_select_of_constants_to_math(),
+                    )?;
+                }
+            }
+        }
         loop {
             let found = function
                 .walk()
@@ -165,82 +169,107 @@ pub fn lowered(
                         && wanted(&context.types.display(function.instruction(inst).ty).to_string()),
                 );
             let Some(select) = found else { break };
-            // Arithmetic on the condition where the constants allow it, as the
-            // DAG combiner makes it before any conditional move.
-            if crate::backend::selectconstants::folded(
-                context,
-                function,
-                select,
-                pricing.tti.convert_select_of_constants_to_math(),
-            )? {
-                continue;
-            }
-            let sink =
-                |function: &Function, operand: Operand| sunk(context, pricing, &outer, function, select, operand);
-            let (yes, no) = (
-                sink(function, function.instruction(select).operands[1]),
-                sink(function, function.instruction(select).operands[2]),
-            );
-            _branched(function, select, yes, no)?;
+            // `EmitLoweredSelect` case 1: the selects on one condition are
+            // lowered together, by one branch. The pin's scheduler puts them in
+            // a row; here an instruction between that reads none of their
+            // results stays above the branch, and the rest follows the join.
+            let (run, join_side) = _run(context, function, select, wanted);
+            _branched(function, &run, &join_side)?;
         }
     }
     Ok(())
 }
 
-/// `sinkSelectOperand`: `operand` is an instruction only `select` uses, safe
-/// to run speculatively and expensive to.
-fn sunk(
+/// The selects that `EmitLoweredSelect` lowers with `select` (same condition,
+/// operands not made after it) and the instructions of the block that follow
+/// the join, terminator last.
+fn _run(
     context: &llrm_mir::context::Context,
-    pricing: &Pricing,
-    outer: &Outer,
     function: &Function,
     select: InstId,
-    operand: Operand,
-) -> Option<InstId> {
-    let Operand::Value(value) = operand else { return None };
-    let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { return None };
-    if function.users(value).only().is_none_or(|only| only.user != select) {
-        return None;
+    wanted: &dyn Fn(&str) -> bool,
+) -> (Vec<InstId>, Vec<InstId>) {
+    let block = function.parent(select).expect("a placed select");
+    let condition = function.instruction(select).operands[0];
+    let following: Vec<InstId> = function.iter_block(block).skip_while(|&inst| inst != select).skip(1).collect();
+    let mut run = vec![select];
+    // What is only known after the branch: the selects' results and what reads them.
+    let mut group: Vec<Operand> = function.instruction(select).result.map(Operand::Value).into_iter().collect();
+    let mut after: Vec<Operand> = Vec::new();
+    let mut effects = false;
+    // The independent, pure instructions between: kept above the branch only
+    // where a select of the run reads them, else they follow the join with
+    // the code that reads them (a compare feeding the block's branch fuses
+    // with it there).
+    let mut kept: Vec<InstId> = Vec::new();
+    for (index, &inst) in following.iter().enumerate() {
+        let one = function.instruction(inst);
+        if index + 1 == following.len() {
+            break;
+        }
+        let reads = |among: &[Operand]| one.operands.iter().any(|operand| among.contains(operand));
+        if one.opcode == Opcode::Select
+            && one.operands[0] == condition
+            && wanted(&context.types.display(one.ty).to_string())
+            && !one.operands[1..].iter().any(|operand| after.contains(operand))
+        {
+            run.push(inst);
+            group.extend(one.result.map(Operand::Value));
+            continue;
+        }
+        let pure = matches!(
+            one.opcode,
+            Opcode::ICmp(_) | Opcode::Select | Opcode::Cast(_) | Opcode::GetElementPtr { .. }
+        ) || matches!(
+            one.opcode,
+            Opcode::Binary(
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Shl
+                    | BinaryOp::LShr
+                    | BinaryOp::AShr
+                    | BinaryOp::And
+                    | BinaryOp::Or
+                    | BinaryOp::Xor
+            )
+        );
+        if reads(&group) || reads(&after) || effects || !pure {
+            effects |= !pure;
+            after.extend(one.result.map(Operand::Value));
+        } else {
+            kept.push(inst);
+        }
     }
-    if !llrm_transforms::licm::hoist::is_safe_to_speculatively_execute_in(
-        context,
-        pricing.layout,
-        function,
-        outer,
-        inst,
-    ) {
-        return None;
+    let mut needed: Vec<Operand> = run.iter().flat_map(|&inst| function.instruction(inst).operands[1..].to_vec()).collect();
+    let mut above: Vec<InstId> = Vec::new();
+    for &inst in kept.iter().rev() {
+        let one = function.instruction(inst);
+        if one.result.is_some_and(|result| needed.contains(&Operand::Value(result))) {
+            needed.extend(one.operands.iter().copied());
+            above.push(inst);
+        }
     }
-    let cost = llrm_mir::instructioncost::instruction_cost(
-        pricing.tti,
-        context,
-        pricing.layout,
-        &outer.globals,
-        function,
-        inst,
-        CostKind::SizeAndLatency,
-    );
-    (!cost.valid || cost.value >= Cost::EXPENSIVE.value).then_some(inst)
+    let join_side: Vec<InstId> =
+        following.iter().copied().filter(|inst| !run.contains(inst) && !above.contains(inst)).collect();
+    (run, join_side)
 }
 
-/// `select` made a branch around an empty block into a phi.
+/// The selects of `run` (in a row, on one condition) made a branch around an
+/// empty block and a phi each (`createPHIsForCMOVsInSinkBB`).
 fn _branched(
     function: &mut Function,
-    select: InstId,
-    sink_yes: Option<InstId>,
-    sink_no: Option<InstId>,
+    run: &[InstId],
+    moved: &[InstId],
 ) -> Result<(), String> {
+    let select = run[0];
     let block = function.parent(select).ok_or("a placed select")?;
-    let op = function.instruction(select).clone();
-    let [condition, yes, no] = op.operands[..] else { return Err("a select of three operands".into()) };
-    let result = op.result.ok_or("a select's value")?;
-    // What follows the select moves to the join, the block's way out with it.
-    let body = function.iter_block(block).collect::<Vec<_>>();
-    let after = body.iter().position(|&inst| inst == select).expect("its own block") + 1;
+    let first = function.instruction(select).clone();
+    let condition = first.operands[0];
+    // What follows the run moves to the join, the block's way out with it.
     let join = function.create_block(None);
     function.insert_block(join, Some(block))?;
-    let moved = body[after..].to_vec();
-    function.move_run(&moved, join)?;
+    function.move_run(moved, join)?;
     for next in function.successors(join) {
         _renamed_edges(function, next, block, join);
     }
@@ -249,42 +278,46 @@ fn _branched(
     let void = function.instruction(*moved.last().expect("a terminator")).ty;
     let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(join)], Flags::default(), None);
     function.insert(jump, Position::End(taken))?;
-    if let Some(inst) = sink_yes {
-        function.splice(&[inst], Position::Before(jump))?;
-    }
-    // The other side is a block of its own only where it has an instruction to
-    // run.
-    let (otherwise, from) = match sink_no {
-        Some(inst) => {
-            let untaken = function.create_block(None);
-            function.insert_block(untaken, Some(taken))?;
-            let past =
-                function.create_instruction(Opcode::Br, void, vec![Operand::Block(join)], Flags::default(), None);
-            function.insert(past, Position::End(untaken))?;
-            function.splice(&[inst], Position::Before(past))?;
-            (untaken, untaken)
-        }
-        None => (join, block),
-    };
     let branch = function.create_instruction(
         Opcode::Br,
         void,
-        vec![condition, Operand::Block(taken), Operand::Block(otherwise)],
+        vec![condition, Operand::Block(taken), Operand::Block(join)],
         Flags::default(),
         None,
     );
     function.insert(branch, Position::End(block))?;
-    let phi = function.create_instruction(
-        Opcode::Phi,
-        op.ty,
-        vec![yes, Operand::Block(taken), no, Operand::Block(from)],
-        Flags::default(),
-        None,
-    );
-    let first = function.block(join).first().expect("a block with instructions");
-    function.insert(phi, Position::Before(first))?;
-    function.replace_all_uses_with(result, Operand::Value(function.instruction(phi).result.expect("a phi's value")));
-    function.erase(select)
+    // What each result is on each edge: a phi may not read an earlier phi of its
+    // own block, so a select reading an earlier one reads what that was on the
+    // edge.
+    let mut edges: Vec<(Operand, Operand, Operand)> = Vec::new();
+    let at_top = function.block(join).first().expect("a block with instructions");
+    for &inst in run {
+        let op = function.instruction(inst).clone();
+        let [_, yes, no] = op.operands[..] else { return Err("a select of three operands".into()) };
+        let result = op.result.ok_or("a select's value")?;
+        let renamed = |value: Operand, taken_edge: bool| {
+            edges
+                .iter()
+                .find(|(earlier, _, _)| *earlier == value)
+                .map_or(value, |&(_, yes, no)| if taken_edge { yes } else { no })
+        };
+        let (yes, no) = (renamed(yes, true), renamed(no, false));
+        let phi = function.create_instruction(
+            Opcode::Phi,
+            op.ty,
+            vec![yes, Operand::Block(taken), no, Operand::Block(block)],
+            Flags::default(),
+            None,
+        );
+        function.insert(phi, Position::Before(at_top))?;
+        let made = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
+        edges.push((Operand::Value(result), yes, no));
+        function.replace_all_uses_with(result, made);
+    }
+    for &inst in run {
+        function.erase(inst)?;
+    }
+    Ok(())
 }
 
 /// `next`'s phis name `to` where they named `from`.
@@ -313,144 +346,84 @@ fn _renamed_edges(
 mod tests {
     use llrm_mir::interpret::{Val, run};
     use llrm_mir::module::Module;
-    use llrm_mir::opcode::Opcode;
-    use llrm_mir::tti::{ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Tti, Ty};
-
-    /// `Basic`, where a division costs `Cost::EXPENSIVE`.
-    struct Pricey;
-
-    impl Tti for Pricey {
-        fn cmp_sel_cost(
-            &self,
-            a: CmpSel,
-            b: Ty,
-            c: CostKind,
-        ) -> Cost {
-            Basic.cmp_sel_cost(a, b, c)
-        }
-        fn memory_op_cost(
-            &self,
-            a: MemoryOp,
-            b: Ty,
-            c: CostKind,
-            d: bool,
-        ) -> Cost {
-            Basic.memory_op_cost(a, b, c, d)
-        }
-        fn cf_instr_cost(
-            &self,
-            a: bool,
-            b: CostKind,
-        ) -> Cost {
-            Basic.cf_instr_cost(a, b)
-        }
-        fn int_imm_cost(
-            &self,
-            a: i128,
-            b: u32,
-        ) -> Cost {
-            Basic.int_imm_cost(a, b)
-        }
-        fn int_imm_cost_inst(
-            &self,
-            a: ImmUser,
-            b: u32,
-            c: i128,
-            d: u32,
-        ) -> Cost {
-            Basic.int_imm_cost_inst(a, b, c, d)
-        }
-        fn is_truncate_free(
-            &self,
-            a: Ty,
-            b: Ty,
-        ) -> bool {
-            Basic.is_truncate_free(a, b)
-        }
-        fn is_legal_addressing_mode(
-            &self,
-            a: bool,
-            b: i64,
-            c: bool,
-            d: i64,
-        ) -> bool {
-            Basic.is_legal_addressing_mode(a, b, c, d)
-        }
-        fn cast_cost(
-            &self,
-            a: CastKind,
-            b: Ty,
-            c: Ty,
-            d: CostKind,
-        ) -> Cost {
-            Basic.cast_cost(a, b, c, d)
-        }
-        fn arithmetic_cost(
-            &self,
-            op: ArithOp,
-            ty: Ty,
-            kind: CostKind,
-            a: OperandInfo,
-            b: OperandInfo,
-        ) -> Cost {
-            if matches!(op, ArithOp::UDiv | ArithOp::SDiv) {
-                Cost::EXPENSIVE
-            } else {
-                Basic.arithmetic_cost(op, ty, kind, a, b)
-            }
-        }
-    }
+    use llrm_mir::tti::Tti;
 
     fn lowered(
         module: &mut Module,
         tti: &dyn Tti,
     ) {
-        let layout = module.datalayout.as_deref().map(|text| llrm_mir::datalayout::DataLayout::parse(text).unwrap());
-        let layout = layout.unwrap_or_default();
-        let pricing = super::Pricing { target: None, layout: &layout, tti };
-        super::lowered(module, &pricing, &|_| true).unwrap();
+        super::lowered(module, tti, &|_| true).unwrap();
     }
 
-    /// A select between a division and a sum: the division is run on its own
-    /// side only, so the other path does not pay it (CodeGenPrepare's
-    /// `sinkSelectOperand`). Hoisted by SimplifyCFG's two-entry phi, it ran on
-    /// both paths once the select became a branch.
+    fn same_answers(
+        before: &Module,
+        after: &Module,
+        inputs: &[(i128, i128)],
+    ) {
+        for &(a, b) in inputs {
+            let arguments = |one: i128, other: i128| {
+                vec![Val::Int { bits: one as u128 & 0xFFFF, width: 16 }, Val::Int { bits: other as u128 & 0xFFFF, width: 16 }]
+            };
+            assert_eq!(
+                run(after, "f", arguments(a, b), 100).unwrap(),
+                run(before, "f", arguments(a, b), 100).unwrap(),
+                "{a}, {b}"
+            );
+        }
+    }
+
+    fn conditional_branches(module: &Module) -> usize {
+        llrm_mir::print::module(module).lines().filter(|line| line.trim_start().starts_with("br i1")).count()
+    }
+
+    /// The two selects of isqrt's step test one condition, with a subtract
+    /// between them. Each made its own branch, and the second tested a flag
+    /// the first block had materialised (`setae al; test al, al`), where the
+    /// pin's `EmitLoweredSelect` lowers the pair with one branch: x_isqrt
+    /// executed 2x the instructions.
     #[test]
-    fn test_an_expensive_operand_only_the_select_uses_runs_on_its_own_side() {
+    fn test_selects_on_one_condition_share_one_branch() {
         let text = "define i16 @f(i16 %a, i16 %b) {
 entry:
-  %q = udiv i16 %a, 3
-  %s = add i16 %a, %b
-  %c = icmp ult i16 %a, %b
-  %r = select i1 %c, i16 %q, i16 %s
+  %c = icmp uge i16 %a, %b
+  %p = select i1 %c, i16 %b, i16 0
+  %d = sub i16 %a, %p
+  %q = select i1 %c, i16 %a, i16 0
+  %r = add i16 %q, %d
   ret i16 %r
 }
 ";
         let before = llrm_mir::parse::module(text).unwrap();
         let mut after = before.clone();
-        lowered(&mut after, &Pricey);
+        lowered(&mut after, &llrm_mir::tti::Basic);
         assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
-        let printed = llrm_mir::print::module(&after);
-        let function = after.named("f").and_then(|id| after.global(id).function()).expect("f");
-        let first = function.walk().next().map(|(block, _)| block).expect("a block");
-        let divides = |block| {
-            function
-                .iter_block(block)
-                .any(
-                    |inst| matches!(
-                        function.instruction(inst).opcode,
-                        Opcode::Binary(llrm_mir::opcode::BinaryOp::UDiv)
-                    ),
-                )
-        };
-        assert!(!divides(first), "{printed}");
-        assert!(
-            function.walk().any(|(block, inst)| block != first
-                && function.instruction(inst).opcode == Opcode::Binary(llrm_mir::opcode::BinaryOp::UDiv)),
-            "{printed}"
-        );
-        for (a, b) in [(3, 5), (9, 2), (4, 4)] {
-            let arguments = vec![Val::Int { bits: a, width: 16 }, Val::Int { bits: b, width: 16 }];
+        assert!(!llrm_mir::print::module(&after).contains("select"));
+        assert_eq!(conditional_branches(&after), 1, "{}", llrm_mir::print::module(&after));
+        same_answers(&before, &after, &[(3, 5), (9, 2), (4, 4), (0, 0), (65535, 1)]);
+    }
+
+    /// `select x, true, y` is `x | y` (`foldBoolSelectToLogic`): queens' `||`
+    /// chain made a branch per select and a setcc-and-test between them.
+    #[test]
+    fn test_a_boolean_select_is_a_logic_operation() {
+        let text = "define i1 @f(i16 %a, i16 %b) {
+entry:
+  %x = icmp eq i16 %a, 0
+  %y = icmp eq i16 %a, %b
+  %o = select i1 %x, i1 true, i1 %y
+  %z = icmp ult i16 %a, %b
+  %p = select i1 %o, i1 true, i1 %z
+  ret i1 %p
+}
+";
+        let before = llrm_mir::parse::module(text).unwrap();
+        let mut after = before.clone();
+        lowered(&mut after, &llrm_mir::tti::Basic);
+        assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
+        assert_eq!(conditional_branches(&after), 0, "{}", llrm_mir::print::module(&after));
+        for (a, b) in [(0, 5), (3, 3), (4, 9), (9, 4)] {
+            let arguments =
+                vec![Val::Int { bits: a, width: 16 }, Val::Int { bits: b, width: 16 }];
             assert_eq!(run(&after, "f", arguments.clone(), 100).unwrap(), run(&before, "f", arguments, 100).unwrap());
         }
     }

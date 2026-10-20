@@ -1,7 +1,7 @@
 //! Each body is MIR text run by llrm-mir's interpreter before and after.
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::passes::Outer;
+use llrm_mir::passes::{Declared, Outer};
 
 use crate::simplifycfg::{Options, simplified_with};
 use crate::testing::{parsed, printed, results};
@@ -18,8 +18,9 @@ fn check(
     let outer = Outer::of(&module, None);
     let layout = DataLayout::default();
     let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    assert_eq!(simplified_with(&options, context, &spec, function), text != expected, "{text}");
+    assert_eq!(simplified_with(&options, context, &spec, &mut declared, function), text != expected, "{text}");
     assert_eq!(printed(&module), expected);
     if let Some(before) = before {
         assert_eq!(results(&module, inputs), before);
@@ -87,7 +88,10 @@ e:
 
 /// A way into the join that is not a jump stays out of it: the jumps get a
 /// block of their own to sink into, when what is sunk cannot run
-/// speculatively (a store).
+/// speculatively (a store). The two ways then fold into one branch
+/// (`SimplifyCondBranchToCondBranch`) and the sunk block's phi of one input is
+/// gone, as `opt -passes='simplifycfg<sink-common-insts>'` has it: `%brmerge`
+/// select, `%p.mux` select, `store i16 1, ptr %p.mux` in `end.sink.split`.
 #[test]
 fn test_a_conditional_way_in_makes_the_jumps_a_block_to_sink_into() {
     check(
@@ -112,17 +116,15 @@ end:
 ",
         "define void @f(ptr %p, ptr %q, i1 %c, i1 %d) {
 b0:
-  br i1 %c, label %0, label %b2
-
-b2:
-  br i1 %d, label %0, label %end
+  %or.cond = select i1 %c, i1 true, i1 %d
+  %mux = select i1 %c, ptr %p, ptr %q
+  br i1 %or.cond, label %0, label %end
 
 end:
   ret void
 
 0:
-  %sink = phi ptr [ %p, %b0 ], [ %q, %b2 ]
-  store i16 1, ptr %sink
+  store i16 1, ptr %mux
   br label %end
 }
 ",
@@ -154,8 +156,9 @@ fn test_hundreds_of_identical_jump_only_predecessors_are_one() {
     let outer = Outer::of(&module, None);
     let layout = DataLayout::default();
     let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    assert!(simplified_with(&options, context, &spec, function));
+    assert!(simplified_with(&options, context, &spec, &mut declared, function));
     let printed = printed(&module);
     assert!(printed.contains("ret i16"), "{printed}");
     assert!(printed.matches("br label").count() <= 1, "{printed}");

@@ -185,3 +185,5 @@ A hand-derived optimal listing for each suite program is the target. Done means 
   `no_local_paths`, `target_facts`, `docs_links`) and prints one verdict line first: about 15 s with a warm target, two minutes
   cold. It is not the gate: no build, tests, benches, oracles or perf.
 - Report what was measured, not what was expected.
+
+Process rules (goal, PRs, landing, measuring, safety): [docs/working/pr-rules.md](docs/working/pr-rules.md).

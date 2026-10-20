@@ -1083,7 +1083,9 @@ impl<'a> Dse<'a> {
             let dead_block = self.mssa.access(maybe_dead_access).block;
             // Every path from the dead def to an exit goes through a killing
             // block.
-            let post_dominates = common.is_some_and(|block| self.pdt.dominates(block, dead_block));
+            // No common post-dominator is the virtual exit, which
+            // post-dominates every block.
+            let post_dominates = common.is_none_or(|block| self.pdt.dominates(block, dead_block));
             if !post_dominates {
                 if !self.any_unreachable_exit {
                     return None;

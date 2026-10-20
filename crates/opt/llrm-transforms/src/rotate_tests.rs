@@ -13,9 +13,7 @@ use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::module::{Function, Module, Operand};
 
 use super::Rotate;
-use crate::peel::Peel;
 use crate::testing::{f, managed, parsed, printed, results};
-use crate::unroll::Unroll;
 
 const INPUTS: &[&[i128]] = &[&[3, 0], &[3, 1], &[2, 7], &[-4, 300], &[5, 9]];
 
@@ -151,18 +149,6 @@ fn a_header_that_stores_keeps_its_first_test() {
         summing("4").replace("  %go = icmp", "  store i16 %i, ptr @g\n  %go = icmp")
     );
     assert!(!through(&text, Rotate { proven: true, copy: false }).0);
-}
-
-/// A rotated loop is one block testing at its bottom, which unroll and
-/// peel do not take: they run before rotation.
-#[test]
-fn a_rotated_loop_is_not_unrolled_or_peeled() {
-    let mut module = parsed(&summing("4"));
-    managed(&mut module, Rotate { proven: true, copy: false });
-    let rotated = printed(&module);
-    assert!(!through(&rotated, Unroll::default()).0);
-    assert!(!through(&rotated, Peel::default()).0);
-    assert!(through(&summing("4"), Unroll::default()).0);
 }
 
 /// A step made in the header that a header phi takes round the back edge is not

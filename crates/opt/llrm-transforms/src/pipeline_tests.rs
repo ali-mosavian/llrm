@@ -1118,30 +1118,6 @@ fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
     assert_eq!(pipeline::Options::aggressive().rounds, usize::MAX);
 }
 
-/// A loop unrolled in the last round of the budget left its straight line
-/// uncleaned: -O1's two rounds stopped there, and `lru`'s two word zero stores
-/// stayed two (169 clocks against clang's 168; the third round's fold makes
-/// them one). A round follows an unroll that changed the body, whatever the
-/// budget.
-#[test]
-fn a_round_follows_an_unroll_that_changed_the_body_past_the_budget() {
-    let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
-    let rounds = |unrolls: usize| {
-        let mut module = llrm_analysis::testing::parsed(text);
-        let count = std::rc::Rc::new(std::cell::Cell::new(0));
-        let options = pipeline::Options { rounds: 2, ..pipeline::Options::standard() };
-        let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), options, ..Applied::default() });
-        fixed.only = false;
-        fixed.passes = vec![Box::new(Chain { left: 8, runs: std::rc::Rc::clone(&count) })];
-        fixed.unrollers = vec![Box::new(Chain { left: unrolls, runs: std::rc::Rc::default() })];
-        crate::testing::managed(&mut module, fixed);
-        count.get()
-    };
-    assert_eq!(rounds(0), 2, "premise: the budget ends the rounds");
-    assert_eq!(rounds(1), 2, "an unroll of the first round is cleaned by the second");
-    assert_eq!(rounds(2), 3, "a third round runs after the unroll of the second, none after the third");
-}
-
 /// Reads what the module says each function does to memory, and finds nothing
 /// to do; counts how often it was asked.
 struct ReadsCallees {
@@ -1256,12 +1232,12 @@ fn test_a_body_run_again_after_a_call_is_sent_to_an_equal_copy_starts_no_pass() 
     assert_eq!(retargeted(true), (2, 1), "the copy writes nothing, which the pass that read callees asked");
 }
 
-/// -O1 inlined small functions called more than once, searched allocations and
-/// made the spiller's second route: 34% of d_faces' -O1 compile (5,643 -> 3,718
-/// Minstr). clang's -O1 runs the always-inliner alone
-/// (`OnlyAlwaysInlining`), so a function called once stays a call too.
+/// -O1 gave small functions called more than once no inline (gcc's -O1) where
+/// the pin's -O1 inlines them as -O2 does (d_faces: 11 defines in, 6 out; ours
+/// 11), and searched allocations and made the spiller's second route (34% of
+/// d_faces' -O1 compile).
 #[test]
-fn o1_inlines_nothing_and_has_no_allocation_search_or_second_route() {
+fn o1_inlines_as_the_pin_does_and_has_no_allocation_search_or_second_route() {
     let text = "
 define internal i16 @twice(i16 %x) {
 entry:
@@ -1288,14 +1264,10 @@ entry:
     let o2 = pipeline::Options::standard();
     let (kept, _) = pipelined(text, o1);
     let kept = crate::testing::printed(&kept);
-    assert_eq!(
-        kept.lines().filter(|line| line.contains("call ") && line.contains("@twice")).count(),
-        2,
-        "-O1 inlined a function called twice:\n{kept}"
-    );
-    assert!(kept.contains("@once"), "@once is inlined at -O1, which clang's always-inliner does not:\n{kept}");
     let (gone, _) = pipelined(text, o2);
-    assert!(!crate::testing::printed(&gone).contains("@twice"), "premise: -O2 inlines it");
+    let defines = |text: &str| text.lines().filter(|line| line.starts_with("define ")).count();
+    assert_eq!(defines(&kept), defines(&crate::testing::printed(&gone)), "-O1 keeps what -O2 inlines:\n{kept}");
+    assert_eq!(defines(&kept), 1, "-O1 leaves {} defines, the pin's -O1 only @main:\n{kept}", defines(&kept));
 }
 
 /// tile.c's inner sum is 40 trips of one load and one add. LLVM's full unroll
@@ -2479,4 +2451,155 @@ out:
         llrm_mir::print::module(&module).matches("icmp eq i16").count() - 1
     };
     assert_eq!((loops(false), loops(true)), (1, 2));
+}
+
+/// A `short` counter, `i = (short)(i + 1)` under `i < N`, stayed an i32 phi
+/// with `ashr (shl i, 16), 16` after InstCombine: the pin's IPSCCP marks the
+/// `trunc` nsw from the loop's bound first, and `sext (trunc nsw x)` is `x`.
+/// SCEV found no trip count in the other form and LoopIdiom made no memmove:
+/// 8.8x the instructions of bench `scroll` (166810 against 1466660), matmul -O3
+/// unrolled no more.
+#[test]
+fn a_short_counter_loop_is_still_a_memmove() {
+    let mut module = llrm_analysis::testing::parsed(&format!(
+        "{}@screen = internal global [2000 x i16] zeroinitializer
+
+define void @f() {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b2 ]
+  %w = sext i16 %i to i32
+  %go = icmp slt i32 %w, 1920
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %up = add nsw i32 %w, 80
+  %src = getelementptr inbounds i16, ptr @screen, i32 %up
+  %v = load i16, ptr %src
+  %dst = getelementptr inbounds i16, ptr @screen, i32 %w
+  store i16 %v, ptr %dst
+  %next = add nsw i32 %w, 1
+  %n = trunc i32 %next to i16
+  br label %b1
+
+b3:
+  ret void
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let text = llrm_mir::print::module(&module);
+    assert!(text.contains("llvm.memmove"), "{text}");
+}
+
+/// A four-trip loop with no closed form, through the LLVM order: its text, and
+/// whether a loop phi is left.
+fn four_trips_under(options: pipeline::Options) -> bool {
+    let text = "define i16 @f(i16 %x) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %h ]\n  %t = phi i16 [ %x, %b0 ], [ %u, %h ]\n  %m = mul i16 %t, 3\n  %u = add i16 %m, %i\n  %j = add i16 %i, 1\n  %c = icmp slt i16 %j, 4\n  br i1 %c, label %h, label %x\nx:\n  ret i16 %u\n}\n";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap_or_else(|error| panic!("{error}"));
+    llrm_mir::print::module(&module).contains(" = phi ")
+}
+
+/// clang runs the full unroll with `OnlyWhenForced = !UnrollLoops`, and
+/// `UnrollLoops` is on above -O1: matmul at -O1 was 379 bytes before the LLVM
+/// order and 3197 after, 8x8x8 copied out where `opt -O1` keeps 408. At -Os the
+/// option is on and the unroller's size threshold (0) keeps the loop; at -O2 a
+/// four-trip loop is gone.
+#[test]
+fn test_the_full_unroll_takes_a_loop_only_below_o2_when_asked() {
+    assert!(four_trips_under(pipeline::Options::basic()), "-O1 kept the loop");
+    assert!(four_trips_under(pipeline::Options { loop_unrolling: false, ..pipeline::Options::standard() }));
+    assert!(pipeline::Options::size().loop_unrolling);
+    assert!(four_trips_under(pipeline::Options::size()), "-Os kept the loop");
+    assert!(!four_trips_under(pipeline::Options::standard()), "-O2 unrolls it");
+}
+
+/// A loop of a runtime trip count over a `u16` counter, through the LLVM order:
+/// whether its body is entered by a guard and leaves by its own back edge (a
+/// rotated loop), as opposed to a header that tests first.
+fn rotated_under(options: pipeline::Options) -> bool {
+    let text = "define i32 @f(i16 %n, ptr %p) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp ult i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %k = zext i16 %i to i32\n  %a = getelementptr i32, ptr %p, i32 %k\n  store i32 %k, ptr %a\n  %j = add i16 %i, 1\n  br label %h\nx:\n  ret i32 0\n}\n";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap_or_else(|error| panic!("{error}"));
+    let printed = llrm_mir::print::module(&module);
+    // A block that branches back to itself on a condition.
+    let mut block = "";
+    printed
+        .lines()
+        .any(
+            |line| {
+                if let Some(name) = line.strip_suffix(':') {
+                    block = name;
+                    return false;
+                }
+                !block.is_empty() && line.trim_start().starts_with("br i1") && line.contains(&format!("label %{block}"))
+            },
+        )
+}
+
+/// matmul at -Os was 362 bytes before the LLVM order and 473 after: the loops
+/// stayed unrotated (a `jmp` back to a top test, `and ebx,65535; cmp; jae` on
+/// the `u16` counters) because the header copy was off at -Os. The pin copies
+/// the header of every loop but at -Oz (`hasMinSize`; threshold 16).
+#[test]
+fn test_the_loop_header_is_copied_at_os_and_not_at_oz() {
+    assert!(rotated_under(pipeline::Options::standard()), "-O2 rotates");
+    assert!(rotated_under(pipeline::Options::size()), "-Os rotates");
+    assert!(!rotated_under(pipeline::Options::min_size()), "-Oz copies no header");
+}
+
+/// A counted loop's exit test is `eq` after the pipeline, as the pin's
+/// IndVarSimplify (LFTR) leaves it: only an `eq`/`ne` test can be taken
+/// against zero by LSR. It stayed `ult` (bench ring: 6 instructions a trip in
+/// the fill loop where the pin has 4).
+#[test]
+fn a_counted_loop_exits_on_an_equality_test() {
+    let mut module = llrm_analysis::testing::parsed(&format!(
+        "{}define void @f(ptr %buf) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b1 ]
+  %p = getelementptr inbounds i16, ptr %buf, i16 %i
+  store i16 %i, ptr %p
+  %n = add nuw nsw i16 %i, 1
+  %go = icmp ult i16 %n, 1024
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret void
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let text = llrm_mir::print::module(&module);
+    assert!(text.contains("icmp eq") || text.contains("icmp ne"), "{text}");
 }

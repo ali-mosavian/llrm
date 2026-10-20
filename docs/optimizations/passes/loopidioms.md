@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopidioms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopidioms.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:20a00abb203a0b3e03f90c38e16a8c5d31c002f9f77f82db9bd3157d84eef161 -->
+<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:fd4066df4c26dc6ac3ac1208db1dcd63da56628ecffb39821efa1cf839a84ef6 -->
 
 # loopidioms
 
@@ -119,8 +119,8 @@ From unit test `a_counted_word_loop_is_one_memset_of_its_bytes` in
 `loopidioms_tests.rs` (first case; the printed text was taken from a run).
 
 ## Runs
-Last in the function fixed point: `LoopIdioms`, then `Merge`, after `unroll`
-and `peel`. On with `-ftree-loop-distribute-patterns`; off at -O0 and -Og,
+Last in the function fixed point: `LoopIdioms`, then `Merge`, after the
+unroller. On with `-ftree-loop-distribute-patterns`; off at -O0 and -Og,
 on from -O1. `size` is set at -Os and -Oz.
 
 ## Needs
@@ -133,5 +133,5 @@ Blocks and edges change (a loop becomes one trip): every analysis is
 invalidated when anything was rewritten.
 
 ## See also
-[`crate::counting`](counting.md) builds the count and exit values; [`crate::unroll`](unroll.md),
-[`crate::peel`](peel.md) precede it.
+[`crate::counting`](counting.md) builds the count and exit values;
+[`crate::loopunrollpass`](loopunrollpass.md), [`crate::looppeel`](looppeel.md) precede it.

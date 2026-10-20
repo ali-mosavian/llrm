@@ -103,7 +103,11 @@ pub mod combine_compares;
 pub mod combine_demanded;
 #[cfg(test)]
 mod combine_dispatch_tests;
+#[cfg(test)]
+mod combine_semantics_tests;
+pub mod combine_funnel;
 pub mod combine_gep;
+pub mod combine_icmp_logic;
 pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
@@ -112,6 +116,7 @@ pub mod combine_muldivrem;
 #[cfg(test)]
 mod combine_muldivrem_tests;
 pub mod combine_negator;
+pub mod combine_or;
 pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_select;
@@ -242,7 +247,6 @@ mod narrowspace_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;
-pub mod peel;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
@@ -273,8 +277,18 @@ pub mod speculate;
 pub mod spill;
 pub mod splitcopy;
 pub mod sroa;
+pub mod switcharms;
 pub mod switchcg;
+pub mod switchdead;
+pub mod switchlookup;
 pub mod switchlower;
+pub mod switchopt;
+pub mod switchphi;
+pub mod switchpow2;
+pub mod switchrange;
+pub mod switchreduce;
+pub mod switchselect;
+pub mod switchvalue;
 pub mod tailcallelim;
 pub mod tailmerge;
 #[cfg(test)]
@@ -285,7 +299,6 @@ pub mod trunc_inst_combine;
 pub mod twoentryphi;
 pub mod uncondicmp;
 pub mod undefpred;
-pub mod unroll;
 pub mod vncoercion;
 #[cfg(test)]
 mod vncoercion_tests;

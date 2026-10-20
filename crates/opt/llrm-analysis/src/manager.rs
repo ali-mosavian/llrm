@@ -71,7 +71,6 @@
 //!  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
 //!  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
 //!  FloatFacts       ThroughMemory, PlainAccesses, Writes, Annotated, Registers
-//!  Published        Pointers, ExposedFrames                 (observers)
 //! ```
 //!
 //! Module entries read the program through `ModuleAnalyses` and are dropped
@@ -142,8 +141,7 @@
 //! `Bounded`; module entries `GlobalsAA`, `Summaries`, `Callbacks`; program
 //! entry `ProgramSummaries`; `Held`, `Ranges`, `Touched::reach`,
 //! `call_effects`, `writes`. [`crate::cfg`]'s `Shape`, [`crate::memoryssa`]'s
-//! `Accesses` and [`crate::observers`]'s `Published` are entries defined
-//! beside their analyses.
+//! `Accesses` is an entry defined beside its analysis.
 //!
 //! # Needs
 //! [`crate::alias`], [`crate::consts`], [`crate::globalsaa`],
@@ -426,7 +424,7 @@ fn procedures<'a>(
 ) -> IndexMap<String, Procedure<'a>> {
     bodies(module)
         .filter_map(|(id, function)| {
-            let name = module.global(id).name.clone()?;
+            let name = module.global(id).name.owned()?;
             let one = &facts[&id];
             Some((
                 name,
@@ -486,11 +484,7 @@ impl ProgramAnalysis for ProgramSummaries {
             })
             .collect();
         let globals = (0..count)
-            .map(|at| {
-                globalsaa::found(&program.modules[at], &proxies[at], &elsewhere[at], &mut |id| {
-                    Rc::clone(&shapes[at][&id])
-                })
-            })
+            .map(|at| globalsaa::found(&program.modules[at], &proxies[at], &elsewhere[at]))
             .collect::<Result<Vec<_>, String>>()?;
         // A body defined elsewhere starts as a call no summary describes,
         // the most any call does: each round only narrows.
@@ -536,7 +530,7 @@ fn imported(
                     let (there, defined) = program.definition(at, id).filter(|&(there, _)| there != at)?;
                     let from = &program.modules[there];
                     let summary = own[there].get(from.global(defined).name.as_deref()?)?;
-                    Some((global.name.clone()?, moved(summary, from, module)))
+                    Some((global.name.owned()?, moved(summary, from, module)))
                 })
                 .collect()
         })

@@ -21,7 +21,7 @@
 //! `removeAllNonTerminatorAndEHPadInstructions` is a CFG edit this pass does
 //! not make); a call is never trivially dead here (`dead` knows what a call
 //! does not write); `visit` runs only the families translated so
-//! far (`visitors`: add, mul, and, xor, div, rem, shifts,
+//! far (`visitors`: add, mul, and, or, xor, div, rem, shifts,
 //! trunc, zext, sext, icmp, getelementptr, select, store): the other `visit*`
 //! rewrites are `algebraic`'s, to move in as they are translated.
 //!
@@ -42,6 +42,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
+use llrm_mir::passes::Declared;
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::FunctionAnalyses;
@@ -51,6 +52,7 @@ use crate::combine_and::visit_and;
 use crate::combine_casts::{visit_sext, visit_trunc, visit_zext};
 use crate::combine_compares::visit_icmp;
 use crate::combine_muldivrem::{visit_mul, visit_sdiv, visit_srem, visit_udiv, visit_urem};
+use crate::combine_or::visit_or;
 use crate::combine_shifts::{visit_ashr, visit_lshr, visit_shl};
 use crate::combine_sink::{droppable_uses, sink, sink_block, sinkable};
 use crate::combine_sub::visit_sub;
@@ -321,6 +323,9 @@ pub struct Combiner<'a> {
     pub function: &'a mut Function,
     pub env: &'a Env<'a>,
     pub worklist: InstWorklist,
+    /// What the pass declares in its module
+    /// (`Intrinsic::getOrInsertDeclaration`).
+    pub declared: &'a mut Declared,
 }
 
 impl Combiner<'_> {
@@ -398,6 +403,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Binary(BinaryOp::Add) => &[visit_add],
         Opcode::Binary(BinaryOp::Mul) => &[visit_mul],
         Opcode::Binary(BinaryOp::And) => &[visit_and],
+        Opcode::Binary(BinaryOp::Or) => &[visit_or],
         Opcode::Binary(BinaryOp::Xor) => &[visit_xor],
         Opcode::Binary(BinaryOp::Sub) => &[visit_sub],
         Opcode::Binary(BinaryOp::UDiv) => &[visit_udiv],
@@ -507,8 +513,9 @@ pub fn combine(
     metadata: &[MetadataNode],
     layout: &DataLayout,
     function: &mut Function,
+    declared: &mut Declared,
 ) -> bool {
-    combine_with_sinking(context, globals, metadata, layout, function, visit, true)
+    combine_with_sinking(context, globals, metadata, layout, function, visit, true, declared)
 }
 
 /// `combine` with the `visit*` of a test, and no sinking: a test of one
@@ -522,7 +529,23 @@ pub(crate) fn combine_with(
     function: &mut Function,
     visit: fn(&mut Combiner, InstId) -> Visit,
 ) -> bool {
-    combine_with_sinking(context, globals, metadata, layout, function, visit, false)
+    let mut declared = Declared::over(std::rc::Rc::new(globals.to_vec()), metadata.len());
+    combine_with_declared(context, globals, metadata, layout, function, visit, &mut declared)
+}
+
+/// `combine_with`, the declarations it makes kept in `declared` for the test
+/// to place in the module.
+#[cfg(test)]
+pub(crate) fn combine_with_declared(
+    context: &mut Context,
+    globals: &[GlobalValue],
+    metadata: &[MetadataNode],
+    layout: &DataLayout,
+    function: &mut Function,
+    visit: fn(&mut Combiner, InstId) -> Visit,
+    declared: &mut Declared,
+) -> bool {
+    combine_with_sinking(context, globals, metadata, layout, function, visit, false, declared)
 }
 
 pub(crate) fn combine_with_sinking(
@@ -533,12 +556,13 @@ pub(crate) fn combine_with_sinking(
     function: &mut Function,
     visit: fn(&mut Combiner, InstId) -> Visit,
     sinking: bool,
+    declared: &mut Declared,
 ) -> bool {
     // InstCombine's `SQ.DC`: what the branches dominating an instruction say.
     let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function)
         .with_dom_conditions_of(context, globals, metadata, function);
     let env = Env { globals, layout, analyses, sinking, back_edges: Default::default() };
-    let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default() };
+    let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
     changed |= drain(&mut c, visit);
     changed

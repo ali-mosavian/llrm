@@ -671,3 +671,49 @@ def test_the_word_clause_does_not_name_the_assistant(tmp_path):
     """A loose pattern would refuse every PR with a where clause or an if clause."""
     repo, head = pr_over_main(tmp_path, file_text="// the where clause and the if clause\nfn a() {}\n", message="docs: a clause")
     assert ps.refusals(head, "the clause", base="main", cwd=repo, title="feat: clause") == []
+
+
+def deleted_page(tmp_path: Path, link: str, other_link: str = "") -> tuple[Path, str]:
+    """A PR deletes docs/optimizations/passes/dse.md; docs/optimizations/readme.md links it with `link`."""
+    repo = tmp_path / "r"
+    (repo / "docs/optimizations/passes").mkdir(parents=True)
+    sh(repo, "init", "-q", "-b", "main")
+    (repo / "docs/optimizations/passes/dse.md").write_text("# dse\n")
+    commit(repo, "docs/optimizations/readme.md", f"| [`dse`]({link}) |\n{other_link}", "pages")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "docs/optimizations/passes/dse.md").unlink()
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "refactor(dse): delete the old dse pass")
+    return repo, sh(repo, "rev-parse", "HEAD")
+
+
+def test_a_squash_that_deletes_a_page_a_doc_still_links_to_is_refused_naming_the_linker(tmp_path):
+    """#fd939a155 and bbdfe8c06 deleted the dse, unroll and peel pages and left the readme's links: docs_links was red on feat/parity for hours."""
+    repo, head = deleted_page(tmp_path, "passes/dse.md")
+    why = ps.refusals(head, "Deletes: docs/optimizations/passes/dse.md", base="main", cwd=repo)
+    assert len(why) == 1 and why[0].startswith("docs/optimizations/readme.md: still links to docs/optimizations/passes/dse.md"), why
+
+
+def test_deleting_a_page_with_its_links_gone_or_to_another_file_of_that_name_passes(tmp_path):
+    repo, head = deleted_page(tmp_path, "passes/deadstore.md", "[`x`](../elsewhere/dse.md) and [web](https://example.com/dse.md)\n")
+    assert ps.refusals(head, "Deletes: docs/optimizations/passes/dse.md", base="main", cwd=repo) == []
+
+
+def test_a_perf_pr_without_a_rows_line_is_refused():
+    """#3251 (perf: GlobalsAA as a module use scan) landed with no rows pair and broke alias/farstruct.nib: a perf title needs a `Rows:` line."""
+    assert ps.perf_needs_rows("perf(analysis): one use scan", "TL;DR: faster\nOwner: x")
+    assert ps.perf_needs_rows("perf: faster", "")
+    assert not ps.perf_needs_rows("perf(analysis): one use scan", "Rows: pair p3251, base e26a479f1924, new 46f5a90986bc: no row above base, run diff clean")
+    assert not ps.perf_needs_rows("fix(analysis): a bug", "Owner: x")
+    assert not ps.perf_needs_rows("", "")
+
+
+def test_a_refactor_pr_that_changes_pass_code_needs_a_rows_line():
+    """A refactor( PR with a pass-code diff and no Rows line is refused; docs/test-only refactors, fix( and feat( are not."""
+    code = ["crates/opt/llrm-analysis/src/globalsaa.rs", "docs/x.md"]
+    assert ps.perf_needs_rows("refactor(analysis): one scan", "Owner: x", code)
+    assert not ps.perf_needs_rows("refactor(analysis): one scan", "Rows: pair p1 base a new b: clean", code)
+    assert not ps.perf_needs_rows("refactor(docs): move", "Owner: x", ["docs/x.md", "crates/opt/llrm-analysis/src/globalsaa_tests.rs"])
+    assert not ps.perf_needs_rows("fix(analysis): bug", "Owner: x", code)
+    assert not ps.perf_needs_rows("feat(analysis): new", "Owner: x", code)
+    assert ps.perf_needs_rows("perf(analysis): faster", "Owner: x", [])

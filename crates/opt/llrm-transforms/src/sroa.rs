@@ -434,7 +434,7 @@ fn build_slices(
     let mut phi_or_select_sizes: llrm_mir::dense::IdMap<InstId, u64> = Default::default();
     let intrinsic = |inst: InstId| {
         let callee = llrm_mir::memory::callee(context, function, inst)?;
-        llrm_mir::intrinsics::Intrinsic::named(globals.get(callee.0 as usize)?.name.as_deref()?)
+        globals.get(callee.0 as usize)?.intrinsic()
     };
     let root = function.instruction(alloca).result.expect("an alloca has a result");
     let Opcode::Alloca { allocated, .. } = function.instruction(alloca).opcode else { unreachable!("an alloca") };
@@ -1235,7 +1235,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         inst: InstId,
     ) -> Option<Intrinsic> {
         let callee = llrm_mir::memory::callee(self.context(), self.function(), inst)?;
-        Intrinsic::named(self.globals.get(callee.0 as usize)?.name.as_deref()?)
+        self.globals.get(callee.0 as usize)?.intrinsic()
     }
 
     fn context(&self) -> &Context {

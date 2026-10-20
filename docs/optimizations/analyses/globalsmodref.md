@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/globalsmodref.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/globalsmodref.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/globalsmodref.rs sha256:0a2e7523c9c4be72194236a516bad219b7752b9562188e6f196c08a2505d423c -->
+<!-- src: crates/opt/llrm-analysis/src/globalsmodref.rs sha256:2070ce989436f1aeaa7ce1a373cae98150bf26cde89f728b4df174456bf997a6 -->
 
 # globalsmodref
 
@@ -14,10 +14,11 @@ declaration (`AnalyzeUsesOfPointer`), with the functions that read and
 write each. `AnalyzeCallGraph` then walks the call graph callees first, one
 SCC at a time: a function gets a `FunctionInfo` (one `ModRefInfo` for all
 memory, a `ModRefInfo` per tracked global, and "may read any global") only
-if every callee of the SCC has one. A call to a declaration, an indirect
-call or a function whose definition is not exact leaves the caller
-without. `get_mod_ref_info` answers a call against a location that is a
-tracked global; any other location is left to the caller's other analyses.
+if every callee of the SCC has one. A call to a declaration that may call
+back into the module (no `nocallback`), an indirect call or a function
+whose definition is not exact leaves the caller without. `get_mod_ref_info`
+answers a call against a location that is a tracked global; any other
+location is left to the caller's other analyses.
 
 ```text
  @g = internal global i16 0      f reads @g          g() calls f, writes @g
@@ -54,6 +55,20 @@ From unit test `a_reader_of_a_private_global_has_ref_on_it` in
 - G4: no `TargetLibraryInfo`: a call to `free` is not recognised, so a
   global passed to it is not tracked.
 - G5: `hasOptNone` is `noipa` (`llrm_mir::facts::opaque`).
+- G6: `escaping_among` (GlobalsAA's use) does not count a global named in an
+  initializer as escaped; GlobalsAA reads an initializer only through its
+  holder (`globalsaa::held`). QB's `REDIM` descriptor held every array's
+  address in a constant nothing read: deedlines +128 memory operands without
+  it
+  (test
+  `a_private_initializer_nothing_names_does_not_leak_the_address_it_holds`).
+  Exit: the pin's rule, once a rows pair shows no row worse.
+- G7: `llrm.ia16.window` and `llrm.ia16.restrict` return their operand's
+  bytes, so the scan follows the call's result as it follows a `gep`, as the
+  pin follows `threadlocal.address`.
+- G6: a declaration needs `nocallback` only, not `nosync` as well
+  (`MaySyncOrCallIntoModule`): MIR has no `nosync` and the targets no
+  threads.
 
 ## Provides
 `GlobalsModRef`, `FunctionInfo`, `compute`.

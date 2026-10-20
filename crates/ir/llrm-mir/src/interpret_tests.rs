@@ -274,6 +274,43 @@ fn bswap_reverses_the_bytes() {
     assert_eq!(call(128, 1), int(1 << 120, 128));
 }
 
+/// `llvm.fshl` and `llvm.fshr` shift the concatenation of their first two
+/// arguments by the third modulo the width (values from `opt
+/// -passes=instsimplify`).
+#[test]
+fn funnel_shifts_take_the_amount_modulo_the_width() {
+    let call = |name: &str, a: u8, b: u8, by: u8| {
+        result(&format!(
+            "declare i8 @llvm.{name}.i8(i8, i8, i8)\n\
+             define i8 @f() {{\n  %r = call i8 @llvm.{name}.i8(i8 {a}, i8 {b}, i8 {by})\n  ret i8 %r\n}}\n"
+        ))
+    };
+    assert_eq!(call("fshl", 18, 52, 3), int(0x91, 8));
+    assert_eq!(call("fshr", 18, 52, 3), int(0x46, 8));
+    // A zero amount keeps the half that is not shifted: the first for fshl, the
+    // second for fshr.
+    assert_eq!(call("fshl", 18, 52, 0), int(18, 8));
+    assert_eq!(call("fshr", 18, 52, 8), int(52, 8));
+    assert_eq!(call("fshl", 18, 52, 11), int(0x91, 8));
+    // The same value twice is a rotate.
+    assert_eq!(call("fshl", 129, 129, 1), int(3, 8));
+    assert_eq!(call("fshr", 129, 129, 1), int(0xc0, 8));
+}
+
+/// `llvm.abs` of the minimum is the minimum, or poison where the flag says.
+#[test]
+fn abs_of_the_minimum_is_itself_unless_the_flag_makes_it_poison() {
+    let call = |a: u8, flag: bool| {
+        result(&format!(
+            "declare i8 @llvm.abs.i8(i8, i1)\n\
+             define i8 @f() {{\n  %r = call i8 @llvm.abs.i8(i8 {a}, i1 {flag})\n  ret i8 %r\n}}\n"
+        ))
+    };
+    assert_eq!(call(251, false), int(5, 8));
+    assert_eq!(call(7, true), int(7, 8));
+    assert_eq!(call(128, false), int(128, 8));
+}
+
 /// `llvm.scmp` and `llvm.ucmp` give -1, 0 or 1 at the result's width, comparing
 /// as signed or unsigned integers.
 #[test]

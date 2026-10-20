@@ -34,7 +34,7 @@ fn dump(text: &str) -> String {
             if q.scalar_bits(value) == 0 {
                 continue;
             }
-            let name = global.name.clone().unwrap_or_default();
+            let name = global.name.owned().unwrap_or_default();
             out.push_str(&format!(
                 "{name} {n}{}
 ",

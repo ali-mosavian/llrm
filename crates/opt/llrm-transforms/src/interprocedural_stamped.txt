@@ -67,7 +67,7 @@ emitted/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.basic.a
 emitted/nib-examples-basic-sortlib define internal i16 @abi.basic.array_count(ptr nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn nounwind norecurse
 emitted/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.qb45.string_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn nounwind norecurse
 emitted/nib-examples-basic-sortlib define internal i16 @abi.qb45.string_length(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn nounwind norecurse
-emitted/nib-examples-basic-sortlib define internal ptr @abi.qb45.string_result(ptr addrspace(1) nocapture readnone %0, i16 %1) addrspace(1)
+emitted/nib-examples-basic-sortlib define internal ptr @abi.qb45.string_result(ptr addrspace(1) %0, i16 %1) addrspace(1)
 emitted/nib-examples-basic-sortlib define cc 1000 void @SORTSCORES(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(readwrite, inaccessiblemem: none) nounwind norecurse
 emitted/nib-examples-basic-sortlib define cc 1000 void @UPPER(ptr nocapture readonly %0) addrspace(1) memory(readwrite, inaccessiblemem: none) nounwind norecurse
 emitted/nib-examples-basic-sortlib define cc 1000 double @AVERAGE(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readnone %2) addrspace(1)
@@ -75,7 +75,7 @@ emitted/nib-examples-basic-sortlib define cc 1000 i16 @ROWTOTAL(ptr nocapture re
 emitted/nib-examples-basic-sortlib define cc 1000 ptr @INITIALS(ptr nocapture readonly %0) addrspace(1)
 emitted/nib-examples-borrows define internal ptr addrspace(1) @leader(ptr addrspace(1) %0, ptr addrspace(1) %1) addrspace(1) memory(argmem: read) willreturn nounwind norecurse
 emitted/nib-examples-borrows define internal void @best(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
-emitted/nib-examples-borrows define internal void @first_name(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-examples-borrows define internal void @first_name(ptr addrspace(1) nocapture writeonly initializes((0, 8)) %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none) willreturn nounwind norecurse
 emitted/nib-examples-borrows define internal void @word(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i16 %2) addrspace(1)
 emitted/nib-examples-borrows define internal i16 @main() addrspace(1)
 emitted/nib-examples-csv define internal void @trimmed(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
@@ -103,8 +103,8 @@ emitted/nib-examples-entries define internal void @std.io.named(ptr addrspace(1)
 emitted/nib-examples-entries define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) nounwind norecurse
 emitted/nib-examples-entries define internal void @std.io.File.open(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i8 %2) addrspace(1)
 emitted/nib-examples-entries define internal void @std.io.File.create(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
-emitted/nib-examples-entries define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
-emitted/nib-examples-entries define internal void @std.io.File.write(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
+emitted/nib-examples-entries define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
+emitted/nib-examples-entries define internal void @std.io.File.write(ptr addrspace(1) nocapture writeonly initializes((0, 6)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
 emitted/nib-examples-entries define internal void @std.io.File.read_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
 emitted/nib-examples-entries define internal void @std.io.File.read_line(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) %1) addrspace(1)
 emitted/nib-examples-entries define internal void @std.io.File.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1)
@@ -116,14 +116,14 @@ emitted/nib-examples-entries define internal i8 @string.eq(ptr addrspace(1) noal
 emitted/nib-examples-entries define internal i16 @string.hash(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) nounwind norecurse
 emitted/nib-examples-generic_types define internal i32 @store(ptr addrspace(1) nocapture %0, i16 %1) addrspace(1)
 emitted/nib-examples-generic_types define internal i16 @main() addrspace(1)
-emitted/nib-examples-generic_types define internal void @"first[i16]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-examples-generic_types define internal void @"first[i16]"(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none) willreturn nounwind norecurse
 emitted/nib-examples-generic_types define internal i16 @"larger[i16]"(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-generic_types define internal i8 @"larger[u8]"(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-generic_types define internal i32 @"Stack.top[i16]"(ptr addrspace(1) nocapture readonly %0) addrspace(1)
 emitted/nib-examples-gradebook define internal void @curve(ptr addrspace(1) nocapture %0, i16 %1) addrspace(1)
 emitted/nib-examples-gradebook define internal i16 @average(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) nounwind norecurse
 emitted/nib-examples-gradebook define internal i16 @main() addrspace(1)
-emitted/nib-examples-greeting define internal ptr @shout(ptr nocapture %0) addrspace(1)
+emitted/nib-examples-greeting define internal ptr @shout(ptr %0) addrspace(1)
 emitted/nib-examples-greeting define internal ptr @label(ptr %0, i16 %1) addrspace(1)
 emitted/nib-examples-greeting define internal i16 @main() addrspace(1)
 emitted/nib-examples-interop-main define i16 @_weight(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
@@ -143,39 +143,39 @@ emitted/nib-examples-level define internal void @std.io.named(ptr addrspace(1) n
 emitted/nib-examples-level define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) nounwind norecurse
 emitted/nib-examples-level define internal void @std.io.File.open(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i8 %2) addrspace(1)
 emitted/nib-examples-level define internal void @std.io.File.create(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
-emitted/nib-examples-level define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
-emitted/nib-examples-level define internal void @std.io.File.write(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
+emitted/nib-examples-level define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
+emitted/nib-examples-level define internal void @std.io.File.write(ptr addrspace(1) nocapture writeonly initializes((0, 6)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
 emitted/nib-examples-level define internal void @std.io.File.read_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
 emitted/nib-examples-level define internal void @std.io.File.read_line(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) %1) addrspace(1)
 emitted/nib-examples-level define internal void @std.io.File.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1)
-emitted/nib-examples-level define internal void @read_exact(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
+emitted/nib-examples-level define internal void @read_exact(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
 emitted/nib-examples-level define internal void @Level.save(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
 emitted/nib-examples-level define internal void @Level.load(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 emitted/nib-examples-level define internal i32 @Level.leaf(ptr addrspace(1) nocapture readonly %0, i16 %1, i16 %2) addrspace(1)
-emitted/nib-examples-level define internal void @built(ptr addrspace(1) nocapture writeonly %0) addrspace(1)
+emitted/nib-examples-level define internal void @built(ptr addrspace(1) nocapture writeonly initializes((0, 6)) %0) addrspace(1)
 emitted/nib-examples-level define internal void @run(ptr addrspace(1) nocapture writeonly %0) addrspace(1)
 emitted/nib-examples-level define internal i16 @main() addrspace(1)
 emitted/nib-examples-level define internal void @"records[Face]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, i16 %2, ptr addrspace(1) nocapture readonly %3) addrspace(1)
 emitted/nib-examples-level define internal void @"records[Node]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, i16 %2, ptr addrspace(1) nocapture readonly %3) addrspace(1)
 emitted/nib-examples-level define internal void @"records[Plane]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, i16 %2, ptr addrspace(1) nocapture readonly %3) addrspace(1)
-emitted/nib-examples-level define internal void @"written[Face]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
-emitted/nib-examples-level define internal void @"written[Node]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
-emitted/nib-examples-level define internal void @"written[Plane]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
+emitted/nib-examples-level define internal void @"written[Face]"(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
+emitted/nib-examples-level define internal void @"written[Node]"(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
+emitted/nib-examples-level define internal void @"written[Plane]"(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
 emitted/nib-examples-logfile define internal void @std.os.write(ptr addrspace(1) %0, i16 %1) addrspace(1)
 emitted/nib-examples-logfile define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-logfile define internal void @std.io.named(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) nocapture writeonly %1) addrspace(1)
 emitted/nib-examples-logfile define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) nounwind norecurse
 emitted/nib-examples-logfile define internal void @std.io.File.open(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i8 %2) addrspace(1)
 emitted/nib-examples-logfile define internal void @std.io.File.create(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
-emitted/nib-examples-logfile define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
-emitted/nib-examples-logfile define internal void @std.io.File.write(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
+emitted/nib-examples-logfile define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
+emitted/nib-examples-logfile define internal void @std.io.File.write(ptr addrspace(1) nocapture writeonly initializes((0, 6)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
 emitted/nib-examples-logfile define internal void @std.io.File.read_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
 emitted/nib-examples-logfile define internal void @std.io.File.read_line(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) %1) addrspace(1)
 emitted/nib-examples-logfile define internal void @std.io.File.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1)
 emitted/nib-examples-logfile define internal void @Log.create(ptr addrspace(1) nocapture writeonly %0, ptr %1) addrspace(1)
 emitted/nib-examples-logfile define internal void @Log.write(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 emitted/nib-examples-logfile define internal void @Log.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1)
-emitted/nib-examples-logfile define internal void @keep_open(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1) addrspace(1)
+emitted/nib-examples-logfile define internal void @keep_open(ptr addrspace(1) nocapture writeonly initializes((0, 4)) %0, ptr addrspace(1) nocapture %1) addrspace(1)
 emitted/nib-examples-logfile define internal void @$main(ptr addrspace(1) nocapture writeonly %0) addrspace(1)
 emitted/nib-examples-logfile define internal i16 @main() addrspace(1)
 emitted/nib-examples-mandel define internal i16 @escape(i32 %0, i32 %1) addrspace(1) memory(none) nounwind norecurse
@@ -218,11 +218,11 @@ emitted/nib-examples-readings define internal void @"report[$state1]"(ptr addrsp
 emitted/nib-examples-readings define internal i32 @$state1.next(ptr addrspace(1) nocapture %0) addrspace(1)
 emitted/nib-examples-readings define internal void @"report[$state0]"(ptr addrspace(1) noalias readonly dereferenceable(8) %0, ptr addrspace(1) nocapture readonly %1) addrspace(1)
 emitted/nib-examples-readings define internal i32 @$state0.next(ptr addrspace(1) nocapture %0) addrspace(1)
-emitted/nib-examples-roster define internal void @Player.new(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1, i16 %2) addrspace(1)
+emitted/nib-examples-roster define internal void @Player.new(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 3), (4, 6)) %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1, i16 %2) addrspace(1)
 emitted/nib-examples-roster define internal ptr @Player.display(ptr addrspace(1) nocapture readonly %0) addrspace(1)
 emitted/nib-examples-roster define internal ptr @Player.grade(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn nounwind norecurse
 emitted/nib-examples-roster define internal ptr addrspace(1) @best(ptr addrspace(1) nocapture readonly %0) addrspace(1)
-emitted/nib-examples-roster define internal void @sign_up(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) %2, i16 %3) addrspace(1)
+emitted/nib-examples-roster define internal void @sign_up(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) %2, i16 %3) addrspace(1)
 emitted/nib-examples-roster define internal i16 @main() addrspace(1)
 emitted/nib-examples-sequences define internal i16 @describe(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1)
 emitted/nib-examples-sequences define internal i16 @head(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) willreturn nounwind norecurse
@@ -472,7 +472,7 @@ emitted/nib-runtime define internal i8 @floats.compare(ptr nocapture readonly %0
 emitted/nib-runtime define internal i8 @floats.beyond(ptr nocapture readonly %0, ptr nocapture readonly %1, i8 %2) addrspace(1) memory(argmem: read) nounwind norecurse
 emitted/nib-runtime define internal i16 @floats.put(ptr nocapture writeonly %0, i16 %1, i8 %2) addrspace(1) memory(argmem: write) willreturn nounwind norecurse
 emitted/nib-runtime define internal i16 @floats.put_text(ptr nocapture writeonly %0, i16 %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none) nounwind norecurse
-emitted/nib-runtime define internal i32 @floats.digits(ptr nocapture %0, i16 %1, i8 %2, i8 %3, ptr nocapture writeonly %4) addrspace(1)
+emitted/nib-runtime define internal i32 @floats.digits(ptr %0, i16 %1, i8 %2, i8 %3, ptr nocapture writeonly %4) addrspace(1)
 emitted/nib-runtime define internal void @floats.print_float(ptr addrspace(1) nocapture readonly %0, i16 %1, i16 %2, i16 %3, i16 %4) addrspace(1)
 emitted/nib-runtime define internal i16 @floats.decimal(ptr nocapture writeonly %0, i16 %1, ptr nocapture readonly %2, i16 %3, i16 %4) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none) nounwind norecurse
 emitted/nib-runtime define void @N$PR8(double %0) addrspace(1)
@@ -602,7 +602,7 @@ optimized/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.basic
 optimized/nib-examples-basic-sortlib define internal i16 @abi.basic.array_count(ptr nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn nounwind norecurse
 optimized/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.qb45.string_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn nounwind norecurse
 optimized/nib-examples-basic-sortlib define internal i16 @abi.qb45.string_length(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn nounwind norecurse
-optimized/nib-examples-basic-sortlib define internal ptr @abi.qb45.string_result(ptr addrspace(1) nocapture readnone %0, i16 %1) addrspace(1)
+optimized/nib-examples-basic-sortlib define internal ptr @abi.qb45.string_result(ptr addrspace(1) %0, i16 %1) addrspace(1)
 optimized/nib-examples-basic-sortlib define cc 1000 void @SORTSCORES(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(readwrite, inaccessiblemem: none) nounwind norecurse
 optimized/nib-examples-basic-sortlib define cc 1000 void @UPPER(ptr nocapture readonly %0) addrspace(1) memory(readwrite, inaccessiblemem: none) willreturn nounwind norecurse
 optimized/nib-examples-basic-sortlib define cc 1000 double @AVERAGE(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readnone %2) addrspace(1)
@@ -610,7 +610,7 @@ optimized/nib-examples-basic-sortlib define cc 1000 i16 @ROWTOTAL(ptr nocapture 
 optimized/nib-examples-basic-sortlib define cc 1000 ptr @INITIALS(ptr nocapture readonly %0) addrspace(1)
 optimized/nib-examples-borrows define internal ptr addrspace(1) @leader(ptr addrspace(1) readonly %0, ptr addrspace(1) readonly %1) addrspace(1) memory(argmem: read) willreturn nounwind norecurse
 optimized/nib-examples-borrows define internal void @best(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
-optimized/nib-examples-borrows define internal void @first_name(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) willreturn memory(read, argmem: readwrite, inaccessiblemem: none) nounwind norecurse
+optimized/nib-examples-borrows define internal void @first_name(ptr addrspace(1) nocapture writeonly initializes((0, 8)) %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) willreturn memory(read, argmem: readwrite, inaccessiblemem: none) nounwind norecurse
 optimized/nib-examples-borrows define internal void @word(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i16 %2) addrspace(1)
 optimized/nib-examples-borrows define internal i16 @main() addrspace(1)
 optimized/nib-examples-csv define internal void @trimmed(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
@@ -638,8 +638,8 @@ optimized/nib-examples-entries define internal void @std.io.named(ptr addrspace(
 optimized/nib-examples-entries define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) willreturn nounwind norecurse
 optimized/nib-examples-entries define internal void @std.io.File.open(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i8 %2) addrspace(1)
 optimized/nib-examples-entries define internal void @std.io.File.create(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
-optimized/nib-examples-entries define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
-optimized/nib-examples-entries define internal void @std.io.File.write(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
+optimized/nib-examples-entries define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
+optimized/nib-examples-entries define internal void @std.io.File.write(ptr addrspace(1) nocapture writeonly initializes((0, 6)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
 optimized/nib-examples-entries define internal void @std.io.File.read_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
 optimized/nib-examples-entries define internal void @std.io.File.read_line(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) %1) addrspace(1)
 optimized/nib-examples-entries define internal void @std.io.File.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1)
@@ -651,7 +651,7 @@ optimized/nib-examples-entries define internal i8 @string.eq(ptr addrspace(1) no
 optimized/nib-examples-entries define internal i16 @string.hash(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) nounwind norecurse
 optimized/nib-examples-generic_types define internal i32 @store(ptr addrspace(1) nocapture %0, i16 %1) addrspace(1)
 optimized/nib-examples-generic_types define internal i16 @main() addrspace(1)
-optimized/nib-examples-generic_types define internal void @"first[i16]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(argmem: readwrite) willreturn nounwind norecurse
+optimized/nib-examples-generic_types define internal void @"first[i16]"(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(argmem: readwrite) willreturn nounwind norecurse
 optimized/nib-examples-generic_types define internal i16 @"larger[i16]"(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-generic_types define internal i8 @"larger[u8]"(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-generic_types define internal i32 @"Stack.top[i16]"(ptr addrspace(1) nocapture readonly %0) addrspace(1)
@@ -678,39 +678,39 @@ optimized/nib-examples-level define internal void @std.io.named(ptr addrspace(1)
 optimized/nib-examples-level define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) willreturn nounwind norecurse
 optimized/nib-examples-level define internal void @std.io.File.open(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i8 %2) addrspace(1)
 optimized/nib-examples-level define internal void @std.io.File.create(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
-optimized/nib-examples-level define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
-optimized/nib-examples-level define internal void @std.io.File.write(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
+optimized/nib-examples-level define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
+optimized/nib-examples-level define internal void @std.io.File.write(ptr addrspace(1) nocapture writeonly initializes((0, 6)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
 optimized/nib-examples-level define internal void @std.io.File.read_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
 optimized/nib-examples-level define internal void @std.io.File.read_line(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) %1) addrspace(1)
 optimized/nib-examples-level define internal void @std.io.File.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1)
-optimized/nib-examples-level define internal void @read_exact(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
+optimized/nib-examples-level define internal void @read_exact(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
 optimized/nib-examples-level define internal void @Level.save(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
 optimized/nib-examples-level define internal void @Level.load(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 optimized/nib-examples-level define internal i32 @Level.leaf(ptr addrspace(1) nocapture readonly %0, i16 %1, i16 %2) addrspace(1)
-optimized/nib-examples-level define internal void @built(ptr addrspace(1) nocapture writeonly %0) addrspace(1)
+optimized/nib-examples-level define internal void @built(ptr addrspace(1) nocapture writeonly initializes((0, 6)) %0) addrspace(1)
 optimized/nib-examples-level define internal void @run(ptr addrspace(1) nocapture writeonly %0) addrspace(1)
 optimized/nib-examples-level define internal i16 @main() addrspace(1)
 optimized/nib-examples-level define internal void @"records[Face]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, i16 %2, ptr addrspace(1) nocapture readonly %3) addrspace(1)
 optimized/nib-examples-level define internal void @"records[Node]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, i16 %2, ptr addrspace(1) nocapture readonly %3) addrspace(1)
 optimized/nib-examples-level define internal void @"records[Plane]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, i16 %2, ptr addrspace(1) nocapture readonly %3) addrspace(1)
-optimized/nib-examples-level define internal void @"written[Face]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
-optimized/nib-examples-level define internal void @"written[Node]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
-optimized/nib-examples-level define internal void @"written[Plane]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
+optimized/nib-examples-level define internal void @"written[Face]"(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
+optimized/nib-examples-level define internal void @"written[Node]"(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
+optimized/nib-examples-level define internal void @"written[Plane]"(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
 optimized/nib-examples-logfile define internal void @std.os.write(ptr addrspace(1) %0, i16 %1) addrspace(1)
 optimized/nib-examples-logfile define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-logfile define internal void @std.io.named(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) nocapture writeonly %1) addrspace(1)
 optimized/nib-examples-logfile define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) willreturn nounwind norecurse
 optimized/nib-examples-logfile define internal void @std.io.File.open(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i8 %2) addrspace(1)
 optimized/nib-examples-logfile define internal void @std.io.File.create(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
-optimized/nib-examples-logfile define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
-optimized/nib-examples-logfile define internal void @std.io.File.write(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
+optimized/nib-examples-logfile define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
+optimized/nib-examples-logfile define internal void @std.io.File.write(ptr addrspace(1) nocapture writeonly initializes((0, 6)) %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1)
 optimized/nib-examples-logfile define internal void @std.io.File.read_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
 optimized/nib-examples-logfile define internal void @std.io.File.read_line(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) %1) addrspace(1)
 optimized/nib-examples-logfile define internal void @std.io.File.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1)
 optimized/nib-examples-logfile define internal void @Log.create(ptr addrspace(1) nocapture writeonly %0, ptr %1) addrspace(1)
 optimized/nib-examples-logfile define internal void @Log.write(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 optimized/nib-examples-logfile define internal void @Log.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1)
-optimized/nib-examples-logfile define internal void @keep_open(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1) addrspace(1) memory(argmem: readwrite) willreturn nounwind norecurse
+optimized/nib-examples-logfile define internal void @keep_open(ptr addrspace(1) nocapture writeonly initializes((0, 4)) %0, ptr addrspace(1) nocapture %1) addrspace(1) memory(argmem: readwrite) willreturn nounwind norecurse
 optimized/nib-examples-logfile define internal void @$main(ptr addrspace(1) nocapture writeonly %0) addrspace(1)
 optimized/nib-examples-logfile define internal i16 @main() addrspace(1)
 optimized/nib-examples-mandel define internal i16 @escape(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
@@ -753,11 +753,11 @@ optimized/nib-examples-readings define internal void @"report[$state1]"(ptr addr
 optimized/nib-examples-readings define internal i32 @$state1.next(ptr addrspace(1) nocapture %0) addrspace(1)
 optimized/nib-examples-readings define internal void @"report[$state0]"(ptr addrspace(1) noalias readonly dereferenceable(8) %0, ptr addrspace(1) nocapture readonly %1) addrspace(1)
 optimized/nib-examples-readings define internal i32 @$state0.next(ptr addrspace(1) nocapture %0) addrspace(1)
-optimized/nib-examples-roster define internal void @Player.new(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1, i16 %2) addrspace(1)
+optimized/nib-examples-roster define internal void @Player.new(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 3), (4, 6)) %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1, i16 %2) addrspace(1)
 optimized/nib-examples-roster define internal ptr @Player.display(ptr addrspace(1) nocapture readonly %0) addrspace(1)
 optimized/nib-examples-roster define internal ptr @Player.grade(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn nounwind norecurse
 optimized/nib-examples-roster define internal ptr addrspace(1) @best(ptr addrspace(1) nocapture readonly %0) addrspace(1)
-optimized/nib-examples-roster define internal void @sign_up(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) %2, i16 %3) addrspace(1)
+optimized/nib-examples-roster define internal void @sign_up(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) %2, i16 %3) addrspace(1)
 optimized/nib-examples-roster define internal i16 @main() addrspace(1)
 optimized/nib-examples-sequences define internal i16 @describe(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1)
 optimized/nib-examples-sequences define internal i16 @head(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) nounwind norecurse
@@ -990,7 +990,7 @@ optimized/nib-runtime define void @N$PN() addrspace(1)
 optimized/nib-runtime define void @N$PFLD(i8 %0, i8 %1, i8 %2, i8 %3) addrspace(1) willreturn memory(write, argmem: none, inaccessiblemem: none) nounwind norecurse
 optimized/nib-runtime define void @N$PBEG() addrspace(1)
 optimized/nib-runtime define ptr @N$PEND() addrspace(1) willreturn memory(readwrite, argmem: none, inaccessiblemem: none) nounwind norecurse
-optimized/nib-runtime define internal void @floats.assign(ptr nocapture writeonly initializes((0, 2)) %0, i16 %1) addrspace(1) memory(argmem: write) willreturn nounwind norecurse
+optimized/nib-runtime define internal void @floats.assign(ptr nocapture writeonly %0, i16 %1) addrspace(1) memory(argmem: write) willreturn nounwind norecurse
 optimized/nib-runtime define internal void @floats.copy(ptr nocapture writeonly %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: readwrite) willreturn nounwind norecurse
 optimized/nib-runtime define internal void @floats.shift(ptr nocapture %0, i16 %1) addrspace(1) memory(argmem: readwrite) willreturn nounwind norecurse
 optimized/nib-runtime define internal void @floats.multiply(ptr nocapture %0, i16 %1) addrspace(1) memory(argmem: readwrite) willreturn nounwind norecurse

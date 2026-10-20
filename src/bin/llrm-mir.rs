@@ -213,7 +213,7 @@ fn main() -> ExitCode {
                 let names: Vec<String> = module
                     .functions()
                     .filter(|(_, _, one)| !one.layout().is_empty())
-                    .filter_map(|(_, one, _)| one.name.clone())
+                    .filter_map(|(_, one, _)| one.name.owned())
                     .collect();
                 for name in names {
                     // The caller has made the loops simplified and LCSSA, as
@@ -285,7 +285,7 @@ fn main() -> ExitCode {
                 let names: Vec<String> = module
                     .functions()
                     .filter(|(_, _, one)| !one.layout().is_empty())
-                    .filter_map(|(_, one, _)| one.name.clone())
+                    .filter_map(|(_, one, _)| one.name.owned())
                     .collect();
                 for name in names {
                     if let Err(error) =
@@ -614,7 +614,7 @@ fn calls(module: &llrm_mir::module::Module) -> String {
         );
     let mut module = module.clone();
     let mut analyses = Analyses::new(std::rc::Rc::new(Outer::of(&module, None)));
-    let names: Vec<String> = module.functions().map(|(_, global, _)| global.name.clone().unwrap_or_default()).collect();
+    let names: Vec<String> = module.functions().map(|(_, global, _)| global.name.owned().unwrap_or_default()).collect();
     let mut out = String::new();
     for name in names {
         let effects = {
@@ -734,7 +734,7 @@ fn unrolled_loop(
     let name = module
         .functions()
         .find(|(_, _, one)| !one.layout().is_empty())
-        .and_then(|(_, one, _)| one.name.clone())
+        .and_then(|(_, one, _)| one.name.owned())
         .ok_or("no function")?;
     let (_, function) = module.function_mut(&name).ok_or("no function")?;
     llrm_transforms::lcssa::closed(function)?;

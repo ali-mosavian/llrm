@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:496388de83dbf84feb93fcea77e85f63cad13e36d7898d983d8e381fe8cafdff -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:3d402f4a969754b57d05c9fe5276ff4fa18c17d6a20940326b71fc6fda914ed6 -->
 
 # manager
 
@@ -76,7 +76,6 @@ most `AssumptionCache` and `ExposedFrames`, which are omitted):
  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
  FloatFacts       ThroughMemory, PlainAccesses, Writes, Annotated, Registers
- Published        Pointers, ExposedFrames                 (observers)
 ```
 
 Module entries read the program through `ModuleAnalyses` and are dropped
@@ -147,8 +146,7 @@ The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
 `Bounded`; module entries `GlobalsAA`, `Summaries`, `Callbacks`; program
 entry `ProgramSummaries`; `Held`, `Ranges`, `Touched::reach`,
 `call_effects`, `writes`. [`crate::cfg`](cfg.md)'s `Shape`, [`crate::memoryssa`](memoryssa.md)'s
-`Accesses` and [`crate::observers`](observers.md)'s `Published` are entries defined
-beside their analyses.
+`Accesses` is an entry defined beside its analysis.
 
 ## Needs
 [`crate::alias`](alias.md), [`crate::consts`](consts.md), [`crate::globalsaa`](globalsaa.md),

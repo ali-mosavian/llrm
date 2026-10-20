@@ -193,3 +193,34 @@ b2:
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
     assert_eq!(results(&module, &[&[1, 0], &[1, 1], &[-3, 7]]), results(&before, &[&[1, 0], &[1, 1], &[-3, 7]]));
 }
+
+/// `counted(trips)` with `hint` on the latch's loop ID.
+fn hinted(
+    trips: u32,
+    hint: &str,
+) -> String {
+    let text =
+        counted(trips).replace("br i1 %go, label %b1, label %b2", "br i1 %go, label %b1, label %b2, !llvm.loop !0");
+    format!("{text}\n!0 = distinct !{{!0, !1}}\n!1 = !{{{hint}}}\n")
+}
+
+/// The language says never (`llvm.loop.unroll.disable`): a loop the budget
+/// would copy stays rolled, and the same loop with a count that is its trips is
+/// copied.
+#[test]
+fn a_loop_the_language_says_not_to_unroll_stays_rolled() {
+    let mut disabled = parsed(&hinted(4, "!\"llvm.loop.unroll.disable\""));
+    assert!(!unrolled(&mut disabled), "{}", printed(&disabled));
+    let mut counted_four = parsed(&hinted(4, "!\"llvm.loop.unroll.count\", i32 4"));
+    assert!(unrolled(&mut counted_four));
+}
+
+/// The language says as many as the trip count (`llvm.loop.unroll.full`): 200
+/// trips are past the threshold of 150, which a pragma overrides.
+#[test]
+fn a_loop_the_language_permits_is_copied_past_the_budget_and_the_cap() {
+    let mut plain = parsed(&counted(200));
+    assert!(!unrolled(&mut plain), "premise: 200 trips are over the budget");
+    let mut full = parsed(&hinted(200, "!\"llvm.loop.unroll.full\""));
+    assert!(unrolled(&mut full));
+}

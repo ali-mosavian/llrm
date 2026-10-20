@@ -5,7 +5,7 @@
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::parse;
-use llrm_mir::passes::Outer;
+use llrm_mir::passes::{Declared, Outer};
 use llrm_transforms::simplifycfg::{Options, simplified_with};
 use llrm_transforms::twoentryphi::Speculation;
 
@@ -32,12 +32,14 @@ fn main() {
         let names: Vec<String> = module
             .functions()
             .filter(|(_, _, function)| !function.is_declaration())
-            .filter_map(|(_, global, _)| global.name.clone())
+            .filter_map(|(_, global, _)| global.name.owned())
             .collect();
         for name in names {
             let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+            let mut declared = Declared::of(&module);
             let (context, function) = module.function_mut(&name).expect("a defined function");
-            simplified_with(&options, context, &spec, function);
+            simplified_with(&options, context, &spec, &mut declared, function);
+            declared.place(&mut module).expect("placed");
         }
         print!("{}", llrm_mir::print::module(&module));
     }

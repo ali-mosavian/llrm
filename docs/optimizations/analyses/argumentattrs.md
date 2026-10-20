@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/argumentattrs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/argumentattrs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/argumentattrs.rs sha256:8a50069dec50d4774fb8f98405d9f34af82bd5f8d58e1779e796d4bfb3f8956a -->
+<!-- src: crates/opt/llrm-analysis/src/argumentattrs.rs sha256:f88a1dac5f871d3a16996072916181eeda5ecd6a78b745682fa417ef22ed987c -->
 
 # argumentattrs
 
@@ -26,7 +26,8 @@ DEVIATE A1: MIR has no `nofree` and no `initializes`-free tracking: the
 DEVIATE A2: only `captures(none)` can be stated (see
 [`crate::capturetracking`](capturetracking.md)), so a parameter that would be
 `captures(ret: ...)` stays unstated. Not translated yet:
-`addArgumentAttrsFromCallsites` (nonnull), `inferInitializes`, `returned`.
+`addArgumentAttrsFromCallsites` (nonnull), `returned`; `inferInitializes` is
+[`crate::initializes`](initializes.md).
 
 ## Example
 `get` reads through `%p` and never keeps it; `put` writes through it:

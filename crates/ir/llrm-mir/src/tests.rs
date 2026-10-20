@@ -367,6 +367,22 @@ fn a_bswap_of_an_odd_number_of_bytes_is_reported() {
     }
 }
 
+/// `llvm.fshl`, `llvm.fshr` and `llvm.abs` are intrinsics MIR has: a call of
+/// each verifies. The verifier said "an intrinsic MIR does not have" of all
+/// three, and the funnel-shift and abs folds of InstCombine could not build
+/// them.
+#[test]
+fn funnel_shifts_and_abs_are_known_intrinsics() {
+    for text in [
+        "declare i16 @llvm.fshl.i16(i16, i16, i16)\ndefine i16 @f(i16 %x, i16 %y) {\nb0:\n  %r = call i16 @llvm.fshl.i16(i16 %x, i16 %y, i16 3)\n  ret i16 %r\n}\n",
+        "declare i32 @llvm.fshr.i32(i32, i32, i32)\ndefine i32 @f(i32 %x, i32 %y) {\nb0:\n  %r = call i32 @llvm.fshr.i32(i32 %x, i32 %y, i32 3)\n  ret i32 %r\n}\n",
+        "declare i16 @llvm.abs.i16(i16, i1)\ndefine i16 @f(i16 %x) {\nb0:\n  %r = call i16 @llvm.abs.i16(i16 %x, i1 false)\n  ret i16 %r\n}\n",
+    ] {
+        let module = parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(crate::verify::verify(&module), Vec::<String>::new(), "{text}");
+    }
+}
+
 fn dominance_problems(text: &str) -> Vec<String> {
     crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")))
         .into_iter()
@@ -557,7 +573,7 @@ fn a_noipa_routine_round_trips_through_text() {
     let opaque: Vec<_> = module
         .functions()
         .filter(|(_, _, function)| crate::facts::opaque(function))
-        .map(|(_, global, _)| global.name.clone().unwrap_or_default())
+        .map(|(_, global, _)| global.name.owned().unwrap_or_default())
         .collect();
     assert_eq!(opaque, vec!["f".to_owned()]);
 }
@@ -1139,4 +1155,43 @@ fn undef_is_a_constant_that_round_trips_apart_from_poison() {
     let once = round(&text);
     assert!(once.contains("ret i16 undef"), "{once}");
     assert_eq!(round(&once), once);
+}
+
+/// A global's cached intrinsic followed neither a rename nor a copy would
+/// leave `intrinsic()` naming the old callee: a `memset` read as a plain call.
+#[test]
+fn a_globals_intrinsic_follows_its_name_through_renames_and_copies() {
+    use crate::{intrinsics::Intrinsic, module::GlobalName};
+    let mut module = parse::module("declare void @f(ptr, i8, i16, i1)\n").unwrap();
+    let id = module.named("f").expect("declared");
+    let intrinsic = |module: &crate::module::Module| module.global(id).intrinsic();
+    assert_eq!(intrinsic(&module), None);
+    module.globals[id.0 as usize].name = GlobalName::from("llvm.memset.p0.i16".to_owned());
+    assert_eq!(intrinsic(&module), Some(Intrinsic::MemSet));
+    assert_eq!(module.global(id).declaration().intrinsic(), Some(Intrinsic::MemSet));
+    assert_eq!(module.clone().global(id).intrinsic(), Some(Intrinsic::MemSet));
+    module.globals[id.0 as usize].name = GlobalName::from("f".to_owned());
+    assert_eq!(intrinsic(&module), None);
+    module.globals[id.0 as usize].name = GlobalName::default();
+    assert_eq!(intrinsic(&module), None);
+}
+
+/// LLVM's `+inf`, `-qnan`, `+nan(0x..)` and `snan(0x..)` spellings were
+/// refused (`unexpected character +`): 84 of the 619 floating-point test files
+/// of Transforms/InstSimplify and Transforms/InstCombine stopped at the first
+/// (#3180). Each reads as the double it names.
+#[test]
+fn the_special_floating_point_spellings_read_as_their_doubles() {
+    let text = "define double @f(double %x) {\nentry:\n  %a = fadd double %x, +inf\n  %b = fadd double %a, -inf\n  %c = fadd double %b, +qnan\n  %d = fadd double %c, -qnan\n  %e = fadd double %d, +nan(0x1)\n  %f = fadd double %e, +snan(0x1)\n  ret double %f\n}\n";
+    let printed = round(text);
+    for bits in [
+        "0x7FF0000000000000",
+        "0xFFF0000000000000",
+        "0x7FF8000000000000",
+        "0xFFF8000000000000",
+        "0x7FF8000000000001",
+        "0x7FF0000000000001",
+    ] {
+        assert!(printed.contains(bits), "{bits} is not in\n{printed}");
+    }
 }

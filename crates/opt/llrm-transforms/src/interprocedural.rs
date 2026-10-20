@@ -145,17 +145,15 @@
 use std::collections::BTreeSet;
 
 use llrm_analysis::aa::ModRefInfo;
-use llrm_analysis::alias::{self, Procedure};
-use llrm_analysis::cfg::Shape;
 use llrm_analysis::functionattrs;
 use llrm_analysis::interprocedural as facts;
 use llrm_analysis::manager::{Callbacks, GlobalsAA, ProgramSummaries, Summaries};
-use llrm_analysis::memory::{Identity, MemoryKind, Unit};
+use llrm_analysis::memory::{Identity, MemoryKind};
 use llrm_mir::callgraph::{CallGraph, CallGraphAnalysis, Defined};
 use llrm_mir::context::GlobalId;
 use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::module::{GlobalKind, Linkage, Module};
-use llrm_mir::opcode::{Attribute, Opcode};
+use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Declarations, Declared, ModuleAnalyses, PreservedAnalyses};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 use llrm_mir::types::Type;
@@ -847,10 +845,6 @@ pub fn stamped(
     let spaces = program.target.spaces();
     let known = analyses.get::<Summaries>(module);
     let known = Result::as_ref(&*known).map_err(String::clone)?;
-    let globals = analyses.get::<GlobalsAA>(module);
-    let globals = Result::as_ref(&*globals).map_err(String::clone)?;
-    let callbacks = analyses.get::<Callbacks>(module);
-    let callbacks = Result::as_ref(&*callbacks).map_err(String::clone)?;
     let graph = analyses.get::<CallGraphAnalysis>(module);
     let mut changed: Vec<GlobalId> = Vec::new();
     let mut seen: BTreeSet<GlobalId> = BTreeSet::new();
@@ -874,16 +868,6 @@ pub fn stamped(
             continue;
         }
         let Some(summary) = known.get(name) else { continue };
-        let shape = analyses.function::<Shape>(module, id);
-        let exposed = llrm_analysis::memory::exposed_frames(&Unit::of(module, layout, function).with_spaces(spaces));
-        let procedure = Procedure::of(
-            Unit { program: Some(&program), ..Unit::of(module, layout, function) }
-                .with_globals_aa(globals)
-                .with_shape(&shape)
-                .with_exposed(&exposed)
-                .with_callbacks(callbacks),
-        );
-        let initialized = alias::initialized(&procedure, known)?;
         let pointers = function
             .parameters()
             .iter()
@@ -926,9 +910,6 @@ pub fn stamped(
                 && !(stated.read_none() || stated.read_only() || stated.write_only())
             {
                 attrs.extend(access.attribute());
-            }
-            if !initialized[index].is_empty() && !attrs.iter().any(|one| matches!(one, Attribute::Initializes(_))) {
-                attrs.push(Attribute::Initializes(initialized[index].clone()));
             }
         }
         if before != function.parameter_attrs && seen.insert(id) {

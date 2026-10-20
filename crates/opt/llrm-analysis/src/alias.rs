@@ -120,7 +120,7 @@
 //! `PointValues`, `Annotated`, `CallEffects`, `Summaries`. Consumers:
 //! [`crate::memory`] (a `Unit`'s lazily built `annotated` and `points_to`),
 //! [`crate::memoryssa`] (`calls_annotated`), [`crate::avail`]
-//! (`EscapedBefore`), [`crate::observers`], [`crate::induction`]
+//! (`EscapedBefore`), [`crate::induction`]
 //! (`congruences`), [`crate::globalsaa`], [`crate::interprocedural`], and
 //! `gvn`, `promote`, `loadjoins` and `decide` in `llrm-transforms`.
 //!
@@ -832,7 +832,7 @@ impl CallFacts {
             if let Operand::Constant(id) = callee
                 && let ConstantKind::Global(global) = unit.context.get(id).kind
                 && let Some(named) = unit.globals.get(global.0 as usize)
-                && let Some(name) = named.name.clone()
+                && let Some(name) = named.name.owned()
             {
                 if named.function().is_some()
                     && !matches!(
@@ -2537,60 +2537,6 @@ fn _fills(
     out
 }
 
-/// Byte ranges, sorted, apart and not touching.
-type Ranges = Vec<(i64, i64)>;
-
-fn _with(
-    ranges: &Ranges,
-    low: i64,
-    high: i64,
-) -> Ranges {
-    let (mut low, mut high, mut out) = (low, high, Vec::new());
-    for &(one, other) in ranges {
-        if other < low || high < one {
-            out.push((one, other));
-        } else {
-            (low, high) = (low.min(one), high.max(other));
-        }
-    }
-    out.push((low, high));
-    out.sort_unstable();
-    out
-}
-
-fn _without(
-    ranges: &Ranges,
-    low: i64,
-    high: i64,
-) -> Ranges {
-    let mut out = Vec::new();
-    for &(one, other) in ranges {
-        if one < low.min(other) {
-            out.push((one, low.min(other)));
-        }
-        if high.max(one) < other {
-            out.push((high.max(one), other));
-        }
-    }
-    out
-}
-
-fn _common(
-    one: &Ranges,
-    other: &Ranges,
-) -> Ranges {
-    let mut out = Vec::new();
-    for &(low, high) in one {
-        for &(from, to) in other {
-            if low.max(from) < high.min(to) {
-                out.push((low.max(from), high.min(to)));
-            }
-        }
-    }
-    out.sort_unstable();
-    out
-}
-
 /// The parameter a slice lies in.
 fn _parameter(one: &Slice) -> Option<usize> {
     match (one.object.kind, one.object.key) {
@@ -2602,173 +2548,6 @@ fn _parameter(one: &Slice) -> Option<usize> {
 /// The bytes `slice` may cover, or `None` for all of them.
 fn _bytes(one: &Slice) -> Option<(i64, i64)> {
     (one.low != memory::WHOLE_LOW && one.high != memory::WHOLE_HIGH).then(|| (one.low, one.high - 1 + one.width))
-}
-
-/// Each pointer parameter's bytes the body writes before anything reads
-/// them, on every path that returns: LLVM's `initializes`, as its
-/// FunctionAttrs infers it, backwards from each `ret`. A path that
-/// unwinds or cannot go on asks nothing; a call reads what its effect
-/// loads and writes what its `initializes` names.
-pub fn initialized(
-    procedure: &Procedure,
-    known: &IndexMap<String, Summary>,
-) -> Result<Vec<Ranges>, String> {
-    let unit = &procedure.unit;
-    let function = unit.function;
-    let count = function.parameters().len();
-    // Only a pointer parameter is an object a body can write before it reads.
-    // Two points-to solves and the effects of every call were made for each
-    // body of the module (45% of `mir interprocedural` over QCport at -O1),
-    // most of them for bodies whose parameters are integers.
-    // LLRM_CHECK_INITIALIZED works it out anyway and asserts nothing is
-    // initialized. And only a store, or a call that initializes its
-    // argument, writes one.
-    let pointers = function
-        .parameters()
-        .iter()
-        .any(|&one| matches!(
-            unit.context.types.get(function.value(one).ty),
-            llrm_mir::types::Type::Pointer(_)
-        ))
-        && function.walk().any(|(_, inst)| {
-            matches!(
-                function.instruction(inst).opcode,
-                Opcode::Store { volatile: false, .. } | Opcode::Call(_) | Opcode::Invoke(_)
-            )
-        });
-    if !pointers && !llrm_support::env_flag!("LLRM_CHECK_INITIALIZED") {
-        return Ok(vec![Vec::new(); count]);
-    }
-    // The value solve is made once; the escape phase is not asked.
-    let values = match unit.point_values {
-        Some(_) => None,
-        None => Some(point_values(unit)?),
-    };
-    let held =
-        Procedure { unit: values.as_ref().map_or(*unit, |values| unit.with_point_values(values)), ..procedure.clone() };
-    let (procedure, unit) = (&held, &held.unit);
-    // What it reads of the solve is each pointer's objects: neither what
-    // escapes nor, for the actuals, anything the arguments add (they enter
-    // only the escape phase), so the value solve is all it asks.
-    let facts = unit.point_values.expect("the value solve was made above or is held");
-    let effects = calls_annotated(procedure, known)?;
-    // `None` is every byte: nothing asked yet.
-    type State = Vec<Option<Ranges>>;
-    let meet = |one: &State, other: &State| -> State {
-        one.iter()
-            .zip(other)
-            .map(|(one, other)| match (one, other) {
-                (None, any) | (any, None) => any.clone(),
-                (Some(one), Some(other)) => Some(_common(one, other)),
-            })
-            .collect()
-    };
-    // A read of another object that may be the parameter's reads all of it.
-    let interner = ObjectInterner::of(unit.context);
-    let parameter_objects = (0..count)
-        .map(|index| {
-            interner.intern(MemoryObject {
-                identity: Some(Identity::Int(index as i64)),
-                ..MemoryObject::new(MemoryKind::Parameter)
-            })
-        })
-        .collect::<Vec<_>>();
-    let read = |state: &mut State, one: &Slice| {
-        for (index, ranges) in state.iter_mut().enumerate() {
-            let parameter = parameter_objects[index];
-            let bytes = if one.object == parameter {
-                _bytes(one)
-            } else if memory::objects_may_alias(&one.object, &parameter) {
-                None
-            } else {
-                continue;
-            };
-            let held = ranges.clone().unwrap_or_else(|| vec![(i64::MIN, i64::MAX)]);
-            *ranges = Some(bytes.map_or_else(Vec::new, |(low, high)| _without(&held, low, high)));
-        }
-    };
-    let written = |state: &mut State, index: usize, low: i64, high: i64| {
-        if let Some(Some(held)) = state.get(index) {
-            state[index] = Some(_with(held, low, high));
-        }
-    };
-    let transfer = |at: i64, mut state: State| -> State {
-        for inst in function.iter_block_rev(cfg::block(at)) {
-            let op = function.instruction(inst);
-            if let Some(effect) = effects.get(&inst) {
-                for one in
-                    effect.loads.iter().filter_map(|one| one.provenance.as_ref()).flat_map(|one| one.slices.iter())
-                {
-                    read(&mut state, one);
-                }
-                let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { continue };
-                let declared = llrm_mir::memory::callee(unit.context, function, inst)
-                    .and_then(|one| unit.globals.get(one.0 as usize))
-                    .and_then(|one| one.function());
-                for (argument, operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
-                    let mut ranges = llrm_mir::memory::initializes(&info.argument_attrs[argument]).to_vec();
-                    ranges.extend(
-                        declared
-                            .and_then(|one| one.parameter_attrs.get(argument))
-                            .map_or(&[][..], |attrs| llrm_mir::memory::initializes(attrs)),
-                    );
-                    let Some(pointer) = _operand(unit, *operand, &facts.values) else { continue };
-                    let [one] = pointer.slices.iter().collect::<Vec<_>>()[..] else { continue };
-                    let (Some(index), true) = (_parameter(one), one.high == one.low + 1) else { continue };
-                    for (low, high) in ranges {
-                        written(&mut state, index, one.low + low, one.low + high);
-                    }
-                }
-                continue;
-            }
-            let Some(reference) = MemRef::of(unit, inst) else { continue };
-            let slices = facts.reference(unit, &reference).map_or_else(|| UNKNOWN.slices.clone(), |one| one.slices);
-            match op.opcode {
-                Opcode::Store { volatile: false, .. } => {
-                    if let [one] = slices.iter().collect::<Vec<_>>()[..]
-                        && let (Some(index), true) = (_parameter(one), one.high == one.low + 1)
-                    {
-                        written(&mut state, index, one.low, one.low + one.width);
-                    }
-                }
-                Opcode::Store { .. } => {}
-                _ => slices.iter().for_each(|one| read(&mut state, one)),
-            }
-        }
-        state
-    };
-    let graph = cfg::graph(function);
-    let exit = |at: i64| -> State {
-        match function.instruction(function.block(cfg::block(at)).last().expect("a block ends")).opcode {
-            Opcode::Ret => vec![Some(Vec::new()); count],
-            _ => vec![None; count],
-        }
-    };
-    let mut entry = graph.iter().map(|block| (block.at, vec![None; count])).collect::<IndexMap<i64, State>>();
-    loop {
-        let mut changed = false;
-        for block in graph.iter().rev() {
-            let out = block.succ.iter().fold(exit(block.at), |state, successor| meet(&state, &entry[successor]));
-            let made = transfer(block.at, out);
-            if made != entry[&block.at] {
-                entry.insert(block.at, made);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    let first = graph.first().map_or_else(|| vec![None; count], |block| entry[&block.at].clone());
-    // A range reaching the sentinels was found only on paths that never return.
-    let bounded = |(low, high): &(i64, i64)| i64::MIN < *low && *high < i64::MAX && low < high;
-    let made: Vec<Ranges> =
-        first.into_iter().map(|one| one.unwrap_or_default().into_iter().filter(bounded).collect()).collect();
-    assert!(
-        pointers || made.iter().all(Vec::is_empty),
-        "initialized: a body with no pointer parameter written initializes bytes"
-    );
-    Ok(made)
 }
 
 fn _union<'a>(parts: impl IntoIterator<Item = Option<&'a Provenance>>) -> Option<Provenance> {

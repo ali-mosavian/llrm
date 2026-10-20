@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_build.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_build.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_build.rs sha256:341c45bf344f5721cf54bd34868d444c1a9b05c15963061efe650c3bdb9a3953 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_build.rs sha256:3c949b0978d9a6a3d89ac970e75e19fa1268165de02f99e224f021d4b36cae81 -->
 
 # combine_build
 
@@ -21,10 +21,11 @@ assumptions and no context instruction (`InstSimplifyFolder(DL)`), as here.
 DEVIATE 1: no instruction names (`Twine`): MIR names are not read by any
 pass.
 
-DEVIATE 2: intrinsic calls (`CreateIntrinsic`) are not built here: they need
-the module's declaration of the intrinsic, which a pass over one function
-does not hold. A fold that builds one is not translated until the
-declaration is (the numbered DEVIATE of that fold names it).
+DEVIATE 2: `CreateIntrinsic` (`Combiner::create_intrinsic`) builds a call
+to the declaration the pass makes through `Unit::declared`
+(`Intrinsic::getOrInsertDeclaration`); the declaration reaches the module
+after the pass. It is for intrinsics overloaded on one integer type, named
+`llvm.<base>.i<width>`, with the argument types as the parameters.
 
 ## How it works
 Each `create_*` asks `simplify*` of its operands first (the folder) and

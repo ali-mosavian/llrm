@@ -77,7 +77,7 @@
 //!
 //! # Used by
 //! Each of [`crate::lsr_pass`], [`crate::hoist`], [`crate::gvn`],
-//! [`crate::unroll`], [`crate::peel`],
+//! [`crate::loopunrollpass`], [`crate::looppeel`],
 //! [`crate::loopidioms`], [`crate::window`], [`crate::gepoffset`],
 //! [`crate::indvars`], [`crate::ipacp`], [`crate::inline`]
 //! and [`crate::interprocedural`] asks it, before a rewrite that trades code

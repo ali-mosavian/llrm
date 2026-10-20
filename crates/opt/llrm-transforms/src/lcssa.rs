@@ -67,8 +67,7 @@
 //!
 //! # Runs
 //! In every body's pipeline after `loopsimplify`, unless `lcssa` is turned off,
-//! and again after header copying. `peel` calls [`closed`] on its
-//! candidates.
+//! and again after header copying. The unroller calls it first.
 //!
 //! # Keeps
 //! Dominators and loops stay valid; all other analyses are invalidated when
@@ -272,11 +271,12 @@ pub fn _closed_loop(
         return Ok(false);
     }
 
+    let edges_in = function.edge_predecessors(cfg::block(exit_at));
     let mut swap: BTreeMap<ValueId, Operand> = BTreeMap::new();
     let mut phis = Vec::new();
     for &value in &crossing {
         let phi = exit_phi(function, value);
-        let incoming = sources.iter().map(|&source| (Operand::Value(value), cfg::block(source))).collect::<Vec<_>>();
+        let incoming = edges_in.iter().map(|&source| (Operand::Value(value), source)).collect::<Vec<_>>();
         function.set_operands(phi, from_arms(&incoming));
         swap.insert(value, Operand::Value(function.instruction(phi).result.expect("a phi's value")));
         phis.push(phi);
