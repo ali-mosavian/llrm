@@ -783,7 +783,7 @@ pub(crate) fn llvm_order(
             phiopt("phiopt@1244"),
         ],
         // The Late stage follows the Simplify list and its unroll-and-jam:
-        // L1438, InstSimplifyPass (PassBuilderPipelines.cpp#L1662, the last
+        // L1438, Float2IntPass (L1594), InstSimplifyPass (PassBuilderPipelines.cpp#L1662, the last
         // function pass of `OptimizePM`, after LoopSink) and L2376.
         // DEVIATE LS1: the jam is not in the pin's default pipeline
         // (`enable-unroll-and-jam` is false, L222); at the pin, if enabled,
@@ -798,6 +798,7 @@ pub(crate) fn llvm_order(
             // The slots' options, with the pin's lines,
             // are `simplifycfg::Options::{L1438, L2376}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
+            slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             simplify_cfg_with("simplifycfg@2376", simplifycfg::Options::L2376),
         ],
