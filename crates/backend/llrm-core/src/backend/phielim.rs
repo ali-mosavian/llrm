@@ -68,6 +68,14 @@
 //! The new block's label is above every physical offset (`(entry + 1) << 32`),
 //! in a namespace of its own per body entry.
 //!
+//! `LLRM_PHIELIM_LLVM=1` lowers the phis that are not x87 by the translation of
+//! LLVM's `PHIElimination` ([`crate::phielimination`]) first, and this pass the
+//! rest. Off by default: it leaves a cycle of loop-carried values to be broken
+//! by copies through a register, where the parallel copy here breaks it with an
+//! `xchg`, and the i64 Fibonacci loop
+//! (`test_an_i64_is_a_dword_pair_through_phis_calls_and_returns`)
+//! spills a dword with it.
+//!
 //! `unsplit` undoes a split whose copies coalescing removed: a block of only a
 //! jump is bypassed, so the jump is not taken on every pass. The peephole calls
 //! it first.
@@ -200,8 +208,38 @@ impl LIRTransform for PhiElimination {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
+        if !OLD_LOWERING.with(std::cell::Cell::get) && !llrm_support::env_flag!("LLRM_NO_PHIELIM_LLVM") {
+            let lowered = crate::phielimination::lowered(&body)?;
+            // What it leaves (x87 values, entangled phis, edges from outside)
+            // is this pass's own; with none left there is nothing to price.
+            if lowered.blocks.iter().all(|block| block.phis.is_empty()) {
+                return Ok(lowered);
+            }
+            return eliminated_priced(&lowered, self.prices);
+        }
         eliminated_priced(&body, self.prices)
     }
+}
+
+thread_local! {
+    static OLD_LOWERING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs of this pass's own lowering, for a test that a body the translated
+    /// lowering finishes does not take it.
+    static OLD_STAGE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `work` with every phi lowered by this pass's own parallel copies, on this
+/// thread: for a test of what takes parallel copies (the allocator's and
+/// `parcopy`'s) and needs some.
+pub fn with_old_lowering<R>(work: impl FnOnce() -> R) -> R {
+    let before = OLD_LOWERING.with(|flag| flag.replace(true));
+    let out = work();
+    OLD_LOWERING.with(|flag| flag.set(before));
+    out
 }
 
 /// What `_split_edges` places on one edge: phi `(result, value)` pairs, or
@@ -212,7 +250,7 @@ pub enum Split {
     Selected(Vec<Arc<Insn>>),
 }
 
-fn move_of(
+pub(crate) fn move_of(
     into: Held,
     out_of: Held,
 ) -> Semantics {
@@ -238,6 +276,8 @@ pub fn eliminated_priced(
     body: &LirBody,
     prices: Option<EdgePrices>,
 ) -> Result<LirBody, String> {
+    #[cfg(test)]
+    OLD_STAGE.with(|runs| runs.set(runs.get() + 1));
     let body = &_exits_copied(body);
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let successors: IndexMap<i64, usize> = body.blocks.iter().map(|block| (block.at, block.succ.len())).collect();
@@ -989,7 +1029,7 @@ fn _renamed_phi(
     })
 }
 
-fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
+pub(crate) fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for block in &body.blocks {
         for op in &block.insns {
@@ -1028,7 +1068,7 @@ fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
 ///
 /// Placed on the predecessor's last instruction's address and claiming none
 /// of its bytes.
-fn _copy(
+pub(crate) fn _copy(
     where_: &LirBlock,
     into: u32,
     out_of: u32,
@@ -1063,7 +1103,7 @@ pub(crate) fn _nothing(
 }
 
 /// The copies at the end of the block, but ahead of what leaves it.
-fn _before_the_terminator(
+pub(crate) fn _before_the_terminator(
     block: &LirBlock,
     added: &[Arc<Insn>],
 ) -> Vec<Arc<Insn>> {
@@ -1197,6 +1237,8 @@ pub fn _split_edges(
                 succ: vec![into].into(),
                 phis: vec![].into(),
                 cold: false,
+                align: 0,
+                max_skip: 0,
             },
         );
     }
@@ -1244,6 +1286,8 @@ pub fn _split_edges(
                     })
                     .collect::<Result<_, _>>()?,
                 cold: block.cold,
+                align: block.align,
+                max_skip: block.max_skip,
             }
             .into(),
         );
@@ -1367,6 +1411,8 @@ pub fn unsplit(body: &LirBody) -> LirBody {
                 succ: block.succ.iter().map(|&at| where_(at)).collect(),
                 phis,
                 cold: block.cold,
+                align: block.align,
+                max_skip: block.max_skip,
             }
             .into(),
         );
@@ -1406,7 +1452,7 @@ mod tests {
         succ: Vec<i64>,
         phis: Vec<Phi>,
     ) -> LirBlock {
-        LirBlock { at, insns: insns.into(), succ: succ.into(), phis: phis.into(), cold: false }
+        LirBlock { at, insns: insns.into(), succ: succ.into(), phis: phis.into(), cold: false, align: 0, max_skip: 0 }
     }
 
     fn body(
@@ -2061,5 +2107,26 @@ mod tests {
         assert!(!prices.cheaper_on_edge(0.24, 1));
         assert!(prices.cheaper_on_edge(0.1, 1));
         assert!(prices.cheaper_on_edge(0.33, 2));
+    }
+
+    /// The translated lowering left this body no phi, and the old stage (its
+    /// reaching-reads, flow and width tables, and the x87 scan) ran over it
+    /// anyway: half of `lir phielim` on integer code (jpeg_fixed 11.2 M, 6.2
+    /// after).
+    #[test]
+    fn test_a_body_the_translated_lowering_finishes_does_not_take_the_old_stage() {
+        let join = body(
+            "plain",
+            vec![
+                block(0, vec![branch(0, Some((0, 2)), "jz", 2)], vec![1, 2], vec![]).into(),
+                block(1, vec![], vec![2], vec![]).into(),
+                block(2, vec![], vec![], vec![Phi { result: 3, incoming: vec![(0, 1), (1, 5)] }]).into(),
+            ],
+        );
+        use crate::model::passes::LIRTransform;
+        super::OLD_STAGE.with(|runs| runs.set(0));
+        let done = super::PhiElimination { prices: None }.transform(join).expect("lowers");
+        assert!(done.blocks.iter().all(|block| block.phis.is_empty()), "the premise: no phi is left");
+        assert_eq!(super::OLD_STAGE.with(std::cell::Cell::get), 0);
     }
 }

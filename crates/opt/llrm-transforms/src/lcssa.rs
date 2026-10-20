@@ -116,7 +116,14 @@ impl FunctionPass for LoopClosedSSA {
 /// `function` with every supported natural loop in closed SSA form; whether
 /// anything changed.
 pub fn closed(function: &mut Function) -> Result<bool, String> {
-    let mut changed = _opened(function)?;
+    let opened = _opened(function)?;
+    Ok(formed(function)? | opened)
+}
+
+/// `formLCSSA` of every loop: the exit phis a loop lacks are added, and none
+/// is taken away, as `closed` does first for the phis no loop closes at.
+pub fn formed(function: &mut Function) -> Result<bool, String> {
+    let mut changed = false;
     // Loops come inner first. Closing an inner loop first makes its exit
     // value an ordinary definition in an enclosing loop.
     // The dominators of the body, found once for as long as no exit is merged.
@@ -132,13 +139,7 @@ pub(crate) fn operations(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .filter(|&one| function.instruction(one).opcode != Opcode::Phi)
-        .collect()
+    function.iter_block(block).filter(|&one| function.instruction(one).opcode != Opcode::Phi).collect()
 }
 
 pub(crate) use llrm_analysis::occurrence::{arms, from_arms};
@@ -151,7 +152,7 @@ pub(crate) fn definitions(
     let mut defined = BTreeMap::new();
     for &at in blocks {
         let block = cfg::block(at);
-        for &inst in function.block(block).instructions() {
+        for inst in function.iter_block(block) {
             if let Some(value) = function.instruction(inst).result {
                 defined.insert(value, cfg::id(block));
             }
@@ -262,8 +263,8 @@ pub fn _closed_loop(
         .iter()
         .filter(|(value, sites)| {
             !sites.is_empty()
-                && sites.iter().all(|&site| dominance.dominates(exit_at, site))
-                && sources.iter().all(|&source| dominance.dominates(defined[*value], source))
+                && sites.iter().all(|&site| dominance.dominates(function, exit_at, site))
+                && sources.iter().all(|&source| dominance.dominates(function, defined[*value], source))
         })
         .map(|(value, _)| *value)
         .collect::<Vec<_>>();
@@ -295,10 +296,10 @@ pub fn _closed_loop(
                 home != exit_at
                     && matches!(
                         user.operands[one.index as usize + 1],
-                        Operand::Block(from) if dominance.dominates(exit_at, cfg::id(from))
+                        Operand::Block(from) if dominance.dominates(function, exit_at, cfg::id(from))
                     )
             } else {
-                dominance.dominates(exit_at, home)
+                dominance.dominates(function, exit_at, home)
             };
             if reads_it {
                 rewrites.push((one.user, one.index as usize, replacement));

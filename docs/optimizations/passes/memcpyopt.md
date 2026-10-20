@@ -1,64 +1,77 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/memcpyopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/memcpyopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:5ce56fc4fb217e98bc484110c65009a0859a50403eb97156d0548ee5ea0aad98 -->
+<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:c8be581dfdd4667ef25ea98a2911377574c5473efa2845ca719f2134174bd9b1 -->
 
 # memcpyopt
 
-Loads and stores that copy adjacent bytes become one `llvm.memcpy` (LLVM's
-MemCpyOpt, which makes a call of the stores that copy a struct; gcc has no
-such pass and leaves them to the by-pieces expansion).
+MemCpyOpt on MemorySSA: LLVM's `MemCpyOptPass` apart from the memset
+merging of `processStore` and `processMemSet`, which
+[`crate::memcpyoptimizer`](memcpyoptimizer.md) does (stage 1). A translation of
+`MemCpyOptimizer.cpp` at d1106deb71cc.
 
 ## How it works
-In each block, a pair is a non-volatile integer load whose only user is a
-non-volatile store of it in the same block, each at a constant offset from a
-root pointer. A run is the pairs of one source root and one destination root
-that tile adjacent bytes of both, the destination at the same distance from
-the source throughout. Pairs are taken in one walk of the block: any other
-instruction that touches memory, or a pair of other roots, ends the pairs
-open so far, so nothing stands between a run's first load and last store but
-work that touches no memory.
-
-The run is one `llvm.memcpy` of its bytes where its last store stood, when
-two things hold. The alias owner (`regions::overlapping`, over the
-references `Unit::annotated` gives) says no source cell and destination cell
-of the run can meet, so the order of its loads and stores does not matter.
-And it is cheaper: the pairs' loads and stores against what the same
-`length` costs (`fill::copy_price`: the loads and stores isel makes of a
-short copy, else `rep movs`). Four byte pairs are one dword pair, which is
-a gain; two dword pairs are what isel makes of the copy, which is none.
-
-```text
-  %a = load i32, ptr %s            call memcpy(%d, %s, 40)
-  store i32 %a, ptr %d      ==>    (nine more pairs gone)
-  ... nine more pairs
-```
+Each memcpy, memmove and aggregate store of a load is looked at in block
+order with the memory graph (`mssa`) kept right by the updater as
+instructions are made and erased. The clobber a memcpy's source or
+destination walks up to decides what it can become:
+- a copy to itself, or of no bytes, is gone; a copy out of a constant global
+  that repeats one byte is a memset;
+- a memcpy of a memcpy's destination copies from that memcpy's source
+  instead (`processMemCpyMemCpyDependence`);
+- a memcpy right after a memset of its destination: the memset shrinks to
+  what the copy leaves (`processMemSetMemCpyDependence`);
+- a memcpy of a memset's bytes is a memset (`performMemCpyToMemSetOptzn`);
+- a copy of memory nothing wrote (a fresh alloca) is gone
+  (`hasUndefContents`);
+- a call that fills a fresh alloca, copied to another place, fills that
+  place instead and the copy is gone (`performCallSlotOptzn`, from a memcpy
+  or a load and store of the alloca);
+- a memmove whose ranges cannot meet is a memcpy (`processMemMove`);
+- an aggregate loaded and stored right after is a memcpy, or a memmove where
+  the store may write what the load reads (`processStoreOfLoad`), the store
+  lifted above the first write to the loaded bytes when nothing in between
+  needs it (`moveUp`).
 
 ## Example
-Ten dword pairs, `d[i] = s[i]`, two globals:
+A copy of a copy reads the first source:
 
-```mir
-%a0 = load i32, ptr @s
-store i32 %a0, ptr @d
-%p1 = getelementptr i32, ptr @s, i32 1
-%a1 = load i32, ptr %p1
-...
+```text
+ call memcpy(%b, %a, 16)           call memcpy(%b, %a, 16)
+ call memcpy(%c, %b, 16)    ==>    call memcpy(%c, %a, 16)
 ```
 
-becomes `call void @llvm.memcpy.p0.p0.i32(ptr @d, ptr @s, i32 40, i1
-false)`.
-
-From unit test `ten_dword_pairs_are_one_memcpy` in `memcpyopt_tests.rs`.
+## DEVIATEs
+1. Alias questions are `mssa::alias`'s (llrm's reference model), not
+   BasicAA's, and there is no `EarliestEscapeAnalysis`: what it adds to
+   `BatchAAResults` is a capture query the reference model answers by the
+   object's exposure. Exit: none; the model is llrm's.
+2. Nothing throws (no unwinding in MIR): `mayBeVisibleThroughUnwinding` is
+   false.
+3. No debug-info assignment IDs (`mergeDIAssignID`), no `combineAAMetadata`
+   (the formed calls carry no `!tbaa`, as in `loopidiom`).
+4. Done later (stages): `performStackMoveOptzn`, `processByValArgument` and
+   `processImmutArgument`.
+5. MIR holds no constant expression in code: where the builder folds
+   `getelementptr (i8, @g, 16)` the pass makes the instruction. A forced
+   inline copy (`llvm.memcpy.inline`) is not forwarded, as the builder's
+   `CreateMemCpyInline` has no counterpart here.
+6. `moveUp` does not lift a call (LLVM does when it neither reads nor writes
+   what the lifted ones touch): a call between the load and the store ends
+   the attempt. Fact: `getModRefInfo(Instruction, CallBase)` has no model
+   here. Exit: a call-against-call mod/ref query.
+7. The call slot asks `PointerMayBeCaptured` of the destination object where
+   the pin asks `PointerMayBeCapturedBefore` the call (only when the callee
+   may capture the source): a capture after the call also stops it. Exit: a
+   dominance-aware capture query.
+8. The call slot gives up where the alias model says the call may touch the
+   destination; the pin goes on to `callCapturesBefore`. Exit: that query in
+   `llrm_analysis::aa`'s model.
 
 ## Runs
-After the function fixed point, beside `Merge` (no pass asks a memcpy what
-its destination holds, and `splitcopy` would split the memcpy of a local
-again). On and off with `-ftree-loop-distribute-patterns`, as `Fill`.
-
-## Needs
-`regions::overlapping` through `Unit::annotated`; the target's costs.
+In the slot of `memcpyopt@818`.
 
 ## Keeps
 The blocks and edges: only instructions change.
 
 ## See also
-[`crate::fill`](fill.md) owns `copy_price` and the loop that copies;
-[`crate::splitcopy`](splitcopy.md) is the opposite for a local.
+[`crate::memcpyoptimizer`](memcpyoptimizer.md), [`crate::deadstore`](deadstore.md), the memory graph in
+`llrm_analysis::mssa`.

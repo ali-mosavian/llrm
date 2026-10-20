@@ -1,3 +1,7 @@
+---
+architecture-index: output rows by date
+architecture-order: 420
+---
 # Output rows against clang and gcc, by date
 
 > **Void as a reference.** Every ratio and count in this file reads `rows/main` and `rows/base`, built with the Ubuntu clang 20.1.8; `rowcheck.compiler_premise` ([#2226]) refuses 284 of 284 of those objects. The pinned rows are `main24` to `main24d` (clang 24.0.0git `d1106deb71cc`). The llrm-against-llrm statements (objects byte-identical, ablation deltas) are unaffected; every figure against min(gcc, clang) is to be redone on `main24d`, except the ablation section, which is re-taken there.

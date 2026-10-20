@@ -44,6 +44,8 @@ SIZES = {"functions": 64, "straight": 512, "branches": 32, "live": 64, "callers"
 # (`hir to mir`, 62 -> 230 -> 884 -> 3,480 -> 13,841 Minstr at -O1 over N = 64..1024, x4 per doubling) went quadratic unseen: every
 # generator is an axis here, and a test says so.
 SIZES |= {"cases": 128, "joins": 64, "fjoins": 64, "unrolled": 8}
+# One value with N uses, and N equal expressions (use-list walks and replacements; measured 2026-10-19, -O2, 2N = 2048: ~3 G).
+SIZES |= {"fanout": 1024, "equal": 2048}
 # The axes that cross calls, again at -m16: another register file and calling convention, where a hang once hid (chain at N=7 never
 # finished) while every -m32 axis passed.
 SIZES |= {"chain-m16": 32, "callers-m16": 32}

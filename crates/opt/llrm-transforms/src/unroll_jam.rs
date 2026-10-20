@@ -21,8 +21,9 @@
 //! `unroll-jam-max-unroll`) and `min_percent` (1, `unroll-jam-min-percent`),
 //! which bounds N by the dependence distances and refuses a nest where fewer
 //! than `min_percent` percent of the accesses go away. The outer loop needs an
-//! exact trip count; N is the largest factor from 2 up to the bound that
-//! divides it.
+//! exact trip count (ScalarEvolution's `getSmallConstantTripCount`;
+//! `LLRM_NO_SCEV_TRIPS` asks `induction::trip_count`); N is the largest factor
+//! from 2 up to the bound that divides it.
 //!
 //! The outer loop is unrolled by `loopclone::chained` into N bodies. In each
 //! copy the work between the loops moves ahead of the first inner loop, the
@@ -114,6 +115,13 @@
 //! `-floop-unroll-and-jam`. Not run where one pass is selected by name. See
 //! `docs/reference/levels.md`.
 //!
+//! The pin's default pipeline never jams: `enable-unroll-and-jam` is false
+//! ([`PassBuilderPipelines.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L222)),
+//! so this pass is gcc's, not a translation. Were it enabled, the pin runs
+//! SimplifyCFG with hoisting and sinking (L1438) before it (L1474); llrm runs
+//! the jam first, because the matcher needs the nest as it was before that
+//! rewrite. Exit: the matcher accepts the L1438 form; no date.
+//!
 //! # Needs
 //! `induction` (trip counts), `dependence`, `Registers` (`llrm_analysis`);
 //! [`crate::loopclone`] (`chained`).
@@ -130,6 +138,7 @@ use std::collections::BTreeSet;
 
 use llrm_analysis::dependence;
 use llrm_analysis::manager::Registers;
+use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::{cfg, induction, memory};
 use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
@@ -207,6 +216,7 @@ fn one(
     let mut chosen = None;
     // Computed for the first nest there is: most functions have none.
     let mut facts = None;
+    let mut scevs = None;
     for inner in &shape.loops {
         if shape.loops.iter().any(|other| other.header != inner.header && inner.body.is_superset(&other.body)) {
             continue;
@@ -232,9 +242,22 @@ fn one(
         let memory_unit = memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer())
             .with_registers(facts)
             .with_shape(&shape);
+        let scev = crate::profit::scev_trips_enabled().then(|| {
+            scevs.get_or_insert_with(|| {
+                ScevSession::within(unit.context, &analyses.outer().globals, &analyses.outer().metadata, unit.function)
+            })
+        });
         let planned = (|| {
-            let trips = induction::trip_count(&memory_unit, outer, facts)?.to_i64()?;
-            let inner_trips = induction::trip_count(&memory_unit, inner, facts).and_then(|count| count.to_i64());
+            let (trips, inner_trips) = match scev {
+                Some(session) => (
+                    crate::profit::scev_trips(session, &memory_unit, outer)?,
+                    crate::profit::scev_trips(session, &memory_unit, inner),
+                ),
+                None => (
+                    induction::trip_count(&memory_unit, outer, facts)?.to_i64()?,
+                    induction::trip_count(&memory_unit, inner, facts).and_then(|count| count.to_i64()),
+                ),
+            };
             let list = accesses(&memory_unit, &nest)?;
             if list.is_empty() {
                 return None;
@@ -309,12 +332,7 @@ fn apply(
         }
         // The copy's test is not made: its work runs ahead of the body.
         let first_k = inner_first(function, hi_k, &|to| body_k.contains(&to));
-        let at = function
-            .block(first_k)
-            .instructions()
-            .iter()
-            .copied()
-            .find(|&inst| function.instruction(inst).opcode != Opcode::Phi);
+        let at = function.iter_block(first_k).find(|&inst| function.instruction(inst).opcode != Opcode::Phi);
         for inst in work(function, hi_k) {
             match at {
                 Some(at) => function.move_to(inst, Position::Before(at))?,

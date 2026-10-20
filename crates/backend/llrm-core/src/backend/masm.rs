@@ -21,7 +21,7 @@
 //!   cleaned_returns          and leave            block labels, items
 //!   (ret imm / retf n)       sequences            leave before each ret
 //!                            shrinkwrap::wrapped  pieces set up in the
-//!                                                 block that first needs
+//!                                                 the Save block
 //! ```
 //!
 //! The entry and return sequences are not in the LIR. `parts` builds them:
@@ -49,9 +49,9 @@
 //! immediate into a segment register, which x86 lacks, is written `push imm;
 //! pop seg`.
 //!
-//! A frame piece (the frame, one saved register) is set up where it is first
-//! needed rather than at the entry when `shrinkwrap::wrapped` says so, and is
-//! taken back on the returns that path reaches.
+//! The frame and the saved registers are set up at the Save block rather than
+//! the entry when `shrinkwrap::wrapped` says so, and are taken back before the
+//! return of the Restore block.
 //!
 //! `cleaned_returns` rewrites each `ret` of a callee that removes its
 //! arguments to `ret n` or `retf n`; past what `ret imm16` can remove, a
@@ -106,7 +106,7 @@
 //! # Runs
 //! Once per procedure after the machine phases. `cleaned_returns` runs in
 //! `assemble::assembled_by` (`masm cleaned returns`), before the return
-//! duplication and shrink-wrap tails there; `listing` runs when the object is
+//! duplication there; `listing` runs when the object is
 //! built or `-S` is printed.
 //!
 //! # See also
@@ -164,6 +164,8 @@ impl From<Unprintable> for crate::model::passes::Exception {
 pub enum InlinePart {
     Bytes(Vec<u8>),
     Fixup(String, String, i64),
+    /// A near call (0xE8) or jump (0xE9) to a symbol: the opcode and the name.
+    Near(u8, String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -244,6 +246,22 @@ pub struct Align {
     pub to: i64,
 }
 
+/// `MCAlignFragment`: pad the code to a multiple of `1 << log2` with
+/// no-operations, unless that takes more than `max_skip` bytes (0: no limit).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CodeAlign {
+    pub log2: u8,
+    pub max_skip: u8,
+}
+
+/// What a target pads its code with and to: `getPrefFunctionAlignment` as a
+/// power of two (0: none) and `getMaximumNopSize` (0 reads as 1).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Padding {
+    pub function: u8,
+    pub nop: u8,
+}
+
 /// `Datum`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Datum {
@@ -287,6 +305,8 @@ pub struct Module {
     pub stack: i64,
     /// The target's object format: the listing's header, the writer's mode.
     pub object: llrm_target::object::ObjectFormat,
+    /// How the code is padded.
+    pub padding: Padding,
 }
 
 impl Module {
@@ -422,6 +442,8 @@ pub fn datum(item: &Datum) -> Vec<String> {
 /// `Item`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
+    /// The block that follows starts at a multiple of this (`setAlignment`).
+    Align(CodeAlign),
     Label(Label),
     Callee(Callee),
     Semantics(Semantics),
@@ -593,9 +615,7 @@ fn sp_reg() -> Loc {
 /// it saves are then all pushed at the entry, and the return sets SP from the
 /// frame register.
 fn moves_stack(body: &crate::model::lir::LirBody) -> bool {
-    body.insns().iter().any(|one| {
-        one.call.as_ref().is_some_and(|call| call.disturbs.iter().any(|one| ir::root(*one) == ir::root(STACK)))
-    })
+    body.facts.0.get::<BodyRoots>(body).moves_stack
 }
 
 /// The registers `procedure` keeps for its caller: each one it names, or a call
@@ -604,14 +624,10 @@ fn moves_stack(body: &crate::model::lir::LirBody) -> bool {
 /// than this one's (cdecl's ECX and EDX under Watcom's) takes the caller's
 /// value.
 fn saved_of(procedure: &Procedure) -> Vec<RegId> {
-    let mut roots = if procedure.registers.free {
-        _roots_of_values(&procedure.body, procedure.registers.pointer)
-    } else {
-        _roots(&procedure.body)
-    };
-    for one in procedure.body.insns() {
-        roots.extend(one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(ir::root)));
-    }
+    let found = procedure.body.facts.0.get::<BodyRoots>(&procedure.body);
+    let mut roots =
+        if procedure.registers.free { found.of_values(procedure.registers.pointer) } else { found.plain.clone() };
+    roots.extend(found.disturbed.iter());
     // An interrupt handler has saved everything before its frame, and a
     // runtime-built one has saved SI and DI (B$ENRA/B$ENRD, restored by
     // B$EXSA).
@@ -646,26 +662,6 @@ fn wrap_of(
         (frame && movable).then_some((registers.pointer, registers.stack)),
         stack_addressed,
     )
-}
-
-/// How many pieces `procedure` sets up (the frame, the registers it keeps): no
-/// body of it can set up more late.
-pub fn pieces_to_set_up(procedure: &Procedure) -> usize {
-    let (enter, _) = parts(procedure, true);
-    let count = saved_of(procedure).len();
-    count + usize::from(enter.len() > count)
-}
-
-/// How many of `procedure`'s pieces `body` sets up after its entry
-/// (`shrinkwrap`), the frame addressed through the stack pointer as it is where
-/// that is smaller.
-pub fn wrapped_pieces(
-    procedure: &Procedure,
-    body: &crate::model::lir::LirBody,
-) -> usize {
-    let (enter, _) = parts(procedure, true);
-    let count = saved_of(procedure).len();
-    wrap_of(procedure, body, enter.len() > count, true).map_or(0, |wrap| wrap.wrapped.len() * 1000 + wrap.depth)
 }
 
 /// The implicit entry and return sequences shared by text and OMF emission.
@@ -867,7 +863,14 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
 /// to fall back to.
 fn frame_held(procedure: &Procedure) -> bool {
     let registers = &procedure.registers;
-    registers.free && _roots_of_values(&procedure.body, registers.pointer).contains(&ir::root(registers.pointer))
+    registers.free
+        && procedure
+            .body
+            .facts
+            .0
+            .get::<BodyRoots>(&procedure.body)
+            .of_values(registers.pointer)
+            .contains(&ir::root(registers.pointer))
 }
 
 pub fn listing(
@@ -978,6 +981,9 @@ fn built(
         .chain(enter.into_iter().map(Item::Semantics))
         .collect();
     for (index, block) in blocks.iter().enumerate() {
+        if block.align > 0 {
+            out.push(Item::Align(CodeAlign { log2: block.align, max_skip: block.max_skip }));
+        }
         out.push(Item::Label(Label { name: label(number, block.at) }));
         if let Some(pieces) = wrap.as_ref().and_then(|wrap| wrap.opens.get(&block.at)) {
             out.extend(pieces.iter().flat_map(|piece| item(piece).0).map(Item::Semantics));
@@ -1282,6 +1288,7 @@ fn addressed_pass(
     let name_of = |target: i64| label(number, target);
     for item in items {
         match item {
+            Item::Align(align) => out.push(Item::Align(align)),
             Item::Label(label) => {
                 if after_dead_end.contains(&label.name) {
                     depth = None;
@@ -1612,6 +1619,7 @@ pub fn _procedure_of(
     let mut out = vec![format!("{} proc {}", procedure.name, if procedure.far { "far" } else { "near" })];
     for item in items {
         match item {
+            Item::Align(CodeAlign { log2, .. }) => out.push(format!("    align {}", 1u32 << log2)),
             Item::Label(Label { name }) => out.push(format!("{name}:")),
             Item::Mark(_) => {}
             Item::Callee(Callee { code, .. }) if !code.is_empty() => {
@@ -1660,51 +1668,105 @@ pub fn _falls_to(
     Ok(rest.first().copied())
 }
 
-/// `_roots` where the frame register holds a value: a frame cell (a stack
-/// array's too) names it only as the address it is, and does not use it.
-fn _roots_of_values(
-    body: &lir::LirBody,
-    pointer: RegId,
-) -> RegSet {
-    let mut found = RegSet::new();
-    for one in body.insns() {
-        let Some(what) = &one.what else { continue };
-        for r#where in what.dests.iter().chain(&what.sources) {
-            match r#where {
-                Loc::Reg(ir::Reg { register, .. }) => {
-                    found.insert(ir::root(*register));
+/// What a body names, found in one walk of its instructions: the registers
+/// (`_roots`), those a call disturbs, and what `_roots_of_values` needs of the
+/// cells. `saved_of`, `parts`, `built` and `frame_held` each asked for them of
+/// the same body, each with a walk that copied the instruction list.
+#[derive(Debug, Default, PartialEq)]
+pub struct Roots {
+    /// `_roots`: the registers named as operands and as address registers.
+    pub plain: RegSet,
+    /// The roots a call disturbs by its convention.
+    pub disturbed: RegSet,
+    /// A call disturbs the stack pointer.
+    pub moves_stack: bool,
+    /// `_roots_of_values` but for the registers a frame cell is addressed
+    /// through.
+    values: RegSet,
+    /// The `through` of each cell in the frame space.
+    frame_through: RegSet,
+}
+
+impl Roots {
+    /// `_roots` where the frame register `pointer` holds a value: a frame cell
+    /// (a stack array's too) names it only as the address it is, and does not
+    /// use it.
+    pub fn of_values(
+        &self,
+        pointer: RegId,
+    ) -> RegSet {
+        let mut found = self.values.clone();
+        found.extend(
+            self.frame_through
+                .iter()
+                .filter(|through| *through != FRAME && *through != pointer && *through != RegId::None)
+                .map(ir::root),
+        );
+        found
+    }
+}
+
+/// `Roots` as the manager keeps it: worked out once for the instructions a body
+/// has.
+pub struct BodyRoots;
+
+impl crate::analysis::facts::Fact for BodyRoots {
+    type Result = Roots;
+    type Inputs = crate::analysis::facts::Stamp;
+    const NAME: &'static str = "body-roots";
+
+    fn run(body: &lir::LirBody) -> Roots {
+        let mut found = Roots::default();
+        let stack = ir::root(STACK);
+        for block in &body.blocks {
+            for one in block.insns.iter() {
+                for disturbed in one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(ir::root)) {
+                    found.moves_stack |= disturbed == stack;
+                    found.disturbed.insert(disturbed);
                 }
-                Loc::Mem(cell) => {
-                    let frame_cell = cell.addr.as_ref().is_some_and(|addr| addr.space == Space::Frame)
-                        && (cell.through == FRAME || cell.through == pointer || cell.through == RegId::None);
-                    if !frame_cell {
-                        found.insert(ir::root(cell.through));
+                let Some(what) = &one.what else { continue };
+                // A move into the stack pointer (`stackrestore`) leaves it
+                // somewhere else, as an `alloca` does.
+                found.moves_stack |= what.op == Operation::Move
+                    && what.dests.iter().any(|to| matches!(to, Loc::Reg(reg) if ir::root(reg.register) == stack));
+                for r#where in what.dests.iter().chain(&what.sources) {
+                    if let Loc::Reg(ir::Reg { register, .. }) = r#where {
+                        found.plain.insert(ir::root(*register));
+                        found.values.insert(ir::root(*register));
                     }
-                    found.insert(ir::root(cell.index_through));
+                    // `lea` of a cell reads the register the cell is addressed
+                    // through as much as a load of it does.
+                    if let Some(at) = r#where.address() {
+                        found.plain.extend([at.through, at.index_through].map(ir::root));
+                    }
+                    if let Loc::Mem(cell) = r#where {
+                        if cell.addr.as_ref().is_some_and(|addr| addr.space == Space::Frame) {
+                            found.frame_through.insert(cell.through);
+                        } else {
+                            found.values.insert(ir::root(cell.through));
+                        }
+                        found.values.insert(ir::root(cell.index_through));
+                    }
                 }
-                _ => {}
             }
         }
+        found
     }
-    found
+
+    fn inputs(body: &lir::LirBody) -> crate::analysis::facts::Stamp {
+        crate::analysis::facts::Stamp::of(body)
+    }
+
+    fn held_by(
+        kept: &crate::analysis::facts::Stamp,
+        body: &lir::LirBody,
+    ) -> bool {
+        kept.differing(body).is_some_and(|changed| changed.is_empty())
+    }
 }
 
 pub fn _roots(body: &lir::LirBody) -> RegSet {
-    let mut found = RegSet::new();
-    for one in body.insns() {
-        let Some(what) = &one.what else { continue };
-        for r#where in what.dests.iter().chain(&what.sources) {
-            if let Loc::Reg(ir::Reg { register, .. }) = r#where {
-                found.insert(ir::root(*register));
-            }
-            // `lea` of a cell reads the register the cell is addressed through
-            // as much as a load of it does.
-            if let Some(at) = r#where.address() {
-                found.extend([at.through, at.index_through].map(ir::root));
-            }
-        }
-    }
-    found
+    body.facts.0.get::<BodyRoots>(body).plain.clone()
 }
 
 pub fn _instruction(
@@ -1844,6 +1906,9 @@ pub fn _code(parts: &[InlinePart]) -> Vec<String> {
                 out.push(format!("dw offset {name}{}", _signed(*offset)));
             }
             InlinePart::Fixup(kind, name, _) if kind == "segment" => out.push(format!("dw seg {name}")),
+            InlinePart::Near(opcode, name) => {
+                out.push(format!("{} near ptr {name}", if *opcode == 0xE8 { "call" } else { "jmp" }));
+            }
             InlinePart::Fixup(..) => {}
         }
     }
@@ -1892,7 +1957,7 @@ pub fn _operand(
         Loc::Address(ir::AddressRef { through, index_through: index, scale, offset, .. }) => {
             format!("[{}{}]", _registers(regs, *through, *index, *scale), _signed(*offset))
         }
-        Loc::Held(_) => return Err(Unprintable(format!("operand {}", r#where.repr()))),
+        Loc::Held(_) | Loc::Field(_) => return Err(Unprintable(format!("operand {}", r#where.repr()))),
     })
 }
 
@@ -2160,6 +2225,36 @@ mod tests {
         _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
     }
 
+    /// A procedure's frame, saved registers and wrap each asked the same
+    /// question of its body, each with a walk of every instruction
+    /// (`assemble` frame and shrink-wrap: 32.5 M of d_faces, 5.3 M of it these
+    /// walks). They are worked out once for a body.
+    #[test]
+    fn test_what_a_body_names_is_worked_out_once_for_all_the_frame_questions() {
+        let bx = Loc::Reg(ir::Reg { register: RegId::BX, width: 2 });
+        let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![bx]));
+        let leave = insn(1, semantics(Operation::Return, "retf", vec![], vec![]));
+        let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
+        let body =
+            lir::LirBody::new("get", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
+        let procedure = Procedure {
+            name: "_get".into(),
+            public: true,
+            far: true,
+            body,
+            reserve: 4,
+            callees: IndexMap::default(),
+            interrupt: None,
+            size: false,
+            entry: 0,
+            stack_check: None,
+            registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
+        };
+        _procedure(&procedure, &no_names(), 0).unwrap();
+        let _ = saved_of(&procedure);
+        assert_eq!(procedure.body.facts.0.runs::<BodyRoots>(), 1);
+    }
+
     fn through_bp() -> Loc {
         Loc::Mem(ir::Mem { through: RegId::BP, ..ir::Mem::new(Some(Addr::new(Space::Frame, 6)), 2) })
     }
@@ -2357,6 +2452,7 @@ mod tests {
             procedures: Vec::new(),
             private: BTreeSet::new(),
             far_bss: BTreeSet::new(),
+            padding: Default::default(),
             requests: BTreeSet::new(),
             debug: None,
             stack: 0,

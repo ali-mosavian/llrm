@@ -25,7 +25,7 @@
 //!     once["<b>machined_once</b><br/><small>cheaper of allocator alone<br/>and spiller route<br/>(flow::machine_with)</small>"]:::mid
 //!     relay["<b>relayout::laid_again</b><br/><small>if far frame operands remain</small>"]:::mid
 //!     omax["<b>-Omax: again without</b><br/><small>callee facts, keep cheaper</small>"]:::mid
-//!     proc["<b>per procedure</b><br/><small>addressvalues::converted<br/>masm::cleaned_returns<br/>jumps::duplicated_returns<br/>shrinkwrap::tails_split</small>"]:::mid
+//!     proc["<b>per procedure</b><br/><small>addressvalues::converted<br/>masm::cleaned_returns<br/>jumps::duplicated_returns</small>"]:::mid
 //!     all["<b>all procedures</b><br/><small>stackusage::elide_checks<br/>debuginfo::described</small>"]:::mid
 //!   end
 //!   mod["<b>masm::Module</b>"]:::opt
@@ -78,7 +78,7 @@
 //! `splitkit`, `spillplacement`, `spiller`, `spillforward` and `postings` for
 //! live-range splitting and spilling, and consults `constrain`, `classes`,
 //! `registerinfo` and `datagroup` for what each value may be assigned.
-//! `peephole` calls the sub-passes `regthrash`, `copyprop`, `copysink`,
+//! `peephole` calls the sub-passes `regthrash`, `machinecp`, `copysink`,
 //! `spillforward`, `postrasink`, `storecombine`, `sharedstores`,
 //! `exactaddress`, `machinecse`, `machinedce` and `upperzero`, and the rule
 //! groups of `peep`.
@@ -133,6 +133,7 @@ pub mod arithmetic;
 pub mod arrival;
 pub mod asm;
 pub mod assemble;
+pub mod bitcounts;
 pub mod calleefacts;
 pub mod callregs;
 pub mod cfi;
@@ -141,7 +142,6 @@ pub mod coalesce;
 pub mod comparefold;
 pub mod constpool;
 pub mod constrain;
-pub mod copyprop;
 pub mod copysink;
 pub mod cpu;
 pub mod datagroup;
@@ -158,6 +158,9 @@ pub mod floatassign;
 pub mod floatfold;
 pub mod floatregions;
 pub mod fpconvert;
+pub mod fpcopyprop;
+pub mod fpregs;
+pub mod fpstack;
 pub mod frame;
 pub mod framefree;
 pub mod globals;
@@ -176,12 +179,15 @@ pub mod selectors {
 
     include!(concat!(env!("OUT_DIR"), "/selectors.rs"));
 }
+pub mod edges;
 pub mod incremental;
+pub mod intbits;
 #[cfg(test)]
 mod isel_tests;
 pub mod jumps;
 pub mod lanes;
 pub mod layout;
+pub mod legalize;
 pub mod lifetimes;
 pub mod lirtext;
 pub mod live;
@@ -189,8 +195,10 @@ pub mod liveness;
 pub mod liveunion;
 pub mod loopslots;
 pub mod lower_int64;
+pub mod machinecp;
 pub mod machinecse;
 pub mod machinedce;
+pub mod machinesink;
 pub mod masm;
 pub mod nativeframe;
 pub mod nearcode;
@@ -206,12 +214,15 @@ pub mod phielim;
 pub mod pointers;
 pub mod postings;
 pub mod postrasink;
+pub mod precse;
 pub mod pressuresink;
 pub mod prologue;
 pub mod regthrash;
 pub mod relayout;
 pub mod rmw;
+pub mod saverestore;
 pub mod schedule;
+pub mod selectconstants;
 pub mod selects;
 pub mod shrinkwrap;
 pub mod slots;
@@ -301,7 +312,7 @@ pub mod verify;
 #[cfg(test)]
 mod pricing_tests;
 #[cfg(test)]
-mod regalloc_fuzz_tests;
+pub(crate) mod regalloc_fuzz_tests;
 #[cfg(test)]
 pub mod regalloc_input;
 #[cfg(test)]

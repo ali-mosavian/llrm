@@ -1,3 +1,7 @@
+---
+architecture-index: source layout
+architecture-order: 20
+---
 # Source layout
 
 For contributors finding where something lives. Every top-level directory and

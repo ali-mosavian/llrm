@@ -45,12 +45,12 @@ def built_from(directory: Path, default: Path) -> Path:
     return default
 
 
-def stale_binaries(directory: Path, repo: Path = REPO) -> list[str]:
-    """The binaries in `directory` older than a file cargo's dep-info says they are built from, or than the toolchain
-    patches (build.rs reruns on them; dep-info does not list them) of the tree they were built from, which is `repo` unless
+def stale_found(directory: Path, repo: Path = REPO) -> list[tuple[str, float, str, float]]:
+    """(binary, its mtime, the newest source it is built from, that source's mtime) for each binary in `directory` older than a file cargo's dep-info says it is
+    built from, or than the toolchain patches (build.rs reruns on them; dep-info does not list them) of the tree they were built from, which is `repo` unless
     their dep-info names another. A directory without dep-info is not checked."""
     repo = built_from(directory, repo)
-    patches = [one.stat().st_mtime for one in (repo / "toolchain/owshim").rglob("*") if one.is_file()]
+    patches = [(one.stat().st_mtime, str(one)) for one in (repo / "toolchain/owshim").rglob("*") if one.is_file()]
     stale, built_here = [], declared(repo)
     for info in sorted(directory.glob("*.d")) if directory.is_dir() else []:
         binary = info.with_suffix("")
@@ -61,10 +61,29 @@ def stale_binaries(directory: Path, repo: Path = REPO) -> list[str]:
         # Sources only: a build script rewrites its outputs under the target directory whenever it reruns.
         written = directory.resolve().parent
         tracked = [source for source in sources if source.is_file() and source.resolve().is_relative_to(repo.resolve()) and not source.resolve().is_relative_to(written)]
-        newest = max([source.stat().st_mtime for source in tracked] + patches, default=0)
+        newest, where = max([(source.stat().st_mtime, str(source)) for source in tracked] + patches, default=(0.0, ""))
         if newest > built:
-            stale.append(binary.name)
+            stale.append((binary.name, built, where, newest))
     return stale
+
+
+def stale_binaries(directory: Path, repo: Path = REPO) -> list[str]:
+    """The binaries in `directory` older than the newest source they are built from (`stale_found`)."""
+    return [name for name, *_ in stale_found(directory, repo)]
+
+
+def stale_detail(directory: Path, repo: Path = REPO) -> str:
+    """Which binary is the oldest and which source the newest, with their times: a rebuild that left a binary stale is a failed build or a clock, and this tells which."""
+    import time
+
+    found = stale_found(directory, repo)
+    if not found:
+        return ""
+    oldest = min(found, key=lambda one: one[1])
+    newest = max(found, key=lambda one: one[3])
+    clock = lambda t: time.strftime("%H:%M:%S", time.localtime(t))
+    future = " (its mtime is in the FUTURE: a copy that kept a future timestamp stays newer than any binary built today)" if newest[3] > time.time() else ""
+    return f"oldest binary {oldest[0]} built {clock(oldest[1])}; newest source {newest[2]} written {clock(newest[3])} ({newest[3] - oldest[1]:.0f} s later){future}"
 
 
 def target_dir(env: dict | None = None, repo: Path = REPO) -> Path:
@@ -103,3 +122,16 @@ def pinned(binary: Path) -> Path:
     except FileExistsError:  # another thread of this process pinned it first
         pass
     return link
+
+
+def md5(path) -> str:
+    return hashlib.md5(Path(path).read_bytes()).hexdigest()
+
+
+def assert_distinct(base, new, same_source: bool = False) -> str:
+    """The header line of an A/B table: both binaries' md5. SystemExit when they are equal and the sources are not known to be: `cargo build -p X` does not
+    relink target/release/X, so two builds of different commits were the same binary and a pair read "0 differ" (lir-cleanup-port's identity run)."""
+    a, b = md5(base), md5(new)
+    if a == b and not same_source:
+        raise SystemExit(f"same binary: base {base} and new {new} both have md5 {a}; the new commit was not built into it (`cargo build --bin X`, not `-p`). Refusing to print a diff.")
+    return f"binaries: base {a[:12]} {base} | new {b[:12]} {new}" + (" (same binary, same source)" if a == b else "")

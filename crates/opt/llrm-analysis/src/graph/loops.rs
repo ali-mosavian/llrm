@@ -77,8 +77,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub use llrm_mir::domtree_address::{AddressDominance as Dominance, Dominates};
 pub use llrm_mir::forest::Body;
-pub use llrm_support::graph::{Dominance, Dominates, Node, dominance, dominators, predecessors, reverse_postorder};
+pub use llrm_support::graph::{Node, predecessors, reverse_postorder};
 use llrm_support::hash::IndexMap;
 
 /// One natural loop: where control comes back to, and what is inside.
@@ -143,7 +144,7 @@ pub fn irreducible<N: Node>(
     blocks: &[N],
     entry: Option<i64>,
 ) -> BTreeSet<i64> {
-    irreducible_under(blocks, &*dominance(blocks, entry))
+    irreducible_under(blocks, &dominance(blocks, entry))
 }
 
 /// `irreducible`, of dominance found already.
@@ -224,28 +225,31 @@ pub fn depth<N: Node>(
     found
 }
 
+/// The dominance of `blocks` from `entry` (the first block by default).
+pub fn dominance<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> Dominance {
+    Dominance::of(blocks.iter().map(|block| (block.at(), block.succ())), entry)
+}
+
+/// Every block that must have run before each one. A block unreachable from
+/// the entry gets the empty set rather than "every block".
+pub fn dominators<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeMap<i64, BTreeSet<i64>> {
+    dominance(blocks, entry).named()
+}
+
 /// Each block's nearest strict dominator, or None for the entry and for
 /// anything unreachable.
-///
-/// The nearest strict dominator is the one with the most dominators of its
-/// own.
 pub fn immediate_dominators<N: Node>(
     blocks: &[N],
     entry: Option<i64>,
 ) -> BTreeMap<i64, Option<i64>> {
-    let doms = dominators(blocks, entry);
-    let mut found = BTreeMap::new();
-    for block in blocks {
-        let empty = BTreeSet::new();
-        let strict = doms.get(&block.at()).unwrap_or(&empty).iter().copied().filter(|&one| one != block.at());
-        // max() keeps the first of equal keys
-        let nearest = strict.fold(None, |best: Option<i64>, one| match best {
-            Some(previous) if doms[&one].len() <= doms[&previous].len() => Some(previous),
-            _ => Some(one),
-        });
-        found.insert(block.at(), nearest);
-    }
-    found
+    let tree = dominance(blocks, entry);
+    blocks.iter().map(|block| (block.at(), tree.immediate(block.at()))).collect()
 }
 
 /// Where a definition stops being the only one that reaches -- the blocks
@@ -254,8 +258,8 @@ pub fn frontiers<N: Node>(
     blocks: &[N],
     entry: Option<i64>,
 ) -> BTreeMap<i64, BTreeSet<i64>> {
-    let doms = dominators(blocks, entry);
-    let live = blocks.iter().filter(|block| !doms[&block.at()].is_empty()).collect::<Vec<_>>();
+    let tree = dominance(blocks, entry);
+    let live = blocks.iter().filter(|block| tree.reachable(block.at())).collect::<Vec<_>>();
     let idom = immediate_dominators(&live, entry);
     let preds = predecessors(&live);
     let mut found = blocks.iter().map(|block| (block.at(), BTreeSet::new())).collect::<BTreeMap<_, _>>();

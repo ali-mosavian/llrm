@@ -1,5 +1,5 @@
 use crate::datalayout::DataLayout;
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::module::{GlobalKind, InstId, Operand};
 use crate::parse;
 use crate::valuetracking::{AssumptionCache, Query, column};
@@ -18,9 +18,9 @@ fn dump(
         if function.is_declaration() {
             continue;
         }
-        let dt = DominatorTree::new(function);
+        let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(&module, function);
-        let entry_first = function.block(function.entry().expect("an entry")).instructions().first().copied();
+        let entry_first = function.block(function.entry().expect("an entry")).first();
         let mut values: Vec<(Operand, Option<InstId>)> =
             function.parameters().iter().map(|one| (Operand::Value(*one), entry_first)).collect();
         for (_, inst) in function.walk() {

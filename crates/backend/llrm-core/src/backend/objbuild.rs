@@ -36,6 +36,11 @@
 //! a name neither defined nor declared is an error. 16-bit data segments of
 //! the near kind join the `DGROUP` group.
 //!
+//! Code is padded as MC does: an `Align` item (a block's `align` and
+//! `max_skip`) pads with `nops` (`writeNopData`), and each function not tuned
+//! for size starts at the target's preferred function alignment: `.p2align` in
+//! OMF and COFF, ELF's `.prefalign` (no more than the body fills).
+//!
 //! `written_in` hands the object to the writer crate of the target's format
 //! (OMF, ELF32/64, COFF32/64, Mach-O x86-64), or refuses a pair none writes.
 //!
@@ -246,6 +251,19 @@ pub enum Encoded {
     Near(Near),
     /// A mark, and the symbol a line's defines.
     Mark(masm::Mark, Option<String>),
+    /// `MCAlignFragment`: nops up to the alignment.
+    Align(masm::CodeAlign),
+    /// `.prefalign` (`MCAssembler::relaxPrefAlign`): a function aligned to
+    /// at most `preferred` (a power of two), and to no more than the least
+    /// power of two its body fills, which ends at the `End` named `end`;
+    /// `computed` is what the layout has settled on so far.
+    Prefer {
+        preferred: u8,
+        computed: u8,
+        end: String,
+    },
+    /// Where a `Prefer`'s body ends.
+    End(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -397,7 +415,12 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
                     Encoded::Near(Near { name }) => {
                         reached.insert(name);
                     }
-                    Encoded::Label(_) | Encoded::Jump(_) | Encoded::Mark(..) => {}
+                    Encoded::Label(_)
+                    | Encoded::Jump(_)
+                    | Encoded::Mark(..)
+                    | Encoded::Align(_)
+                    | Encoded::Prefer { .. }
+                    | Encoded::End(_) => {}
                 }
             }
         }
@@ -486,7 +509,7 @@ pub fn written_in(
     format: Format,
 ) -> Result<Vec<u8>, Error> {
     llrm_support::debug::timed("object write", || {
-        let object = built_inner(module, source, layout)?;
+        let object = built_inner(module, source, layout, format)?;
         match format {
             Format::Omf => Ok(llrm_omf::write::write(&object)?),
             Format::Elf if object.arch == Arch::I386 => Ok(llrm_elf32::write(&object)?),
@@ -509,13 +532,14 @@ pub fn built(
     source: &str,
     layout: CodeLayout,
 ) -> Result<Object, Error> {
-    built_inner(module, source, layout)
+    built_inner(module, source, layout, Format::Omf)
 }
 
 fn built_inner(
     module: &masm::Module,
     source: &str,
     layout: CodeLayout,
+    format: Format,
 ) -> Result<Object, Error> {
     let module = &live(module)?;
     let groups: Vec<Vec<usize>> = match layout {
@@ -548,8 +572,9 @@ fn built_inner(
             .unwrap_or_else(|| panic!("ValueError: {} is not in list", pyrepr::string(name)));
         _data(&mut segments[index], index, items, &mut symbols, module.object.bitness);
     }
+    let mut sizes: IndexMap<String, usize> = IndexMap::default();
     for (index, group) in groups.iter().enumerate() {
-        _code(&mut segments[index], index, module, group, &mut symbols)?;
+        _code(&mut segments[index], index, module, group, &mut symbols, &mut sizes, format)?;
     }
     // The BASIC dialect's records name an address by its offset alone, so they
     // need the one code segment the module's code is in; CodeView 4 as C7
@@ -559,7 +584,7 @@ fn built_inner(
         return Err(Unencodable("-g of the BASIC dialect with a code segment per procedure".into()).into());
     }
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
-    let mut object = object_of(module, source, segments, &symbols, &externs)?;
+    let mut object = object_of(module, source, segments, &symbols, &sizes, &externs)?;
     // A segment per procedure of one name is one segment to Microsoft's LINK,
     // which keeps the last one's length and loses the rest; a COMDAT per
     // procedure is what MSC's /Gy and Watcom's -zm write, which every linker
@@ -618,8 +643,10 @@ pub fn _code(
     module: &masm::Module,
     group: &[usize],
     symbols: &mut IndexMap<String, (usize, usize)>,
+    sizes: &mut IndexMap<String, usize>,
+    format: Format,
 ) -> Result<(), Error> {
-    _code_by(segment, index, module, group, symbols, |procedure, number| {
+    _code_by(segment, index, module, group, symbols, sizes, format, |procedure, number| {
         masm::listing(procedure, number).map_err(|error| error.0)
     })
 }
@@ -631,12 +658,27 @@ pub fn _code_by(
     module: &masm::Module,
     group: &[usize],
     symbols: &mut IndexMap<String, (usize, usize)>,
+    sizes: &mut IndexMap<String, usize>,
+    format: Format,
     listed: impl Fn(&masm::Procedure, usize) -> Result<Vec<masm::Item>, String>,
 ) -> Result<(), Error> {
     let regs = module.registers;
     let mut items: Vec<Encoded> = Vec::new();
     for &number in group {
         let procedure = &module.procedures[number];
+        // `MachineFunction::getPreferredAlignment`: none for a function
+        // optimized for size. ELF writes `.prefalign` (the alignment is no
+        // more than the body fills), the other formats `.p2align`.
+        let function = module.padding.function;
+        let end = format!("{}$end", procedure.name);
+        let aligned = function > 0 && !procedure.size;
+        match format {
+            Format::Elf if aligned => {
+                items.push(Encoded::Prefer { preferred: function, computed: 0, end: end.clone() })
+            }
+            _ if aligned => items.push(Encoded::Align(masm::CodeAlign { log2: function, max_skip: 0 })),
+            _ => {}
+        }
         items.push(Encoded::Label(masm::Label { name: procedure.name.clone() }));
         for item in listed(procedure, number).map_err(Unencodable)? {
             match _items(regs, &item, &module.names, number, module.object.bitness) {
@@ -644,6 +686,7 @@ pub fn _code_by(
                 Err(error) => return Err(Unencodable(format!("{}: {error}", procedure.name)).into()),
             }
         }
+        items.push(Encoded::End(end));
     }
     // Tuned for size, a long conditional jump may go through a `jmp` within
     // reach.
@@ -663,6 +706,21 @@ pub fn _code_by(
                 }
             }
             Encoded::Piece(Piece { code, fixups }) => segment.put(code, fixups),
+            Encoded::End(end) => {
+                // `.size`: the body alone, not the padding before it.
+                let name = end.strip_suffix("$end").expect("an end label is named for its procedure");
+                sizes.insert(name.to_string(), at - symbols[name].1);
+            }
+            Encoded::Align(_) | Encoded::Prefer { .. } => {
+                let pad = _size(item, at as i64, bits);
+                segment.put(&nops(pad, usize::from(module.padding.nop), bits == 16), &[]);
+                let log2 = match item {
+                    Encoded::Align(masm::CodeAlign { log2, .. }) => *log2,
+                    Encoded::Prefer { computed, .. } => *computed,
+                    _ => 0,
+                };
+                segment.align = segment.align.max(1 << log2);
+            }
             Encoded::Jump(Jump { name, label, long }) => {
                 segment.put(&_jump(name, labels[label], at, *long, bits)?.code, &[])
             }
@@ -695,6 +753,7 @@ pub fn _items(
     bits: u32,
 ) -> Result<Vec<Encoded>, Unencodable> {
     Ok(match item {
+        masm::Item::Align(align) => vec![Encoded::Align(*align)],
         masm::Item::Label(label) => vec![Encoded::Label(label.clone())],
         masm::Item::Mark(mark @ masm::Mark::Line { index, .. }) => {
             vec![Encoded::Mark(*mark, Some(masm::line_label(number, *index)))]
@@ -738,6 +797,10 @@ pub fn _part(
 ) -> Result<Piece, Unencodable> {
     match part {
         masm::InlinePart::Bytes(part) => Ok(Piece::new(part.clone())),
+        masm::InlinePart::Near(opcode, name) => Ok(Piece {
+            code: [&[*opcode][..], &vec![0; bits as usize / 8][..]].concat(),
+            fixups: vec![Fixup::new(1, relative(bits as usize / 8), name.clone())],
+        }),
         masm::InlinePart::Fixup(kind, name, offset) if kind == "offset" && bits == 32 => Ok(Piece {
             code: (*offset as u32).to_le_bytes().to_vec(),
             fixups: vec![Fixup::new(0, OFFSET32, name.clone())],
@@ -819,20 +882,19 @@ pub fn _relaxed(
 ) -> Result<IndexMap<String, i64>, Unencodable> {
     loop {
         let (mut labels, mut at) = (IndexMap::default(), 0i64);
+        let mut starts = Vec::with_capacity(items.len());
         for item in items.iter() {
-            if let Encoded::Label(label) = item {
-                labels.insert(label.name.clone(), at);
+            if let Encoded::Label(masm::Label { name }) | Encoded::End(name) = item {
+                labels.insert(name.clone(), at);
             }
-            at += _length(item, bits) as i64;
+            starts.push(at);
+            at += _size(item, at, bits) as i64;
         }
         let mut changed = false;
-        at = 0;
-        for item in items.iter_mut() {
-            // Measured before the jump may grow: `labels` is this pass's
-            // layout.
-            let length = _length(item, bits) as i64;
-            if let Encoded::Jump(item) = item {
-                if !item.long {
+        for (index, item) in items.iter_mut().enumerate() {
+            let at = starts[index];
+            match item {
+                Encoded::Jump(item) if !item.long => {
                     let Some(target) = labels.get(&item.label) else {
                         return Err(Unencodable(format!("a jump to {}, which is nowhere", item.label)));
                     };
@@ -841,8 +903,20 @@ pub fn _relaxed(
                         changed = true;
                     }
                 }
+                // `relaxPrefAlign`: the body is what lies between the padding
+                // and its end, and the alignment only grows.
+                Encoded::Prefer { preferred, computed, end } => {
+                    let pad = (at as u64).wrapping_neg() as i64 & ((1i64 << *computed) - 1);
+                    let body = labels[end.as_str()] - (at + pad);
+                    let fit = (body.max(1) as u64).next_power_of_two().trailing_zeros() as u8;
+                    let wanted = fit.min(*preferred).max(*computed);
+                    if wanted != *computed {
+                        *computed = wanted;
+                        changed = true;
+                    }
+                }
+                _ => {}
             }
-            at += length;
         }
         if !changed {
             return Ok(labels);
@@ -865,7 +939,7 @@ pub fn _trampolined(
         let mut at = 0i64;
         for item in items.iter() {
             starts.push(at);
-            at += _length(item, bits) as i64;
+            at += _size(item, at, bits) as i64;
         }
         let mut jumps: IndexMap<&str, Vec<usize>> = IndexMap::default();
         for (index, item) in items.iter().enumerate() {
@@ -931,7 +1005,9 @@ pub fn _length(
     bits: u32,
 ) -> usize {
     match item {
-        Encoded::Label(_) | Encoded::Mark(..) => 0,
+        Encoded::Label(_) | Encoded::Mark(..) | Encoded::End(_) => 0,
+        // Padding depends on where it lands: see `_size`.
+        Encoded::Align(_) | Encoded::Prefer { .. } => 0,
         Encoded::Piece(Piece { code, .. }) => code.len(),
         Encoded::Jump(Jump { name, long, .. }) => {
             if !long {
@@ -944,6 +1020,60 @@ pub fn _length(
         }
         Encoded::Near(_) => 1 + bits as usize / 8,
     }
+}
+
+/// An item's bytes where it lies at offset `at`: `_length`, and the padding of
+/// an alignment (none where it takes more than the most it may skip).
+pub fn _size(
+    item: &Encoded,
+    at: i64,
+    bits: u32,
+) -> usize {
+    let pad = |log2: u8| (at as u64).wrapping_neg() as usize & ((1usize << log2) - 1);
+    match item {
+        Encoded::Align(masm::CodeAlign { log2, max_skip }) => {
+            let pad = pad(*log2);
+            if *max_skip != 0 && pad > usize::from(*max_skip) { 0 } else { pad }
+        }
+        Encoded::Prefer { computed, .. } => pad(*computed),
+        other => _length(other, bits),
+    }
+}
+
+/// `X86AsmBackend::writeNopData`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/MCTargetDesc/X86AsmBackend.cpp#L1167-L1223>):
+/// `count` bytes of nops, none longer than `longest`; `sixteen` for 16-bit
+/// mode's forms.
+pub fn nops(
+    count: usize,
+    longest: usize,
+    sixteen: bool,
+) -> Vec<u8> {
+    const NOPS_32: [&[u8]; 10] = [
+        &[0x90],
+        &[0x66, 0x90],
+        &[0x0f, 0x1f, 0x00],
+        &[0x0f, 0x1f, 0x40, 0x00],
+        &[0x0f, 0x1f, 0x44, 0x00, 0x00],
+        &[0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00],
+        &[0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00],
+        &[0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00],
+        &[0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00],
+        &[0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00],
+    ];
+    const NOPS_16: [&[u8]; 4] = [&[0x90], &[0x66, 0x90], &[0x8d, 0x74, 0x00], &[0x8d, 0xb4, 0x00, 0x00]];
+    let table: &[&[u8]] = if sixteen { &NOPS_16 } else { &NOPS_32 };
+    let longest = if sixteen { longest.min(4) } else { longest }.max(1);
+    let (mut left, mut out) = (count, Vec::with_capacity(count));
+    while left != 0 {
+        let this = left.min(longest);
+        // A nop longer than the table's longest has 0x66 prefixes.
+        let prefixes = this.saturating_sub(10);
+        out.extend(std::iter::repeat_n(0x66, prefixes));
+        out.extend_from_slice(table[this - prefixes - 1]);
+        left -= this;
+    }
+    out
 }
 
 pub fn _jump(
@@ -971,6 +1101,7 @@ pub fn object_of(
     source: &str,
     segments: Vec<Segment>,
     symbols: &IndexMap<String, (usize, usize)>,
+    sizes: &IndexMap<String, usize>,
     externs: &IndexMap<String, String>,
 ) -> Result<Object, Error> {
     let bits = module.object.bitness;
@@ -1009,6 +1140,7 @@ pub fn object_of(
             name: name.clone(),
             binding: if module.publics.contains(name) { Binding::Public } else { Binding::Local },
             definition: Definition::Defined { section, offset },
+            size: sizes.get(name).copied().unwrap_or(0),
             group: None,
         })
         .collect();
@@ -1018,6 +1150,7 @@ pub fn object_of(
         name: (*name).clone(),
         binding: Binding::Public,
         definition: Definition::Undefined,
+        size: 0,
         group: (externs[*name] == "byte").then_some(0),
     }));
     let index: IndexMap<String, usize> =
@@ -1292,6 +1425,7 @@ mod tests {
             )],
             private: BTreeSet::new(),
             far_bss: BTreeSet::new(),
+            padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: BTreeSet::new(),
             stack: 0,
@@ -1330,6 +1464,7 @@ mod tests {
                 procedures: vec![],
                 private: BTreeSet::new(),
                 far_bss: BTreeSet::new(),
+                padding: Default::default(),
                 object: llrm_target::Target::object(&llrm_x86_m16::M16),
                 requests: BTreeSet::new(),
                 stack: 0,
@@ -1437,6 +1572,7 @@ mod tests {
             ],
             private: BTreeSet::from(["FAR_SEG".to_owned()]),
             far_bss: BTreeSet::new(),
+            padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: BTreeSet::new(),
             stack: 0,
@@ -1496,5 +1632,89 @@ mod tests {
             (fixup.kind, fixup.at + 4, field(&piece.code, fixup.at, fixup.kind)),
             (OFFSET32, piece.code.len(), 1280)
         );
+    }
+
+    /// `X86AsmBackend::writeNopData`: no `nopl` on a 486 or P5, so a pad is
+    /// that many `nop`s; with it the longest single no-operation (10 bytes,
+    /// then the rest); 16-bit mode has four forms.
+    #[test]
+    fn test_padding_is_the_nops_writenopdata_writes() {
+        assert_eq!(nops(3, 1, false), [0x90, 0x90, 0x90]);
+        assert_eq!(nops(3, 10, false), [0x0f, 0x1f, 0x00]);
+        assert_eq!(nops(15, 10, false).len(), 15);
+        assert_eq!(&nops(15, 10, false)[10..], [0x0f, 0x1f, 0x44, 0x00, 0x00], "the rest after a 10-byte nop");
+        assert_eq!(nops(11, 11, false)[..2], [0x66, 0x66], "a nop over 10 bytes has 0x66 prefixes");
+        assert_eq!(nops(4, 4, true), [0x8d, 0xb4, 0x00, 0x00]);
+        assert_eq!(nops(5, 4, true), [0x8d, 0xb4, 0x00, 0x00, 0x90]);
+        assert_eq!(nops(0, 1, false), Vec::<u8>::new());
+    }
+
+    /// Code was never aligned: every function began where the last ended.
+    /// `emitFunctionHeader` aligns to 16 (`.p2align 4`, OMF and COFF); ELF's
+    /// `.prefalign` aligns to no more than the body fills, so a 3-byte
+    /// function is aligned to 4; none for a function tuned for size.
+    #[test]
+    fn test_a_function_is_aligned_as_emitfunctionheader_does() {
+        let small = |size: bool| {
+            let mut module = masm::Module {
+                registers: crate::backend::registerinfo::test_regs(),
+                code: "M_TEXT".into(),
+                names: IndexMap::default(),
+                externs: vec![],
+                publics: vec![],
+                data: vec![],
+                procedures: (0..3)
+                    .map(|n| masm::Procedure {
+                        size,
+                        ..procedure(&format!("_f{n}"), false, body("f", vec![]), 0, vec![])
+                    })
+                    .collect(),
+                private: BTreeSet::new(),
+                far_bss: BTreeSet::new(),
+                padding: masm::Padding { function: 4, nop: 1 },
+                object: llrm_target::Target::object(&llrm_x86_m32::M32),
+                requests: BTreeSet::new(),
+                stack: 0,
+                debug: None,
+            };
+            module.object = llrm_target::Target::object(&llrm_x86_m32::M32);
+            module
+        };
+        let body_of = |_: &masm::Procedure, _: usize| -> Result<Vec<masm::Item>, String> {
+            Ok(vec![masm::Item::Callee(masm::Callee {
+                code: vec![masm::InlinePart::Bytes(vec![0x41, 0x42, 0xC3])],
+                ..masm::Callee::new("", false)
+            })])
+        };
+        let offsets = |format: Format, size: bool| {
+            let module = small(size);
+            let mut segment = Segment::new("M_TEXT", Role::Text, true);
+            let mut symbols = IndexMap::default();
+            let mut sizes = IndexMap::default();
+            _code_by(&mut segment, 0, &module, &[0, 1, 2], &mut symbols, &mut sizes, format, body_of).unwrap();
+            // `.size` is the body alone: the padding before a function is no
+            // symbol's.
+            assert_eq!(["_f0", "_f1", "_f2"].map(|name| sizes[name]), [3, 3, 3], "{format:?}");
+            (["_f0", "_f1", "_f2"].map(|name| symbols[name].1), segment.align)
+        };
+        assert_eq!(offsets(Format::Coff, false), ([0, 16, 32], 16), "p2align 4 each");
+        assert_eq!(offsets(Format::Elf, false), ([0, 4, 8], 4), "prefalign: a 3-byte body fills 4");
+        assert_eq!(offsets(Format::Coff, true), ([0, 3, 6], 1), "no alignment tuned for size");
+    }
+
+    /// `MachineBasicBlock::setAlignment`: a block that asks for alignment is
+    /// preceded by the padding item, and one that does not is not. Before the
+    /// field the listing could say nothing of it.
+    #[test]
+    fn test_a_block_that_asks_for_alignment_is_preceded_by_the_padding() {
+        let returned = insn(2, semantics(Operation::Return, "ret", vec![], vec![]));
+        let aligned = lir::LirBlock { align: 4, max_skip: 7, ..block(2, vec![returned], vec![]) };
+        let anchor = insn(1, semantics(Operation::Nothing, "", vec![], vec![]));
+        let body = body("a", vec![block(1, vec![anchor], vec![2]).into(), aligned.into()]);
+        let items = masm::listing(&procedure("_a", false, body, 0, vec![]), 0).unwrap();
+        let at = items.iter().position(|one| matches!(one, masm::Item::Align(_))).expect("an align item");
+        assert_eq!(items[at], masm::Item::Align(masm::CodeAlign { log2: 4, max_skip: 7 }));
+        assert!(matches!(&items[at + 1], masm::Item::Label(label) if label.name == "L0_2"), "{items:?}");
+        assert_eq!(items.iter().filter(|one| matches!(one, masm::Item::Align(_))).count(), 1);
     }
 }

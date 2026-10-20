@@ -133,8 +133,12 @@ const RESUME: &str = "llrm.qb.B$RESN";
 /// what the handlers cannot yet serve.
 pub fn prepared(
     module: &mut Module,
-    far: u32,
+    layout: &llrm_target::layout::Layout,
 ) -> Result<(), String> {
+    let far = layout.spaces.far;
+    // The runtime keeps a procedure's handler as an offset in its code
+    // segment: a word at m16, a flat address where a pointer is wider.
+    let offset = llrm_mir::datalayout::DataLayout::parse(&layout.datalayout)?.pointer(layout.spaces.near).bits.min(32);
     // An intrinsic raises no BASIC error.
     let nounwind: BTreeSet<GlobalId> = module
         .functions()
@@ -193,7 +197,7 @@ pub fn prepared(
         let on = trapping(&module.context, function, &registrations);
         for &block in function.layout() {
             let mut trapped = on[&block];
-            for &inst in function.block(block).instructions() {
+            for inst in function.iter_block(block) {
                 if trapped
                     && matches!(function.instruction(inst).opcode, Opcode::Call(_))
                     && unwinds(&module.context, &nounwind, function, inst)
@@ -207,7 +211,7 @@ pub fn prepared(
         }
         pads.push((name.clone(), pad(function).map_err(why)?));
     }
-    let routines = if pads.iter().any(|(_, pad)| pad.is_some()) { Some(declare(module, far)?) } else { None };
+    let routines = if pads.iter().any(|(_, pad)| pad.is_some()) { Some(declare(module, far, offset)?) } else { None };
     for (name, pad) in pads {
         let why = |what: String| format!("@{name}: {what}");
         let (context, function) = module.function_mut(&name).expect("a handled function");
@@ -238,10 +242,8 @@ fn trapping(
     let mut pending: Vec<BlockId> = function.layout().to_vec();
     while let Some(block) = pending.pop() {
         let out = function
-            .block(block)
-            .instructions()
-            .iter()
-            .fold(on[&block], |trapped, &inst| trapping_after(context, function, registrations, inst, trapped));
+            .iter_block(block)
+            .fold(on[&block], |trapped, inst| trapping_after(context, function, registrations, inst, trapped));
         for next in function.successors(block) {
             if out && !on[&next] {
                 on.insert(next, true);
@@ -345,12 +347,7 @@ fn landing_pad(
     function: &Function,
     block: BlockId,
 ) -> Option<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .find(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+    function.iter_block(block).find(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
 }
 
 /// What a registration becomes: the runtime's ON ERROR GOTO, B$OEGA with
@@ -362,6 +359,8 @@ struct Routines {
     landing: ConstantId,
     null: ConstantId,
     landed: ConstantId,
+    /// The type of ON LOCAL ERROR's handler offset.
+    offset: TypeId,
 }
 
 /// The runtime routines the landing and the registrations call, and the
@@ -369,11 +368,12 @@ struct Routines {
 fn declare(
     module: &mut Module,
     space: u32,
+    offset: u32,
 ) -> Result<Routines, String> {
     let types = &mut module.context.types;
-    let (void, i16, far) = (types.void(), types.int(16), types.ptr(space));
+    let (void, i16, far, offset) = (types.void(), types.int(16), types.ptr(space), types.int(offset));
     let register = types.intern(llrm_mir::Type::Function { returns: void, parameters: vec![far], variadic: false });
-    let local = types.intern(llrm_mir::Type::Function { returns: void, parameters: vec![i16], variadic: false });
+    let local = types.intern(llrm_mir::Type::Function { returns: void, parameters: vec![offset], variadic: false });
     let asked = types.intern(llrm_mir::Type::Function { returns: i16, parameters: Vec::new(), variadic: false });
     let nothing = types.intern(llrm_mir::Type::Function { returns: void, parameters: Vec::new(), variadic: false });
     let mut routines = vec![(ERR, asked, &["nounwind"][..]), (RESUME, nothing, &["noreturn", "nounwind"][..])];
@@ -394,7 +394,13 @@ fn declare(
     let zero = module.context.int(i16, 0);
     module.add_variable(
         LANDED,
-        GlobalVariable { ty: i16, constant: false, initializer: Some(zero), align: None },
+        GlobalVariable {
+            externally_initialized: false,
+            ty: i16,
+            constant: false,
+            initializer: Some(zero),
+            align: None,
+        },
         Linkage::Internal,
     )?;
     let id = module.add_function(LANDING, nothing, Linkage::Internal)?;
@@ -414,7 +420,7 @@ fn declare(
         registration.map(|one| (one, ty, module.reference(module.named(name).expect("declared"))))
     };
     let (onerror, onlocal) = (routine(onerror, REGISTER, register), routine(onlocal, REGISTER_LOCAL, local));
-    Ok(Routines { onerror, onlocal, landing, null, landed })
+    Ok(Routines { onerror, onlocal, landing, null, landed, offset })
 }
 
 /// A far function by BASIC's convention, as the runtime's are.
@@ -448,7 +454,7 @@ fn unregistered(
 /// Each ON ERROR a call of B$OEGA with the landing or null; each ON LOCAL
 /// ERROR one of B$OEGP with the landing's offset or 0.
 fn registered(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     routines: &Routines,
 ) -> Result<(), String> {
@@ -473,11 +479,11 @@ fn registered(
         let target = if Some(registration) == routines.onlocal.map(|(one, _, _)| one) {
             // The runtime keeps a procedure's handler as an offset in its code
             // segment.
-            let i16 = context.types.int(16);
+            let offset_ty = routines.offset;
             if on {
                 let offset = function.create_instruction(
                     Opcode::Cast(CastOp::PtrToInt),
-                    i16,
+                    offset_ty,
                     vec![Operand::Constant(routines.landing)],
                     Flags::default(),
                     None,
@@ -485,7 +491,7 @@ fn registered(
                 function.insert(offset, Position::Before(inst))?;
                 Operand::Value(function.instruction(offset).result.expect("a value"))
             } else {
-                Operand::Constant(context.int(i16, 0))
+                Operand::Constant(context.int(offset_ty, 0))
             }
         } else {
             Operand::Constant(if on { routines.landing } else { routines.null })
@@ -513,7 +519,7 @@ fn registered(
 
 /// The pad's selector, ERR, read from what the landing kept.
 fn selected(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     pad: BlockId,
     landed: ConstantId,
@@ -521,7 +527,7 @@ fn selected(
     let lp = landing_pad(function, pad).expect("a pad");
     let Some(value) = function.instruction(lp).result else { return Ok(()) };
     let i16 = context.types.int(16);
-    for one in function.users(value).to_vec() {
+    for one in function.users(value).snapshot() {
         let user = function.instruction(one.user);
         if user.opcode != Opcode::ExtractValue(vec![1]) {
             return Err("a landing pad read other than for its selector".to_owned());
@@ -552,12 +558,12 @@ fn selected(
 
 /// A stack slot for a value of `ty`, first in the entry block.
 fn slot(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     ty: TypeId,
 ) -> Result<Operand, String> {
     let entry = function.entry().expect("a body");
-    let first = function.block(entry).instructions()[0];
+    let first = function.block(entry).first().expect("a block with instructions");
     let pointer = context.types.ptr(0);
     let alloca = function.create_instruction(
         Opcode::Alloca { allocated: ty, align: None, address_space: 0 },
@@ -571,7 +577,7 @@ fn slot(
 }
 
 fn store(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     value: Operand,
     slot: Operand,
@@ -612,10 +618,7 @@ fn body_start(
     block: BlockId,
 ) -> Position {
     let found = function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(block)
         .find(|&one| !matches!(
             function.instruction(one).opcode,
             Opcode::Phi | Opcode::LandingPad { .. }
@@ -626,17 +629,12 @@ fn body_start(
 /// Each phi of the pad a slot its predecessors store into before they call,
 /// as DemotePHIToStack makes it.
 fn demote_phis(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     pad: BlockId,
 ) -> Result<(), String> {
-    let phis: Vec<InstId> = function
-        .block(pad)
-        .instructions()
-        .iter()
-        .copied()
-        .filter(|&one| function.instruction(one).opcode == Opcode::Phi)
-        .collect();
+    let phis: Vec<InstId> =
+        function.iter_block(pad).filter(|&one| function.instruction(one).opcode == Opcode::Phi).collect();
     for phi in phis {
         let instruction = function.instruction(phi).clone();
         let slot = slot(context, function, instruction.ty)?;
@@ -663,7 +661,7 @@ fn live_in(function: &Function) -> BTreeMap<BlockId, BTreeSet<ValueId>> {
     let mut edges: BTreeMap<(BlockId, BlockId), BTreeSet<ValueId>> = BTreeMap::new();
     for &block in function.layout() {
         let (mut used, mut defined) = (BTreeSet::new(), BTreeSet::new());
-        for &inst in function.block(block).instructions() {
+        for inst in function.iter_block(block) {
             let instruction = function.instruction(inst);
             if instruction.opcode == Opcode::Phi {
                 for pair in instruction.operands.chunks(2) {
@@ -704,7 +702,7 @@ fn live_in(function: &Function) -> BTreeMap<BlockId, BTreeSet<ValueId>> {
 /// Each value live into the pad kept in a slot: stored where it is made,
 /// loaded where it is read, as DemoteRegToStack does.
 fn demote_live(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     pad: BlockId,
 ) -> Result<(), String> {
@@ -725,10 +723,7 @@ fn demote_live(
             ValueDef::Argument(_) => {
                 let entry = function.entry().expect("a body");
                 let first = function
-                    .block(entry)
-                    .instructions()
-                    .iter()
-                    .copied()
+                    .iter_block(entry)
                     .find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }));
                 first.map_or(Position::End(entry), Position::Before)
             }
@@ -748,16 +743,12 @@ fn demote_live(
                         }
                         body_start(function, normal)
                     }
-                    _ => {
-                        let list = function.block(block).instructions();
-                        let at = list.iter().position(|&one| one == def).expect("in its block");
-                        Position::Before(list[at + 1])
-                    }
+                    _ => Position::Before(function.next_in_block(def).expect("a successor in its block")),
                 }
             }
         };
         let kept = store(context, function, Operand::Value(value), slot, at)?;
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             if one.user == kept {
                 continue;
             }

@@ -55,7 +55,7 @@ fn simplified_in(
     let mut after = before.clone();
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
-    passes.add(super::Algebraic { size });
+    passes.add(super::Algebraic { size, llvm: false });
     passes
         .run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -215,8 +215,10 @@ fn test_shifts_combine_short_of_the_width() {
     let text = unary(16, "  %m = shl i16 %x, 1\n  %r = shl i16 %m, 1\n  ret i16 %r\n");
     assert_eq!(checked(&text, &singles(&edges(16))), unary(16, "  %0 = shl i16 %x, 2\n  ret i16 %0\n"));
     unchanged(&unary(16, "  %m = shl i16 %x, 1\n  %r = shl i16 %m, 1\n  %s = add i16 %m, %r\n  ret i16 %s\n"));
-    // A count past the width is poison, and stays.
-    unchanged(&unary(16, "  %m = shl i16 %x, 16\n  %r = shl i16 %m, 1\n  ret i16 %r\n"));
+    // A count past the width is poison: never combined into one count past the
+    // width (17); ValueTracking knows the result zero, a refinement of it.
+    let (_, after) = simplified(&unary(16, "  %m = shl i16 %x, 16\n  %r = shl i16 %m, 1\n  ret i16 %r\n"));
+    assert!(!bare(&after).contains("17"), "{}", bare(&after));
 }
 
 /// Shifted out entirely is zero, not a shift by the width, which is poison.
@@ -388,7 +390,9 @@ fn test_integer_identities() {
         unary(16, "  ret i16 %x\n")
     );
     unchanged(&unary(16, "  %r = sub i16 0, %x\n  ret i16 %r\n"));
-    unchanged(&unary(16, "  %r = shl i16 0, %x\n  %s = add i16 %r, 1\n  ret i16 %s\n"));
+    // `0 << x` is zero (poison past the width): ValueTracking knows its bits.
+    let (_, after) = simplified(&unary(16, "  %r = shl i16 0, %x\n  %s = add i16 %r, 1\n  ret i16 %s\n"));
+    assert_eq!(bare(&after), unary(16, "  ret i16 1\n"));
 }
 
 #[test]
@@ -1239,6 +1243,37 @@ b0:
     assert_eq!(after.matches("and i32").count(), 1, "{after}");
 }
 
+/// A mask on a value whose high bits only a low-bits user reads is dropped, and
+/// the `nsw` of the sums and products that now see those bits goes with it:
+/// `x = (x * 25173 + 13849) & 0xFFFF` read as `& 0xFFF` kept `mul nsw` on the
+/// unmasked value, which overflows (poison in the interpreter;
+/// phi_slot_unknown_arm walked past it).
+#[test]
+fn test_dropping_a_mask_nobody_reads_drops_the_nsw_of_what_sees_its_bits() {
+    let text = "define i32 @f(i32 %x) {
+b0:
+  br label %loop
+
+loop:
+  %s = phi i32 [ %x, %b0 ], [ %m, %loop ]
+  %i = phi i16 [ 0, %b0 ], [ %i1, %loop ]
+  %mul = mul nsw i32 %s, 25173
+  %add = add nsw i32 %mul, 13849
+  %m = and i32 %add, 65535
+  %low = and i32 %add, 4095
+  %i1 = add i16 %i, 1
+  %c = icmp slt i16 %i1, 5
+  br i1 %c, label %loop, label %out
+
+out:
+  ret i32 %low
+}
+";
+    let inputs: Vec<Vec<i128>> = [0, 1, 255, 4095, 65535, 12345].iter().map(|&x| vec![x]).collect();
+    let after = checked(text, &inputs);
+    assert!(!after.contains("nsw"), "{after}");
+}
+
 /// bench/x_popcount: `rev32(s) & 255` read one byte of five 32-bit stages; the
 /// stages' other halves are never read, and `x << 16` is zero in every bit the
 /// `& 255` reads.
@@ -1379,7 +1414,7 @@ fn test_the_recurrences_of_a_body_are_asked_of_the_manager_not_derived_again() {
     module.datalayout = Some(LEGAL.to_owned());
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.add(crate::fold::Fold);
-    passes.add(super::Algebraic { size: false });
+    passes.add(super::Algebraic { size: false, llvm: false });
     let before = llrm_analysis::consts::register_derivations();
     passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let derived = llrm_analysis::consts::register_derivations() - before;
@@ -1396,8 +1431,11 @@ fn test_only_the_loops_holding_a_masked_source_are_asked_what_advances() {
         let mut text = masked_sum("%i").replace("b3:\n  ret i16 %s\n", "b3:\n  br label %e0\n");
         for at in 0..extra_loops {
             let next = if at + 1 == extra_loops { "x".to_owned() } else { format!("e{}", at + 1) };
+            // The loop is entered from the one before it (the first from `b3`):
+            // a phi's input names the block that branches there.
+            let before = if at == 0 { "b3".to_owned() } else { format!("e{}", at - 1) };
             text = text.replace("\n}\n", &format!(
-                "\ne{at}:\n  %j{at} = phi i16 [ 0, %b3 ], [ %j{at}n, %e{at} ]\n  %j{at}n = add i16 %j{at}, 1\n  %d{at} = icmp slt i16 %j{at}n, %n\n  br i1 %d{at}, label %e{at}, label %{next}\n}}\n"
+                "\ne{at}:\n  %j{at} = phi i16 [ 0, %{before} ], [ %j{at}n, %e{at} ]\n  %j{at}n = add i16 %j{at}, 1\n  %d{at} = icmp slt i16 %j{at}n, %n\n  br i1 %d{at}, label %e{at}, label %{next}\n}}\n"
             ).replacen("}}\n", "}\n", 1));
         }
         if extra_loops == 0 {
@@ -1408,7 +1446,7 @@ fn test_only_the_loops_holding_a_masked_source_are_asked_what_advances() {
         module.datalayout = Some(LEGAL.to_owned());
         let mut passes = llrm_mir::passes::PassManager::default();
         passes.add(crate::fold::Fold);
-        passes.add(super::Algebraic { size: false });
+        passes.add(super::Algebraic { size: false, llvm: false });
         llrm_analysis::induction::ADVANCES_ASKED.with(|one| one.set(0));
         passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
         llrm_analysis::induction::ADVANCES_ASKED.with(std::cell::Cell::get)
@@ -1419,4 +1457,86 @@ fn test_only_the_loops_holding_a_masked_source_are_asked_what_advances() {
         with_two_more, alone,
         "{with_two_more} loops asked with two loops that hold no masked source, {alone} without"
     );
+}
+
+/// CVP's `processAnd` and `processSDivOrSRem` read LazyValueInfo, which knows
+/// an `llvm.assume` the `ranges` engine does not: `x & 63` after
+/// `assume(x u< 64)` is `x`, and `x sdiv 4` after `assume(x s>= 0)` is a
+/// shift. Both stayed.
+#[test]
+fn a_mask_and_a_division_an_assume_makes_redundant_are_removed() {
+    let mask = checked(
+        "declare void @llvm.assume(i1)
+
+define i32 @f(i32 %x) {
+b0:
+  %a = icmp ult i32 %x, 64
+  call void @llvm.assume(i1 %a)
+  %m = and i32 %x, 63
+  ret i32 %m
+}
+",
+        &[vec![5], vec![63]],
+    );
+    assert!(!mask.contains("and i32"), "{mask}");
+    let division = checked(
+        "declare void @llvm.assume(i1)
+
+define i32 @f(i32 %x) {
+b0:
+  %a = icmp sge i32 %x, 0
+  call void @llvm.assume(i1 %a)
+  %d = sdiv i32 %x, 4
+  ret i32 %d
+}
+",
+        &[vec![8], vec![0], vec![7]],
+    );
+    assert!(!division.contains("sdiv"), "{division}");
+}
+
+/// `text` through the LLVM order's `Algebraic`.
+fn llvm_simplified(text: &str) -> String {
+    let mut module = parsed(text);
+    module.datalayout = Some(LEGAL.to_owned());
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.add(super::Algebraic { size: false, llvm: true });
+    passes
+        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    bare(&module)
+}
+
+/// x_dct -Os under the LLVM order kept `mul (mul x, 4), 4` where the first
+/// `mul` had another reader, because `_scaled_chain` wanted it single-use: the
+/// hot loop did a `mul` by the stride and another by 4 where the old rounds did
+/// one by 16, +4.3% clocks. `SimplifyAssociativeOrCommutative` has no such
+/// condition.
+#[test]
+fn test_the_llvm_order_reassociates_a_mul_chain_whatever_else_reads_the_first() {
+    let text = unary(32, "  %a = mul i32 %x, 4\n  %b = mul i32 %a, 4\n  %s = add i32 %a, %b\n  ret i32 %s\n");
+    // Premise: the old rule keeps the chain, a shared first scale being work to
+    // keep.
+    unchanged(&text);
+    assert_eq!(
+        llvm_simplified(&text),
+        unary(32, "  %a = mul i32 %x, 4\n  %0 = mul i32 %x, 16\n  %s = add i32 %a, %0\n  ret i32 %s\n")
+    );
+}
+
+/// The wrap-around product of the constants, at the operand width.
+#[test]
+fn test_the_llvm_order_folds_mul_constants_modulo_the_width() {
+    let text = unary(16, "  %a = mul i16 %x, 300\n  %b = mul i16 %a, 300\n  %s = xor i16 %a, %b\n  ret i16 %s\n");
+    assert!(llvm_simplified(&text).contains("mul i16 %x, 24464"), "{}", llvm_simplified(&text));
+}
+
+/// A `shl` in the chain keeps the guard under the order too: LLVM folds those
+/// elsewhere.
+#[test]
+fn test_the_llvm_order_keeps_a_shared_shl_in_the_chain() {
+    let text = unary(32, "  %a = shl i32 %x, 2\n  %b = mul i32 %a, 4\n  %s = add i32 %a, %b\n  ret i32 %s\n");
+    let (before, _) = simplified(&text);
+    assert_eq!(llvm_simplified(&text), bare(&before));
 }

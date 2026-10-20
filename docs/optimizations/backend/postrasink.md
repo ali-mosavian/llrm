@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/postrasink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postrasink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:81e361de86862d8d2c649662076120e244349db33791ea0c6ee306df7a7d9fcc -->
+<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:56a2c48b5d68dd81e6697f710da45d9929e72f75cba0dfba60b6b3d749175f47 -->
 
 # postrasink
 
@@ -100,6 +100,20 @@ peephole run. `latched` follows it.
 The body is returned unchanged where no block with several successors holds
 a copy or spill store. Block odds follow a bridged edge.
 
+## Deviations from the pin
+The copy half is `PostRAMachineSinkingImpl::tryToSinkCopy`; a copy moves
+when no later instruction of the block touches what it reads or writes and
+one successor, entered from this block alone, has its result live in.
+- DEVIATE P1: the spill-store half (a store to a frame cell sunk by cell
+  liveness, for shrink wrapping, with bridge blocks for a target entered
+  from elsewhere) has no counterpart in the pin, where `ShrinkWrap` places
+  the prologue. Exit: ShrinkWrap translated.
+- DEVIATE P2: `latched` has no counterpart in the pin (x_cordic `-Os`).
+  Exit: the coalescer or block placement keeps the copy off the back edge.
+- Blocks are walked in reverse post-order and past a call, not the pin's
+  layout order with a call stopping a block: the pin's way gives 7 different
+  objects of 556 (net +4 B, 2 larger), so ours stays.
+
 ## See also
 - LLVM `PostRAMachineSinking`:
-  <https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/MachineSink.cpp>
+  <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L2243>

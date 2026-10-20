@@ -188,6 +188,7 @@ pub fn asm_call(name: &str) -> Option<Result<(Contract, Registers), AbiError>> {
         outputs: block.outputs,
         clobbers: block.clobbers,
         memory: block.memory,
+        fixups: Vec::new(),
     };
     Some(_inline_contract(&asm).and_then(|(contract, inputs, outputs)| {
         let machine = |names: Vec<(runtime::Reg, u32)>| {
@@ -978,6 +979,14 @@ impl llrm_mir::target::Machine for LoweredTarget {
 
     fn size_costs(&self) -> llrm_mir::target::OperationCosts {
         self.machine.size_costs()
+    }
+
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        self.machine.tti()
+    }
+
+    fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
+        self.machine.lowering()
     }
 
     fn registers(&self) -> i64 {
