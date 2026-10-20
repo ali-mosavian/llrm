@@ -254,12 +254,14 @@ pub enum InlineCost {
 }
 
 impl InlineCost {
-    /// `explicit operator bool`: inlining pays.
+    /// `explicit operator bool` (InlineCost.h:138): `Cost < Threshold`. The
+    /// `std::max(1, Threshold)` is `finalizeAnalysis`'s, which decides whether the
+    /// walk succeeded, not whether the verdict pays.
     pub fn is_ok(&self) -> bool {
         match self {
             Self::Always(_) => true,
             Self::Never(_) => false,
-            Self::Cost { cost, threshold, .. } => cost < &(*threshold).max(1),
+            Self::Cost { cost, threshold, .. } => cost < threshold,
         }
     }
 }
