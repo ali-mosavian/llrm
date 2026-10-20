@@ -534,3 +534,23 @@ def test_the_precheck_formats_only_the_prs_own_rust_files(tmp_path, monkeypatch)
 
     ps.precheck_items(tmp_path, checks_with_only(), only=["a.rs"])
     assert seen == [["a.rs"]], seen
+
+
+def test_fast_mode_lets_a_refactor_delete_lines_but_not_a_file(tmp_path, monkeypatch):
+    """#2855, #2856, #2881, #2942, #2958, #3010 and #3028 sat out a 02:37 batch: each deleted 21-76 lines of its own file, and nothing landed for 27 minutes."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sh(repo, "init", "-q", "-b", "main")
+    commit(repo, "a.rs", "".join(f"fn f{i}() {{}}\n" for i in range(60)), "base")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "a.rs").write_text("fn f0() {}\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "refactor(a): shrink")
+    head = sh(repo, "rev-parse", "HEAD")
+    monkeypatch.delenv("LAND_FAST", raising=False)
+    assert ps.refusals(head, "", base="main", cwd=repo)
+    monkeypatch.setenv("LAND_FAST", "1")
+    assert ps.refusals(head, "", base="main", cwd=repo) == []
+    (tmp_path / "s").mkdir()
+    stale, stale_head = squash_of_a_stale_tree(tmp_path / "s")
+    assert ps.refusals(stale_head, "", base="main", cwd=stale)
