@@ -478,3 +478,42 @@ fn the_trip_counts_lsr_works_out_grow_with_the_loops_not_their_square() {
     let (small, large) = (lsr_trip_counts(4), lsr_trip_counts(16));
     assert!(large < 6 * small, "4 loops: {small} counts, 16 loops: {large}");
 }
+
+/// recsum after tail recursion elimination: `n` only ends the loop, and `3n`
+/// (the factor 3 is odd, so `n == 0` and `3n == 0` are the same compare even
+/// where `3n` wraps) is read in it. LLVM's `getExactSDiv` wants the product to
+/// not overflow and keeps `n` as a second counter: main's loop exits on the
+/// scaled one (`add ebx, -3; jne`), this kept `dec ebx` beside it, 79296 clocks
+/// against 77291.
+#[test]
+fn a_counter_that_only_ends_the_loop_is_dropped_for_its_odd_multiple() {
+    let text = "define i32 @f(i32 %n) {
+e:
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %x, label %p
+p:
+  %m = mul i32 %n, 3
+  br label %h
+h:
+  %t = phi i32 [ %m, %p ], [ %t1, %h ]
+  %c = phi i32 [ %n, %p ], [ %c1, %h ]
+  %acc = phi i32 [ 0, %p ], [ %acc1, %h ]
+  %c1 = add nsw i32 %c, -1
+  %r = srem i32 %t, 11
+  %acc1 = add nsw i32 %r, %acc
+  %t1 = add i32 %t, -3
+  %done = icmp eq i32 %c1, 0
+  br i1 %done, label %q, label %h
+q:
+  br label %x
+x:
+  %res = phi i32 [ 0, %e ], [ %acc1, %q ]
+  ret i32 %res
+}
+";
+    let (changed, after) = reduced_on(FLAT, text, "i486", &[&[0], &[1], &[7], &[2000]]);
+    assert!(changed, "{after}");
+    // The loop's phis are the scaled counter and the sum; the exit phi is the third.
+    assert_eq!(after.matches(" = phi i32").count(), 3, "{after}");
+    assert!(after.contains("icmp eq i32 %t1, 0"), "{after}");
+}
