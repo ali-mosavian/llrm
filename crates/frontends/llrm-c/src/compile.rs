@@ -1287,6 +1287,30 @@ mod tests {
         assert!(format!("{other:?}").contains("register calling convention"), "{other:?}");
     }
 
+    /// A branch on `a && b && c`, its compares of a pointer with the addresses
+    /// of two functions, made each address in the block after the branch: the
+    /// coalescer stopped on a value without a definition ("a unique value"),
+    /// compiling clib's `sigsy`.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_branch_on_compares_with_two_function_addresses_makes_each_before_its_compare() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("cond.c");
+        std::fs::write(
+            &source,
+            "extern int rwd;\nextern void (*exitp)(void);\nextern void nullexit(void);\nvoid restore(void) { }\n\
+             extern void chain(void);\n\
+             void h(void) { if (rwd == 0 && exitp != nullexit && exitp != restore) chain(); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::of(&llrm_x86_m16::M16).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records cond.c");
+        let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "cond", None, &options).unwrap()).unwrap();
+        assert!(asm.contains("call"), "{asm}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`

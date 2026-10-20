@@ -3031,9 +3031,13 @@ impl Selector<'_, '_, '_> {
         match merge {
             Merge::Leaf(compare) => {
                 let (mut insns, phis) = first.take().unwrap_or_default();
+                let start = insns.len();
                 let Test::One(code) = self.compare(*compare, at, &mut insns)? else {
                     unreachable!("an integer compare is one condition")
                 };
+                // An address the compare reads is made in the leaf's block, before it: left in
+                // `materialized` it would land after the branch, in the next block.
+                insns.splice(start..start, std::mem::take(&mut self.materialized));
                 insns.push(insn(
                     at,
                     Semantics { target: Some(taken), ..semantics(Operation::Branch, code, vec![], vec![]) },
