@@ -344,11 +344,13 @@ fn a_fill_is_priced_against_its_loop() {
     assert!(super::_cheaper(size.fill + 1, None, None, &size, true, None));
 }
 
-/// A fill through a huge pointer reached isel as a count of 32 bits it
-/// refused, failing a Nib build; `rep stos` would wrap at 64K besides. It
-/// stays a loop, whose pointer carries.
+/// A fill through a huge pointer is one fill in the pointer's space, with a
+/// count of 32 bits: the intrinsic carries the address space, and isel splits
+/// it at each 64K segment (`isel/huge.rs`). It was left a loop, ten
+/// instructions to a byte. A word of two different bytes is a pattern; a byte
+/// is a memset.
 #[test]
-fn a_fill_through_a_huge_pointer_is_kept() {
+fn a_fill_through_a_huge_pointer_is_one_fill_in_its_space() {
     let text = "@big = addrspace(3) global [40000 x i16] zeroinitializer
 
 define i16 @f(i32 %n) {
@@ -371,7 +373,12 @@ b3:
 }
 ";
     assert!(text.contains("store i16 4660"), "premise: a loop of word stores");
-    kept(text, &[&[0], &[1], &[300]]);
+    let after = managed_fill(text, &[&[0], &[1], &[300]]);
+    assert!(after.contains("call void @llvm.experimental.memset.pattern.p3.i16.i32(ptr addrspace(3) "), "{after}");
+    let bytes =
+        text.replace("[40000 x i16]", "[40000 x i8]").replace("i16 4660", "i8 65").replace("store i16", "store i8");
+    let after = managed_fill(&bytes, &[&[0], &[1], &[300]]);
+    assert!(after.contains("call void @llvm.memset.p3.i32(ptr addrspace(3) "), "{after}");
 }
 
 /// Two arrays of 64 words, each cell its own number, and @f(n, q): `body`
@@ -767,9 +774,8 @@ fn a_pair_of_constants_is_one_store_tuned_for_size_where_the_bytes_are_fewer() {
         let (layout, outer) =
             (layout(&module), Outer::of(&module, Some(std::rc::Rc::new(llrm_x86_m16::Dos::default()))));
         let callees = llrm_mir::memory::callees(&module);
-        let mut declared = Declared::of(&module);
         let (context, function) = module.function_mut("f").expect("@f");
-        super::merged(context, &layout, &callees, function, &outer, &mut declared, size);
+        crate::mergestores::merged_constants(context, &layout, &callees, function, &outer, size);
         let after = printed(&module);
         assert_eq!(results(&module, BYTES), results(&before, BYTES), "{after}");
         after.matches("store").count()
@@ -842,4 +848,115 @@ fn a_loop_of_two_adjacent_fills_is_one_memset_of_both() {
 fn a_loop_of_two_fills_with_a_gap_is_not_one_memset() {
     let (text, changed) = fill(&two_fills(30, "-1", "-1", "%i"), CELLS);
     assert!(changed && text.matches("call void @llvm.memset").count() == 2, "{text}");
+}
+
+/// A loop of `undef` byte stores is a memset of `undef`, not poison
+/// (`isBytewiseValue` answers `UndefValue`). A guard: it also passes with
+/// `byte_operand` giving poison, so the arm is reached another way.
+#[test]
+fn a_loop_of_undef_bytes_is_a_memset_of_undef() {
+    let body = "  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i\n  store i8 undef, ptr %p\n";
+    let (text, changed) = fill(&looped("i8", "%n", body, "%e"), TRIPS);
+    assert!(changed);
+    assert!(text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 undef, i16 %1, i1 false)"), "{text}");
+}
+
+/// `buf[i + 7] = buf[i]` for `i` falling from `n - 1` (idiom_edges.c's
+/// `bytes_down`), the cells `body` addresses. Seven bytes apart and read
+/// before they are written: a backward `llvm.memmove`. The alias query's
+/// answer for two accesses off one index (apart: a constant 7 > the cell) is
+/// about one trip; across trips the ranges overlap, and a `memcpy` copies them
+/// forward through each other.
+fn bytes_down(
+    body: &str,
+    start: &str,
+) -> String {
+    format!(
+        "@buf = global [140 x i8] zeroinitializer
+
+{MEMSET}define i16 @f(i16 %n, i16 %q) {{
+b0:
+  %s = sub i16 %n, 1
+  br label %b1
+
+b1:
+  %i = phi i16 [ {start}, %b0 ], [ %next, %b2 ]
+  %c = icmp sge i16 %i, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+{body}  %next = sub i16 %i, 1
+  br label %b1
+
+b3:
+  %r = getelementptr i8, ptr @buf, i16 %q
+  %v = load i8, ptr %r
+  %w = zext i8 %v to i16
+  ret i16 %w
+}}
+"
+    )
+}
+
+#[test]
+fn a_falling_byte_copy_seven_apart_is_never_a_memcpy_whatever_its_addresses_look_like() {
+    const INPUTS: &[&[i128]] = &[&[0, 0], &[1, 7], &[17, 20], &[17, 3], &[30, 29]];
+    for body in [
+        "  %p = getelementptr i8, ptr @buf, i16 %i\n  %x = load i8, ptr %p\n  %j = add i16 %i, 7\n  %d = getelementptr i8, ptr @buf, i16 %j\n  store i8 %x, ptr %d\n",
+        "  %p = getelementptr i8, ptr @buf, i16 %i\n  %x = load i8, ptr %p\n  %k = getelementptr i8, ptr @buf, i16 %i\n  %d = getelementptr i8, ptr %k, i16 7\n  store i8 %x, ptr %d\n",
+    ] {
+        // A count only the call knows, and a constant one.
+        for start in ["%s", "16"] {
+            let after = managed_fill(&bytes_down(body, start), INPUTS);
+            assert!(!after.contains("llvm.memcpy"), "{start}\n{after}");
+            assert!(!after.contains("llvm.memmove") || after.contains("!llrm.backward"), "{start}\n{after}");
+        }
+    }
+}
+
+/// `screen[i + 80] = screen[i]` for `i` falling from `n - 1` (bench/scroll's
+/// scroll back down) on words.
+fn words_down(
+    body: &str,
+    start: &str,
+) -> String {
+    format!(
+        "@buf = global [2000 x i16] zeroinitializer
+
+{MEMSET}define i16 @f(i16 %n, i16 %q) {{
+b0:
+  %s = sub i16 %n, 1
+  br label %b1
+
+b1:
+  %i = phi i16 [ {start}, %b0 ], [ %next, %b2 ]
+  %c = icmp sge i16 %i, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+{body}  %next = sub i16 %i, 1
+  br label %b1
+
+b3:
+  %r = getelementptr i16, ptr @buf, i16 %q
+  %v = load i16, ptr %r
+  ret i16 %v
+}}
+"
+    )
+}
+
+#[test]
+fn a_falling_word_copy_eighty_cells_up_is_never_a_memcpy_whatever_its_addresses_look_like() {
+    const INPUTS: &[&[i128]] = &[&[0, 0], &[1, 80], &[100, 150], &[100, 3], &[1920, 1999]];
+    for body in [
+        "  %p = getelementptr i16, ptr @buf, i16 %i\n  %x = load i16, ptr %p\n  %j = add i16 %i, 80\n  %d = getelementptr i16, ptr @buf, i16 %j\n  store i16 %x, ptr %d\n",
+        "  %p = getelementptr i16, ptr @buf, i16 %i\n  %x = load i16, ptr %p\n  %k = getelementptr i16, ptr @buf, i16 %i\n  %d = getelementptr i8, ptr %k, i16 160\n  store i16 %x, ptr %d\n",
+    ] {
+        for start in ["%s", "1919"] {
+            let after = managed_fill(&words_down(body, start), INPUTS);
+            assert!(!after.contains("llvm.memcpy"), "{start}\n{after}");
+            assert!(!after.contains("llvm.memmove") || after.contains("!llrm.backward"), "{start}\n{after}");
+        }
+    }
 }

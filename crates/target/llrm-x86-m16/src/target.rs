@@ -9,7 +9,7 @@ use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use crate::timings;
 
 /// The registers a value may be placed in.
-pub const GENERAL: [RegId; 6] = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI];
+pub const GENERAL: [RegId; 6] = [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX, RegId::ESI, RegId::EDI];
 
 /// The registers a 16-bit address is encoded with, `[bx+si]`: a base is BX or
 /// BP and an index SI or DI.
@@ -124,6 +124,17 @@ impl Dos {
 }
 
 impl Machine for Dos {
+    /// LLVM prices 16-bit code with the i386 X86 model (`-code16`: the same
+    /// subtarget, operand-size prefixes), and every CPU the target accepts
+    /// reads the x87 tables as on m32 (`llrm_x86::tti`, T3).
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        llrm_x86::tti::X86::of_cpu("i486").map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>)
+    }
+
+    fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
+        Some(std::rc::Rc::new(llrm_x86::lowering::X86))
+    }
+
     fn private_convention(&self) -> Option<llrm_mir::target::PrivateConvention> {
         self.private.clone()
     }

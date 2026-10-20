@@ -113,8 +113,8 @@ fn holds_doubles(
         || function
             .layout()
             .iter()
-            .flat_map(|&block| function.block(block).instructions())
-            .any(|&inst| wide(function.instruction(inst).ty))
+            .flat_map(|&block| function.iter_block(block))
+            .any(|inst| wide(function.instruction(inst).ty))
 }
 
 impl CalleeFacts {

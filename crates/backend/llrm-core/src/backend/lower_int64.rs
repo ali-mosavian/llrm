@@ -19,7 +19,7 @@
 
 use std::collections::BTreeSet;
 
-use llrm_lir::registers::RegId;
+use llrm_lir::registers::{RegId, Regs};
 
 use crate::abi::runtime::{self, Reg};
 
@@ -56,19 +56,23 @@ pub(crate) fn _helper(
 }
 
 /// The runtime registers `registers` are views of, and the flags too where
-/// `flags` says so.
+/// `flags` says so. A register is the runtime's by the name of its word view
+/// in the target's description.
 pub(crate) fn runtime_registers(
+    regs: &Regs,
     registers: &[RegId],
     flags: bool,
 ) -> BTreeSet<Reg> {
     let mut out: BTreeSet<Reg> = registers
         .iter()
-        .map(|register| match register.full_register32() {
-            RegId::EAX => Reg::Ax,
-            RegId::EBX => Reg::Bx,
-            RegId::ECX => Reg::Cx,
-            RegId::EDX => Reg::Dx,
-            other => panic!("an inline routine names {other:?}"),
+        .map(|&register| {
+            let root = regs.root(register);
+            let word = regs.view(root, 16).unwrap_or(root);
+            let name = regs.name(word).unwrap_or_default();
+            Reg::ALL
+                .into_iter()
+                .find(|one| one.value() == name)
+                .unwrap_or_else(|| panic!("an inline routine names {register:?}"))
         })
         .collect();
     if flags {

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/trivialunswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/trivialunswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/trivialunswitch.rs sha256:77d59970123721dfc13409436aed0d62bfbf575b890cf4910f42971cff506fee -->
+<!-- src: crates/opt/llrm-transforms/src/trivialunswitch.rs sha256:2b7548c1a773d9ddf1515e779b48703b20b086a77f2a19f13b3bfbd41d24b1c4 -->
 
 # trivialunswitch
 
@@ -60,6 +60,8 @@ Tail recursion makes such loops: `paths(n, m)` tests `n == 0` on every trip
 of the loop that tests `m == 0`. A condition inside the body, or a branch
 that stays in the loop on both sides, is [`crate::unswitch`](unswitch.md)'s, which
 copies the loop.
+
+A rotated loop, one whose header jumps back to itself, is left alone (TU1).
 
 The pass repeats while a loop changes.
 

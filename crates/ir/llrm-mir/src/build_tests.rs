@@ -37,7 +37,13 @@ fn a_built_module_is_the_one_its_text_describes() {
     let count = module
         .add_variable(
             "count",
-            GlobalVariable { ty: i16, constant: false, initializer: Some(zero), align: None },
+            GlobalVariable {
+                externally_initialized: false,
+                ty: i16,
+                constant: false,
+                initializer: Some(zero),
+                align: None,
+            },
             Linkage::Internal,
         )
         .unwrap();
@@ -127,6 +133,44 @@ fn the_builder_folds_what_is_made_of_numbers() {
     assert_eq!(number(&module, cut), Some(40));
     assert_eq!(number(&module, wide), Some(0xFFFF_FFFB));
     assert_eq!(number(&module, less), Some(1));
+}
+
+/// `zz_f` compared two double constants at run time: `fcmp olt double C1, C2`
+/// was an instruction to isel, a compare and a `seta` per call argument. The
+/// builder folds it as `ConstantFoldCompareInstruction` does, a NaN being
+/// unordered.
+#[test]
+fn the_builder_folds_a_compare_of_two_floating_constants() {
+    use crate::context::{Constant, ConstantKind};
+    use crate::opcode::FloatPredicate;
+    let mut module = Module::default();
+    let (i1, double) =
+        (module.context.types.int(1), module.context.types.intern(Type::Float(crate::types::FloatKind::Double)));
+    let unary = module.context.types.intern(Type::Function { returns: i1, parameters: vec![], variadic: false });
+    let f = module.add_function("f", unary, Linkage::External).unwrap();
+    let constant = |m: &Module, value: f64| {
+        Operand::Constant(m.context.constant(Constant { ty: double, kind: ConstantKind::Float(value.to_bits()) }))
+    };
+    let (one, two, nan) = (constant(&module, 1.0), constant(&module, 2.0), constant(&module, f64::NAN));
+    let mut b = module.builder(f);
+    let entry = b.block("entry");
+    b.position(entry);
+    let folded = [
+        b.fcmp(FloatPredicate::Olt, one, two, "lt"),
+        b.fcmp(FloatPredicate::Ogt, one, two, "gt"),
+        b.fcmp(FloatPredicate::Olt, one, nan, "lt_nan"),
+        b.fcmp(FloatPredicate::Ult, one, nan, "ult_nan"),
+    ];
+    b.ret(Some(folded[0]));
+    assert!(!print::module(&module).contains("fcmp"), "{}", print::module(&module));
+    let held = |operand: Operand| match operand {
+        Operand::Constant(id) => match module.context.get(id).kind {
+            ConstantKind::Int(bits) => Some(bits),
+            _ => None,
+        },
+        _ => None,
+    };
+    assert_eq!(folded.map(held), [Some(1), Some(0), Some(0), Some(1)]);
 }
 
 /// `ConstantFoldBinaryInstruction`'s special cases: an identity returns the

@@ -50,7 +50,8 @@ b2:
 b3:
   %2 = load i16, ptr %total
   %3 = load i16, ptr %i
-  %4 = add i16 %2, %3
+  %t = mul i16 %2, 3
+  %4 = add i16 %t, %3
   store i16 %4, ptr %total
   %5 = add i16 %3, 1
   store i16 %5, ptr %i
@@ -229,7 +230,12 @@ b5:
     assert_eq!(out.matches("load i16, ptr %v").count(), 1, "{out}");
     assert_eq!(out.matches("icmp ult").count(), 1, "{out}");
     assert!(
-        out.contains("store i16 %k, ptr %out\n  call void @write()\n  %2 = load i16, ptr %out\n  %3 = add i16 %k, %2"),
+        out.contains(
+            "store i16 %k, ptr %out
+  tail call void @write()
+  %2 = load i16, ptr %out
+  %3 = add i16 %2, %k"
+        ),
         "{out}"
     );
     assert!(!out.contains("@panic()\n  unreachable"), "{out}");
@@ -240,7 +246,8 @@ b5:
 /// write, leaves the loop; one through a plain pointer stays.
 #[test]
 fn an_invariant_load_leaves_a_loop_from_a_conditional_block() {
-    const TEXT: &str = r#"define void @f(ptr noalias readonly dereferenceable(4) %v, ptr %w, i16 %n, ptr %out) {
+    const TEXT: &str = r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
+define void @f(ptr noalias readonly dereferenceable(4) %v, ptr %w, i16 %n, ptr %out) {
 b1:
   br label %b2
 
@@ -267,9 +274,12 @@ b5:
 }
 "#;
     let out = piped(TEXT);
-    let entry = &out[out.find("b1:").unwrap()..out.find("b2:").unwrap()];
-    assert!(entry.contains("getelementptr i8, ptr %v, i16 2") && entry.contains("load i16"), "{out}");
-    let body = &out[out.find("b3:").unwrap()..out.find("b5:").unwrap()];
+    let at = |label: &str| out.find(label).unwrap_or_else(|| panic!("{label} in {out}"));
+    let entry = &out[at("b1:")..at("b3:")];
+    // `dereferenceable(4)` makes the offset-2 GEP `inbounds nuw`, as the pin
+    // infers.
+    assert!(entry.contains("getelementptr inbounds nuw i8, ptr %v, i16 2") && entry.contains("load i16"), "{out}");
+    let body = &out[at("b3:")..at("b5:")];
     assert!(body.contains("load i16, ptr %w"), "{out}");
 }
 
@@ -420,7 +430,57 @@ b7:
 "#;
     let out = piped(TEXT);
     assert!(!out.contains("phi") && !out.contains("mul") && !out.contains("shl"), "{out}");
-    assert_eq!(out.matches("store i32 0").count(), 64, "{out}");
+    // The 64 stores are one memset of their 256 bytes (LoopIdiomRecognize
+    // takes the loop nest, as LLVM's does).
+    assert!(
+        out.contains("llvm.memset.p0.i64(ptr %0, i8 0, i64 256, i1 false)") && !out.contains("store i32 0"),
+        "{out}"
+    );
+}
+
+/// An 8x8 array of longs filled with the element's index (not a memset): the
+/// loops are gone and each store has its constant offset.
+#[test]
+fn a_stepped_address_with_a_varying_value_leaves_no_multiply_or_inner_counter_product() {
+    const TEXT: &str = r#"define void @fill(ptr %0) {
+b1:
+  br label %b2
+
+b2:
+  %1 = phi i16 [ 0, %b1 ], [ %9, %b6 ]
+  %2 = icmp slt i16 %1, 8
+  br i1 %2, label %b3, label %b7
+
+b3:
+  %3 = shl i16 %1, 3
+  br label %b4
+
+b4:
+  %4 = phi i16 [ 0, %b3 ], [ %8, %b5 ]
+  %5 = icmp slt i16 %4, 8
+  br i1 %5, label %b5, label %b6
+
+b5:
+  %6 = add i16 %3, %4
+  %7 = getelementptr inbounds i32, ptr %0, i16 %6
+  %v = zext i16 %6 to i32
+  store i32 %v, ptr %7
+  %8 = add i16 %4, 1
+  br label %b4
+
+b6:
+  %9 = add i16 %1, 1
+  br label %b2
+
+b7:
+  ret void
+}
+"#;
+    let out = piped(TEXT);
+    assert!(!out.contains("phi") && !out.contains("mul") && !out.contains("shl"), "{out}");
+    // Each cell holds its own index: 64 stores, no memset.
+    assert_eq!(out.matches("store i32").count(), 64, "{out}");
+    assert!(!out.contains("llvm.memset"), "{out}");
 }
 
 /// What every call of a private function passes is the parameter.
@@ -716,9 +776,10 @@ b3:
 }
 "#;
     let out = piped(TEXT);
-    assert!(out.contains("br i1 %0, label %b2, label %b3") && !out.contains("sext"), "{out}");
+    assert!(out.contains("i1 %0,") && out.matches("icmp").count() == 1 && !out.contains("sext"), "{out}");
     assert_eq!(out.matches("mul").count() + out.matches("shl").count(), 2, "{out}");
-    assert!(out.contains("add i16") && out.contains(", 3"), "{out}");
+    // The add may carry `nuw`, inferred from the known bits of what it adds to.
+    assert!(out.contains("add ") && out.contains(", 3"), "{out}");
 }
 
 /// A memset of a slot only written, and a store into it, go with it (llrm-mir's

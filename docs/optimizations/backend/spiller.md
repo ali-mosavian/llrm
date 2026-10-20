@@ -20,22 +20,6 @@ value of the set gets one of these, in this order:
 
 A plain copy of a value made again is made again the same way.
 
-Making an update short (`_short_update_runs`) or local (`_local_updates`)
-looks at the definitions of the spilled values, which the postings give, and
-copies a block only where a run is made: on `cells` at N=896, `spill short
-updates` was 335 Minstr, 3.6 now; `spill local updates` 258, 35.
-`live_among` reads the occurrences of the pieces a split made from the postings
-too (`split after liveness`: 401 Minstr, 162), as does a local split for the references
-of its value (`split local`: 291, 57).
-A stable load asks only the writers that may meet its cell (`Writers`). A
-frame cell is never met by a store to a data cell. A data cell is met, by its
-bytes, by the stores to its own symbol; the stores to another external symbol
-meet an external symbol's cell by region, whatever the displacement
-(`overlap::may_overlap`), and are held by block (`Background`, as LLVM's
-`AliasSetTracker` holds its unknown-alias set) and not named for each load:
-300 loads against 300 stores cost 1,226 Minstr at -O2 -m32, 272 now. A body
-with a `spares` pair names the stores of the other space one by one.
-
 Slots are shared by [`crate::backend::slots`](slots.md). Within an allocation each
 stored value takes a slot of its own (`Frame::defer_colours`); once the
 allocation is kept, `slots_colored` shares them, as LLVM's

@@ -89,12 +89,34 @@ impl llrm_target::Target for M16 {
         instructions::TEXT.clone()
     }
 
+    fn dialect(&self) -> &'static llrm_instr::Dialect {
+        llrm_x86::instructions::dialect()
+    }
+
     fn operand_bytes(&self) -> i64 {
         2
     }
 
     fn default_cpu(&self) -> &'static str {
         timings::TABLE.default_cpu().expect("timings.times states a default CPU")
+    }
+
+    /// DEVIATE E2-1: the pin sets `setPrefFunctionAlignment(Align(16))`
+    /// (X86ISelLowering.cpp); m16 aligns no function, loop or block, for
+    /// code size (user decision 2026-10-18). Only segments are aligned, as
+    /// their definitions require.
+    fn pref_function_alignment(&self) -> u8 {
+        0
+    }
+
+    /// DEVIATE E2-1: no loop is aligned (the pin's is 16 bytes).
+    fn pref_loop_alignment(&self) -> u8 {
+        0
+    }
+
+    /// 16-bit mode has the four forms of `Nops16Bit`.
+    fn max_nop_bytes(&self) -> u8 {
+        4
     }
 
     fn cpu_table(
@@ -230,6 +252,28 @@ impl llrm_target::Target for M16 {
 
 #[cfg(test)]
 mod tests {
+    /// E2 put 16-byte padding between every two functions of a 16-bit object,
+    /// +2% of QCport's code; m16 asks for none (DEVIATE E2-1).
+    /// Greedy allocates the x87 values into the RFP registers FP0..FP6, LLVM's
+    /// seven (FP7 is the stackifier's scratch); they are no stack position,
+    /// so the float stack stays eight deep.
+    #[test]
+    fn test_seven_rfp_registers_and_an_eight_deep_float_stack() {
+        use llrm_target::Target;
+        let file = llrm_target::registers::parse(&M16.registers_text()).unwrap();
+        let rfp: Vec<&str> = file.iter().filter(|one| one.is("rfp")).map(|one| one.name.as_str()).collect();
+        assert_eq!(rfp, ["mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "mm6"]);
+        assert!(file.iter().filter(|one| one.is("rfp")).all(|one| !one.is("x87") && !one.is("gpr")));
+        assert_eq!(M16.float_stack(), 8);
+    }
+
+    #[test]
+    fn test_m16_aligns_no_function_or_loop() {
+        use llrm_target::Target;
+        assert_eq!(super::M16.pref_function_alignment(), 0);
+        assert_eq!(super::M16.pref_loop_alignment(), 0);
+    }
+
     /// gcc's by-pieces ratios of a constant memset where its algorithm is `rep
     /// stos` (`i386_cost`, `i486_cost`, `pentium_cost`); none where it is a
     /// loop or a libcall (`pentiumpro_memset`).
@@ -325,10 +369,13 @@ mod tests {
             (dwarf("ax"), dwarf("dx"), dwarf("bp"), dwarf("sp"), dwarf("es")),
             (Some(27), Some(30), Some(33), Some(34), Some(38))
         );
+        // FP0..FP6 (`rfp`) never reach the output: the stackifier makes each an
+        // st(i), which has its number.
+        let emitted = |one: &&llrm_target::registers::Register| !one.is("rfp");
         assert!(
-            file.iter().all(|one| one.dwarf.is_some()),
+            file.iter().filter(emitted).all(|one| one.dwarf.is_some()),
             "{:?}",
-            file.iter().filter(|one| one.dwarf.is_none()).map(|one| &one.name).collect::<Vec<_>>()
+            file.iter().filter(emitted).filter(|one| one.dwarf.is_none()).map(|one| &one.name).collect::<Vec<_>>()
         );
         let cv = |name: &str| file.iter().find(|one| one.name == name).unwrap().codeview;
         assert_eq!((cv("bp"), cv("ax"), cv("st0")), (Some(14), Some(9), Some(128)));

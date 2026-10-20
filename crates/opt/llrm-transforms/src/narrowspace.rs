@@ -142,6 +142,10 @@ pub fn narrowed(
                 }
                 changed.extend(narrow(module, id, parameter, far, space, calls));
                 changed.insert(id);
+                llrm_mir::memory::unsplit(
+                    &mut crate::interprocedural::function_mut(module, id).1.attrs,
+                    llrm_mir::memory::Moved::OutOfArguments,
+                );
                 // The callers of this function that pass what they received,
                 // now a near pointer of it.
                 proven.retain(|&(function, at), _| function != id || at < parameter);
@@ -248,7 +252,7 @@ fn narrow(
         }
         // What else reads it reads the far pointer it was.
         let entry = function.entry().expect("a body");
-        let first = function.block(entry).instructions()[0];
+        let first = function.block(entry).first().expect("a block with an instruction");
         let cast = function.create_instruction(
             Opcode::Cast(CastOp::AddrSpaceCast),
             wide,

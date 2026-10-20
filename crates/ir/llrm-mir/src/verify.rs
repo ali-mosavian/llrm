@@ -3,7 +3,7 @@
 //! is its oracle: `tools/mir-oracle.sh` holds the two to the same verdicts.
 
 use crate::context::{ConstantKind, Context};
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::hash::{HashMap, HashSet};
 use crate::intrinsics::{self, Intrinsic};
 use crate::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
@@ -127,6 +127,17 @@ impl Checker<'_> {
         self.function.operand_type(self.context, operand)
     }
 
+    /// The intrinsic `operand` names, if it names one MIR has.
+    fn called_intrinsic(
+        &self,
+        operand: Operand,
+    ) -> Option<Intrinsic> {
+        let Operand::Constant(id) = operand else { return None };
+        let ConstantKind::Global(global) = self.context.get(id).kind else { return None };
+        let name = self.module.global(global).name.as_deref()?;
+        intrinsics::is_reserved(name).then(|| Intrinsic::named(name)).flatten()
+    }
+
     /// The type of the intrinsic `operand` names, if it names one.
     fn intrinsic(
         &self,
@@ -206,14 +217,14 @@ impl Checker<'_> {
         for problem in function.check_uses() {
             self.fail(format!("use lists: {problem}"));
         }
-        let tree = DominatorTree::new(function);
+        let tree = DomTree::of(function);
         let entry = function.entry().expect("a body has an entry");
         if !function.predecessors(entry).is_empty() {
             self.fail("the entry block has predecessors".to_owned());
         }
         for &block in function.layout() {
             self.block(block, block == entry);
-            for &inst in function.block(block).instructions() {
+            for inst in function.iter_block(block) {
                 self.instruction(inst, returns);
                 self.dominance(&tree, inst);
             }
@@ -225,19 +236,19 @@ impl Checker<'_> {
         block: BlockId,
         entry: bool,
     ) {
-        let list = self.function.block(block).instructions();
+        let function = self.function;
         let name = self.block_name(block);
-        match list.last() {
+        match function.block(block).last() {
             None => return self.fail(format!("{name} is empty")),
-            Some(&last) if !self.function.instruction(last).opcode.is_terminator() => {
+            Some(last) if !function.instruction(last).opcode.is_terminator() => {
                 self.fail(format!("{name} does not end in a terminator"))
             }
             _ => {}
         }
         let mut phis_over = false;
-        for (at, &inst) in list.iter().enumerate() {
-            let opcode = &self.function.instruction(inst).opcode;
-            if opcode.is_terminator() && at + 1 != list.len() {
+        for inst in function.iter_block(block) {
+            let opcode = &function.instruction(inst).opcode;
+            if opcode.is_terminator() && function.next_in_block(inst).is_some() {
                 self.fail(format!("{name} has a terminator before its end"));
             }
             match opcode {
@@ -271,7 +282,7 @@ impl Checker<'_> {
                 *edges.entry(parent).or_default() += 1;
             }
         }
-        for &inst in self.function.block(block).instructions() {
+        for inst in self.function.iter_block(block) {
             let instruction = self.function.instruction(inst);
             if instruction.opcode != Opcode::Phi {
                 continue;
@@ -310,7 +321,7 @@ impl Checker<'_> {
 
     fn dominance(
         &mut self,
-        tree: &DominatorTree,
+        tree: &DomTree,
         inst: InstId,
     ) {
         let instruction = self.function.instruction(inst);
@@ -472,6 +483,13 @@ impl Checker<'_> {
                 {
                     self.fail(format!("{at}: Intrinsic called with incompatible signature"));
                 }
+                // Verifier.cpp's `visitIntrinsicCall`: a byte swap of whole
+                // 16-bit units.
+                if self.called_intrinsic(callee) == Some(Intrinsic::ByteSwap)
+                    && !matches!(self.ty(result), Type::Int(bits) if bits % 16 == 0)
+                {
+                    self.fail(format!("{at}: bswap must be an even number of bytes"));
+                }
                 if call_returns != result {
                     self.fail(format!(
                         "{at} returns {}, not its type's {}",
@@ -569,13 +587,8 @@ impl Checker<'_> {
     ) {
         let operands = &self.function.instruction(inst).operands;
         let Operand::Block(unwind) = operands[operands.len() - 2] else { return };
-        let first = self
-            .function
-            .block(unwind)
-            .instructions()
-            .iter()
-            .find(|&&one| self.function.instruction(one).opcode != Opcode::Phi);
-        if !first.is_some_and(|&one| matches!(
+        let first = self.function.iter_block(unwind).find(|&one| self.function.instruction(one).opcode != Opcode::Phi);
+        if !first.is_some_and(|one| matches!(
             self.function.instruction(one).opcode,
             Opcode::LandingPad { .. }
         )) {

@@ -565,15 +565,6 @@ why = "measured 8.6 -> 22.1 Minstr (x2.57)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "analysis counted"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.6 -> 6.3 Minstr (x2.43)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "analysis dominated-edges"
 ratio = 2.7
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
@@ -1589,3 +1580,21 @@ ratio = 3.7
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
 why = "measured 5.4 -> 18.0 Minstr (x3.33)"
+
+[[debt]]
+kind = "steps"
+axis = "equal"
+name = "lir coalesce"
+ratio = 3.63
+issue = "https://github.com/ali-mosavian/llrm/issues/2641"
+owner = "backend-slopes"
+why = "measured 161.5 -> 533.4 Minstr (x3.30)"
+
+[[debt]]
+kind = "steps"
+axis = "equal"
+name = "regalloc base"
+ratio = 3.34
+issue = "https://github.com/ali-mosavian/llrm/issues/2641"
+owner = "backend-slopes"
+why = "measured 118.9 -> 359.9 Minstr (x3.03)"

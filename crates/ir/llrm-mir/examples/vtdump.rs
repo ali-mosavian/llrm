@@ -6,7 +6,7 @@
 //! sb nz p2 p2z gp nn ng cru crs pat ov
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::module::{GlobalKind, Operand};
 use llrm_mir::parse;
 use llrm_mir::valuetracking::{AssumptionCache, Query};
@@ -25,10 +25,10 @@ fn main() {
                 continue;
             }
             let name = global.name.clone().unwrap_or_default();
-            let dt = DominatorTree::new(function);
+            let dt = DomTree::of(function);
             let assumptions = AssumptionCache::new(&module, function);
             let mut values: Vec<(Operand, Option<llrm_mir::module::InstId>)> = Vec::new();
-            let entry_first = function.block(function.entry().expect("an entry")).instructions().first().copied();
+            let entry_first = function.block(function.entry().expect("an entry")).first();
             for parameter in function.parameters() {
                 values.push((Operand::Value(*parameter), entry_first));
             }

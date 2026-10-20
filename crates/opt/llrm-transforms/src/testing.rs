@@ -139,11 +139,25 @@ pub struct Tuned {
     pub window: Option<(u32, i64)>,
     /// The address spaces, where not real mode's.
     pub spaces: Option<llrm_mir::spaces::Spaces>,
+    /// `Lowering::is_mask_and_cmp0_folding_beneficial`.
+    pub folds_masks: bool,
     /// `Machine::two_address`.
     pub two_address: bool,
 }
 
+struct FoldsMasks;
+
+impl llrm_mir::lowering::Lowering for FoldsMasks {
+    fn is_mask_and_cmp0_folding_beneficial(&self) -> bool {
+        true
+    }
+}
+
 impl llrm_mir::target::Machine for Tuned {
+    fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
+        self.folds_masks.then(|| std::rc::Rc::new(FoldsMasks) as _)
+    }
+
     fn two_address(&self) -> bool {
         self.two_address
     }

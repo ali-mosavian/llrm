@@ -8,7 +8,7 @@ use crate::module::{Change, Function, GlobalKind, Module, Operand};
 use crate::opcode::Attribute;
 use crate::parse;
 use crate::passes::{
-    Analyses, Analysis, Dominators, FunctionPass, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager,
+    Analyses, Analysis, Dominators, FunctionPass, Loops, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager,
     PreservedAnalyses, Unit,
 };
 use crate::target::Neutral;
@@ -144,6 +144,58 @@ fn a_pass_that_says_none_drops_what_it_did_not_name_edited_or_not() {
     passes.add(Look(PreservedAnalyses::all()));
     passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
     assert_eq!(COMPUTED.get(), 2, "a pass that said none kept an analysis");
+}
+
+/// Asks for the loops and the dominators, then says what it kept.
+struct LooksAtLoops {
+    seen: Rc<RefCell<Vec<(Rc<crate::loopinfo::LoopInfo>, Rc<crate::domtree::DomTree>)>>>,
+    kept: PreservedAnalyses,
+}
+
+impl FunctionPass for LooksAtLoops {
+    fn name(&self) -> &'static str {
+        "looks-at-loops"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let loops = analyses.get::<Loops>(unit.context, unit.layout, unit.function);
+        let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
+        self.seen.borrow_mut().push((loops, tree));
+        self.kept.clone()
+    }
+}
+
+/// LLVM's `preserveSet<CFGAnalyses>`: a pass that left the CFG alone keeps the
+/// loops and dominators, one that names nothing drops both. Without the set
+/// the manager recomputed LoopInfo after every pass that only moved
+/// instructions.
+#[test]
+fn a_pass_preserving_the_cfg_keeps_loops_and_dominators() {
+    let run = |kept: PreservedAnalyses| {
+        let seen = Rc::default();
+        let mut passes = PassManager::default();
+        passes.add(LooksAtLoops { seen: Rc::clone(&seen), kept });
+        passes.add(LooksAtLoops { seen: Rc::clone(&seen), kept: PreservedAnalyses::all() });
+        passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+        let seen = seen.borrow();
+        (Rc::ptr_eq(&seen[0].0, &seen[1].0), Rc::ptr_eq(&seen[0].1, &seen[1].1))
+    };
+    assert_eq!(run(PreservedAnalyses::none().preserve_cfg()), (true, true), "the CFG set was not honoured");
+    assert_eq!(run(PreservedAnalyses::none()), (false, false), "premise: none drops both");
+}
+
+/// A pass that claims the CFG and changes it is caught, as LLVM's
+/// `-verify-analysis-invalidation` does.
+#[test]
+fn a_pass_claiming_the_cfg_it_changed_is_caught() {
+    let mut passes = PassManager { verify_invalidation: true, ..Default::default() };
+    passes.add(Retarget(PreservedAnalyses::none().preserve_cfg()));
+    let error = passes.run_module(&mut module(), Rc::new(Neutral)).err();
+    assert!(error.is_some_and(|e| e.starts_with("retarget claims to preserve")), "a changed CFG went unnoticed");
 }
 
 /// Asks, drops as a rule that edited would, and asks again, the body unedited.
@@ -735,6 +787,34 @@ fn a_frozen_module_analysis_is_held_past_passes_that_add_no_memory_operation() {
     assert_eq!(SUMMED.get(), 2, "a pass that may add one did not drop it");
 }
 
+/// GlobalsAA was computed 9 times for one compile of d_faces -O2: every
+/// function pass that may add a memory operation dropped it and the next pass
+/// made it again. LLVM keeps it past every function pass
+/// (`GlobalsAAResult::invalidate` drops it only when a pass abandons it), so a
+/// held analysis stands whatever a function pass may add.
+#[test]
+fn a_held_module_analysis_is_kept_past_function_passes_that_may_add_memory_operations() {
+    SUMMED.set(0);
+    let mut passes = PassManager::default();
+    passes.require::<Bodies>();
+    passes.hold::<Bodies>();
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Counts(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(SUMMED.get(), 1, "a function pass that may add a memory operation dropped the held analysis");
+
+    SUMMED.set(0);
+    let mut passes = PassManager::default();
+    passes.require::<Bodies>();
+    passes.freeze::<Bodies>();
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Counts(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(SUMMED.get(), 3, "premise: a frozen one is dropped by each such pass");
+}
+
 /// What a body holds, as a number: a summary that can only be an upper bound.
 struct Size;
 
@@ -775,7 +855,7 @@ impl FunctionPass for Lies {
         let ty = unit.context.types.int(16);
         let one = unit.context.int(ty, 1);
         let function = &mut *unit.function;
-        let first = function.block(function.entry().unwrap()).instructions()[0];
+        let first = function.block(function.entry().unwrap()).first().expect("a block with an instruction");
         let made = function.create_instruction(
             crate::opcode::Opcode::Binary(crate::opcode::BinaryOp::Add),
             ty,
@@ -1207,4 +1287,171 @@ fn a_result_derived_from_one_held_from_before_the_edit_is_not_kept_as_current() 
     analyses.invalidate(function, &PreservedAnalyses::none());
     analyses.get::<Above>(context, &layout, function);
     assert_eq!(ABOVE_RUNS.get(), 2, "kept as derived from the body as it stands");
+}
+
+/// Asks for `Counted`, edits the function, and says it kept `Counted` by
+/// updating it: it puts the result back when `put_back` (LLVM's pass that
+/// uses `MemorySSAUpdater` and preserves `MemorySSAAnalysis`).
+struct UpdatesCounted {
+    put_back: bool,
+}
+
+impl FunctionPass for UpdatesCounted {
+    fn name(&self) -> &'static str {
+        "updates-counted"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        analyses.get::<Counted>(unit.context, unit.layout, unit.function);
+        let last = *unit.function.layout().last().unwrap();
+        let ret = unit.function.terminator(last).unwrap();
+        unit.function.erase(ret).unwrap();
+        if self.put_back {
+            analyses.replace::<Counted>(unit.function, unit.function.layout().len());
+        }
+        PreservedAnalyses::none().preserve_updated::<Counted>()
+    }
+}
+
+/// A pass that updated an analysis and put it back keeps it for the next pass:
+/// the analysis is built once over the two passes that ask. Without
+/// `replace` the manager would have built it again after the edit.
+#[test]
+fn an_analysis_a_pass_updated_and_put_back_is_not_computed_again() {
+    COMPUTED.set(0);
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(UpdatesCounted { put_back: true });
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(COMPUTED.get(), 1, "the updated result was not kept");
+}
+
+/// A pass that says it kept an analysis by updating it and did not put the
+/// result back left it as old as the edit: the manager computes it again.
+#[test]
+fn an_analysis_a_pass_said_it_updated_and_did_not_put_back_is_computed_again() {
+    COMPUTED.set(0);
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(UpdatesCounted { put_back: false });
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(COMPUTED.get(), 2, "a stale result stood");
+}
+
+/// `LLRM_CHECK_STALE` names the pass that declared it and did not put back.
+#[test]
+fn the_stale_check_names_a_pass_that_declared_an_update_it_did_not_put_back() {
+    crate::passes::check_stale(true);
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(UpdatesCounted { put_back: false });
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = passes.run_module(&mut module(), Rc::new(Neutral));
+    }));
+    crate::passes::check_stale(false);
+    let message = caught.expect_err("the lying pass went unnoticed");
+    let message = message.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(message.contains("updates-counted") && message.contains("replace"), "{message}");
+}
+
+/// A function pass that changes nothing.
+struct Idle;
+
+impl FunctionPass for Idle {
+    fn name(&self) -> &'static str {
+        "idle"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        PreservedAnalyses::all()
+    }
+}
+
+/// A program pass that changes nothing.
+struct Nothing;
+
+impl crate::program::ProgramPass for Nothing {
+    fn name(&self) -> &'static str {
+        "nothing"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut crate::program::Program,
+        _: &mut crate::program::ProgramAnalyses,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// `LLRM_DUMP_INPUTS` dumped the input of the pipeline's function passes only:
+/// a module or program pass (the inliner, GlobalDCE, IPSCCP) wrote nothing, and
+/// a miscompile after inlining could not name its pass (#2982).
+#[test]
+fn a_module_or_program_pass_dumps_its_input_when_inputs_are_dumped() {
+    let text = "define i16 @g() {\nentry:\n  ret i16 0\n}\n\ndefine i16 @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %b\nb:\n  ret i16 0\n}\n";
+    let run = |inputs: bool| {
+        let directory = std::env::temp_dir().join(format!("llrm-dump-inputs-{}-{inputs}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let mut module = parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+        let mut passes = PassManager::default();
+        passes.dump = Some(directory.clone());
+        passes.dump_inputs = inputs;
+        passes.add_module(MarkReadonly);
+        passes.add_program(Nothing);
+        passes.add(Idle);
+        passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+        directory
+    };
+    let directory = run(true);
+    let manifest = std::fs::read_to_string(directory.join("manifest.txt")).expect("a manifest");
+    let lines: Vec<Vec<&str>> = manifest.lines().map(|line| line.split(' ').collect()).collect();
+    let named: Vec<(&str, &str)> = lines.iter().map(|line| (line[0], line[2])).collect();
+    assert_eq!(
+        named,
+        [("mark-readonly", "0001-in-mark-readonly.ll"), ("nothing", "0002-in-nothing.ll"), ("idle", "0003-in-idle.ll"),]
+    );
+    assert!(lines.iter().all(|line| line[3].parse::<usize>().unwrap() > 0), "{manifest}");
+    for (_, file) in named {
+        assert!(directory.join(file).exists(), "{file}");
+    }
+    let off = run(false);
+    assert!(!off.join("manifest.txt").exists(), "an input dump without LLRM_DUMP_INPUTS");
+    let _ = std::fs::remove_dir_all(directory);
+    let _ = std::fs::remove_dir_all(off);
+}
+
+/// A dump per pass added: five passes of the three kinds wrote fewer input
+/// files and manifest lines than that when a kind was left out.
+#[test]
+fn a_manager_with_n_passes_writes_n_input_dumps_and_n_manifest_lines() {
+    let directory = std::env::temp_dir().join(format!("llrm-dump-count-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let mut module = parse::module(TEXT).unwrap_or_else(|error| panic!("{error}"));
+    let mut passes = PassManager::default();
+    passes.dump = Some(directory.clone());
+    passes.dump_inputs = true;
+    passes.add_program(Nothing);
+    passes.add(Idle);
+    passes.add_program(Nothing);
+    passes.add(Idle);
+    passes.add(Idle);
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    let files = std::fs::read_dir(&directory)
+        .unwrap()
+        .filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().contains("-in-"))
+        .count();
+    let manifest = std::fs::read_to_string(directory.join("manifest.txt")).expect("a manifest");
+    assert_eq!((files, manifest.lines().count()), (5, 5), "{manifest}");
+    let _ = std::fs::remove_dir_all(directory);
 }
