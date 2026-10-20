@@ -126,11 +126,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     ),
     entry("sroa@646", Simplify, "sroa", Translated, "sroa.rs"),
     entry("earlycse@649", Simplify, "early-cse<memssa>", Translated, ""),
-    partial(
+    entry(
         "jumpthreading@668",
         Simplify,
         "jump-threading",
-        "criterion: the S1-S4 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; stage S4 is the load PRE (loadpre.rs); guards (J2) and the profile (J3) stay deviations; decide's own threading is deleted; exit: the oracle (difftest.py inputs jumpthreading@668) identical on the d_faces -O2 inputs with J12-J14 closed; on by default, LLRM_NO_JUMPTHREADING turns it off",
+        Translated,
+        "jumpthreading.rs + jumpthreading/loadpre.rs; deviations J2 (guards: no deopt bundles in MIR), J3 (!prof/BFI/BPI), J15 (isSafeToSpeculativelyExecute reuse); see docs/architecture/jumpthreading-translation.md",
     ),
     entry("cvp@669", Simplify, "correlated-propagation", Translated, ""),
     partial(
@@ -147,6 +148,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     ),
     entry("fold@677", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@677", Simplify, "instcombine", Old, "instcombine-port"),
+    partial(
+        "aggressive-instcombine@678",
+        Simplify,
+        "aggressive-instcombine",
+        "TruncInstCombine runs here; criterion: the trunc graphs of tools/difftest/difftest.py pair on synthetic inputs match opt -passes=aggressive-instcombine; exit: foldUnusualPatterns translated (the folds of AggressiveInstCombine.cpp: bit-pattern, popcount, funnel shift, table, load and store merging, lib calls), no date; L2194 is the LTO pipeline's and not a slot",
+    ),
     entry("tailrec@688", Simplify, "tailcallelim", Translated, ""),
     partial(
         "decide@690",
@@ -202,11 +209,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dfajumpthreading@806", Simplify, "dfa-jump-threading", Translated, ""),
-    partial(
+    entry(
         "jumpthreading@809",
         Simplify,
         "jump-threading",
-        "criterion: the S1-S4 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; stage S4 is the load PRE (loadpre.rs); guards (J2) and the profile (J3) stay deviations; decide's own threading is deleted; exit: the oracle (difftest.py inputs jumpthreading@809) identical on the d_faces -O2 inputs with J12-J14 closed; on by default, LLRM_NO_JUMPTHREADING turns it off",
+        Translated,
+        "jumpthreading.rs + jumpthreading/loadpre.rs; deviations J2 (guards: no deopt bundles in MIR), J3 (!prof/BFI/BPI), J15 (isSafeToSpeculativelyExecute reuse); see docs/architecture/jumpthreading-translation.md",
     ),
     entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
@@ -632,8 +640,14 @@ impl Level {
 /// Registry slots the pin's `default<O1>` does not have (no GVN, JumpThreading
 /// or TailCallElim at -O1: `buildO1FunctionSimplificationPipeline`), so a
 /// Translated one is not required in a -O1 list.
-pub const ABSENT_AT_O1: &[&str] =
-    &["gvn@787", "jumpthreading@668", "jumpthreading@809", "dfajumpthreading@806", "tailrec@688"];
+pub const ABSENT_AT_O1: &[&str] = &[
+    "gvn@787",
+    "jumpthreading@668",
+    "jumpthreading@809",
+    "dfajumpthreading@806",
+    "tailrec@688",
+    "aggressive-instcombine@678",
+];
 
 /// Run counts LLVM does not match yet, stated and not checked:
 /// `loopsimplify`/`lcssa` run at three unconditional slots per body at every
@@ -792,7 +806,7 @@ pub(crate) fn check_phase_with(
 ) -> Result<(), String> {
     let absent: Vec<&str> =
         if level == Level::O1 { ABSENT_AT_O1.iter().chain(off).copied().collect() } else { off.to_vec() };
-    // The translated `loop-rotate` is in the order unless `LLRM_NO_ROTATE`.
+    // The translated `loop-rotate` is in the order unless the option is off.
     let registry: Vec<Entry> = REGISTRY
         .iter()
         .map(|one| {

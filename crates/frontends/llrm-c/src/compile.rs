@@ -2112,9 +2112,10 @@ mod tests {
 
     /// `wcc -ecw` took the first four words in AX, DX, BX and CX and the rest
     /// from the stack, lowest first, popped with `retf 4`; the stack
-    /// convention read all six from [bp+6]... Reassociate puts the product's
-    /// operands highest rank first (`imul cx, bx`): same instructions as
-    /// before, commuted.
+    /// convention read all six from [bp+6]... The sum is reassociated
+    /// (`a + c*d - (b + e) + f`): the same ten instructions and two memory
+    /// operands as the previous association, no `neg`. The pin has no Watcom
+    /// convention to compare with.
     #[test]
     fn test_m16_watcom_words_arrive_in_ax_dx_bx_cx_and_the_callee_pops_the_rest() {
         let body = watcall16("six_");
@@ -2124,10 +2125,10 @@ mod tests {
                 "push bp",
                 "mov bp, sp",
                 "L0_0:",
-                "sub ax, dx",
                 "imul cx, bx",
                 "add ax, cx",
-                "sub ax, word ptr [bp+6]",
+                "add dx, word ptr [bp+6]",
+                "sub ax, dx",
                 "add ax, word ptr [bp+8]",
                 "pop bp",
                 "retf 4"

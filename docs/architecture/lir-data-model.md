@@ -25,6 +25,14 @@ An operand is a mutable object inside its instruction. `setReg` unlinks it from 
 
 Recommendation: B, then C where a pass needs the use list (SplitKit, coalescer, inline spiller). A is not worth landing: it keeps the identity problem.
 
+## DEVIATEs from the pin
+
+1. Block-level `Arc` persistence between passes. The pin invalidates analyses by pass preservation, not by block identity; here facts are cached by block identity. Exit: facts keyed on a pass-local version, then `Arc` goes. Owner: uselist-port.
+2. `Insn::id` is the instruction's stable arena slot; the pin's `MachineInstr` identity is its address or iterator, the same role.
+3. One ordered operand list replaces the five operand fields, as `MachineInstr` has its `MachineOperand` list; `Semantics` refers to operands by index.
+
+(Confirmed by the coordinator as defaults; oversight may overrule.)
+
 ## Decisions to confirm
 
 1. Persistence between passes stays (block-level `Arc`, `same_as`) because facts are cached by block identity; mutation happens only inside a thawed block. If the facts caches can key on a pass-local version number instead, `Arc` goes away entirely.

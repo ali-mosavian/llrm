@@ -3012,6 +3012,7 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
     let graph = cfg::graph(function);
     let shape = unit.shape();
     let dominance = &shape.dominance;
+    let tree = dominance.tree(function);
     let back_edges = graph
         .iter()
         .flat_map(|block| block.succ.iter().map(move |successor| (block.at, *successor)))
@@ -3062,7 +3063,7 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
                             if there == here {
                                 place.get(&store) > place.get(load)
                             } else {
-                                shape.reaching.to(function, there).contains(&here)
+                                crate::reachability::is_potentially_reachable_blocks(function, here, there, Some(tree))
                             }
                         },
                     )
