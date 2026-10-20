@@ -20,6 +20,16 @@
 //!     ... uses %x (made in entry)    ... uses reload of %x's slot
 //! ```
 //!
+//! [`frame_captured`] runs first, before the MIR pipeline: each frame cell of a
+//! function with a handler is passed to a declared routine, so every pass sees
+//! it captured and keeps its loads and stores; the handler reads the cells
+//! whenever a call raises, as an SEH funclet reads its parent's
+//! (`llvm.localescape`). Without it GVN forwarded the cells into 2,638 phis in
+//! GORILLA's MAKECITYSCAPE and the demotion below stored them all back: 189,936
+//! bytes at m32 -Os where main's is 47,769. D-EH1 (DEVIATE): MIR has no
+//! variadic intrinsic, so one call per cell stands for `localescape`; exit: the
+//! intrinsic in `llrm-mir` (owner splitkit-port, 2026-11-06).
+//!
 //! [`prepared`] works on each function with the QB personality, in order:
 //!
 //! - Checks. A function that registers a handler without the personality, a
@@ -36,6 +46,7 @@
 //!   calls `B$OEGP` with the landing's offset, or 0.
 //! - Replaces the pad's selector (the landing pad's second member) with a load
 //!   of `$QB$LANDED`.
+//! - Erases the `frame_captured` calls.
 //! - Demotes to the stack every phi of the pad and every value live into it
 //!   (`demote_phis`, `demote_live`, after LLVM's DemotePHIToStack and
 //!   DemoteRegToStack). The pad is entered with nothing the function left in a
@@ -99,7 +110,8 @@
 //! `ehprepare_tests.rs`: its fixture `HANDLED` and the printed module.
 //!
 //! # Runs
-//! In `driver::optimized` (`mir ehprepare`), once per module after the MIR
+//! In `driver::optimized`: `frame_captured` before the MIR pipeline, and
+//! `prepared` (`mir ehprepare`), once per module after the MIR
 //! pipeline and the dropping of `llvm.assume`, before `fpconvert` and
 //! `selects`. Runs at every level. A module with no QB personality is
 //! untouched.
@@ -129,6 +141,75 @@ const REGISTER: &str = "llrm.qb.B$OEGA";
 const REGISTER_LOCAL: &str = "llrm.qb.B$OEGP";
 const RESUME: &str = "llrm.qb.B$RESN";
 
+/// A call that hands a frame cell to the runtime: its handler reads the cells
+/// whenever a call raises, so no pass may keep one in a register across one.
+pub const FRAME: &str = "llrm.qb.frame";
+
+/// Each frame cell of a function with the QB personality passed to `FRAME`,
+/// before the pipeline, so every pass sees it captured as an alloca given to a
+/// call that may keep it is; `prepared` erases the calls.
+///
+/// DEVIATE D-EH1: the pin says it with `llvm.localescape(ptr %a, ptr %b, ...)`
+/// (SEH: a funclet reads its parent's frame cells, so they are escaped). MIR
+/// has no variadic intrinsic, so each cell is the argument of its own call of
+/// a declared routine; the effect on the passes is the same. Exit: the
+/// intrinsic in `llrm-mir`, then `FRAME` goes (owner splitkit-port,
+/// 2026-11-06).
+pub fn frame_captured(
+    module: &mut Module,
+    space: u32,
+) -> Result<(), String> {
+    let handled: Vec<GlobalId> =
+        module.functions().filter(|(_, _, function)| personality(module, function)).map(|(id, _, _)| id).collect();
+    if handled.is_empty() {
+        return Ok(());
+    }
+    let types = &mut module.context.types;
+    let (void, pointer) = (types.void(), types.ptr(0));
+    let ty = types.intern(llrm_mir::Type::Function { returns: void, parameters: vec![pointer], variadic: false });
+    let marker = match module.named(FRAME) {
+        Some(one) => one,
+        None => {
+            let id = module.add_function(FRAME, ty, Linkage::External)?;
+            runtime(module, id, &["nounwind"], space);
+            id
+        }
+    };
+    let routine = module.reference(marker);
+    for id in handled {
+        let name = module.global(id).name.owned().unwrap_or_default();
+        let (_, function) = module.function_mut(&name).expect("a handled function");
+        let Some(entry) = function.entry() else { continue };
+        let cells: Vec<ValueId> = function
+            .iter_block(entry)
+            .filter(|&one| matches!(function.instruction(one).opcode, Opcode::Alloca { .. }))
+            .filter_map(|one| function.instruction(one).result)
+            .collect();
+        let first =
+            function.iter_block(entry).find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }));
+        let at = first.map_or(Position::End(entry), Position::Before);
+        for cell in cells {
+            let info = CallInfo {
+                function_type: ty,
+                calling_convention: BASIC,
+                return_attrs: Vec::new(),
+                argument_attrs: vec![Vec::new()],
+                attrs: Vec::new(),
+                tail: Default::default(),
+            };
+            let made = function.create_instruction(
+                Opcode::Call(Box::new(info)),
+                void,
+                vec![Operand::Value(cell), Operand::Constant(routine)],
+                Flags::default(),
+                None,
+            );
+            function.insert(made, at)?;
+        }
+    }
+    Ok(())
+}
+
 /// Prepares each function of `module` with the QB personality, or refuses
 /// what the handlers cannot yet serve.
 pub fn prepared(
@@ -152,6 +233,18 @@ pub fn prepared(
         module.functions().filter(|(_, _, function)| personality(module, function)).map(|(id, _, _)| id).collect();
     let registrations: Vec<GlobalId> =
         [ONERROR, ONLOCALERROR].into_iter().filter_map(|one| module.named(one)).collect();
+    if let Some(marker) = module.named(FRAME) {
+        for &id in &handled {
+            let name = module.global(id).name.owned().unwrap_or_default();
+            let (context, function) = module.function_mut(&name).expect("a handled function");
+            let sites: Vec<InstId> = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .filter(|&inst| callee(context, function, inst) == Some(marker))
+                .collect();
+            sites.into_iter().try_for_each(|inst| function.erase(inst))?;
+        }
+    }
     let registers = |function: &Function| {
         function
             .walk()

@@ -390,6 +390,12 @@ pub fn optimized(
         dump: options.dump.clone(),
         ..Default::default()
     };
+    // A handler reads the frame's cells whenever a call raises: no pass may
+    // keep one in a register across a call (D-EH1, `ehprepare`).
+    timed("mir frame captured", || {
+        let far = llrm_target::Target::layout(&*options.arch).spaces.far;
+        program.modules.iter_mut().try_for_each(|module| crate::backend::ehprepare::frame_captured(module, far))
+    })?;
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
     timed("mir ehprepare", || {
