@@ -166,3 +166,8 @@ id = "unit llrm-c::compile::tests::test_m32_adds_into_a_new_register_with_lea"
 issue = 3052
 owner = "lir-cleanup-port"
 date = "2026-10-23"
+[[xfail]]
+id = "unit llrm-c::compile::tests::test_m32_an_unmarked_function_takes_registers_and_pops_its_stack_arguments"
+issue = 3059
+owner = "backend-slopes"
+date = "2026-10-20"
