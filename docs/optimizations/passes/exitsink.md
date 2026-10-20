@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/exitsink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/exitsink.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/exitsink.rs sha256:3deb4e2242cb14cde1915ce5a8370566b2b676997fa7e099a9acb459444f4c9e -->
+<!-- src: crates/opt/llrm-transforms/src/exitsink.rs sha256:270a004512c116e13331003b28f15d651b38e30c7c943e7793524c6004f9684b -->
 
 # exitsink
 
@@ -67,4 +67,4 @@ and after the loop-header copy. Not at -O0; off with `-fno-strength-reduce`.
 Blocks and edges are unchanged; dominators and loops are preserved.
 
 ## See also
-[`crate::exitfold`](exitfold.md), [`crate::lcssa`](lcssa.md); LLVM LICM `sinkRegion`.
+[`crate::lcssa`](lcssa.md); LLVM LICM `sinkRegion`.

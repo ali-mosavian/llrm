@@ -1102,7 +1102,7 @@ pub fn note_pass(name: &'static str) {
 /// nothing.
 fn why() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    TRACE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_WHY").is_some())
+    TRACE.with(std::cell::Cell::get) || *ON.get_or_init(|| llrm_env::set("LLRM_WHY"))
 }
 
 /// Starts or stops counting recomputations on this thread (the test form of
@@ -1136,12 +1136,12 @@ fn record(
 
 fn why_printed() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_WHY").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_WHY"))
 }
 
 fn check_modules() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_MODULES").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
 }
 
 fn check_captures() -> bool {
@@ -1151,7 +1151,7 @@ fn check_captures() -> bool {
 
 fn check_replay() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_REPLAY").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_REPLAY"))
 }
 
 /// Whether `changes` only keep every live value's meaning, as a result that
@@ -1566,7 +1566,7 @@ impl Analyses {
         function: &Function,
     ) {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_PRESERVED").is_some()) {
+        if *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_PRESERVED")) {
             let stale = self.stale(context, layout, function);
             assert!(stale.is_empty(), "{pass} left {} held but stale", stale.join(", "));
         }
@@ -1796,7 +1796,7 @@ impl Analyses {
 /// was not reported fails, where otherwise it is brought up to date.
 fn unreported_fails() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_UNREPORTED").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_UNREPORTED"))
 }
 
 /// A module analysis: how to compute it, and whether two results agree.
@@ -2248,6 +2248,53 @@ impl ModuleAnalyses {
     }
 }
 
+thread_local! {
+    /// The first body a pass left with a short phi since the manager last
+    /// asked (#3016), as "after <pass>: ...".
+    static PHI_PROBLEM: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `pass`, then (in a build with debug assertions: dev, the unit tests)
+/// checks that every phi of the body it left has one input per edge, and notes
+/// the first pass that left one short for [`take_phi_problem`]. Passes that run
+/// others (a slot of several, the fixed-point rounds) run them through here, so
+/// the member is named and not the slot. A release build pays nothing: LLVM
+/// verifies only under `-verify-each`.
+pub fn run_checked(
+    pass: &mut dyn FunctionPass,
+    unit: &mut Unit,
+    analyses: &mut Analyses,
+) -> PreservedAnalyses {
+    let preserved = pass.run(unit, analyses);
+    check_phi_arity(pass.name(), unit.function);
+    preserved
+}
+
+/// [`run_checked`]'s check, for a pass that edits in steps and names a step
+/// that is not a pass of its own.
+pub fn check_phi_arity(
+    step: &str,
+    function: &Function,
+) {
+    #[cfg(debug_assertions)]
+    PHI_PROBLEM.with(|problem| {
+        let mut problem = problem.borrow_mut();
+        if problem.is_none() {
+            let found = crate::verify::phi_arity(function);
+            if !found.is_empty() {
+                *problem = Some(format!("after {step}: {}", found.join("; ")));
+            }
+        }
+    });
+    #[cfg(not(debug_assertions))]
+    let _ = (step, function);
+}
+
+/// The problem [`run_checked`] noted, if any, and forgets it.
+pub fn take_phi_problem() -> Option<String> {
+    PHI_PROBLEM.with(|problem| problem.borrow_mut().take())
+}
+
 pub trait FunctionPass {
     fn name(&self) -> &'static str;
     /// The names of the passes that run under `name` (a slot that stands for
@@ -2645,7 +2692,8 @@ impl PassManager {
                 let running = crate::counts::pass_run_over(name, function);
                 let preserved = in_function(global.name.as_deref().unwrap_or_default(), || {
                     spanned(name, || {
-                        pass.run(
+                        run_checked(
+                            pass.as_mut(),
                             &mut Unit {
                                 context,
                                 layout: &layout,
@@ -2659,6 +2707,9 @@ impl PassManager {
                     })
                 });
                 drop(running);
+                if let Some(problem) = take_phi_problem() {
+                    return Err(problem);
+                }
                 kept.retain(|one| preserved.keeps(*one));
                 spanned("invalidate", || cache.invalidate(function, &preserved));
                 cache.check_kept(name, context, &layout, function);
@@ -2738,8 +2789,7 @@ fn checked_stale(
     pass: &str,
 ) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let on =
-        CHECK_STALE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_STALE").is_some());
+    let on = CHECK_STALE.with(std::cell::Cell::get) || *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_STALE"));
     if frozen.is_empty() || !on {
         return;
     }

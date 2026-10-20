@@ -818,7 +818,7 @@ fn a_pass_derives_the_shape_of_its_body_once_however_many_loops_it_has() {
 #[test]
 fn a_pass_takes_the_trip_counts_the_manager_proved() {
     // The check proves them again to compare, and is counted.
-    if std::env::var_os("LLRM_CHECK_COUNTED").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_COUNTED") {
         return;
     }
     let loops = 20;

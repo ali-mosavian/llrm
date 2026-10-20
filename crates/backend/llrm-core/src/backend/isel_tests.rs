@@ -1132,12 +1132,10 @@ define i16 @f() addrspace(1) {{
             "push di",
             "L0_0:",
             "lea di, [bp-8]",
-            // The segment is loaded from `ss` itself (MachineCopyPropagation):
-            // the same 16 instructions, the selector in a segment register from
-            // the start.
-            "mov es, ss",
+            // The segment is loaded from `ss` itself (MachineCopyPropagation).
             "mov eax, 16843009",
             "mov cx, 1",
+            "mov es, ss",
             "rep stosd",
             "stosw",
             "stosb",
@@ -2797,6 +2795,71 @@ n:
         got.iter().position(|one| one.starts_with("mov dword ptr [bx]")),
     );
     assert!(load.is_some() && load < store, "{got:?}");
+}
+
+/// An access into a global indexed by `%off`, computed from counter `%i`
+/// (0 ..= 49).
+fn indexed(
+    offset: &str,
+    gep: &str,
+) -> llrm_mir::Module {
+    parsed(&format!(
+        "@a = global [100 x i8] zeroinitializer
+
+define void @f(ptr %q) addrspace(1) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp slt i16 %i, 50
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %off = {offset}
+  %p = {gep}
+  store i8 0, ptr %p
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret void
+}}
+"
+    ))
+}
+
+/// An offset is exact only when every partial sum of it is a non-negative
+/// index below 2**16, an object's start is placed, and the index range is the
+/// middle end's: the lowering's table, not the selector's own solve.
+#[test]
+fn test_an_offset_is_exact_only_when_every_partial_sum_is_a_nonnegative_index() {
+    for (offset, gep, exact) in [
+        ("mul i16 %i, 2", "getelementptr inbounds i8, ptr @a, i16 %off", true),
+        ("add i16 %i, 3", "getelementptr inbounds i16, ptr @a, i16 %off", true),
+        // no promise
+        ("mul i16 %i, 2", "getelementptr i8, ptr @a, i16 %off", false),
+        // below 0
+        ("sub i16 %i, 5", "getelementptr inbounds i8, ptr @a, i16 %off", false),
+        // past 64K
+        ("mul i16 %i, 2000", "getelementptr inbounds i8, ptr @a, i16 %off", false),
+        // no object start
+        ("mul i16 %i, 2", "getelementptr inbounds i8, ptr %q, i16 %off", false),
+    ] {
+        let module = indexed(offset, gep);
+        let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().expect("a layout")).unwrap();
+        let global = module.named("f").expect("@f");
+        let function = module.global(global).function().expect("a body");
+        let unit = llrm_analysis::memory::Unit::of(&module, &layout, function);
+        let facts = crate::backend::valuefacts::ValueFacts::new(&module, &layout, function);
+        let found = crate::backend::valuefacts::exact_offsets(&unit, &facts);
+        let off = function
+            .walk()
+            .filter_map(|(_, inst)| function.instruction(inst).result)
+            .find(|&one| function.value(one).name.as_deref() == Some("off"))
+            .expect("%off");
+        assert_eq!(found.contains(&off), exact, "{offset} {gep}");
+    }
 }
 
 /// A cell whose offset `exact_offsets` proves is `Mem::exact`, so

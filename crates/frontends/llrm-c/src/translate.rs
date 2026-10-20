@@ -572,6 +572,31 @@ impl<'u> Types<'u> {
         self.unit.types.get(&self.unit.canonical_type(type_)).copied()
     }
 
+    /// What the convention sees of a parameter of C type `type_`.
+    fn argument(
+        &mut self,
+        type_: &str,
+    ) -> R<llrm_mir::target::Argument> {
+        if let Some(bytes) = self.aggregate(type_) {
+            return Ok(llrm_mir::target::Argument {
+                bytes,
+                integer: false,
+                pointer: false,
+                floating: false,
+                memory: true,
+            });
+        }
+        let id = self.c(type_)?;
+        let (shape, bytes) = (self.shape(id), self.get(id).width);
+        Ok(llrm_mir::target::Argument {
+            bytes,
+            integer: matches!(shape, Shape::Int(..) | Shape::Bool),
+            pointer: matches!(shape, Shape::Pointer(_) | Shape::Huge),
+            floating: matches!(shape, Shape::Float(_)),
+            memory: false,
+        })
+    }
+
     /// C type `type_` as a value, its accesses in its aliasing class.
     fn c(
         &mut self,
@@ -719,6 +744,9 @@ struct Open {
 struct Body<'a, 't> {
     /// The facts the language states of instructions, by instruction id.
     stated_instructions: Vec<(i64, Fact)>,
+    /// What the language states of an operand of an instruction: its id, the
+    /// operand's position and the fact.
+    stated_operands: Vec<(i64, i64, Fact)>,
     /// A scaled index's product, by value: its index and the element size.
     scales: HashMap<i64, (i64, i64)>,
     /// The places of each open block that marks its locals' lifetimes; and the
@@ -845,6 +873,7 @@ fn value_ref(value: i64) -> Operand {
 fn cleanup(
     symbol: &hir::Symbol,
     unit: &hir::Unit,
+    listed_default: bool,
 ) -> R<(StackCleanup, Option<String>)> {
     // The entry is called by the runtime's start in the stack convention its
     // description names.
@@ -857,11 +886,56 @@ fn cleanup(
         (false, hir::REVERSE_PARMS) => Ok((StackCleanup::Callee, None)),
         // Open Watcom's own register list, where the target's calling.toml
         // states that convention.
-        (true, 0) if symbol.register_list == unit.default_registers => {
+        (true, 0) if symbol.register_list == unit.default_registers || listed_default => {
             Ok((StackCleanup::Callee, unit.registers_cc.clone()))
         }
         _ => refuse(format!("{} has a register calling convention", symbol.object_name())),
     }
+}
+
+/// Whether the register list a pragma wrote (`__parm [__ax] [__dx] [__bx]`) is
+/// what the target's own register convention gives these `parameters`, and the
+/// routine keeps what that convention's callee keeps: then the function is the
+/// convention's, whatever the spelling. Another list is a convention of its
+/// own.
+fn lists_default(
+    symbol: &hir::Symbol,
+    unit: &hir::Unit,
+    calling: &llrm_target::calling::Calling,
+    parameters: &[llrm_mir::target::Argument],
+) -> bool {
+    use crate::hwreg::Set;
+    let Some(entry) = unit.registers_cc.as_deref().and_then(|cc| calling.by_cc(cc)) else { return false };
+    if !symbol.register_parms || symbol.call_target & (SPECIAL_RETURN | MODIFY_EXACT) != 0 {
+        return false;
+    }
+    // What the default keeps, bp, si and di among it.
+    if Set::parse(&symbol.saved_registers).is_some_and(|saved| !saved.is_empty() && !unit.hardware.keeps_general(saved))
+    {
+        return false;
+    }
+    let kinds: Vec<_> = parameters.iter().map(|one| entry.kind(*one, 2)).collect();
+    let placed = entry.place(&kinds);
+    let listed: Vec<&str> =
+        symbol.register_list.trim_matches(|c| c == '[' || c == ']').split(',').filter(|one| !one.is_empty()).collect();
+    let mut places = placed.places.iter();
+    for at in 0..parameters.len() {
+        let place = places.next();
+        match (listed.get(at), place) {
+            (Some(text), Some(llrm_target::calling::Place::Registers(names))) => {
+                let Some(mut named) = Set::parse(text).and_then(|set| unit.hardware.names(set)) else { return false };
+                let mut want: Vec<String> = names.clone();
+                named.sort_unstable();
+                want.sort_unstable();
+                if named != want {
+                    return false;
+                }
+            }
+            (None, Some(llrm_target::calling::Place::Stack(_))) => {}
+            _ => return false,
+        }
+    }
+    listed.len() == parameters.len()
 }
 
 /// Parameters that live in the memory they were passed in, `sizes` each
@@ -1068,7 +1142,9 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<h::Function> {
         let unit = shared.unit;
         let symbol = &unit.symbols[&proc.symbol];
-        let (cleanup, convention) = cleanup(symbol, unit)?;
+        let arguments = proc.parms.iter().map(|(_, type_)| types.argument(type_)).collect::<R<Vec<_>>>()?;
+        let listed_default = lists_default(symbol, unit, calling, &arguments);
+        let (cleanup, convention) = cleanup(symbol, unit, listed_default)?;
         let mut body = Body {
             convention: convention.clone(),
             memory: Vec::new(),
@@ -1090,6 +1166,7 @@ impl<'a, 't> Body<'a, 't> {
             done: HashMap::default(),
             selects: IndexMap::default(),
             stated_instructions: Vec::new(),
+            stated_operands: Vec::new(),
             scales: HashMap::default(),
             scopes: Vec::new(),
             opened: 0,
@@ -1124,6 +1201,7 @@ impl<'a, 't> Body<'a, 't> {
         body.finish()?;
         body.drop_unread_scales();
         let mut body_instruction_facts = std::mem::take(&mut body.stated_instructions);
+        let body_operand_facts = std::mem::take(&mut body.stated_operands);
         let body_widths: HashMap<i64, i64> =
             parameters.iter().map(|&one| (one, body.types.get(body.values[one as usize - 1].r#type).width)).collect();
         let parameter_bytes = body_widths.values().sum();
@@ -1176,6 +1254,9 @@ impl<'a, 't> Body<'a, 't> {
         };
         for (instruction, fact) in std::mem::take(&mut body_instruction_facts) {
             facts.state(Subject::Instruction { function: id, id: instruction }, fact);
+        }
+        for (instruction, operand, fact) in body_operand_facts {
+            facts.state(Subject::Operand { function: id, instruction, operand }, fact);
         }
         for (value, fact) in stated {
             let index = function.parameters.iter().position(|&one| one == value).expect("a parameter") as i64;
@@ -1372,6 +1453,7 @@ impl<'a, 't> Body<'a, 't> {
             block.instructions.retain(|one| !ids.contains(&one.id));
         }
         self.stated_instructions.retain(|(id, _)| !ids.contains(id));
+        self.stated_operands.retain(|(id, _, _)| !ids.contains(id));
         self.values.retain(|value| !unread.contains(&value.id));
     }
 
@@ -3549,8 +3631,10 @@ impl<'a, 't> Body<'a, 't> {
             let value = self.value_as(node, type_)?;
             return Ok(Got::Returned(Some(self.unary("O_FABS", value, type_)?)));
         }
-        let (cleanup, convention) =
-            cleanup(symbol, self.unit).map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))?;
+        let arguments = call.parms.iter().rev().map(|(_, type_)| self.types.argument(type_)).collect::<R<Vec<_>>>()?;
+        let listed_default = lists_default(symbol, unit, self.shared.calling, &arguments);
+        let (cleanup, convention) = cleanup(symbol, self.unit, listed_default)
+            .map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))?;
         let distance = distance(symbol);
         let callee = match target {
             Got::Function(_) => None,
@@ -3694,6 +3778,9 @@ impl<'a, 't> Body<'a, 't> {
             .map(|(at, bytes)| (at as i64, *bytes))
             .collect();
         let result_pointer = result_at.filter(|_| convention.is_some());
+        let first_argument = operands.len() as i64 - count;
+        let stated: Vec<i64> =
+            in_memory.iter().enumerate().filter(|(_, memory)| !**memory).map(|(at, _)| at as i64).collect();
         self.call_site(
             name.as_deref(),
             result,
@@ -3706,6 +3793,10 @@ impl<'a, 't> Body<'a, 't> {
             byval,
             result_pointer,
         );
+        // CGCall.cpp `DetermineNoUndef`: a scalar argument, and an indirect
+        // one, is `noundef`; a struct's words passed in memory are not.
+        let call_id = self.calls.last().expect("the call just made").instruction;
+        self.stated_operands.extend(stated.into_iter().map(|at| (call_id, first_argument + at, Fact::NoUndef)));
         let Some((temporary, size)) = returned else { return Ok(Got::Returned(result)) };
         let address = self.address_of(temporary);
         if let (Some(width), Some(value)) = (returned_as_integer(self.shared.calling, &convention, size), result) {
@@ -4147,6 +4238,21 @@ mod tests {
         let emitted = llrm_core::hir::mir::emit(&program, &layout).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         defined(&emitted.module, "_f")
+    }
+
+    /// CGCall.cpp `DetermineNoUndef`: a scalar argument of a call is
+    /// `noundef`, as the parameter is. None was stated at a call site, so a
+    /// callee's `noundef` parameter had no argument to match (a branch more
+    /// where SimplifyCFG asks if an argument may be undef).
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_scalar_call_arguments_are_noundef() {
+        let text = raised_c(
+            "extern int __cdecl g(int a, short *p);\nint __cdecl f(int n, short *q) { return g(n, q); }\n",
+            false,
+        );
+        let call = text.lines().find(|line| line.contains("call ")).expect("a call");
+        assert_eq!(call.matches("noundef").count(), 2, "{text}");
     }
 
     const ARRAYS: &str = "short a[100]; int b[100];\n\

@@ -249,7 +249,7 @@ pub(crate) fn vouched(
 /// `module`'s declarations to declare into: the module's own `Declarations`,
 /// nothing scanned unless a pass declares. `LLRM_CHECK_CALLEES=1` compares them
 /// with a fresh listing.
-fn declared(
+pub(crate) fn declared(
     modules: &mut ModuleAnalyses,
     module: &Module,
 ) -> Declared {
@@ -265,7 +265,7 @@ fn declared(
 
 /// Places what `declared` made. The module has more functions than its
 /// `Declarations` say now.
-fn placed(
+pub(crate) fn placed(
     declared: &mut Declared,
     modules: &mut ModuleAnalyses,
     module: &mut Module,

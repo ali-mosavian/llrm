@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 106 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 107 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -110,5 +110,6 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 106 documented
 | timing | Core-clock bounds of multiplies and divides, read from the CPU profile, so the compiler can pick a multiply or divide form by cost. | [`crate::backend::division`](division.md) (multiply by reciprocal against a divide) and | [timing](timing.md) |
 | twoaddr | Rewrites three-address arithmetic into x86's two-address form before register allocation. | A machine phase after `floatalloc` and before `coalesce` | [twoaddr](twoaddr.md) |
 | upperzero | Which 32-bit register roots hold zero in their upper half, and the `movzx` that makes it so where a 32-bit address needs it. | `established` is the last sub-pass of [`crate::backend::peephole`](peephole.md), run when | [upperzero](upperzero.md) |
+| valuefacts | What the middle end proves of an integer value, for the instruction selector to read: the bounds of an index or a dividend. | Once per function selected, in `isel::selected_with`. | [valuefacts](valuefacts.md) |
 | valuetrack | Where each `-g` variable's value is over the emitted code. | On the emitted code of a procedure, from `debuginfo`, when `-g` places | [valuetrack](valuetrack.md) |
 | verify | Checks that a lowered body is well formed, between machine phases. | After instruction selection and after every machine phase when `LLRM_VERIFY` | [verify](verify.md) |

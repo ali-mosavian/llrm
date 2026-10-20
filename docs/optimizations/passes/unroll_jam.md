@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/unroll_jam.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unroll_jam.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:3f10aa35ab7ef4c251868497f901b7f7f8df4ee838e580ff56c817e9b2e12cc9 -->
+<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:fa29fe74de319f81ac1b332a457858d151561f96de803a5ae7a101eab6915290 -->
 
 # unroll_jam
 
@@ -26,9 +26,8 @@ go to `llrm_analysis::dependence::factor` with `max_unroll` (4, gcc's
 `unroll-jam-max-unroll`) and `min_percent` (1, `unroll-jam-min-percent`),
 which bounds N by the dependence distances and refuses a nest where fewer
 than `min_percent` percent of the accesses go away. The outer loop needs an
-exact trip count (ScalarEvolution's `getSmallConstantTripCount`;
-`LLRM_NO_SCEV_TRIPS` asks `induction::trip_count`); N is the largest factor
-from 2 up to the bound that divides it.
+exact trip count (ScalarEvolution's `getSmallConstantTripCount`); N is the
+largest factor from 2 up to the bound that divides it.
 
 The outer loop is unrolled by `loopclone::chained` into N bodies. In each
 copy the work between the loops moves ahead of the first inner loop, the

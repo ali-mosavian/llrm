@@ -65,6 +65,8 @@ def owner_of(body: str) -> str:
 def repro(failure: str) -> str:
     """The command that runs one failure alone."""
     kind, _, name = failure.partition(" ")
+    if kind == "smoke":
+        return "python3 tools/parity_smoke.py (the step named in the failure)"
     if kind == "run":
         return f"python3 tools/dosbatch/run_tests.py {Path(name).stem}"
     crate, _, test = name.partition("::")
@@ -172,6 +174,16 @@ def by_binary(output: str) -> dict[str, list[str]]:
     return found
 
 
+NAMELESS = "unit workspace::failed-without-a-test-name"
+LAST_OUTPUT: dict[str, str] = {}
+
+
+def record_nameless(sha: str, output: str) -> None:
+    """Keep what a nameless run printed and the load it ran under, so the retry leaves a trace: HOME/nameless-<sha>.log."""
+    HOME.mkdir(parents=True, exist_ok=True)
+    (HOME / f"nameless-{sha[:9]}.log").write_text(f"load {os.getloadavg()}\n{output[-4000:]}\n")
+
+
 def merged(command: list[str], cwd: Path, env: dict[str, str]) -> tuple[str, int]:
     """(output, exit code) with stderr and stdout as one stream: cargo prints `Running` on stderr and the results on stdout, and joined as two strings the
     blocks lost their crate (0 named failures of 14)."""
@@ -183,7 +195,7 @@ def unit_result(output: str, code: int) -> set[str]:
     """The failing `unit crate::test` ids of a workspace test run; a run that failed and named no test (a build error, an output this does not parse) is itself the failure,
     never a pass: `-q` printed no `Running` line, nothing parsed, and 59 landings read as 'No new failure'."""
     named = {f"unit {crate}::{test}" for crate, tests in by_binary(output).items() for test in tests}
-    return named or ({"unit workspace::failed-without-a-test-name"} if code else set())
+    return named or ({NAMELESS} if code else set())
 
 
 def unit_failures(at: Path, name: str | None = None) -> tuple[set[str], str]:
@@ -194,6 +206,7 @@ def unit_failures(at: Path, name: str | None = None) -> tuple[set[str], str]:
     command = [*LOW, "buildslot", "cargo", "test", "--release", "--workspace", "--lib", "--no-fail-fast", *([name] if name else [])]
     fresh(at)
     output, code = merged(command, at, env)
+    LAST_OUTPUT["text"] = output
     return unit_result(output, code), unit_summary(output)
 
 
@@ -203,12 +216,19 @@ UNIT_SETS: dict[str, set[str]] = {}
 def probe(failure: str, sha: str) -> bool:
     """Whether `failure` holds at `sha`. A unit failure is read from the whole workspace's failing set at that commit, run once and kept: the bisects of dozens of failures
     share their probes (56 failures x 6 probes of 4 minutes was 22 hours; one set per commit is a few dozen probes)."""
-    at = tree(sha)
     kind, _, name = failure.partition(" ")
+    if kind == "smoke":
+        raise Inconclusive("smoke steps are not bisected")
+    at = tree(sha)
     if kind == "run":
         return failure in run_groups(at, dist(at, sha), Path(name).stem)[0]
     if sha not in UNIT_SETS:
         UNIT_SETS[sha] = unit_failures(at)[0]
+        if NAMELESS in UNIT_SETS[sha]:  # one retry: a build killed by load or a memory cap reads like a broken commit
+            record_nameless(sha, LAST_OUTPUT.get("text", ""))
+            UNIT_SETS[sha] = unit_failures(at)[0]
+    if NAMELESS in UNIT_SETS[sha]:
+        raise Inconclusive(f"{sha[:9]} does not build")
     return failure in UNIT_SETS[sha]
 
 
@@ -311,6 +331,23 @@ def pr_of_commit(sha: str) -> int | None:
     return int(done.stdout) if done.stdout.strip().isdigit() else None
 
 
+def verified_pr(pr: int | None, state_of=None) -> tuple[int | None, str]:
+    """(pr, note): a culprit names a PR only if GitHub says it is MERGED; an open or closed one is rejected, as a bisect cannot blame a change that is not on the head."""
+    if pr is None:
+        return None, "no PR in the commit's subject or GitHub's link"
+    state = (state_of or pr_state)(pr)
+    return (pr, "") if state == "MERGED" else (None, f"#{pr} is {state}, not merged: rejected")
+
+
+def pr_state(number: int) -> str:
+    done = subprocess.run(["gh", "pr", "view", str(number), "--json", "state", "-q", ".state"], capture_output=True, text=True)
+    return done.stdout.strip() or "UNKNOWN"
+
+
+class Inconclusive(Exception):
+    """A probe commit that does not build says nothing about a test: the bisect stops there instead of reading every test as passing."""
+
+
 def once(sha: str | None = None) -> str:
     """Check one head against the last checked one; write and return its report path."""
     git("fetch", "-q", "origin")
@@ -327,10 +364,14 @@ def once(sha: str | None = None) -> str:
     (HOME / f"{sha[:9]}.md").write_text(report(sha, previous or sha, [{"failure": one, "commit": None, "pr": None, "owner": "bisect pending", "repro": repro(one)} for one in pending], covered))
     for failure in pending:
         commits = first_parent(previous, sha) if previous else []
-        found = culprit([one for one, _ in commits], lambda one: probe(failure, one)) if commits else None
+        try:
+            found = culprit([one for one, _ in commits], lambda one: probe(failure, one)) if commits else None
+            note = ""
+        except Inconclusive as why:
+            found, note = None, f"inconclusive: {why}"
         subject = dict(commits).get(found, "") if found else ""
-        pr = pr_of(subject) or (pr_of_commit(found) if found else None)
-        rows.append({"failure": failure, "commit": found, "pr": pr, "owner": pr_owner(pr) if pr else "unknown", "repro": repro(failure)})
+        pr, why_not = verified_pr(pr_of(subject) or (pr_of_commit(found) if found else None)) if found else (None, note)
+        rows.append({"failure": failure, "commit": found, "pr": pr, "owner": pr_owner(pr) if pr else (why_not or "unknown"), "repro": repro(failure)})
     HOME.mkdir(parents=True, exist_ok=True)
     path = HOME / f"{sha[:9]}.md"
     path.write_text(report(sha, previous or sha, rows, covered))

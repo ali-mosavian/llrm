@@ -23,7 +23,7 @@
 //!   end
 //!   ipa["<b>interprocedural: inline,</b><br/><small>ipacp, argpromotion,<br/>deadargs, narrowspace</small>"]:::mid
 //!   dce["<b>globaldce</b><br/><small>availableexternally<br/>calleepop</small>"]:::mid
-//!   ch["<b>copy headers (rotate,</b><br/><small>loopsimplify, lcssa, fold,<br/>algebraic, indvars, dead)<br/>fixednarrow lsr window<br/>rotate jumpthread hoist<br/>gepoffset addresssink<br/>spares homes</small>"]:::mid
+//!   ch["<b>copy headers (rotate,</b><br/><small>loopsimplify, lcssa, fold,<br/>algebraic, indvars, dead)<br/>fixednarrow lsr window<br/>rotate hoist<br/>gepoffset addresssink<br/>spares homes</small>"]:::mid
 //!   sel["selection"]:::note
 //!   a -->|"Fixed (per body)"| s1
 //!   s1 --> s2
@@ -47,12 +47,12 @@
 //!
 //! Scalar and memory: `fold` (with `canonical` and `floatfold`), `decide`,
 //! `dead`, `algebraic`, `cfg`, `dse`, `gvn`,
-//! `promote` (`Sroa`, `Promote`, with `splitcopy`), `inferspace`, `jumpthread`,
+//! `promote` (`Sroa`, `Promote`, with `splitcopy`), `inferspace`,
 //! `gepoffset`, `addresssink`, `fixednarrow`, `ports`.
 //!
 //! Loops: `loopsimplify`, `lcssa` (with `lcssamerges`), `hoist`, `loopmotion`,
 //! `trivialunswitch`, `unswitch`, `loopsplit`, `loopfuse`, `loopdistribute`
-//! (with `loopshape`), `indvars` (with `exitvalues`, `exitfold`, `exitsink`),
+//! (with `loopshape`), `indvars` (with `exitvalues`, `exitsink`),
 //! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`, `unroll_jam`,
 //! `loopidioms`, `floatloop`, `tailcallelim`.
 //!
@@ -93,6 +93,7 @@ pub mod canonexit;
 pub mod canonical;
 pub mod cfg;
 pub mod combine;
+pub mod combine_add_idioms;
 pub mod combine_addsub;
 pub mod combine_build;
 pub mod combine_casts;
@@ -100,22 +101,29 @@ pub mod combine_casts;
 mod combine_casts_tests;
 pub mod combine_compares;
 pub mod combine_demanded;
+#[cfg(test)]
+mod combine_dispatch_tests;
 pub mod combine_gep;
 pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
 pub mod combine_loadstore;
 pub mod combine_muldivrem;
+pub mod combine_negator;
 #[cfg(test)]
 mod combine_muldivrem_tests;
 pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_select;
+pub mod combine_select_bools;
+pub mod combine_select_op_op;
 pub mod combine_shared;
 pub mod combine_shifts;
+pub mod combine_sub;
 pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
+pub mod combine_visit_select;
 pub mod condstores;
 pub mod congruentiv;
 pub mod constraintelim;
@@ -139,13 +147,13 @@ mod dfajumpthreading_tests;
 pub mod dse;
 pub mod earlycse;
 pub mod edges;
-pub mod exitfold;
 pub mod exitopt;
 pub mod exitpredicate;
 pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;
 pub mod fixednarrow;
+pub mod float2int;
 pub mod floatfold;
 pub mod floatloop;
 pub mod fold;
@@ -179,7 +187,6 @@ pub mod ipacp;
 pub mod ivusers;
 #[cfg(test)]
 mod ivusers_tests;
-pub mod jumpthread;
 pub mod jumpthreading;
 #[cfg(test)]
 mod jumpthreading_tests;
@@ -280,7 +287,6 @@ pub mod uncondicmp;
 pub mod undefpred;
 pub mod unroll;
 pub mod unroll_jam;
-pub mod unswitch;
 pub mod versionalias;
 pub mod versionstride;
 pub mod vncoercion;

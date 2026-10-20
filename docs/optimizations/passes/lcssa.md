@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lcssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lcssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:de2ea89708f71d82ab199e911a3b0ac51f918814ccd9466cb17d30704a4e2ea4 -->
+<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:678c281b71335628e2e670bcc636c26ec78f3c534f18d713bb5ed0858914700c -->
 
 # lcssa
 
@@ -72,8 +72,8 @@ From unit test `test_a_loop_value_used_after_the_exit_gets_an_exit_phi` in
 
 ## Runs
 In every body's pipeline after `loopsimplify`, unless `lcssa` is turned off,
-and again after header copying. `unswitch` and `peel` call `closed` on
-their candidates.
+and again after header copying. `peel` calls `closed` on its
+candidates.
 
 ## Keeps
 Dominators and loops stay valid; all other analyses are invalidated when

@@ -36,10 +36,9 @@
 //! - `_frequencies`: `branchprob`'s estimate in `UNIT`ths of an execution
 //!   (never below one, so a cold arm is near free but ordered), with each
 //!   loop's proven trips (`proven_trips`, from ScalarEvolution's
-//!   `getSmallConstantTripCount`; `LLRM_NO_SCEV_TRIPS` asks
-//!   `induction::trip_count`) in place of its estimate;
+//!   `getSmallConstantTripCount`) in place of its estimate;
 //! - `_loop_products`: the trips of each loop around a block multiplied, with
-//!   `UNKNOWN_TRIPS` (ten) for a loop `induction` does not name. `lsr` and
+//!   `UNKNOWN_TRIPS` (ten) for a loop ScalarEvolution does not count. `lsr` and
 //!   `gvn` were tuned on it (#202, #203). `_loop_products_by_branch` weighs
 //!   each block by the share of its loop's trips that reach it.
 //!
@@ -78,7 +77,7 @@
 //!
 //! # Used by
 //! Each of [`crate::lsr_pass`], [`crate::hoist`], [`crate::gvn`],
-//! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`],
+//! [`crate::unroll`], [`crate::peel`],
 //! [`crate::loopidioms`], [`crate::window`], [`crate::gepoffset`],
 //! [`crate::indvars`], [`crate::ipacp`], [`crate::inline`]
 //! and [`crate::interprocedural`] asks it, before a rewrite that trades code
@@ -93,8 +92,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::cfg;
 use llrm_analysis::effects::Declarations;
+use llrm_analysis::memory;
 use llrm_analysis::scev::analysis::ScevSession;
-use llrm_analysis::{induction, memory};
 use llrm_mir::blockfrequency::frequency::BlockFrequency;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -104,7 +103,6 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
-use num_traits::ToPrimitive;
 
 use crate::spill::{self, Room};
 
@@ -349,15 +347,20 @@ pub fn priced(
 
 /// Each loop's trips by latch (the runs of its latch), where ScalarEvolution
 /// proves them (`getSmallConstantTripCount`): the `trips` that replaces the
-/// conventional ten. `LLRM_NO_SCEV_TRIPS` asks `induction` instead.
+/// conventional ten.
 pub fn proven_trips(unit: &memory::Unit) -> IndexMap<i64, i64> {
-    proven_trips_using(unit, scev_trips_enabled())
-}
-
-/// `LLRM_NO_SCEV_TRIPS`, read once: trip counts come from ScalarEvolution
-/// (`proven_trips`, `unroll`), not `induction::trip_count`.
-pub fn scev_trips_enabled() -> bool {
-    !llrm_support::env_flag!("LLRM_NO_SCEV_TRIPS")
+    let mut trips = IndexMap::default();
+    let loops = &unit.shape().loops;
+    if loops.is_empty() {
+        return trips;
+    }
+    let mut session = ScevSession::within(unit.context, unit.globals, unit.metadata, unit.function);
+    for loop_ in loops {
+        if let Some(count) = scev_trips(&mut session, unit, loop_) {
+            trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
+        }
+    }
+    trips
 }
 
 /// How often `loop_`'s latch runs, where ScalarEvolution proves it
@@ -401,30 +404,6 @@ pub fn scev_trip_bound(
             Some(scev.get_small_constant_max_trip_count(cx, header))
         })?;
     (count != 0).then_some(i64::from(count))
-}
-
-/// [`proven_trips`], asking ScalarEvolution (`scev`) or `induction`.
-pub fn proven_trips_using(
-    unit: &memory::Unit,
-    scev: bool,
-) -> IndexMap<i64, i64> {
-    let mut trips = IndexMap::default();
-    let loops = &unit.shape().loops;
-    if scev && !loops.is_empty() {
-        let mut session = ScevSession::within(unit.context, unit.globals, unit.metadata, unit.function);
-        for loop_ in loops {
-            if let Some(count) = scev_trips(&mut session, unit, loop_) {
-                trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
-            }
-        }
-        return trips;
-    }
-    for loop_ in loops {
-        if let Some(count) = induction::trip_count(unit, loop_, &unit.registers()).and_then(|count| count.to_i64()) {
-            trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
-        }
-    }
-    trips
 }
 
 /// What one execution of the entry weighs in `_frequencies`: a block taken a
