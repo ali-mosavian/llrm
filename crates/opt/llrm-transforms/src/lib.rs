@@ -42,8 +42,7 @@
 //! The modules fall into five groups.
 //!
 //! Driver: [`crate::pipeline`] (`Options`, `Fixed`, the order above) and
-//! [`crate::interprocedural`] (the whole-program step); [`crate::candidate`]
-//! judges a rewrite tried on a copy of the body.
+//! [`crate::interprocedural`] (the whole-program step).
 //!
 //! Scalar and memory: `fold` (with `canonical` and `floatfold`), `decide`,
 //! `dead`, `algebraic`, `cfg`, `dse`, `gvn`,
@@ -51,8 +50,8 @@
 //! `gepoffset`, `addresssink`, `fixednarrow`, `ports`.
 //!
 //! Loops: `loopsimplify`, `lcssa` (with `lcssamerges`), `hoist`, `loopmotion`,
-//! `trivialunswitch`, `unswitch`
-//! (with `loopshape`), `indvars` (with `exitvalues`, `exitsink`),
+//! `trivialunswitch`, `unswitch`,
+//! `indvars` (with `exitvalues`, `exitsink`),
 //! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`,
 //! `loopidioms`, `floatloop`, `tailcallelim`.
 //!
@@ -88,7 +87,6 @@ pub mod branchtocommon;
 pub mod calleepop;
 #[cfg(test)]
 mod calleepop_tests;
-pub mod candidate;
 pub mod canonexit;
 pub mod canonical;
 pub mod cfg;
@@ -212,11 +210,9 @@ pub mod loopinterchange;
 pub mod loopnest;
 pub mod looppeel;
 pub mod looprotate;
-pub mod loopshape;
 pub mod loopsimplify;
 pub mod loopunroll;
 pub mod loopunrollpass;
-pub mod loopversion;
 pub mod lsr_chain;
 pub mod lsr_collect;
 #[cfg(test)]
@@ -291,8 +287,6 @@ pub mod twoentryphi;
 pub mod uncondicmp;
 pub mod undefpred;
 pub mod unroll;
-pub mod versionalias;
-pub mod versionstride;
 pub mod vncoercion;
 #[cfg(test)]
 mod vncoercion_tests;
