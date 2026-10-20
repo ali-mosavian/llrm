@@ -38,6 +38,8 @@ meta tested = clobbers symbol
 // immediate, and the unary operations, that read no flag.
 set alu_rmw = op(Binary) & shape("rm/^0,rmi") - reads(any)
 set unary_rmw = op(Unary) & shape("rm/^0") - reads(any)
+// The conditional byte sets: they read flags and write only their operand.
+set setcc = op(Unary) & shape("rm/-") & reads(any)
 set commutative = (add|and|or|xor|imul)
 set commutative_alu = commutative & op(Binary)
 // The branches zero_compares was written for. jo, jno, jp and jnp would be
@@ -196,6 +198,15 @@ rule fused_unary
     when    free(@0, dropped), free(@1, settled), free(@2, dropped), same_width(r, c),
             !addresses(c, r), same_cell(c2, c), dead(@2, lanes(r)), encodable($1)
     rewrite anchor @0 ; @1: op c, c ; anchor @2
+
+// `set<cc> r; mov [m],r` is `set<cc> [m]` (X86InstrFragments' store of a setcc):
+// the flags are read at the same place, the byte lands in the cell, and nothing
+// reads r after.
+rule fused_setcc_store
+    match   op=setcc r:reg / ; mov c:mem, r
+    when    free(@0, dropped), free(@1, settled), width_in(r, [8]), same_width(r, c), !addresses(c, r),
+            dead(@1, lanes(r)), encodable($1)
+    rewrite anchor @0 ; @1: op c /
 
 rule fused_sourceless_unary
     match   mov r:reg, c:mem ; ... delays(@0, *) ; op=unary_rmw r / ; mov c2:mem, r
