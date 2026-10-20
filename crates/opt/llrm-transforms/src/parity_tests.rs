@@ -111,7 +111,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@99"), "{why}");
     let why = parity::check_backend(
-        &["machinesink@4", "floatalloc@8", "coalesce@10", "jumps@17", "allocate@11", "unknown@1"],
+        &["machinecse@4", "machinesink@4", "floatalloc@8", "coalesce@10", "jumps@17", "allocate@11", "unknown@1"],
         &[],
     )
     .unwrap_err();

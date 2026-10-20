@@ -137,7 +137,8 @@ the one it has, so each joined copy becomes a deleted move.
 
 ### Candidates
 The first run (`regalloc base`) is a full allocation of the prepared body.
-If it spilled, and the profile has `search` (`-fallocation-search`; -Omax), the spilled values suggest other shapes of the same body and each is
+If it spilled, and the profile has `search` (`-fallocation-search`; off at
+-O0), the spilled values suggest other shapes of the same body and each is
 allocated and priced (`_emitted`: instructions and memory operands
 weighted by block frequency); the cheapest wins.
 
@@ -151,11 +152,10 @@ weighted by block frequency); the cheapest wins.
 Unless the search is exhaustive (`-fallocation-search-all`, -Omax) only
 the first shape in the order `Retainable`, `Scoped`, `Addressed`,
 `Unfolded` that the spills admit is tried, plus `Whole` without
-splitting, and only that shape is made: the rewritten bodies of the others
-cost 104 M of `d_faces` -O1's 7.1 G and were dropped unused. A trial is kept
-only if it is cheaper and spilled none of its protected values: it stops at the
-first spill of one (`ABANDONED`), since the rounds after it could not change
-what is kept. The frame is restored between trials.
+splitting. A trial is kept only if it is cheaper and spilled none of its
+protected values: it stops at the first spill of one (`ABANDONED`), since
+the rounds after it could not change what is kept. The frame is restored
+between trials.
 
 ### Applying
 `applied` replaces every operand's value by its register at its width

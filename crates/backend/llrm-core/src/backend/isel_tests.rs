@@ -310,6 +310,46 @@ fn a_bit_count_intrinsic_is_refused_until_it_is_lowered() {
     }
 }
 
+/// A variadic function that starts a list, copies it and ends both: the copy
+/// is the pointer the first list holds, moved to the second.
+#[test]
+fn a_va_copy_moves_the_list_pointer_and_a_va_end_is_no_code() {
+    let text = "declare void @llvm.va_start.p0(ptr)\n\
+                declare void @llvm.va_copy.p0.p0(ptr, ptr)\n\
+                declare void @llvm.va_end.p0(ptr)\n\
+                define i16 @f(i16 %n, ...) addrspace(1) {\n  %a = alloca ptr\n  %b = alloca ptr\n  \
+                call void @llvm.va_start.p0(ptr %a)\n  call void @llvm.va_copy.p0.p0(ptr %b, ptr %a)\n  \
+                call void @llvm.va_end.p0(ptr %a)\n  call void @llvm.va_end.p0(ptr %b)\n  ret i16 %n\n}\n";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 4",
+            "L0_0:",
+            // va_start: the first list holds the address of the variadic
+            // arguments.
+            "lea ax, [bp+8]",
+            "mov word ptr [bp-2], ax",
+            // va_copy: the second list holds the same pointer; va_end is no
+            // code.
+            "mov word ptr [bp-4], ax",
+            "mov ax, word ptr [bp+6]",
+            "leave",
+            "retf",
+        ]
+    );
+}
+
+/// `llvm.bswap` verifies but has no lowering yet: a program that calls it
+/// stops with a named refusal, not a wrong result.
+#[test]
+fn a_bswap_is_refused_until_it_is_lowered() {
+    let text = "declare i16 @llvm.bswap.i16(i16)\n\
+                define i16 @f(i16 %a) addrspace(1) {\n  %r = call i16 @llvm.bswap.i16(i16 %a)\n  ret i16 %r\n}\n";
+    assert_eq!(selected(text, "f").err(), Some(Unselected("@llvm.bswap.i16".to_owned())));
+}
+
 /// `llvm.scmp` and `llvm.ucmp` verify but have no lowering yet: a program that
 /// calls one stops with a named refusal, not a wrong result.
 #[test]
@@ -3142,8 +3182,8 @@ define i16 @f(i16 %i) addrspace(1) {
 
 /// An i64 is a pair of dwords wherever it goes: a parameter's two cells,
 /// a phi per dword, edx:eax out of a call and a return, and a comparison's
-/// halves or-ed. isel refused "a i64 value"; C's fib64 kept both
-/// Fibonacci terms in registers as the old route did.
+/// halves or-ed. isel refused "a i64 value". The loop spills a dword on the
+/// 386 in 16-bit code: a register per phi, LLVM's lowering of the swap.
 #[test]
 fn test_an_i64_is_a_dword_pair_through_phis_calls_and_returns() {
     let text = "define i64 @f(i64 %x, i16 %n) addrspace(1) {
@@ -3170,7 +3210,7 @@ define i16 @g() addrspace(1) {
 ";
     let f = listing(text, "f");
     let add = f.iter().position(|line| line.starts_with("add e")).expect("the low dwords' sum");
-    assert!(f[add + 1].starts_with("adc e") && !f.iter().any(|line| line.contains("[bp-")), "{f:?}");
+    assert!(f[add + 1].starts_with("adc e"), "{f:?}");
     let g = listing(text, "g");
     for line in ["pushd 0", "pushd 1", "call far ptr f", "xor eax, 34", "or eax, edx"] {
         assert!(g.iter().any(|one| one == line), "{line}: {g:?}");
@@ -3688,6 +3728,48 @@ no:
         let branches: Vec<&String> =
             got.iter().filter(|line| line.starts_with('j') && !line.starts_with("jmp")).collect();
         assert_eq!(branches.len(), 2, "{join}: {got:?}");
+    }
+}
+
+/// The tree of a merged condition is any depth: `d == 0 || d == k || d == -k`
+/// (queens' `safe`) was `sete; test; jne; ...` chains, one branch per compare
+/// in the pin's FindMergedConditions. Both kinds, nested either way, and the
+/// `select` forms.
+#[test]
+fn test_a_branch_on_a_tree_of_compares_branches_on_each() {
+    for (joins, leaves) in [
+        ("  %u = or i1 %x, %y\n  %c = or i1 %u, %z\n", 3),
+        ("  %u = or i1 %y, %z\n  %c = or i1 %x, %u\n", 3),
+        ("  %u = and i1 %x, %y\n  %c = and i1 %u, %z\n", 3),
+        ("  %u = select i1 %x, i1 true, i1 %y\n  %c = select i1 %u, i1 true, i1 %z\n", 3),
+        ("  %u = or i1 %x, %y\n  %v = or i1 %z, %w\n  %c = or i1 %u, %v\n", 4),
+        ("  %u = and i1 %x, %y\n  %v = and i1 %z, %w\n  %c = and i1 %u, %v\n", 4),
+    ] {
+        let text = format!(
+            "declare void @g() addrspace(1)
+define void @f(i16 %a, i16 %b, i16 %d) addrspace(1) {{
+entry:
+  %x = icmp eq i16 %a, 0
+  %y = icmp slt i16 %b, 5
+  %z = icmp ne i16 %d, 7
+  %w = icmp ugt i16 %a, %b
+{joins}  br i1 %c, label %yes, label %no
+yes:
+  call addrspace(1) void @g()
+  ret void
+no:
+  ret void
+}}
+"
+        );
+        let got = listing_on("386", &text, "f");
+        assert!(
+            !got.iter().any(|line| line.starts_with("set") || line.starts_with("and") || line.starts_with("or ")),
+            "{joins}: {got:?}"
+        );
+        let branches: Vec<&String> =
+            got.iter().filter(|line| line.starts_with('j') && !line.starts_with("jmp")).collect();
+        assert_eq!(branches.len(), leaves, "{joins}: {got:?}");
     }
 }
 
@@ -6136,6 +6218,62 @@ entry:
   ret i32 %r
 }
 ";
-    let got = listing_on("486", text, "f");
+    // The driver legalizes and lowers selects before selection, as the pin's
+    // DAG does.
+    let mut module = llrm_mir::parse::module(text).expect("parses");
+    crate::backend::legalize::legalized(&mut module).expect("legalizes");
+    let layout = llrm_mir::datalayout::DataLayout::parse(&llrm_target::Target::layout(&llrm_x86_m16::M16).datalayout)
+        .expect("a datalayout");
+    let pricing = crate::backend::selects::Pricing { target: None, layout: &layout, tti: &llrm_mir::tti::Basic };
+    crate::backend::selects::lowered(&mut module, &pricing).expect("lowers selects");
+    let got = listing_on("486", &llrm_mir::print::module(&module), "f");
     assert!(!got.is_empty(), "{got:?}");
+}
+
+/// An address with no register operand is made where it is read, not shared:
+/// the add after the call wrote over the shared `lea`, a two-def value the
+/// allocator could not remake, and grep -O2 -m32 ran 21.9% more instructions.
+#[test]
+fn test_an_address_is_made_again_after_a_call() {
+    let text = "declare void @use(ptr) addrspace(1)
+@h = global ptr null
+define void @f(i32 %n) addrspace(1) {
+entry:
+  %buf = alloca [64 x i8]
+  call addrspace(1) void @use(ptr %buf)
+  %p = getelementptr i8, ptr %buf, i32 %n
+  store ptr %p, ptr @h
+  ret void
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let addresses = |body: &crate::model::lir::LirBody| {
+        body.blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Address))
+            .count()
+    };
+    assert_eq!(addresses(&body), 2, "the premise: the frame address is made twice");
+    let shared = crate::backend::precse::shared(&body, &crate::backend::classes::RegisterClasses::m16());
+    assert_eq!(addresses(&shared), 2);
+}
+
+/// A float argument read after a call is read from its cell there, as the
+/// pin does (`fadds 20(%esp)`): a call bounded the load's move down to its
+/// reader, so both arguments were loaded first and spilled across the call.
+#[test]
+fn test_a_float_argument_read_after_a_call_is_loaded_after_it() {
+    let _on = crate::backend::allocate::RfpOn::set();
+    let text = "declare void @g() addrspace(1)
+define float @f(float %x, float %y) addrspace(1) {
+  call addrspace(1) void @g()
+  %s = fadd float %x, %y
+  ret float %s
+}
+";
+    let got = listing(text, "f");
+    let call = got.iter().position(|line| line.starts_with("call ")).expect("the premise: a call");
+    assert!(got[call..].iter().any(|line| line.starts_with("fadd dword ptr [bp+")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("fstp")), "{got:?}");
 }

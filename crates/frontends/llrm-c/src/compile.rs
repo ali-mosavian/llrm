@@ -776,7 +776,10 @@ mod tests {
     fn test_restrict_reaches_mir_as_distinct_noalias_roots() {
         let text = emitted("tests/test_restrict_reaches_mir_as_distinct_noalias_roots");
         let define = text.lines().find(|line| line.starts_with("define ")).expect("a definition");
-        assert_eq!(define.matches("ptr noalias").count(), 3, "{text}");
+        // The attribute order is the printer's; each pointer is also `noundef`
+        // (CGCall.cpp `DetermineNoUndef`: a scalar parameter).
+        let on_pointers = |attribute: &str| define.split(", ").filter(|one| one.contains(attribute)).count();
+        assert_eq!((on_pointers("noalias"), on_pointers("noundef")), (3, 3), "{text}");
     }
 
     /// `ls_animate(&ls, 0.05f)` pushes the single's four bytes; CGFloat was
@@ -1213,6 +1216,24 @@ mod tests {
         assert!(asm.contains("dw offset reach_") && asm.contains("dw seg reach_"), "{asm}");
         assert!(asm.contains("dw offset _table"), "{asm}");
         assert!(asm.contains("extern fixed_:near") && asm.contains("extern reach_:far"), "{asm}");
+    }
+
+    /// Every module's code was in `<MODULE>_TEXT`, so a near call between
+    /// modules (clib's `__set_errno_dos`, declared near) reached into another
+    /// segment. `-mcode-segment=_TEXT` puts them all in one.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_code_segment_may_be_named_for_every_module() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("one.c");
+        std::fs::write(&source, "int one(void) { return 1; }\n").unwrap();
+        let argv: Vec<String> = ["-m16", "-mabi=watcom", "-mcode-segment=_TEXT", "one.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records one.c");
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "one", None, &args.codegen).unwrap()).unwrap();
+        assert!(asm.lines().any(|one| one == ".code _TEXT"), "{asm}");
     }
 
     /// A register list that spells the default convention's own assignment
@@ -2527,11 +2548,12 @@ mod tests {
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
         let calls: Vec<usize> =
             body.iter().enumerate().filter(|(_, one)| **one == "call far ptr _animate").map(|(at, _)| at).collect();
-        // `s`, by the address passed to `animate`: `lea ax, [bp-N]`.
+        // `s`, by the address passed to `animate`: `lea r, [bp-N]`, made once
+        // for both calls.
         let base: i64 = body[..calls[1]]
             .iter()
             .rev()
-            .find_map(|one| one.strip_prefix("lea ax, [bp-")?.strip_suffix(']')?.parse().ok())
+            .find_map(|one| one.strip_prefix("lea ")?.split_once(", [bp-")?.1.strip_suffix(']')?.parse().ok())
             .expect("&s");
         // Every byte the stores between the calls write, by frame offset.
         let mut written = std::collections::BTreeSet::new();
@@ -2566,6 +2588,9 @@ mod tests {
         let built = super::selected(&text, "indexread", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_test proc").expect("_test");
+        if std::env::var_os("SHOWASM").is_some() {
+            eprintln!("{}", &asm[from..]);
+        }
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
         let stored: Vec<&&str> = body
             .iter()

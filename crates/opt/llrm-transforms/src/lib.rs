@@ -112,6 +112,7 @@ pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_select;
 pub mod combine_shared;
+pub mod combine_shifts;
 pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
@@ -276,6 +277,7 @@ pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
 pub mod twoentryphi;
+pub mod uncondicmp;
 pub mod undefpred;
 pub mod unroll;
 pub mod unroll_jam;
