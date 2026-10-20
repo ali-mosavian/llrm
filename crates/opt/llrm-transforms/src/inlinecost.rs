@@ -385,7 +385,6 @@ struct Analyzer<'a> {
     known_successors: HashMap<u32, BlockId>,
     load_addrs: BTreeSet<Operand>,
     enable_load_elimination: bool,
-    recursive_call: bool,
     exposes_returns_twice: bool,
     has_dynamic_alloca: bool,
     contains_noduplicate_call: bool,
@@ -426,7 +425,6 @@ impl<'a> Analyzer<'a> {
             known_successors: HashMap::default(),
             load_addrs: BTreeSet::new(),
             enable_load_elimination: true,
-            recursive_call: false,
             exposes_returns_twice: false,
             has_dynamic_alloca: false,
             contains_noduplicate_call: false,
@@ -1401,11 +1399,10 @@ impl<'a> Analyzer<'a> {
             }
             return self.visit_default(inst);
         }
-        if target == self.site.callee_id && self.callee.layout().first().is_some() {
-            // F == Call.getFunction(): the callee calls itself.
-            self.recursive_call = true;
-            return false;
-        }
+        // D-recursion: `F == Call.getFunction()` (the callee calls itself) is
+        // an ordinary call here, not the refusal "recursive": a recursive
+        // callee is inlined into another caller as gcc does, and into itself
+        // by `walk`'s bounded self-inlining.
         if lowered_to_call(self.site.module, target) {
             // onLoweredCall (:732), a direct call.
             self.add_cost(arguments as i64 * INSTR_COST);
@@ -1606,9 +1603,7 @@ impl<'a> Analyzer<'a> {
                     self.cost - before
                 );
             }
-            if self.recursive_call {
-                return Err("recursive".into());
-            } else if self.exposes_returns_twice {
+            if self.exposes_returns_twice {
                 return Err("exposes returns twice".into());
             } else if self.has_dynamic_alloca {
                 return Err("dynamic alloca".into());
@@ -2443,7 +2438,9 @@ pub fn decide(
     let callee_id = llrm_mir::memory::callee(&module.context, caller, call)?;
     let callee_global = module.global(callee_id);
     let GlobalKind::Function(callee) = &callee_global.kind else { return None };
-    if callee.layout().is_empty() || !crate::inline::cloneable(module, context.recursive, callee_id, callee) {
+    // A call of the caller itself is `walk`'s bounded self-inlining, not a
+    // site priced here.
+    if callee.layout().is_empty() || callee_id == caller_id || !crate::inline::copyable(module, callee) {
         return None;
     }
     let site = Site {

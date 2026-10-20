@@ -231,7 +231,34 @@ pub struct Candidate {
 pub struct Caller<'a> {
     pub layout: &'a DataLayout,
     pub recursive: bool,
+    /// The copies are of the caller itself: they stop at the recursion limits,
+    /// and this is the frequency of each call of the function's own body
+    /// over its entry's (a call not in it counts 1).
+    pub self_inlining: Option<&'a SparseIdMap<InstId, f64>>,
 }
+
+/// DEVIATE (recursion), gcc's `--param max-inline-recursive-depth-auto` is 8
+/// (gcc 13.3, `gcc -Q --help=params`); 3 here. Measured on the i486 rows,
+/// -O2 clocks / bytes (main | depth 8 | depth 3): fib 227171/537 | 227940/1736
+/// | 132006/360, rectwo 612458/538 | 1539189/1848 | 530081/520; gcc's depth
+/// costs 3-10x main's bytes (bintree 291 -> 2876, quicksort 343 -> 3116).
+/// Owner: w-6. Exit: the copies are chosen by gcc's badness heap with its
+/// real growth limits (`inline-unit-growth`).
+pub const MAX_INLINE_RECURSIVE_DEPTH: usize = 3;
+
+/// DEVIATE (recursion), gcc 13.3's `--param max-inline-insns-recursive-auto`
+/// is 450; 150 here, in `gcc_insns`: the size the function may reach by copies
+/// of itself. The smallest that keeps fib and rectwo under main (depth 3,
+/// -O2 clocks/bytes; main fib 227171/537, rectwo 612458/538):
+/// 60: fib 207179/264, rectwo 1489763/280; 100: 132006/360, 876030/424;
+/// 150: 132006/360, 530081/520; 450: 132006/360, 530081/520.
+/// Owner: w-6. Exit: as the depth's.
+pub const MAX_INLINE_INSNS_RECURSIVE: i64 = 150;
+
+/// gcc 13.3 `--param min-inline-recursive-probability` (10 per cent): a copy
+/// is made only where the probability of reaching it, the product of the
+/// frequencies of the calls on the way, is at least this.
+pub const MIN_INLINE_RECURSIVE_PROBABILITY: f64 = 0.10;
 
 /// Whether `inst` does semantic work: not a phi, a jump or a return.
 fn semantic(
@@ -442,17 +469,6 @@ pub fn recursive(module: &Module) -> BTreeSet<GlobalId> {
     module.functions().map(|(id, _, _)| id).filter(|&id| graph.recursive(id)).collect()
 }
 
-/// Whether `body` may be cloned into another function: it returns, `splice`
-/// carries it, and it is not recursive, never to be inlined or `setjmp`-like.
-pub(crate) fn cloneable(
-    module: &Module,
-    recursive: &BTreeSet<GlobalId>,
-    id: GlobalId,
-    body: &Function,
-) -> bool {
-    !recursive.contains(&id) && copyable(module, body)
-}
-
 /// Whether `body` may be copied as a function of its own (a recursive one
 /// included): it returns, `splice` carries it, and it is not to be inlined or
 /// `setjmp`-like.
@@ -629,6 +645,8 @@ struct Plan<'a, 'c> {
     caller: &'c Caller<'c>,
     available: &'a IndexMap<GlobalId, Candidate>,
     own: i64,
+    /// The caller's size in `gcc_insns`, kept only to bound self-inlining.
+    insns: i64,
     frame: u64,
     seq: usize,
 }
@@ -641,11 +659,26 @@ impl<'a> Plan<'a, '_> {
         function_type: llrm_mir::types::TypeId,
         actuals: &[Actual],
         candidate: &'a Candidate,
+        site: InstId,
+        depth: usize,
+        reached: f64,
     ) -> Option<(Planned<'a>, Actual)> {
         if !fits_with(self.context, self.caller, function_type, |at| actuals[at].owned, candidate) {
             return None;
         }
         let callee = &*candidate.body;
+        let mut reached = reached;
+        if let Some(frequencies) = self.caller.self_inlining {
+            let grown = gcc_insns(callee) - 1;
+            reached *= frequencies.get(&site).copied().unwrap_or(1.0);
+            if depth > MAX_INLINE_RECURSIVE_DEPTH
+                || self.insns + grown > MAX_INLINE_INSNS_RECURSIVE
+                || reached < MIN_INLINE_RECURSIVE_PROBABILITY
+            {
+                return None;
+            }
+            self.insns += grown;
+        }
         self.seq += 1;
         let seq = self.seq;
         let mut actuals = actuals.to_vec();
@@ -677,7 +710,7 @@ impl<'a> Plan<'a, '_> {
                     .collect();
                 let target = seen.last().and_then(|one| one.callee).and_then(|name| self.available.get(&name));
                 if let Some(target) = target
-                    && let Some((planned, result)) = self.inline(info.function_type, &seen, target)
+                    && let Some((planned, result)) = self.inline(info.function_type, &seen, target, inst, depth + 1, reached)
                 {
                     if instruction.result.is_some() {
                         results.insert(inst, result);
@@ -920,7 +953,15 @@ pub fn expanded_all(
 ) -> Result<usize, String> {
     let calls: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
     let start = (semantic_count(function), frame(context, caller.layout, function));
-    let mut plan = Plan { context: &*context, caller, available, own: start.0, frame: start.1, seq: 0 };
+    let mut plan = Plan {
+        context: &*context,
+        caller,
+        available,
+        own: start.0,
+        insns: gcc_insns(function),
+        frame: start.1,
+        seq: 0,
+    };
     let mut results = SparseIdMap::default();
     let mut sites: Vec<(InstId, Planned)> = Vec::new();
     for call in calls {
@@ -932,7 +973,7 @@ pub fn expanded_all(
             .and_then(|sites| sites.get(&call))
             .or_else(|| seen.last().and_then(|one| one.callee).and_then(|name| available.get(&name)));
         let Some(target) = target else { continue };
-        if let Some((planned, result)) = plan.inline(info.function_type, &seen, target) {
+        if let Some((planned, result)) = plan.inline(info.function_type, &seen, target, call, 1, 1.0) {
             if instruction.result.is_some() {
                 results.insert(call, result);
             }

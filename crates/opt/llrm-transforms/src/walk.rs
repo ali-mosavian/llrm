@@ -245,7 +245,11 @@ impl ProgramPass for Walk {
                     let mut declared = declared(&mut modules[at], module);
                     let (context, function) = function_mut(module, id);
                     let was = calls_of(context, function);
-                    let by = crate::inline::Caller { layout: &program.layout, recursive: recursive.contains(&id) };
+                    let by = crate::inline::Caller {
+                        layout: &program.layout,
+                        recursive: recursive.contains(&id),
+                        self_inlining: None,
+                    };
                     let spliced = crate::inline::expanded_all(
                         context,
                         function,
@@ -254,6 +258,18 @@ impl ProgramPass for Walk {
                         Some(&constant),
                         &mut declared,
                     )? > 0;
+                    let mut spliced = spliced;
+                    if let Some(frequencies) = self_calls(module, &program.layout, id, self.inline.single) {
+                        let (context, function) = function_mut(module, id);
+                        let itself = crate::inline::Candidate {
+                            body: std::rc::Rc::new(function.clone()),
+                            frame: crate::inline::grown(context, &program.layout, function),
+                            moved: false,
+                        };
+                        let available = [(id, itself)].into_iter().collect();
+                        let by = crate::inline::Caller { self_inlining: Some(&frequencies), ..by };
+                        spliced |= crate::inline::expanded_all(context, function, &by, &available, None, &mut declared)? > 0;
+                    }
                     for (call, callee, cost) in decided.iter().flatten() {
                         let name = |id: GlobalId| module.global(id).name.as_deref().unwrap_or("?");
                         let gone = module.global(id).function().is_some_and(|one| one.parent(*call).is_none());
@@ -296,6 +312,48 @@ impl ProgramPass for Walk {
         analyses.invalidate();
         Ok(())
     }
+}
+
+/// DEVIATE (recursion): the frequency of each call in `id`, if it is to be
+/// given copies of its own body at its calls of itself, as gcc's
+/// `recursive_inlining` does, to the limits of [`crate::inline`]. None where
+/// it is not: it calls itself in fewer than two distinct ways (calls of a
+/// function that reads and writes nothing, with the same arguments, are one
+/// call: `hanoi(n-1, a, c, b) + hanoi(n-1, a, c, b)` is a loop once the
+/// simplifier has merged them, 188 clocks, and 185482 copied before), or the
+/// body is sized for bytes (gcc does not inline recursively at -Os).
+fn self_calls(
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    id: GlobalId,
+    for_size: bool,
+) -> Option<llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, f64>> {
+    let function = module.global(id).function()?;
+    let pure = {
+        let effects = llrm_mir::memory::stated(&function.attrs);
+        !effects.reads && !effects.writes
+    };
+    let mut distinct: Vec<(Vec<llrm_mir::module::Operand>, llrm_mir::module::InstId)> = Vec::new();
+    for (_, inst) in function.walk() {
+        if llrm_mir::memory::callee(&module.context, function, inst) != Some(id) {
+            continue;
+        }
+        let operands = function.instruction(inst).operands.clone();
+        if !(pure && distinct.iter().any(|(seen, _)| *seen == operands)) {
+            distinct.push((operands, inst));
+        }
+    }
+    if for_size || distinct.len() < 2 {
+        return None;
+    }
+    let found = crate::inlinecost::caller_frequencies(module, layout, function);
+    let mut frequencies = llrm_support::hash::SparseIdMap::default();
+    if found.get_entry_freq().get_frequency() > 0 {
+        for (block, inst) in function.walk().filter_map(|(_, inst)| function.parent(inst).map(|block| (block, inst))) {
+            frequencies.insert(inst, found.relative_to_entry(block));
+        }
+    }
+    Some(frequencies)
 }
 
 #[cfg(test)]

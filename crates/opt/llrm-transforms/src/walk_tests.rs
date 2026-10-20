@@ -186,11 +186,13 @@ fn test_a_loop_around_a_call_is_unrolled_only_after_the_call_is_inlined() {
     assert!(multiplies == 30 && !top.contains("@eq"), "top has {multiplies} multiplies:\n{top}");
 }
 
-/// fib at -O2 was inlined into itself eight levels deep (802 bytes of text
-/// against clang's 100, tests/llc/fib.c): LLVM never inlines a recursive
-/// callee into itself.
+/// fib was never copied into itself (LLVM refuses a recursive callee): 334157
+/// clocks at -O2 against main's 227171, whose gcc-style recursion inlined it
+/// eight levels deep. The walk copies it as gcc's `recursive_inlining` does,
+/// to gcc's depth and size limits (DEVIATE recursion; tests/llc/fib.c is 802
+/// bytes of text against clang's 100).
 #[test]
-fn test_a_directly_recursive_function_is_not_inlined_into_itself() {
+fn test_a_directly_recursive_function_is_copied_into_itself_to_gcc_limits() {
     let mut module = parsed(
         "define i32 @fib(i32 %n) {
 b0:
@@ -227,7 +229,8 @@ b0:
     .expect("the pipeline runs");
     let text = llrm_mir::print::module(&module);
     let calls = text.matches("call i32 @fib").count();
-    assert!(calls <= 3, "fib was copied into itself, {calls} calls of it:\n{text}");
+    assert!(calls > 3, "fib was not copied into itself, {calls} calls of it:\n{text}");
+    assert!(calls <= crate::inline::MAX_INLINE_INSNS_RECURSIVE as usize, "fib was copied past gcc's limit, {calls} calls of it");
 }
 
 /// A tail-recursive function called once: tail-call elimination makes its
@@ -340,4 +343,49 @@ b0:
         let body = text.split("define").find(|one| one.contains(&format!("{name}("))).expect(name);
         assert!(!body.contains("add") && !body.contains("call"), "{name} stands:\n{text}");
     }
+}
+
+/// Two calls of a function that reads and writes nothing, with the same
+/// arguments, are one call. hanoi's merge in the simplifier makes it a loop
+/// (188 clocks); copies made before it (two calls in the body) left it
+/// 185482.
+#[test]
+fn test_calls_the_simplifier_merges_are_not_two_recursive_calls_to_copy() {
+    let mut module = parsed(
+        "define internal i32 @hanoi(i32 %n) memory(none) {
+b0:
+  %zero = icmp eq i32 %n, 0
+  br i1 %zero, label %out, label %rec
+
+rec:
+  %m = sub i32 %n, 1
+  %x = call i32 @hanoi(i32 %m)
+  %p = add i32 %x, 1
+  %y = call i32 @hanoi(i32 %m)
+  %s = add i32 %p, %y
+  ret i32 %s
+
+out:
+  ret i32 0
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @hanoi(i32 %n)
+  ret i32 %r
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    let calls = text.matches("call i32 @hanoi").count();
+    assert!(calls <= 1, "hanoi was copied before its two calls were merged, {calls} calls of it:\n{text}");
 }
