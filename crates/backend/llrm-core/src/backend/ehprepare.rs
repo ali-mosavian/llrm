@@ -30,6 +30,14 @@
 //! variadic intrinsic, so one call per cell stands for `localescape`; exit: the
 //! intrinsic in `llrm-mir` (owner splitkit-port, 2026-11-06).
 //!
+//! Row D-EH2 (open): GORILLA m32 is 7.6%, 6.8%, 7.7% and 8.6% over main at
+//! -Os, -O1, -O2 and -O3 (51,421 against 47,769; 52,305; 52,770; 53,169), m16
+//! 4.7%, 4.2%, 5.1% and 5.6% (42,505 against 40,602; 43,531; 43,868; 44,108);
+//! DRAWGORILLA, PLOTSHOT, EXPLODEGORILLA and DOSUN carry it, DRAWGORILLA's x87
+//! stores and loads first. Owner splitkit-port, by 2026-10-27, closed by the
+//! per-function listing diff against main; closes when all eight are at or
+//! under main.
+//!
 //! [`prepared`] works on each function with the QB personality, in order:
 //!
 //! - Checks. A function that registers a handler without the personality, a
