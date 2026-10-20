@@ -24,3 +24,17 @@ fn the_arm64_forms_read_and_cover_the_selection_gaps() {
     // `b.{cc}` expands to one form per condition, each reading the flags it tests.
     assert_eq!(forms.iter().filter(|form| form.name.starts_with("b.")).count(), 14);
 }
+
+#[test]
+fn the_arm64_patterns_generate_against_the_arm64_forms() {
+    let dialect = Dialect::parse(include_str!("../src/instructions/dialect.toml")).expect("the dialect reads");
+    let generated = llrm_iselgen::generate(
+        include_str!("../src/instructions/arm64.instr"),
+        include_str!("../src/isel/patterns.isel"),
+        "arm64",
+        "llrm_core",
+        &dialect,
+    )
+    .unwrap_or_else(|why| panic!("{why}"));
+    assert!(generated.code.contains("fn arm64_holds("), "{}", &generated.code[..200.min(generated.code.len())]);
+}

@@ -238,6 +238,7 @@ version = "0.1.0"
 dependencies = [
  "llrm-elf-arm64",
  "llrm-instr",
+ "llrm-iselgen",
  "llrm-lir",
  "llrm-macho",
  "llrm-mir",
