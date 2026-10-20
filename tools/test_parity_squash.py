@@ -554,3 +554,51 @@ def test_fast_mode_lets_a_refactor_delete_lines_but_not_a_file(tmp_path, monkeyp
     (tmp_path / "s").mkdir()
     stale, stale_head = squash_of_a_stale_tree(tmp_path / "s")
     assert ps.refusals(stale_head, "", base="main", cwd=stale)
+
+
+def test_a_pr_whose_only_conflict_is_a_generated_page_is_brought_up_to_date_on_its_branch(tmp_path, monkeypatch):
+    """#2878, #2872, #2941, #2943, #2949 and #2951 conflicted only in an index readme: regenerated locally, but `gh pr merge` refused them as unmergeable at 03:02, so none landed."""
+    origin = tmp_path / "origin.git"
+    sh(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    work = tmp_path / "w"
+    sh(tmp_path, "clone", "-q", str(origin), str(work))
+    commit(work, "index.md", "a\n", "base")
+    sh(work, "push", "-q", "origin", "HEAD:main")
+    sh(work, "checkout", "-q", "-b", "pr")
+    head = commit(work, "index.md", "a\npr\n", "pr adds a page")
+    sh(work, "push", "-q", "origin", "pr")
+    sh(work, "checkout", "-q", "main")
+    commit(work, "index.md", "a\nmain\n", "main adds a page")
+    sh(work, "push", "-q", "origin", "main")
+
+    def regenerate(conflicts, cwd):
+        sh(cwd, "checkout", "--ours", "--", *conflicts)
+        sh(cwd, "add", "-A")
+        sh(cwd, "commit", "-q", "--no-edit")
+        return ""
+
+    monkeypatch.setattr(ps, "regenerate", regenerate)
+    fresh = ps.update_generated_only(head, "pr", base="origin/main", cwd=work)
+    assert fresh and fresh != head
+    sh(work, "fetch", "-q", "origin")
+    assert sh(work, "rev-parse", "origin/pr") == fresh
+    sh(work, "merge-base", "--is-ancestor", "origin/main", fresh)
+
+
+def test_a_pr_with_a_real_conflict_is_not_pushed_to(tmp_path, monkeypatch):
+    origin = tmp_path / "origin.git"
+    sh(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    work = tmp_path / "w"
+    sh(tmp_path, "clone", "-q", str(origin), str(work))
+    commit(work, "code.rs", "a\n", "base")
+    sh(work, "push", "-q", "origin", "HEAD:main")
+    sh(work, "checkout", "-q", "-b", "pr")
+    head = commit(work, "code.rs", "a\npr\n", "pr")
+    sh(work, "push", "-q", "origin", "pr")
+    sh(work, "checkout", "-q", "main")
+    commit(work, "code.rs", "a\nmain\n", "main")
+    sh(work, "push", "-q", "origin", "main")
+    monkeypatch.setattr(ps, "regenerate", lambda conflicts, cwd: "conflicts in files nothing generates: " + ", ".join(conflicts))
+    assert ps.update_generated_only(head, "pr", base="origin/main", cwd=work) == ""
+    sh(work, "fetch", "-q", "origin")
+    assert sh(work, "rev-parse", "origin/pr") == head
