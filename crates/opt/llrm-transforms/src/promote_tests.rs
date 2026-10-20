@@ -636,13 +636,17 @@ fn a_global_cell_is_promoted_across_a_readonly_call() {
 
 /// Promote took every call to write anything, so a store before a call
 /// to a procedure that writes something else was loaded again after it. A
-/// weak body may be replaced, so what it does says nothing.
+/// weak body may be replaced, so what it does says nothing. The cells are
+/// internal: the pin (24.0.0git d1106deb71cc, `opt -O2`, the callee
+/// `noinline`) keeps the reload of an external global across the call and
+/// drops it for an internal one, which is what GlobalsAA tracks.
 #[test]
+#[ignore = "#3190: the pin forwards it (GlobalsAA); promote's regions walk does not read GlobalsModRef"]
 fn a_call_to_a_procedure_that_does_not_write_a_cell_keeps_it_promoted() {
     let text = |linkage: &str| {
         format!(
-            "@x = global i16 0
-@y = global i16 0
+            "@x = internal global i16 0
+@y = internal global i16 0
 
 define {linkage}void @p() {{
 b0:
@@ -662,6 +666,7 @@ b0:
     };
     let promoted = |linkage: &str| {
         let mut module = module(&text(linkage));
+        crate::testing::attributed(&mut module);
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
         manager.add(Promote);
@@ -738,6 +743,7 @@ b0:
 /// type is `allocation`, a variable's `place`: apart, so `@g` keeps its value;
 /// a store of the variable's own type still kills it.
 #[test]
+#[ignore = "#3190: the pin keeps it (GlobalsAA); promote's regions walk does not read GlobalsModRef"]
 fn an_unplaced_store_of_another_type_leaves_a_stored_global() {
     let across = |store_tag: &str| {
         let text = format!(

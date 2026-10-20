@@ -1118,105 +1118,6 @@ fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
     assert_eq!(pipeline::Options::aggressive().rounds, usize::MAX);
 }
 
-/// A loop unrolled in the last round of the budget left its straight line
-/// uncleaned: -O1's two rounds stopped there, and `lru`'s two word zero stores
-/// stayed two (169 clocks against clang's 168; the third round's fold makes
-/// them one). A round follows an unroll that changed the body, whatever the
-/// budget.
-#[test]
-fn a_round_follows_an_unroll_that_changed_the_body_past_the_budget() {
-    let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
-    let rounds = |unrolls: usize| {
-        let mut module = llrm_analysis::testing::parsed(text);
-        let count = std::rc::Rc::new(std::cell::Cell::new(0));
-        let options = pipeline::Options { rounds: 2, ..pipeline::Options::standard() };
-        let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), options, ..Applied::default() });
-        fixed.only = false;
-        fixed.passes = vec![Box::new(Chain { left: 8, runs: std::rc::Rc::clone(&count) })];
-        fixed.unrollers = vec![Box::new(Chain { left: unrolls, runs: std::rc::Rc::default() })];
-        crate::testing::managed(&mut module, fixed);
-        count.get()
-    };
-    assert_eq!(rounds(0), 2, "premise: the budget ends the rounds");
-    assert_eq!(rounds(1), 2, "an unroll of the first round is cleaned by the second");
-    assert_eq!(rounds(2), 3, "a third round runs after the unroll of the second, none after the third");
-}
-
-/// Sixty sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them
-/// (six sweeps are completely unrolled by `LoopFullUnroll`, which LLVM's order
-/// runs before the jam, and leave no nest to jam),
-/// through the whole pipeline at -O3 with and without unroll-and-jam, and at
-/// -O2: the jam changes the code of -O3 alone, and the nest computes what it
-/// did. Before the pass was in the pipeline the first two were the same text.
-#[test]
-fn only_o3_jams_a_nest_that_sweeps_the_same_cells() {
-    let cells = |base: i32| (0..100).map(|at| format!("i16 {}", base + at % 7)).collect::<Vec<_>>().join(", ");
-    let text = format!(
-        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
-@p = global [100 x i16] [{}]
-@v = global [100 x i16] [{}]
-
-define i16 @main() {{
-b0:
-  br label %outer
-
-outer:
-  %t = phi i16 [ 0, %b0 ], [ %tn, %outerlatch ]
-  %go = icmp slt i16 %t, 60
-  br i1 %go, label %pre, label %done
-
-pre:
-  br label %inner
-
-inner:
-  %j = phi i16 [ 0, %pre ], [ %jn, %body ]
-  %more = icmp slt i16 %j, 100
-  br i1 %more, label %body, label %outerlatch
-
-body:
-  %o = mul i16 %j, 2
-  %pp = getelementptr i8, ptr @p, i16 %o
-  %pv = getelementptr i8, ptr @v, i16 %o
-  %a = load i16, ptr %pp
-  %b = load i16, ptr %pv
-  %s = add i16 %a, %b
-  store i16 %s, ptr %pp
-  %jn = add i16 %j, 1
-  br label %inner
-
-outerlatch:
-  %tn = add i16 %t, 1
-  br label %outer
-
-done:
-  %q = getelementptr i8, ptr @p, i16 40
-  %w = load i16, ptr %q
-  ret i16 %w
-}}
-",
-        cells(1),
-        cells(3)
-    );
-    let through = |options: pipeline::Options| {
-        let mut module = llrm_analysis::testing::parsed(&text);
-        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
-            pipeline::applied(program, &Applied { options, ..Applied::default() })
-        })
-        .and_then(|done| done)
-        .unwrap();
-        (llrm_mir::print::module(&module), interpret::run(&module, "main", Vec::new(), FUEL))
-    };
-    let before = interpret::run(&llrm_analysis::testing::parsed(&text), "main", Vec::new(), FUEL);
-    let (jammed, result) = through(pipeline::Options::speed());
-    let (plain, plain_result) = through(pipeline::Options { unroll_jam: false, ..pipeline::Options::speed() });
-    assert_eq!((&result, &plain_result), (&before, &before), "{jammed}");
-    assert_ne!(jammed, plain);
-    assert_eq!(
-        through(pipeline::Options::default()).0,
-        through(pipeline::Options { unroll_jam: false, ..Default::default() }).0
-    );
-}
-
 /// Reads what the module says each function does to memory, and finds nothing
 /// to do; counts how often it was asked.
 struct ReadsCallees {
@@ -1456,7 +1357,7 @@ fn test_sroa_and_mem2reg_are_on_by_default_and_the_registry_calls_their_slots_tr
                 level,
                 applied.options.sroa,
                 applied.options.mem2reg,
-                applied.options.rotating(),
+                applied.options.rotate_slot,
                 &[],
                 &[],
             );
@@ -2222,17 +2123,16 @@ fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
     assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
 }
 
-/// LoopRotate is on, as in the pin (the `LLRM_NO_ROTATE` opt-out ran a path
-/// the pin has not: idioms.bas failed six with it), and off where
-/// unroll-and-jam runs, whose nests are the header-tested form (RJ1).
+/// The rotate slot (the pin's LPM1 `loop-rotate`, L728) used to be left out
+/// where unroll-and-jam ran, so -O3 and -Omax ran no loop-rotate that the pin
+/// runs. It is in the order at every level.
 #[test]
-fn test_the_rotate_slot_is_on_and_off_where_unroll_jam_is() {
-    let on = pipeline::Options { rotate_slot: true, ..pipeline::Options::default() };
-    assert!(on.rotating());
-    assert!(pipeline::Options::default().rotating());
-    assert!(!pipeline::Options { unroll_jam: true, ..on }.rotating());
-    assert!(!pipeline::Options::speed().rotating());
-    assert!(!pipeline::Options::aggressive().rotating());
+fn test_the_rotate_slot_runs_at_every_level() {
+    for options in [pipeline::Options::default(), pipeline::Options::speed(), pipeline::Options::aggressive()] {
+        let applied = Applied { options, ..Applied::default() };
+        let built = pipeline::llvm_order(&applied, crate::parity::Phase::Simplify);
+        assert!(built.iter().any(|one| one.name() == "rotate@728"), "no rotate@728 in the order");
+    }
 }
 
 /// `llrm-pass --order` could not name a slot of LLVM's order: the oracle ran
@@ -2555,4 +2455,33 @@ out:
         llrm_mir::print::module(&module).matches("icmp eq i16").count() - 1
     };
     assert_eq!((loops(false), loops(true)), (1, 2));
+}
+
+/// A four-trip loop with no closed form, through the LLVM order: its text, and
+/// whether a loop phi is left.
+fn four_trips_under(options: pipeline::Options) -> bool {
+    let text = "define i16 @f(i16 %x) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %h ]\n  %t = phi i16 [ %x, %b0 ], [ %u, %h ]\n  %m = mul i16 %t, 3\n  %u = add i16 %m, %i\n  %j = add i16 %i, 1\n  %c = icmp slt i16 %j, 4\n  br i1 %c, label %h, label %x\nx:\n  ret i16 %u\n}\n";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap_or_else(|error| panic!("{error}"));
+    llrm_mir::print::module(&module).contains(" = phi ")
+}
+
+/// clang runs the full unroll with `OnlyWhenForced = !UnrollLoops`, and
+/// `UnrollLoops` is on above -O1: matmul at -O1 was 379 bytes before the LLVM
+/// order and 3197 after, 8x8x8 copied out where `opt -O1` keeps 408. At -Os the
+/// option is on and the unroller's size threshold (0) keeps the loop; at -O2 a
+/// four-trip loop is gone.
+#[test]
+fn test_the_full_unroll_takes_a_loop_only_below_o2_when_asked() {
+    assert!(four_trips_under(pipeline::Options::basic()), "-O1 kept the loop");
+    assert!(four_trips_under(pipeline::Options { loop_unrolling: false, ..pipeline::Options::standard() }));
+    assert!(pipeline::Options::size().loop_unrolling);
+    assert!(four_trips_under(pipeline::Options::size()), "-Os kept the loop");
+    assert!(!four_trips_under(pipeline::Options::standard()), "-O2 unrolls it");
 }

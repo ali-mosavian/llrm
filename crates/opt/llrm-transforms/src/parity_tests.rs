@@ -334,7 +334,6 @@ fn test_every_analysis_the_manager_names_has_a_registry_row() {
         include_str!("../../llrm-analysis/src/cfg.rs"),
         include_str!("../../llrm-analysis/src/memoryssa.rs"),
         include_str!("../../llrm-analysis/src/noreturn.rs"),
-        include_str!("../../llrm-analysis/src/observers.rs"),
         include_str!("../../llrm-analysis/src/scev/analysis.rs"),
         include_str!("spill.rs"),
         include_str!("../../../ir/llrm-mir/src/memory.rs"),
@@ -411,7 +410,7 @@ fn test_no_old_slot_of_the_built_lists_runs_a_translated_pass() {
                 level,
                 on.options.sroa,
                 on.options.mem2reg,
-                on.options.rotating(),
+                on.options.rotate_slot,
                 &[],
                 &held,
             );

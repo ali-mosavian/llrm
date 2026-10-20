@@ -19,7 +19,7 @@
 //!     s1["<b>sroa (+ splitcopy)</b><br/><small>at boundaries</small>"]:::mid
 //!     s2["<b>cleanup: fold decide dead</b><br/><small>algebraic dse gvn<br/>promote inferspace<br/>calls: tailrec<br/>loops: loopsimplify lcssa<br/>licm<br/>trivialunswitch indvars<br/>floatloop fill</small>"]:::mid
 //!     s3["<b>after each round: unroll</b>"]:::mid
-//!     s4["<b>after it settles: peel,</b><br/><small>unswitch, distribute, unroll-jam, merge</small>"]:::mid
+//!     s4["<b>after it settles: peel,</b><br/><small>unswitch, merge</small>"]:::mid
 //!   end
 //!   ipa["<b>interprocedural: inline,</b><br/><small>ipacp, argpromotion,<br/>deadargs, narrowspace</small>"]:::mid
 //!   dce["<b>globaldce</b><br/><small>availableexternally<br/>calleepop</small>"]:::mid
@@ -42,8 +42,7 @@
 //! The modules fall into five groups.
 //!
 //! Driver: [`crate::pipeline`] (`Options`, `Fixed`, the order above) and
-//! [`crate::interprocedural`] (the whole-program step); [`crate::candidate`]
-//! judges a rewrite tried on a copy of the body.
+//! [`crate::interprocedural`] (the whole-program step).
 //!
 //! Scalar and memory: `fold` (with `canonical` and `floatfold`), `decide`,
 //! `dead`, `algebraic`, `cfg`, `dse`, `gvn`,
@@ -51,9 +50,9 @@
 //! `gepoffset`, `addresssink`, `fixednarrow`, `ports`.
 //!
 //! Loops: `loopsimplify`, `lcssa` (with `lcssamerges`), `hoist`, `loopmotion`,
-//! `trivialunswitch`, `unswitch`, `loopdistribute`
-//! (with `loopshape`), `indvars` (with `exitvalues`, `exitsink`),
-//! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`, `unroll_jam`,
+//! `trivialunswitch`, `unswitch`,
+//! `indvars` (with `exitvalues`, `exitsink`),
+//! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`,
 //! `loopidioms`, `floatloop`, `tailcallelim`.
 //!
 //! Whole program: `globalopt`, `globaldce`, `availableexternally`, `inline`,
@@ -88,7 +87,6 @@ pub mod branchtocommon;
 pub mod calleepop;
 #[cfg(test)]
 mod calleepop_tests;
-pub mod candidate;
 pub mod canonexit;
 pub mod canonical;
 pub mod cfg;
@@ -128,6 +126,7 @@ pub mod combine_sink;
 mod combine_sink_tests;
 pub mod combine_sub;
 pub mod combine_visit_select;
+pub mod combine_xor;
 pub mod condstores;
 pub mod condtocond;
 pub mod congruentiv;
@@ -149,7 +148,6 @@ pub mod decide;
 pub mod dfajumpthreading;
 #[cfg(test)]
 mod dfajumpthreading_tests;
-pub mod dse;
 pub mod earlycse;
 pub mod edges;
 pub mod exitopt;
@@ -205,18 +203,15 @@ pub mod local;
 mod local_tests;
 pub mod loopclone;
 pub mod loopdeletion;
-pub mod loopdistribute;
 pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;
 pub mod loopnest;
 pub mod looppeel;
 pub mod looprotate;
-pub mod loopshape;
 pub mod loopsimplify;
 pub mod loopunroll;
 pub mod loopunrollpass;
-pub mod loopversion;
 pub mod lsr_chain;
 pub mod lsr_collect;
 #[cfg(test)]
@@ -247,7 +242,6 @@ mod narrowspace_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;
-pub mod peel;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
@@ -290,10 +284,6 @@ pub mod trunc_inst_combine;
 pub mod twoentryphi;
 pub mod uncondicmp;
 pub mod undefpred;
-pub mod unroll;
-pub mod unroll_jam;
-pub mod versionalias;
-pub mod versionstride;
 pub mod vncoercion;
 #[cfg(test)]
 mod vncoercion_tests;

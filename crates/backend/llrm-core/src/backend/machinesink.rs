@@ -56,6 +56,16 @@
 //! 2026-10-22 with jumps' block-by-block diff: a placement rule jumps names,
 //! or sinking with shrink-wrapping (lir-cleanup-port for the sinking half).
 //!
+//! DEVIATE M6 (no number): an instruction that reads or writes any physical
+//! register stays, where `FindSuccToSinkTo` lets a physical def marked dead
+//! through (and a use of a constant register). Effect: none seen, 0 sinks
+//! missed over d_faces and the 820-object corpus at -O2 (counted: no
+//! instruction that passes `safe_to_move` has a physical write and no read).
+//! The flags are the pin's rule in full: a def moves only if dead (read by no
+//! later instruction of its block and no successor), and not into a block that
+//! reads them (`SinkInstruction`'s zombie check).
+//! Exit: honor a dead implicit def when LIR marks one.
+//!
 //! DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
 //! (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
 //! instruction has none).
@@ -203,6 +213,9 @@ struct Sinker {
     changed: bool,
     regs: llrm_lir::registers::Regs,
     bits: u32,
+    /// Whether the flags are read before they are written from each block's
+    /// entry on (live in, as `isLiveIn` says of EFLAGS).
+    flags_live_in: Vec<bool>,
 }
 
 /// The post-dominator tree: the dominator tree of the reversed graph with a
@@ -225,10 +238,42 @@ fn post_dominators(cfg: &Cfg) -> DomTree {
 }
 
 impl Sinker {
+    /// The walk of `body`. Where `before` is the previous round's, and it broke
+    /// no edge, the graph is the same and its analyses are taken from it (the
+    /// pin computes them once and updates them after a split).
     fn new(
         body: &LirBody,
         size: bool,
+        before: Option<Sinker>,
     ) -> Self {
+        let mut owner = HashMap::default();
+        let mut uses: HashMap<u32, Vec<Use>> = HashMap::default();
+        for (number, block) in body.blocks.iter().enumerate() {
+            for one in block.insns.iter() {
+                owner.insert(one.id(), number);
+                for value in &one.uses {
+                    uses.entry(*value).or_default().push(Use::Insn(one.id()));
+                }
+            }
+            for phi in block.phis.iter() {
+                for &(from, value) in &phi.incoming {
+                    uses.entry(value).or_default().push(Use::Phi { block: number, from });
+                }
+            }
+        }
+        let insns = body.blocks.iter().map(|block| block.insns.to_vec()).collect();
+        if let Some(before) = before {
+            return Self {
+                insns,
+                owner,
+                uses,
+                considered: HashSet::default(),
+                merged: HashMap::default(),
+                to_split: Vec::new(),
+                changed: false,
+                ..before
+            };
+        }
         let cfg = Cfg::of(body);
         let dom = DomTree::of(&cfg);
         let post = post_dominators(&cfg);
@@ -248,24 +293,9 @@ impl Sinker {
             }
         }
         let depths = crate::analysis::intervals::depths_shared(body);
-        let mut owner = HashMap::default();
-        let mut uses: HashMap<u32, Vec<Use>> = HashMap::default();
-        for (number, block) in body.blocks.iter().enumerate() {
-            for one in block.insns.iter() {
-                owner.insert(one.id(), number);
-                for value in &one.uses {
-                    uses.entry(*value).or_default().push(Use::Insn(one.id()));
-                }
-            }
-            for phi in block.phis.iter() {
-                for &(from, value) in &phi.incoming {
-                    uses.entry(value).or_default().push(Use::Phi { block: number, from });
-                }
-            }
-        }
         let mut sinker = Self {
             size,
-            insns: body.blocks.iter().map(|block| block.insns.to_vec()).collect(),
+            insns,
             at: body.blocks.iter().map(|block| block.at).collect(),
             irreducible: body.blocks.iter().map(|block| hard.contains(&block.at)).collect(),
             depth: body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect(),
@@ -284,7 +314,9 @@ impl Sinker {
             changed: false,
             regs: body.regs(),
             bits: body.bits,
+            flags_live_in: Vec::new(),
         };
+        sinker.flags_live_in = sinker.solve_flags();
         sinker.sort_successors();
         sinker
     }
@@ -335,21 +367,88 @@ impl Sinker {
         true
     }
 
-    /// Whether `one` reads or writes a register that is not virtual or a flag
-    /// it does not overwrite, so that it cannot move (the physical register
-    /// cases of `FindSuccToSinkTo`).
+    /// The physical-register cases of `FindSuccToSinkTo` for the instruction at
+    /// `index` of `block`: it stays if it reads a physical register (the flags
+    /// included), or defines one that is not dead. A flag it sets is dead when
+    /// no later instruction of its block reads it before another sets it and
+    /// no successor reads it (`flags_live_in`); any other physical def counts
+    /// as live (DEVIATE M6). An unknown effect reads and writes them all.
     fn touches_machine_state(
         &self,
-        one: &Insn,
+        block: usize,
+        index: usize,
     ) -> bool {
-        let Some(effect) = liveness::effect(self.regs, self.bits, one) else { return true };
+        let flags = |lanes: &crate::backend::lanes::Lanes| {
+            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+        };
         let physical = |lanes: &crate::backend::lanes::Lanes| {
             lanes.iter().any(|&(register, _)| register != llrm_lir::registers::RegId::None)
         };
-        // A flag it writes is dead here (nothing reads flags across blocks);
-        // one it reads is set by an instruction it must stay behind.
-        let reads_flags = effect.all_reads().iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None);
-        physical(&effect.all_reads()) || physical(&effect.writes) || reads_flags
+        let Some(effect) = liveness::effect(self.regs, self.bits, &self.insns[block][index]) else { return true };
+        if physical(&effect.all_reads()) || physical(&effect.writes) || flags(&effect.all_reads()) {
+            return true;
+        }
+        if !flags(&effect.writes) {
+            return false;
+        }
+        for later in &self.insns[block][index + 1..] {
+            let Some(effect) = liveness::effect(self.regs, self.bits, later) else { return true };
+            if flags(&effect.all_reads()) {
+                return true;
+            }
+            if flags(&effect.writes) {
+                return false;
+            }
+        }
+        // Not touched again here: dead unless a successor reads them.
+        self.cfg.succs[block].iter().any(|&succ| self.flags_live_in[succ])
+    }
+
+    /// Whether `one` writes the flags.
+    fn writes_flags(
+        &self,
+        one: &Insn,
+    ) -> bool {
+        liveness::effect(self.regs, self.bits, one).is_none_or(|effect| {
+            effect.writes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+        })
+    }
+
+    /// The flags live at each block's entry: read before written there, or
+    /// untouched there and live at a successor's.
+    fn solve_flags(&self) -> Vec<bool> {
+        let n = self.cfg.len();
+        let flags = |lanes: &crate::backend::lanes::Lanes| {
+            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+        };
+        // What each block does first: reads the flags (live in), writes them
+        // (not), or neither (as its successors). An unknown effect reads them.
+        let first: Vec<Option<bool>> = (0..n)
+            .map(|block| {
+                self.insns[block]
+                    .iter()
+                    .find_map(
+                        |one| match liveness::effect(self.regs, self.bits, one) {
+                            None => Some(true),
+                            Some(effect) => {
+                                let reads = flags(&effect.all_reads());
+                                (reads || flags(&effect.writes)).then_some(reads)
+                            }
+                        },
+                    )
+            })
+            .collect();
+        let mut live: Vec<bool> = first.iter().map(|first| *first == Some(true)).collect();
+        let mut work: Vec<usize> = (0..n).filter(|&block| live[block]).collect();
+        while let Some(block) = work.pop() {
+            for &pred in &self.cfg.preds[block] {
+                if !live[pred] && first[pred].is_none() {
+                    live[pred] = true;
+                    work.push(pred);
+                }
+            }
+        }
+        live
     }
 
     /// `GetAllSortedSuccessors`: the successors of `block`, and the blocks it
@@ -404,9 +503,6 @@ impl Sinker {
         block: usize,
         break_phi_edge: &mut bool,
     ) -> Option<usize> {
-        if self.touches_machine_state(one) {
-            return None;
-        }
         let mut sink_to: Option<usize> = None;
         for &value in &one.defines {
             if let Some(chosen) = sink_to {
@@ -588,8 +684,16 @@ impl Sinker {
         if !safe_to_move(&one, saw_store) {
             return false;
         }
+        if self.touches_machine_state(block, index) {
+            return false;
+        }
         let mut break_phi_edge = false;
         let Some(sink_to) = self.find_succ_to_sink_to(&one, block, &mut break_phi_edge) else { return false };
+        // A dead flags def that is live into the block it moves to would turn
+        // into a zombie def there (`SinkInstruction`).
+        if self.flags_live_in[sink_to] && self.writes_flags(&one) {
+            return false;
+        }
         if self.size && !one.uses.is_empty() {
             return false;
         }
@@ -653,8 +757,9 @@ pub fn sunk(
     let mut body = body.clone();
     // Each round walks the blocks, then breaks the edges it marked; it ends
     // when nothing moved and nothing was marked.
+    let mut before: Option<Sinker> = None;
     loop {
-        let mut sinker = Sinker::new(&body, size);
+        let mut sinker = Sinker::new(&body, size, before.take());
         for block in 0..sinker.cfg.len() {
             sinker.process_block(block);
         }
@@ -683,5 +788,116 @@ pub fn sunk(
         if !broke && !sinker.changed {
             return body;
         }
+        if !broke {
+            before = Some(sinker);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::model::ir::{Held, Semantics};
+    use crate::model::lir::{Insn, LirBlock};
+    use crate::support::hash::IndexMap;
+
+    fn held(value: u32) -> Loc {
+        Loc::Held(Held { value, width: 4 })
+    }
+
+    fn insn(
+        at: i64,
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+        defines: Vec<u32>,
+        uses: Vec<u32>,
+    ) -> Arc<Insn> {
+        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+    }
+
+    /// `if (n == 0)` on a long in a register pair tests `or v9, v2` and
+    /// branches on its flags; the value v9 is read by nothing, so the `or` was
+    /// sunk into a successor and the `je` read the flags of whatever ran last
+    /// (tests/run/c/register_upper_half.c -mabi=watcom printed 1382385 for 9).
+    #[test]
+    fn test_an_instruction_whose_flags_the_branch_reads_stays_before_it() {
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Move, "mov", vec![held(8)], vec![held(1)], vec![8], vec![1]),
+                    insn(1, Operation::Binary, "or", vec![held(9)], vec![held(8), held(2)], vec![9], vec![8, 2]),
+                    insn(2, Operation::Branch, "je", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let rest = |at: i64| {
+            LirBlock::new(
+                at,
+                vec![
+                    insn(
+                        at,
+                        Operation::Move,
+                        "mov",
+                        vec![held(20 + at as u32)],
+                        vec![held(1)],
+                        vec![20 + at as u32],
+                        vec![1],
+                    ),
+                    insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let mut body = LirBody::new(
+            "flags",
+            0,
+            vec![entry.into(), rest(1).into(), rest(2).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let names: Vec<_> =
+            sunk(&body, false).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+        assert_eq!(names, ["mov", "or", "je"], "the flag-setting or stays in its block");
+    }
+
+    /// The flags a `cmp` sets may be read by a branch in the next block (one
+    /// `cmp`, two branches): the def is live out and does not sink either.
+    #[test]
+    fn test_an_instruction_whose_flags_a_successor_reads_stays() {
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Binary, "or", vec![held(9)], vec![held(1), held(2)], vec![9], vec![1, 2]),
+                    insn(1, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let reader = LirBlock {
+            succ: vec![2].into(),
+            ..LirBlock::new(1, vec![insn(2, Operation::Branch, "je", vec![], vec![], vec![], vec![])])
+        };
+        let leaf = LirBlock::new(2, vec![insn(3, Operation::Return, "ret", vec![], vec![], vec![], vec![])]);
+        let mut body = LirBody::new(
+            "flags_out",
+            0,
+            vec![entry.into(), reader.into(), leaf.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let names: Vec<_> =
+            sunk(&body, false).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+        assert_eq!(names, ["or", "jcxz"], "the or stays: its flags are read in the next block");
     }
 }

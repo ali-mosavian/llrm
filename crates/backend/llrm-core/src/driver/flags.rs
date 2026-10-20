@@ -72,7 +72,10 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("allocation-search", |options, on| options.search = on),
     ("allocation-routes", |options, on| options.routes = on),
     ("allocation-search-all", |options, on| options.exhaustive = on),
-    ("unroll-loops", |options, on| options.unroll = on),
+    ("unroll-loops", |options, on| {
+        options.unroll = on;
+        options.loop_unrolling = on;
+    }),
     ("peel-loops", |options, on| options.peel = on),
     ("inline-functions-called-once", |options, on| options.inline.last = on),
     ("inline-functions", |options, on| {
@@ -87,10 +90,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("strength-reduce", |options, on| options.strength = on),
     ("lsr", |options, on| options.lsr = on),
     ("unswitch-loops", |options, on| options.unswitch = on),
-    ("loop-unroll-and-jam", |options, on| options.unroll_jam = on),
     ("loop-interchange", |options, on| options.interchange = on),
-    ("tree-loop-distribution", |options, on| options.distribute = on),
-    ("version-loops", |options, on| options.version = on),
     ("tree-ch", |options, on| options.copy_headers = on),
     ("ipa-cp-clone", |options, on| options.inline.cp_clone = on),
     ("ipa-vrp", |options, on| options.ipa_ranges = on),

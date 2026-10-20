@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollpass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollpass.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollpass.rs sha256:f41d36edac4caaabf14577c9737d1f249bc58370b6bf0ef4ce09ede99b4d8e49 -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollpass.rs sha256:9531c4425cdbd02518b191a99c3e1a6370809d628da9c54b263bb330ebae757e -->
 
 # loopunrollpass
 
@@ -23,8 +23,8 @@ unrolling, which this pass (`OnlyFullUnroll`) does not do. The loop is then
 unrolled by [`crate::loopunroll::unroll_loop_blocks`](loopunroll.md).
 
 ## Deviations
-- U3 `computePeelCount` is not translated: peeling is the plan's stage S2
-  (`PP.PeelCount` stays 0), and `peel` still runs where it did.
+- U3 `computePeelCount` is `looppeel.rs` (S2); its deviations are PL1 to PL5
+  there.
 - U4 The pragma metadata (`llvm.loop.unroll.*`) is read from the loop ID on
   the latch's branch; no frontend of llrm writes it yet. Remarks (the
   `OptimizationRemarkEmitter`), `UniformityInfo` and profile data are left

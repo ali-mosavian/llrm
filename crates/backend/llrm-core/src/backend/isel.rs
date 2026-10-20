@@ -3035,8 +3035,9 @@ impl Selector<'_, '_, '_> {
                 let Test::One(code) = self.compare(*compare, at, &mut insns)? else {
                     unreachable!("an integer compare is one condition")
                 };
-                // An address the compare reads is made in the leaf's block, before it: left in
-                // `materialized` it would land after the branch, in the next block.
+                // An address the compare reads is made in the leaf's block,
+                // before it: left in `materialized` it would
+                // land after the branch, in the next block.
                 insns.splice(start..start, std::mem::take(&mut self.materialized));
                 insns.push(insn(
                     at,

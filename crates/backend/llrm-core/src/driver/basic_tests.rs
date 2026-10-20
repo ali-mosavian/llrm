@@ -60,10 +60,18 @@ fn test_an_indexed_frame_cell_moves_below_the_runtime_header() {
 /// stayed BP-relative: the runtime's BP.
 #[test]
 fn test_an_indexed_frame_cell_moves_into_the_static_module_frame() {
-    let cell = loaded(&_static_frame(&loading(indexed_frame_cell()), 46));
+    let cell = loaded(&_static_frame(&loading(indexed_frame_cell()), 46, None));
     let addr = cell.addr.unwrap();
     assert_eq!(
         (cell.through, addr.space, addr.index, addr.disp),
         (RegId::None, Space::Segment, MAIN_FRAME_ID, 46 - 30)
     );
+}
+
+/// The static module frame's cells read through DS, where allocation held a
+/// far pointer's selector (particle.bas, #2585): spills went into an array.
+#[test]
+fn test_a_static_frame_cell_stays_on_the_stack_segment_where_the_stack_is_data() {
+    let cell = loaded(&_static_frame(&loading(indexed_frame_cell()), 46, Some(RegId::SS)));
+    assert_eq!(RegId::from(cell.addr.unwrap().segment), RegId::SS);
 }
