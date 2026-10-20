@@ -1,4 +1,4 @@
-// flags: -O2 -fno-inline-functions | -Os -fno-inline-functions | -O2 -fno-inline-functions -m32 | -Os -fno-inline-functions -m32 | -O2 -fno-inline-functions -march=pentium -m32
+// flags: -O2 -fno-inline-functions | -Os -fno-inline-functions | -O2 -fno-inline-functions -m32 | -Os -fno-inline-functions -m32 | -O2 -fno-inline-functions -march=pentium -m32 | -O1 -fno-inline-functions -m32
 // A multiply by a constant is shifts, adds and `lea` where the target prices them below `imul`: the same product as the multiply
 // for every constant the chains make, over a spread of values, the wrap included.
 extern void report(long value);
