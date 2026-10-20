@@ -328,7 +328,7 @@ impl<'a> LoopSafety<'a> {
             return false;
         };
         let width = self.compare_width(compare);
-        let truth = compare_ints(predicate, x, y, width);
+        let truth = predicate.holds(x, y, width);
         // The exit is `on_true` when the condition holds.
         if exit == on_true { !truth } else { truth }
     }
@@ -351,27 +351,5 @@ impl<'a> LoopSafety<'a> {
             Operand::Block(_) => return 64,
         };
         self.context.types.int_bits(ty).unwrap_or(64)
-    }
-}
-
-fn compare_ints(
-    predicate: llrm_mir::opcode::IntPredicate,
-    x: u128,
-    y: u128,
-    width: u32,
-) -> bool {
-    use llrm_mir::opcode::IntPredicate::*;
-    let (sx, sy) = (llrm_mir::context::signed(x, width), llrm_mir::context::signed(y, width));
-    match predicate {
-        Eq => x == y,
-        Ne => x != y,
-        Ugt => x > y,
-        Uge => x >= y,
-        Ult => x < y,
-        Ule => x <= y,
-        Sgt => sx > sy,
-        Sge => sx >= sy,
-        Slt => sx < sy,
-        Sle => sx <= sy,
     }
 }

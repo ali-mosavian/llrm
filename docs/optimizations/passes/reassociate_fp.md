@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/reassociate_fp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/reassociate_fp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/reassociate_fp.rs sha256:6f8c067b43e0c4c542ce3aecadb30ef8eeff8ad2e5658cdf8c9af336324439b3 -->
+<!-- src: crates/opt/llrm-transforms/src/reassociate_fp.rs sha256:f85b165254b51df560277be28e99ea05d781cedcef279c42562ccf894d63ae25 -->
 
 # reassociate_fp
 
@@ -9,9 +9,9 @@ DEVIATE: a floating constant is held as the nearest `f32` or `f64`
 (`floatfold`'s representation), so an `x86_fp80` constant is a double and
 `ConstantFP::get(Ty, NumFound)` is exact only up to 2^53.
 
-## Example
-No honest example: this holds helpers, not a pass; the reassociate
-pages show the folds that use them.
-
 ## Used by
 `crate::reassociate_optimize`, `crate::reassociate_negate`.
+
+## Example
+`x * 4.0 * 0.25`: the constants fold to `1.0` (`fold_float`), the identity
+of `fmul`, so the result is `x`.

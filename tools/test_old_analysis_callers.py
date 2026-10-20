@@ -53,3 +53,21 @@ def test_the_analysis_that_moves_last_is_split_out(tmp_path):
     entries = [ENTRIES[0], {"name": "ranges", "module": "ranges", "moves_last": True}]
     lines = oac.report(oac.callers(tmp_path, entries), frozenset({"ranges"}))
     assert lines[-1] == "old-analysis callers under parity: 3 (ranges 2; without it 1); analyses with old callers: 2 (1 without ranges)"
+
+
+def test_the_old_rows_of_the_registry_are_the_analyses(tmp_path):
+    """Seeded by hand the list had 9 names and missed 28 of the registry's 37 Old rows: a count that could only be low."""
+    tree(
+        tmp_path,
+        {
+            oac.REGISTRY: 'const A: &[AnalysisEntry] = &[\n    AnalysisEntry { key: "loops", symbol: "Loops", kind: Translated },\n'
+            '    old_analysis(\n        "sums",\n        "Sums",\n        "none",\n        "x",\n    ),\n'
+            '    old_analysis("callees", "Callees", "none", "y"),\n];\n',
+            "crates/opt/a/src/manager.rs": "pub struct Sums;\nimpl Analysis for Sums {}\nfn own() { analyses.get::<Sums>(); }\n",
+            "crates/opt/a/src/gvn.rs": "fn f() { x.get::<Sums>(); x.get::<Loops>(); }\n",
+        },
+    )
+    entries = oac.registry_entries(tmp_path)
+    assert [entry["name"] for entry in entries] == ["Sums"]
+    found = oac.callers(tmp_path, entries)
+    assert found["Sums"] == {"crates/opt/a/src/manager.rs": [3], "crates/opt/a/src/gvn.rs": [1]}

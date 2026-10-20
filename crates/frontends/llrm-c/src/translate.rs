@@ -572,6 +572,31 @@ impl<'u> Types<'u> {
         self.unit.types.get(&self.unit.canonical_type(type_)).copied()
     }
 
+    /// What the convention sees of a parameter of C type `type_`.
+    fn argument(
+        &mut self,
+        type_: &str,
+    ) -> R<llrm_mir::target::Argument> {
+        if let Some(bytes) = self.aggregate(type_) {
+            return Ok(llrm_mir::target::Argument {
+                bytes,
+                integer: false,
+                pointer: false,
+                floating: false,
+                memory: true,
+            });
+        }
+        let id = self.c(type_)?;
+        let (shape, bytes) = (self.shape(id), self.get(id).width);
+        Ok(llrm_mir::target::Argument {
+            bytes,
+            integer: matches!(shape, Shape::Int(..) | Shape::Bool),
+            pointer: matches!(shape, Shape::Pointer(_) | Shape::Huge),
+            floating: matches!(shape, Shape::Float(_)),
+            memory: false,
+        })
+    }
+
     /// C type `type_` as a value, its accesses in its aliasing class.
     fn c(
         &mut self,
@@ -845,6 +870,7 @@ fn value_ref(value: i64) -> Operand {
 fn cleanup(
     symbol: &hir::Symbol,
     unit: &hir::Unit,
+    listed_default: bool,
 ) -> R<(StackCleanup, Option<String>)> {
     // The entry is called by the runtime's start in the stack convention its
     // description names.
@@ -857,11 +883,56 @@ fn cleanup(
         (false, hir::REVERSE_PARMS) => Ok((StackCleanup::Callee, None)),
         // Open Watcom's own register list, where the target's calling.toml
         // states that convention.
-        (true, 0) if symbol.register_list == unit.default_registers => {
+        (true, 0) if symbol.register_list == unit.default_registers || listed_default => {
             Ok((StackCleanup::Callee, unit.registers_cc.clone()))
         }
         _ => refuse(format!("{} has a register calling convention", symbol.object_name())),
     }
+}
+
+/// Whether the register list a pragma wrote (`__parm [__ax] [__dx] [__bx]`) is
+/// what the target's own register convention gives these `parameters`, and the
+/// routine keeps what that convention's callee keeps: then the function is the
+/// convention's, whatever the spelling. Another list is a convention of its
+/// own.
+fn lists_default(
+    symbol: &hir::Symbol,
+    unit: &hir::Unit,
+    calling: &llrm_target::calling::Calling,
+    parameters: &[llrm_mir::target::Argument],
+) -> bool {
+    use crate::hwreg::Set;
+    let Some(entry) = unit.registers_cc.as_deref().and_then(|cc| calling.by_cc(cc)) else { return false };
+    if !symbol.register_parms || symbol.call_target & (SPECIAL_RETURN | MODIFY_EXACT) != 0 {
+        return false;
+    }
+    // What the default keeps, bp, si and di among it.
+    if Set::parse(&symbol.saved_registers).is_some_and(|saved| !saved.is_empty() && !unit.hardware.keeps_general(saved))
+    {
+        return false;
+    }
+    let kinds: Vec<_> = parameters.iter().map(|one| entry.kind(*one, 2)).collect();
+    let placed = entry.place(&kinds);
+    let listed: Vec<&str> =
+        symbol.register_list.trim_matches(|c| c == '[' || c == ']').split(',').filter(|one| !one.is_empty()).collect();
+    let mut places = placed.places.iter();
+    for at in 0..parameters.len() {
+        let place = places.next();
+        match (listed.get(at), place) {
+            (Some(text), Some(llrm_target::calling::Place::Registers(names))) => {
+                let Some(mut named) = Set::parse(text).and_then(|set| unit.hardware.names(set)) else { return false };
+                let mut want: Vec<String> = names.clone();
+                named.sort_unstable();
+                want.sort_unstable();
+                if named != want {
+                    return false;
+                }
+            }
+            (None, Some(llrm_target::calling::Place::Stack(_))) => {}
+            _ => return false,
+        }
+    }
+    listed.len() == parameters.len()
 }
 
 /// Parameters that live in the memory they were passed in, `sizes` each
@@ -1068,7 +1139,9 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<h::Function> {
         let unit = shared.unit;
         let symbol = &unit.symbols[&proc.symbol];
-        let (cleanup, convention) = cleanup(symbol, unit)?;
+        let arguments = proc.parms.iter().map(|(_, type_)| types.argument(type_)).collect::<R<Vec<_>>>()?;
+        let listed_default = lists_default(symbol, unit, calling, &arguments);
+        let (cleanup, convention) = cleanup(symbol, unit, listed_default)?;
         let mut body = Body {
             convention: convention.clone(),
             memory: Vec::new(),
@@ -2097,7 +2170,13 @@ impl<'a, 't> Body<'a, 't> {
                 }
                 let ty = self.types.pointer(space(self.unit, Key::Symbol(symbol.id)));
                 let value = self.value(ty);
-                self.instruction(Op::Address, vec![value], Vec::new()).callee = Some(symbol.object_name());
+                let name = symbol.object_name();
+                // A routine this unit does not define is declared by the
+                // address taken of it as by a call.
+                if !self.unit.procs.iter().any(|one| one.symbol == symbol.id) {
+                    self.callable(&name);
+                }
+                self.instruction(Op::Address, vec![value], Vec::new()).callee = Some(name);
                 Ok(value)
             }
             Got::Returned(None) => self.refuse("a void call's value"),
@@ -3140,8 +3219,31 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<Got> {
         use crate::hwreg::Set;
         let name = symbol.name.clone();
-        if !code.fixups.is_empty() {
-            return self.refuse(format!("{name} is inline code with registers and a symbol reference"));
+        // The words that name a symbol, each with the symbol's address as an
+        // operand ahead of the registers'.
+        let mut symbols = Vec::new();
+        let mut fixups = Vec::new();
+        for fixup in &code.fixups {
+            let target = &self.unit.symbols[&fixup.symbol];
+            let value = if target.proc() {
+                if inline(target) {
+                    return self.refuse(format!("{name} names inline code {}", target.name));
+                }
+                self.scalar(Got::Function(target.id))?
+            } else if fixup.kind == "reloff" {
+                return self.refuse(format!("{name} reaches data {} relative to itself", target.name));
+            } else if let Some(&object) = self.shared.keys.get(&Key::Symbol(target.id)) {
+                let place = self.global(object);
+                self.address_of(place)
+            } else {
+                return self
+                    .refuse(format!("{name} names {}, a frame place, in inline code with registers", target.name));
+            };
+            if !matches!(fixup.kind.as_str(), "offset" | "segment" | "reloff") {
+                return self.refuse(format!("{name} names a symbol as {}", fixup.kind));
+            }
+            symbols.push(value_ref(value));
+            fixups.push(h::AsmFixup { at: fixup.at, kind: fixup.kind.clone(), addend: fixup.offset });
         }
         // Source order: the call lists its last argument first.
         let parms: Vec<(String, String)> = call.parms.iter().rev().cloned().collect();
@@ -3293,6 +3395,7 @@ impl<'a, 't> Body<'a, 't> {
             operands.push(value_ref(value.expect("a part")));
             registers.push(root);
         }
+        operands.splice(0..0, symbols);
         // What it answers in.
         let target = symbol.call_target;
         // A small struct is answered as the integer of its size, and kept in a
@@ -3361,6 +3464,7 @@ impl<'a, 't> Body<'a, 't> {
             outputs,
             clobbers,
             memory,
+            fixups,
         });
         if returns_void {
             return Ok(Got::Returned(None));
@@ -3518,8 +3622,10 @@ impl<'a, 't> Body<'a, 't> {
             let value = self.value_as(node, type_)?;
             return Ok(Got::Returned(Some(self.unary("O_FABS", value, type_)?)));
         }
-        let (cleanup, convention) =
-            cleanup(symbol, self.unit).map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))?;
+        let arguments = call.parms.iter().rev().map(|(_, type_)| self.types.argument(type_)).collect::<R<Vec<_>>>()?;
+        let listed_default = lists_default(symbol, unit, self.shared.calling, &arguments);
+        let (cleanup, convention) = cleanup(symbol, self.unit, listed_default)
+            .map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))?;
         let distance = distance(symbol);
         let callee = match target {
             Got::Function(_) => None,

@@ -58,14 +58,17 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 5] = ["Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink"];
+const UNOPTIMIZED: [&str; 7] =
+    ["Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink", "MachineSink", "MachineCSE"];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 18] = [
+const SLOTS: [(&str, &str); 20] = [
     ("FarIndirectCalls", "farcall@1"),
     ("SharedConstants", "phiconst@2"),
     ("SsaSpill", "ssaspill@3"),
     ("PhiElimination", "phielim@4"),
+    ("MachineCSE", "machinecse@4"),
+    ("MachineSink", "machinesink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FloatFold", "floatfold@6"),
     ("FloatAssign", "floatassign@7"),
@@ -119,6 +122,11 @@ pub fn machine_with<'a>(
             prices: ssaspill::Prices::of(target),
             run: spilling.clone().unwrap_or_default(),
         }),
+        // On SSA, a repeated computation once (the pin: MachineCSE, then
+        // MachineSink).
+        Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
+        // On SSA, where a def with phi users alone can go to its edge.
+        Box::new(crate::backend::machinesink::MachineSink { size: target.size }),
         Box::new(phielim::PhiElimination { prices: phielim::EdgePrices::of(target) }),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
@@ -205,9 +213,13 @@ pub fn verified(
     body: LirBody,
     stage: &str,
     in_ssa: bool,
+    allocated: Option<&std::collections::BTreeSet<RegId>>,
     spaces: &llrm_mir::spaces::Spaces,
 ) -> Result<LirBody, Malformed> {
-    let complaints = verify::verify_for(&body, in_ssa, spaces);
+    let mut complaints = verify::verify_for(&body, in_ssa, spaces);
+    if let Some(arguments) = allocated {
+        complaints.extend(verify::physical(&body, arguments));
+    }
     if let Some(first) = complaints.first() {
         return Err(Malformed(format!("{stage}: {first}")));
     }
@@ -226,6 +238,7 @@ pub fn checked(
     body: LirBody,
     phase: &mut dyn LIRTransform,
     in_ssa: bool,
+    allocated: Option<&std::collections::BTreeSet<RegId>>,
     classes: &crate::backend::classes::RegisterClasses,
     segments: &Segments,
     arch: &dyn llrm_target::Target,
@@ -242,7 +255,7 @@ pub fn checked(
     transformed.facts.0.end_phase();
     let body = if verifying {
         crate::support::debug::timed("lir verify", || {
-            verified(transformed, &stage, in_ssa, &arch.layout().spaces.roles)
+            verified(transformed, &stage, in_ssa, allocated, &arch.layout().spaces.roles)
         })
         .map_err(Checked::Malformed)?
     } else {
@@ -434,6 +447,7 @@ mod tests {
             body,
             &mut DropsBytes,
             false,
+            None,
             &crate::backend::classes::RegisterClasses::m16(),
             &crate::backend::target::BUILT_IN,
             &llrm_x86_m16::M16,
@@ -464,6 +478,7 @@ mod tests {
             body,
             &mut LosesDefinition,
             false,
+            None,
             &crate::backend::classes::RegisterClasses::m16(),
             &crate::backend::target::BUILT_IN,
             &llrm_x86_m16::M16,
@@ -503,6 +518,7 @@ mod tests {
             body,
             &mut Keeps,
             false,
+            None,
             &crate::backend::classes::RegisterClasses::m16(),
             &crate::backend::target::BUILT_IN,
             &llrm_x86_m16::M16,

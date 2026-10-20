@@ -274,3 +274,38 @@ fn a_bool_add_is_a_xor_and_a_doubling_is_a_shift() {
     check("i1", "i1 %a, i1 %b", "  %r = add i1 %a, %b\n  ret i1 %r\n", "  %0 = xor i1 %a, %b\n  ret i1 %0\n");
     check("i16", "i16 %x", "  %r = add nsw i16 %x, %x\n  ret i16 %r\n", "  %0 = shl nsw i16 %x, 1\n  ret i16 %0\n");
 }
+
+/// An add of a select against a constant is a select of sums: the select
+/// family's `foldBinOpIntoSelectOrPhi` runs from `foldAddWithConstant`.
+#[test]
+fn an_add_of_a_select_of_numbers_is_a_select_of_sums() {
+    let out = combined(
+        "define i16 @f(i1 %c) {\nb0:\n  %s = select i1 %c, i16 3, i16 4\n  %r = add i16 %s, 5\n  ret i16 %r\n}\n",
+    );
+    assert!(out.contains("select i1 %c, i16 8, i16 9"), "{out}");
+}
+
+/// Two phis added, a constant pair for one predecessor: the add moves to the
+/// other predecessor (`foldBinopWithPhiOperands`).
+#[test]
+fn an_add_of_two_phis_with_a_constant_pair_moves_to_the_other_predecessor() {
+    let text = "define i16 @f(i1 %c, i16 %i, i16 %j) {
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %m
+
+b:
+  br label %m
+
+m:
+  %p = phi i16 [ 3, %a ], [ %i, %b ]
+  %q = phi i16 [ 4, %a ], [ %j, %b ]
+  %r = add i16 %p, %q
+  ret i16 %r
+}
+";
+    let out = combined(text);
+    assert!(out.contains("phi i16 [ %0, %b ], [ 7, %a ]") || out.contains("phi i16 [ 7, %a ], [ %0, %b ]"), "{out}");
+}

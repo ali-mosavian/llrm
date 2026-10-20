@@ -431,7 +431,7 @@ fn test_a_block_that_jumps_to_itself_stays() {
 /// `optimized`'s round: the tails merged, then the branches settled.
 fn merged(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
     let merged = tailmerge::merged(body, false)?.unwrap_or_else(|| body.clone());
-    Ok(machinedce::eliminated(_converged(&threaded(&merged))))
+    Ok(machinedce::eliminated(threaded(&merged)))
 }
 
 fn two_zero_tails(inserted: bool) -> LirBody {
@@ -1479,6 +1479,7 @@ fn test_threading_a_chain_of_removable_jumps_visits_blocks_a_few_times_not_n_tim
         .collect();
     blocks.push(block(count * 0x10, vec![_return(count * 0x10)], Vec::new()).into());
     let source = body("f", 0, blocks);
+    super::branchfold::VISITS.with(|one| one.set(0));
     let result = threaded(&source);
     let jumps = result
         .blocks
@@ -1486,16 +1487,10 @@ fn test_threading_a_chain_of_removable_jumps_visits_blocks_a_few_times_not_n_tim
         .flat_map(|block| block.insns.iter())
         .filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Jump));
     assert_eq!(jumps.count(), 0, "premise: every jump to the next block goes");
-    let visits = result.facts.0.counted("jump-visits");
+    let visits = super::branchfold::VISITS.with(|one| one.get());
     assert!(visits <= 3 * (count as usize + 1), "{visits} block visits for {count} removable jumps");
 }
 
-/// x_adler's loop: the latch `jne top; jmp exit` with a short return as the
-/// exit. The copy of the return in the jump's place left the loop's back
-/// branch taken over the copy on every trip (9 clocks a trip, not 7): the
-/// likelier way of a branch before the jump is not given up for the jump's.
-/// Not a loop: the same rule on a guard whose branch is the likelier way, and,
-/// for the other way round, a copy that is made.
 /// Every hoisted anchor solved the liveness of every value of the body afresh
 /// (a nest of 64 copied loops: a third of `lir jumps`); a value is live where
 /// its own reads and definitions say, so only the values a moved instruction
@@ -1712,14 +1707,19 @@ fn test_a_branch_or_table_is_remapped_by_its_blocks() {
     assert!(Semantics::new(Operation::Move).remapped(to).is_none());
 }
 
-/// Each branch threaded past a passage walked the whole body from the entry to
-/// find what it stranded, though one block can only strand the blocks it alone
-/// enters: N cases, N walks of N blocks (`cases` 1024: `lir jumps` 8196 Minstr
-/// of 25 G). The edges entering each block are counted; a walk is made only for
-/// a block on a cycle.
+/// Threading past a passage must not look at the whole body again for each
+/// one: N cases, N walks of N blocks (`cases` 1024: `lir jumps` 8196 Minstr of
+/// 25 G). Blocks looked at stay a small multiple of the blocks, at 40 and 160
+/// cases alike.
 #[test]
-fn threading_a_chain_of_passages_makes_no_walk_from_the_entry() {
-    let cases = 40;
+fn threading_a_chain_of_passages_looks_at_each_block_a_few_times() {
+    for cases in [40, 160] {
+        let visits = visits_threading_passages(cases);
+        assert!(visits <= 12 * (2 * cases + 2) as usize, "{visits} blocks looked at for {cases} passages");
+    }
+}
+
+fn visits_threading_passages(cases: i64) -> usize {
     let (exit, last) = (10_000, 10 * cases);
     let mut blocks = Vec::new();
     let mut passages = Vec::new();
@@ -1735,11 +1735,10 @@ fn threading_a_chain_of_passages_makes_no_walk_from_the_entry() {
     blocks.push(block(last, vec![_return(last)], vec![]));
     blocks.extend(passages);
     blocks.push(block(exit, vec![_return(exit)], vec![]));
-    WALKS.with(|one| one.set(0));
+    super::branchfold::VISITS.with(|one| one.set(0));
     let result = threaded(&body("f", 0, blocks.into_iter().collect()));
     assert!(result.blocks.len() < 2 * cases as usize, "the passages are threaded past");
-    let walks = WALKS.with(|one| one.get());
-    assert_eq!(walks, 0, "{walks} walks from the entry for {cases} passages");
+    super::branchfold::VISITS.with(|one| one.get())
 }
 
 /// A table jump to one passage in several entries freed the passage once for
@@ -1814,6 +1813,65 @@ fn test_the_blocks_on_a_cycle_are_found_without_a_scan_per_block() {
     let scans = SELF_LOOP_SCANS.with(|one| one.get());
     assert!(scans <= 4 * blocks.len(), "{scans} scans for {} blocks", blocks.len());
     assert_eq!(found.into_iter().collect::<Vec<_>>(), vec![n]);
+}
+
+/// Loops nested three deep, the innermost one block that loops on itself; each
+/// level's header tests a rare base case (`e`) and otherwise enters the next,
+/// and both reach the level's latch `l`.
+fn loop_nest() -> LirBody {
+    let (levels, done): (i64, i64) = (3, 9999);
+    let (h, e, pre, l) = (|k: i64| 100 * k, |k: i64| 100 * k + 1, |k: i64| 100 * k + 2, |k: i64| 100 * k + 3);
+    let mut blocks: Vec<Block> =
+        vec![block(1, vec![_compare(1), _branch(2, "jle", done), _jump(3, 10)], vec![done, 10]).into()];
+    blocks.push(block(10, vec![_move(10, imm(0)), _jump(11, h(1))], vec![h(1)]).into());
+    let mut odds: Vec<(i64, i64, f64)> = vec![(1, done, 0.25), (1, 10, 0.75)];
+    for k in 1..=levels {
+        blocks.push(
+            block(
+                h(k),
+                vec![_compare(h(k)), _branch(h(k) + 1, "jl", e(k)), _jump(h(k) + 2, pre(k))],
+                vec![e(k), pre(k)],
+            )
+            .into(),
+        );
+        odds.extend([(h(k), e(k), 1.0 / 32.0), (h(k), pre(k), 31.0 / 32.0)]);
+        blocks.push(block(e(k), vec![_move(e(k), imm(k)), _jump(e(k) + 50, l(k))], vec![l(k)]).into());
+        let next = if k < levels { h(k + 1) } else { 7000 };
+        blocks.push(block(pre(k), vec![_move(pre(k), imm(0)), _jump(pre(k) + 50, next)], vec![next]).into());
+    }
+    blocks.push(
+        block(7000, vec![_compare(7000), _branch(7001, "jg", 7000), _jump(7002, l(levels))], vec![7000, l(levels)])
+            .into(),
+    );
+    odds.extend([(7000, 7000, 31.0 / 32.0), (7000, l(levels), 1.0 / 32.0)]);
+    for k in (1..=levels).rev() {
+        let out = if k == 1 { done } else { l(k - 1) };
+        let mut insns: Vec<_> = (0..5).map(|n| _move(l(k) + n + 1, imm(n))).collect();
+        insns.extend([_compare(l(k)), _branch(l(k) + 10, "jg", h(k)), _jump(l(k) + 20, out)]);
+        blocks.push(block(l(k), insns, vec![h(k), out]).into());
+        odds.extend([(l(k), h(k), 31.0 / 32.0), (l(k), out, 1.0 / 32.0)]);
+    }
+    blocks.push(block(done, vec![_return(done)], vec![]).into());
+    let mut made = body("f", 1, blocks);
+    for (from, to, chance) in odds {
+        made.odds.taken.insert((from, to), (chance * crate::model::lir::BlockOdds::CERTAIN) as u32);
+    }
+    made
+}
+
+/// A loop whose exit test leaves exactly as often as its top is fallen into is
+/// not rotated (`rotateLoop`: `FallThrough2Top >= ExitFreq`). The two are equal
+/// in the odds of 31 in 32, and in `f64` the exit came out larger by a
+/// rounding: the innermost loop of a nest (bench/fib) was rotated, and the
+/// latches of the levels were left at the end after the inner loops, each
+/// base-case block ending in a jump to its latch (17 jumps, llc 9). Order
+/// checked with `llc -O2 -mtriple=i486` on the same nest as IR with branch
+/// weights: entry pre0 e1 l1 h1 pre1 e2 l2 h2 pre2 h3 pre3 s l3 e3 done.
+#[test]
+fn test_a_loop_is_not_rotated_where_its_exit_only_ties_the_top_fall_through() {
+    let made = optimized(&loop_nest(), cpu::profile("486").unwrap()).unwrap();
+    let order: Vec<i64> = made.blocks.iter().map(|one| one.at).collect();
+    assert_eq!(order, [1, 10, 101, 103, 100, 102, 201, 203, 200, 202, 300, 302, 7000, 303, 301, 9999], "{order:?}");
 }
 
 /// Placement worked out the frequencies of the body again, as `over` over the

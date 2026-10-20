@@ -4,12 +4,12 @@
 //! (`floatfold`'s representation), so an `x86_fp80` constant is a double and
 //! `ConstantFP::get(Ty, NumFound)` is exact only up to 2^53.
 //!
-//! # Example
-//! No honest example: this holds helpers, not a pass; the reassociate
-//! pages show the folds that use them.
-//!
 //! # Used by
 //! `crate::reassociate_optimize`, `crate::reassociate_negate`.
+//!
+//! # Example
+//! `x * 4.0 * 0.25`: the constants fold to `1.0` (`fold_float`), the identity
+//! of `fmul`, so the result is `x`.
 
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::module::Operand;
