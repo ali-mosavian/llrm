@@ -523,7 +523,7 @@ pub fn compute_known_bits_from_cond(
 }
 
 /// `DominatorTree::dominates(BasicBlockEdge(start, end), use_block)`.
-fn edge_dominates(
+pub(super) fn edge_dominates(
     q: &Query,
     start: BlockId,
     end: BlockId,

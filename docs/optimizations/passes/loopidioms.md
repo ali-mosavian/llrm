@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopidioms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopidioms.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:7d764d91f75227f4b4755d5fe18ae3b27a93509256e911f9af8749a0d3f18f10 -->
+<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:fd4066df4c26dc6ac3ac1208db1dcd63da56628ecffb39821efa1cf839a84ef6 -->
 
 # loopidioms
 
@@ -133,5 +133,5 @@ Blocks and edges change (a loop becomes one trip): every analysis is
 invalidated when anything was rewritten.
 
 ## See also
-[`crate::counting`](counting.md) builds the count and exit values; [`crate::loopunrollpass`](loopunrollpass.md),
-[`crate::looppeel`](looppeel.md) precede it.
+[`crate::counting`](counting.md) builds the count and exit values;
+[`crate::loopunrollpass`](loopunrollpass.md), [`crate::looppeel`](looppeel.md) precede it.

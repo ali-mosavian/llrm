@@ -112,7 +112,7 @@ pub struct Run<'a> {
     /// Blocks an unroll merged away, erased when the pass is done.
     pub emptied: Vec<BlockId>,
     /// The iterations peeled off the loop headed by a block in this run (PL1).
-    pub peeled: std::collections::BTreeMap<BlockId, u32>,
+    pub peeled: IdMap<BlockId, u32>,
 }
 
 /// `TransformationMode`.
@@ -1344,7 +1344,8 @@ fn try_to_unroll_loop(
         let loop_ = peelable(run.function, lp);
         return match crate::loopclone::peeled_any_latch(run.function, &loop_, i64::from(pp.peel_count)) {
             Ok(Some(_)) => {
-                *run.peeled.entry(header).or_insert(0) += pp.peel_count;
+                let so_far = run.peeled.get(&header).copied().unwrap_or(0);
+                run.peeled.insert(header, so_far + pp.peel_count);
                 Unrolled::Peeled
             }
             Ok(None) => Unrolled::Unmodified,

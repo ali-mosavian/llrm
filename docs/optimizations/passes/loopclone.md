@@ -1,17 +1,15 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopclone.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopclone.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:9dfe607c0298ada1ba1ab7b7f686ed56bad86cb0596ceb275189a2547023f24f -->
+<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:6132956ec5ecff79df70c92b6ce6a762dfcfc1636bca2fa958963f996244ba5e -->
 
 # loopclone
 
-Clones loop iterations as CFG, for the passes that peel, unswitch or jam a
-loop: `peeled` copies whole iterations ahead of a loop, `chained` copies
-bodies inside it, keeping the loop and every exit.
+Clones loop iterations as CFG, for the passes that peel a loop: `peeled`
+copies whole iterations ahead of it.
 
 ## How it works
-This is the mechanism for peeling and unswitching; it makes
-no profitability decision. Both functions return each copy's map from an
-original block to its clone, or `None` having changed nothing when the loop
-is not one they can clone. Both need
+This is the mechanism for peeling; it makes no profitability decision. It
+returns each copy's map from an original block to its clone, or `None`
+having changed nothing when the loop is not one it can clone. It needs
 - a header that is not the entry, one latch that ends in a jump to it, and
   one outside predecessor that falls into the header (a preheader);
 - no block but the header entered from outside the loop;
@@ -71,17 +69,6 @@ the previous copy's latch value, and the residual loop's header the last
 copy's latch value. Every exit phi gains an arm for each copy's exit edge.
 The residual loop stays so the result is right whatever the trip count;
 the caller proves it unreachable where the count is exact.
-
-`copied(function, loop, count)` makes `count` whole loops of it, each
-running every trip, one after another ahead of the original: the copy loop
-distribution and loop versioning start from.
-
-`chained(function, loop, copies)` is the partial unroll LLVM's `UnrollLoop`
-makes when no iteration is left over. The loop must leave only from its
-header, by a conditional branch. The copies hold no header test: the
-original latch runs on into the first copy's header work, each copy's latch
-into the next, and the last into the header. That is right only where the
-trip count is a multiple of `copies + 1`, which the caller proves.
 
 ## Example
 `peeled(.., 1)` on a loop whose body is a diamond with an early exit.
