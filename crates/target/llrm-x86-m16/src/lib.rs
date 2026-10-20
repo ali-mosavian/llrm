@@ -97,6 +97,29 @@ impl llrm_target::Target for M16 {
         2
     }
 
+    fn register_op_bytes(
+        &self,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::register_bytes(width, 2)
+    }
+
+    fn shift_op_bytes(
+        &self,
+        count: i64,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::shift_bytes(count, width, 2)
+    }
+
+    fn multiply_immediate_bytes(
+        &self,
+        number: i64,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::imul_immediate_bytes(number, width, 2)
+    }
+
     fn default_cpu(&self) -> &'static str {
         timings::TABLE.default_cpu().expect("timings.times states a default CPU")
     }

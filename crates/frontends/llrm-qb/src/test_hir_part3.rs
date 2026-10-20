@@ -1464,6 +1464,23 @@ fn test_affine_addresses_of_one_counter_step_no_pointer_in_memory() {
     assert!(!regex::Regex::new(r"add\s+word ptr \[bp-\d+\]").unwrap().is_match(&inner), "{inner}");
 }
 
+/// The seven terms shift one counter alike, `lea di, [esi+esi]` seven times in
+/// the loop: MachineCSE kept them because its walk for a reader of the flags
+/// gave up at an indexed load (#3075).
+#[test]
+fn test_the_shift_of_one_counter_is_made_once_per_trip() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "T.BAS", SEVEN_TERMS.as_bytes());
+    let inner = poke_loop(&listing(&parsed_as(&source, "qb45", "qb45")), "T");
+    let doubled = regex::Regex::new(r"lea\s+\w+, \[(\w+)\+(\w+)\]").unwrap();
+    let mut seen = std::collections::HashMap::new();
+    for line in inner.lines().filter(|line| doubled.captures(line).is_some_and(|found| found[1] == found[2])) {
+        *seen.entry(line.trim().to_owned()).or_insert(0) += 1;
+    }
+    let repeats = seen.values().copied().max().unwrap_or(0);
+    assert!(repeats <= 1, "one doubling made {repeats} times\n{inner}");
+}
+
 /// cycleblobs computed each `f(x - xp(k))` index as `(x - xp(k)) * 2` per
 /// pixel: seven subtracts and seven multiplies of the counter, where the
 /// counter scaled once per term and a hoisted `-2 * xp(k)` base does, on the
