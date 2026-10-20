@@ -923,4 +923,50 @@ mod tests {
             sunk(&body, false).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
         assert_eq!(names, ["or", "jcxz"], "the or stays: its flags are read in the next block");
     }
+
+    /// `x > 65520 ? x - 65521 : x` in a build for size: the `add` was computed
+    /// above the branch and copied in the arm (`lea; cmp; jbe; mov`, x_adler -Os
+    /// 13 to 17 instructions a trip), because only an instruction that read
+    /// nothing moved. Its operand is read by the phi on the other edge, so
+    /// moving it into the arm extends nothing.
+    #[test]
+    fn test_in_a_size_build_an_instruction_whose_operand_lives_on_moves() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Binary, "add", vec![held(3)], vec![held(1), imm(-65521)], vec![3], vec![1]),
+                    insn(1, Operation::Compare, "cmp", vec![], vec![held(1), imm(65520)], vec![], vec![1]),
+                    insn(2, Operation::Branch, "jbe", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let arm = LirBlock {
+            succ: vec![2].into(),
+            ..LirBlock::new(1, vec![insn(3, Operation::Move, "mov", vec![held(5)], vec![held(1)], vec![5], vec![1])])
+        };
+        let join = LirBlock {
+            phis: vec![crate::model::lir::Phi { result: 4, incoming: vec![(1, 3), (0, 1)] }].into(),
+            ..LirBlock::new(2, vec![insn(4, Operation::Move, "mov", vec![held(6)], vec![held(4)], vec![6], vec![4])])
+        };
+        let mut body = LirBody::new(
+            "adler",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let names = |body: &LirBody, block: usize| -> Vec<String> {
+            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+        };
+        // The premise: no block reads the flags the add sets.
+        assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
+        let moved = sunk(&body, true);
+        assert_eq!(names(&moved, 0), ["cmp", "jbe"], "the add left the block");
+        assert_eq!(names(&moved, 1), ["add", "mov"], "and went into the arm");
+    }
 }
