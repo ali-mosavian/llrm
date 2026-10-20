@@ -89,7 +89,7 @@ b0:
   ret i32 %p
 }
 
-define i32 @wrapped(i32 range(i32 -1500000000, 1500000001) %a, i32 range(i32 0, 2) %b) {
+define i32 @wrapped(i32 range(i32 -1500000000, 1500000001) %a, i32 range(i32 0, 4) %b) {
 b0:
   %t = add i32 %a, %a
   %p = call i32 @llvm.smul.fix.i32(i32 %t, i32 %b, i32 8)
@@ -132,6 +132,29 @@ fn a_shift_by_the_scale_makes_the_product_whole() {
 fn a_doubling_that_may_wrap_is_not_taken_out() {
     let module = narrowed(SHIFTED);
     assert!(body(&module, "wrapped").contains("smul.fix"));
+}
+
+/// A factor that may wrap has the full range, but times a 0 or 1 the product
+/// still fits: LazyValueInfo's ranges narrow it, where the old intervals gave
+/// up on the wrapped factor.
+#[test]
+fn a_wrapped_factor_times_a_bit_is_still_narrowed() {
+    let module = narrowed(
+        "declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)
+
+define i32 @bit(i32 %t, i32 range(i32 0, 2) %b) {
+b0:
+  %p = call i32 @llvm.smul.fix.i32(i32 %t, i32 %b, i32 8)
+  ret i32 %p
+}
+",
+    );
+    assert!(!body(&module, "bit").contains("smul.fix"));
+    for (t, b) in [(i32::MIN, 1_i64), (i32::MAX, 1), (-77, 0)] {
+        let args = [i64::from(t), b].map(|n| Val::Int { bits: n as u128 & 0xFFFF_FFFF, width: 32 }).to_vec();
+        let Ok(Val::Int { bits, .. }) = run(&module, "bit", args, 1000) else { panic!() };
+        assert_eq!(bits as u32 as i32 as i64, (i64::from(t) * b) >> 8, "{t} {b}");
+    }
 }
 
 /// A product read by the next product: both narrowed, the second one's operand
