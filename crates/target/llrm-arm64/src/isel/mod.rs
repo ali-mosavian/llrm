@@ -77,7 +77,7 @@ pub fn select(
     platform: Platform,
 ) -> Selected<MFunc> {
     let global = module.global(function);
-    let name = global.name.clone().ok_or("an unnamed function")?;
+    let name = global.name.owned().ok_or("an unnamed function")?;
     let body = global.function().ok_or("a variable is not selected")?;
     let mut selector = Selector::new(module, body, layout, platform, &name);
     selector.run()?;
@@ -350,7 +350,7 @@ impl<'a> Selector<'a> {
         &self,
         global: GlobalId,
     ) -> Selected<String> {
-        let name = self.module.global(global).name.clone().ok_or("an unnamed global")?;
+        let name = self.module.global(global).name.owned().ok_or("an unnamed global")?;
         Ok(if self.platform.underscore() { format!("_{name}") } else { name })
     }
 

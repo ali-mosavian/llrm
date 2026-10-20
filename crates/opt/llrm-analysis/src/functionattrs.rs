@@ -120,7 +120,7 @@ fn may_have_recursive_callee(
                     if callee == id {
                         return true;
                     }
-                    let named = module.global(callee).name.as_deref().and_then(Intrinsic::named);
+                    let named = module.global(callee).intrinsic();
                     // DEVIATE F1: an intrinsic carries `norecurse` in LLVM's
                     // attribute tables; llrm's carry none, so the name says it.
                     if named.is_some_and(|one| !matches!(one, Intrinsic::Code | Intrinsic::Asm)) {

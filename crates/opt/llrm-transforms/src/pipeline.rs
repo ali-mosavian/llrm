@@ -1804,7 +1804,7 @@ impl Run {
     ) {
         let mut globals = analyses.outer().globals.to_vec();
         globals.push(GlobalValue {
-            name: Some("pipeline.body".to_owned()),
+            name: "pipeline.body".to_owned().into(),
             linkage: Linkage::Internal,
             unnamed_addr: UnnamedAddr::default(),
             address_space: 0,

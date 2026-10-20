@@ -832,7 +832,7 @@ impl CallFacts {
             if let Operand::Constant(id) = callee
                 && let ConstantKind::Global(global) = unit.context.get(id).kind
                 && let Some(named) = unit.globals.get(global.0 as usize)
-                && let Some(name) = named.name.clone()
+                && let Some(name) = named.name.owned()
             {
                 if named.function().is_some()
                     && !matches!(

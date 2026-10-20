@@ -2515,7 +2515,7 @@ impl Selector<'_, '_, '_> {
         inst: InstId,
     ) -> Option<crate::backend::lifetimes::Marker> {
         let global = llrm_mir::memory::callee(&self.module.context, self.function, inst)?;
-        let starts = match Intrinsic::named(self.module.global(global).name.as_deref()?)? {
+        let starts = match self.module.global(global).intrinsic()? {
             Intrinsic::LifetimeStart => true,
             Intrinsic::LifetimeEnd => false,
             _ => return None,
@@ -2842,8 +2842,7 @@ impl Selector<'_, '_, '_> {
                     return None;
                 };
                 let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
-                let name = self.module.global(global).name.as_deref()?;
-                if Intrinsic::named(name) != Some(Intrinsic::MemSet) || !zero(volatile) {
+                if self.module.global(global).intrinsic() != Some(Intrinsic::MemSet) || !zero(volatile) {
                     return None;
                 }
                 (value, destination)
@@ -5868,7 +5867,7 @@ impl Selector<'_, '_, '_> {
             Operand::Block(_) => return refuse("a call of a block"),
         };
         let Some(global) = global else { return self.indirect(inst, convention, *callee, arguments, at, out) };
-        let name = global.name.clone().unwrap_or_default();
+        let name = global.name.owned().unwrap_or_default();
         if llrm_mir::intrinsics::is_reserved(&name) {
             return match Intrinsic::named(&name) {
                 Some(Intrinsic::MemSet) => self.memset(arguments, at, out),

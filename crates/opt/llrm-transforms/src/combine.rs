@@ -21,7 +21,7 @@
 //! `removeAllNonTerminatorAndEHPadInstructions` is a CFG edit this pass does
 //! not make); a call is never trivially dead here (`dead` knows what a call
 //! does not write); `visit` runs only the families translated so
-//! far (`visitors`: add, mul, and, xor, div, rem, shifts,
+//! far (`visitors`: add, mul, and, or, xor, div, rem, shifts,
 //! trunc, zext, sext, icmp, getelementptr, select, store): the other `visit*`
 //! rewrites are `algebraic`'s, to move in as they are translated.
 //!
@@ -52,6 +52,7 @@ use crate::combine_and::visit_and;
 use crate::combine_casts::{visit_sext, visit_trunc, visit_zext};
 use crate::combine_compares::visit_icmp;
 use crate::combine_muldivrem::{visit_mul, visit_sdiv, visit_srem, visit_udiv, visit_urem};
+use crate::combine_or::visit_or;
 use crate::combine_shifts::{visit_ashr, visit_lshr, visit_shl};
 use crate::combine_sink::{droppable_uses, sink, sink_block, sinkable};
 use crate::combine_sub::visit_sub;
@@ -402,6 +403,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Binary(BinaryOp::Add) => &[visit_add],
         Opcode::Binary(BinaryOp::Mul) => &[visit_mul],
         Opcode::Binary(BinaryOp::And) => &[visit_and],
+        Opcode::Binary(BinaryOp::Or) => &[visit_or],
         Opcode::Binary(BinaryOp::Xor) => &[visit_xor],
         Opcode::Binary(BinaryOp::Sub) => &[visit_sub],
         Opcode::Binary(BinaryOp::UDiv) => &[visit_udiv],

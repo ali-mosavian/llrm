@@ -69,7 +69,7 @@ fn printed(
         .filter(|(_, one, function)| {
             function.is_declaration() && one.name.as_deref().is_some_and(|name| name.starts_with(llrm_x86_bc::RUNTIME))
         })
-        .map(|(id, one, _)| (id, one.name.clone().unwrap()))
+        .map(|(id, one, _)| (id, one.name.owned().unwrap()))
         .collect();
     for (id, name) in routines {
         let returns = match &module.globals[id.0 as usize].kind {
