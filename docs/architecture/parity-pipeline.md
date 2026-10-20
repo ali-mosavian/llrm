@@ -90,3 +90,9 @@ llvm-difftest fills this every half hour; one row per bucket, instrument stated 
 | loop passes + LSR | | | | 15 | |
 | machine clean-up + FPS | | | | 35 | |
 | total | | | | | |
+
+## Backend DEVIATEs
+
+| id | where | deviation | owner, date | exit |
+|----|-------|-----------|-------------|------|
+| D-SB1 | `isel/wide.rs` `narrow_divisor`, the idiv test; `isel.rs` `significant_bits` | the divisions count sign bits with the old `valuetracking::sign_bits`, not the translated `compute_num_sign_bits`: with it, x_ll_div ran +8% and switch +10% in clocks (two dword `idiv`s for the helper; `x % 65537` as `idiv` for the reciprocal) | w-1, 2026-10-20 | price two dword divisions against the helper, and the reciprocal against `idiv`, from the target description's table; then use the translated count |

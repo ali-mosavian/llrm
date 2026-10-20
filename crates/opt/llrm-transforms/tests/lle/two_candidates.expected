@@ -1,0 +1,71 @@
+target datalayout = "e-m:e-p:64:64-i64:64-n8:16:32:64"
+
+define void @f(ptr %a, ptr %b, i64 %n) {
+entry:
+  %g = icmp sgt i64 %n, 0
+  br i1 %g, label %loop.lver.check, label %exit
+
+loop.lver.check:                                  ; preds = %entry
+  %0 = shl i64 %n, 2
+  %1 = add i64 %0, 4
+  %scevgep = getelementptr i8, ptr %a, i64 %1
+  %scevgep1 = getelementptr i8, ptr %b, i64 %1
+  %bound0 = icmp ult ptr %a, %scevgep1
+  %bound1 = icmp ult ptr %b, %scevgep
+  %found.conflict = and i1 %bound0, %bound1
+  br i1 %found.conflict, label %loop.ph.lver.orig, label %loop.ph
+
+loop.ph.lver.orig:                                ; preds = %loop.lver.check
+  br label %loop.lver.orig
+
+loop.lver.orig:                                   ; preds = %loop.lver.orig, %loop.ph.lver.orig
+  %i.lver.orig = phi i64 [ %i.next.lver.orig, %loop.lver.orig ], [ 0, %loop.ph.lver.orig ]
+  %pa.lver.orig = getelementptr inbounds i32, ptr %a, i64 %i.lver.orig
+  %x.lver.orig = load i32, ptr %pa.lver.orig, align 4
+  %pb.lver.orig = getelementptr inbounds i32, ptr %b, i64 %i.lver.orig
+  %z.lver.orig = load i32, ptr %pb.lver.orig, align 4
+  %y.lver.orig = add i32 %x.lver.orig, %z.lver.orig
+  %j.lver.orig = add nuw nsw i64 %i.lver.orig, 1
+  %pa1.lver.orig = getelementptr inbounds i32, ptr %a, i64 %j.lver.orig
+  store i32 %y.lver.orig, ptr %pa1.lver.orig, align 4
+  %pb1.lver.orig = getelementptr inbounds i32, ptr %b, i64 %j.lver.orig
+  store i32 %x.lver.orig, ptr %pb1.lver.orig, align 4
+  %i.next.lver.orig = add nuw nsw i64 %i.lver.orig, 1
+  %c.lver.orig = icmp eq i64 %i.next.lver.orig, %n
+  br i1 %c.lver.orig, label %exit.loopexit.loopexit, label %loop.lver.orig
+
+loop.ph:                                          ; preds = %loop.lver.check
+  %load_initial = load i32, ptr %a, align 4
+  %load_initial3 = load i32, ptr %b, align 4
+  br label %loop
+
+loop:                                             ; preds = %loop.ph, %loop
+  %store_forwarded4 = phi i32 [ %load_initial3, %loop.ph ], [ %store_forwarded, %loop ]
+  %store_forwarded = phi i32 [ %load_initial, %loop.ph ], [ %y, %loop ]
+  %i = phi i64 [ %i.next, %loop ], [ 0, %loop.ph ]
+  %pa = getelementptr inbounds i32, ptr %a, i64 %i
+  %x = load i32, ptr %pa, align 4
+  %pb = getelementptr inbounds i32, ptr %b, i64 %i
+  %z = load i32, ptr %pb, align 4
+  %y = add i32 %store_forwarded, %store_forwarded4
+  %j = add nuw nsw i64 %i, 1
+  %pa1 = getelementptr inbounds i32, ptr %a, i64 %j
+  store i32 %y, ptr %pa1, align 4
+  %pb1 = getelementptr inbounds i32, ptr %b, i64 %j
+  store i32 %store_forwarded, ptr %pb1, align 4
+  %i.next = add nuw nsw i64 %i, 1
+  %c = icmp eq i64 %i.next, %n
+  br i1 %c, label %exit.loopexit.loopexit2, label %loop
+
+exit.loopexit.loopexit:                           ; preds = %loop.lver.orig
+  br label %exit.loopexit
+
+exit.loopexit.loopexit2:                          ; preds = %loop
+  br label %exit.loopexit
+
+exit.loopexit:                                    ; preds = %exit.loopexit.loopexit2, %exit.loopexit.loopexit
+  br label %exit
+
+exit:                                             ; preds = %exit.loopexit, %entry
+  ret void
+}

@@ -38,7 +38,7 @@ fn inline_with(
     _threshold: Threshold,
 ) -> bool {
     let layout = DataLayout::default();
-    let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)), self_inlining: None };
+    let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)), self_inlining: None, peeling: false };
     let mut changed = false;
     loop {
         let available = every_body(module, &layout);
@@ -70,6 +70,8 @@ fn every_body(
                     body: std::rc::Rc::new(function.clone()),
                     frame: grown(&module.context, layout, function),
                     moved: false,
+                    callee: None,
+                    self_calls: None,
                 },
             )
         })
@@ -560,11 +562,13 @@ fn self_inlined(ops: usize) -> (usize, i64) {
             body: std::rc::Rc::new(function.clone()),
             frame: grown(context, &layout, function),
             moved: false,
+            callee: None,
+            self_calls: None,
         }
     };
     let available = [(name, itself)].into_iter().collect();
     let frequencies = SparseIdMap::default();
-    let by = Caller { layout: &layout, recursive: true, self_inlining: Some(&frequencies) };
+    let by = Caller { layout: &layout, recursive: true, self_inlining: Some(&frequencies), peeling: false };
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("down").unwrap();
     expanded_all(context, function, &by, &available, None, &mut declared).unwrap();
