@@ -22,6 +22,8 @@
 //!   or a load and store of the alloca);
 //! - a copy of a whole stack slot to another that never conflict with it makes
 //!   the two one slot (`performStackMoveOptzn`);
+//! - a `byval` argument, or one a callee only reads, fed by a memcpy takes the
+//!   memcpy's source (`processByValArgument`, `processImmutArgument`);
 //! - a memmove whose ranges cannot meet is a memcpy (`processMemMove`);
 //! - an aggregate loaded and stored right after is a memcpy, or a memmove where
 //!   the store may write what the load reads (`processStoreOfLoad`), the store
@@ -45,11 +47,14 @@
 //!    false.
 //! 3. No debug-info assignment IDs (`mergeDIAssignID`), no `combineAAMetadata`
 //!    (the formed calls carry no `!tbaa`, as in `loopidiom`).
-//! 4. Done later (stages): `processByValArgument` and `processImmutArgument`.
 //! 5. MIR holds no constant expression in code: where the builder folds
 //!    `getelementptr (i8, @g, 16)` the pass makes the instruction. A forced
 //!    inline copy (`llvm.memcpy.inline`) is not forwarded, as the builder's
 //!    `CreateMemCpyInline` has no counterpart here.
+//! 9. `getOrEnforceKnownAlignment` is `known_alignment`: it never raises an
+//!    alloca's or global's alignment, so a source aligned less than the byval
+//!    or the alloca needs ends the forwarding. Exit: the alignment-raising
+//!    helper (needs the writer of alloca alignment shared with call slot).
 //! 6. `moveUp` does not lift a call (LLVM does when it neither reads nor writes
 //!    what the lifted ones touch): a call between the load and the store ends
 //!    the attempt. Fact: `getModRefInfo(Instruction, CallBase)` has no model
@@ -396,6 +401,24 @@ impl State<'_> {
                     }
                 } else if matches!(self.function.instruction(inst).opcode, Opcode::Store { .. }) {
                     repeat_instruction = self.process_store(inst, &mut bi);
+                } else if matches!(self.function.instruction(inst).opcode, Opcode::Call(_)) {
+                    for index in 0..self.function.instruction(inst).operands.len().saturating_sub(1) {
+                        let attrs = self.argument_attrs(inst, index);
+                        let by_value = attrs
+                            .iter()
+                            .any(
+                                |attr| matches!(
+                                    attr,
+                                    llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
+                                ),
+                            );
+                        let facts = llrm_mir::facts::Facts::of(&attrs);
+                        if by_value {
+                            made_change |= self.process_byval_argument(inst, index);
+                        } else if facts.read_only() || facts.read_none() {
+                            made_change |= self.process_immut_argument(inst, index);
+                        }
+                    }
                 }
                 if repeat_instruction {
                     // `--BI` when not at the beginning.
@@ -2134,6 +2157,194 @@ impl State<'_> {
             Byte::Undef => Operand::Constant(self.context.constant(Constant { ty: i8, kind: ConstantKind::Undef })),
             Byte::Poison => Operand::Constant(self.context.constant(Constant { ty: i8, kind: ConstantKind::Poison })),
         }
+    }
+
+    /// The attributes of argument `index` of `call`: the call site's and its
+    /// callee's declaration's (`CallBase::paramHasAttr`).
+    fn argument_attrs(
+        &self,
+        call: InstId,
+        index: usize,
+    ) -> Vec<llrm_mir::opcode::Attribute> {
+        let Opcode::Call(info) = &self.function.instruction(call).opcode else { return Vec::new() };
+        let mut attrs = info.argument_attrs.get(index).cloned().unwrap_or_default();
+        if let Some(callee) = llrm_mir::memory::callee(self.context, self.function, call)
+            && let Some(function) = self.outer.globals.get(callee.0 as usize).and_then(|global| global.function())
+        {
+            attrs.extend(function.parameter_attrs.get(index).cloned().unwrap_or_default());
+        }
+        attrs
+    }
+
+    /// The alignment `pointer` is known to have: an alloca's. DEVIATE 9: the
+    /// pin's `getOrEnforceKnownAlignment` also raises the alignment of an
+    /// alloca or global it may; here a smaller known alignment ends the
+    /// transform.
+    fn known_alignment(
+        &self,
+        pointer: Operand,
+    ) -> u64 {
+        let Operand::Value(value) = get_underlying_object(&self.query(), pointer, 0) else { return 1 };
+        let llrm_mir::module::ValueDef::Instruction(inst) = self.function.value(value).def else { return 1 };
+        let Opcode::Alloca { allocated, align, .. } = self.function.instruction(inst).opcode else { return 1 };
+        align.unwrap_or_else(|| self.layout.align(&self.context.types, allocated))
+    }
+
+    /// The memcpy that fed `pointer` (`size` bytes of it) to `call`, if the
+    /// clobber of that location right before the call is one.
+    fn feeding_memcpy(
+        &self,
+        aa: &AliasQuery,
+        call: InstId,
+        pointer: Operand,
+        size: u64,
+    ) -> Option<Mem> {
+        let access = self.mssa.get_memory_access(call)?;
+        let defining = self.mssa.access(access).defining?;
+        let location = aa.location_for(&self.reference_at(aa.unit(), pointer, size as u32), false);
+        let mut limit = llrm_analysis::mssa::walker::MAX_CHECK_LIMIT;
+        let clobber = self.mssa.get_clobbering_memory_access_for_location(aa, defining, &location, &mut limit);
+        if self.mssa.access(clobber).kind != Kind::Def {
+            return None;
+        }
+        self.mem(self.mssa.access(clobber).inst?).filter(|one| one.kind == Kind3::Copy && !one.volatile)
+    }
+
+    /// Whether the bytes `dep` copied from are written between the copy and
+    /// `call`.
+    fn source_written_between(
+        &self,
+        aa: &AliasQuery,
+        dep: &Mem,
+        call: InstId,
+    ) -> bool {
+        let (Some(start), Some(end)) = (self.mssa.get_memory_access(dep.inst), self.mssa.get_memory_access(call))
+        else {
+            return true;
+        };
+        let Some(source) = self.source_location(aa, dep) else { return true };
+        self.written_between_shared(aa, &source, start, end)
+    }
+
+    /// `processByValArgument`: a `byval` argument fed by a memcpy takes the
+    /// memcpy's source instead.
+    fn process_byval_argument(
+        &mut self,
+        call: InstId,
+        index: usize,
+    ) -> bool {
+        let attrs = self.argument_attrs(call, index);
+        let Some(by_val_ty) = attrs.iter().find_map(|attr| match attr {
+            llrm_mir::opcode::Attribute::Type(name, ty) if name == "byval" => Some(*ty),
+            _ => None,
+        }) else {
+            return false;
+        };
+        let size = self.layout.alloc_size(&self.context.types, by_val_ty);
+        let argument = self.function.instruction(call).operands[index];
+        // The call doesn't say its alignment: a target-specific value.
+        let Some(by_val_align) = llrm_mir::facts::Facts::of(&attrs).align() else { return false };
+        let dep = {
+            let view = self.view();
+            let aa = AliasQuery::new(&view, &self.accesses);
+            let Some(dep) = self.feeding_memcpy(&aa, call, argument, size) else { return false };
+            // The argument is the memcpy's destination, which covers it.
+            if self.strip_pointer_casts(argument) != dep.dest {
+                return false;
+            }
+            if !self.constant_length(dep.length).is_some_and(|length| length >= size) {
+                return false;
+            }
+            let dep_align = self.align_of(dep.inst, 1).unwrap_or(1).max(self.known_alignment(dep.other));
+            if dep_align < by_val_align {
+                return false;
+            }
+            if self.function.operand_type(self.context, dep.other) != self.function.operand_type(self.context, argument)
+            {
+                return false;
+            }
+            if self.source_written_between(&aa, &dep, call) {
+                return false;
+            }
+            dep
+        };
+        self.function.set_operand(call, index, dep.other);
+        true
+    }
+
+    /// `processImmutArgument`: a pointer argument the callee only reads, to a
+    /// whole alloca a memcpy filled, is the memcpy's source instead.
+    fn process_immut_argument(
+        &mut self,
+        call: InstId,
+        index: usize,
+    ) -> bool {
+        use llrm_mir::facts::Facts;
+        let attrs = self.argument_attrs(call, index);
+        let facts = Facts::of(&attrs);
+        // 1. Immutable during the call, and not captured by it.
+        if !facts.no_capture() {
+            return false;
+        }
+        let argument = self.function.instruction(call).operands[index];
+        let dep = {
+            let view = self.view();
+            let aa = AliasQuery::new(&view, &self.accesses);
+            // The callee may still write it through another pointer: noalias,
+            // or the alias model says not.
+            if !facts.no_alias() {
+                let any = aa.location_for(&self.reference_at(aa.unit(), argument, 1), true);
+                if aa.get_mod_ref_info(call, &any).is_mod() {
+                    return false;
+                }
+            }
+            // 2. An alloca of a size known.
+            let Operand::Value(alloca_value) = self.strip_pointer_casts(argument) else { return false };
+            let llrm_mir::module::ValueDef::Instruction(alloca) = self.function.value(alloca_value).def else {
+                return false;
+            };
+            let Opcode::Alloca { allocated, align, .. } = self.function.instruction(alloca).opcode else {
+                return false;
+            };
+            let count = match self.function.instruction(alloca).operands.first() {
+                None => 1,
+                Some(&count) => match self.query().int_constant(count) {
+                    Some((bits, _)) => bits as u64,
+                    None => return false,
+                },
+            };
+            let alloca_size = self.layout.alloc_size(&self.context.types, allocated) * count;
+            let Some(dep) = self.feeding_memcpy(&aa, call, argument, alloca_size) else { return false };
+            if dep.dest != Operand::Value(alloca_value) {
+                return false;
+            }
+            if self.function.operand_type(self.context, dep.other) != self.function.operand_type(self.context, argument)
+            {
+                return false;
+            }
+            // 2-1. The copy is the whole alloca.
+            if self.constant_length(dep.length) != Some(alloca_size) {
+                return false;
+            }
+            // 2-2. The source is aligned as the alloca is.
+            let alloca_align = align.unwrap_or_else(|| self.layout.align(&self.context.types, allocated));
+            let dep_align = self.align_of(dep.inst, 1).unwrap_or(1).max(self.known_alignment(dep.other));
+            if dep_align < alloca_align {
+                return false;
+            }
+            // 3. The source is not written between the copy and the call.
+            if self.source_written_between(&aa, &dep, call) {
+                return false;
+            }
+            // 4. Nor during the call.
+            let Some(source) = self.source_location(&aa, &dep) else { return false };
+            if aa.get_mod_ref_info(call, &source).is_mod() {
+                return false;
+            }
+            dep
+        };
+        self.function.set_operand(call, index, dep.other);
+        true
     }
 
     /// The alignment an argument of a call carries (`align` on parameter

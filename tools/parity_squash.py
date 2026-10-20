@@ -7,7 +7,7 @@
 
 Subset rule: the fast set runs on the head (origin/feat/parity, failure set cached per sha by `head-failures`) AND on the merged tree; the merged tree may fail only checks the head fails, and strictly fewer
 when the description has a `Fixes red` line; both sets are in the refusal. Every landing appends `<sha> #PR gate-ok <date>` to ~/scratch/coordwork/landed.log; `unlogged` lists feat/parity commits with no line.
-Refused unless: the PR head contains the current origin/feat/parity; the squash diff deletes no file, no test function (`#[test] fn`, `def test_`, unless re-added) and no more than
+Refused unless: the PR head contains the current origin/feat/parity; the squash deletes no file a docs/*.md still links to, and no file, no test function (`#[test] fn`, `def test_`, unless re-added) and no more than
 LIMIT lines of a file, unless a `Deletes:` or `Reverts:` line of the description names the path (own commits or not: #2443's deleted scev/expand_iv.rs); parity_smoke passes on that exact head.
 PARITY_BIN names the directory of the built release llrm-c, llrm-qb and llrm-nib (parity_smoke needs them); unset, it is the repo target dir's release
 (LLRM_BIN / CARGO_TARGET_DIR as tools/llrmbin.py reads them) when all three are there.
@@ -138,6 +138,26 @@ def assistant_mentions(title: str, description: str, base: str, head: str, cwd: 
     return why
 
 
+MD_LINK = re.compile(r"\]\(([^)#\s]+)(?:#[^)]*)?\)")
+
+
+def dead_links(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, str]]:
+    """(deleted path, docs page) for each file the squash deletes that a docs/*.md at `head` still links to. Two PRs deleted the dse, unroll and peel pages and left their
+    readme links; the docs_links test went red on feat/parity for hours."""
+    gone = git("diff", "--name-only", "--diff-filter=D", base, head, cwd=cwd).split()
+    found = []
+    for path in gone:
+        listed = subprocess.run(["git", "grep", "-l", "-F", "-e", Path(path).name, head, "--", "docs"], cwd=cwd, capture_output=True, text=True).stdout.split()
+        for entry in listed:
+            page = entry.split(":", 1)[1]
+            if not page.endswith(".md"):
+                continue
+            text = git("show", f"{head}:{page}", cwd=cwd)
+            if any(os.path.normpath(os.path.join(os.path.dirname(page), target)) == path for target in MD_LINK.findall(text) if "://" not in target):
+                found.append((path, page))
+    return found
+
+
 def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, title: str = "") -> list[str]:
     """Why this head may not be squashed into `base`; empty if it may."""
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
@@ -149,6 +169,8 @@ def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, ti
             what = "deletes the whole file" if whole else f"deletes {gone} line(s)"
             why.append(f"{path}: the squash {what}{f' and {tests} test function(s)' if tests else ''}{' (no commit of this PR touched it)' if path in outside else ''}; "
                        "name the path in a `Deletes:` or `Reverts:` line of the description if that is meant")
+    for path, page in dead_links(base, head, cwd):
+        why.append(f"{page}: still links to {path}, which the squash deletes; remove or repoint the link in this PR")
     return why + assistant_mentions(title, description, base, head, cwd)
 
 
