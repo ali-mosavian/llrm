@@ -6360,3 +6360,35 @@ define float @f(float %x, float %y) addrspace(1) {
     assert!(got[call..].iter().any(|line| line.starts_with("fadd dword ptr [bp+")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("fstp")), "{got:?}");
 }
+
+/// `while (p < big + 20000)` over a huge array stopped at the 64 KB boundary:
+/// the offset half of the end compare (`big + 14464`, the bytes past it) was
+/// gone from the loop, so `sbb` borrowed from whatever flags came before and
+/// `tests/run` `huge_array.c` summed 16,384 of 20,000 elements (#3141, since
+/// #3078). The offsets are subtracted, then the selectors with the borrow.
+#[test]
+fn test_a_huge_pointer_loop_to_a_constant_end_compares_the_offset_before_the_selector() {
+    let text = "@big = external addrspace(1) global [20000 x i32]
+define i32 @f() addrspace(1) {
+entry:
+  br label %loop
+loop:
+  %p = phi ptr addrspace(3) [ addrspacecast (ptr addrspace(1) @big to ptr addrspace(3)), %entry ], [ %next, %loop ]
+  %s = phi i32 [ 0, %entry ], [ %sum, %loop ]
+  %v = load i32, ptr addrspace(3) %p
+  %sum = add i32 %s, %v
+  %next = getelementptr inbounds nuw i8, ptr addrspace(3) %p, i32 4
+  %c = icmp ult ptr addrspace(3) %next, getelementptr inbounds nuw (i8, ptr addrspace(3) addrspacecast (ptr addrspace(1) @big to ptr addrspace(3)), i32 80000)
+  br i1 %c, label %loop, label %done
+done:
+  ret i32 %sum
+}
+";
+    let lines = listing(text, "f");
+    let borrow = lines.iter().position(|line| line.starts_with("sbb ") && line.ends_with(", ax") || line.starts_with("sbb ")).expect("the selector compare");
+    let before = &lines[..borrow];
+    assert!(
+        before.iter().rev().take(4).any(|line| line.starts_with("sub ") || line.starts_with("cmp ")),
+        "no offset compare before the selector's borrow: {lines:#?}"
+    );
+}
