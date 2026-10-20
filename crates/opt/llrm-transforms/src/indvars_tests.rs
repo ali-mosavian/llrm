@@ -685,9 +685,10 @@ b3:
     assert!(after.contains("br i1 false, label %b4, label %b3"), "{after}");
 }
 
-/// LFTR was on in the pipeline (the rotated copy ran it with the rotate slot
-/// off): sieve.c -O1 m32 grew 32 B. It is opt-in until the translated LSR.
+/// LFTR was off in the pipeline until the translated LSR: bench ring's exit
+/// test stayed `ult`, LSR made no compare against zero, and its fill loop ran 6
+/// instructions where the pin's runs 4 (48154 against 40103 instructions).
 #[test]
-fn test_lftr_is_off_in_the_pipeline_unless_asked() {
-    assert_eq!(super::lftr_default(), std::env::var_os("LLRM_LFTR").is_some());
+fn test_lftr_is_on_in_the_pipeline_unless_turned_off() {
+    assert_eq!(super::lftr_default(), std::env::var_os("LLRM_NO_LFTR").is_none());
 }
