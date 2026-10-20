@@ -671,3 +671,29 @@ def test_the_word_clause_does_not_name_the_assistant(tmp_path):
     """A loose pattern would refuse every PR with a where clause or an if clause."""
     repo, head = pr_over_main(tmp_path, file_text="// the where clause and the if clause\nfn a() {}\n", message="docs: a clause")
     assert ps.refusals(head, "the clause", base="main", cwd=repo, title="feat: clause") == []
+
+
+def deleted_page(tmp_path: Path, link: str, other_link: str = "") -> tuple[Path, str]:
+    """A PR deletes docs/optimizations/passes/dse.md; docs/optimizations/readme.md links it with `link`."""
+    repo = tmp_path / "r"
+    (repo / "docs/optimizations/passes").mkdir(parents=True)
+    sh(repo, "init", "-q", "-b", "main")
+    (repo / "docs/optimizations/passes/dse.md").write_text("# dse\n")
+    commit(repo, "docs/optimizations/readme.md", f"| [`dse`]({link}) |\n{other_link}", "pages")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "docs/optimizations/passes/dse.md").unlink()
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "refactor(dse): delete the old dse pass")
+    return repo, sh(repo, "rev-parse", "HEAD")
+
+
+def test_a_squash_that_deletes_a_page_a_doc_still_links_to_is_refused_naming_the_linker(tmp_path):
+    """#fd939a155 and bbdfe8c06 deleted the dse, unroll and peel pages and left the readme's links: docs_links was red on feat/parity for hours."""
+    repo, head = deleted_page(tmp_path, "passes/dse.md")
+    why = ps.refusals(head, "Deletes: docs/optimizations/passes/dse.md", base="main", cwd=repo)
+    assert len(why) == 1 and why[0].startswith("docs/optimizations/readme.md: still links to docs/optimizations/passes/dse.md"), why
+
+
+def test_deleting_a_page_with_its_links_gone_or_to_another_file_of_that_name_passes(tmp_path):
+    repo, head = deleted_page(tmp_path, "passes/deadstore.md", "[`x`](../elsewhere/dse.md) and [web](https://example.com/dse.md)\n")
+    assert ps.refusals(head, "Deletes: docs/optimizations/passes/dse.md", base="main", cwd=repo) == []
