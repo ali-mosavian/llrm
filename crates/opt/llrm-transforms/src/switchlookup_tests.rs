@@ -25,7 +25,9 @@ fn check(
     let spec = Speculation { tti: &tti, layout: &layout, outer: &outer };
     let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    assert_eq!(simplified_with(&Options::L1438, context, &spec, &mut declared, function), text != expected, "{text}");
+    let changed = simplified_with(&Options::L1438, context, &spec, &mut declared, function);
+    declared.place(&mut module).expect("the declarations are placed");
+    assert_eq!(changed, text != expected, "{text}");
     assert_eq!(printed(&module), expected);
     assert_eq!(results(&module, inputs), before);
 }
@@ -401,5 +403,136 @@ b0:
 }
 ",
         &[&[0], &[1], &[2], &[3], &[9]],
+    );
+}
+
+/// By `y & 3` the default is dead; results 10, 20, 30, 0 are not a line, and
+/// four i8 cells make a 32-bit map, read by a shift.
+#[test]
+fn test_values_that_are_not_a_line_are_a_bit_map() {
+    check(
+        "define i8 @f(i8 %y) {
+b0:
+  %x = and i8 %y, 3
+  switch i8 %x, label %d [
+    i8 0, label %a
+    i8 1, label %b
+    i8 2, label %c
+  ]
+
+a:
+  br label %end
+
+b:
+  br label %end
+
+c:
+  br label %end
+
+d:
+  br label %end
+
+end:
+  %p = phi i8 [ 10, %a ], [ 20, %b ], [ 30, %c ], [ 0, %d ]
+  ret i8 %p
+}
+",
+        "define i8 @f(i8 %y) {
+b0:
+  %x = and i8 %y, 3
+  %switch.cast = zext i8 %x to i32
+  %switch.shiftamt = mul nuw nsw i32 %switch.cast, 8
+  %switch.downshift = lshr i32 1971210, %switch.shiftamt
+  %switch.masked = trunc i32 %switch.downshift to i8
+  ret i8 %switch.masked
+}
+",
+        &[&[0], &[1], &[2], &[3], &[4]],
+    );
+}
+
+/// Two phis: one linear, one with a value off its line. The second is read from
+/// an array global; the first stays arithmetic.
+#[test]
+fn test_a_phi_off_the_line_is_read_from_an_array() {
+    check(
+        "define i16 @f(i16 %x) {
+b0:
+  switch i16 %x, label %d [
+    i16 0, label %a
+    i16 1, label %b
+    i16 2, label %c
+  ]
+
+a:
+  br label %end
+
+b:
+  br label %end
+
+c:
+  br label %end
+
+d:
+  br label %end
+
+end:
+  %p = phi i16 [ 1, %a ], [ 3, %b ], [ 5, %c ], [ 0, %d ]
+  %q = phi i16 [ 8, %a ], [ 8, %b ], [ 9, %c ], [ 8, %d ]
+  %s = add i16 %p, %q
+  ret i16 %s
+}
+",
+        "@switch.table.0 = private constant [3 x i8] [i8 8, i8 8, i8 9]
+
+define i16 @f(i16 %x) {
+b0:
+  %0 = icmp ult i16 %x, 3
+  br i1 %0, label %switch.lookup, label %end
+
+switch.lookup:
+  %switch.idx.mult = mul nsw i16 %x, 2
+  %switch.offset = add nsw i16 %switch.idx.mult, 1
+  %1 = zext nneg i16 %x to i32
+  %switch.gep = getelementptr inbounds [3 x i8], ptr @switch.table.0, i32 0, i32 %1
+  %switch.load = load i8, ptr %switch.gep
+  %switch.ext = zext i8 %switch.load to i16
+  br label %end
+
+end:
+  %p = phi i16 [ %switch.offset, %switch.lookup ], [ 0, %b0 ]
+  %q = phi i16 [ %switch.ext, %switch.lookup ], [ 8, %b0 ]
+  %s = add i16 %p, %q
+  ret i16 %s
+}
+",
+        &[&[0], &[1], &[2], &[3], &[-1]],
+    );
+}
+
+/// Ten cases with i32 results below 3 are read from an array of bytes.
+#[test]
+fn test_array_cells_are_as_narrow_as_the_values_need() {
+    check(
+        &diamond("i32", &[(0, 0), (1, 1), (2, 2), (3, 1), (4, 0), (5, 2), (6, 1), (7, 0), (8, 2), (9, 1)], 0),
+        "@switch.table.0 = private constant [10 x i8] [i8 0, i8 1, i8 2, i8 1, i8 0, i8 2, i8 1, i8 0, i8 2, i8 1]
+
+define i32 @f(i32 %x) {
+b0:
+  %0 = icmp ult i32 %x, 10
+  br i1 %0, label %switch.lookup, label %end
+
+switch.lookup:
+  %switch.gep = getelementptr inbounds [10 x i8], ptr @switch.table.0, i32 0, i32 %x
+  %switch.load = load i8, ptr %switch.gep
+  %switch.ext = zext i8 %switch.load to i32
+  br label %end
+
+end:
+  %p = phi i32 [ %switch.ext, %switch.lookup ], [ 0, %b0 ]
+  ret i32 %p
+}
+",
+        &[&[0], &[1], &[2], &[3], &[4], &[5], &[6], &[7], &[8], &[9], &[10]],
     );
 }

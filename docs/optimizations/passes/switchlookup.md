@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchlookup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchlookup.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchlookup.rs sha256:f2e69b2f3c783b3339a4b9d801425ec383a5c6b40012112be962febe8e362423 -->
+<!-- src: crates/opt/llrm-transforms/src/switchlookup.rs sha256:763501a3a5454b4db37e1a0b42f404623bea43421a8312ef13a40d62f790fb92 -->
 
 # switchlookup
 
@@ -26,8 +26,8 @@ the data layout, not answered here.
 Each case is walked to the common block, folding what the case block
 computes from the condition (`case_results`). A table of the results is
 sized (`condition_is_index`, the offset of the lowest case), priced
-(`should_build_lookup_table`) and, per phi, found to be one value or
-linear in the index. The phis then take the arithmetic, behind a range
+(`should_build_lookup_table`) and, per phi, found to be one value, linear
+in the index, a bit map in a register or cells of an array global. The phis then take the arithmetic, behind a range
 check or, for holes with a default that is not a constant, a bit mask.
 
 ## Example
@@ -40,7 +40,7 @@ check or, for holes with a default that is not a constant, a bit mask.
 
 | # | DEVIATE |
 |---|---|
-| D1 | OWED (llrm-w-4, 2026-10-20; exit: the bit map and the array table in the next PR): a phi whose results are neither one value nor linear in the index (`SwitchReplacement`'s `BitMapKind`, `LookupTableKind`) makes the whole fold give up. |
+| D1 | A table is a private constant from `Declared::table`, named `switch.table.N`, deduplicated, without the function's name or the preferred alignment of its cells; `shouldBuildLookupTablesForConstant` is not asked and a constant MIR cannot hold is not offered. |
 | D2 | No branch weights on the range check (`setFittedBranchWeights`). |
 | D3 | No `DomTreeUpdater`: callers recompute the tree. |
 | D4 | A hole at index 0 of a table whose holes are poison takes the first result as the linear offset; the pin `cast<ConstantInt>`s the poison. |
