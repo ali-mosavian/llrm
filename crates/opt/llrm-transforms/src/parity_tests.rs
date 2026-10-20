@@ -48,7 +48,9 @@ fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
 /// A slot the parity pipeline runs must be in the registry, or it has no kind.
 #[test]
 fn test_a_slot_that_runs_and_is_not_registered_fails() {
-    let why = parity::check(parity::REGISTRY, Phase::Early, &["sroa@1179", "earlycse@1180", "unknown@1"]).unwrap_err();
+    let why =
+        parity::check(parity::REGISTRY, Phase::Early, &["decide@1178", "sroa@1179", "earlycse@1180", "unknown@1"])
+            .unwrap_err();
     assert!(why.contains("unknown@1"), "{why}");
 }
 
@@ -108,26 +110,40 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     assert_eq!(parity::check(parity::REGISTRY, Phase::Backend, &built), Ok(()));
     let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@99"), "{why}");
-    let why = parity::check_backend(&["floatalloc@8", "jumps@17", "allocate@11", "unknown@1"]).unwrap_err();
+    let why = parity::check_backend(
+        &["machinecse@4", "machinesink@4", "floatalloc@8", "coalesce@10", "jumps@17", "allocate@11", "unknown@1"],
+        &[],
+    )
+    .unwrap_err();
     assert!(why.contains("unknown@1"), "{why}");
 }
 
 /// A Partial slot that is not run fails like a Translated one, but it is never
-/// counted as joined: `jumps@17` is TailMergeBlocks only.
+/// counted as joined. Held for every Partial row of a registry, so a row that
+/// moves to Translated or leaves Partial needs no edit here.
+fn partial_rows_are_required_and_never_joined(registry: &[Entry]) {
+    for row in registry.iter().filter(|one| one.kind == SlotKind::Partial) {
+        let built: Vec<&str> = registry.iter().filter(|one| one.phase == row.phase).map(|one| one.slot).collect();
+        assert_eq!(parity::check(registry, row.phase, &built), Ok(()), "{}", row.slot);
+        let without: Vec<&str> = built.iter().copied().filter(|one| *one != row.slot).collect();
+        let why = parity::check(registry, row.phase, &without).expect_err("a Partial slot left out");
+        assert!(why.contains(row.slot), "{why}");
+        assert!(parity::joined_slots(registry, &built).all(|one| one != row.slot), "{}", row.slot);
+    }
+}
+
 #[test]
 fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined() {
-    let built: Vec<&str> =
-        parity::REGISTRY.iter().filter(|one| one.phase == Phase::Backend).map(|one| one.slot).collect();
-    let without: Vec<&str> = built.iter().copied().filter(|one| *one != "jumps@17").collect();
-    let why = parity::check(parity::REGISTRY, Phase::Backend, &without).expect_err("jumps@17 left out");
-    assert!(why.contains("jumps@17"), "{why}");
-    assert!(parity::joined_slots(parity::REGISTRY, &built).all(|one| one != "jumps@17"));
-    let count = parity::tally(parity::REGISTRY);
-    // jumps@17, allocate@11 (greedy by default under LLVM's order) and
-    // merge@818 (MemCpyOpt's memsets), dse@820 (stage 1) and the two
-    // jumpthreading slots (stage S1).
-    assert_eq!(count.partial, 6);
-    assert!(parity::report().contains("jumps@17") && parity::report().contains("6 partial"));
+    let fixture = [Entry {
+        slot: "fixture@1",
+        phase: Phase::Early,
+        llvm: "fixture",
+        kind: SlotKind::Partial,
+        replaced_by: "",
+        note: "criterion: c; exit: e",
+    }];
+    partial_rows_are_required_and_never_joined(&fixture);
+    partial_rows_are_required_and_never_joined(parity::REGISTRY);
 }
 
 /// A Partial slot without its criterion and exit says what is done and not what
@@ -136,6 +152,17 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
 fn test_a_partial_slot_states_its_criterion_and_exit() {
     for one in parity::REGISTRY.iter().filter(|one| one.kind == SlotKind::Partial) {
         assert!(one.note.contains("criterion:") && one.note.contains("exit:"), "{}: {:?}", one.slot, one.note);
+    }
+}
+
+/// indvars@738 and coalesce@10 ran translated code under the order at defaults
+/// but counted as Old, so the count of record hid the progress.
+#[test]
+fn test_indvars_and_coalesce_that_run_translations_are_partial_with_an_exit() {
+    for slot in ["indvars@738", "coalesce@10"] {
+        let one = parity::REGISTRY.iter().find(|one| one.slot == slot).expect(slot);
+        assert_eq!(one.kind, SlotKind::Partial, "{slot}");
+        assert!(one.note.contains("exit:"), "{slot}: {:?}", one.note);
     }
 }
 
@@ -274,4 +301,242 @@ fn test_sccp_stands_between_gvn_and_bdce() {
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
     assert_eq!((at("gvn@787") + 1, at("sccp@792") + 1), (at("sccp@792"), at("bdce@797")));
+}
+
+/// LSR's translated pieces landed with no registry row, so the count could not
+/// show them; DomTree was translated with no analyses row. The slot is
+/// Translated now the pass calls the pieces, and `dominators` is a Translated
+/// analysis.
+#[test]
+fn test_lsr_is_a_registered_slot_and_dominators_a_translated_analysis() {
+    let lsr = parity::REGISTRY.iter().find(|one| one.slot == "lsr").expect("lsr is registered");
+    assert_eq!((lsr.llvm, lsr.kind), ("loop-reduce (LoopStrengthReduce.cpp)", SlotKind::Translated));
+    let dominators = parity::ANALYSES.iter().find(|one| one.key == "dominators").expect("dominators is registered");
+    assert_eq!(
+        (dominators.llvm, dominators.kind, dominators.off),
+        ("DominatorTreeAnalysis", SlotKind::Translated, false)
+    );
+    let shape = parity::ANALYSES.iter().find(|one| one.key == "shape").expect("shape is registered");
+    assert_eq!((shape.llvm, shape.kind), ("none", SlotKind::Old), "shape is a bundle, not a translation");
+}
+
+/// An analysis the manager computed that no registry row named left the count
+/// of old callers without a list to read: `tools/old_analysis_callers.py` kept
+/// its own by hand. Every analysis `LLRM_DEBUG=counts` can print has a row, and
+/// a row that is not Translated says what replaces it.
+#[test]
+fn test_every_analysis_the_manager_names_has_a_registry_row() {
+    let sources = [
+        include_str!("../../../ir/llrm-mir/src/passes.rs"),
+        include_str!("../../../ir/llrm-mir/src/callgraph.rs"),
+        include_str!("../../../ir/llrm-mir/src/lazyvalueinfo.rs"),
+        include_str!("../../llrm-analysis/src/manager.rs"),
+        include_str!("../../llrm-analysis/src/bpi.rs"),
+        include_str!("../../llrm-analysis/src/blockfreq.rs"),
+        include_str!("../../llrm-analysis/src/cfg.rs"),
+        include_str!("../../llrm-analysis/src/memoryssa.rs"),
+        include_str!("../../llrm-analysis/src/noreturn.rs"),
+        include_str!("../../llrm-analysis/src/observers.rs"),
+        include_str!("../../llrm-analysis/src/scev/analysis.rs"),
+        include_str!("spill.rs"),
+        include_str!("../../../ir/llrm-mir/src/memory.rs"),
+    ];
+    // An analysis names itself in `const NAME`, a scan that is not one in a
+    // `counted("..")` call.
+    let named: Vec<&str> = sources
+        .iter()
+        .flat_map(|source| source.lines())
+        .map(|line| line.trim_start().trim_start_matches("crate::passes::"))
+        .filter(|line| line.starts_with("const NAME: &'static str = \"") || line.starts_with("counted(\""))
+        .filter_map(|line| line.split('"').nth(1))
+        .filter(|name| !name.starts_with("program-"))
+        .collect();
+    assert!(named.len() > 30, "the scan found {} names", named.len());
+    let missing: Vec<&&str> =
+        named.iter().filter(|name| parity::ANALYSES.iter().all(|one| one.key != **name)).collect();
+    assert!(missing.is_empty(), "analyses with no registry row: {missing:?}");
+    for one in parity::ANALYSES.iter().filter(|one| one.kind != SlotKind::Translated) {
+        assert!(!one.replaced_by.is_empty(), "{} is not Translated and says nothing of its replacement", one.key);
+    }
+}
+
+/// `tools/old_analysis_callers.py` reads the analyses from the `[parity]
+/// analysis` lines; a row printed without its type would leave it nothing to
+/// look for.
+#[test]
+fn test_the_tally_lines_carry_each_analysis_with_its_kind_and_type() {
+    let lines = parity::tally_lines();
+    assert!(lines.contains(&"[parity] analysis shape old Shape".to_owned()), "{lines:?}");
+    assert!(lines.contains(&"[parity] analysis dominators translated Dominators".to_owned()), "{lines:?}");
+    assert!(parity::ANALYSES.iter().all(|one| !one.symbol.is_empty()));
+}
+
+/// A slot called Old that runs a translated pass went unnoticed: `decide@1178`
+/// ran the translated SimplifyCFG (#2907) while its row stayed Old, and the
+/// count of record under-reported the work. The same slot called Partial or
+/// Translated passes.
+#[test]
+fn test_an_old_slot_that_runs_a_translated_pass_fails() {
+    let row = |kind| Entry {
+        slot: "fixture@1",
+        phase: Phase::Early,
+        llvm: "fixture",
+        kind,
+        replaced_by: "",
+        note: "criterion: c; exit: e",
+    };
+    let held = [("fixture@1", vec!["simplifycfg"])];
+    for kind in [SlotKind::Old, SlotKind::Missing] {
+        let why = parity::check_old_slots(&[row(kind)], &held).expect_err("a translated pass in an unfinished row");
+        assert!(why.contains("fixture@1") && why.contains("simplifycfg"), "{why}");
+    }
+    for kind in [SlotKind::Partial, SlotKind::Translated] {
+        assert_eq!(parity::check_old_slots(&[row(kind)], &held), Ok(()), "{kind:?}");
+    }
+    assert_eq!(parity::check_old_slots(&[row(SlotKind::Old)], &[("fixture@1", Vec::new())]), Ok(()));
+}
+
+/// The registry is what the order runs: no slot of the built lists, at any
+/// level, is Old and holds a translated pass.
+#[test]
+fn test_no_old_slot_of_the_built_lists_runs_a_translated_pass() {
+    for options in [pipeline::Options::basic(), pipeline::Options::standard(), pipeline::Options::size()] {
+        let on = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+        for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late] {
+            let passes = pipeline::llvm_order(&on, phase);
+            let held: Vec<_> = passes.iter().map(|one| (one.name(), one.translations())).collect();
+            let built: Vec<_> = held.iter().map(|one| one.0).collect();
+            let level = if on.options.pre { parity::Level::O2 } else { parity::Level::O1 };
+            let checked = parity::check_phase_with(
+                phase,
+                &built,
+                level,
+                on.options.sroa,
+                on.options.mem2reg,
+                on.options.rotating(),
+                &[],
+                &held,
+            );
+            assert_eq!(checked, Ok(()), "{phase:?} {level:?}");
+        }
+    }
+}
+
+fn recount(registry: &[Entry]) -> parity::Tally {
+    let of = |kind| registry.iter().filter(|one| one.kind == kind).count();
+    parity::Tally {
+        translated: of(SlotKind::Translated),
+        partial: of(SlotKind::Partial),
+        old: of(SlotKind::Old),
+        missing: of(SlotKind::Missing),
+    }
+}
+
+fn line(
+    what: &str,
+    count: parity::Tally,
+) -> String {
+    format!(
+        "[parity] {what} translated {} partial {} old {} missing {}",
+        count.translated, count.partial, count.old, count.missing
+    )
+}
+
+/// The registry's tally and the `[parity]` lines `LLRM_DEBUG=counts` prints are
+/// the recount of its rows by kind. A pinned number (`assert_eq!(partial, 14)`)
+/// made every slot-moving PR edit the same line, so every second one
+/// conflicted; the number to read lives in `LLRM_DEBUG=counts`, not in a test.
+fn the_counts_are_the_recount_of_the_rows(
+    registry: &[Entry],
+    analyses: &[parity::AnalysisEntry],
+) {
+    let all = recount(registry);
+    assert_eq!(parity::tally(registry), all);
+    assert_eq!(all.translated + all.partial + all.old + all.missing, registry.len());
+    let lines = parity::tally_lines_of(registry, analyses);
+    assert_eq!(lines[0], line("slots", all) + &format!(" (of {})", registry.len()));
+    let phases = [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late, Phase::Module, Phase::Backend];
+    let mut by_phase = 0;
+    for phase in phases {
+        let rows: Vec<Entry> = registry.iter().filter(|one| one.phase == phase).copied().collect();
+        by_phase += rows.len();
+        let name = format!("{phase:?}").to_lowercase();
+        let wanted = line(&format!("phase {name}"), recount(&rows));
+        assert!(lines.contains(&wanted), "{wanted}\n{lines:?}");
+    }
+    assert_eq!(by_phase, registry.len(), "a phase is missing from this test's list");
+    let of = |kind| analyses.iter().filter(|one| one.kind == kind).count();
+    let analyses_count = parity::Tally {
+        translated: of(SlotKind::Translated),
+        partial: of(SlotKind::Partial),
+        old: of(SlotKind::Old),
+        missing: of(SlotKind::Missing),
+    };
+    assert!(lines.contains(&line("analyses", analyses_count)), "{lines:?}");
+}
+
+#[test]
+fn test_the_registry_counts_are_the_recount_of_its_rows() {
+    the_counts_are_the_recount_of_the_rows(parity::REGISTRY, parity::ANALYSES);
+    let first = parity::report().lines().next().unwrap_or_default().to_owned();
+    let all = recount(parity::REGISTRY);
+    assert_eq!(
+        first,
+        format!(
+            "slots: {} translated, {} partial, {} old, {} missing",
+            all.translated, all.partial, all.old, all.missing
+        )
+    );
+}
+
+/// Moving a row's kind moves the recount and nothing pinned: the same
+/// invariants hold for the registry before and after, with no literal to edit.
+#[test]
+fn test_moving_a_row_changes_the_recount_and_no_literal() {
+    let row = |slot, kind| Entry {
+        slot,
+        phase: Phase::Simplify,
+        llvm: "fixture",
+        kind,
+        replaced_by: "",
+        note: "criterion: c; exit: e",
+    };
+    let before = [row("a@1", SlotKind::Old), row("b@2", SlotKind::Translated)];
+    let after = [row("a@1", SlotKind::Partial), row("b@2", SlotKind::Translated)];
+    for registry in [&before, &after] {
+        the_counts_are_the_recount_of_the_rows(registry, &[]);
+    }
+    assert_eq!(recount(&before), parity::Tally { translated: 1, partial: 0, old: 1, missing: 0 });
+    assert_eq!(recount(&after), parity::Tally { translated: 1, partial: 1, old: 0, missing: 0 });
+    assert_eq!(parity::tally(&after), recount(&after));
+}
+
+/// Marking a wired row Old without the runtime changing is the drift the
+/// check exists for: take the real built lists, mark one slot that holds a
+/// translated pass Old in a copy of the registry, and the check names it.
+#[test]
+fn test_marking_a_wired_row_old_is_caught_on_the_real_lists() {
+    let on = Applied {
+        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
+        ..Applied::default()
+    };
+    let mut checked = 0;
+    for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late] {
+        let passes = pipeline::llvm_order(&on, phase);
+        let held: Vec<_> = passes.iter().map(|one| (one.name(), one.translations())).collect();
+        assert_eq!(parity::check_old_slots(parity::REGISTRY, &held), Ok(()), "{phase:?}");
+        for (slot, translations) in held.iter().filter(|one| !one.1.is_empty()) {
+            let marked: Vec<Entry> = parity::REGISTRY
+                .iter()
+                .map(|one| Entry { kind: if one.slot == *slot { SlotKind::Old } else { one.kind }, ..*one })
+                .collect();
+            if marked.iter().all(|one| one.slot != *slot) {
+                continue;
+            }
+            let why = parity::check_old_slots(&marked, &held).expect_err("a wired row marked Old");
+            assert!(why.contains(slot) && why.contains(translations[0]), "{slot}: {why}");
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no slot of the built lists holds a translated pass: the scan checks nothing");
 }

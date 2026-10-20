@@ -66,3 +66,38 @@ b0:
     assert!(!merge(&mut module));
     assert_eq!(printed(&module), text);
 }
+
+/// The operand slots rewritten while `blocks` returning blocks are merged.
+fn rewritten_slots(blocks: usize) -> usize {
+    let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  switch i16 %x, label %r0 [\n");
+    for i in 1..blocks {
+        text += &format!("    i16 {i}, label %r{i}\n");
+    }
+    text += "  ]\n\n";
+    for i in 0..blocks {
+        text += &format!("r{i}:\n  %a{i} = add i16 %x, {}\n  ret i16 %a{i}\n\n", i + 1);
+    }
+    text += "}\n";
+    let mut module = parsed(&text);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let _ = function.take_changes();
+    assert!(super::merged(context, function));
+    function
+        .take_changes()
+        .iter()
+        .map(|change| match change {
+            llrm_mir::module::Change::Operands { was, .. } => was.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Merging the returns rewrites each operand slot of the new phi once: 4x the
+/// returns is 4x the slots. Rewriting the phi's operand list for each block
+/// copied it every time (n^2 slots: 20,000 at 200 blocks).
+#[test]
+fn test_merging_returns_rewrites_operand_slots_linearly_in_their_number() {
+    let (small, large) = (rewritten_slots(100), rewritten_slots(400));
+    assert!(large <= 4 * small.max(400), "100 returns rewrote {small} slots, 400 rewrote {large}");
+    assert!(large < 8 * 400, "400 returns rewrote {large} operand slots");
+}

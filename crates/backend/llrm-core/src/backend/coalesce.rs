@@ -90,6 +90,8 @@ pub struct Coalescer {
     pub pinned: IndexMap<u32, RegId>,
     pub segments: Segments,
     pub classes: std::rc::Rc<RegisterClasses>,
+    /// A build for size.
+    pub size: bool,
 }
 
 impl Coalescer {
@@ -104,6 +106,7 @@ impl Coalescer {
             pinned: pinned.cloned().unwrap_or_default(),
             segments: segments.clone(),
             classes: std::rc::Rc::clone(classes),
+            size: false,
         }
     }
 }
@@ -165,7 +168,7 @@ impl Coalescer {
         }
         let depths = ranges::depths_shared(body);
         let depth = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
-        Some((crate::coalescer::env::TargetEnv { palettes, pins }, depth))
+        Some((crate::coalescer::env::TargetEnv { palettes, pins, size: self.size }, depth))
     }
 }
 
@@ -639,7 +642,6 @@ pub(crate) fn _renamed(
 mod tests {
     //! Port of `tests/test_coalesce.py`.
 
-    use std::collections::BTreeSet;
     use std::sync::Arc;
 
     use llrm_lir::registers::RegId;
@@ -647,7 +649,7 @@ mod tests {
     use super::{_interference, _merged};
     use crate::analysis::intervals;
     use crate::backend::{allocate, cpu::ProfileOrName, select, target};
-    use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
+    use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 

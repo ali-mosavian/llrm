@@ -1824,38 +1824,40 @@ fn greedy_check(
     }
 }
 
-/// Whether greedy allocates the x87 values into FP0..FP6 (`LLRM_GREEDY_RFP`):
-/// off until the stackifier reads the assignment (backend-slopes), then on
-/// with floatassign gone.
+/// Whether greedy allocates the x87 values into FP0..FP6 and the stackifier
+/// follows it, as the pin does: on unless `LLRM_NO_RFP` (the old floatassign
+/// route, until it is deleted).
 pub fn rfp_on() -> bool {
-    #[cfg(test)]
-    if RFP_ON.with(std::cell::Cell::get) {
-        return true;
+    if let Some(forced) = RFP_ON.with(std::cell::Cell::get) {
+        return forced;
     }
-    llrm_support::env_flag!("LLRM_GREEDY_RFP")
+    !llrm_support::env_flag!("LLRM_NO_RFP")
 }
 
-#[cfg(test)]
 thread_local! {
-    static RFP_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static RFP_ON: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-/// `LLRM_GREEDY_RFP` for the life of the value, on this thread: for tests.
-#[cfg(test)]
+/// The RFP route forced on or off for the life of the value, on this thread:
+/// for tests, including those of other crates.
 pub struct RfpOn;
 
-#[cfg(test)]
 impl RfpOn {
     pub fn set() -> Self {
-        RFP_ON.with(|one| one.set(true));
+        RFP_ON.with(|one| one.set(Some(true)));
+        Self
+    }
+
+    /// The old route: floatassign before allocation.
+    pub fn off() -> Self {
+        RFP_ON.with(|one| one.set(Some(false)));
         Self
     }
 }
 
-#[cfg(test)]
 impl Drop for RfpOn {
     fn drop(&mut self) {
-        RFP_ON.with(|one| one.set(false));
+        RFP_ON.with(|one| one.set(None));
     }
 }
 
@@ -1902,6 +1904,12 @@ impl Drop for OldAllocator {
 
 thread_local! {
     static FACTS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// `_emitted` runs, for a test that greedy prices nothing it does not compare.
+#[cfg(test)]
+thread_local! {
+    static PRICED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many times `Facts::of` has run on this thread.
@@ -4368,6 +4376,9 @@ impl RegAlloc {
         }
         let start = frame.borrow().saved();
         drop(prepare);
+        // LLVM allocates each function once: the translated allocator runs no
+        // search over other shapes of the body, so nothing is priced.
+        let searched = cpu.search && !greedy_on();
         // One allocation per candidate body, each splitting and spilling as
         // it goes; the one whose output costs least is kept.
         let run = |name: &'static str,
@@ -4403,13 +4414,13 @@ impl RegAlloc {
             );
             frame.borrow_mut().defer_colours = false;
             let (got, out, spilled) = allocated?;
-            let cost = llrm_support::debug::timed("regalloc cost", || _emitted(&out));
+            let cost = searched.then(|| llrm_support::debug::timed("regalloc cost", || _emitted(&out)));
             Ok(Outcome { cost, got, out, spilled, slots: frame.borrow().saved(), forced: last_resorts() - before })
         };
         let mut best = run("regalloc base", &body, &reloads, &BTreeSet::new(), true)?;
         llrm_support::debug!(
             "regalloc",
-            "{}: {} insns, {} spilled, cost {}, {} forced",
+            "{}: {} insns, {} spilled, cost {:?}, {} forced",
             body.name,
             best.out.insns().len(),
             best.spilled.len(),
@@ -4419,9 +4430,7 @@ impl RegAlloc {
         let spilled = best.spilled.clone();
         let base_stats = LAST_STATS.with(std::cell::Cell::get);
         BASE_SPLITS.with(|splits| splits.set(base_stats.0));
-        // LLVM allocates each function once: the translated allocator runs no
-        // search over other shapes of the body.
-        if !spilled.is_empty() && cpu.search && !greedy_on() {
+        if !spilled.is_empty() && searched {
             // Other shapes of the same body, which the base allocation's spills
             // suggest: each is kept only if its output is cheaper.
             let building = llrm_support::debug::span("regalloc candidates");
@@ -4556,7 +4565,7 @@ impl RegAlloc {
                     };
                     llrm_support::debug!(
                         "regalloc",
-                        "  trial {shape:?} (splitting {splitting}): {} spilled, cost {}, {} forced",
+                        "  trial {shape:?} (splitting {splitting}): {} spilled, cost {:?}, {} forced",
                         trial.spilled.len(),
                         trial.cost,
                         trial.forced
@@ -4604,7 +4613,8 @@ impl Shape {
 
 /// One finished allocation: its output, what that costs, and the frame it left.
 struct Outcome {
-    cost: f64,
+    /// Only where a search compares it.
+    cost: Option<f64>,
     got: Assignment,
     out: LirBody,
     spilled: BTreeSet<u32>,
@@ -4621,6 +4631,8 @@ const MEMORY_OPERAND: f64 = 1.0;
 /// weighted by how often its block runs. Alternatives differ only in what the
 /// allocator added, so this is the cost of that.
 fn _emitted(body: &LirBody) -> f64 {
+    #[cfg(test)]
+    PRICED.with(|count| count.set(count.get() + 1));
     // The count the run makes: an anchor that prints nothing is not an
     // instruction.
     if let Some(work) = crate::backend::executed::work(body) {
@@ -5375,6 +5387,11 @@ fn _placed(
         }
     }
     let mut made = (**one).clone();
+    // A value now in an x87 register is named by the register: the stackifier
+    // numbers it again (`fpregs`).
+    let in_rfp = |value: &u32| held.get(value).is_some_and(|at| regs.in_class(*at, llrm_lir::registers::class::RFP));
+    made.uses.retain(|value| !in_rfp(value));
+    made.defines.retain(|value| !in_rfp(value));
     made.what = Some(Semantics { name, dests, sources, ..what.clone() });
     Ok(Arc::new(made))
 }
@@ -5434,10 +5451,10 @@ fn _settled(
     let Some(register) = held.get(&value.value) else {
         return Err(Unplaced(format!("value#{} at width {} has no register", value.value, value.width)));
     };
-    // An x87 value is placed in FP0..FP6 but stays a value: the stackifier
-    // puts it on the stack and its operands become st(i).
+    // An x87 value is placed in FP0..FP6: the stackifier puts it on the stack
+    // and its operands become st(i).
     if regs.in_class(*register, llrm_lir::registers::class::RFP) {
-        return Ok(place);
+        return Ok(Loc::Reg(Reg { register: *register, width: value.width }));
     }
     Ok(Loc::Reg(Reg { register: regs.named(*register, i64::from(value.width)), width: value.width }))
 }
@@ -5456,7 +5473,7 @@ mod tests {
 
     use super::*;
     use crate::analysis::intervals::Segment;
-    use crate::backend::regalloc_input::{before_regalloc, through};
+    use crate::backend::regalloc_input::through;
     use crate::backend::{parcopy, select, verify};
     use crate::model::ir::Imm;
     use crate::support::hash::IndexMap;
@@ -5638,6 +5655,18 @@ mod tests {
         _through_regalloc(_one_block(insns), &[]);
         assert_eq!(greedy_runs().0 - runs, 1, "premise: the greedy allocator placed the body");
         assert_eq!(facts_built() - built, 0);
+    }
+
+    /// Each allocation was priced for the search over other shapes, which the
+    /// greedy allocator never runs: `executed` with its own frequencies, 4.4 M
+    /// of 1945 M instructions on d_faces.
+    #[test]
+    fn test_the_greedy_allocator_prices_no_allocation() {
+        let insns: Vec<Insn> = vec![_mov(1, 2, 4)];
+        let (runs, priced) = (greedy_runs().0, PRICED.with(std::cell::Cell::get));
+        _through_regalloc(_one_block(insns), &[]);
+        assert_eq!(greedy_runs().0 - runs, 1, "premise: the greedy allocator placed the body");
+        assert_eq!(PRICED.with(std::cell::Cell::get) - priced, 0);
     }
 
     fn _one_block(insns: Vec<Insn>) -> LirBody {
@@ -6931,5 +6960,24 @@ mod tests {
         let after = through(body, phases).expect("allocates");
         let made = splitkit::_next_value(&after) - before;
         assert!(made < 1000, "{made} values made for ten walks");
+    }
+
+    /// An x87 value placed in FP0..FP6 is named by the register, with no value
+    /// left on the instruction (`fpregs` numbers it again): it stayed a value
+    /// the stackifier could not tell from another in the same register.
+    #[test]
+    fn test_an_x87_value_in_a_register_is_the_register_and_no_value() {
+        let load = semantics(
+            Operation::FloatLoad,
+            "fld",
+            vec![Loc::Held(Held { value: 7, width: 10 })],
+            vec![Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, -8)), 8))],
+        );
+        let one = Arc::new(Insn::new(1, Some((1, 1)), Some(load), vec![7], vec![]));
+        let held = pins(&[(7, RFP[3])]);
+        let placed = _placed(&one, &held, &crate::backend::classes::RegisterClasses::m16()).expect("placed");
+        let what = placed.what.as_ref().expect("semantics");
+        assert_eq!(what.dests, vec![Loc::Reg(Reg { register: RFP[3], width: 10 })]);
+        assert!(placed.defines.is_empty(), "{:?}", placed.defines);
     }
 }

@@ -240,14 +240,25 @@ pub fn split_block(
     function: &mut Function,
     old: BlockId,
 ) -> BlockId {
-    let list: Vec<InstId> = function.iter_block(old).collect();
-    let first = list
-        .iter()
-        .position(|&inst| !matches!(
+    let first = function
+        .iter_block(old)
+        .find(|&inst| !matches!(
             function.instruction(inst).opcode,
             Opcode::Phi | Opcode::LandingPad { .. }
         ))
         .expect("a terminated block");
+    split_block_at(function, old, first)
+}
+
+/// `Block::splitBasicBlock(at)`: the instructions of `old` from `at` on move
+/// to a new block, `old` jumps to; the successors' phis name the new one.
+pub fn split_block_at(
+    function: &mut Function,
+    old: BlockId,
+    at: InstId,
+) -> BlockId {
+    let list: Vec<InstId> = function.iter_block(old).collect();
+    let first = list.iter().position(|&inst| inst == at).expect("an instruction of the block");
     let void = function.instruction(*list.last().expect("a terminated block")).ty;
     let new = function.create_block(None);
     function.insert_block(new, None).expect("a new block");
@@ -264,6 +275,28 @@ pub fn split_block(
         }
     }
     new
+}
+
+/// SimplifyCFG's `addPredecessorToBlock(Succ, NewPred, ExistPred)`
+/// ([L1224](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L420)):
+/// each phi of `block` gets an input from `new_pred`, the one it has from
+/// `existing_pred`.
+pub fn predecessor_added(
+    function: &mut Function,
+    block: BlockId,
+    new_pred: BlockId,
+    existing_pred: BlockId,
+) {
+    for phi in phis(function, block) {
+        let mut incoming = arms(function, phi);
+        let value = incoming
+            .iter()
+            .find(|&&(_, from)| from == existing_pred)
+            .expect("an input from the existing predecessor")
+            .0;
+        incoming.push((value, new_pred));
+        function.set_operands(phi, from_arms(&incoming));
+    }
 }
 
 /// `SplitBlockPredecessors(BB, Preds)`
@@ -362,6 +395,20 @@ pub(crate) fn retarget(
             function.set_operand(terminator, at, Operand::Block(to));
         }
     }
+}
+
+/// Whether the first instruction of `block` after its phis is a `landingpad`:
+/// a copy of it would be a second pad, and the one module handler
+/// (`ehprepare`) cannot choose between two. Jump threading does not copy such
+/// a block (J10 of `jumpthreading.rs`, DF3 of `dfajumpthreading.rs`).
+pub(crate) fn starts_with_landing_pad(
+    function: &Function,
+    block: BlockId,
+) -> bool {
+    function
+        .iter_block(block)
+        .find(|&one| function.instruction(one).opcode != Opcode::Phi)
+        .is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
 }
 
 /// `block`'s phis, in order.

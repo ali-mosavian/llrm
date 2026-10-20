@@ -70,6 +70,9 @@ pub struct Options {
     /// `-fexcess-precision=standard` or `-ffloat-store`: a float conversion
     /// rounds to its type.
     pub float_store: bool,
+    /// `-mcode-segment=`: the segment every module's code is in, where it is
+    /// not its own `<MODULE>_TEXT`.
+    pub code_segment: Option<String>,
 }
 
 impl Options {
@@ -92,6 +95,7 @@ impl Options {
             debug_format: Default::default(),
             abi: None,
             float_store: false,
+            code_segment: None,
         }
     }
 
@@ -172,7 +176,7 @@ pub fn compiled(
             assemble::assembled_by(
                 module,
                 &abi,
-                &format!("{}_TEXT", hir.name.to_uppercase()),
+                &options.code_segment.clone().unwrap_or_else(|| format!("{}_TEXT", hir.name.to_uppercase())),
                 ProfileOrName::Profile(options.cpu()?),
                 &segments,
                 options.selection,
@@ -340,15 +344,25 @@ pub fn optimized(
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
     timed("mir ehprepare", || {
-        program.modules.iter_mut().try_for_each(|module| {
-            crate::backend::ehprepare::prepared(module, &llrm_target::Target::layout(&*options.arch))
-        })
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(
+                |module| crate::backend::ehprepare::prepared(module, &llrm_target::Target::layout(&*options.arch)),
+            )
     })?;
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
-    timed("mir odd widths", || program.modules.iter_mut().try_for_each(crate::backend::legalize::promoted))?;
-    timed("mir min max", || program.modules.iter_mut().try_for_each(crate::backend::selects::minmax_expanded))?;
+    timed("mir bit counts", || {
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(
+                |module| crate::backend::bitcounts::expanded(module, |operation| options.arch.expands(operation)),
+            )
+    })?;
+    timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
     if options.arch.expands("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
         let pricing = crate::backend::selects::Pricing {

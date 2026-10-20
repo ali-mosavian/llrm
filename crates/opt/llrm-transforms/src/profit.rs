@@ -77,10 +77,10 @@
 //! `proven_trips`, the frequency models and `UNIT`, `UNKNOWN_TRIPS`.
 //!
 //! # Used by
-//! Each of [`crate::lsr`], [`crate::hoist`], [`crate::gvn`],
+//! Each of [`crate::lsr_pass`], [`crate::hoist`], [`crate::gvn`],
 //! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`],
 //! [`crate::loopidioms`], [`crate::window`], [`crate::gepoffset`],
-//! [`crate::indvars`], [`crate::tailrec`], [`crate::ipacp`], [`crate::inline`]
+//! [`crate::indvars`], [`crate::ipacp`], [`crate::inline`]
 //! and [`crate::interprocedural`] asks it, before a rewrite that trades code
 //! size or registers for speed, whether the rewrite pays. Not a pass: it runs
 //! only inside those.
@@ -91,11 +91,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::branchprob;
 use llrm_analysis::cfg;
 use llrm_analysis::effects::Declarations;
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::{induction, memory};
+use llrm_mir::blockfrequency::frequency::BlockFrequency;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::{Callees, callee};
@@ -478,7 +478,11 @@ pub fn counted_by_header(
     Some(counted)
 }
 
-/// `_frequencies_in`, and the odds of each edge they were worked out from.
+/// `_frequencies_in`, and the odds of each edge they were worked out from:
+/// `BranchProbabilityInfo`'s, a loop's proven trips setting its exit's
+/// (`blockfreq::trip_adjusted`, profit's own: LLVM's probabilities know no
+/// trip count), then `BlockFrequencyInfo` over them, each block's frequency in
+/// `UNIT`s of the entry's. `None` for conflicting proofs.
 fn _odds_in(
     context: &Context,
     metadata: &[llrm_mir::module::MetadataNode],
@@ -488,19 +492,45 @@ fn _odds_in(
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<(BTreeMap<i64, i64>, BTreeMap<(i64, i64), f64>)> {
     let counted = counted_by_header(shape, trips)?;
-    let odds = branchprob::estimated(context, metadata, globals, function, shape, &counted);
+    let taken = _edge_odds(context, metadata, globals, function, shape, &counted);
+    let frequencies = llrm_analysis::blockfreq::BlockFrequencies::of_probabilities(function, &taken);
     Some((
-        cfg::graph(function)
+        function
+            .layout()
             .iter()
-            .map(|block| {
-                (
-                    block.at,
-                    odds.frequency.get(&block.at).map_or(UNIT, |one| ((one * UNIT as f64).round() as i64).max(1)),
-                )
+            .map(|&block| {
+                (cfg::id(block), ((frequencies.relative_to_entry(block) * UNIT as f64).round() as i64).max(1))
             })
             .collect(),
-        odds.taken,
+        taken,
     ))
+}
+
+/// Each edge's odds as `_odds_in` works the frequencies out from:
+/// `BranchProbabilityInfo`'s, a proven loop's exit set by its trips
+/// (`counted`, by header).
+pub fn _edge_odds(
+    context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+    globals: &Declarations,
+    function: &Function,
+    shape: &cfg::Shape,
+    counted: &BTreeMap<i64, i64>,
+) -> BTreeMap<(i64, i64), f64> {
+    // The layout only folds the integer constants of a loop's exit test
+    // (`computeUnlikelySuccessors`).
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+        llrm_analysis::bpi::Module { context, declarations: globals, metadata, layout: &layout },
+        function,
+    );
+    let mut taken = BTreeMap::new();
+    for &block in function.layout() {
+        for to in function.successors(block) {
+            taken.insert((cfg::id(block), cfg::id(to)), bpi.get_edge_probability_to(function, block, to).to_f64());
+        }
+    }
+    llrm_analysis::blockfreq::trip_adjusted(function, &shape.loops, counted, &taken)
 }
 
 /// Block frequencies as a product of the trips of each loop around a block, ten
@@ -532,7 +562,7 @@ pub fn _loop_products_in(
         let factor = exact.iter().next().copied().unwrap_or(UNKNOWN_TRIPS);
         for at in &loop_.body {
             if let Some(count) = frequency.get_mut(at) {
-                *count *= factor;
+                *count = nested(*count, factor);
             }
         }
     }
@@ -585,10 +615,41 @@ pub fn _products_with_odds_in(
         let trip: i64 = innermost.latches.iter().map(|latch| odds.get(latch).copied().unwrap_or(UNIT)).sum();
         let here = odds.get(at).copied().unwrap_or(UNIT);
         if here < trip {
-            *count = (*count * here / trip).max(1);
+            *count = share_of(*count, here, trip);
         }
     }
     Some((weight, taken))
+}
+
+/// A block weight as the frequency type LLVM keeps it in: a saturating `u64`
+/// ([`BlockFrequency`](llrm_mir::blockfrequency::frequency::BlockFrequency),
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/BlockFrequency.h#L27>).
+/// DEVIATE: the maps keep `i64`, so a weight past `i64::MAX` is that.
+fn frequency(count: i64) -> BlockFrequency {
+    BlockFrequency(u64::try_from(count).unwrap_or(0))
+}
+
+fn weight(frequency: BlockFrequency) -> i64 {
+    i64::try_from(frequency.get_frequency()).unwrap_or(i64::MAX)
+}
+
+/// `count` for a block one loop deeper, which runs `factor` trips: the product
+/// of the trips of every loop around a block. Twenty nested loops of the
+/// assumed ten trips pass `i64`'s end.
+fn nested(
+    count: i64,
+    factor: i64,
+) -> i64 {
+    weight(frequency(count).saturating_mul(u64::try_from(factor).unwrap_or(0)))
+}
+
+/// `count` times the share `here / trip`, at least 1.
+fn share_of(
+    count: i64,
+    here: i64,
+    trip: i64,
+) -> i64 {
+    weight(frequency(count).scaled(u64::try_from(here).unwrap_or(0), u64::try_from(trip).unwrap_or(1))).max(1)
 }
 
 /// Profile-free expected work at `frequency`, a block's executions per entry
@@ -603,10 +664,10 @@ pub fn weighted(
 ) -> Option<i64> {
     #[cfg(test)]
     PRICED.with(|count| count.set((count.get().0 + 1, count.get().1)));
-    let mut total = 0;
+    let mut total: i64 = 0;
     for &block in function.layout() {
         let priced = _block(context, layout, function, callees, cfg::id(block), costs)?;
-        total += frequency[&cfg::id(block)] * priced;
+        total = total.saturating_add(frequency[&cfg::id(block)].saturating_mul(priced));
     }
     Some(total)
 }

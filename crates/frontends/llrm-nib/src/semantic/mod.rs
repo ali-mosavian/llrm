@@ -1616,6 +1616,7 @@ fn program(
                 facts,
                 frontend.unchecked_bounds,
                 frontend.debug,
+                frontend.float_store,
             )?
             .compile(function)?,
         );
@@ -1649,6 +1650,7 @@ fn program(
                 facts,
                 frontend.unchecked_bounds,
                 frontend.debug,
+                frontend.float_store,
             )?
             .compile(&function)?,
         );
@@ -1839,6 +1841,7 @@ struct FunctionCompiler<'a> {
     /// `-g`: the source line of the statement being compiled, 0 for none;
     /// and each source parameter's value and name.
     debug: bool,
+    float_store: bool,
     line: u32,
     named_parameters: Vec<(u32, String)>,
     next_value: u32,
@@ -1948,6 +1951,7 @@ impl<'a> FunctionCompiler<'a> {
         facts: Option<&'a RefCell<Vec<Fact>>>,
         unchecked_bounds: bool,
         debug: bool,
+        float_store: bool,
     ) -> Result<Self, Diagnostic> {
         let mut compiler = Self {
             signature,
@@ -1970,6 +1974,7 @@ impl<'a> FunctionCompiler<'a> {
             unsafe_depth: 0,
             unchecked_bounds,
             debug,
+            float_store,
             line: 0,
             named_parameters: Vec::new(),
             next_value: 1,
