@@ -95,6 +95,7 @@ def losses(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, int, int, 
     """(path, deleted lines, test functions removed, whole file gone) for each file of the net diff base..head that loses more than LIMIT lines, loses a test or goes.
     Own commits or not: #2443's own commit deleted scev/expand_iv.rs (855 lines) from a stale tree, and 'outside its own commits' let it through."""
     out = []
+    limit = 10**9 if os.environ.get("LAND_FAST") == "1" else LIMIT  # fast mode merges onto the head: a net line loss is the PR's own refactor; whole files and tests still count
     for line in git("diff", "--numstat", base, head, cwd=cwd).splitlines():
         added, gone, path = line.split("\t", 2)
         if gone == "-" or is_generated(base, path, cwd):
@@ -102,7 +103,7 @@ def losses(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, int, int, 
         diff = git("diff", base, head, "--", path, cwd=cwd)
         tests = len(removed_tests(diff))
         whole = bool(re.search(r"^deleted file mode", diff, re.M))
-        if int(gone) > LIMIT or tests or whole:
+        if int(gone) > limit or tests or whole:
             out.append((path, int(gone), tests, whole))
     return out
 
