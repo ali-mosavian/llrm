@@ -39,6 +39,16 @@ use crate::scev::expr::{Kind, Scev, Ty, Use, flags};
 use crate::scev::guards::LoopGuards;
 use crate::scev::{Cx, Flags, ScalarEvolution};
 
+thread_local! {
+    static COMPARISONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many bounds `groupChecks` compared on this thread: a test counts the
+/// work it did.
+pub fn group_comparisons() -> usize {
+    COMPARISONS.with(std::cell::Cell::get)
+}
+
 /// `VectorizerParams`, as the command line options of the pin set them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VectorizerParams {
@@ -962,6 +972,7 @@ impl RuntimePointerChecking {
                             break;
                         }
                         total_comparisons += 1;
+                        COMPARISONS.with(|made| made.set(made.get() + 1));
                         if group.add_pointer(se, cx, pointer, &self.pointers) {
                             merged = true;
                             break;

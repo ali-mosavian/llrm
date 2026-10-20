@@ -246,22 +246,22 @@ fn window(n: usize) -> String {
     text + "  %i.next = add nuw nsw i64 %i, 1\n  %c1 = icmp eq i64 %i.next, %n\n  br i1 %c1, label %exit, label %loop\nexit:\n  ret void\n}\n"
 }
 
+/// The bounds `groupChecks` compared for `n` reads a constant apart.
+fn comparisons_for(n: usize) -> usize {
+    let before = super::group_comparisons();
+    // The reads are one dependency class, as `AccessAnalysis` makes them.
+    let names: Vec<String> = (0..n).map(|k| format!("pa{k}")).collect();
+    let classes: Vec<(&str, &str)> = names.iter().skip(1).map(|name| ("pa0", name.as_str())).collect();
+    let (checks, _) = analysed(&window(n), &classes);
+    assert!(checks.contains("Group GRP1") && !checks.contains("Group GRP2"), "{checks}");
+    super::group_comparisons() - before
+}
+
 /// The reads a constant apart share one group, and the grouping is linear in
-/// them: four times the reads cost about four times, not sixteen (a slope test
-/// at 1x and 4x, the least of five runs of each).
+/// them: four times the reads make about four times the comparisons, not
+/// sixteen (a slope test at 1x and 4x, counting comparisons).
 #[test]
-fn the_time_grows_with_the_reads_not_with_their_square() {
-    let least = |n: usize| {
-        let text = window(n);
-        (0..5)
-            .map(|_| {
-                let start = std::time::Instant::now();
-                let (checks, _) = analysed(&text, &[]);
-                assert!(checks.contains("Group GRP1"), "{checks}");
-                start.elapsed().as_secs_f64()
-            })
-            .fold(f64::MAX, f64::min)
-    };
-    let (small, large) = (least(100), least(400));
-    assert!(large < small * 6.0, "100 reads {small:.4} s, 400 reads {large:.4} s: a ratio of {:.1}", large / small);
+fn the_comparisons_grow_with_the_reads_not_with_their_square() {
+    let (small, large) = (comparisons_for(25), comparisons_for(100));
+    assert!(small > 0 && large < small * 5, "25 reads: {small} comparisons, 100 reads: {large}");
 }
