@@ -165,7 +165,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
     entry("licm@724", Simplify, "licm<no-allowspeculation>", Translated, ""),
     entry("licm@730", Simplify, "licm<allowspeculation>", Translated, ""),
-    entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial>", Translated, ""),
+    entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial> (-O3: nontrivial;trivial)", Translated, ""),
     partial(
         "decide@766",
         Simplify,
@@ -189,7 +189,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "indvars@738",
         Simplify,
         "indvars",
-        "SimplifyIndvar, WidenIV, exit values, congruent IVs, canonicalizeExitCondition; optimizeLoopExits and predicateLoopExits once indvars.rs calls exitopt/exitpredicate; LFTR behind LLRM_LFTR (D22); criterion: identical to opt on d_faces -O2 with LLRM_LFTR=1, D22 deleted when the translated LSR lands; exit: exitfold, congruent/twin_phis (rows pair on #2773 first) and the old widen path (LLRM_NO_SCEV_WIDEN) deleted, rewound/exitsink deleted or DEVIATE-numbered",
+        "SimplifyIndvar, WidenIV, exit values, congruent IVs, canonicalizeExitCondition; optimizeLoopExits and predicateLoopExits once indvars.rs calls exitopt/exitpredicate; LFTR behind LLRM_LFTR (D22); criterion: identical to opt on d_faces -O2 with LLRM_LFTR=1, D22 deleted when the translated LSR lands; exit: exitfold, congruent/twin_phis (rows pair on #2773 first), rewound/exitsink deleted or DEVIATE-numbered; the old widen path is deleted",
     ),
     entry("loopdeletion@749", Simplify, "loop-deletion", Translated, ""),
     entry("unroll@753", Simplify, "loop-unroll-full", Translated, ""),
@@ -325,6 +325,9 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "TailMergeBlocks (#2241), block placement chains and loops (#2629); criterion: rows vs min(gcc,pin) per bench pair + oracle sweep (J1, #2307); exit: identity vs llc after placement, branch folding and tail duplication; open: trellises and tail duplication (#2745) and alignBlocks/optimizeBranches (#2760) once landed, irreducible loops after tail dup (D16), BranchFolder merge parts, MBFI/MBPI replaced by BlockOdds (D7)",
     ),
     entry("early-tailduplication", Backend, "early-tailduplication", Missing, ""),
+    // X86TargetLowering::EmitLoweredSelect: the diamond at selection
+    // (lir-cleanup-port, 2026-11-13).
+    entry("emit-lowered-select", Backend, "x86-emit-lowered-select", Missing, ""),
     entry("stack-coloring", Backend, "stack-coloring", Missing, ""),
     entry("shrink-wrap", Backend, "shrink-wrap", Missing, ""),
 ];

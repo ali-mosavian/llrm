@@ -1680,7 +1680,7 @@ fn a_float_converts_to_every_integer_width() {
 /// test waited a minute for a release rebuild and every other one for its lock.
 #[test]
 fn test_parsing_runs_no_cargo() {
-    if std::env::var_os("LLRM_NO_CARGO").is_some() {
+    if llrm_core::support::env_set("LLRM_NO_CARGO") {
         parsed(&fixture("fixed.nib"));
         return;
     }

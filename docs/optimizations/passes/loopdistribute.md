@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopdistribute.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopdistribute.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopdistribute.rs sha256:e364187149091afdcca3876d81b37a5e0c0464ab46756cd5d55417e9c2f0f87e -->
+<!-- src: crates/opt/llrm-transforms/src/loopdistribute.rs sha256:ceb4117a30464b9486b25c8e26055e0b16418aa8ee5e77007ba3a8e6118a986a -->
 
 # loopdistribute
 
@@ -45,7 +45,7 @@ each partition but the last ([`crate::loopclone`](loopclone.md)'s `copied`), eac
 keeps its partition's stores and the original the last's, `loopidioms` runs
 over the parts and what nothing reads is removed, and the result is priced
 beside the body. Only then is the pipeline run over it, as in
-[`crate::unswitch`](unswitch.md), and [`crate::candidate`](candidate.md) keeps it when its price,
+[`crate::loopversion`](loopversion.md), and [`crate::candidate`](candidate.md) keeps it when its price,
 spills included, is `MIN_PERCENT` smaller (`Gain::CheaperBy`). At most
 `MAX_TRIALS` loop is tried per body, the most nested, a loop of at most
 `MAX_LOOP_OPS` operations and `MAX_ACCESSES` accesses, in at most

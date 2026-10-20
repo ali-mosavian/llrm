@@ -106,7 +106,7 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::target::{self, Segments};
 use crate::model::ir::{Loc, Operation, Space};
 use crate::model::lir::{Insn, LirBody};
-use crate::support::hash::IndexMap;
+use crate::support::hash::{HashSet, IndexMap};
 
 pub type Classes = IndexMap<u32, BTreeSet<RegId>>;
 
@@ -681,15 +681,20 @@ fn _through_webs(
         web.insert(value, top);
         top
     }
+    let mut of_phis: HashSet<u32> = HashSet::default();
     for phi in body.blocks.iter().flat_map(|block| &block.phis) {
+        of_phis.insert(phi.result);
         for (_, value) in &phi.incoming {
+            of_phis.insert(*value);
             let (one, other) = (find(&mut web, phi.result), find(&mut web, *value));
             web.insert(one, other);
         }
     }
     // A selector carried round a loop by its phi is a plain `mov` to the
     // register of the phi and another back: one value, which a segment
-    // register can hold the whole way.
+    // register can hold the whole way. A copy off a call's result is not
+    // one: the word is in the call's register, and the web would ask a
+    // segment register of it.
     let carries = |one: &Insn| {
         one.group.is_none()
             && one.what.as_ref().is_some_and(|what| {
@@ -707,6 +712,9 @@ fn _through_webs(
         .filter(|one| if one.group.is_some() { optimistic } else { carries(one) })
     {
         if let ([into], [from]) = (one.defines.as_slice(), one.uses.as_slice()) {
+            if one.group.is_none() && !of_phis.contains(into) && !of_phis.contains(from) {
+                continue;
+            }
             let (a, b) = (find(&mut web, *into), find(&mut web, *from));
             web.insert(a, b);
         }

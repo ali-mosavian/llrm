@@ -26,7 +26,7 @@
 //!     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
 //!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
-//!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+//!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>simple-loop-unswitch,<br/>non-trivial</small>"]:::mid
 //!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     ver["<b>version (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     fuse["<b>fuse (-Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
@@ -73,8 +73,9 @@
 //! dominators.
 //!
 //! Peeling repeats while it leaves fewer loops, so an outer loop whose inner
-//! loop was peeled is peeled in turn. [`crate::unswitch`] re-optimizes each
-//! candidate with a `Fixed` of its own that has unswitching and jamming off.
+//! loop was peeled is peeled in turn. The passes that make a candidate
+//! re-optimize it with a `Fixed` of its own that has unswitching and jamming
+//! off.
 //!
 //! In E, `lsr` is after the interprocedural step because nothing after it may
 //! choose a loop's counters again; `rotate{proven}` is last of the loop
@@ -158,7 +159,7 @@ use crate::{
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, jumpthread, lcssa,
     loopdeletion, loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit,
     loopunrollpass, loopversion, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp, simpleloopunswitch,
-    simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -575,11 +576,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // `LLRM_NO_MEM2REG` keeps the write-through stand-in instead of the
         // translated PromoteMemToReg.
         if applied.options.mem2reg { Box::new(mem2reg::Mem2Reg) } else { Box::new(promote::Promote) },
-        Box::new(indvars::IndVars {
-            exit_values: false,
-            unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
-            lftr: indvars::lftr_default(),
-        }),
+        Box::new(indvars::IndVars { lftr: indvars::lftr_default() }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size(), llvm: false }),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
@@ -685,7 +682,7 @@ impl FunctionPass for Together {
     ) -> PreservedAnalyses {
         let mut changed = false;
         for part in &mut self.parts {
-            let preserved = part.run(unit, analyses);
+            let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
             if !preserved.are_all_preserved() {
                 changed = true;
                 analyses.invalidate(unit.function, &preserved);
@@ -851,7 +848,12 @@ pub(crate) fn llvm_order(
             }
             list.extend([
                 licm("licm@730", true),
-                slot("trivialunswitch@732", Box::new(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: false })),
+                // The pin's `SimpleLoopUnswitchPass(NonTrivial = Level == O3)`:
+                // the options say -O3 and -Omax.
+                slot(
+                    "trivialunswitch@732",
+                    Box::new(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: applied.options.unswitch }),
+                ),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L766:
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
@@ -864,14 +866,7 @@ pub(crate) fn llvm_order(
             list.extend([
                 slot("loopidiom@737", Box::new(crate::loopidiom::pass::LoopIdiom::new())),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
-                slot(
-                    "indvars@738",
-                    Box::new(indvars::IndVars {
-                        exit_values: false,
-                        unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
-                        lftr: indvars::lftr_default(),
-                    }),
-                ),
+                slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default() })),
                 slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
                 slot(
                     "unroll@753",
@@ -1036,8 +1031,27 @@ pub fn recorded(
     if applied.options.llvm_order {
         manager.hold::<GlobalsAA>();
     }
+    let walked = |dump: &str| Applied { dump: applied.dump.as_ref().map(|one| one.join(dump)), ..applied.clone() };
     for (at, stage) in function_stages(applied).into_iter().enumerate() {
-        manager.add(stage);
+        // The walk simplifies each body: not a module-wide stage.
+        if at != 2 || !applied.options.llvm_order {
+            manager.add(stage);
+        }
+        // LLVM's CGSCC walk: each body inlined into, then simplified, callees
+        // first. `Phase::Simplify` runs there and not module-wide.
+        if at == 1 && applied.options.llvm_order {
+            let mut simplify = Fixed::linear(&walked("walk"), Phase::Simplify);
+            manager.add_program(crate::walk::Walk {
+                inline: applied.options.inline,
+                simplify: Box::new(move |module, analyses, id, stage| {
+                    TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
+                    rerun(module, analyses, id, &mut simplify, true)
+                        .unwrap_or_else(|error| panic!("pipeline: {error}"));
+                    TRIGGER.with(|trigger| trigger.borrow_mut().clear());
+                }),
+            });
+            manager.hold::<GlobalsAA>();
+        }
         // LLVM's IPSCCP and DeadArgumentElimination run after the early
         // function pipeline, before the Simplify list.
         if at == 0 && applied.options.llvm_order {
@@ -1065,7 +1079,8 @@ pub fn recorded(
     manager.add_program(Interprocedural {
         pipeline: Box::new(move |module, analyses, id, stage| {
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
-            let done = rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"));
+            let done =
+                rerun(module, analyses, id, &mut again, false).unwrap_or_else(|error| panic!("pipeline: {error}"));
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
@@ -1215,7 +1230,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(algebraic::Algebraic { size: false, llvm: false }));
     // A counted exit's values are numbers where the copy made its test the one
     // that leaves.
-    passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None, lftr: indvars::lftr_default() }));
+    passes.push(Box::new(indvars::IndVars { lftr: indvars::lftr_default() }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
         passes.push(Box::new(crate::licm::Licm { apply: true, speculate: true }));
@@ -1236,6 +1251,7 @@ fn rerun(
     analyses: &mut ModuleAnalyses,
     id: GlobalId,
     fixed: &mut Fixed,
+    globals_aa_held: bool,
 ) -> Result<(), String> {
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
@@ -1246,10 +1262,17 @@ fn rerun(
         return Err(format!("@{}: not a function", id.0));
     };
     let mut unit = Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared };
-    let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
+    let mut preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
+    if globals_aa_held {
+        preserved = preserved.preserve_module::<GlobalsAA>();
+    }
     analyses.body_edited(id, &preserved);
     if declared.place(module)? > 0 {
-        analyses.invalidate(&PreservedAnalyses::none());
+        let mut dropped = PreservedAnalyses::none();
+        if globals_aa_held {
+            dropped = dropped.preserve_module::<GlobalsAA>();
+        }
+        analyses.invalidate(&dropped);
     }
     Ok(())
 }
@@ -1265,7 +1288,7 @@ pub struct Fixed {
     peelers: Vec<Box<dyn FunctionPass>>,
     /// Once, after everything else.
     last: Vec<Box<dyn FunctionPass>>,
-    unswitch: Option<unswitch::Unswitch>,
+    unswitch: Option<simpleloopunswitch::SimpleLoopUnswitch>,
     split: Option<loopsplit::Split>,
     distribute: Option<loopdistribute::Distribute>,
     version: Option<loopversion::Version>,
@@ -1325,7 +1348,7 @@ impl Fixed {
                 ..applied.clone()
             }))
         };
-        let unswitch = applied.options.unswitch.then(|| unswitch::Unswitch { passes: vec![judged()] });
+        let unswitch = applied.options.unswitch.then_some(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: true });
         let distribute = applied.options.distribute.then(|| loopdistribute::Distribute { passes: vec![judged()] });
         // A loop the copy changes the shape of is judged as it will be run:
         // its header copied and what it loads unchanged moved out.
@@ -1410,9 +1433,10 @@ impl Fixed {
         );
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
+        // The slot of the order unswitches, where the pin does.
+        linear.unswitch = None;
         if !matches!(phase, Phase::Simplify) {
             linear.peelers.clear();
-            linear.unswitch = None;
             linear.split = None;
             linear.distribute = None;
             linear.version = None;
@@ -1911,7 +1935,8 @@ impl Run {
             (llrm_support::debug::work(), llrm_support::debug::analysed_work(), placed_instructions(unit.function))
         });
         let running = llrm_mir::counts::pass_run_over(pass.name(), unit.function);
-        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses));
+        let preserved =
+            llrm_mir::passes::spanned(pass.name(), || llrm_mir::passes::run_checked(&mut *pass, unit, analyses));
         drop(running);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
@@ -2054,8 +2079,12 @@ impl Run {
 #[path = "pipeline_tests.rs"]
 mod pipeline_tests;
 
-/// The seed of `LLRM_CHECK_ORDER`, where it is a number.
+/// The seed of `LLRM_CHECK_ORDER`, where it is on and a number.
 fn order_seed() -> Option<u64> {
     static SEED: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
-    *SEED.get_or_init(|| std::env::var("LLRM_CHECK_ORDER").ok().and_then(|value| value.parse().ok()))
+    *SEED.get_or_init(|| {
+        llrm_support::env_set("LLRM_CHECK_ORDER")
+            .then(|| std::env::var("LLRM_CHECK_ORDER").ok().and_then(|value| value.parse().ok()))
+            .flatten()
+    })
 }

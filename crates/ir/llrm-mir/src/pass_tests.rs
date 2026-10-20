@@ -381,6 +381,55 @@ fn verify_each_names_the_pass_that_broke_the_module() {
     assert!(error.starts_with("after drop-return: "), "{error}");
 }
 
+const TWO_EDGES: &str = "define i16 @p(i1 %c) {\nentry:\n  br i1 %c, label %b, label %b\nb:\n  %x = phi i16 [ 1, %entry ], [ 1, %entry ]\n  ret i16 %x\n}\n";
+
+/// Drops one of the two inputs of the phi that two edges feed: the body
+/// `SsaUpdaterBulk` left (#3016), which made SCEV and liveness allocate 3 GB.
+struct ShortPhi;
+
+impl FunctionPass for ShortPhi {
+    fn name(&self) -> &'static str {
+        "short-phi"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let function = &mut *unit.function;
+        let block = function.layout()[1];
+        let phi = function.iter_block(block).next().unwrap();
+        let first = function.instruction(phi).operands[..2].to_vec();
+        function.set_operands(phi, first);
+        PreservedAnalyses::none()
+    }
+}
+
+/// A pass that leaves a phi short of an input for one of its edges is named
+/// where it ran, not found as a consumer's runaway allocation later. Only a
+/// build with debug assertions checks: LLVM verifies a release build's passes
+/// only under `-verify-each`.
+#[test]
+#[cfg(debug_assertions)]
+fn a_pass_that_leaves_a_phi_short_of_an_edge_is_named() {
+    let mut module = parse::module(TWO_EDGES).unwrap_or_else(|error| panic!("{error}"));
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(ShortPhi);
+    let error = passes.run_module(&mut module, Rc::new(Neutral)).unwrap_err();
+    assert!(error.starts_with("after short-phi: a phi in %b has 1 inputs from %entry for 2 edges"), "{error}");
+}
+
+/// The well-formed body passes the same check.
+#[test]
+fn a_pass_that_keeps_every_phi_whole_is_not_refused() {
+    let mut module = parse::module(TWO_EDGES).unwrap_or_else(|error| panic!("{error}"));
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+}
+
 /// A bisection limit runs only the first pass runs, as LLVM's
 /// `-opt-bisect-limit`: with two functions and a limit of one, the second
 /// is left as it was. It found the peephole that added deedlines' z%(i)

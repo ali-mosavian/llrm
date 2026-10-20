@@ -424,6 +424,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-env"
+version = "0.1.0"
+
+[[package]]
 name = "llrm-hir"
 version = "0.1.0"
 dependencies = [
@@ -473,6 +477,9 @@ dependencies = [
 [[package]]
 name = "llrm-mir"
 version = "0.1.0"
+dependencies = [
+ "llrm-env",
+]
 
 [[package]]
 name = "llrm-nib"
@@ -579,6 +586,7 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "libc",
+ "llrm-env",
  "num-bigint",
  "num-traits",
  "rustc-hash",

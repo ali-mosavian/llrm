@@ -4343,6 +4343,23 @@ pub fn simplify_binop_with_flags_at(
     simplify_binop_flags(&mut q, opcode, lhs, rhs, flags, RECURSION_LIMIT)
 }
 
+/// `simplifyWithOpReplaced(V, Op, RepOp, SQ.getWithInstruction(&cxt),
+/// /*AllowRefinement=*/true)`: what `v` equals with `rep_op` in place of `op`.
+pub fn simplify_with_op_replaced_at(
+    context: &Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+    analyses: Option<&FunctionAnalyses>,
+    function: &Function,
+    cxt: InstId,
+    v: Operand,
+    op: Operand,
+    rep_op: Operand,
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: true };
+    simplify_with_op_replaced(&mut q, v, op, rep_op, RECURSION_LIMIT)
+}
+
 /// `simplifyInstructionWithOperands(&I, Ops, SQ.getWithInstruction(&cxt))`:
 /// what `inst` equals with `operands` in place of its own, asked at `cxt`
 /// (none: `SQ` of the data layout alone).

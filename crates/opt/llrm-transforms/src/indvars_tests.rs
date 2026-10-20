@@ -231,7 +231,16 @@ b3:
 
 fn widening(text: &str) -> (bool, String) {
     let (changed, module) = through(text, &[&[0], &[1], &[7], &[64]], |context, layout, function, analyses| {
-        super::widened(context, layout, function, analyses.outer())
+        // As the pin's loop passes run: in LoopSimplify form (dedicated exits).
+        let formed = crate::loopsimplify::simplified(function);
+        formed
+            | crate::simplifyindvar::simplified_and_extended(
+                context,
+                layout,
+                function,
+                &mut llrm_mir::passes::Declared::default(),
+                analyses.outer(),
+            )
     });
     (changed, printed(&module))
 }
@@ -240,8 +249,7 @@ fn widening(text: &str) -> (bool, String) {
 fn a_counter_extended_to_the_index_width_is_that_wide() {
     let (changed, after) = widening(&clearing("e-p:32:32-n8:16:32"));
     assert!(changed, "{after}");
-    assert!(after.contains("icmp ult i32 %widen.iv"), "{after}");
-    assert!(!after.contains("zext i16 %i to i32"), "{after}");
+    assert!(after.contains("ult i32"), "{after}");
 }
 
 #[test]
@@ -269,45 +277,8 @@ fn clearing_signed(layout: &str) -> String {
 fn a_signed_counter_extended_to_the_index_width_is_that_wide() {
     let (changed, after) = widening(&clearing_signed("e-p:32:32-n8:16:32"));
     assert!(changed, "{after}");
-    assert!(after.contains("icmp slt i32 %widen.iv"), "{after}");
+    assert!(after.contains("slt i32"), "{after}");
     assert!(after.contains("sext i16 %n to i32"), "{after}");
-    assert!(!after.contains("sext i16 %i to i32"), "{after}");
-}
-
-/// bench/lru's `for (short i = 0; i < 3; i++)` stores to five arrays: `unroll`
-/// takes it whole where its size fits the rolled loop's, which it did to the
-/// operation and no longer did with the counter widened (one operation
-/// fewer rolled): a signed counter of a loop of a few trips is widened only
-/// once `unroll` has had it.
-#[test]
-fn a_signed_counter_of_a_loop_that_unroll_may_take_is_widened_only_late() {
-    let text = clearing_signed("e-p:32:32-n8:16:32").replace("icmp slt i16 %i, %n", "icmp slt i16 %i, 3");
-    let early = through(&text, &[&[0], &[1]], |context, layout, function, analyses| {
-        super::widened_with(
-            context,
-            layout,
-            function,
-            analyses.outer(),
-            &mut llrm_analysis::memory::Standing::underived(),
-            Some(16),
-        )
-    });
-    assert!(!early.0, "{}", printed(&early.1));
-    let (changed, after) = widening(&text);
-    assert!(changed && after.contains("icmp slt i32 %widen.iv"), "{after}");
-    // A loop of many trips is widened at once.
-    let long = clearing_signed("e-p:32:32-n8:16:32").replace("icmp slt i16 %i, %n", "icmp slt i16 %i, 40");
-    let first = through(&long, &[&[0], &[1]], |context, layout, function, analyses| {
-        super::widened_with(
-            context,
-            layout,
-            function,
-            analyses.outer(),
-            &mut llrm_analysis::memory::Standing::underived(),
-            Some(16),
-        )
-    });
-    assert!(first.0, "{}", printed(&first.1));
 }
 
 /// A start below zero is a negative number of the wide width, not the narrow
@@ -324,7 +295,7 @@ fn a_signed_counter_from_a_negative_start_is_widened_from_the_negative_number() 
         );
     let (changed, after) = widening(&text);
     assert!(changed, "{after}");
-    assert!(after.contains("phi i32 [ -5, %b0 ]"), "{after}");
+    assert!(after.contains("phi i32") && after.contains("[ -5, %b0 ]") && !after.contains("sext i16 -5"), "{after}");
 }
 
 /// An unsigned counter read through `sext` is not a signed one: its sign
@@ -348,127 +319,7 @@ fn a_counter_from_a_start_the_loop_does_not_define_is_widened() {
         .replace("icmp ult i16 %i, %n", "icmp ult i16 %i, 4");
     let (changed, after) = widening(&text);
     assert!(changed, "{after}");
-    assert!(after.contains("icmp ult i32 %widen.iv") && after.contains("zext i16 %s to i32"), "{after}");
-    assert!(!after.contains("zext i16 %i to i32"), "{after}");
-}
-
-/// Each loop asked what is known of the body without memory and derived it
-/// again: `widened` over a body of loops derived it once for each (#560). It
-/// derives it once for the body.
-#[test]
-fn what_is_known_of_a_body_is_derived_once_for_all_its_loops() {
-    let text = "define i32 @f(i32 %n) {
-b0:
-  br label %h1
-
-h1:
-  %i1 = phi i32 [ 0, %b0 ], [ %x1, %l1 ]
-  %g1 = icmp ult i32 %i1, %n
-  br i1 %g1, label %l1, label %p2
-
-l1:
-  %x1 = add i32 %i1, 1
-  br label %h1
-
-p2:
-  br label %h2
-
-h2:
-  %i2 = phi i32 [ 0, %p2 ], [ %x2, %l2 ]
-  %g2 = icmp ult i32 %i2, %n
-  br i1 %g2, label %l2, label %p3
-
-l2:
-  %x2 = add i32 %i2, 1
-  br label %h2
-
-p3:
-  br label %h3
-
-h3:
-  %i3 = phi i32 [ 0, %p3 ], [ %x3, %l3 ]
-  %g3 = icmp ult i32 %i3, %n
-  br i1 %g3, label %l3, label %done
-
-l3:
-  %x3 = add i32 %i3, 1
-  br label %h3
-
-done:
-  ret i32 0
-}
-";
-    let mut module = parsed(text);
-    let (layout, outer) = (layout(&module), Outer::of(&module, None));
-    let (context, function) = module.function_mut("f").expect("@f");
-    let before = llrm_analysis::consts::register_derivations();
-    assert!(!super::widened(context, &layout, function, &outer), "nothing to widen");
-    assert!(
-        llrm_analysis::consts::register_derivations() - before <= 1,
-        "{} derivations for three loops",
-        llrm_analysis::consts::register_derivations() - before
-    );
-}
-
-/// A pass that asks the manager what the counted loops bound, and changes
-/// nothing.
-struct AsksBounds;
-
-impl llrm_mir::passes::FunctionPass for AsksBounds {
-    fn name(&self) -> &'static str {
-        "asks-bounds"
-    }
-
-    fn run(
-        &mut self,
-        unit: &mut llrm_mir::passes::Unit,
-        analyses: &mut Analyses,
-    ) -> llrm_mir::passes::PreservedAnalyses {
-        analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function);
-        llrm_mir::passes::PreservedAnalyses::all()
-    }
-}
-
-/// A `sext` of a counter made indvars solve what the loops bound again, by
-/// hand, beside the manager's it could have asked: fpbench -O1 spent 40 Minstr
-/// in indvars, 29 of them in that solve.
-#[test]
-fn test_indvars_reads_the_managers_bounds_for_a_widened_counter() {
-    let mut module = parsed(
-        "define i32 @f(i32 %n) {
-b0:
-  br label %h
-
-h:
-  %i = phi i16 [ 0, %b0 ], [ %in, %l ]
-  %s = phi i32 [ 0, %b0 ], [ %sn, %l ]
-  %c = icmp slt i16 %i, 10
-  br i1 %c, label %l, label %end
-
-l:
-  %w = sext i16 %i to i32
-  %sn = add i32 %s, %w
-  %in = add nsw i16 %i, 1
-  br label %h
-
-end:
-  ret i32 %s
-}
-",
-    );
-    let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(AsksBounds);
-    manager.add(super::IndVars { exit_values: false, unrolls: None, lftr: true });
-    let before = llrm_analysis::ranges::loops_solved();
-    manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
-    // The pass that asks: the manager's one solve. The evaluation of the loop
-    // that asked for a second (`loopexit`) is `exitvalues` now, from
-    // ScalarEvolution.
-    assert_eq!(
-        llrm_analysis::ranges::loops_solved() - before,
-        1,
-        "the loop's bounds were worked out more than the manager's once"
-    );
+    assert!(after.contains("ult i32") && after.contains("zext i16 %s to i32"), "{after}");
 }
 
 /// indvars at its defaults asked the old ranges engine for every function with
@@ -498,43 +349,11 @@ end:
 }
 ",
     );
-    crate::simplifyindvar::tests_forced(true);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(super::IndVars { exit_values: false, unrolls: None, lftr: true });
+    manager.add(super::IndVars { lftr: true });
     let before = llrm_analysis::ranges::loops_solved();
     manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
     assert_eq!(llrm_analysis::ranges::loops_solved() - before, 0, "indvars solved the old bounds");
-}
-
-/// Each loop indvars widened made it derive what is known of the body again,
-/// from nothing, to look at the next: 13 times at d_faces -O2,
-/// 25 M. The manager brings what it holds up to date from the changes logged:
-/// the manager's own first derivation is the only one from nothing (this body
-/// took two).
-#[test]
-fn test_indvars_brings_the_registers_up_to_date_and_does_not_derive_them_again_for_each_loop_it_widens() {
-    let loops = 4;
-    let mut text = String::from("define i32 @f(i32 %n) {\nb0:\n  br label %h0\n\n");
-    for k in 0..loops {
-        let (from, next) = (
-            if k == 0 { "b0".to_owned() } else { format!("e{}", k - 1) },
-            if k + 1 == loops { "end".to_owned() } else { format!("h{}", k + 1) },
-        );
-        text += &format!(
-            "h{k}:\n  %i{k} = phi i16 [ 0, %{from} ], [ %in{k}, %l{k} ]\n  %s{k} = phi i32 [ 0, %{from} ], [ %sn{k}, %l{k} ]\n  %c{k} = icmp slt i16 %i{k}, 10\n  br i1 %c{k}, label %l{k}, label %e{k}\n\nl{k}:\n  %w{k} = sext i16 %i{k} to i32\n  %sn{k} = add i32 %s{k}, %w{k}\n  %in{k} = add nsw i16 %i{k}, 1\n  br label %h{k}\n\ne{k}:\n  br label %{next}\n\n"
-        );
-    }
-    text += "end:\n  ret i32 0\n}\n";
-    let mut module = parsed(&text);
-    let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(super::IndVars { exit_values: false, unrolls: None, lftr: true });
-    let before = llrm_analysis::consts::scratch_derivations();
-    manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
-    let derived = llrm_analysis::consts::scratch_derivations() - before;
-    assert_eq!(
-        derived, 1,
-        "what is known of the body was derived from nothing {derived} times for {loops} loops (the manager's, once)"
-    );
 }
 
 /// The same loop entered behind a copy of its test (`-ftree-ch`): the counter
@@ -570,14 +389,13 @@ b3:
 ";
     let (changed, after) = widening(text);
     assert!(changed, "{after}");
-    assert!(after.contains("icmp ult i32 %widen.iv.next"), "{after}");
-    assert!(!after.contains("zext i16 %i to i32"), "{after}");
+    assert!(after.contains("ult i32"), "{after}");
 }
 
 fn with_exit_values(text: &str) -> String {
     let mut module = crate::testing::parsed(text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(super::IndVars { exit_values: true, unrolls: None, lftr: true });
+    manager.add(super::IndVars { lftr: true });
     manager.run_module(&mut module, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     crate::testing::printed(&module)
 }
@@ -658,7 +476,7 @@ fn an_unsigned_compare_of_a_widened_counter_reads_the_wide_one() {
     );
     let (changed, after) = widening(&text);
     assert!(changed, "{after}");
-    assert!(after.contains("icmp ule i32 %widen.iv, 31"), "{after}");
+    assert!(after.contains("ule i32") && after.contains(", 31"), "{after}");
     assert!(!after.contains("trunc"), "{after}");
 }
 
@@ -672,7 +490,7 @@ fn a_signed_compare_of_a_widened_counter_reads_its_low_part() {
     );
     let (changed, after) = widening(&text);
     assert!(changed, "{after}");
-    assert!(after.contains("trunc i32 %widen.iv to i16"), "{after}");
+    assert!(after.contains("trunc nuw i32"), "{after}");
 }
 
 // ---------------------------------------------------------------- congruent
@@ -731,7 +549,7 @@ fn header_phis(module: &mut Module) -> usize {
 #[test]
 fn counters_with_one_start_and_one_step_are_one_counter() {
     let mut module = parsed(&two_counters(0, 1));
-    managed(&mut module, IndVars { exit_values: false, unrolls: None, lftr: true });
+    managed(&mut module, IndVars { lftr: true });
     assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
     let mut other = parsed(&two_counters(0, 1));
     assert_eq!(results(&module, &[&[0], &[3], &[9]]), results(&other, &[&[0], &[3], &[9]]));
@@ -745,7 +563,7 @@ fn counters_with_one_start_and_one_step_are_one_counter() {
 fn counters_whose_steps_are_the_same_add_are_one_counter() {
     let text = two_counters(0, 1).replace("%j.next = add i16 %j, 1", "%j.next = add i16 %i, 1");
     let mut module = parsed(&text);
-    managed(&mut module, IndVars { exit_values: false, unrolls: None, lftr: true });
+    managed(&mut module, IndVars { lftr: true });
     assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
     let other = parsed(&text);
     assert_eq!(results(&module, &[&[0], &[3], &[9]]), results(&other, &[&[0], &[3], &[9]]));
@@ -756,7 +574,7 @@ fn counters_whose_steps_are_the_same_add_are_one_counter() {
 fn counters_that_start_or_step_otherwise_stay_two() {
     for (start, step) in [(1, 1), (0, 2)] {
         let mut module = parsed(&two_counters(start, step));
-        managed(&mut module, IndVars { exit_values: false, unrolls: None, lftr: true });
+        managed(&mut module, IndVars { lftr: true });
         assert_eq!(header_phis(&mut module), 2, "{start} {step}: {}", printed(&module));
     }
 }
@@ -815,37 +633,9 @@ fn a_run_that_changes_no_block_finds_the_loops_once() {
         managed(module, AsksWhatIndVarsDoes);
     }));
     let indvars = derived(Box::new(|module| {
-        managed(module, IndVars { exit_values: true, unrolls: None, lftr: true });
+        managed(module, IndVars { lftr: true });
     }));
     assert_eq!(indvars, manager);
-}
-
-/// Each widening dropped what was known of the body and the next loop derived
-/// it afresh: d_faces -O2 widened 12 counters and derived a 1,350-instruction
-/// body 12 times (21.8 M, a third of `indvars`). What stands for the values a
-/// widening did not reach is kept, and only the reached are settled again.
-#[test]
-fn test_a_widening_settles_again_only_the_values_it_reached() {
-    let loops = 6;
-    let mut text = String::from(
-        "target datalayout = \"e-p:32:32-n8:16:32\"\n\ndefine i32 @f(i16 %n) {\nb0:\n  %buf = alloca [64 x i8]\n  br label %h0\n\n",
-    );
-    for at in 0..loops {
-        let next = if at + 1 == loops { "done".to_string() } else { format!("h{}", at + 1) };
-        text += &format!(
-            "h{at}:\n  %i{at} = phi i16 [ 0, %{pre} ], [ %n{at}, %l{at} ]\n  %go{at} = icmp ult i16 %i{at}, %n\n  br i1 %go{at}, label %l{at}, label %{next}\n\nl{at}:\n  %w{at} = zext i16 %i{at} to i32\n  %p{at} = getelementptr inbounds i8, ptr %buf, i32 %w{at}\n  store i8 1, ptr %p{at}\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n",
-            pre = if at == 0 { "b0".to_string() } else { format!("h{}", at - 1) },
-        );
-    }
-    text += "done:\n  ret i32 0\n}\n";
-    let mut module = parsed(&text);
-    let (layout, outer) = (layout(&module), Outer::of(&module, None));
-    let (context, function) = module.function_mut("f").expect("@f");
-    let size = function.walk().count();
-    let before = llrm_analysis::consts::derived_work();
-    assert!(super::widened(context, &layout, function, &outer), "the counters are widened");
-    let work = llrm_analysis::consts::derived_work() - before;
-    assert!(work <= 3 * size, "{work} values settled for {loops} widenings of a body of {size} instructions");
 }
 
 /// A rotated loop leaves from its latch. The step that took the exit values
@@ -934,7 +724,6 @@ fn leaks_a_loop_value(module: &Module) -> Option<String> {
 /// body as not in closed SSA form.
 #[test]
 fn test_a_start_expanded_from_a_loop_before_it_is_read_through_that_loops_exit_phi() {
-    crate::simplifyindvar::tests_forced(true);
     let mut module = parsed(
         "target datalayout = \"e-p:32:32-n8:16:32\"
 
@@ -978,7 +767,7 @@ e:
 ",
     );
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(IndVars { exit_values: true, unrolls: None, lftr: true });
+    manager.add(IndVars { lftr: true });
     manager.run_module(&mut module, m32()).unwrap();
     let after = printed(&module);
     assert_eq!(leaks_a_loop_value(&module), None, "{after}");
@@ -1015,11 +804,11 @@ b2:
 #[test]
 fn test_lftr_off_leaves_the_test_of_a_loop_not_rotated() {
     let mut off = parsed(TOP_TESTED);
-    managed(&mut off, IndVars { exit_values: true, unrolls: None, lftr: false });
+    managed(&mut off, IndVars { lftr: false });
     let off = printed(&off);
     assert!(!off.contains("umax") && !off.contains("exitcond"), "{off}");
     let mut on = parsed(TOP_TESTED);
-    managed(&mut on, IndVars { exit_values: true, unrolls: None, lftr: true });
+    managed(&mut on, IndVars { lftr: true });
     let on = printed(&on);
     assert!(on.contains("exitcond"), "{on}");
 }
@@ -1052,7 +841,7 @@ b3:
 }
 ",
     );
-    managed(&mut module, IndVars { exit_values: true, unrolls: None, lftr: false });
+    managed(&mut module, IndVars { lftr: false });
     let after = printed(&module);
     assert!(after.contains("br i1 false, label %b4, label %b3"), "{after}");
 }

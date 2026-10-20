@@ -43,11 +43,10 @@ b3:
 /// @f of `text` through `indvars` (with the exit values), printed, and
 /// computing what it did on `inputs`.
 fn widened(text: &str) -> String {
-    crate::simplifyindvar::tests_forced(true);
     let mut module = parsed(text);
     let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[40]];
     let before = results(&module, inputs);
-    managed(&mut module, IndVars { exit_values: true, unrolls: None, lftr: true });
+    managed(&mut module, IndVars { lftr: true });
     let after = printed(&module);
     assert_eq!(results(&module, inputs), before, "{after}");
     after
@@ -88,11 +87,10 @@ fn test_an_unsigned_counter_read_through_sext_is_not_widened() {
 /// costs two.
 #[test]
 fn test_a_counter_is_not_widened_past_the_pointer_width_on_the_16_bit_target() {
-    crate::simplifyindvar::tests_forced(true);
     let text = clearing("zext", "ult", "0", "nsw").replace("e-p:32:32-n8:16:32", "e-p:16:16-n8:16:32");
     let mut module = parsed(&text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(IndVars { exit_values: true, unrolls: None, lftr: true });
+    manager.add(IndVars { lftr: true });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     let after = printed(&module);
     assert!(!after.contains("phi i32"), "{after}");

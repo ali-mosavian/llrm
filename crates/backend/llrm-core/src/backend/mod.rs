@@ -25,7 +25,7 @@
 //!     once["<b>machined_once</b><br/><small>cheaper of allocator alone<br/>and spiller route<br/>(flow::machine_with)</small>"]:::mid
 //!     relay["<b>relayout::laid_again</b><br/><small>if far frame operands remain</small>"]:::mid
 //!     omax["<b>-Omax: again without</b><br/><small>callee facts, keep cheaper</small>"]:::mid
-//!     proc["<b>per procedure</b><br/><small>addressvalues::converted<br/>masm::cleaned_returns<br/>jumps::duplicated_returns<br/>shrinkwrap::tails_split</small>"]:::mid
+//!     proc["<b>per procedure</b><br/><small>addressvalues::converted<br/>masm::cleaned_returns<br/>jumps::duplicated_returns</small>"]:::mid
 //!     all["<b>all procedures</b><br/><small>stackusage::elide_checks<br/>debuginfo::described</small>"]:::mid
 //!   end
 //!   mod["<b>masm::Module</b>"]:::opt
@@ -167,6 +167,7 @@ pub mod globals;
 pub mod hintwalk;
 pub mod inline_asm;
 pub mod isel;
+pub mod valuefacts;
 
 /// Every target's peephole rules, as its definition directory is named.
 pub mod targets {

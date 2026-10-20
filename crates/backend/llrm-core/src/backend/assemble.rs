@@ -336,22 +336,6 @@ pub fn assembled_by(
                     if let Some(error) = unprintable.take() {
                         return Err(error);
                     }
-                    let procedure = masm::Procedure { body, ..procedure };
-                    let enough = std::cell::OnceCell::new();
-                    let body = timed("lir shrink-wrap tails", || {
-                        crate::backend::shrinkwrap::tails_split(&procedure.body, &|candidate| {
-                            // Asked only once a tail could be copied.
-                            if !procedure.size
-                                && *enough.get_or_init(|| {
-                                    masm::pieces_to_set_up(&procedure) >= crate::backend::shrinkwrap::PIECES
-                                })
-                            {
-                                masm::wrapped_pieces(&procedure, candidate)
-                            } else {
-                                0
-                            }
-                        })
-                    });
                     masm::Procedure { body, ..procedure }
                 };
                 procedures.push(procedure);
@@ -609,13 +593,11 @@ fn calls_known(
     facts: &calleefacts::CalleeFacts,
 ) -> bool {
     let Some(function) = module.named(name).and_then(|id| module.global(id).function()) else { return false };
-    function
-        .walk()
-        .any(
-            |(_, inst)| llrm_mir::memory::callee(&module.context, function, inst)
-                .and_then(|id| module.global(id).name.as_deref())
-                .is_some_and(|callee| facts.written(callee).is_some()),
-        )
+    function.walk().any(|(_, inst)| {
+        llrm_mir::memory::callee(&module.context, function, inst)
+            .and_then(|id| module.global(id).name.as_deref())
+            .is_some_and(|callee| facts.written(callee).is_some())
+    })
 }
 
 fn machined_once(
@@ -722,15 +704,12 @@ const SPILLER_TRAFFIC: f64 = 0.005;
 /// fixed displacement. An array's cell, indexed, reaches its whole object and
 /// is not the traffic the spiller removes.
 fn names_frame_cell(what: &Semantics) -> bool {
-    what.dests
-        .iter()
-        .chain(&what.sources)
-        .any(
-            |place| matches!(
-                place,
-                Loc::Mem(mem) if mem.index.is_none() && mem.addr.is_some_and(|addr| addr.space == Space::Frame)
-            ),
+    what.dests.iter().chain(&what.sources).any(|place| {
+        matches!(
+            place,
+            Loc::Mem(mem) if mem.index.is_none() && mem.addr.is_some_and(|addr| addr.space == Space::Frame)
         )
+    })
 }
 
 /// What `cheaper` does below -Omax (LLVM allocates once; GCC runs its reload

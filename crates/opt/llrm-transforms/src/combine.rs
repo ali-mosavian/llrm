@@ -16,13 +16,13 @@
 //! phi inputs of a dead edge become poison); the pop, delete-if-dead, visit,
 //! replace-all-uses, `pushUsersToWorkList`, erase sequence.
 //!
-//! DEVIATE, with the reason: code sinking (`tryToSinkInstruction`) is not made
-//! (no counterpart in llrm yet: its cost is a number the combine page owes);
-//! blocks no live edge reaches keep their instructions (`decide` removes
-//! them; LLVM's `removeAllNonTerminatorAndEHPadInstructions` is a CFG edit
-//! this pass does not make); a call is never trivially dead here (`dead` knows
-//! what a call does not write); `visit` runs only the families translated so
-//! far (`visitors`: add, mul, icmp, getelementptr, store): the other `visit*`
+//! DEVIATE, with the reason: blocks no live edge reaches keep their
+//! instructions (`decide` removes them; LLVM's
+//! `removeAllNonTerminatorAndEHPadInstructions` is a CFG edit this pass does
+//! not make); a call is never trivially dead here (`dead` knows what a call
+//! does not write); `visit` runs only the families translated so
+//! far (`visitors`: add, mul, div, rem, shifts,
+//! trunc, zext, sext, icmp, getelementptr, select, store): the other `visit*`
 //! rewrites are `algebraic`'s, to move in as they are translated.
 //!
 //! # Used by
@@ -41,14 +41,17 @@ use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Operand, ValueDef};
-use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::FunctionAnalyses;
 
 use crate::combine_addsub::visit_add;
 use crate::combine_compares::visit_icmp;
-use crate::combine_muldivrem::visit_mul;
+use crate::combine_casts::{visit_sext, visit_trunc, visit_zext};
+use crate::combine_muldivrem::{visit_mul, visit_sdiv, visit_srem, visit_udiv, visit_urem};
+use crate::combine_shifts::{visit_ashr, visit_lshr, visit_shl};
+use crate::combine_sink::{droppable_uses, sink, sink_block, sinkable};
 use crate::instworklist::InstWorklist;
 
 /// `handleUseCountDecrement`: an operand that lost a user, and the one user it
@@ -119,6 +122,34 @@ fn erase(
     for operand in operands {
         handle_use_count_decrement(worklist, function, operand);
     }
+}
+
+/// The sink step of `run` (:5865): `inst` moves to the block of its only
+/// user when `tryToSinkInstruction` allows it; its operands' definitions and
+/// the `llvm.assume`s that read it are looked at again. Whether it moved.
+fn try_to_sink(
+    c: &mut Combiner,
+    inst: InstId,
+) -> bool {
+    let (dest, dropped) = {
+        let q = crate::combine_shared::query(c, Some(inst));
+        let Some(dest) = sink_block(&q, inst) else { return false };
+        if !sinkable(&q, inst, dest) {
+            return false;
+        }
+        (dest, droppable_uses(&q, inst, dest))
+    };
+    sink(c.context, c.function, inst, dest, &dropped);
+    for one in &dropped {
+        c.worklist.push(one.user);
+    }
+    let operands = c.function.instruction(inst).operands.to_vec();
+    for operand in operands {
+        if let Some(def) = defining(c.function, operand) {
+            c.worklist.push(def);
+        }
+    }
+    true
 }
 
 /// `InstCombinerImpl::prepareWorklist` (:6031): the blocks in reverse
@@ -273,6 +304,9 @@ pub struct Env<'a> {
     pub globals: &'a [GlobalValue],
     pub layout: &'a DataLayout,
     pub analyses: FunctionAnalyses,
+    /// `instcombine-code-sinking` (default true): the driver sinks an
+    /// instruction to its only user's block after popping it.
+    pub sinking: bool,
     /// `BackEdges`, computed on the first ask (`computeBackEdges`).
     pub back_edges: std::cell::OnceCell<std::collections::BTreeSet<(BlockId, BlockId)>>,
 }
@@ -360,9 +394,20 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
     match opcode {
         Opcode::Binary(BinaryOp::Add) => &[visit_add],
         Opcode::Binary(BinaryOp::Mul) => &[visit_mul],
+        Opcode::Binary(BinaryOp::UDiv) => &[visit_udiv],
+        Opcode::Binary(BinaryOp::SDiv) => &[visit_sdiv],
+        Opcode::Binary(BinaryOp::URem) => &[visit_urem],
+        Opcode::Binary(BinaryOp::SRem) => &[visit_srem],
+        Opcode::Binary(BinaryOp::Shl) => &[visit_shl],
+        Opcode::Binary(BinaryOp::LShr) => &[visit_lshr],
+        Opcode::Binary(BinaryOp::AShr) => &[visit_ashr],
+        Opcode::Cast(CastOp::Trunc) => &[visit_trunc],
+        Opcode::Cast(CastOp::ZExt) => &[visit_zext],
+        Opcode::Cast(CastOp::SExt) => &[visit_sext],
         Opcode::ICmp(_) => &[visit_icmp],
         Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
         Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],
+        Opcode::Select => &[|c, inst| c.visit_select(inst)],
         _ => &[],
     }
 }
@@ -416,6 +461,9 @@ fn drain(
             changed = true;
             continue;
         }
+        if c.env.sinking && try_to_sink(c, inst) {
+            changed = true;
+        }
         match visit(c, inst) {
             Visit::None => {}
             Visit::Erased => changed = true,
@@ -454,9 +502,11 @@ pub fn combine(
     layout: &DataLayout,
     function: &mut Function,
 ) -> bool {
-    combine_with(context, globals, metadata, layout, function, visit)
+    combine_with_sinking(context, globals, metadata, layout, function, visit, true)
 }
 
+/// `combine` with the `visit*` of a test, and no sinking: a test of one
+/// family sees what that family does.
 pub(crate) fn combine_with(
     context: &mut Context,
     globals: &[GlobalValue],
@@ -465,10 +515,22 @@ pub(crate) fn combine_with(
     function: &mut Function,
     visit: fn(&mut Combiner, InstId) -> Visit,
 ) -> bool {
+    combine_with_sinking(context, globals, metadata, layout, function, visit, false)
+}
+
+pub(crate) fn combine_with_sinking(
+    context: &mut Context,
+    globals: &[GlobalValue],
+    metadata: &[MetadataNode],
+    layout: &DataLayout,
+    function: &mut Function,
+    visit: fn(&mut Combiner, InstId) -> Visit,
+    sinking: bool,
+) -> bool {
     // InstCombine's `SQ.DC`: what the branches dominating an instruction say.
     let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function)
         .with_dom_conditions_of(context, globals, metadata, function);
-    let env = Env { globals, layout, analyses, back_edges: Default::default() };
+    let env = Env { globals, layout, analyses, sinking, back_edges: Default::default() };
     let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default() };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
     changed |= drain(&mut c, visit);
