@@ -28,6 +28,7 @@
 use llrm_mir::context::Context;
 use llrm_mir::module::{BlockId, Function};
 use llrm_mir::opcode::Opcode;
+use llrm_mir::passes::Declared;
 
 use crate::simplifycfg::Options;
 use crate::twoentryphi::Speculation;
@@ -40,6 +41,7 @@ pub fn simplified(
     options: &Options,
     context: &Context,
     spec: &Speculation,
+    declared: &mut Declared,
     function: &mut Function,
     block: BlockId,
 ) -> bool {
@@ -54,6 +56,6 @@ pub fn simplified(
         || ((options.convert_switch_to_arithmetic || options.convert_switch_to_lookup_table)
             && switchlookup::folded(options, context, spec, function, block))
         || switchpow2::folded(options, context, spec, function, block)
-        || switchreduce::folded(options, context, spec, function, block)
+        || switchreduce::folded(options, context, spec, declared, function, block)
         || switcharms::folded(options, context, spec, function, block)
 }
