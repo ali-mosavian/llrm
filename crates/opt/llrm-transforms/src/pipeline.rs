@@ -36,7 +36,7 @@
 //!   end
 //!   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
 //!   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>jumpthread hoist gepoffset<br/>addresssink sink</small>"]:::mid
+//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>addresssink sink</small>"]:::mid
 //!   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
 //!   a --> sroa
 //!   sroa --> rnd
@@ -122,10 +122,8 @@
 //! | `fuse` | `fuse` (off by default; on at -Omax) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
-//! `pre` makes `gvn` insert on the path that lacks a value; `expensive`
-//! enables `jumpthread`'s state machines and `copy_headers` its correlated
-//! branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
-//! `lsr`, `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals`
+//! `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
+//! `lsr`, `window` and `calleepop` in bytes; `loop_intervals`
 //! lets alias and branch decisions use the intervals of counted loops. `limits`
 //! are the copy budgets of `unroll` and `peel`.
 //!
@@ -156,7 +154,7 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
-    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, jumpthread, lcssa,
+    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa,
     loopdeletion, loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit,
     loopunrollpass, loopversion, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp, simpleloopunswitch,
     simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, window,
@@ -1160,15 +1158,6 @@ pub fn recorded(
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
     manager.add(rotate::Rotate { proven: true, copy: false });
-    // After the loop passes: the cycles it makes between the cases are no
-    // natural loop. LLVM's DFAJumpThreading, gcc's FSM threader.
-    if applied.options.wanted("jumpthread") {
-        manager.add(jumpthread::JumpThread {
-            size: applied.options.prefers_size(),
-            correlated: applied.options.copy_headers,
-            states: applied.options.expensive,
-        });
-    }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if !guarded && applied.options.wanted("hoist") && !llvm_motion(applied) {

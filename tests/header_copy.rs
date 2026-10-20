@@ -307,7 +307,7 @@ fn test_an_early_return_through_a_spilled_sum_sets_up_nothing() {
     assert!(early, "{text}");
 }
 
-/// Behind the copy `JumpThread` cleans the function with `Algebraic` after
+/// Behind the copy the old `JumpThread` cleaned the function with `Algebraic` after
 /// LSR, and `icmp ne (x + 1), 2` became `icmp ne x, 1` for the counter's own
 /// next value: `lea eax,[ecx+1]; add edi,24; cmp ecx,1; mov ecx,eax; jne`, the
 /// counter in two registers (x_life +5% clocks). The step is tested where it
