@@ -375,9 +375,9 @@ out:
 ";
     let module = module(text);
     let f = function(&module);
-    let shape = cfg::Shape::of(f);
+    let loops = llrm_analysis::cfg::loops_of(f);
     let before = llrm_analysis::cfg::shapes_derived();
-    let given = super::_loop_products_by_branch_in(&module.context, &module.metadata, &module.globals, f, &shape, None);
+    let given = super::_loop_products_by_branch_in(&module.context, &module.metadata, &module.globals, f, &loops, None);
     assert_eq!(llrm_analysis::cfg::shapes_derived(), before, "a shape was derived for a call given one");
     let own = super::_loop_products_by_branch(&module.context, &module.metadata, &module.globals, f, None);
     assert_eq!(
