@@ -80,7 +80,7 @@
 //! Inside [`crate::promote`]'s `Sroa`, before it scalarizes the aggregate's
 //! leaves, so the new loads and stores are promoted by the same run. `Sroa`
 //! is a structural-boundary pass: it runs at the start of the body's
-//! pipeline and again after unroll, peel and unroll-jam copy a loop. It is
+//! pipeline and again after unroll and peel copy a loop. It is
 //! off by `-fno-tree-sra` and at
 //! -O0.
 //!

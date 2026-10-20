@@ -1,7 +1,7 @@
 //! `computeKnownFPClass` against what LLVM answered on the same IR: the lines
 //! of `tests/vt/fp/NAME.expected` are `tools/llvmport/fpdump.sh NAME.ll`, and
 //! `NAME.deviates` lists the values llrm answers differently (a DEVIATE of the
-//! `fp` header: `f 14` is a `floor`, the intrinsics slice). The set of lines
+//! `fp` header: none now). The set of lines
 //! that differ must be exactly that list: a fold that closes a gap fails here
 //! until its line is removed.
 
@@ -21,7 +21,7 @@ macro_rules! cases {
     };
 }
 
-cases!(ops);
+cases!(ops, intrinsics);
 
 #[test]
 fn llvm_and_llrm_know_the_same_classes_but_the_listed_values() {

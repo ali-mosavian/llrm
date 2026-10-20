@@ -317,36 +317,11 @@ fn fwrapv_makes_signed_arithmetic_wrap() {
     assert!(!parsed(&["-fwrapv", "-fno-wrapv"]).unwrap().wrapv && !parsed(&[]).unwrap().wrapv);
 }
 
-/// gcc turns `-floop-unroll-and-jam` on at -O3 and no lower (opts.cc:678);
-/// -Omax is everything.
-#[test]
-fn only_o3_and_omax_jam_loop_nests_and_the_flag_overrides_it() {
-    assert!(pipeline(&["-Omax"]).unroll_jam);
-    for level in ["-O1", "-O2", "-Os"] {
-        assert!(!pipeline(&[level]).unroll_jam, "{level}");
-        assert!(pipeline(&[level, "-floop-unroll-and-jam"]).unroll_jam, "{level}");
-    }
-    assert!(pipeline(&["-O3"]).unroll_jam);
-    assert!(!pipeline(&["-O3", "-fno-loop-unroll-and-jam"]).unroll_jam);
-}
-
 /// -Omax is every pass on: it had `unswitch` off while -O3 had it on.
 #[test]
 fn omax_unswitches_loops() {
     assert!(pipeline(&["-Omax"]).unswitch);
     assert!(!pipeline(&["-Omax", "-fno-unswitch-loops"]).unswitch);
-}
-
-/// gcc turns `-ftree-loop-distribution` on at -O3 and no lower; -Omax is
-/// everything.
-#[test]
-fn only_o3_and_omax_distribute_loops_and_the_flag_overrides_it() {
-    assert!(pipeline(&["-Omax"]).distribute && pipeline(&["-O3"]).distribute);
-    assert!(!pipeline(&["-O3", "-fno-tree-loop-distribution"]).distribute);
-    for level in ["-O1", "-O2", "-Os"] {
-        assert!(!pipeline(&[level]).distribute, "{level}");
-        assert!(pipeline(&[level, "-ftree-loop-distribution"]).distribute, "{level}");
-    }
 }
 
 /// gcc turns `-fversion-loops` on at -O3 and no lower; -Omax is

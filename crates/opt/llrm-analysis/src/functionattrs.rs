@@ -598,6 +598,19 @@ fn stamp_flags(
     changed
 }
 
+/// `post_order` over every component of `module`, callees first: the
+/// attributes the pipeline has stated when a pass that reads them runs.
+pub fn infer_module(
+    module: &mut Module,
+    layout: &DataLayout,
+    spaces: Spaces,
+) {
+    let components = llrm_mir::callgraph::CallGraph::new(module).bottom_up_components();
+    for (members, _) in components {
+        post_order(module, layout, spaces, &members);
+    }
+}
+
 /// `deriveAttrsInPostOrder` (FunctionAttrs.cpp:2211,
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/IPO/FunctionAttrs.cpp#L2211>)
 /// for what is translated, in its order: `addMemoryAttrs`, `addArgumentAttrs`,

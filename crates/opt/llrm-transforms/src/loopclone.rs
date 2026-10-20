@@ -3,7 +3,7 @@
 //! bodies inside it, keeping the loop and every exit.
 //!
 //! # How it works
-//! This is the mechanism for peeling, unswitching and unroll-and-jam; it makes
+//! This is the mechanism for peeling and unswitching; it makes
 //! no profitability decision. Both functions return each copy's map from an
 //! original block to its clone, or `None` having changed nothing when the loop
 //! is not one they can clone. Both need
@@ -132,9 +132,7 @@
 //! peeled once where the test peels twice.
 //!
 //! # Runs
-//! Called by [`crate::peel`] (`peeled`),
-//! [`crate::unroll_jam`] (`chained`) and [`crate::loopdistribute`] (`copied`);
-//! not a pass.
+//! Called by [`crate::peel`] (`peeled`); not a pass.
 //!
 //! # Needs
 //! LCSSA ([`crate::lcssa`]) and a simplified loop ([`crate::loopsimplify`]).

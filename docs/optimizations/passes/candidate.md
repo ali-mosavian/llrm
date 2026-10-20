@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/candidate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/candidate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/candidate.rs sha256:d439265fbcf75889c167b96473fecb167fc209f1d5b337f0ecc599aacce0ec55 -->
+<!-- src: crates/opt/llrm-transforms/src/candidate.rs sha256:73ef39e86bdcf6847d94bad9284ce3bcb122eb2d601a7453aa23804852c99e7b -->
 
 # candidate
 
@@ -26,7 +26,7 @@ proves, as [`crate::profit::_frequencies`](profit.md) has them.
 
 ## Example
 None: a library. [`crate::loopversion`](loopversion.md) judges a specialised loop by work
-alone and [`crate::loopdistribute`](loopdistribute.md) a split one by its price alone.
+alone.
 
 ## Provides
 `adopted`, `priced`, `priced_at`, `frequencies`, `Pricing`, `Gain`,

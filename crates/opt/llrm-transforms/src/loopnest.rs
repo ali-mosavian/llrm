@@ -39,11 +39,11 @@
 //! `pre` is `[b2]`, `post` `[b5]`; the inner count is the same each outer trip.
 //!
 //! # Provides
-//! `Nest`, `nest_of`, `inner_is_invariant`, `accesses`. Consumers: `unroll_jam`
-//! and `loopinterchange`.
+//! `Nest`, `nest_of`, `inner_is_invariant`, `accesses`. Consumer:
+//! `loopinterchange`.
 //!
 //! # See also
-//! [`crate::unroll_jam`], [`crate::loopinterchange`].
+//! [`crate::loopinterchange`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
