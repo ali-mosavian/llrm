@@ -131,7 +131,7 @@ use std::collections::BTreeMap;
 
 use llrm_analysis::cfg;
 use llrm_analysis::graph::loops::{self, Loop};
-use llrm_mir::edit::Position;
+use llrm_mir::edit::{Position, ValueMap};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 
@@ -199,12 +199,10 @@ fn plan(
             return None;
         }
         if edges::phis(function, at).into_iter().any(|phi| {
-            arms(function, phi)
-                .into_iter()
-                .any(
-                    |(value, source)| matches!(value, Operand::Value(value) if defined.contains_key(&value))
-                        && !loop_.body.contains(&cfg::id(source)),
-                )
+            arms(function, phi).into_iter().any(|(value, source)| {
+                matches!(value, Operand::Value(value) if defined.contains_key(&value))
+                    && !loop_.body.contains(&cfg::id(source))
+            })
         }) {
             return None;
         }
@@ -341,6 +339,43 @@ fn peeled_from(
         }
     }
     Ok(Some(labels))
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/CloneFunction.cpp#L1020
+/// `cloneLoopWithPreheader(Before, .., OrigLoop, VMap, NameSuffix, ..)`: the
+/// loop's preheader and blocks cloned, named with `suffix`, and placed before
+/// `before`; the preheader's clone first, then the blocks in the loop's order.
+/// `vmap` maps each original block and result to its clone, and the copies
+/// still read the originals' values until `remap_instruction` runs over them.
+/// The loop info and the dominator tree are not updated (DEVIATE 27): the
+/// caller finds them again.
+pub fn clone_loop_with_preheader(
+    function: &mut Function,
+    before: BlockId,
+    orig_loop: llrm_mir::loopinfo::Loop,
+    suffix: &str,
+    vmap: &mut ValueMap,
+) -> Vec<BlockId> {
+    let orig_ph = orig_loop.get_loop_preheader(&*function).expect("No preheader");
+    let mut blocks = Vec::new();
+    for orig in std::iter::once(orig_ph).chain(orig_loop.get_blocks().iter().copied()) {
+        let new = function.clone_block(orig, vmap);
+        if let Some(name) = function.block(orig).name.clone() {
+            function.set_block_name(new, &format!("{name}{suffix}"));
+        }
+        for (from, to) in
+            function.iter_block(orig).collect::<Vec<_>>().into_iter().zip(function.iter_block(new).collect::<Vec<_>>())
+        {
+            if let (Some(from), Some(to)) = (function.instruction(from).result, function.instruction(to).result)
+                && let Some(name) = function.value(from).name.clone()
+            {
+                function.set_name(to, &format!("{name}{suffix}"));
+            }
+        }
+        function.insert_block_before(new, before).expect("a new block");
+        blocks.push(new);
+    }
+    blocks
 }
 
 #[cfg(test)]

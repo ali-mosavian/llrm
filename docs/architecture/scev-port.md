@@ -180,6 +180,10 @@ Module `scev/expander.rs`, replacing `llrm-transforms/src/expand.rs`.
 | 23 | `RuntimePointerChecking`: no operand bundles, so `getKnowledgeForValue(.., Dereferenceable, ..)` in `evaluatePtrAddRecAtMaxBTCWillNotWrap` finds no assumption and the dereferenceable bytes are the value's own | MIR has no operand bundles; exit: operand bundles in MIR | `runtimecheck.rs` header; `runtimecheck_tests.rs` against the pin's `print<access-info>` |
 | 24 | `RuntimePointerChecking::insert` takes the loop's backedge-taken counts where LLVM takes a `PredicatedScalarEvolution` (no predicate is added; D1) | SCEV has no predicates; exit: `PredicatedScalarEvolution` with `replaceSymbolicStrideSCEV` | same |
 | 25 | `addDiffRuntimeChecks` takes `VF` as a count, not an `ElementCount`; `getElementCount` is `getConstant` | MIR has no scalable vectors (D2) | `runtimechecks.rs` header; `runtimechecks_tests.rs` against the pin's `loop-vectorize` |
+| 26 | `LoopVersioning` checks are the memory checks only: no `expandCodeForPredicate`, no `lver.safe` | no SCEV predicates (D1) | `version_loop` asserts there is a memory check; `loopversioning.rs` header |
+| 27 | `LoopVersioning` and `cloneLoopWithPreheader` update no `DominatorTree`, `LoopInfo` or `MemorySSA` | `LoopInfo` and `DomTree` are not updatable; the caller finds them again, as `simpleloopunswitch` does (SU7) | `loopversioning_tests::a_copy_loop_is_versioned_into_two_simplified_loops` finds both again and checks simplify form and the verifier |
+| 28 | the new branch is not marked with unknown weights (`setExplicitlyUnknownBranchWeightsIfProfiled`) | MIR has no function entry count; LLVM would not mark either | `loopversioning.rs` header |
+| 29 | `forgetLcssaPhiWithNewPredecessor` is not called by `addPHINodes` | the CFG changed, so the caller drops its SCEV (`ScevSession::forget_expressions`) | `loopversioning.rs` header |
 
 Container idioms (`FoldingSet` -> interner, `SmallVector` -> `Vec`, `DenseMap` -> `IdMap`) are not DEVIATEs.
 

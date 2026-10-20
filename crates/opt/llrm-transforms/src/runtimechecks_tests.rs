@@ -1,6 +1,7 @@
 //! `addRuntimeChecks` and `addDiffRuntimeChecks` against the pinned LLVM:
-//! the text of the check block `opt -passes='loop-simplify,lcssa,loop-versioning'`
-//! (and `loop-vectorize` for the diff form) writes for the same loop.
+//! the text of the check block `opt
+//! -passes='loop-simplify,lcssa,loop-versioning'` (and `loop-vectorize` for the
+//! diff form) writes for the same loop.
 
 use llrm_analysis::runtimecheck::{AccessOrder, DepCandidates, RuntimePointerChecking, VectorizerParams};
 use llrm_analysis::scev::backedge::ExitCountKind;
@@ -110,6 +111,7 @@ impl AccessOrder for Accesses {
 /// A function's loop `loop` with its memory checks worked out (what
 /// `LoopAccessInfo` will hand over), and what a rewrite of it needs.
 pub(crate) struct Analysed {
+    pub module: llrm_mir::module::Module,
     pub context: Context,
     pub function: Function,
     pub globals: Vec<GlobalValue>,
@@ -183,7 +185,20 @@ pub(crate) fn analysed_freezing(
             } else {
                 function.instruction(inst).ty
             };
-            assert!(rtc.insert(&mut se, &cx, header, ptr, ptr_expr, ty, write, set as u32 + 1, 0, btc, max_btc, needs_freeze));
+            assert!(rtc.insert(
+                &mut se,
+                &cx,
+                header,
+                ptr,
+                ptr_expr,
+                ty,
+                write,
+                set as u32 + 1,
+                0,
+                btc,
+                max_btc,
+                needs_freeze
+            ));
         }
         let order = Accesses { header, list: accesses };
         rtc.generate_checks(&mut se, &cx, &order, &DepCandidates::default());
@@ -203,10 +218,21 @@ pub(crate) fn analysed_freezing(
         memory,
         declared: Declared::of(&module),
         callees: Callees::default(),
+        module,
     }
 }
 
 impl Analysed {
+    /// The module with the rewritten function and the metadata made, which
+    /// must verify.
+    pub fn finished(&mut self) -> llrm_mir::module::Module {
+        let mut module = self.module.clone();
+        module.context = self.context.clone();
+        *module.function_mut("f").expect("@f").1 = self.function.clone();
+        self.declared.place(&mut module).expect("the declarations");
+        module
+    }
+
     /// The block named `name`.
     pub fn block(
         &self,

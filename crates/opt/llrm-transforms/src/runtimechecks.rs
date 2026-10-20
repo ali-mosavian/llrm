@@ -23,7 +23,9 @@
 
 use std::collections::HashMap;
 
-use llrm_analysis::runtimecheck::{PointerDiffInfo, RuntimeCheckingPtrGroup, RuntimePointerCheck, RuntimePointerChecking};
+use llrm_analysis::runtimecheck::{
+    PointerDiffInfo, RuntimeCheckingPtrGroup, RuntimePointerCheck, RuntimePointerChecking,
+};
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::backedge::ExitCountKind;
 use llrm_analysis::scev::expander::{Env, Expander};
@@ -239,10 +241,10 @@ impl Rewriter<'_> {
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L2273
-    /// `addRuntimeChecks(Loc, TheLoop, PointerChecks, Exp, HoistRuntimeChecks)`:
-    /// the memory checks of `checks` before `loc`, or-ed into one `i1` that is
-    /// true when some pair of groups may overlap; none where there is no
-    /// check or all fold away.
+    /// `addRuntimeChecks(Loc, TheLoop, PointerChecks, Exp,
+    /// HoistRuntimeChecks)`: the memory checks of `checks` before `loc`,
+    /// or-ed into one `i1` that is true when some pair of groups may
+    /// overlap; none where there is no check or all fold away.
     pub fn add_runtime_checks(
         &mut self,
         exp: &mut Expander,
