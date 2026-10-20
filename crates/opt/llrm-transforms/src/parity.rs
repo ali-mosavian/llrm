@@ -254,6 +254,9 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
     // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default
     // pipeline, and llrm has neither a profile nor a vectorizer.
+    // l.1400: after `infer-alignment`; LoopLoadElimination at the target's
+    // vector width (no vector registers on llrm's targets).
+    entry("loop-load-elim@1400", Late, "loop-load-elim", Translated, ""),
     partial(
         "simplifycfg@1438",
         Late,
