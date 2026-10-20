@@ -305,6 +305,9 @@ impl Body<'_, '_, '_> {
     ) -> Emit<()> {
         let word = self.b.context.types.int(16);
         let site = self.b.alloca(word, "site");
+        // The pad reads the statement that raised: the handler's own variable.
+        let (frame, frame_type) = handled.frame;
+        self.b.call(frame_type, Value::Constant(frame), &[site], "");
         let statements = numbered(statements, self.function.id);
         let entry = self.b.current().expect("the entry block");
         let pad = self.b.block("landing");
@@ -428,7 +431,7 @@ impl Body<'_, '_, '_> {
             self.blocks.insert(block.id, id);
         }
         self.b.position(entry);
-        self.allocate()?;
+        self.allocate(None)?;
         let word = self.b.context.types.int(16);
         let (err, erl) = (self.b.parameter(0), self.b.parameter(1));
         self.b.store(erl, handler.last_erl, false);

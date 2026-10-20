@@ -8,6 +8,7 @@ declare cc1000 void @llrm.qb.B$CEND() addrspace(1) noreturn nounwind
 declare cc1000 void @llrm.qb.onerror(i1) addrspace(1) nounwind
 declare cc1000 void @llrm.qb.onlocalerror(i1) addrspace(1) nounwind
 declare i32 @llrm.qb.personality(...) addrspace(1)
+declare cc1000 void @llrm.qb.frame(ptr) addrspace(1) nounwind
 "#;
 
 /// Prints A&+1 after registering the handler; the handler, with trapping
@@ -198,4 +199,82 @@ entry:
     assert!(text.contains("ptrtoint ptr addrspace(1) @$QB$LANDING to i16"), "{text}");
     assert!(text.contains("@llrm.qb.B$OEGP(i16 %"), "{text}");
     assert!(text.contains("@llrm.qb.B$OEGP(i16 0)"), "{text}");
+}
+
+/// A function with a handler whose pad reads the variables `cells` hold in the
+/// frame, stored before each call that may raise.
+const CELLS: &str = r#"
+@"G" = global [4 x i8] zeroinitializer
+@"A&" = global [4 x i8] zeroinitializer
+
+define void @main() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
+entry:
+  %a = alloca i32
+  %b = alloca i32
+  call cc1000 addrspace(1) void @llrm.qb.frame(ptr %a)
+  call cc1000 addrspace(1) void @llrm.qb.frame(ptr %b)
+  call cc1000 addrspace(1) void @llrm.qb.onerror(i1 true)
+  store i32 0, ptr %a
+  store i32 0, ptr %b
+  br label %loop
+loop:
+  %x = load i32, ptr %a
+  %y = add i32 %x, 1
+  store i32 %y, ptr %a
+  %z = load i32, ptr %b
+  %w = add i32 %z, %y
+  store i32 %w, ptr %b
+  invoke cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %y) to label %next unwind label %landing
+next:
+  %go = load volatile i32, ptr @"A&"
+  %more = icmp ne i32 %go, 0
+  br i1 %more, label %loop, label %done
+done:
+  call cc1000 addrspace(1) void @llrm.qb.B$CEND()
+  unreachable
+landing:
+  %e = landingpad { ptr, i32 } catch ptr null
+  call cc1000 addrspace(1) void @llrm.qb.onerror(i1 false)
+  %v = load i32, ptr %a
+  %u = load i32, ptr %b
+  %s = add i32 %v, %u
+  store i32 %s, ptr @"G"
+  br label %next
+}
+"#;
+
+/// The module through the optimizer, as `driver::optimized` runs it, then
+/// `prepared`; `captured` says whether the frontend handed the cells over.
+fn optimized(captured: bool) -> String {
+    let source = if captured {
+        CELLS.to_owned()
+    } else {
+        CELLS.lines().filter(|line| !line.contains("@llrm.qb.frame(ptr %")).collect::<Vec<_>>().join("\n")
+    };
+    let module = parsed(&source);
+    let layout = llrm_x86_m16::layout();
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    let mut program = llrm_mir::program::Program::new(vec![module], cpu.target()).expect("a program");
+    let applied =
+        llrm_transforms::pipeline::Applied { options: crate::driver::flags::Level::O2.options(), ..Default::default() };
+    llrm_transforms::pipeline::applied(&mut program, &applied).expect("optimized");
+    prepared(&mut program.modules[0], &layout).expect("prepared");
+    printed(&program.modules[0])
+}
+
+/// The handler reads `%a` and `%b` whenever a call raises, and the runtime
+/// enters it with nothing in a register: the optimizer took the cells for
+/// registers (a phi each round the loop and at the pad) and `prepared` stored
+/// them all back, GORILLA m32 -Os 189,936 bytes where main's is 47,769. The
+/// cells are escaped to the handler (D-EH1, the pin's `llvm.localescape`, as
+/// SEH funclets read their parent's frame): the loads and stores stay, and so
+/// do the allocas.
+#[test]
+fn a_cell_the_pad_reads_stays_in_the_frame() {
+    let text = optimized(true);
+    assert!(!text.contains(" = phi "), "{text}");
+    assert!(text.contains("alloca i32"), "{text}");
+    assert!(!text.contains("call cc 1000 addrspace(1) void @llrm.qb.frame"), "{text}");
+    let held = optimized(false);
+    assert!(held.contains(" = phi "), "premise: without it the cells are promoted:\n{held}");
 }
