@@ -7,6 +7,12 @@
 //! and `getDenseSwitchRangeReductionShift`
 //! ([L7390](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L7390)).
 //!
+//! # How it works
+//! With four or more cases on a legal integer of at most 64 bits, and the
+//! sorted case values not already dense (`isSwitchDense`: 10% of the range
+//! used, 40% at `optsize`), find a base and a shift that make them dense:
+//! base 0 if dense at the optsize threshold, else the smallest case.
+//!
 //! # Example
 //! ```text
 //!   switch i32 %x [ 5, 9, 13, 17 ]    %s = sub i32 %x, 5
@@ -20,6 +26,9 @@
 //! | # | DEVIATE |
 //! |---|---|
 //! | D1 | No branch weights (the pin keeps the switch's own). |
+//!
+//! # Used by
+//! `switchopt::simplified`.
 
 use llrm_mir::context::{Constant, ConstantKind, Context, signed};
 use llrm_mir::edit::Position;

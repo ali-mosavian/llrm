@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchreduce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchreduce.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchreduce.rs sha256:36a5a29dd4152ec0d2f3f47660d3e2bf538bd519f998b1888d98fa4b8e4ff8d3 -->
+<!-- src: crates/opt/llrm-transforms/src/switchreduce.rs sha256:7aa9e15d1e3870a420687e44675c02486b426b90306fe6279606d9941c802d72 -->
 
 # switchreduce
 
@@ -11,6 +11,12 @@ with `isSwitchDense`
 ([L7367](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L7367))
 and `getDenseSwitchRangeReductionShift`
 ([L7390](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L7390)).
+
+## How it works
+With four or more cases on a legal integer of at most 64 bits, and the
+sorted case values not already dense (`isSwitchDense`: 10% of the range
+used, 40% at `optsize`), find a base and a shift that make them dense:
+base 0 if dense at the optsize threshold, else the smallest case.
 
 ## Example
 ```text
@@ -25,3 +31,6 @@ value that did not divide cleanly is large and takes the default.
 | # | DEVIATE |
 |---|---|
 | D1 | No branch weights (the pin keeps the switch's own). |
+
+## Used by
+`switchopt::simplified`.
