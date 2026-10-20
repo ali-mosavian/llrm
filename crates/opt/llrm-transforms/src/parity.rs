@@ -130,7 +130,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "jumpthreading@668",
         Simplify,
         "jump-threading",
-        "criterion: the S1-S3 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; exit: the old threading of decide@675 deleted (vt-constantfolding, after the flip), stage S4 (load PRE, guards, profile) open; on by default, LLRM_NO_JUMPTHREADING turns it off",
+        "criterion: the S1-S4 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; stage S4 is the load PRE (loadpre.rs); guards (J2) and the profile (J3) stay deviations; decide's own threading is deleted; exit: the oracle (difftest.py inputs jumpthreading@668) identical on the d_faces -O2 inputs with J12-J14 closed; on by default, LLRM_NO_JUMPTHREADING turns it off",
     ),
     entry("cvp@669", Simplify, "correlated-propagation", Translated, ""),
     partial(
@@ -184,7 +184,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "indvars@738",
         Simplify,
         "indvars",
-        "SimplifyIndvar, WidenIV, exit values, congruent IVs, canonicalizeExitCondition; optimizeLoopExits and predicateLoopExits once indvars.rs calls exitopt/exitpredicate; LFTR behind LLRM_LFTR (D22); criterion: identical to opt on d_faces -O2 with LLRM_LFTR=1, D22 deleted when the translated LSR lands; exit: congruent/twin_phis (rows pair on #2773 first), rewound/exitsink deleted or DEVIATE-numbered; exitfold and the old widen path are deleted",
+        "SimplifyIndvar, WidenIV, exit values, congruent IVs, canonicalizeExitCondition; optimizeLoopExits and predicateLoopExits once indvars.rs calls exitopt/exitpredicate; LFTR behind LLRM_LFTR (D22); criterion: identical to opt on d_faces -O2 with LLRM_LFTR=1, D22 deleted when the translated LSR lands; exit: exitsink deleted or DEVIATE-numbered; congruent/twin_phis, rewound, exitfold and the old widen path are deleted",
     ),
     entry("loopdeletion@749", Simplify, "loop-deletion", Translated, ""),
     entry("unroll@753", Simplify, "loop-unroll-full", Translated, ""),
@@ -206,7 +206,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "jumpthreading@809",
         Simplify,
         "jump-threading",
-        "criterion: the S1-S3 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; exit: the old threading of decide@809 deleted (vt-constantfolding, after the flip), stage S4 open; on by default, LLRM_NO_JUMPTHREADING turns it off",
+        "criterion: the S1-S4 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; stage S4 is the load PRE (loadpre.rs); guards (J2) and the profile (J3) stay deviations; decide's own threading is deleted; exit: the oracle (difftest.py inputs jumpthreading@809) identical on the d_faces -O2 inputs with J12-J14 closed; on by default, LLRM_NO_JUMPTHREADING turns it off",
     ),
     entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
@@ -242,6 +242,10 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("fold@837", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@837", Simplify, "instcombine", Old, "instcombine-port"),
     entry("constraint-elimination", Simplify, "constraint-elimination", Missing, ""),
+    // Not slots: SimplifyCFG at PassBuilderPipelines.cpp#L873
+    // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
+    // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default
+    // pipeline, and llrm has neither a profile nor a vectorizer.
     partial(
         "simplifycfg@1438",
         Late,
@@ -250,6 +254,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     ),
     entry("float2int@1594", Late, "float2int", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
+    partial(
+        "simplifycfg@1682",
+        Late,
+        "simplifycfg",
+        "translated SimplifyCfg at the default options runs here; untranslated: the switch options (convertSwitchRangeToICmp, convertSwitchToArithmetic, speculateUnpredictables, hoistLoadsStoresWithCondFaulting), SimplifyCondBranchToCondBranch, simplifySwitch; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     partial(
         "simplifycfg@2376",
         Late,
@@ -782,7 +792,7 @@ pub(crate) fn check_phase_with(
 ) -> Result<(), String> {
     let absent: Vec<&str> =
         if level == Level::O1 { ABSENT_AT_O1.iter().chain(off).copied().collect() } else { off.to_vec() };
-    // The translated `loop-rotate` is in the order only with `LLRM_ROTATE`.
+    // The translated `loop-rotate` is in the order unless `LLRM_NO_ROTATE`.
     let registry: Vec<Entry> = REGISTRY
         .iter()
         .map(|one| {

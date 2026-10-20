@@ -130,11 +130,15 @@ fn fold_box_multiply(
                 .map(|(a, ..)| a)
         };
         let product = |v: Operand| if has_one_use(c, v) { binop(&q, v, BinaryOp::Mul) } else { None };
-        let (cross_sum, y_lo, x_lo) = [(lhs, rhs), (rhs, lhs)].into_iter().find_map(|(a, b)| {
-            let cross_sum = shifted(a)?;
-            let (y_lo, x_lo, _) = product(b)?;
-            Some((cross_sum, y_lo, x_lo))
-        })?;
+        let (cross_sum, y_lo, x_lo) = [(lhs, rhs), (rhs, lhs)]
+            .into_iter()
+            .find_map(
+                |(a, b)| {
+                    let cross_sum = shifted(a)?;
+                    let (y_lo, x_lo, _) = product(b)?;
+                    Some((cross_sum, y_lo, x_lo))
+                },
+            )?;
         // XLo = X & HalfMask, YLo = Y & HalfMask.
         let masked = |v: Operand| {
             let (x, m, _) = binop(&q, v, BinaryOp::And)?;

@@ -15,12 +15,14 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(next((ROOT / "crates/target").glob("*/vsgcc/dfaces"))))
+import wrapper  # noqa: E402  the d_faces wrapper and flags run.py builds with
 # Steps that run other passes; their total is the passes' too.
 CONTAINERS = {"pipeline"}
-KEYWORDS = [f"-D{k}=" for k in "far huge near pascal cdecl __far _far __near _near".split()]
 
 
 def parsed(text: str) -> list[dict]:
@@ -50,6 +52,13 @@ def table(passes: list[dict], budget: float) -> str:
     return "\n".join(out)
 
 
+def command(llrm: str, level: str, source: str | None, qcport: Path, work: Path) -> list[str]:
+    """One compile: `source` as given, else QCport's d_faces through the wrapper run.py compiles it with."""
+    if source:
+        return [llrm, "-m32", "-march=i486", f"-{level}", "-o", str(work / "pass-budgets.obj"), source]
+    return wrapper.llrm_command(llrm, level, qcport, wrapper.write_source(qcport / "render/d_faces.c", work / "d_faces_flat.c"), work / "pass-budgets.obj")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("source", nargs="?", help="a C file; by default d_faces of $QCPORT")
@@ -57,15 +66,11 @@ def main() -> None:
     parser.add_argument("--levels", default="O1,O2,Os")
     parser.add_argument("--budget", type=float, default=300.0, help="instructions per IR instruction per run (plan step 4.1)")
     args = parser.parse_args()
-    if args.source:
-        source, extra = args.source, []
-    else:
-        qc = Path(os.environ["QCPORT"]).expanduser()
-        source = str(qc / "render/d_faces.c")
-        extra = KEYWORDS + [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(qc / d))]
+    qc = Path(os.environ.get("QCPORT", "")).expanduser()
+    work = Path(tempfile.mkdtemp(prefix="pass-budgets-"))
     for level in args.levels.split(","):
         done = subprocess.run(
-            [args.llrm, "-m32", "-march=i486", f"-{level}", *extra, "-o", "/tmp/pass-budgets.obj", source],
+            command(args.llrm, level, args.source, qc, work),
             capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "counts,time", "LLRM_TIME_TOP": "2000"},
         )
         if done.returncode:

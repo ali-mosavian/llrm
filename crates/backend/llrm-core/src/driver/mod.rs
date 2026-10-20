@@ -223,6 +223,50 @@ pub fn compiled(
     Ok(out)
 }
 
+/// `module`, read from LLVM IR (clang's front end alone, `-O2 -Xclang
+/// -disable-llvm-passes`), run through the whole pipeline and selected, as
+/// `opt` then `llc` do: its code in `<NAME>_TEXT`, each function linked under
+/// its own name. The target is `options.arch`; the module states its
+/// datalayout, which must be the target's.
+pub fn compiled_module(
+    module: Module,
+    name: &str,
+    options: &Options,
+) -> Result<masm::Module, String> {
+    let layout = options.arch.layout().datalayout;
+    match module.datalayout.as_deref() {
+        Some(stated) if stated == layout => {}
+        Some(stated) => {
+            return Err(format!("the module's datalayout `{stated}` is not {}'s `{layout}`", options.arch.name()));
+        }
+        None => return Err(format!("the module states no datalayout; {}'s is `{layout}`", options.arch.name())),
+    }
+    let cpu = options.cpu()?;
+    let mut program = Program::new(vec![module], cpu.target())?;
+    if llrm_support::debug::verifying() {
+        timed("mir verify frontend", || verified(&program, "the frontend"))?;
+    }
+    optimized(&mut program, options)?;
+    let segments = Segments::of(
+        &options.machine,
+        Regs(options.arch.registers()),
+        crate::backend::target::offset_bytes(&*options.arch),
+    );
+    let assembled = timed("assemble", || {
+        assemble::assembled_by(
+            &program.modules[0],
+            &crate::abi::llvm::LlvmAbi,
+            &format!("{}_TEXT", name.to_uppercase()),
+            ProfileOrName::Profile(cpu),
+            &segments,
+            options.selection,
+            &*options.arch,
+        )
+    })?;
+    stage_files(options, "", &assembled)?;
+    Ok(assembled)
+}
+
 /// What the spill model (`llrm_transforms::spill`) forecasts for each function
 /// the pipeline hands to instruction selection: the `spillmodel` channel, to
 /// set beside the spills the allocator makes (`cost` channel, `executed`).
@@ -377,7 +421,8 @@ pub fn optimized(
             )
     })?;
     timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
-    if options.arch.expands("select") {
+    let layout = options.arch.layout();
+    if layout.expands_some("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
         let pricing = crate::backend::selects::Pricing {
             target: Some(program.target.clone()),
@@ -385,7 +430,9 @@ pub fn optimized(
             tti: &*tti,
         };
         timed("mir selects", || {
-            program.modules.iter_mut().try_for_each(|module| crate::backend::selects::lowered(module, &pricing))
+            program.modules.iter_mut().try_for_each(|module| {
+                crate::backend::selects::lowered(module, &pricing, &|ty| layout.expands_for("select", ty))
+            })
         })?;
     }
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {

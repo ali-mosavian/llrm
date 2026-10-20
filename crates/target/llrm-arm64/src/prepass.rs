@@ -1,0 +1,475 @@
+//! Machine-level redundancy removal before registers are assigned: common
+//! subexpression elimination over the dominator tree (`MachineCSE`) and the
+//! hoisting of loop-invariant definitions to the loop's preheader
+//! (`MachineLICM`), for the values selection makes at each use: constants,
+//! frame and global addresses. Only side-effect-free operations whose result is
+//! a virtual register defined once are touched.
+//!
+//! DEVIATE 3: LLVM runs these on the shared machine IR; this is a small version
+//! over the arm64 selector's operations, standing in until the core machine
+//! passes run on arm64 (docs/architecture/arm64-spike.md).
+
+use std::collections::{HashMap, HashSet};
+
+use crate::mc::inst::*;
+use crate::mc::visit::{Reg, RegRef, Role};
+use crate::mfunc::{MFunc, Op, successors_of};
+
+/// Whether `op` only computes a virtual register from virtual registers and
+/// constants, with no other effect.
+fn pure(op: &Op) -> bool {
+    match op {
+        Op::Imm { .. } | Op::FrameAddress { .. } => true,
+        Op::Copy { .. } => false,
+        Op::I(inst) => {
+            matches!(
+                inst,
+                Inst::MoveWide { op: Wide::Not | Wide::Zero, .. }
+                    | Inst::LogicImm { op: Logic::And | Logic::Orr | Logic::Eor, .. }
+                    | Inst::AddSubImm { op: AddSub { set_flags: false, .. }, .. }
+                    | Inst::AddPageOffset { .. }
+                    | Inst::Adr { .. }
+                    | Inst::FpMoveImm { .. }
+                    | Inst::FpInt { op: FpConvert::Bits { to_fp: true }, .. }
+            ) && !matches!(inst, Inst::AddSubImm { rd, .. } if !rd.is_virtual())
+                // Reading the stack pointer (stacksave, a dynamic alloca's
+                // object) depends on where it is.
+                && !matches!(inst, Inst::AddSubImm { rn, .. } if rn.0 == 31)
+        }
+        _ => false,
+    }
+}
+
+/// The one register `op` defines, if it is virtual.
+fn defined(op: &Op) -> Option<Reg> {
+    let (defs, _) = op.defs_and_uses();
+    match defs.as_slice() {
+        [one] if one.is_virtual() => Some(*one),
+        _ => None,
+    }
+}
+
+/// `op` with its destination register made a fixed one, so that equal
+/// computations compare equal.
+fn keyed(op: &Op) -> String {
+    let mut copy = op.clone();
+    copy.visit(&mut |register, role| {
+        if role == Role::Def {
+            match register {
+                RegRef::Gpr(slot) => *slot = Gpr(0),
+                RegRef::Fpr(slot) => *slot = Vreg(0),
+            }
+        }
+    });
+    format!("{copy:?}")
+}
+
+struct Cfg {
+    successors: Vec<Vec<usize>>,
+    predecessors: Vec<Vec<usize>>,
+    /// Immediate dominators; the entry's is itself.
+    idom: Vec<usize>,
+    /// Reachable blocks in reverse post-order.
+    order: Vec<usize>,
+}
+
+fn cfg(function: &MFunc) -> Cfg {
+    let count = function.blocks.len();
+    let labels: HashMap<&str, usize> =
+        function.blocks.iter().enumerate().map(|(at, one)| (one.label.as_str(), at)).collect();
+    let successors: Vec<Vec<usize>> =
+        function.blocks.iter().enumerate().map(|(at, block)| successors_of(block, at, count, &labels)).collect();
+    let mut predecessors = vec![Vec::new(); count];
+    for (from, targets) in successors.iter().enumerate() {
+        for &to in targets {
+            predecessors[to].push(from);
+        }
+    }
+    // Reverse post-order from the entry.
+    let mut seen = vec![false; count];
+    let mut post = Vec::new();
+    let mut stack = vec![(0usize, 0usize)];
+    seen[0] = true;
+    while let Some((block, next)) = stack.last_mut() {
+        if *next < successors[*block].len() {
+            let successor = successors[*block][*next];
+            *next += 1;
+            if !seen[successor] {
+                seen[successor] = true;
+                stack.push((successor, 0));
+            }
+        } else {
+            post.push(*block);
+            stack.pop();
+        }
+    }
+    post.reverse();
+    let position: HashMap<usize, usize> = post.iter().enumerate().map(|(at, block)| (*block, at)).collect();
+    // Cooper, Harvey and Kennedy's iterative dominators.
+    let mut idom = vec![usize::MAX; count];
+    idom[0] = 0;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &block in post.iter().skip(1) {
+            let mut new = usize::MAX;
+            for &predecessor in &predecessors[block] {
+                if idom[predecessor] == usize::MAX {
+                    continue;
+                }
+                new = if new == usize::MAX {
+                    predecessor
+                } else {
+                    let (mut a, mut b) = (predecessor, new);
+                    while a != b {
+                        while position[&a] > position[&b] {
+                            a = idom[a];
+                        }
+                        while position[&b] > position[&a] {
+                            b = idom[b];
+                        }
+                    }
+                    a
+                };
+            }
+            if new != idom[block] {
+                idom[block] = new;
+                changed = true;
+            }
+        }
+    }
+    Cfg { successors, predecessors, idom, order: post }
+}
+
+fn dominates(
+    cfg: &Cfg,
+    a: usize,
+    mut b: usize,
+) -> bool {
+    loop {
+        if a == b {
+            return true;
+        }
+        if b == 0 || cfg.idom[b] == usize::MAX {
+            return false;
+        }
+        b = cfg.idom[b];
+    }
+}
+
+/// How many definitions each virtual register has.
+fn definitions(function: &MFunc) -> HashMap<Reg, usize> {
+    let mut count: HashMap<Reg, usize> = HashMap::new();
+    for block in &function.blocks {
+        for op in &block.ops {
+            for register in op.defs_and_uses().0 {
+                *count.entry(register).or_default() += 1;
+            }
+        }
+    }
+    count
+}
+
+pub fn run(function: &mut MFunc) {
+    if function.blocks.len() < 2 && function.blocks.iter().all(|block| block.ops.len() < 3) {
+        return;
+    }
+    cse(function);
+    hoist(function);
+}
+
+/// Equal pure computations of a dominating block are used instead of repeated.
+fn cse(function: &mut MFunc) {
+    let cfg = cfg(function);
+    let definitions = definitions(function);
+    // The table, scoped by the dominator tree: a block sees what its
+    // dominators computed.
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); function.blocks.len()];
+    for &block in cfg.order.iter().skip(1) {
+        children[cfg.idom[block]].push(block);
+    }
+    let mut rename: HashMap<Reg, Reg> = HashMap::new();
+    let mut removed: HashSet<(usize, usize)> = HashSet::new();
+    let mut table: HashMap<String, Reg> = HashMap::new();
+    let mut stack: Vec<(usize, usize, Vec<String>)> = vec![(0, 0, Vec::new())];
+    // Depth-first over the tree, undoing a block's entries when it is left.
+    while let Some((block, next, added)) = stack.last_mut() {
+        if *next == 0 {
+            let mut entries = Vec::new();
+            for (index, op) in function.blocks[*block].ops.iter().enumerate() {
+                if !pure(op) {
+                    continue;
+                }
+                let Some(register) = defined(op) else { continue };
+                if definitions.get(&register) != Some(&1) {
+                    continue;
+                }
+                // Uses renamed already by earlier removals.
+                let mut copy = op.clone();
+                copy.visit(&mut |slot, role| {
+                    if role == Role::Use {
+                        let key = slot.key();
+                        if let Some(found) = rename.get(&key) {
+                            match (slot, found) {
+                                (RegRef::Gpr(slot), Reg::Gpr(new)) => *slot = *new,
+                                (RegRef::Fpr(slot), Reg::Fpr(new)) => *slot = *new,
+                                _ => {}
+                            }
+                        }
+                    }
+                });
+                let key = keyed(&copy);
+                match table.get(&key) {
+                    Some(&earlier) => {
+                        rename.insert(register, earlier);
+                        removed.insert((*block, index));
+                    }
+                    None => {
+                        table.insert(key.clone(), register);
+                        entries.push(key);
+                    }
+                }
+            }
+            *added = entries;
+        }
+        if *next < children[*block].len() {
+            let child = children[*block][*next];
+            *next += 1;
+            stack.push((child, 0, Vec::new()));
+        } else {
+            for key in added.iter() {
+                table.remove(key);
+            }
+            stack.pop();
+        }
+    }
+    if removed.is_empty() {
+        return;
+    }
+    for (index, block) in function.blocks.iter_mut().enumerate() {
+        let mut at = 0;
+        block
+            .ops
+            .retain(
+                |_| {
+                    let keep = !removed.contains(&(index, at));
+                    at += 1;
+                    keep
+                },
+            );
+        for op in &mut block.ops {
+            op.visit(&mut |slot, _| {
+                let key = slot.key();
+                if let Some(found) = rename.get(&key) {
+                    match (slot, found) {
+                        (RegRef::Gpr(slot), Reg::Gpr(new)) => *slot = *new,
+                        (RegRef::Fpr(slot), Reg::Fpr(new)) => *slot = *new,
+                        _ => {}
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// Loop-invariant pure definitions move to the end of the loop's preheader.
+fn hoist(function: &mut MFunc) {
+    let cfg = cfg(function);
+    let definitions = definitions(function);
+    // The natural loops: a back edge's header dominates its tail.
+    let mut loops: Vec<(usize, HashSet<usize>)> = Vec::new();
+    for tail in 0..function.blocks.len() {
+        for &header in &cfg.successors[tail] {
+            if cfg.idom[tail] != usize::MAX && dominates(&cfg, header, tail) {
+                let mut body: HashSet<usize> = HashSet::from([header, tail]);
+                let mut work = vec![tail];
+                while let Some(block) = work.pop() {
+                    if block == header {
+                        continue;
+                    }
+                    for &predecessor in &cfg.predecessors[block] {
+                        if body.insert(predecessor) {
+                            work.push(predecessor);
+                        }
+                    }
+                }
+                match loops.iter_mut().find(|(known, _)| *known == header) {
+                    Some((_, existing)) => existing.extend(body),
+                    None => loops.push((header, body)),
+                }
+            }
+        }
+    }
+    // Innermost first, so a value hoisted out of an inner loop can go on out of
+    // the outer one.
+    loops.sort_by_key(|(_, body)| body.len());
+    for (header, body) in loops {
+        let outside: Vec<usize> = cfg.predecessors[header].iter().copied().filter(|one| !body.contains(one)).collect();
+        let [preheader] = outside[..] else { continue };
+        // What the loop defines.
+        let mut inside_defs: HashSet<Reg> = HashSet::new();
+        for &block in &body {
+            for op in &function.blocks[block].ops {
+                inside_defs.extend(op.defs_and_uses().0);
+            }
+        }
+        let mut hoisted: Vec<Op> = Vec::new();
+        let mut order: Vec<usize> = body.iter().copied().collect();
+        order.sort_by_key(|block| cfg.order.iter().position(|one| one == block));
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &block in &order {
+                let ops = std::mem::take(&mut function.blocks[block].ops);
+                let mut kept = Vec::with_capacity(ops.len());
+                for op in ops {
+                    let invariant = pure(&op)
+                        && defined(&op).is_some_and(|register| definitions.get(&register) == Some(&1))
+                        && op
+                            .defs_and_uses()
+                            .1
+                            .iter()
+                            .all(|used| !inside_defs.contains(used) || !used.is_virtual() && false)
+                        && op.defs_and_uses().1.iter().all(|used| used.is_virtual());
+                    if invariant {
+                        inside_defs.remove(&defined(&op).expect("a definition"));
+                        hoisted.push(op);
+                        changed = true;
+                    } else {
+                        kept.push(op);
+                    }
+                }
+                function.blocks[block].ops = kept;
+            }
+        }
+        if hoisted.is_empty() {
+            continue;
+        }
+        // Before the preheader's branches.
+        let ops = &mut function.blocks[preheader].ops;
+        let at = ops
+            .iter()
+            .rposition(|op| {
+                !matches!(
+                    op,
+                    Op::I(
+                        Inst::Branch { link: false, .. }
+                            | Inst::BranchCond { .. }
+                            | Inst::CompareBranch { .. }
+                            | Inst::TestBranch { .. }
+                    )
+                )
+            })
+            .map_or(0, |last| last + 1);
+        for (offset, op) in hoisted.into_iter().enumerate() {
+            ops.insert(at + offset, op);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mfunc::{MBlock, branch_to};
+
+    fn movz(
+        rd: u32,
+        value: u16,
+    ) -> Op {
+        Op::I(Inst::MoveWide { op: Wide::Zero, width: Width::X, rd: Gpr(rd), imm16: value, lsl: 0 })
+    }
+
+    fn add(
+        rd: u32,
+        rn: u32,
+        rm: u32,
+    ) -> Op {
+        Op::I(Inst::AddSubShifted {
+            op: AddSub { subtract: false, set_flags: false },
+            width: Width::X,
+            rd: Gpr(rd),
+            rn: Gpr(rn),
+            rm: Gpr(rm),
+            shift: Shift::Lsl,
+            amount: 0,
+        })
+    }
+
+    /// entry -> loop -> loop | exit, where the loop makes the constant 5000 and
+    /// the entry makes it too.
+    fn function() -> MFunc {
+        let mut function = MFunc::new("f");
+        let (a, b, c, d) = (64, 65, 66, 67);
+        function.next_register = 70;
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(a, 5000), movz(b, 0), branch_to("loop")] },
+            MBlock {
+                label: "loop".into(),
+                ops: vec![
+                    movz(c, 5000),
+                    add(d, b, c),
+                    Op::I(Inst::CompareBranch {
+                        nonzero: true,
+                        width: Width::X,
+                        rt: Gpr(d),
+                        target: Target::Label("loop".into()),
+                    }),
+                    branch_to("exit"),
+                ],
+            },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![] }] },
+        ];
+        function
+    }
+
+    /// The loop made 5000 again on each trip although the entry had it in a
+    /// register: `executed` was 1.4x of `llc` on loops of this shape.
+    #[test]
+    fn a_constant_the_loop_remakes_is_the_entrys() {
+        let mut function = function();
+        run(&mut function);
+        let movzs = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!((movzs(0), movzs(1)), (2, 0), "{function:#?}");
+    }
+
+    /// `sp + 0` before a dynamic allocation and after it are different values:
+    /// a `stacksave` and the object were made one (the array read the saved
+    /// stack pointer, and a C variable-length array's loop printed
+    /// garbage).
+    #[test]
+    fn two_reads_of_the_stack_pointer_are_not_one_value() {
+        let read = |rd: u32| {
+            Op::I(Inst::AddSubImm {
+                op: AddSub { subtract: false, set_flags: false },
+                width: Width::X,
+                rd: Gpr(rd),
+                rn: Gpr::R31,
+                imm12: 0,
+                shift12: false,
+            })
+        };
+        let mut function = function();
+        function.blocks[0].ops = vec![read(64), movz(65, 1), read(66), branch_to("loop")];
+        run(&mut function);
+        let reads = function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::AddSubImm { .. }))).count();
+        assert_eq!(reads, 2, "{function:#?}");
+    }
+
+    /// A constant only the loop makes goes to the preheader.
+    #[test]
+    fn a_constant_only_the_loop_makes_is_hoisted() {
+        let mut function = function();
+        function.blocks[0].ops.remove(0);
+        run(&mut function);
+        let count = |block: usize| {
+            function.blocks[block]
+                .ops
+                .iter()
+                .filter(|op| matches!(op, Op::I(Inst::MoveWide { imm16: 5000, .. })))
+                .count()
+        };
+        assert_eq!((count(0), count(1)), (1, 0), "{function:#?}");
+    }
+}

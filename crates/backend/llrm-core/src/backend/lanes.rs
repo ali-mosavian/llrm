@@ -1,12 +1,15 @@
 //! A set of register and flag lanes, as a 128-bit mask.
 //!
 //! # How it works
-//! A lane is a byte of a general register root (4 each, 7 roots), a byte of a
-//! segment register (2 each, 6 segments), or a flag bit against
-//! `RegId::None` (32): 72 in all. The table sorts the lanes in `(RegId, u32)`
-//! order, so flag bit `i` is mask bit `i`, and iteration visits lanes in the
-//! order a `BTreeSet<Lane>` would. Each register records the mask bit of its
-//! byte 0 and its byte count, so a lane's bit is a table lookup.
+//! A lane is a byte of a general register root (4 each, 7 roots of a 32-bit
+//! target), a byte of a segment register (2 each, 6 segments), or a flag bit
+//! against `RegId::None` (32). Long mode adds 8 roots and a root's upper four
+//! bytes, which no view splits, are one lane: 5 lanes for each of 15 roots, 119
+//! lanes in all, which fit the mask a 32-bit target has always had. The table
+//! sorts the lanes in `(RegId, u32)` order, so flag bit `i` is mask bit `i`,
+//! and iteration visits lanes in the order a `BTreeSet<Lane>` would. Each
+//! register records the mask bit of its byte 0 and its byte count, so a lane's
+//! bit is a table lookup.
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
@@ -46,22 +49,29 @@ const REGISTERS: usize = 256;
 struct Table {
     // Every lane, in bit order.
     lanes: Vec<Lane>,
-    // Per register, the bit of its byte 0 and how many bytes it has.
+    // Per register, the bit of its byte 0, how many lanes it has and how many
+    // bytes (a root's upper four share one lane).
     first: [u8; REGISTERS],
     count: [u8; REGISTERS],
+    bytes: [u8; REGISTERS],
 }
+
+/// The bytes a root has: the lanes below `UPPER` are its own, and
+/// `UPPER..BYTES` are one.
+const BYTES: u32 = 8;
+const UPPER: u32 = 4;
 
 static TABLE: LazyLock<Table> = LazyLock::new(|| {
     let mut lanes: Vec<Lane> = (0..32).map(|bit| (RegId::None, bit)).collect();
-    for root in llrm_x86::registers::ROOTS {
-        lanes.extend((0..4).map(|byte| (root, byte)));
+    for root in llrm_x86::registers::ROOTS.into_iter().chain(llrm_x86::registers::ROOTS64) {
+        lanes.extend((0..=UPPER).map(|byte| (root, byte)));
     }
     for segment in llrm_x86::registers::SEGMENTS {
         lanes.extend((0..2).map(|byte| (segment, byte)));
     }
     lanes.sort();
     assert!(lanes.len() <= 128 && (0..32).all(|bit| lanes[bit as usize] == (RegId::None, bit)));
-    let (mut first, mut count) = ([0_u8; REGISTERS], [0_u8; REGISTERS]);
+    let (mut first, mut count, mut bytes) = ([0_u8; REGISTERS], [0_u8; REGISTERS], [0_u8; REGISTERS]);
     for (bit, (register, _)) in lanes.iter().enumerate() {
         let slot = (*register).index();
         if count[slot] == 0 {
@@ -69,13 +79,23 @@ static TABLE: LazyLock<Table> = LazyLock::new(|| {
         }
         count[slot] += 1;
     }
-    Table { lanes, first, count }
+    for (slot, lanes) in count.iter().enumerate() {
+        bytes[slot] = if *lanes == 0 {
+            0
+        } else if u32::from(*lanes) == UPPER + 1 {
+            BYTES as u8
+        } else {
+            *lanes
+        };
+    }
+    Table { lanes, first, count, bytes }
 });
 
 fn bit(lane: &Lane) -> Option<u32> {
     let table = &*TABLE;
     let slot = lane.0.index();
-    (slot < REGISTERS && lane.1 < u32::from(table.count[slot])).then(|| u32::from(table.first[slot]) + lane.1)
+    (slot < REGISTERS && lane.1 < u32::from(table.bytes[slot]))
+        .then(|| u32::from(table.first[slot]) + lane.1.min(u32::from(table.count[slot]) - 1))
 }
 
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
@@ -327,6 +347,18 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+
+    /// A root's upper four bytes are one lane (long mode's quadword), so a
+    /// quadword's lanes fit the mask: writing `rax` writes the same set as
+    /// its dword and the upper four bytes together.
+    #[test]
+    fn a_roots_upper_four_bytes_are_one_lane() {
+        let upper = Lanes::from([(RegId::EAX, 4)]);
+        assert_eq!(Lanes::from([(RegId::EAX, 7), (RegId::EAX, 5)]), upper);
+        assert!(!Lanes::from([(RegId::EAX, 3)]).contains(&(RegId::EAX, 4)));
+        assert!(std::panic::catch_unwind(|| Lanes::from([(RegId::EAX, 8)])).is_err(), "a ninth byte is no lane");
+        assert!(TABLE.lanes.len() <= 128);
+    }
 
     #[test]
     fn test_lanes_iterate_and_compare_as_a_btreeset_does() {

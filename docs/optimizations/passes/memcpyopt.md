@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/memcpyopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/memcpyopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:c8be581dfdd4667ef25ea98a2911377574c5473efa2845ca719f2134174bd9b1 -->
+<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:4a2d13b48a038274113de322bf8c6b6984ce2b3bfaec92a092a11bba92369a20 -->
 
 # memcpyopt
 
@@ -25,6 +25,8 @@ destination walks up to decides what it can become:
 - a call that fills a fresh alloca, copied to another place, fills that
   place instead and the copy is gone (`performCallSlotOptzn`, from a memcpy
   or a load and store of the alloca);
+- a copy of a whole stack slot to another that never conflict with it makes
+  the two one slot (`performStackMoveOptzn`);
 - a memmove whose ranges cannot meet is a memcpy (`processMemMove`);
 - an aggregate loaded and stored right after is a memcpy, or a memmove where
   the store may write what the load reads (`processStoreOfLoad`), the store
@@ -48,8 +50,7 @@ A copy of a copy reads the first source:
    false.
 3. No debug-info assignment IDs (`mergeDIAssignID`), no `combineAAMetadata`
    (the formed calls carry no `!tbaa`, as in `loopidiom`).
-4. Done later (stages): `performStackMoveOptzn`, `processByValArgument` and
-   `processImmutArgument`.
+4. Done later (stages): `processByValArgument` and `processImmutArgument`.
 5. MIR holds no constant expression in code: where the builder folds
    `getelementptr (i8, @g, 16)` the pass makes the instruction. A forced
    inline copy (`llvm.memcpy.inline`) is not forwarded, as the builder's
