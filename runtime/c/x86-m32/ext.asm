@@ -11,7 +11,7 @@ extrn LL$WRITE_FILE:near
 extrn LL$EXIT:near
 
 .data
-digits  db 12 dup (?)
+digits  db 13 dup (?)
 inhandle dd 0FFFFFFFFh
 inname  db 'DICKENS', 0
 stkmsg  db 'Stack Overflow!', 13, 10
@@ -37,7 +37,7 @@ report_ proc
     push ecx
     push edx
     push edi
-    mov edi, offset digits + 12
+    mov edi, offset digits + 13
     mov byte ptr [edi-1], 10
     mov byte ptr [edi-2], 13
     sub edi, 2
@@ -61,7 +61,7 @@ more:
     dec edi
     mov byte ptr [edi], '-'
 unsigned:
-    mov ecx, offset digits + 12
+    mov ecx, offset digits + 13
     sub ecx, edi
     push ecx
     push edi

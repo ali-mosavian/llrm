@@ -536,3 +536,67 @@ end:
         &[&[0], &[1], &[2], &[3], &[4], &[5], &[6], &[7], &[8], &[9], &[10]],
     );
 }
+
+/// `check` on a 16-bit target, where the table index is a `trunc`.
+fn check16(
+    text: &str,
+    expected: &str,
+    inputs: &[&[i128]],
+) {
+    let mut module = parsed(text);
+    let before = results(&module, inputs);
+    let outer = Outer::of(&module, Some(std::rc::Rc::new(llrm_x86_m16::Dos::default())));
+    let layout = DataLayout::parse("e-p:16:16-i32:16-n8:16:32").expect("a layout");
+    let tti = X86::of_cpu("i486").expect("a cpu");
+    let spec = Speculation { tti: &tti, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    simplified_with(&Options::L1438, context, &spec, &mut declared, function);
+    declared.place(&mut module).expect("the declarations are placed");
+    assert_eq!(printed(&module), expected);
+    assert_eq!(results(&module, inputs), before);
+}
+
+/// bench/switch.c at m16 -Os grew 4 bytes: the table load, behind its range
+/// check, ran before it as a `select` (the target's no-trap rule), and the
+/// select lowered with extra copies. The pin keeps the load behind the check.
+#[test]
+fn test_the_table_load_stays_behind_its_range_check() {
+    let cases: Vec<(i128, i128)> =
+        (0..12).map(|at| (at, [3, 14, 15, 92, 65, 35, 89, 79, 32, 38, 46, 26][at as usize])).collect();
+    let mut text = String::from("define i32 @f(i32 %x) {\nb0:\n  %m = srem i32 %x, 14\n  switch i32 %m, label %d [\n");
+    for (at, (case, _)) in cases.iter().enumerate() {
+        text += &format!("    i32 {case}, label %c{at}\n");
+    }
+    text += "  ]\n\n";
+    for at in 0..cases.len() {
+        text += &format!("c{at}:\n  br label %end\n\n");
+    }
+    text += "d:\n  br label %end\n\nend:\n  %p = phi i32 ";
+    let arms: Vec<String> = cases.iter().enumerate().map(|(at, (_, v))| format!("[ {v}, %c{at} ]")).collect();
+    text += &format!("{}, [ 1, %d ]\n  ret i32 %p\n}}\n", arms.join(", "));
+    check16(
+        &text,
+        "@switch.table.0 = private constant [12 x i8] [i8 3, i8 14, i8 15, i8 92, i8 65, i8 35, i8 89, i8 79, i8 32, i8 38, i8 46, i8 26]
+
+define i32 @f(i32 %x) {
+b0:
+  %m = srem i32 %x, 14
+  %0 = icmp ult i32 %m, 12
+  br i1 %0, label %switch.lookup, label %end
+
+switch.lookup:
+  %1 = trunc i32 %m to i16
+  %switch.gep = getelementptr inbounds [12 x i8], ptr @switch.table.0, i16 0, i16 %1
+  %switch.load = load i8, ptr %switch.gep
+  %switch.ext = zext i8 %switch.load to i32
+  br label %end
+
+end:
+  %p = phi i32 [ %switch.ext, %switch.lookup ], [ 1, %b0 ]
+  ret i32 %p
+}
+",
+        &[&[0], &[1], &[13], &[14], &[-1], &[25]],
+    );
+}
