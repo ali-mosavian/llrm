@@ -887,7 +887,11 @@ impl Placer {
                 }
                 let freq = self.freq[block] * self.chance[block][place];
                 // LLVM never raises `BestExitLoopDepth` above 0 (D8).
-                if exiting.is_none() || depth[to] > 0 || above(freq, best_freq) || (block + 1 == to && at_least(freq, best_freq)) {
+                if exiting.is_none()
+                    || depth[to] > 0
+                    || above(freq, best_freq)
+                    || (block + 1 == to && at_least(freq, best_freq))
+                {
                     best_freq = freq;
                     exiting = Some(block);
                 }

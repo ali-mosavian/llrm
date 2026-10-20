@@ -278,6 +278,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("phiconst@2", Backend, "none (shared phi constants)", Old, ""),
     entry("ssaspill@3", Backend, "none (spiller route)", Old, ""),
     partial(
+        "machinecse@4",
+        Backend,
+        "machine-cse",
+        "criterion: a repeated pure computation before phi elimination is made once, rows identical or better and the post-RA machinecse step deletable; exit: PerformSimplePRE and the invariant-load candidate",
+    ),
+    partial(
         "machinesink@4",
         Backend,
         "machine-sink",

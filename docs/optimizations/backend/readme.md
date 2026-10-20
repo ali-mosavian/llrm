@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 105 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 106 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -80,6 +80,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 105 documented
 | pointers | Advances a packed huge pointer by a displacement as arithmetic on its 32-bit form. | Nothing outside the file's own tests: a grep finds no caller. Isel states | [pointers](pointers.md) |
 | postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [postings](postings.md) |
 | postrasink | Moves a register copy, or a spill store, into the one successor that needs it. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `spillforward`: a reload | [postrasink](postrasink.md) |
+| precse | The same pure computation made twice, made once: `MachineCSE` before PHI elimination, where a value has one definition. | A machine phase before `machinesink` (`flow::machine_with`), at every -O | [precse](precse.md) |
 | pressuresink | Moves a load down to just before its one reader when that raises the pressure of no register class and lowers it for some. | A machine phase after `phielim` and before `floatfold` | [pressuresink](pressuresink.md) |
 | prologue | Reserves the stack the spiller asked for (`sub sp, N`) and gives it back (`add sp, N`) at every exit. | A machine phase after `parcopy` and before `peephole`, in every machine | [prologue](prologue.md) |
 | regalloc_input | Test support: the machine-phase list and the LIR a fixture has reached just before a chosen phase. | Tests of [`crate::backend::allocate`](allocate.md), [`crate::backend::ssaspill`](ssaspill.md), | [regalloc_input](regalloc_input.md) |

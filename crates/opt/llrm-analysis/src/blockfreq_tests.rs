@@ -1,9 +1,7 @@
 use super::*;
 
-/// With `branch_weights` on every branch, `branchprob` and LLVM's
-/// `BranchProbabilityInfo` read the same odds, so the frequencies are LLVM's to
-/// the integer: `opt -passes='print<block-freq>'` on `blockfreq_golden.ll`
-/// at d1106deb71cc.
+/// The frequencies are LLVM's to the integer: `opt -passes='print<block-freq>'`
+/// on `blockfreq_golden.ll` at d1106deb71cc.
 #[test]
 fn test_frequencies_are_llvms_where_branch_weights_fix_the_odds() {
     let text = include_str!("blockfreq_golden.ll");
@@ -32,19 +30,17 @@ fn test_frequencies_are_llvms_where_branch_weights_fix_the_odds() {
     for (name, blocks) in llvm {
         let (_, _, function) =
             module.functions().find(|(_, global, _)| global.name.as_deref() == Some(*name)).expect("the function");
-        let odds = branchprob::estimated(
-            &module.context,
-            &module.metadata,
-            &module.globals,
+        let layout = llrm_mir::datalayout::DataLayout::default();
+        let bpi = crate::bpi::BranchProbabilityInfo::of(
+            crate::bpi::Module {
+                context: &module.context,
+                declarations: &module.globals,
+                metadata: &module.metadata,
+                layout: &layout,
+            },
             function,
-            &Shape::of(function),
-            &Default::default(),
         );
-        assert!(
-            odds.by.values().all(|by| *by == branchprob::Heuristic::Declared),
-            "premise: the weights decide {name}"
-        );
-        let bfi = BlockFrequencies::of(function, &odds);
+        let bfi = BlockFrequencies::of_bpi(function, &bpi);
         for (block, want) in *blocks {
             let id = *function
                 .layout()
