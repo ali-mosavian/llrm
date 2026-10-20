@@ -248,12 +248,12 @@ fn window(n: usize) -> String {
 
 /// The reads a constant apart share one group, and the grouping is linear in
 /// them: four times the reads cost about four times, not sixteen (a slope test
-/// at 1x and 4x, the least of three runs of each).
+/// at 1x and 4x, the least of five runs of each).
 #[test]
 fn the_time_grows_with_the_reads_not_with_their_square() {
     let least = |n: usize| {
         let text = window(n);
-        (0..3)
+        (0..5)
             .map(|_| {
                 let start = std::time::Instant::now();
                 let (checks, _) = analysed(&text, &[]);
@@ -262,6 +262,6 @@ fn the_time_grows_with_the_reads_not_with_their_square() {
             })
             .fold(f64::MAX, f64::min)
     };
-    let (small, large) = (least(40), least(160));
-    assert!(large < small * 6.0, "40 reads {small:.4} s, 160 reads {large:.4} s: a ratio of {:.1}", large / small);
+    let (small, large) = (least(100), least(400));
+    assert!(large < small * 6.0, "100 reads {small:.4} s, 400 reads {large:.4} s: a ratio of {:.1}", large / small);
 }
