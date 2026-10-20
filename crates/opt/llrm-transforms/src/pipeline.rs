@@ -199,8 +199,8 @@ pub struct Options {
     pub loopidioms: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
-    /// `-floop-interchange`, -O3 (gcc's `gimple-loop-interchange.cc`); -Omax
-    /// too. LLVM's `LoopInterchange` is off in its pipelines.
+    /// `-floop-interchange`, -O3 (gcc's flag; LLVM's `LoopInterchange.cpp`
+    /// does it); -Omax too. LLVM's pipelines have it off.
     pub interchange: bool,
     /// The passes run in LLVM's order, once each (`Fixed::linear`:
     /// [`llvm_order`]), not in the rounds; on by default, `LLRM_NO_LLVM_ORDER`
@@ -1245,7 +1245,7 @@ impl Fixed {
             passes,
             last,
             unswitch,
-            interchange: (applied.options.interchange && only.is_none()).then_some(loopinterchange::Interchange),
+            interchange: (applied.options.interchange && only.is_none()).then(loopinterchange::Interchange::default),
             only: only.is_some(),
             rounds: applied.options.rounds,
             dump: applied.dump.clone(),

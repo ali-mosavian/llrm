@@ -1,0 +1,87 @@
+== -loop-interchange-profitabilities=ignore
+@missed_outer_prefix_subnest
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v32, %B22 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v30, %B21 ], [ 0, %B1 ]
+  %v2 = mul nuw nsw i64 %v0, 8
+  %v3 = add nuw nsw i64 %v2, %v1
+  %v4 = getelementptr i8, ptr %A, i64 %v3
+  store i8 0, ptr %v4
+  br label %B3
+B3:
+  %v5 = phi i64 [ %v28, %B20 ], [ 0, %B2 ]
+  br label %B4
+B4:
+  br label %B5
+B5:
+  %v6 = phi i64 [ %v15, %B11 ], [ 0, %B4 ]
+  br label %B6
+B6:
+  br label %B7
+B7:
+  %v7 = phi i64 [ %v13, %B10 ], [ 0, %B6 ]
+  br label %B8
+B8:
+  %v8 = mul nuw nsw i64 %v6, 8
+  %v9 = add nuw nsw i64 %v8, %v7
+  %v10 = getelementptr i8, ptr %Left, i64 %v9
+  store i8 0, ptr %v10
+  br label %B9
+B9:
+  %v11 = add nuw nsw i64 %v6, 1
+  %v12 = icmp eq i64 %v11, 8
+  br label %B10
+B10:
+  %v13 = add nuw nsw i64 %v7, 1
+  %v14 = icmp eq i64 %v13, 8
+  br i1 %v14, label %B11, label %B7
+B11:
+  %v15 = add nuw nsw i64 %v6, 1
+  %v16 = icmp eq i64 %v15, 8
+  br i1 %v16, label %B12, label %B5
+B12:
+  br label %B13
+B13:
+  %v17 = phi i64 [ %v26, %B19 ], [ 0, %B12 ]
+  br label %B14
+B14:
+  br label %B15
+B15:
+  %v18 = phi i64 [ %v24, %B18 ], [ 0, %B14 ]
+  br label %B16
+B16:
+  %v19 = mul nuw nsw i64 %v17, 8
+  %v20 = add nuw nsw i64 %v19, %v18
+  %v21 = getelementptr i8, ptr %Right, i64 %v20
+  store i8 0, ptr %v21
+  br label %B17
+B17:
+  %v22 = add nuw nsw i64 %v17, 1
+  %v23 = icmp eq i64 %v22, 8
+  br label %B18
+B18:
+  %v24 = add nuw nsw i64 %v18, 1
+  %v25 = icmp eq i64 %v24, 8
+  br i1 %v25, label %B19, label %B15
+B19:
+  %v26 = add nuw nsw i64 %v17, 1
+  %v27 = icmp eq i64 %v26, 8
+  br i1 %v27, label %B20, label %B13
+B20:
+  %v28 = add nuw nsw i64 %v5, 1
+  %v29 = icmp eq i64 %v28, 8
+  br i1 %v29, label %B21, label %B3
+B21:
+  %v30 = add nuw nsw i64 %v1, 1
+  %v31 = icmp eq i64 %v30, 8
+  br i1 %v31, label %B22, label %B2
+B22:
+  %v32 = add nuw nsw i64 %v0, 1
+  %v33 = icmp eq i64 %v32, 8
+  br i1 %v33, label %B23, label %B1
+B23:
+  ret void

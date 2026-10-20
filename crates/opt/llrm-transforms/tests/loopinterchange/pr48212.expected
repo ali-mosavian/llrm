@@ -1,0 +1,41 @@
+== 
+@pr48212
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i32 [ %v15, %B9 ], [ 0, %B1 ]
+  %v1 = phi i32 [ %v14, %B9 ], [ undef, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v2 = phi i32 [ %v12, %B8 ], [ 0, %B3 ]
+  %v3 = phi i32 [ %v1, %B3 ], [ %v9, %B8 ]
+  br label %B5
+B5:
+  %v4 = sext i32 %v0 to i64
+  %v5 = getelementptr inbounds [5 x i32], ptr %filter, i64 %v4
+  %v6 = sext i32 %v2 to i64
+  %v7 = getelementptr inbounds [5 x i32], ptr %v5, i64 0, i64 %v6
+  %v8 = load i32, ptr %v7
+  %v9 = add i32 %v3, %v8
+  br label %B6
+B6:
+  %v10 = add nsw i32 %v0, 1
+  %v11 = icmp slt i32 %v10, 3
+  br label %B7
+B7:
+  br label %B8
+B8:
+  %v12 = add nsw i32 %v2, 1
+  %v13 = icmp slt i32 %v12, 5
+  br i1 %v13, label %B4, label %B9
+B9:
+  %v14 = phi i32 [ %v9, %B8 ]
+  %v15 = add nsw i32 %v0, 1
+  %v16 = icmp slt i32 %v15, 3
+  br i1 %v16, label %B2, label %B10
+B10:
+  ret void
