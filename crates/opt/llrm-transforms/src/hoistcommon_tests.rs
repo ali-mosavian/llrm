@@ -1,7 +1,7 @@
 //! Each body is MIR text run by llrm-mir's interpreter before and after.
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::passes::Outer;
+use llrm_mir::passes::{Declared, Outer};
 
 use crate::simplifycfg::{Options, simplified_with};
 use crate::testing::{parsed, printed, results};
@@ -19,8 +19,9 @@ fn check(
     let outer = Outer::of(&module, None);
     let layout = DataLayout::default();
     let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    assert_eq!(simplified_with(options, context, &spec, function), text != expected, "{text}");
+    assert_eq!(simplified_with(options, context, &spec, &mut declared, function), text != expected, "{text}");
     assert_eq!(printed(&module), expected);
     assert_eq!(results(&module, inputs), before);
 }
@@ -197,7 +198,8 @@ b3:
     let outer = Outer::of(&module, None);
     let layout = DataLayout::default();
     let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    assert!(!simplified_with(&branching(true), context, &spec, function));
+    assert!(!simplified_with(&branching(true), context, &spec, &mut declared, function));
     assert_eq!(printed(&module), text);
 }
