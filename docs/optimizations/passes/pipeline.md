@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:6fe3621bce60bcc017e517c2f96cc3307ee6072926d4f2b98d8243c90fbdbc37 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:a8132f86c3b932ecdd5aa0e30dba8665351d976933b3d80d7d28c4e29c9c07bb -->
 
 # pipeline
 
@@ -35,7 +35,6 @@ flowchart TB
     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     ver["<b>version (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     swap["<b>interchange (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
-    jam["<b>unroll-jam (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
     mrg["<b>merge (once)</b>"]:::mid
   end
   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
@@ -49,8 +48,7 @@ flowchart TB
   unsw --> dist
   dist --> ver
   ver --> swap
-  swap --> jam
-  jam --> mrg
+  swap --> mrg
   mrg --> c
   c -.->|"a changed body goes<br/>back through B"| sroa
   c --> d
@@ -77,7 +75,7 @@ dominators.
 
 Peeling repeats while it leaves fewer loops, so an outer loop whose inner
 loop was peeled is peeled in turn. The passes that make a candidate
-re-optimize it with a `Fixed` of its own that has unswitching and jamming
+re-optimize it with a `Fixed` of its own that has unswitching
 off.
 
 In E, `lsr` is after the interprocedural step because nothing after it may
@@ -119,7 +117,7 @@ LLVM counterpart of each limit, is
 | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
 | `ipa_ranges` | argument ranges in the interprocedural step |
-| `unswitch`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
+| `unswitch`, `interchange` | the passes of that name (off by default; on at -O3 and -Omax) |
 | `distribute` | `distribute` (off by default; on at -O3 and -Omax) |
 | `version` | `version` (off by default; on at -O3 and -Omax) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |

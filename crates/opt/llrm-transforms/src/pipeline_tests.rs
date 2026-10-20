@@ -1142,81 +1142,6 @@ fn a_round_follows_an_unroll_that_changed_the_body_past_the_budget() {
     assert_eq!(rounds(2), 3, "a third round runs after the unroll of the second, none after the third");
 }
 
-/// Sixty sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them
-/// (six sweeps are completely unrolled by `LoopFullUnroll`, which LLVM's order
-/// runs before the jam, and leave no nest to jam),
-/// through the whole pipeline at -O3 with and without unroll-and-jam, and at
-/// -O2: the jam changes the code of -O3 alone, and the nest computes what it
-/// did. Before the pass was in the pipeline the first two were the same text.
-#[test]
-fn only_o3_jams_a_nest_that_sweeps_the_same_cells() {
-    let cells = |base: i32| (0..100).map(|at| format!("i16 {}", base + at % 7)).collect::<Vec<_>>().join(", ");
-    let text = format!(
-        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
-@p = global [100 x i16] [{}]
-@v = global [100 x i16] [{}]
-
-define i16 @main() {{
-b0:
-  br label %outer
-
-outer:
-  %t = phi i16 [ 0, %b0 ], [ %tn, %outerlatch ]
-  %go = icmp slt i16 %t, 60
-  br i1 %go, label %pre, label %done
-
-pre:
-  br label %inner
-
-inner:
-  %j = phi i16 [ 0, %pre ], [ %jn, %body ]
-  %more = icmp slt i16 %j, 100
-  br i1 %more, label %body, label %outerlatch
-
-body:
-  %o = mul i16 %j, 2
-  %pp = getelementptr i8, ptr @p, i16 %o
-  %pv = getelementptr i8, ptr @v, i16 %o
-  %a = load i16, ptr %pp
-  %b = load i16, ptr %pv
-  %s = add i16 %a, %b
-  store i16 %s, ptr %pp
-  %jn = add i16 %j, 1
-  br label %inner
-
-outerlatch:
-  %tn = add i16 %t, 1
-  br label %outer
-
-done:
-  %q = getelementptr i8, ptr @p, i16 40
-  %w = load i16, ptr %q
-  ret i16 %w
-}}
-",
-        cells(1),
-        cells(3)
-    );
-    let through = |options: pipeline::Options| {
-        let mut module = llrm_analysis::testing::parsed(&text);
-        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
-            pipeline::applied(program, &Applied { options, ..Applied::default() })
-        })
-        .and_then(|done| done)
-        .unwrap();
-        (llrm_mir::print::module(&module), interpret::run(&module, "main", Vec::new(), FUEL))
-    };
-    let before = interpret::run(&llrm_analysis::testing::parsed(&text), "main", Vec::new(), FUEL);
-    let (jammed, result) = through(pipeline::Options::speed());
-    let (plain, plain_result) = through(pipeline::Options { unroll_jam: false, ..pipeline::Options::speed() });
-    assert_eq!((&result, &plain_result), (&before, &before), "{jammed}");
-    assert_ne!(jammed, plain);
-    assert_eq!(
-        through(pipeline::Options::default()).0,
-        through(pipeline::Options { unroll_jam: false, ..Default::default() }).0
-    );
-}
-
 /// Reads what the module says each function does to memory, and finds nothing
 /// to do; counts how often it was asked.
 struct ReadsCallees {
@@ -1456,7 +1381,7 @@ fn test_sroa_and_mem2reg_are_on_by_default_and_the_registry_calls_their_slots_tr
                 level,
                 applied.options.sroa,
                 applied.options.mem2reg,
-                applied.options.rotating(),
+                applied.options.rotate_slot,
                 &[],
                 &[],
             );
@@ -2222,17 +2147,16 @@ fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
     assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
 }
 
-/// LoopRotate is on, as in the pin (the `LLRM_NO_ROTATE` opt-out ran a path
-/// the pin has not: idioms.bas failed six with it), and off where
-/// unroll-and-jam runs, whose nests are the header-tested form (RJ1).
+/// The rotate slot (the pin's LPM1 `loop-rotate`, L728) used to be left out
+/// where unroll-and-jam ran, so -O3 and -Omax ran no loop-rotate that the pin
+/// runs. It is in the order at every level.
 #[test]
-fn test_the_rotate_slot_is_on_and_off_where_unroll_jam_is() {
-    let on = pipeline::Options { rotate_slot: true, ..pipeline::Options::default() };
-    assert!(on.rotating());
-    assert!(pipeline::Options::default().rotating());
-    assert!(!pipeline::Options { unroll_jam: true, ..on }.rotating());
-    assert!(!pipeline::Options::speed().rotating());
-    assert!(!pipeline::Options::aggressive().rotating());
+fn test_the_rotate_slot_runs_at_every_level() {
+    for options in [pipeline::Options::default(), pipeline::Options::speed(), pipeline::Options::aggressive()] {
+        let applied = Applied { options, ..Applied::default() };
+        let built = pipeline::llvm_order(&applied, crate::parity::Phase::Simplify);
+        assert!(built.iter().any(|one| one.name() == "rotate@728"), "no rotate@728 in the order");
+    }
 }
 
 /// `llrm-pass --order` could not name a slot of LLVM's order: the oracle ran

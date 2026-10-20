@@ -41,7 +41,7 @@
 //! From unit test `a_column_walk_is_swapped` in `loopinterchange_tests.rs`.
 //!
 //! # Runs
-//! Once per body, before `unroll-jam`; a swapped nest goes through `sroa` and
+//! Once per body; a swapped nest goes through `sroa` and
 //! the fixed point again. -O3 and -Omax: `-floop-interchange`.
 //!
 //! # Needs

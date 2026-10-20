@@ -411,7 +411,7 @@ fn test_no_old_slot_of_the_built_lists_runs_a_translated_pass() {
                 level,
                 on.options.sroa,
                 on.options.mem2reg,
-                on.options.rotating(),
+                on.options.rotate_slot,
                 &[],
                 &held,
             );

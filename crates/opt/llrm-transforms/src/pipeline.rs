@@ -30,7 +30,6 @@
 //!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     ver["<b>version (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     swap["<b>interchange (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
-//!     jam["<b>unroll-jam (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
 //!     mrg["<b>merge (once)</b>"]:::mid
 //!   end
 //!   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
@@ -44,8 +43,7 @@
 //!   unsw --> dist
 //!   dist --> ver
 //!   ver --> swap
-//!   swap --> jam
-//!   jam --> mrg
+//!   swap --> mrg
 //!   mrg --> c
 //!   c -.->|"a changed body goes<br/>back through B"| sroa
 //!   c --> d
@@ -72,7 +70,7 @@
 //!
 //! Peeling repeats while it leaves fewer loops, so an outer loop whose inner
 //! loop was peeled is peeled in turn. The passes that make a candidate
-//! re-optimize it with a `Fixed` of its own that has unswitching and jamming
+//! re-optimize it with a `Fixed` of its own that has unswitching
 //! off.
 //!
 //! In E, `lsr` is after the interprocedural step because nothing after it may
@@ -114,7 +112,7 @@
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
-//! | `unswitch`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
+//! | `unswitch`, `interchange` | the passes of that name (off by default; on at -O3 and -Omax) |
 //! | `distribute` | `distribute` (off by default; on at -O3 and -Omax) |
 //! | `version` | `version` (off by default; on at -O3 and -Omax) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
@@ -155,7 +153,7 @@ use crate::{
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
     loopdistribute, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollpass, loopversion, mem2reg,
     memcpyopt, peel, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
-    trivialunswitch, unroll, unroll_jam, window,
+    trivialunswitch, unroll, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -212,9 +210,6 @@ pub struct Options {
     /// `-fversion-loops-for-strides`, -O3; LLVM's `LoopVersioning`; -Omax
     /// too).
     pub version: bool,
-    /// A nest's outer loop unrolled and its inner copies fused (gcc's
-    /// `-floop-unroll-and-jam`, -O3; -Omax too).
-    pub unroll_jam: bool,
     /// `-floop-interchange`, -O3 (gcc's `gimple-loop-interchange.cc`); -Omax
     /// too. LLVM's `LoopInterchange` is off in its pipelines.
     pub interchange: bool,
@@ -224,7 +219,7 @@ pub struct Options {
     pub llvm_order: bool,
     /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
-    /// in the pin. Not run where `unroll_jam` is (see [`Options::rotating`]).
+    /// in the pin.
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); on by default, `LLRM_NO_MEM2REG` turns it off.
@@ -304,7 +299,6 @@ impl Default for Options {
             unswitch: false,
             distribute: false,
             version: false,
-            unroll_jam: false,
             interchange: false,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
@@ -377,13 +371,6 @@ impl Options {
         }
     }
 
-    /// Whether the rotate slot runs: it does not where `unroll_jam` does,
-    /// whose nests are the header-tested form (RJ1: `loopnest.rs` and
-    /// `loopclone::chained` take a loop that leaves only from its header).
-    pub fn rotating(&self) -> bool {
-        self.rotate_slot && !self.unroll_jam
-    }
-
     /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the
     /// code, and the larger inline threshold; the copy budget is LLVM's -O3
     /// (`UnrollThresholdAggressive`, twice the target's), not gcc's.
@@ -393,7 +380,6 @@ impl Options {
             unswitch: true,
             distribute: true,
             version: true,
-            unroll_jam: true,
             interchange: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
@@ -411,7 +397,6 @@ impl Options {
             unswitch: true,
             distribute: true,
             version: true,
-            unroll_jam: true,
             interchange: true,
             search: true,
             routes: true,
@@ -758,19 +743,9 @@ pub(crate) fn llvm_order(
             // `simplifySwitch`, not translated yet, so these are the defaults.
             simplify_cfg("decide@1244"),
         ],
-        // The Late stage follows the Simplify list and its unroll-and-jam:
-        // L1438, Float2IntPass (L1594), InstSimplifyPass
-        // (PassBuilderPipelines.cpp#L1662, the last function pass
-        // of `OptimizePM`, after LoopSink) and L2376. DEVIATE LS1: the jam is
-        // not in the pin's default pipeline (`enable-unroll-and-jam` is false,
-        // L222); at the pin, if enabled, L1438 comes first, then the jam at
-        // L1474. llrm runs the jam first because its matcher needs the
-        // pre-L1438 nest: `needCanonicalLoops (false)` merges the blocks it
-        // matches (a testing outer header, a chain `pre` and `post`; hoist and
-        // sink alone leave them), and
-        // `only_o3_jams_a_nest_that_sweeps_the_same_cells` fails with the slot
-        // at the end of the Simplify list. Exit: the matcher accepts the
-        // L1438 form, no date.
+        // The Late stage follows the Simplify list: L1438, Float2IntPass
+        // (L1594), InstSimplifyPass (PassBuilderPipelines.cpp#L1662, the last
+        // function pass of `OptimizePM`, after LoopSink) and L2376.
         Phase::Late => vec![
             // The slots' options, with the pin's lines,
             // are `simplifycfg::Options::{L1438, L1682, L2376}`.
@@ -804,7 +779,7 @@ pub(crate) fn llvm_order(
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
             // Without the rotate slot the first LICM keeps speculating, as the
             // single hoist did.
-            let rotating = applied.options.rotating();
+            let rotating = applied.options.rotate_slot;
             list.extend([
                 slot("floatloop@724", Box::new(floatloop::FloatLoop)),
                 // LPM1
@@ -1240,7 +1215,6 @@ pub struct Fixed {
     distribute: Option<loopdistribute::Distribute>,
     version: Option<loopversion::Version>,
     interchange: Option<loopinterchange::Interchange>,
-    jam: Option<unroll_jam::UnrollJam>,
     only: bool,
     rounds: usize,
     dump: Option<PathBuf>,
@@ -1251,14 +1225,7 @@ pub struct Fixed {
 /// `options` less the passes that try a rewrite on a copy and judge it: what
 /// a candidate goes through before it is judged.
 fn without_candidates(options: &Options) -> Options {
-    Options {
-        unswitch: false,
-        distribute: false,
-        version: false,
-        unroll_jam: false,
-        interchange: false,
-        ..options.clone()
-    }
+    Options { unswitch: false, distribute: false, version: false, interchange: false, ..options.clone() }
 }
 
 impl Fixed {
@@ -1314,7 +1281,6 @@ impl Fixed {
             distribute: distribute.filter(|_| only.is_none()),
             version: version.filter(|_| only.is_none()),
             interchange: (applied.options.interchange && only.is_none()).then_some(loopinterchange::Interchange),
-            jam: (applied.options.unroll_jam && only.is_none()).then(unroll_jam::UnrollJam::default),
             only: only.is_some(),
             rounds: applied.options.rounds,
             dump: applied.dump.clone(),
@@ -1368,7 +1334,7 @@ impl Fixed {
             level,
             applied.options.sroa,
             applied.options.mem2reg,
-            applied.options.rotating(),
+            applied.options.rotate_slot,
             &off,
             &held,
         );
@@ -1381,7 +1347,6 @@ impl Fixed {
             linear.distribute = None;
             linear.version = None;
             linear.interchange = None;
-            linear.jam = None;
         }
         linear
     }
@@ -1430,21 +1395,11 @@ impl Fixed {
         if let Some(version) = &mut self.version {
             run.step(version, "version", unit, analyses);
         }
-        // Before jamming: the swapped nest is the one that is jammed. Cleaned
-        // as a peeled loop is.
+        // The swapped nest is cleaned as a peeled loop is.
         if let Some(interchange) = &mut self.interchange {
             if run.step(interchange, "interchange", unit, analyses) {
                 self.scalarized(unit, analyses, run, "interchanged");
                 self.fixed(unit, analyses, run, "interchanged-")?;
-            }
-        }
-        // After unswitching, as gcc's pass order has it: an invariant guard is
-        // out of the nest by then. The copies are cleaned as a peeled
-        // loop is.
-        if let Some(jam) = &mut self.jam {
-            if run.step(jam, "unroll-jam", unit, analyses) {
-                self.scalarized(unit, analyses, run, "jammed");
-                self.fixed(unit, analyses, run, "jammed-")?;
             }
         }
         for one in &mut self.last {
