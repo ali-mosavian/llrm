@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:73a275d0aabb18273ab4c1b6752258d2be90de953268de87ccc7430d70c61d72 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:1c70362443f4eac6c8ce251db38ecf8429d79c3059554108ed72d4ee259cd8dc -->
 
 # pipeline
 
@@ -29,7 +29,7 @@ flowchart TB
   a["<b>A  once, whole module</b><br/><small>globalopt, ports (every body),<br/>stamp</small>"]:::mid
   subgraph g_b["B  EACH BODY, TO A FIXED POINT (FIXED, MIR PIPELINE)"]
     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
-    rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
+    rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>simple-loop-unswitch,<br/>non-trivial</small>"]:::mid
     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
@@ -41,7 +41,7 @@ flowchart TB
   end
   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>jumpthread hoist gepoffset<br/>addresssink sink</small>"]:::mid
+  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>addresssink sink</small>"]:::mid
   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
   a --> sroa
   sroa --> rnd
@@ -127,12 +127,11 @@ LLVM counterpart of each limit, is
 | `fuse` | `fuse` (off by default; on at -Omax) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 
-`pre` makes `gvn` insert on the path that lacks a value; `expensive`
-enables `jumpthread`'s state machines and `copy_headers` its correlated
-branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
-`lsr`, `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals`
-lets alias and branch decisions use the intervals of counted loops. `limits`
-are the copy budgets of `unroll` and `peel`.
+`pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
+`hoist`, `algebraic`, `loopidioms`, `lsr`, `window` and
+`calleepop` in bytes; `loop_intervals` lets alias and branch decisions use
+the intervals of counted loops. `limits` are the copy budgets of `unroll`
+and `peel`.
 
 ## Needs
 `Summaries`, `GlobalsAA`, `Callbacks` and `ProgramSummaries` are required

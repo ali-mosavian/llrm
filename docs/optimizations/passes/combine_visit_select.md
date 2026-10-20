@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_visit_select.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_visit_select.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:da628d4b89668ed49a7f6017e092b0522de1dfe11a5f14f6341011d9e2affdb8 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:872c156989378b526e1de7586c22bdddf535735e3761f5255d361c3f30720543 -->
 
 # combine_visit_select
 
@@ -24,7 +24,7 @@ left out, each named where it stood: `foldSelectOfBools`,
 `foldSelectICmpAndAnd`, `foldSelectBitTest`, `foldAddSubSelect`,
 `foldOverflowingAddSubSelect`, `foldSetClearBits`,
 `foldSelectZeroOrFixedOp`, `foldSelectIntrinsic`,
-`foldSelectExtConst`, `foldSelectWithSRem`, `foldSelectIntoOp`, the
+`foldSelectWithSRem`, the
 min/max (`matchSelectPattern`) folds, and everything after the not-condition
 (`foldSelectCmpBitcasts` ... `FoldSelectWithAndOrCond`).
 

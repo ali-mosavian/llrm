@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:1892bb1477d5c7b6b998c6060583fd0e35a2d6ec462d280198c3e158f0af9fd6 -->
+<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:e4f4cf59e34f02a3ed942748be3f307f5eda2b849e7881be597add2d1f4f9041 -->
 
 # allocate
 
@@ -61,14 +61,13 @@ treat every value alike, in this order:
    role.
 2. `explicit_selectors` reaches a far cell through ES where its selector is
    also read as a number.
-3. `narrowed` turns a call result nothing reads into a clobber.
-4. A pin outside the value's class is dropped where an instruction delivers
+3. A pin outside the value's class is dropped where an instruction delivers
    the value in that register, else it is an error; a value both pinned and
    required in two registers is an error.
-5. `constrain::constrained` gives each register an instruction requires a
+4. `constrain::constrained` gives each register an instruction requires a
    value of its own, live across that one instruction and copied in and out,
    and returns those pins; `required` adds the rest.
-6. A value read once from a cell that holds, by an instruction that takes
+5. A value read once from a cell that holds, by an instruction that takes
    the cell, is not held at all: the read stays a memory operand.
 
 `unallocatable` then refuses a body no assignment can fit: a value no
@@ -134,28 +133,6 @@ finds each group member's segments once and asks a point by search;
 Last, `_recolored_hints` moves a value into a copy partner's register when
 that register is free over its whole interval and joins more copies than
 the one it has, so each joined copy becomes a deleted move.
-
-### Candidates
-The first run (`regalloc base`) is a full allocation of the prepared body.
-If it spilled, and the profile has `search` (`-fallocation-search`; off at
--O0), the spilled values suggest other shapes of the same body and each is
-allocated and priced (`_emitted`: instructions and memory operands
-weighted by block frequency); the cheapest wins.
-
-- `Addressed`: address arithmetic of spilled values made apart from users.
-- `Unfolded`: folded indexes of spilled values opened.
-- `Scoped`, `ScopedOpened`: loop-local copies of the base values a loop's
-  spills lost, protected from spilling.
-- `Retainable`: one spilled invariant base protected from spilling.
-- `Whole`: the body as it was, without splitting.
-
-Unless the search is exhaustive (`-fallocation-search-all`, -Omax) only
-the first shape in the order `Retainable`, `Scoped`, `Addressed`,
-`Unfolded` that the spills admit is tried, plus `Whole` without
-splitting. A trial is kept only if it is cheaper and spilled none of its
-protected values: it stops at the first spill of one (`ABANDONED`), since
-the rounds after it could not change what is kept. The frame is restored
-between trials.
 
 ### Applying
 `applied` replaces every operand's value by its register at its width

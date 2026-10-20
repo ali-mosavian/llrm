@@ -32,9 +32,10 @@ D_FACES = QCPORT / "render" / "d_faces.c"
 SOURCE = OUT / "dfaces" / "d_faces_flat.c"
 ENV_BASE = 0x300000                       # env.elf is loaded here; everything below it and above BASE is the code under test
 LEVELS = ("O1", "O2", "O3", "Os")
-# The Borland-era keywords mean nothing flat; every compiler reads the file with the same convention and the same sizes.
-KEYWORDS = "far huge near pascal cdecl __far _far __near _near"
-INCLUDES = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(QCPORT / d))]
+import wrapper  # noqa: E402
+
+KEYWORDS = wrapper.KEYWORDS
+INCLUDES = wrapper.includes(QCPORT)
 GCC_FLAGS = ["-m32", "-march=i486", "-fno-pic", "-fno-stack-protector", "-fcf-protection=none", "-fno-asynchronous-unwind-tables", "-w"]
 COVERAGE = ["flat", "tex", "ptex", "wire", "refused", "sc_hit", "sc_miss", "alloc", "alloc_fail", "build", "noz", "nodst"]
 
@@ -67,8 +68,7 @@ def emulation():
 def write_source():
     """The file every compiler reads: d_faces.c with its keywords of the segmented models emptied, so that they all take the flat
     model and one calling convention (llrm-c has no -D)."""
-    SOURCE.parent.mkdir(parents=True, exist_ok=True)
-    SOURCE.write_text("".join(f"#define {word}\n" for word in KEYWORDS.split()) + f'#include "{D_FACES}"\n')
+    wrapper.write_source(D_FACES, SOURCE)
 
 
 def write_env_source():
@@ -100,7 +100,7 @@ def build_variant(variant):
     if variant.startswith("llrm"):
         level = variant[4:] or "O2"
         obj = OUT / "o" / f"dfaces.{variant}.obj"
-        sh([harness.LLRM, "-m32", "-mabi=sysv", f"-{level}", "-march=i486", *INCLUDES, "-o", obj, SOURCE])
+        sh(wrapper.llrm_command(harness.LLRM, level, QCPORT, SOURCE, obj))
         return obj
     compiler = "gcc" if variant.startswith("gcc") else "clang"
     level = variant[len(compiler):]

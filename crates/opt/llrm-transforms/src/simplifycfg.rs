@@ -165,11 +165,11 @@
 //! The C corpus (`identical.py`: 395 sources, -O1/-O2/-Os/-Omax, 1,580
 //! compiles): `decide` decides 646 branches instead of 3,002; the ones on a
 //! literal or a constant `switch` go from 2,464 to 153 (the rest are made by
-//! `jumpthread`'s own cleanup, after this pass), and it runs 32,640 times
-//! instead of 33,932. Of the 1,583 objects 40 differ in bytes, 36 only in label
-//! numbers; of the rest, `bintree` -O3 is 7 instructions longer (twice) and
-//! `switch_empty_cases` 2 shorter (twice). The 140 bench rows at -O2 and -Os of
-//! the 14 programs that differ have every counter unchanged.
+//! the old `jumpthread`'s own cleanup, after this pass), and it runs 32,640
+//! times instead of 33,932. Of the 1,583 objects 40 differ in bytes, 36 only in
+//! label numbers; of the rest, `bintree` -O3 is 7 instructions longer (twice)
+//! and `switch_empty_cases` 2 shorter (twice). The 140 bench rows at -O2 and
+//! -Os of the 14 programs that differ have every counter unchanged.
 //!
 //! # Keeps
 //! Blocks and edges change: every analysis is invalidated when anything
@@ -256,6 +256,18 @@ impl Options {
         speculate_blocks: true,
         hoist_common_insts: true,
         sink_common_insts: true,
+    };
+
+    /// The slot at
+    /// [L1682](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1682),
+    /// after LoopSink: the pin sets the switch options,
+    /// `speculateUnpredictables` and `hoistLoadsStoresWithCondFaulting`,
+    /// none translated, so these are the defaults.
+    pub const L1682: Options = Options {
+        need_canonical_loop: true,
+        speculate_blocks: true,
+        hoist_common_insts: false,
+        sink_common_insts: false,
     };
 
     /// The slot at
