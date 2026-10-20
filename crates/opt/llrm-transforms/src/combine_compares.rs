@@ -58,6 +58,7 @@ use llrm_mir::valuetracking::range::{self, SelectOperand, SelectPatternFlavor};
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_icmp_const::fold_icmp_inst_with_constant;
 use crate::combine_shared::{get_complexity, query};
 
 /// `ICmpInst::isSigned`.
@@ -203,8 +204,11 @@ pub fn visit_icmp(
             return new_icmp(c, inst, IntPredicate::Sgt, op0, ones);
         }
     }
-    // OWED: foldICmpBinOp, foldICmpInstWithConstant, foldSignBitTest,
-    // foldOpIntoPhi, foldICmpInstWithConstantNotInt, foldICmpCommutative,
+    // OWED: foldICmpBinOp.
+    if let Some(r) = fold_icmp_inst_with_constant(c, inst, pred, op0, op1) {
+        return r;
+    }
+    // OWED: foldSignBitTest, foldOpIntoPhi, foldICmpInstWithConstantNotInt, foldICmpCommutative,
     // matchSymmetricPair, foldCmpSelectOfConstants and the two-select fold.
     if changed { Visit::Changed } else { Visit::None }
 }
