@@ -324,18 +324,6 @@ fn omax_unswitches_loops() {
     assert!(!pipeline(&["-Omax", "-fno-unswitch-loops"]).unswitch);
 }
 
-/// gcc turns `-fversion-loops` on at -O3 and no lower; -Omax is
-/// everything.
-#[test]
-fn only_o3_and_omax_version_loops_for_strides_and_the_flag_overrides_it() {
-    assert!(pipeline(&["-Omax"]).version && pipeline(&["-O3"]).version);
-    assert!(!pipeline(&["-O3", "-fno-version-loops"]).version);
-    for level in ["-O1", "-O2", "-Os"] {
-        assert!(!pipeline(&[level]).version, "{level}");
-        assert!(pipeline(&[level, "-fversion-loops"]).version, "{level}");
-    }
-}
-
 /// gcc turns `-floop-interchange` on at -O3 and no lower (opts.cc:677);
 /// -Omax is everything.
 #[test]

@@ -88,7 +88,6 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("lsr", |options, on| options.lsr = on),
     ("unswitch-loops", |options, on| options.unswitch = on),
     ("loop-interchange", |options, on| options.interchange = on),
-    ("version-loops", |options, on| options.version = on),
     ("tree-ch", |options, on| options.copy_headers = on),
     ("ipa-cp-clone", |options, on| options.inline.cp_clone = on),
     ("ipa-vrp", |options, on| options.ipa_ranges = on),
