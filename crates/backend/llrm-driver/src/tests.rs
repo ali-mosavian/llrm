@@ -449,3 +449,16 @@ fn values_live_across_a_call_take_the_callee_saved_registers() {
     let listing = llrm_core::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("[rsp"), "no value goes to the stack\n{listing}");
 }
+
+/// A quadword zero stayed `mov rax, 0` (7 bytes): the zero idiom took only
+/// words and dwords. It is `xor eax, eax`.
+#[test]
+fn a_quadword_zero_is_a_dword_xor() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i64 @g(i64)\n\
+                define i64 @f() {\n  %r = call i64 @g(i64 0)\n  ret i64 0\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("xor edi, edi") && !listing.contains(", 0\n"), "{listing}");
+}
