@@ -27,12 +27,15 @@ import sys
 import tempfile
 import time
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
+from stages import stage  # noqa: E402
+import xfail  # noqa: E402
 
 sys.path.insert(0, str(HERE / "dosbatch"))
 import cpulimit  # noqa: E402
@@ -135,6 +138,30 @@ TIERS = ROOT / "tools/gate/tiers.toml"
 EXTRA_RATCHETS = (["cargo", "test", "-q", "--test", "block_list_ratchet"], ["cargo", "test", "-q", "-p", "llrm-mir", "--lib", "facts_rewrite"])
 
 
+# tools/gate/prepush.py runs the gate's cheap static checks (fmt, docs, products, scans, facts, docs_links, the diff check) in about a minute and prints `PREPUSH FAIL: a, b`; its failing steps are
+# ratchets of the smoke too (#2735 and #2732 landed with unformatted files that the smoke never looked at).
+PREPUSH = ["python3", "tools/gate/prepush.py"]
+
+
+def prepush_failures(root: Path = ROOT, run=None) -> dict[str, str]:
+    run = run or (lambda command: subprocess.run(command, cwd=root, capture_output=True, text=True))
+    done = run(PREPUSH)
+    lines = [line for line in (done.stdout + done.stderr).splitlines() if line.startswith("PREPUSH FAIL")]
+    if not lines and not done.returncode:
+        return {}
+    names = lines[0].split(":", 1)[1].split(",") if lines else ["did-not-run"]
+    return {f"ratchet:prepush-{name.strip()}": " / ".join((done.stdout + done.stderr).strip().splitlines()[-2:])[:240] for name in names if name.strip()}
+
+
+def warnings_check(root: Path = ROOT, target: Path | None = None) -> str:
+    """"" when `cargo check --workspace --all-targets` under `-D warnings` is clean (deadstore.rs landed with unused code). Its own target directory: other RUSTFLAGS would rebuild the shared one."""
+    target = target or Path(os.environ.get("LLRM_WARN_TARGET", Path.home() / ".cache/llrm/warn-target"))
+    done = subprocess.run(slotted(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"]), cwd=root, capture_output=True, text=True, env={**os.environ, "RUSTFLAGS": "-D warnings", "CARGO_TARGET_DIR": str(target)})
+    if done.returncode == 0:
+        return ""
+    return " / ".join([line for line in done.stderr.splitlines() if "error" in line or "warning" in line][:3])[:300] or "cargo check -D warnings failed"
+
+
 def ratchet_commands(tiers: Path = TIERS) -> list[list[str]]:
     """Every source-scan test of the gate (tools/gate/tiers.toml `[[scan]]`) and the two that list readers (block list, facts_rewrite), as cargo commands. A test
     that counts what a crate's files read fails on a diff in ANOTHER crate: a reader added in llrm-transforms never ran llrm-mir's ratchets (loopdeletion +3,
@@ -168,16 +195,35 @@ def ratchet_name(command: list[str]) -> str:
     return command[-1]
 
 
+RATCHET_WORKERS = int(os.environ.get("RATCHET_WORKERS", "1"))  # 4 made no gain: each `cargo test -p X --test Y` unifies features differently and rebuilds, the build lock serializes the compiles, and 4 links at load 70 cost 600-750 s a PR
+
+
 def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[str, str]:
-    """name -> why, for EVERY ratchet that fails on the tree in `root` (the subset rule compares whole failure sets, not the first failure)."""
+    """name -> why, for EVERY ratchet that fails on the tree in `root` (the subset rule compares whole failure sets, not the first failure).
+    The commands run RATCHET_WORKERS at a time (default 1); the result is in command order."""
     run = run or (lambda command: subprocess.run(slotted(command), cwd=root, capture_output=True, text=True))
+    commands = ratchet_commands(tiers)
+    with ThreadPoolExecutor(max_workers=RATCHET_WORKERS) as pool:  # read per call: the env and the tests set it
+        done = list(pool.map(run, commands))
     failed = {}
-    for command in ratchet_commands(tiers):
-        done = run(command)
-        if done.returncode:
-            lines = [line for line in (done.stdout + done.stderr).splitlines() if "panicked" in line or "FAILED" in line or "error" in line]
+    for command, result in zip(commands, done):
+        if result.returncode:
+            lines = [line for line in (result.stdout + result.stderr).splitlines() if "panicked" in line or "FAILED" in line or "error" in line]
             failed[f"ratchet:{ratchet_name(command)}"] = " / ".join(lines[:2])[:240] or "failed"
     return failed
+
+
+def docs_failures(root: Path = ROOT, run=None) -> dict[str, str]:
+    """`ratchet:docs` -> the generated pages that are out of date (or the figure problem) on the tree in `root`; none when `docsbuild --check` is clean. A header change
+    that landed without `docsbuild --sync` (jumps.rs) refused every docs-touching PR after it (#2757, #2763, #2857, #2836) with nothing naming the page."""
+    run = run or (lambda command: subprocess.run(command, cwd=root, capture_output=True, text=True))
+    done = run([sys.executable, "tools/docsbuild/build.py", "--check"])
+    if not done.returncode:
+        return {}
+    lines = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip()]
+    pages = [line for line in lines if line.startswith("docs/")]
+    why = f"out of date: {', '.join(pages)}; run python3 tools/docsbuild/build.py --sync" if pages else " / ".join(lines[:2])
+    return {"ratchet:docs": why[:300]}
 
 
 def failing_names(line: str) -> list[str]:
@@ -363,10 +409,17 @@ def unit_step(package: str, allowance: float):
         code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT)
         if code is None:
             return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
-        if code:
+        listed = xfail.load()
+        failed = {f"unit {package}::{test}" for test in failed_tests(output)}
+        ran = {f"unit {package}::{name}" for name in names} if names else {one for one in listed if one.startswith(f"unit {package}::")}
+        unexpected, expected, passing = xfail.classify(failed, ran, listed)
+        if passing:
+            return "fail", f"{package}: listed in xfail.toml but passes (remove the entry): {', '.join(sorted(passing))}"[:300], sorted(f"xpass {one[5:]}" for one in passing)
+        if code and (unexpected or not failed):
             lines = [line for line in output.splitlines() if "FAILED" in line or "panicked" in line or "error" in line]
-            return "fail", f"{package}: {' / '.join(lines[:3])[:300] or 'cargo test failed'}", [f"unit {package}::{test}" for test in failed_tests(output)]
-        return "ok", f"{package}: {len(names) or 'all'} tests"
+            return "fail", f"{package}: {' / '.join(lines[:3])[:300] or 'cargo test failed'}", sorted(unexpected)
+        note = f", {len(expected)} expected failures (xfail.toml)" if expected else ""
+        return "ok", f"{package}: {len(names) or 'all'} tests{note}"
     return step
 
 
@@ -397,6 +450,7 @@ def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET, known_red: f
     with (meter or Meter)() as counted:
         for name, step, _ in steps:
             began = clock()
+            stage(f"step {name}")
             verdict, detail, *tests = ("skipped", "known red, not run") if name in known_red else step(bins)
             parts.append(f"{name} {verdict} {clock() - began:.1f} s")
             if verdict == "fail":
@@ -465,9 +519,12 @@ def main() -> int:
     if broken := workspace_check():
         failing.append("workspace")
         pre.append(f"workspace: {broken}")
-    for name, why in ratchet_failures().items():
+    for name, why in {**ratchet_failures(), **prepush_failures(), **docs_failures()}.items():
         failing.append(name)
         pre.append(f"{name}: {why}")
+    if broken := warnings_check():
+        failing.append("warnings")
+        pre.append(f"warnings: {broken}")
     packages = touched(args.base)
     for package in packages:  # built first, untimed
         subprocess.run(slotted(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"]), cwd=ROOT, capture_output=True)

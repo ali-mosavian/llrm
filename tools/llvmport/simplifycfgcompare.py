@@ -24,12 +24,21 @@ def main() -> int:
     parser.add_argument("paths", nargs="+", type=Path)
     parser.add_argument("--hoist-common-insts", action="store_true")
     parser.add_argument("--sink-common-insts", action="store_true")
+    parser.add_argument("--no-keep-loops", action="store_true", help="needCanonicalLoops(false)")
     parser.add_argument("--show", type=int, default=3)
     parser.add_argument("--strict", action="store_true")
     parser.add_argument("--list", action="store_true", help="one line per function: FILE@NAME identical|differs")
     args = parser.parse_args()
     example = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "release/examples/simplifycfg"
-    named = [name for name, on in (("hoist-common-insts", args.hoist_common_insts), ("sink-common-insts", args.sink_common_insts)) if on]
+    named = [
+        name
+        for name, on in (
+            ("no-keep-loops", args.no_keep_loops),
+            ("hoist-common-insts", args.hoist_common_insts),
+            ("sink-common-insts", args.sink_common_insts),
+        )
+        if on
+    ]
     passes = f"simplifycfg<{';'.join(named)}>" if named else "simplifycfg"
     files = [f for p in args.paths for f in ([p] if p.is_file() else sorted(p.glob("*.ll")))]
     skipped, same, differ, shown = 0, 0, 0, 0

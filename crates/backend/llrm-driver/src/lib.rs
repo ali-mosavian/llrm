@@ -26,6 +26,36 @@ pub fn by_triple(triple: &str) -> Option<Rc<dyn Target>> {
     all().into_iter().find(|one| one.layout().llvm_triple.as_deref() == Some(triple))
 }
 
+/// What a tool's `--mode N` stands for: the datalayout of the target whose
+/// `datalayout.toml` says `mode = N`, and the machine of its default CPU, so
+/// that pointer-width answers and the passes that price with the target's TTI
+/// (unroll, licm, rotate, indvars, loopidiom, unswitch) read the target's.
+pub struct ModeTarget {
+    pub datalayout: String,
+    pub machine: Rc<dyn llrm_mir::target::Machine>,
+    /// One line for the tool to say what it ran on.
+    pub described: String,
+}
+
+/// The `ModeTarget` of mode `mode`, tuned for size where `size`.
+pub fn mode_target(
+    mode: &str,
+    size: bool,
+) -> Result<ModeTarget, String> {
+    let target = mode
+        .parse::<u32>()
+        .ok()
+        .and_then(|mode| all().into_iter().find(|one| one.layout().mode == mode))
+        .ok_or("--mode N: no target with that mode")?;
+    let cpu = target.default_cpu();
+    let machine = llrm_core::backend::cpu::tuned_for(&*target, cpu, size)?.target();
+    // m16 states no TTI: llrm-c prices there by the generic rules, and so does
+    // this.
+    let tti = machine.tti().map_or("none", |tti| tti.name());
+    let described = format!("{} cpu {cpu} tti {tti} datalayout {}", target.name(), target.layout().datalayout);
+    Ok(ModeTarget { datalayout: target.layout().datalayout.clone(), machine, described })
+}
+
 /// The instruction selector of the target `name`, from its select crate.
 pub fn selector(name: &str) -> Option<&'static Compiled> {
     match name {

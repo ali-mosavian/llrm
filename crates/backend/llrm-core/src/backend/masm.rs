@@ -21,7 +21,7 @@
 //!   cleaned_returns          and leave            block labels, items
 //!   (ret imm / retf n)       sequences            leave before each ret
 //!                            shrinkwrap::wrapped  pieces set up in the
-//!                                                 block that first needs
+//!                                                 the Save block
 //! ```
 //!
 //! The entry and return sequences are not in the LIR. `parts` builds them:
@@ -49,9 +49,9 @@
 //! immediate into a segment register, which x86 lacks, is written `push imm;
 //! pop seg`.
 //!
-//! A frame piece (the frame, one saved register) is set up where it is first
-//! needed rather than at the entry when `shrinkwrap::wrapped` says so, and is
-//! taken back on the returns that path reaches.
+//! The frame and the saved registers are set up at the Save block rather than
+//! the entry when `shrinkwrap::wrapped` says so, and are taken back before the
+//! return of the Restore block.
 //!
 //! `cleaned_returns` rewrites each `ret` of a callee that removes its
 //! arguments to `ret n` or `retf n`; past what `ret imm16` can remove, a
@@ -106,7 +106,7 @@
 //! # Runs
 //! Once per procedure after the machine phases. `cleaned_returns` runs in
 //! `assemble::assembled_by` (`masm cleaned returns`), before the return
-//! duplication and shrink-wrap tails there; `listing` runs when the object is
+//! duplication there; `listing` runs when the object is
 //! built or `-S` is printed.
 //!
 //! # See also
@@ -164,6 +164,8 @@ impl From<Unprintable> for crate::model::passes::Exception {
 pub enum InlinePart {
     Bytes(Vec<u8>),
     Fixup(String, String, i64),
+    /// A near call (0xE8) or jump (0xE9) to a symbol: the opcode and the name.
+    Near(u8, String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -664,26 +666,6 @@ fn wrap_of(
         (frame && movable).then_some((registers.pointer, registers.stack)),
         stack_addressed,
     )
-}
-
-/// How many pieces `procedure` sets up (the frame, the registers it keeps): no
-/// body of it can set up more late.
-pub fn pieces_to_set_up(procedure: &Procedure) -> usize {
-    let (enter, _) = parts(procedure, true);
-    let count = saved_of(procedure).len();
-    count + usize::from(enter.len() > count)
-}
-
-/// How many of `procedure`'s pieces `body` sets up after its entry
-/// (`shrinkwrap`), the frame addressed through the stack pointer as it is where
-/// that is smaller.
-pub fn wrapped_pieces(
-    procedure: &Procedure,
-    body: &crate::model::lir::LirBody,
-) -> usize {
-    let (enter, _) = parts(procedure, true);
-    let count = saved_of(procedure).len();
-    wrap_of(procedure, body, enter.len() > count, true).map_or(0, |wrap| wrap.wrapped.len() * 1000 + wrap.depth)
 }
 
 /// The implicit entry and return sequences shared by text and OMF emission.
@@ -1941,6 +1923,9 @@ pub fn _code(parts: &[InlinePart]) -> Vec<String> {
                 out.push(format!("dw offset {name}{}", _signed(*offset)));
             }
             InlinePart::Fixup(kind, name, _) if kind == "segment" => out.push(format!("dw seg {name}")),
+            InlinePart::Near(opcode, name) => {
+                out.push(format!("{} near ptr {name}", if *opcode == 0xE8 { "call" } else { "jmp" }));
+            }
             InlinePart::Fixup(..) => {}
         }
     }
@@ -1989,7 +1974,7 @@ pub fn _operand(
         Loc::Address(ir::AddressRef { through, index_through: index, scale, offset, .. }) => {
             format!("[{}{}]", _registers(regs, *through, *index, *scale), _signed(*offset))
         }
-        Loc::Held(_) => return Err(Unprintable(format!("operand {}", r#where.repr()))),
+        Loc::Held(_) | Loc::Field(_) => return Err(Unprintable(format!("operand {}", r#where.repr()))),
     })
 }
 
@@ -2283,7 +2268,7 @@ mod tests {
             registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         };
         _procedure(&procedure, &no_names(), 0).unwrap();
-        let _ = (saved_of(&procedure), pieces_to_set_up(&procedure), wrapped_pieces(&procedure, &procedure.body));
+        let _ = saved_of(&procedure);
         assert_eq!(procedure.body.facts.0.runs::<BodyRoots>(), 1);
     }
 

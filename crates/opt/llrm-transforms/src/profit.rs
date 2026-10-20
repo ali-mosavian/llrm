@@ -36,10 +36,9 @@
 //! - `_frequencies`: `branchprob`'s estimate in `UNIT`ths of an execution
 //!   (never below one, so a cold arm is near free but ordered), with each
 //!   loop's proven trips (`proven_trips`, from ScalarEvolution's
-//!   `getSmallConstantTripCount`; `LLRM_NO_SCEV_TRIPS` asks
-//!   `induction::trip_count`) in place of its estimate;
+//!   `getSmallConstantTripCount`) in place of its estimate;
 //! - `_loop_products`: the trips of each loop around a block multiplied, with
-//!   `UNKNOWN_TRIPS` (ten) for a loop `induction` does not name. `lsr` and
+//!   `UNKNOWN_TRIPS` (ten) for a loop ScalarEvolution does not count. `lsr` and
 //!   `gvn` were tuned on it (#202, #203). `_loop_products_by_branch` weighs
 //!   each block by the share of its loop's trips that reach it.
 //!
@@ -77,10 +76,10 @@
 //! `proven_trips`, the frequency models and `UNIT`, `UNKNOWN_TRIPS`.
 //!
 //! # Used by
-//! Each of [`crate::lsr`], [`crate::hoist`], [`crate::gvn`],
-//! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`],
+//! Each of [`crate::lsr_pass`], [`crate::hoist`], [`crate::gvn`],
+//! [`crate::unroll`], [`crate::peel`],
 //! [`crate::loopidioms`], [`crate::window`], [`crate::gepoffset`],
-//! [`crate::indvars`], [`crate::tailrec`], [`crate::ipacp`], [`crate::inline`]
+//! [`crate::indvars`], [`crate::ipacp`], [`crate::inline`]
 //! and [`crate::interprocedural`] asks it, before a rewrite that trades code
 //! size or registers for speed, whether the rewrite pays. Not a pass: it runs
 //! only inside those.
@@ -91,11 +90,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::branchprob;
 use llrm_analysis::cfg;
 use llrm_analysis::effects::Declarations;
+use llrm_analysis::memory;
 use llrm_analysis::scev::analysis::ScevSession;
-use llrm_analysis::{induction, memory};
 use llrm_mir::blockfrequency::frequency::BlockFrequency;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -105,7 +103,6 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
-use num_traits::ToPrimitive;
 
 use crate::spill::{self, Room};
 
@@ -350,15 +347,20 @@ pub fn priced(
 
 /// Each loop's trips by latch (the runs of its latch), where ScalarEvolution
 /// proves them (`getSmallConstantTripCount`): the `trips` that replaces the
-/// conventional ten. `LLRM_NO_SCEV_TRIPS` asks `induction` instead.
+/// conventional ten.
 pub fn proven_trips(unit: &memory::Unit) -> IndexMap<i64, i64> {
-    proven_trips_using(unit, scev_trips_enabled())
-}
-
-/// `LLRM_NO_SCEV_TRIPS`, read once: trip counts come from ScalarEvolution
-/// (`proven_trips`, `unroll`), not `induction::trip_count`.
-pub fn scev_trips_enabled() -> bool {
-    !llrm_support::env_flag!("LLRM_NO_SCEV_TRIPS")
+    let mut trips = IndexMap::default();
+    let loops = &unit.shape().loops;
+    if loops.is_empty() {
+        return trips;
+    }
+    let mut session = ScevSession::within(unit.context, unit.globals, unit.metadata, unit.function);
+    for loop_ in loops {
+        if let Some(count) = scev_trips(&mut session, unit, loop_) {
+            trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
+        }
+    }
+    trips
 }
 
 /// How often `loop_`'s latch runs, where ScalarEvolution proves it
@@ -402,30 +404,6 @@ pub fn scev_trip_bound(
             Some(scev.get_small_constant_max_trip_count(cx, header))
         })?;
     (count != 0).then_some(i64::from(count))
-}
-
-/// [`proven_trips`], asking ScalarEvolution (`scev`) or `induction`.
-pub fn proven_trips_using(
-    unit: &memory::Unit,
-    scev: bool,
-) -> IndexMap<i64, i64> {
-    let mut trips = IndexMap::default();
-    let loops = &unit.shape().loops;
-    if scev && !loops.is_empty() {
-        let mut session = ScevSession::within(unit.context, unit.globals, unit.metadata, unit.function);
-        for loop_ in loops {
-            if let Some(count) = scev_trips(&mut session, unit, loop_) {
-                trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
-            }
-        }
-        return trips;
-    }
-    for loop_ in loops {
-        if let Some(count) = induction::trip_count(unit, loop_, &unit.registers()).and_then(|count| count.to_i64()) {
-            trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
-        }
-    }
-    trips
 }
 
 /// What one execution of the entry weighs in `_frequencies`: a block taken a
@@ -479,7 +457,11 @@ pub fn counted_by_header(
     Some(counted)
 }
 
-/// `_frequencies_in`, and the odds of each edge they were worked out from.
+/// `_frequencies_in`, and the odds of each edge they were worked out from:
+/// `BranchProbabilityInfo`'s, a loop's proven trips setting its exit's
+/// (`blockfreq::trip_adjusted`, profit's own: LLVM's probabilities know no
+/// trip count), then `BlockFrequencyInfo` over them, each block's frequency in
+/// `UNIT`s of the entry's. `None` for conflicting proofs.
 fn _odds_in(
     context: &Context,
     metadata: &[llrm_mir::module::MetadataNode],
@@ -489,19 +471,45 @@ fn _odds_in(
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<(BTreeMap<i64, i64>, BTreeMap<(i64, i64), f64>)> {
     let counted = counted_by_header(shape, trips)?;
-    let odds = branchprob::estimated(context, metadata, globals, function, shape, &counted);
+    let taken = _edge_odds(context, metadata, globals, function, shape, &counted);
+    let frequencies = llrm_analysis::blockfreq::BlockFrequencies::of_probabilities(function, &taken);
     Some((
-        cfg::graph(function)
+        function
+            .layout()
             .iter()
-            .map(|block| {
-                (
-                    block.at,
-                    odds.frequency.get(&block.at).map_or(UNIT, |one| ((one * UNIT as f64).round() as i64).max(1)),
-                )
+            .map(|&block| {
+                (cfg::id(block), ((frequencies.relative_to_entry(block) * UNIT as f64).round() as i64).max(1))
             })
             .collect(),
-        odds.taken,
+        taken,
     ))
+}
+
+/// Each edge's odds as `_odds_in` works the frequencies out from:
+/// `BranchProbabilityInfo`'s, a proven loop's exit set by its trips
+/// (`counted`, by header).
+pub fn _edge_odds(
+    context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+    globals: &Declarations,
+    function: &Function,
+    shape: &cfg::Shape,
+    counted: &BTreeMap<i64, i64>,
+) -> BTreeMap<(i64, i64), f64> {
+    // The layout only folds the integer constants of a loop's exit test
+    // (`computeUnlikelySuccessors`).
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+        llrm_analysis::bpi::Module { context, declarations: globals, metadata, layout: &layout },
+        function,
+    );
+    let mut taken = BTreeMap::new();
+    for &block in function.layout() {
+        for to in function.successors(block) {
+            taken.insert((cfg::id(block), cfg::id(to)), bpi.get_edge_probability_to(function, block, to).to_f64());
+        }
+    }
+    llrm_analysis::blockfreq::trip_adjusted(function, &shape.loops, counted, &taken)
 }
 
 /// Block frequencies as a product of the trips of each loop around a block, ten

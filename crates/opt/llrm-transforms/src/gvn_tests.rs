@@ -818,7 +818,7 @@ fn a_pass_derives_the_shape_of_its_body_once_however_many_loops_it_has() {
 #[test]
 fn a_pass_takes_the_trip_counts_the_manager_proved() {
     // The check proves them again to compare, and is counted.
-    if std::env::var_os("LLRM_CHECK_COUNTED").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_COUNTED") {
         return;
     }
     let loops = 20;
@@ -982,7 +982,7 @@ b0:
 #[test]
 fn test_two_equal_calls_are_one_before_tail_recursion_makes_a_loop_of_one() {
     use super::EqualCalls;
-    use crate::tailrec::TailRecursion;
+    use crate::tailcallelim::TailCallElim;
     let text = "define internal i32 @h(i32 %n) memory(none) {
 b0:
   %z = icmp eq i32 %n, 0
@@ -1005,7 +1005,7 @@ b2:
         if merge {
             manager.add(EqualCalls);
         }
-        manager.add(TailRecursion);
+        manager.add(TailCallElim);
         manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
         printed(&module)
     };

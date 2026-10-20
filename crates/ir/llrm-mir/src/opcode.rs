@@ -1,5 +1,7 @@
 //! LLVM's instructions, each with what its class carries beside operands.
 
+use std::cmp::Ordering;
+
 use crate::types::TypeId;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -90,6 +92,28 @@ impl IntPredicate {
             same => same,
         }
     }
+
+    /// Whether `x self y` for `width`-bit integers given as unsigned bits.
+    pub fn holds(
+        self,
+        x: u128,
+        y: u128,
+        width: u32,
+    ) -> bool {
+        let (sx, sy) = (crate::context::signed(x, width), crate::context::signed(y, width));
+        match self {
+            Self::Eq => x == y,
+            Self::Ne => x != y,
+            Self::Ugt => x > y,
+            Self::Uge => x >= y,
+            Self::Ult => x < y,
+            Self::Ule => x <= y,
+            Self::Sgt => sx > sy,
+            Self::Sge => sx >= sy,
+            Self::Slt => sx < sy,
+            Self::Sle => sx <= sy,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -113,6 +137,35 @@ pub enum FloatPredicate {
 }
 
 impl FloatPredicate {
+    /// `FCmpInst::compare`
+    /// ([Instructions.cpp:3916](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/Instructions.cpp#L3916)):
+    /// whether the predicate holds for operands that compare as `order`, None
+    /// being unordered.
+    pub fn holds(
+        self,
+        order: Option<Ordering>,
+    ) -> bool {
+        use Ordering::{Equal, Greater, Less};
+        match self {
+            Self::False => false,
+            Self::True => true,
+            Self::Uno => order.is_none(),
+            Self::Ord => order.is_some(),
+            Self::Ueq => matches!(order, None | Some(Equal)),
+            Self::Oeq => order == Some(Equal),
+            Self::Une => order != Some(Equal),
+            Self::One => matches!(order, Some(Less | Greater)),
+            Self::Ult => matches!(order, None | Some(Less)),
+            Self::Olt => order == Some(Less),
+            Self::Ugt => matches!(order, None | Some(Greater)),
+            Self::Ogt => order == Some(Greater),
+            Self::Ule => order != Some(Greater),
+            Self::Ole => matches!(order, Some(Less | Equal)),
+            Self::Uge => order != Some(Less),
+            Self::Oge => matches!(order, Some(Greater | Equal)),
+        }
+    }
+
     /// `CmpInst::getInversePredicate`: the predicate that holds where this one
     /// does not (an ordered one becomes the unordered of its complement).
     pub fn inverse(self) -> Self {
@@ -263,6 +316,7 @@ impl Flags {
     pub const NINF: Flags = Flags(1 << 10);
     pub const NSZ: Flags = Flags(1 << 11);
     pub const ARCP: Flags = Flags(1 << 12);
+    pub const CONTRACT: Flags = Flags(1 << 13);
     pub const FAST: Flags = Flags(0x7f << 8);
     /// What makes a result poison where the operation's promise breaks:
     /// `Instruction::dropPoisonGeneratingFlags`.
@@ -297,7 +351,7 @@ impl Flags {
         (Flags::NINF, "ninf"),
         (Flags::NSZ, "nsz"),
         (Flags::ARCP, "arcp"),
-        (Flags(1 << 13), "contract"),
+        (Flags::CONTRACT, "contract"),
         (Flags(1 << 14), "afn"),
         (Flags::TABLE, "table"),
     ];
@@ -333,6 +387,14 @@ impl Flags {
         other: Flags,
     ) -> Flags {
         Flags(self.0 & !other.0)
+    }
+
+    /// The flags either has.
+    pub fn union(
+        self,
+        other: Flags,
+    ) -> Flags {
+        Flags(self.0 | other.0)
     }
 
     /// The flags both have.

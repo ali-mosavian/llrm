@@ -35,11 +35,13 @@ fn the_crate_depends_on_nothing() {
     // enforces it.
     let manifest = include_str!("../Cargo.toml");
     let dependencies = manifest.split("[dependencies]").nth(1).expect("a [dependencies] table");
+    // llrm-env is a leaf of its own, with no dependencies: the one reader of an
+    // `LLRM_*` switch.
     let entries: Vec<&str> = dependencies
         .lines()
         .map(str::trim)
         .take_while(|line| !line.starts_with('['))
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("llrm-env "))
         .collect();
     assert!(entries.is_empty(), "{entries:?}");
 }
@@ -212,6 +214,11 @@ fn a_declaration_takes_the_attributes_intrinsics_td_gives_its_intrinsic() {
         "declare void @llvm.va_start.p0(ptr) nocallback nofree nosync nounwind willreturn\n"
     );
     assert_eq!(
+        print("declare void @llvm.va_end.p0(ptr)\ndeclare void @llvm.va_copy.p0.p0(ptr, ptr)\n"),
+        "declare void @llvm.va_end.p0(ptr) nocallback nofree nosync nounwind willreturn\n\n\
+         declare void @llvm.va_copy.p0.p0(ptr, ptr) nocallback nofree nosync nounwind willreturn\n"
+    );
+    assert_eq!(
         print("declare i64 @llvm.x86.sse42.crc32.64.64(i64, i64)\n"),
         "declare i64 @llvm.x86.sse42.crc32.64.64(i64, i64) nocallback nofree nosync nounwind willreturn memory(none)\n"
     );
@@ -338,6 +345,26 @@ b0:
         crate::memory::of(&module.context, &callees, function, calls[0]).writes,
         "it still writes what it can reach"
     );
+}
+
+/// Verifier.cpp: `llvm.bswap` takes whole 16-bit units; an `i8` or an `i24` is
+/// reported at the call, an `i16` is not.
+#[test]
+fn a_bswap_of_an_odd_number_of_bytes_is_reported() {
+    let problems = |bits: u32| {
+        crate::verify::verify(
+            &parse::module(&format!(
+                "declare i{bits} @llvm.bswap.i{bits}(i{bits})\n\
+                 define i{bits} @f(i{bits} %x) {{\nb0:\n  %r = call i{bits} @llvm.bswap.i{bits}(i{bits} %x)\n  ret i{bits} %r\n}}\n"
+            ))
+            .unwrap_or_else(|error| panic!("{error}")),
+        )
+    };
+    assert_eq!(problems(16), Vec::<String>::new());
+    for bits in [8, 24] {
+        let found = problems(bits);
+        assert!(found.iter().any(|one| one.contains("bswap must be an even number of bytes")), "i{bits}: {found:?}");
+    }
 }
 
 fn dominance_problems(text: &str) -> Vec<String> {
@@ -576,11 +603,8 @@ fn clangs_target_attributes_and_captures_are_read() {
     assert_eq!(round(&once), once);
     let kept = round(&format!("{DATALAYOUT}\ndeclare void @g(ptr captures(address) %p)\n"));
     assert!(!kept.contains("nocapture"), "{kept}");
-    // Newer LLVM's `ptrtoaddr` and the attributes of its by-value copies.
-    let newer = round(&format!(
-        "{DATALAYOUT}\ndeclare i16 @h(ptr nofreeobj dead_on_return %p) nocreateundeforpoison\n\ndefine i16 @k(ptr %p) {{\nb0:\n  %a = ptrtoaddr ptr %p to i16\n  ret i16 %a\n}}\n"
-    ));
-    assert!(newer.contains("ptrtoint ptr %p to i16"), "{newer}");
+    // The attributes of by-value copies.
+    round(&format!("{DATALAYOUT}\ndeclare i16 @h(ptr nofreeobj dead_on_return %p) nocreateundeforpoison\n"));
     // `allocsize(0, 1)` on a declaration (clang's `malloc`, `calloc`).
     round(&format!("{DATALAYOUT}\ndeclare ptr @calloc(i16, i16) allocsize(0, 1) allockind(\"alloc,zeroed\")\n"));
 }

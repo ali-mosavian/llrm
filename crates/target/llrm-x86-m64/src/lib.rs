@@ -60,6 +60,10 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 });
 
 impl llrm_target::Target for M64 {
+    fn dialect(&self) -> &'static llrm_instr::Dialect {
+        llrm_x86::instructions::dialect()
+    }
+
     fn registers(&self) -> &'static llrm_lir::registers::Info {
         &REGISTER_INFO
     }

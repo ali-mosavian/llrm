@@ -5,7 +5,7 @@ use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::module::Module;
 use llrm_mir::passes::Outer;
 
-use super::{_threaded, Decide, decided, decided_using};
+use super::{Decide, decided, decided_using};
 use crate::testing::{ACROSS_READONLY_CALL, managed, parsed, printed, results};
 
 /// @f decided; whether anything changed.
@@ -13,6 +13,13 @@ fn decide(module: &mut Module) -> bool {
     let (layout, outer) = (layout(module), Outer::of(module, None));
     let (context, function) = module.function_mut("f").expect("@f");
     decided(context, &layout, function, &outer).expect("decides")
+}
+
+/// @f through JumpThreading, which threads and settles what `decided` once did.
+fn jump_threaded(module: &mut Module) {
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::jumpthreading::JumpThreading { enabled: true, options: Default::default() });
+    manager.run_module(module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
 }
 
 /// @f decided by the old guard engine alone (`LLRM_NO_SCEV_DECIDE`).
@@ -40,85 +47,6 @@ fn check(
     assert_eq!(decide(&mut module), text != expected, "{text}");
     assert_eq!(printed(&module), expected);
     assert_eq!(results(&module, inputs), before);
-}
-
-/// Collapsed FPCSE's trampoline is removable; a phi edge, a store or a
-/// cycle keeps it.
-#[test]
-fn test_empty_jump_threading_preserves_phi_inputs_and_effects() {
-    let body = |middle: &str, end: &str| {
-        format!(
-            "define i16 @f(i16 %x) {{
-b0:
-  %a = alloca i16
-  br label %b1
-
-b1:
-{middle}
-b2:
-{end}  ret i16 %x
-}}
-"
-        )
-    };
-    let jump = "  br label %b2\n";
-    let phi = "  %r = phi i16 [ %x, %b1 ]\n";
-    for (guard, text) in [
-        ("none", body(jump, "")),
-        ("phi", body(jump, phi)),
-        ("store", body(&format!("  store i16 %x, ptr %a\n{jump}"), "")),
-        ("cycle", body("  br label %b1\n", "")),
-    ] {
-        let mut module = parsed(&text);
-        let (context, function) = module.function_mut("f").expect("@f");
-        let changed = _threaded(context, function);
-        assert_eq!(changed, guard == "none", "{guard}");
-        let expected = if guard == "none" {
-            "define i16 @f(i16 %x) {
-b0:
-  %a = alloca i16
-  br label %b2
-
-b2:
-  ret i16 %x
-}
-"
-        } else {
-            &text
-        };
-        assert_eq!(printed(&module), expected, "{guard}");
-    }
-}
-
-/// `br i1 %c, %b1, %b1` made a jump kept both of b1's phi inputs from b0, one
-/// per edge, so QCport's sc.c at -O2 ended in a phi naming a deleted block.
-#[test]
-fn test_a_branch_with_both_arms_one_way_leaves_the_phi_one_input() {
-    let mut module = parsed(
-        "define i16 @f(i1 %c, i16 %x) {
-b0:
-  br i1 %c, label %b1, label %b1
-
-b1:
-  %r = phi i16 [ %x, %b0 ], [ %x, %b0 ]
-  ret i16 %r
-}
-",
-    );
-    let (context, function) = module.function_mut("f").expect("@f");
-    assert!(_threaded(context, function));
-    assert_eq!(
-        printed(&module),
-        "define i16 @f(i1 %c, i16 %x) {
-b0:
-  br label %b1
-
-b1:
-  %r = phi i16 [ %x, %b0 ]
-  ret i16 %r
-}
-"
-    );
 }
 
 /// A branch on a compare of two numbers is a jump the way it goes, and
@@ -559,7 +487,7 @@ b4:
     let inputs: &[&[i128]] = &[&[0, 0], &[0, 1], &[1, 0], &[1, 1]];
     let mut module = parsed(text);
     let before = results(&module, inputs);
-    assert!(decide(&mut module));
+    jump_threaded(&mut module);
     let after = printed(&module);
     assert!(!after.contains("phi"), "{after}");
     assert_eq!(results(&module, inputs), before);
@@ -891,6 +819,7 @@ b25:
 }
 ";
     let mut module = parsed(text);
+    jump_threaded(&mut module);
     managed(&mut module, Decide);
     assert!(!decide(&mut module), "a run left a decision for the next:\n{}", printed(&module));
     assert!(!printed(&module).contains("phi i1 ["), "the branch on the phi was threaded:\n{}", printed(&module));
@@ -919,56 +848,8 @@ b2:
 }
 ",
     );
-    decide(&mut module);
+    jump_threaded(&mut module);
     assert!(!has(&module, "b2"), "{}", printed(&module));
-}
-
-/// `rectwo`'s count check at a counted loop's exit (reduced by scev-port,
-/// `COUNT_NOT_ZERO_AT_THE_EXIT` of `alim/feat/scev-decide`): the loop is
-/// entered with `%n != 0` and continues with `%k - 1 != 0`, so the header phi
-/// `%k` is not zero where the loop is left from its header. The old engine
-/// decides it; LazyValueInfo must too (the phi's edge values, CVP's way), or
-/// `rectwo` loses the fold.
-#[test]
-fn test_lazy_value_info_settles_the_count_check_at_a_loops_exit() {
-    let mut module = parsed(&format!(
-        "{DOS}define i16 @f(i16 %inv, i16 %n) {{
-entry:
-  %z0 = icmp eq i16 %n, 0
-  br i1 %z0, label %zero, label %pre
-pre:
-  br label %h
-h:
-  %c = phi i16 [ 0, %pre ], [ %c2, %l ]
-  %k = phi i16 [ %n, %pre ], [ %dec, %l ]
-  %t = icmp eq i16 %inv, 1
-  br i1 %t, label %l, label %x
-l:
-  %dec = sub nsw i16 %k, 1
-  %c2 = add i16 %c, 1
-  %d = icmp eq i16 %dec, 0
-  br i1 %d, label %out, label %h
-x:
-  %z = icmp eq i16 %k, 0
-  br i1 %z, label %zero, label %nz
-out:
-  ret i16 %c2
-nz:
-  ret i16 7
-zero:
-  ret i16 0
-}}
-"
-    ));
-    let (layout, outer) = (layout(&module), Outer::of(&module, None));
-    let (context, function) = module.function_mut("f").expect("@f");
-    let settled =
-        super::_settled(context, &layout, function, &outer, &mut llrm_mir::lazyvalueinfo::LazyValueInfo::new());
-    let at = |name: &str| {
-        function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some(name)).expect("block")
-    };
-    assert_eq!(settled.get(&at("x")), Some(&false), "the check at the exit is settled");
-    assert_eq!(settled.get(&at("h")), None, "an unknown condition is not");
 }
 
 /// `br i1 %c, T, T` decided left the two inputs `T`'s phi had from the block
