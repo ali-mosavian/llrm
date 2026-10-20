@@ -41,10 +41,11 @@
 //! shared (`Arc`), so each rewritten instruction is rebuilt
 //! (`Insn::try_renamed`, then `LiveIntervals::rewrite_instr`). The fact:
 //! d_faces -O2, 746 rewrites cost 3.9 M of 1,330 M instructions (0.3%), about 5
-//! K each. Owner: splitkit-port. Exit: an isolated POC that prices in-place
-//! operand mutation of the LIR `Insn` (interior registers behind the `Arc`)
-//! before any structural change, by 2026-11-06; the deviation closes when the
-//! POC shows a gain over 1% of a compile or is dropped with its numbers.
+//! K each. Owner of the row: splitkit-port. Exit: uselist-port's LIR operand
+//! model (mutable in-place operands with use/def lists, the backend twin of the
+//! MIR storage work); design note due 2026-10-23, then slices. The row closes
+//! when `rewrite_assigned` sets the register in place; cite the note here when
+//! it lands.
 //!
 //! # Example
 //! A value live through `b1` with a use in it: `openIntv`; `enterIntvBefore`
