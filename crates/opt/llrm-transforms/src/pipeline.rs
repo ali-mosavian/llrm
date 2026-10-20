@@ -995,7 +995,8 @@ pub fn recorded(
             // from ranges (`trunc nsw`, `zext nneg`, `add nuw nsw`), which the
             // first InstCombine reads. DEVIATE: what flows between bodies is
             // `ModuleIpo`'s (`ipa-args`, `ipa-range`), not the solver's.
-            // Exit: `ModuleIpo` runs the solver over the program.
+            // Exit: `ModuleIpo` runs the solver over the program (owner:
+            // funcattrs-port, the IPO analyses).
             manager.add(sccp::Sccp);
             // A program pass abandons it.
             manager.hold::<GlobalsAA>();
