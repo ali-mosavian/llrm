@@ -389,9 +389,9 @@ fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
 /// procedure's pad, the registration belonged to a frame that returns, and the
 /// next error found no handler ("Illegal function call"; erlnum.bas hung).
 #[test]
-fn test_a_callee_that_registers_the_error_handler_is_never_inlined() {
+fn test_a_callee_that_makes_a_frame_bound_call_is_never_inlined() {
     let module = crate::testing::parsed(
-        "declare void @llrm.qb.onerror(i1) nounwind
+        "declare void @llrm.qb.onerror(i1) nounwind frame_bound
 
 define internal i16 @callee(i16 %c) {
 b0:
