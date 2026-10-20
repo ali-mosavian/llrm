@@ -46,7 +46,7 @@
 //! - D4. No `llvm.experimental.deoptimize`.
 
 use llrm_mir::context::Context;
-use llrm_mir::dense::IdSet;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags, Opcode};
@@ -372,12 +372,24 @@ pub fn sunk(
         return false;
     }
     let mut phi_operands = PhiOperands::default();
+    // Each jump by its place in `jumps`: a phi's arms are read once.
+    let mut jump_at: IdMap<BlockId, usize> = IdMap::new();
+    for (at, &pred) in jumps.iter().enumerate() {
+        jump_at.insert(pred, at);
+    }
     for phi in crate::edges::phis(function, block) {
-        let arms = llrm_analysis::occurrence::arms(function, phi);
-        // Each arm by its block, once: a lookup per jump is then O(1).
-        let by_block: HashMap<BlockId, usize> = arms.iter().enumerate().map(|(at, &(_, from))| (from, at)).collect();
-        let values: Vec<Operand> = jumps.iter().map(|pred| arms[by_block[pred]].0).collect();
-        phi_operands.insert((phi, 2 * by_block[&jumps[0]]), values);
+        let mut values: Vec<Option<Operand>> = vec![None; jumps.len()];
+        let mut first_arm = 0;
+        for (arm, &(value, from)) in llrm_analysis::occurrence::arms(function, phi).iter().enumerate() {
+            if let Some(&at) = jump_at.get(&from) {
+                values[at] = Some(value);
+                if at == 0 {
+                    first_arm = arm;
+                }
+            }
+        }
+        let values = values.into_iter().map(|one| one.expect("an arm per jump")).collect();
+        phi_operands.insert((phi, 2 * first_arm), values);
     }
     // The columns: the instruction `depth` before the terminator of each.
     let bodies: Vec<Vec<InstId>> = jumps
@@ -525,17 +537,25 @@ pub fn duplicate_predecessors_merged(
     let mut changed = false;
     // What each phi takes from each predecessor, once (`PhiPredIVs`).
     let phis = crate::edges::phis(function, block);
-    let taken: Vec<HashMap<BlockId, Operand>> = phis
-        .iter()
-        .map(|&phi| {
-            llrm_analysis::occurrence::arms(function, phi).into_iter().map(|(value, from)| (from, value)).collect()
-        })
-        .collect();
-    let values = |pred: BlockId| -> Vec<Operand> { taken.iter().map(|by_block| by_block[&pred]).collect() };
+    let mut candidate_at: IdMap<BlockId, usize> = IdMap::new();
+    for (at, &candidate) in candidates.iter().enumerate() {
+        candidate_at.insert(candidate, at);
+    }
+    let mut taken: Vec<Vec<Option<Operand>>> = vec![vec![None; phis.len()]; candidates.len()];
+    for (column, &phi) in phis.iter().enumerate() {
+        for (value, from) in llrm_analysis::occurrence::arms(function, phi) {
+            if let Some(&at) = candidate_at.get(&from) {
+                taken[at][column] = Some(value);
+            }
+        }
+    }
+    let values = |at: usize| -> Vec<Operand> {
+        taken[at].iter().map(|one| one.expect("an arm per candidate")).collect()
+    };
     // Candidates by what the phis take from them: the first of each kind stays.
     let mut kept: HashMap<Vec<Operand>, BlockId> = HashMap::default();
-    for &candidate in &candidates {
-        match kept.entry(values(candidate)) {
+    for (at, &candidate) in candidates.iter().enumerate() {
+        match kept.entry(values(at)) {
             std::collections::hash_map::Entry::Vacant(slot) => {
                 slot.insert(candidate);
             }
