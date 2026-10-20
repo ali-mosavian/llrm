@@ -203,7 +203,7 @@ impl ProgramPass for Walk {
                 .map(|(members, _)| members.into_iter().filter(|id| wanted.contains(id)).collect())
                 .collect();
             let remarks = llrm_support::env_flag!("LLRM_INLINE_REMARKS");
-            let attributes = llrm_support::env_flag!("LLRM_ATTR_SUMMARIES");
+            let attributes = llrm_analysis::attrsummary::enabled();
             for members in components {
                 for &id in &members {
                     let mut decided = remarks.then(Vec::new);
@@ -238,12 +238,7 @@ impl ProgramPass for Walk {
                     };
                     let mut declared = declared(&mut modules[at], module);
                     let (context, function) = function_mut(module, id);
-                    let by = crate::inline::Caller {
-                        layout: &program.layout,
-                        recursive: recursive.contains(&id),
-                        base: 0,
-                        limits: false,
-                    };
+                    let by = crate::inline::Caller { layout: &program.layout, recursive: recursive.contains(&id) };
                     let spliced = crate::inline::expanded_all(
                         context,
                         function,
@@ -268,7 +263,7 @@ impl ProgramPass for Walk {
                 }
                 // `PostOrderFunctionAttrsPass`: once per component, after its
                 // bodies are simplified. Only the attribute-fed `Summaries`
-                // reads them (`LLRM_ATTR_SUMMARIES`).
+                // reads them (`attrsummary::enabled`).
                 if attributes && !members.is_empty() {
                     for id in llrm_analysis::functionattrs::post_order(
                         module,

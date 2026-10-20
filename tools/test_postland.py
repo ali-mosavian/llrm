@@ -207,3 +207,10 @@ def test_a_nameless_run_leaves_its_output_tail_and_the_load_in_a_log(monkeypatch
     postland.probe("unit a::t", "d" * 40)
     log = (tmp_path / ("nameless-" + "d" * 9 + ".log")).read_text()
     assert "load" in log and "killed by signal 9" in log
+
+
+def test_the_pr_of_a_commit_is_the_one_that_merged_it_not_the_first_that_contains_it():
+    """Every culprit read '#2137 is OPEN, rejected': GitHub listed my branch's PR (which merged the head into itself) before the PR that landed the commit."""
+    pulls = [{"number": 2137, "merge_commit_sha": "x"}, {"number": 3026, "merge_commit_sha": "abc"}]
+    assert postland.merging_pr("abc", pulls) == 3026
+    assert postland.merging_pr("zzz", pulls) is None
