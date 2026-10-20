@@ -102,19 +102,15 @@ e:
 ",
         "define i1 @f(i16 %x) {
 b0:
-  switch i16 %x, label %e [
-    i16 1, label %c
-    i16 2, label %switch.edge
-  ]
-
-switch.edge:
-  br label %e
+  %x.off = add i16 %x, -1
+  %switch = icmp ult i16 %x.off, 2
+  br i1 %switch, label %c, label %e
 
 c:
   br label %e
 
 e:
-  %r = phi i1 [ true, %b0 ], [ false, %c ], [ false, %switch.edge ]
+  %r = phi i1 [ true, %b0 ], [ false, %c ]
   ret i1 %r
 }
 ",
@@ -148,21 +144,11 @@ e:
 ",
         "define i16 @f(i16 %x) {
 b0:
-  switch i16 %x, label %d [
-    i16 0, label %e
-    i16 1, label %c
-  ]
-
-c:
-  br label %e
-
-d:
-  %v = select i1 false, i16 7, i16 9
-  br label %e
-
-e:
-  %r = phi i16 [ 5, %b0 ], [ 6, %c ], [ %v, %d ]
-  ret i16 %r
+  %0 = icmp eq i16 %x, 1
+  %1 = select i1 %0, i16 6, i16 9
+  %2 = icmp eq i16 %x, 0
+  %3 = select i1 %2, i16 5, i16 %1
+  ret i16 %3
 }
 ",
         &[&[0], &[1], &[2], &[3]],
@@ -195,21 +181,11 @@ e:
 ",
         "define i16 @f(i16 %x) {
 b0:
-  switch i16 %x, label %e [
-    i16 3, label %d
-    i16 4, label %f
-  ]
-
-f:
-  br label %e
-
-d:
-  %v = select i1 true, i16 7, i16 9
-  br label %e
-
-e:
-  %r = phi i16 [ 5, %b0 ], [ %v, %d ], [ 8, %f ]
-  ret i16 %r
+  %0 = icmp eq i16 %x, 4
+  %1 = select i1 %0, i16 8, i16 5
+  %2 = icmp eq i16 %x, 3
+  %3 = select i1 %2, i16 7, i16 %1
+  ret i16 %3
 }
 ",
         &[&[0], &[3], &[4], &[5]],

@@ -408,6 +408,10 @@ mod tests {
             // so it ran wherever the branch does, and a value the flag makes
             // poison made the branch undefined before.
             "icmpchain.rs",
+            // SimplifyCFG.cpp's `switchToLookupTable` gives the `sub` that
+            // makes the table index `nsw` when the case range cannot wrap;
+            // it reads no flag.
+            "switchlookup.rs",
             // LICM.cpp's `hoistGEP` makes the swapped GEPs `inbounds` when both
             // were and no index is negative (L2373); `apply` gives the GEP it
             // builds the flag `hoist` decided.
