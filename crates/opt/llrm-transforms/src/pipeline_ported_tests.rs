@@ -778,8 +778,9 @@ b3:
     let out = piped(TEXT);
     assert!(out.contains("i1 %0,") && out.matches("icmp").count() == 1 && !out.contains("sext"), "{out}");
     assert_eq!(out.matches("mul").count() + out.matches("shl").count(), 2, "{out}");
-    // The add may carry `nuw`, inferred from the known bits of what it adds to.
-    assert!(out.contains("add ") && out.contains(", 3"), "{out}");
+    // `opt -O2` agrees: the sum has no common bits, so it is `or disjoint`
+    // (`getNoCommonBitsSetResult`).
+    assert!(out.contains("or disjoint i16") && out.contains(", 3"), "{out}");
 }
 
 /// A memset of a slot only written, and a store into it, go with it (llrm-mir's

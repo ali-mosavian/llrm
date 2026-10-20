@@ -197,68 +197,83 @@ impl ProgramPass for Walk {
             let recursive = crate::inline::recursive(module);
             let addressed = llrm_mir::callgraph::addressed(module);
             let counts = crate::inline::call_counts(module);
-            let order: Vec<GlobalId> = llrm_mir::callgraph::CallGraph::new(module)
+            let components: Vec<Vec<GlobalId>> = llrm_mir::callgraph::CallGraph::new(module)
                 .bottom_up_components()
                 .into_iter()
-                .flat_map(|(members, _)| members)
-                .filter(|id| wanted.contains(id))
+                .map(|(members, _)| members.into_iter().filter(|id| wanted.contains(id)).collect())
                 .collect();
             let remarks = llrm_support::env_flag!("LLRM_INLINE_REMARKS");
-            for id in order {
-                let mut decided = remarks.then(Vec::new);
-                // `sites` prices every block's frequency before it looks at a
-                // call.
-                let calls_a_body = module
-                    .global(id)
-                    .function()
-                    .is_some_and(
-                        |caller| caller.walk().any(|(_, inst)| {
-                            llrm_mir::memory::callee(&module.context, caller, inst).is_some_and(|callee| {
-                                module.global(callee).function().is_some_and(|one| !one.layout().is_empty())
-                            })
-                        }),
-                    );
-                let constant = if !calls_a_body {
-                    Default::default()
-                } else {
-                    crate::inlinecost::sites(
+            let attributes = llrm_support::env_flag!("LLRM_ATTR_SUMMARIES");
+            for members in components {
+                for &id in &members {
+                    let mut decided = remarks.then(Vec::new);
+                    // `sites` prices every block's frequency before it looks at
+                    // a call.
+                    let calls_a_body = module
+                        .global(id)
+                        .function()
+                        .is_some_and(
+                            |caller| caller.walk().any(|(_, inst)| {
+                                llrm_mir::memory::callee(&module.context, caller, inst).is_some_and(|callee| {
+                                    module.global(callee).function().is_some_and(|one| !one.layout().is_empty())
+                                })
+                            }),
+                        );
+                    let constant = if !calls_a_body {
+                        Default::default()
+                    } else {
+                        crate::inlinecost::sites(
+                            module,
+                            &program.layout,
+                            id,
+                            &counts,
+                            &addressed,
+                            &recursive,
+                            params,
+                            size,
+                            self.inline.limit == 0,
+                            program.target.tti().as_deref(),
+                            decided.as_mut(),
+                        )
+                    };
+                    let mut declared = declared(&mut modules[at], module);
+                    let (context, function) = function_mut(module, id);
+                    let by = crate::inline::Caller { layout: &program.layout, recursive: recursive.contains(&id) };
+                    let spliced = crate::inline::expanded_all(
+                        context,
+                        function,
+                        &by,
+                        &Default::default(),
+                        Some(&constant),
+                        &mut declared,
+                    )? > 0;
+                    for (call, callee, cost) in decided.iter().flatten() {
+                        let name = |id: GlobalId| module.global(id).name.as_deref().unwrap_or("?");
+                        let gone = module.global(id).function().is_some_and(|one| one.parent(*call).is_none());
+                        eprintln!("{}", crate::inlinecost::remark(name(id), name(*callee), cost, gone));
+                    }
+                    if declared.place(module)? > 0 {
+                        modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                    }
+                    if spliced {
+                        modules[at].changed(id);
+                        modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                    }
+                    (self.simplify)(module, &mut modules[at], id, "walk.");
+                }
+                // `PostOrderFunctionAttrsPass`: once per component, after its
+                // bodies are simplified. Only the attribute-fed `Summaries`
+                // reads them (`LLRM_ATTR_SUMMARIES`).
+                if attributes && !members.is_empty() {
+                    for id in llrm_analysis::functionattrs::post_order(
                         module,
                         &program.layout,
-                        id,
-                        &counts,
-                        &addressed,
-                        &recursive,
-                        params,
-                        size,
-                        self.inline.limit == 0,
-                        program.target.tti().as_deref(),
-                        decided.as_mut(),
-                    )
-                };
-                let mut declared = declared(&mut modules[at], module);
-                let (context, function) = function_mut(module, id);
-                let by = crate::inline::Caller { layout: &program.layout, recursive: recursive.contains(&id) };
-                let spliced = crate::inline::expanded_all(
-                    context,
-                    function,
-                    &by,
-                    &Default::default(),
-                    Some(&constant),
-                    &mut declared,
-                )? > 0;
-                for (call, callee, cost) in decided.iter().flatten() {
-                    let name = |id: GlobalId| module.global(id).name.as_deref().unwrap_or("?");
-                    let gone = module.global(id).function().is_some_and(|one| one.parent(*call).is_none());
-                    eprintln!("{}", crate::inlinecost::remark(name(id), name(*callee), cost, gone));
+                        program.target.spaces(),
+                        &members,
+                    ) {
+                        modules[at].changed(id);
+                    }
                 }
-                if declared.place(module)? > 0 {
-                    modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
-                }
-                if spliced {
-                    modules[at].changed(id);
-                    modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
-                }
-                (self.simplify)(module, &mut modules[at], id, "walk.");
             }
         }
         for (at, one) in modules.into_iter().enumerate() {

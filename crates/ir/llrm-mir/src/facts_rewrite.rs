@@ -330,6 +330,18 @@ mod tests {
             // and a sub's `nsw`/`nuw` where LLVM does, to give the
             // replacement the flags the operands prove.
             "combine_addsub.rs",
+            // The same function's later folds: `-A + B` keeps `nsw` only if
+            // both had it, `zext(B -nuw A)` needs `nuw`, and `(or A, B) +
+            // (and A, B)` rewrites the operands in place to keep the flags.
+            "combine_add_idioms.rs",
+            // InstCombineNegator.cpp's `sub`/`shl`/`mul` cases give the
+            // negated operation `nsw` only if the original and the negation
+            // had it.
+            "combine_negator.rs",
+            // InstCombineAddSub.cpp's `visitSub` keeps `nsw`/`nuw` on the
+            // sub it builds only where the operands and the original had
+            // them, and infers them from the overflow queries.
+            "combine_sub.rs",
             // InstructionCombining.cpp's `foldBinopWithRecurrence` merges the
             // `nuw`/`nsw` of the three adds (`OverflowTracking`) so the new add
             // has them only if all had them, and drops the rest.
