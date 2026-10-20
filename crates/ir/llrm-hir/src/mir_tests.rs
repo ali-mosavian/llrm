@@ -39,7 +39,7 @@ fn a_function_becomes_its_llvm_ir() {
     // With no ABI of its own, a procedure is far and C's.
     assert!(
         text.contains(
-            "define i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {\nb1:\n  %2 = sub i16 %0, %1\n  ret i16 %2\n}\n"
+            "define i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) noinline {\nb1:\n  %2 = sub i16 %0, %1\n  ret i16 %2\n}\n"
         ),
         "{text}"
     );
@@ -86,7 +86,7 @@ fn a_call_repeats_its_callees_convention() {
     let emitted = emit(&program(function.clone())).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("define cc 1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {"), "{text}");
+    assert!(text.contains("define cc 1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) noinline {"), "{text}");
     assert!(text.contains("call i16 @llrm.qb.B$NEAR(i16 %2, i16 %0)"), "{text}");
     assert!(text.contains("declare i16 @llrm.qb.B$NEAR(i16, i16)\n"), "{text}");
 
@@ -2035,7 +2035,7 @@ fn a_flat_target_has_one_space_and_a_32_bit_layout() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("p:32:32") && !text.contains("p1:"), "{text}");
-    assert!(text.contains("define ptr @same(ptr %0) {"), "{text}");
+    assert!(text.contains("define ptr @same(ptr %0) noinline {"), "{text}");
     // Real mode's description makes the same 4-byte pointer a far one.
     assert!(llrm_mir::print::module(&emit(&program).remove(0).module).contains("ptr addrspace(1)"));
     // A pointer kind the flat target has no space for is refused, not made
