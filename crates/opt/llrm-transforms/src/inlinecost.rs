@@ -2224,6 +2224,25 @@ pub fn caller_frequencies(
     llrm_analysis::blockfreq::BlockFrequencies::of_bpi(caller, &bpi)
 }
 
+/// The frequency of each instruction of `function` over its entry's; none
+/// where the entry's is 0.
+pub fn call_frequencies(
+    module: &Module,
+    layout: &DataLayout,
+    function: &Function,
+) -> llrm_support::hash::SparseIdMap<InstId, f64> {
+    let found = caller_frequencies(module, layout, function);
+    let mut frequencies = llrm_support::hash::SparseIdMap::default();
+    if found.get_entry_freq().get_frequency() > 0 {
+        for (_, inst) in function.walk() {
+            if let Some(block) = function.parent(inst) {
+                frequencies.insert(inst, found.relative_to_entry(block));
+            }
+        }
+    }
+    frequencies
+}
+
 /// `block`'s frequency over the entry's, as `isColdCallSite` and
 /// `getHotCallSiteThreshold` compare them; none where the entry's is 0.
 fn relative_to_entry(
@@ -2403,12 +2422,24 @@ pub fn sites(
         }
         if decision.inline {
             let GlobalKind::Function(callee) = &module.global(decision.callee).kind else { continue };
+            // A callee that calls itself may have those calls peeled in the
+            // copy (D10): the frequencies of its calls say how deep.
+            let own: Vec<InstId> = callee
+                .walk()
+                .map(|(_, one)| one)
+                .filter(|&one| llrm_mir::memory::callee(&module.context, callee, one) == Some(decision.callee))
+                .collect();
             out.insert(
                 inst,
                 crate::inline::Candidate {
                     body: std::rc::Rc::new((**callee).clone()),
                     frame: crate::inline::grown(&module.context, layout, callee),
                     moved: false,
+                    callee: Some(decision.callee),
+                    self_calls: (!own.is_empty()).then(|| {
+                        let frequencies = call_frequencies(module, layout, callee);
+                        own.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum()
+                    }),
                 },
             );
         }
