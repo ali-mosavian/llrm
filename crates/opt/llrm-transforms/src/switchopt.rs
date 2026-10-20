@@ -19,6 +19,14 @@
 //! | 9 | `hoistCommonCodeFromSuccessors` | `simplifycfg::branch_hoisted` | `hoist_common_insts` |
 //! | 10 | `simplifyDuplicateSwitchArms`, `simplifySwitchWhenUMin`, `simplifySwitchDefaultBranch` | [`switcharms`] | |
 //!
+//! # How it works
+//! `simplified` returns at the first step that changes the block, as
+//! `requestResimplify` does; the block is visited again.
+//!
+//! # Example
+//! A `switch` whose cases all go to one block and the default goes elsewhere
+//! is rewritten by step 2 (`switchrange`) to a range check and a branch.
+//!
 //! DEVIATE 1: step 9 runs where the branch's `hoistCommonCodeFromSuccessors`
 //! does, before this dispatcher, not between 8 and 10.
 //!
