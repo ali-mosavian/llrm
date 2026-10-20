@@ -532,7 +532,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         target,
         watcom,
         entry_requests,
-        codegen: bound.options(&flags, machine),
+        codegen: llrm_core::driver::Options { rounds_float_spills: true, ..bound.options(&flags, machine) },
         flags,
     })
 }
