@@ -29,8 +29,6 @@
 //! - U6 The loop pass manager's update of loops (`addSiblingLoops`) is the
 //!   driver's: the loops a complete unroll makes of the inner loops are visited
 //!   next, in program order.
-//! - U7 The cost of a simulated instruction is asked of the instruction itself,
-//!   not of its simplified operands.
 //! - U8 `simplifyLoopAfterUnroll` simplifies without a dominator tree or
 //!   assumptions.
 //! - U9 Blocks an unroll merges away are erased once, when the pass ends.
@@ -61,7 +59,7 @@ use llrm_mir::context::{ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
-use llrm_mir::instructioncost::instruction_cost;
+use llrm_mir::instructioncost::{instruction_cost, instruction_cost_with};
 use llrm_mir::loopinfo::{Loop, LoopInfo};
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{
@@ -787,12 +785,26 @@ fn add_cost_recursively(
 
             // First accumulate the cost of this instruction.
             if !is_free {
-                // Operands are considered as simplified, but the instruction
-                // cost of this translation is asked of the
-                // instruction itself (U7).
-                let _ = simplified_values;
+                // Operands are considered as simplified.
+                let operands: Vec<Operand> = operation
+                    .operands
+                    .iter()
+                    .map(|&operand| match operand {
+                        Operand::Value(value) => simplified_values.get(&value).copied().unwrap_or(operand),
+                        other => other,
+                    })
+                    .collect();
                 *unrolled_cost = *unrolled_cost
-                    + instruction_cost(run.tti, run.context, run.layout, run.globals, run.function, inst, kind);
+                    + instruction_cost_with(
+                        run.tti,
+                        run.context,
+                        run.layout,
+                        run.globals,
+                        run.function,
+                        inst,
+                        &operands,
+                        kind,
+                    );
             }
 
             // The cost of every operand that is not free must be counted,

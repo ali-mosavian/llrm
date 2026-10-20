@@ -64,6 +64,15 @@ fn a_malformed_rule_is_refused_with_its_line() {
     );
 }
 
+/// A literal operand is signed: `add d, d, #-1` was refused ("expected a
+/// number, found '-'"), so no rule could name the canonical `x - 1` that the
+/// combiner makes, and `dec` was chosen for `sub x, 1` alone.
+#[test]
+fn a_negative_literal_operand_compiles() {
+    let rules = "group g\n    walk each\nrule r\n    match add d:reg, d, #-1\n    rewrite @0: dec d, d\n";
+    assert!(compiled(rules).is_ok(), "{:?}", compiled(rules).err());
+}
+
 /// `add r,1` and `add r,2` differ only in the immediate: one state tests
 /// the operation, the operand counts and kinds for both, and the automaton
 /// branches only where they differ.

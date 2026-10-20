@@ -197,7 +197,7 @@ impl ProgramPass for Walk {
             let wanted: BTreeSet<GlobalId> = procedures(program, at).into_iter().collect();
             let private = private(program, at);
             let module = &mut program.modules[at];
-            let recursive = crate::inline::recursive(module);
+            let mut recursive = crate::inline::recursive(module);
             let addressed = llrm_mir::callgraph::addressed(module);
             // The calls to each function as the splices leave them, as LLVM's
             // use lists do (`isSoleCallToLocalFunction`), and a callee with
@@ -263,12 +263,18 @@ impl ProgramPass for Walk {
                         modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
                     if spliced {
-                        let now = calls_of(&module.context, module.global(id).function().expect("a procedure"));
                         modules[at].changed(id);
                         modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
-                        live.spliced(module, &mut modules[at], was, now);
                     }
                     (self.simplify)(module, &mut modules[at], id, "walk.");
+                    // The calls left after the splices and the simplification
+                    // (tail-call elimination makes a recursive body a loop), as
+                    // CGSCC updates its call graph.
+                    let now = calls_of(&module.context, module.global(id).function().expect("a procedure"));
+                    live.spliced(module, &mut modules[at], was, now);
+                    if recursive.contains(&id) {
+                        recursive = crate::inline::recursive(module);
+                    }
                 }
                 // `PostOrderFunctionAttrsPass`: once per component, after its
                 // bodies are simplified.
