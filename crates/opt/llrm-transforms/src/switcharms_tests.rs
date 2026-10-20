@@ -1,7 +1,6 @@
 //! The first two expected texts are what the pinned
 //! `opt -passes='simplifycfg<no-speculate-blocks>'` prints. The third is
-//! derived by hand: `opt` also removes the dead case in
-//! `eliminateDeadSwitchCases`, which is not translated yet.
+//! derived by hand: `opt` takes the dead cases first.
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::passes::{Declared, Outer};
@@ -24,6 +23,25 @@ fn check(
     let options = Options { speculate_blocks: false, convert_switch_range_to_icmp: false, ..Options::default() };
     let (context, function) = module.function_mut("f").expect("@f");
     assert_eq!(simplified_with(&options, context, &spec, &mut declared, function), text != expected, "{text}");
+    assert_eq!(printed(&module), expected);
+    assert_eq!(results(&module, inputs), before);
+}
+
+/// `text` with only [`super::folded`] run on the entry block.
+fn check_step(
+    text: &str,
+    expected: &str,
+    inputs: &[&[i128]],
+) {
+    let mut module = parsed(text);
+    let before = results(&module, inputs);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let entry = function.layout()[0];
+    assert!(super::folded(&Options::default(), context, &spec, &mut declared, function, entry), "{text}");
     assert_eq!(printed(&module), expected);
     assert_eq!(results(&module, inputs), before);
 }
@@ -156,10 +174,11 @@ b3:
     );
 }
 
-/// A value fixed to 0 where the default runs stayed a reachable default.
+/// A value fixed to 0 where the default runs kept the default reachable.
+/// A pipeline takes the dead cases first, so the step is run alone.
 #[test]
 fn test_a_known_constant_value_makes_the_default_unreachable() {
-    check(
+    check_step(
         "@g = global i16 0
 
 define i16 @f(i16 %x) {
@@ -194,24 +213,20 @@ b0:
     i16 0, label %d
   ]
 
-common.ret:
-  %common.op = phi i16 [ 1, %b1 ], [ 2, %b2 ], [ 3, %d ]
-  ret i16 %common.op
-
 b1:
   store i16 1, ptr @g
-  br label %common.ret
+  ret i16 1
 
 b2:
   store i16 2, ptr @g
-  br label %common.ret
+  ret i16 2
 
 b0.unreachabledefault:
   unreachable
 
 d:
   store i16 3, ptr @g
-  br label %common.ret
+  ret i16 3
 }
 ",
         &[&[0], &[5]],
