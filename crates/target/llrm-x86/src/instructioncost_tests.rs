@@ -2,7 +2,7 @@
 //! price of every instruction of `instructioncost_corpus.ll`, per cpu and kind
 //! (rows of `instructioncost_oracle.txt`, made by `instructioncost_oracle.py`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::instructioncost::instruction_cost;
@@ -12,6 +12,8 @@ use crate::tti::X86;
 
 const CORPUS: &str = include_str!("instructioncost_corpus.ll");
 const ORACLE: &str = include_str!("instructioncost_oracle.txt");
+const MATRIX: &str = include_str!("instructioncost_matrix.ll");
+const MATRIX_ORACLE: &str = include_str!("instructioncost_matrix.txt");
 
 fn kind_of(word: &str) -> CostKind {
     match word {
@@ -27,15 +29,45 @@ fn kind_of(word: &str) -> CostKind {
 /// instruction. The failure names the first rows that differ.
 #[test]
 fn test_every_instruction_costs_what_the_pinned_opt_says() {
+    let checked = priced_as_the_oracle_says(CORPUS, ORACLE);
+    assert!(checked > 3000, "the oracle holds {checked} rows");
+}
+
+/// The matrix: every opcode at every type with variable and constant operands,
+/// loads as cast sources, truncs stored. `sext (load)` was priced 1 where the
+/// pin says 0 because no row held it.
+#[test]
+fn test_the_matrix_of_opcodes_and_types_costs_what_the_pinned_opt_says() {
+    let checked = priced_as_the_oracle_says(MATRIX, MATRIX_ORACLE);
+    assert!(checked > 6000, "the matrix holds {checked} rows");
+}
+
+/// The prices of `corpus` against `oracle`: the rows checked. Every
+/// instruction of the corpus must have a row for each cpu and kind the oracle
+/// names, so that an instruction the oracle skipped cannot hide.
+fn priced_as_the_oracle_says(
+    corpus: &str,
+    oracle: &str,
+) -> usize {
     // MIR has no `target triple`; the oracle's opt needs it.
-    let text: String = CORPUS.lines().filter(|line| !line.starts_with("target triple")).collect::<Vec<_>>().join("\n");
+    let text: String = corpus.lines().filter(|line| !line.starts_with("target triple")).collect::<Vec<_>>().join("\n");
     let module = llrm_mir::parse::module(&text).expect("the corpus parses");
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a datalayout")).expect("a layout");
     let mut expected = BTreeMap::<(String, String, String, usize), String>::new();
-    for line in ORACLE.lines().filter(|line| !line.starts_with('#')) {
+    for line in oracle.lines().filter(|line| !line.starts_with('#')) {
         let w: Vec<&str> = line.split(' ').collect();
         expected.insert((w[0].into(), w[1].into(), w[2].into(), w[3].parse().unwrap()), w[4].into());
     }
+    let combinations =
+        expected.keys().map(|(cpu, kind, ..)| (cpu.clone(), kind.clone())).collect::<BTreeSet<_>>().len();
+    let instructions: usize = module
+        .functions()
+        .filter(|(_, _, function)| !function.layout().is_empty())
+        .map(|(_, _, function)| {
+            function.layout().iter().map(|&block| function.iter_block(block).count()).sum::<usize>()
+        })
+        .sum();
+    assert_eq!(expected.len(), instructions * combinations, "an instruction of the corpus has no oracle row");
     let (mut checked, mut wrong) = (0, Vec::<String>::new());
     for ((cpu, kind, name, index), want) in &expected {
         let x86 = X86::of_cpu(cpu).expect("a cpu");
@@ -56,13 +88,13 @@ fn test_every_instruction_costs_what_the_pinned_opt_says() {
             wrong.push(format!("{cpu} {kind} @{name}#{index}: {got}, opt says {want}"));
         }
     }
-    assert!(checked > 3000, "the oracle holds {checked} rows");
     assert!(
         wrong.is_empty(),
         "{} of {checked} differ:\n{}",
         wrong.len(),
         wrong.iter().take(25).cloned().collect::<Vec<_>>().join("\n")
     );
+    checked
 }
 
 /// The cost model prints no price for lifetime markers, so the oracle cannot

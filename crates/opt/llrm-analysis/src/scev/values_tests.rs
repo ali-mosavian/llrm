@@ -215,3 +215,41 @@ fn test_llvm_abs_is_the_smax_of_the_value_and_its_negation() {
         ]
     );
 }
+
+/// A hasher that counts what it is given.
+#[derive(Default)]
+struct Writes(usize);
+
+impl std::hash::Hasher for Writes {
+    fn finish(&self) -> u64 {
+        0
+    }
+
+    fn write(
+        &mut self,
+        _: &[u8],
+    ) {
+        self.0 += 1;
+    }
+}
+
+/// The key of a node went into the hasher a field at a time, 12 writes for
+/// `a + b`: 745 K of d_faces -O2's 10.3 M for `indvars` was hashing (the pin
+/// hashes a precomputed node id, 102 K). The operands are one word each now.
+#[test]
+fn test_the_key_of_a_sum_is_hashed_in_a_few_writes() {
+    use std::hash::Hash;
+
+    use super::expr::{Scev, Type, Use};
+    let key = super::Key {
+        tag: Type::Add,
+        ops: vec![Use::of(Scev(3)), Use::of(Scev(4))],
+        ty: Some(super::expr::Ty::Int(32)),
+        constant: None,
+        value: None,
+        header: None,
+    };
+    let mut writes = Writes::default();
+    key.hash(&mut writes);
+    assert!(writes.0 <= 4, "{} writes", writes.0);
+}

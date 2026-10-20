@@ -304,7 +304,7 @@ fn is_safe_to_execute_unconditionally(
 }
 
 /// [`isSafeToSpeculativelyExecuteWithOpcode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7575).
-/// DEVIATE: a load is safe where its bytes are dereferenceable or the target
+/// DEVIATE LM1: a load is safe where its bytes are dereferenceable or the target
 /// does not trap on it at its alignment (`Machine::load_may_trap`), in place
 /// of `isDereferenceableAndAlignedPointer` (the same rule as `hoist`'s
 /// `_may_fault`).
@@ -340,6 +340,34 @@ pub fn is_safe_to_speculatively_execute_with(
     inst: InstId,
     ignore_ub_implying_attrs: bool,
 ) -> bool {
+    speculatable(context, layout, function, outer, inst, ignore_ub_implying_attrs, false)
+}
+
+/// The rule of SimplifyCFG's own speculation (`speculativelyExecuteBB`,
+/// `foldTwoEntryPHINode`, `foldBranchToCommonDest`, hoisting and sinking common
+/// code): [`is_safe_to_speculatively_execute_in`] where a load is safe only
+/// if its bytes are dereferenceable, as `isDereferenceableAndAlignedPointer`
+/// has it (alignment is not asked: x86 reads unaligned). LICM and the other
+/// users keep the target's no-trap rule (DEVIATE LM1 of `hoist`).
+pub fn is_safe_to_speculatively_execute_for_cfg(
+    context: &llrm_mir::context::Context,
+    layout: &llrm_mir::datalayout::DataLayout,
+    function: &Function,
+    outer: &Outer,
+    inst: InstId,
+) -> bool {
+    speculatable(context, layout, function, outer, inst, false, true)
+}
+
+fn speculatable(
+    context: &llrm_mir::context::Context,
+    layout: &llrm_mir::datalayout::DataLayout,
+    function: &Function,
+    outer: &Outer,
+    inst: InstId,
+    ignore_ub_implying_attrs: bool,
+    pin_loads: bool,
+) -> bool {
     let instruction = function.instruction(inst);
     let constant_int = |operand: Operand| match operand {
         Operand::Constant(id) => match context.get(id).kind {
@@ -372,10 +400,11 @@ pub fn is_safe_to_speculatively_execute_with(
             }
             let (pointer, bytes) = (instruction.operands[0], layout.store_size(&context.types, instruction.ty));
             llrm_mir::valuetracking::dereferenceable(context, layout, outer.sizes(), function, pointer, bytes)
-                || !outer.target().load_may_trap(
+                || (!pin_loads
+                    && !outer.target().load_may_trap(
                     bytes,
-                    llrm_mir::valuetracking::alignment(context, layout, &outer.globals, function, pointer),
-                )
+                        llrm_mir::valuetracking::alignment(context, layout, &outer.globals, function, pointer),
+                    ))
         }
         Opcode::Call(info) => {
             // The called function could have undefined behavior or

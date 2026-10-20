@@ -37,6 +37,7 @@
 //! `switchopt::simplified`.
 
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, Context, signed};
+use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
@@ -67,11 +68,11 @@ fn possible_values(
     max: usize,
 ) -> Option<HashSet<ConstantId>> {
     let mut constants = HashSet::default();
-    let mut visited: HashSet<InstId> = HashSet::default();
+    let mut visited: IdSet<InstId> = IdSet::new();
     let mut worklist: Vec<InstId> = Vec::new();
     let push = |operand: Operand,
                 constants: &mut HashSet<ConstantId>,
-                visited: &mut HashSet<InstId>,
+                visited: &mut IdSet<InstId>,
                 worklist: &mut Vec<InstId>|
      -> bool {
         match operand {
@@ -220,7 +221,14 @@ fn dead_cases_eliminated(
     let unknown_bits = width - (known.zero | known.one).count_ones();
     if has_default && dead.is_empty() {
         if known_values.as_ref().is_some_and(|values| {
-            values.iter().all(|&value| matches!(context.get(value).kind, ConstantKind::Undef | ConstantKind::Poison))
+            values
+                .iter()
+                .all(
+                    |&value| matches!(
+                        context.get(value).kind,
+                        ConstantKind::Undef | ConstantKind::Poison
+                    ),
+                )
         }) {
             unreachable_default(context, function, block, switch, false);
             return true;

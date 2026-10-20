@@ -210,6 +210,11 @@ impl Declared {
         &self.nodes
     }
 
+    /// The id the next `node` gets: what a node that names itself holds.
+    pub fn next_node(&self) -> crate::module::MetadataId {
+        crate::module::MetadataId(self.first_node + self.nodes.len() as u32)
+    }
+
     /// A metadata node, its id at once, added to the module after the pass.
     pub fn node(
         &mut self,
@@ -217,6 +222,15 @@ impl Declared {
     ) -> crate::module::MetadataId {
         self.nodes.push(node);
         crate::module::MetadataId(self.first_node + self.nodes.len() as u32 - 1)
+    }
+
+    /// `Module::getFunction`: the global `name`, declared by the module or by
+    /// this pass, without declaring it.
+    pub fn find(
+        &mut self,
+        name: &str,
+    ) -> Option<GlobalId> {
+        self.names().get(name).copied()
     }
 
     /// The function `name` of type `ty`, declared where the module has none.

@@ -454,6 +454,14 @@ impl Tti for X86 {
         "X86"
     }
 
+    /// SZ1: at most one call penalty (25) of growth over the call removed, where
+    /// the pin's 50 let crc, tile and recchop copy an external callee into
+    /// `main` at -Os (+52, +42, +15 bytes). Over the -Os corpus: 0 grows 16
+    /// programs, 25 grows 3, 50 is the pin.
+    fn opt_size_inline_threshold(&self) -> Option<i64> {
+        Some(25)
+    }
+
     fn is_type_legal(
         &self,
         ty: Ty,
@@ -476,6 +484,17 @@ impl Tti for X86 {
         src: Ty,
         kind: CostKind,
     ) -> Option<Cost> {
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L1297
+        // A `sext`/`zext` of a load is the extending load (movsx, movzx) when
+        // both types legalize to one register each.
+        if let (CastKind::SExt | CastKind::ZExt, Ty::Int(to), Ty::Int(from)) = (op, dst, src)
+            && from >= 8
+            && let (Some((to_count, _)), Some((from_count, _))) =
+                (legalized(Ty::Int(to), self.native()), legalized(Ty::Int(from), self.native()))
+            && to_count == from_count
+        {
+            return Some(Cost::FREE);
+        }
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L3805
         // For a scalar load the extend would be free.
         (matches!(op, CastKind::SIToFP | CastKind::UIToFP) && matches!(src, Ty::Int(bits) if (2..32).contains(&bits)))
