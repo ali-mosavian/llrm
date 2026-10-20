@@ -94,8 +94,8 @@ pub mod canonical;
 pub mod cfg;
 pub mod combine;
 pub mod combine_add_idioms;
-pub mod combine_and;
 pub mod combine_addsub;
+pub mod combine_and;
 pub mod combine_build;
 pub mod combine_casts;
 #[cfg(test)]
@@ -209,6 +209,7 @@ pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;
 pub mod loopnest;
+pub mod looppeel;
 pub mod looprotate;
 pub mod loopshape;
 pub mod loopsimplify;

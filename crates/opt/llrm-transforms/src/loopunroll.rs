@@ -113,6 +113,8 @@ pub enum Unrolled {
     Unmodified,
     /// `LoopUnrollResult::FullyUnrolled`.
     Fully,
+    /// `LoopUnrollResult::PartiallyUnrolled`: the loop was peeled.
+    Peeled,
 }
 
 struct ExitInfo {
