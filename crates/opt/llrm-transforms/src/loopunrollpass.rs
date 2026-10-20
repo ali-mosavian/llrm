@@ -111,6 +111,10 @@ pub struct Run<'a> {
     pub options: Options,
     /// Blocks an unroll merged away, erased when the pass is done.
     pub emptied: Vec<BlockId>,
+    /// The module's analyses, and what the pass declares in it, for the IV
+    /// simplifier (PL5).
+    pub outer: &'a llrm_mir::passes::Outer,
+    pub declared: &'a mut llrm_mir::passes::Declared,
     /// The iterations peeled off the loop headed by a block in this run (PL1).
     pub peeled: IdMap<BlockId, u32>,
 }
@@ -1561,6 +1565,16 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             crate::loopsimplify::simplified(run.function);
             let _ = crate::lcssa::closed(run.function);
             analyzed = Analyzed::of(run);
+            // `simplifyLoopAfterUnroll(L, SimplifyIVs = true)`: the IVs first
+            // (PL5).
+            let _ = crate::simplifyindvar::simplified_loop_ivs(
+                run.context,
+                run.layout,
+                run.function,
+                run.declared,
+                run.outer,
+                header,
+            );
             let after = unrolled_blocks(run, capacity, &body);
             simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
             analyzed = Analyzed::of(run);
@@ -1635,6 +1649,8 @@ impl FunctionPass for LoopFullUnroll {
             this: unit.id,
             tti: &*tti,
             function: unit.function,
+            outer: &outer,
+            declared: unit.declared,
             emptied: Vec::new(),
             peeled: Default::default(),
             options: Options {
@@ -1660,6 +1676,8 @@ pub fn unroll_function(
     let layout =
         DataLayout::parse(module.datalayout.as_deref().unwrap_or("e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128"))?;
     let callees = llrm_mir::memory::callees(module);
+    let outer = llrm_mir::passes::Outer::of(module, None);
+    let mut declared = llrm_mir::passes::Declared::default();
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
     let id = module
@@ -1680,6 +1698,8 @@ pub fn unroll_function(
         this: Some(id),
         tti,
         function,
+        outer: &outer,
+        declared: &mut declared,
         options,
         emptied: Vec::new(),
         peeled: Default::default(),
