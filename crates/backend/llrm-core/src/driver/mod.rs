@@ -412,6 +412,22 @@ pub fn optimized(
             .iter_mut()
             .try_for_each(|module| crate::backend::bytes::expanded(module, |operation| options.arch.expands(operation)))
     })?;
+    timed("mir funnel shifts", || {
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(
+                |module| crate::backend::funnel::expanded(module, |operation| options.arch.expands(operation)),
+            )
+    })?;
+    timed("mir absolute values", || {
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(
+                |module| crate::backend::absolute::expanded(module, |operation| options.arch.expands(operation)),
+            )
+    })?;
     timed("mir compares", || {
         program
             .modules
