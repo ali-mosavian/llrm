@@ -59,12 +59,14 @@ pub fn folded(
     }
 
     // The trailing zeros count must not be too expensive.
-    let cost = spec.tti.intrinsic_cost(
-        &format!("llvm.cttz.i{width}"),
-        Some(Ty::Int(width)),
-        &[Ty::Int(width), Ty::Int(1)],
-        CostKind::SizeAndLatency,
-    );
+    let cost = spec
+        .tti
+        .intrinsic_cost(
+            &format!("llvm.cttz.i{width}"),
+            Some(Ty::Int(width)),
+            &[Ty::Int(width), Ty::Int(1)],
+            CostKind::SizeAndLatency,
+        );
     if !cost.valid || cost.value > MAX_CTTZ_COST {
         return false;
     }
