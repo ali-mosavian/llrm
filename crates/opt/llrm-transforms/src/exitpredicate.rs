@@ -68,6 +68,18 @@ pub fn predicated(
     outer: &Outer,
 ) -> bool {
     let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
+    predicated_in(&mut session, context, layout, function, declared, outer)
+}
+
+/// [`predicated`] over `session`, whose expressions are valid for `function`.
+pub fn predicated_in(
+    session: &mut ScevSession,
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut Declared,
+    outer: &Outer,
+) -> bool {
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let headers: Vec<BlockId> = {
         let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
