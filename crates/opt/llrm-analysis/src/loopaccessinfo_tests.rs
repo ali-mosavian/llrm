@@ -73,4 +73,50 @@ macro_rules! corpus {
     };
 }
 
-corpus!(true_dependence, anti_dependence, unknownk, indirect, invariant);
+corpus!(
+    anti_dependence,
+    anti_distance16,
+    anti_distance3,
+    byte_copy_overlap,
+    call_unknown,
+    far_distance_known_count,
+    forwarding_distance3,
+    i64_elements,
+    indirect,
+    invariant,
+    invariant_distinct,
+    mixed_sizes,
+    negative_stride,
+    nest,
+    noalias_args,
+    phi_pointer,
+    quadratic,
+    read_modify_write,
+    read_only,
+    select_offset,
+    select_pointer,
+    stride2_dependent,
+    stride2_interlaced,
+    three_arrays,
+    true_dependence,
+    two_exits,
+    uncountable,
+    unknownk,
+    volatile_load,
+    waw,
+    write_only,
+);
+
+/// DEVIATE 25: the pin speculates `%s == 1` for `b[i * s]` (an `Equal predicate`
+/// and a `{%b,+,4}` bound); with no predicates the pointer is bounded by its
+/// general range, `[b umin (b + 4 (n - 1) s), 4 + b umax (b + 4 (n - 1) s))`, and
+/// the access is still checked.
+#[test]
+fn a_symbolic_stride_is_checked_over_its_whole_range_not_speculated_unit() {
+    let ours = printed(include_str!("../tests/laa/symbolic_stride.ll"));
+    let pin = include_str!("../tests/laa/symbolic_stride.expected");
+    assert!(pin.contains("Equal predicate: %s == 1"), "premise: the pin speculates");
+    assert!(ours.contains("Memory dependences are safe with run-time checks"), "{ours}");
+    assert!(ours.contains("(Low: (((4 * (-1 + %n) * %s) + %b) umin %b) High: (4 + (((4 * (-1 + %n) * %s) + %b) umax %b)))"), "{ours}");
+    assert!(!ours.contains("Equal predicate"), "{ours}");
+}
