@@ -18,10 +18,13 @@ fn the_arm64_forms_read_and_cover_the_selection_gaps() {
     let forms = llrm_instr::parse(include_str!("../src/instructions/arm64.instr"), &dialect).expect("the forms read");
     let has = |name: &str| forms.iter().any(|form| form.name == name);
     // Every pattern the gap list names has a form to select.
-    for name in ["madd", "msub", "ccmp", "csinc", "cinc", "fnmul", "fmadd", "ubfx", "ldp", "stp", "b.eq", "b.le", "cbz", "tbz"] {
+    for name in
+        ["madd", "msub", "ccmp", "csinc", "cinc", "fnmul", "fmadd", "ubfx", "ldp", "stp", "b.eq", "b.le", "cbz", "tbz"]
+    {
         assert!(has(name), "no form `{name}`");
     }
-    // `b.{cc}` expands to one form per condition, each reading the flags it tests.
+    // `b.{cc}` expands to one form per condition, each reading the flags it
+    // tests.
     assert_eq!(forms.iter().filter(|form| form.name.starts_with("b.")).count(), 14);
 }
 

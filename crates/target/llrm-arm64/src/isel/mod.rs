@@ -494,8 +494,9 @@ impl<'a> Selector<'a> {
         let register_bits = if bits <= 32 { 32 } else { 64 };
         let value = if register_bits == 32 { value & 0xFFFF_FFFF } else { value };
         let insts = crate::expand_imm::mov_imm(value, register_bits, reg);
-        // A chain of `movz`/`movk` is several writes of one register: kept as one
-        // definition (expanded after allocation) so CSE and hoisting can move it.
+        // A chain of `movz`/`movk` is several writes of one register: kept as
+        // one definition (expanded after allocation) so CSE and
+        // hoisting can move it.
         if insts.len() > 1 {
             self.emit(Op::Imm { dst: reg, bits: register_bits, value });
         } else {

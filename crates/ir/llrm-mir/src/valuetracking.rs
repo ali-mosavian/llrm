@@ -16,6 +16,9 @@ mod bytewise_tests;
 pub mod context;
 #[cfg(test)]
 mod context_tests;
+pub mod fp;
+#[cfg(test)]
+mod fp_tests;
 pub mod guarantee;
 #[cfg(test)]
 mod guarantee_tests;

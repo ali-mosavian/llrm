@@ -88,7 +88,7 @@
 //! `loopdistribute_tests.rs`.
 //!
 //! # Runs
-//! Once per body, after `unswitch` and `split`, at -O3 and -Omax
+//! Once per body, after `unswitch`, at -O3 and -Omax
 //! (`-ftree-loop-distribution`). Not run where one pass is selected by name.
 //!
 //! # Needs
