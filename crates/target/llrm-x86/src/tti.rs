@@ -454,6 +454,21 @@ impl Tti for X86 {
         "X86"
     }
 
+    fn is_type_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp
+        // The GPR classes hold i8, i16, i32 and, in long mode, i64; x87 holds
+        // every scalar float.
+        match ty {
+            Ty::Int(8 | 16 | 32) | Ty::Pointer => true,
+            Ty::Int(64) => self.quad,
+            Ty::Int(_) => false,
+            Ty::Float | Ty::Double | Ty::X87 => true,
+        }
+    }
+
     fn cast_of_load_cost(
         &self,
         op: CastKind,
