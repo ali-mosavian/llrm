@@ -1,0 +1,54 @@
+"""objsweep and rowdiff tell a changed object and a worse row from an unchanged one, and say a compile that failed instead of counting it unchanged."""
+from __future__ import annotations
+
+import importlib.util
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+
+def load(name: str):
+    spec = importlib.util.spec_from_file_location(name, HERE / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def fake_llrm(path: Path, body: str) -> str:
+    """A stand-in llrm-c: writes `body` to the -o file; a source containing FAIL makes it exit 1."""
+    path.write_text(f'#!/bin/bash\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ngrep -q FAIL "$a" && {{ echo "llrm-c: boom" >&2; exit 1; }}\necho {body} > "$o"\n')
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_objsweep_names_a_changed_object_and_a_one_sided_failure(tmp_path):
+    src = tmp_path / "b"
+    src.mkdir()
+    (src / "same.c").write_text("int a;")
+    (src / "broken.c").write_text("FAIL")
+    old, new = fake_llrm(tmp_path / "old", "x"), fake_llrm(tmp_path / "new", "y")
+    done = subprocess.run([sys.executable, str(HERE / "objsweep.py"), old, new, "--src", str(src), "--levels", "O2", "--targets", "m32"], capture_output=True, text=True)
+    assert done.returncode == 1
+    assert "1 objects changed" in done.stdout and "changed same m32 -O2" in done.stdout
+    assert "failed on both sides" in done.stdout and "1 failed on both sides" in done.stdout
+
+
+def test_rowdiff_counts_rows_above_a_and_names_a_row_on_one_side():
+    rowdiff = load("rowdiff")
+    row = lambda c, b: {"clocks": c, "code": b}
+    a = {("p", "llrm"): row(100, 50), ("q", "llrm"): row(10, 10)}
+    b = {("p", "llrm"): row(120, 50), ("r", "llrm"): row(1, 1)}
+    lines, above = rowdiff.diff(a, b, set())
+    assert above == 1
+    assert "p -O2: clocks 100->120 (+20.0%), code 50->50 (+0.0%)" in lines
+    assert "q -O2: only in A" in lines and "r -O2: only in B" in lines
+
+
+def test_the_stub_defines_strlen(tmp_path):
+    """The pinned clang turns x_strlen's loop into a call to strlen; the stub lacked it and all four clang rows of x_strlen failed to link (the table had no reference)."""
+    stub = HERE.parents[1] / "crates/target/llrm-x86-m32/vsgcc/stub.s"
+    subprocess.run(["gcc", "-m32", "-c", str(stub), "-o", str(tmp_path / "s.o")], check=True)
+    symbols = subprocess.run(["nm", str(tmp_path / "s.o")], capture_output=True, text=True, check=True).stdout
+    assert " T strlen" in symbols
