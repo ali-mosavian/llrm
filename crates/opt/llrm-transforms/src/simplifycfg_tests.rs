@@ -442,8 +442,9 @@ b2:
 }
 
 /// A block with phis of its own and two predecessors is merged into its
-/// successor's phis; the branches then fold into one (`SimplifyCondBranchToCondBranch`,
-/// not gated by `SpeculateBlocks`), as `opt -passes='simplifycfg<no-speculate-blocks>'` does.
+/// successor's phis; the branches then fold into one
+/// (`SimplifyCondBranchToCondBranch`, not gated by `SpeculateBlocks`), as `opt
+/// -passes='simplifycfg<no-speculate-blocks>'` does.
 #[test]
 fn test_a_block_of_phis_and_a_jump_is_merged_into_the_successor() {
     check_branching(

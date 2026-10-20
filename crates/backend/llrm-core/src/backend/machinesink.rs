@@ -61,6 +61,9 @@
 //! through (and a use of a constant register). Effect: none seen, 0 sinks
 //! missed over d_faces and the 820-object corpus at -O2 (counted: no
 //! instruction that passes `safe_to_move` has a physical write and no read).
+//! The flags are the pin's rule in full: a def moves only if dead (read by no
+//! later instruction of its block and no successor), and not into a block that
+//! reads them (`SinkInstruction`'s zombie check).
 //! Exit: honor a dead implicit def when LIR marks one.
 //!
 //! DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
@@ -210,6 +213,9 @@ struct Sinker {
     changed: bool,
     regs: llrm_lir::registers::Regs,
     bits: u32,
+    /// Whether the flags are read before they are written from each block's
+    /// entry on (live in, as `isLiveIn` says of EFLAGS).
+    flags_live_in: Vec<bool>,
 }
 
 /// The post-dominator tree: the dominator tree of the reversed graph with a
@@ -308,7 +314,9 @@ impl Sinker {
             changed: false,
             regs: body.regs(),
             bits: body.bits,
+            flags_live_in: Vec::new(),
         };
+        sinker.flags_live_in = sinker.solve_flags();
         sinker.sort_successors();
         sinker
     }
@@ -362,9 +370,9 @@ impl Sinker {
     /// The physical-register cases of `FindSuccToSinkTo` for the instruction at
     /// `index` of `block`: it stays if it reads a physical register (the flags
     /// included), or defines one that is not dead. A flag it sets is dead when
-    /// no later instruction of its block reads it before another sets it
-    /// (nothing reads flags across blocks); any other physical def counts as
-    /// live (DEVIATE M6). An unknown effect reads and writes them all.
+    /// no later instruction of its block reads it before another sets it and
+    /// no successor reads it (`flags_live_in`); any other physical def counts
+    /// as live (DEVIATE M6). An unknown effect reads and writes them all.
     fn touches_machine_state(
         &self,
         block: usize,
@@ -392,7 +400,55 @@ impl Sinker {
                 return false;
             }
         }
-        false
+        // Not touched again here: dead unless a successor reads them.
+        self.cfg.succs[block].iter().any(|&succ| self.flags_live_in[succ])
+    }
+
+    /// Whether `one` writes the flags.
+    fn writes_flags(
+        &self,
+        one: &Insn,
+    ) -> bool {
+        liveness::effect(self.regs, self.bits, one).is_none_or(|effect| {
+            effect.writes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+        })
+    }
+
+    /// The flags live at each block's entry: read before written there, or
+    /// untouched there and live at a successor's.
+    fn solve_flags(&self) -> Vec<bool> {
+        let n = self.cfg.len();
+        let flags = |lanes: &crate::backend::lanes::Lanes| {
+            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+        };
+        // What each block does first: reads the flags (live in), writes them
+        // (not), or neither (as its successors). An unknown effect reads them.
+        let first: Vec<Option<bool>> = (0..n)
+            .map(|block| {
+                self.insns[block]
+                    .iter()
+                    .find_map(
+                        |one| match liveness::effect(self.regs, self.bits, one) {
+                            None => Some(true),
+                            Some(effect) => {
+                                let reads = flags(&effect.all_reads());
+                                (reads || flags(&effect.writes)).then_some(reads)
+                            }
+                        },
+                    )
+            })
+            .collect();
+        let mut live: Vec<bool> = first.iter().map(|first| *first == Some(true)).collect();
+        let mut work: Vec<usize> = (0..n).filter(|&block| live[block]).collect();
+        while let Some(block) = work.pop() {
+            for &pred in &self.cfg.preds[block] {
+                if !live[pred] && first[pred].is_none() {
+                    live[pred] = true;
+                    work.push(pred);
+                }
+            }
+        }
+        live
     }
 
     /// `GetAllSortedSuccessors`: the successors of `block`, and the blocks it
@@ -633,6 +689,11 @@ impl Sinker {
         }
         let mut break_phi_edge = false;
         let Some(sink_to) = self.find_succ_to_sink_to(&one, block, &mut break_phi_edge) else { return false };
+        // A dead flags def that is live into the block it moves to would turn
+        // into a zombie def there (`SinkInstruction`).
+        if self.flags_live_in[sink_to] && self.writes_flags(&one) {
+            return false;
+        }
         if self.size && !one.uses.is_empty() {
             return false;
         }
@@ -805,5 +866,38 @@ mod tests {
         let names: Vec<_> =
             sunk(&body, false).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
         assert_eq!(names, ["mov", "or", "je"], "the flag-setting or stays in its block");
+    }
+
+    /// The flags a `cmp` sets may be read by a branch in the next block (one
+    /// `cmp`, two branches): the def is live out and does not sink either.
+    #[test]
+    fn test_an_instruction_whose_flags_a_successor_reads_stays() {
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Binary, "or", vec![held(9)], vec![held(1), held(2)], vec![9], vec![1, 2]),
+                    insn(1, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let reader = LirBlock {
+            succ: vec![2].into(),
+            ..LirBlock::new(1, vec![insn(2, Operation::Branch, "je", vec![], vec![], vec![], vec![])])
+        };
+        let leaf = LirBlock::new(2, vec![insn(3, Operation::Return, "ret", vec![], vec![], vec![], vec![])]);
+        let mut body = LirBody::new(
+            "flags_out",
+            0,
+            vec![entry.into(), reader.into(), leaf.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let names: Vec<_> =
+            sunk(&body, false).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+        assert_eq!(names, ["or", "jcxz"], "the or stays: its flags are read in the next block");
     }
 }

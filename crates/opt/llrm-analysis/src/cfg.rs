@@ -558,8 +558,8 @@ thread_local! {
     static DERIVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many shapes (or loop sets, `loops_of`) this thread has derived, for a test
-/// that a pass asks for its body's once.
+/// How many shapes (or loop sets, `loops_of`) this thread has derived, for a
+/// test that a pass asks for its body's once.
 pub fn shapes_derived() -> usize {
     DERIVED.with(std::cell::Cell::get)
 }
