@@ -507,6 +507,7 @@ pub fn combine(
 
 /// `combine` with the `visit*` of a test, and no sinking: a test of one
 /// family sees what that family does.
+#[cfg(test)]
 pub(crate) fn combine_with(
     context: &mut Context,
     globals: &[GlobalValue],
