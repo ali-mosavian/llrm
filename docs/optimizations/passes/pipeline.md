@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:1c70362443f4eac6c8ce251db38ecf8429d79c3059554108ed72d4ee259cd8dc -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:b1ea4f9c82c1d4d7c26f24b520ae7a988f13fc99994def430496bcd835d54461 -->
 
 # pipeline
 
@@ -34,7 +34,6 @@ flowchart TB
     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>simple-loop-unswitch,<br/>non-trivial</small>"]:::mid
     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     ver["<b>version (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
-    fuse["<b>fuse (-Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     swap["<b>interchange (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
     jam["<b>unroll-jam (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
     mrg["<b>merge (once)</b>"]:::mid
@@ -47,8 +46,7 @@ flowchart TB
   sroa --> rnd
   rnd --> peel
   peel --> unsw
-  unsw --> fuse
-  fuse --> dist
+  unsw --> dist
   dist --> ver
   ver --> swap
   swap --> jam
@@ -124,7 +122,6 @@ LLVM counterpart of each limit, is
 | `unswitch`, `split`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
 | `distribute` | `distribute` (off by default; on at -O3 and -Omax) |
 | `version` | `version` (off by default; on at -O3 and -Omax) |
-| `fuse` | `fuse` (off by default; on at -Omax) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 
 `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
