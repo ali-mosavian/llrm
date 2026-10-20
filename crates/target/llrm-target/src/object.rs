@@ -47,6 +47,15 @@ pub struct ObjectFormat {
     /// The DWARF version `-gdwarf` writes: the one the target's own consumers
     /// read.
     pub dwarf_version: u16,
+    /// A symbol is reached from the instruction pointer (`[rip + symbol]`): no
+    /// address mixes a symbol with a register, and a table of code
+    /// addresses is not position independent.
+    pub pc_relative: bool,
+    /// A symbol defined elsewhere is reached through the global offset table:
+    /// its address is loaded from an entry the linker fills, since a
+    /// position independent program cannot assume where a shared library puts
+    /// it.
+    pub got_external: bool,
 }
 
 /// What `-gdwarf` writes where the target does not say.
@@ -77,8 +86,8 @@ impl ObjectFormat {
             .get("bitness")
             .and_then(|one| one.as_integer())
             .and_then(|one| u32::try_from(one).ok())
-            .filter(|one| matches!(one, 16 | 32))
-            .ok_or("bitness is not 16 or 32")?;
+            .filter(|one| matches!(one, 16 | 32 | 64))
+            .ok_or("bitness is not 16, 32 or 64")?;
         let header = value
             .get("header")
             .and_then(|one| one.as_array())
@@ -94,7 +103,15 @@ impl ObjectFormat {
                 .filter(|one| (2..=5).contains(one))
                 .ok_or("dwarf_version is not 2 to 5")?,
         };
-        Ok(Self { formats, default, bitness, header, dwarf_version })
+        let pc_relative = match value.get("pc_relative") {
+            None => false,
+            Some(one) => one.as_bool().ok_or("pc_relative is not a boolean")?,
+        };
+        let got_external = match value.get("got_external") {
+            None => false,
+            Some(one) => one.as_bool().ok_or("got_external is not a boolean")?,
+        };
+        Ok(Self { formats, default, bitness, header, dwarf_version, pc_relative, got_external })
     }
 
     /// The format written when `asked` is the one `-fobject-format=` named, if
@@ -152,7 +169,7 @@ mod tests {
         };
         assert_eq!(parse("[\"pe\"]", "omf", 32), "formats: \"pe\" is not one of \"omf\", \"elf\", \"macho\", \"coff\"");
         assert_eq!(parse("[\"omf\"]", "elf", 32), "default \"elf\" is not one of formats");
-        assert_eq!(parse("[\"omf\"]", "omf", 24), "bitness is not 16 or 32");
+        assert_eq!(parse("[\"omf\"]", "omf", 24), "bitness is not 16, 32 or 64");
     }
 
     /// A format the target does not list was written as the target's own, or

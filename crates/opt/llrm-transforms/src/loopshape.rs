@@ -16,8 +16,7 @@
 //! an instruction outside it.
 //!
 //! # Example
-//! None: a library. [`crate::loopfuse`] asks all four of both its loops;
-//! [`crate::loopdistribute`] of its one.
+//! None: a library. [`crate::loopdistribute`] asks all four of its one loop.
 //!
 //! # Provides
 //! `controls`, `quiet`, `header_quiet`, `read_outside`.

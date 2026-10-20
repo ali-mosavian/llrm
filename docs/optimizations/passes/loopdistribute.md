@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopdistribute.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopdistribute.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopdistribute.rs sha256:ceb4117a30464b9486b25c8e26055e0b16418aa8ee5e77007ba3a8e6118a986a -->
+<!-- src: crates/opt/llrm-transforms/src/loopdistribute.rs sha256:c889a87e57fbfd2943d245b13b295aae2a9b6617e05a5c9657f72913b0fcf2e7 -->
 
 # loopdistribute
 
@@ -93,7 +93,7 @@ From unit test `two_independent_stores_become_two_loops` in
 `loopdistribute_tests.rs`.
 
 ## Runs
-Once per body, after `unswitch`, `split` and `fuse`, at -O3 and -Omax
+Once per body, after `unswitch` and `split`, at -O3 and -Omax
 (`-ftree-loop-distribution`). Not run where one pass is selected by name.
 
 ## Needs
@@ -109,5 +109,3 @@ Nothing when it splits: the function is replaced by the candidate.
 gcc `tree-loop-distribution.cc` (`loop_distribution::distribute_loop`,
 on at -O3); LLVM `LoopDistribute.cpp` (`InstPartitionContainer`,
 `LoopDistributeForLoop::processLoop`; off by default).
-[`crate::loopfuse`](loopfuse.md) is the opposite and judges by the same price; it runs
-first, so what it joins is not parted again.

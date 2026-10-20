@@ -233,6 +233,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-arm64"
+version = "0.1.0"
+dependencies = [
+ "llrm-elf-arm64",
+ "llrm-instr",
+ "llrm-iselgen",
+ "llrm-lir",
+ "llrm-macho",
+ "llrm-mir",
+ "llrm-object",
+ "llrm-support",
+ "llrm-target",
+ "llrm-transforms",
+ "tempfile",
+]
+
+[[package]]
 name = "llrm-bcdriver"
 version = "0.1.0"
 dependencies = [
@@ -356,6 +373,8 @@ dependencies = [
  "llrm-x86-m16-select",
  "llrm-x86-m32",
  "llrm-x86-m32-select",
+ "llrm-x86-m64",
+ "llrm-x86-m64-select",
 ]
 
 [[package]]
@@ -376,6 +395,15 @@ version = "0.1.0"
 dependencies = [
  "llrm-dwarf",
  "llrm-object",
+]
+
+[[package]]
+name = "llrm-elf-arm64"
+version = "0.1.0"
+dependencies = [
+ "llrm-elf",
+ "llrm-object",
+ "tempfile",
 ]
 
 [[package]]
@@ -682,6 +710,29 @@ dependencies = [
 
 [[package]]
 name = "llrm-x86-m32-select"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-core",
+ "llrm-iselgen",
+ "llrm-x86",
+]
+
+[[package]]
+name = "llrm-x86-m64"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-instr",
+ "llrm-iselgen",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-target",
+ "llrm-x86",
+]
+
+[[package]]
+name = "llrm-x86-m64-select"
 version = "0.1.0"
 dependencies = [
  "iced-x86",

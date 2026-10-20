@@ -1400,4 +1400,31 @@ mod tests {
             &apart[..apart.len().min(8)]
         );
     }
+
+    /// `isel` asks whether an access carries a `!tbaa` type: `AAInfo::tbaa`
+    /// says it as `MemRef::typed` did, on every load and store of the
+    /// corpus.
+    #[test]
+    fn a_tbaa_tag_is_present_where_memref_has_a_type() {
+        use crate::memory::MemRef;
+        let (mut tagged, mut differ) = (0usize, Vec::new());
+        for (name, module) in crate::testing::corpus() {
+            let layout = layout(&module);
+            for (_, global, function) in module.functions().filter(|(_, _, f)| !f.is_declaration()) {
+                let unit = Unit::of(&module, &layout, function);
+                for (_, inst) in function.walk() {
+                    let old = MemRef::of(&unit, inst).is_some_and(|one| one.typed.is_some());
+                    let new = MemoryLocation::get(&unit, inst).is_some_and(|place| place.aa_info.tbaa.is_some());
+                    tagged += usize::from(new);
+                    if old != new {
+                        differ
+                            .push(format!("{name}/@{} {inst:?}: {old} vs {new}", global.name.as_deref().unwrap_or("")));
+                    }
+                }
+            }
+        }
+        // Premise: the corpus has tagged accesses.
+        assert!(tagged > 0, "no tagged access in the corpus");
+        assert!(differ.is_empty(), "{} differ: {:#?}", differ.len(), &differ[..differ.len().min(8)]);
+    }
 }
