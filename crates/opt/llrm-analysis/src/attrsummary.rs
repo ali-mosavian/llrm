@@ -30,9 +30,9 @@
 //! `mod_ref_for_global` says, and `globals_listed` keeps the unknown access
 //! from reaching it. Without a `FunctionInfo` the unknown access reaches it.
 
-use llrm_mir::facts::Facts;
 use llrm_mir::GlobalId;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::facts::Facts;
 use llrm_mir::module::{GlobalKind, Module};
 use llrm_mir::types::Type;
 use llrm_support::hash::IndexMap;
@@ -40,6 +40,12 @@ use llrm_support::hash::IndexMap;
 use crate::aa::{IRMemLocation, MemoryEffects, ModRefInfo};
 use crate::alias::Summary;
 use crate::memory::{Identity, Key, MemoryKind, MemoryObject, ObjectInterner, Slice};
+
+/// Whether `Summaries` is this map; `LLRM_LEGACY_SUMMARIES=1` brings back the
+/// fixed point over the bodies (`alias::summaries`).
+pub fn enabled() -> bool {
+    !llrm_support::env_flag!("LLRM_LEGACY_SUMMARIES")
+}
 
 /// The summaries of the defined functions of `module`, by name.
 ///

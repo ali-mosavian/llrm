@@ -182,6 +182,28 @@ impl llrm_target::Target for M32 {
         llrm_x86::calling::callee_saved(CALLING.native())
     }
 
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId {
+        llrm_x86::calling::register(name)
+    }
+
+    fn convention_results(
+        &self,
+        convention: &llrm_target::calling::Convention,
+        width: u32,
+    ) -> Vec<RegId> {
+        llrm_x86::calling::results(convention, width)
+    }
+
+    fn convention_callee_saved(
+        &self,
+        convention: &llrm_target::calling::Convention,
+    ) -> Vec<(RegId, RegId)> {
+        llrm_x86::calling::callee_saved(convention)
+    }
+
     fn march(
         &self,
         name: &str,
@@ -207,6 +229,29 @@ impl llrm_target::Target for M32 {
 
     fn operand_bytes(&self) -> i64 {
         4
+    }
+
+    fn register_op_bytes(
+        &self,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::register_bytes(width, 4)
+    }
+
+    fn shift_op_bytes(
+        &self,
+        count: i64,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::shift_bytes(count, width, 4)
+    }
+
+    fn multiply_immediate_bytes(
+        &self,
+        number: i64,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::imul_immediate_bytes(number, width, 4)
     }
 
     fn default_cpu(&self) -> &'static str {

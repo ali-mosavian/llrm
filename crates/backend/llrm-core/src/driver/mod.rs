@@ -362,6 +362,20 @@ pub fn optimized(
                 |module| crate::backend::bitcounts::expanded(module, |operation| options.arch.expands(operation)),
             )
     })?;
+    timed("mir byte swaps", || {
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(|module| crate::backend::bytes::expanded(module, |operation| options.arch.expands(operation)))
+    })?;
+    timed("mir compares", || {
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(
+                |module| crate::backend::compares::expanded(module, |operation| options.arch.expands(operation)),
+            )
+    })?;
     timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
     if options.arch.expands("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));

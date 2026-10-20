@@ -24,7 +24,7 @@
 //! body with an irreducible loop has no finite estimate: the result is none.
 //!
 //! [`work`] is `instructions + memory`, the number the allocator and the
-//! route choice compare alternatives by (`allocate::_emitted`, and the cost of
+//! route choice compares alternatives by (the cost of
 //! a candidate in `assemble.rs`, in bytes at -Os). [`Executed::jump_cycles`]
 //! prices the branches and jumps on a CPU profile: taken branches, untaken
 //! branches and short jumps each at their form's cost.

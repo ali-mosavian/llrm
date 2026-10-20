@@ -1488,8 +1488,9 @@ impl<'d> SplitEditor<'d> {
         // `eliminateDeadDefs`: the copy goes and the ranges of what it read are
         // cut back to their other reads (`shrinkToUses`), else they end at an
         // index with no instruction.
-        while let Some(mi) = dead.pop() {
-            for def in cx.lis.erase_dead_def(mi) {
+        while !dead.is_empty() {
+            let round = std::mem::take(&mut dead);
+            for def in cx.lis.erase_dead_defs(&round) {
                 if cx.env.is_copy_like(cx.lis.instr(def)) && cx.lis.instr(def).defines.len() == 1 {
                     dead.push(def);
                 }

@@ -38,7 +38,6 @@ The run count per slot must match LLVM's. `parity::RUNS_PER_BODY` states it and 
 
 ## A/Bs against the old rounds
 
-`LLRM_NO_LLVM_ORDER` also turns the translated greedy allocator off (`allocate.rs`), so an order-against-old A/B mixes the pass order with the allocator. `LLRM_NO_GREEDY` isolates the allocator: compare order with and without it before reading a regression as the order's.
 
 ## Recount of the registry
 

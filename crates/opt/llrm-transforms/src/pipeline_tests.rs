@@ -1332,11 +1332,11 @@ fn test_a_body_run_again_after_a_call_is_sent_to_an_equal_copy_starts_no_pass() 
 }
 
 /// -O1 inlined small functions called more than once, searched allocations and
-/// made the spiller's second route, none of which gcc's -O1 does: 34% of
-/// d_faces' -O1 compile (5,643 -> 3,718 Minstr) for 0 rows of vsgcc. A function
-/// called once still goes in (`-finline-functions-called-once`).
+/// made the spiller's second route: 34% of d_faces' -O1 compile (5,643 -> 3,718
+/// Minstr). clang's -O1 runs the always-inliner alone
+/// (`OnlyAlwaysInlining`), so a function called once stays a call too.
 #[test]
-fn o1_inlines_only_the_last_call_and_has_no_allocation_search_or_second_route() {
+fn o1_inlines_nothing_and_has_no_allocation_search_or_second_route() {
     let text = "
 define internal i16 @twice(i16 %x) {
 entry:
@@ -1368,7 +1368,7 @@ entry:
         2,
         "-O1 inlined a function called twice:\n{kept}"
     );
-    assert!(!kept.contains("@once"), "@once, called once, is inlined at -O1:\n{kept}");
+    assert!(kept.contains("@once"), "@once is inlined at -O1, which clang's always-inliner does not:\n{kept}");
     let (gone, _) = pipelined(text, o2);
     assert!(!crate::testing::printed(&gone).contains("@twice"), "premise: -O2 inlines it");
 }
@@ -2295,6 +2295,36 @@ fn test_the_llvm_order_runs_licm_in_its_three_slots_and_once_after_the_header_co
         runs(&after, "licm") - runs(&before, "licm")
     };
     assert_eq!(ran(true), 4, "licm@724, licm@730, licm@823 and the one after the header copy");
+}
+
+/// The write-through `Promote` ran after the translated SROA and mem2reg at
+/// every level: 34.6 M instructions of d_faces -O2 (1,894.7 -> 1,860.1 M) for
+/// assembly GVN already produces. Only -O1 (no GVN `pre`) keeps it.
+#[test]
+fn test_the_write_through_promote_runs_after_sroa_only_where_gvn_has_no_pre() {
+    let parts = |applied: &Applied| {
+        let mut slots = Vec::new();
+        for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
+            for one in pipeline::llvm_order(applied, phase) {
+                if matches!(
+                    one.name(),
+                    "sroa@1179" | "promote@1241" | "sroa@646" | "sroa@776"
+                ) {
+                    slots.push((one.name(), one.parts()));
+                }
+            }
+        }
+        slots
+    };
+    let o2 = parts(&Applied::default());
+    assert_eq!(o2.len(), 4);
+    for (slot, parts) in &o2 {
+        assert!(!parts.contains(&"promote") && !parts.contains(&"deadslots"), "{slot} {parts:?}");
+    }
+    let o1 = Applied { options: pipeline::Options { pre: false, ..Default::default() }, ..Applied::default() };
+    for (slot, parts) in &parts(&o1) {
+        assert!(parts.contains(&"promote"), "{slot} {parts:?}");
+    }
 }
 
 /// `llrm-pass -O3 --order SLOT` ran the peeler in the slot's place:
