@@ -28,6 +28,14 @@
 //! DEVIATE: the pre- and post-indexed addressing branches
 //! (`AMK_PreIndexed`, `AMK_PostIndexed`; x86 prefers none) are not ported.
 //! Work per use is bounded by the formulae it has, which the caps bound.
+//!
+//! DEVIATE LG1: `GenerateICmpZeroScales` asks `getExactSDiv` for no overflow
+//! of the product, but for an odd factor `x == 0` and `x * c == 0` are the same
+//! compare (multiplying by it is a bijection mod 2^bits), so it ignores the
+//! significant bits there, for the counter alone compared to zero. The pin keeps a loop's exit counter beside the
+//! scaled one it is a multiple of (recsum: `dec; add -3; jne`); this exits on
+//! the scaled one (`add -3; jne`), as the stand-in LSR did. Exit: none, a
+//! proof; if LLVM does the same, delete the line.
 
 use std::collections::BTreeMap;
 
@@ -562,12 +570,20 @@ impl Collection<'_, '_> {
             f.base_offset = f.base_offset.add_unsigned(offset).sub_unsigned(min_offset);
 
             let factor_s = se.get_constant_of_type(cx, int_ty, i128::from(factor));
+            // DEVIATE LG1: `x == 0` and `x * c == 0` are the same compare for an
+            // odd `c` (multiplying by it is a bijection of the integers mod
+            // 2^bits), so the product may wrap where LLVM's `getExactSDiv`
+            // wants it not to (`isMulSExtable`). Only for the counter alone
+            // compared to zero: with a limit besides it the scaled limit is a
+            // multiply in the preheader and an add in the loop, which the cost
+            // model prices below `dec; je` (x_adler -O2: 47972 -> 50976 clocks).
+            let odd = factor & 1 == 1 && base.scaled_reg.is_none() && base.base_regs.len() == 1;
             // No base register may overflow when multiplied.
             for i in 0..f.base_regs.len() {
                 f.base_regs[i] = se
                     .get_mul_expr(cx, vec![ScevUse::of(f.base_regs[i]), ScevUse::of(factor_s)], Flags::default(), 0)
                     .scev;
-                if get_exact_sdiv(se, cx, f.base_regs[i], factor_s, false) != Some(base.base_regs[i]) {
+                if get_exact_sdiv(se, cx, f.base_regs[i], factor_s, odd) != Some(base.base_regs[i]) {
                     continue 'factor;
                 }
             }
@@ -576,7 +592,7 @@ impl Collection<'_, '_> {
                 let product =
                     se.get_mul_expr(cx, vec![ScevUse::of(scaled), ScevUse::of(factor_s)], Flags::default(), 0).scev;
                 f.scaled_reg = Some(product);
-                if get_exact_sdiv(se, cx, product, factor_s, false) != base.scaled_reg {
+                if get_exact_sdiv(se, cx, product, factor_s, odd) != base.scaled_reg {
                     continue;
                 }
             }
