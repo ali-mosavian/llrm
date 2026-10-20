@@ -77,3 +77,14 @@ def test_runpinned_stops_when_the_dist_lacks_the_linker(tmp_path):
     done = subprocess.run(["bash", str(HERE / "runpinned.sh"), "0" * 9, str(dist), str(tmp_path / "out.txt")], capture_output=True, text=True, env={"PIN_TREES": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(tmp_path)}, cwd=repo)
     assert done.returncode == 2 and "is missing" in done.stderr, done.stderr
     assert not (tmp_path / "out.txt").exists()
+
+
+def test_rundiff_sets_aside_unbuilt_programs_and_names_a_new_failure():
+    """A VM without V:\\LINK failed 137 programs per side; pairruns called the pair void, and the 7 that ran were not compared."""
+    rundiff = load("rundiff")
+    group = "[c] 3 programs: 1 pass, 0 known, 2 fail\n"
+    base = group + 'FAIL  qb/a.bas: not built: Bad command or filename - "V:\\LINK"\n' + "FAIL  c/x.c [-O2]: wrong output\n"
+    new = group + 'FAIL  qb/a.bas: not built: Bad command or filename - "V:\\LINK"\n' + "FAIL  c/y.c [-O2]: wrong output\n"
+    added, fixed, census = rundiff.compare(base, new)
+    assert added == ["NEW FAIL c/y.c [-O2]: wrong output"] and fixed == ["c/x.c [-O2]"]
+    assert "not built (V:\\LINK etc.): base 1, new 1" in census
