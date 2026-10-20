@@ -2125,8 +2125,7 @@ pub fn emit_in(
         }
         return None;
     }
-    // A conditional move: the first source is the destination, the second
-    // replaces it when the condition holds.
+    // A conditional move: the first source is the destination, the second replaces it when the condition holds.
     if op == Operation::Select && dests.len() == 1 && sources.len() == 2 {
         let into = reg_of(&dests[0])?;
         let width = width_of(into)?;

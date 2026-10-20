@@ -31,8 +31,7 @@ fn a_wide_constant_is_built_outside_the_loop_that_uses_it() {
     let start = lines.iter().position(|l| l.strip_suffix(':') == Some(target)).expect("the loop label");
     // Premise: the constant is built somewhere (not folded away).
     assert!(lines.iter().any(|l| l.starts_with("movk")), "{asm}");
-    let inside: Vec<&&str> =
-        lines[start..=back].iter().filter(|l| l.starts_with("movk") || l.starts_with("movz")).collect();
+    let inside: Vec<&&str> = lines[start..=back].iter().filter(|l| l.starts_with("movk") || l.starts_with("movz")).collect();
     assert!(inside.is_empty(), "constant rebuilt in the loop: {inside:?}\n{asm}");
 }
 

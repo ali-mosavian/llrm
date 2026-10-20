@@ -50,10 +50,10 @@
 //! `RegAlloc::transform` first changes the body so that the greedy loop can
 //! treat every value alike, in this order:
 //!
-//! 1. `constrain::distinct_roles` and `distinct_classes` copy a value that
-//!    needs two incompatible register sets at once (a word that is both base
-//!    and index of one address, or both a byte and an index) into one value per
-//!    role.
+//! 1. `constrain::distinct_classes` copies a value that needs two incompatible
+//!    register sets at once (both a byte and an index) into one value per role;
+//!    isel already gives a word that is both base and index of one address two
+//!    values.
 //! 2. `explicit_selectors` reaches a far cell through ES where its selector is
 //!    also read as a number.
 //! 3. A pin outside the value's class is dropped where an instruction delivers
@@ -4118,8 +4118,7 @@ impl RegAlloc {
             );
         }
         let floor = self.pinned.keys().copied().max().map_or(0, |one| one + 1);
-        let mut body =
-            constrain::distinct_classes(&constrain::distinct_roles(&body, floor), floor, &segments, &self.classes);
+        let mut body = constrain::distinct_classes(&body, floor, &segments, &self.classes);
         body = explicit_selectors(&body, Some(&self.pinned), &segments, &self.classes);
         let confined = classes(&body, &BTreeSet::new(), &segments, &self.classes);
         let incompatible: BTreeSet<u32> = self

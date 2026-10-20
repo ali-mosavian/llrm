@@ -237,8 +237,8 @@ impl Selector<'_> {
             {
                 Ok(Addr::Register { base: *base, index: index.reg, extend: index.extend, shifted: index.shift != 0 })
             }
-            // A global, frame object or offset base with an index: the base in
-            // a register, the index in the access.
+            // A global, frame object or offset base with an index: the base in a register,
+            // the index in the access.
             (_, Some(index)) if index.shift == 0 || i64::from(1u8 << index.shift) == scale => {
                 let base = self.pointer_register(&AddrExpr { index: None, ..address.clone() })?;
                 Ok(Addr::Register { base, index: index.reg, extend: index.extend, shifted: index.shift != 0 })
