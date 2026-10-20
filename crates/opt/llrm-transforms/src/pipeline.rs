@@ -27,8 +27,6 @@
 //!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
 //!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>simple-loop-unswitch,<br/>non-trivial</small>"]:::mid
-//!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
-//!     ver["<b>version (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     swap["<b>interchange (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
 //!     mrg["<b>merge (once)</b>"]:::mid
 //!   end
@@ -40,9 +38,7 @@
 //!   sroa --> rnd
 //!   rnd --> peel
 //!   peel --> unsw
-//!   unsw --> dist
-//!   dist --> ver
-//!   ver --> swap
+//!   unsw --> swap
 //!   swap --> mrg
 //!   mrg --> c
 //!   c -.->|"a changed body goes<br/>back through B"| sroa
@@ -113,8 +109,6 @@
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
 //! | `unswitch`, `interchange` | the passes of that name (off by default; on at -O3 and -Omax) |
-//! | `distribute` | `distribute` (off by default; on at -O3 and -Omax) |
-//! | `version` | `version` (off by default; on at -O3 and -Omax) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
@@ -149,11 +143,10 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
+    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
-    loopdistribute, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollpass, loopversion, mem2reg,
-    memcpyopt, peel, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
-    trivialunswitch, unroll, window,
+    loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollpass, mem2reg, memcpyopt, peel, ports, promote,
+    rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -202,14 +195,6 @@ pub struct Options {
     pub loopidioms: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
-    /// A loop whose stores do not need each other's trips becomes a loop
-    /// for each (gcc's `-ftree-loop-distribution`, -O3; -Omax too).
-    pub distribute: bool,
-    /// A loop is copied for what is true of it at run time, behind a test of
-    /// it: a stride of one, pointers apart (gcc's
-    /// `-fversion-loops-for-strides`, -O3; LLVM's `LoopVersioning`; -Omax
-    /// too).
-    pub version: bool,
     /// `-floop-interchange`, -O3 (gcc's `gimple-loop-interchange.cc`); -Omax
     /// too. LLVM's `LoopInterchange` is off in its pipelines.
     pub interchange: bool,
@@ -297,8 +282,6 @@ impl Default for Options {
             loopidioms: true,
             sibcalls: true,
             unswitch: false,
-            distribute: false,
-            version: false,
             interchange: false,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
@@ -348,8 +331,6 @@ impl Options {
             sibcalls: false,
             peel: false,
             unswitch: false,
-            distribute: false,
-            version: false,
             expensive: false,
             switch_conversion: false,
             ..Self::default()
@@ -365,8 +346,6 @@ impl Options {
             limits: Limits { grows: false, ..Self::default().limits },
             peel: false,
             unswitch: false,
-            distribute: false,
-            version: false,
             ..Self::default()
         }
     }
@@ -378,8 +357,6 @@ impl Options {
         Self {
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
-            distribute: true,
-            version: true,
             interchange: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
@@ -395,8 +372,6 @@ impl Options {
             limits: Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() },
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
-            distribute: true,
-            version: true,
             interchange: true,
             search: true,
             routes: true,
@@ -535,7 +510,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Before gvn: a far pointer cast from a near one is read as the near
         // one.
         Box::new(inferspace::InferAddressSpaces),
-        Box::new(dse::Dse),
+        Box::new(deadstore::DeadStoreElimination),
         Box::new(gvn::Gvn { pre: applied.options.pre }),
         // Ordinary scalar write-through promotion remains after memory GVN;
         // `LLRM_NO_MEM2REG` keeps the write-through stand-in instead of the
@@ -964,11 +939,6 @@ pub fn recorded(
     manager.require::<Summaries>();
     manager.require::<Callbacks>();
     manager.require_program::<ProgramSummaries>();
-    // Before any summary is made: the module names what a loop's copy is told
-    // its pointers are by.
-    if applied.options.version {
-        manager.add_module(loopversion::DeclareRestrict);
-    }
     // As LLVM's O2 runs GlobalOpt before the function pipeline.
     manager.add_module(globalopt::GlobalOpt);
     // Over every body first, so a caller's pipeline sees each callee's
@@ -1212,20 +1182,12 @@ pub struct Fixed {
     /// Once, after everything else.
     last: Vec<Box<dyn FunctionPass>>,
     unswitch: Option<simpleloopunswitch::SimpleLoopUnswitch>,
-    distribute: Option<loopdistribute::Distribute>,
-    version: Option<loopversion::Version>,
     interchange: Option<loopinterchange::Interchange>,
     only: bool,
     rounds: usize,
     dump: Option<PathBuf>,
     /// Bodies run, naming each one's dump.
     runs: usize,
-}
-
-/// `options` less the passes that try a rewrite on a copy and judge it: what
-/// a candidate goes through before it is judged.
-fn without_candidates(options: &Options) -> Options {
-    Options { unswitch: false, distribute: false, version: false, interchange: false, ..options.clone() }
 }
 
 impl Fixed {
@@ -1249,28 +1211,7 @@ impl Fixed {
         let (peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "peel");
         let (last, passes): (Vec<_>, Vec<_>) =
             passes.into_iter().partition(|one| matches!(one.name(), "merge" | "memcpyopt"));
-        // A candidate is judged after the whole pipeline, with the passes that
-        // make candidates off.
-        let judged = || {
-            Box::new(Fixed::new(&Applied {
-                options: without_candidates(&applied.options),
-                only: None,
-                dump: None,
-                ..applied.clone()
-            }))
-        };
         let unswitch = applied.options.unswitch.then_some(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: true });
-        let distribute = applied.options.distribute.then(|| loopdistribute::Distribute { passes: vec![judged()] });
-        // A loop the copy changes the shape of is judged as it will be run:
-        // its header copied and what it loads unchanged moved out.
-        let version = applied
-            .options
-            .version
-            .then(
-                || loopversion::Version {
-                    passes: std::iter::once(judged() as Box<dyn FunctionPass>).chain(header_copied(applied)).collect(),
-                },
-            );
         Self {
             boundary,
             passes,
@@ -1278,8 +1219,6 @@ impl Fixed {
             peelers,
             last,
             unswitch,
-            distribute: distribute.filter(|_| only.is_none()),
-            version: version.filter(|_| only.is_none()),
             interchange: (applied.options.interchange && only.is_none()).then_some(loopinterchange::Interchange),
             only: only.is_some(),
             rounds: applied.options.rounds,
@@ -1344,8 +1283,6 @@ impl Fixed {
         linear.unswitch = None;
         if !matches!(phase, Phase::Simplify) {
             linear.peelers.clear();
-            linear.distribute = None;
-            linear.version = None;
             linear.interchange = None;
         }
         linear
@@ -1386,14 +1323,6 @@ impl Fixed {
         }
         if let Some(unswitch) = &mut self.unswitch {
             run.step(unswitch, "unswitch", unit, analyses);
-        }
-        if let Some(distribute) = &mut self.distribute {
-            run.step(distribute, "distribute", unit, analyses);
-        }
-        // A loop that is a stride from a fill or a unit step, once what runs
-        // before has parted and joined what it will.
-        if let Some(version) = &mut self.version {
-            run.step(version, "version", unit, analyses);
         }
         // The swapped nest is cleaned as a peeled loop is.
         if let Some(interchange) = &mut self.interchange {

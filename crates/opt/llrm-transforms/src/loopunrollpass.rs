@@ -1007,7 +1007,7 @@ fn compute_unroll_count(
             assumptions: &analyzed.assumptions,
         };
         let already = run.peeled.get(&lp.get_header()).copied().unwrap_or(0);
-        crate::looppeel::compute_peel_count(se, &cx, lp, loop_size, pp, up.threshold, already);
+        crate::looppeel::compute_peel_count(se, &cx, run.callees, lp, loop_size, pp, up.threshold, already);
     }
     if pp.peel_count != 0 {
         up.runtime = false;
@@ -1555,6 +1555,9 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             // `PartiallyUnrolled`: the loop is looked at again, as
             // `revisitCurrentLoop` does; its analyses and its nest are made
             // again (the cloned iterations are loops' blocks of its parent).
+            // `peelLoop` ends in `simplifyLoop`: the exits the copies share
+            // are dedicated again (here for the whole function, U6).
+            crate::loopsimplify::simplified(run.function);
             let _ = crate::lcssa::closed(run.function);
             analyzed = Analyzed::of(run);
             let after = unrolled_blocks(run, capacity, &body);

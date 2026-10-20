@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopclone.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopclone.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:7245d57578f6fb60b4b8a7a96da44ef961d203f7446c44d8c1a4f7548011396b -->
+<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:b0f77f2c339fe5aebf830b4af897913fd1f79925eba8c5b43b49b14774e52890 -->
 
 # loopclone
 
@@ -137,9 +137,7 @@ From the fixture of unit test
 peeled once where the test peels twice.
 
 ## Runs
-Called by [`crate::peel`](peel.md) (`peeled`),
-[`crate::loopdistribute`](loopdistribute.md) (`copied`);
-not a pass.
+Called by [`crate::peel`](peel.md) (`peeled`); not a pass.
 
 ## Needs
 LCSSA ([`crate::lcssa`](lcssa.md)) and a simplified loop ([`crate::loopsimplify`](loopsimplify.md)).

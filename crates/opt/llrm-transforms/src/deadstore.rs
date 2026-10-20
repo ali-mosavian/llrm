@@ -75,7 +75,7 @@
 //! ```
 //!
 //! # Runs
-//! In the slot of `dse@820` (LLVM's order); the older `dse.rs` runs elsewhere.
+//! In the slot of `dse@820` (LLVM's order); the legacy pipeline runs it too.
 //!
 //! # Needs
 //! MemorySSA (`mssa`), its alias query, dominators and post-dominators, the
@@ -1721,3 +1721,7 @@ fn post_order_of(function: &Function) -> Vec<BlockId> {
 #[cfg(test)]
 #[path = "deadstore_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "dse_tests.rs"]
+mod dse_tests;
