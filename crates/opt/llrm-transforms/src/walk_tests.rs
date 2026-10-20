@@ -347,12 +347,12 @@ b0:
 
 /// Two calls of a function that reads and writes nothing, with the same
 /// arguments, are one call. hanoi's merge in the simplifier makes it a loop
-/// (188 clocks); copies made before it (two calls in the body) left it
-/// 185482.
+/// (188 clocks); copies made before it (two calls in the body) peeled it
+/// four levels deep (185482 clocks).
 #[test]
 fn test_calls_the_simplifier_merges_are_not_two_recursive_calls_to_copy() {
     let mut module = parsed(
-        "define internal i32 @hanoi(i32 %n) memory(none) {
+        "define internal i32 @hanoi(i32 %n) {
 b0:
   %zero = icmp eq i32 %n, 0
   br i1 %zero, label %out, label %rec
@@ -386,6 +386,49 @@ b0:
     .and_then(|done| done)
     .expect("the pipeline runs");
     let text = llrm_mir::print::module(&module);
-    let calls = text.matches("call i32 @hanoi").count();
-    assert!(calls <= 1, "hanoi was copied before its two calls were merged, {calls} calls of it:\n{text}");
+    let hanoi = text.split("define").find(|one| one.contains("@hanoi(i32 %n)")).expect("@hanoi");
+    let peeled = hanoi.matches("icmp eq i32 %n,").count();
+    assert_eq!(peeled, 1, "hanoi was copied into itself before its two calls were merged, {peeled} levels:\n{hanoi}");
+}
+
+/// gcc does not inline recursively at -Os. fib was copied into itself there
+/// as at -O2 (17 calls of it standing).
+#[test]
+fn test_a_recursive_function_is_not_copied_into_itself_when_sized_for_bytes() {
+    let mut module = parsed(
+        "define i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @main() {
+b0:
+  %r = call i32 @fib(i32 30)
+  ret i32 %r
+}
+",
+    );
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    let calls = text.matches("call i32 @fib").count();
+    assert!(calls <= 3, "fib was copied into itself at -Os, {calls} calls of it:\n{text}");
 }
