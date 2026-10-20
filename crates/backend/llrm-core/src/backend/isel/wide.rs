@@ -118,7 +118,7 @@ impl Selector<'_, '_, '_> {
     /// Whether `operand` is an i32 sign-extended by the old, weaker count. The
     /// divisions keep it: with the translated count x_ll_div's signed 64 by 32
     /// divisions became two dword `idiv`s where the helper was 8% faster in
-    /// clocks (rows, 2026-10-20). Exit: price two divisions against the
+    /// clocks (rows, 2026-10-20). DEVIATE D-SB1 (docs/architecture/parity-pipeline.md). Exit: price two divisions against the
     /// helper from the target description, then use `narrow`.
     fn narrow_divisor(
         &self,
