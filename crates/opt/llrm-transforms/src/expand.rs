@@ -31,11 +31,10 @@
 //! None: `expand` is infrastructure and has no pass-level before and after of
 //! its own. Its `test_generated_recurrences_expand_to_what_the_loop_computes`
 //! in `expand_tests.rs` checks expanded values against the interpreter; the
-//! passes that use it show it at work, see [`crate::lsr_pass`] and
-//! [`crate::exitfold`].
+//! passes that use it show it at work, see [`crate::lsr_pass`].
 //!
 //! # Used by
-//! [`crate::lsr_pass`] and [`crate::exitfold`], while they rewrite a loop, and
+//! [`crate::lsr_pass`], while it rewrites a loop, and
 //! [`crate::counting`], which builds its seeds with it. Not a pass: it runs
 //! only inside those.
 //!
