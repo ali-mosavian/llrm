@@ -918,3 +918,16 @@ fn a_block_takes_the_name_of_another_and_a_taken_name_gets_a_number() {
     assert_eq!(f.block(entry).name.as_deref(), Some("next1"));
     assert_eq!(f.block(next).name.as_deref(), Some("next"));
 }
+
+/// A `switch` with two cases to one block is two edges: a phi there has two
+/// inputs from it, and the exit phis of lcssa, lcssamerges and LSR gave one.
+#[test]
+fn a_switch_with_two_cases_to_a_block_is_two_edge_predecessors() {
+    let text = "define i16 @f(i16 %x) {\nentry:\n  switch i16 %x, label %d [\n    i16 1, label %t\n    i16 2, label %t\n  ]\n\nt:\n  ret i16 1\n\nd:\n  ret i16 2\n}\n";
+    let mut module = module(text);
+    let f = function(&mut module);
+    let entry = f.entry().unwrap();
+    let t = f.successors(entry)[1];
+    assert_eq!(f.predecessors(t), [entry]);
+    assert_eq!(f.edge_predecessors(t), [entry, entry]);
+}
