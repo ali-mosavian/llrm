@@ -2845,6 +2845,25 @@ mod tests {
         assert!(asm.contains("mov eax, 200012"), "{asm}");
     }
 
+    /// A byte stored to the absolute address 0xB8000 (text video memory) was
+    /// `mov byte ptr [32768], 65`: the direct address was masked to 16 bits on
+    /// every target (GORILLA/bload_bsave.bas printed the wrong cell at -O2).
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_m32_an_absolute_address_keeps_its_32_bits() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("vm.c");
+        std::fs::write(&source, "void __cdecl f(void) { *(volatile char *)0xB8000 = 65; *(volatile char *)0xB8001 = 66; }\n")
+            .unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
+            .expect("wccq records vm.c");
+        let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
+        let built = super::selected(&text, "vm", None, &super::parse_args(&argv).unwrap().codegen).unwrap();
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        assert!(!asm.contains("[32768]") && !asm.contains("[32769]"), "{asm}");
+    }
+
     /// `(long long)a * (65500 + (i & 31))` is a dword times a dword: one `imul`
     /// into EDX:EAX. The old sign-bit count did not see that the divisor's
     /// range fits an i32, so x_fixmul widened both and multiplied in halves
