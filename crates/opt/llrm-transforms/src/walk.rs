@@ -203,7 +203,6 @@ impl ProgramPass for Walk {
                 .map(|(members, _)| members.into_iter().filter(|id| wanted.contains(id)).collect())
                 .collect();
             let remarks = llrm_support::env_flag!("LLRM_INLINE_REMARKS");
-            let attributes = llrm_analysis::attrsummary::enabled();
             for members in components {
                 for &id in &members {
                     let mut decided = remarks.then(Vec::new);
@@ -262,9 +261,8 @@ impl ProgramPass for Walk {
                     (self.simplify)(module, &mut modules[at], id, "walk.");
                 }
                 // `PostOrderFunctionAttrsPass`: once per component, after its
-                // bodies are simplified. Only the attribute-fed `Summaries`
-                // reads them (`attrsummary::enabled`).
-                if attributes && !members.is_empty() {
+                // bodies are simplified.
+                if !members.is_empty() {
                     for id in llrm_analysis::functionattrs::post_order(
                         module,
                         &program.layout,
