@@ -83,6 +83,11 @@
 //!   w-6. Exit: the copies chosen by gcc's badness heap with its growth limits,
 //!   tail-call elimination at the pin's slot; open rows hanoi, bintree,
 //!   quicksort, x_mergesort, recsum (docs/architecture/recursion-rows.md).
+//!   A recursive callee inlined into another function is also peeled
+//!   (ipa-inline.cc:1033): its own calls inlined in the copy while the calls
+//!   of it to itself per call, to the power of the copies deep, are below
+//!   1 - 1/8 (squared per copy), a copy adds at most 15 `gcc_insns` and the
+//!   copies of a call at most 450; a tree is never peeled; not at -Os.
 //!
 //! # See also
 //! [`crate::inline`], the decision this is to replace; the plan is
