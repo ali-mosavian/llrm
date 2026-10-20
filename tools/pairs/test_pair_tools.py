@@ -94,3 +94,10 @@ def test_bisect_stops_when_the_command_cannot_run(tmp_path):
     """A runner that refused stale binaries exited 1 like a failing test; every later probe read as bad and 40bc8dd60 was named the culprit of stft_single."""
     source = (HERE / "firstbad.py").read_text()
     assert "not 0 or 1" in source and "dist.glob(\"llrm-*\")" in source
+
+
+def test_board_and_cbisect_say_what_they_need_instead_of_running():
+    """Run without QCPORT or a worktree they print their usage and exit 2: a board with no corpus measured an empty compile once."""
+    for script in ("board.py", "cbisect.py"):
+        done = subprocess.run([sys.executable, str(HERE / script)], capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+        assert done.returncode == 2, (script, done.stderr)
