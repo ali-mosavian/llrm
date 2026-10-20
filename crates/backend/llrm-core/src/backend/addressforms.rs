@@ -94,6 +94,21 @@ pub fn promote(
                     Loc::Held(destination) if destination.value == value && destination.width == 2
                 ),
             );
+        // A parameter the convention delivers in a register: the entry's
+        // marker defines it, with no destination of its own. The register
+        // delivers a fresh word, and the `movzx` into the value follows.
+        let delivered = one.delivers.iter().position(|(held, _)| held.value == value && held.width == 2);
+        if let (None, Some(slot)) = (position, delivered) {
+            let temporary = fresh();
+            let rename = |found: u32| if found == value { temporary } else { found };
+            let mut leader = (*one).clone();
+            leader.delivers[slot].0.value = temporary;
+            leader.defines = one.defines.iter().map(|&found| rename(found)).collect();
+            leader.widths = one.widths.iter().map(|&(found, width)| (rename(found), width)).collect();
+            let follower = extension(&one, value, temporary);
+            out[&at].splice(index..=index, [Arc::new(leader), Arc::new(follower)]);
+            continue;
+        }
         let Some(position) = position else {
             return Err(format!("value#{value} has no word destination to promote"));
         };
@@ -137,18 +152,28 @@ pub fn promote(
         leader.defines = one.defines.iter().map(|&found| if found == value { temporary } else { found }).collect();
         leader.widths =
             one.widths.iter().map(|&(found, width)| (if found == value { temporary } else { found }, width)).collect();
-        let mut follower = (*lir::anchor(Arc::clone(&one))).clone();
-        follower.what = Some(Semantics {
-            name: Some("movzx".to_owned()),
-            dests: vec![Loc::Held(ir::Held { value, width: 4 })],
-            sources: vec![Loc::Held(ir::Held { value: temporary, width: 2 })],
-            ..Semantics::new(Operation::Extend)
-        });
-        follower.defines = vec![value];
-        follower.uses = vec![temporary];
-        follower.widths = vec![(temporary, 2), (value, 4)];
-        follower.call = None;
+        let follower = extension(&one, value, temporary);
         out[&at].splice(index..=index, [Arc::new(leader), Arc::new(follower)]);
     }
     Ok(out)
+}
+
+/// After `one`: `value` as the zero extension of the word `temporary`.
+fn extension(
+    one: &Arc<Insn>,
+    value: u32,
+    temporary: u32,
+) -> Insn {
+    let mut follower = (*lir::anchor(Arc::clone(one))).clone();
+    follower.what = Some(Semantics {
+        name: Some("movzx".to_owned()),
+        dests: vec![Loc::Held(ir::Held { value, width: 4 })],
+        sources: vec![Loc::Held(ir::Held { value: temporary, width: 2 })],
+        ..Semantics::new(Operation::Extend)
+    });
+    follower.defines = vec![value];
+    follower.uses = vec![temporary];
+    follower.widths = vec![(temporary, 2), (value, 4)];
+    follower.call = None;
+    follower
 }
