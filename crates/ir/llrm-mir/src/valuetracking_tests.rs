@@ -124,3 +124,18 @@ fn the_stub_api_answers_from_the_zero_bits_it_proves() {
     assert_eq!((range.lower, range.upper), (0, 256));
     assert!(!is_known_to_be_a_power_of_two(context, function, m, false, 0, None));
 }
+
+/// A table a pass declared (`Declared::table`) is a constant naming a global
+/// that is not in the module until `place`; the alignment asked then panicked
+/// indexing past `globals`. Like every other lookup it is `get`: unknown, so 1.
+#[test]
+fn test_alignment_of_a_global_the_running_pass_declared_is_one() {
+    let module = parse::module("@w = global [100 x i8] zeroinitializer, align 2\ndefine ptr @f(i16 %i) {\n  %p = getelementptr inbounds i16, ptr @w, i16 %i\n  ret ptr %p\n}\n").expect("parses");
+    let GlobalKind::Function(function) = &module.global(module.named("f").expect("@f")).kind else { unreachable!() };
+    let ret = function.terminator(function.entry().expect("an entry")).expect("a return");
+    let layout = crate::datalayout::DataLayout::default();
+    let pointer = function.instruction(ret).operands[0];
+    assert_eq!(alignment(&module.context, &layout, &module.globals, function, pointer), 2);
+    // `@w` not yet among the globals.
+    assert_eq!(alignment(&module.context, &layout, &[], function, pointer), 1);
+}
