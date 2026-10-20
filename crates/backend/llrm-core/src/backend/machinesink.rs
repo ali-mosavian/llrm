@@ -38,14 +38,16 @@
 //! instruction inside a cycle; no instruction here sinks on that ground.
 //! Exit: the target description's pressure limits.
 //!
-//! DEVIATE M4 (#2903): in a build for size only an instruction that reads no
-//! value moves (a constant). LLVM moves any, and its allocator splits the
-//! operands' ranges around the stretch. Rows with every instruction movable
-//! at -Os: `bench/jpeg_single` m16 +61 bytes, `jpeg_fixed` m16 +50, `huge_runs`
-//! +29 (all 36 -Os objects that differ: 8 larger, +163, 21 smaller, -998).
-//! Otherwise (-O1 to -O3) every safe instruction moves; `bench/quicksort`
-//! -O2 m16 costs +985 clocks (+0.3%, a reload more per trip). Exit: the
-//! greedy allocator with SplitKit as the default allocator (target 2026-11-05).
+//! DEVIATE M4 (#2903): in a build for size an instruction moves only if each
+//! value it reads is read again after it (a later instruction of its block, or
+//! a phi reading it at the block's end), so that no range grows; LLVM moves
+//! any, and its allocator splits the ranges around the stretch. Rows with every
+//! instruction movable at -Os: `bench/jpeg_single` m16 +61 bytes, `jpeg_fixed`
+//! m16 +50, `huge_runs` +29 (all 36 -Os objects that differ: 8 larger, +163, 21
+//! smaller, -998). Otherwise (-O1 to -O3) every safe instruction moves;
+//! `bench/quicksort` -O2 m16 costs +985 clocks (+0.3%, a reload more per trip).
+//! Exit: the greedy allocator with SplitKit as the default allocator (target
+//! 2026-11-05).
 //!
 //! DEVIATE M5 (#2903): in a build for size no edge is broken. The block
 //! costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
@@ -672,6 +674,27 @@ impl Sinker {
         false
     }
 
+    /// Whether `value` is not read after the instruction at `index` of `block`
+    /// on any path: a later instruction of the block, or a phi reading it at the
+    /// block's end, keeps it alive. Moving the instruction down would then make
+    /// `value` live longer (DEVIATE M4: in a build for size only an instruction
+    /// whose operands live on moves).
+    fn dies_at(
+        &self,
+        value: u32,
+        block: usize,
+        index: usize,
+    ) -> bool {
+        let later = self.insns[block][index + 1..].iter().any(|one| one.uses.contains(&value));
+        let at_end = self
+            .uses
+            .get(&value)
+            .into_iter()
+            .flatten()
+            .any(|&used| matches!(used, Use::Phi { from, .. } if self.position[&from] == block));
+        !later && !at_end
+    }
+
     /// `SinkInstruction`: the instruction at `index` of `block`, moved into a
     /// successor or its edge marked for splitting. Whether it moved.
     fn sink_instruction(
@@ -694,7 +717,7 @@ impl Sinker {
         if self.flags_live_in[sink_to] && self.writes_flags(&one) {
             return false;
         }
-        if self.size && !one.uses.is_empty() {
+        if self.size && one.uses.iter().any(|&value| self.dies_at(value, block, index)) {
             return false;
         }
         // A successor with other predecessors: sink along the edge, or break
