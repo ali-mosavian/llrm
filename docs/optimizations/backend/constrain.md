@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/constrain.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/constrain.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/constrain.rs sha256:83735f660751b0bc92b65aab2ec2e8a024274ab9ce3c387540a6cad56e349570 -->
+<!-- src: crates/backend/llrm-core/src/backend/constrain.rs sha256:4a3431306364e13d04de528817b6f21b4b3bd8d2f0aa3b4b8b797fc5f0a57a31 -->
 
 # constrain
 
@@ -38,17 +38,10 @@ The result is the new body and the map of fresh values to registers.
 The same file holds the other splits the allocator applies to a body
 before it places values:
 
-- `distinct_roles`: a value that is both the base and the index of one
-  16-bit address needs two registers at once; the index reads a copy.
 - `distinct_classes`: a value read as a byte (AX..DX) and as the index of
   a frame array (SI, DI) has no register that fits all reads. The reads that
   fit the most others keep the value; each remaining read takes a copy, live
   across that instruction alone.
-- `addressed`: a candidate shape the allocator tries when the first
-  allocation spills. A spilled value that is a base or index in more than
-  one instruction and has no other role (no plain operand, selector,
-  requirement or hidden use) is copied at each addressing instruction, so
-  the copy can sit in an address register while the value is spilled.
 - `required`, `required_in` and `required_added`: the pin map of a
   body, of some blocks, or of only the instructions added since a previous
   body.
@@ -80,10 +73,9 @@ From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
 -march=i386` of the program under `calleefacts`.
 
 ## Used by
-Register allocation (`allocate.rs`), which calls `distinct_roles`,
-`distinct_classes` and `constrained` on the body entering allocation, the
-`required` family each time the body is rewritten, and `addressed` for a
-candidate shape.
+Register allocation (`allocate.rs`), which calls `distinct_classes` and
+`constrained` on the body entering allocation, and the `required` family
+each time the body is rewritten.
 
 ## See also
 The phase map: `crate::backend`

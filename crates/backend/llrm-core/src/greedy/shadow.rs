@@ -201,6 +201,20 @@ struct BodySplitEnv {
 }
 
 impl BodySplitEnv {
+    /// How wide `from` is named by the instructions that read it: for a value
+    /// no table holds (one a spill made).
+    fn named_width(
+        lis: &LiveIntervals,
+        from: u32,
+    ) -> Option<u32> {
+        lis.operands(from)
+            .iter()
+            .flat_map(|op| crate::backend::allocate::_named_widths(lis.instr(op.instr)).collect::<Vec<_>>())
+            .filter(|(value, _)| *value == from)
+            .map(|(_, width)| width)
+            .max()
+    }
+
     fn new(
         body: &LirBody,
         tables: Rc<Tables>,
@@ -246,15 +260,9 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         new: u32,
         from: u32,
     ) {
-        let named = lis
-            .operands(from)
-            .iter()
-            .flat_map(|op| crate::backend::allocate::_named_widths(lis.instr(op.instr)).collect::<Vec<_>>())
-            .filter(|(value, _)| *value == from)
-            .map(|(_, width)| width)
-            .max();
         let mut widths = self.tables.widths.borrow_mut();
-        if let Some(width) = widths.get(&from).copied().or(named) {
+        let width = widths.get(&from).copied().or_else(|| Self::named_width(lis, from));
+        if let Some(width) = width {
             widths.insert(new, width);
         }
         let order = self.tables.orders.borrow().get(&from).cloned();
@@ -404,14 +412,8 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         beside: Option<&Insn>,
     ) -> Arc<Insn> {
         use crate::model::ir::{Held, Loc, Operation, Semantics};
-        let named = lis
-            .operands(from)
-            .iter()
-            .flat_map(|op| crate::backend::allocate::_named_widths(lis.instr(op.instr)).collect::<Vec<_>>())
-            .filter(|(value, _)| *value == from)
-            .map(|(_, width)| width)
-            .max();
-        let width = named.or_else(|| self.tables.widths.borrow().get(&from).copied()).unwrap_or(4);
+        let known = self.tables.widths.borrow().get(&from).copied();
+        let width = known.or_else(|| Self::named_width(lis, from)).unwrap_or(4);
         self.tables.widths.borrow_mut().insert(to, width);
         let what = Semantics {
             name: Some("mov".to_owned()),
@@ -1176,6 +1178,38 @@ mod tests {
             BodySplitEnv::new(&body, Rc::clone(&tables), Regs(&llrm_x86_m16::REGISTER_INFO), None, Default::default());
         env.note_split_from(&lis, 7, 1);
         assert_eq!(tables.widths.borrow().get(&7), Some(&4), "the clone is as wide as its parent");
+    }
+
+    /// A split's copy is as wide as the parent's class (`createFrom`'s
+    /// register class), read from the table, not from a walk over every
+    /// operand of the parent: d_faces -O2 spent 3 M instructions on 266 copies
+    /// that way, a scan of the parent's operands for each.
+    #[test]
+    fn test_a_split_copy_takes_the_width_the_table_holds_for_its_parent() {
+        use crate::greedy::splitkit::SplitEnv as _;
+        use crate::model::ir::{Held, Loc, Operation, Semantics};
+        let what = Semantics {
+            name: Some("mov".to_owned()),
+            dests: vec![Loc::Held(Held { value: 1, width: 2 })],
+            sources: vec![Loc::Held(Held { value: 2, width: 2 })],
+            ..Semantics::new(Operation::Move)
+        };
+        let insns = vec![Arc::new(Insn::new(0, None, Some(what), vec![1], vec![2]))];
+        let body = LirBody::new(
+            "table",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let lis = LiveIntervals::new(&body);
+        let tables = Rc::new(Tables::default());
+        tables.widths.borrow_mut().insert(1, 4);
+        let env =
+            BodySplitEnv::new(&body, Rc::clone(&tables), Regs(&llrm_x86_m16::REGISTER_INFO), None, Default::default());
+        let copy = env.build_copy(&lis, 7, 1, None);
+        let width = copy.what.as_ref().map(|what| what.dests.clone());
+        assert_eq!(width, Some(vec![Loc::Held(Held { value: 7, width: 4 })]), "the table says 4, the operands say 2");
     }
 
     /// A phi value defined by a literal on one edge and an add on the other

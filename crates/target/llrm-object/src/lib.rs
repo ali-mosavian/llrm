@@ -13,6 +13,8 @@ pub enum Arch {
     I386,
     /// x86-64.
     X8664,
+    /// arm64 (AArch64).
+    Arm64,
 }
 
 impl Arch {
@@ -21,7 +23,7 @@ impl Arch {
         match self {
             Arch::I8086 => 16,
             Arch::I386 => 32,
-            Arch::X8664 => 64,
+            Arch::X8664 | Arch::Arm64 => 64,
         }
     }
 }
@@ -65,21 +67,50 @@ pub enum Kind {
     SegmentBase,
     /// OMF: a 16:16 pointer, whose offset is the field's first two bytes.
     FarPointer,
+    /// arm64: the word offset to the target in the low 26 bits of a `b` or
+    /// `bl`.
+    Branch26,
+    /// arm64: the 4 KiB page of the target, relative to the place's page, in an
+    /// `adrp`.
+    Page21,
+    /// arm64: the target's offset in its page, in the 12-bit immediate of an
+    /// `add` (`access` is `None`) or of a load or store of `1 << access` bytes.
+    PageOffset12 { access: Option<u8> },
+    /// x86-64: the place's offset from the target's global offset table entry,
+    /// `width` bytes relative to the place `from` bytes past the field's
+    /// start (`R_X86_64_REX_GOTPCRELX`): the entry holds the target's address.
+    GotPcRel { width: usize, from: usize },
+    /// arm64: `Page21` of the target's GOT entry.
+    GotPage21,
+    /// arm64: the offset of the target's GOT entry in its page, in an 8-byte
+    /// load.
+    GotPageOffset12,
 }
 
 impl Kind {
     /// Field bytes this kind patches.
     pub fn width(self) -> usize {
         match self {
-            Kind::Abs { width } | Kind::PcRel { width, .. } | Kind::Branch { width } => width,
+            Kind::Abs { width } | Kind::PcRel { width, .. } | Kind::GotPcRel { width, .. } | Kind::Branch { width } => {
+                width
+            }
             Kind::SectionIndex | Kind::SegmentBase => 2,
             Kind::SectionOffset { width } => width,
             Kind::FarPointer => 4,
+            Kind::Branch26 | Kind::Page21 | Kind::PageOffset12 { .. } | Kind::GotPage21 | Kind::GotPageOffset12 => 4,
         }
     }
 
     pub fn relative(self) -> bool {
-        matches!(self, Kind::PcRel { .. } | Kind::Branch { .. })
+        matches!(
+            self,
+            Kind::PcRel { .. }
+                | Kind::GotPcRel { .. }
+                | Kind::Branch { .. }
+                | Kind::Branch26
+                | Kind::Page21
+                | Kind::GotPage21
+        )
     }
 }
 

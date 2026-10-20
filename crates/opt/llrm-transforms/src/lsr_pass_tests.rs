@@ -309,6 +309,19 @@ fn a_zip_loop_with_three_element_exits_keeps_the_element_counter_as_opt_does() {
     assert_eq!(after.matches("shl i16 %8, 1").count(), 2, "{after}");
 }
 
+/// `LLRM_DEBUG=counts` could not say whether LSR still rewrote anything on a
+/// bench (d_faces read 11 runs and a fraction of the old cost): the loop it
+/// looked at, the solution it chose and the rewrite it made are counted.
+#[test]
+fn lsr_counts_the_loops_it_looks_at_solves_and_rewrites() {
+    use llrm_mir::counts::{Event, get};
+    let before = [Event::LsrLoops, Event::LsrSolutions, Event::LsrRewritten].map(get);
+    let (changed, after) = reduced(ARRAY, "i486", &[&[5]]);
+    assert!(changed, "{after}");
+    let now = [Event::LsrLoops, Event::LsrSolutions, Event::LsrRewritten].map(get);
+    assert_eq!(now.iter().zip(&before).map(|(now, before)| now - before).collect::<Vec<_>>(), [1, 1, 1], "{after}");
+}
+
 /// `for i < 33: p[i] = (7 * i) & 31`, stored through `p + 2 * i`.
 const FILL: &str = "define i16 @f(i16 %k) {
 b1:
@@ -354,4 +367,35 @@ fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
     assert_eq!(results(&module, &[&[0], &[3]]), results(&before, &[&[0], &[3]]), "{after}");
     assert!(after.contains("getelementptr i8, ptr %0, i16 2"), "{after}");
     assert!(!after.contains(" shl nuw nsw i16 %i, 1"), "{after}");
+}
+
+/// planets.nib and flat_containers.nib (m16 and m32) panicked at
+/// `intrinsic_name`: a call to a function declared after the globals LSR was
+/// handed were read indexed past their end.
+#[test]
+fn a_call_to_a_global_the_outer_snapshot_lacks_is_no_intrinsic() {
+    let text = "declare void @h(ptr)\n\ndefine i32 @f(i32 %n) {
+entry:
+  %buf = alloca [64 x i32]
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %a = getelementptr i32, ptr %buf, i32 %i
+  store i32 7, ptr %a
+  call void @h(ptr %a)
+  %next = add i32 %i, 1
+  %c = icmp eq i32 %next, %n
+  br i1 %c, label %exit, label %loop
+exit:
+  ret i32 %next
+}
+";
+    let mut module = parsed(&format!("{FLAT}{text}"));
+    let (layout, mut outer) = (layout(&module), Outer::of(&module, None));
+    let known = module.globals.iter().position(|global| global.name.as_deref() == Some("h")).unwrap();
+    outer.globals = std::rc::Rc::new(outer.globals[..known].to_vec());
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap();
+    crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
 }

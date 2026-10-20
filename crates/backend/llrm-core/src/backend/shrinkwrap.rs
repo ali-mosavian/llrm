@@ -98,7 +98,7 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-use llrm_lir::registers::RegId;
+use llrm_lir::registers::{RegId, Regs};
 use llrm_mir::module::BlockId;
 
 use crate::analysis::loops::dominance;
@@ -126,17 +126,20 @@ pub struct Wrap {
 
 /// The registers `one` names, and those the call it is disturbs by its
 /// convention.
-pub fn named(one: &Insn) -> BTreeSet<RegId> {
+pub fn named(
+    regs: Regs,
+    one: &Insn,
+) -> BTreeSet<RegId> {
     let mut found: BTreeSet<RegId> =
-        one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(ir::root)).collect();
+        one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(|register| regs.root(register))).collect();
     let Some(what) = &one.what else { return found };
     for place in what.dests.iter().chain(&what.sources) {
         match place {
             Loc::Reg(ir::Reg { register, .. }) => {
-                found.insert(ir::root(*register));
+                found.insert(regs.root(*register));
             }
             Loc::Mem(ir::Mem { through, index_through, .. }) => {
-                found.extend([*through, *index_through].map(ir::root));
+                found.extend([*through, *index_through].map(|register| regs.root(register)));
             }
             _ => {}
         }
@@ -245,8 +248,9 @@ impl<'a> Uses<'a> {
         kept: &'a BTreeSet<RegId>,
         frame: Option<(RegId, RegId)>,
     ) -> Self {
+        let regs = body.regs();
         let frame_registers =
-            frame.iter().flat_map(|(pointer, stack)| [ir::root(*pointer), ir::root(*stack)]).collect();
+            frame.iter().flat_map(|(pointer, stack)| [regs.root(*pointer), regs.root(*stack)]).collect();
         Self { body, kept, frame_registers, framed: frame.is_some() }
     }
 
@@ -254,7 +258,7 @@ impl<'a> Uses<'a> {
         &self,
         one: &Insn,
     ) -> bool {
-        let names = named(one);
+        let names = named(self.body.regs(), one);
         (self.framed && (touches_frame(one) || names.iter().any(|register| self.frame_registers.contains(register))))
             || names.iter().any(|register| self.kept.contains(register))
     }

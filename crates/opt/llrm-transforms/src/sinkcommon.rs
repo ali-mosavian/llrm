@@ -521,17 +521,21 @@ pub fn duplicate_predecessors_merged(
     if preds.len() < 2 {
         return false;
     }
-    // A candidate holds a jump and nothing else.
+    // A candidate holds a jump and nothing else
+    // (`EqualBBWrapper::canBeMerged`): the entry block is not one, it
+    // cannot be eliminated or have predecessors.
     let candidates: Vec<BlockId> = preds
         .iter()
         .copied()
         .filter(|&pred| {
             let mut body = function.iter_block(pred);
-            body.next().is_some_and(|first| {
-                function.instruction(first).opcode == Opcode::Br
-                    && function.instruction(first).operands.len() == 1
-                    && body.next().is_none()
-            })
+            function.entry() != Some(pred)
+                && !function.predecessors(pred).is_empty()
+                && body.next().is_some_and(|first| {
+                    function.instruction(first).opcode == Opcode::Br
+                        && function.instruction(first).operands.len() == 1
+                        && body.next().is_none()
+                })
         })
         .collect();
     let mut changed = false;

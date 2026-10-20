@@ -21,8 +21,7 @@
 //!
 //! # Example
 //! None: a library. [`crate::loopversion`] judges a specialised loop by work
-//! alone, [`crate::loopfuse`] a fused one with the spills, and
-//! [`crate::loopdistribute`] a split one by its price alone.
+//! alone and [`crate::loopdistribute`] a split one by its price alone.
 //!
 //! # Provides
 //! `adopted`, `priced`, `priced_at`, `frequencies`, `Pricing`, `Gain`,
@@ -159,7 +158,7 @@ pub fn adopted(
     });
 
     let size = |state: &Function| occurrence::operations(state).count();
-    let count = |state: &Function| cfg::Shape::of(state).loops.len();
+    let count = |state: &Function| cfg::loops_of(state).len();
     let price = |state: &Function| priced(unit, outer, costs, state, pricing);
     let body = kept.as_ref().unwrap_or(&*unit.function);
     let prices = (price(body), price(&candidate));

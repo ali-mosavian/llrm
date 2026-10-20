@@ -63,7 +63,7 @@ use std::fmt;
 
 use llrm_lir::registers::Regs;
 use llrm_object::{Arch, Binding, Definition, Kind, Object, OmfGroup, Reloc, Role, Section, Symbol, Target};
-use llrm_target::object::Format;
+use llrm_target::object::{CodeModel, Format};
 
 use crate::backend::masm;
 use crate::backend::select;
@@ -78,6 +78,7 @@ pub const OFFSET: Kind = Kind::Abs { width: 2 };
 pub const BASE: Kind = Kind::SegmentBase;
 pub const POINTER: Kind = Kind::FarPointer;
 pub const OFFSET32: Kind = Kind::Abs { width: 4 };
+pub const OFFSET64: Kind = Kind::Abs { width: 8 };
 
 /// A call's field: relative to its own end.
 fn relative(width: usize) -> Kind {
@@ -368,7 +369,9 @@ fn pack_field(
     kind: Kind,
     value: i64,
 ) {
-    if kind.width() == 4 && kind != POINTER {
+    if kind.width() == 8 {
+        buffer[at..at + 8].copy_from_slice(&value.to_le_bytes());
+    } else if kind.width() == 4 && kind != POINTER {
         buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
     } else {
         pack_into(buffer, at, value & 0xFFFF);
@@ -382,7 +385,9 @@ fn field(
     at: usize,
     kind: Kind,
 ) -> i64 {
-    if kind.width() == 4 && kind != POINTER {
+    if kind.width() == 8 {
+        i64::from_le_bytes(buffer[at..at + 8].try_into().expect("eight bytes"))
+    } else if kind.width() == 4 && kind != POINTER {
         i64::from(i32::from_le_bytes([buffer[at], buffer[at + 1], buffer[at + 2], buffer[at + 3]]))
     } else {
         i64::from(i16::from_le_bytes([buffer[at], buffer[at + 1]]))
@@ -407,7 +412,7 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
     for (number, procedure) in module.procedures.iter().enumerate() {
         reached.insert(procedure.name.clone());
         for item in masm::listing(procedure, number)? {
-            for one in _items(regs, &item, &module.names, number, module.object.bitness)? {
+            for one in _items(regs, &item, &module.names, number, module.object.code_model())? {
                 match one {
                     Encoded::Piece(Piece { fixups, .. }) => {
                         reached.extend(fixups.iter().map(|fixup| _target(&fixup.name).to_owned()));
@@ -570,7 +575,7 @@ fn built_inner(
             .iter()
             .position(|one| &one.name == name)
             .unwrap_or_else(|| panic!("ValueError: {} is not in list", pyrepr::string(name)));
-        _data(&mut segments[index], index, items, &mut symbols, module.object.bitness);
+        _data(&mut segments[index], index, items, &mut symbols, module.object.code_model());
     }
     let mut sizes: IndexMap<String, usize> = IndexMap::default();
     for (index, group) in groups.iter().enumerate() {
@@ -600,7 +605,7 @@ pub fn _data(
     index: usize,
     items: &[masm::Datum],
     symbols: &mut IndexMap<String, (usize, usize)>,
-    bits: u32,
+    model: CodeModel,
 ) {
     for item in items {
         match item {
@@ -615,15 +620,21 @@ pub fn _data(
                 // (a 32-bit object's is a dword).
                 let loc = if *far {
                     POINTER
-                } else if bits == 32 {
-                    OFFSET32
                 } else {
-                    OFFSET
+                    match model {
+                        CodeModel::Flat64 => OFFSET64,
+                        CodeModel::Flat32 => OFFSET32,
+                        CodeModel::Segmented16 => OFFSET,
+                    }
                 };
-                assert_eq!(loc.width(), *bytes as usize, "a {bytes}-byte pointer in a {bits}-bit object");
+                assert_eq!(loc.width(), *bytes as usize, "a {bytes}-byte pointer in a {}-bit object", model.bits());
                 segment.put(&vec![0; loc.width()], &[Fixup::new(0, loc, name.clone())]);
                 let at = segment.image.len() - loc.width();
-                pack_into(&mut segment.image, at, offset & ((1_i64 << (8 * (*bytes).min(4))) - 1));
+                if loc == OFFSET64 {
+                    pack_field(&mut segment.image, at, loc, *offset);
+                } else {
+                    pack_into(&mut segment.image, at, offset & ((1_i64 << (8 * (*bytes).min(4))) - 1));
+                }
             }
             masm::Datum::Align(masm::Align { to }) => {
                 segment.align = segment.align.max(*to as usize);
@@ -681,7 +692,7 @@ pub fn _code_by(
         }
         items.push(Encoded::Label(masm::Label { name: procedure.name.clone() }));
         for item in listed(procedure, number).map_err(Unencodable)? {
-            match _items(regs, &item, &module.names, number, module.object.bitness) {
+            match _items(regs, &item, &module.names, number, module.object.code_model()) {
                 Ok(encoded) => items.extend(encoded),
                 Err(error) => return Err(Unencodable(format!("{}: {error}", procedure.name)).into()),
             }
@@ -691,8 +702,8 @@ pub fn _code_by(
     // Tuned for size, a long conditional jump may go through a `jmp` within
     // reach.
     let size = !group.is_empty() && group.iter().all(|&number| module.procedures[number].size);
-    let bits = module.object.bitness;
-    let labels = if size { _trampolined(&mut items, bits)? } else { _relaxed(&mut items, bits)? };
+    let model = module.object.code_model();
+    let labels = if size { _trampolined(&mut items, model)? } else { _relaxed(&mut items, model)? };
     let mut at = 0;
     for item in &items {
         match item {
@@ -712,8 +723,8 @@ pub fn _code_by(
                 sizes.insert(name.to_string(), at - symbols[name].1);
             }
             Encoded::Align(_) | Encoded::Prefer { .. } => {
-                let pad = _size(item, at as i64, bits);
-                segment.put(&nops(pad, usize::from(module.padding.nop), bits == 16), &[]);
+                let pad = _size(item, at as i64, model);
+                segment.put(&nops(pad, usize::from(module.padding.nop), model.segmented()), &[]);
                 let log2 = match item {
                     Encoded::Align(masm::CodeAlign { log2, .. }) => *log2,
                     Encoded::Prefer { computed, .. } => *computed,
@@ -722,12 +733,12 @@ pub fn _code_by(
                 segment.align = segment.align.max(1 << log2);
             }
             Encoded::Jump(Jump { name, label, long }) => {
-                segment.put(&_jump(name, labels[label], at, *long, bits)?.code, &[])
+                segment.put(&_jump(name, labels[label], at, *long, model)?.code, &[])
             }
             Encoded::Near(Near { name }) if labels.contains_key(name) => {
-                let distance = labels[name] - (at as i64 + 1 + i64::from(bits) / 8);
+                let distance = labels[name] - (at as i64 + 1 + model.displacement_bytes() as i64);
                 let far = || Unencodable(format!("a near call to {name} {distance} bytes away"));
-                let displacement = if bits == 32 {
+                let displacement = if model.flat() {
                     i32::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
                 } else {
                     i16::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
@@ -735,8 +746,10 @@ pub fn _code_by(
                 segment.put(&[&[0xE8][..], &displacement].concat(), &[]);
             }
             Encoded::Near(Near { name }) => {
-                segment
-                    .put(&vec![0; 1 + bits as usize / 8], &[Fixup::new(1, relative(bits as usize / 8), name.clone())]);
+                segment.put(
+                    &vec![0; 1 + model.displacement_bytes()],
+                    &[Fixup::new(1, relative(model.displacement_bytes()), name.clone())],
+                );
                 segment.image[at] = 0xE8;
             }
         }
@@ -750,7 +763,7 @@ pub fn _items(
     item: &masm::Item,
     names: &IndexMap<(Space, i64), String>,
     number: usize,
-    bits: u32,
+    model: CodeModel,
 ) -> Result<Vec<Encoded>, Unencodable> {
     Ok(match item {
         masm::Item::Align(align) => vec![Encoded::Align(*align)],
@@ -761,12 +774,12 @@ pub fn _items(
         masm::Item::Mark(mark) => vec![Encoded::Mark(*mark, None)],
         masm::Item::Callee(masm::Callee { code, .. }) if !code.is_empty() => code
             .iter()
-            .map(|part| _part(part, bits))
+            .map(|part| _part(part, model))
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .map(Encoded::Piece)
             .collect(),
-        masm::Item::Callee(masm::Callee { name, far: true, .. }) if bits == 32 => {
+        masm::Item::Callee(masm::Callee { name, far: true, .. }) if model == CodeModel::Flat32 => {
             return Err(Unencodable(format!("a far call to {name} in flat code")));
         }
         masm::Item::Callee(masm::Callee { name, far: true, .. }) => vec![Encoded::Piece(Piece {
@@ -787,21 +800,21 @@ pub fn _items(
             };
             vec![Encoded::Jump(Jump::new(name.unwrap_or("jmp"), masm::label(number, *target)))]
         }
-        masm::Item::Semantics(what) => vec![Encoded::Piece(_encoded(regs, what, names, bits)?)],
+        masm::Item::Semantics(what) => vec![Encoded::Piece(_encoded(regs, what, names, model)?)],
     })
 }
 
 pub fn _part(
     part: &masm::InlinePart,
-    bits: u32,
+    model: CodeModel,
 ) -> Result<Piece, Unencodable> {
     match part {
         masm::InlinePart::Bytes(part) => Ok(Piece::new(part.clone())),
         masm::InlinePart::Near(opcode, name) => Ok(Piece {
-            code: [&[*opcode][..], &vec![0; bits as usize / 8][..]].concat(),
-            fixups: vec![Fixup::new(1, relative(bits as usize / 8), name.clone())],
+            code: [&[*opcode][..], &vec![0; model.bits() as usize / 8][..]].concat(),
+            fixups: vec![Fixup::new(1, relative(model.bits() as usize / 8), name.clone())],
         }),
-        masm::InlinePart::Fixup(kind, name, offset) if kind == "offset" && bits == 32 => Ok(Piece {
+        masm::InlinePart::Fixup(kind, name, offset) if kind == "offset" && model == CodeModel::Flat32 => Ok(Piece {
             code: (*offset as u32).to_le_bytes().to_vec(),
             fixups: vec![Fixup::new(0, OFFSET32, name.clone())],
         }),
@@ -822,12 +835,12 @@ pub fn _encoded(
     regs: Regs,
     what: &Semantics,
     names: &IndexMap<(Space, i64), String>,
-    bits: u32,
+    model: CodeModel,
 ) -> Result<Piece, Unencodable> {
     let relocated = what.sources.iter().any(|one| matches!(one, Loc::Imm(ir::Imm { address: Some(_), .. })));
-    // A near address is the `bits`-bit offset.
-    let near = if bits == 32 { OFFSET32 } else { OFFSET };
-    let Some(made) = select::emit_in(bits, what, 0, None, false, relocated, None) else {
+    // A near address is the code's offset.
+    let near = if model.flat() { OFFSET32 } else { OFFSET };
+    let Some(made) = select::emit_in(model.bits(), what, 0, None, false, relocated, None) else {
         return Err(Unencodable(what.repr()));
     };
     let mut code = made.code.clone();
@@ -848,11 +861,29 @@ pub fn _encoded(
             Loc::Imm(ir::Imm { address: Some(addr), .. }) if addr.space == Space::Group => {
                 (made.immediate_at, BASE, 0, addr)
             }
+            // Long mode loads a symbol's address with `lea` from the
+            // instruction pointer.
+            Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if model == CodeModel::Flat64 => {
+                (made.displacement_at, near, addr.disp + value, addr)
+            }
             Loc::Imm(ir::Imm { address: Some(addr), value, .. }) => (made.immediate_at, near, addr.disp + value, addr),
             _ => continue,
         };
         let Some(at) = at else {
             return Err(Unencodable(format!("{}: no field for {}", what.repr(), one.repr())));
+        };
+        // Long mode reaches a symbol from the instruction pointer: the field is
+        // relative to the instruction's end, and an address loaded for
+        // a symbol defined elsewhere is its table entry's.
+        let loc = if model == CodeModel::Flat64 {
+            let from = code.len() - at;
+            if matches!(one, Loc::Imm(_)) && addr.space == Space::External {
+                Kind::GotPcRel { width: 4, from }
+            } else {
+                Kind::PcRel { width: 4, from }
+            }
+        } else {
+            loc
         };
         pack_field(&mut code, at, loc, addend);
         let name = names
@@ -878,7 +909,7 @@ pub fn short_reaches(displacement: i64) -> bool {
 /// only moves targets further away, so it ends, and at the smallest layout.
 pub fn _relaxed(
     items: &mut [Encoded],
-    bits: u32,
+    model: CodeModel,
 ) -> Result<IndexMap<String, i64>, Unencodable> {
     loop {
         let (mut labels, mut at) = (IndexMap::default(), 0i64);
@@ -888,7 +919,7 @@ pub fn _relaxed(
                 labels.insert(name.clone(), at);
             }
             starts.push(at);
-            at += _size(item, at, bits) as i64;
+            at += _size(item, at, model) as i64;
         }
         let mut changed = false;
         for (index, item) in items.iter_mut().enumerate() {
@@ -931,15 +962,15 @@ pub fn _relaxed(
 /// layout brings more within reach; Watcom's `SetBranches`.
 pub fn _trampolined(
     items: &mut Vec<Encoded>,
-    bits: u32,
+    model: CodeModel,
 ) -> Result<IndexMap<String, i64>, Unencodable> {
-    let mut labels = _relaxed(items, bits)?;
+    let mut labels = _relaxed(items, model)?;
     loop {
         let mut starts = Vec::with_capacity(items.len());
         let mut at = 0i64;
         for item in items.iter() {
             starts.push(at);
-            at += _size(item, at, bits) as i64;
+            at += _size(item, at, model) as i64;
         }
         let mut jumps: IndexMap<&str, Vec<usize>> = IndexMap::default();
         for (index, item) in items.iter().enumerate() {
@@ -995,14 +1026,15 @@ pub fn _trampolined(
                 item.long = false;
             }
         }
-        labels = _relaxed(items, bits)?;
+        labels = _relaxed(items, model)?;
     }
 }
 
-/// An item's bytes in `bits`-bit mode: a near displacement is `bits` wide.
+/// An item's bytes in the code model: a near displacement is
+/// `CodeModel::displacement_bytes` wide.
 pub fn _length(
     item: &Encoded,
-    bits: u32,
+    model: CodeModel,
 ) -> usize {
     match item {
         Encoded::Label(_) | Encoded::Mark(..) | Encoded::End(_) => 0,
@@ -1013,12 +1045,12 @@ pub fn _length(
             if !long {
                 SHORT_JUMP as usize
             } else if name == "jmp" {
-                1 + bits as usize / 8
+                1 + model.displacement_bytes()
             } else {
-                2 + bits as usize / 8
+                2 + model.displacement_bytes()
             }
         }
-        Encoded::Near(_) => 1 + bits as usize / 8,
+        Encoded::Near(_) => 1 + model.displacement_bytes(),
     }
 }
 
@@ -1027,7 +1059,7 @@ pub fn _length(
 pub fn _size(
     item: &Encoded,
     at: i64,
-    bits: u32,
+    model: CodeModel,
 ) -> usize {
     let pad = |log2: u8| (at as u64).wrapping_neg() as usize & ((1usize << log2) - 1);
     match item {
@@ -1036,7 +1068,7 @@ pub fn _size(
             if *max_skip != 0 && pad > usize::from(*max_skip) { 0 } else { pad }
         }
         Encoded::Prefer { computed, .. } => pad(*computed),
-        other => _length(other, bits),
+        other => _length(other, model),
     }
 }
 
@@ -1081,13 +1113,13 @@ pub fn _jump(
     target: i64,
     at: usize,
     long: bool,
-    bits: u32,
+    model: CodeModel,
 ) -> Result<select::Emitted, Unencodable> {
-    let at_ip = select::At { ip: at as u64, bits };
+    let at_ip = select::At { ip: at as u64, bits: model.bits() };
     let made =
         if name == "jmp" { select::jump(target, at_ip, !long) } else { select::branch(name, target, at_ip, !long) };
     match made {
-        Some(made) if made.code.len() == _length(&Encoded::Jump(Jump { long, ..Jump::new(name, "") }), bits) => {
+        Some(made) if made.code.len() == _length(&Encoded::Jump(Jump { long, ..Jump::new(name, "") }), model) => {
             Ok(made)
         }
         _ => Err(Unencodable(format!("{name} from {at:#x} to {target:#x}"))),
@@ -1104,7 +1136,7 @@ pub fn object_of(
     sizes: &IndexMap<String, usize>,
     externs: &IndexMap<String, String>,
 ) -> Result<Object, Error> {
-    let bits = module.object.bitness;
+    let model = module.object.code_model();
     let used: BTreeSet<String> = segments
         .iter()
         .flat_map(|segment| segment.fixups.iter().map(|one| _target(&one.name).to_owned()))
@@ -1125,7 +1157,7 @@ pub fn object_of(
     // Every segment but the code and the debug sections is addressed in DGROUP,
     // where there is one.
     let grouped = |segment: &Segment| {
-        bits == 16 && segment.near && matches!(
+        model.segmented() && segment.near && matches!(
             segment.role,
             Role::Data | Role::Bss | Role::ROData | Role::Stack
         )
@@ -1181,7 +1213,11 @@ pub fn object_of(
     }
     Ok(Object {
         name: source.to_owned(),
-        arch: if bits == 32 { Arch::I386 } else { Arch::I8086 },
+        arch: match model {
+            CodeModel::Flat64 => Arch::X8664,
+            CodeModel::Flat32 => Arch::I386,
+            CodeModel::Segmented16 => Arch::I8086,
+        },
         sections,
         symbols: table,
         omf_groups,
@@ -1315,7 +1351,7 @@ mod tests {
         let mut segment = Segment::new("_DATA", Role::Data, true);
         let mut symbols = IndexMap::default();
         let items = [pointer("_x", 0, false), masm::Datum::SegmentWord("DGROUP".into()), label("_after")];
-        _data(&mut segment, 0, &items, &mut symbols, 16);
+        _data(&mut segment, 0, &items, &mut symbols, CodeModel::Segmented16);
         assert_eq!(segment.image.len(), 4);
         assert_eq!(symbols["_after"], (0, 4));
         assert_eq!(
@@ -1361,7 +1397,7 @@ mod tests {
             Encoded::Piece(Piece::new(vec![0; 200])),
             Encoded::Label(masm::Label { name: "far".into() }),
         ];
-        let labels = _relaxed(&mut items, 16).unwrap();
+        let labels = _relaxed(&mut items, CodeModel::Segmented16).unwrap();
         let long = |item: &Encoded| matches!(item, Encoded::Jump(Jump { long: true, .. }));
         assert_eq!((long(&items[0]), long(&items[3])), (true, false));
         assert_eq!(labels["far"], 3 + 126 + 2 + 200);
@@ -1382,8 +1418,8 @@ mod tests {
                 Encoded::Label(masm::Label { name: "far".into() }),
                 Encoded::Label(masm::Label { name: "elsewhere".into() }),
             ];
-            let labels = _trampolined(&mut items, 16).unwrap();
-            (items.iter().map(|item| _length(item, 16)).sum::<usize>(), labels["far"])
+            let labels = _trampolined(&mut items, CodeModel::Segmented16).unwrap();
+            (items.iter().map(|item| _length(item, CodeModel::Segmented16)).sum::<usize>(), labels["far"])
         };
         // 2 for the `je` short, the piece, a 3-byte `jmp`, and the 300 bytes: 2
         // + 20 + 3 + 300.
@@ -1625,7 +1661,7 @@ mod tests {
         );
         let names = IndexMap::from_iter([((Space::Segment, 3), "S%".to_owned())]);
 
-        let piece = _encoded(regs, &what, &names, 16).unwrap();
+        let piece = _encoded(regs, &what, &names, CodeModel::Segmented16).unwrap();
 
         let [fixup] = piece.fixups.as_slice() else { panic!("{:?}", piece.fixups) };
         assert_eq!(

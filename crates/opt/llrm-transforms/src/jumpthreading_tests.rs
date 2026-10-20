@@ -363,3 +363,74 @@ fn a_sweep_that_removes_every_block_looks_at_a_linear_number_of_positions() {
     let (small, large) = (removing_sweep_work(500), removing_sweep_work(2000));
     assert!(large * 2 <= small * 9, "500 blocks looked at {small} positions, 2000 looked at {large}");
 }
+
+/// `fixture` through the pass, printed, and the same fixture parsed and
+/// printed unchanged.
+fn after_and_unchanged(name: &str) -> (String, String) {
+    let before = fixture(name);
+    (run(&before), llrm_mir::print::module(&parsed(&before)))
+}
+
+/// `%p1` holds the value, `%p2` does not: the test stayed on a load that every
+/// path executed, so nothing was threaded from `%p1`. Now `%p2` gets the load
+/// and `%p1` skips the test.
+#[test]
+fn a_load_partially_redundant_on_one_predecessor_is_loaded_in_the_other() {
+    let after = run(&fixture("load_pre_partial"));
+    assert!(after.contains("%x.pr = load i32, ptr %p"), "a load in %p2:\n{after}");
+    assert!(after.contains("join.thread:"), "%p1 skips the test:\n{after}");
+}
+
+/// Both predecessors hold the value: no load is inserted.
+#[test]
+fn a_load_available_on_every_predecessor_is_not_loaded_again() {
+    let after = run(&fixture("load_pre_all_available"));
+    assert!(!after.contains("load"), "{after}");
+}
+
+/// The store to `%q` may overwrite `%p`: the load stayed as the program had it,
+/// and a value stored before it would have been the wrong one.
+#[test]
+fn a_store_that_may_alias_ends_the_scan() {
+    let (after, before) = after_and_unchanged("load_pre_aliasing_store");
+    assert_eq!(after, before);
+}
+
+/// A volatile load is read once, wherever its address was stored.
+#[test]
+fn a_volatile_load_is_not_made_a_phi() {
+    let (after, before) = after_and_unchanged("load_pre_volatile");
+    assert_eq!(after, before);
+}
+
+/// The address is made in the block of the load: nothing in a predecessor
+/// can be asked about it.
+#[test]
+fn a_load_whose_address_is_made_in_its_block_is_left_alone() {
+    let (after, before) = after_and_unchanged("load_pre_address_in_block");
+    assert_eq!(after, before);
+}
+
+/// The address is a `phi` of the block: each predecessor is asked about its
+/// own input.
+#[test]
+fn a_phi_address_is_translated_for_each_predecessor() {
+    let after = run(&fixture("load_pre_phi_address"));
+    assert!(!after.contains("load"), "both predecessors stored their address:\n{after}");
+}
+
+/// Two predecessors lack the value, so one block takes both and holds the one
+/// load.
+#[test]
+fn predecessors_without_the_value_share_one_inserted_load() {
+    let after = run(&fixture("load_pre_split_preds"));
+    assert_eq!(after.matches("load").count(), 1, "{after}");
+}
+
+/// The stored value is a float and the load an `i32`: the phi reads a bitcast
+/// made in the predecessor.
+#[test]
+fn a_value_of_another_type_reaches_the_phi_through_a_bitcast() {
+    let after = run(&fixture("load_pre_cast"));
+    assert!(after.contains("bitcast float %v to i32"), "{after}");
+}

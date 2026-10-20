@@ -39,6 +39,9 @@ pub struct Layout {
     pub mode: u32,
     /// LLVM's datalayout string.
     pub datalayout: String,
+    /// The `target triple` of the LLVM IR this target takes, where it takes
+    /// any.
+    pub llvm_triple: Option<String>,
     pub spaces: AddressSpaces,
     /// The operations (`select`, `fptoui.i64`) the machine has no instruction
     /// for, which the compiler expands before selection: LLVM's
@@ -78,6 +81,30 @@ impl Layout {
         operation: &str,
     ) -> bool {
         self.expand.iter().any(|one| one == operation)
+    }
+
+    /// Whether the machine lacks an instruction for `operation` on values of
+    /// the type `ty` (`select.i8`), or on any type (`select`).
+    pub fn expands_for(
+        &self,
+        operation: &str,
+        ty: &str,
+    ) -> bool {
+        self.expands(operation)
+            || self
+                .expand
+                .iter()
+                .any(|one| one.strip_prefix(operation).is_some_and(|rest| rest.strip_prefix('.') == Some(ty)))
+    }
+
+    /// Whether any value type of `operation` is expanded.
+    pub fn expands_some(
+        &self,
+        operation: &str,
+    ) -> bool {
+        self.expand
+            .iter()
+            .any(|one| one == operation || one.strip_prefix(operation).is_some_and(|rest| rest.starts_with('.')))
     }
 
     /// Whether the machine would rather run `operation` at the native width
@@ -177,9 +204,11 @@ impl Layout {
                 Some(one) => one.as_str().map(|one| Some(one.to_owned())).ok_or(format!("{name} is not a string")),
             }
         };
+        let llvm_triple = text("llvm_triple")?;
         Ok(Self {
             mode,
             datalayout,
+            llvm_triple,
             expand,
             promote,
             tti: text("tti")?,
@@ -206,6 +235,15 @@ mod tests {
     use super::*;
 
     const FLAT: &str = "mode = 32\ndatalayout = \"e-p:32:32\"\n[spaces]\nnear = 0\nfar = 0\ndata = 0\nstack = 0\n[pointers]\n4 = \"near\"\n";
+
+    /// A target found by the triple a module states needs the triple read from
+    /// its description.
+    #[test]
+    fn a_layout_reads_its_llvm_triple() {
+        let text = format!("llvm_triple = \"x86_64-unknown-linux-gnu\"\n{FLAT}");
+        assert_eq!(Layout::parse(&text).unwrap().llvm_triple.as_deref(), Some("x86_64-unknown-linux-gnu"));
+        assert_eq!(Layout::parse(FLAT).unwrap().llvm_triple, None);
+    }
 
     /// The cost model and the CPU a target is priced as were read nowhere: the
     /// targets spelled "i486" in code (m16 and m32 both).

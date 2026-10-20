@@ -25,15 +25,15 @@
 //!                                    else:      for i: a[i * s] = 0
 //! ```
 //!
-//! The copy is a candidate, as in [`crate::loopfuse`]: [`crate::candidate`]
-//! runs the pipeline over it, with the loop's header copied and what it loads
-//! unchanged hoisted ([`crate::pipeline::header_copied`]) and the same done to
-//! the loop it is judged against, so what the assumption allows is done by
-//! then (a fill, one counter, a load read once). It is kept only when its
-//! price, spills included, is 5 percent smaller (`MIN_PERCENT`): the loop twice
-//! and the test are code for what they save. At most `MAX_TRIALS` loop is tried
-//! per body, of at most `MAX_LOOP_OPS` operations in a body of at most
-//! `MAX_BODY_OPS`.
+//! The copy is a candidate, as in [`crate::loopdistribute`]:
+//! [`crate::candidate`] runs the pipeline over it, with the loop's header
+//! copied and what it loads unchanged hoisted
+//! ([`crate::pipeline::header_copied`]) and the same done to the loop it is
+//! judged against, so what the assumption allows is done by then (a fill, one
+//! counter, a load read once). It is kept only when its price, spills included,
+//! is 5 percent smaller (`MIN_PERCENT`): the loop twice and the test are code
+//! for what they save. At most `MAX_TRIALS` loop is tried per body, of at most
+//! `MAX_LOOP_OPS` operations in a body of at most `MAX_BODY_OPS`.
 //!
 //! `LLRM_DEBUG=version` prints each loop versioned and why each other was not.
 //!
@@ -61,7 +61,7 @@
 //! `loopversion_tests.rs`.
 //!
 //! # Runs
-//! Once per body, after `unswitch`, `split`, `fuse` and `distribute` and
+//! Once per body, after `unswitch` and `distribute` and
 //! before unroll-jam, at -O3 and -Omax (`-fversion-loops`, both
 //! reasons: gcc's flag is the stride's, LLVM's has none). Not run where one
 //! pass is selected by name. The module declares `llrm.noalias.p0` first
