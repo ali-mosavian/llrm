@@ -52,7 +52,7 @@ impl CoalescerEnv for TargetEnv {
         a: u32,
         b: u32,
     ) -> bool {
-        if self.fixed.contains(&a) || self.fixed.contains(&b) {
+        if (self.fixed.contains(&a) || self.fixed.contains(&b)) && std::env::var_os("LLRM_POC_NO_REFUSE").is_none() {
             return false;
         }
         if let (Some(x), Some(y)) = (self.pins.get(&a), self.pins.get(&b)) {

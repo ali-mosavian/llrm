@@ -1235,14 +1235,34 @@ impl crate::model::passes::LIRTransform for Constrain {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        if body.blocks.iter().any(|block| !block.phis.is_empty()) {
+        if body.blocks.iter().any(|block| !block.phis.is_empty()) || std::env::var_os("LLRM_POC_NO_CONSTRAIN").is_some() {
             return Ok(body);
         }
         let mut pinned = self.pinned.clone();
         pinned.extend(body.pins.iter().map(|(value, register)| (*value, *register)));
         let body = crate::backend::allocate::explicit_selectors(&body, Some(&pinned), &self.segments, &self.classes);
+        if std::env::var_os("LLRM_POC_RELEASE").is_some() {
+            if let Ok(kept) = crate::backend::allocate::released_pins(&body, &pinned, &self.segments, &self.classes) {
+                pinned = kept;
+            }
+        }
         let (mut made, fixed) = constrained(&body, Some(&pinned), &self.classes);
-        FIXED.with(|all| all.borrow_mut().insert(body.name.clone(), fixed.keys().copied().collect()));
+        // Arguments: delivered by an instruction that is not a call.
+        let arrived: BTreeSet<u32> = made
+            .insns()
+            .iter()
+            .filter(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Call))
+            .flat_map(|one| one.delivers.iter().map(|(held, _register)| held.value))
+            .collect();
+        if std::env::var_os("LLRM_POC_JOIN_ARGS").is_some() {
+            eprintln!("pocargs {} {:?}", body.name, arrived.iter().filter(|v| fixed.contains_key(*v)).collect::<Vec<_>>());
+        }
+        let refused: BTreeSet<u32> = fixed
+            .keys()
+            .copied()
+            .filter(|value| std::env::var_os("LLRM_POC_JOIN_ARGS").is_none() || !arrived.contains(value))
+            .collect();
+        FIXED.with(|all| all.borrow_mut().insert(body.name.clone(), refused));
         made.pins.extend(fixed);
         Ok(made)
     }

@@ -4093,7 +4093,6 @@ impl RegAlloc {
         body: LirBody,
     ) -> Result<LirBody, Error> {
         llrm_mir::counts::bump(llrm_mir::counts::Event::Allocations);
-        let regs = body.regs();
         let prepare = llrm_support::debug::span("regalloc prepare");
         if self.frame.is_none() {
             self.frame = Some(Rc::new(RefCell::new(frames::of(&body, None, "", None)?)));
@@ -4127,35 +4126,7 @@ impl RegAlloc {
         let poc_before = handoff_key_poc(&body);
         body = explicit_selectors(&body, Some(&self.pinned), &segments, &self.classes);
         if std::env::var_os("LLRM_POC_HITS").is_some() && poc_before != handoff_key_poc(&body) { eprintln!("pocchange {} explicit_selectors", body.name); }
-        let confined = classes(&body, &BTreeSet::new(), &segments, &self.classes);
-        let incompatible: BTreeSet<u32> = self
-            .pinned
-            .iter()
-            .filter(|(value, register)| {
-                confined.get(*value).is_some_and(|choices| {
-                    !choices.iter().map(|choice| _whole(*choice)).any(|choice| choice == _whole(**register))
-                })
-            })
-            .map(|(value, _register)| *value)
-            .collect();
-        if !incompatible.is_empty() {
-            let delivered: BTreeSet<u32> = body
-                .blocks
-                .iter()
-                .flat_map(|block| &block.insns)
-                .flat_map(|one| one.delivers.iter().map(|(held, _register)| held.value))
-                .collect();
-            let missing: BTreeSet<u32> = incompatible.difference(&delivered).copied().collect();
-            if let Some(value) = missing.first() {
-                return Err(Unplaced(format!(
-                    "value#{value} is pinned outside its register class and has no defining occurrence to split"
-                ))
-                .into());
-            }
-            self.pinned.retain(|value, _register| !incompatible.contains(value));
-        }
-        let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
-        self.pinned.retain(|value, register| !(regs.is_segment(*register) && confined.get(value) == Some(&selectors)));
+        self.pinned = released_pins(&body, &self.pinned, &segments, &self.classes)?;
         if std::env::var_os("LLRM_POC_WHAT").is_some() && !poc_fixed.is_empty() {
             let (again, more) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
             let old: std::collections::HashSet<*const Insn> = body.insns().iter().map(|one| Arc::as_ptr(one)).collect();
@@ -6457,4 +6428,45 @@ mod tests {
 
 fn handoff_key_poc(body: &LirBody) -> Vec<*const Insn> {
     body.blocks.iter().flat_map(|block| block.insns.iter().map(Arc::as_ptr)).collect()
+}
+
+/// The pins a body's values keep: a pin outside the value's class is dropped
+/// where an instruction delivers the value in that register (else an error),
+/// and a segment pin on a value confined to the selectors is dropped.
+pub fn released_pins(
+    body: &LirBody,
+    pinned: &IndexMap<u32, RegId>,
+    segments: &Segments,
+    classes_of: &RegisterClasses,
+) -> Result<IndexMap<u32, RegId>, Error> {
+    let regs = body.regs();
+    let confined = classes(body, &BTreeSet::new(), segments, classes_of);
+    let mut kept = pinned.clone();
+    let incompatible: BTreeSet<u32> = kept
+        .iter()
+        .filter(|(value, register)| {
+            confined.get(*value).is_some_and(|choices| {
+                !choices.iter().map(|choice| _whole(*choice)).any(|choice| choice == _whole(**register))
+            })
+        })
+        .map(|(value, _register)| *value)
+        .collect();
+    if !incompatible.is_empty() {
+        let delivered: BTreeSet<u32> = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insns)
+            .flat_map(|one| one.delivers.iter().map(|(held, _register)| held.value))
+            .collect();
+        if let Some(value) = incompatible.difference(&delivered).next() {
+            return Err(Unplaced(format!(
+                "value#{value} is pinned outside its register class and has no defining occurrence to split"
+            ))
+            .into());
+        }
+        kept.retain(|value, _register| !incompatible.contains(value));
+    }
+    let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
+    kept.retain(|value, register| !(regs.is_segment(*register) && confined.get(value) == Some(&selectors)));
+    Ok(kept)
 }

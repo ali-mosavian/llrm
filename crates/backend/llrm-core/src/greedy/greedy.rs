@@ -583,7 +583,16 @@ impl<'a> RAGreedy<'a> {
             // physical register if possible and populate a list of
             // new live intervals that result from splitting.
             let mut split_vregs: Vec<u32> = Vec::new();
-            match self.select_or_split(&virt_reg, &mut split_vregs) {
+            let poc_trace = std::env::var_os("LLRM_POC_DECIDE").is_some();
+            if poc_trace {
+                let hints: Vec<String> = self.hints.get(&virt_reg.reg()).into_iter().flatten().map(|h| format!("{h:?}")).collect();
+                eprintln!("decide {} w={:.3} stage={:?} hints=[{}] order={:?}", virt_reg, virt_reg.weight(), self.extra.get_stage(virt_reg.reg()), hints.join(","), self.order_of(virt_reg.reg()).iter().take(3).collect::<Vec<_>>());
+            }
+            let poc_got = self.select_or_split(&virt_reg, &mut split_vregs);
+            if poc_trace {
+                eprintln!("  -> {:?} split={:?}", match &poc_got { Select::Reg(r) => format!("{r:?}"), Select::Fail => "fail".into(), Select::None => "none".into() }, split_vregs);
+            }
+            match poc_got {
                 Select::Fail => {
                     // selectOrSplit failed to find a register: no valid
                     // allocation.
