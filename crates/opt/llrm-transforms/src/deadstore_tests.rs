@@ -144,3 +144,101 @@ fn a_returned_local_keeps_its_stores() {
         "{after}"
     );
 }
+
+/// A store to a local whose address escaped, and then `lifetime.end`: nothing
+/// reads it again and the end sweep spares it (it is visible to the callee's
+/// holder), but the terminator kills it (`isMemTerminator`).
+#[test]
+fn a_store_before_lifetime_end_goes() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @keep(ptr)\ndeclare void @llvm.lifetime.end.p0(i64, ptr)\n\ndefine void @f(i32 %x) addrspace(1) {{\nb0:\n  %a = alloca i32\n  call void @keep(ptr %a)\n  store i32 %x, ptr %a\n  call void @llvm.lifetime.end.p0(i64 4, ptr %a)\n  ret void\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(!after.contains("store i32 %x"), "{after}");
+}
+
+/// `lifetime.end` on an alloca the function returns (QB's B$FMID shape) ends
+/// nothing: the caller reads what was stored. The marker was wrong, and a DSE
+/// that trusted it removed the stores (#2625).
+#[test]
+fn a_lifetime_end_on_a_returned_alloca_kills_nothing() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @llvm.lifetime.end.p0(i64, ptr)\n\ndefine ptr @f(i32 %x) addrspace(1) {{\nb0:\n  %a = alloca i32\n  store i32 %x, ptr %a\n  call void @llvm.lifetime.end.p0(i64 4, ptr %a)\n  ret ptr %a\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(after.contains("store i32 %x"), "{after}");
+}
+
+/// A store the next call overwrites before reading, by the `initializes` of
+/// the callee's parameter, is dead (`getInitializesArgMemLoc`).
+#[test]
+fn a_store_before_a_call_that_initializes_it_goes() {
+    let mut module = parsed(&format!(
+        "{DOS}@g = global i32 0\n\ndeclare void @init(ptr initializes((0, 4)) %p) memory(argmem: write) nounwind\n\ndefine i32 @f(i32 %x) addrspace(1) {{\nb0:\n  store i32 %x, ptr @g\n  call void @init(ptr @g)\n  %r = load i32, ptr @g\n  ret i32 %r\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(!after.contains("store i32 %x"), "{after}");
+}
+
+/// A store over the head of a memset leaves its tail, which a load reads: the
+/// memset went, and the load at byte 6 read an undefined byte.
+#[test]
+fn a_memset_whose_tail_is_read_stays() {
+    let after = eliminated(
+        "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n\ndefine i16 @f(i16 %x) {\nb0:\n  %s = alloca [8 x i8]\n  call void @llvm.memset.p0.i16(ptr %s, i8 0, i16 8, i1 false)\n  store i16 %x, ptr %s\n  %s6 = getelementptr inbounds i8, ptr %s, i16 6\n  %v = load i16, ptr %s6\n  %w = load i16, ptr %s\n  %r = add i16 %v, %w\n  ret i16 %r\n}\n",
+        &[&[7]],
+    );
+    assert!(after.contains("i8 0, i16 6"), "{after}");
+}
+
+/// A call that fills a buffer reads it first through another argument: the
+/// memset before it stays. It went, and the callee read poison.
+#[test]
+fn a_call_reading_the_buffer_it_fills_keeps_the_earlier_fill() {
+    let after = eliminated(
+        "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n\ndefine void @fill(ptr %d, ptr %s) {\nb:\n  %v = load i16, ptr %s\n  store i16 %v, ptr %d\n  %e = getelementptr i8, ptr %d, i16 2\n  store i16 %v, ptr %e\n  ret void\n}\n\ndefine i16 @f(i16 %x) {\nb0:\n  %a = alloca [4 x i8]\n  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 4, i1 false)\n  call void @fill(ptr nocapture writeonly initializes((0, 4)) %a, ptr %a)\n  %v = load i16, ptr %a\n  ret i16 %v\n}\n",
+        &[&[7]],
+    );
+    assert!(after.contains("llvm.memset.p0.i16(ptr %a"), "{after}");
+}
+
+/// Only a store, or a call that fills bytes, can be dead: a body with neither
+/// built the memory graph and solved what escapes for nothing.
+#[test]
+fn a_body_with_no_store_asks_nothing() {
+    use llrm_analysis::manager::Summaries;
+    use llrm_mir::passes::PassManager;
+    let mut module =
+        parsed("declare i16 @g(i16)\n\ndefine i16 @f(i16 %x) {\nb0:\n  %y = call i16 @g(i16 %x)\n  ret i16 %y\n}\n");
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(DeadStoreElimination);
+    llrm_mir::passes::trace_recomputes(true);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let counts = llrm_mir::passes::recomputes();
+    llrm_mir::passes::trace_recomputes(false);
+    let asked: Vec<_> =
+        counts.iter().filter(|(name, ..)| matches!(*name, "points-to" | "published" | "accesses")).collect();
+    assert!(asked.is_empty(), "{asked:?}");
+}
+
+/// The cells of one array, each stored twice, cost in proportion to their
+/// number (the old solver compared every cell with all of its object's, and
+/// LLVM's walk is capped).
+#[test]
+fn the_stores_of_one_array_cost_in_proportion_to_their_number() {
+    let work = |cells: usize| {
+        let stores: String =
+            (0..cells).map(|i| format!("  store i16 {i}, ptr getelementptr (i8, ptr @arr, i16 {})\n", 2 * i)).collect();
+        let text = format!(
+            "@arr = global [{} x i8] zeroinitializer\n\ndefine i16 @f() {{\nb0:\n{stores}{stores}  ret i16 0\n}}\n",
+            2 * cells
+        );
+        let before = super::steps();
+        let after = eliminated(&text, &[&[]]);
+        let _ = after;
+        super::steps() - before
+    };
+    let (small, large) = (work(100), work(400));
+    assert!(large as f64 <= 5.0 * small as f64, "{small} steps for 100 cells, {large} for 400");
+}

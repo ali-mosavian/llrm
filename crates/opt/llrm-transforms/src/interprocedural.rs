@@ -249,7 +249,7 @@ pub(crate) fn vouched(
 /// `module`'s declarations to declare into: the module's own `Declarations`,
 /// nothing scanned unless a pass declares. `LLRM_CHECK_CALLEES=1` compares them
 /// with a fresh listing.
-fn declared(
+pub(crate) fn declared(
     modules: &mut ModuleAnalyses,
     module: &Module,
 ) -> Declared {
@@ -265,7 +265,7 @@ fn declared(
 
 /// Places what `declared` made. The module has more functions than its
 /// `Declarations` say now.
-fn placed(
+pub(crate) fn placed(
     declared: &mut Declared,
     modules: &mut ModuleAnalyses,
     module: &mut Module,
@@ -1183,23 +1183,26 @@ pub fn optimized_with<E: From<String>>(
             // `LLRM_EXP_INLINEDECIDE`: LLVM's decision per call site, in place
             // of the per-callee budget (inlinecost.rs).
             let llvm = llrm_support::env_flag!("LLRM_EXP_INLINEDECIDE");
-            let (available, more) = if llvm {
-                Default::default()
-            } else {
-                candidates(
-                    module,
-                    &callees(&mut modules[at], module),
-                    &program.layout,
-                    &counts,
-                    &private[at],
-                    costs,
-                    loose,
-                    reach,
-                    threshold,
-                    &recursive,
-                    &addressed,
-                )
+            let pick = |module: &Module, modules: &mut ModuleAnalyses, counts: &inline::Counter| {
+                if llvm {
+                    Default::default()
+                } else {
+                    candidates(
+                        module,
+                        &callees(modules, module),
+                        &program.layout,
+                        counts,
+                        &private[at],
+                        costs,
+                        loose,
+                        reach,
+                        threshold,
+                        &recursive,
+                        &addressed,
+                    )
+                }
             };
+            let (mut available, more) = pick(module, &mut modules[at], &counts);
             // What only the clocks admit of a callee stays where its copies,
             // as the pipeline over each alone leaves them, come to no more.
             if !llvm
@@ -1221,6 +1224,9 @@ pub fn optimized_with<E: From<String>>(
                 )?
             {
                 changed = true;
+                // The candidates hold the bodies as they were: a callee
+                // that took its own callees in is spliced as it is now.
+                available = pick(module, &mut modules[at], &inline::call_counts(module)).0;
             }
             // gcc's order (`inline_small_functions`): callers before callees,
             // the calls each leaves counted as they go, so that a
@@ -1933,8 +1939,9 @@ pub fn stamped(
             changed.push(id);
         }
     }
-    if llrm_support::env_set("LLRM_SHADOW_GMR") {
+    if llrm_support::env_flag!("LLRM_SHADOW_GMR") {
         shadow_globalsmodref(module, known);
+        shadow_attributes(module, known);
     }
     Ok(changed)
 }
@@ -1985,6 +1992,61 @@ fn shadow_globalsmodref(
         }
     }
     eprintln!("shadow-gmr compared {compared} bodies: same {same} looser {looser} tighter {tighter}");
+}
+
+/// Shadow of the attributes' `memory(...)` against alias's summaries, per body:
+/// the whole-memory read and write, and whether the effect is argument memory
+/// alone. `tighter` is an attribute that states less than the summary found.
+fn shadow_attributes(
+    module: &Module,
+    known: &llrm_support::hash::IndexMap<String, llrm_analysis::alias::Summary>,
+) {
+    use llrm_analysis::aa::{IRMemLocation, MemoryEffects};
+    use llrm_analysis::memory::MemoryKind;
+    let (mut same, mut looser, mut tighter, mut compared) = (0_usize, 0_usize, 0_usize, 0_usize);
+    let (mut argmem_same, mut argmem_looser) = (0_usize, 0_usize);
+    for (_, global, function) in module.functions() {
+        let Some(name) = global.name.as_ref() else { continue };
+        let Some(summary) = known.get(name) else { continue };
+        compared += 1;
+        let me = MemoryEffects::of_attrs(&function.attrs);
+        let reads = !summary.reads.is_empty() || summary.unknown_read;
+        let writes = !summary.writes.is_empty() || summary.unknown_write;
+        let theirs = me.overall();
+        let mine = match (reads, writes) {
+            (false, false) => ModRefInfo::NoModRef,
+            (true, false) => ModRefInfo::Ref,
+            (false, true) => ModRefInfo::Mod,
+            (true, true) => ModRefInfo::ModRef,
+        };
+        if theirs == mine {
+            same += 1;
+        } else if theirs.union(mine) == theirs {
+            looser += 1;
+            eprintln!("shadow-attrs looser @{name}: attrs {theirs:?} summary {mine:?}");
+        } else {
+            tighter += 1;
+            eprintln!("shadow-attrs tighter @{name}: attrs {theirs:?} summary {mine:?}");
+        }
+        let only_arguments = |slices: &llrm_analysis::sliceset::SliceSet| {
+            slices.iter().all(|one| one.object.kind == MemoryKind::Parameter)
+        };
+        let summary_args = !summary.unknown_read
+            && !summary.unknown_write
+            && only_arguments(&summary.reads)
+            && only_arguments(&summary.writes);
+        let attrs_args = me.mod_ref(IRMemLocation::Other).is_no_mod_ref()
+            && me.mod_ref(IRMemLocation::InaccessibleMem).is_no_mod_ref();
+        if summary_args == attrs_args {
+            argmem_same += 1;
+        } else if summary_args {
+            argmem_looser += 1;
+            eprintln!("shadow-attrs argument-only looser @{name}: attrs {me:?}");
+        }
+    }
+    eprintln!(
+        "shadow-attrs compared {compared} bodies: overall same {same} looser {looser} tighter {tighter}; argument-only same {argmem_same} looser {argmem_looser}"
+    );
 }
 
 /// The procedure `id`, with the context its types and constants live in.

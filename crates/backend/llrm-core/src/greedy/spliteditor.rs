@@ -19,9 +19,10 @@
 //!   result     |--o--c1 o  o c2--|   c1: open <- parent, c2: complement <- parent
 //! ```
 //!
-//! DEVIATE D-SE1: no rematerialization in `defFromParent`
-//! (`canRematerializeAt`, `rematerializeAt`, `rematWillIncreaseRestriction`),
-//! as D-E1 of `LiveRangeEdit`; every definition is a copy.
+//! DEVIATE D-SE1: `defFromParent` rematerializes only a definition that reads
+//! no register (a literal, address or load of a cell); `allUsesAvailableAt` and
+//! `rematWillIncreaseRestriction` are not translated, as D-E1 of
+//! `LiveRangeEdit`.
 //!
 //! DEVIATE D-SE2: no sub-ranges or lane masks (`addDeadDef`'s sub-range
 //! branches, `buildSingleSubRegCopy`, `getLiveLaneMaskAt`, the
@@ -191,6 +192,9 @@ pub struct SplitEditor<'d> {
     pub reg_assign: RegAssignMap,
     /// (register index, parent value id) -> the value defining it there.
     values: HashMap<(usize, u32), ValueForce>,
+    /// The parent values made again where a copy would have been
+    /// (`Edit->didRematerialize`).
+    rematted: HashSet<u32>,
     /// `LICalc[2]`: the second serves the registers after the complement in the
     /// spill modes.
     lical: [LiveIntervalCalc; 2],
@@ -211,6 +215,7 @@ impl<'d> SplitEditor<'d> {
             spill_mode: ComplementSpillMode::Partition,
             reg_assign: RegAssignMap::default(),
             values: HashMap::default(),
+            rematted: HashSet::default(),
             lical: [LiveIntervalCalc::new(), LiveIntervalCalc::new()],
         }
     }
@@ -229,6 +234,7 @@ impl<'d> SplitEditor<'d> {
         self.open_idx = 0;
         self.reg_assign.clear();
         self.values.clear();
+        self.rematted.clear();
         // Reset the LiveIntervalCalc instances needed for this spill mode.
         self.lical[0].calc.reset(lis.cfg.len());
         if sm != ComplementSpillMode::Partition {
@@ -338,7 +344,18 @@ impl<'d> SplitEditor<'d> {
             Some(k) => Some(Arc::clone(cx.lis.instr(k))),
             None => cx.lis.block_insns(mbb).last().cloned(),
         };
-        let copy = cx.env.build_copy(cx.lis, to, from, beside.as_deref());
+        // The one definition of a rematerializable parent is where its value
+        // starts.
+        let remade = (!parent_vni.is_phi_def() && !parent_vni.is_unused())
+            .then(|| cx.lis.instr(cx.lis.defining_instr(&parent_vni.def(), from)))
+            .and_then(|def| cx.env.rematerialize(def, to, from, beside.as_deref()));
+        let copy = match remade {
+            Some(made) => {
+                self.rematted.insert(parent_vni.id());
+                made
+            }
+            None => cx.env.build_copy(cx.lis, to, from, beside.as_deref()),
+        };
         let def = cx.lis.insert_instr_before_at(mbb, before, copy, late).get_reg_slot(false);
         self.def_value(cx, reg_idx, parent_vni, def, false)
     }
@@ -382,13 +399,23 @@ impl<'d> SplitEditor<'d> {
         let mi = cx.lis.indexes.get_instruction_from_index(idx).expect("called with an invalid index");
         let mbb = cx.lis.indexes.get_mbb_from_index(idx);
         let at = cx.lis.indexes.get_instruction_index(mi);
-        let first = cx
-            .lis
-            .block_insns(mbb)
-            .iter()
-            .find(|i| cx.lis.indexes.get_instruction_index(i.id()) == at)
-            .expect("an instruction of the block");
+        let first =
+            cx.lis.block_insns(mbb).get(cx.lis.partition_at(mbb, &at, false)).expect("an instruction of the block");
         (mbb, first.id())
+    }
+
+    /// A pseudo-op that names the x87 value a call left in ST0.
+    fn takes_call_result(one: &crate::model::lir::Insn) -> bool {
+        use crate::model::ir::{Loc, Operation};
+        one.what
+            .as_ref()
+            .is_some_and(
+                |what| what.op == Operation::FloatLoad
+                    && what.name.as_deref().is_none_or(str::is_empty)
+                    && what.sources.is_empty()
+                    && !what.dests.is_empty()
+                    && what.dests.iter().all(|place| matches!(place, Loc::Held(held) if held.width == 10)),
+            )
     }
 
     /// The instruction after `mi` in `mbb`, None at the end (`std::next`),
@@ -399,12 +426,7 @@ impl<'d> SplitEditor<'d> {
         mi: InstrKey,
     ) -> Option<InstrKey> {
         let at = cx.lis.indexes.get_instruction_index(mi);
-        cx.lis
-            .block_insns(mbb)
-            .iter()
-            .skip_while(|i| cx.lis.indexes.get_instruction_index(i.id()) != at)
-            .find(|i| cx.lis.indexes.get_instruction_index(i.id()) != at)
-            .map(|i| i.id())
+        cx.lis.block_insns(mbb).get(cx.lis.partition_at(mbb, &at, true)).map(|i| i.id())
     }
 
     /// `enterIntvBefore`
@@ -437,7 +459,16 @@ impl<'d> SplitEditor<'d> {
             return idx;
         };
         let (mbb, mi) = Self::instr_at(cx, &idx);
-        let next = Self::next_instr(cx, mbb, mi);
+        let mut next = Self::next_instr(cx, mbb, mi);
+        // DEVIATE S-RFP1 (RFP-5): a copy after a call goes after the pseudo-ops
+        // that take its x87 results, which `X86FloatingPoint` finds right
+        // after the call (a `fld` between them left the result under it).
+        // Exit: the x87 results copied out of ST0 by the call's lowering.
+        if cx.lis.instr(mi).what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Call) {
+            while let Some(key) = next.filter(|key| Self::takes_call_result(cx.lis.instr(*key))) {
+                next = Self::next_instr(cx, mbb, key);
+            }
+        }
         self.def_from_parent(cx, self.open_idx, &parent_vni, idx, mbb, next).def()
     }
 
@@ -1414,14 +1445,14 @@ impl<'d> SplitEditor<'d> {
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1484>).
     ///
     /// DEVIATE D-SE6: `eliminateDeadDefs` is not translated (D-E1); only the
-    /// copies this editor made whose value nothing reads are erased. The fact:
-    /// without rematerialization (D-SE1) the instructions that lose every use
-    /// here are the editor's own copies.
+    /// copies this editor made and the pure definitions whose value nothing
+    /// reads are erased.
     fn delete_remat_victims(
         &mut self,
         cx: &mut SplitCx,
     ) {
         let mut dead: Vec<InstrKey> = Vec::new();
+        let mut marked: HashSet<InstrKey> = HashSet::default();
         for reg in self.regs() {
             for s in &cx.lis.get_interval(reg).segments {
                 let vni = s.valno.as_ref().expect("a segment has a value");
@@ -1430,8 +1461,27 @@ impl<'d> SplitEditor<'d> {
                     continue;
                 }
                 let mi = cx.lis.defining_instr(&vni.def(), reg);
-                if cx.env.is_copy_like(cx.lis.instr(mi)) && cx.lis.instr(mi).defines.len() == 1 {
+                // `allDefsAreDead`, and `eliminateDeadDef`'s `isSafeToMove`: a
+                // copy, or a definition made again here (a literal, an address,
+                // a load of a cell that holds).
+                let one = cx.lis.instr(mi);
+                if (cx.env.is_copy_like(one) || cx.env.is_pure_def(one)) && one.defines.len() == 1 && marked.insert(mi)
+                {
                     dead.push(mi);
+                }
+            }
+        }
+        // A definition rematerialized elsewhere leaves the original with no
+        // reader.
+        for reg in self.regs() {
+            let operands = cx.lis.operands(reg);
+            if operands.is_empty() || operands.iter().any(|op| !op.is_def) {
+                continue;
+            }
+            for op in operands {
+                let one = cx.lis.instr(op.instr);
+                if cx.env.is_pure_def(one) && one.defines == [reg] && marked.insert(op.instr) {
+                    dead.push(op.instr);
                 }
             }
         }
@@ -1485,6 +1535,13 @@ impl<'d> SplitEditor<'d> {
             }
             let reg_idx = self.reg_assign.lookup(pvni.def()) as usize;
             self.def_value(cx, reg_idx, pvni, pvni.def(), true);
+            // Force rematted values to be recomputed everywhere. The new live
+            // ranges may be truncated.
+            if self.rematted.contains(&pvni.id()) {
+                for i in 0..self.edit().size() {
+                    self.force_recompute(cx, i, pvni);
+                }
+            }
         }
 
         // Hoist back-copies to the complement interval when in spill mode.
@@ -1620,6 +1677,13 @@ mod tests {
             _insn: &Insn,
         ) -> bool {
             false
+        }
+
+        fn is_pure_def(
+            &self,
+            insn: &Insn,
+        ) -> bool {
+            insn.what.as_ref().is_some_and(|w| matches!(w.sources.as_slice(), [Loc::Imm(_)]))
         }
 
         fn build_copy(
@@ -1776,6 +1840,54 @@ mod tests {
             r.insert(e0, e1, 2);
         }));
         assert!(result.is_err());
+    }
+
+    /// A definition a split made again that nothing reads is erased
+    /// (`deleteRematVictims`: `allDefsAreDead`, then `eliminateDeadDefs`),
+    /// not only a dead copy: a remade x87 load stayed as `fld [bp+6]; fstp
+    /// st(0)` at the entry of paramremat's `summed`.
+    #[test]
+    fn a_dead_remade_definition_is_erased() {
+        use crate::model::ir::Imm;
+        let literal = |value: i64| {
+            let what = Semantics {
+                name: Some("mov".to_owned()),
+                dests: vec![Loc::Held(Held { value: 2, width: 2 })],
+                sources: vec![Loc::Imm(Imm { value, width: 2, address: None })],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(0, None, Some(what), vec![2], vec![]))
+        };
+        let insns = vec![insn(&[1], &[]), literal(7), literal(8), insn(&[], &[2]), insn(&[], &[1])];
+        let body = LirBody::new(
+            "dead",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        let mut vrm = VirtRegMap::new();
+        let mut sa = SplitAnalysis::new(1);
+        let li = lis.interval_rc(1);
+        sa.analyze(&lis, &Env, li);
+        let mut delegate = NoDelegate;
+        let mut ed = SplitEditor::new();
+        ed.reset(&lis, LiveRangeEdit::new(1, &mut delegate), ComplementSpillMode::Partition);
+        ed.edit_mut().create_from(&mut lis, &mut vrm, 2, 1);
+        // The register the split made, its interval held as `finish` leaves it.
+        lis.interval_rc(2);
+        let mut cx = SplitCx { lis: &mut lis, vrm: &mut vrm, sa: &mut sa, env: &Env, mbfi: None };
+        ed.delete_remat_victims(&mut cx);
+        let left: Vec<i64> = lis
+            .block_insns(0)
+            .iter()
+            .filter_map(|one| match one.what.as_ref()?.sources.as_slice() {
+                [Loc::Imm(imm)] => Some(imm.value),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(left, [8], "the dead `mov 7` is erased, the read `mov 8` kept");
     }
 
     /// After `finish` no instruction names the parent, every operand names the

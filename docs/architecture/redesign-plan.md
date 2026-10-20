@@ -63,6 +63,7 @@ Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when 
 | 3.4 LIR clean-up | ssa-spill-m16 | idle skip killed (10.4 M, [#2043]); solve-cost probe next | 290 M; exit about 250 M |
 | 3.5 pricing (`hoist`, `lsr` forecast) | hoist-bounded, greedy-port | probe next | forecast 2.6% (-O2), 4.9% (-Os) |
 | 3.6 code quality on pressure-heavy loops | greedy-port | closed at parity; Reassociate row low priority (pass-list-parity) | 90 / 24 against clang 82 / 23 |
+| 3.7 llrm-core's machine layer target-generic | backend-two | M0 10-20 to FINAL 11-13; about 120 `llrm_x86*` references in about 40 core files | `llrm_x86*` references in core: about 120 |
 
 ## 1. TL;DR
 
@@ -314,7 +315,7 @@ State: **translated** = the pass at the pin exists in llrm (a switch-gated or sh
 | 17 | jump-table-to-switch | O2 | none | missing | scalar-cleanup-port |
 | 18 | aggressive-instcombine | O2 | none | missing | scalar-cleanup-port |
 | 19 | libcalls-shrinkwrap | all | none | n/a | |
-| 20 | tailcallelim (twice) | O2 (once O1) | `tailrec` | old | scalar-cleanup-port |
+| 20 | tailcallelim (twice) | O2 (once O1) | `tailrec` | translated | gvn-ci-2160-2172 |
 | 21 | reassociate | all | `algebraic` | old | fold-poc |
 | 22 | constraint-elimination | O2 | none | missing | domtree-port |
 | 23 | loop-instsimplify, loop-simplifycfg | all | none | missing | loop-passes-port |
@@ -334,7 +335,7 @@ State: **translated** = the pass at the pin exists in llrm (a switch-gated or sh
 | 37 | dse | O2 | `dse` | old | memoryssa-port |
 | 38 | instsimplify | all | `fold` (InstSimplify translation in progress) | old | fold-poc |
 | 39 | deadargelim, globaldce, elim-avail-extern, constmerge | all | `deadargs`, `globaldce`, `availableexternally`; constmerge none | old; constmerge missing | cgscc-poc |
-| 40 | float2int, lower-constant-intrinsics | all | none | missing | scalar-cleanup-port |
+| 40 | float2int, lower-constant-intrinsics | all | `float2int` (lower-constant-intrinsics none) | float2int translated; the other missing | gvn-ci-2160-2172 |
 | 41 | loop-interchange, loop-distribute | O2 | `loopinterchange`, `loopdistribute` at -O3 only | old, wrong level | loop-passes-port |
 | 42 | infer-alignment, alignment-from-assumptions, loop-load-elim | all (loop-load-elim O2) | none | missing | scalar-cleanup-port |
 | 43 | loop-sink, div-rem-pairs, mergeicmps, expand-memcmp | O2 | LIR `sink`, `addresssink`, `window` stand in | old | scalar-cleanup-port |
@@ -408,6 +409,7 @@ The exit method M and the bars it uses are defined once in section 4.
 | 3.4 LIR clean-up | about 290 M on the merged tree to about 250 M; skipping idle visits is worth 10.4 M (killed), block-local and dominator-scoped `copyprop` are killed | an idle skip worth below 15 M: killed; the next probe is the cost of the solves | ssa-spill-m16 | solve-cost probe next |
 | 3.5 pricing: `hoist` and `lsr` forecast | the forecast is 2.6% at -O2 and 4.9% at -Os (`hoist` 1.4% / 3.7%, `lsr` 1.2%); `gvn` is 0.04%; the saving is `unmeasured` | forecast below 1% at both levels: not met | hoist-bounded, greedy-port | probe next |
 | 3.6 code quality on pressure-heavy loops | stack operands within 1.5x of clang on the `live` shapes | rows worse | greedy-port | study first |
+| 3.7 llrm-core's machine layer target-generic | no `llrm_x86::` in core; the machine passes run on arm64 selector output | the arm64 experiment shows a pass that needs a target literal the description cannot carry | backend-two | M0 10-20 to FINAL 11-13 |
 | B3 re-baseline | the phase-3 row measured | n/a | llvm-compare | after 3.x |
 | 4.1 per-pass budgets | each pass 300 instructions or fewer per IR instruction per run | a pass already within budget | each pass's owner | measure first |
 | 4.2 budgets from clang | spec 1.3 re-derived per job from clang | n/a (measurement) | llvm-compare | to do |
@@ -1175,6 +1177,44 @@ Checklist: the shared list. Its own metric boxes:
 | no effect | the cost is the decision procedure, not the path: S4's page | 3.3 |
 | worse elsewhere (rows) | revert; rows are the rule | 3.3 |
 
+### 3.7 llrm-core's machine layer target-generic
+
+LLVM shares one target-independent CodeGen; `llrm-arm64`'s private allocator is spike-only. The machine passes in `llrm-core` take their target facts from the target description (target hooks), and no `llrm_x86::` appears in core ([machine facts rule](#4-cross-step-guards)).
+
+- **(a) Effect:** `llrm_x86::` uses in `llrm-core` go to 0; `llrm-arm64` runs the core machine passes and drops its private allocator. Output on x86-64 identical.
+- **(b) Early:** arm64-spike's experiment: the core machine passes on arm64 selector output. Kill: a pass that needs a target literal the description cannot carry names the missing hook.
+- **(c) Gate:** a design page for the hook set, with a review.
+- **(d) Exit:** method M; zero `llrm_x86::` in core (a test counts them); the x86-64 output identical.
+- **(e) Who:** backend-two. Inputs: the target-facts audit ([#2862], [#2867]), the iced inventory, x86-64-spike's shared edits. Touches `crates/backend/llrm-core`, `llrm-x86`, `llrm-arm64`.
+
+Milestones (backend-two's dates, 2026; each step byte-identical at m16/m32 by bench). Baseline: about 120 `llrm_x86*` references in about 40 core files.
+
+| step | date | content |
+|---|---|---|
+| M0 | 10-20 | [#2862], [#2867] land |
+| M1 | 10-21 | ratchet widened (`llrm_x86` paths, bare bits `==`/`!=` 16 or 32); `objbuild` mode tests move to `ObjectFormat`/`Layout` |
+| M2 | 10-23 | slot steps use `stack_slot_bytes` |
+| M3 | 10-24 | register tables use `registers.regs`; frame base is `frame_registers()` |
+| M4 | 10-26 | ABI and QB widths come from `calling.toml` |
+| M5 | 10-30 | target hooks: rules, `REGISTER_INFO`, `PRESERVED`, machine tables, cpu, shadow, effects, farcall, division and arithmetic through `Target` |
+| M6 | 11-04 | `Encoding` trait and the x86 impl (shape agreed with arm64-spike) |
+| M7 | 11-06 | core's `Cargo.toml` drops `llrm-x86*` from `[dependencies]`; ratchet baseline 0 |
+| M8 | 11-09 | arm64-spike's experiment runs on the generic layer |
+| FINAL | 11-13 | core builds and passes with no x86 crate (the ratchet plus a CI `cargo tree` check) |
+
+The dates slip only if arm64-spike's `RegId`/`Flag` or LIR vocabulary lands late (M5 to M7).
+
+Checklist: the shared list. Its own metric boxes:
+
+- [ ] arm64 experiment
+- [ ] `llrm_x86::` uses in core
+
+| outcome | decision | next |
+|---|---|---|
+| partial | the remaining uses are listed per file with the hook each needs | 3.7 |
+| no effect | record the missing hook; the core stays x86-first | 3.4 |
+| worse elsewhere (rows) | revert; rows are the rule | 3.4 |
+
 ### B3 Re-baseline
 
 Re-run 0.1 after phase 3.
@@ -1242,6 +1282,8 @@ Checklist: the shared list.
 ## 4. Cross-step guards
 
 **Translate, do not paraphrase.** Every LLVM-mirroring pass or file is a translation of LLVM's C++ at `d1106deb71cc`, read from a local checkout and not from memory or docs. The Rust follows the C++ structure: its functions, worklists, caps and thresholds with the `cl::opt` defaults, and the order of the checks. Each function carries a one-line permalink comment. Anything not translated is a `DEVIATE` with the reason and a number in the PR; the PR's `LLVM structure` line names files and lines; review reads the two side by side.
+
+**Translate into idiomatic Rust.** Translating from language A to B is always into idiomatic B, not a straight copy. For LLVM's C++ into Rust: keep what must mirror (the algorithm, the order of checks, the worklists, caps and thresholds with their `cl::opt` defaults, the permalinks, the numbered DEVIATEs), written as Rust: ownership and borrowing instead of raw-pointer emulation, enums plus `match` instead of opcode-switch ladders or kind fields, iterators and closures instead of index loops, `Option`/`Result` instead of null or sentinel values, no getter/setter boilerplate, no C++ class hierarchies emulated with trait objects where an enum fits, Rust naming. Reviews check it; existing translations become idiomatic when their owner next touches the file, without a churn wave; an urgent file goes to oversight.
 
 **Mirror LLVM's structure by default.** Every design page and every structural PR carries a `LLVM structure` line: LLVM's structure (name and permalink at `d1106deb71cc`), ours, and `MIRROR` or `DEVIATE` with the reason. The default is to mirror. A deviation needs a reason (our MIR or LIR differs; output would change and the rows rule applies; measured not better) and a number. The mapping so far:
 
@@ -1592,3 +1634,5 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2046]: https://github.com/ali-mosavian/llrm/pull/2046
 [#2049]: https://github.com/ali-mosavian/llrm/pull/2049
 [#2043]: https://github.com/ali-mosavian/llrm/pull/2043
+[#2862]: https://github.com/ali-mosavian/llrm/pull/2862
+[#2867]: https://github.com/ali-mosavian/llrm/pull/2867

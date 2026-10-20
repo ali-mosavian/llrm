@@ -46,6 +46,18 @@ fn def(v: u32) -> Arc<Insn> {
     Arc::new(Insn::new(0, None, Some(what), vec![v], vec![]))
 }
 
+/// A definition of `v` from a read of memory: not a copy, and not cheap to
+/// make again.
+fn load(v: u32) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".to_owned()),
+        dests: vec![held(v)],
+        sources: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0))],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![v], vec![]))
+}
+
 fn read(v: u32) -> Arc<Insn> {
     Arc::new(Insn::new(0, None, None, vec![], vec![v]))
 }
@@ -98,7 +110,7 @@ fn test_a_copy_between_values_that_do_not_overlap_is_joined_and_removed() {
 /// would make `v2` read the new value. The copy stays and nothing changes.
 #[test]
 fn test_a_copy_whose_source_is_redefined_while_the_copy_lives_is_not_joined() {
-    let (a, c, b, r1, r2) = (def(1), copy(2, 1), def(1), read(1), read(2));
+    let (a, c, b, r1, r2) = (load(1), copy(2, 1), load(1), read(1), read(2));
     let insns = [a, Arc::clone(&c), b, r1, r2];
     let was = body(&[(&insns, &[])]);
     let mut lis = LiveIntervals::new(&was);
@@ -197,7 +209,7 @@ fn test_a_chain_of_copies_is_joined_to_one_value() {
 /// it.
 #[test]
 fn test_a_copy_that_cannot_join_is_left_and_the_run_ends() {
-    let (a, c, b, r1, r2) = (def(1), copy(2, 1), def(1), read(1), read(2));
+    let (a, c, b, r1, r2) = (load(1), copy(2, 1), load(1), read(1), read(2));
     let was = body(&[(&[a, c, b, r1, r2], &[])]);
     let mut lis = LiveIntervals::new(&was);
     let stats = run(&mut lis, &AnyClass, &[0]);
@@ -424,4 +436,64 @@ fn test_a_join_does_not_verify_the_ranges() {
     let before = crate::liveness::liverange::verifies();
     assert_eq!(join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id()), JoinResult::Joined);
     assert_eq!(crate::liveness::liverange::verifies() - before, 0, "a join verified a range");
+}
+
+/// `v1 := 7; v2 := mov v1; v1 := 7; read v1; read v2`: the join is refused (the
+/// source is redefined while the copy lives) and the source is a constant, so
+/// the copy becomes `v2 := 7` as LLVM's `reMaterializeDef` makes it. It was
+/// left as a copy, one register move that kept both values live.
+#[test]
+fn test_a_copy_of_a_constant_that_cannot_be_joined_is_made_again() {
+    let (a, c, b, r1, r2) = (def(1), copy(2, 1), def(1), read(1), read(2));
+    let was = body(&[(&[a, Arc::clone(&c), b, r1, r2], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = names(&lis);
+    // The first definition of v1 is read by nothing now: it goes too.
+    assert_eq!(kept, [(vec![2], vec![]), (vec![1], vec![]), (vec![], vec![1]), (vec![], vec![2])]);
+    assert_consistent(&lis, &was, 2);
+}
+
+/// A copy of a loaded value is not cheap to make again: it stays.
+#[test]
+fn test_a_copy_of_a_load_that_cannot_be_joined_is_not_made_again() {
+    let (a, c, b, r1, r2) = (load(1), copy(2, 1), def(1), read(1), read(2));
+    let was = body(&[(&[a, Arc::clone(&c), b, r1, r2], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Deferred);
+    assert_eq!(names(&lis).len(), 5);
+}
+
+struct ForSize;
+
+impl CoalescerEnv for ForSize {
+    fn can_share(
+        &self,
+        _a: u32,
+        _b: u32,
+    ) -> bool {
+        true
+    }
+
+    fn tuned_for_size(&self) -> bool {
+        true
+    }
+}
+
+/// For size the copy of a constant that stays read elsewhere is left a copy:
+/// it was a 5-byte move for a 2-byte copy (`regparm3_matrix_22` +18 bytes).
+#[test]
+fn test_for_size_a_copy_of_a_constant_that_stays_read_is_not_made_again() {
+    let (a, c, b, r1, r2) = (def(1), copy(2, 1), def(1), read(1), read(2));
+    let was = body(&[(&[a, Arc::clone(&c), b, r1, r2], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    let result = join_copy(&mut lis, &ForSize, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Deferred);
+    assert_eq!(names(&lis).len(), 5);
 }

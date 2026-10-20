@@ -43,11 +43,10 @@ b3:
 /// @f of `text` through `indvars` (with the exit values), printed, and
 /// computing what it did on `inputs`.
 fn widened(text: &str) -> String {
-    crate::simplifyindvar::tests_forced(true);
     let mut module = parsed(text);
     let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[40]];
     let before = results(&module, inputs);
-    managed(&mut module, IndVars { exit_values: true, unrolls: None });
+    managed(&mut module, IndVars { lftr: true });
     let after = printed(&module);
     assert_eq!(results(&module, inputs), before, "{after}");
     after
@@ -66,7 +65,8 @@ fn test_a_counter_read_through_zext_is_a_counter_of_that_width() {
 fn test_a_signed_counter_read_through_sext_is_a_counter_of_that_width() {
     let after = widened(&clearing("sext", "slt", "0", "nsw"));
     assert!(after.contains("phi i32"), "{after}");
-    assert!(after.contains("icmp slt i32"), "{after}");
+    // LFTR then tests the wide counter against its exit count with `ne`.
+    assert!(after.contains("icmp ne i32"), "{after}");
     assert!(!after.contains("sext i16 %i to i32"), "{after}");
 }
 
@@ -82,16 +82,15 @@ fn test_an_unsigned_counter_read_through_sext_is_not_widened() {
     assert!(!after.contains("phi i32"), "{after}");
 }
 
-/// The 16-bit target states no cost model and `n8:16:32` calls `i32` legal: a
-/// counter is not widened past the pointer's 16 bits there (D18), where its
-/// `i32` add costs two.
+/// The 16-bit target's X86 model and `n8:16:32` call `i32` legal: a counter is
+/// not widened past the pointer's 16 bits there (D18), where its `i32` add
+/// costs two.
 #[test]
-fn test_a_counter_is_not_widened_past_the_pointer_width_without_a_cost_model() {
-    crate::simplifyindvar::tests_forced(true);
+fn test_a_counter_is_not_widened_past_the_pointer_width_on_the_16_bit_target() {
     let text = clearing("zext", "ult", "0", "nsw").replace("e-p:32:32-n8:16:32", "e-p:16:16-n8:16:32");
     let mut module = parsed(&text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(IndVars { exit_values: true, unrolls: None });
+    manager.add(IndVars { lftr: true });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     let after = printed(&module);
     assert!(!after.contains("phi i32"), "{after}");
@@ -131,4 +130,37 @@ b3:
     let after = widened(text);
     assert!(after.contains("phi i32"), "{after}");
     assert!(after.contains("= trunc nuw nsw i32"), "{after}");
+}
+
+/// histo-O2 `pipeline.body`: the `int` index `%i` and the `short` counter
+/// `%j` the loop tests run side by side; `%i` is `sext` of `%j`'s next value.
+/// The narrow counter stayed, with the `sext` and an `slt i16` test, where
+/// `opt` has one `i32` counter and `icmp ne i32 %i.next, 4096`.
+#[test]
+fn test_a_narrow_counter_beside_its_own_sign_extension_is_not_kept() {
+    let after = widened(
+        "target datalayout = \"e-p:32:32-n8:16:32\"
+
+define i32 @f() {
+b0:
+  %buf = alloca [4096 x i8]
+  br label %b1
+
+b1:
+  %i = phi i32 [ %w, %b1 ], [ 0, %b0 ]
+  %j = phi i16 [ %next, %b1 ], [ 0, %b0 ]
+  %p = getelementptr inbounds i8, ptr %buf, i32 %i
+  store i8 1, ptr %p
+  %next = add i16 %j, 1
+  %w = sext i16 %next to i32
+  %go = icmp slt i16 %next, 4096
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i32 0
+}
+",
+    );
+    assert!(!after.contains("phi i16"), "{after}");
+    assert!(!after.contains("sext i16"), "{after}");
 }

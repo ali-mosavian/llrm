@@ -474,7 +474,7 @@ fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
     let proved = crate::induction::proved();
     let after = analyses.get::<super::Counted>(context, &layout, function);
     // The check derives them afresh to compare, and is counted.
-    if std::env::var_os("LLRM_CHECK_REPLAY").is_none() {
+    if !llrm_support::env_set("LLRM_CHECK_REPLAY") {
         assert_eq!(crate::induction::proved() - proved, 1, "only the loop the change reaches is proved again");
     }
     assert_eq!(trips(&after, "h1", function), Some(crate::num::Num::from(7)), "the loop that reads the changed bound");
@@ -1403,7 +1403,7 @@ fn a_terminator_rewritten_in_one_loop_proves_that_loop_again_and_not_the_other()
     let (context, function) = module.function_mut("f").unwrap();
     let proved = crate::induction::proved();
     let after = analyses.get::<super::Counted>(context, &layout, function);
-    if std::env::var_os("LLRM_CHECK_REPLAY").is_none() {
+    if !llrm_support::env_set("LLRM_CHECK_REPLAY") {
         assert_eq!(crate::induction::proved() - proved, 1, "only the loop holding the terminator is proved again");
     }
     assert_eq!(
@@ -1447,7 +1447,7 @@ b0:
     let (context, function) = module.function_mut("f").unwrap();
     let (whole, asked) = (crate::frameescape::whole_runs(), crate::frameescape::scans());
     let after = analyses.get::<super::ExposedFrames>(context, &layout, function);
-    if std::env::var_os("LLRM_CHECK_REPLAY").is_none() {
+    if !llrm_support::env_set("LLRM_CHECK_REPLAY") {
         assert_eq!(crate::frameescape::whole_runs() - whole, 0, "the function's allocas were all asked again");
         assert!(crate::frameescape::scans() - asked <= 1, "only %b is behind what the edit read");
     }

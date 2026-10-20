@@ -17,20 +17,31 @@ pub enum Sinking {
     Erased,
     /// Cloned into the exit blocks its users stand in.
     Sunk,
+    /// `FoldableInLoop`: a GEP the target folds into its loads and stores in
+    /// the loop; copied into the exit blocks, the original stays.
+    Cloned,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The blocks `collect_children_in_loop` has looked at, for the test that
+    /// holds its work to the loop's size.
+    pub static CHILDREN_EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// [`collectChildrenInLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L486):
 /// the loop's blocks from the header, a block before the blocks it immediately
 /// dominates.
 fn collect_children_in_loop(ctx: &LoopCtx) -> Vec<BlockId> {
+    let tree = ctx.shape.dominance.tree(ctx.function);
     let mut worklist = vec![cfg::block(ctx.loop_.header)];
     let mut at = 0;
     while at < worklist.len() {
-        let parent = cfg::id(worklist[at]);
-        for &block in ctx.function.layout() {
-            if ctx.contains_block(block) && ctx.shape.dominance.immediate(ctx.function, cfg::id(block)) == Some(parent)
-            {
-                worklist.push(block);
+        for child in tree.children(Some(worklist[at])) {
+            #[cfg(test)]
+            CHILDREN_EXAMINED.with(|one| one.set(one.get() + 1));
+            if ctx.contains_block(child) {
+                worklist.push(child);
             }
         }
         at += 1;
@@ -81,9 +92,7 @@ fn users(
 
 /// [`sinkRegion`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L553):
 /// the instructions it erases as dead and sinks, bottom-up. Not built: the
-/// loop-nest mode, and `isFoldableInLoop` (a GEP the target folds into its
-/// load or store stays in the loop: needs the target's cost, taken as never
-/// foldable, which sinks more GEPs than LLVM).
+/// loop-nest mode.
 #[allow(clippy::too_many_arguments)]
 pub fn sink_region(
     unit: &passes::Unit,
@@ -121,10 +130,14 @@ pub fn sink_region(
             // of the loop. We can do this if the all users of the instruction
             // are outside of the loop.
             if !may_have_side_effects(unit, outer, accesses, inst)
-                && let Some(into) = is_not_used_in_loop(ctx, inst)
+                && let Some((into, foldable)) = is_not_used_or_foldable_in_loop(unit, outer, ctx, inst)
                 && can_sink_or_hoist_inst(unit, outer, ctx, mssa, aa, flags, safety, inst, true)
                 && can_sink(ctx, inst)
             {
+                if foldable {
+                    found.push((inst, Sinking::Cloned));
+                    continue;
+                }
                 ctx.state.gone.borrow_mut().insert(inst);
                 ctx.state.sunk.borrow_mut().insert(inst);
                 ctx.state.moved.borrow_mut().insert(inst, into);
@@ -135,18 +148,65 @@ pub fn sink_region(
     found
 }
 
-/// [`isNotUsedOrFoldableInLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1106)
-/// with nothing foldable: every user is outside the loop. The block of the
-/// first user.
-fn is_not_used_in_loop(
+/// [`isFoldableInLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1086):
+/// a GEP the target prices as free whose users in the loop are loads and
+/// stores in its own block.
+fn is_foldable_in_loop(
+    unit: &passes::Unit,
+    outer: &Outer,
     ctx: &LoopCtx,
     inst: InstId,
-) -> Option<BlockId> {
+) -> bool {
+    let function = &*unit.function;
+    if !matches!(
+        function.instruction(inst).opcode,
+        Opcode::GetElementPtr { .. }
+    ) {
+        return false;
+    }
+    let tti = crate::looprotate::target_tti(outer.target());
+    let price = llrm_mir::instructioncost::instruction_cost(
+        &*tti,
+        unit.context,
+        unit.layout,
+        &outer.globals,
+        function,
+        inst,
+        llrm_mir::tti::CostKind::SizeAndLatency,
+    );
+    if !price.valid || price.value != 0 {
+        return false;
+    }
+    let block = function.parent(inst);
+    users(ctx, inst)
+        .into_iter()
+        .filter(|&user| ctx.contains(user))
+        .all(
+            |user| function.parent(user) == block
+                && matches!(
+                    function.instruction(user).opcode,
+                    Opcode::Load { .. } | Opcode::Store { .. }
+                ),
+        )
+}
+
+/// [`isNotUsedOrFoldableInLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1106):
+/// the block of the first user outside the loop, and whether users in the loop
+/// remain, all of which fold `inst`.
+fn is_not_used_or_foldable_in_loop(
+    unit: &passes::Unit,
+    outer: &Outer,
+    ctx: &LoopCtx,
+    inst: InstId,
+) -> Option<(BlockId, bool)> {
     let users = users(ctx, inst);
-    if users.iter().any(|&user| ctx.contains(user)) {
+    let in_loop = users.iter().any(|&user| ctx.contains(user));
+    if in_loop && !is_foldable_in_loop(unit, outer, ctx, inst) {
         return None;
     }
-    users.first().and_then(|&user| ctx.state.moved.borrow().get(&user).copied().or_else(|| ctx.function.parent(user)))
+    let first = users.iter().copied().find(|&user| !ctx.contains(user))?;
+    let into = ctx.state.moved.borrow().get(&first).copied().or_else(|| ctx.function.parent(first))?;
+    Some((into, in_loop))
 }
 
 /// Whether
@@ -160,7 +220,7 @@ fn can_sink(
 ) -> bool {
     let function = ctx.function;
     let Some(result) = function.instruction(inst).result else { return false };
-    let users = users(ctx, inst);
+    let users: Vec<InstId> = users(ctx, inst).into_iter().filter(|&user| !ctx.contains(user)).collect();
     !users.is_empty()
         && users.iter().all(|&user| {
             // A user that was sunk reads it through a phi made for the clone.

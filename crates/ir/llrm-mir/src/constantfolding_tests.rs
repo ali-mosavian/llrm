@@ -21,30 +21,10 @@ macro_rules! cases {
     };
 }
 
-cases!(gep, load, loadbe, cast, icmp, intrinsic, misc, deviate, regress);
+cases!(gep, load, loadbe, cast, icmp, fcmp, intrinsic, misc, deviate, regress);
 
 fn answer(line: &str) -> &str {
     line.splitn(4, ' ').nth(3).expect("four fields")
-}
-
-/// LLVM spells `nusw` and `nuw` on a constant GEP, MIR keeps `inbounds`.
-fn flags_only(
-    llvm: &str,
-    ours: &str,
-) -> bool {
-    let strip = |text: &str| -> String {
-        let mut out = String::new();
-        let mut rest = text;
-        while let Some(at) = rest.find("gep[") {
-            let end = rest[at..].find(']').expect("a closed bracket") + at;
-            out.push_str(&rest[..at]);
-            out.push_str(if rest[at..end].contains("inbounds") { "gep[inbounds]" } else { "gep[]" });
-            rest = &rest[end + 1..];
-        }
-        out.push_str(rest);
-        out
-    };
-    strip(llvm) == ours
 }
 
 #[test]
@@ -61,7 +41,7 @@ fn llvm_and_llrm_fold_the_same_but_the_listed_lines() {
             let mut fields = llvm.splitn(3, ' ');
             let (function, n) = (fields.next().expect("function"), fields.next().expect("n"));
             assert!(
-                answer(mine) == "-" || flags_only(answer(llvm), answer(mine)),
+                answer(mine) == "-",
                 "{name}: llrm folds where LLVM does not or differently:\n  llrm: {mine}\n  llvm: {llvm}"
             );
             differing.insert(format!("{function} {n}"));

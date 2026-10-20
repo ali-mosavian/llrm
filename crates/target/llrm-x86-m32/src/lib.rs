@@ -182,6 +182,28 @@ impl llrm_target::Target for M32 {
         llrm_x86::calling::callee_saved(CALLING.native())
     }
 
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId {
+        llrm_x86::calling::register(name)
+    }
+
+    fn convention_results(
+        &self,
+        convention: &llrm_target::calling::Convention,
+        width: u32,
+    ) -> Vec<RegId> {
+        llrm_x86::calling::results(convention, width)
+    }
+
+    fn convention_callee_saved(
+        &self,
+        convention: &llrm_target::calling::Convention,
+    ) -> Vec<(RegId, RegId)> {
+        llrm_x86::calling::callee_saved(convention)
+    }
+
     fn march(
         &self,
         name: &str,
@@ -201,6 +223,10 @@ impl llrm_target::Target for M32 {
         llrm_x86::instructions::joined(include_str!("instructions/x86.instr"))
     }
 
+    fn dialect(&self) -> &'static llrm_instr::Dialect {
+        llrm_x86::instructions::dialect()
+    }
+
     fn operand_bytes(&self) -> i64 {
         4
     }
@@ -211,6 +237,11 @@ impl llrm_target::Target for M32 {
 
     /// X86ISelLowering.cpp: `setPrefFunctionAlignment(Align(16))`.
     fn pref_function_alignment(&self) -> u8 {
+        4
+    }
+
+    /// X86ISelLowering.cpp: `setPrefLoopAlignment(Align(16))`.
+    fn pref_loop_alignment(&self) -> u8 {
         4
     }
 
@@ -253,7 +284,10 @@ impl llrm_target::Target for M32 {
                 Some(OPCOSTS.size_costs()),
                 // Every CPU the target accepts (i486, pentium) prices alike:
                 // the x87 tables.
-                llrm_x86::tti::X86::of_cpu("i486")
+                layout()
+                    .tti
+                    .zip(layout().llvm_cpu)
+                    .and_then(|(tti, cpu)| llrm_x86::tti::X86::described(&tti, &cpu))
                     .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86)),
             )

@@ -59,7 +59,7 @@ use super::{
     semantics,
 };
 use crate::backend::arithmetic;
-use crate::model::ir::{Held, Imm, Loc, Operation};
+use crate::model::ir::{Field, FieldKind, Held, Imm, Loc, Operation};
 use crate::model::lir::Insn;
 use crate::support::hash::IndexMap;
 
@@ -603,6 +603,39 @@ impl Selector<'_, '_, '_> {
         Ok(Loc::Imm(Imm { value, width: width as u32, address: None }))
     }
 
+    /// A shifted register's field: the target's shift `code` and the `amount`.
+    pub fn op_shift(
+        &mut self,
+        _: &Match,
+        _: &mut Vec<Arc<Insn>>,
+        code: i64,
+        amount: i64,
+    ) -> Result<Loc, Unselected> {
+        Ok(Loc::Field(Field { kind: FieldKind::Shift, code: code as u8, amount: amount as u8 }))
+    }
+
+    /// A condition field: the target's condition `code`.
+    pub fn op_cond(
+        &mut self,
+        _: &Match,
+        _: &mut Vec<Arc<Insn>>,
+        code: i64,
+    ) -> Result<Loc, Unselected> {
+        Ok(Loc::Field(Field { kind: FieldKind::Condition, code: code as u8, amount: 0 }))
+    }
+
+    /// An extended register's field: the target's extension `code` and the
+    /// `amount`.
+    pub fn op_extend(
+        &mut self,
+        _: &Match,
+        _: &mut Vec<Arc<Insn>>,
+        code: i64,
+        amount: i64,
+    ) -> Result<Loc, Unselected> {
+        Ok(Loc::Field(Field { kind: FieldKind::Extend, code: code as u8, amount: amount as u8 }))
+    }
+
     // Predicates.
 
     /// Whether the target would rather run this operation, at its width, on
@@ -703,6 +736,28 @@ impl Selector<'_, '_, '_> {
             value,
             Operand::Value(value) if self.dies_at(value, m.inst)
         )
+    }
+
+    /// Whether a `getelementptr` takes the root's result: the address reads the
+    /// sum's parts, not the sum, so a load covered by the sum is never
+    /// selected.
+    pub fn is_indexing(
+        &self,
+        m: &Match,
+    ) -> bool {
+        let function = self.function;
+        function
+            .instruction(m.inst)
+            .result
+            .is_some_and(
+                |result| function
+                    .users(result)
+                    .iter()
+                    .any(|one| matches!(
+                        function.instruction(one.user).opcode,
+                        Opcode::GetElementPtr { .. }
+                    )),
+            )
     }
 
     pub fn is_nonvolatile(

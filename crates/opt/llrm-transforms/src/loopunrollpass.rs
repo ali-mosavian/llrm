@@ -1460,6 +1460,10 @@ fn unrolled_blocks(
 /// a complete unroll makes of the inner loops are visited next. Whether any
 /// loop was unrolled.
 pub fn unroll_loops(run: &mut Run) -> bool {
+    // `LoopUnrollPass::run` (L1762): every loop is put in simplified form and
+    // LCSSA first, whether or not anything is unrolled.
+    let simplified = crate::loopsimplify::simplified(run.function);
+    let closed = crate::lcssa::closed(run.function).unwrap_or(false);
     let mut analyzed = Analyzed::of(run);
     // The worklist is popped from the back (`appendReversedLoopsToWorklist`):
     // the loops are visited in the reverse of
@@ -1467,7 +1471,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     // holds.
     let mut work: std::collections::VecDeque<BlockId> =
         analyzed.loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
-    let mut changed = false;
+    let mut changed = simplified || closed;
     while let Some(header) = work.pop_front() {
         if !analyzed.loops.is_loop_header(header) {
             continue;
@@ -1539,6 +1543,10 @@ pub struct LoopFullUnroll {
 impl FunctionPass for LoopFullUnroll {
     fn name(&self) -> &'static str {
         "loopfullunroll"
+    }
+
+    fn translation(&self) -> Option<&'static str> {
+        Some("loop-unroll-full")
     }
 
     fn run(

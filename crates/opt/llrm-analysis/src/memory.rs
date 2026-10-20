@@ -1994,7 +1994,19 @@ impl MemRef {
         };
         let mut disp: i128 = 0;
         let mut root = pointer;
+        // A block nothing enters may define a pointer from itself; a chain
+        // longer than 64 starts remembering what it has passed.
+        let mut steps = 0u32;
+        let mut seen = BTreeSet::new();
         loop {
+            steps += 1;
+            if steps > 64 {
+                if let Operand::Value(value) = root
+                    && !seen.insert(value)
+                {
+                    break;
+                }
+            }
             if let (Some(chain), Operand::Value(value)) = (chain.as_deref_mut(), root) {
                 chain.push(value);
             }
@@ -2377,7 +2389,7 @@ fn step(
             ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
                 through(Operand::Constant(*value))
             }
-            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands }) => {
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands, .. }) => {
                 let indices = operands[1..]
                     .iter()
                     .map(|&one| {
@@ -2441,17 +2453,31 @@ fn segment(
     unit: &Unit,
     root: Operand,
 ) -> Option<Operand> {
-    let (_, instruction) = unit.defining(root)?;
-    if !matches!(instruction.opcode, Opcode::Cast(CastOp::AddrSpaceCast)) {
-        return None;
-    }
-    let from = instruction.operands[0];
+    let from = match root {
+        Operand::Constant(id) => match &unit.context.get(id).kind {
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) => Operand::Constant(*value),
+            _ => return None,
+        },
+        _ => {
+            let (_, instruction) = unit.defining(root)?;
+            if !matches!(instruction.opcode, Opcode::Cast(CastOp::AddrSpaceCast)) {
+                return None;
+            }
+            instruction.operands[0]
+        }
+    };
     if unit.space(from) != Some(2) {
         return None;
     }
-    match unit.defining(from) {
-        Some((_, made)) if matches!(made.opcode, Opcode::Cast(CastOp::IntToPtr)) => Some(made.operands[0]),
-        _ => Some(from),
+    match from {
+        Operand::Constant(id) => match &unit.context.get(id).kind {
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => Some(Operand::Constant(*value)),
+            _ => Some(from),
+        },
+        _ => match unit.defining(from) {
+            Some((_, made)) if matches!(made.opcode, Opcode::Cast(CastOp::IntToPtr)) => Some(made.operands[0]),
+            _ => Some(from),
+        },
     }
 }
 
@@ -2605,6 +2631,30 @@ mod tests {
 
     fn object(kind: MemoryKind) -> MemoryObject {
         MemoryObject::new(kind)
+    }
+
+    /// A loop nothing enters (a block group that only reaches itself) can
+    /// define a pointer as `gep %p, 1` of itself, as a function with
+    /// JumpThreading did before `decide` removed it:
+    /// the chain walk never ended and held a value per step, 50 GB in 100 s
+    /// on QB's datetime.c at -Os -m16. A chain that comes back to a value ends
+    /// there, as `getUnderlyingObject` ends on a value it has seen.
+    #[test]
+    fn a_pointer_chain_that_comes_back_to_itself_ends() {
+        let module = parsed(&format!(
+            "{DOS}define i8 @f(ptr %a) {{\nb0:\n  ret i8 0\nb1:\n  %p = getelementptr inbounds i8, ptr %p, i16 1\n  %v = load i8, ptr %p\n  br label %b1\n}}\n"
+        ));
+        let layout = layout(&module);
+        let (_, _, f) = module.functions().next().unwrap();
+        let unit = Unit::of(&module, &layout, f);
+        let (_, load) = f
+            .walk()
+            .find(|&(_, at)| matches!(
+                f.instruction(at).opcode,
+                llrm_mir::opcode::Opcode::Load { .. }
+            ))
+            .unwrap();
+        assert!(MemRef::of(&unit, load).is_some());
     }
 
     /// Isel's unit named no program, so the spaces became one flat space: a QB

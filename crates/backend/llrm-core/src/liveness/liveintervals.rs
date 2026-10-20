@@ -51,6 +51,10 @@ pub struct LiveIntervals {
     /// The instructions of each block, in order (`MachineBasicBlock`).
     blocks: Vec<Vec<Arc<Insn>>>,
     operands: HashMap<u32, Vec<Operand>>,
+    /// Where each instruction's operands of a value sit in `operands`, so
+    /// removing them is not a scan of the list (the use-def chain of C++
+    /// unlinks in O(1)).
+    slots: HashMap<(u32, InstrKey), Vec<u32>>,
     /// Every instruction by its key (`MachineInstr*`).
     insns: HashMap<InstrKey, Arc<Insn>>,
     /// The values defined on entry (parameters), which no instruction defines.
@@ -72,6 +76,7 @@ impl LiveIntervals {
             dom,
             blocks: Vec::with_capacity(body.blocks.len()),
             operands: HashMap::default(),
+            slots: HashMap::default(),
             insns: HashMap::default(),
             inputs: body.inputs.clone(),
             intervals: HashMap::default(),
@@ -97,31 +102,21 @@ impl LiveIntervals {
     ) {
         let instr = one.id();
         for &value in &one.defines {
-            self.operands
-                .entry(value)
-                .or_default()
-                .push(
-                    Operand {
-                        instr,
-                        is_def: true,
-                        reads_reg: false,
-                        early_clobber: false,
-                    },
-                );
+            self.push_operand(value, Operand { instr, is_def: true, reads_reg: false, early_clobber: false });
         }
         for &value in &one.uses {
-            self.operands
-                .entry(value)
-                .or_default()
-                .push(
-                    Operand {
-                        instr,
-                        is_def: false,
-                        reads_reg: true,
-                        early_clobber: false,
-                    },
-                );
+            self.push_operand(value, Operand { instr, is_def: false, reads_reg: true, early_clobber: false });
         }
+    }
+
+    fn push_operand(
+        &mut self,
+        value: u32,
+        operand: Operand,
+    ) {
+        let list = self.operands.entry(value).or_default();
+        self.slots.entry((value, operand.instr)).or_default().push(list.len() as u32);
+        list.push(operand);
     }
 
     fn remove_operands(
@@ -129,12 +124,24 @@ impl LiveIntervals {
         one: &Insn,
     ) {
         let instr = one.id();
-        for value in one.defines.iter().chain(&one.uses) {
-            if let Some(list) = self.operands.get_mut(value) {
-                list.retain(|operand| operand.instr != instr);
-                if list.is_empty() {
-                    self.operands.remove(value);
+        for &value in one.defines.iter().chain(&one.uses) {
+            // A value named twice finds its slots gone the second time.
+            let Some(mut mine) = self.slots.remove(&(value, instr)) else { continue };
+            let list = self.operands.get_mut(&value).expect("a slot names a listed operand");
+            // Highest first: the operand swapped in is then never one of ours.
+            mine.sort_unstable_by(|a, b| b.cmp(a));
+            for at in mine {
+                let at = at as usize;
+                let last = list.len() - 1;
+                list.swap_remove(at);
+                if at != last {
+                    let moved = self.slots.get_mut(&(value, list[at].instr)).expect("a listed operand has a slot");
+                    *moved.iter_mut().find(|slot| **slot as usize == last).expect("the slot of the last operand") =
+                        at as u32;
                 }
+            }
+            if list.is_empty() {
+                self.operands.remove(&value);
             }
         }
     }
@@ -422,12 +429,38 @@ impl LiveIntervals {
         (a == b).then_some(a)
     }
 
+    /// The position in `block` of the first instruction whose index is `at`
+    /// or later (`strict`: later than `at`). The block is in slot order.
+    pub fn partition_at(
+        &self,
+        block: usize,
+        at: &SlotIndex,
+        strict: bool,
+    ) -> usize {
+        self.blocks[block].partition_point(|one| {
+            let here = self.indexes.get_instruction_index(one.id());
+            if strict { here <= *at } else { here < *at }
+        })
+    }
+
     fn position_of(
         &self,
         block: usize,
         key: InstrKey,
     ) -> usize {
-        self.blocks[block].iter().position(|one| one.id() == key).expect("an instruction of the block")
+        // The block is in slot order, so the instruction is found by bisection
+        // (LLVM's list gives the position for free); a parallel copy shares
+        // one index, so the run of equal ones is searched.
+        let at = self.indexes.get_instruction_index(key);
+        let insns = &self.blocks[block];
+        let first = insns.partition_point(|one| self.indexes.get_instruction_index(one.id()) < at);
+        insns[first..]
+            .iter()
+            .take_while(|one| self.indexes.get_instruction_index(one.id()) == at)
+            .position(|one| one.id() == key)
+            .map(|run| first + run)
+            .or_else(|| insns.iter().position(|one| one.id() == key))
+            .expect("an instruction of the block")
     }
 
     /// `insertMachineInstrInMaps` for an instruction put immediately before

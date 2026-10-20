@@ -10,7 +10,7 @@ use llrm_transforms::pipeline;
 use crate::abi::machine::Machine;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [-mcode-segment=NAME] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,6 +85,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
         }
     }),
     ("strength-reduce", |options, on| options.strength = on),
+    ("lsr", |options, on| options.lsr = on),
     ("unswitch-loops", |options, on| options.unswitch = on),
     ("loop-unroll-and-jam", |options, on| options.unroll_jam = on),
     ("loop-interchange", |options, on| options.interchange = on),
@@ -173,6 +174,9 @@ pub struct Flags {
     stack_is_data: Option<bool>,
     far_bss: Option<bool>,
     bss_begin: Option<bool>,
+    /// `-mcode-segment=NAME`: every module's code goes in the segment NAME, not
+    /// in `<MODULE>_TEXT`: the near calls and jumps between modules reach.
+    code_segment: Option<String>,
     /// `--clocks-per-byte N`: the clocks an inline must save for each byte of
     /// code it adds (default 16; 0 allows no growth).
     milliclocks_per_byte: Option<i64>,
@@ -220,6 +224,7 @@ impl Default for Flags {
             stack_is_data: None,
             far_bss: None,
             bss_begin: None,
+            code_segment: None,
             milliclocks_per_byte: None,
             output: None,
             assembly: false,
@@ -259,6 +264,13 @@ impl Flags {
         match flag {
             "-o" | "--output" => self.output = Some(PathBuf::from(value("-o/--output")?)),
             "-S" => self.assembly = true,
+            // LLVM's `-disable-lsr` (TargetPassConfig), also
+            // as `-mllvm -disable-lsr`.
+            "-disable-lsr" => self.disable_lsr(),
+            "-mllvm" => match value("-mllvm")?.as_str() {
+                "-disable-lsr" => self.disable_lsr(),
+                other => return Err(format!("unknown -mllvm option {other}; the only one is -disable-lsr")),
+            },
             "-g" => (self.debug, self.debug_format) = (true, Default::default()),
             "-g0" => self.debug = false,
             "-gcodeview" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::CodeView),
@@ -283,6 +295,9 @@ impl Flags {
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "-mfar-bss" => self.far_bss = Some(true),
             "-mno-far-bss" => self.far_bss = Some(false),
+            _ if flag.starts_with("-mcode-segment=") => {
+                self.code_segment = Some(flag["-mcode-segment=".len()..].to_owned())
+            }
             "-mbss-begin" => self.bss_begin = Some(true),
             "-mno-bss-begin" => self.bss_begin = Some(false),
             "--clocks-per-byte" => {
@@ -335,6 +350,11 @@ impl Flags {
             _ => return Ok(false),
         }
         Ok(true)
+    }
+
+    fn disable_lsr(&mut self) {
+        let lsr = PASSES.iter().position(|(one, _)| *one == "lsr").expect("the lsr pass");
+        self.passes.push((lsr, false));
     }
 
     /// The convention an unmarked function has on `target`: the `-mabi=`
@@ -451,6 +471,7 @@ impl Flags {
             stack_limit: self.stack_limit,
             abi: self.abi.clone(),
             float_store: self.float_store,
+            code_segment: self.code_segment.clone(),
             ..super::Options::new(machine, arch, selection)
         }
     }

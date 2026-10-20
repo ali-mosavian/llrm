@@ -40,7 +40,7 @@
 //! ```
 //!
 //! The setup between them moves ahead of the first loop. The copy is a
-//! candidate, as in [`crate::unswitch`]: [`crate::candidate`] runs the
+//! candidate, as in [`crate::loopversion`]: [`crate::candidate`] runs the
 //! pipeline over it and keeps it when it has fewer loops, no more operations
 //! and no larger price, spills included. At most `MAX_TRIALS` candidates are
 //! tried per body and the loops are at most `MAX_LOOP_OPS` operations

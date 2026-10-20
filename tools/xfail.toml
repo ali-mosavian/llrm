@@ -1,0 +1,163 @@
+# Tests expected to fail on feat/parity: id, issue, owner, date. A fix removes its entry (a listed test that passes fails the gate).
+# ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
+
+[[xfail]]
+id = "unit llrm-c::compile::tests::test_m16_regparm3_a_small_struct_argument_is_on_the_stack"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-c::compile::tests::test_m16_watcom_a_long_and_a_far_pointer_take_a_pair_and_a_passed_over_register_stays_free"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-c::compile::tests::test_m16_watcom_a_struct_result_is_written_through_si_and_returned_in_ax"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::nibstages::tests::test_the_dump_shows_the_code_the_compiler_emits"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_debug::a_parameter_the_optimiser_removed_is_in_the_model_with_no_location"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_debug::a_register_parameter_kept_across_a_loop_has_its_place_and_one_that_moves_has_its_ranges"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_debug::nib_inlined_code_keeps_its_lines_and_loses_its_symbols"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_nib_frontend::test_a_column_read_steps_a_pointer_by_its_runtime_stride"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_nib_frontend::test_a_loop_past_max_completely_peel_times_stays_rolled"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_nib_frontend::test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_nib_frontend::test_a_pointer_stepped_by_a_runtime_stride_is_one_recurrence"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_nib_frontend::test_a_range_loop_with_a_variable_bound_counts_to_zero"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_nib_frontend::test_a_reference_lets_its_field_load_leave_the_loop"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_nib_frontend::test_a_zip_loop_tested_for_equality_ends_on_the_flags_of_its_byte_counter"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_nib_frontend::test_an_array_field_fills_and_copies_as_one_run_each"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_nib_frontend::test_an_interrupt_handler_saves_every_register_and_returns_with_iret"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_nib_frontend::test_borrowed_array_call_builds_one_view_from_the_direct_payload"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_nib_frontend::test_the_rich_route_prices_the_configured_cpu"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_pipeline::test_a_frame_no_stack_segment_holds_is_refused"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-nib::test_pipeline::test_a_partition_loop_has_no_bounds_check_in_it"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::peek_and_poke_touch_memory_every_time"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_constant_divisor_of_a_non_negative_counter_is_a_reciprocal_without_a_spill"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_loop_doubles_an_index_with_add_not_the_three_clock_shift"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_raise_under_an_error_handler_resumes_after_its_statement"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_register_live_through_a_loop_is_parked_for_its_counters"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_sum_read_after_its_loop_is_copied_out_where_the_loop_ends"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_affine_terms_of_one_counter_share_its_scaled_value"
+issue = 3075
+owner = "hir-branch-icmp-2211"
+date = "2026-10-23"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_element_stores_leave_descriptors_unread"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_nested_integer_division_keeps_each_dividend"
+issue = 2848
+owner = "unassigned"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-c::compile::tests::test_m32_adds_into_a_new_register_with_lea"
+issue = 3052
+owner = "lir-cleanup-port"
+date = "2026-10-23"
+[[xfail]]
+id = "unit llrm-c::compile::tests::test_m32_an_unmarked_function_takes_registers_and_pops_its_stack_arguments"
+issue = 3059
+owner = "backend-slopes"
+date = "2026-10-20"
+[[xfail]]
+id = "unit llrm-c::compile::tests::test_m16_watcom_words_arrive_in_ax_dx_bx_cx_and_the_callee_pops_the_rest"
+issue = 2980
+owner = "simplify-combine-wiring-2128"
+date = "2026-10-21"

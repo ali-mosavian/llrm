@@ -76,7 +76,7 @@
 //! # Provides
 //! The helpers above. Consumers in llrm-transforms: `dead`, `promote`
 //! (`pruned_phis`); `gvn`, `lcssamerges`, `transform`, `loadjoins`
-//! (`substituted`, `provider`); `rotate`, `jumpthread`, `floatloop`
+//! (`substituted`, `provider`); `rotate`, `floatloop`
 //! (`SsaUpdater`).
 //!
 //! # Needs

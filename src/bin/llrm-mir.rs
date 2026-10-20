@@ -98,6 +98,21 @@ fn main() -> ExitCode {
         })
         .is_some()
     };
+    let mode = {
+        let at = arguments.iter().position(|one| one == "--mode");
+        at.map(|at| {
+            let value = arguments.get(at + 1).cloned().unwrap_or_default();
+            arguments.drain(at..(at + 2).min(arguments.len()));
+            value
+        })
+    };
+    let non_trivial = {
+        let at = arguments.iter().position(|one| one == "--non-trivial");
+        at.inspect(|&at| {
+            arguments.remove(at);
+        })
+        .is_some()
+    };
     let simple_loop_unswitch = {
         let at = arguments.iter().position(|one| one == "--simple-loop-unswitch");
         at.inspect(|&at| {
@@ -231,8 +246,24 @@ fn main() -> ExitCode {
             }
             if simple_loop_unswitch {
                 let mut manager = llrm_mir::passes::PassManager::default();
-                manager.add(llrm_transforms::simpleloopunswitch::SimpleLoopUnswitch);
-                if let Err(error) = manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)) {
+                manager.add(llrm_transforms::simpleloopunswitch::SimpleLoopUnswitch { non_trivial });
+                // `--mode N`: the target's datalayout and TTI price the loop,
+                // as in llrm-pass.
+                let mut machine: std::rc::Rc<dyn llrm_mir::target::Machine> =
+                    std::rc::Rc::new(llrm_mir::target::Neutral);
+                if let Some(mode) = &mode {
+                    match llrm_driver::mode_target(mode, false) {
+                        Ok(target) => {
+                            module.datalayout = Some(target.datalayout);
+                            machine = target.machine;
+                        }
+                        Err(error) => {
+                            eprintln!("llrm-mir: {error}");
+                            return ExitCode::from(2);
+                        }
+                    }
+                }
+                if let Err(error) = manager.run_module(&mut module, machine) {
                     eprintln!("{path}: {error}");
                     return ExitCode::FAILURE;
                 }

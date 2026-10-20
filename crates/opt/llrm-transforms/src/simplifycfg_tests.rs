@@ -189,13 +189,8 @@ b2:
         "define i16 @f(i16 %x) {
 b0:
   %cond = icmp eq i16 %x, 1
-  br i1 %cond, label %b1, label %b2
-
-b1:
-  ret i16 10
-
-b2:
-  ret i16 20
+  %0 = select i1 %cond, i16 10, i16 20
+  ret i16 %0
 }
 ",
         &[&[1], &[2], &[3]],
@@ -232,9 +227,12 @@ b0:
     );
 }
 
+/// The two returns are one (`tailMergeBlocksWithSimilarFunctionTerminators`),
+/// and the two-entry phi of constants it makes a select.
 #[test]
-fn test_a_branch_on_a_value_is_left_alone() {
-    let text = "define i16 @f(i16 %x) {
+fn test_a_branch_on_a_value_whose_arms_return_constants_is_a_select() {
+    check(
+        "define i16 @f(i16 %x) {
 b0:
   %c = icmp eq i16 %x, 1
   br i1 %c, label %b1, label %b2
@@ -245,8 +243,16 @@ b1:
 b2:
   ret i16 20
 }
-";
-    check(text, text, &[&[1], &[2]]);
+",
+        "define i16 @f(i16 %x) {
+b0:
+  %c = icmp eq i16 %x, 1
+  %0 = select i1 %c, i16 10, i16 20
+  ret i16 %0
+}
+",
+        &[&[1], &[2]],
+    );
 }
 
 /// The jump that closes a loop keeps its `!llvm.loop` (it is the loop's one
@@ -642,6 +648,7 @@ b2:
 /// With `SpeculateBlocks` off no select forms: only the empty arm goes.
 #[test]
 fn test_without_speculate_blocks_no_select_forms() {
+    // The arms differ, so `hoistCommonCodeFromSuccessors` has nothing to share.
     let text = "define i16 @f(i16 %a, i16 %b, i1 %c) {
 b0:
   br i1 %c, label %b1, label %b2
@@ -650,10 +657,11 @@ b1:
   br label %b3
 
 b2:
+  %d = mul i16 %b, 3
   br label %b3
 
 b3:
-  %m = phi i16 [ %a, %b1 ], [ %b, %b2 ]
+  %m = phi i16 [ %a, %b1 ], [ %d, %b2 ]
   ret i16 %m
 }
 ";
@@ -662,10 +670,11 @@ b0:
   br i1 %c, label %b3, label %b2
 
 b2:
+  %d = mul i16 %b, 3
   br label %b3
 
 b3:
-  %m = phi i16 [ %b, %b2 ], [ %a, %b0 ]
+  %m = phi i16 [ %d, %b2 ], [ %a, %b0 ]
   ret i16 %m
 }
 ";
@@ -703,6 +712,78 @@ b9:
 }
 ",
         &[&[3, 1, 1], &[3, 0, 1], &[3, 1, 0]],
+    );
+}
+
+/// The store of the arm runs before the branch, of the value it stores or
+/// the one the location already held (`HoistCondStores`): the location is
+/// known to be written, by the store just before the branch.
+#[test]
+fn test_a_store_over_a_store_just_before_the_branch_runs_early() {
+    check(
+        "define i16 @f(i16 %x, i1 %c) {
+entry:
+  %a = alloca i16
+  store i16 0, ptr %a
+  br i1 %c, label %then, label %end
+
+then:
+  store i16 %x, ptr %a
+  br label %end
+
+end:
+  %r = load i16, ptr %a
+  ret i16 %r
+}
+",
+        "define i16 @f(i16 %x, i1 %c) {
+entry:
+  %a = alloca i16
+  store i16 0, ptr %a
+  %spec.store.select = select i1 %c, i16 %x, i16 0
+  store i16 %spec.store.select, ptr %a
+  %r = load i16, ptr %a
+  ret i16 %r
+}
+",
+        &[&[7, 1], &[7, 0]],
+    );
+}
+
+/// A load of an alloca is safe to run early: the join has a third
+/// predecessor, so the two-entry fold does not apply, and the phi is a select.
+#[test]
+fn test_a_load_of_an_alloca_runs_before_the_branch() {
+    check(
+        "define i16 @f(i1 %c, i1 %d) {
+b9:
+  %a = alloca i16
+  store i16 5, ptr %a
+  br i1 %d, label %b0, label %end
+
+b0:
+  br i1 %c, label %then, label %end
+
+then:
+  %l = load i16, ptr %a
+  br label %end
+
+end:
+  %r = phi i16 [ 9, %b9 ], [ 0, %b0 ], [ %l, %then ]
+  ret i16 %r
+}
+",
+        "define i16 @f(i1 %c, i1 %d) {
+b9:
+  %a = alloca i16
+  store i16 5, ptr %a
+  %l = load i16, ptr %a
+  %0 = select i1 %c, i16 %l, i16 0
+  %1 = select i1 %d, i16 %0, i16 9
+  ret i16 %1
+}
+",
+        &[&[1, 1], &[0, 1], &[1, 0]],
     );
 }
 
@@ -803,4 +884,51 @@ b0:
 ",
         &[&[3, 1, 1]],
     );
+}
+
+/// The late slot L1438 has `needCanonicalLoops(false)`. An empty block of two
+/// predecessors that jumps to a loop header stays at the default (it would
+/// give the header a third entry) and goes at the slot: `opt -passes=
+/// 'simplifycfg<no-keep-loops;hoist-common-insts;sink-common-insts>'` makes
+/// the same (tools/llvmport/simplifycfgcompare.py --no-keep-loops).
+#[test]
+fn test_an_empty_entry_block_of_a_loop_goes_only_without_canonical_loops() {
+    let text = "@g = internal global i16 0
+
+define i16 @f(i16 %n, i1 %c) {
+entry:
+  br i1 %c, label %e, label %a
+
+a:
+  %t = add i16 %n, 1
+  store i16 %t, ptr @g
+  br label %e
+
+e:
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %e ], [ %i1, %h ]
+  %i1 = add i16 %i, 1
+  %k = icmp slt i16 %i1, %n
+  br i1 %k, label %h, label %x
+
+x:
+  ret i16 %i1
+}
+";
+    let inputs: &[&[i128]] = &[&[3, 1], &[3, 0], &[1, 1]];
+    let run = |options: &super::Options| {
+        let mut module = parsed(text);
+        let before = results(&module, inputs);
+        let changed = simplify_with(options, &mut module);
+        assert_eq!(results(&module, inputs), before);
+        (changed, printed(&module))
+    };
+    let (kept_changed, kept) = run(&super::Options::default());
+    assert!(!kept_changed && kept.contains("\ne:\n"), "{kept}");
+    // The options the pipeline builds the slot from.
+    let (gone_changed, gone) = run(&super::Options::L1438);
+    assert!(gone_changed && !gone.contains("\ne:\n"), "{gone}");
+    assert!(gone.contains("br i1 %c, label %h, label %a"), "{gone}");
 }

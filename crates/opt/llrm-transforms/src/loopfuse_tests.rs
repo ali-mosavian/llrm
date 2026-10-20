@@ -313,10 +313,17 @@ fn two_loops_behind_one_test_become_one() {
     same_answers(&module, &text);
 }
 
-/// The second loop's own test is read the same way round or not.
+/// The second loop's own test is read the same way round or not. Both guards
+/// weigh 1:1: `BranchProbabilityInfo`'s zero heuristic reads `sgt %n, 0` and
+/// not `slt 0, %n` (InstCombine makes the one the other before LLVM's loop
+/// passes see it), and the price would favour the unfused pair.
 #[test]
 fn the_second_test_may_be_the_first_written_another_way() {
-    let text = rotated("sgt i16 %n, 0", "slt i16 0, %n");
+    let text = rotated("sgt i16 %n, 0", "slt i16 0, %n")
+        .replace("label %pre0, label %g1\n", "label %pre0, label %g1, !prof !0\n")
+        .replace("label %pre1, label %done\n", "label %pre1, label %done, !prof !0\n")
+        + "\n!0 = !{!\"branch_weights\", i32 1, i32 1}\n";
+    assert_eq!(text.matches("!prof !0").count(), 2, "the premise: both guards weighed");
     let (module, gone) = fused(&text);
     assert_eq!(gone, 1, "{}", printed(&module));
     same_answers(&module, &text);

@@ -159,3 +159,25 @@ def test_a_wrong_reference_row_is_failed_like_a_wrong_llrm_row():
     rows = {"p/gccO2": {"ok": False, "got": [7], "ins": 1, "mem": 1, "clocks": 1, "code": 1}, "p/clangO2": {"ok": True, "ins": 1, "mem": 1, "clocks": 1, "code": 1}}
     line, bad = rowcheck.census({"base": rows})
     assert bad == ["p/gccO2 (failed in base: wrong output: got [7])"] and "failed 1" in line
+
+
+def test_a_side_whose_d_faces_did_not_compile_is_named_and_the_report_still_comes(tmp_path, monkeypatch):
+    """The #2773 pair's new side panicked compiling d_faces: df-main.json was never written and analyse.py died with FileNotFoundError, losing every table."""
+    work = load(tmp_path, monkeypatch)
+    import json
+
+    for name in ("base", "main"):
+        lines = ""
+        for level in ("O1", "O2", "O3", "Os"):
+            llrm = "llrm" if level == "O2" else "llrm" + level
+            for variant in (llrm, "gcc" + level, "clang" + level):
+                lines += json.dumps({"prog": "p", "variant": variant, "ins": 5, "mem": 1, "clocks": 9, "code": 3, "ok": True}) + "\n"
+        (work / name / "results.jsonl").write_text(lines)
+    (work / "df-base.json").write_text("".join(row("dfaces", v, 100) for v in ("llrm", "llrmO1", "llrmO3", "llrmOs", "gccO1", "gccO2", "gccO3", "gccOs", "clangO1", "clangO2", "clangO3", "clangOs")))
+    (work / "df-main.log").write_text("internal error: a SCEVable type, not Float(Float)\n")
+    (work / "qcport.json").write_text(json.dumps([[n, "m", level, 5] for n in ("base", "main") for level in ("-O1", "-O2", "-O3", "-Os")]))
+    spec = importlib.util.spec_from_file_location("analyse", HERE / "analyse.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    text = "\n".join(module.out)
+    assert "d_faces: NOT MEASURED, no result on main (internal error: a SCEVable type, not Float(Float))" in text and "rows total 12" in text

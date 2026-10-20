@@ -35,8 +35,16 @@ use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 
 use crate::aa::{AAQueryInfo, AAResults, AliasResult, LocationSize, MemoryEffects, MemoryLocation, ModRefInfo};
-use crate::capturetracking::{CaptureComponents, DEFAULT_MAX_USES_TO_EXPLORE, pointer_may_be_captured};
+use crate::capturetracking::CaptureComponents;
 use crate::memory::Unit;
+
+#[cfg(test)]
+thread_local! {
+    /// Times an object was classified as function-local, for the test that a
+    /// batch classifies each object once.
+    pub static DECOMPOSITIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub static CLASSIFICATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// `MaxLookupSearchDepth`.
 const MAX_LOOKUP: usize = 6;
@@ -44,13 +52,62 @@ const MAX_LOOKUP: usize = 6;
 /// A pointer as a base object, a constant offset and variable indices
 /// (`DecomposedGEP`).
 #[derive(Clone, Debug)]
-struct Decomposed {
+pub(crate) struct Decomposed {
     base: Operand,
     offset: i128,
     /// `(index value, scale)`, a scale never zero.
     vars: Vec<(Operand, i128)>,
     inbounds: bool,
     nuw: bool,
+}
+
+/// A load or store's place as `DecomposeGEPExpression` finds it: the object its
+/// pointer starts from, the constant offset in it (wrapped to the pointer's
+/// index width) and the bytes accessed. `indexed` says a variable index is
+/// added too, which the offset leaves out.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObjectCell {
+    pub object: Operand,
+    pub offset: i64,
+    pub size: u64,
+    pub indexed: bool,
+}
+
+/// The place `inst` accesses, if it is a load or store of a known size.
+pub fn object_cell(
+    unit: &Unit,
+    inst: llrm_mir::module::InstId,
+) -> Option<ObjectCell> {
+    let place = MemoryLocation::get(unit, inst)?;
+    let LocationSize::Precise(size) = place.size else { return None };
+    let found = BasicAA::new(unit).decomposed(place.ptr);
+    let bits = unit.layout.pointer(unit.space(place.ptr).unwrap_or(0)).index_bits;
+    let offset = match bits {
+        1..=127 => (found.offset << (128 - bits)) >> (128 - bits),
+        _ => found.offset,
+    };
+    Some(ObjectCell { object: found.base, offset: i64::try_from(offset).ok()?, size, indexed: !found.vars.is_empty() })
+}
+
+/// Bits of `BasicAA::class`.
+struct Class;
+
+impl Class {
+    const LOCAL: u8 = 1;
+    const GLOBAL_VARIABLE: u8 = 2;
+    const ARGUMENT: u8 = 4;
+    const ESCAPE_SOURCE: u8 = 8;
+    /// `isIdentifiedObject`.
+    const IDENTIFIED: u8 = Self::LOCAL | Self::GLOBAL_VARIABLE;
+}
+
+/// `isIdentifiedFunctionLocal`: an alloca, a `noalias` call result or a
+/// `noalias` or `byval` argument.
+pub(crate) fn is_identified_function_local(
+    unit: &Unit,
+    operand: Operand,
+) -> bool {
+    BasicAA::new(unit).is_identified_local(operand)
 }
 
 pub struct BasicAA<'a> {
@@ -112,8 +169,23 @@ impl<'a> BasicAA<'a> {
     /// `DecomposeGEPExpression`.
     fn decompose(
         &self,
+        operand: Operand,
+        aaqi: &mut AAQueryInfo,
+    ) -> std::rc::Rc<Decomposed> {
+        if let Some(found) = aaqi.decomposed.get(&operand) {
+            return std::rc::Rc::clone(found);
+        }
+        let found = std::rc::Rc::new(self.decomposed(operand));
+        aaqi.decomposed.insert(operand, std::rc::Rc::clone(&found));
+        found
+    }
+
+    fn decomposed(
+        &self,
         mut operand: Operand,
     ) -> Decomposed {
+        #[cfg(test)]
+        DECOMPOSITIONS.with(|count| count.set(count.get() + 1));
         let mut found = Decomposed { base: operand, offset: 0, vars: Vec::new(), inbounds: true, nuw: true };
         for _ in 0..MAX_LOOKUP {
             let Some(one) = self.defining(operand) else { break };
@@ -293,8 +365,18 @@ impl<'a> BasicAA<'a> {
             )
     }
 
-    /// `isIdentifiedFunctionLocal`.
+    /// `isIdentifiedFunctionLocal`, counted for the test that a batch
+    /// classifies each object once.
     fn identified_local(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        #[cfg(test)]
+        CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
+        self.is_identified_local(operand)
+    }
+
+    fn is_identified_local(
         &self,
         operand: Operand,
     ) -> bool {
@@ -309,6 +391,32 @@ impl<'a> BasicAA<'a> {
         operand: Operand,
     ) -> bool {
         self.identified_local(operand) || self.global_variable(operand)
+    }
+
+    /// What `operand` is, as `Class` bits, found once for the batch.
+    fn class(
+        &self,
+        operand: Operand,
+        aaqi: &mut AAQueryInfo,
+    ) -> u8 {
+        if let Some(found) = aaqi.classes.get(&operand) {
+            return *found;
+        }
+        let mut class = 0;
+        if self.identified_local(operand) {
+            class |= Class::LOCAL;
+        }
+        if self.global_variable(operand) {
+            class |= Class::GLOBAL_VARIABLE;
+        }
+        if self.argument(operand) {
+            class |= Class::ARGUMENT;
+        }
+        if self.escape_source(operand) {
+            class |= Class::ESCAPE_SOURCE;
+        }
+        aaqi.classes.insert(operand, class);
+        class
     }
 
     fn argument(
@@ -335,46 +443,40 @@ impl<'a> BasicAA<'a> {
         })
     }
 
-    /// `SimpleCaptureAnalysis::getCapturesBefore` (BasicAliasAnalysis.cpp:203):
-    /// what `PointerMayBeCaptured` finds of a function-local identified object
-    /// (provenance mask, stopping at full provenance), remembered in the batch
-    /// (`IsCapturedCache`). Any other object keeps its provenance.
+    /// `AAQI.CA->getCapturesBefore(Object, I, OrAt, ReturnCaptures)`: asked of
+    /// the batch's capture analysis (`SimpleCaptureAnalysis`: the whole
+    /// function; `EarliestEscapeAnalysis`: before `inst`).
     fn captures_before(
         &self,
         object: Operand,
+        inst: Option<llrm_mir::module::InstId>,
+        or_at: bool,
         return_captures: bool,
         aaqi: &mut AAQueryInfo,
     ) -> CaptureComponents {
-        let Operand::Value(value) = object else { return CaptureComponents::PROVENANCE };
-        if !self.identified_local(object) {
-            return CaptureComponents::PROVENANCE;
-        }
-        let key = u64::from(value.0);
-        let found = match aaqi.captured.get(&key) {
-            Some(found) => *found,
-            None => {
-                let found = pointer_may_be_captured(
-                    self.unit.function,
-                    self.unit.globals,
-                    self.unit.context,
-                    value,
-                    CaptureComponents::PROVENANCE,
-                    |cc| cc.intersect(CaptureComponents::PROVENANCE) == CaptureComponents::PROVENANCE,
-                    DEFAULT_MAX_USES_TO_EXPLORE,
-                );
-                aaqi.captured.insert(key, found);
-                found
-            }
-        };
-        if return_captures { found.with_ret } else { found.without_ret }
+        aaqi.capture.captures_before(self.unit, object, inst, or_at, return_captures)
     }
 
-    fn not_captured(
+    /// Whether the address of `object` may be captured anywhere, a return
+    /// included.
+    pub(crate) fn is_captured(
         &self,
         object: Operand,
         aaqi: &mut AAQueryInfo,
     ) -> bool {
-        self.captures_before(object, false, aaqi).captures_nothing()
+        !self.captures_before(object, None, true, true, aaqi).captures_nothing()
+    }
+
+    /// `capturesNothing(getCapturesBefore(O, dyn_cast<Instruction>(Source),
+    /// /*OrAt=*/true, /*ReturnCaptures=*/false))`.
+    fn not_captured_before(
+        &self,
+        object: Operand,
+        source: Operand,
+        aaqi: &mut AAQueryInfo,
+    ) -> bool {
+        let at = self.unit.defining(source).map(|(inst, _)| inst);
+        self.captures_before(object, at, true, false, aaqi).captures_nothing()
     }
 
     /// `isObjectSmallerThan(object, size)`: an identified object whose whole
@@ -383,8 +485,9 @@ impl<'a> BasicAA<'a> {
         &self,
         object: Operand,
         size: u64,
+        aaqi: &mut AAQueryInfo,
     ) -> bool {
-        self.identified(object)
+        self.class(object, aaqi) & Class::IDENTIFIED != 0
             && crate::memory::extent_of(self.unit, object).is_some_and(|extent| (extent as u64) < size)
     }
 
@@ -392,8 +495,10 @@ impl<'a> BasicAA<'a> {
         &self,
         object: Operand,
         size: u64,
+        aaqi: &mut AAQueryInfo,
     ) -> bool {
-        self.identified(object) && crate::memory::extent_of(self.unit, object) == Some(size as i64)
+        self.class(object, aaqi) & Class::IDENTIFIED != 0
+            && crate::memory::extent_of(self.unit, object) == Some(size as i64)
     }
 
     fn alias_check(
@@ -424,24 +529,27 @@ impl<'a> BasicAA<'a> {
                 return AliasResult::NoAlias;
             }
             // Two different identified objects.
-            if self.identified(o1) && self.identified(o2) {
+            let (c1, c2) = (self.class(o1, aaqi), self.class(o2, aaqi));
+            if c1 & Class::IDENTIFIED != 0 && c2 & Class::IDENTIFIED != 0 {
                 return AliasResult::NoAlias;
             }
             // Arguments cannot alias what is identified at the function level.
-            if (self.argument(o1) && self.identified_local(o2)) || (self.argument(o2) && self.identified_local(o1)) {
+            if (c1 & Class::ARGUMENT != 0 && c2 & Class::LOCAL != 0)
+                || (c2 & Class::ARGUMENT != 0 && c1 & Class::LOCAL != 0)
+            {
                 return AliasResult::NoAlias;
             }
             // A call or load result cannot be a non-escaping local object.
-            if (self.escape_source(o1) && self.not_captured(o2, aaqi))
-                || (self.escape_source(o2) && self.not_captured(o1, aaqi))
+            if (c1 & Class::ESCAPE_SOURCE != 0 && self.not_captured_before(o2, o1, aaqi))
+                || (c2 & Class::ESCAPE_SOURCE != 0 && self.not_captured_before(o1, o2, aaqi))
             {
                 return AliasResult::NoAlias;
             }
         }
         // An access larger than the entire object on the other side is
         // undefined.
-        if b.size.value().is_some_and(|size| self.object_smaller_than(o1, size))
-            || a.size.value().is_some_and(|size| self.object_smaller_than(o2, size))
+        if b.size.value().is_some_and(|size| self.object_smaller_than(o1, size, aaqi))
+            || a.size.value().is_some_and(|size| self.object_smaller_than(o2, size, aaqi))
         {
             return AliasResult::NoAlias;
         }
@@ -488,8 +596,8 @@ impl<'a> BasicAA<'a> {
         if o1 == o2
             && a.size.is_precise()
             && b.size.is_precise()
-            && (self.is_object_size(o1, a.size.value().unwrap_or(0))
-                || self.is_object_size(o2, b.size.value().unwrap_or(0)))
+            && (self.is_object_size(o1, a.size.value().unwrap_or(0), aaqi)
+                || self.is_object_size(o2, b.size.value().unwrap_or(0), aaqi))
         {
             return AliasResult::PartialAlias { offset: None };
         }
@@ -533,7 +641,7 @@ impl<'a> BasicAA<'a> {
             }
             return AliasResult::MayAlias;
         }
-        let (mut d1, mut d2) = (self.decompose(gep.ptr), self.decompose(other.ptr));
+        let (mut d1, mut d2) = ((*self.decompose(gep.ptr, aaqi)).clone(), (*self.decompose(other.ptr, aaqi)).clone());
         if d1.base == gep.ptr && d2.base == other.ptr {
             return AliasResult::MayAlias;
         }
@@ -694,7 +802,7 @@ impl BasicAA<'_> {
             && !is_call_itself
             && (local_slot || !returns_twice)
         {
-            let captures = self.captures_before(object, false, aaqi);
+            let captures = self.captures_before(object, Some(call), false, false, aaqi);
             if captures.captures_nothing() {
                 other = ModRefInfo::NoModRef;
             } else if captures == CaptureComponents::READ_PROVENANCE {
@@ -723,7 +831,8 @@ impl BasicAA<'_> {
         // aliasErrno without the target's int size: only a local slot or an
         // access wider than an int (32 bits) is told apart.
         if errno.union(result) != result {
-            let apart = self.identified_local(object) || loc.size.value().is_some_and(|bytes| bytes * 8 > 32);
+            let apart =
+                self.class(object, aaqi) & Class::LOCAL != 0 || loc.size.value().is_some_and(|bytes| bytes * 8 > 32);
             if !apart {
                 result = result.union(errno);
             }
@@ -1025,6 +1134,55 @@ mod tests {
         assert_eq!(answer(&body("store ptr %b, ptr @cell"), "a", "b", 4), AliasResult::MayAlias);
     }
 
+    /// An object was classified (function-local, global, argument) again by
+    /// every check of every query: 14 K calls for 3.3 K queries on d_faces -O2,
+    /// 2.9 M instructions. A batch classifies each object once.
+    #[test]
+    fn a_batch_classifies_each_object_once() {
+        let module = parsed(&format!(
+            "{M32}define i32 @f(ptr %p) {{\nentry:\n  %a = alloca [16 x i8]\n  %b = alloca [16 x i8]\n  ret i32 0\n}}\n"
+        ));
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let (a, b) = (Operand::Value(value(function, "a")), Operand::Value(value(function, "b")));
+        let mut aa = BasicAA::new(&unit);
+        let mut aaqi = AAQueryInfo::default();
+        let before = CLASSIFICATIONS.with(std::cell::Cell::get);
+        for size in 1..=10 {
+            let (la, lb) = (
+                MemoryLocation::new(a, LocationSize::Precise(size)),
+                MemoryLocation::new(b, LocationSize::Precise(size)),
+            );
+            assert_eq!(aa.alias(&la, &lb, &mut aaqi, None), AliasResult::NoAlias);
+        }
+        let made = CLASSIFICATIONS.with(std::cell::Cell::get) - before;
+        assert!(made <= 2, "{made} classifications of 2 objects in 10 queries");
+    }
+
+    /// A pointer was decomposed again by every query it was in (4.3 M
+    /// instructions for 3 K queries on d_faces -O2). A batch decomposes each
+    /// pointer once.
+    #[test]
+    fn a_batch_decomposes_each_pointer_once() {
+        let geps: String =
+            (0..6).map(|n| format!("  %g{n} = getelementptr inbounds i8, ptr %p, i32 {}\n", n * 8)).collect();
+        let module = parsed(&format!("{M32}define i32 @f(ptr %p) {{\nentry:\n{geps}  ret i32 0\n}}\n"));
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let location =
+            |name: &str| MemoryLocation::new(Operand::Value(value(function, name)), LocationSize::Precise(4));
+        let mut aa = BasicAA::new(&unit);
+        let mut aaqi = AAQueryInfo::default();
+        let before = DECOMPOSITIONS.with(std::cell::Cell::get);
+        for n in 1..6 {
+            aa.alias(&location("g0"), &location(&format!("g{n}")), &mut aaqi, None);
+        }
+        let made = DECOMPOSITIONS.with(std::cell::Cell::get) - before;
+        assert!(made <= 6, "{made} decompositions of 6 pointers in 5 queries");
+    }
+
     /// CaptureTracking explores 150 uses
     /// (`capture-tracking-max-uses-to-explore`) and then takes the
     /// pointer as captured. The slot has two uses besides its loads; the pinned
@@ -1198,5 +1356,48 @@ mod tests {
         };
         assert_eq!(call_on(&body("%a")), ModRefInfo::Ref);
         assert_eq!(call_on(&body("%q")), ModRefInfo::NoModRef);
+    }
+
+    /// On every load and store of the corpus that `MemRef` places at a constant
+    /// offset in an alloca, `object_cell` finds the same object, offset and
+    /// size: `slotstores` reads the second where it read the first.
+    #[test]
+    fn object_cell_agrees_with_memref_on_every_slot_access() {
+        use crate::memory::MemRef;
+        let (mut agreed, mut apart) = (0usize, Vec::new());
+        for (name, module) in crate::testing::corpus() {
+            let layout = layout(&module);
+            for (_, global, function) in module.functions().filter(|(_, _, f)| !f.is_declaration()) {
+                let unit = Unit::of(&module, &layout, function);
+                for (_, inst) in function.walk() {
+                    let Some(reference) = MemRef::of(&unit, inst) else { continue };
+                    let Some(Operand::Value(slot)) = reference.root else { continue };
+                    if !matches!(
+                        unit.defining(Operand::Value(slot)).map(|(_, one)| &one.opcode),
+                        Some(Opcode::Alloca { .. })
+                    ) || reference.base.is_some()
+                    {
+                        continue;
+                    }
+                    let want = (Operand::Value(slot), reference.disp, u64::from(reference.width));
+                    match object_cell(&unit, inst) {
+                        Some(cell) if !cell.indexed && (cell.object, cell.offset, cell.size) == want => agreed += 1,
+                        other => apart.push(format!(
+                            "{name}/@{} {inst:?}: {want:?} vs {other:?}",
+                            global.name.as_deref().unwrap_or("")
+                        )),
+                    }
+                }
+            }
+        }
+        // Premise: the corpus has slot accesses.
+        assert!(agreed > 0, "no slot access in the corpus");
+        assert!(
+            apart.is_empty(),
+            "{} of {} differ: {:#?}",
+            apart.len(),
+            agreed + apart.len(),
+            &apart[..apart.len().min(8)]
+        );
     }
 }
