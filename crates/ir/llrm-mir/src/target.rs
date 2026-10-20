@@ -33,6 +33,13 @@ pub trait Machine {
         None
     }
 
+    /// The library functions the target's runtime has and the widths of `int`
+    /// and `size_t` (`TargetLibraryInfo`'s `initialize` of the triple); none:
+    /// the pin's defaults for an unknown OS, `int` as wide as a pointer.
+    fn library(&self) -> Option<std::rc::Rc<dyn crate::libfunc::Library>> {
+        None
+    }
+
     /// The target's `TargetLowering` facts, for the passes that translate
     /// code reading them; none: the base class's answers.
     fn lowering(&self) -> Option<std::rc::Rc<dyn crate::lowering::Lowering>> {
