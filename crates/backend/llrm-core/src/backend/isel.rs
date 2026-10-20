@@ -1100,7 +1100,9 @@ pub fn selected_with<'c>(
     }
     body.spares = Arc::new(spared(module, function, &selector.ats));
     body.homes = Arc::new(homed(module, function, &selector.ats, &selector.values, &body));
-    body.float_bytes = Arc::new(float_bytes(module, function, &selector.values));
+    if cpu.rounds_float_spills {
+        body.float_bytes = Arc::new(float_bytes(module, function, &selector.values));
+    }
     body.variables = parameters(module, function, name, &convention, &selector.homes);
     body.cfa_variables = true;
     let mut body =
@@ -1226,25 +1228,26 @@ fn spared(
     pairs
 }
 
-/// The bytes of each float value's type, by the number selection gave it.
+/// The bytes of each float value's type, by the number selection gave it. A
+/// widening or a narrowing that rounds nothing (`fpext`, `fptrunc` under fast
+/// float) shares its operand's number: the number is as wide as the widest.
 fn float_bytes(
     module: &Module,
     function: &Function,
     values: &IndexMap<ValueId, u32>,
 ) -> std::collections::BTreeMap<u32, u32> {
-    values
-        .iter()
-        .filter_map(|(&id, &number)| {
-            let ty = function.value(id).ty;
-            let Type::Float(kind) = module.context.types.get(ty) else { return None };
-            let bytes = match kind {
-                FloatKind::Float => 4,
-                FloatKind::Double => 8,
-                FloatKind::X86Fp80 => 10,
-            };
-            Some((number, bytes))
-        })
-        .collect()
+    let mut bytes = std::collections::BTreeMap::new();
+    for (&id, &number) in values {
+        let Type::Float(kind) = module.context.types.get(function.value(id).ty) else { continue };
+        let size = match kind {
+            FloatKind::Float => 4,
+            FloatKind::Double => 8,
+            FloatKind::X86Fp80 => 10,
+        };
+        let widest = bytes.entry(number).or_insert(0);
+        *widest = size.max(*widest);
+    }
+    bytes
 }
 
 /// Each phi's value that the program also holds in a fixed cell (`!llrm.home`):

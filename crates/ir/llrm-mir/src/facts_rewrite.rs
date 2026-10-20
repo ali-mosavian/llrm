@@ -408,10 +408,25 @@ mod tests {
             // so it ran wherever the branch does, and a value the flag makes
             // poison made the branch undefined before.
             "icmpchain.rs",
+            // SimplifyCFG.cpp's `switchToLookupTable` gives the `sub` that
+            // makes the table index `nsw` when the case range cannot wrap;
+            // it reads no flag.
+            "switchlookup.rs",
+            // InstCombineCompares.cpp's `foldICmpAndConstConst` builds the
+            // `shl nuw 1, B` of the `(or (lshr A, B), A) & 1` fold
+            // (`HasNUW=true`); it reads no flag.
+            "combine_icmp_const.rs",
             // LICM.cpp's `hoistGEP` makes the swapped GEPs `inbounds` when both
             // were and no index is negative (L2373); `apply` gives the GEP it
             // builds the flag `hoist` decided.
             "apply.rs",
+            // LoopAccessAnalysis.cpp's `isNoWrap` reads the `nusw` or
+            // `inbounds` of the GEP an access goes through
+            // (`hasNoUnsignedSignedWrap`) to call its add recurrence
+            // non-wrapping, and only when an access through it runs in every
+            // iteration (the GEP would be poison, the access UB, otherwise);
+            // it changes no instruction.
+            "loopaccess.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

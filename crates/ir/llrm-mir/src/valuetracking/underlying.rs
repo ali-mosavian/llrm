@@ -1,4 +1,4 @@
-//! `getUnderlyingObject`.
+//! `getUnderlyingObject` and `getUnderlyingObjects`.
 //!
 //! # How it works
 //! A translation of LLVM `d1106deb71cc` `ValueTracking.cpp`
@@ -87,4 +87,90 @@ pub fn get_underlying_object(
         }
     }
     v
+}
+
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7264>
+///
+/// `pn`, a phi in a loop header, defines a loop-variant pointer: whether the
+/// previous iteration referred to the same object.
+fn is_same_underlying_object_in_loop(
+    q: &Query,
+    pn: &crate::module::Instruction,
+    pn_block: crate::module::BlockId,
+    loops: &crate::loopinfo::LoopInfo,
+) -> bool {
+    // Find the loop-defined value.
+    let Some(lp) = loops.get_loop_for(pn_block) else { return true };
+    if pn.operands.len() != 4 {
+        return true;
+    }
+
+    // Find the value from the previous iteration.
+    let in_loop = |value: Operand| {
+        let (inst, instruction) = q.instruction_of(value)?;
+        let block = q.function.parent(inst)?;
+        (loops.get_loop_for(block).is_some_and(|found| found.id() == lp.id())).then_some(instruction)
+    };
+    let Some(prev) = in_loop(pn.operands[0]).or_else(|| in_loop(pn.operands[2])) else { return true };
+
+    // If a new pointer is loaded in the loop, the pointer references a
+    // different object in every iteration.
+    if let Opcode::Load { .. } = prev.opcode
+        && !lp.is_loop_invariant(q.function, prev.operands[0])
+    {
+        return false;
+    }
+    true
+}
+
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7338>
+///
+/// Every underlying object `v` may be based on, through selects and phis.
+/// `max_lookup` 0 is unbounded, as in C++.
+pub fn get_underlying_objects(
+    q: &Query,
+    v: Operand,
+    loops: Option<&crate::loopinfo::LoopInfo>,
+    max_lookup: u32,
+) -> Vec<Operand> {
+    let mut visited = std::collections::HashSet::new();
+    let mut objects = Vec::new();
+    let mut worklist = vec![v];
+    while let Some(p) = worklist.pop() {
+        let p = get_underlying_object(q, p, max_lookup);
+
+        if !visited.insert(p) {
+            continue;
+        }
+
+        if let Some((_, instruction)) = q.instruction_of(p) {
+            match instruction.opcode {
+                Opcode::Select => {
+                    worklist.push(instruction.operands[1]);
+                    worklist.push(instruction.operands[2]);
+                    continue;
+                }
+                // If this phi changes the underlying object in every
+                // iteration of the loop, don't look through it: `Prev` tracks
+                // `Curr` one iteration behind, so they refer to different
+                // underlying objects.
+                Opcode::Phi => {
+                    let (inst, _) = q.instruction_of(p).expect("an instruction");
+                    let block = q.function.parent(inst).expect("a block");
+                    let incoming = || instruction.operands.chunks(2).map(|pair| pair[0]);
+                    match loops {
+                        Some(loops) if loops.is_loop_header(block) && !is_same_underlying_object_in_loop(q, instruction, block, loops) => {
+                            objects.push(p);
+                        }
+                        _ => worklist.extend(incoming()),
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        objects.push(p);
+    }
+    objects
 }

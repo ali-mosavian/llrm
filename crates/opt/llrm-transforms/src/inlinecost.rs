@@ -67,6 +67,28 @@
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
 //!   `LoopInfo`.
+//! - D10: a callee that calls itself is priced as any (LLVM: "recursive",
+//!   `IsRecursiveCall`), and `decide` leaves a call of the caller itself to the
+//!   copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
+//!   ipa-inline.cc:1645: depth `MAX_INLINE_RECURSIVE_DEPTH` 3 against gcc's 8,
+//!   `MAX_INLINE_INSNS_RECURSIVE` 150 against 450, the call's frequency above
+//!   10%; none at -Os; calls of a function that reads and writes nothing with
+//!   the same arguments count once; only a tree, at least one self-call per
+//!   call). They follow ipa-cp's second round, as the pin's specializer
+//!   precedes its inliner (PassBuilderPipelines.cpp:1228 against :1331), and so
+//!   does the tail-call elimination of such a function (the pin: inside its
+//!   function simplification, :688). Why: -O2 clocks/bytes, main | this: fib
+//!   227171/537 | 154398/392, rectwo 612458/538 | 597725/552, recchop -O3
+//!   5946/1450 | 5932/5113; gcc's 8 and 450 cost 3-10x main's bytes. Owner:
+//!   w-6. Exit: the copies chosen by gcc's badness heap with its growth limits,
+//!   tail-call elimination at the pin's slot; open rows hanoi, bintree,
+//!   quicksort, x_mergesort, recsum (docs/architecture/recursion-rows.md).
+//!   A recursive callee inlined into another function is also peeled
+//!   (ipa-inline.cc:1033): its own calls inlined in the copy while the calls
+//!   of it to itself per call, to the power of the copies deep, are below
+//!   1 - 1/8 (squared per copy where the body has more than one call to
+//!   itself), a copy adds at most 15 `gcc_insns` and the
+//!   copies of a call at most 450; a tree is never peeled; not at -Os.
 //!
 //! # See also
 //! [`crate::inline`], the decision this is to replace; the plan is
@@ -243,6 +265,14 @@ fn has_flag(
     attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == name))
 }
 
+/// Whether the function `id` is declared `frame_bound`.
+fn frame_bound(
+    module: &Module,
+    id: GlobalId,
+) -> bool {
+    module.global(id).function().is_some_and(|function| has_flag(&function.attrs, "frame_bound"))
+}
+
 fn call_info(
     function: &Function,
     inst: InstId,
@@ -307,6 +337,9 @@ pub fn inline_viable(
                 }
                 if name == "llvm.localescape" {
                     return Err("disallowed inlining of @llvm.localescape".into());
+                }
+                if target.is_some_and(|one| frame_bound(module, one)) {
+                    return Err("disallowed inlining of a frame-bound call".into());
                 }
                 if name == "llvm.va_start" {
                     return Err("contains VarArgs initialized with va_start".into());
@@ -385,7 +418,6 @@ struct Analyzer<'a> {
     known_successors: HashMap<u32, BlockId>,
     load_addrs: BTreeSet<Operand>,
     enable_load_elimination: bool,
-    recursive_call: bool,
     exposes_returns_twice: bool,
     has_dynamic_alloca: bool,
     contains_noduplicate_call: bool,
@@ -426,7 +458,6 @@ impl<'a> Analyzer<'a> {
             known_successors: HashMap::default(),
             load_addrs: BTreeSet::new(),
             enable_load_elimination: true,
-            recursive_call: false,
             exposes_returns_twice: false,
             has_dynamic_alloca: false,
             contains_noduplicate_call: false,
@@ -1363,6 +1394,14 @@ impl<'a> Analyzer<'a> {
         };
         // simplifyCallSite: D3, no library folding.
         let name = self.site.module.global(target).name.clone();
+        // A declaration flagged `frame_bound` (the QB error-handler
+        // registration): its effect belongs to the frame that runs it, so the
+        // callee is not copied into another frame (the `returns_twice` rule of
+        // `visitCallBase`, InlineCost.cpp:2473).
+        if frame_bound(self.site.module, target) {
+            self.has_uninlineable_intrinsic = true;
+            return false;
+        }
         if let Some(name) = name.as_deref().filter(|name| name.starts_with("llvm.")) {
             let family = |prefix: &str| name.starts_with(prefix);
             if family("llvm.load.relative") {
@@ -1401,11 +1440,10 @@ impl<'a> Analyzer<'a> {
             }
             return self.visit_default(inst);
         }
-        if target == self.site.callee_id && self.callee.layout().first().is_some() {
-            // F == Call.getFunction(): the callee calls itself.
-            self.recursive_call = true;
-            return false;
-        }
+        // D-recursion: `F == Call.getFunction()` (the callee calls itself) is
+        // an ordinary call here, not the refusal "recursive": a recursive
+        // callee is inlined into another caller as gcc does, and into itself
+        // by `walk`'s bounded self-inlining.
         if lowered_to_call(self.site.module, target) {
             // onLoweredCall (:732), a direct call.
             self.add_cost(arguments as i64 * INSTR_COST);
@@ -1606,9 +1644,7 @@ impl<'a> Analyzer<'a> {
                     self.cost - before
                 );
             }
-            if self.recursive_call {
-                return Err("recursive".into());
-            } else if self.exposes_returns_twice {
+            if self.exposes_returns_twice {
                 return Err("exposes returns twice".into());
             } else if self.has_dynamic_alloca {
                 return Err("dynamic alloca".into());
@@ -2213,6 +2249,25 @@ pub fn caller_frequencies(
     llrm_analysis::blockfreq::BlockFrequencies::of_bpi(caller, &bpi)
 }
 
+/// The frequency of each instruction of `function` over its entry's; none
+/// where the entry's is 0.
+pub fn call_frequencies(
+    module: &Module,
+    layout: &DataLayout,
+    function: &Function,
+) -> llrm_support::hash::SparseIdMap<InstId, f64> {
+    let found = caller_frequencies(module, layout, function);
+    let mut frequencies = llrm_support::hash::SparseIdMap::default();
+    if found.get_entry_freq().get_frequency() > 0 {
+        for (_, inst) in function.walk() {
+            if let Some(block) = function.parent(inst) {
+                frequencies.insert(inst, found.relative_to_entry(block));
+            }
+        }
+    }
+    frequencies
+}
+
 /// `block`'s frequency over the entry's, as `isColdCallSite` and
 /// `getHotCallSiteThreshold` compare them; none where the entry's is 0.
 fn relative_to_entry(
@@ -2392,12 +2447,25 @@ pub fn sites(
         }
         if decision.inline {
             let GlobalKind::Function(callee) = &module.global(decision.callee).kind else { continue };
+            // A callee that calls itself may have those calls peeled in the
+            // copy (D10): the frequencies of its calls say how deep.
+            let own: Vec<InstId> = callee
+                .walk()
+                .map(|(_, one)| one)
+                .filter(|&one| llrm_mir::memory::callee(&module.context, callee, one) == Some(decision.callee))
+                .collect();
             out.insert(
                 inst,
                 crate::inline::Candidate {
                     body: std::rc::Rc::new((**callee).clone()),
                     frame: crate::inline::grown(&module.context, layout, callee),
                     moved: false,
+                    callee: Some(decision.callee),
+                    self_sites: own.len(),
+                    self_calls: (!own.is_empty()).then(|| {
+                        let frequencies = call_frequencies(module, layout, callee);
+                        own.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum()
+                    }),
                 },
             );
         }
@@ -2443,7 +2511,9 @@ pub fn decide(
     let callee_id = llrm_mir::memory::callee(&module.context, caller, call)?;
     let callee_global = module.global(callee_id);
     let GlobalKind::Function(callee) = &callee_global.kind else { return None };
-    if callee.layout().is_empty() || !crate::inline::cloneable(module, context.recursive, callee_id, callee) {
+    // A call of the caller itself is `walk`'s bounded self-inlining, not a
+    // site priced here.
+    if callee.layout().is_empty() || callee_id == caller_id || !crate::inline::copyable(module, callee) {
         return None;
     }
     let site = Site {

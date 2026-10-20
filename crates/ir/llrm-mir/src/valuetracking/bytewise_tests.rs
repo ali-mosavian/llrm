@@ -123,3 +123,64 @@ fn underlying_objects_are_as_llvm_says() {
 fn bytewise_undef_is_undef_as_llvm_says() {
     check(include_str!("../../tests/vt/bytewise/undef.ll"), include_str!("../../tests/vt/bytewise/undef.expected"));
 }
+
+/// `getUnderlyingObjects` looks through a select and a phi, and stops at a
+/// loop-header phi that tracks a pointer loaded in the loop (`Prev = phi (a,
+/// Cur)`): `Prev` and `Cur` are different objects each iteration.
+#[test]
+fn underlying_objects_look_through_selects_and_phis_but_not_a_trailing_loop_phi() {
+    use super::underlying::get_underlying_objects;
+    use crate::domtree::DomTree;
+    use crate::loopinfo::LoopInfo;
+
+    let text = "define void @f(ptr %a, ptr %b, i1 %c, i64 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %i1, %loop ]
+  %prev = phi ptr [ %a, %entry ], [ %cur, %loop ]
+  %same = phi ptr [ %a, %entry ], [ %same2, %loop ]
+  %slot = getelementptr ptr, ptr %b, i64 %i
+  %cur = load ptr, ptr %slot
+  %same2 = getelementptr i8, ptr %same, i64 1
+  %pick = select i1 %c, ptr %a, ptr %b
+  %i1 = add i64 %i, 1
+  %done = icmp eq i64 %i1, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  ret void
+}
+";
+    let module = parse::module(text).expect("a module");
+    let layout = DataLayout::default();
+    let (_, _, function) = module.functions().next().expect("a function");
+    let query = Query::new(&module, function, &layout);
+    let tree = DomTree::of(function);
+    let loops = LoopInfo::analyze(function, || &tree);
+    let named = |name: &str| {
+        let found = function
+            .parameters()
+            .iter()
+            .copied()
+            .chain(function.walk().filter_map(|(_, inst)| function.instruction(inst).result))
+            .find(|&value| function.value(value).name.as_deref() == Some(name))
+            .expect(name);
+        Operand::Value(found)
+    };
+    let objects = |name: &str| {
+        let mut found = get_underlying_objects(&query, named(name), Some(&loops), MAX_LOOKUP_SEARCH_DEPTH);
+        found.sort_by_key(|operand| format!("{operand:?}"));
+        found
+    };
+    let mut want = vec![named("a"), named("b")];
+    want.sort_by_key(|operand| format!("{operand:?}"));
+    assert_eq!(objects("pick"), want, "a select: both arms");
+    assert_eq!(objects("prev"), [named("prev")], "a phi that trails a loaded pointer stops");
+    assert_eq!(objects("same"), [named("a")], "a phi that tracks the same object is looked through");
+    // Without loop information every phi is looked through.
+    let mut found = get_underlying_objects(&query, named("prev"), None, MAX_LOOKUP_SEARCH_DEPTH);
+    found.sort_by_key(|operand| format!("{operand:?}"));
+    let mut want = vec![named("a"), named("cur")];
+    want.sort_by_key(|operand| format!("{operand:?}"));
+    assert_eq!(found, want);
+}

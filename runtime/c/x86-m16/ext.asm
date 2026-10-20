@@ -10,7 +10,7 @@ extrn LL$EXIT:far
 
 .data
 ticks   dw 0
-digits  db 12 dup (?)
+digits  db 13 dup (?)
 inhandle dw 0FFFFh
 inname  db 'DICKENS', 0
 
@@ -40,7 +40,7 @@ _report proc far
     push si
     push di
     mov eax, dword ptr [bp+6]
-    mov di, offset digits + 12
+    mov di, offset digits + 13
     mov byte ptr [di-1], 10
     mov byte ptr [di-2], 13
     sub di, 2
@@ -63,7 +63,7 @@ more:
     dec di
     mov byte ptr [di], '-'
 unsigned:
-    mov cx, offset digits + 12
+    mov cx, offset digits + 13
     sub cx, di
     push cx
     push ds

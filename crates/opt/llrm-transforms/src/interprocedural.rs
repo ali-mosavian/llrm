@@ -259,6 +259,9 @@ pub struct Interprocedural {
     /// Whether what a body's callers pass is stated as a range on its
     /// parameters (gcc's `-fipa-vrp`, -O2 and up).
     pub ranges: bool,
+    /// The copies of a tree recursion in itself and its tail-call
+    /// elimination, once the clones are made (D10).
+    pub late: Option<crate::walk::SelfInline>,
 }
 
 thread_local! {
@@ -298,6 +301,9 @@ impl ProgramPass for Interprocedural {
             },
         )?;
         self.proved = Some(proved);
+        if let Some(late) = &mut self.late {
+            late.apply(program, &mut modules)?;
+        }
         for (at, one) in modules.into_iter().enumerate() {
             analyses.carry(at, one.carried());
         }
