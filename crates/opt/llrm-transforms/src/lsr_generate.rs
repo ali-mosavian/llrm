@@ -32,7 +32,7 @@
 //! DEVIATE LG1: `GenerateICmpZeroScales` asks `getExactSDiv` for no overflow
 //! of the product, but for an odd factor `x == 0` and `x * c == 0` are the same
 //! compare (multiplying by it is a bijection mod 2^bits), so it ignores the
-//! significant bits there. The pin keeps a loop's exit counter beside the
+//! significant bits there, for the counter alone compared to zero. The pin keeps a loop's exit counter beside the
 //! scaled one it is a multiple of (recsum: `dec; add -3; jne`); this exits on
 //! the scaled one (`add -3; jne`), as the stand-in LSR did. Exit: none, a
 //! proof; if LLVM does the same, delete the line.
@@ -573,8 +573,11 @@ impl Collection<'_, '_> {
             // DEVIATE LG1: `x == 0` and `x * c == 0` are the same compare for an
             // odd `c` (multiplying by it is a bijection of the integers mod
             // 2^bits), so the product may wrap where LLVM's `getExactSDiv`
-            // wants it not to (`isMulSExtable`).
-            let odd = factor & 1 == 1;
+            // wants it not to (`isMulSExtable`). Only for the counter alone
+            // compared to zero: with a limit besides it the scaled limit is a
+            // multiply in the preheader and an add in the loop, which the cost
+            // model prices below `dec; je` (x_adler -O2: 47972 -> 50976 clocks).
+            let odd = factor & 1 == 1 && base.scaled_reg.is_none() && base.base_regs.len() == 1;
             // No base register may overflow when multiplied.
             for i in 0..f.base_regs.len() {
                 f.base_regs[i] = se
