@@ -314,6 +314,18 @@ def test_each_smoke_step_prints_its_stage_line_before_it_runs(capsys):
     assert order and order[0].endswith(" STAGE step sc")
 
 
+def test_a_header_change_without_the_docs_sync_is_refused_with_the_page_named():
+    """jumps.rs landed without `docsbuild --sync`; every docs-touching PR after it was refused with no page named."""
+    class Done:
+        def __init__(self, out, code):
+            self.stdout, self.stderr, self.returncode = out, "", code
+
+    stale = "1 problem(s)\ngenerated docs are out of date; run python3 tools/docsbuild/build.py --sync\n  docs/optimizations/backend/jumps.md\n  docs/optimizations/passes/readme.md\n"
+    failed = ps.docs_failures(run=lambda command: Done(stale, 1))
+    assert set(failed) == {"ratchet:docs"} and "docs/optimizations/backend/jumps.md" in failed["ratchet:docs"] and "--sync" in failed["ratchet:docs"], failed
+    assert ps.docs_failures(run=lambda command: Done("ok\n", 0)) == {}
+
+
 def test_the_ratchets_run_side_by_side_and_report_in_command_order(monkeypatch):
     """A precheck spent ~45 s of its ~70 s running ten cargo test ratchets one after another; four at a time they overlap their links and runs."""
     import threading
