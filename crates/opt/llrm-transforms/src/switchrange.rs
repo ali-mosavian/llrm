@@ -6,6 +6,15 @@
 //! A switch with two destinations, one of which gets a run of consecutive
 //! case values, becomes a range compare and a branch.
 //!
+//! # How it works
+//! The cases are split by destination, the default counting as the first. A
+//! third destination ends the fold. A destination with one case, or whose
+//! cases run without a gap (`findContiguousCases`), is the range: `x - min u<
+//! count` (an `icmp eq` for one case) branches to it. When the value's range
+//! spans exactly the first and last case of a set, the gap between the two
+//! runs is the other destination's run. The phis of both destinations drop
+//! the inputs of the cases that merged into one edge.
+//!
 //! # Example
 //! ```text
 //!   switch i16 %x, label %b [            %x.off = add i16 %x, -1

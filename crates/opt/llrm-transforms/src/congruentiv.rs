@@ -73,9 +73,7 @@ pub fn replaced_in(
             cx.loops
                 .get_loop_for(header)
                 .is_some_and(
-                    |found| found.get_loop_preheader(cx.function).is_some()
-                        && found.get_loop_latch(cx.function).is_some()
-                        && found.has_dedicated_exits(cx.function),
+                    |found| found.is_loop_simplify_form(cx.function),
                 )
         };
         if simple {

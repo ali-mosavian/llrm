@@ -224,3 +224,43 @@ fn a_loop_the_language_permits_is_copied_past_the_budget_and_the_cap() {
     let mut full = parsed(&hinted(200, "!\"llvm.loop.unroll.full\""));
     assert!(unrolled(&mut full));
 }
+
+/// GORILLA.BAS (qb45 -O2 m32, -O3): an `ON ERROR` pad inside a counted loop
+/// was copied with each unrolled iteration, and `ehprepare` refuses a second
+/// landing pad in a function ("@PLACEGORILLAS: more than one landing pad").
+#[test]
+fn test_a_loop_with_a_landing_pad_is_not_unrolled() {
+    let mut module = parsed(
+        "declare void @g()
+declare i32 @__gxx_personality_v0(...)
+
+define i16 @f(i16 %x, i16 %n) personality ptr @__gxx_personality_v0 {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b3 ]
+  invoke void @g() to label %ok unwind label %pad
+
+ok:
+  br label %b3
+
+pad:
+  %lp = landingpad { ptr, i32 } cleanup
+  br label %b3
+
+b3:
+  %next = add i16 %i, 1
+  %go = icmp slt i16 %next, 4
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i16 %x
+}
+",
+    );
+    let unrolled = unrolled(&mut module);
+    let text = printed(&module);
+    assert!(!unrolled, "{text}");
+    assert_eq!(text.matches("landingpad").count(), 1, "{text}");
+}
