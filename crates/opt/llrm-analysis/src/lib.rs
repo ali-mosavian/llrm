@@ -128,6 +128,7 @@ pub mod globalsmodref;
 pub mod graph;
 pub mod guards;
 pub mod induction;
+pub mod initializes;
 pub mod interprocedural;
 pub mod liveness;
 pub mod loads;

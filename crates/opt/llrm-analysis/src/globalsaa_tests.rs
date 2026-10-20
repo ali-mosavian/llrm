@@ -4,6 +4,8 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
+use llrm_mir::GlobalId;
+use llrm_mir::module::Module;
 use llrm_mir::passes::{Analyses, ModuleAnalyses, Outer};
 use llrm_mir::program::{Exports, Program, ProgramAnalyses};
 use llrm_mir::target::Neutral;
@@ -38,7 +40,7 @@ fn kept_under(
     call: &str,
     summarized: bool,
 ) -> Option<Known> {
-    let module = parsed(&format!(
+    let mut module = parsed(&format!(
         "{DOS}{globals}
 define i16 @f() {{
 b0:
@@ -50,6 +52,9 @@ b0:
 "
     ));
     let layout = layout(&module);
+    if summarized {
+        attributed(&mut module);
+    }
     let program =
         Program::new(vec![module], Rc::new(Neutral)).unwrap().with_runtime(parsed(&format!("{DOS}{runtime}"))).unwrap();
     let module = &program.modules[0];
@@ -68,6 +73,12 @@ b0:
     }
     let known = Analyses::new(outer).get::<ThroughMemory>(&module.context, &layout, f);
     Result::as_ref(&*known).unwrap().get(&value(f, "r")).cloned()
+}
+
+/// What the pipeline's `FunctionAttrs` has stated of `module`.
+fn attributed(module: &mut Module) {
+    let layout = layout(module);
+    crate::functionattrs::infer_module(module, &layout, llrm_mir::target::Machine::spaces(&Neutral));
 }
 
 fn seven() -> Option<Known> {
@@ -279,9 +290,23 @@ fn kept_in(
     let second = format!(
         "{DOS}{globals}\ndefine i16 @f() {{\nb0:\n  store i16 7, ptr @g\n  {call}\n  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
     );
-    let program = Program::new(vec![parsed(&format!("{DOS}{first}")), parsed(&second)], Rc::new(Neutral))
-        .unwrap()
-        .exporting(exports);
+    let (mut first, mut second) = (parsed(&format!("{DOS}{first}")), parsed(&second));
+    attributed(&mut first);
+    attributed(&mut second);
+    let mut program = Program::new(vec![first, second], Rc::new(Neutral)).unwrap().exporting(exports);
+    // Each body's attributes on the other module's declaration of it, as the
+    // pipeline's `published` does.
+    for at in 0..2 {
+        let defined: Vec<_> = program.modules[at].functions().map(|(id, _, _)| id).collect();
+        for id in defined {
+            let other = 1 - at;
+            for one in (0..program.modules[other].globals.len() as u32).map(GlobalId) {
+                if program.definition(other, one) == Some((at, id)) {
+                    program.restate(at, id, other, one);
+                }
+            }
+        }
+    }
     let mut analyses = ProgramAnalyses::default();
     analyses.get::<ProgramSummaries>(&program);
     let module = &program.modules[1];

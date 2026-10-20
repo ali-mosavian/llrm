@@ -862,12 +862,11 @@ fn test_a_store_s_cell_is_decoded_once_however_many_loads_it_reaches() {
     assert!(decoded <= 2 * joins, "{decoded} decodes for {joins} stores and {joins} loads");
 }
 
-/// `Summaries` solved where every pointer points for the direct summary, for
-/// the calls' facts and for each summarized call: 4 to 5 value solves a body
-/// state, 11.0% of QCport's -O1 compile with the rest of the family. One a
-/// body.
+/// `Summaries` solved where every pointer points for a body (4 to 5 value
+/// solves a body, 11.0% of QCport's -O1 compile); it reads attributes, which
+/// solve none.
 #[test]
-fn summaries_solve_the_pointer_values_of_a_body_once() {
+fn summaries_solve_no_pointer_values_of_a_body() {
     let module = parsed(
         "declare void @g(ptr)\n\ndefine void @f(ptr %a) {\nentry:\n  %p = getelementptr i8, ptr %a, i16 2\n  call void @g(ptr %p)\n  call void @g(ptr %a)\n  ret void\n}\n",
     );
@@ -875,7 +874,7 @@ fn summaries_solve_the_pointer_values_of_a_body_once() {
     analyses.get::<GlobalsAA>(&module);
     let before = crate::alias::value_solves();
     analyses.get::<Summaries>(&module);
-    assert_eq!(crate::alias::value_solves() - before, 1, "Summaries solved a body's pointer values again");
+    assert_eq!(crate::alias::value_solves() - before, 0, "Summaries solved a body's pointer values");
 }
 
 /// What calling back into the module does was added up from every entry's

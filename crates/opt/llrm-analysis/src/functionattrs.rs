@@ -630,6 +630,7 @@ pub fn post_order(
     let list: Vec<GlobalId> = set.iter().copied().collect();
     let mut changed: BTreeSet<GlobalId> = stamp_memory(module, &list).into_iter().collect();
     changed.extend(crate::argumentattrs::add_argument_attrs(module, &set));
+    changed.extend(crate::initializes::add_initializes(module, layout, &set));
     changed.extend(stamp_flags(module, layout, spaces, &list));
     changed.into_iter().collect()
 }

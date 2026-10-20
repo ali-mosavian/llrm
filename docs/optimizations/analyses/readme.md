@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 66 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 67 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -42,6 +42,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 66 documented, 0 undoc
 | graph | Block-graph algorithms (loops, depth, reducibility, dominators) over any IR whose blocks implement `loops::Node`. | The algorithms of `loops`. Consumers: [`crate::cfg`](cfg.md) (`Loop`, `Node`, | [graph](graph.md) |
 | guards | What the branches that dominate a block prove on entry to it. | Guard facts and the implication queries above. Consumers: `decide`, | [guards](guards.md) |
 | induction | Which values are affine functions of a loop's counter, and how many trips a loop makes. | `AffineOperand`, `Affine`, `CountedLoop`, `Counted`, `ExitCount`, `Scev`, | [induction](induction.md) |
+| initializes | `initializes(...)` of the pointer parameters of a function: the bytes it writes before anything reads them, as `inferInitializes` states them (FunctionAttrs.cpp:1118, <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/IPO/FunctionAttrs.cpp#L1118>). |  | [initializes](initializes.md) |
 | interprocedural | Finds what the two sides of a direct call make certain: constant arguments, constant returns, purity and termination. | The functions above, and the re-export of `noreturn::terminal_sites`. | [interprocedural](interprocedural.md) |
 | liveness | Which SSA values are live at each block's entry and exit, and how many are live at once. | `Liveness`, `live`, `live_where`, `pressure`, `pressure_of`, `entry_values`, | [liveness](liveness.md) |
 | loads | The value a load can reuse from an access before it in its block. | InstCombine's `visitLoadInst`, JumpThreading's load PRE, Promote. | [loads](loads.md) |
