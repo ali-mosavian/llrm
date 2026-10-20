@@ -30,14 +30,16 @@
 //! wrapping pass's.
 //!
 //! DEVIATE D-G1: at -Os m16 the greedy allocator is not at the shipped
-//! allocator's size (QCport, 65 modules: 77021 against 76183 instructions,
-//! +0.6% bytes at the default). The fact: LLVM's greedy on the same final IR
-//! (`llc -O2`, code16) emits 75881 and is as large as greedy in the largest
-//! modules (`_ent_move_trigs` 888 against 889, `_d_draw_faces` 1422 against
-//! 1435); where both allocators are far above `llc` (sc, savegame, item) the
-//! excess is instruction selection and the passes before allocation. Exit:
-//! every module at `llc` or at the shipped allocator's bytes, before the
-//! backend phase merges to main.
+//! allocator's size (QCport, 65 modules, 2026-10-19: 78518 against 77618
+//! instructions, +1.2%). The fact: LLVM's greedy on the same final IR is at
+//! ours in total (`llc -O2`, code16, `-frame-pointer=all`, as `bp` is the
+//! frame here: 78720; without it `ebp` is free and llc reads 76020, which is
+//! not a bar for this target). Where both allocators are far above `llc`
+//! (savegame, mdl_ai, item) the excess is instruction selection and the
+//! passes before allocation, or `llc` was fed the `26-switchconv` stage.
+//! Splitting costs single functions: `_pl_trace_actors` 220 against 189 with
+//! `LLRM_NO_SPLIT` and 190 shipped. Exit: every module at `llc` or at the
+//! shipped allocator's bytes, before the backend phase merges to main.
 //!
 //! Named row of D-G1 (qb `register_live_through`, qbdemo PLASMA): the x loop
 //! keeps 2 stores and 3 loads per trip in `[bp]` where the shipped allocator

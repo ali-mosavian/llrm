@@ -10,7 +10,7 @@
 pub(crate) mod apply;
 mod calls;
 pub mod hoist;
-mod promote;
+pub(crate) mod promote;
 mod safety;
 mod sink;
 #[cfg(test)]

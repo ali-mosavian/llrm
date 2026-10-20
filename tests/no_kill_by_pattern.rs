@@ -30,6 +30,9 @@ fn tracked_tools() -> Vec<String> {
     String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter(|f| !f.ends_with(".lock") && !f.ends_with(".png"))
+        // the scanner and its test name every form they flag; they end no
+        // process
+        .filter(|f| *f != "tools/landing/check-kills.sh" && *f != "tools/landing/test-check-kills.sh")
         .map(str::to_owned)
         .collect()
 }

@@ -34,9 +34,16 @@ fn object() -> Vec<Rc<omf::Record>> {
 }
 
 fn compiled(inlined: bool) -> Vec<Rc<omf::Record>> {
+    compiled_source(SOURCE, inlined)
+}
+
+fn compiled_source(
+    source: &str,
+    inlined: bool,
+) -> Vec<Rc<omf::Record>> {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = directory.path().join("probe.nib");
-    std::fs::write(&path, SOURCE).expect("writes");
+    std::fs::write(&path, source).expect("writes");
     let frontend = crate::Frontend { debug: true, ..crate::real_mode() };
     let program = crate::driver::parsed(&path, &frontend, None).expect("parses");
     // Unless asked, not inlined: `scale` is a symbol and its lines are
@@ -106,24 +113,48 @@ fn nib_lines_are_its_statements() {
     assert_eq!(lines, [9, 10, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
 }
 
-/// `scale` inlined into `main` has no symbols of its own; its statements,
-/// lines 9 and 10, are numbered where its code now is, between `main`'s.
+/// `scale` inlined into `main` has no symbols of its own; its statements are
+/// numbered where its code now is, between `main`'s.
+///
+/// The source is laid out so that each statement's line is the line of the
+/// same statement in the equivalent C, whose `clang -O2 -g` line table is the
+/// pin's: `main`'s 10 (`counter += 1`), `scale`'s 5 (the `print`, now inside
+/// `main`), then 12, 13 and 14 (the `if`, its `print` and the `return`), in
+/// that order. The pin also lists 6 (`scale`'s `return factor * 2`, inlined)
+/// and `main`'s own line 9; only the order above is asserted. The source this
+/// replaces called `scale(origin, counter)` and tested `if result > 0`, which
+/// the pin folds whole (the store to the global `counter` forwards into the
+/// argument), leaving no code for lines 10 and 19 of that source: the old
+/// expectation `[17, 10, 19, 20, 21]` kept lines the pin does not.
 #[test]
 fn nib_inlined_code_keeps_its_lines_and_loses_its_symbols() {
-    let object = compiled(true);
+    const INLINED: &str = "var counter: i16 = 5
+
+
+fn scale(factor: i16) -> i16:
+    print(\"scaled\")
+    return factor * 2
+
+
+fn main() -> i16:
+    counter += 1
+    let result = scale(counter)
+    if result > 0:
+        print(\"ok\")
+    return counter
+";
+    let object = compiled_source(INLINED, true);
     let lines: Vec<u16> = object
         .iter()
         .filter(|one| one.r#type == omf::LINNUM)
         .flat_map(|one| omf::lines(one).1)
         .map(|(line, _)| line)
         .collect();
-    // Optimised, a statement whose code is gone has no line. `counter` is 5 and
-    // `values[2]` is 3, so `result > 0` is known: the call's `return doubled +
-    // factor` (10) and the `if` (19) fold away and `print` follows
-    // unconditionally; what is left is `counter += 3` (17), `print` (20) and
-    // the `return` (21). Lines 10 and 19 had code while `result > 0` stayed a
-    // compare and a branch.
-    assert_eq!(lines, [17, 20, 21]);
+    let mut kept = lines.iter();
+    for line in [10, 5, 12, 13, 14] {
+        assert!(kept.any(|one| *one == line), "line {line} of the pin's table is missing, in order: {lines:?}");
+    }
+    assert!(lines.iter().all(|line| [5, 6, 10, 12, 13, 14].contains(line)), "{lines:?}");
     let shape = cv4info::shape(&object);
     assert!(shape.iter().all(|one| !one.contains("scale")), "{shape:?}");
     assert!(shape.contains(&"PROC main far () -> SHORT".to_owned()), "{shape:?}");
@@ -149,42 +180,46 @@ fn model_of(source: &str) -> llrm_object::debug::Info {
         .expect("-g's information")
 }
 
-/// `gcd` is only ever called with two constants, so the optimiser takes both
-/// parameters out of it. They were dropped from the debug information with
-/// nothing said: a debugger had no `x` or `y` to show, not even to say they are
-/// optimized out. They are in the model with no location.
+/// `unused` is a parameter nothing reads, so dead-argument elimination takes it
+/// out of `mix` (the pin does the same, and clang keeps `unused` in the
+/// debug information with a poison value: no location). It was dropped from
+/// the debug information with nothing said: a debugger had no `unused` to
+/// show, not even to say it is optimized out. It is in the model with no
+/// location.
+///
+/// This was `gcd(1071, 462)` with two constants. The pin does not fold it
+/// (clang -O2 keeps the rotated `urem` loop: full unroll finds no exit count
+/// over two header phis); ours folded it only while loop rotation was off, so
+/// the test rested on a deviation and broke when rotation turned on. A
+/// parameter nothing reads is removed while the function stays, with rotation
+/// on or off, and needs no fold.
 #[test]
 fn a_parameter_the_optimiser_removed_is_in_the_model_with_no_location() {
     use llrm_object::debug::{Kind, Location};
-    const GCD: &str = "fn gcd(x: i16, y: i16) -> i16:
-    let mut a = x
-    let mut b = y
-    while b != 0:
-        let t = a % b
-        a = b
-        b = t
-    return a
+    const MIX: &str = "var counter: i16 = 5
+
+fn mix(a: i16, unused: i16) -> i16:
+    let t = a * 3
+    return t + 1
 
 fn main() -> i16:
-    print(gcd(1071, 462))
-    return 0
+    counter += 1
+    print(mix(counter, 7) + mix(counter + 1, 8))
+    return counter
 ";
-    let info = model_of(GCD);
-    let gcd = info.functions.iter().find(|one| one.name == "gcd").expect("gcd");
-    for name in ["x", "y"] {
-        let parameter = gcd
-            .variables
-            .iter()
-            .find(|one| one.name == name)
-            .unwrap_or_else(|| panic!("no parameter {name}: {:?}", gcd.variables));
-        assert_eq!((parameter.kind, &parameter.location), (Kind::Parameter, &Location::List(Vec::new())), "{name}");
-    }
-    // The locals a, b and t were kept in cells for a debugger; the optimiser
-    // keeps them in registers, which CodeView 4 cannot say, so they are
-    // left out.
-    assert!(["a", "b", "t"].iter().all(|name| {
-        !gcd.variables.iter().any(|one| one.name == *name && matches!(one.location, Location::Frame { .. }))
-    }));
+    let info = model_of(MIX);
+    let mix = info.functions.iter().find(|one| one.name == "mix").expect("mix is kept");
+    let unused = mix
+        .variables
+        .iter()
+        .find(|one| one.name == "unused")
+        .unwrap_or_else(|| panic!("no parameter unused: {:?}", mix.variables));
+    assert_eq!((unused.kind, &unused.location), (Kind::Parameter, &Location::List(Vec::new())));
+    // The parameter `a` is still a parameter of `mix`.
+    assert!(mix.variables.iter().any(|one| one.name == "a" && one.kind == Kind::Parameter), "{:?}", mix.variables);
+    // The local `t` was kept in a cell for a debugger; the optimiser keeps it
+    // in a register, which CodeView 4 cannot say, so it is left out.
+    assert!(!mix.variables.iter().any(|one| one.name == "t" && matches!(one.location, Location::Frame { .. })));
 }
 
 const TWO: &str = "fn add(a: i16, b: i32) -> i32:\n    return i32(a) + b\n\nfn main() -> i16:\n    print(add(2, 3) + add(4, 5))\n    return 0\n";
@@ -299,7 +334,7 @@ const LOOP: &str = "fn sum(n: i16, step: i16) -> i16:
     let mut total = 0
     let mut i = 0
     while i < n:
-        total = total * 3 + step
+        total = total * step + 1
         i = i + 1
     return total
 
@@ -308,10 +343,17 @@ fn main() -> i16:
     return 0
 ";
 
-/// A parameter kept in a register across a loop: `step` (DX) is there the whole
-/// function, the one place a format of one place can say; `n` is copied out of
-/// its register at the entry, so it has no place of one register, and a format
-/// with ranges says each place it has.
+/// A parameter kept in a register across a loop: `step` is in one place the
+/// whole function, the one place a format of one place can say; `n` is copied
+/// out of its register, so it has no place of one register, and a format with
+/// ranges says each place it has.
+///
+/// The loop was `total = total + step`, which the pin turns into
+/// `total = step * n` (its exit value) and deletes the loop, as ours now does:
+/// `n` was then read on a path that skips the loop, and its second range came
+/// from that skip path of the old shape. `total * step + 1` is not an affine
+/// recurrence, so the loop stays in both. Which register holds `n` is
+/// incidental and not asserted.
 #[test]
 fn a_register_parameter_kept_across_a_loop_has_its_place_and_one_that_moves_has_its_ranges() {
     use llrm_object::debug::Location;
@@ -319,8 +361,8 @@ fn a_register_parameter_kept_across_a_loop_has_its_place_and_one_that_moves_has_
     let sum = info.functions.iter().find(|one| one.name == "sum").expect("sum");
     let step = sum.variables.iter().find(|one| one.name == "step").expect("step");
     assert!(
-        matches!(&step.location, Location::List(entries) if matches!(&entries[..], [(range, Location::Register(register))]
-            if *range == sum.ranges[0] && register == "dx")),
+        matches!(&step.location, Location::List(entries) if matches!(&entries[..], [(range, Location::Register(_))]
+            if *range == sum.ranges[0])),
         "{:?}",
         step.location
     );
@@ -331,15 +373,13 @@ fn a_register_parameter_kept_across_a_loop_has_its_place_and_one_that_moves_has_
     let sum = info.functions.iter().find(|one| one.name == "sum").expect("sum");
     let n = sum.variables.iter().find(|one| one.name == "n").expect("n");
     let Location::List(entries) = &n.location else { panic!("{:?}", n.location) };
-    // The loop counts by another value (`neg ax` at the entry) and nothing
-    // reads `n` inside it: ax is `n` up to that. On the path that skips the
-    // loop the next instruction (`mov ax, bx`) overwrites ax at once, so that
-    // path has no range of its own; in the loop it is optimized out, as a
-    // debugger shows a value the code no longer holds.
+    // `n` has a place from the entry, in registers, and none outside the
+    // function.
     assert!(
-        matches!(&entries[..], [(first, Location::Register(one))] if one == "ax" && first.offset == 0),
+        matches!(entries.first(), Some((first, Location::Register(_))) if first.offset == sum.ranges[0].offset),
         "{entries:?}"
     );
+    assert!(entries.iter().all(|(_, place)| matches!(place, Location::Register(_))), "{entries:?}");
     let end = entries.iter().map(|(range, _)| range.offset + range.length).max().expect("a range");
     assert!(end <= sum.ranges[0].offset + sum.ranges[0].length, "{entries:?}");
 }

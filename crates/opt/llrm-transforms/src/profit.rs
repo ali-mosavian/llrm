@@ -77,7 +77,7 @@
 //! `proven_trips`, the frequency models and `UNIT`, `UNKNOWN_TRIPS`.
 //!
 //! # Used by
-//! Each of [`crate::lsr`], [`crate::hoist`], [`crate::gvn`],
+//! Each of [`crate::lsr_pass`], [`crate::hoist`], [`crate::gvn`],
 //! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`],
 //! [`crate::loopidioms`], [`crate::window`], [`crate::gepoffset`],
 //! [`crate::indvars`], [`crate::ipacp`], [`crate::inline`]
@@ -91,7 +91,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::branchprob;
 use llrm_analysis::cfg;
 use llrm_analysis::effects::Declarations;
 use llrm_analysis::scev::analysis::ScevSession;
@@ -479,7 +478,11 @@ pub fn counted_by_header(
     Some(counted)
 }
 
-/// `_frequencies_in`, and the odds of each edge they were worked out from.
+/// `_frequencies_in`, and the odds of each edge they were worked out from:
+/// `BranchProbabilityInfo`'s, a loop's proven trips setting its exit's
+/// (`blockfreq::trip_adjusted`, profit's own: LLVM's probabilities know no
+/// trip count), then `BlockFrequencyInfo` over them, each block's frequency in
+/// `UNIT`s of the entry's. `None` for conflicting proofs.
 fn _odds_in(
     context: &Context,
     metadata: &[llrm_mir::module::MetadataNode],
@@ -489,19 +492,45 @@ fn _odds_in(
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<(BTreeMap<i64, i64>, BTreeMap<(i64, i64), f64>)> {
     let counted = counted_by_header(shape, trips)?;
-    let odds = branchprob::estimated(context, metadata, globals, function, shape, &counted);
+    let taken = _edge_odds(context, metadata, globals, function, shape, &counted);
+    let frequencies = llrm_analysis::blockfreq::BlockFrequencies::of_probabilities(function, &taken);
     Some((
-        cfg::graph(function)
+        function
+            .layout()
             .iter()
-            .map(|block| {
-                (
-                    block.at,
-                    odds.frequency.get(&block.at).map_or(UNIT, |one| ((one * UNIT as f64).round() as i64).max(1)),
-                )
+            .map(|&block| {
+                (cfg::id(block), ((frequencies.relative_to_entry(block) * UNIT as f64).round() as i64).max(1))
             })
             .collect(),
-        odds.taken,
+        taken,
     ))
+}
+
+/// Each edge's odds as `_odds_in` works the frequencies out from:
+/// `BranchProbabilityInfo`'s, a proven loop's exit set by its trips
+/// (`counted`, by header).
+pub fn _edge_odds(
+    context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+    globals: &Declarations,
+    function: &Function,
+    shape: &cfg::Shape,
+    counted: &BTreeMap<i64, i64>,
+) -> BTreeMap<(i64, i64), f64> {
+    // The layout only folds the integer constants of a loop's exit test
+    // (`computeUnlikelySuccessors`).
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+        llrm_analysis::bpi::Module { context, declarations: globals, metadata, layout: &layout },
+        function,
+    );
+    let mut taken = BTreeMap::new();
+    for &block in function.layout() {
+        for to in function.successors(block) {
+            taken.insert((cfg::id(block), cfg::id(to)), bpi.get_edge_probability_to(function, block, to).to_f64());
+        }
+    }
+    llrm_analysis::blockfreq::trip_adjusted(function, &shape.loops, counted, &taken)
 }
 
 /// Block frequencies as a product of the trips of each loop around a block, ten

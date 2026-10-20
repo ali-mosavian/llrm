@@ -43,6 +43,8 @@ pub enum Intrinsic {
     },
     /// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop`.
     BitCount(BitCount),
+    /// `llvm.bswap`: the bytes of its argument in the opposite order.
+    ByteSwap,
     /// `llvm.scmp` and `llvm.ucmp`: -1, 0 or 1 as the first argument is less
     /// than, equal to or greater than the second, in the result's integer type.
     Compare {
@@ -89,6 +91,12 @@ pub enum Intrinsic {
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
+    /// `llvm.va_end`: the list its argument points to is no longer read. It
+    /// does nothing where the list owns no resource.
+    VaEnd,
+    /// `llvm.va_copy`: the list the second argument points to, copied to the
+    /// first.
+    VaCopy,
     /// `llvm.stacksave`: the stack pointer, to give back to `stackrestore`.
     StackSave,
     /// `llvm.stackrestore`: the stack pointer `stacksave` returned made the
@@ -375,6 +383,8 @@ const fn bit_count(
     arithmetic(name, Intrinsic::BitCount(count), Slot::Any(0), parameters, Kind::Int)
 }
 
+const UNARY: &[Slot] = &[Slot::Any(0)];
+
 const fn compare(
     name: &'static str,
     signed: bool,
@@ -395,7 +405,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 42] = [
+const TABLE: [Spec; 45] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -409,6 +419,7 @@ const TABLE: [Spec; 42] = [
     bit_count("llvm.ctlz", BitCount::LeadingZeros),
     bit_count("llvm.cttz", BitCount::TrailingZeros),
     bit_count("llvm.ctpop", BitCount::Population),
+    arithmetic("llvm.bswap", Intrinsic::ByteSwap, Slot::Any(0), UNARY, Kind::Int),
     compare("llvm.scmp", true),
     compare("llvm.ucmp", false),
     arithmetic("llvm.smul.fix", Intrinsic::Fixed { divide: false }, Slot::Any(0), FIXED, Kind::Int),
@@ -526,6 +537,14 @@ const TABLE: [Spec; 42] = [
         own: None,
     },
     Spec {
+        name: "llvm.va_end",
+        intrinsic: Intrinsic::VaEnd,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
         name: "llvm.stacksave",
         intrinsic: Intrinsic::StackSave,
         overloads: &[Kind::Pointer],
@@ -539,6 +558,14 @@ const TABLE: [Spec; 42] = [
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
         parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.va_copy",
+        intrinsic: Intrinsic::VaCopy,
+        overloads: &[Kind::Pointer, Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0), Slot::Any(1)],
         own: None,
     },
     Spec {
