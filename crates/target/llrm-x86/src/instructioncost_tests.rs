@@ -74,3 +74,37 @@ fn test_lifetime_and_assume_are_free() {
         assert_eq!(cost, llrm_mir::tti::Cost::FREE, "{name}");
     }
 }
+
+/// `LoopUnrollPass` asks the cost of an instruction as if its operands were
+/// the constants it simplified them to: a `getelementptr` with two variable
+/// indices costs one (no addressing mode takes two scale registers), and
+/// nothing once both are constants. llrm asked the instruction itself, so a
+/// simulated address that folds was priced as one that does not, and the nest
+/// of a stepped fill (8x8 longs) was priced out of its unroll.
+#[test]
+fn test_a_gep_asked_with_constant_operands_costs_what_they_make_it() {
+    let module = llrm_mir::parse::module(
+        "define void @f(ptr %p, i16 %k, i16 %j) {\nb0:\n  %q = getelementptr inbounds [4 x i32], ptr %p, i16 %k, i16 %j\n  store i32 0, ptr %q\n  ret void\n}\n",
+    )
+    .expect("parses");
+    let layout = DataLayout::parse("e-p:16:16-i32:16-n8:16:32").expect("a layout");
+    let (_, _, function) = module.functions().next().expect("@f");
+    let gep = function.iter_block(function.entry().expect("entry")).next().expect("the gep");
+    let x86 = X86::of_cpu("i486").expect("a cpu");
+    let cost = |operands: &[llrm_mir::module::Operand]| {
+        llrm_mir::instructioncost::instruction_cost_with(
+            &x86,
+            &module.context,
+            &layout,
+            &module.globals,
+            function,
+            gep,
+            operands,
+            CostKind::SizeAndLatency,
+        )
+        .value
+    };
+    let own = function.instruction(gep).operands.clone();
+    let constant = |value| llrm_mir::module::Operand::Constant(module.context.int(module.context.types.int(16), value));
+    assert_eq!((cost(&own), cost(&[own[0], constant(3), constant(1)])), (1, 0));
+}
