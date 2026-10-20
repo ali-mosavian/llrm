@@ -851,7 +851,7 @@ pub(crate) fn llvm_order(
             }
             list.extend([
                 licm("licm@730", true),
-                slot("trivialunswitch@732", Box::new(simpleloopunswitch::SimpleLoopUnswitch)),
+                slot("trivialunswitch@732", Box::new(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: false })),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L766:
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
