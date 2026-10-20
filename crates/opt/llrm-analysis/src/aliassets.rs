@@ -24,17 +24,94 @@ use llrm_mir::module::{InstId, Operand};
 
 use crate::mssa::alias::{AliasQuery, AliasResult, Location, ModRef};
 
+/// What the sets read of a location.
+pub trait AliasLocation {
+    /// The pointer value of the location.
+    fn pointer(&self) -> Option<Operand>;
+    /// Whether `other` is this very location (same pointer, same extent).
+    fn is_same(
+        &self,
+        other: &Self,
+    ) -> bool;
+}
+
+/// What the tracker asks of the alias analysis over its locations: MemorySSA's
+/// [`AliasQuery`], or a `BatchAAResults` (`LoopAccessAnalysis`).
+pub trait AliasLocations {
+    type Loc: AliasLocation;
+
+    /// `alias(A, B)`.
+    fn alias(
+        &self,
+        one: &Self::Loc,
+        other: &Self::Loc,
+    ) -> AliasResult;
+
+    /// `getModRefInfo(Inst, Loc)`.
+    fn get_mod_ref_info(
+        &self,
+        inst: InstId,
+        member: &Self::Loc,
+    ) -> ModRef;
+
+    /// The location with its AA tags dropped.
+    fn without_aa_tags(
+        &self,
+        location: &Rc<Self::Loc>,
+    ) -> Rc<Self::Loc>;
+}
+
+impl AliasLocation for Location {
+    fn pointer(&self) -> Option<Operand> {
+        self.reference.pointer
+    }
+
+    fn is_same(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.reference == other.reference && self.unbounded == other.unbounded
+    }
+}
+
+impl<'b> AliasLocations for AliasQuery<'b> {
+    type Loc = Location;
+
+    fn alias(
+        &self,
+        one: &Location,
+        other: &Location,
+    ) -> AliasResult {
+        AliasQuery::alias(self, one, other)
+    }
+
+    fn get_mod_ref_info(
+        &self,
+        inst: InstId,
+        member: &Location,
+    ) -> ModRef {
+        AliasQuery::get_mod_ref_info(self, inst, member)
+    }
+
+    fn without_aa_tags(
+        &self,
+        location: &Rc<Location>,
+    ) -> Rc<Location> {
+        AliasQuery::without_aa_tags(self, location)
+    }
+}
+
 /// `-alias-set-saturation-threshold`: the most locations the sets hold before
 /// they are lumped into one.
 pub const SATURATION_THRESHOLD: usize = 250;
 
 /// [`AliasSet`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/AliasSetTracker.h#L49).
 #[derive(Debug)]
-pub struct AliasSet {
+pub struct AliasSet<L = Location> {
     /// The set this one was merged into.
     forward: Option<usize>,
     /// `MemoryLocs`.
-    locations: Vec<Rc<Location>>,
+    locations: Vec<Rc<L>>,
     /// `AliasAny`: the set is to be considered to alias any pointer.
     alias_any: bool,
     /// `Alias == SetMustAlias`.
@@ -43,7 +120,7 @@ pub struct AliasSet {
     access: ModRef,
 }
 
-impl AliasSet {
+impl<L: AliasLocation> AliasSet<L> {
     fn new() -> Self {
         Self { forward: None, locations: Vec::new(), alias_any: false, must_alias: true, access: ModRef::NONE }
     }
@@ -69,7 +146,7 @@ impl AliasSet {
         self.forward.is_some()
     }
 
-    pub fn locations(&self) -> &[Rc<Location>] {
+    pub fn locations(&self) -> &[Rc<L>] {
         &self.locations
     }
 
@@ -77,7 +154,7 @@ impl AliasSet {
     pub fn get_pointers(&self) -> Vec<Operand> {
         let mut found: Vec<Operand> = Vec::new();
         for location in &self.locations {
-            if let Some(pointer) = location.reference.pointer
+            if let Some(pointer) = location.pointer()
                 && !found.contains(&pointer)
             {
                 found.push(pointer);
@@ -88,9 +165,9 @@ impl AliasSet {
 }
 
 /// [`AliasSetTracker`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/AliasSetTracker.h#L201).
-pub struct AliasSetTracker<'a, 'b> {
-    aa: &'a AliasQuery<'b>,
-    sets: Vec<AliasSet>,
+pub struct AliasSetTracker<'a, Q: AliasLocations> {
+    aa: &'a Q,
+    sets: Vec<AliasSet<Q::Loc>>,
     /// `PointerMap`: the set holding the locations of a pointer value.
     pointer_map: llrm_support::hash::HashMap<Operand, usize>,
     /// `TotalAliasSetSize`.
@@ -99,20 +176,20 @@ pub struct AliasSetTracker<'a, 'b> {
     alias_any_as: Option<usize>,
 }
 
-impl<'a, 'b> AliasSetTracker<'a, 'b> {
-    pub fn new(aa: &'a AliasQuery<'b>) -> Self {
+impl<'a, Q: AliasLocations> AliasSetTracker<'a, Q> {
+    pub fn new(aa: &'a Q) -> Self {
         Self { aa, sets: Vec::new(), pointer_map: Default::default(), total_alias_set_size: 0, alias_any_as: None }
     }
 
     /// The sets that do not forward, in the order they were made.
-    pub fn alias_sets(&self) -> impl Iterator<Item = (usize, &AliasSet)> {
+    pub fn alias_sets(&self) -> impl Iterator<Item = (usize, &AliasSet<Q::Loc>)> {
         self.sets.iter().enumerate().filter(|(_, set)| set.forward.is_none())
     }
 
     pub fn alias_set(
         &self,
         at: usize,
-    ) -> &AliasSet {
+    ) -> &AliasSet<Q::Loc> {
         &self.sets[at]
     }
 
@@ -174,7 +251,7 @@ impl<'a, 'b> AliasSetTracker<'a, 'b> {
     fn aliases_memory_location(
         &self,
         set: usize,
-        location: &Location,
+        location: &Q::Loc,
     ) -> AliasResult {
         let set = &self.sets[set];
         if set.alias_any {
@@ -221,7 +298,7 @@ impl<'a, 'b> AliasSetTracker<'a, 'b> {
     /// and whether it must alias all of them.
     fn merge_alias_sets_for_memory_location(
         &mut self,
-        location: &Location,
+        location: &Q::Loc,
         ptr_as: Option<usize>,
     ) -> (Option<usize>, bool) {
         let mut found: Option<usize> = None;
@@ -256,12 +333,12 @@ impl<'a, 'b> AliasSetTracker<'a, 'b> {
     /// the set holding `location`, made and filled when there is none.
     pub fn get_alias_set_for(
         &mut self,
-        location: &Rc<Location>,
+        location: &Rc<Q::Loc>,
     ) -> usize {
         // The alias sets are indexed with a map from the memory locations'
         // pointer values. If the memory location is already registered, we can
         // find it in the alias set associated with its pointer.
-        let pointer = location.reference.pointer;
+        let pointer = location.pointer();
         let mut entry = pointer.and_then(|pointer| self.pointer_map.get(&pointer).copied());
         if let Some(found) = entry {
             let found = self.collapse_forwarding(found);
@@ -269,7 +346,7 @@ impl<'a, 'b> AliasSetTracker<'a, 'b> {
             if self.sets[found]
                 .locations
                 .iter()
-                .any(|one| one.reference == location.reference && one.unbounded == location.unbounded)
+                .any(|one| one.is_same(location))
             {
                 return found;
             }
@@ -308,7 +385,7 @@ impl<'a, 'b> AliasSetTracker<'a, 'b> {
     fn add_memory_location_to_set(
         &mut self,
         set: usize,
-        location: &Rc<Location>,
+        location: &Rc<Q::Loc>,
         known_must_alias: bool,
     ) {
         if self.sets[set].must_alias && !known_must_alias {
@@ -330,7 +407,7 @@ impl<'a, 'b> AliasSetTracker<'a, 'b> {
     /// threshold.
     pub fn add_memory_location(
         &mut self,
-        location: &Rc<Location>,
+        location: &Rc<Q::Loc>,
         access: ModRef,
     ) -> usize {
         let set = self.get_alias_set_for(location);
@@ -346,7 +423,7 @@ impl<'a, 'b> AliasSetTracker<'a, 'b> {
     /// `add(LoadInst *)`.
     pub fn add_load(
         &mut self,
-        location: &Rc<Location>,
+        location: &Rc<Q::Loc>,
     ) {
         self.add_memory_location(location, ModRef::REF);
     }
@@ -354,7 +431,7 @@ impl<'a, 'b> AliasSetTracker<'a, 'b> {
     /// `add(StoreInst *)`.
     pub fn add_store(
         &mut self,
-        location: &Rc<Location>,
+        location: &Rc<Q::Loc>,
     ) {
         self.add_memory_location(location, ModRef::MOD);
     }
@@ -362,7 +439,7 @@ impl<'a, 'b> AliasSetTracker<'a, 'b> {
     /// `addWithoutAATags(StoreInst *)`.
     pub fn add_store_without_aa_tags(
         &mut self,
-        location: &Rc<Location>,
+        location: &Rc<Q::Loc>,
     ) {
         let bare = self.aa.without_aa_tags(location);
         self.add_memory_location(&bare, ModRef::MOD);
