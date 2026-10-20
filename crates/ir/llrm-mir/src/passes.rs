@@ -729,23 +729,6 @@ impl Analysis for Loops {
     }
 }
 
-/// LLVM's `ScalarEvolutionAnalysis`, of add recurrences alone.
-pub struct ScalarEvolution;
-
-impl Analysis for ScalarEvolution {
-    type Result = crate::scalarevolution::Evolution;
-    const READS_OUTER: bool = false;
-    const NAME: &'static str = "scalar-evolution";
-    fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> crate::scalarevolution::Evolution {
-        crate::scalarevolution::Evolution::new(context, function, &analyses.get::<Loops>(context, layout, function))
-    }
-}
-
 /// Which analyses a pass left true. MIRROR: LLVM's `PreservedAnalyses`
 /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Analysis.h#L109):
 /// a pass that changed something names what it kept, and the manager drops the
@@ -1119,7 +1102,7 @@ pub fn note_pass(name: &'static str) {
 /// nothing.
 fn why() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    TRACE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_WHY").is_some())
+    TRACE.with(std::cell::Cell::get) || *ON.get_or_init(|| llrm_env::set("LLRM_WHY"))
 }
 
 /// Starts or stops counting recomputations on this thread (the test form of
@@ -1153,12 +1136,12 @@ fn record(
 
 fn why_printed() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_WHY").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_WHY"))
 }
 
 fn check_modules() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_MODULES").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
 }
 
 fn check_captures() -> bool {
@@ -1168,7 +1151,7 @@ fn check_captures() -> bool {
 
 fn check_replay() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_REPLAY").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_REPLAY"))
 }
 
 /// Whether `changes` only keep every live value's meaning, as a result that
@@ -1583,7 +1566,7 @@ impl Analyses {
         function: &Function,
     ) {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_PRESERVED").is_some()) {
+        if *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_PRESERVED")) {
             let stale = self.stale(context, layout, function);
             assert!(stale.is_empty(), "{pass} left {} held but stale", stale.join(", "));
         }
@@ -1813,7 +1796,7 @@ impl Analyses {
 /// was not reported fails, where otherwise it is brought up to date.
 fn unreported_fails() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_UNREPORTED").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_UNREPORTED"))
 }
 
 /// A module analysis: how to compute it, and whether two results agree.
@@ -2265,12 +2248,69 @@ impl ModuleAnalyses {
     }
 }
 
+thread_local! {
+    /// The first body a pass left with a short phi since the manager last
+    /// asked (#3016), as "after <pass>: ...".
+    static PHI_PROBLEM: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `pass`, then (in a build with debug assertions: dev, the unit tests)
+/// checks that every phi of the body it left has one input per edge, and notes
+/// the first pass that left one short for [`take_phi_problem`]. Passes that run
+/// others (a slot of several, the fixed-point rounds) run them through here, so
+/// the member is named and not the slot. A release build pays nothing: LLVM
+/// verifies only under `-verify-each`.
+pub fn run_checked(
+    pass: &mut dyn FunctionPass,
+    unit: &mut Unit,
+    analyses: &mut Analyses,
+) -> PreservedAnalyses {
+    let preserved = pass.run(unit, analyses);
+    check_phi_arity(pass.name(), unit.function);
+    preserved
+}
+
+/// [`run_checked`]'s check, for a pass that edits in steps and names a step
+/// that is not a pass of its own.
+pub fn check_phi_arity(
+    step: &str,
+    function: &Function,
+) {
+    #[cfg(debug_assertions)]
+    PHI_PROBLEM.with(|problem| {
+        let mut problem = problem.borrow_mut();
+        if problem.is_none() {
+            let found = crate::verify::phi_arity(function);
+            if !found.is_empty() {
+                *problem = Some(format!("after {step}: {}", found.join("; ")));
+            }
+        }
+    });
+    #[cfg(not(debug_assertions))]
+    let _ = (step, function);
+}
+
+/// The problem [`run_checked`] noted, if any, and forgets it.
+pub fn take_phi_problem() -> Option<String> {
+    PHI_PROBLEM.with(|problem| problem.borrow_mut().take())
+}
+
 pub trait FunctionPass {
     fn name(&self) -> &'static str;
     /// The names of the passes that run under `name` (a slot that stands for
     /// one pass of LLVM and runs several): the pass itself if it is one.
     fn parts(&self) -> Vec<&'static str> {
         vec![self.name()]
+    }
+    /// The LLVM pass this one translates; `None` for an llrm stand-in. The
+    /// parity registry refuses an Old slot that runs one
+    /// (`parity::check_phase`).
+    fn translation(&self) -> Option<&'static str> {
+        None
+    }
+    /// [`translation`](Self::translation) of each pass that runs under `name`.
+    fn translations(&self) -> Vec<&'static str> {
+        self.translation().into_iter().collect()
     }
     /// Whether the pass may add a memory operation a function did not have (a
     /// load speculated, a call made). The module analyses frozen at a point
@@ -2280,6 +2320,12 @@ pub trait FunctionPass {
     /// and says if it did.
     fn adds_memory_operations(&self) -> bool {
         true
+    }
+
+    /// The pass dumps the bodies it is run over itself (the pipeline does, per
+    /// function), so the manager dumps none.
+    fn dumps_inputs_itself(&self) -> bool {
+        false
     }
     /// The parts of a function the pass looks at (`footprint`). A pass that
     /// found nothing to do is not run again until an edit reaches one of
@@ -2354,6 +2400,9 @@ pub struct PassManager {
     pub verify_invalidation: bool,
     /// A directory each pass's output is written to, as `NN-pass.ll`.
     pub dump: Option<std::path::PathBuf>,
+    /// `LLRM_DUMP_INPUTS`: the module each pass is about to run over is dumped
+    /// too, as `NNNN-in-pass.ll` with a line in `manifest.txt`.
+    pub dump_inputs: bool,
     /// How many pass runs happen, a module pass's one and a function
     /// pass's one per function, as LLVM's `-opt-bisect-limit`: each run is
     /// named on stderr, and those past the limit are skipped.
@@ -2490,6 +2539,11 @@ impl PassManager {
                     );
                     running
                 }) {
+                    if self.dump_inputs {
+                        for (at, module) in program.modules.iter().enumerate() {
+                            before(&dumps[at], start, name, module)?;
+                        }
+                    }
                     let _running = crate::counts::pass_run(name, 0);
                     spanned(name, || pass.run(program, analyses))?;
                 }
@@ -2556,11 +2610,16 @@ impl PassManager {
             eprintln!("BISECT: {}running pass ({runs}) {name} on {unit}", if running { "" } else { "NOT " });
             running
         };
+        let inputs = self.dump_inputs;
         let mut frozen: Vec<Kind> = Vec::new();
         let mut held: Vec<Kind> = Vec::new();
         for (number, pass) in self.passes.iter_mut().enumerate().skip(passes.start).take(passes.len()) {
             let name = pass.name();
             PASS.with(|p| p.set(name));
+            let dumped_by_itself = matches!(pass, Pass::Function(one) if one.dumps_inputs_itself());
+            if inputs && !dumped_by_itself && !matches!(pass, Pass::Freeze(_) | Pass::Hold(_)) {
+                before(dump, number, name, module)?;
+            }
             let pass = match pass {
                 Pass::Function(pass) => pass,
                 Pass::Program(_) => unreachable!("a program pass runs over every module"),
@@ -2633,7 +2692,8 @@ impl PassManager {
                 let running = crate::counts::pass_run_over(name, function);
                 let preserved = in_function(global.name.as_deref().unwrap_or_default(), || {
                     spanned(name, || {
-                        pass.run(
+                        run_checked(
+                            pass.as_mut(),
                             &mut Unit {
                                 context,
                                 layout: &layout,
@@ -2647,6 +2707,9 @@ impl PassManager {
                     })
                 });
                 drop(running);
+                if let Some(problem) = take_phi_problem() {
+                    return Err(problem);
+                }
                 kept.retain(|one| preserved.keeps(*one));
                 spanned("invalidate", || cache.invalidate(function, &preserved));
                 cache.check_kept(name, context, &layout, function);
@@ -2726,8 +2789,7 @@ fn checked_stale(
     pass: &str,
 ) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let on =
-        CHECK_STALE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_STALE").is_some());
+    let on = CHECK_STALE.with(std::cell::Cell::get) || *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_STALE"));
     if frozen.is_empty() || !on {
         return;
     }
@@ -2757,6 +2819,35 @@ impl ProgramPass for PassManager {
     ) -> Result<(), String> {
         self.managed(program, analyses).map(|_| ())
     }
+}
+
+/// `LLRM_DUMP_INPUTS`: the module pass `number` is about to run over, as
+/// `NNNN-in-pass.ll`, with a line in `manifest.txt` (pass, number, file,
+/// instructions), as the pipeline's `input` writes for a function.
+fn before(
+    dump: &Option<std::path::PathBuf>,
+    number: usize,
+    name: &str,
+    module: &Module,
+) -> Result<(), String> {
+    let Some(directory) = dump else { return Ok(()) };
+    let file = format!("{:04}-in-{name}.ll", number + 1);
+    let instructions: usize = module
+        .globals
+        .iter()
+        .map(|global| match &global.kind {
+            GlobalKind::Function(function) => function.walk().count(),
+            _ => 0,
+        })
+        .sum();
+    let line = format!("{name} {} {file} {instructions}\n", number + 1);
+    std::fs::create_dir_all(directory)
+        .and_then(|()| std::fs::write(directory.join(&file), crate::print::module(module)))
+        .and_then(|()| {
+            let mut out = std::fs::OpenOptions::new().create(true).append(true).open(directory.join("manifest.txt"))?;
+            std::io::Write::write_all(&mut out, line.as_bytes())
+        })
+        .map_err(|error| error.to_string())
 }
 
 /// The dump and the verifier after pass `number`.

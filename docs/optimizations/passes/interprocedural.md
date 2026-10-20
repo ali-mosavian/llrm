@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:85abc6b268358f68c3bc6bef2ccd5592cf1c2720660aefd6b5c2af72d8882769 -->
+<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:757b19693529383112864d5feb676a3b9d4adba4c7e3a22daccd0b63b124c377 -->
 
 # interprocedural
 
@@ -31,16 +31,9 @@ The stages, in order:
    `writeonly`/`initializes` on pointer parameters, `willreturn`,
    `norecurse`, `nounwind`. A stated attribute is only narrowed. The same
    stamp is stated on the declarations of the body in other modules.
-2. Inlining ([`crate::inline`](inline.md)), repeated until a round changes nothing.
-   Each round removes the private bodies nothing reaches
-   (`bare_the_unreached`), picks candidates and constant sites by code
-   bytes, and splices (`inline<N>`). What only the clocks admit is tried on
-   copies sized after the pipeline ran over them with the site's constants,
-   and kept where the callers come to no more bytes than before, within the
-   estimate's error, plus what the clocks saved buy at `rate`
-   (`estimated_callees`, `estimated_sites`, `together_trial`). A private
-   function called once is not built in a round, as GCC takes its last call
-   before any body is made.
+2. The private bodies nothing reaches any more, the ones the walk
+   ([`crate::walk::Walk`](walk.md)) inlined into every caller, lose their bodies
+   (`bare_the_unreached`). Inlining is the walk's alone.
 3. `promote.` ([`crate::argpromotion`](argpromotion.md)), `narrow.` ([`crate::narrowspace`](narrowspace.md)):
    a pointer a body only reads is passed as the fields it reads; a far
    pointer every call fills from DGROUP is passed as its offset.
@@ -48,17 +41,12 @@ The stages, in order:
    results replaced by it (`llrm_analysis::interprocedural`); the call
    stays.
 5. A loop of: `ipa-args<N>.` (a private body whose every call passes the
-   same constant uses it), `ipa-cp.` ([`crate::ipacp`](ipacp.md) cloning), and
-   `ipa-inline<N>.` (constant sites and callees inlined again), with return
-   propagation after each, until nothing changes.
+   same constant uses it) and `ipa-cp.` ([`crate::ipacp`](ipacp.md) cloning), with
+   return propagation after each, until nothing changes.
 6. `ipa-range<N>.`, up to four rounds, if `ranges` is set: the range every
    caller passes a parameter is stated on it for the body's own proofs.
 7. `ipa-deadargs.` ([`crate::deadargs`](deadargs.md)): parameters nothing reads go.
-8. `ipa-peel.` and `ipa-recursive.`: a function that calls itself gets
-   copies of itself, and its callers one copy
-   (`inline::inlined_into_itself`, `inline::peeled_into`); skipped where the
-   threshold is 0 or code size outranks speed.
-9. `stamped_all` again, then `ipa-pure.` removes unused calls to bodies
+8. `stamped_all` again, then `ipa-pure.` removes unused calls to bodies
    proved pure and terminating, and `ipa-noreturn.` cuts the code after a
    call to a private body every path of which stops, keeping the call.
 
@@ -72,10 +60,9 @@ flowchart TB
   inl["<b>inline*</b>"]:::mid
   pn["<b>promote/narrow</b>"]:::mid
   rc["<b>ret consts</b>"]:::mid
-  lp["<b>[args, cp, inline]*</b>"]:::mid
+  lp["<b>[args, cp]*</b>"]:::mid
   rg["<b>ranges</b>"]:::mid
   da["<b>deadargs</b>"]:::mid
-  rec["<b>recursion</b>"]:::mid
   st2["<b>stamp</b>"]:::mid
   pu["<b>pure</b>"]:::mid
   nr["<b>noreturn</b>"]:::mid
@@ -86,8 +73,7 @@ flowchart TB
   rc --> lp
   lp --> rg
   rg --> da
-  da --> rec
-  rec --> st2
+  da --> st2
   st2 --> pu
   pu --> nr
   nr -.-> re

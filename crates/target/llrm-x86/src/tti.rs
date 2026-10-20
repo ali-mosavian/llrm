@@ -18,6 +18,12 @@
 //! - T5: the constant costs (`int_imm_cost*`) and `is_legal_addressing_mode`
 //!   are read off the source; the cost model has no printer for them.
 //!
+//! - T6: the 16-bit target reads the addressing hooks and the register count
+//!   from its description: `getScalingFactorCost` is the cost of the address
+//!   form that holds the scale (the prefix and its stall beyond the native `bx
+//!   + si` form), `getNumberOfRegisters` the registers a value may sit in
+//!   (six). The pin's X86TTI prices every second register 1 and has eight.
+//!
 //! # Example
 //! `sdiv i32 %a, 8` costs `2 * ashr + lshr + add = 4` and `sdiv i32 %a, %b`
 //! costs 25 on every x87 CPU (the `ScalarVarDivCostTable` entry).
@@ -35,10 +41,39 @@
 use llrm_mir::tti::*;
 
 /// X86's scalar profile: which tables its CPU reads.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct X86 {
     pub sse1: bool,
     pub sse2: bool,
+    /// `TuningMacroFusion` (Sandy Bridge and newer tunings, and `core2`'s as
+    /// X86.td lists it); `branchfusion` is a Bulldozer-and-newer feature none
+    /// of the profiles has.
+    pub macro_fusion: bool,
+    /// What real mode's addressing and register file make of the hooks LSR
+    /// reads (T6); none: the 32-bit mode's.
+    pub real_mode: Option<RealMode>,
+}
+
+/// T6: the 16-bit target's address forms and registers, from its description
+/// (`Machine::address_forms`, `Machine::registers`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RealMode {
+    /// What an address `base + scale * index` costs above the native form,
+    /// for each scale a primary address form holds: the legal scales. A
+    /// secondary form (the address-size prefix) is the backend's fallback, not
+    /// an address LSR may form.
+    pub scale_costs: Vec<(i64, i64)>,
+    /// General registers a value may sit in.
+    pub registers: u32,
+}
+
+impl RealMode {
+    fn scale_cost(
+        &self,
+        scale: i64,
+    ) -> Option<i64> {
+        self.scale_costs.iter().find(|(held, _)| *held == scale).map(|(_, cost)| *cost)
+    }
 }
 
 impl X86 {
@@ -46,11 +81,31 @@ impl X86 {
     pub fn of_cpu(cpu: &str) -> Option<X86> {
         match cpu {
             "i386" | "i486" | "pentium" | "pentiumpro" | "k5" | "k6" | "athlon" => {
-                Some(X86 { sse1: false, sse2: false })
+                Some(X86 { sse1: false, sse2: false, macro_fusion: false, real_mode: None })
             }
-            "core2" => Some(X86 { sse1: true, sse2: true }),
+            "core2" => Some(X86 { sse1: true, sse2: true, macro_fusion: true, real_mode: None }),
             _ => None,
         }
+    }
+
+    /// The model a target description names (`tti` and `llvm_cpu` of its
+    /// `datalayout.toml`): none for a name no model here has.
+    pub fn described(
+        tti: &str,
+        llvm_cpu: &str,
+    ) -> Option<X86> {
+        match tti {
+            "X86" => X86::of_cpu(llvm_cpu),
+            _ => None,
+        }
+    }
+
+    /// The profile of 16-bit code (T6).
+    pub fn in_real_mode(
+        &self,
+        real_mode: RealMode,
+    ) -> X86 {
+        X86 { real_mode: Some(real_mode), ..self.clone() }
     }
 }
 
@@ -358,6 +413,10 @@ fn intrinsic_prices() -> &'static llrm_support::hash::HashMap<(&'static str, &'s
 }
 
 impl Tti for X86 {
+    fn name(&self) -> &'static str {
+        "X86"
+    }
+
     fn cast_of_load_cost(
         &self,
         op: CastKind,
@@ -559,6 +618,11 @@ impl Tti for X86 {
     ) -> bool {
         // A displacement is a signed 32-bit immediate, below 16 MB beside a
         // symbol.
+        if let Some(real) = &self.real_mode {
+            // 16-bit addresses: a 16-bit displacement and a scale a primary
+            // form holds (0 is no index).
+            return i16::try_from(base_offset).is_ok() && (scale == 0 || real.scale_cost(scale).is_some());
+        }
         if i32::try_from(base_offset).is_err() || (base_gv && base_offset >= 16 * 1024 * 1024) {
             return false;
         }
@@ -568,6 +632,79 @@ impl Tti for X86 {
             3 | 5 | 9 => !has_base_reg,
             _ => false,
         }
+    }
+
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36734
+    /// `isLegalAddImmediate`: a signed 32-bit immediate (a negative one is a
+    /// `sub`).
+    fn is_legal_add_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36730
+    fn is_legal_icmp_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L8045
+    /// `getScalingFactorCost`: a second register in the address is one, a
+    /// plain address nothing; an illegal mode is invalid.
+    fn scaling_factor_cost(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> Cost {
+        if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) {
+            // T6: real mode's native form (bx + si/di) is free at scale 1; the
+            // others take the address-size prefix and its stall.
+            if let Some(cost) = self.real_mode.as_ref().and_then(|real| real.scale_cost(scale)) {
+                return Cost::of(cost);
+            }
+            Cost::of(i64::from(scale != 0))
+        } else {
+            Cost::INVALID
+        }
+    }
+
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7202
+    /// `isLSRCostLess`: "instruction number 1st priority".
+    fn is_lsr_cost_less(
+        &self,
+        a: &LsrCost,
+        b: &LsrCost,
+    ) -> bool {
+        let key = |c: &LsrCost| {
+            (
+                c.insns,
+                c.num_regs,
+                c.add_rec_cost,
+                c.num_iv_muls,
+                c.num_base_adds,
+                c.scale_cost,
+                c.imm_cost,
+                c.setup_cost,
+            )
+        };
+        key(a) < key(b)
+    }
+
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7211
+    fn can_macro_fuse_cmp(&self) -> bool {
+        self.macro_fusion
+    }
+
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L173
+    /// 32-bit: eight general registers.
+    fn number_of_gpr_registers(&self) -> u32 {
+        self.real_mode.as_ref().map_or(8, |real| real.registers)
     }
 
     /// `X86TTIImpl::getCastInstrCost`, scalars:

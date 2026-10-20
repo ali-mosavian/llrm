@@ -595,9 +595,13 @@ impl Run<'_> {
                 // the start of the block; correct it to a valid position.
                 at = self.first_insertion_pt(header);
             } else {
+                // Not in a loop it is expanded post-incremented for: its
+                // increment is below the header's start, and
+                // does not dominate it.
                 let computable = {
                     let cx = cx!(self);
-                    l.is_some() && self.se.has_computable_loop_evolution(&cx, s, l)
+                    l.is_some_and(|header| !self.x.post_inc_loops.contains(&header))
+                        && self.se.has_computable_loop_evolution(&cx, s, l)
                 };
                 if computable {
                     at = self.first_insertion_pt(l.expect("a loop"));

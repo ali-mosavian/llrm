@@ -26,8 +26,8 @@
 //! `%exitcond = icmp ne i32 %i.next, %n` in the latch.
 //!
 //! # Used by
-//! Not wired in: [`crate::indvars`] will run [`replaced`] after
-//! `exitfold`, as `IndVarSimplify::run` does.
+//! [`crate::indvars`] runs [`replaced`] after the exit steps, as
+//! `IndVarSimplify::run` does.
 //!
 //! # See also
 //! `linearFunctionTestReplace`, `FindLoopCounter`, `genLoopLimit`,
@@ -64,6 +64,11 @@ struct Lftr<'a> {
     env: Env<'a>,
     rewriter: &'a mut Expander,
     tti: &'a dyn ExpansionTti,
+}
+
+/// `LLRM_NO_SCEV_LFTR`, read once; set, the step is skipped.
+pub fn enabled() -> bool {
+    !llrm_support::env_flag!("LLRM_NO_SCEV_LFTR")
 }
 
 /// `IndVarSimplify::run`'s LFTR step over every loop of `function`, innermost
@@ -110,7 +115,7 @@ pub fn replaced(
 }
 
 /// The condition of `block`'s conditional branch.
-fn branch_of(
+pub(crate) fn branch_of(
     function: &Function,
     block: BlockId,
 ) -> Option<(InstId, Operand)> {
@@ -120,7 +125,7 @@ fn branch_of(
 }
 
 /// The instruction that defines `value`.
-fn def_of(
+pub(crate) fn def_of(
     function: &Function,
     value: Operand,
 ) -> Option<InstId> {

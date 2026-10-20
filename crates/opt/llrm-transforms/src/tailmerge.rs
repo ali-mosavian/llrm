@@ -99,10 +99,20 @@ fn block_merged(
     let after = function.layout()[before - 1];
     function.insert_block(canonical, Some(after)).expect("a new block");
     let operands = function.instruction(first).operands.clone();
+    // Each block's operand in each arm, gathered first so a phi is made once
+    // with all its arms.
+    let mut arms: Vec<Vec<Operand>> = vec![Vec::with_capacity(2 * blocks.len()); operands.len()];
+    for &block in blocks {
+        let old = function.terminator(block).expect("a terminated block");
+        for (list, &operand) in arms.iter_mut().zip(&function.instruction(old).operands) {
+            list.push(operand);
+            list.push(Operand::Block(block));
+        }
+    }
     let mut phis = Vec::new();
-    for operand in &operands {
+    for (operand, list) in operands.iter().zip(arms) {
         let ty = function.operand_type(context, *operand).expect("a value operand");
-        let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), Some("common.op"));
+        let phi = function.create_instruction(Opcode::Phi, ty, list, Flags::default(), Some("common.op"));
         function.insert(phi, Position::End(canonical)).expect("a new phi");
         phis.push(phi);
     }
@@ -114,13 +124,6 @@ fn block_merged(
     }
     for &block in blocks {
         let old = function.terminator(block).expect("a terminated block");
-        let operands = function.instruction(old).operands.clone();
-        for (&phi, &operand) in phis.iter().zip(&operands) {
-            let mut arms = function.instruction(phi).operands.clone();
-            arms.push(operand);
-            arms.push(Operand::Block(block));
-            function.set_operands(phi, arms);
-        }
         function.erase(old).expect("a terminator defines nothing");
         let jump =
             function.create_instruction(Opcode::Br, void, vec![Operand::Block(canonical)], Flags::default(), None);

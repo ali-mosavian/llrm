@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Trivial loop unswitching against the pinned `opt -passes='loop-mssa(simple-loop-unswitch<no-nontrivial;trivial>)'`.
+"""Loop unswitching against the pinned `opt -passes='loop-mssa(simple-loop-unswitch<no-nontrivial;trivial>)'`, or with
+`--non-trivial` `simple-loop-unswitch<nontrivial;trivial>`.
 
-    tools/simpleloopunswitch_oracle.py [--rotated] [FILE.ll ...]    (default: tests/fixtures/slu and the analysis corpus)
+    tools/simpleloopunswitch_oracle.py [--rotated] [--non-trivial] [--keep DIR] [FILE.ll ...]    (default: tests/fixtures/slu and the analysis corpus)
 
 A file holds functions; both sides get each through `loop-simplify,lcssa`, as the loop pass manager does. Both outputs are put in one form (blocks in
 depth-first order from the entry, blocks and values renamed by place, phi inputs
@@ -14,6 +15,7 @@ corpus must hold each shape the translation claims (REQUIRED). Prints
 on any failure or a missing side.
 """
 import glob
+import targetdesc
 import re
 import struct
 import subprocess
@@ -21,16 +23,21 @@ import sys
 import tempfile
 from pathlib import Path
 
+REQUIRED_NON_TRIVIAL = {"nt_branch", "nt_switch", "nt_and", "nt_or", "nt_select", "nt_exit_phi", "nt_nested"}
 REQUIRED = {"header_exit", "variant_stays", "partial_or", "partial_and", "switch_exit", "switch_default_exit", "latch_exit", "exit_phi_variant", "stores_first", "nested_hoist", "shared_exit", "second_branch", "constant_cond"}
 PINNED = Path.home() / "scratch/llvm-build/bin/opt"
+TARGET = targetdesc.triple_cpu()  # llrm's default target (crates/target/*/datalayout.toml): a dump has no `target triple`, and opt costs for x86-64 without one
 COMMIT = "24.0.0git"
+MODE = targetdesc.default()[1:]  # opt prices for this target (TARGET), so llrm-mir does too
 ROOT = Path(__file__).resolve().parent.parent
 LLRM = ROOT / "target/debug/llrm-mir"
-PASS = "loop-mssa(simple-loop-unswitch<no-nontrivial;trivial>)"
-CONTROL = "loop-mssa(simple-loop-unswitch<no-nontrivial;no-trivial>)"
-
 ROTATED = "--rotated" in sys.argv
-ARGS = [a for a in sys.argv[1:] if a != "--rotated"]
+NON_TRIVIAL = "--non-trivial" in sys.argv
+KEEP = Path(sys.argv[sys.argv.index("--keep") + 1]) if "--keep" in sys.argv else None  # writes each file's input, opt's and llrm's output there
+ARGS = [a for a in sys.argv[1:] if a not in ("--rotated", "--non-trivial", "--keep") and (KEEP is None or a != str(KEEP))]
+# The control is the same run without the half under test: it must differ from llrm where opt changes the loop.
+PASS = "loop-mssa(simple-loop-unswitch<nontrivial;trivial>)" if NON_TRIVIAL else "loop-mssa(simple-loop-unswitch<no-nontrivial;trivial>)"
+CONTROL = "loop-mssa(simple-loop-unswitch<no-nontrivial;trivial>)" if NON_TRIVIAL else "loop-mssa(simple-loop-unswitch<no-nontrivial;no-trivial>)"
 
 
 def run(cmd, stdin=None):
@@ -71,7 +78,15 @@ def to_mir(text):
             line,
         )
 
-    return "\n".join(exact(line) for line in text.splitlines()) + "\n"
+    return "\n".join(exact(line) for line in text.splitlines() if not line.startswith("target triple")) + "\n"
+
+
+def node_text(nodes, number, depth=0):
+    """Metadata node `number` with the nodes it names written out."""
+    text = nodes.get(number, "?")
+    if depth > 6:
+        return text
+    return re.sub(r"!(\d+)", lambda m: "{" + node_text(nodes, m.group(1), depth + 1) + "}", text)
 
 
 def canonical(ir, nodes=None, body=None):
@@ -142,6 +157,8 @@ def canonical(ir, nodes=None, body=None):
             s = re.sub(r"(?<![\w.%@])(f?0x[0-9A-Fa-f]{16}|-?\d+\.\d+e[+-]\d+)\b", lambda m: "fp(%016X)" % fp_bits(m.group(1), " float " in s and " double " not in s), s)
             s = re.sub(r"!prof !(\d+)", lambda m: "!prof " + nodes.get(m.group(1), "?"), s)
             s = re.sub(r"!llvm.loop !(\d+)", lambda m: "!llvm.loop " + nodes.get(m.group(1), "?"), s)
+            # A node's number depends on what else the module holds (opt adds the loop id of an unswitched loop), so compare its content.
+            s = re.sub(r"!tbaa !(\d+)", lambda m: "!tbaa " + node_text(nodes, m.group(1)), s)
             s = rename(s)
             m = re.match(r"^(%\w+ = phi \S+ )(.*)$", s)
             if m:
@@ -151,8 +168,28 @@ def canonical(ir, nodes=None, body=None):
     return "\n".join(out)
 
 
+def marked_partial(body, nodes):
+    """Whether a loop of `body` carries the mark opt leaves on a partially invariant condition it unswitched (nodes follow `!N` references)."""
+    pending, seen = re.findall(r"!llvm\.loop !(\d+)", body), set()
+    while pending:
+        node = pending.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        text = nodes.get(node, "")
+        if "llvm.loop.unswitch.partial.disable" in text:
+            return True
+        pending += re.findall(r"!(\d+)", text)
+    return False
+
+
+def llrm_command(path):
+    """llrm's run of `path`: at the target opt priced for, or the loops differ in cost and in decision."""
+    return [str(LLRM), "--simple-loop-unswitch", *(["--non-trivial"] if NON_TRIVIAL else []), "--mode", MODE, str(path)]
+
+
 def opt_unswitched(ir, passes=PASS):
-    r = run([str(PINNED), f"-passes={passes}", "-S"], stdin=ir)
+    r = run([str(PINNED), *TARGET, f"-passes={passes}", "-S"], stdin=ir)
     return r.stdout if r.returncode == 0 else None
 
 
@@ -164,10 +201,10 @@ def main():
     files = ARGS or sorted(
         glob.glob(str(ROOT / "tests/fixtures/slu/*.ll")) + glob.glob(str(ROOT / "crates/opt/llrm-analysis/corpus/*/*.ll"))
     )
-    compared = failed = missing = 0
+    compared = failed = missing = classified = 0
     bad = []
     if not ARGS:
-        absent = REQUIRED - {Path(f).stem for f in files if "fixtures/slu" in f}
+        absent = (REQUIRED_NON_TRIVIAL if NON_TRIVIAL else REQUIRED) - {Path(f).stem for f in files if "fixtures/slu" in f}
         if absent:
             failed += len(absent)
             bad.append(f"the corpus misses shapes: {sorted(absent)}")
@@ -178,21 +215,30 @@ def main():
         ir = Path(f).read_text()
         # The loop pass manager hands its passes loops in simplified, LCSSA form;
         # both sides start from the same one.
-        prepared = run([str(PINNED), "-passes=loop-simplify,lcssa" + (",loop-rotate" if ROTATED else ""), "-S"], stdin=ir).stdout
+        prepared = run([str(PINNED), *TARGET, "-passes=loop-simplify,lcssa" + (",loop-rotate" if ROTATED else ""), "-S"], stdin=ir).stdout
         tmp = Path(tempfile.mkdtemp()) / "prepared.ll"
         tmp.write_text(to_mir(prepared))
         want = opt_unswitched(prepared)
-        got = run([str(LLRM), "--simple-loop-unswitch", str(tmp)])
+        got = run(llrm_command(tmp))
         if want is None or got.returncode != 0:
             missing += 1
             bad.append(f"{name}: " + ("opt failed" if want is None else "llrm-mir failed: " + got.stderr.strip()[:300]))
             continue
         compared += 1
+        if KEEP:
+            KEEP.mkdir(parents=True, exist_ok=True)
+            (KEEP / f"{name}.in.ll").write_text(to_mir(prepared))
+            (KEEP / f"{name}.opt.ll").write_text(want)
+            (KEEP / f"{name}.llrm.ll").write_text(got.stdout)
         nodes = [dict(re.findall(r"^!(\d+) = (.*)$", text, re.M)) for text in (prepared, want, got.stdout)]
         control = None
         before_fns, want_fns, got_fns = functions(prepared), functions(want), functions(got.stdout)
         for fn, text in before_fns.items():
             total += 1
+            # SU9: opt unswitches a condition MemorySSA shows invariant (`hasPartialIVCondition`) and marks the loop; llrm has no MemorySSA here.
+            if NON_TRIVIAL and marked_partial(want_fns.get(fn, ""), nodes[1]):
+                classified += 1
+                continue
             before = canonical(prepared, nodes[0], text)
             a = canonical(want, nodes[1], want_fns.get(fn, ""))
             b = canonical(got.stdout, nodes[2], got_fns.get(fn, ""))
@@ -214,10 +260,11 @@ def main():
         failed += 1
         bad.append("the control (no trivial unswitching) never differed from llrm: the oracle cannot fail")
     print(f"files {len(files)} / compared {compared} / failed {failed} / missing {missing}"
-          f"  ({total} functions, opt unswitched in {unswitched_by_opt}, control differed in {controlled} files)")
+          f"  ({total} functions, opt unswitched in {unswitched_by_opt}, control differed in {controlled} files, {classified} classified SU9)")
     for line in bad:
         print(line)
     return 1 if failed or missing else 0
 
 
-sys.exit(main())
+if __name__ == "__main__":
+    sys.exit(main())

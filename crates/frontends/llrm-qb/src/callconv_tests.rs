@@ -228,7 +228,7 @@ fn reference_table() -> String {
 fn test_the_reference_table_is_what_bc_listed() {
     let path = fixtures().join("reference.txt");
     let derived = reference_table();
-    if std::env::var_os("LLRM_BLESS").is_some() {
+    if llrm_support::env_set("LLRM_BLESS") {
         std::fs::write(&path, &derived).unwrap();
     }
     assert!(

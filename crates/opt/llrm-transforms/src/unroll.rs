@@ -9,11 +9,10 @@
 //! phis; and every header phi has exactly the two arms, entry and latch.
 //! The body and latch may not call out (`calls_out`) or touch volatile memory.
 //! The header's work runs once more than the body, so it may not store, call
-//! or allocate. ScalarEvolution (`getSmallConstantTripCount`;
-//! `LLRM_NO_SCEV_TRIPS` asks `induction::trip_count`) must prove the count, and
-//! `peelsize::admitted` (in `llrm_analysis`) must price it as worth copying:
-//! the budgets, the hint a language may state, and the reasons it refuses are
-//! documented there.
+//! or allocate. ScalarEvolution (`getSmallConstantTripCount`) must prove the
+//! count, and `peelsize::admitted` (in `llrm_analysis`) must price it as worth
+//! copying: the budgets, the hint a language may state, and the reasons it
+//! refuses are documented there.
 //!
 //! The first trip is the original blocks. Each later trip is a clone of the
 //! header's work and of the body's, appended in the latch before its jump,
@@ -164,7 +163,7 @@ use llrm_analysis::manager::Registers;
 use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::peelsize::{self, Limits};
 use llrm_analysis::scev::analysis::ScevSession;
-use llrm_analysis::{cfg, induction, memory};
+use llrm_analysis::{cfg, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -269,7 +268,7 @@ pub fn expanded(
     let mut found = None;
     let found_shape = cfg::Shape::of(function);
     let frequencies = profit::Frequencies::default();
-    let mut scevs = (profit::scev_trips_enabled() && !found_shape.loops.is_empty())
+    let mut scevs = (!found_shape.loops.is_empty())
         .then(|| ScevSession::within(context, &analyses.outer().globals, &analyses.outer().metadata, function));
     for loop_ in found_shape.loops.clone() {
         let unit = memory::Unit::within(context, layout, function, analyses.outer())
@@ -278,10 +277,7 @@ pub fn expanded(
         let Some(shape) = _shape(&unit, &graph, &loop_) else {
             continue;
         };
-        let counted = match scevs.as_mut() {
-            Some(session) => profit::scev_trips(session, &unit, &loop_).map(BigInt::from),
-            None => induction::trip_count(&unit, &loop_, &facts),
-        };
+        let counted = scevs.as_mut().and_then(|session| profit::scev_trips(session, &unit, &loop_)).map(BigInt::from);
         let Some(count) = counted else {
             continue;
         };

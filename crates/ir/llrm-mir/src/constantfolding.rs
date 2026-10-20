@@ -24,11 +24,11 @@
 //! 3. Target intrinsics (AMDGCN, ARM, AArch64, Wasm, NVVM, x86): the MIR
 //!    verifier rejects a `llvm.*` name `Intrinsic` does not enumerate, and it
 //!    enumerates none of them.
+//! 8. A GEP with an index that is not an integer constant (`ptrtoint (@g)`)
+//!    stays an instruction: the backend lowers constant GEP offsets only
+//!    (`globals::constant_offset`), LLVM's x86 ISel lowers any constant.
 //!
 //! OWED (MIR can represent it; each has an issue and its exit):
-//! 4. GEP `nuw`/`nusw` on a constant expression: `ConstantExpr::GetElementPtr`
-//!    keeps `inbounds` only. Exit: add the flags to it, the parser and the
-//!    printer (#2261).
 //! 5. The constant expressions `add`, `sub`, `xor`, `select`: `ConstantExpr`
 //!    has GEP and cast only, so a fold that would make one (L1463) gives none,
 //!    as does the `(sub 0, V)` arm (L1658). Exit: add the variants (#2262).
@@ -466,7 +466,13 @@ pub fn constant_fold_get_element_ptr(
     operands.extend_from_slice(indices);
     context.constant(Constant {
         ty,
-        kind: ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds: nw & IN_BOUNDS != 0, operands }),
+        kind: ConstantKind::Expr(ConstantExpr::GetElementPtr {
+            source,
+            inbounds: nw & IN_BOUNDS != 0,
+            nusw: nw & (IN_BOUNDS | NUSW) != 0,
+            nuw: nw & NUW != 0,
+            operands,
+        }),
     })
 }
 
@@ -583,7 +589,7 @@ fn get_indexed_offset_in_type(
 /// `GEPOperator::accumulateConstantOffset`
 /// ([Operator.cpp:141](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Operator.cpp#L141)),
 /// the offset modulo 2^`width`.
-fn accumulate_constant_offset(
+pub fn accumulate_constant_offset(
     context: &Context,
     layout: &DataLayout,
     source: TypeId,
@@ -648,7 +654,7 @@ fn strip_and_accumulate_constant_offsets(
     let mut value = c;
     loop {
         match expr(context, value) {
-            Some(ConstantExpr::GetElementPtr { source, inbounds, operands }) => {
+            Some(ConstantExpr::GetElementPtr { source, inbounds, operands, .. }) => {
                 if !allow_non_inbounds && !inbounds {
                     return value;
                 }
@@ -775,7 +781,7 @@ pub fn is_constant_offset_from_global(
 
 /// `CastInst::getCastOpcode`-free half of `isEliminableCastPair`
 /// ([Instructions.cpp:2884](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L2884)).
-fn is_eliminable_cast_pair(
+pub fn is_eliminable_cast_pair(
     context: &Context,
     layout: &DataLayout,
     first: CastOp,
@@ -1484,8 +1490,10 @@ fn symbolically_evaluate_gep(
     let mut offset = get_indexed_offset_in_type(context, layout, source, &ops[1..]) as u128 & wrap;
     let mut nw = nw;
     let mut overflow = false;
-    while let Some(ConstantExpr::GetElementPtr { source: nested_source, inbounds, operands }) = expr(context, ptr) {
-        nw &= if inbounds { IN_BOUNDS | NUSW } else { 0 };
+    while let Some(ConstantExpr::GetElementPtr { source: nested_source, inbounds, nusw, nuw, operands }) =
+        expr(context, ptr)
+    {
+        nw &= u8::from(inbounds) * IN_BOUNDS | u8::from(nusw) * NUSW | u8::from(nuw) * NUW;
         let nested = &operands[1..];
         if nested.iter().any(|&one| as_int(context, one).is_none()) {
             break;
@@ -1572,11 +1580,15 @@ fn constant_fold_inst_operands_impl(
             if let Some(c) = symbolically_evaluate_gep(context, env, *source, nw, dest, ops) {
                 return Some(c);
             }
+            if !integer_indices(context, &ops[1..]) {
+                return None;
+            }
             constant_expr_get_gep_with_layout(context, env.layout, *source, ops[0], &ops[1..], nw)
         }
         Opcode::ICmp(predicate) => {
             constant_fold_compare_inst_operands(context, env.globals, env.layout, *predicate, ops[0], ops[1])
         }
+        Opcode::FCmp(predicate) => constfold::compare_float(context, *predicate, ops[0], ops[1]),
         Opcode::Freeze => {
             let guaranteed = with_query(context, env, |q| {
                 crate::valuetracking::guarantee::is_guaranteed_not_to_be_undef_or_poison(
@@ -1610,6 +1622,20 @@ fn constant_fold_inst_operands_impl(
         }
         _ => None,
     }
+}
+
+/// DEVIATE: a constant GEP is made only of integer indices, the only ones
+/// `globals::constant_offset` lowers; LLVM's x86 ISel lowers any constant.
+pub(crate) fn integer_indices(
+    context: &Context,
+    indices: &[ConstantId],
+) -> bool {
+    indices
+        .iter()
+        .all(|&one| matches!(
+            context.get(one).kind,
+            ConstantKind::Int(_) | ConstantKind::Null | ConstantKind::Zero
+        ))
 }
 
 /// `GEPNoWrapFlags` of an instruction's flags.
@@ -1695,10 +1721,16 @@ fn constant_fold_constant_impl(
     let dest = ty_of(context, c);
     let (opcode, flags) = match ce {
         ConstantExpr::Cast { op, .. } => (Opcode::Cast(op), Flags::default()),
-        ConstantExpr::GetElementPtr { source, inbounds, .. } => {
+        ConstantExpr::GetElementPtr { source, inbounds, nusw, nuw, .. } => {
             let mut flags = Flags::default();
             if inbounds {
                 flags.insert(Flags::INBOUNDS);
+            }
+            if nusw {
+                flags.insert(Flags::NUSW);
+            }
+            if nuw {
+                flags.insert(Flags::NUW);
             }
             (Opcode::GetElementPtr { source }, flags)
         }

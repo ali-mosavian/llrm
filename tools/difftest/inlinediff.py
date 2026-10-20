@@ -61,7 +61,7 @@ def llvm_verdicts(before: str, pipeline: str, threshold: int | None) -> tuple[di
     """(inlined, refused, the module LLVM wrote): (caller, callee) -> [(cost, threshold)] and -> [(reason, cost, threshold)]."""
     passes = f"-passes={pipeline}"
     flags = ["-pass-remarks=inline", "-pass-remarks-missed=inline", "-pass-remarks-analysis=inline", *([f"-inline-threshold={threshold}"] if threshold is not None else [])]
-    done = subprocess.run([str(difftest.LLVM_BIN / "opt"), passes, "-S", *flags, "-"], input=difftest.normalise(before), capture_output=True, text=True)
+    done = subprocess.run([str(difftest.LLVM_BIN / "opt"), *difftest.target_args(), passes, "-S", *flags, "-"], input=difftest.normalise(before), capture_output=True, text=True)
     if done.returncode:
         raise SystemExit(f"opt {passes}: " + (done.stderr.strip().splitlines() or ["failed"])[0])
     inlined, refused = verdicts(done.stderr)

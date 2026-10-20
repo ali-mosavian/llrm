@@ -4,8 +4,9 @@
 //! What tools/difftest compares with LLVM's counterpart: llrm's answer to that
 //! input, not the input of the next step.
 //!
-//! `llrm-pass [-On] --order PASS@SLOT FILE` runs one slot of LLVM's order
-//! (`sroa@1179`) the same way, and says on stderr what stands in it.
+//! `llrm-pass [-On] [--mode 16|32] --order PASS@SLOT FILE` runs one slot of
+//! LLVM's order (`sroa@1179`) the same way, and says on stderr what stands in
+//! it.
 
 use std::process::ExitCode;
 use std::rc::Rc;
@@ -31,12 +32,35 @@ fn main() -> ExitCode {
         },
         None => llrm_core::driver::flags::Level::O2,
     };
+    // `--mode N`: the module gets the datalayout of the target whose
+    // `datalayout.toml` says `mode = N`, so pointer-width answers (a memset's
+    // length type) are the target's.
+    let mut layout = None;
+    let mut machine: Rc<dyn llrm_mir::target::Machine> = Rc::new(llrm_mir::target::Neutral);
+    let mut described = "neutral".to_owned();
+    if arguments.first().is_some_and(|one| one == "--mode") {
+        let size = matches!(
+            level,
+            llrm_core::driver::flags::Level::Os | llrm_core::driver::flags::Level::Oz
+        );
+        let target = match llrm_driver::mode_target(arguments.get(1).map_or("", String::as_str), size) {
+            Ok(target) => target,
+            Err(error) => {
+                eprintln!("llrm-pass: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        layout = Some(target.datalayout);
+        machine = target.machine;
+        described = target.described;
+        arguments.drain(..2);
+    }
     let ordered = arguments.first().is_some_and(|one| one == "--order");
     if ordered {
         arguments.remove(0);
     }
     let [pass, path] = arguments.as_slice() else {
-        eprintln!("usage: llrm-pass [-O1|-O2|-Os|...] [--order] PASS FILE");
+        eprintln!("usage: llrm-pass [-O1|-O2|-Os|...] [--mode N] [--order] PASS FILE");
         return ExitCode::from(2);
     };
     if ordered {
@@ -68,10 +92,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if layout.is_some() {
+        module.datalayout = layout;
+    }
+    eprintln!("llrm-pass: target {described}");
     let applied = Applied { options: level.options(), only: Some(pass.clone()), ..Applied::default() };
     let mut manager = PassManager::default();
     manager.add(Fixed::new(&applied));
-    if let Err(error) = manager.run_module(&mut module, Rc::new(llrm_mir::target::Neutral)) {
+    if let Err(error) = manager.run_module(&mut module, machine) {
         eprintln!("{path}: {pass}: {error}");
         return ExitCode::FAILURE;
     }

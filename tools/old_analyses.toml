@@ -1,0 +1,23 @@
+# What the registry (parity.rs ANALYSES) cannot say: old modules and types that are not manager analyses. The analyses
+# themselves are the registry's Old rows, read by `tools/old_analysis_callers.py`.
+# `use` a type or function named in code, `module` a module whose functions are called.
+# `moves_last`: reported apart (the shared location type, which moves last).
+# `scope`: path prefixes searched (default crates/). `defined_in`: files that are not callers.
+
+[[analysis]]
+name = "MemRef"
+use = "MemRef"
+moves_last = true
+defined_in = ["crates/opt/llrm-analysis/src/memory.rs", "crates/opt/llrm-analysis/src/manager.rs"]
+
+[[analysis]]
+name = "ranges"
+module = "ranges"
+defined_in = ["crates/opt/llrm-analysis/src/ranges.rs"]
+scope = ["crates/opt/"]
+
+[[analysis]]
+name = "regions"
+module = "regions"
+defined_in = ["crates/opt/llrm-analysis/src/regions.rs"]
+scope = ["crates/opt/"]

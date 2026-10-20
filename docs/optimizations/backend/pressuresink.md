@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/pressuresink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/pressuresink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/pressuresink.rs sha256:aead09aa5719b60e5bb84a482cb6f9c14be7e939b9aeb97bc86687e7dac334b7 -->
+<!-- src: crates/backend/llrm-core/src/backend/pressuresink.rs sha256:adb4b07e08c1cc7ecec86238dab24221cc55260668a5f547e093549488aa540f -->
 
 # pressuresink
 
@@ -12,6 +12,10 @@ for the same reason. The sink runs before allocation, when each value's
 class is what [`crate::backend::regclass`](regclass.md) says confines it (a byte
 register, an address base or index, a selector) or the x87 stack, and loads
 of different classes differ in nothing but those sets.
+
+A call is no float-region boundary when x87 values live in registers the
+allocator spills (`rfp_on`): a float argument is read after the call
+instead of spilled across it.
 
 Within a block, from the last instruction up, a load `d = load [a]` is a
 candidate when it is plain (a move or float load of a cell, not volatile, no
@@ -41,6 +45,10 @@ The load moves where no class rises and at least one falls; the sets tried
 are the general set, the x87 stack and the classes of `d` and of those dying
 address operands. The moved load takes `u`'s `at`, so a block's instructions
 stay in order by it.
+
+DEVIATE P1 (#2903): no pin counterpart. LLVM orders loads by the scheduler;
+exit: the pre-RA machine scheduler translated (target 2026-11-20), then this
+file is deleted.
 
 ## Example
 None: no test fixture exercises `sunk` on a body whose LIR it prints, and

@@ -144,6 +144,27 @@ fn test_a_call_that_may_throw_stays() {
     assert_eq!(decided(&call(" nounwind readnone")), ["v"]);
 }
 
+/// A speculatable call that is handed a `noundef` argument stayed in the loop:
+/// `isSafeToSpeculativelyExecute` ignores UB-implying attributes by default,
+/// and LICM strips them from a call it moves that was not certain to run.
+#[test]
+fn test_a_call_with_a_noundef_argument_is_hoisted_without_it() {
+    use crate::testing::printed;
+    let text = looped(
+        "declare i16 @pure(i16 noundef) speculatable nounwind readnone\n\n",
+        ", i16 %a",
+        "",
+        "  %v = call i16 @pure(i16 noundef %a)\n",
+    );
+    assert_eq!(decided(&text), ["v"]);
+    let mut module = parsed(&text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("licm");
+    let after = printed(&module);
+    assert_eq!(block_of(&after, "b0"), ["%v = call i16 @pure(i16 %a)", "br label %b1"], "{after}");
+}
+
 /// An exit's LCSSA phi reading `body`'s `%v` out of a loop that counts `%i` up
 /// to `%n`: the value is read only after the loop.
 fn sinking(body: &str) -> String {
@@ -851,4 +872,312 @@ b3:
     let stated = licm_printed(&with("load i16, ptr @g, !invariant.load !0"));
     assert!(block_of(&stated, "b2").iter().all(|line| !line.contains("load i16, ptr @g")), "{stated}");
     assert!(block_of(&stated, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{stated}");
+}
+
+/// A GEP the target folds into the loop's load, also read by an exit phi: LLVM
+/// copies it into the exit and keeps it in the loop. llrm left the exit phi
+/// reading the loop's pointer, where `opt -passes=licm` re-forms the address
+/// there from the index (five bodies at the i486 target).
+#[test]
+fn test_a_gep_folded_into_a_load_is_copied_into_the_exit() {
+    struct I486(llrm_mir::target::Neutral);
+    impl llrm_mir::target::Machine for I486 {
+        fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+            Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap()))
+        }
+
+        fn foreign_span(
+            &self,
+            selectors: (i64, i64),
+            offsets: (i64, i64),
+            width: i64,
+        ) -> Option<(i64, i64)> {
+            self.0.foreign_span(selectors, offsets, width)
+        }
+
+        fn spaces(&self) -> llrm_mir::spaces::Spaces {
+            self.0.spaces()
+        }
+
+        fn costs(&self) -> llrm_mir::target::OperationCosts {
+            self.0.costs()
+        }
+
+        fn registers(&self) -> i64 {
+            self.0.registers()
+        }
+
+        fn call_registers(&self) -> i64 {
+            self.0.call_registers()
+        }
+
+        fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+            self.0.address_forms()
+        }
+    }
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+
+define i32 @f(ptr %p, i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b1 ]
+  %a = getelementptr i32, ptr %p, i32 %i
+  %v = load i32, ptr %a
+  %i1 = add i32 %i, %v
+  %c = icmp eq i32 %v, 0
+  br i1 %c, label %b2, label %b1
+
+b2:
+  %e = phi ptr [ %a, %b1 ]
+  store i32 %n, ptr %e
+  ret i32 0
+}
+";
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(I486(llrm_mir::target::Neutral))).unwrap();
+    let after = crate::testing::printed(&module);
+    assert!(!after.contains("phi ptr"), "{after}");
+    assert!(after.contains("%a = getelementptr"), "{after}");
+}
+
+/// `(LV + a) + 1` with `a` invariant: `LV + (a + 1)`, the sum made in the
+/// preheader. llrm left the add in the loop, where `opt -passes=licm` hoists
+/// it (matmul at the i486 target). Flags: `nuw` kept only if both had it, `nsw`
+/// only with `nuw`; `bo0` with another user stays.
+#[test]
+fn test_an_invariant_operand_of_a_chained_add_is_reassociated_out() {
+    let text = |first: &str, second: &str, extra: &str| {
+        format!(
+            "define i16 @f(i16 %n, i16 %a) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = add {first} i16 %i, %a
+  %y = add {second} i16 %x, 1
+  {extra}
+  %i1 = add i16 %i, %y
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        )
+    };
+    let after = licm_printed(&text("nsw", "nsw", ""));
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = add i16 %a, 1")), "{after}");
+    let body = block_of(&after, "b1");
+    assert!(body.iter().any(|line| line.contains("%y.reass = add i16 %i, %invariant.op")), "{after}");
+    assert!(body.iter().all(|line| !line.contains("%x = ")), "{after}");
+    let after = licm_printed(&text("nuw nsw", "nuw nsw", ""));
+    assert!(after.contains("%y.reass = add nuw nsw i16 %i,"), "{after}");
+    let after = licm_printed(&text("nuw", "", ""));
+    assert!(after.contains("%y.reass = add i16 %i,"), "{after}");
+    let after = licm_printed(&text("nsw", "nsw", "%z = add i16 %x, 2"));
+    assert!(!after.contains("reass"), "{after}");
+    // A chain: the reassociations of one loop read nothing an earlier one
+    // erased. Reading it looped SCEV forever in `qb-pressx`.
+    let chain = "define i16 @f(i16 %n, i16 %a, i16 %b, i16 %c, i16 %d) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %p = add i16 %i, %a
+  %q = add i16 %p, %b
+  %r = add i16 %q, %c
+  %s = add i16 %r, %d
+  %i1 = add i16 %i, %s
+  %k = icmp slt i16 %i1, %n
+  br i1 %k, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+";
+    let after = licm_printed(chain);
+    assert!(block_of(&after, "b1").iter().filter(|line| line.contains(".reass =")).count() <= 1, "{after}");
+}
+
+/// `collectChildrenInLoop` looked at every block of the function once per loop
+/// block (and `inSubLoop` compared whole loop bodies): with the inliner's big
+/// bodies `sink_and_hoist` went from 24 to 62 M on d_faces. Its work follows
+/// the loop, not the function.
+#[test]
+fn test_the_children_walk_of_a_loop_does_not_look_at_the_whole_function() {
+    let chain: String = (0..60).map(|at| format!("\nc{at}:\n  br label %c{}\n", at + 1)).collect();
+    let text = format!(
+        "define i16 @f(i16 %n, i16 %a) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %k = mul i16 %a, 3
+  br label %b2
+
+b2:
+  %i1 = add i16 %i, %k
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %c0
+{chain}
+c60:
+  ret i16 %i1
+}}
+"
+    );
+    super::sink::CHILDREN_EXAMINED.with(|one| one.set(0));
+    licm_printed(&text);
+    let looked = super::sink::CHILDREN_EXAMINED.with(|one| one.get());
+    assert!(looked <= 10, "{looked} blocks looked at for a loop of two blocks in a function of 64");
+}
+
+/// `hoistGEP`: matmul's `gep i16, (gep [16 x i8], %a, %j), %i` read the
+/// invariant index only after the variant one, so the row address was rebuilt
+/// every trip. Not for constant indices, nor when the inner GEP has another
+/// user.
+#[test]
+fn test_a_gep_of_a_variant_gep_is_reassociated_to_leave_the_loop() {
+    let text = |outer: &str, extra: &str| {
+        format!(
+            "define i16 @f(ptr %a, i16 %n, i16 %k) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %p = getelementptr inbounds i16, ptr %a, i16 %i
+  %q = getelementptr inbounds [16 x i8], ptr %p, i16 {outer}
+  {extra}
+  store i8 1, ptr %q
+  %i1 = add nuw i16 %i, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        )
+    };
+    let after = licm_printed(&text("%k", ""));
+    assert!(
+        block_of(&after, "b0")
+            .iter()
+            .any(|line| line.contains("%invariant.gep = getelementptr [16 x i8], ptr %a, i16 %k")),
+        "{after}"
+    );
+    assert!(
+        block_of(&after, "b1").iter().any(|line| line.contains("%gep = getelementptr i16, ptr %invariant.gep, i16 %i")),
+        "{after}"
+    );
+    assert!(!after.contains("%p ="), "{after}");
+    assert!(!licm_printed(&text("3", "")).contains("invariant.gep"));
+    assert!(!licm_printed(&text("%k", "store ptr %p, ptr %a")).contains("invariant.gep"));
+}
+
+/// A reassociation reaches the preheader where the visit found it: matmul's
+/// `invariant.op` came after the GEPs visited later, LLVM's before them.
+#[test]
+fn test_a_reassociation_keeps_its_place_among_the_hoists() {
+    let after = licm_printed(
+        "define i16 @f(ptr %a, i16 %n, i16 %k, i16 %m) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = add nsw i16 %i, %m
+  %y = add nsw i16 %x, 1
+  %g = getelementptr i16, ptr %a, i16 %k
+  store i16 %y, ptr %g
+  %i1 = add nuw i16 %i, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    let entry = block_of(&after, "b0");
+    let place = |what: &str| entry.iter().position(|line| line.contains(what)).unwrap_or_else(|| panic!("{after}"));
+    assert!(place("%invariant.op =") < place("%g ="), "{after}");
+}
+
+/// Under `licm<no-allowspeculation>` a GEP the loop may skip stays in it:
+/// `nbody`'s `gep @_pos_x, %i` in the conditional branch of the inner loop was
+/// copied out to the inner preheader, which LLVM's first LICM does not do.
+#[test]
+fn test_without_allow_speculation_a_conditional_gep_stays_in_the_loop() {
+    let text = "define i16 @f(i16 %n, ptr %a, i16 %k) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b4 ]
+  %t = and i16 %i, 1
+  %c = icmp eq i16 %t, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %g = getelementptr i16, ptr %a, i16 %k
+  %v = load i16, ptr %g
+  br label %b4
+
+b3:
+  br label %b4
+
+b4:
+  %p = phi i16 [ %v, %b2 ], [ 0, %b3 ]
+  %j = add i16 %i, 1
+  %d = icmp slt i16 %j, %n
+  br i1 %d, label %b1, label %b5
+
+b5:
+  ret i16 %p
+}
+";
+    let mut module = parsed(text);
+    let kept = crate::testing::managed(&mut module, Licm { apply: true, speculate: false });
+    assert!(block_of(&kept, "b2").iter().any(|line| line.starts_with("%g =")), "{kept}");
+}
+
+/// `hoistGEP` asks `isKnownNonNegative` of the translated value tracking: the
+/// matmul indices `phi [zext i16, 0]` are, so the re-formed GEPs are `inbounds`
+/// as LLVM's are (the older query answered no, and they lost the flag).
+#[test]
+fn test_a_reassociated_gep_of_non_negative_indices_stays_inbounds() {
+    let after = licm_printed(
+        "define i16 @f(ptr %a, i16 %n, i32 %k) {
+b0:
+  %kk = and i32 %k, 255
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b1 ]
+  %c = phi i16 [ 0, %b0 ], [ %c1, %b1 ]
+  %p = getelementptr inbounds i16, ptr %a, i32 %i
+  %q = getelementptr inbounds [16 x i8], ptr %p, i32 %kk
+  store i8 1, ptr %q
+  %c1 = add i16 %c, 1
+  %i1 = zext i16 %c1 to i32
+  %d = icmp slt i16 %c1, %n
+  br i1 %d, label %b1, label %b2
+
+b2:
+  ret i16 %c1
+}
+",
+    );
+    assert!(after.contains("%invariant.gep = getelementptr inbounds [16 x i8]"), "{after}");
+    assert!(after.contains("%gep = getelementptr inbounds i16"), "{after}");
 }

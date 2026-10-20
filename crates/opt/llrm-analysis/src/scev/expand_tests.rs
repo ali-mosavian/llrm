@@ -296,9 +296,27 @@ fn test_a_recurrence_written_literally_has_its_own_phi() {
     );
 }
 
+/// `{1,+,1}` in post-inc mode, expanded after `%i2 = %i + 1`, is that
+/// increment: the phi is found, and so is its increment. A duplicate
+/// `add %i, 1` was made when the insert point was hoisted above `%i2` to the
+/// header's first instruction (`expand` omitted `!PostIncLoops.count(L)`),
+/// where `%i2` does not dominate it.
+#[test]
+fn test_a_post_increment_recurrence_reuses_the_latch_increment() {
+    let text = expanded_in_loop_with(false, true, |se, cx, h, _| {
+        let one = constant(se, 32, 1).scev;
+        add_rec(se, cx, h, vec![one, one])
+    });
+    assert_eq!(
+        lines(&text),
+        ["%i = phi i32 [ 0, %entry ], [ %i2, %h ]", "%i2 = add i32 %i, 1", "%c = icmp slt i32 %i2, %n"]
+    );
+}
+
 /// In post-inc mode `{%a,+,%b}` is the value after the increment: the phi
 /// starts at the normalized `%a - %b` and the increment does not dominate the
-/// compare, so one is added there.
+/// compare, so one is added there: before the compare, not hoisted to the
+/// header (`expand` does not hoist for a loop it expands post-incremented).
 #[test]
 fn test_a_post_increment_recurrence_starts_one_step_back() {
     let text = expanded_in_loop_with(false, true, |se, cx, h, args| {
@@ -312,8 +330,8 @@ fn test_a_post_increment_recurrence_starts_one_step_back() {
             "%0 = sub i32 %a, %b",
             "%1 = phi i32 [ %3, %h ], [ %0, %entry ]",
             "%i = phi i32 [ 0, %entry ], [ %i2, %h ]",
-            "%2 = add i32 %1, %b",
             "%i2 = add i32 %i, 1",
+            "%2 = add i32 %1, %b",
             "%c = icmp slt i32 %i2, %n",
             "%3 = add i32 %1, %b"
         ]

@@ -96,6 +96,10 @@ impl FunctionPass for Adce {
         "adce"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("adce")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,

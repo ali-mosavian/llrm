@@ -29,6 +29,26 @@
 //! path of `tryAssign` is dropped. Callee-saved register cost is the shrink
 //! wrapping pass's.
 //!
+//! DEVIATE D-G1: at -Os m16 the greedy allocator is not at the shipped
+//! allocator's size (QCport, 65 modules, 2026-10-19: 78518 against 77618
+//! instructions, +1.2%). The fact: LLVM's greedy on the same final IR is at
+//! ours in total (`llc -O2`, code16, `-frame-pointer=all`, as `bp` is the
+//! frame here: 78720; without it `ebp` is free and llc reads 76020, which is
+//! not a bar for this target). Where both allocators are far above `llc`
+//! (savegame, mdl_ai, item) the excess is instruction selection and the
+//! passes before allocation, or `llc` was fed the `26-switchconv` stage.
+//! Splitting costs single functions: `_pl_trace_actors` 220 against 189 with
+//! `LLRM_NO_SPLIT` and 190 shipped. Exit: every module at `llc` or at the
+//! shipped allocator's bytes, before the backend phase merges to main.
+//!
+//! Named row of D-G1 (qb `register_live_through`, qbdemo PLASMA): the x loop
+//! keeps 2 stores and 3 loads per trip in `[bp]` where the shipped allocator
+//! kept none; `llc` on the same IR has 1 store and 4 loads. Six registers
+//! against five induction variables and the address temporaries. The test
+//! stays red: it pins what the shipped allocator achieved. Closers: fewer live
+//! induction variables (the new LSR), or a translated improvement from the pin
+//! that avoids the induction variable's spill.
+//!
 //! # Example
 //! Three values live together over two registers: the third finds none free,
 //! none to evict (all heavier), waits a round, then is spilled; the spill's
@@ -274,6 +294,14 @@ impl AllocationOrder {
 
 /// What the allocator asks of the target's register classes and instructions.
 pub trait GreedyEnv: SpillWeightEnv {
+    /// Whether `virt` has a class of its own (`MRI->getRegClass`), else its
+    /// original's is asked.
+    fn has_class(
+        &self,
+        _virt: u32,
+    ) -> bool {
+        false
+    }
     /// `RegClassInfo.getOrder(MRI->getRegClass(VirtReg))`.
     fn allocation_order(
         &self,
@@ -492,8 +520,8 @@ impl<'a> RAGreedy<'a> {
         }
         // Giant live ranges fall back to the global assignment heuristic, which
         // prevents excessive spilling in pathological cases.
-        let force_global = (size / SlotIndex::INSTR_DIST) as usize
-            > 2 * self.env.num_allocatable_regs(self.matrix.vrm.get_original(reg));
+        let force_global =
+            (size / SlotIndex::INSTR_DIST) as usize > 2 * self.env.num_allocatable_regs(self.class_reg(reg));
         let mut global_bit = 0u32;
         let mut prio;
         if stage == LiveRangeStage::Assign
@@ -603,16 +631,20 @@ impl<'a> RAGreedy<'a> {
 
     // ---- direct assignment, eviction ---------------------------------------
 
+    /// The register whose class `virt` has: itself where it has one of its own,
+    /// else its original.
+    fn class_reg(
+        &self,
+        virt: u32,
+    ) -> u32 {
+        if self.env.has_class(virt) { virt } else { self.matrix.vrm.get_original(virt) }
+    }
+
     fn order_of(
         &self,
         virt: u32,
     ) -> AllocationOrder {
-        AllocationOrder::create(
-            virt,
-            &self.matrix.vrm,
-            self.env.allocation_order(self.matrix.vrm.get_original(virt)),
-            &self.hints,
-        )
+        AllocationOrder::create(virt, &self.matrix.vrm, self.env.allocation_order(self.class_reg(virt)), &self.hints)
     }
 
     /// `tryAssign` (RegAllocGreedy.cpp#L532), without the cost-per-use path.
@@ -657,8 +689,8 @@ impl<'a> RAGreedy<'a> {
     ) -> bool {
         !virt.is_spillable()
             && (intf.is_spillable()
-                || self.env.num_allocatable_regs(self.matrix.vrm.get_original(virt.reg()))
-                    < self.env.num_allocatable_regs(self.matrix.vrm.get_original(intf.reg())))
+                || self.env.num_allocatable_regs(self.class_reg(virt.reg()))
+                    < self.env.num_allocatable_regs(self.class_reg(intf.reg())))
     }
 
     /// `DefaultEvictionAdvisor::shouldEvict`
@@ -979,10 +1011,7 @@ impl<'a> RAGreedy<'a> {
                 let assigned = self.matrix.vrm.get_phys(intf_reg);
                 let partially_overlaps = assigned.is_some_and(|a| a != phys && self.matrix.tri().overlaps(phys, a));
                 let done_same_class = self.extra.get_stage(intf_reg) == LiveRangeStage::Done
-                    && self.env.same_reg_class(
-                        self.matrix.vrm.get_original(intf_reg),
-                        self.matrix.vrm.get_original(virt.reg()),
-                    )
+                    && self.env.same_reg_class(self.class_reg(intf_reg), self.class_reg(virt.reg()))
                     && !partially_overlaps;
                 let tied_exception = self.env.has_tied_def(virt.reg()) && !self.env.has_tied_def(intf_reg);
                 if (done_same_class && !tied_exception) || fixed.contains(&intf_reg) || self.pinned.contains(&intf_reg)

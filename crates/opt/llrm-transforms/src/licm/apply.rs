@@ -15,6 +15,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::Outer;
 
+use super::hoist::Reassociation;
 use super::sink::Sinking;
 
 /// The memory graph the edits keep right (`MemorySSAUpdater` and the accesses
@@ -118,7 +119,8 @@ impl Graph<'_> {
 /// [`hoist`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1460):
 /// `inst` moved before the preheader's terminator. Every fact an instruction
 /// carries survives running where it did not run
-/// (`Fact::survives_speculation`), so none is dropped.
+/// (`Fact::survives_speculation`), so none is dropped; a call's attributes on
+/// its arguments and result are dropped by the caller.
 fn hoist(
     function: &mut Function,
     graph: &mut Graph,
@@ -128,6 +130,74 @@ fn hoist(
     let terminator = function.terminator(preheader).ok_or("a preheader with no terminator")?;
     function.move_to(inst, Position::Before(terminator))?;
     graph.moved_to_end(function, inst, preheader);
+    Ok(())
+}
+
+/// The edit of a [`Reassociation`]. For `hoistBOAssociation`, `c1 op c2` goes
+/// before the preheader's terminator, `bo` is replaced by `lv op` that, and
+/// `bo0`, which only `bo` read, is erased. DEVIATE: `c1 op c2` is made even
+/// where both are constants (no folding builder). For `hoistGEP`, the GEP of
+/// the outer indices goes there and `gep` is replaced by one of the inner
+/// indices on it.
+fn reassociate(
+    function: &mut Function,
+    context: &Context,
+    graph: &mut Graph,
+    preheader: BlockId,
+    one: &Reassociation,
+) -> Result<(), String> {
+    let terminator = function.terminator(preheader).ok_or("a preheader with no terminator")?;
+    let old = one.inst();
+    let ty = function.instruction(old).ty;
+    // The invariant instruction, then the new one: its opcode and flags, the
+    // operands before the invariant one, and those after it.
+    let (invariant, rebuilt) = match one {
+        Reassociation::BinaryOp { op, lv, c1, c2, flags, .. } => (
+            (Opcode::Binary(*op), vec![*c1, *c2], *flags, "invariant.op"),
+            (Opcode::Binary(*op), *flags, vec![*lv], vec![]),
+        ),
+        Reassociation::Gep { gep, src, in_bounds } => {
+            let (gep, src) = (function.instruction(*gep), function.instruction(*src));
+            let (Opcode::GetElementPtr { source: outer }, Opcode::GetElementPtr { source: inner }) =
+                (&gep.opcode, &src.opcode)
+            else {
+                return Err("a GEP reassociation of a non-GEP".into());
+            };
+            let flags = if *in_bounds { Flags::INBOUNDS } else { Flags::default() };
+            let outer_operands = [&src.operands[..1], &gep.operands[1..]].concat();
+            (
+                (Opcode::GetElementPtr { source: *outer }, outer_operands, flags, "invariant.gep"),
+                (Opcode::GetElementPtr { source: *inner }, flags, vec![], src.operands[1..].to_vec()),
+            )
+        }
+    };
+    let (opcode, operands, flags, name) = invariant;
+    let inv = function.create_instruction(opcode, ty, operands, flags, Some(name));
+    function.insert(inv, Position::Before(terminator))?;
+    graph.created(context, function, inv, preheader, Created::End);
+    let inv_result = function.instruction(inv).result.ok_or("an invariant op with no result")?;
+    let (opcode, flags, head, tail) = rebuilt;
+    let operands = [head, vec![Operand::Value(inv_result)], tail].concat();
+    // LLVM names the new GEP "gep".
+    let name = match one {
+        Reassociation::BinaryOp { .. } => function
+            .instruction(old)
+            .result
+            .and_then(|result| function.value(result).name.clone())
+            .map(|name| format!("{name}.reass")),
+        Reassociation::Gep { .. } => Some("gep".to_string()),
+    };
+    let new = function.create_instruction(opcode, ty, operands, flags, name.as_deref());
+    function.insert(new, Position::Before(old))?;
+    let home = function.parent(old).ok_or("an instruction in no block")?;
+    graph.created(context, function, new, home, Created::End);
+    let old_result = function.instruction(old).result.ok_or("a reassociated op with no result")?;
+    let new_result = function.instruction(new).result.ok_or("a reassociated op with no result")?;
+    function.replace_all_uses_with(old_result, Operand::Value(new_result));
+    for gone in [old, one.erased()] {
+        graph.erase(function, gone);
+        function.erase(gone)?;
+    }
     Ok(())
 }
 
@@ -188,16 +258,21 @@ fn clone_in_exit_block(
 
 /// [`sink`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1353)
 /// through phis that read nothing else: `inst` is copied into each exit block
-/// that reads it, the phi replaced by the copy, the original erased.
+/// that reads it, the phi replaced by the copy, the original erased unless
+/// `keep`: users in the loop still read it.
 fn sink(
     function: &mut Function,
     context: &Context,
     graph: &mut Graph,
     loop_: &Loop,
     inst: InstId,
+    keep: bool,
 ) -> Result<(), String> {
     let result = function.instruction(inst).result.ok_or("a sunk instruction with no result")?;
     let mut users: Vec<InstId> = function.users(result).iter().map(|one| one.user).collect();
+    users.retain(|&user| {
+        !keep || function.parent(user).is_some_and(|home| !loop_.body.contains(&llrm_analysis::cfg::id(home)))
+    });
     users.dedup();
     // Clones of this instruction. Don't create more than one per exit block!
     let mut copies: IdMap<BlockId, InstId> = IdMap::new();
@@ -219,6 +294,9 @@ fn sink(
         function.replace_all_uses_with(phi_result, Operand::Value(copy_result));
         function.erase(user)?;
     }
+    if keep {
+        return Ok(());
+    }
     graph.erase(function, inst);
     function.erase(inst)
 }
@@ -233,7 +311,8 @@ pub fn apply_loop(
     loop_: &Loop,
     preheader: Option<BlockId>,
     sunk: &[(InstId, Sinking)],
-    hoisted: &[(InstId, BlockId)],
+    hoisted: &[super::hoist::Hoist],
+    reassociated: &[(usize, Reassociation)],
 ) -> Result<bool, String> {
     let mut changed = false;
     for &(inst, how) in sunk {
@@ -242,13 +321,31 @@ pub fn apply_loop(
                 graph.erase(function, inst);
                 function.erase(inst)?;
             }
-            Sinking::Sunk => sink(function, context, graph, loop_, inst)?,
+            Sinking::Sunk => sink(function, context, graph, loop_, inst, false)?,
+            Sinking::Cloned => sink(function, context, graph, loop_, inst, true)?,
         }
         changed = true;
     }
-    for &(inst, _) in hoisted {
+    // A reassociation goes to the preheader where the visit found it, among
+    // the hoists.
+    let mut pending = reassociated.iter().peekable();
+    for (at, &super::hoist::Hoist { inst, guaranteed, .. }) in hoisted.iter().enumerate() {
+        while let Some((_, one)) = pending.next_if(|(after, _)| *after <= at) {
+            let preheader = preheader.ok_or("a reassociation with no preheader")?;
+            reassociate(function, context, graph, preheader, one)?;
+        }
         let preheader = preheader.ok_or("a hoist with no preheader")?;
+        // Hoisting a call that was not guaranteed to execute strips what would
+        // make it undefined where it did not run (`LICM.cpp:1478`).
+        if !guaranteed {
+            function.drop_ub_implying_attrs(inst);
+        }
         hoist(function, graph, inst, preheader)?;
+        changed = true;
+    }
+    for (_, one) in pending {
+        let preheader = preheader.ok_or("a reassociation with no preheader")?;
+        reassociate(function, context, graph, preheader, one)?;
         changed = true;
     }
     Ok(changed)

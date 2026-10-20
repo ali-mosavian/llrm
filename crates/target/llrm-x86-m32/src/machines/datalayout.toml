@@ -4,12 +4,18 @@
 # What gcc's -m names it: -m32.
 mode = 32
 
+# What the LLVM tools are told to price this target as (opt -mtriple/-mcpu), and the TTI llrm prices with.
+llvm_triple = "i486-unknown-linux-gnu"
+llvm_cpu = "i486"
+tti = "X86"
+
 # LLVM syntax. One pointer type; i64 is two dwords; x87 long double is 80 bits.
 datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
 
 # The operations this machine has no instruction for, which the compiler expands before selection: fptoui to a 64-bit integer
-# (fistp stores signed qwords) and a conditional move (none before the Pentium Pro).
-expand = ["fptoui.i64", "select"]
+# (fistp stores signed qwords), a conditional move (none before the Pentium Pro), the bit counts (no popcnt, and bsr and bsf
+# are not selected yet), `bswap` and the three-way compares `scmp` and `ucmp` (none is selected yet).
+expand = ["bswap", "ctlz", "ctpop", "cttz", "fptoui.i64", "scmp", "select", "ucmp"]
 
 # The operations flat code would rather run on the whole register: a word one costs an operand-size prefix, and when the
 # word is read after as a dword, an extension (X86TargetLowering::isTypeDesirableForOp). A word add or sub stays a word

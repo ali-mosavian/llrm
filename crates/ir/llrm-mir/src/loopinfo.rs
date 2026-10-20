@@ -49,33 +49,187 @@ struct LoopData {
     len: u32,
 }
 
-/// `LoopInfoBase<BasicBlock, Loop>`.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct LoopInfo {
+/// `LoopInfoBase<BlockT, LoopT>`, over blocks `B`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoopInfo<B = BlockId> {
     /// `BBMap`: each block's innermost loop, by block number.
     bb_map: Vec<u32>,
     loops: Vec<LoopData>,
     /// `TopLevelLoops`.
     top_level: Vec<LoopId>,
     /// `BlockLayout`.
-    layout: Vec<BlockId>,
+    layout: Vec<B>,
 }
 
-/// The block named by the `cursor`th block operand of `block`'s terminator at
-/// or after it, and the cursor past it: `children<BasicBlock *>`.
-fn next_child(
-    function: &Function,
-    block: BlockId,
-    cursor: &mut usize,
-) -> Option<BlockId> {
-    let operands = function.instruction(function.terminator(block)?).operands.as_slice();
-    while let Some(operand) = operands.get(*cursor) {
-        *cursor += 1;
-        if let Operand::Block(target) = operand {
-            return Some(*target);
-        }
+impl<B> Default for LoopInfo<B> {
+    fn default() -> Self {
+        Self { bb_map: Vec::new(), loops: Vec::new(), top_level: Vec::new(), layout: Vec::new() }
     }
-    None
+}
+
+/// `GraphTraits<const BlockT *>::getNumber`: dense, below the graph's
+/// `max_number`.
+pub trait BlockNumber: Copy + Eq + std::fmt::Debug {
+    fn number(self) -> usize;
+}
+
+impl BlockNumber for BlockId {
+    fn number(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// `GraphTraits<BlockT *>` and `GraphTraits<Inverse<BlockT *>>` of a function's
+/// blocks, with `getNumber`: all `LoopInfoBase` asks of its blocks.
+pub trait LoopGraph {
+    type Block: BlockNumber;
+    /// `GraphTraits<ParentT>::getEntryNode`.
+    fn entry(&self) -> Option<Self::Block>;
+    /// `GraphTraits<ParentT>::getMaxNumber`: one past the largest number.
+    fn max_number(&self) -> usize;
+    /// The child of `block` at or after `*cursor`, the cursor past it: repeats
+    /// kept, as `children<BlockT *>` gives them.
+    fn child(
+        &self,
+        block: Self::Block,
+        cursor: &mut usize,
+    ) -> Option<Self::Block>;
+    /// `inverse_children<BlockT *>`: one per edge.
+    fn inverse_children(
+        &self,
+        block: Self::Block,
+    ) -> impl Iterator<Item = Self::Block>;
+    /// `children<BlockT *>`.
+    fn children(
+        &self,
+        block: Self::Block,
+    ) -> impl Iterator<Item = Self::Block> {
+        let mut cursor = 0;
+        std::iter::from_fn(move || self.child(block, &mut cursor))
+    }
+    /// `detail::isLegalToHoistInto`: `BasicBlock::isLegalToHoistInto` where the
+    /// block type has it, else false.
+    fn is_legal_to_hoist_into(
+        &self,
+        _block: Self::Block,
+    ) -> bool {
+        false
+    }
+}
+
+/// What `analyzeImpl` asks of the dominator tree, for a re-entered cycle: the
+/// `DomTree.getNode` and `dominates` of its loop reduction.
+pub trait Dominance<B> {
+    fn is_reachable(
+        &self,
+        block: B,
+    ) -> bool;
+    fn dominates(
+        &self,
+        dominator: B,
+        block: B,
+    ) -> bool;
+}
+
+impl Dominance<BlockId> for DomTree {
+    fn is_reachable(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        self.is_reachable_from_entry(block)
+    }
+
+    fn dominates(
+        &self,
+        dominator: BlockId,
+        block: BlockId,
+    ) -> bool {
+        DomTree::dominates(self, dominator, block)
+    }
+}
+
+impl<D: Dominance<BlockId> + ?Sized> Dominance<BlockId> for std::rc::Rc<D> {
+    fn is_reachable(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        (**self).is_reachable(block)
+    }
+
+    fn dominates(
+        &self,
+        dominator: BlockId,
+        block: BlockId,
+    ) -> bool {
+        (**self).dominates(dominator, block)
+    }
+}
+
+impl<D: Dominance<BlockId> + ?Sized> Dominance<BlockId> for &D {
+    fn is_reachable(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        (**self).is_reachable(block)
+    }
+
+    fn dominates(
+        &self,
+        dominator: BlockId,
+        block: BlockId,
+    ) -> bool {
+        (**self).dominates(dominator, block)
+    }
+}
+
+/// MIR's `GraphTraits<Function *>`: the terminator's block operands with
+/// repeats, as `children<BasicBlock *>` gives them; predecessors one per
+/// edge, as `inverse_children` gives them.
+impl LoopGraph for Function {
+    type Block = BlockId;
+
+    fn entry(&self) -> Option<BlockId> {
+        Function::entry(self)
+    }
+
+    fn max_number(&self) -> usize {
+        self.blocks.len()
+    }
+
+    fn child(
+        &self,
+        block: BlockId,
+        cursor: &mut usize,
+    ) -> Option<BlockId> {
+        let operands = self.instruction(self.terminator(block)?).operands.as_slice();
+        while let Some(operand) = operands.get(*cursor) {
+            *cursor += 1;
+            if let Operand::Block(target) = operand {
+                return Some(*target);
+            }
+        }
+        None
+    }
+
+    fn inverse_children(
+        &self,
+        block: BlockId,
+    ) -> impl Iterator<Item = BlockId> {
+        self.block_users(block)
+            .iter()
+            .filter(|one| self.instruction(one.user).opcode.is_terminator())
+            .filter_map(|one| self.parent(one.user))
+    }
+
+    /// `BasicBlock::isLegalToHoistInto`: not across a terminator that does
+    /// more than branch (`Instruction::isSpecialTerminator`; `invoke` is the
+    /// one MIR has with successors).
+    fn is_legal_to_hoist_into(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        self.terminator(block).is_none_or(|term| !matches!(self.instruction(term).opcode, Opcode::Invoke(_)))
+    }
 }
 
 /// `children<BasicBlock *>(block)`: repeats kept.
@@ -84,7 +238,7 @@ pub fn children(
     block: BlockId,
 ) -> impl Iterator<Item = BlockId> + '_ {
     let mut cursor = 0;
-    std::iter::from_fn(move || next_child(function, block, &mut cursor))
+    std::iter::from_fn(move || LoopGraph::child(function, block, &mut cursor))
 }
 
 /// `inverse_children<BasicBlock *>(block)`: one per edge.
@@ -92,21 +246,7 @@ pub fn inverse_children(
     function: &Function,
     block: BlockId,
 ) -> impl Iterator<Item = BlockId> + '_ {
-    function
-        .block_users(block)
-        .iter()
-        .filter(|one| function.instruction(one.user).opcode.is_terminator())
-        .filter_map(|one| function.parent(one.user))
-}
-
-/// `BasicBlock::isLegalToHoistInto`: not across a terminator that does more
-/// than branch (`Instruction::isSpecialTerminator`; `invoke` is the one MIR
-/// has with successors).
-fn is_legal_to_hoist_into(
-    function: &Function,
-    block: BlockId,
-) -> bool {
-    function.terminator(block).is_none_or(|term| !matches!(function.instruction(term).opcode, Opcode::Invoke(_)))
+    LoopGraph::inverse_children(function, block)
 }
 
 /// `tagLoopHeader`.
@@ -132,37 +272,38 @@ fn tag_loop_header(
     }
 }
 
-impl LoopInfo {
+impl<B: BlockNumber> LoopInfo<B> {
     /// `LoopInfoBase::analyze`, with `dom_tree` asked for only if a loop is
     /// entered other than through its header.
-    pub fn analyze<D: std::borrow::Borrow<DomTree>>(
-        function: &Function,
+    pub fn analyze<D: Dominance<B>>(
+        graph: &impl LoopGraph<Block = B>,
         dom_tree: impl FnOnce() -> D,
     ) -> Self {
         crate::counts::bump(crate::counts::Event::Forests);
         let mut found = Self::default();
-        found.analyze_impl(function, dom_tree);
+        found.analyze_impl(graph, dom_tree);
         found
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericLoopInfoImpl.h#L488
-    fn analyze_impl<D: std::borrow::Borrow<DomTree>>(
+    fn analyze_impl<D: Dominance<B>>(
         &mut self,
-        function: &Function,
+        graph: &impl LoopGraph<Block = B>,
         dom_tree: impl FnOnce() -> D,
     ) {
-        let Some(entry) = function.entry() else { return };
-        let max_number = function.blocks.len();
+        let Some(entry) = graph.entry() else { return };
+        let max_number = graph.max_number();
         // (Pos, LoopHeader) per block number.
         let mut info: Vec<(u32, u32)> = vec![(UNVISITED, 0); max_number];
         let mut headers: Vec<u32> = Vec::new();
         let mut reentries: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-        let mut postorder: Vec<BlockId> = Vec::with_capacity(max_number);
-        let mut stack: Vec<(BlockId, usize)> = Vec::new();
+        let mut postorder: Vec<B> = Vec::with_capacity(max_number);
+        let mut stack: Vec<(B, usize)> = Vec::new();
         let mut counter = FIRST_ON_PATH;
-        let mut open = |bb: BlockId, info: &mut Vec<(u32, u32)>, stack: &mut Vec<(BlockId, usize)>| {
+        let num = |block: B| block.number() as u32;
+        let mut open = |bb: B, info: &mut Vec<(u32, u32)>, stack: &mut Vec<(B, usize)>| {
             visit();
-            info[bb.0 as usize] = (counter, NO_BLOCK);
+            info[num(bb) as usize] = (counter, NO_BLOCK);
             counter += 1;
             stack.push((bb, 0));
         };
@@ -170,8 +311,8 @@ impl LoopInfo {
         open(entry, &mut info, &mut stack);
         while let Some(&(top, _)) = stack.last() {
             let cursor = &mut stack.last_mut().expect("nonempty").1;
-            let Some(b1p) = next_child(function, top, cursor) else {
-                let b0 = top.0;
+            let Some(b1p) = graph.child(top, cursor) else {
+                let b0 = num(top);
                 info[b0 as usize].0 = OFF_PATH;
                 postorder.push(top);
                 stack.pop();
@@ -179,21 +320,21 @@ impl LoopInfo {
                 if let Some(&(parent, _)) = stack.last()
                     && enclosing != NO_BLOCK
                 {
-                    tag_loop_header(&mut info, parent.0, enclosing);
+                    tag_loop_header(&mut info, num(parent), enclosing);
                 }
                 continue;
             };
-            let b1 = b1p.0;
+            let b1 = num(b1p);
             if info[b1 as usize].0 == UNVISITED {
                 open(b1p, &mut info, &mut stack);
             } else if info[b1 as usize].0 >= FIRST_ON_PATH {
                 headers.push(b1);
-                tag_loop_header(&mut info, top.0, b1);
+                tag_loop_header(&mut info, num(top), b1);
             } else {
                 let mut h = info[b1 as usize].1;
                 while h != NO_BLOCK {
                     if info[h as usize].0 >= FIRST_ON_PATH {
-                        tag_loop_header(&mut info, top.0, h);
+                        tag_loop_header(&mut info, num(top), h);
                         break;
                     }
                     reentries.insert(h);
@@ -213,14 +354,13 @@ impl LoopInfo {
                 info[h as usize].0 = IS_REENTERED;
             }
             let tree = dom_tree();
-            let tree = tree.borrow();
             let mut mark = vec![NO_BLOCK; max_number];
-            let mut worklist: Vec<BlockId> = Vec::new();
+            let mut worklist: Vec<B> = Vec::new();
             let mut first_child = vec![NO_BLOCK; max_number];
             let mut next_sibling = vec![NO_BLOCK; max_number];
-            let mut blocks: Vec<Option<BlockId>> = vec![None; max_number];
+            let mut blocks: Vec<Option<B>> = vec![None; max_number];
             for &bb in &postorder {
-                let b = bb.0;
+                let b = num(bb);
                 blocks[b as usize] = Some(bb);
                 let p = info[b as usize].1;
                 if p != NO_BLOCK {
@@ -229,14 +369,14 @@ impl LoopInfo {
                 }
             }
             for &header in &postorder {
-                let h = header.0;
+                let h = num(header);
                 if info[h as usize].0 != IS_REENTERED {
                     continue;
                 }
                 mark[h as usize] = h;
                 worklist.clear();
-                let enqueue = |pred: BlockId, mark: &mut Vec<u32>, worklist: &mut Vec<BlockId>, info: &[(u32, u32)]| {
-                    let mut p = pred.0;
+                let enqueue = |pred: B, mark: &mut Vec<u32>, worklist: &mut Vec<B>, info: &[(u32, u32)]| {
+                    let mut p = num(pred);
                     let mut pred = pred;
                     let mut a = p;
                     while a != NO_BLOCK {
@@ -254,7 +394,7 @@ impl LoopInfo {
                     worklist.push(pred);
                 };
                 let mut has_backedge = false;
-                for pred in inverse_children(function, header) {
+                for pred in graph.inverse_children(header) {
                     if tree.is_reachable(pred) && tree.dominates(header, pred) {
                         has_backedge = true;
                         enqueue(pred, &mut mark, &mut worklist, &info);
@@ -265,8 +405,8 @@ impl LoopInfo {
                     let at = worklist[i];
                     i += 1;
                     visit();
-                    for pred in inverse_children(function, at) {
-                        if blocks[pred.0 as usize].is_some() {
+                    for pred in graph.inverse_children(at) {
+                        if blocks[num(pred) as usize].is_some() {
                             enqueue(pred, &mut mark, &mut worklist, &info);
                         }
                     }
@@ -297,10 +437,10 @@ impl LoopInfo {
         }
 
         // Resolve the chains in reverse postorder.
-        let mut loop_headers: Vec<BlockId> = Vec::new();
+        let mut loop_headers: Vec<B> = Vec::new();
         self.bb_map = vec![NONE; max_number];
         for &bb in postorder.iter().rev() {
-            let b = bb.0 as usize;
+            let b = num(bb) as usize;
             let h = info[b].1;
             let enclosing = if h == NO_BLOCK { NONE } else { self.bb_map[h as usize] };
             let mut l = enclosing;
@@ -319,10 +459,10 @@ impl LoopInfo {
 
         // Record each in-loop block with its innermost loop in forward CFG
         // postorder, and build the loop list in PO.
-        let mut po: Vec<(BlockId, u32)> = Vec::with_capacity(postorder.len());
+        let mut po: Vec<(B, u32)> = Vec::with_capacity(postorder.len());
         let mut block_len = vec![0u32; self.loops.len()];
         for &bb in &postorder {
-            let l = self.bb_map[bb.0 as usize];
+            let l = self.bb_map[num(bb) as usize];
             if l == NONE {
                 continue;
             }
@@ -338,7 +478,7 @@ impl LoopInfo {
         }
         debug_assert!(!self.top_level.is_empty(), "discovered loops but found no header");
 
-        self.layout = vec![BlockId(0); po.len()];
+        self.layout = vec![entry; po.len()];
         let mut root_cursor = 0u32;
         let mut start = vec![0u32; self.loops.len()];
         let mut capacity = vec![0u32; self.loops.len()];
@@ -368,41 +508,136 @@ impl LoopInfo {
     }
 }
 
-impl LoopInfo {
+impl<B: BlockNumber> LoopInfo<B> {
     /// `lookupLoopFor`: the innermost loop holding `block`.
     fn lookup(
         &self,
-        block: BlockId,
+        block: B,
     ) -> Option<LoopId> {
-        self.bb_map.get(block.0 as usize).copied().filter(|&one| one != NONE).map(LoopId)
+        self.bb_map.get(block.number()).copied().filter(|&one| one != NONE).map(LoopId)
     }
 
     /// `getLoopFor`.
     pub fn get_loop_for(
         &self,
-        block: BlockId,
-    ) -> Option<Loop<'_>> {
+        block: B,
+    ) -> Option<Loop<'_, B>> {
         self.lookup(block).map(|id| Loop { info: self, id })
     }
 
     /// `getLoopDepth`: 0 outside any loop.
     pub fn get_loop_depth(
         &self,
-        block: BlockId,
+        block: B,
     ) -> u32 {
         self.get_loop_for(block).map_or(0, |one| one.get_loop_depth())
     }
 
+}
+
+impl LoopInfo<BlockId> {
+    /// `Loop::addBasicBlockToLoop`
+    /// ([L283](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericLoopInfoImpl.h#L283)),
+    /// for `new_blocks` at once: each is a new member of `loop_id`, and so of
+    /// every loop around it; `getLoopFor` names `loop_id`. A block already in a
+    /// loop, or the header, is not valid here.
+    ///
+    /// The blocks go at the end of the slice of `loop_id` in the block layout,
+    /// which lies inside the slices of its parents. The pin pushes onto each
+    /// parent's block vector (O(depth)); a slice of one flat layout needs a
+    /// splice, so the cost is the layout plus the loops, once per call, not per
+    /// block: pass all the blocks of one loop together.
+    pub fn add_basic_blocks_to_loop(
+        &mut self,
+        loop_id: LoopId,
+        new_blocks: &[BlockId],
+    ) {
+        if new_blocks.is_empty() {
+            return;
+        }
+        let count = new_blocks.len() as u32;
+        let highest = new_blocks.iter().map(|one| one.0 as usize).max().expect("a block");
+        if highest >= self.bb_map.len() {
+            self.bb_map.resize(highest + 1, NONE);
+        }
+        for block in new_blocks {
+            debug_assert_eq!(self.bb_map[block.0 as usize], NONE, "a block already in a loop");
+            self.bb_map[block.0 as usize] = loop_id.0;
+        }
+        let data = &self.loops[loop_id.0 as usize];
+        let at = data.start + data.len;
+        self.layout.splice(at as usize..at as usize, new_blocks.iter().copied());
+        // The loops that hold `at` are `loop_id` and its parents, which grow;
+        // a loop that starts at or after it moves. Sub-loops of `loop_id` end
+        // at or before `at` and keep their slice.
+        let mut around = vec![false; self.loops.len()];
+        let mut walk = Some(loop_id);
+        while let Some(one) = walk {
+            around[one.0 as usize] = true;
+            self.loops[one.0 as usize].len += count;
+            walk = self.loops[one.0 as usize].parent;
+        }
+        for (index, one) in self.loops.iter_mut().enumerate() {
+            if !around[index] && one.start >= at {
+                one.start += count;
+            }
+        }
+    }
+
+    /// `Loop::addBasicBlockToLoop` for one block.
+    pub fn add_basic_block_to_loop(
+        &mut self,
+        loop_id: LoopId,
+        new_block: BlockId,
+    ) {
+        self.add_basic_blocks_to_loop(loop_id, &[new_block]);
+    }
+
+    /// Whether `self` and `other` hold the same loops of `function`: the same
+    /// innermost loop per block, and per loop the same header, blocks, parent
+    /// and sub-loops. The order of the blocks in a loop is not compared: an
+    /// update appends, an analysis orders by postorder. For a check of an
+    /// updated `LoopInfo` against one made afresh (`LoopInfoBase::verify`).
+    pub fn equivalent(
+        &self,
+        other: &LoopInfo,
+        function: &Function,
+    ) -> bool {
+        let header_of = |info: &LoopInfo, block| info.get_loop_for(block).map(|one| one.get_header());
+        if function.layout().iter().any(|&block| header_of(self, block) != header_of(other, block)) {
+            return false;
+        }
+        let summary = |info: &LoopInfo| {
+            let mut loops: Vec<_> = info
+                .get_loops_in_preorder()
+                .iter()
+                .map(|one| {
+                    let mut blocks = one.get_blocks().to_vec();
+                    blocks.sort();
+                    let mut subs: Vec<_> = one.get_sub_loops().map(|sub| sub.get_header()).collect();
+                    subs.sort();
+                    (one.get_header(), blocks, one.get_parent_loop().map(|parent| parent.get_header()), subs)
+                })
+                .collect();
+            loops.sort();
+            loops
+        };
+        summary(self) == summary(other)
+    }
+
+}
+
+impl<B: BlockNumber> LoopInfo<B> {
     /// `isLoopHeader`.
     pub fn is_loop_header(
         &self,
-        block: BlockId,
+        block: B,
     ) -> bool {
         self.get_loop_for(block).is_some_and(|one| one.get_header() == block)
     }
 
     /// The top-level loops, in reverse program order.
-    pub fn top_level_loops(&self) -> impl Iterator<Item = Loop<'_>> {
+    pub fn top_level_loops(&self) -> impl Iterator<Item = Loop<'_, B>> {
         self.top_level.iter().map(|&id| Loop { info: self, id })
     }
 
@@ -411,7 +646,7 @@ impl LoopInfo {
     }
 
     /// `getLoopsInPreorder`: every loop, outer loops first, in program order.
-    pub fn get_loops_in_preorder(&self) -> Vec<Loop<'_>> {
+    pub fn get_loops_in_preorder(&self) -> Vec<Loop<'_, B>> {
         let mut found = Vec::new();
         for root in self.top_level_loops().collect::<Vec<_>>().into_iter().rev() {
             found.push(root);
@@ -421,7 +656,7 @@ impl LoopInfo {
     }
 
     /// `getLoopsInReverseSiblingPreorder`.
-    pub fn get_loops_in_reverse_sibling_preorder(&self) -> Vec<Loop<'_>> {
+    pub fn get_loops_in_reverse_sibling_preorder(&self) -> Vec<Loop<'_, B>> {
         let mut found = Vec::new();
         for root in self.top_level_loops() {
             let mut pending = vec![root];
@@ -436,9 +671,9 @@ impl LoopInfo {
     /// `getSmallestCommonLoop`.
     pub fn get_smallest_common_loop<'a>(
         &'a self,
-        a: Option<Loop<'a>>,
-        b: Option<Loop<'a>>,
-    ) -> Option<Loop<'a>> {
+        a: Option<Loop<'a, B>>,
+        b: Option<Loop<'a, B>>,
+    ) -> Option<Loop<'a, B>> {
         let (mut a, mut b) = (a?, b?);
         let (mut depth_a, mut depth_b) = (a.get_loop_depth(), b.get_loop_depth());
         while depth_a > depth_b {
@@ -459,12 +694,12 @@ impl LoopInfo {
     /// `getExitEdges`: (inside block, outside block) pairs.
     pub fn get_exit_edges(
         &self,
-        function: &Function,
-        one: Loop<'_>,
-    ) -> Vec<(BlockId, BlockId)> {
+        graph: &impl LoopGraph<Block = B>,
+        one: Loop<'_, B>,
+    ) -> Vec<(B, B)> {
         let mut found = Vec::new();
         for &block in one.get_blocks() {
-            for successor in children(function, block) {
+            for successor in graph.children(block) {
                 if !one.contains(successor) {
                     found.push((block, successor));
                 }
@@ -476,33 +711,33 @@ impl LoopInfo {
     /// `hasNoExitBlocks`.
     pub fn has_no_exit_blocks(
         &self,
-        function: &Function,
-        one: Loop<'_>,
+        graph: &impl LoopGraph<Block = B>,
+        one: Loop<'_, B>,
     ) -> bool {
-        one.get_blocks().iter().all(|&block| children(function, block).all(|successor| one.contains(successor)))
+        one.get_blocks().iter().all(|&block| graph.children(block).all(|successor| one.contains(successor)))
     }
 
     /// `getUniqueLatchExitBlock`.
     pub fn get_unique_latch_exit_block(
         &self,
-        function: &Function,
-        one: Loop<'_>,
-    ) -> Option<BlockId> {
-        let latch = one.get_loop_latch(function).expect("Latch block must exists");
-        single(children(function, latch).filter(|&successor| !one.contains(successor)), false)
+        graph: &impl LoopGraph<Block = B>,
+        one: Loop<'_, B>,
+    ) -> Option<B> {
+        let latch = one.get_loop_latch(graph).expect("Latch block must exists");
+        single(graph.children(latch).filter(|&successor| !one.contains(successor)), false)
     }
 
     /// `print`: `Loop info for function 'name':` and the loops with their
     /// nested loops, as `print<loops>` writes them.
     pub fn print(
         &self,
-        function: &Function,
+        graph: &impl LoopGraph<Block = B>,
         name: &str,
-        block_name: &dyn Fn(BlockId) -> String,
+        block_name: &dyn Fn(B) -> String,
     ) -> String {
         let mut out = format!("Loop info for function '{name}':\n");
         for one in self.top_level_loops() {
-            one.print(function, block_name, 0, &mut out);
+            one.print(graph, block_name, 0, &mut out);
         }
         out
     }
@@ -510,138 +745,15 @@ impl LoopInfo {
 
 /// `find_singleton`: the one element, `None` if none or (unless
 /// `allow_repeats`) more than one.
-fn single(
-    mut items: impl Iterator<Item = BlockId>,
+fn single<B: Copy + Eq>(
+    mut items: impl Iterator<Item = B>,
     allow_repeats: bool,
-) -> Option<BlockId> {
+) -> Option<B> {
     let first = items.next()?;
     items.all(|next| allow_repeats && next == first).then_some(first)
 }
 
-/// A loop of a [`LoopInfo`].
-#[derive(Clone, Copy)]
-pub struct Loop<'a> {
-    info: &'a LoopInfo,
-    id: LoopId,
-}
-
-impl PartialEq for Loop<'_> {
-    fn eq(
-        &self,
-        other: &Self,
-    ) -> bool {
-        std::ptr::eq(self.info, other.info) && self.id == other.id
-    }
-}
-
-impl Eq for Loop<'_> {}
-
-impl std::fmt::Debug for Loop<'_> {
-    fn fmt(
-        &self,
-        out: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        write!(out, "Loop({:?} at {})", self.get_header(), self.id.0)
-    }
-}
-
-impl<'a> Loop<'a> {
-    fn data(&self) -> &'a LoopData {
-        &self.info.loops[self.id.0 as usize]
-    }
-
-    pub fn id(&self) -> LoopId {
-        self.id
-    }
-
-    /// `getBlocks`: header first, each subloop's blocks contiguous.
-    pub fn get_blocks(&self) -> &'a [BlockId] {
-        let one = self.data();
-        &self.info.layout[one.start as usize..(one.start + one.len) as usize]
-    }
-
-    pub fn get_num_blocks(&self) -> usize {
-        self.get_blocks().len()
-    }
-
-    /// `getHeader`.
-    pub fn get_header(&self) -> BlockId {
-        self.get_blocks()[0]
-    }
-
-    /// `getParentLoop`.
-    pub fn get_parent_loop(&self) -> Option<Loop<'a>> {
-        self.data().parent.map(|id| Loop { info: self.info, id })
-    }
-
-    /// `getOutermostLoop`.
-    pub fn get_outermost_loop(&self) -> Loop<'a> {
-        let mut one = *self;
-        while let Some(parent) = one.get_parent_loop() {
-            one = parent;
-        }
-        one
-    }
-
-    /// `getLoopDepth`: 1 for an outermost loop.
-    pub fn get_loop_depth(&self) -> u32 {
-        let mut depth = 1;
-        let mut one = self.get_parent_loop();
-        while let Some(parent) = one {
-            depth += 1;
-            one = parent.get_parent_loop();
-        }
-        depth
-    }
-
-    /// `getSubLoops`, in program order.
-    pub fn get_sub_loops(&self) -> impl Iterator<Item = Loop<'a>> + 'a {
-        let info = self.info;
-        self.data().sub_loops.iter().map(move |&id| Loop { info, id })
-    }
-
-    pub fn is_innermost(&self) -> bool {
-        self.data().sub_loops.is_empty()
-    }
-
-    pub fn is_outermost(&self) -> bool {
-        self.data().parent.is_none()
-    }
-
-    /// `getInnerLoopsInPreorder`.
-    pub fn get_inner_loops_in_preorder(
-        &self,
-        found: &mut Vec<Loop<'a>>,
-    ) {
-        for sub in self.get_sub_loops() {
-            found.push(sub);
-            sub.get_inner_loops_in_preorder(found);
-        }
-    }
-
-    /// `contains(const LoopT *)`: this loop or one inside it.
-    pub fn contains_loop(
-        &self,
-        other: Option<Loop<'a>>,
-    ) -> bool {
-        let mut at = other;
-        while let Some(one) = at {
-            if one == *self {
-                return true;
-            }
-            at = one.get_parent_loop();
-        }
-        false
-    }
-
-    /// `contains(const BlockT *)`, by the block-to-loop map.
-    pub fn contains(
-        &self,
-        block: BlockId,
-    ) -> bool {
-        self.contains_loop(self.info.get_loop_for(block))
-    }
-
+impl Loop<'_, BlockId> {
     /// `contains(const InstT *)`.
     pub fn contains_instruction(
         &self,
@@ -668,71 +780,192 @@ impl<'a> Loop<'a> {
             _ => true,
         }
     }
+}
+
+/// A loop of a [`LoopInfo`].
+#[derive(Clone, Copy)]
+pub struct Loop<'a, B = BlockId> {
+    info: &'a LoopInfo<B>,
+    id: LoopId,
+}
+
+impl<B> PartialEq for Loop<'_, B> {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        std::ptr::eq(self.info, other.info) && self.id == other.id
+    }
+}
+
+impl<B> Eq for Loop<'_, B> {}
+
+impl<B: BlockNumber> std::fmt::Debug for Loop<'_, B> {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(out, "Loop({:?} at {})", self.get_header(), self.id.0)
+    }
+}
+
+impl<'a, B: BlockNumber> Loop<'a, B> {
+    fn data(&self) -> &'a LoopData {
+        &self.info.loops[self.id.0 as usize]
+    }
+
+    pub fn id(&self) -> LoopId {
+        self.id
+    }
+
+    /// `getBlocks`: header first, each subloop's blocks contiguous.
+    pub fn get_blocks(&self) -> &'a [B] {
+        let one = self.data();
+        &self.info.layout[one.start as usize..(one.start + one.len) as usize]
+    }
+
+    pub fn get_num_blocks(&self) -> usize {
+        self.get_blocks().len()
+    }
+
+    /// `getHeader`.
+    pub fn get_header(&self) -> B {
+        self.get_blocks()[0]
+    }
+
+    /// `getParentLoop`.
+    pub fn get_parent_loop(&self) -> Option<Loop<'a, B>> {
+        self.data().parent.map(|id| Loop { info: self.info, id })
+    }
+
+    /// `getOutermostLoop`.
+    pub fn get_outermost_loop(&self) -> Loop<'a, B> {
+        let mut one = *self;
+        while let Some(parent) = one.get_parent_loop() {
+            one = parent;
+        }
+        one
+    }
+
+    /// `getLoopDepth`: 1 for an outermost loop.
+    pub fn get_loop_depth(&self) -> u32 {
+        let mut depth = 1;
+        let mut one = self.get_parent_loop();
+        while let Some(parent) = one {
+            depth += 1;
+            one = parent.get_parent_loop();
+        }
+        depth
+    }
+
+    /// `getSubLoops`, in program order.
+    pub fn get_sub_loops(&self) -> impl Iterator<Item = Loop<'a, B>> + 'a {
+        let info = self.info;
+        self.data().sub_loops.iter().map(move |&id| Loop { info, id })
+    }
+
+    pub fn is_innermost(&self) -> bool {
+        self.data().sub_loops.is_empty()
+    }
+
+    pub fn is_outermost(&self) -> bool {
+        self.data().parent.is_none()
+    }
+
+    /// `getInnerLoopsInPreorder`.
+    pub fn get_inner_loops_in_preorder(
+        &self,
+        found: &mut Vec<Loop<'a, B>>,
+    ) {
+        for sub in self.get_sub_loops() {
+            found.push(sub);
+            sub.get_inner_loops_in_preorder(found);
+        }
+    }
+
+    /// `contains(const LoopT *)`: this loop or one inside it.
+    pub fn contains_loop(
+        &self,
+        other: Option<Loop<'a, B>>,
+    ) -> bool {
+        let mut at = other;
+        while let Some(one) = at {
+            if one == *self {
+                return true;
+            }
+            at = one.get_parent_loop();
+        }
+        false
+    }
+
+    /// `contains(const BlockT *)`, by the block-to-loop map.
+    pub fn contains(
+        &self,
+        block: B,
+    ) -> bool {
+        self.contains_loop(self.info.get_loop_for(block))
+    }
 
     /// `isLoopExiting`.
     pub fn is_loop_exiting(
         &self,
-        function: &Function,
-        block: BlockId,
+        graph: &impl LoopGraph<Block = B>,
+        block: B,
     ) -> bool {
         debug_assert!(self.contains(block), "Exiting block must be part of the loop");
-        children(function, block).any(|successor| !self.contains(successor))
+        graph.children(block).any(|successor| !self.contains(successor))
     }
 
     /// `isLoopLatch`.
     pub fn is_loop_latch(
         &self,
-        function: &Function,
-        block: BlockId,
+        graph: &impl LoopGraph<Block = B>,
+        block: B,
     ) -> bool {
         debug_assert!(self.contains(block), "block does not belong to the loop");
-        inverse_children(function, self.get_header()).any(|pred| pred == block)
+        graph.inverse_children(self.get_header()).any(|pred| pred == block)
     }
 
     /// `getNumBackEdges`.
     pub fn get_num_back_edges(
         &self,
-        function: &Function,
+        graph: &impl LoopGraph<Block = B>,
     ) -> usize {
-        inverse_children(function, self.get_header()).filter(|&pred| self.contains(pred)).count()
+        graph.inverse_children(self.get_header()).filter(|&pred| self.contains(pred)).count()
     }
 
     /// `getLoopLatches`.
     pub fn get_loop_latches(
         &self,
-        function: &Function,
-    ) -> Vec<BlockId> {
-        inverse_children(function, self.get_header()).filter(|&pred| self.contains(pred)).collect()
+        graph: &impl LoopGraph<Block = B>,
+    ) -> Vec<B> {
+        graph.inverse_children(self.get_header()).filter(|&pred| self.contains(pred)).collect()
     }
 
     /// `getExitingBlocks`.
     pub fn get_exiting_blocks(
         &self,
-        function: &Function,
-    ) -> Vec<BlockId> {
-        self.get_blocks()
-            .iter()
-            .copied()
-            .filter(|&block| children(function, block).any(|s| !self.contains(s)))
-            .collect()
+        graph: &impl LoopGraph<Block = B>,
+    ) -> Vec<B> {
+        self.get_blocks().iter().copied().filter(|&block| graph.children(block).any(|s| !self.contains(s))).collect()
     }
 
     /// `getExitingBlock`.
     pub fn get_exiting_block(
         &self,
-        function: &Function,
-    ) -> Option<BlockId> {
-        single(self.get_exiting_blocks(function).into_iter(), false)
+        graph: &impl LoopGraph<Block = B>,
+    ) -> Option<B> {
+        single(self.get_exiting_blocks(graph).into_iter(), false)
     }
 
     /// `getExitBlocks`: repeats kept.
     pub fn get_exit_blocks(
         &self,
-        function: &Function,
-    ) -> Vec<BlockId> {
+        graph: &impl LoopGraph<Block = B>,
+    ) -> Vec<B> {
         self.get_blocks()
             .iter()
-            .flat_map(|&block| children(function, block))
+            .flat_map(|&block| graph.children(block))
             .filter(|&successor| !self.contains(successor))
             .collect()
     }
@@ -740,37 +973,37 @@ impl<'a> Loop<'a> {
     /// `getExitBlock`: the one exit block edge, if exactly one.
     pub fn get_exit_block(
         &self,
-        function: &Function,
-    ) -> Option<BlockId> {
-        single(self.get_exit_blocks(function).into_iter(), false)
+        graph: &impl LoopGraph<Block = B>,
+    ) -> Option<B> {
+        single(self.get_exit_blocks(graph).into_iter(), false)
     }
 
     /// `getUniqueExitBlocks`.
     pub fn get_unique_exit_blocks(
         &self,
-        function: &Function,
-    ) -> Vec<BlockId> {
-        self.unique_exits(function, |_| true)
+        graph: &impl LoopGraph<Block = B>,
+    ) -> Vec<B> {
+        self.unique_exits(graph, |_| true)
     }
 
     /// `getUniqueNonLatchExitBlocks`.
     pub fn get_unique_non_latch_exit_blocks(
         &self,
-        function: &Function,
-    ) -> Vec<BlockId> {
-        let latch = self.get_loop_latch(function).expect("Latch block must exists");
-        self.unique_exits(function, |block| block != latch)
+        graph: &impl LoopGraph<Block = B>,
+    ) -> Vec<B> {
+        let latch = self.get_loop_latch(graph).expect("Latch block must exists");
+        self.unique_exits(graph, |block| block != latch)
     }
 
     /// `getUniqueExitBlocksHelper`.
     fn unique_exits(
         &self,
-        function: &Function,
-        keep: impl Fn(BlockId) -> bool,
-    ) -> Vec<BlockId> {
-        let mut found: Vec<BlockId> = Vec::new();
+        graph: &impl LoopGraph<Block = B>,
+        keep: impl Fn(B) -> bool,
+    ) -> Vec<B> {
+        let mut found: Vec<B> = Vec::new();
         for &block in self.get_blocks().iter().filter(|&&block| keep(block)) {
-            for successor in children(function, block) {
+            for successor in graph.children(block) {
                 if !self.contains(successor) && !found.contains(&successor) {
                     found.push(successor);
                 }
@@ -783,29 +1016,29 @@ impl<'a> Loop<'a> {
     /// edges reach it.
     pub fn get_unique_exit_block(
         &self,
-        function: &Function,
-    ) -> Option<BlockId> {
-        single(self.get_exit_blocks(function).into_iter(), true)
+        graph: &impl LoopGraph<Block = B>,
+    ) -> Option<B> {
+        single(self.get_exit_blocks(graph).into_iter(), true)
     }
 
     /// `hasDedicatedExits`.
     pub fn has_dedicated_exits(
         &self,
-        function: &Function,
+        graph: &impl LoopGraph<Block = B>,
     ) -> bool {
-        self.get_unique_exit_blocks(function)
+        self.get_unique_exit_blocks(graph)
             .into_iter()
-            .all(|exit| inverse_children(function, exit).all(|pred| self.contains(pred)))
+            .all(|exit| graph.inverse_children(exit).all(|pred| self.contains(pred)))
     }
 
     /// `getLoopPredecessor`: the one block outside the loop that branches to
     /// the header.
     pub fn get_loop_predecessor(
         &self,
-        function: &Function,
-    ) -> Option<BlockId> {
+        graph: &impl LoopGraph<Block = B>,
+    ) -> Option<B> {
         let mut out = None;
-        for pred in inverse_children(function, self.get_header()) {
+        for pred in graph.inverse_children(self.get_header()) {
             if !self.contains(pred) {
                 if out.is_some_and(|one| one != pred) {
                     return None;
@@ -819,22 +1052,22 @@ impl<'a> Loop<'a> {
     /// `getLoopPreheader`.
     pub fn get_loop_preheader(
         &self,
-        function: &Function,
-    ) -> Option<BlockId> {
-        let out = self.get_loop_predecessor(function)?;
-        if !is_legal_to_hoist_into(function, out) {
+        graph: &impl LoopGraph<Block = B>,
+    ) -> Option<B> {
+        let out = self.get_loop_predecessor(graph)?;
+        if !graph.is_legal_to_hoist_into(out) {
             return None;
         }
-        (children(function, out).count() == 1).then_some(out)
+        (graph.children(out).count() == 1).then_some(out)
     }
 
     /// `getLoopLatch`: the one block in the loop that branches to the header.
     pub fn get_loop_latch(
         &self,
-        function: &Function,
-    ) -> Option<BlockId> {
+        graph: &impl LoopGraph<Block = B>,
+    ) -> Option<B> {
         let mut latch = None;
-        for pred in inverse_children(function, self.get_header()) {
+        for pred in graph.inverse_children(self.get_header()) {
             if self.contains(pred) {
                 if latch.is_some() {
                     return None;
@@ -848,8 +1081,8 @@ impl<'a> Loop<'a> {
     /// `LoopBase::print`.
     fn print(
         &self,
-        function: &Function,
-        block_name: &dyn Fn(BlockId) -> String,
+        graph: &impl LoopGraph<Block = B>,
+        block_name: &dyn Fn(B) -> String,
         depth: usize,
         out: &mut String,
     ) {
@@ -864,16 +1097,16 @@ impl<'a> Loop<'a> {
             if block == header {
                 out.push_str("<header>");
             }
-            if self.is_loop_latch(function, block) {
+            if self.is_loop_latch(graph, block) {
                 out.push_str("<latch>");
             }
-            if self.is_loop_exiting(function, block) {
+            if self.is_loop_exiting(graph, block) {
                 out.push_str("<exiting>");
             }
         }
         out.push('\n');
         for sub in self.get_sub_loops() {
-            sub.print(function, block_name, depth + 2, out);
+            sub.print(graph, block_name, depth + 2, out);
         }
     }
 }

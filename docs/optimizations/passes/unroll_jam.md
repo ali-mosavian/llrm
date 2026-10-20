@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/unroll_jam.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unroll_jam.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:3a294aac6b27b3d5cc7b03d3d590f04a568d61e5b10c43eb423f19f39e86da63 -->
+<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:fa29fe74de319f81ac1b332a457858d151561f96de803a5ae7a101eab6915290 -->
 
 # unroll_jam
 
@@ -26,9 +26,8 @@ go to `llrm_analysis::dependence::factor` with `max_unroll` (4, gcc's
 `unroll-jam-max-unroll`) and `min_percent` (1, `unroll-jam-min-percent`),
 which bounds N by the dependence distances and refuses a nest where fewer
 than `min_percent` percent of the accesses go away. The outer loop needs an
-exact trip count (ScalarEvolution's `getSmallConstantTripCount`;
-`LLRM_NO_SCEV_TRIPS` asks `induction::trip_count`); N is the largest factor
-from 2 up to the bound that divides it.
+exact trip count (ScalarEvolution's `getSmallConstantTripCount`); N is the
+largest factor from 2 up to the bound that divides it.
 
 The outer loop is unrolled by `loopclone::chained` into N bodies. In each
 copy the work between the loops moves ahead of the first inner loop, the
@@ -119,6 +118,13 @@ nest. If it fused a nest, `sroa` and the fixed point run again over the
 result (the fused stores merge there). -O3 and -Omax:
 `-floop-unroll-and-jam`. Not run where one pass is selected by name. See
 `docs/reference/levels.md`.
+
+The pin's default pipeline never jams: `enable-unroll-and-jam` is false
+([`PassBuilderPipelines.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L222)),
+so this pass is gcc's, not a translation. Were it enabled, the pin runs
+SimplifyCFG with hoisting and sinking (L1438) before it (L1474); llrm runs
+the jam first, because the matcher needs the nest as it was before that
+rewrite. Exit: the matcher accepts the L1438 form; no date.
 
 ## Needs
 `induction` (trip counts), `dependence`, `Registers` (`llrm_analysis`);
