@@ -238,7 +238,8 @@ pub struct Caller<'a> {
 }
 
 /// DEVIATE (recursion), gcc's `--param max-inline-recursive-depth-auto` is 8
-/// (gcc 13.3, `gcc -Q --help=params`); 3 here. Measured on the i486 rows,
+/// (params.opt:573, gcc 13.3; `want_inline_self_recursive_call_p`,
+/// ipa-inline.cc:991); 3 here. Measured on the i486 rows,
 /// -O2 clocks / bytes (main | depth 8 | depth 3): fib 227171/537 | 227940/1736
 /// | 132006/360, rectwo 612458/538 | 1539189/1848 | 530081/520; gcc's depth
 /// costs 3-10x main's bytes (bintree 291 -> 2876, quicksort 343 -> 3116).
@@ -247,18 +248,19 @@ pub struct Caller<'a> {
 pub const MAX_INLINE_RECURSIVE_DEPTH: usize = 3;
 
 /// DEVIATE (recursion), gcc 13.3's `--param max-inline-insns-recursive-auto`
-/// is 450; 150 here, in `gcc_insns`: the size the function may reach by copies
-/// of itself. The smallest that keeps fib and rectwo under main (depth 3,
-/// -O2 clocks/bytes; main fib 227171/537, rectwo 612458/538):
-/// 60: fib 207179/264, rectwo 1489763/280; 100: 132006/360, 876030/424;
-/// 150: 132006/360, 530081/520; 450: 132006/360, 530081/520.
-/// Owner: w-6. Exit: as the depth's.
+/// is 450 (params.opt:553, `recursive_inlining`, ipa-inline.cc:1645); 150 here,
+/// in `gcc_insns`: the size the function may reach by copies of itself. The
+/// smallest that keeps fib and rectwo under main (depth 3, -O2 clocks/bytes;
+/// main fib 227171/537, rectwo 612458/538): 60: fib 207179/264, rectwo
+/// 1489763/280; 100: 132006/360, 876030/424; 150: 132006/360, 530081/520; 450:
+/// 132006/360, 530081/520. Owner: w-6. Exit: as the depth's.
 pub const MAX_INLINE_INSNS_RECURSIVE: i64 = 150;
 
-/// gcc 13.3 `--param min-inline-recursive-probability` (10 per cent): a copy
-/// is made only where the probability of reaching it, the product of the
-/// frequencies of the calls on the way, is at least this.
-pub const MIN_INLINE_RECURSIVE_PROBABILITY: f64 = 0.10;
+/// `--param min-inline-recursive-probability` (10 per cent, params.opt:769): a
+/// copy is made only where the call's frequency over the entry's, in the
+/// body, exceeds this (`want_inline_self_recursive_call_p`,
+/// ipa-inline.cc:1067).
+pub const MIN_INLINE_RECURSIVE_PROBABILITY: f64 = 10.0;
 
 /// Whether `inst` does semantic work: not a phi, a jump or a return.
 fn semantic(
@@ -661,19 +663,19 @@ impl<'a> Plan<'a, '_> {
         candidate: &'a Candidate,
         site: InstId,
         depth: usize,
-        reached: f64,
     ) -> Option<(Planned<'a>, Actual)> {
         if !fits_with(self.context, self.caller, function_type, |at| actuals[at].owned, candidate) {
             return None;
         }
         let callee = &*candidate.body;
-        let mut reached = reached;
         if let Some(frequencies) = self.caller.self_inlining {
             let grown = gcc_insns(callee) - 1;
-            reached *= frequencies.get(&site).copied().unwrap_or(1.0);
+            // `want_inline_self_recursive_call_p`: the frequency of the
+            // call within the body, over the entry's, above the minimum.
+            let frequency = frequencies.get(&site).copied().unwrap_or(1.0);
             if depth > MAX_INLINE_RECURSIVE_DEPTH
                 || self.insns + grown > MAX_INLINE_INSNS_RECURSIVE
-                || reached < MIN_INLINE_RECURSIVE_PROBABILITY
+                || frequency * 100.0 <= MIN_INLINE_RECURSIVE_PROBABILITY
             {
                 return None;
             }
@@ -710,7 +712,7 @@ impl<'a> Plan<'a, '_> {
                     .collect();
                 let target = seen.last().and_then(|one| one.callee).and_then(|name| self.available.get(&name));
                 if let Some(target) = target
-                    && let Some((planned, result)) = self.inline(info.function_type, &seen, target, inst, depth + 1, reached)
+                    && let Some((planned, result)) = self.inline(info.function_type, &seen, target, inst, depth + 1)
                 {
                     if instruction.result.is_some() {
                         results.insert(inst, result);
@@ -973,7 +975,7 @@ pub fn expanded_all(
             .and_then(|sites| sites.get(&call))
             .or_else(|| seen.last().and_then(|one| one.callee).and_then(|name| available.get(&name)));
         let Some(target) = target else { continue };
-        if let Some((planned, result)) = plan.inline(info.function_type, &seen, target, call, 1, 1.0) {
+        if let Some((planned, result)) = plan.inline(info.function_type, &seen, target, call, 1) {
             if instruction.result.is_some() {
                 results.insert(call, result);
             }

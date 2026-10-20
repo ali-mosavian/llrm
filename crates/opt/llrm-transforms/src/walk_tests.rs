@@ -489,3 +489,138 @@ b0:
     let peeled = power.matches("urem i32").count();
     assert!(peeled <= 2, "power was copied into itself, {peeled} remainders:\n{power}");
 }
+
+const CHOP: &str = "@values = internal global [64 x i32] zeroinitializer
+
+define internal i32 @chop(i32 %lo, i32 %hi) {
+b0:
+  %d = sub i32 %hi, %lo
+  %small = icmp slt i32 %d, 2
+  br i1 %small, label %out, label %rec
+
+out:
+  ret i32 0
+
+rec:
+  %s = add i32 %lo, %hi
+  %mid = sdiv i32 %s, 2
+  br label %head
+
+head:
+  %i = phi i32 [ %lo, %rec ], [ %next, %body ]
+  %sum = phi i32 [ 0, %rec ], [ %sum2, %body ]
+  %c = icmp slt i32 %i, %hi
+  br i1 %c, label %body, label %done
+
+body:
+  %p = getelementptr inbounds i32, ptr @values, i32 %i
+  %v = load i32, ptr %p
+  %m = and i32 %v, %mid
+  %sum2 = add i32 %sum, %m
+  %next = add nsw i32 %i, 1
+  br label %head
+
+done:
+  %a = call i32 @chop(i32 %lo, i32 %mid)
+  %b = call i32 @chop(i32 %mid, i32 %hi)
+  %t = add i32 %sum, %a
+  %r = add i32 %t, %b
+  ret i32 %r
+}
+
+define i32 @top() {
+b0:
+  %r = call i32 @chop(i32 0, i32 64)
+  ret i32 %r
+}
+";
+
+/// A tree recursion waits for its tail-call elimination until its copies are
+/// made, and a linear one does not: the mark is on `fib`'s shape after the
+/// walk and not on a tail-recursive count-down.
+#[test]
+fn test_only_a_tree_recursion_waits_for_its_tail_call_elimination() {
+    use llrm_mir::program::ProgramPass;
+    let marked = |text: &str, name: &str| {
+        let mut module = parsed(text);
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            |program: &mut llrm_mir::program::Program| {
+                let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+                walk.run(program, &mut Default::default())
+            },
+        )
+        .and_then(|done| done)
+        .expect("the walk runs");
+        let text = llrm_mir::print::module(&module);
+        let body = text.split("define").find(|one| one.contains(&format!("@{name}("))).expect(name).to_owned();
+        body.lines().next().unwrap_or_default().contains(crate::tailcallelim::DEFERRED)
+    };
+    let tree = "define internal i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @fib(i32 %n)
+  ret i32 %r
+}
+";
+    let linear = "define internal i32 @down(i32 %n, i32 %acc) {
+b0:
+  %done = icmp eq i32 %n, 0
+  br i1 %done, label %out, label %again
+
+out:
+  ret i32 %acc
+
+again:
+  %m = sub i32 %n, 1
+  %a = add i32 %acc, %n
+  %r = call i32 @down(i32 %m, i32 %a)
+  ret i32 %r
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @down(i32 %n, i32 0)
+  ret i32 %r
+}
+";
+    assert!(marked(tree, "fib"), "fib waits for tail-call elimination");
+    assert!(!marked(linear, "down"), "a count-down does not");
+}
+
+/// ipa-cp prices the callee whole: copies made in the walk first left
+/// recchop -O3 with no clone (4 defines after the interprocedural step against
+/// the base's 12) and 6368 clocks against 6209.
+#[test]
+fn test_ipa_cp_clones_a_tree_recursion_before_it_is_copied_into_itself() {
+    let mut module = parsed(CHOP);
+    let options = crate::pipeline::Options::speed();
+    let applied = crate::pipeline::Applied { options, ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    assert!(text.contains("chop.constprop"), "no clone of chop for its constants:\n{text}");
+    assert!(!text.contains(crate::tailcallelim::DEFERRED), "a function still waits:\n{text}");
+}

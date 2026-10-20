@@ -85,6 +85,10 @@ use crate::lcssa::{arms, from_arms};
 /// ([TailRecursionElimination.cpp:1172](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/TailRecursionElimination.cpp#L1172)).
 pub struct TailCallElim;
 
+/// The flag of a function whose tail-call elimination waits (D10: a tree
+/// recursion is copied into itself first, `walk::SelfInline`).
+pub const DEFERRED: &str = "tre-deferred";
+
 impl FunctionPass for TailCallElim {
     fn name(&self) -> &'static str {
         "tailrec"
@@ -99,7 +103,9 @@ impl FunctionPass for TailCallElim {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        if unit.function.is_declaration() {
+        if unit.function.is_declaration()
+            || unit.function.attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == DEFERRED))
+        {
             return PreservedAnalyses::all();
         }
         let outer = analyses.outer();
