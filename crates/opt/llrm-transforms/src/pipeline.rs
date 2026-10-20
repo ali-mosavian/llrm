@@ -143,7 +143,7 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
+    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
     loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollpass, mem2reg, memcpyopt, peel, ports, promote,
     rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, window,
@@ -510,7 +510,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Before gvn: a far pointer cast from a near one is read as the near
         // one.
         Box::new(inferspace::InferAddressSpaces),
-        Box::new(dse::Dse),
+        Box::new(deadstore::DeadStoreElimination),
         Box::new(gvn::Gvn { pre: applied.options.pre }),
         // Ordinary scalar write-through promotion remains after memory GVN;
         // `LLRM_NO_MEM2REG` keeps the write-through stand-in instead of the
