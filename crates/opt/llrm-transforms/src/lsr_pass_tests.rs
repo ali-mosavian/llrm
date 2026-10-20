@@ -517,3 +517,48 @@ x:
     assert_eq!(after.matches(" = phi i32").count(), 3, "{after}");
     assert!(after.contains("icmp eq i32 %t1, 0"), "{after}");
 }
+
+/// A rotated store loop over a global array, its element GEP `flags`.
+fn store_loop(flags: &str) -> String {
+    format!(
+        "@a = internal global [1024 x i32] zeroinitializer
+define i32 @f(i32 %n) {{
+e:
+  %z = icmp sgt i32 %n, 0
+  br i1 %z, label %h, label %x
+h:
+  %i = phi i32 [ 0, %e ], [ %i2, %h ]
+  %a = getelementptr {flags} [4 x i8], ptr @a, i32 %i
+  store i32 7, ptr %a
+  %i2 = add nuw nsw i32 %i, 1
+  %c = icmp eq i32 %i2, %n
+  br i1 %c, label %x, label %h
+x:
+  ret i32 0
+}}
+"
+    )
+}
+
+/// DEVIATE LG2. x_prefix: `i` indexes an `inbounds nuw` GEP, so `4 * i` cannot
+/// wrap before the exit and `i == n` is the same compare as `4 * i == 4 * n`.
+/// The pin's `getExactSDiv` cannot see the GEP, so it kept the counter and
+/// scaled it for the address (`shl; lea`) where main's loop was one byte
+/// counter against `4 * n` (47985 clocks against 44454).
+#[test]
+fn a_counter_indexing_a_nuw_gep_is_compared_in_the_scaled_form() {
+    let (changed, after) = reduced_on(FLAT, &store_loop("inbounds nuw"), "i486", &[&[1], &[5], &[100]]);
+    assert!(changed, "{after}");
+    assert!(after.contains("%4 = shl i32 %n, 2"), "{after}");
+    assert!(!after.contains("shl i32 %0, 2"), "{after}");
+}
+
+/// The pin's behaviour where nothing proves `4 * i` does not wrap (the GEP is
+/// only `inbounds`): the counter stays and is scaled for the address.
+#[test]
+fn a_counter_indexing_a_plain_gep_is_not_compared_in_the_scaled_form() {
+    let (changed, after) = reduced_on(FLAT, &store_loop("inbounds"), "i486", &[&[1], &[5], &[100]]);
+    assert!(changed, "{after}");
+    assert!(after.contains("= shl i32 %i, 2"), "{after}");
+    assert!(!after.contains("shl i32 %n, 2"), "{after}");
+}

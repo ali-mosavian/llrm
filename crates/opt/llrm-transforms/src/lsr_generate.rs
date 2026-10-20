@@ -36,12 +36,21 @@
 //! scaled one it is a multiple of (recsum: `dec; add -3; jne`); this exits on
 //! the scaled one (`add -3; jne`), as the stand-in LSR did. Exit: none, a
 //! proof; if LLVM does the same, delete the line.
+//!
+//! DEVIATE LG2: the same for any factor when the compared counter is a unit
+//! step of the loop whose one exit it ends, and an `inbounds nuw` GEP that runs
+//! every iteration indexes another unit-step counter of the loop (see
+//! `counter_indexes_nuw_gep`): `factor * i` cannot wrap before the exit, or the
+//! GEP is undefined. `getExactSDiv` only sees the flags of the scaled addrec,
+//! not those of a GEP that scales it for an address, so the pin keeps the
+//! counter beside the pointer (x_prefix). Exit: none, a proof.
 
 use std::collections::BTreeMap;
 
 use llrm_analysis::scev::expr::{Kind as ScevKind, Scev, Ty, Use as ScevUse};
 use llrm_analysis::scev::{Flags, ScalarEvolution};
 use llrm_mir::context::GlobalId;
+use llrm_mir::opcode::{Flags as IrFlags, Opcode};
 use llrm_mir::tti::Ty as TtiTy;
 use llrm_support::hash::{HashMap, HashSet};
 
@@ -578,6 +587,8 @@ impl Collection<'_, '_> {
             // multiply in the preheader and an add in the loop, which the cost
             // model prices below `dec; je` (x_adler -O2: 47972 -> 50976 clocks).
             let odd = factor & 1 == 1 && base.scaled_reg.is_none() && base.base_regs.len() == 1;
+            // DEVIATE LG2: or the counter is also the index of a `nuw` GEP.
+            let odd = odd || self.counter_indexes_nuw_gep(se, lu_idx, &base, factor);
             // No base register may overflow when multiplied.
             for i in 0..f.base_regs.len() {
                 f.base_regs[i] = se
@@ -611,6 +622,81 @@ impl Collection<'_, '_> {
             }
             // Legal: add it.
             let _ = self.insert_formula(se, lu_idx, &f);
+        }
+    }
+
+    /// DEVIATE LG2: whether `x == 0` and `x * factor == 0` are the same compare
+    /// for the ICmpZero use `lu_idx` of formula `base`, though the product may
+    /// wrap: `x` is a unit-step counter of the loop less loop invariants, the
+    /// loop's one exit is this compare, and an `inbounds nuw` GEP indexes a
+    /// unit-step counter `i` of the loop into elements of at least `factor`
+    /// bytes, executing every iteration with poison being undefined behaviour.
+    /// Then `factor * i` is in `[0, 2^31)` on each iteration run and at most
+    /// `factor` more at the exit, so `x = i - m` is `0` exactly where
+    /// `factor * x` is: they differ by under `2^32` before the exit. If `x` is
+    /// never `0`, `i` runs past the GEP's wrap, which is undefined.
+    fn counter_indexes_nuw_gep(
+        &self,
+        se: &mut ScalarEvolution,
+        lu_idx: usize,
+        base: &Formula,
+        factor: i64,
+    ) -> bool {
+        let cx = self.cx;
+        let lu = &self.uses[lu_idx];
+        if factor < 1 || lu.fixups.is_empty() {
+            return false;
+        }
+        let Some(lp) = cx.loops.get_loop_for(self.l) else { return false };
+        let exiting = lp.get_exiting_blocks(cx.function);
+        let &[exit] = exiting.as_slice() else { return false };
+        if lu.fixups.iter().any(|f| cx.function.parent(f.user) != Some(exit)) {
+            return false;
+        }
+        let regs: Vec<Scev> = base.base_regs.iter().copied().chain(base.scaled_reg).collect();
+        // The one counter, the rest invariant.
+        let mut counter = None;
+        for reg in regs {
+            if se.is_loop_invariant(cx, reg, Some(self.l)) {
+                continue;
+            }
+            if !self.is_unit_counter(se, reg) || counter.replace(reg).is_some() {
+                return false;
+            }
+        }
+        let Some(counter) = counter else { return false };
+        let ty = se.type_of(counter);
+        for &block in lp.get_blocks() {
+            for inst in cx.function.iter_block(block).collect::<Vec<_>>() {
+                let i = cx.function.instruction(inst);
+                let Opcode::GetElementPtr { source } = i.opcode else { continue };
+                if i.operands.len() != 2
+                    || !i.flags.contains(IrFlags::NUW)
+                    || !i.flags.contains(IrFlags::INBOUNDS)
+                    || cx.layout.alloc_size(&cx.context.types, source) < factor as u64
+                    || !cx.tree.dominates(block, self.iv_inc_block)
+                {
+                    continue;
+                }
+                let index = se.get_scev(cx, i.operands[1]);
+                if se.type_of(index) == ty && self.is_unit_counter(se, index) && se.is_scev_expr_never_poison(cx, inst)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether `reg` is `{start,+,1}` or `{start,+,-1}` of the loop.
+    fn is_unit_counter(
+        &self,
+        se: &mut ScalarEvolution,
+        reg: Scev,
+    ) -> bool {
+        matches!(se.node(reg).kind, ScevKind::AddRec(_, header) if header == self.l) && se.is_affine(reg) && {
+            let step = se.get_step_recurrence(self.cx, reg);
+            se.as_constant(step).is_some_and(|c| c.is_one() || c.is_all_ones())
         }
     }
 
