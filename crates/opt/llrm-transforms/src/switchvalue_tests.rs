@@ -872,3 +872,286 @@ ce:
         &[&[0], &[3], &[4], &[5]],
     );
 }
+
+/// `%key` is 3 for `%x == 5` and `%x` else: the switch stayed on `%key`. On `%x` it needs a
+/// case 5 to `%cb`, where 3 goes.
+#[test]
+fn test_a_select_of_the_value_adds_a_case_that_goes_where_its_constant_did() {
+    check(
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  store i16 8, ptr @g
+  %cmp = icmp eq i16 %x, 5
+  %key = select i1 %cmp, i16 3, i16 %x
+  switch i16 %key, label %cd [
+    i16 3, label %cb
+    i16 7, label %cc
+  ]
+
+cb:
+  store i16 2, ptr @g
+  ret i16 2
+
+cc:
+  store i16 3, ptr @g
+  ret i16 3
+
+cd:
+  store i16 4, ptr @g
+  ret i16 4
+}
+",
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  store i16 8, ptr @g
+  switch i16 %x, label %cd [
+    i16 3, label %cb
+    i16 7, label %cc
+    i16 5, label %cb
+  ]
+
+common.ret:
+  %common.op = phi i16 [ 2, %cb ], [ 3, %cc ], [ 4, %cd ]
+  ret i16 %common.op
+
+cb:
+  store i16 2, ptr @g
+  br label %common.ret
+
+cc:
+  store i16 3, ptr @g
+  br label %common.ret
+
+cd:
+  store i16 4, ptr @g
+  br label %common.ret
+}
+",
+        &[&[0], &[3], &[5], &[7], &[9]],
+    );
+}
+
+/// `%key` is `%x` for `%x != 7` and 3 else: the switch stayed on `%key`. Case 7 now goes to
+/// `%cb` like 3, and `%cc` is gone.
+#[test]
+fn test_an_inverted_select_of_the_value_retargets_its_case() {
+    check(
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  store i16 8, ptr @g
+  %cmp = icmp ne i16 %x, 7
+  %key = select i1 %cmp, i16 %x, i16 3
+  switch i16 %key, label %cd [
+    i16 3, label %cb
+    i16 7, label %cc
+  ]
+
+cb:
+  store i16 2, ptr @g
+  ret i16 2
+
+cc:
+  store i16 3, ptr @g
+  ret i16 3
+
+cd:
+  store i16 4, ptr @g
+  ret i16 4
+}
+",
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  store i16 8, ptr @g
+  switch i16 %x, label %cd [
+    i16 3, label %cb
+    i16 7, label %cb
+  ]
+
+common.ret:
+  %common.op = phi i16 [ 2, %cb ], [ 4, %cd ]
+  ret i16 %common.op
+
+cb:
+  store i16 2, ptr @g
+  br label %common.ret
+
+cd:
+  store i16 4, ptr @g
+  br label %common.ret
+}
+",
+        &[&[0], &[3], &[7], &[9]],
+    );
+}
+
+/// `%key` is 3 or 7 by `%neg`: the switch on it stayed, with an edge to the default left over.
+#[test]
+fn test_a_select_of_two_constants_is_a_branch_on_its_condition() {
+    check(
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  store i16 8, ptr @g
+  %neg = icmp slt i16 %x, 0
+  %key = select i1 %neg, i16 3, i16 7
+  switch i16 %key, label %cd [
+    i16 3, label %cb
+    i16 7, label %cc
+    i16 9, label %cd
+  ]
+
+cb:
+  store i16 2, ptr @g
+  ret i16 2
+
+cc:
+  store i16 3, ptr @g
+  ret i16 3
+
+cd:
+  store i16 4, ptr @g
+  ret i16 4
+}
+",
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  store i16 8, ptr @g
+  %neg = icmp slt i16 %x, 0
+  br i1 %neg, label %cb, label %cc
+
+common.ret:
+  %common.op = phi i16 [ 2, %cb ], [ 3, %cc ]
+  ret i16 %common.op
+
+cb:
+  store i16 2, ptr @g
+  br label %common.ret
+
+cc:
+  store i16 3, ptr @g
+  br label %common.ret
+}
+",
+        &[&[-1], &[0], &[1]],
+    );
+}
+
+/// `%key` is 3 or 5, and 5 is no case: the branch goes to `%cb` and the default.
+#[test]
+fn test_a_select_of_a_case_and_a_value_none_has_goes_to_the_default() {
+    check(
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  store i16 8, ptr @g
+  %neg = icmp slt i16 %x, 0
+  %key = select i1 %neg, i16 3, i16 5
+  switch i16 %key, label %cd [
+    i16 3, label %cb
+    i16 7, label %cc
+  ]
+
+cb:
+  store i16 2, ptr @g
+  ret i16 2
+
+cc:
+  store i16 3, ptr @g
+  ret i16 3
+
+cd:
+  store i16 4, ptr @g
+  ret i16 4
+}
+",
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  store i16 8, ptr @g
+  %neg = icmp slt i16 %x, 0
+  br i1 %neg, label %cb, label %cd
+
+common.ret:
+  %common.op = phi i16 [ 2, %cb ], [ 4, %cd ]
+  ret i16 %common.op
+
+cb:
+  store i16 2, ptr @g
+  br label %common.ret
+
+cd:
+  store i16 4, ptr @g
+  br label %common.ret
+}
+",
+        &[&[-1], &[0]],
+    );
+}
+
+/// Case 7 moves to `%end`, which already has an edge from `b0` through case 3: its phi
+/// needs a second input from `b0`, and loses the one it had from `%cc`.
+#[test]
+fn test_a_retargeted_case_gives_the_new_destination_a_phi_input_per_edge() {
+    check(
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  store i16 8, ptr @g
+  %cmp = icmp eq i16 %x, 7
+  %key = select i1 %cmp, i16 3, i16 %x
+  switch i16 %key, label %cd [
+    i16 3, label %end
+    i16 7, label %cc
+  ]
+
+cc:
+  store i16 3, ptr @g
+  br label %end
+
+cd:
+  store i16 4, ptr @g
+  br label %end
+
+end:
+  %p = phi i16 [ 20, %b0 ], [ 30, %cc ], [ 40, %cd ]
+  store i16 %p, ptr @g
+  ret i16 %p
+}
+",
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  store i16 8, ptr @g
+  switch i16 %x, label %cd [
+    i16 3, label %end
+    i16 7, label %end
+  ]
+
+cd:
+  store i16 4, ptr @g
+  br label %end
+
+end:
+  %p = phi i16 [ 20, %b0 ], [ 20, %b0 ], [ 40, %cd ]
+  store i16 %p, ptr @g
+  ret i16 %p
+}
+",
+        &[&[0], &[3], &[7], &[9]],
+    );
+}

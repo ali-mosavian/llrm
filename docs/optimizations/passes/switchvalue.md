@@ -1,18 +1,22 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchvalue.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchvalue.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchvalue.rs sha256:dc4180b8a83a5d5c707a684b33a91dd9b30fd162bee013918a47d0e3510609ac -->
+<!-- src: crates/opt/llrm-transforms/src/switchvalue.rs sha256:bbd783a7d64c4523dcced4ec7352677c1949641eb901598cdbab6946a4ab9191 -->
 
 # switchvalue
 
-A `switch` on a value its predecessors compare with constants too, folded
-with them: LLVM's
-[`simplifyEqualityComparisonWithOnlyPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L973)
-and
+The value-comparison steps of `simplifySwitch`
+([L8591](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8591)): a `switch` on a value its predecessors compare with
+constants too, folded with them, and a `switch` on a `select`. LLVM's
+[`simplifyEqualityComparisonWithOnlyPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L973),
 [`foldValueComparisonIntoPredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L1475)
 with
 [`performValueComparisonIntoPredecessorFolding`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L1251),
-the first steps of `simplifySwitch`
-([L8591](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8591)),
-and their helpers
+and
+[`simplifySwitchOnSelect`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5192)
+with
+[`simplifySwitchOnSelectRemap`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5083)
+and
+[`simplifyTerminatorOnSelect`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4998),
+with the helpers
 [`isValueEqualityComparison`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L866),
 [`getValueEqualityComparisonCases`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L899),
 `eliminateBlockCases` ([L929](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L929))
@@ -25,6 +29,10 @@ predecessor's default, the cases the predecessor lists cannot happen: they
 are removed. Reached by one case, the constant is known: the `switch`
 becomes a `br` to the block that constant picks. Dead edges lose their phi
 inputs.
+
+A `switch` on `select (x == C), K, x` switches on `x`, `C` going where `K`
+goes. A `switch` on a `select` of two constants is a branch on the select's
+condition to the blocks the constants go to.
 
 A block of only the `switch` is folded into every predecessor that
 compares the same value: the predecessor becomes one `switch` that sends

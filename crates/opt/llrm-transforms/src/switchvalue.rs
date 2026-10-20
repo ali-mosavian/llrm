@@ -1,13 +1,17 @@
-//! A `switch` on a value its predecessors compare with constants too, folded
-//! with them: LLVM's
-//! [`simplifyEqualityComparisonWithOnlyPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L973)
-//! and
+//! The value-comparison steps of `simplifySwitch`
+//! ([L8591](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8591)): a `switch` on a value its predecessors compare with
+//! constants too, folded with them, and a `switch` on a `select`. LLVM's
+//! [`simplifyEqualityComparisonWithOnlyPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L973),
 //! [`foldValueComparisonIntoPredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L1475)
 //! with
 //! [`performValueComparisonIntoPredecessorFolding`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L1251),
-//! the first steps of `simplifySwitch`
-//! ([L8591](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8591)),
-//! and their helpers
+//! and
+//! [`simplifySwitchOnSelect`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5192)
+//! with
+//! [`simplifySwitchOnSelectRemap`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5083)
+//! and
+//! [`simplifyTerminatorOnSelect`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4998),
+//! with the helpers
 //! [`isValueEqualityComparison`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L866),
 //! [`getValueEqualityComparisonCases`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L899),
 //! `eliminateBlockCases` ([L929](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L929))
@@ -20,6 +24,10 @@
 //! are removed. Reached by one case, the constant is known: the `switch`
 //! becomes a `br` to the block that constant picks. Dead edges lose their phi
 //! inputs.
+//!
+//! A `switch` on `select (x == C), K, x` switches on `x`, `C` going where `K`
+//! goes. A `switch` on a `select` of two constants is a branch on the select's
+//! condition to the blocks the constants go to.
 //!
 //! A block of only the `switch` is folded into every predecessor that
 //! compares the same value: the predecessor becomes one `switch` that sends
@@ -497,6 +505,152 @@ fn folded_into_predecessors(
     changed
 }
 
+/// `SwitchInst::findCaseValue(value)`'s successor: where `value` goes, the
+/// default if no case has it.
+fn destination_of(
+    cases: &[Case],
+    default: BlockId,
+    value: u128,
+) -> BlockId {
+    cases.iter().find(|case| case.value == value).map_or(default, |case| case.dest)
+}
+
+/// `simplifySwitchOnSelectRemap`
+/// ([L5083](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5083)): `switch (select (icmp eq %x, C), K, %x)`
+/// switches on `%x`, `C` going where `K` did. `negate` is for `icmp ne`.
+#[allow(clippy::too_many_arguments)]
+fn select_remapped(
+    context: &Context,
+    spec: &Speculation,
+    function: &mut Function,
+    block: BlockId,
+    switch: InstId,
+    select: InstId,
+    (x, c): (Operand, Operand),
+    negate: bool,
+) -> bool {
+    let layout = spec.layout;
+    let [_, mut true_value, mut false_value] = function.instruction(select).operands[..] else { return false };
+    if negate {
+        std::mem::swap(&mut true_value, &mut false_value);
+    }
+    if false_value != x {
+        return false;
+    }
+    let Some((_, k)) = constant_int(context, layout, true_value) else { return false };
+    let Some((c, c_value)) = constant_int(context, layout, c) else { return false };
+
+    let (cases, default) = cases_of(context, layout, function, switch);
+    let dest_fork = destination_of(&cases, default, k);
+    let case_c = cases.iter().position(|case| case.value == c_value);
+    let old_dest = case_c.map_or(default, |at| cases[at].dest);
+
+    // Switch on `x` first: `removePredecessor` may fold `x` away.
+    function.set_operand(switch, 0, x);
+    if old_dest != dest_fork {
+        match case_c {
+            Some(at) => {
+                function.predecessor_removed(context, old_dest, block, false);
+                function.set_operand(switch, 2 + 2 * at + 1, Operand::Block(dest_fork));
+            }
+            None => {
+                let mut operands = function.instruction(switch).operands.clone();
+                operands.extend([c, Operand::Block(dest_fork)]);
+                function.set_operands(switch, operands);
+            }
+        }
+        // Not a new edge (`block` reaches `dest_fork` through `K`): only the
+        // phi input.
+        edges::predecessor_added(function, dest_fork, block, block);
+    }
+    // The compare and the select are dead.
+    let select = function.instruction(select).result.expect("a select's value");
+    condition_deleted(context, spec.outer.callees(), function, Operand::Value(select), true);
+    true
+}
+
+/// `simplifyTerminatorOnSelect` for a `switch`: a jump, or a branch on
+/// `condition`, to the blocks `true_dest` and `false_dest` that the select's
+/// values went to. Both are successors of the `switch`, being its own.
+#[allow(clippy::too_many_arguments)]
+fn terminator_on_select(
+    context: &Context,
+    spec: &Speculation,
+    function: &mut Function,
+    block: BlockId,
+    switch: InstId,
+    condition: Operand,
+    true_dest: BlockId,
+    false_dest: BlockId,
+) {
+    // Exactly one edge to each is kept.
+    let mut keep_first = Some(true_dest);
+    let mut keep_second = (true_dest != false_dest).then_some(false_dest);
+    let targets: Vec<BlockId> = function
+        .instruction(switch)
+        .operands
+        .iter()
+        .filter_map(|one| if let Operand::Block(target) = one { Some(*target) } else { None })
+        .collect();
+    for target in targets {
+        if Some(target) == keep_first {
+            keep_first = None;
+        } else if Some(target) == keep_second {
+            keep_second = None;
+        } else {
+            function.predecessor_removed(context, target, block, true);
+        }
+    }
+    debug_assert!(keep_first.is_none() && keep_second.is_none(), "both selected blocks are successors");
+    let void = function.instruction(switch).ty;
+    let operands = if true_dest == false_dest {
+        vec![Operand::Block(true_dest)]
+    } else {
+        vec![condition, Operand::Block(true_dest), Operand::Block(false_dest)]
+    };
+    let branch = function.create_instruction(Opcode::Br, void, operands, Flags::default(), None);
+    function.insert(branch, Position::Before(switch)).expect("a placed terminator");
+    let selected = function.instruction(switch).operands[0];
+    function.erase(switch).expect("a terminator defines nothing");
+    condition_deleted(context, spec.outer.callees(), function, selected, true);
+}
+
+/// `simplifySwitchOnSelect`: a `switch` on a `select` is a remapped `switch`
+/// when the select re-reads the value, else a branch on the select's
+/// condition when it chooses between constants.
+fn switch_on_select_simplified(
+    context: &Context,
+    spec: &Speculation,
+    function: &mut Function,
+    block: BlockId,
+    switch: InstId,
+    select: InstId,
+) -> bool {
+    let layout = spec.layout;
+    let [condition, true_value, false_value] = function.instruction(select).operands[..] else { return false };
+    let select_result = function.instruction(select).result.expect("a select's value");
+    if function.users(select_result).has_one_use()
+        && let Some(compare) = defining(function, condition).map(|inst| function.instruction(inst))
+        && let Opcode::ICmp(predicate @ (IntPredicate::Eq | IntPredicate::Ne)) = compare.opcode
+        && constant_int(context, layout, compare.operands[1]).is_some()
+    {
+        let (x, c) = (compare.operands[0], compare.operands[1]);
+        if select_remapped(context, spec, function, block, switch, select, (x, c), predicate == IntPredicate::Ne) {
+            return true;
+        }
+    }
+    let (Some((_, true_bits)), Some((_, false_bits))) =
+        (constant_int(context, layout, true_value), constant_int(context, layout, false_value))
+    else {
+        return false;
+    };
+    let (cases, default) = cases_of(context, layout, function, switch);
+    let true_dest = destination_of(&cases, default, true_bits);
+    let false_dest = destination_of(&cases, default, false_bits);
+    terminator_on_select(context, spec, function, block, switch, condition, true_dest, false_dest);
+    true
+}
+
 /// Whether the `switch` ending `block` was rewritten.
 pub fn folded(
     _options: &Options,
@@ -510,6 +664,13 @@ pub fn folded(
     // One predecessor that compares the same value.
     if edges::single_predecessor(function, block)
         .is_some_and(|pred| only_predecessor_simplified(context, spec, function, block, switch, pred))
+    {
+        return true;
+    }
+    let select = defining(function, function.instruction(switch).operands[0])
+        .filter(|&inst| function.instruction(inst).opcode == Opcode::Select);
+    if let Some(select) = select
+        && switch_on_select_simplified(context, spec, function, block, switch, select)
     {
         return true;
     }
