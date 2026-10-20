@@ -465,3 +465,56 @@ b2:
     };
     assert_eq!((of(0), of(1), of(2)), (1, 1, 2));
 }
+
+/// A routine that frees its argument (`releases`) is copied only where the
+/// caller owns what it passes: a local temporary, not a pointer it was given
+/// (the copy would free it twice, once as the caller's and once as the
+/// callee's).
+#[test]
+fn a_routine_that_frees_a_temporary_is_not_inlined_at_a_call_of_one() {
+    let text = "define internal i16 @take(ptr releases %p) {
+b1:
+  store i16 1, ptr %p
+  ret i16 0
+}
+
+define i16 @given(ptr %pp) {
+b1:
+  %q = load ptr, ptr %pp
+  %r = call i16 @take(ptr %q)
+  ret i16 %r
+}
+
+define i16 @local() {
+b1:
+  %t = alloca i16
+  %r = call i16 @take(ptr %t)
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    assert!(!inline_into(&mut module, "given", 1), "{}", printed(&module));
+    assert!(inline_into(&mut module, "local", 1), "{}", printed(&module));
+}
+
+/// `noipa` keeps a body out of every copy.
+#[test]
+fn a_noipa_routine_is_never_inlined() {
+    let text = |attribute: &str| format!("define internal i16 @leaf() {attribute} {{\nb1:\n  ret i16 37\n}}\n");
+    let plain = parsed(&text(""));
+    let noipa = parsed(&text("noipa"));
+    let leaf = |module: &Module| module.functions().next().expect("@leaf").2.clone();
+    assert!(copyable(&plain, &leaf(&plain)), "premise: the same routine without noipa is copyable");
+    assert!(!copyable(&noipa, &leaf(&noipa)));
+}
+
+/// `noinline` outranks `alwaysinline` when the language states both.
+#[test]
+fn test_a_callee_the_language_says_never_inline_stays_even_if_always_is_stated_too() {
+    let text = |attribute: &str| format!("define internal i16 @leaf() {attribute} {{\nb1:\n  ret i16 37\n}}\n");
+    let leaf = |module: &Module| module.functions().next().expect("@leaf").2.clone();
+    let always = parsed(&text("alwaysinline"));
+    assert!(copyable(&always, &leaf(&always)), "premise: alwaysinline alone is copyable");
+    let both = parsed(&text("alwaysinline noinline"));
+    assert!(!copyable(&both, &leaf(&both)));
+}
