@@ -1,0 +1,48 @@
+Printing analysis 'Loop Access Analysis' for function 'f':
+  loop:
+    Memory dependences are safe with run-time checks
+    Dependences:
+    Run-time memory checks:
+    Check 0:
+      Comparing group GRP0:
+        %pc = getelementptr inbounds i16, ptr %c, i64 %i
+      Against group GRP1:
+        %pd = getelementptr inbounds i16, ptr %d, i64 %i
+    Check 1:
+      Comparing group GRP0:
+        %pc = getelementptr inbounds i16, ptr %c, i64 %i
+      Against group GRP2:
+        %pa = getelementptr inbounds i16, ptr %a, i64 %i
+    Check 2:
+      Comparing group GRP0:
+        %pc = getelementptr inbounds i16, ptr %c, i64 %i
+      Against group GRP3:
+        %pb = getelementptr inbounds i16, ptr %b, i64 %i
+    Check 3:
+      Comparing group GRP1:
+        %pd = getelementptr inbounds i16, ptr %d, i64 %i
+      Against group GRP2:
+        %pa = getelementptr inbounds i16, ptr %a, i64 %i
+    Check 4:
+      Comparing group GRP1:
+        %pd = getelementptr inbounds i16, ptr %d, i64 %i
+      Against group GRP3:
+        %pb = getelementptr inbounds i16, ptr %b, i64 %i
+    Grouped accesses:
+      Group GRP0:
+        (Low: %c High: ((2 * %n) + %c))
+          Member: {%c,+,2}<nuw><%loop>
+      Group GRP1:
+        (Low: %d High: ((2 * %n) + %d))
+          Member: {%d,+,2}<nuw><%loop>
+      Group GRP2:
+        (Low: %a High: ((2 * %n) + %a))
+          Member: {%a,+,2}<nuw><%loop>
+      Group GRP3:
+        (Low: %b High: ((2 * %n) + %b))
+          Member: {%b,+,2}<nuw><%loop>
+
+    Non vectorizable stores to invariant address were not found in loop.
+    SCEV assumptions:
+
+    Expressions re-written:

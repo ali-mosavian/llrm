@@ -1,7 +1,6 @@
 //! `RuntimePointerChecking` against the pinned LLVM's
 //! `opt -passes='print<access-info>'` on the same loops (the text of its
-//! "Run-time memory checks" and "Grouped accesses", with each pointer named
-//! `%name` where `opt` writes the instruction that defines it).
+//! "Run-time memory checks" and "Grouped accesses").
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::domtree::DomTree;
@@ -167,7 +166,8 @@ fn analysed(
     rtc.generate_checks(&mut se, &cx, &order, &dep_cands);
 
     let labels = Labels::of(function);
-    let text = rtc.print(&se, &cx, &labels, 0);
+    let printer = crate::laa_testing::PinText::of(&module, function);
+    let text = rtc.print(&se, &cx, &labels, &printer, 0);
     let diffs = rtc
         .diff_checks()
         .unwrap_or_default()
@@ -187,9 +187,9 @@ fn a_copy_between_two_arrays_is_one_check_of_two_groups() {
         "Run-time memory checks:
 Check 0:
   Comparing group GRP0:
-    %pa
+    %pa = getelementptr inbounds i32, ptr %a, i64 %i
   Against group GRP1:
-    %pb
+    %pb = getelementptr inbounds i32, ptr %b, i64 %i
 Grouped accesses:
   Group GRP0:
     (Low: %a High: ((4 * %n) + %a))
@@ -213,10 +213,10 @@ fn reads_a_constant_apart_share_a_group() {
         "Run-time memory checks:
 Check 0:
   Comparing group GRP0:
-    %pc
+    %pc = getelementptr inbounds i32, ptr %c, i64 %i
   Against group GRP1:
-    %pa1
-    %pa
+    %pa1 = getelementptr inbounds i32, ptr %a, i64 %j
+    %pa = getelementptr inbounds i32, ptr %a, i64 %i
 Grouped accesses:
   Group GRP0:
     (Low: %c High: ((4 * %n) + %c))
@@ -246,22 +246,22 @@ fn window(n: usize) -> String {
     text + "  %i.next = add nuw nsw i64 %i, 1\n  %c1 = icmp eq i64 %i.next, %n\n  br i1 %c1, label %exit, label %loop\nexit:\n  ret void\n}\n"
 }
 
+/// The bounds `groupChecks` compared for `n` reads a constant apart.
+fn comparisons_for(n: usize) -> usize {
+    let before = super::group_comparisons();
+    // The reads are one dependency class, as `AccessAnalysis` makes them.
+    let names: Vec<String> = (0..n).map(|k| format!("pa{k}")).collect();
+    let classes: Vec<(&str, &str)> = names.iter().skip(1).map(|name| ("pa0", name.as_str())).collect();
+    let (checks, _) = analysed(&window(n), &classes);
+    assert!(checks.contains("Group GRP1") && !checks.contains("Group GRP2"), "{checks}");
+    super::group_comparisons() - before
+}
+
 /// The reads a constant apart share one group, and the grouping is linear in
-/// them: four times the reads cost about four times, not sixteen (a slope test
-/// at 1x and 4x, the least of five runs of each).
+/// them: four times the reads make about four times the comparisons, not
+/// sixteen (a slope test at 1x and 4x, counting comparisons).
 #[test]
-fn the_time_grows_with_the_reads_not_with_their_square() {
-    let least = |n: usize| {
-        let text = window(n);
-        (0..5)
-            .map(|_| {
-                let start = std::time::Instant::now();
-                let (checks, _) = analysed(&text, &[]);
-                assert!(checks.contains("Group GRP1"), "{checks}");
-                start.elapsed().as_secs_f64()
-            })
-            .fold(f64::MAX, f64::min)
-    };
-    let (small, large) = (least(100), least(400));
-    assert!(large < small * 6.0, "100 reads {small:.4} s, 400 reads {large:.4} s: a ratio of {:.1}", large / small);
+fn the_comparisons_grow_with_the_reads_not_with_their_square() {
+    let (small, large) = (comparisons_for(25), comparisons_for(100));
+    assert!(small > 0 && large < small * 5, "25 reads: {small} comparisons, 100 reads: {large}");
 }
