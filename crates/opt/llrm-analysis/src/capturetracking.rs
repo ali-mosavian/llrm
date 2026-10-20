@@ -200,8 +200,8 @@ fn call_capture_info(
     }
 }
 
-/// `DetermineUseCaptureKind` (CaptureTracking.cpp:334,
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/CaptureTracking.cpp#L334>).
+/// `DetermineUseCaptureKind` (CaptureTracking.cpp:268,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/CaptureTracking.cpp#L268>).
 pub fn determine_use_capture_kind(
     function: &Function,
     globals: &[GlobalValue],
@@ -276,8 +276,8 @@ pub fn determine_use_capture_kind(
 }
 
 /// `PointerMayBeCaptured(V, Tracker, MaxUsesToExplore)`
-/// (CaptureTracking.cpp:384,
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/CaptureTracking.cpp#L384>).
+/// (CaptureTracking.cpp:397,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/CaptureTracking.cpp#L397>).
 pub fn pointer_may_be_captured_by(
     function: &Function,
     globals: &[GlobalValue],

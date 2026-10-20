@@ -90,9 +90,7 @@ use llrm_mir::passes::{Declarations, ModuleAnalyses};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy, defines};
 use llrm_support::hash::IndexMap;
 
-use crate::alias;
-use crate::cfg::Shape;
-use crate::memory::{Key, MemoryKind, Unit};
+use crate::memory::Unit;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Globals {
@@ -325,7 +323,6 @@ pub struct Elsewhere {
 /// the body and the declarations alone.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Contribution {
-    escaped: BTreeSet<GlobalId>,
     named: BTreeSet<GlobalId>,
     retained: BTreeSet<GlobalId>,
 }
@@ -361,8 +358,7 @@ pub fn analysis(
     }
     memo.declarations = Some(declarations);
     memo.elsewhere = Some(elsewhere.clone());
-    let found =
-        found_with(module, &program, &elsewhere, &mut |id| analyses.function::<Shape>(module, id), Some(&mut memo.per));
+    let found = found_with(module, &program, &elsewhere, Some(&mut memo.per));
     *analyses.memo::<Bodies>() = memo;
     found
 }
@@ -373,19 +369,16 @@ pub fn found(
     module: &Module,
     program: &ProgramProxy,
     elsewhere: &Elsewhere,
-    shape: &mut dyn FnMut(GlobalId) -> Rc<Shape>,
 ) -> Result<Globals, String> {
-    found_with(module, program, elsewhere, shape, None)
+    found_with(module, program, elsewhere, None)
 }
 
 fn found_with(
     module: &Module,
     program: &ProgramProxy,
     elsewhere: &Elsewhere,
-    shape: &mut dyn FnMut(GlobalId) -> Rc<Shape>,
     mut kept: Option<&mut IndexMap<GlobalId, (Mark, Rc<Contribution>)>>,
 ) -> Result<Globals, String> {
-    let layout = &program.layout;
     let (named, writes) = promised(module, &program.runtime);
     // Outside code reaches a global by name only where the program exports
     // it, or the runtime names it.
@@ -415,23 +408,7 @@ fn found_with(
         let contribution = match reused {
             Some(one) => one,
             None => {
-                let shape = shape(id);
-                let unit = Unit { program: Some(program), ..Unit::of(module, layout, function) };
-                // Each access asks whether its frame object's address is
-                // exposed: found once for the body.
-                let exposed = crate::memory::exposed_frames(&unit);
-                let facts = alias::points_to(&unit.with_shape(&shape).with_exposed(&exposed), None, None)?;
-                let escaped = facts
-                    .escaped
-                    .iter()
-                    .filter(|one| one.kind == MemoryKind::Global)
-                    .filter_map(|one| match one.key {
-                        Key::Global(global) => Some(GlobalId(global)),
-                        _ => None,
-                    })
-                    .collect();
                 let made = Rc::new(Contribution {
-                    escaped,
                     named: named_in(module, function, false),
                     retained: named_in(module, function, true),
                 });
@@ -441,11 +418,13 @@ fn found_with(
                 made
             }
         };
-        for global in &contribution.escaped {
-            tracked.remove(global);
-        }
         plain.extend(contribution.named.iter().copied());
         retained.extend(contribution.retained.iter().copied());
+    }
+    // The use scan of `AnalyzeGlobals`, once for the module: a global whose
+    // address escapes is not reached by name alone.
+    for escaped in crate::globalsmodref::escaping_among(module, &tracked) {
+        tracked.remove(&escaped);
     }
     if let Some(kept) = kept.as_mut() {
         let live: BTreeSet<GlobalId> = bodies.iter().map(|(id, _, _)| *id).collect();
@@ -528,7 +507,7 @@ impl ProgramAnalysis for ProgramGlobals {
     const NAME: &'static str = "program-globals";
     fn run(
         program: &Program,
-        analyses: &mut ProgramAnalyses,
+        _: &mut ProgramAnalyses,
     ) -> Self::Result {
         let count = program.modules.len();
         if count < 2 {
@@ -537,20 +516,17 @@ impl ProgramAnalysis for ProgramGlobals {
         let mut escaped = Vec::new();
         let mut taken = Vec::new();
         for (at, module) in program.modules.iter().enumerate() {
-            let proxy = analyses.proxy(program, at);
             let mut ids = held(module);
-            for (_, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
-                let shape = Shape::of(function);
-                let unit = Unit { program: Some(&proxy), ..Unit::of(module, &program.layout, function) };
-                let exposed = crate::memory::exposed_frames(&unit);
-                let facts = alias::points_to(&unit.with_shape(&shape).with_exposed(&exposed), None, None)?;
-                ids.extend(facts.escaped.iter().filter(|one| one.kind == MemoryKind::Global).filter_map(|one| {
-                    match one.key {
-                        Key::Global(global) => Some(GlobalId(global)),
-                        _ => None,
-                    }
-                }));
-            }
+            // The globals this module lets escape: the use scan of
+            // `AnalyzeGlobals` over every global variable it names.
+            let variables = module
+                .globals
+                .iter()
+                .enumerate()
+                .filter(|(_, global)| matches!(global.kind, GlobalKind::Variable(_)))
+                .map(|(index, _)| GlobalId(index as u32))
+                .collect::<BTreeSet<_>>();
+            ids.extend(crate::globalsmodref::escaping_among(module, &variables));
             let symbols = |ids: BTreeSet<GlobalId>| {
                 ids.into_iter().filter_map(|id| symbol(program, at, id)).collect::<BTreeSet<_>>()
             };

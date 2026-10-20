@@ -532,3 +532,23 @@ fn globals_aa_tracks_what_the_globals_mod_ref_scan_tracks_and_the_extras_are_exp
     );
     assert_eq!(explained, extras);
 }
+
+/// GlobalsAA of a module asks no pointer solve: its tracked set is one use scan
+/// of the module (`AnalyzeGlobals`), where it ran `alias::points_to` on every
+/// body, five times over a d_faces compile (48.8 M inclusive, #3190).
+#[test]
+fn globals_aa_asks_no_pointer_solve() {
+    let module = parsed(&format!(
+        "{DOS}@g = internal global i16 0\n@h = internal global i16 0\ndefine i16 @f() {{\nb0:\n  store i16 7, ptr @g\n  %r = load i16, ptr @h\n  ret i16 %r\n}}\ndefine i16 @k() {{\nb0:\n  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
+    ));
+    let program = Program::new(vec![module], Rc::new(Neutral)).unwrap();
+    let module = &program.modules[0];
+    let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
+    let (values, escapes) = (crate::alias::value_solves(), crate::alias::escape_solves());
+    let found = modules.get::<GlobalsAA>(module);
+    let found = Result::as_ref(&*found).unwrap();
+    // Premise: the analysis ran and tracks both globals.
+    assert_eq!(found.tracked_globals().len(), 2);
+    assert_eq!(crate::alias::value_solves() - values, 0, "a body was solved for what it points to");
+    assert_eq!(crate::alias::escape_solves() - escapes, 0, "a body was solved for what escapes");
+}
