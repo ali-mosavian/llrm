@@ -30,8 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 LLRM = ROOT / "target/debug/llrm-mir"
 TARGET = ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"]
 # Differences with a stated deviation (the plan page), not failures.
-PL5 = "PL5: opt runs simplifyLoopIVs after a peel (nsw/nuw/samesign inferred, so the residual loop's compare folds); llrm does not"
-CLASSIFIED = {("optimized/nib-control", "count"): PL5, ("optimized/demo-deedlines", "RGBLIGHTS"): PL5}
+CLASSIFIED = {}
 REQUIRED = {"counted_small", "counted_large", "table_sum", "table_cost", "nested_inner", "unknown_trips", "header_tested", "two_exits", "peel_compare"}
 
 

@@ -366,3 +366,20 @@ fn test_one_site_is_decided_as_the_site_list_decides_it() {
     assert_eq!((one.inline, &one.cost), (true, &listed[0].2));
     assert_eq!(crate::inlinecost::decide(&module, &layout, main, calls[1], &context, &frequencies), None);
 }
+
+/// `inlinehint` raises a callee's threshold to the hint threshold, not for a
+/// caller built for minimum size (opt: 487 = 325 * 1.5 for a single block at
+/// speed, against 337 = 225 * 1.5 without the hint).
+#[test]
+fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
+    let text = |attribute: &str| {
+        format!(
+            "{GLOBAL}define internal i32 @callee(i32 %x) {attribute} {{\nb0:\n  %a = load i32, ptr @g\n  %b = add i32 %a, %x\n  store i32 %b, ptr @g\n  ret i32 %b\n}}\n\ndefine i32 @f(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  %s = call i32 @callee(i32 %r)\n  ret i32 %s\n}}\n"
+        )
+    };
+    // Premise: the same callee unhinted, at speed and for minimum size.
+    assert_eq!(priced(&text(""), 0, false, CallerSize::Speed).1, 337);
+    assert_eq!(priced(&text(""), 0, false, CallerSize::MinSize).1, 5);
+    assert_eq!(priced(&text("inlinehint"), 0, false, CallerSize::Speed).1, 487);
+    assert_eq!(priced(&text("inlinehint"), 0, false, CallerSize::MinSize).1, 5);
+}
