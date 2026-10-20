@@ -101,7 +101,6 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `lir twoaddr` | on | on | on | on | on | on |
 | `lir coalesce` | on | on | on | on | on | on |
 | `lir regalloc` | on | on | on | on | on | on |
-| `regalloc candidates`, `regalloc trial`: allocations beyond the first (`-fallocation-search`) | x | x | x | x | <= 12 | x |
 | `lir parcopy` | on | on | on | on | on | on |
 | `lir peephole` | on | on | on | on | on | on |
 | `lir loopslots` | on | on | on | on | on | on |
