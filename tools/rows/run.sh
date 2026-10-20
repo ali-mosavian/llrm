@@ -6,7 +6,7 @@ set -e
 R=$(cd "$(dirname "$0")/../.." && pwd); H=$(echo $R/crates/target/*/vsgcc)
 NAME=$1; export LLRM=$2; FROM=$3
 export VSGCC_WORK=${ROWS_WORK:-$HOME/scratch/rows}/$NAME; mkdir -p $VSGCC_WORK
-PROGS=$(python3 $H/programs.py)
+PROGS=${ROWS_PROGRAMS:-$(python3 $H/programs.py)}  # ROWS_PROGRAMS="x_dct sieve": a subset, for a pair of two builds on a few rows
 # the stub's build is vsgcc/run.sh's own lines, not a copy of them
 eval "$(grep -E '^(gcc -m32 -c|sha256sum) ' $H/run.sh)"
 if [ -n "$FROM" ]; then
