@@ -1383,6 +1383,13 @@ pub fn _effects_by_table(
     }
     for register in &found.writes {
         writes.extend(_lanes(regs, *register));
+        // In long mode a dword write clears the upper half of the register.
+        if bits == 64
+            && regs.bytes(*register) == Some(4)
+            && let Some(whole) = regs.view(regs.root(*register), 64)
+        {
+            writes.extend(_lanes(regs, whole));
+        }
     }
     if may_write {
         for register in &found.maybe_writes {

@@ -229,3 +229,71 @@ b0:
     let calls = text.matches("call i32 @fib").count();
     assert!(calls <= 3, "fib was copied into itself, {calls} calls of it:\n{text}");
 }
+
+/// A tail-recursive function called once: tail-call elimination makes its
+/// loop, and the caller then inlines it (LLVM's CGSCC order, which the pin
+/// follows). `recursive` and the call counts were taken before the walk, so
+/// the callee stayed a recursive function with two calls and `insert` stayed a
+/// call in `bintree` (+36% clocks at -O2).
+#[test]
+fn test_a_callee_made_a_loop_by_tail_call_elimination_is_inlined_into_its_one_caller() {
+    let padding: String = (0..70)
+        .map(|at| {
+            let before = if at == 0 { "%node".to_owned() } else { format!("%t{}", at - 1) };
+            format!("  %t{at} = {} i32 {before}, {}\n", if at % 2 == 0 { "mul" } else { "xor" }, 3 + at)
+        })
+        .collect();
+    let mut module = parsed(
+        &"define internal void @ins(ptr %t, i32 %at, i32 %node) {
+b1:
+  %p = getelementptr inbounds i32, ptr %t, i32 %at
+  %v = load i32, ptr %p
+  %z = icmp eq i32 %v, 0
+  br i1 %z, label %set, label %more
+
+set:
+PADDING  store i32 %t69, ptr %p
+  br label %done
+
+more:
+  call void @ins(ptr %t, i32 %v, i32 %node)
+  br label %done
+
+done:
+  ret void
+}
+
+define i32 @top(ptr %t, i32 %n) {
+b1:
+  br label %head
+
+head:
+  %i = phi i32 [ 2, %b1 ], [ %next, %body ]
+  %c = icmp sle i32 %i, %n
+  br i1 %c, label %body, label %exit
+
+body:
+  call void @ins(ptr %t, i32 1, i32 %i)
+  %next = add nsw i32 %i, 1
+  br label %head
+
+exit:
+  %r = load i32, ptr %t
+  ret i32 %r
+}
+"
+        .replace("PADDING", &padding),
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let top = llrm_mir::print::module(&module);
+    let top = top.split("define").find(|one| one.contains("@top")).expect("@top");
+    assert!(!top.contains("@ins("), "{top}");
+}

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollpass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollpass.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollpass.rs sha256:9531c4425cdbd02518b191a99c3e1a6370809d628da9c54b263bb330ebae757e -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollpass.rs sha256:08390fe184ddc69037f2e019848f1e2d2f18bc818b1567797d0b2bdd20ac3577 -->
 
 # loopunrollpass
 
@@ -34,8 +34,6 @@ unrolled by [`crate::loopunroll::unroll_loop_blocks`](loopunroll.md).
 - U6 The loop pass manager's update of loops (`addSiblingLoops`) is the
   driver's: the loops a complete unroll makes of the inner loops are visited
   next, in program order.
-- U7 The cost of a simulated instruction is asked of the instruction itself,
-  not of its simplified operands.
 - U8 `simplifyLoopAfterUnroll` simplifies without a dominator tree or
   assumptions.
 - U9 Blocks an unroll merges away are erased once, when the pass ends.

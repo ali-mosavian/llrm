@@ -283,19 +283,19 @@ fn a_struct_of_two_quadwords_returns_in_rax_and_rdx() {
     );
 }
 
-/// A frame register given to a value is a callee-saved register like rbx: `fib`
-/// kept its argument in rbp across the recursive call and never saved it (it
-/// listed `(rbp, rbp)` where the others list a root), so its caller's frame was
-/// garbage.
+/// A frame register given to a value is a callee-saved register like rbx: a
+/// function with more values live across a call than rbx and r12-r15 hold kept
+/// one in rbp and never saved it (it listed `(rbp, rbp)` where the others list a
+/// root), so its caller's frame was garbage.
 #[test]
 fn a_freed_frame_register_holding_a_value_is_saved() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
-                define i32 @fib(i32 %n) {\n\
-                  %c = icmp slt i32 %n, 2\n  br i1 %c, label %done, label %rec\n\
-                done:\n  ret i32 %n\n\
-                rec:\n  %a = sub i32 %n, 1\n  %x = call i32 @fib(i32 %a)\n  %b = sub i32 %n, 2\n  %y = call i32 @fib(i32 %b)\n  %s = add i32 %x, %y\n  ret i32 %s\n}\n";
-    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "fib").unwrap();
+                declare i32 @g(i32)\n\
+                define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %h) {\n\
+                  %x = call i32 @g(i32 %a)\n\
+                  %1 = add i32 %x, %a\n  %2 = add i32 %1, %b\n  %3 = add i32 %2, %c\n  %4 = add i32 %3, %d\n  %5 = add i32 %4, %e\n  %6 = add i32 %5, %h\n  ret i32 %6\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
     let listing = llrm_core::backend::masm::text(&built).unwrap();
     let body: Vec<&str> = listing.lines().map(str::trim).collect();
     let uses_rbp = body.iter().any(|line| line.contains("ebp") && !line.starts_with("push"));
