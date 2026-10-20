@@ -12,7 +12,7 @@ Rule for the code: each Rust function names the C++ function it translates (perm
 
 | stage | what | check |
 |---|---|---|
-| S0 | why the current pass leaves hanoi's `push ecx` at the entry (its `WORTH` of three pieces, the join block `pop ecx; ret`, or the frame not being a piece), with the pass's decision dumped | hanoi dump in `~/scratch/hanoios-dump` |
+| S0 | why the current pass leaves hanoi's `push ecx` at the entry (its `WORTH` of three pieces, the join block `pop ecx; ret`, or the frame not being a piece), with the pass's decision dumped | the hanoi dump from a scratch directory |
 | S1 | `ShrinkWrapImpl::run`: `useOrDefCSROrFI`, the Save walk over `MDT`, the Restore walk over `MPDT`, `isSaveReachableThroughClobber`, the loop and frequency rejection (`BlockFrequencyInfo` costs), `tryToReallocateCSR` | unit tests on LIR bodies with the pass's own expected Save/Restore; oracle against `llc` on the pin where a target exists |
 | S2 | PrologEpilogInserter: `calculateSaveRestoreBlocks`, the frame cell and CSR saves at Save, the restores before each return Restore post-dominates; the stack depth stays one per block | hanoi final IR has no `push ecx` before the test; a return reached around Save is rejected |
 | S3 | delete `backend/shrinkwrap.rs` once every row it won is held (rows pair by bench, not by total) | ratchet on the rows; `x_hanoi2`, main |

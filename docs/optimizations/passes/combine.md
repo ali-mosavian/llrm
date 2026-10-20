@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine.rs sha256:c254f0e3cdc65fdf1b304b7905ce99f16a339f1f505ef0b3783211e742b57b40 -->
+<!-- src: crates/opt/llrm-transforms/src/combine.rs sha256:642720d2c04558d9c2ce4443c537fa2fa97ff20d2a0d8cab82c904b8662e6197 -->
 
 # combine
 
@@ -27,7 +27,7 @@ blocks no live edge reaches keep their instructions (`decide` removes
 them; LLVM's `removeAllNonTerminatorAndEHPadInstructions` is a CFG edit
 this pass does not make); a call is never trivially dead here (`dead` knows
 what a call does not write); `visit` runs only the families translated so
-far (`visitors`: add, icmp, getelementptr, store): the other `visit*`
+far (`visitors`: add, mul, icmp, getelementptr, store): the other `visit*`
 rewrites are `algebraic`'s, to move in as they are translated.
 
 ## Used by

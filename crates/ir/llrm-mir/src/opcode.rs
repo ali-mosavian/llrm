@@ -92,6 +92,28 @@ impl IntPredicate {
             same => same,
         }
     }
+
+    /// Whether `x self y` for `width`-bit integers given as unsigned bits.
+    pub fn holds(
+        self,
+        x: u128,
+        y: u128,
+        width: u32,
+    ) -> bool {
+        let (sx, sy) = (crate::context::signed(x, width), crate::context::signed(y, width));
+        match self {
+            Self::Eq => x == y,
+            Self::Ne => x != y,
+            Self::Ugt => x > y,
+            Self::Uge => x >= y,
+            Self::Ult => x < y,
+            Self::Ule => x <= y,
+            Self::Sgt => sx > sy,
+            Self::Sge => sx >= sy,
+            Self::Slt => sx < sy,
+            Self::Sle => sx <= sy,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

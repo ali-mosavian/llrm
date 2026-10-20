@@ -4,6 +4,10 @@
 //! module's globals and metadata from the pass manager. It runs only where
 //! `Options::combine` is set (`LLRM_NO_COMBINE` clears it).
 //!
+//! # Example
+//! With `Options::combine` set, `%y = add i32 %x, 0` is gone and its uses read
+//! `%x`; with it clear, the function is returned unchanged.
+//!
 //! # Used by
 //! `pipeline` (`combine@N`, in front of the old `fold@N` of each InstCombine
 //! slot of LLVM's order).

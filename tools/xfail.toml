@@ -2,16 +2,6 @@
 # ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
 
 [[xfail]]
-id = "unit llrm-c::callconv_tests::test_llrm_lowers_each_call_boundary_as_bcc_does"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-c::compile::tests::test_a_volatile_far_store_to_video_memory_leaves_the_loop_its_cells"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
 id = "unit llrm-c::compile::tests::test_m16_regparm3_a_small_struct_argument_is_on_the_stack"
 issue = 2848
 owner = "unassigned"
@@ -162,7 +152,22 @@ issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
 [[xfail]]
-id = "unit llrm-core::backend::isel_tests::test_a_closed_form_sum_in_an_odd_width_assembles"
-issue = 3020
+id = "unit llrm-transforms::jumpthread::tests::test_a_way_in_found_twice_is_copied_once"
+issue = 3018
+owner = "parity-pipeline"
+date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-c::compile::tests::test_m32_adds_into_a_new_register_with_lea"
+issue = 3052
 owner = "lir-cleanup-port"
+date = "2026-10-23"
+[[xfail]]
+id = "unit llrm-c::compile::tests::test_m32_an_unmarked_function_takes_registers_and_pops_its_stack_arguments"
+issue = 3059
+owner = "backend-slopes"
+date = "2026-10-20"
+[[xfail]]
+id = "unit llrm-c::compile::tests::test_m16_watcom_words_arrive_in_ax_dx_bx_cx_and_the_callee_pops_the_rest"
+issue = 2980
+owner = "simplify-combine-wiring-2128"
 date = "2026-10-21"

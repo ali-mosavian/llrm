@@ -230,10 +230,12 @@ b5:
     assert_eq!(out.matches("load i16, ptr %v").count(), 1, "{out}");
     assert_eq!(out.matches("icmp ult").count(), 1, "{out}");
     assert!(
-        out.contains("store i16 %k, ptr %out
+        out.contains(
+            "store i16 %k, ptr %out
   tail call void @write()
   %2 = load i16, ptr %out
-  %3 = add i16 %2, %k"),
+  %3 = add i16 %2, %k"
+        ),
         "{out}"
     );
     assert!(!out.contains("@panic()\n  unreachable"), "{out}");
@@ -776,7 +778,8 @@ b3:
     let out = piped(TEXT);
     assert!(out.contains("i1 %0,") && out.matches("icmp").count() == 1 && !out.contains("sext"), "{out}");
     assert_eq!(out.matches("mul").count() + out.matches("shl").count(), 2, "{out}");
-    assert!(out.contains("add i16") && out.contains(", 3"), "{out}");
+    // The add may carry `nuw`, inferred from the known bits of what it adds to.
+    assert!(out.contains("add ") && out.contains(", 3"), "{out}");
 }
 
 /// A memset of a slot only written, and a store into it, go with it (llrm-mir's

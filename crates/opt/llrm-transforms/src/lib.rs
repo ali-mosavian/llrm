@@ -114,6 +114,7 @@ pub mod combine_select;
 pub mod combine_select_bools;
 pub mod combine_select_op_op;
 pub mod combine_shared;
+pub mod combine_shifts;
 pub mod combine_sink;
 pub mod combine_visit_select;
 #[cfg(test)]
@@ -279,6 +280,7 @@ pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
 pub mod twoentryphi;
+pub mod uncondicmp;
 pub mod undefpred;
 pub mod unroll;
 pub mod unroll_jam;

@@ -22,7 +22,7 @@
 //! them; LLVM's `removeAllNonTerminatorAndEHPadInstructions` is a CFG edit
 //! this pass does not make); a call is never trivially dead here (`dead` knows
 //! what a call does not write); `visit` runs only the families translated so
-//! far (`visitors`: add, icmp, getelementptr, store): the other `visit*`
+//! far (`visitors`: add, mul, icmp, getelementptr, store): the other `visit*`
 //! rewrites are `algebraic`'s, to move in as they are translated.
 //!
 //! # Used by
@@ -48,6 +48,7 @@ use llrm_mir::valuetracking::FunctionAnalyses;
 
 use crate::combine_addsub::visit_add;
 use crate::combine_compares::visit_icmp;
+use crate::combine_muldivrem::visit_mul;
 use crate::instworklist::InstWorklist;
 
 /// `handleUseCountDecrement`: an operand that lost a user, and the one user it
@@ -67,7 +68,7 @@ pub(crate) fn handle_use_count_decrement(
 }
 
 /// The instruction in the body that defines `operand`.
-fn defining(
+pub(crate) fn defining(
     function: &Function,
     operand: Operand,
 ) -> Option<InstId> {
@@ -358,6 +359,7 @@ type Visitor = fn(&mut Combiner, InstId) -> Visit;
 fn visitors(opcode: &Opcode) -> &'static [Visitor] {
     match opcode {
         Opcode::Binary(BinaryOp::Add) => &[visit_add],
+        Opcode::Binary(BinaryOp::Mul) => &[visit_mul],
         Opcode::ICmp(_) => &[visit_icmp],
         Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
         Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],
