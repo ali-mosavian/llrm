@@ -60,6 +60,8 @@ use crate::support::hash::HashMap;
 pub struct Tables {
     pub orders: RefCell<HashMap<u32, Vec<RegId>>>,
     pub widths: RefCell<HashMap<u32, u32>>,
+    /// The bytes of each x87 value's float type: its spill cell's width.
+    pub float_bytes: RefCell<HashMap<u32, u32>>,
     /// The registers whose one definition can be made again where they are
     /// read (`isTriviallyReMaterializable`).
     pub remat: RefCell<crate::support::hash::HashSet<u32>>,
@@ -468,7 +470,8 @@ impl InlineSpiller<'_> {
         members: &[InstrKey],
         old: &[Arc<Insn>],
     ) -> Option<Vec<u32>> {
-        let cell = self.frame.cell(reg, 8).ok()?;
+        let bytes = self.tables.float_bytes.borrow().get(&reg).copied().unwrap_or(8);
+        let cell = self.frame.cell(reg, bytes).ok()?;
         if let [one] = old
             && one.group.is_none()
             && !one.defines.contains(&reg)
@@ -507,9 +510,79 @@ impl InlineSpiller<'_> {
         }
         self.tables.orders.borrow_mut().insert(new, crate::backend::allocate::RFP.to_vec());
         self.tables.widths.borrow_mut().insert(new, 10);
+        self.tables.float_bytes.borrow_mut().insert(new, bytes);
         NATIVE_UNITS.with(|one| one.set(one.get() + 1));
         Some(vec![new])
     }
+}
+
+/// The bytes of the float type of every x87 value of `body` that selection's
+/// numbering, or a copy or phi of such a value, gives: the type's own where
+/// a value is the program's, else that of the values it is copied from or
+/// to. A web joined to values of two types has the wider.
+pub fn float_precisions(body: &LirBody) -> HashMap<u32, u32> {
+    fn root(
+        parent: &mut HashMap<u32, u32>,
+        value: u32,
+    ) -> u32 {
+        let mut at = value;
+        while let Some(&up) = parent.get(&at) {
+            if up == at {
+                break;
+            }
+            at = up;
+        }
+        let top = at;
+        let mut at = value;
+        while let Some(&up) = parent.get(&at) {
+            if up == at {
+                break;
+            }
+            parent.insert(at, top);
+            at = up;
+        }
+        parent.entry(top).or_insert(top);
+        top
+    }
+    let mut parent: HashMap<u32, u32> = HashMap::default();
+    let mut join = |parent: &mut HashMap<u32, u32>, one: u32, other: u32| {
+        let (one, other) = (root(parent, one), root(parent, other));
+        parent.insert(one, other);
+    };
+    let floating = |loc: &Loc| match loc {
+        Loc::Held(held) if held.width == 10 => Some(held.value),
+        _ => None,
+    };
+    for block in &body.blocks {
+        for phi in &block.phis {
+            for (_, value) in &phi.incoming {
+                join(&mut parent, phi.result, *value);
+            }
+        }
+        for one in &block.insns {
+            let Some(what) = &one.what else { continue };
+            if what.op == Operation::Move
+                && let ([dest], [source]) = (what.dests.as_slice(), what.sources.as_slice())
+                && let (Some(dest), Some(source)) = (floating(dest), floating(source))
+            {
+                join(&mut parent, dest, source);
+            }
+        }
+    }
+    let mut bytes: HashMap<u32, u32> = HashMap::default();
+    for (&value, &size) in body.float_bytes.iter() {
+        let top = root(&mut parent, value);
+        let widest = bytes.entry(top).or_insert(0);
+        *widest = (*widest).max(size);
+    }
+    let members: Vec<u32> = parent.keys().copied().collect();
+    members
+        .into_iter()
+        .filter_map(|value| {
+            let top = root(&mut parent, value);
+            bytes.get(&top).map(|&size| (value, size))
+        })
+        .collect()
 }
 
 /// The widest operand naming `reg` in `unit`.
