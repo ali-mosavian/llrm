@@ -895,6 +895,37 @@ b2:
 }
 ";
 
+/// The records said before the predecessor's branch go with the terminator that
+/// takes its place: the merge redirected the uses of the block before it erased
+/// the branch, which then named its own block, and the records stayed standing
+/// before the erased branch (nib: "a debug record of !8 stands before
+/// instruction 5, which is no longer in the function").
+#[test]
+fn merging_leaves_the_records_of_the_old_branch_before_the_new_terminator() {
+    let (merged, module) = merged(
+        "define i16 @f(i16 %x) {
+b0:
+  %a = add i16 %x, 1
+  #dbg_value(i16 %a, !0)
+  br label %b1
+
+b1:
+  ret i16 %a
+}
+
+!0 = !{!\"v\"}
+",
+        "b1",
+        false,
+    );
+    assert!(merged);
+    assert!(llrm_mir::verify::verify(&module).is_empty(), "{:?}", llrm_mir::verify::verify(&module));
+    let (_, _, function) = module.functions().next().expect("@f");
+    let ret = function.terminator(function.entry().expect("entry")).expect("a terminator");
+    assert!(function.debug_records().iter().all(|one| one.before == ret), "{:?}", function.debug_records());
+    assert_eq!(function.debug_records().len(), 1);
+}
+
 /// A block its predecessor alone enters joins it: the phi is its one value,
 /// the instructions follow the predecessor's, and the block is gone.
 #[test]

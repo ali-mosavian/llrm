@@ -122,6 +122,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     }
     let frontend = super::Frontend {
         debug: flags.debug,
+        float_store: flags.float_store,
         checked_stack: flags.sanitize.stack,
         unchecked_bounds,
         warn_target_width,
@@ -327,6 +328,9 @@ mod tests {
         }
         fn forms_text(&self) -> String {
             self.0.forms_text()
+        }
+        fn dialect(&self) -> &'static llrm_instr::Dialect {
+            self.0.dialect()
         }
         fn registers_text(&self) -> String {
             self.0.registers_text()

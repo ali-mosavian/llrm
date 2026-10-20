@@ -70,6 +70,60 @@ pub fn divide(
     })
 }
 
+/// A fill or copy through huge pointers (real mode): its code and the registers
+/// it takes. A huge pointer's run ends where its 16-bit offset wraps, so the
+/// routine walks the runs, `rep`ing each and stepping the selector.
+#[derive(Clone, Debug)]
+pub struct HugeString {
+    pub name: &'static str,
+    pub code: Vec<u8>,
+    /// The registers it reads: the byte or the source's selector, the count
+    /// (`ECX`), the destination's selector and offset, and a copy's source
+    /// offset.
+    pub reads: Vec<RegId>,
+    /// What it changes besides the flags (the data segment is kept).
+    pub clobbers: Vec<RegId>,
+}
+
+const REAL: Mode = Mode { bits: 16, segmented: true, address_bytes: 2, wide: true };
+
+/// `ecx` cells of `cell` bytes (1, 2 or 4) of the pattern in `eax` through the
+/// huge pointer `bx:di`: the cell, its low bytes, becomes the dword the fill
+/// stores, and the count of cells becomes bytes.
+pub fn huge_fill(cell: u32) -> Result<HugeString, Refusal> {
+    let before = match cell {
+        1 => "    and eax, 0xFF\n    imul eax, eax, 0x01010101\n",
+        2 => "    and eax, 0xFFFF\n    imul eax, eax, 0x10001\n    shl ecx, 1\n",
+        4 => "    shl ecx, 2\n",
+        _ => return Err(Refusal { line: 0, message: format!("a huge fill of {cell}-byte cells") }),
+    };
+    let source = [before, include_str!("helpers/huge_fill.asm")].concat();
+    let lines: Vec<&str> = source.lines().collect();
+    Ok(HugeString {
+        name: match cell {
+            1 => "huge_fill1",
+            2 => "huge_fill2",
+            _ => "huge_fill4",
+        },
+        code: asm::assembled(&lines, REAL)?,
+        reads: vec![RegId::EAX, RegId::ECX, RegId::BX, RegId::DI],
+        clobbers: vec![RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::DI, RegId::ES],
+    })
+}
+
+/// `ecx` bytes from the huge pointer `ax:si` to `bx:di`, upward or, `down`,
+/// from the last byte.
+pub fn huge_copy(down: bool) -> Result<HugeString, Refusal> {
+    let source = if down { include_str!("helpers/huge_copy_down.asm") } else { include_str!("helpers/huge_copy.asm") };
+    let lines: Vec<&str> = source.lines().collect();
+    Ok(HugeString {
+        name: if down { "huge_copy_down" } else { "huge_copy" },
+        code: asm::assembled(&lines, REAL)?,
+        reads: vec![RegId::ECX, RegId::AX, RegId::SI, RegId::BX, RegId::DI],
+        clobbers: vec![RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::SI, RegId::DI, RegId::ES],
+    })
+}
+
 #[cfg(test)]
 #[path = "helpers_tests.rs"]
 mod tests;

@@ -41,6 +41,10 @@
 //! address operands. The moved load takes `u`'s `at`, so a block's instructions
 //! stay in order by it.
 //!
+//! DEVIATE P1 (#2903): no pin counterpart. LLVM orders loads by the scheduler;
+//! exit: the pre-RA machine scheduler translated (target 2026-11-20), then this
+//! file is deleted.
+//!
 //! # Example
 //! None: no test fixture exercises `sunk` on a body whose LIR it prints, and
 //! the sketch above is not program output. Read `sunk` for the candidate test.
