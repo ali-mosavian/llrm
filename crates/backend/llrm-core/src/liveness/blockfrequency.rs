@@ -20,7 +20,7 @@ use crate::model::lir::LirBody;
 use crate::support::hash::HashMap;
 
 /// A LIR body as the graph its frequencies are worked out over.
-struct Graph<'a> {
+pub(crate) struct Graph<'a> {
     body: &'a LirBody,
     blocks: Vec<BlockId>,
     succs: Vec<BlockList>,
@@ -28,7 +28,7 @@ struct Graph<'a> {
 }
 
 impl<'a> Graph<'a> {
-    fn of(body: &'a LirBody) -> Self {
+    pub(crate) fn of(body: &'a LirBody) -> Self {
         let index: HashMap<i64, u32> =
             body.blocks.iter().enumerate().map(|(at, block)| (block.at, at as u32)).collect();
         let mut succs = vec![BlockList::new(); body.blocks.len()];

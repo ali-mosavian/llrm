@@ -9,7 +9,7 @@ use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use crate::timings;
 
 /// The registers a value may be placed in.
-pub const GENERAL: [RegId; 6] = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI];
+pub const GENERAL: [RegId; 6] = [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX, RegId::ESI, RegId::EDI];
 
 /// The registers a 16-bit address is encoded with, `[bx+si]`: a base is BX or
 /// BP and an index SI or DI.
@@ -128,7 +128,20 @@ impl Machine for Dos {
     /// subtarget, operand-size prefixes), and every CPU the target accepts
     /// reads the x87 tables as on m32 (`llrm_x86::tti`, T3).
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        llrm_x86::tti::X86::of_cpu("i486").map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>)
+        let scales: std::collections::BTreeSet<i64> =
+            self.address_forms.iter().flat_map(|form| form.scales.iter().copied()).collect();
+        let scale_costs = scales
+            .into_iter()
+            .filter_map(|scale| {
+                let cheapest =
+                    self.address_forms.iter().filter(|form| form.scales.contains(&scale)).map(|form| form.use_cost);
+                Some((scale, cheapest.min()?))
+            })
+            .collect();
+        let real = llrm_x86::tti::RealMode { scale_costs, registers: self.registers as u32 };
+        let layout = crate::layout();
+        llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?)
+            .map(|one| std::rc::Rc::new(one.in_real_mode(real)) as std::rc::Rc<dyn llrm_mir::tti::Tti>)
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
@@ -309,6 +322,22 @@ mod tests {
     use llrm_mir::target::Machine;
 
     use super::Dos;
+
+    /// LSR reads the addressing hooks of the model: real mode's `[bx+si]` is
+    /// free, a scaled or any-register address pays the prefix and its stall,
+    /// and a value sits in one of six registers. The 32-bit mode's model made
+    /// every second register cost 1 and counted eight.
+    #[test]
+    fn the_model_reads_real_modes_addressing_and_registers() {
+        let costs = super::costs("486");
+        let dos = Dos { address_forms: super::address_forms(&costs, 1), costs, ..Dos::default() };
+        let tti = dos.tti().expect("m16 states its cost model");
+        let cost = |scale| tti.scaling_factor_cost(false, 0, true, scale).value;
+        assert_eq!((cost(0), cost(1)), (0, 0), "plain and bx+si are free");
+        assert_eq!((cost(2), cost(4), cost(8)), (2, 2, 2), "the prefix (1) and the stall (1)");
+        assert!(tti.is_legal_addressing_mode(false, 0, true, 8));
+        assert_eq!(tti.number_of_gpr_registers(), 6);
+    }
 
     /// Dos prices at the 486's clocks: a 16-bit divide and multiply, and a
     /// fill's setup around `rep stos`.

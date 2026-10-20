@@ -35,7 +35,7 @@ use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 
 use crate::aa::{AAQueryInfo, AAResults, AliasResult, LocationSize, MemoryEffects, MemoryLocation, ModRefInfo};
-use crate::capturetracking::{CaptureComponents, DEFAULT_MAX_USES_TO_EXPLORE, pointer_may_be_captured};
+use crate::capturetracking::CaptureComponents;
 use crate::memory::Unit;
 
 #[cfg(test)]
@@ -61,6 +61,34 @@ pub(crate) struct Decomposed {
     nuw: bool,
 }
 
+/// A load or store's place as `DecomposeGEPExpression` finds it: the object its
+/// pointer starts from, the constant offset in it (wrapped to the pointer's
+/// index width) and the bytes accessed. `indexed` says a variable index is
+/// added too, which the offset leaves out.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObjectCell {
+    pub object: Operand,
+    pub offset: i64,
+    pub size: u64,
+    pub indexed: bool,
+}
+
+/// The place `inst` accesses, if it is a load or store of a known size.
+pub fn object_cell(
+    unit: &Unit,
+    inst: llrm_mir::module::InstId,
+) -> Option<ObjectCell> {
+    let place = MemoryLocation::get(unit, inst)?;
+    let LocationSize::Precise(size) = place.size else { return None };
+    let found = BasicAA::new(unit).decomposed(place.ptr);
+    let bits = unit.layout.pointer(unit.space(place.ptr).unwrap_or(0)).index_bits;
+    let offset = match bits {
+        1..=127 => (found.offset << (128 - bits)) >> (128 - bits),
+        _ => found.offset,
+    };
+    Some(ObjectCell { object: found.base, offset: i64::try_from(offset).ok()?, size, indexed: !found.vars.is_empty() })
+}
+
 /// Bits of `BasicAA::class`.
 struct Class;
 
@@ -71,6 +99,15 @@ impl Class {
     const ESCAPE_SOURCE: u8 = 8;
     /// `isIdentifiedObject`.
     const IDENTIFIED: u8 = Self::LOCAL | Self::GLOBAL_VARIABLE;
+}
+
+/// `isIdentifiedFunctionLocal`: an alloca, a `noalias` call result or a
+/// `noalias` or `byval` argument.
+pub(crate) fn is_identified_function_local(
+    unit: &Unit,
+    operand: Operand,
+) -> bool {
+    BasicAA::new(unit).is_identified_local(operand)
 }
 
 pub struct BasicAA<'a> {
@@ -328,13 +365,21 @@ impl<'a> BasicAA<'a> {
             )
     }
 
-    /// `isIdentifiedFunctionLocal`.
+    /// `isIdentifiedFunctionLocal`, counted for the test that a batch
+    /// classifies each object once.
     fn identified_local(
         &self,
         operand: Operand,
     ) -> bool {
         #[cfg(test)]
         CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
+        self.is_identified_local(operand)
+    }
+
+    fn is_identified_local(
+        &self,
+        operand: Operand,
+    ) -> bool {
         self.defining(operand).is_some_and(|one| matches!(one.opcode, Opcode::Alloca { .. }))
             || self.noalias_call(operand)
             || self.noalias_or_byval_argument(operand)
@@ -398,55 +443,40 @@ impl<'a> BasicAA<'a> {
         })
     }
 
-    /// `SimpleCaptureAnalysis::getCapturesBefore` (BasicAliasAnalysis.cpp:203):
-    /// what `PointerMayBeCaptured` finds of a function-local identified object
-    /// (provenance mask, stopping at full provenance), remembered in the batch
-    /// (`IsCapturedCache`). Any other object keeps its provenance.
+    /// `AAQI.CA->getCapturesBefore(Object, I, OrAt, ReturnCaptures)`: asked of
+    /// the batch's capture analysis (`SimpleCaptureAnalysis`: the whole
+    /// function; `EarliestEscapeAnalysis`: before `inst`).
     fn captures_before(
         &self,
         object: Operand,
+        inst: Option<llrm_mir::module::InstId>,
+        or_at: bool,
         return_captures: bool,
         aaqi: &mut AAQueryInfo,
     ) -> CaptureComponents {
-        let Operand::Value(value) = object else { return CaptureComponents::PROVENANCE };
-        if self.class(object, aaqi) & Class::LOCAL == 0 {
-            return CaptureComponents::PROVENANCE;
-        }
-        let key = u64::from(value.0);
-        let found = match aaqi.captured.get(&key) {
-            Some(found) => *found,
-            None => {
-                let found = pointer_may_be_captured(
-                    self.unit.function,
-                    self.unit.globals,
-                    self.unit.context,
-                    value,
-                    CaptureComponents::PROVENANCE,
-                    |cc| cc.intersect(CaptureComponents::PROVENANCE) == CaptureComponents::PROVENANCE,
-                    DEFAULT_MAX_USES_TO_EXPLORE,
-                );
-                aaqi.captured.insert(key, found);
-                found
-            }
-        };
-        if return_captures { found.with_ret } else { found.without_ret }
+        aaqi.capture.captures_before(self.unit, object, inst, or_at, return_captures)
     }
 
-    /// Whether the address of `object` may be captured, a return included.
+    /// Whether the address of `object` may be captured anywhere, a return
+    /// included.
     pub(crate) fn is_captured(
         &self,
         object: Operand,
         aaqi: &mut AAQueryInfo,
     ) -> bool {
-        !self.captures_before(object, true, aaqi).captures_nothing()
+        !self.captures_before(object, None, true, true, aaqi).captures_nothing()
     }
 
-    fn not_captured(
+    /// `capturesNothing(getCapturesBefore(O, dyn_cast<Instruction>(Source),
+    /// /*OrAt=*/true, /*ReturnCaptures=*/false))`.
+    fn not_captured_before(
         &self,
         object: Operand,
+        source: Operand,
         aaqi: &mut AAQueryInfo,
     ) -> bool {
-        self.captures_before(object, false, aaqi).captures_nothing()
+        let at = self.unit.defining(source).map(|(inst, _)| inst);
+        self.captures_before(object, at, true, false, aaqi).captures_nothing()
     }
 
     /// `isObjectSmallerThan(object, size)`: an identified object whose whole
@@ -510,8 +540,8 @@ impl<'a> BasicAA<'a> {
                 return AliasResult::NoAlias;
             }
             // A call or load result cannot be a non-escaping local object.
-            if (c1 & Class::ESCAPE_SOURCE != 0 && self.not_captured(o2, aaqi))
-                || (c2 & Class::ESCAPE_SOURCE != 0 && self.not_captured(o1, aaqi))
+            if (c1 & Class::ESCAPE_SOURCE != 0 && self.not_captured_before(o2, o1, aaqi))
+                || (c2 & Class::ESCAPE_SOURCE != 0 && self.not_captured_before(o1, o2, aaqi))
             {
                 return AliasResult::NoAlias;
             }
@@ -772,7 +802,7 @@ impl BasicAA<'_> {
             && !is_call_itself
             && (local_slot || !returns_twice)
         {
-            let captures = self.captures_before(object, false, aaqi);
+            let captures = self.captures_before(object, Some(call), false, false, aaqi);
             if captures.captures_nothing() {
                 other = ModRefInfo::NoModRef;
             } else if captures == CaptureComponents::READ_PROVENANCE {
@@ -1326,5 +1356,48 @@ mod tests {
         };
         assert_eq!(call_on(&body("%a")), ModRefInfo::Ref);
         assert_eq!(call_on(&body("%q")), ModRefInfo::NoModRef);
+    }
+
+    /// On every load and store of the corpus that `MemRef` places at a constant
+    /// offset in an alloca, `object_cell` finds the same object, offset and
+    /// size: `slotstores` reads the second where it read the first.
+    #[test]
+    fn object_cell_agrees_with_memref_on_every_slot_access() {
+        use crate::memory::MemRef;
+        let (mut agreed, mut apart) = (0usize, Vec::new());
+        for (name, module) in crate::testing::corpus() {
+            let layout = layout(&module);
+            for (_, global, function) in module.functions().filter(|(_, _, f)| !f.is_declaration()) {
+                let unit = Unit::of(&module, &layout, function);
+                for (_, inst) in function.walk() {
+                    let Some(reference) = MemRef::of(&unit, inst) else { continue };
+                    let Some(Operand::Value(slot)) = reference.root else { continue };
+                    if !matches!(
+                        unit.defining(Operand::Value(slot)).map(|(_, one)| &one.opcode),
+                        Some(Opcode::Alloca { .. })
+                    ) || reference.base.is_some()
+                    {
+                        continue;
+                    }
+                    let want = (Operand::Value(slot), reference.disp, u64::from(reference.width));
+                    match object_cell(&unit, inst) {
+                        Some(cell) if !cell.indexed && (cell.object, cell.offset, cell.size) == want => agreed += 1,
+                        other => apart.push(format!(
+                            "{name}/@{} {inst:?}: {want:?} vs {other:?}",
+                            global.name.as_deref().unwrap_or("")
+                        )),
+                    }
+                }
+            }
+        }
+        // Premise: the corpus has slot accesses.
+        assert!(agreed > 0, "no slot access in the corpus");
+        assert!(
+            apart.is_empty(),
+            "{} of {} differ: {:#?}",
+            apart.len(),
+            agreed + apart.len(),
+            &apart[..apart.len().min(8)]
+        );
     }
 }

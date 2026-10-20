@@ -150,7 +150,7 @@ pub(crate) fn _folded(
 }
 
 /// A floating constant's value and format.
-fn float(
+pub(crate) fn float(
     context: &Context,
     operand: Operand,
 ) -> Option<(FloatKind, f64)> {
@@ -166,7 +166,7 @@ fn float(
 }
 
 /// A floating constant of `ty`.
-fn float_constant(
+pub(crate) fn float_constant(
     context: &Context,
     ty: TypeId,
     kind: FloatKind,

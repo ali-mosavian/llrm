@@ -62,10 +62,6 @@
 //! `operand_at` is one operand's at one block without copying the rest.
 //! `covering` widens an indexed access into its own object to the byte interval
 //! it can touch; `inside_object` says that interval lies inside the object.
-//! `exact_offsets` finds index values whose every access sums, at any wider
-//! width, to the same bytes, because every partial sum is a non-negative
-//! integer below `2**index_bits`; it is used where the object's own address is
-//! the only root known to start at 0.
 //!
 //! # Example
 //! `for i = 0 while i < 10: if i < 4: off = i * 2`:
@@ -2698,105 +2694,6 @@ pub fn operand_at(
         }
     }
     Ok(_operand(unit, operand, &known, &facts))
-}
-
-/// The values that index accesses whose offset every wider sum names exactly.
-///
-/// An index added to its object's own address is summed at the pointer's
-/// index width, which wraps. The sum names the same bytes at any wider
-/// width when every partial sum of the offset, as the affine operations
-/// computing it would be cut anywhere, is a non-negative integer below
-/// 2**index_bits: zero extension is then the identity. `inbounds` is the
-/// promise that places the start. A value is exact only if every access it
-/// indexes is.
-pub fn exact_offsets(unit: &Unit) -> Result<BTreeSet<ValueId>, String> {
-    exact_offsets_given(unit, &scoped(unit)?)
-}
-
-/// `exact_offsets`, given the `scoped` facts of the unit: a caller that needs
-/// them too solves once.
-pub fn exact_offsets_given(
-    unit: &Unit,
-    scoped: &Facts,
-) -> Result<BTreeSet<ValueId>, String> {
-    let mut verdict = IndexMap::<ValueId, bool>::default();
-    for (block, inst) in unit.function.walk() {
-        let Some(reference) = MemRef::of(unit, inst) else { continue };
-        let Some(base) = reference.base else { continue };
-        let bits = reference.index_bits;
-        // A far pointer made from a selector starts at offset 0 as well.
-        let placed = (reference.inbounds && reference.object) || reference.segment.is_some();
-        let exact = placed
-            && reference.base_width == bits
-            && _exact_sum(unit, base, cfg::id(block), scoped, bits, 16).is_some_and(|(low, high)| {
-                let (low, high) = (
-                    BigInt::from(reference.disp) + low * reference.scale,
-                    BigInt::from(reference.disp) + high * reference.scale,
-                );
-                low >= BigInt::from(0) && high < BigInt::from(1) << bits
-            });
-        *verdict.entry(base).or_insert(true) &= exact;
-    }
-    Ok(verdict.into_iter().filter(|(_, exact)| *exact).map(|(value, _)| value).collect())
-}
-
-/// The integer range of `value`, where it and every affine partial sum
-/// computing it is a non-negative integer below 2**bits; leaves read at `at`.
-fn _exact_sum(
-    unit: &Unit,
-    value: ValueId,
-    at: i64,
-    scoped: &Facts,
-    bits: u32,
-    depth: usize,
-) -> Option<(BigInt, BigInt)> {
-    // Past the depth, a node is unproven, not a leaf.
-    if depth == 0 {
-        return None;
-    }
-    let limit = BigInt::from(1) << bits;
-    let inside = |(low, high): (BigInt, BigInt)| (low >= BigInt::from(0) && high < limit).then_some((low, high));
-    let operand = |one: Operand| -> Option<(BigInt, BigInt)> {
-        if unit.int_bits(one) != Some(bits) {
-            return None;
-        }
-        match one {
-            Operand::Value(value) => _exact_sum(unit, value, at, scoped, bits, depth - 1),
-            _ => unit.int_constant(one).map(|n| (BigInt::from(n), BigInt::from(n))),
-        }
-    };
-    let constant = |one: Operand| unit.int_constant(one).map(BigInt::from);
-    let made = unit.defining(Operand::Value(value));
-    if let Some((_, op)) = made {
-        let affine = match (&op.opcode, op.operands.as_slice()) {
-            (Opcode::Binary(BinaryOp::Add), &[left, right]) => {
-                Some(operand(left).zip(operand(right)).map(|(l, r)| (l.0 + r.0, l.1 + r.1)))
-            }
-            (Opcode::Binary(BinaryOp::Sub), &[left, right]) if constant(right).is_some() => {
-                Some(operand(left).zip(operand(right)).map(|(l, r)| (l.0 - r.1, l.1 - r.0)))
-            }
-            (Opcode::Binary(BinaryOp::Mul), &[left, right]) | (Opcode::Binary(BinaryOp::Mul), &[right, left])
-                if constant(right).is_some() =>
-            {
-                Some(operand(left).zip(operand(right)).map(|(l, r)| (l.0 * &r.0, l.1 * r.0)))
-            }
-            (Opcode::Binary(BinaryOp::Shl), &[left, right]) => {
-                let count = constant(right).and_then(|count| u32::try_from(count).ok()).filter(|count| *count < bits);
-                Some(operand(left).zip(count).map(|(l, count)| (l.0 << count, l.1 << count)))
-            }
-            _ => None,
-        };
-        if let Some(bounds) = affine {
-            return bounds.and_then(inside);
-        }
-    }
-    // A leaf: whatever it is, it is read in this block.
-    let defined = made.and_then(|(inst, _)| unit.function.parent(inst)).map(cfg::id);
-    let fact = scoped
-        .get(&at)
-        .and_then(|known| known.get(&value))
-        .or_else(|| defined.and_then(|block| scoped.get(&block)).and_then(|known| known.get(&value)))?;
-    (fact.width == bits).then(|| (fact.low.clone(), fact.high.clone())).and_then(inside)
 }
 
 /// Every value `consts` knows without solving memory, as the singleton

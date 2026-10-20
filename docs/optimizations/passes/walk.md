@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/walk.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/walk.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/walk.rs sha256:8974d81ef4990f9ee68b501840660fa14118ca0ef3c872943eba1e81f30456a4 -->
+<!-- src: crates/opt/llrm-transforms/src/walk.rs sha256:ada361c891935eab4920fa0e1b44bb069a6e41f04be0ceba94a83b4d52d1184c -->
 
 # walk
 
@@ -14,6 +14,13 @@ and send each body through the Simplify list again (`ipa-deadargs.`). The
 bodies it changes are reported to their module's analyses; no pipeline
 runs here.
 
+`Walk` is a program pass placed after `Phase::Cleanup`, in place of the
+module-wide Simplify stage. Callees' components first, it splices the
+calls `inlinecost::sites` accepts into each function, then runs the
+Simplify list over it, as LLVM's CGSCC walk does: a loop around a call is
+unrolled after the call is inlined (keybind `_action_for`, 8 inlined copies
+of `_text_eq`, 325 instructions against 55).
+
 ## Deviations
 - W1: `deadargelim` runs before the Simplify list, LLVM's after the CGSCC
   walk (`PassBuilderPipelines.cpp` l.1335). Fact: nothing here cleans a body
@@ -21,6 +28,9 @@ runs here.
   argument a dropped parameter leaves behind is dead code only the list
   removes. Issue: it sees bodies simplified by Early only. Exit: a post-walk
   cleanup stage, then `deadargelim` after the walk.
+- W2a: the walk is per function in callee-first order, not per SCC with the
+  inliner's own updates; the clocks inliner still runs afterwards;
+  `inlinecost::sites` stands for `decide` until it lands. Exit: W2.
 - W2: `ipa-cp` clones with the clocks' cost model (`ipacp`), not
   `FunctionSpecialization`; exit W5.
 
