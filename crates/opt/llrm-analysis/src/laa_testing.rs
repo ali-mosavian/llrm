@@ -10,7 +10,7 @@ use llrm_mir::types::Type;
 use crate::runtimecheck::ValueText;
 
 pub struct PinText {
-    instructions: HashMap<InstId, String>,
+    instructions: llrm_mir::dense::IdMap<InstId, String>,
     values: HashMap<Operand, String>,
 }
 
@@ -28,7 +28,7 @@ impl PinText {
             .skip(1)
             .take_while(|line| *line != "}")
             .filter(|line| line.starts_with("  "));
-        let mut instructions = HashMap::new();
+        let mut instructions = llrm_mir::dense::IdMap::new();
         let mut values = HashMap::new();
         for (_, inst) in function.walk() {
             let line = lines.next().expect("a line for each instruction");

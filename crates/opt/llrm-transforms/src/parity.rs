@@ -194,7 +194,14 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "SimplifyIndvar, WidenIV, exit values, congruent IVs, canonicalizeExitCondition; optimizeLoopExits and predicateLoopExits once indvars.rs calls exitopt/exitpredicate; LFTR on (D22 closed); criterion: identical to opt on d_faces -O2; exit: exitsink deleted or DEVIATE-numbered; congruent/twin_phis, rewound, exitfold and the old widen path are deleted",
     ),
     entry("loopdeletion@749", Simplify, "loop-deletion", Translated, ""),
-    entry("unroll@753", Simplify, "loop-unroll-full", Translated, ""),
+    Entry {
+        slot: "unroll@753",
+        phase: Simplify,
+        llvm: "loop-unroll-full",
+        kind: Translated,
+        replaced_by: "",
+        note: "ROW planets -Os: the 4-trip f32 sum over four constant stores to a frame slot (examples/planets.nib, `for r in readings: total += r`) is not fully unrolled at -Os (nor at -O1, where the pin keeps it too); the pin folds it at -O2 and -Os (clang d1106 -m32 -march=i486: `ret float 0x41209999`). First bad 21aadae64 (LFTR on), good 30a1f4f8b, found 2026-10-20 by w-6; the loop at the stage before unrolling: iv phi, acc phi, gep [4 x i8] ptr %frame iv, load float, fadd, iv+1, icmp ne iv+1 4. Suspect: the saving the unroll cost sees through stored-then-loaded constants at the OptSize threshold, or the IV form after LFTR; owner loopidioms-rename-unroll-2238 with w-5 on LFTR, 2026-10-30; criterion: llrm-nib -Os of the sum has no loop and the example's mean prints 10.037499 un-rounded",
+    },
     entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
     entry("inferspace@787", Simplify, "infer-address-spaces (target)", Old, ""),
     entry("gvn@787", Simplify, "gvn", Translated, ""),
@@ -254,6 +261,14 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
     // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default
     // pipeline, and llrm has neither a profile nor a vectorizer.
+    // l.1400: after `infer-alignment`; LoopLoadElimination at the target's
+    // vector width (no vector registers on llrm's targets).
+    partial(
+        "loop-load-elim@1400",
+        Late,
+        "loop-load-elim",
+        "translated LoopLoadElimination (looploadelim.rs) runs here, output equal to opt's on its tests; criterion: x_prefix clocks at or below main at -O1/-O2/-O3/-Os (-O2: 47985 against 44454 clocks, 395 against 174 bytes; base was 50377 before the slot); exit: the assembly of the three x_prefix loops against main's tells which pass differs (laa-runtime-checks-loadelim, 2026-11-06)",
+    ),
     partial(
         "simplifycfg@1438",
         Late,

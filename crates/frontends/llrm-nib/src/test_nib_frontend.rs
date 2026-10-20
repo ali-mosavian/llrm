@@ -1483,6 +1483,55 @@ fn mean_stores(float_store: bool) -> usize {
     between(&text, "MEAN proc far", "MEAN endp").matches("fstp").count()
 }
 
+/// Ten f32 accumulators live across a loop spill x87 values. Nib keeps an f32
+/// in the wider x87 format unless the program stores it (`-fexcess-precision`
+/// fast), so a spill the program did not write must not round to f32: with the
+/// float's own dword cell stft_single's FFT butterfly printed 526523818, want
+/// 78803551 (the cell is a qword; llrm-c's, which follows the pin, is a dword).
+#[test]
+fn test_a_spilled_f32_keeps_its_wider_cell() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "spill.nib",
+        "@export(\"pascal16\")
+fn f(p0: f32, p1: f32, p2: f32, p3: f32, p4: f32, p5: f32, p6: f32, p7: f32, p8: f32, p9: f32, n: i16) -> f32:
+    let mut a0: f32 = p0
+    let mut a1: f32 = p1
+    let mut a2: f32 = p2
+    let mut a3: f32 = p3
+    let mut a4: f32 = p4
+    let mut a5: f32 = p5
+    let mut a6: f32 = p6
+    let mut a7: f32 = p7
+    let mut a8: f32 = p8
+    let mut a9: f32 = p9
+    let mut i: i16 = 0
+    while i < n:
+        a0 = a0 * a1 + a9
+        a1 = a1 * a2 + a0
+        a2 = a2 * a3 + a1
+        a3 = a3 * a4 + a2
+        a4 = a4 * a5 + a3
+        a5 = a5 * a6 + a4
+        a6 = a6 * a7 + a5
+        a7 = a7 * a8 + a6
+        a8 = a8 * a9 + a7
+        a9 = a9 * a0 + a8
+        i += 1
+    return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9
+
+fn main() -> i16:
+    return 0
+",
+    );
+    let program = driver::parsed(&source, &crate::real_mode(), None).expect("parses");
+    let text = listing_on(&program, "main", &level("O2"), "486");
+    let body = between(&text, "F proc far", "F endp");
+    let spills = |width: &str| body.lines().filter(|line| line.trim().starts_with(&format!("fstp {width} ptr [bp-"))).count();
+    assert!(spills("qword") > 0 && spills("dword") == 0, "{body}");
+}
+
 #[test]
 /// `-fexcess-precision=standard` rounds an f32 variable at each assignment.
 /// The sum of four unknown readings stayed in one x87 register, 10.0375 where

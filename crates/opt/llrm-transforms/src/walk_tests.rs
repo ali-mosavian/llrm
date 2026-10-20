@@ -624,3 +624,134 @@ fn test_ipa_cp_clones_a_tree_recursion_before_it_is_copied_into_itself() {
     assert!(text.contains("chop.constprop"), "no clone of chop for its constants:\n{text}");
     assert!(!text.contains(crate::tailcallelim::DEFERRED), "a function still waits:\n{text}");
 }
+
+/// The module `text` after the walk alone (no simplifier), `top`'s body.
+fn walked_top(text: &str) -> String {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(text);
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+            walk.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the walk runs");
+    let text = llrm_mir::print::module(&module);
+    text.split("define").find(|one| one.contains("@top(")).expect("@top").to_owned()
+}
+
+const LINEAR: &str = "define internal i32 @down(i32 %n) {
+b0:
+  %done = icmp eq i32 %n, 0
+  br i1 %done, label %out, label %again
+
+out:
+  ret i32 0
+
+again:
+  %m = sub i32 %n, 1
+  %r = call i32 @down(i32 %m)
+  %s = mul i32 %r, 7919
+  ret i32 %s
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @down(i32 %n)
+  ret i32 %r
+}
+";
+
+/// A recursive callee inlined into a caller has its own call inlined in the
+/// copy, to gcc's peeling depth: the probability of reaching the copy (the
+/// calls to itself per call, 0.5 here, to the power of the copies deep) below
+/// 1 - 1/8, squared per copy only where the body has more than one call
+/// (their copies grow as sites to the power of the depth; one call grows them
+/// by one a level). Eight copies after the one the cost allowed (hanoi: 180
+/// clocks with one copy, 163 with three, 133 with six squared, 103 now).
+#[test]
+fn test_a_linear_recursive_callee_is_peeled_in_its_caller() {
+    let top = walked_top(LINEAR);
+    let copies = top.matches("mul i32 %").count();
+    assert_eq!(copies, 9, "{copies} copies of down in top:\n{top}");
+}
+
+/// A tree is not peeled: the copy doubles at each level (bintree -O2 +0.13%
+/// clocks, 988 to 1276 bytes, with the peeling of an edge at a time).
+#[test]
+fn test_a_tree_recursive_callee_is_inlined_once_in_its_caller() {
+    let top = walked_top(
+        "define internal i32 @down(i32 %n) {
+b0:
+  %done = icmp slt i32 %n, 2
+  br i1 %done, label %out, label %again
+
+out:
+  ret i32 %n
+
+again:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @down(i32 %a)
+  %y = call i32 @down(i32 %b)
+  %s = mul i32 %x, 7919
+  %t = add i32 %s, %y
+  ret i32 %t
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @down(i32 %n)
+  ret i32 %r
+}
+",
+    );
+    let copies = top.matches("mul i32 %x").count();
+    assert_eq!(copies, 1, "{copies} copies of down in top:\n{top}");
+}
+
+/// What the copies a call peels add is capped at gcc's recursive growth
+/// limit: two calls in exclusive branches (recpow's shape) double the copies
+/// at each level, 32 copies and 8203 bytes at -O1 before the cap, 20 after.
+#[test]
+fn test_the_copies_a_call_peels_add_at_most_a_functions_growth() {
+    let top = walked_top(
+        "define internal i32 @down(i32 %n) {
+b0:
+  %done = icmp eq i32 %n, 0
+  br i1 %done, label %out, label %more
+
+out:
+  ret i32 1
+
+more:
+  %bit = and i32 %n, 1
+  %odd = icmp ne i32 %bit, 0
+  br i1 %odd, label %odd.arm, label %even.arm
+
+odd.arm:
+  %a = sub i32 %n, 1
+  %x = call i32 @down(i32 %a)
+  %r = urem i32 %x, 30011
+  ret i32 %r
+
+even.arm:
+  %h = lshr i32 %n, 1
+  %y = call i32 @down(i32 %h)
+  %q = urem i32 %y, 30013
+  ret i32 %q
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @down(i32 %n)
+  ret i32 %r
+}
+",
+    );
+    let copies = top.matches("urem i32 %x").count();
+    assert!(copies <= 24, "{copies} copies of down in top:\n{top}");
+}
