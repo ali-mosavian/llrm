@@ -201,7 +201,7 @@ fn compute_into(
 /// ([L4947](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L4947)):
 /// whether `icmp pred x, rhs` (`rhs` of `width` bits) only checks the sign
 /// bit, and if so whether it is true for a negative `x`.
-fn is_sign_bit_check(
+pub fn is_sign_bit_check(
     pred: IntPredicate,
     rhs: u128,
     width: u32,

@@ -80,6 +80,18 @@ pub fn rewritten(
     outer: &Outer,
 ) -> bool {
     let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
+    rewritten_in(&mut session, context, layout, function, declared, outer)
+}
+
+/// [`rewritten`] over `session`, whose expressions are valid for `function`.
+pub fn rewritten_in(
+    session: &mut ScevSession,
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut Declared,
+    outer: &Outer,
+) -> bool {
     let headers: Vec<BlockId> = {
         let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
         let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
@@ -110,7 +122,7 @@ pub fn rewritten(
             function,
             declared,
             outer,
-            &mut session,
+            session,
             &mut rewriter,
             &tti,
             header,

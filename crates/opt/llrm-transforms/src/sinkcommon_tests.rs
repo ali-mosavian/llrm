@@ -1,7 +1,7 @@
 //! Each body is MIR text run by llrm-mir's interpreter before and after.
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::passes::Outer;
+use llrm_mir::passes::{Declared, Outer};
 
 use crate::simplifycfg::{Options, simplified_with};
 use crate::testing::{parsed, printed, results};
@@ -18,8 +18,9 @@ fn check(
     let outer = Outer::of(&module, None);
     let layout = DataLayout::default();
     let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    assert_eq!(simplified_with(&options, context, &spec, function), text != expected, "{text}");
+    assert_eq!(simplified_with(&options, context, &spec, &mut declared, function), text != expected, "{text}");
     assert_eq!(printed(&module), expected);
     if let Some(before) = before {
         assert_eq!(results(&module, inputs), before);
@@ -155,8 +156,9 @@ fn test_hundreds_of_identical_jump_only_predecessors_are_one() {
     let outer = Outer::of(&module, None);
     let layout = DataLayout::default();
     let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    assert!(simplified_with(&options, context, &spec, function));
+    assert!(simplified_with(&options, context, &spec, &mut declared, function));
     let printed = printed(&module);
     assert!(printed.contains("ret i16"), "{printed}");
     assert!(printed.matches("br label").count() <= 1, "{printed}");

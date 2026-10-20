@@ -692,3 +692,36 @@ b3:
 fn test_lftr_is_on_in_the_pipeline() {
     assert!(super::lftr_default());
 }
+
+/// `loops` counted loops one after another, each in LoopSimplify form.
+fn counted_loops(loops: usize) -> String {
+    let mut text = String::from("define i32 @f(i32 %n) {\nb0:\n  br label %p0\n\n");
+    for at in 0..loops {
+        let next = if at + 1 == loops { "done".to_owned() } else { format!("p{}", at + 1) };
+        text += &format!(
+            "p{at}:\n  br label %h{at}\n\nh{at}:\n  %i{at} = phi i32 [ 0, %p{at} ], [ %n{at}, %l{at} ]\n  %g{at} = icmp ult i32 %i{at}, %n\n  br i1 %g{at}, label %l{at}, label %x{at}\n\nl{at}:\n  %n{at} = add i32 %i{at}, 1\n  br label %h{at}\n\nx{at}:\n  br label %{next}\n\n"
+        );
+    }
+    text + "done:\n  ret i32 0\n}\n"
+}
+
+/// The trip counts `indvars` works out for `loops` loops that none of its
+/// steps changes.
+fn computed_counts(loops: usize) -> usize {
+    let mut module = parsed(&counted_loops(loops));
+    let before = llrm_analysis::scev::trip::backedge_taken_computations();
+    managed(&mut module, IndVars { lftr: true });
+    llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// Each step of `indvars` made a `ScalarEvolution` of its own and worked out
+/// every loop's trip count again: 6 steps over d_faces -O2 cost 49 M
+/// instructions, 21 M of them trip counts. One run holds one, as LLVM's pass
+/// does: a loop that nothing changes is counted once, and the work grows with
+/// the loops, not with loops times steps.
+#[test]
+fn a_loop_nothing_changes_has_its_trip_count_worked_out_once_in_a_run() {
+    assert_eq!(computed_counts(4), 4);
+    // Four times the loops, four times the counts (the 1x/4x slope).
+    assert_eq!(computed_counts(16), 16);
+}

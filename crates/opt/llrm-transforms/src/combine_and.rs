@@ -44,6 +44,7 @@ use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_and_select::fold_and_select;
+use crate::combine_icmp_logic::fold_boolean_and_or;
 use crate::combine_shared::{
     binop, commutative, has_one_use, inst_def, parts, query, simplify_associative_or_commutative, simplify_visited,
     width,
@@ -438,7 +439,11 @@ pub fn visit_and(
     if let Some(found) = steps.iter().find_map(|step| step(c, inst, op0, op1)) {
         return found;
     }
-    fold_and_select(c, inst, op0, op1).unwrap_or(Visit::None)
+    if let Some(found) = fold_and_select(c, inst, op0, op1) {
+        return found;
+    }
+    // DEVIATE 4: the rest of visitAnd after this.
+    fold_boolean_and_or(c, inst, op0, op1, true, false).map_or(Visit::None, Visit::Replace)
 }
 
 #[cfg(test)]
