@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectconstants.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectconstants.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectconstants.rs sha256:f11684128312bbf13c7e7dd6414755e3b3e2e1cd7cfe8871b36db808ac7a3030 -->
+<!-- src: crates/backend/llrm-core/src/backend/selectconstants.rs sha256:8b037349a42612c80cb4ae02d072797411426064938ae08b09fa1439941eacaa -->
 
 # selectconstants
 
@@ -29,9 +29,10 @@ reader and compares a value of the select's own type. What no row covers
 stays a select, which `selects` turns into a branch where the target has no
 conditional move.
 
-DEVIATE S1 (no number): a select of one-bit values is left alone. LLVM's
-`foldBoolSelectToLogic` takes it (`and`/`or` of the condition); that fold
-is not translated yet. Exit: that function.
+A select of one-bit values is `foldBoolSelectToLogic` (`boolean`): `select
+c, c|1, f` is `c | f`, `select c, t, c|0` is `c & t`, `select c, t, 1` is
+`!c | t`, `select c, 0, f` is `!c & f`. The pin freezes the other operand,
+which no machine value needs, so it is left out.
 
 ## Example
 `%r = select i1 %less, i32 4, i32 0` is `%z = zext i1 %less to i32` and
