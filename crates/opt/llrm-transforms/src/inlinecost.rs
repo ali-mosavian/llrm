@@ -63,6 +63,12 @@
 //! - D8: -Os and -Oz share one pipeline here, so every caller at -Os is
 //!   `optsize` (clang's `OptimizeForSize`, InlineCost.cpp:2125) and none
 //!   `minsize` (:2117).
+//! - D11: at -Os a callee that stays is inlined only if the target's bound
+//!   (`Tti::opt_size_inline_threshold`, X86: 25, a cost value of the target) holds
+//!   the finished cost, where LLVM's `OptSizeThreshold` 50 allows growth. The
+//!   pin's threshold cannot say it: its verdict is `cost < max(1, threshold)`
+//!   and the walk stops at cost 0, so a threshold of 0 inlines a callee whose
+//!   walk ends there. No shape of callee is tested.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
@@ -1890,6 +1896,14 @@ impl<'a> Analyzer<'a> {
             self.threshold -= self.vector_bonus;
         } else if self.vector_instructions <= self.instructions / 2 {
             self.threshold -= self.vector_bonus / 2;
+        }
+        // D11: the analysis above stops at LLVM's threshold; the verdict is
+        // held to the target's.
+        if self.site.caller_size == CallerSize::OptSize
+            && !self.site.sole_call_to_local
+            && let Some(bound) = self.site.tti.and_then(|tti| tti.opt_size_inline_threshold())
+        {
+            self.threshold = self.threshold.min(bound);
         }
         self.decided_by_threshold = true;
         if self.cost < self.threshold.max(1) { Ok(()) } else { Err("Cost over threshold.".into()) }
