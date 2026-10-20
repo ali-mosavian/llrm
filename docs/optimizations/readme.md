@@ -21,7 +21,7 @@ Levels and flags: [levels](../reference/levels.md).
 | Module, before bodies | `available-externally`, [`globalopt`](passes/globalopt.md), [`ports`](passes/ports.md), `stamp` |  |
 | Body rounds | `sroa`, [`fold`](passes/fold.md), [`floatfold`](passes/floatfold.md), [`decide`](passes/decide.md), [`phiopt`](passes/phiopt.md) |  |
 |  | `equalcalls`, [`gvn`](passes/gvn.md) |  |
-|  | [`tailrec`](passes/tailrec.md), [`loopsimplify`](passes/loopsimplify.md), [`lcssa`](passes/lcssa.md), [`floatloop`](passes/floatloop.md), [`trivialunswitch`](passes/trivialunswitch.md), [`inferspace`](passes/inferspace.md) |  |
+|  | [`tailrec`](passes/tailcallelim.md), [`loopsimplify`](passes/loopsimplify.md), [`lcssa`](passes/lcssa.md), [`floatloop`](passes/floatloop.md), [`trivialunswitch`](passes/trivialunswitch.md), [`inferspace`](passes/inferspace.md) |  |
 |  | `licm`, [`indvars`](passes/indvars.md), [`algebraic`](passes/algebraic.md) |  |
 |  | [`dse`](passes/dse.md), [`promote`](passes/promote.md), [`dead`](passes/dead.md), [`loopidioms`](passes/loopidioms.md) |  |
 |  | [`unroll`](passes/unroll.md), [`peel`](passes/peel.md), [`unswitch`](passes/unswitch.md), [`loopsplit`](passes/loopsplit.md), [`loopfuse`](passes/loopfuse.md), [`loopdistribute`](passes/loopdistribute.md), `unroll-jam` |  |

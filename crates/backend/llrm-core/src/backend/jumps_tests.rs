@@ -1815,6 +1815,65 @@ fn test_the_blocks_on_a_cycle_are_found_without_a_scan_per_block() {
     assert_eq!(found.into_iter().collect::<Vec<_>>(), vec![n]);
 }
 
+/// Loops nested three deep, the innermost one block that loops on itself; each
+/// level's header tests a rare base case (`e`) and otherwise enters the next,
+/// and both reach the level's latch `l`.
+fn loop_nest() -> LirBody {
+    let (levels, done): (i64, i64) = (3, 9999);
+    let (h, e, pre, l) = (|k: i64| 100 * k, |k: i64| 100 * k + 1, |k: i64| 100 * k + 2, |k: i64| 100 * k + 3);
+    let mut blocks: Vec<Block> =
+        vec![block(1, vec![_compare(1), _branch(2, "jle", done), _jump(3, 10)], vec![done, 10]).into()];
+    blocks.push(block(10, vec![_move(10, imm(0)), _jump(11, h(1))], vec![h(1)]).into());
+    let mut odds: Vec<(i64, i64, f64)> = vec![(1, done, 0.25), (1, 10, 0.75)];
+    for k in 1..=levels {
+        blocks.push(
+            block(
+                h(k),
+                vec![_compare(h(k)), _branch(h(k) + 1, "jl", e(k)), _jump(h(k) + 2, pre(k))],
+                vec![e(k), pre(k)],
+            )
+            .into(),
+        );
+        odds.extend([(h(k), e(k), 1.0 / 32.0), (h(k), pre(k), 31.0 / 32.0)]);
+        blocks.push(block(e(k), vec![_move(e(k), imm(k)), _jump(e(k) + 50, l(k))], vec![l(k)]).into());
+        let next = if k < levels { h(k + 1) } else { 7000 };
+        blocks.push(block(pre(k), vec![_move(pre(k), imm(0)), _jump(pre(k) + 50, next)], vec![next]).into());
+    }
+    blocks.push(
+        block(7000, vec![_compare(7000), _branch(7001, "jg", 7000), _jump(7002, l(levels))], vec![7000, l(levels)])
+            .into(),
+    );
+    odds.extend([(7000, 7000, 31.0 / 32.0), (7000, l(levels), 1.0 / 32.0)]);
+    for k in (1..=levels).rev() {
+        let out = if k == 1 { done } else { l(k - 1) };
+        let mut insns: Vec<_> = (0..5).map(|n| _move(l(k) + n + 1, imm(n))).collect();
+        insns.extend([_compare(l(k)), _branch(l(k) + 10, "jg", h(k)), _jump(l(k) + 20, out)]);
+        blocks.push(block(l(k), insns, vec![h(k), out]).into());
+        odds.extend([(l(k), h(k), 31.0 / 32.0), (l(k), out, 1.0 / 32.0)]);
+    }
+    blocks.push(block(done, vec![_return(done)], vec![]).into());
+    let mut made = body("f", 1, blocks);
+    for (from, to, chance) in odds {
+        made.odds.taken.insert((from, to), (chance * crate::model::lir::BlockOdds::CERTAIN) as u32);
+    }
+    made
+}
+
+/// A loop whose exit test leaves exactly as often as its top is fallen into is
+/// not rotated (`rotateLoop`: `FallThrough2Top >= ExitFreq`). The two are equal
+/// in the odds of 31 in 32, and in `f64` the exit came out larger by a
+/// rounding: the innermost loop of a nest (bench/fib) was rotated, and the
+/// latches of the levels were left at the end after the inner loops, each
+/// base-case block ending in a jump to its latch (17 jumps, llc 9). Order
+/// checked with `llc -O2 -mtriple=i486` on the same nest as IR with branch
+/// weights: entry pre0 e1 l1 h1 pre1 e2 l2 h2 pre2 h3 pre3 s l3 e3 done.
+#[test]
+fn test_a_loop_is_not_rotated_where_its_exit_only_ties_the_top_fall_through() {
+    let made = optimized(&loop_nest(), cpu::profile("486").unwrap()).unwrap();
+    let order: Vec<i64> = made.blocks.iter().map(|one| one.at).collect();
+    assert_eq!(order, [1, 10, 101, 103, 100, 102, 201, 203, 200, 202, 300, 302, 7000, 303, 301, 9999], "{order:?}");
+}
+
 /// Placement worked out the frequencies of the body again, as `over` over the
 /// blocks it was given, though the body's own answer stood in its facts: 68 M
 /// of 380 M instructions of `jumps` at 1600 diamonds. It asks `Frequency::of`.

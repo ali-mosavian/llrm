@@ -46,7 +46,7 @@
 //! - D4. No `llvm.experimental.deoptimize`.
 
 use llrm_mir::context::Context;
-use llrm_mir::dense::IdSet;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags, Opcode};
@@ -354,13 +354,14 @@ pub fn sunk(
     block: BlockId,
 ) -> bool {
     let mut jumps = Vec::new();
+    let mut listed: IdSet<BlockId> = IdSet::new();
     let mut other = false;
     for &pred in function.predecessors(block).iter() {
         let jump = function.terminator(pred).is_some_and(|last| {
             function.instruction(last).opcode == Opcode::Br && function.instruction(last).operands.len() == 1
         });
         if jump {
-            if !jumps.contains(&pred) {
+            if listed.insert(pred) {
                 jumps.push(pred);
             }
         } else {
@@ -371,11 +372,24 @@ pub fn sunk(
         return false;
     }
     let mut phi_operands = PhiOperands::default();
+    // Each jump by its place in `jumps`: a phi's arms are read once.
+    let mut jump_at: IdMap<BlockId, usize> = IdMap::new();
+    for (at, &pred) in jumps.iter().enumerate() {
+        jump_at.insert(pred, at);
+    }
     for phi in crate::edges::phis(function, block) {
-        let arms = llrm_analysis::occurrence::arms(function, phi);
-        let at = |from: BlockId| arms.iter().position(|&(_, one)| one == from).expect("an arm");
-        let values: Vec<Operand> = jumps.iter().map(|&pred| arms[at(pred)].0).collect();
-        phi_operands.insert((phi, 2 * at(jumps[0])), values);
+        let mut values: Vec<Option<Operand>> = vec![None; jumps.len()];
+        let mut first_arm = 0;
+        for (arm, &(value, from)) in llrm_analysis::occurrence::arms(function, phi).iter().enumerate() {
+            if let Some(&at) = jump_at.get(&from) {
+                values[at] = Some(value);
+                if at == 0 {
+                    first_arm = arm;
+                }
+            }
+        }
+        let values = values.into_iter().map(|one| one.expect("an arm per jump")).collect();
+        phi_operands.insert((phi, 2 * first_arm), values);
     }
     // The columns: the instruction `depth` before the terminator of each.
     let bodies: Vec<Vec<InstId>> = jumps
@@ -521,23 +535,32 @@ pub fn duplicate_predecessors_merged(
         })
         .collect();
     let mut changed = false;
+    // What each phi takes from each predecessor, once (`PhiPredIVs`).
     let phis = crate::edges::phis(function, block);
-    let values = |function: &Function, pred: BlockId| -> Vec<Operand> {
-        phis.iter()
-            .map(|&phi| {
-                llrm_analysis::occurrence::arms(function, phi)
-                    .iter()
-                    .find(|&&(_, one)| one == pred)
-                    .map(|&(value, _)| value)
-                    .expect("an arm")
-            })
-            .collect()
+    let mut candidate_at: IdMap<BlockId, usize> = IdMap::new();
+    for (at, &candidate) in candidates.iter().enumerate() {
+        candidate_at.insert(candidate, at);
+    }
+    let mut taken: Vec<Vec<Option<Operand>>> = vec![vec![None; phis.len()]; candidates.len()];
+    for (column, &phi) in phis.iter().enumerate() {
+        for (value, from) in llrm_analysis::occurrence::arms(function, phi) {
+            if let Some(&at) = candidate_at.get(&from) {
+                taken[at][column] = Some(value);
+            }
+        }
+    }
+    let values = |at: usize| -> Vec<Operand> {
+        taken[at].iter().map(|one| one.expect("an arm per candidate")).collect()
     };
-    let mut kept: Vec<(BlockId, Vec<Operand>)> = Vec::new();
-    for &candidate in &candidates {
-        let seen = values(function, candidate);
-        match kept.iter().find(|(_, one)| *one == seen) {
-            Some(&(keep, _)) if keep != candidate => {
+    // Candidates by what the phis take from them: the first of each kind stays.
+    let mut kept: HashMap<Vec<Operand>, BlockId> = HashMap::default();
+    for (at, &candidate) in candidates.iter().enumerate() {
+        match kept.entry(values(at)) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(candidate);
+            }
+            std::collections::hash_map::Entry::Occupied(slot) => {
+                let keep = *slot.get();
                 // Everything that reached the duplicate reaches the kept one.
                 for source in function.predecessors(candidate).iter().copied().collect::<Vec<_>>() {
                     let last = function.terminator(source).expect("a terminated predecessor");
@@ -545,8 +568,6 @@ pub fn duplicate_predecessors_merged(
                 }
                 changed = true;
             }
-            Some(_) => {}
-            None => kept.push((candidate, seen)),
         }
     }
     changed

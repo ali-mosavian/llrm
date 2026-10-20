@@ -1484,7 +1484,7 @@ fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translat
 fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
-    assert_eq!(late, ["instsimplify@1662"]);
+    assert_eq!(late, ["simplifycfg@1438", "instsimplify@1662", "simplifycfg@2376"]);
     let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
     assert_eq!(kind, Some(crate::parity::SlotKind::Translated));
 }
@@ -1565,12 +1565,15 @@ done:
         let printed =
             crate::testing::managed(&mut module, pipeline::Fixed::linear(&applied, pipeline::Phase::Simplify));
         let entry = printed.split("\n\n").find(|one| one.contains("b0:")).expect("the entry block").to_owned();
-        (entry.contains("mul i16"), printed)
+        (entry.contains("mul i16") || entry.contains("shl i16"), printed)
     };
     let (without, plain) = entry_has_mul(false);
-    assert!(without, "premise: without the rotate slot the mul is in the entry block\n{plain}");
+    assert!(
+        without,
+        "premise: without the rotate slot the mul (or the shift it becomes) is in the entry block\n{plain}"
+    );
     let (with, rotated) = entry_has_mul(true);
-    assert!(!with, "the mul is behind the guard, not in the entry block\n{rotated}");
+    assert!(!with, "the mul (or shift) is behind the guard, not in the entry block\n{rotated}");
 }
 
 /// The rotate slot is LLVM's `LoopRotate`: a loop whose latch only increments
@@ -2240,6 +2243,21 @@ fn test_a_slot_of_the_order_can_be_run_alone_when_the_level_builds_it() {
     assert!(!pipeline::slot_built(&o2, "gvn"), "a pass name is no slot");
     let o1 = Applied { options: pipeline::Options { pre: false, ..Default::default() }, ..Applied::default() };
     assert!(!pipeline::slot_built(&o1, "gvn@787"), "-O1 has no GVN");
+}
+
+/// The order had no SimplifyCFG after the Simplify stage: L1438 (hoist and
+/// sink common code, loops need not stay canonical) and L2376 (hoist) were
+/// Missing. Their slots are built, in the pin's order around
+/// `instsimplify@1662`.
+#[test]
+fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
+    let o2 = Applied::default();
+    for slot in ["simplifycfg@1438", "simplifycfg@2376"] {
+        assert!(pipeline::slot_built(&o2, slot), "{slot}");
+    }
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
+    assert_eq!(late, ["simplifycfg@1438", "instsimplify@1662", "simplifycfg@2376"]);
 }
 
 /// d_faces -O2 under the LLVM order ran `hoist` three times in its slots and
