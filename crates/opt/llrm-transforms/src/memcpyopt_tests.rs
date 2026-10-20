@@ -277,3 +277,49 @@ fn test_a_call_slot_is_not_taken_when_the_source_is_read_elsewhere() {
         "{text}"
     );
 }
+
+const MOVE_DECLARES: &str = "declare void @fill(ptr nocapture) nounwind willreturn memory(argmem: write)
+declare void @read(ptr nocapture) nounwind willreturn memory(argmem: read)
+";
+
+/// A module of `MOVE_DECLARES` and `body`, after the pass.
+fn moved(body: &str) -> String {
+    let mut module = parsed(&format!("{DECLARES}{MOVE_DECLARES}\n{body}"));
+    managed(&mut module, MemCpyOpt)
+}
+
+/// Both slots are read after the copy, and neither is written: they are one
+/// slot and the copy is gone (`opt -passes=memcpyopt` `@both_read`).
+#[test]
+fn test_a_copy_of_one_stack_slot_to_another_makes_them_one() {
+    let text = moved(
+        "define void @f2() {\nb0:\n  %a = alloca [16 x i8]\n  %b = alloca [16 x i8]\n  call void @fill(ptr nocapture %a)\n  call void @llvm.memcpy.p0.p0.i64(ptr %b, ptr %a, i64 16, i1 false)\n  call void @read(ptr nocapture %a)\n  call void @read(ptr nocapture %b)\n  ret void\n}\n",
+    );
+    let body = &text[text.find("define void @f2").expect("@f2")..];
+    assert!(!body.contains("%b") && !body.contains("@llvm.memcpy"), "{body}");
+    assert_eq!(body.matches("call void @read(ptr nocapture %a)").count(), 2, "{body}");
+}
+
+/// The same through a loaded and stored scalar (`@scalar`).
+#[test]
+fn test_a_loaded_and_stored_scalar_between_stack_slots_makes_them_one() {
+    let text = moved(
+        "define void @f2() {\nb0:\n  %a = alloca i32\n  %b = alloca i32\n  store i32 1, ptr %a\n  %v = load i32, ptr %a\n  store i32 %v, ptr %b\n  call void @read(ptr nocapture %b)\n  ret void\n}\n",
+    );
+    let body = &text[text.find("define void @f2").expect("@f2")..];
+    assert!(
+        !body.contains("%b") && !body.contains("%v") && body.contains("call void @read(ptr nocapture %a)"),
+        "{body}"
+    );
+}
+
+/// The source is written again after the copy while the destination is read:
+/// one slot would show the new bytes (`@src_written_after`).
+#[test]
+fn test_two_stack_slots_are_kept_when_the_source_is_written_after_the_copy() {
+    let text = moved(
+        "define void @f2() {\nb0:\n  %a = alloca [16 x i8]\n  %b = alloca [16 x i8]\n  call void @fill(ptr nocapture %a)\n  call void @llvm.memcpy.p0.p0.i64(ptr %b, ptr %a, i64 16, i1 false)\n  call void @fill(ptr nocapture %a)\n  call void @read(ptr nocapture %b)\n  ret void\n}\n",
+    );
+    let body = &text[text.find("define void @f2").expect("@f2")..];
+    assert!(body.contains("%b") && body.contains("@llvm.memcpy"), "{body}");
+}
