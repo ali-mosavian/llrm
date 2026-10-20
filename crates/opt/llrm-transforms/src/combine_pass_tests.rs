@@ -70,3 +70,66 @@ fn the_pipeline_honours_the_combine_switch() {
     assert!(!off.contains("[4 x i8]"), "{off}");
     assert!(on.contains("[4 x i8]"), "{on}");
 }
+
+/// A pass that makes `add x, 1` into `add x, 0` and says it changed the
+/// function, or does not.
+struct Spoil {
+    reports_a_change: bool,
+}
+
+impl FunctionPass for Spoil {
+    fn name(&self) -> &'static str {
+        "spoil"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        let (_, add) = unit.function.walk().next().expect("an add");
+        let zero = llrm_mir::module::Operand::Constant(unit.context.int(unit.function.instruction(add).ty, 0));
+        unit.function.set_operand(add, 1, zero);
+        if self.reports_a_change {
+            llrm_mir::passes::PreservedAnalyses::none()
+        } else {
+            llrm_mir::passes::PreservedAnalyses::all()
+        }
+    }
+}
+
+const ADD: &str = "define i32 @f(i32 %x) {
+b0:
+  %a = add i32 %x, 1
+  ret i32 %a
+}
+";
+
+/// `ADD` through `Combine`, `Spoil`, `Combine`.
+fn combine_spoil_combine(reports_a_change: bool) -> String {
+    let mut module = parsed(ADD);
+    let mut manager = PassManager::default();
+    manager.add(Combine { enabled: true });
+    manager.add(Spoil { reports_a_change });
+    manager.add(Combine { enabled: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    printed(&module)
+}
+
+/// A pass that changed the function in between drops what InstCombine last saw
+/// (LLVM's `LastRunTrackingAnalysis`): the second run folds `add x, 0`.
+#[test]
+fn a_changing_pass_between_two_runs_makes_the_second_run_visit() {
+    let out = combine_spoil_combine(true);
+    assert!(!out.contains("add"), "{out}");
+}
+
+/// With nothing reported changed since the last run the second one is skipped,
+/// as `InstCombinePass::run` returns at `LRT.shouldSkip(&ID)`: the pipeline's
+/// idle `combine@N` slots each walked the whole function again (66 M
+/// instructions over five slots at d_faces -O2, the pin's ~5 K).
+#[test]
+fn a_run_with_nothing_changed_since_the_last_is_skipped() {
+    let out = combine_spoil_combine(false);
+    assert!(out.contains("add i32 %x, 0"), "{out}");
+}
