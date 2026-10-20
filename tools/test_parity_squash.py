@@ -615,3 +615,21 @@ def test_a_pr_with_a_real_conflict_is_not_pushed_to(tmp_path, monkeypatch):
     assert ps.update_generated_only(head, "pr", base="origin/main", cwd=work) == ""
     sh(work, "fetch", "-q", "origin")
     assert sh(work, "rev-parse", "origin/pr") == head
+
+
+def test_a_generated_only_conflict_pr_is_not_refused_at_the_squash(monkeypatch):
+    """The 03:02 symptom: six PRs the runner had regenerated were refused at `gh pr merge` (GitHub: not mergeable) because their branches never got the merge."""
+    monkeypatch.setattr(ps, "FAST", True)
+    calls = []
+
+    def run(cmd, **_):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "pr", "merge"]:
+            return subprocess.CompletedProcess(cmd, 0 if cmd[cmd.index("--match-head-commit") + 1] == "newsha" else 1)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    info = {"headRefOid": "oldsha", "headRefName": "pr", "title": "t", "mergeable": "CONFLICTING"}
+    assert ps.squash("2878", info, "", run=run, update=lambda head, branch: "newsha", settle=0)
+    comment = next(c for c in calls if c[:3] == ["gh", "pr", "comment"])
+    assert "never force" in comment[-1] and "newsha"[:9] in comment[-1]
+    assert not ps.squash("2872", info, "", run=run, update=lambda head, branch: "", settle=0)

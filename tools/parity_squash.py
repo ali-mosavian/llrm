@@ -398,6 +398,19 @@ def update_generated_only(head: str, branch: str, base: str = BASE, cwd: Path = 
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
 
 
+def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5) -> bool:
+    """Squash PR `number` into feat/parity. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
+    if FAST and info["mergeable"] == "CONFLICTING":
+        if not (fresh := update(info["headRefOid"], info["headRefName"])):
+            return False
+        note = f"The landing runner merged feat/parity into this branch ({fresh[:9]}; generated pages regenerated). If your push is rejected: git pull --no-rebase, then push; never force."
+        run(["gh", "pr", "comment", number, "--body", note])
+        info = {**info, "headRefOid": fresh}
+        time.sleep(settle)  # GitHub recomputes the PR's mergeability after the push
+    stage(f"squash #{number}")
+    return run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", body]).returncode == 0
+
+
 def merged_result(head: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str | None, str]:
     """(sha, "") of `head` with `base` merged into it, checked out detached in `cwd` and not pushed; (None, why) when `base` conflicts. When `head` already
     contains `base` the result is `head` itself. The squash lands on whatever feat/parity is at the call: the tests must run on this result, not on a head that
@@ -567,16 +580,9 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if number in left_out:
             refused.append(number)
             return
-        if FAST and infos[number]["mergeable"] == "CONFLICTING":
-            if not (fresh := update_generated_only(infos[number]["headRefOid"], infos[number]["headRefName"])):
-                refused.append(number)
-                return
-            infos[number]["headRefOid"] = fresh
-            time.sleep(5)  # GitHub recomputes the PR's mergeability after the push
-        stage(f"squash #{number}")
-        done = subprocess.run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", infos[number]["headRefOid"], "--subject", infos[number]["title"], "--body", known_red_line(known)])
-        (landed if done.returncode == 0 else refused).append(number)
-        if done.returncode == 0:
+        landed_ok = squash(number, infos[number], known_red_line(known))
+        (landed if landed_ok else refused).append(number)
+        if landed_ok:
             git("fetch", "-q", "origin", "feat/parity")
             log_landed(git("rev-parse", BASE).strip(), number, "gate-ok")
 
