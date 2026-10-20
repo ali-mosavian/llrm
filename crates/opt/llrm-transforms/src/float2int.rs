@@ -46,7 +46,8 @@
 //!
 //! # Runs
 //! As `float2int@1594`, in the late list after the second `simplifycfg` slot
-//! and before `instsimplify`, at every level (`PassBuilderPipelines.cpp#L1594`).
+//! and before `instsimplify`, at every level
+//! (`PassBuilderPipelines.cpp#L1594`).
 //!
 //! # Needs
 //! The dominator tree, to leave unreachable blocks alone.

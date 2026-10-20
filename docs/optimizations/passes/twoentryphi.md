@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/twoentryphi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/twoentryphi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:9fab671c0cbb818310ae17dc0e818821a94488f601e02e9809e703e83fa481f1 -->
+<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:11d50708661e2ee130c2c7d890b24c4d2eb2c4279dbaf8379aa5986dda782e79 -->
 
 # twoentryphi
 
@@ -32,10 +32,6 @@ a block whose first instruction is a phi of two entries.
 - D4. A hoisted instruction keeps the metadata kinds LLVM keeps
   (`dropUBImplyingAttrsAndMetadata`) and loses the rest; there are no debug
   records to drop.
-
-## See also
-[`phiopt`](phiopt.md), which prices a constant-only phi in the
-target's units and runs at its own slot.
 
 ## Example
 The phi that a branch chooses between becomes a select in the branch's

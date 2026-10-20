@@ -235,17 +235,25 @@ fn the_x86_model_makes_a_scaled_address_and_a_narrow_trunc_free() {
 }
 
 /// m16 priced every instruction with the generic rules (`Machine::tti` was
-/// none): a scaled address cost 5 more per use than the i386 X86 model LLVM
-/// prices `-code16` with, so a callee the walk inlines under it was refused.
+/// none): a narrow `trunc` cost 5 more per use than under the i386 X86 model
+/// LLVM prices `-code16` with, so a callee the walk inlines under it was
+/// refused. A scale-4 address is no 16-bit form, so it stays as dear as the
+/// generic rule has it.
 #[test]
-fn test_m16_prices_a_scaled_address_with_the_x86_model() {
+fn test_m16_prices_a_narrow_trunc_with_the_x86_model_and_a_scaled_address_dear() {
     use llrm_mir::target::Machine;
+    let m16 = llrm_x86_m16::Dos::default().tti();
     let gep = format!(
         "{GLOBAL}define internal i32 @callee(ptr %p, i32 %i) {{\nb0:\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  ret i32 %v\n}}\n\ndefine i32 @f(ptr %a, i32 %j) {{\nb0:\n  %r = call i32 @callee(ptr %a, i32 %j)\n  %s = call i32 @callee(ptr %a, i32 %r)\n  ret i32 %s\n}}\n"
     );
-    let m16 = llrm_x86_m16::Dos::default().tti();
     let generic = priced_with(&gep, 0, false, CallerSize::Speed, None).0;
     let target = priced_with(&gep, 0, false, CallerSize::Speed, m16.as_deref()).0;
+    assert_eq!(generic, target, "a scale-4 address is not free in real mode");
+    let trunc = format!(
+        "{GLOBAL}define internal i1 @callee(i32 %x) {{\nb0:\n  %t = trunc i32 %x to i1\n  ret i1 %t\n}}\n\ndefine i1 @f(i32 %y) {{\nb0:\n  %r = call i1 @callee(i32 %y)\n  %s = call i1 @callee(i32 %y)\n  ret i1 %r\n}}\n"
+    );
+    let generic = priced_with(&trunc, 0, false, CallerSize::Speed, None).0;
+    let target = priced_with(&trunc, 0, false, CallerSize::Speed, m16.as_deref()).0;
     assert_eq!(generic - target, 5, "generic {generic}, m16 {target}");
 }
 

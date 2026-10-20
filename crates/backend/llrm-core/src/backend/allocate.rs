@@ -130,28 +130,6 @@
 //! that register is free over its whole interval and joins more copies than
 //! the one it has, so each joined copy becomes a deleted move.
 //!
-//! ## Candidates
-//! The first run (`regalloc base`) is a full allocation of the prepared body.
-//! If it spilled, and the profile has `search` (`-fallocation-search`; off at
-//! -O0), the spilled values suggest other shapes of the same body and each is
-//! allocated and priced (`_emitted`: instructions and memory operands
-//! weighted by block frequency); the cheapest wins.
-//!
-//! - `Addressed`: address arithmetic of spilled values made apart from users.
-//! - `Unfolded`: folded indexes of spilled values opened.
-//! - `Scoped`, `ScopedOpened`: loop-local copies of the base values a loop's
-//!   spills lost, protected from spilling.
-//! - `Retainable`: one spilled invariant base protected from spilling.
-//! - `Whole`: the body as it was, without splitting.
-//!
-//! Unless the search is exhaustive (`-fallocation-search-all`, -Omax) only
-//! the first shape in the order `Retainable`, `Scoped`, `Addressed`,
-//! `Unfolded` that the spills admit is tried, plus `Whole` without
-//! splitting. A trial is kept only if it is cheaper and spilled none of its
-//! protected values: it stops at the first spill of one (`ABANDONED`), since
-//! the rounds after it could not change what is kept. The frame is restored
-//! between trials.
-//!
 //! ## Applying
 //! `applied` replaces every operand's value by its register at its width
 //! (selector and address registers included), deletes identity moves and
@@ -258,7 +236,6 @@ use llrm_lir::registers::RegId;
 
 use crate::analysis::frequency::Frequency;
 use crate::analysis::intervals::{self as ranges, Indexes, Interval};
-use crate::analysis::loops;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame, Refused};
 use crate::backend::live::LiveRanges;
@@ -267,7 +244,7 @@ use crate::backend::liveunion::{LiveUnion, Overlaps};
 use crate::backend::target::{self, Segments};
 use crate::backend::{constrain, datagroup, spiller, spillplacement, splitkit};
 use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Reg, Semantics, Space};
-use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
+use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::hash::{IndexMap, IndexSet};
 use crate::support::pyrepr::Repr;
@@ -1864,52 +1841,8 @@ impl Drop for RfpOn {
 /// The RFP registers FP0..FP6 (`class::RFP`), in allocation order.
 pub const RFP: [RegId; 7] = [RegId::MM0, RegId::MM1, RegId::MM2, RegId::MM3, RegId::MM4, RegId::MM5, RegId::MM6];
 
-/// Whether the translated greedy allocator allocates: by default, the allocate
-/// slot of LLVM's order being greedy's; `LLRM_NO_LLVM_ORDER` turns it off
-/// unless `LLRM_GREEDY` is set, and `LLRM_NO_GREEDY` alone, under the order.
-pub fn greedy_on() -> bool {
-    #[cfg(test)]
-    if OLD_ALLOCATOR.with(std::cell::Cell::get) {
-        return false;
-    }
-    llrm_support::env_flag!("LLRM_GREEDY")
-        || !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER") && !llrm_support::env_flag!("LLRM_NO_GREEDY")
-}
-
-#[cfg(test)]
-thread_local! {
-    static OLD_ALLOCATOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// The old allocator on this thread until dropped: for the tests of its
-/// mechanics (last resort, trial search, rebuilds), which greedy does not have
-/// and which are deleted with it.
-#[cfg(test)]
-pub struct OldAllocator;
-
-#[cfg(test)]
-impl OldAllocator {
-    pub fn pinned() -> Self {
-        OLD_ALLOCATOR.with(|old| old.set(true));
-        Self
-    }
-}
-
-#[cfg(test)]
-impl Drop for OldAllocator {
-    fn drop(&mut self) {
-        OLD_ALLOCATOR.with(|old| old.set(false));
-    }
-}
-
 thread_local! {
     static FACTS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-// `_emitted` runs, for a test that greedy prices nothing it does not compare.
-#[cfg(test)]
-thread_local! {
-    static PRICED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many times `Facts::of` has run on this thread.
@@ -2395,7 +2328,6 @@ fn _allocated(
     // and `RS_Spill`.
     let mut pieces: BTreeSet<u32> = BTreeSet::new();
     let mut splits_made = 0_usize;
-    let abandon: BTreeSet<u32> = ABANDON_IF_SPILLED.with(|set| set.borrow().clone());
     let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
 
@@ -2789,9 +2721,6 @@ fn _allocated(
                         if kept.contains(one) {
                             stage.insert(*one, Stage::Assign);
                         } else {
-                            if abandon.contains(one) {
-                                return Err(Error::Value(ABANDONED.to_owned()));
-                            }
                             spilled.insert(*one);
                             stage.insert(*one, Stage::Done);
                         }
@@ -3021,43 +2950,6 @@ fn _allocated(
         body,
         spilled,
     ))
-}
-
-/// What a trial's allocation returns once a value its shape protects is
-/// spilled: whatever else it does it is dropped (`kept` below), so the rounds
-/// after that spill are work no output reads.
-pub const ABANDONED: &str = "trial abandoned: a value it protects was spilled";
-
-thread_local! {
-    /// The values whose spilling makes the allocation running (a trial) one
-    /// that cannot be kept.
-    static ABANDON_IF_SPILLED: std::cell::RefCell<BTreeSet<u32>> = const { std::cell::RefCell::new(BTreeSet::new()) };
-    /// Whether trials are abandoned (a test turns it off to see that no output
-    /// changes), and how many were.
-    static ABANDONING: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
-    static ABANDONED_TRIALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many trials this thread abandoned, for a test.
-pub fn abandoned_trials() -> usize {
-    ABANDONED_TRIALS.with(std::cell::Cell::get)
-}
-
-/// Whether trials are abandoned once a protected value is spilled (on); a test
-/// turns it off.
-pub fn abandoning(on: bool) {
-    ABANDONING.with(|flag| flag.set(on));
-}
-
-thread_local! {
-    /// How many splits the base allocation of the last body that had one made.
-    static BASE_SPLITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many splits the base allocation of the last body this thread allocated
-/// made, for a test.
-pub fn base_splits() -> usize {
-    BASE_SPLITS.with(std::cell::Cell::get)
 }
 
 thread_local! {
@@ -3802,26 +3694,10 @@ fn _forced(
     best.map(|(_bill, register, victims)| (register, victims))
 }
 
-thread_local! {
-    static TRIALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static SHAPES_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many other shapes of a body the search made (not those it allocated).
-pub fn shapes_made() -> usize {
-    SHAPES_MADE.with(std::cell::Cell::get)
-}
-
-/// How many allocations this thread has made to try another shape of a body
-/// than the one it was given.
 /// Blocks the pins were not worked out of again after a rewrite, on this
 /// thread.
 pub fn required_skipped() -> usize {
     REQUIRED_SKIPPED.with(std::cell::Cell::get)
-}
-
-pub fn trials() -> usize {
-    TRIALS.with(std::cell::Cell::get)
 }
 
 thread_local! {
@@ -4374,284 +4250,46 @@ impl RegAlloc {
                 reloads.extend(made);
             }
         }
-        let start = frame.borrow().saved();
         drop(prepare);
-        // LLVM allocates each function once: the translated allocator runs no
-        // search over other shapes of the body, so nothing is priced.
-        let searched = cpu.search && !greedy_on();
-        // One allocation per candidate body, each splitting and spilling as
-        // it goes; the one whose output costs least is kept.
-        let run = |name: &'static str,
-                   candidate: &LirBody,
-                   unspillable: &BTreeSet<u32>,
-                   protected: &BTreeSet<u32>,
-                   splitting: bool|
-         -> Result<Outcome, Error> {
-            let _run = llrm_support::debug::span(name);
-            let mut pins = prefer.clone();
-            pins.extend(constrain::required(candidate, &self.classes));
-            let before = last_resorts();
-            // Each spill gets a slot of its own; they are shared once, over the
-            // allocation kept (`spiller::slots_colored`).
-            frame.borrow_mut().defer_colours = true;
-            let allocate = if greedy_on()
-                && std::env::var("LLRM_GREEDY_ONLY").map_or(true, |only| only.split(',').any(|n| n == candidate.name))
-            {
-                greedy_rewritten
-            } else {
-                rewritten
-            };
-            let allocated = allocate(
-                candidate,
-                Some(&pins),
-                Some(unspillable),
-                Some(protected),
-                (&cpu).into(),
-                &segments,
-                &self.classes,
-                &mut frame.borrow_mut(),
-                splitting,
-            );
-            frame.borrow_mut().defer_colours = false;
-            let (got, out, spilled) = allocated?;
-            let cost = searched.then(|| llrm_support::debug::timed("regalloc cost", || _emitted(&out)));
-            Ok(Outcome { cost, got, out, spilled, slots: frame.borrow().saved(), forced: last_resorts() - before })
-        };
-        let mut best = run("regalloc base", &body, &reloads, &BTreeSet::new(), true)?;
+        let base = llrm_support::debug::span("regalloc base");
+        let mut pins = prefer.clone();
+        pins.extend(constrain::required(&body, &self.classes));
+        let before = last_resorts();
+        // Each spill gets a slot of its own; they are shared once, over the
+        // allocation (`spiller::slots_colored`).
+        frame.borrow_mut().defer_colours = true;
+        let allocated = greedy_rewritten(
+            &body,
+            Some(&pins),
+            Some(&reloads),
+            Some(&BTreeSet::new()),
+            (&cpu).into(),
+            &segments,
+            &self.classes,
+            &mut frame.borrow_mut(),
+            true,
+        );
+        frame.borrow_mut().defer_colours = false;
+        let (got, out, spilled) = allocated?;
+        drop(base);
         llrm_support::debug!(
             "regalloc",
-            "{}: {} insns, {} spilled, cost {:?}, {} forced",
+            "{}: {} insns, {} spilled, {} forced",
             body.name,
-            best.out.insns().len(),
-            best.spilled.len(),
-            best.cost,
-            best.forced
+            out.insns().len(),
+            spilled.len(),
+            last_resorts() - before
         );
-        let spilled = best.spilled.clone();
-        let base_stats = LAST_STATS.with(std::cell::Cell::get);
-        BASE_SPLITS.with(|splits| splits.set(base_stats.0));
-        if !spilled.is_empty() && searched {
-            // Other shapes of the same body, which the base allocation's spills
-            // suggest: each is kept only if its output is cheaper.
-            let building = llrm_support::debug::span("regalloc candidates");
-            let mut candidates: Vec<(Shape, LirBody, BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
-            if cpu.exhaustive {
-                let (separated, opened) = constrain::addressed(&body, &spilled);
-                if !opened.is_empty() {
-                    candidates.push((Shape::Addressed, separated, reloads.clone(), BTreeSet::new(), opened));
-                }
-                let (unfolded, opened) = spiller::unfolded_indexes(&body, &spilled);
-                if !opened.is_empty() {
-                    candidates.push((Shape::Unfolded, unfolded, reloads.clone(), BTreeSet::new(), BTreeSet::new()));
-                }
-                let (scoped, keep) = splitkit::loop_bases(&body, &spilled);
-                if !keep.is_empty() {
-                    let folded = _scoped_foldable_indexes(&scoped, &keep);
-                    let (opened_body, opened) = spiller::unfolded_indexes(&scoped, &folded);
-                    if !opened.is_empty() {
-                        candidates.push((
-                            Shape::ScopedOpened,
-                            opened_body,
-                            reloads.clone(),
-                            keep.clone(),
-                            keep.clone(),
-                        ));
-                    }
-                    candidates.push((Shape::Scoped, scoped, reloads.clone(), keep.clone(), keep.clone()));
-                }
-                for candidate in _retainable_bases(&body, &spilled) {
-                    let keep = BTreeSet::from([candidate]);
-                    candidates.push((Shape::Retainable, body.clone(), reloads.clone(), keep.clone(), keep));
-                }
-            } else {
-                // Only the first shape of `Shape::PICKED` the spills admit is
-                // allocated, so only it is made (LLVM makes no shape the run
-                // does not take).
-                for want in Shape::PICKED {
-                    match want {
-                        Shape::Retainable => {
-                            if let Some(candidate) = _retainable_bases(&body, &spilled).into_iter().next() {
-                                let keep = BTreeSet::from([candidate]);
-                                candidates.push((Shape::Retainable, body.clone(), reloads.clone(), keep.clone(), keep));
-                            }
-                        }
-                        Shape::Scoped => {
-                            let (scoped, keep) = splitkit::loop_bases(&body, &spilled);
-                            if !keep.is_empty() {
-                                candidates.push((Shape::Scoped, scoped, reloads.clone(), keep.clone(), keep));
-                            }
-                        }
-                        Shape::Addressed => {
-                            let (separated, opened) = constrain::addressed(&body, &spilled);
-                            if !opened.is_empty() {
-                                candidates.push((
-                                    Shape::Addressed,
-                                    separated,
-                                    reloads.clone(),
-                                    BTreeSet::new(),
-                                    opened,
-                                ));
-                            }
-                        }
-                        Shape::Unfolded => {
-                            let (unfolded, opened) = spiller::unfolded_indexes(&body, &spilled);
-                            if !opened.is_empty() {
-                                candidates.push((
-                                    Shape::Unfolded,
-                                    unfolded,
-                                    reloads.clone(),
-                                    BTreeSet::new(),
-                                    BTreeSet::new(),
-                                ));
-                            }
-                        }
-                        _ => {}
-                    }
-                    if !candidates.is_empty() {
-                        break;
-                    }
-                }
-            }
-            // Splitting is priced one value at a time, against registers its
-            // pieces may later lose; the whole output without it is the check.
-            let whole = candidates.len();
-            SHAPES_MADE.with(|count| count.set(count.get() + whole));
-            candidates.push((Shape::Whole, body.clone(), reloads.clone(), BTreeSet::new(), BTreeSet::new()));
-            drop(building);
-            // Unless the search is exhaustive (-Omax): the first shape of
-            // `Shape::PICKED` the spills admit, and the
-            // body without splitting, which no spill suggests. Across 4045
-            // allocations of QCport, the bench and the 66 programs
-            // this is the exhaustive search's output on every bench row, +0.04%
-            // on QCport's bytes, at 2 allocations instead of up to
-            // 12.
-            let picked = if cpu.exhaustive {
-                None
-            } else {
-                Shape::PICKED.iter().find_map(|want| candidates.iter().position(|one| one.0 == *want))
-            };
-            for (at, (shape, candidate, unspillable, protected, kept)) in candidates.into_iter().enumerate() {
-                for splitting in [true, false] {
-                    if !cpu.exhaustive
-                        && !(shape == Shape::Whole && !splitting)
-                        && !(Some(at) == picked && splitting != (shape == Shape::Whole))
-                    {
-                        continue;
-                    }
-                    // The base allocation split nothing, so allocating without
-                    // splitting is that allocation again.
-                    if shape == Shape::Whole && !splitting && base_stats.0 == 0 {
-                        continue;
-                    }
-                    // The base run was this body with splitting.
-                    if at == whole && splitting {
-                        continue;
-                    }
-                    frame.borrow_mut().restore(&start);
-                    TRIALS.with(|count| count.set(count.get() + 1));
-                    if ABANDONING.with(std::cell::Cell::get) {
-                        ABANDON_IF_SPILLED.with(|set| *set.borrow_mut() = kept.clone());
-                    }
-                    let trial = run("regalloc trial", &candidate, &unspillable, &protected, splitting);
-                    ABANDON_IF_SPILLED.with(|set| set.borrow_mut().clear());
-                    let trial = match trial {
-                        Ok(trial) => trial,
-                        Err(Error::Value(text)) if text == ABANDONED => {
-                            ABANDONED_TRIALS.with(|count| count.set(count.get() + 1));
-                            llrm_support::debug!("regalloc", "  trial {shape:?} (splitting {splitting}): abandoned");
-                            continue;
-                        }
-                        Err(other) => return Err(other),
-                    };
-                    llrm_support::debug!(
-                        "regalloc",
-                        "  trial {shape:?} (splitting {splitting}): {} spilled, cost {:?}, {} forced",
-                        trial.spilled.len(),
-                        trial.cost,
-                        trial.forced
-                    );
-                    if kept.is_disjoint(&trial.spilled) && trial.cost < best.cost {
-                        llrm_support::debug!("regalloc", "  kept the trial");
-                        best = trial;
-                    }
-                }
-            }
-        }
-        frame.borrow_mut().restore(&best.slots);
-        let colored = llrm_support::debug::timed("spill slots shared", || {
-            spiller::slots_colored(&best.out, &mut frame.borrow_mut())
-        });
+        let colored =
+            llrm_support::debug::timed("spill slots shared", || spiller::slots_colored(&out, &mut frame.borrow_mut()));
         let _apply = llrm_support::debug::span("regalloc apply");
-        applied(&colored, &best.got, &self.classes).map(|placed| datagroup::restored(&placed, data_free, &segments))
+        applied(&colored, &got, &self.classes).map(|placed| datagroup::restored(&placed, data_free, &segments))
     }
 }
 
-/// The other shapes of a body the allocator may try after the first allocation,
-/// by what they change.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Shape {
-    /// Address computations of spilled values made apart from their users.
-    Addressed,
-    /// Folded indexes of spilled values opened.
-    Unfolded,
-    /// Loop-local copies of the base values a loop's spills lost, protected
-    /// from spilling.
-    Scoped,
-    /// `Scoped`, with the indexes it can fold opened.
-    ScopedOpened,
-    /// One spilled invariant base value protected from spilling.
-    Retainable,
-    /// The body as it was, for the no-splitting allocation.
-    Whole,
-}
-
-impl Shape {
-    /// The order a shape is picked in: the one that won most often, by mean and
-    /// worst case, over every order tried on 4045 allocations.
-    const PICKED: [Shape; 4] = [Shape::Retainable, Shape::Scoped, Shape::Addressed, Shape::Unfolded];
-}
-
-/// One finished allocation: its output, what that costs, and the frame it left.
-struct Outcome {
-    /// Only where a search compares it.
-    cost: Option<f64>,
-    got: Assignment,
-    out: LirBody,
-    spilled: BTreeSet<u32>,
-    slots: (IndexMap<frames::SlotKey, i64>, IndexMap<i64, i64>),
-    /// How many values it took a register for by force.
-    forced: usize,
-}
-
-/// `_emitted`'s prices: one instruction, one memory operand.
+/// A reload's prices: one instruction, one memory operand.
 const INSTRUCTION: f64 = 1.0;
 const MEMORY_OPERAND: f64 = 1.0;
-
-/// What a body costs to run: its instructions and memory operands, each
-/// weighted by how often its block runs. Alternatives differ only in what the
-/// allocator added, so this is the cost of that.
-fn _emitted(body: &LirBody) -> f64 {
-    #[cfg(test)]
-    PRICED.with(|count| count.set(count.get() + 1));
-    // The count the run makes: an anchor that prints nothing is not an
-    // instruction.
-    if let Some(work) = crate::backend::executed::work(body) {
-        return work;
-    }
-    let busy = Frequency::of(body);
-    body.blocks
-        .iter()
-        .map(|block| {
-            let printed = block.insns.iter().filter(|one| crate::backend::masm::prints(one));
-            let memory: usize = printed
-                .clone()
-                .filter_map(|one| one.what.as_ref())
-                .map(|what| what.dests.iter().chain(&what.sources).filter(|place| matches!(place, Loc::Mem(_))).count())
-                .sum();
-            busy.block(block.at) * (printed.count() as f64 * INSTRUCTION + memory as f64 * MEMORY_OPERAND)
-        })
-        .sum()
-}
 
 impl LIRTransform for RegAlloc {
     fn class_name(&self) -> &'static str {
@@ -4898,79 +4536,8 @@ pub fn traffic_by_cause(body: &LirBody) -> std::collections::BTreeMap<&'static s
     out
 }
 
-/// Spilled invariant frame loads that repeatedly form addresses.
-fn _retainable_bases(
-    body: &LirBody,
-    spilled: &BTreeSet<u32>,
-) -> BTreeSet<u32> {
-    if spilled.is_empty() {
-        return BTreeSet::new();
-    }
-    let stable: BTreeSet<u32> = spiller::_stable_loads(body, spilled).keys().copied().collect();
-    if stable.is_empty() {
-        return BTreeSet::new();
-    }
-    let busy = Frequency::of(body);
-    let mut references: IndexMap<u32, f64> = IndexMap::default();
-    for block in &body.blocks {
-        let weight = busy.block(block.at);
-        for one in &block.insns {
-            let bases: BTreeSet<u32> = match &one.what {
-                Some(what) => what
-                    .dests
-                    .iter()
-                    .chain(&what.sources)
-                    .filter_map(|place| match place {
-                        Loc::Mem(cell) => cell.base.map(|base| base.value),
-                        _ => None,
-                    })
-                    .collect(),
-                None => BTreeSet::new(),
-            };
-            for value in stable.intersection(&bases) {
-                *references.entry(*value).or_insert(0.0) += weight;
-            }
-        }
-    }
-    let repeated: BTreeSet<u32> =
-        references.iter().filter(|(_value, weight)| **weight > 1.0).map(|(value, _)| *value).collect();
-    stable.intersection(&repeated).copied().collect()
-}
-
-/// Dying word indexes in a natural loop that actually uses `bases`.
-fn _scoped_foldable_indexes(
-    body: &LirBody,
-    bases: &BTreeSet<u32>,
-) -> BTreeSet<u32> {
-    if bases.is_empty() {
-        return BTreeSet::new();
-    }
-    let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let mut indexes: BTreeSet<u32> = BTreeSet::new();
-    for found in loops::loops(&body.blocks, Some(body.entry)) {
-        let cells: Vec<&Mem> = found
-            .body
-            .iter()
-            .map(|at| blocks[at])
-            .flat_map(|block| &block.insns)
-            .filter_map(|one| one.what.as_ref())
-            .flat_map(|what| what.dests.iter().chain(&what.sources))
-            .filter_map(|place| match place {
-                Loc::Mem(cell) => Some(cell),
-                _ => None,
-            })
-            .collect();
-        if !cells.iter().any(|cell| cell.base.is_some_and(|base| bases.contains(&base.value))) {
-            continue;
-        }
-        indexes
-            .extend(cells.iter().filter(|cell| cell.scale == 1).filter_map(|cell| cell.index.map(|index| index.value)));
-    }
-    spiller::foldable_indexes(body, &indexes)
-}
-
 /// What holding a value in a register saves at one reference, in reloads: a
-/// reload is an instruction and a memory operand at `_emitted`'s prices, and an
+/// reload is an instruction and a memory operand at these prices, and an
 /// instruction that names the value takes the memory operand (`_foldable`), so
 /// a fold saves the instruction.
 pub(crate) fn _held_saving(one: &Insn) -> f64 {
@@ -5655,18 +5222,6 @@ mod tests {
         _through_regalloc(_one_block(insns), &[]);
         assert_eq!(greedy_runs().0 - runs, 1, "premise: the greedy allocator placed the body");
         assert_eq!(facts_built() - built, 0);
-    }
-
-    /// Each allocation was priced for the search over other shapes, which the
-    /// greedy allocator never runs: `executed` with its own frequencies, 4.4 M
-    /// of 1945 M instructions on d_faces.
-    #[test]
-    fn test_the_greedy_allocator_prices_no_allocation() {
-        let insns: Vec<Insn> = vec![_mov(1, 2, 4)];
-        let (runs, priced) = (greedy_runs().0, PRICED.with(std::cell::Cell::get));
-        _through_regalloc(_one_block(insns), &[]);
-        assert_eq!(greedy_runs().0 - runs, 1, "premise: the greedy allocator placed the body");
-        assert_eq!(PRICED.with(std::cell::Cell::get) - priced, 0);
     }
 
     fn _one_block(insns: Vec<Insn>) -> LirBody {
@@ -6698,21 +6253,6 @@ mod tests {
     }
 
     #[test]
-    fn test_repeated_acyclic_stable_address_base_is_a_retention_candidate() {
-        let mut insns = vec![_frame_load(1, 1, 6)];
-        for at in [2u32, 3] {
-            let cell = Mem {
-                base: Some(Held { value: 1, width: 2 }),
-                ..Mem::new(Some(Addr::new(Space::Far, i64::from(at) * 2)), 2)
-            };
-            insns.push(_load(i64::from(at), at, cell, vec![1]));
-        }
-        let body = body_of("acyclic-stable-base", 0, insns);
-
-        assert_eq!(_retainable_bases(&body, &values(&[1])), values(&[1]));
-    }
-
-    #[test]
     fn test_retained_owner_influences_commutative_address_roles_before_allocation() {
         let cell = Mem {
             base: Some(Held { value: 1, width: 2 }),
@@ -6727,27 +6267,6 @@ mod tests {
 
         assert_eq!(confined[&1], crate::backend::classes::RegisterClasses::m16().word_indexes);
         assert_eq!(confined[&2], crate::backend::classes::RegisterClasses::m16().word_bases);
-    }
-
-    /// The allocator ranked its candidate bodies counting every instruction,
-    /// anchors that print nothing among them: a body with more anchors cost
-    /// more than one with more code, and the run, which counts what prints,
-    /// said the reverse.
-    #[test]
-    fn test_anchors_that_print_nothing_do_not_cost_the_candidate() {
-        let anchor = |at| _instruction(at, semantics(Operation::Nothing, "", vec![], vec![]), vec![], vec![]);
-        let body = body_of(
-            "anchored",
-            0,
-            vec![
-                anchor(1),
-                _mov(1, 1, 2),
-                anchor(3),
-                anchor(4),
-                Insn { what: Some(semantics(Operation::Return, "ret", vec![], vec![])), ..anchor(5) },
-            ],
-        );
-        assert_eq!(_emitted(&body), 2.0);
     }
 
     #[test]

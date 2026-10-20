@@ -17,7 +17,7 @@
 //!   a["<b>globalopt, ports, Stamp</b><br/><small>(module / program)</small>"]:::mid
 //!   subgraph g_body["PER BODY, REPEATED TO A FIXED POINT"]
 //!     s1["<b>sroa (+ splitcopy)</b><br/><small>at boundaries</small>"]:::mid
-//!     s2["<b>cleanup: fold decide dead</b><br/><small>algebraic phiopt dse gvn<br/>promote inferspace<br/>calls: tailrec<br/>loops: loopsimplify lcssa<br/>licm<br/>trivialunswitch indvars<br/>floatloop fill</small>"]:::mid
+//!     s2["<b>cleanup: fold decide dead</b><br/><small>algebraic dse gvn<br/>promote inferspace<br/>calls: tailrec<br/>loops: loopsimplify lcssa<br/>licm<br/>trivialunswitch indvars<br/>floatloop fill</small>"]:::mid
 //!     s3["<b>after each round: unroll</b>"]:::mid
 //!     s4["<b>after it settles: peel,</b><br/><small>unswitch, split, fuse, distribute, unroll-jam, merge</small>"]:::mid
 //!   end
@@ -46,7 +46,7 @@
 //! judges a rewrite tried on a copy of the body.
 //!
 //! Scalar and memory: `fold` (with `canonical` and `floatfold`), `decide`,
-//! `dead`, `algebraic`, `phiopt`, `cfg`, `dse`, `gvn`,
+//! `dead`, `algebraic`, `cfg`, `dse`, `gvn`,
 //! `promote` (`Sroa`, `Promote`, with `splitcopy`), `inferspace`,
 //! `gepoffset`, `addresssink`, `fixednarrow`, `ports`.
 //!
@@ -93,6 +93,8 @@ pub mod canonexit;
 pub mod canonical;
 pub mod cfg;
 pub mod combine;
+pub mod combine_add_idioms;
+pub mod combine_and;
 pub mod combine_addsub;
 pub mod combine_build;
 pub mod combine_casts;
@@ -108,15 +110,18 @@ pub mod combine_gep_merge;
 pub mod combine_gep_phi;
 pub mod combine_loadstore;
 pub mod combine_muldivrem;
+pub mod combine_negator;
 #[cfg(test)]
 mod combine_muldivrem_tests;
 pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_select;
 pub mod combine_select_bools;
+pub mod combine_select_into_op;
 pub mod combine_select_op_op;
 pub mod combine_shared;
 pub mod combine_shifts;
+pub mod combine_sub;
 pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
@@ -241,7 +246,6 @@ pub mod parity;
 #[cfg(test)]
 mod parity_tests;
 pub mod peel;
-pub mod phiopt;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;

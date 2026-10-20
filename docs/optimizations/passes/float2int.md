@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/float2int.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/float2int.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/float2int.rs sha256:807640e49fac0cf3cb3f403b585ce9e5b6c5851a8e7951b46e72d8951ba4aa52 -->
+<!-- src: crates/opt/llrm-transforms/src/float2int.rs sha256:fff477118ed0881f075b609254913ef0cbc78fbd86742794f180339e5f8c0a6a -->
 
 # float2int
 
@@ -51,7 +51,8 @@ float; see `float2int_tests.rs`.
 
 ## Runs
 As `float2int@1594`, in the late list after the second `simplifycfg` slot
-and before `instsimplify`, at every level (`PassBuilderPipelines.cpp#L1594`).
+and before `instsimplify`, at every level
+(`PassBuilderPipelines.cpp#L1594`).
 
 ## Needs
 The dominator tree, to leave unreachable blocks alone.
