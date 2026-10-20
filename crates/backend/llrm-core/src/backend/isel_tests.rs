@@ -252,8 +252,8 @@ fn test_a_pointer_parameter_is_a_base_register() {
 }
 
 /// A word address reads its base and index from disjoint register sets, so
-/// one value in both roles reaches the allocator as two: isel copies it, as
-/// regalloc's `distinct_roles` once did.
+/// isel gives one value in both roles a copy (regalloc's `distinct_roles`
+/// copies again where the coalescer joined them).
 #[test]
 fn test_a_value_used_as_base_and_index_is_two_registers() {
     let text = "define i8 @g(i16 %i) addrspace(1) {
