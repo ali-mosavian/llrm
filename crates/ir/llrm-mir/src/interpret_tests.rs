@@ -257,6 +257,23 @@ fn bit_count_intrinsics_count_what_the_machine_integers_do() {
     }
 }
 
+/// `llvm.bswap` reverses the bytes of an integer of any whole number of 16-bit
+/// units.
+#[test]
+fn bswap_reverses_the_bytes() {
+    let call = |bits: u32, value: u128| {
+        result(&format!(
+            "declare i{bits} @llvm.bswap.i{bits}(i{bits})\n\
+             define i{bits} @f() {{\n  %r = call i{bits} @llvm.bswap.i{bits}(i{bits} {value})\n  ret i{bits} %r\n}}\n"
+        ))
+    };
+    assert_eq!(call(16, 0x1234), int(0x3412, 16));
+    assert_eq!(call(32, 0x1234_5678), int(0x7856_3412, 32));
+    assert_eq!(call(64, 0x0123_4567_89ab_cdef), int(0xefcd_ab89_6745_2301, 64));
+    assert_eq!(call(48, 0x0123_4567_89ab), int(0xab89_6745_2301, 48));
+    assert_eq!(call(128, 1), int(1 << 120, 128));
+}
+
 /// `llvm.scmp` and `llvm.ucmp` give -1, 0 or 1 at the result's width, comparing
 /// as signed or unsigned integers.
 #[test]

@@ -110,8 +110,11 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     assert_eq!(parity::check(parity::REGISTRY, Phase::Backend, &built), Ok(()));
     let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@99"), "{why}");
-    let why = parity::check_backend(&["floatalloc@8", "coalesce@10", "jumps@17", "allocate@11", "unknown@1"], &[])
-        .unwrap_err();
+    let why = parity::check_backend(
+        &["machinecse@4", "machinesink@4", "floatalloc@8", "coalesce@10", "jumps@17", "allocate@11", "unknown@1"],
+        &[],
+    )
+    .unwrap_err();
     assert!(why.contains("unknown@1"), "{why}");
 }
 
@@ -301,13 +304,13 @@ fn test_sccp_stands_between_gvn_and_bdce() {
 }
 
 /// LSR's translated pieces landed with no registry row, so the count could not
-/// show them; DomTree was translated with no analyses row. The slot is Old
-/// while no pass calls the pieces, and `dominators` is a Translated analysis.
+/// show them; DomTree was translated with no analyses row. The slot is
+/// Translated now the pass calls the pieces, and `dominators` is a Translated
+/// analysis.
 #[test]
 fn test_lsr_is_a_registered_slot_and_dominators_a_translated_analysis() {
     let lsr = parity::REGISTRY.iter().find(|one| one.slot == "lsr").expect("lsr is registered");
-    assert_eq!((lsr.llvm, lsr.kind), ("loop-reduce (LoopStrengthReduce.cpp)", SlotKind::Old));
-    assert!(!lsr.replaced_by.is_empty(), "an Old slot names who replaces it");
+    assert_eq!((lsr.llvm, lsr.kind), ("loop-reduce (LoopStrengthReduce.cpp)", SlotKind::Translated));
     let dominators = parity::ANALYSES.iter().find(|one| one.key == "dominators").expect("dominators is registered");
     assert_eq!(
         (dominators.llvm, dominators.kind, dominators.off),
@@ -335,7 +338,6 @@ fn test_every_analysis_the_manager_names_has_a_registry_row() {
         include_str!("../../llrm-analysis/src/noreturn.rs"),
         include_str!("../../llrm-analysis/src/observers.rs"),
         include_str!("../../llrm-analysis/src/scev/analysis.rs"),
-        include_str!("lsr.rs"),
         include_str!("spill.rs"),
         include_str!("../../../ir/llrm-mir/src/memory.rs"),
     ];

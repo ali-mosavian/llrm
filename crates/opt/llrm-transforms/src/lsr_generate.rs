@@ -1042,6 +1042,7 @@ impl Collection<'_, '_> {
         lu_idx: usize,
         losers: Option<&mut HashSet<Scev>>,
     ) {
+        self.rated.set(self.rated.get() + 1);
         let mut rating = Rating {
             se,
             cx: self.cx,
