@@ -251,6 +251,25 @@ fn test_a_pointer_parameter_is_a_base_register() {
     );
 }
 
+/// A word address reads its base and index from disjoint register sets, so
+/// one value in both roles reaches the allocator as two: isel copies it, as
+/// regalloc's `distinct_roles` once did.
+#[test]
+fn test_a_value_used_as_base_and_index_is_two_registers() {
+    let text = "define i8 @g(i16 %i) addrspace(1) {
+  %p = inttoptr i16 %i to ptr
+  %q = getelementptr inbounds i8, ptr %p, i16 %i
+  %v = load i8, ptr %q
+  ret i8 %v
+}
+";
+    let got = listing(text, "g");
+    let load = got.iter().find(|line| line.starts_with("mov al, byte ptr [")).expect("the load");
+    let inside = &load[load.find('[').expect("a cell") + 1..load.find(']').expect("a cell")];
+    let (base, index) = inside.split_once('+').expect("a base and an index");
+    assert_ne!(base, index, "{got:?}");
+}
+
 #[test]
 fn test_a_constant_compared_first_is_swapped() {
     let text = "define i16 @f(i16 %a) addrspace(1) {
