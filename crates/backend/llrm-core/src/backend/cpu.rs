@@ -154,6 +154,12 @@ pub struct Profile {
     /// rounds to its type, where otherwise x87 keeps the wider value in its
     /// register, as gcc's `-fexcess-precision=fast` does.
     pub float_store: bool,
+    /// A spill of a float value rounds to its type, as the pin's RFP32 and
+    /// RFP64 spills do (`C`): the spill cell is as wide as the value's type.
+    /// Off, the cell keeps x87's wider format and a spill loses no precision
+    /// the language allows to stay (Nib and BASIC: only a store the program
+    /// writes rounds).
+    pub rounds_float_spills: bool,
     /// With `search`, whether it tries every shape (`-fallocation-search-all`,
     /// -Omax) or the one the spills suggest and the body without splitting.
     pub exhaustive: bool,
@@ -302,6 +308,7 @@ impl Profile {
             optimized: true,
             aggressive: false,
             float_store: false,
+            rounds_float_spills: false,
             exhaustive: false,
             model: arch.cost_model(),
             multiplies: Default::default(),
@@ -430,7 +437,7 @@ fn _profile(
 static _MADE: LazyLock<
     std::sync::Mutex<
         crate::support::hash::HashMap<
-            (&'static str, String, bool, bool, bool, bool, bool, bool, bool),
+            (&'static str, String, bool, bool, bool, bool, bool, bool, bool, bool),
             &'static Profile,
         >,
     >,
@@ -487,7 +494,7 @@ pub fn tuned_routing(
     exhaustive: bool,
     routes: bool,
 ) -> Result<&'static Profile, String> {
-    tuned_optimizing(arch, name, size, search, exhaustive, routes, true, false, false)
+    tuned_optimizing(arch, name, size, search, exhaustive, routes, true, false, false, false)
 }
 
 /// `tuned_routing`, the backend's optional phases left out where not
@@ -502,12 +509,13 @@ pub fn tuned_optimizing(
     optimized: bool,
     float_store: bool,
     aggressive: bool,
+    rounds_float_spills: bool,
 ) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
     }
     let mut made = _MADE.lock().expect("the profiles are not poisoned");
-    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes, optimized, float_store, aggressive);
+    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes, optimized, float_store, aggressive, rounds_float_spills);
     if let Some(&one) = made.get(&key) {
         return Ok(one);
     }
@@ -519,6 +527,7 @@ pub fn tuned_optimizing(
         optimized,
         float_store,
         aggressive,
+        rounds_float_spills,
         ..(_profile(arch, name)).expect("every listed CPU has a profile")
     }));
     made.insert(key, one);
