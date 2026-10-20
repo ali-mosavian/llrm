@@ -85,6 +85,7 @@
 //! | [`simplifyBranchOnICmpChain`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5469), called from `simplifyCondBranch` ([L8985](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8985)) | `block_simplified`, `icmpchain::folded` | MIRROR for the call; see that module |
 //! | [`speculativelyExecuteBB`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3244), called from `simplifyCondBranch` ([L9060](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9060)) | `branch_speculated`, `speculate::executed` | MIRROR for the call; see that module |
 //! | [`foldCondBranchOnValueKnownInPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3814), called from `simplifyCondBranch` ([L9068](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9068)) | `block_simplified`, `knownpred::folded` | MIRROR for the call; see that module |
+//! | [`tryToSimplifyUncondBranchWithICmpSelectInIt`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5328) and its `ICmpInIt` form, called from `simplifyUncondBranch` ([L8827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8827)) | `block_simplified`, `uncondicmp::folded` | MIRROR for the call; see that module |
 //! | [`tailMergeBlocksWithSimilarFunctionTerminators`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L142), called from `simplifyFunctionCFGImpl` after the first `removeUnreachableBlocks` | `tailmerge::merged` | MIRROR; see that module |
 //! | [`sinkCommonCodeFromPredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L2425) and [`simplifyDuplicatePredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8573), called from `simplifyOnce` ([L9336](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9336)) under `SinkCommonInsts` | `sinkcommon::sunk`, `sinkcommon::duplicate_predecessors_merged`, `Options::sink_common_insts` | MIRROR for the calls; see that module |
 //! | [`foldBranchToCommonDest`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4231), called from `simplifyCondBranch` ([L9005](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9005)) under `SpeculateBlocks` | `branchtocommon::folded` | MIRROR for the call; see that module |
@@ -188,12 +189,18 @@ use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
 use crate::twoentryphi::{self, Speculation};
-use crate::{branchtocommon, condstores, hoistcommon, icmpchain, knownpred, sinkcommon, speculate, tailmerge, undefpred};
+use crate::{
+    branchtocommon, condstores, hoistcommon, icmpchain, knownpred, sinkcommon, speculate, tailmerge, uncondicmp,
+    undefpred,
+};
 use crate::{cfg, dead, edges, transform};
 
-/// LLVM's `SimplifyCFGPass` at the options of the early function pipeline
-/// slot (`SimplifyCFGOptions()`: `PassBuilderPipelines.cpp`).
-pub struct SimplifyCfg;
+/// LLVM's `SimplifyCFGPass` at one slot's `SimplifyCFGOptions`
+/// (`PassBuilderPipelines.cpp`); by default those of the early slot.
+#[derive(Default)]
+pub struct SimplifyCfg {
+    pub options: Options,
+}
 
 impl FunctionPass for SimplifyCfg {
     fn name(&self) -> &'static str {
@@ -216,7 +223,7 @@ impl FunctionPass for SimplifyCfg {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = crate::looprotate::target_tti(outer.target());
         let spec = Speculation { tti: &*tti, layout: unit.layout, outer: &outer };
-        if simplified(unit.context, &spec, unit.function) {
+        if simplified_with(&self.options, unit.context, &spec, unit.function) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -237,6 +244,28 @@ pub struct Options {
     pub hoist_common_insts: bool,
     /// `SinkCommonInsts`: sink the code every jump into a block shares.
     pub sink_common_insts: bool,
+}
+
+impl Options {
+    /// The slot at
+    /// [L1438](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1438):
+    /// the extra sinking can create larger blocks, so loops need not stay
+    /// canonical. The switch options are not translated.
+    pub const L1438: Options = Options {
+        need_canonical_loop: false,
+        speculate_blocks: true,
+        hoist_common_insts: true,
+        sink_common_insts: true,
+    };
+
+    /// The slot at
+    /// [L2376](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L2376).
+    pub const L2376: Options = Options {
+        need_canonical_loop: true,
+        speculate_blocks: true,
+        hoist_common_insts: true,
+        sink_common_insts: false,
+    };
 }
 
 impl Default for Options {
@@ -378,10 +407,14 @@ fn block_simplified(
     if function.is_placed(block) && knownpred::folded(context, spec, function, block, headers) {
         return true;
     }
-    changed
-        | (function.is_placed(block)
-            && !form.contains(&llrm_analysis::cfg::id(block))
-            && jump_simplified(context, function, block, headers))
+    if function.is_placed(block)
+        && !form.contains(&llrm_analysis::cfg::id(block))
+        && jump_simplified(context, function, block, headers)
+    {
+        return true;
+    }
+    // The rest of `simplifyUncondBranch`, where the empty block did not go.
+    changed | (function.is_placed(block) && uncondicmp::folded(context, spec.layout, function, block))
 }
 
 /// The code the two arms of the branch ending `block` share, run before it:

@@ -503,6 +503,13 @@ def test_a_precheck_verdict_is_cached_per_pr_head_and_feat_parity_sha(tmp_path, 
     assert ps.precheck("9", base_sha="p2", **args) == "9: PASS" and len(merges) == 2  # the verdict is for the head sha, whichever number asks
 
 
+def test_a_fast_batch_leaves_out_the_pr_that_cannot_join_and_keeps_the_rest():
+    """The user's call: merge everything, skip the tests. One PR that conflicts or deletes unnamed code is left out with its reason; it does not fail or halve the batch."""
+    why = {"2": "conflicts with an earlier PR of the batch", "4": "deletes 31 lines"}
+    kept, left_out = ps.fast_merge(["1", "2", "3", "4", "5"], lambda number: why.get(number, ""))
+    assert kept == ["1", "3", "5"] and left_out == why, (kept, left_out)
+
+
 def test_the_precheck_formats_only_the_prs_own_rust_files(tmp_path, monkeypatch):
     """fmt --check over the whole tree took ~13 s of a ~70 s precheck for a PR that touches a handful of files; the PR side checks only its changed .rs files."""
     for name, text in {"ok.rs": "fn a() {}\n", "bad.rs": "fn  b( ) {}\n", "notes.md": "x\n"}.items():
@@ -527,3 +534,18 @@ def test_the_precheck_formats_only_the_prs_own_rust_files(tmp_path, monkeypatch)
 
     ps.precheck_items(tmp_path, checks_with_only(), only=["a.rs"])
     assert seen == [["a.rs"]], seen
+
+
+def test_a_stray_untracked_page_does_not_turn_a_pr_that_adds_it_into_a_conflict(tmp_path):
+    """combine_demanded.md, reassociate.md and reassociate_fneg.md sat untracked in the gate checkout after a docs regeneration; every PR adding them was refused as a 'conflict' for hours."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sh(repo, "init", "-q", "-b", "main")
+    commit(repo, "a.rs", "fn a() {}\n", "base")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    commit(repo, "page.md", "from the pr\n", "pr adds the page")
+    sh(repo, "checkout", "-q", "main")
+    (repo / "page.md").write_text("left by a regeneration\n")  # untracked, the file the PR adds
+    ps.clean_checkout("main", cwd=repo)
+    merge = subprocess.run(["git", "merge", "--no-edit", "-q", "pr"], cwd=repo, capture_output=True, text=True)
+    assert merge.returncode == 0 and (repo / "page.md").read_text() == "from the pr\n", merge.stderr

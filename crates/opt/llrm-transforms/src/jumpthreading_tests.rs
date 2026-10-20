@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use llrm_mir::interpret::Val;
 use llrm_mir::target::Neutral;
 
-use crate::jumpthreading::JumpThreading;
+use crate::jumpthreading::{JumpThreading, JumpThreadingOptions};
 use crate::testing::parsed;
 
 fn root() -> PathBuf {
@@ -36,9 +36,16 @@ fn fixtures() -> Vec<PathBuf> {
 /// `text` through the pass under the pass manager, printed; the module must
 /// verify.
 fn run(text: &str) -> String {
+    run_with(text, JumpThreadingOptions::default())
+}
+
+fn run_with(
+    text: &str,
+    options: JumpThreadingOptions,
+) -> String {
     let mut module = parsed(text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(JumpThreading { enabled: true });
+    manager.add(JumpThreading { enabled: true, options });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
     llrm_mir::print::module(&module)
@@ -271,6 +278,27 @@ fn test_jumpthreading_is_on_unless_the_opt_out_is_set() {
     assert_eq!(JumpThreading::from_env().enabled, std::env::var_os("LLRM_NO_JUMPTHREADING").is_none());
 }
 
+/// The limits were file constants, so a level or target could not set them;
+/// they are the pin's `cl::opt` values by default and a field changes the
+/// decision.
+#[test]
+fn the_options_default_to_the_pins_values_and_a_lowered_limit_blocks_the_thread() {
+    let options = JumpThreadingOptions::default();
+    assert_eq!(
+        (
+            options.bb_dup_threshold,
+            options.min_size_bb_dup_threshold,
+            options.phi_duplicate_threshold,
+            options.implication_search_threshold
+        ),
+        (6, 3, 76, 3)
+    );
+    let text = "define i32 @f(i1 %x, i1 %y, i32 %a) {\nentry:\n  br i1 %x, label %p1, label %p2\np1:\n  call void @sink(i32 1)\n  br label %join\np2:\n  call void @sink(i32 2)\n  br label %join\njoin:\n  %c = phi i1 [ true, %p1 ], [ %y, %p2 ]\n  %v1 = add i32 %a, 1\n  %v2 = mul i32 %v1, 3\n  br i1 %c, label %t, label %e\nt:\n  ret i32 %a\ne:\n  ret i32 %v2\n}\ndeclare void @sink(i32)\n";
+    assert!(run_with(text, options).contains(".thread"), "2 instructions thread at 6");
+    let strict = JumpThreadingOptions { bb_dup_threshold: 0, ..options };
+    assert!(!run_with(text, strict).contains(".thread"), "2 instructions are over 0");
+}
+
 fn int(bits: u128) -> Val {
     Val::Int { bits, width: 32 }
 }
@@ -322,9 +350,7 @@ fn removing_sweep_work(n: u32) -> usize {
         let after = layout.get(at + 1).copied();
         layout.remove(at);
         placed[block.0 as usize] = false;
-        let step = crate::jumpthreading::layout_step(&layout, |one| placed[one.0 as usize], block, at, after);
-        work += step.examined;
-        at = step.next;
+        at = crate::jumpthreading::layout_step(&layout, |one| placed[one.0 as usize], block, at, after, || work += 1);
     }
     work
 }

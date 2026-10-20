@@ -825,7 +825,11 @@ impl Selector<'_, '_, '_> {
         }
         requires.push((dividend.1, routine.dividend[1]));
         let reads: Vec<RegId> = requires.iter().map(|(_, register)| *register).collect();
-        let contract = _helper(name, runtime_registers(&reads, false), runtime_registers(&routine.clobbers, true));
+        let contract = _helper(
+            name,
+            runtime_registers(&self.regs, &reads, false),
+            runtime_registers(&self.regs, &routine.clobbers, true),
+        );
         let (quotient, remainder) = ((self.half(), self.half()), (self.half(), self.half()));
         let delivers = vec![
             (quotient.0, routine.quotient[0]),

@@ -70,6 +70,9 @@ pub struct Options {
     /// `-fexcess-precision=standard` or `-ffloat-store`: a float conversion
     /// rounds to its type.
     pub float_store: bool,
+    /// `-mcode-segment=`: the segment every module's code is in, where it is
+    /// not its own `<MODULE>_TEXT`.
+    pub code_segment: Option<String>,
 }
 
 impl Options {
@@ -92,6 +95,7 @@ impl Options {
             debug_format: Default::default(),
             abi: None,
             float_store: false,
+            code_segment: None,
         }
     }
 
@@ -172,7 +176,7 @@ pub fn compiled(
             assemble::assembled_by(
                 module,
                 &abi,
-                &format!("{}_TEXT", hir.name.to_uppercase()),
+                &options.code_segment.clone().unwrap_or_else(|| format!("{}_TEXT", hir.name.to_uppercase())),
                 ProfileOrName::Profile(options.cpu()?),
                 &segments,
                 options.selection,

@@ -1467,8 +1467,10 @@ fn test_affine_addresses_of_one_counter_step_no_pointer_in_memory() {
 }
 
 /// cycleblobs computed each `f(x - xp(k))` index as `(x - xp(k)) * 2` per
-/// pixel: seven subtracts and seven multiplies of the counter, where one
-/// `x * 2` plus a hoisted `-2 * xp(k)` per term does.
+/// pixel: seven subtracts and seven multiplies of the counter, where the
+/// counter scaled once per term and a hoisted `-2 * xp(k)` base does, on the
+/// one counter (`opt -passes=loop-reduce`, LLVM 20: one phi, seven `shl x, 1`;
+/// the pin runs no IR CSE after LSR, SelectionDAG's merges them).
 #[test]
 fn test_affine_terms_of_one_counter_share_its_scaled_value() {
     let text = optimized_sub(SEVEN_TERMS, "T");
@@ -1486,7 +1488,8 @@ fn test_affine_terms_of_one_counter_share_its_scaled_value() {
         .filter(|line| line.contains(" = shl ") || line.contains(" = mul "))
         .filter(|line| counters.iter().any(|counter| line.contains(&format!("{counter},"))))
         .count();
-    assert!(scaled <= 1, "{text}");
+    assert_eq!(scaled, 7, "{text}");
+    assert_eq!(body.matches(" = phi ").count(), 1, "{text}");
 }
 
 /// A POKE into VGA memory counted as reaching a local array's descriptor, so
@@ -1960,7 +1963,8 @@ fn test_a_sum_read_after_its_loop_is_copied_out_where_the_loop_ends() {
     // segld's sum is printed after both loops, across a runtime call, so as
     // one value with the loop's it could only live in SI: the loop added into
     // SI and copied back to CX on a split back edge, `mov cx, si` and `jmp`.
-    // The loops are too long to unroll: at segld's 5 by 20 they are folded away.
+    // The loops are too long to unroll: at segld's 5 by 20 they are folded
+    // away.
     let directory = tempfile::TempDir::new().unwrap();
     let basic = written(
         &directory,
