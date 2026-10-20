@@ -282,7 +282,7 @@ fn is_known_non_decreasing_in_loop(
 /// an affine add recurrence, if its offset is provably monotonically
 /// non-decreasing. The range is half-open: `elt_size` is added to the address
 /// of the last accessed element to form the end.
-fn get_non_affine_monotonic_bounds(
+pub(crate) fn get_non_affine_monotonic_bounds(
     se: &mut ScalarEvolution,
     cx: &Cx,
     lp: BlockId,
@@ -620,6 +620,12 @@ impl RuntimePointerChecking {
             pointer_bounds: PointerBounds::new(),
             loop_guards: None,
         }
+    }
+
+    /// What the dependence checker shares with the checks: the bounds already
+    /// worked out, and the loop's guards.
+    pub fn caches(&mut self) -> crate::memdepchecker::SharedCaches<'_> {
+        crate::memdepchecker::SharedCaches { pointer_bounds: &mut self.pointer_bounds, loop_guards: &mut self.loop_guards }
     }
 
     /// `reset`.
@@ -999,9 +1005,7 @@ impl RuntimePointerChecking {
     /// `printChecks`.
     pub fn print_checks(
         &self,
-        se: &ScalarEvolution,
-        cx: &Cx,
-        labels: &crate::scev::print::Labels,
+        text: &dyn ValueText,
         checks: &[RuntimePointerCheck],
         depth: usize,
     ) -> String {
@@ -1009,10 +1013,9 @@ impl RuntimePointerChecking {
         let indent = |out: &mut String, by: usize| out.push_str(&" ".repeat(by));
         let pointers = |out: &mut String, group: &RuntimeCheckingPtrGroup| {
             for &k in &group.members {
-                // `OS.indent(Depth + 2) << *PointerValue`, and an instruction
-                // prints with two spaces of its own.
-                indent(out, depth + 4);
-                out.push_str(&operand_text(se, cx, labels, self.pointers[k].pointer_value));
+                // `OS.indent(Depth + 2) << *PointerValue << "\n"`.
+                indent(out, depth + 2);
+                out.push_str(&text.value(self.pointers[k].pointer_value));
                 out.push('\n');
             }
         };
@@ -1036,11 +1039,12 @@ impl RuntimePointerChecking {
         se: &ScalarEvolution,
         cx: &Cx,
         labels: &crate::scev::print::Labels,
+        text: &dyn ValueText,
         depth: usize,
     ) -> String {
         let indent = " ".repeat(depth);
         let mut out = format!("{indent}Run-time memory checks:\n");
-        out.push_str(&self.print_checks(se, cx, labels, &self.checks, depth));
+        out.push_str(&self.print_checks(text, &self.checks, depth));
         out.push_str(&format!("{indent}Grouped accesses:\n"));
         for (index, group) in self.checking_groups.iter().enumerate() {
             out.push_str(&format!("{indent}  Group GRP{index}:\n"));
@@ -1057,15 +1061,21 @@ impl RuntimePointerChecking {
     }
 }
 
-/// A pointer as `printChecks` names it: `%name`, where `operator<<(Value)`
-/// writes the instruction that defines it.
-fn operand_text(
-    se: &ScalarEvolution,
-    cx: &Cx,
-    labels: &crate::scev::print::Labels,
-    value: Operand,
-) -> String {
-    se.print_value(cx, labels, value)
+/// `operator<<(raw_ostream &, const Value &)`: how `opt` writes a value, the
+/// instruction that defines it (with two spaces of its own) or an argument
+/// (`ptr %s`).
+pub trait ValueText {
+    /// A value.
+    fn value(
+        &self,
+        value: Operand,
+    ) -> String;
+
+    /// An instruction.
+    fn instruction(
+        &self,
+        inst: InstId,
+    ) -> String;
 }
 
 #[cfg(test)]

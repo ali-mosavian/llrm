@@ -1,7 +1,6 @@
 //! `RuntimePointerChecking` against the pinned LLVM's
 //! `opt -passes='print<access-info>'` on the same loops (the text of its
-//! "Run-time memory checks" and "Grouped accesses", with each pointer named
-//! `%name` where `opt` writes the instruction that defines it).
+//! "Run-time memory checks" and "Grouped accesses").
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::domtree::DomTree;
@@ -167,7 +166,8 @@ fn analysed(
     rtc.generate_checks(&mut se, &cx, &order, &dep_cands);
 
     let labels = Labels::of(function);
-    let text = rtc.print(&se, &cx, &labels, 0);
+    let printer = crate::laa_testing::PinText::of(&module, function);
+    let text = rtc.print(&se, &cx, &labels, &printer, 0);
     let diffs = rtc
         .diff_checks()
         .unwrap_or_default()
@@ -187,9 +187,9 @@ fn a_copy_between_two_arrays_is_one_check_of_two_groups() {
         "Run-time memory checks:
 Check 0:
   Comparing group GRP0:
-    %pa
+    %pa = getelementptr inbounds i32, ptr %a, i64 %i
   Against group GRP1:
-    %pb
+    %pb = getelementptr inbounds i32, ptr %b, i64 %i
 Grouped accesses:
   Group GRP0:
     (Low: %a High: ((4 * %n) + %a))
@@ -213,10 +213,10 @@ fn reads_a_constant_apart_share_a_group() {
         "Run-time memory checks:
 Check 0:
   Comparing group GRP0:
-    %pc
+    %pc = getelementptr inbounds i32, ptr %c, i64 %i
   Against group GRP1:
-    %pa1
-    %pa
+    %pa1 = getelementptr inbounds i32, ptr %a, i64 %j
+    %pa = getelementptr inbounds i32, ptr %a, i64 %i
 Grouped accesses:
   Group GRP0:
     (Low: %c High: ((4 * %n) + %c))

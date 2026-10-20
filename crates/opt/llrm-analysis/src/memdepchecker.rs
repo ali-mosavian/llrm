@@ -155,19 +155,19 @@ impl Dependence {
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopAccessAnalysis.cpp#L2651
-    /// `print`: `render` writes an instruction as `opt` does.
+    /// `print`: `text` writes an instruction as `opt` does.
     pub fn print(
         &self,
         depth: usize,
         instructions: &[InstId],
-        render: &dyn Fn(InstId) -> String,
+        text: &dyn crate::runtimecheck::ValueText,
     ) -> String {
         let indent = " ".repeat(depth);
         format!(
             "{indent}{}:\n{indent}  {} -> \n{indent}  {}\n",
             self.ty.name(),
-            render(instructions[self.source as usize]),
-            render(instructions[self.destination as usize])
+            text.instruction(instructions[self.source as usize]),
+            text.instruction(instructions[self.destination as usize])
         )
     }
 }

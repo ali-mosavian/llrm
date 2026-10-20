@@ -36,11 +36,6 @@ use crate::scev::{Cx, Flags, ScalarEvolution};
 /// (D25: never filled).
 pub type SymbolicStrideMap = HashMap<Operand, Scev>;
 
-/// `Function::hasOptSize`.
-pub(crate) fn has_opt_size(cx: &Cx) -> bool {
-    cx.function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"))
-}
-
 /// `NullPointerIsDefined`: the function says a null pointer is a valid one
 /// (`null_pointer_is_valid`), whatever the address space.
 pub(crate) fn null_pointer_is_defined(cx: &Cx) -> bool {
