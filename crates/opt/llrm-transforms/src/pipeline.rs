@@ -725,6 +725,9 @@ pub(crate) fn llvm_order(
         // (L1594), InstSimplifyPass (PassBuilderPipelines.cpp#L1662, the last
         // function pass of `OptimizePM`, after LoopSink) and L2376.
         Phase::Late => vec![
+            // LoopLoadEliminationPass (l.1400), before the SimplifyCFG of
+            // L1438; llrm's targets have no vector registers.
+            slot("loop-load-elim@1400", Box::new(crate::looploadelim::LoopLoadElim::default())),
             // The slots' options, with the pin's lines,
             // are `simplifycfg::Options::{L1438, L1682, L2376}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),

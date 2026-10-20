@@ -53,7 +53,8 @@
 //! `trivialunswitch`, `unswitch`,
 //! `indvars` (with `exitvalues`, `exitsink`),
 //! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`,
-//! `loopidioms`, `floatloop`, `tailcallelim`.
+//! `loopidioms`, `floatloop`, `tailcallelim`, `loopversioning` (with
+//! `runtimechecks`, the memory checks it branches on).
 //!
 //! Whole program: `globalopt`, `globaldce`, `availableexternally`, `inline`,
 //! `ipacp`, `argpromotion`, `deadargs`, `narrowspace`, `calleepop`; and
@@ -208,9 +209,12 @@ pub mod local;
 #[cfg(test)]
 mod local_tests;
 pub mod loopclone;
+pub mod runtimechecks;
 pub mod loopdeletion;
 pub mod loopidiom;
 pub mod loopidioms;
+pub mod loopversioning;
+pub mod looploadelim;
 pub mod loopinterchange;
 pub mod loopnest;
 pub mod looppeel;

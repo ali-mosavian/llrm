@@ -678,7 +678,7 @@ fn loop_blocks_rpo(
     header: BlockId,
 ) -> Vec<BlockId> {
     let found = cx.loops.get_loop_for(header).expect("the header of a loop");
-    let mut visited: HashSet<BlockId> = HashSet::new();
+    let mut visited = llrm_mir::dense::IdSet::<BlockId>::new();
     let mut post: Vec<BlockId> = Vec::new();
     // The blocks to finish, each with the successors left to visit.
     let mut stack: Vec<(BlockId, Vec<BlockId>)> = Vec::new();

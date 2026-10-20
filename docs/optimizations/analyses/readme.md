@@ -2,12 +2,13 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 68 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 72 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
 | aa | The interface of alias analysis, as LLVM's `AAResults` and `BatchAAResults` (llvm/Analysis/AliasAnalysis.h at d1106deb71cc): the queries a client asks (MemorySSA, MemDep, LICM, GVN, DSE), not an implementation. | `LocationSize`, `AAInfo`, `MemoryLocation`, `AliasResult`, `ModRefInfo`, | [aa](aa.md) |
 | access | Each memory access of a loop as an affine function of its counters, in the form [`crate::dependence`] tests. | `references`, `Reference`, `Roots`, `Apart`. Consumers: none in | [access](access.md) |
+| accessanalysis | `AccessAnalysis`: the memory accesses of a loop, grouped by what they may alias, for the dependence checker and the runtime checks. |  | [accessanalysis](accessanalysis.md) |
 | aggregate | `AAResults::addAAResult` of `AliasAnalysis.cpp` at d1106deb71cc: several alias analyses asked as one. | `AggregateAA`. | [aggregate](aggregate.md) |
 | alias | Strong alias analysis: what each pointer may point to, what escapes and when, and what each call reads and writes. | `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`, | [alias](alias.md) |
 | aliassets | `AliasSetTracker` (LLVM `AliasSetTracker.cpp`, `d1106deb71cc`): the locations an analysis asks of, grouped into sets that may alias, with whether each set's locations all must alias. |  | [aliassets](aliassets.md) |
@@ -45,13 +46,16 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 68 documented, 0 undoc
 | induction | Which values are affine functions of a loop's counter, and how many trips a loop makes. | `AffineOperand`, `Affine`, `CountedLoop`, `Counted`, `ExitCount`, `Scev`, | [induction](induction.md) |
 | initializes | `initializes(...)` of the pointer parameters of a function: the bytes it writes before anything reads them, as `inferInitializes` states them (FunctionAttrs.cpp:1118, <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/IPO/FunctionAttrs.cpp#L1118>). |  | [initializes](initializes.md) |
 | interprocedural | Finds what the two sides of a direct call make certain: constant arguments, constant returns, purity and termination. | The functions above, and the re-export of `noreturn::terminal_sites`. | [interprocedural](interprocedural.md) |
+| laa_testing | How `opt` writes the values `print<access-info>` lists, for the tests that compare with it: the instruction lines of the function as MIR prints them (the same text, in order, for the same names), and an argument as `ptr %x`. |  | [laa_testing](laa_testing.md) |
 | liveness | Which SSA values are live at each block's entry and exit, and how many are live at once. | `Liveness`, `live`, `live_where`, `pressure`, `pressure_of`, `entry_values`, | [liveness](liveness.md) |
 | loads | The value a load can reuse from an access before it in its block. | InstCombine's `visitLoadInst`, JumpThreading's load PRE, Promote. | [loads](loads.md) |
 | loadstorepromoter | `LoadAndStorePromoter`: the loads and stores of one memory slot, rewritten so each load reads the value that reaches it. |  | [loadstorepromoter](loadstorepromoter.md) |
-| loopaccess | `getPointersDiff` and `isConsecutiveAccess`. |  | [loopaccess](loopaccess.md) |
+| loopaccess | `getPointersDiff`, `isConsecutiveAccess`, `getPtrStride` and the pointer walks `LoopAccessInfo` is built on. |  | [loopaccess](loopaccess.md) |
+| loopaccessinfo | `LoopAccessInfo`: whether the memory accesses of an innermost loop can be reordered across iterations, and the runtime checks that would make them so. |  | [loopaccessinfo](loopaccessinfo.md) |
 | loopunrollanalyzer | `UnrolledInstAnalyzer`: what simplifies in one iteration of a loop if it were unrolled completely, to cost the unrolled form without making it. |  | [loopunrollanalyzer](loopunrollanalyzer.md) |
 | manager | The memory and range analyses as entries of llrm-mir's analysis manager: asked for by name, cached, kept or brought up to date after a pass. | The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`, | [manager](manager.md) |
 | memdep | `MemoryDependenceAnalysis`: for a load, a store or a call, the nearest instruction it depends on in its block (a def or a clobber), or that there is none there and the question moves to the predecessors. | `MemDepResult`, `MemoryDependenceResults` (`get_dependency`, | [memdep](memdep.md) |
+| memdepchecker | `MemoryDepChecker`: whether the accesses of a loop to memory that may be the same can be reordered across iterations, and by how much. |  | [memdepchecker](memdepchecker.md) |
 | memory | The memory model every alias query reads: objects, byte slices, provenance, accesses (`MemRef`) and the `Unit` that carries a function's facts. | The types above; `exposed_frames`, `object_of`, `global_object`, `typed`, | [memory](memory.md) |
 | memoryssa | Memory SSA: a single memory state versioned by stores and writing calls, with a walker that finds the writes a load may see. | `Accesses` (analysis `accesses`), `MemorySSA` via `built`, `Kind`, `Access`, | [memoryssa](memoryssa.md) |
 | mustexecute | `SimpleLoopSafetyInfo`. |  | [mustexecute](mustexecute.md) |

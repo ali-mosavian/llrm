@@ -245,16 +245,24 @@ impl ProgramPass for Walk {
                     let mut declared = declared(&mut modules[at], module);
                     let (context, function) = function_mut(module, id);
                     let was = calls_of(context, function);
+                    // DEVIATE (recursion): a recursive callee inlined here has its
+                    // own calls peeled in the copy (gcc's peeling, not at -Os).
+                    let peeled: llrm_support::hash::IndexMap<GlobalId, crate::inline::Candidate> = constant
+                        .values()
+                        .filter(|one| one.self_calls.is_some() && !self.inline.single)
+                        .filter_map(|one| Some((one.callee?, one.clone())))
+                        .collect();
                     let by = crate::inline::Caller {
                         layout: &program.layout,
                         recursive: recursive.contains(&id),
                         self_inlining: None,
+                        peeling: !self.inline.single,
                     };
                     let spliced = crate::inline::expanded_all(
                         context,
                         function,
                         &by,
-                        &Default::default(),
+                        &peeled,
                         Some(&constant),
                         &mut declared,
                     )? > 0;
@@ -344,13 +352,7 @@ fn self_calls(
     if for_size || distinct.len() < 2 {
         return None;
     }
-    let found = crate::inlinecost::caller_frequencies(module, layout, function);
-    let mut frequencies = llrm_support::hash::SparseIdMap::default();
-    if found.get_entry_freq().get_frequency() > 0 {
-        for (block, inst) in function.walk().filter_map(|(_, inst)| function.parent(inst).map(|block| (block, inst))) {
-            frequencies.insert(inst, found.relative_to_entry(block));
-        }
-    }
+    let frequencies = crate::inlinecost::call_frequencies(module, layout, function);
     // A tree: each call of the function makes one or more calls of itself
     // (the frequencies of its distinct self-calls over the entry's sum to 1
     // or more). Fewer, as in recpow's two calls in exclusive branches (0.625),
@@ -403,12 +405,16 @@ impl SelfInline {
                         body: std::rc::Rc::new(function.clone()),
                         frame: crate::inline::grown(context, &program.layout, function),
                         moved: false,
+                        callee: None,
+                        self_calls: None,
+                    self_sites: 0,
                     };
                     let available = [(id, itself)].into_iter().collect();
                     let by = crate::inline::Caller {
                         layout: &program.layout,
                         recursive: true,
                         self_inlining: Some(&frequencies),
+                        peeling: false,
                     };
                     crate::inline::expanded_all(context, function, &by, &available, None, &mut declared)?;
                     if declared.place(module)? > 0 {

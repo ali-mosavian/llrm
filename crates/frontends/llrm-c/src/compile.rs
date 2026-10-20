@@ -532,7 +532,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         target,
         watcom,
         entry_requests,
-        codegen: bound.options(&flags, machine),
+        codegen: llrm_core::driver::Options { rounds_float_spills: true, ..bound.options(&flags, machine) },
         flags,
     })
 }
@@ -2845,6 +2845,31 @@ mod tests {
         assert!(asm.contains("mov eax, 200012"), "{asm}");
     }
 
+    /// `(long long)a * (65500 + (i & 31))` is a dword times a dword: one `imul`
+    /// into EDX:EAX. The old sign-bit count did not see that the divisor's
+    /// range fits an i32, so x_fixmul widened both and multiplied in halves
+    /// (`mul` plus two `imul` and an `add`; +111% clocks at -O1..-O3).
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_m32_a_product_of_two_i32_ranges_is_one_widening_imul() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("fm.c");
+        std::fs::write(
+            &source,
+            "long fm(long a, int i) { return (long)(((long long)a * (65500 + (i & 31))) >> 16); }\n",
+        )
+        .unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
+            .expect("wccq records fm.c");
+        let argv: Vec<String> = ["-m32", "-O2", "-march=i486", "x.c"].map(str::to_owned).to_vec();
+        let built = super::selected(&text, "fm", None, &super::parse_args(&argv).unwrap().codegen).unwrap();
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+        assert!(lines.iter().any(|line| matches!(*line, "imul eax" | "imul edx" | "imul ecx" | "imul ebx")), "{asm}");
+        assert!(!lines.iter().any(|line| line.starts_with("mul ")), "{asm}");
+    }
+
     /// Ten floats live across a loop spill x87 values. Every spill cell was a
     /// qword, so a float reloaded from it kept double precision and nbody_single
     /// printed 86015, the pin 86016. The cell is the float's own dword, as the
@@ -3203,7 +3228,15 @@ mod tests {
         fixture: &str,
         name: &str,
     ) -> Vec<String> {
-        let lines = flat_listing(fixture);
+        flat_body_with(fixture, name, &["-O2"])
+    }
+
+    fn flat_body_with(
+        fixture: &str,
+        name: &str,
+        flags: &[&str],
+    ) -> Vec<String> {
+        let lines = flat_listing_with(fixture, flags);
         lines
             .iter()
             .skip_while(|line| **line != format!("_{name} proc near"))
@@ -3276,13 +3309,21 @@ mod tests {
     }
 
     /// The same sum of dwords keeps the `movzx`: the word `add` would leave the
-    /// upper half as it was, and the result is read as a dword.
+    /// upper half as it was, and the result is read as a dword. The combiner
+    /// makes the extension `and eax, 65535`; the pin selects it back to `movzx`
+    /// (X86InstrCompiler.td), which the 486 and the Pentium price at 3 clocks
+    /// against 1: so for size (-Os), and `and` stays at -O2.
     #[test]
     fn test_m32_keeps_the_extension_where_the_upper_half_is_not_zero() {
-        let body = flat_body("narrow", "int_sum");
+        let small = flat_body_with("narrow", "int_sum", &["-Os"]);
         assert!(
-            body.iter().any(|line| line.starts_with("add eax, ")) && body.iter().any(|line| line == "movzx eax, ax"),
-            "{body:#?}"
+            small.iter().any(|line| line.starts_with("add eax, ")) && small.iter().any(|line| line == "movzx eax, ax"),
+            "{small:#?}"
+        );
+        let fast = flat_body("narrow", "int_sum");
+        assert!(
+            fast.iter().any(|line| line == "and eax, 65535") && !fast.iter().any(|line| line.starts_with("movzx")),
+            "{fast:#?}"
         );
     }
 
