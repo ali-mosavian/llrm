@@ -331,6 +331,14 @@ impl Profile {
             && self.cost("alu_rr")? + self.cost("mov_rm")? + self.partial_register_stall < self.cost("movzx")?)
     }
 
+    /// Whether `and r,255` and `and r,65535` are better as the `movzx` of the
+    /// low byte or word (X86InstrCompiler.td): shorter, so for size; for
+    /// clocks only where the extension is no slower than the `and`. The 486
+    /// and the Pentium take three clocks for it and one for the `and`.
+    pub fn masks_by_extension(&self) -> Result<bool, String> {
+        Ok(self.size || self.cost("movzx")? <= self.cost("alu_rr")?)
+    }
+
     /// Whether `words` pops into a dead register clean a call's arguments
     /// off the stack in place of `add sp,2*words`: shorter for one or two
     /// words, and where size is not wanted, only if no slower.

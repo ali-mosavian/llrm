@@ -243,15 +243,16 @@ rule decrement_by_add
 // `and r, 255` and `and r, 65535` with the flags dead are the zero extension of
 // the low byte or word, as X86's patterns select them (X86InstrCompiler.td
 // `(and GR32:$src, 0xff)` and `0xffff`): the combiner makes `zext(trunc x)`
-// that `and`.
+// that `and`. Where the code is not for size, only if the target prices the
+// extension no higher.
 rule byte_mask
     match   and d:reg, d, #255
-    when    width_in(d, [32]), flags_dead(@0), encodable($0)
+    when    masks_by_extension(), width_in(d, [32]), flags_dead(@0), encodable($0)
     rewrite @0: movzx d, low_byte(d)
 
 rule word_mask
     match   and d:reg, d, #65535
-    when    width_in(d, [32]), flags_dead(@0), encodable($0)
+    when    masks_by_extension(), width_in(d, [32]), flags_dead(@0), encodable($0)
     rewrite @0: movzx d, low_word(d)
 
 
