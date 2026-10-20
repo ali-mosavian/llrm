@@ -817,6 +817,23 @@ impl Function {
         out
     }
 
+    /// LLVM's `predecessors(block)`: the blocks whose terminators name
+    /// `block`, once per edge (a `switch` with two cases to it is two), by
+    /// block id. A phi of `block` has one input for each.
+    pub fn edge_predecessors(
+        &self,
+        block: BlockId,
+    ) -> Vec<BlockId> {
+        let mut out: Vec<BlockId> = self
+            .block_users(block)
+            .into_iter()
+            .filter(|one| self.instruction(one.user).opcode.is_terminator())
+            .filter_map(|one| self.parent(one.user))
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
     /// The blocks whose terminators are among `users`, once each, by a set.
     #[cold]
     fn parents_once(
