@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/deadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/deadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:99b38a0fd00a266c8de211fa0e51c38949ec6740e1b01643b83a03a131330f11 -->
+<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:66a6ba6131c2bb553ebe2d26489348db0dc22a0cafd9b509d49428f104c4260a -->
 
 # deadstore
 
@@ -80,7 +80,7 @@ ret i16 0
 ```
 
 ## Runs
-In the slot of `dse@820` (LLVM's order); the older `dse.rs` runs elsewhere.
+In the slot of `dse@820` (LLVM's order); the legacy pipeline runs it too.
 
 ## Needs
 MemorySSA (`mssa`), its alias query, dominators and post-dominators, the

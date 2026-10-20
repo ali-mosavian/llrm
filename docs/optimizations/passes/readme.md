@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 156 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 155 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -57,10 +57,9 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | cvp | Correlated value propagation: a value is replaced, narrowed or given a flag when the branches and ranges around it prove the fact, as LLVM's `correlated-propagation`. | Alone, through `llrm-pass cvp`; not in the pipeline. `tools/difftest` | [cvp](cvp.md) |
 | dead | Instructions nothing needs, removed: LLVM's ADCE and DCE. | Once per pass of the function fixed point, after `algebraic`, and again | [dead](dead.md) |
 | deadargs | Dead argument elimination (LLVM's DeadArgumentElimination): a parameter nothing reads goes, and with it the argument at every call. | In the interprocedural step, after the callers' arguments have been | [deadargs](deadargs.md) |
-| deadstore | Dead store elimination: LLVM's `DSEPass`, stage 1 (`DSEState`, `eliminateDeadDefs`, `getDomMemoryDef`, `eliminateDeadWritesAtEndOfFunction`, `storeIsNoop`). | In the slot of `dse@820` (LLVM's order); the older `dse.rs` runs elsewhere. | [deadstore](deadstore.md) |
+| deadstore | Dead store elimination: LLVM's `DSEPass`, stage 1 (`DSEState`, `eliminateDeadDefs`, `getDomMemoryDef`, `eliminateDeadWritesAtEndOfFunction`, `storeIsNoop`). | In the slot of `dse@820` (LLVM's order); the legacy pipeline runs it too. | [deadstore](deadstore.md) |
 | decide | Branches whose way is known, decided: LLVM's JumpThreading and SimplifyCFG on known conditions. | Once per pass of the function fixed point, after `fold` and `ports`. | [decide](decide.md) |
 | dfajumpthreading | DFA jump threading: a loop whose `switch` runs on a state variable that each path of the loop sets to a constant, as the body of a state machine does, is threaded: every such path gets its own copy of the blocks from where the state is set to the `switch`, and the copy of the `switch` is a jump to the case the constant picks; as LLVM's `dfa-jump-threading`. | `pipeline` (`dfajumpthreading@806`), a `Partial` slot of the parity | [dfajumpthreading](dfajumpthreading.md) |
-| dse | Dead store elimination: LLVM's DSE. | Once per pass of the function fixed point, after `trivialunswitch` and | [dse](dse.md) |
 | earlycse | LLVM's EarlyCSE with MemorySSA (`early-cse<memssa>`): one walk down the dominator tree, scoped tables of what is available, and a generation count that memory operations advance. | [`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`), | [earlycse](earlycse.md) |
 | edges | Edge surgery on conditional branches: a new block on one arm of a `br i1`, holding the operations that belong to that edge and not to either arm's block. | Not a pass: a library. `split` is called by `rotate` and | [edges](edges.md) |
 | exitopt | A loop's exits are folded by what ScalarEvolution knows of their counts. | Not wired in: [`crate::indvars`](indvars.md) will run `optimized` before | [exitopt](exitopt.md) |
