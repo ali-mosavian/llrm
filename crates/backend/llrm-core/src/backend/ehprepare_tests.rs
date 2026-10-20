@@ -8,6 +8,7 @@ declare cc1000 void @llrm.qb.B$CEND() addrspace(1) noreturn nounwind
 declare cc1000 void @llrm.qb.onerror(i1) addrspace(1) nounwind
 declare cc1000 void @llrm.qb.onlocalerror(i1) addrspace(1) nounwind
 declare i32 @llrm.qb.personality(...) addrspace(1)
+declare cc1000 void @llrm.qb.frame(ptr) addrspace(1) nounwind
 "#;
 
 /// Prints A&+1 after registering the handler; the handler, with trapping
@@ -210,6 +211,8 @@ define void @main() addrspace(1) personality ptr addrspace(1) @llrm.qb.personali
 entry:
   %a = alloca i32
   %b = alloca i32
+  call cc1000 addrspace(1) void @llrm.qb.frame(ptr %a)
+  call cc1000 addrspace(1) void @llrm.qb.frame(ptr %b)
   call cc1000 addrspace(1) void @llrm.qb.onerror(i1 true)
   store i32 0, ptr %a
   store i32 0, ptr %b
@@ -240,14 +243,16 @@ landing:
 }
 "#;
 
-/// The module through `frame_captured` (or not) and the optimizer, as
-/// `driver::optimized` runs them, then `prepared`.
-fn optimized(capture: bool) -> String {
-    let mut module = parsed(CELLS);
+/// The module through the optimizer, as `driver::optimized` runs it, then
+/// `prepared`; `captured` says whether the frontend handed the cells over.
+fn optimized(captured: bool) -> String {
+    let source = if captured {
+        CELLS.to_owned()
+    } else {
+        CELLS.lines().filter(|line| !line.contains("@llrm.qb.frame(ptr %")).collect::<Vec<_>>().join("\n")
+    };
+    let module = parsed(&source);
     let layout = llrm_x86_m16::layout();
-    if capture {
-        super::frame_captured(&mut module, layout.spaces.far).expect("captured");
-    }
     let cpu = crate::backend::cpu::profile("486").expect("a cpu");
     let mut program = llrm_mir::program::Program::new(vec![module], cpu.target()).expect("a program");
     let applied =
