@@ -79,10 +79,7 @@ fn decompose_icmp(
     }
     let (orig_c, width) = q.int_constant(rhs)?;
     let mut inverted = false;
-    if matches!(
-        pred,
-        IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Sgt | IntPredicate::Sge
-    ) {
+    if matches!(pred, IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Sgt | IntPredicate::Sge) {
         inverted = true;
         pred = pred.inverse();
     }

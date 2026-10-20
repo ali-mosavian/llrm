@@ -1,6 +1,5 @@
-//! `combine` keeps what a function computes: each body below is run on a range
-//! of inputs before and after the whole driver, and the answers must be the
-//! same.
+//! `combine` keeps what a function computes: each body below is run on a range of
+//! inputs before and after the whole driver, and the answers must be the same.
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::interpret::{Val, run};
@@ -36,9 +35,7 @@ fn same_answers(body: &str) {
 #[test]
 fn a_quotient_scaled_back_keeps_its_value() {
     same_answers("  %q = sdiv i16 %t, 50\n  %m = mul i16 %q, 50\n  ret i16 %m\n");
-    same_answers(
-        "  %q = sdiv i16 %t, 50\n  %m = mul i16 %q, 50\n  %s = mul i16 %m, 40\n  %r = sdiv i16 %s, 100\n  ret i16 %r\n",
-    );
+    same_answers("  %q = sdiv i16 %t, 50\n  %m = mul i16 %q, 50\n  %s = mul i16 %m, 40\n  %r = sdiv i16 %s, 100\n  ret i16 %r\n");
 }
 
 /// The floored form the Nib frontend writes for `t // 50 * 50`.

@@ -127,15 +127,10 @@ fn case_results(
         let instruction = function.instruction(inst);
         if instruction.opcode.is_terminator() {
             // A simple branch continues to the next block.
-            let mut successors = instruction
-                .operands
-                .iter()
-                .filter_map(
-                    |operand| match operand {
-                        Operand::Block(block) => Some(*block),
-                        _ => None,
-                    },
-                );
+            let mut successors = instruction.operands.iter().filter_map(|operand| match operand {
+                Operand::Block(block) => Some(*block),
+                _ => None,
+            });
             let (Some(next), None) = (successors.next(), successors.next()) else { return (false, Vec::new()) };
             if !matches!(instruction.opcode, Opcode::Br | Opcode::Switch) {
                 return (false, Vec::new());

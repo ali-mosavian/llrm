@@ -1,5 +1,4 @@
-//! Each expected text is what the pinned `opt
-//! -passes='simplifycfg<no-speculate-blocks;forward-switch-cond>'` prints.
+//! Each expected text is what the pinned `opt -passes='simplifycfg<no-speculate-blocks;forward-switch-cond>'` prints.
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::passes::{Declared, Outer};

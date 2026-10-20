@@ -220,14 +220,7 @@ fn dead_cases_eliminated(
     let unknown_bits = width - (known.zero | known.one).count_ones();
     if has_default && dead.is_empty() {
         if known_values.as_ref().is_some_and(|values| {
-            values
-                .iter()
-                .all(
-                    |&value| matches!(
-                        context.get(value).kind,
-                        ConstantKind::Undef | ConstantKind::Poison
-                    ),
-                )
+            values.iter().all(|&value| matches!(context.get(value).kind, ConstantKind::Undef | ConstantKind::Poison))
         }) {
             unreachable_default(context, function, block, switch, false);
             return true;

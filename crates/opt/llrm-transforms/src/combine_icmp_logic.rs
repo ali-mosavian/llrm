@@ -41,10 +41,10 @@
 //! pair, `(ne A, 0) | (ne B, 0)` and `(ne A, -1) | (ne B, -1)` are here. Not
 //! yet: `foldAndOrOfICmpEqConstantAndICmp`, `foldAndOrOfICmpsWithConstEq`,
 //! `foldIsPowerOf2OrZero`, `simplifyRangeCheck`, `foldSignedTruncationCheck`,
-//! `foldIsPowerOf2`, `foldPowerOf2AndShiftedMask`,
-//! `foldUnsignedUnderflowCheck`, `foldAndOrOfICmpsWithPow2AndWithZero`, the
-//! `trunc`/`and` fold, the `isnormal` fold and `foldAndOrOfICmpsUsingRanges`;
-//! also `foldLogicOfFCmps` and `foldEqOfParts`.
+//! `foldIsPowerOf2`, `foldPowerOf2AndShiftedMask`, `foldUnsignedUnderflowCheck`,
+//! `foldAndOrOfICmpsWithPow2AndWithZero`, the `trunc`/`and` fold, the `isnormal`
+//! fold and `foldAndOrOfICmpsUsingRanges`; also `foldLogicOfFCmps` and
+//! `foldEqOfParts`.
 //!
 //! # Used by
 //! `visit_and` and `visit_or` (the bitwise forms).
@@ -84,10 +84,7 @@ fn is_equality(pred: IntPredicate) -> bool {
 }
 
 fn is_signed(pred: IntPredicate) -> bool {
-    matches!(
-        pred,
-        IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge
-    )
+    matches!(pred, IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge)
 }
 
 /// `getMaskedICmpType`: the patterns `icmp pred (A & B), C` satisfies.
@@ -432,8 +429,7 @@ fn fold_log_op_of_masked_icmps(
         |c: &Combiner, v: Operand| !is_logical || is_guaranteed_not_to_be_undef_or_poison(&query(c, Some(inst)), v, 0);
 
     if mask_set & MASK_ALL_ZEROS != 0 {
-        // (icmp eq (A & B), 0) & (icmp eq (A & D), 0) -> (icmp eq (A & (B|D)),
-        // 0)
+        // (icmp eq (A & B), 0) & (icmp eq (A & D), 0) -> (icmp eq (A & (B|D)), 0)
         if !poison_safe(c, d) {
             return None;
         }
@@ -445,8 +441,7 @@ fn fold_log_op_of_masked_icmps(
         return Some(c.create_icmp(inst, new_cc, new_and, zero));
     }
     if mask_set & B_MASK_ALL_ONES != 0 {
-        // (icmp eq (A & B), B) & (icmp eq (A & D), D) -> (icmp eq (A & (B|D)),
-        // (B|D))
+        // (icmp eq (A & B), B) & (icmp eq (A & D), D) -> (icmp eq (A & (B|D)), (B|D))
         if !poison_safe(c, d) {
             return None;
         }
@@ -455,8 +450,7 @@ fn fold_log_op_of_masked_icmps(
         return Some(c.create_icmp(inst, new_cc, new_and, new_or));
     }
     if mask_set & A_MASK_ALL_ONES != 0 {
-        // (icmp eq (A & B), A) & (icmp eq (A & D), A) -> (icmp eq (A & (B&D)),
-        // A)
+        // (icmp eq (A & B), A) & (icmp eq (A & D), A) -> (icmp eq (A & (B&D)), A)
         if !poison_safe(c, d) {
             return None;
         }
@@ -486,8 +480,8 @@ fn fold_log_op_of_masked_icmps(
             }
         }
         if mask_set & A_MASK_NOT_ALL_ONES != 0 {
-            // (icmp ne (A & B), B) & (icmp ne (A & D), D) -> (icmp ne (A & B),
-            // A) or (icmp ne (A & D), A), where B|D is B or D.
+            // (icmp ne (A & B), B) & (icmp ne (A & D), D) -> (icmp ne (A & B), A)
+            // or (icmp ne (A & D), A), where B|D is B or D.
             let new_mask = const_b | const_d;
             if new_mask == const_b {
                 return Some(lhs);
@@ -530,9 +524,9 @@ fn fold_log_op_of_masked_icmps(
         }
     }
 
-    // (icmp eq (A & B), 0) | (icmp eq (A & D), 0) -> (icmp ne (A & (B|D)),
-    // (B|D)) (icmp ne (A & B), 0) & (icmp ne (A & D), 0) -> (icmp eq (A &
-    // (B|D)), (B|D)) if B and D are known to be a power of two.
+    // (icmp eq (A & B), 0) | (icmp eq (A & D), 0) -> (icmp ne (A & (B|D)), (B|D))
+    // (icmp ne (A & B), 0) & (icmp ne (A & D), 0) -> (icmp eq (A & (B|D)), (B|D))
+    // if B and D are known to be a power of two.
     if mask_set & MASK_NOT_ALL_ZEROS != 0 {
         let both = {
             let q = query(c, Some(inst));

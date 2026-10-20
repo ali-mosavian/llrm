@@ -103,12 +103,14 @@ pub mod combine_compares;
 pub mod combine_demanded;
 #[cfg(test)]
 mod combine_dispatch_tests;
+#[cfg(test)]
+mod combine_semantics_tests;
 pub mod combine_funnel;
 pub mod combine_gep;
+pub mod combine_icmp_logic;
 pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
-pub mod combine_icmp_logic;
 pub mod combine_loadstore;
 pub mod combine_muldivrem;
 #[cfg(test)]
@@ -122,8 +124,6 @@ pub mod combine_select_bools;
 pub mod combine_select_ext_const;
 pub mod combine_select_into_op;
 pub mod combine_select_op_op;
-#[cfg(test)]
-mod combine_semantics_tests;
 pub mod combine_shared;
 pub mod combine_shifts;
 pub mod combine_sink;

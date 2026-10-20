@@ -129,8 +129,7 @@ pub fn lex(text: &str) -> Result<Vec<(Token, usize)>, ParseError> {
                 out.push((Token::Dots, line));
                 at += 3;
             }
-            // `+inf`, `-qnan`, `+nan(0x1)`: LLVM's special floating-point
-            // values.
+            // `+inf`, `-qnan`, `+nan(0x1)`: LLVM's special floating-point values.
             b'+' | b'-' if special_float_at(text, at).is_some() => {
                 let (bits, next) = special_float_at(text, at).expect("checked by the guard");
                 out.push((Token::HexFloat(bits), line));
