@@ -240,7 +240,7 @@ pub fn order(
     if !wanted.is_empty() && wanted.iter().all(|one| segments.registers.is_segment(*one)) {
         return segments.selectors.iter().copied().filter(|one| wanted.contains(one)).collect();
     }
-    classes.available.iter().copied().filter(|one| wanted.contains(one)).collect()
+    classes.available.iter().chain(&classes.xmm).copied().filter(|one| wanted.contains(one)).collect()
 }
 
 /// The segment registers as the machine's program model assigns them.
