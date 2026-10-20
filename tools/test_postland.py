@@ -190,3 +190,20 @@ def test_a_nameless_failure_is_retried_once_before_a_commit_is_called_unbuildabl
     monkeypatch.setattr(postland, "unit_failures", lambda at, name=None: next(answers))
     postland.UNIT_SETS.clear()
     assert postland.probe("unit a::t", "c" * 40) is True
+
+
+def test_a_nameless_run_leaves_its_output_tail_and_the_load_in_a_log(monkeypatch, tmp_path):
+    """The retry hid why the first run failed; the tail of its output and the load average are kept."""
+    monkeypatch.setattr(postland, "HOME", tmp_path)
+    monkeypatch.setattr(postland, "tree", lambda sha: tmp_path)
+    answers = iter([({postland.NAMELESS}, ""), (set(), "")])
+
+    def fake(at, name=None):
+        postland.LAST_OUTPUT["text"] = "error: killed by signal 9"
+        return next(answers)
+
+    monkeypatch.setattr(postland, "unit_failures", fake)
+    postland.UNIT_SETS.clear()
+    postland.probe("unit a::t", "d" * 40)
+    log = (tmp_path / ("nameless-" + "d" * 9 + ".log")).read_text()
+    assert "load" in log and "killed by signal 9" in log
