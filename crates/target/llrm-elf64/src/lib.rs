@@ -14,6 +14,7 @@ const R_X86_64_PC16: u32 = 13;
 const R_X86_64_8: u32 = 14;
 const R_X86_64_PC8: u32 = 15;
 const R_X86_64_PC64: u32 = 24;
+const R_X86_64_REX_GOTPCRELX: u32 = 42;
 
 struct X8664;
 
@@ -34,6 +35,7 @@ impl Machine for X8664 {
             Kind::PcRel { width: 8, from } => (R_X86_64_PC64, 8, from),
             Kind::PcRel { width: 4, from } => (R_X86_64_PC32, 4, from),
             Kind::Branch { width: 4 } => (R_X86_64_PLT32, 4, 4),
+            Kind::GotPcRel { width: 4, from } => (R_X86_64_REX_GOTPCRELX, 4, from),
             Kind::PcRel { width: 2, from } => (R_X86_64_PC16, 2, from),
             Kind::PcRel { width: 1, from } => (R_X86_64_PC8, 1, from),
             Kind::SegmentBase => return Err(Unsupported("a segment selector has no ELF relocation".into())),

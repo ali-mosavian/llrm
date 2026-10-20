@@ -28,6 +28,13 @@
 # A constant first operand is taken second.
 commutative add and or xor mul
 
+# An element count that is a value reserves its bytes when it runs.
+pattern dynamic_alloca
+  match alloca
+  when dynamic
+  call dynamic_alloca
+end
+
 pattern alloca
   match alloca
   nothing

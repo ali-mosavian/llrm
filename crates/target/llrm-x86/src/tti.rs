@@ -56,13 +56,6 @@ pub struct X86 {
     pub real_mode: Option<RealMode>,
 }
 
-impl X86 {
-    /// The bits of the integer registers.
-    pub fn native(&self) -> u32 {
-        if self.quad { 64 } else { 32 }
-    }
-}
-
 /// T6: the 16-bit target's address forms and registers, from its description
 /// (`Machine::address_forms`, `Machine::registers`).
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -86,6 +79,11 @@ impl RealMode {
 }
 
 impl X86 {
+    /// The bits of the integer registers.
+    pub fn native(&self) -> u32 {
+        if self.quad { 64 } else { 32 }
+    }
+
     /// The profile of a `-march` llrm supports.
     pub fn of_cpu(cpu: &str) -> Option<X86> {
         match cpu {

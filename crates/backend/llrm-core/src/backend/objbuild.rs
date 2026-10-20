@@ -873,8 +873,18 @@ pub fn _encoded(
             return Err(Unencodable(format!("{}: no field for {}", what.repr(), one.repr())));
         };
         // Long mode reaches a symbol from the instruction pointer: the field is
-        // relative to the instruction's end.
-        let loc = if bits == 64 { Kind::PcRel { width: 4, from: code.len() - at } } else { loc };
+        // relative to the instruction's end, and an address loaded for
+        // a symbol defined elsewhere is its table entry's.
+        let loc = if bits == 64 {
+            let from = code.len() - at;
+            if matches!(one, Loc::Imm(_)) && addr.space == Space::External {
+                Kind::GotPcRel { width: 4, from }
+            } else {
+                Kind::PcRel { width: 4, from }
+            }
+        } else {
+            loc
+        };
         pack_field(&mut code, at, loc, addend);
         let name = names
             .get(&(addr.space, addr.index))

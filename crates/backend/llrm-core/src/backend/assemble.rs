@@ -397,6 +397,13 @@ pub fn assembled_by(
         .filter(|(name, _)| !defined.contains(name.as_str()))
         .map(|(name, &far)| (name.clone(), if far { "far" } else { "near" }.to_owned()))
         .collect();
+    // A variable declared and not defined is data the linker finds; the object
+    // lists only those code reaches.
+    externs.extend(module.globals.iter().enumerate().filter_map(|(at, global)| {
+        let GlobalKind::Variable(variable) = &global.kind else { return None };
+        let name = names.get(&(globals::space(module, GlobalId(at as u32)), at as i64))?;
+        (variable.initializer.is_none() && !defined.contains(name.as_str())).then(|| (name.clone(), "byte".to_owned()))
+    }));
     externs.extend(masm::stack_externs(&procedures, &mut names));
     externs.sort();
     externs.dedup();

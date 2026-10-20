@@ -1,1 +1,9 @@
-# Flat code adds no selection patterns of its own to the family's (llrm-x86).
+# The patterns x86-64 adds to the family's. Each `splice` is where the family's file says `own` of that name.
+
+splice casts
+
+# `cmov` takes the compare's flags; a select of a byte or a float was expanded to a branch before selection.
+pattern select
+  match select
+  call select
+end

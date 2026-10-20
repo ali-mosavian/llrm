@@ -51,6 +51,11 @@ pub struct ObjectFormat {
     /// address mixes a symbol with a register, and a table of code
     /// addresses is not position independent.
     pub pc_relative: bool,
+    /// A symbol defined elsewhere is reached through the global offset table:
+    /// its address is loaded from an entry the linker fills, since a
+    /// position independent program cannot assume where a shared library puts
+    /// it.
+    pub got_external: bool,
 }
 
 /// What `-gdwarf` writes where the target does not say.
@@ -102,7 +107,11 @@ impl ObjectFormat {
             None => false,
             Some(one) => one.as_bool().ok_or("pc_relative is not a boolean")?,
         };
-        Ok(Self { formats, default, bitness, header, dwarf_version, pc_relative })
+        let got_external = match value.get("got_external") {
+            None => false,
+            Some(one) => one.as_bool().ok_or("got_external is not a boolean")?,
+        };
+        Ok(Self { formats, default, bitness, header, dwarf_version, pc_relative, got_external })
     }
 
     /// The format written when `asked` is the one `-fobject-format=` named, if

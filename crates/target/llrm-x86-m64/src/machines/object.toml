@@ -4,6 +4,8 @@ default = "elf"
 bitness = 64
 # Symbols are `[rip + symbol]`: the isel makes a symbol's address a value before it adds a register to it.
 pc_relative = true
+# A symbol defined elsewhere is reached through the GOT (R_X86_64_REX_GOTPCRELX): the program is a PIE.
+got_external = true
 header = []
 
 # The ELF objects, linked by GNU ld: its emulation (`-m`).

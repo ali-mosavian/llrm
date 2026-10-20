@@ -76,6 +76,10 @@ pub enum Kind {
     /// arm64: the target's offset in its page, in the 12-bit immediate of an
     /// `add` (`access` is `None`) or of a load or store of `1 << access` bytes.
     PageOffset12 { access: Option<u8> },
+    /// x86-64: the place's offset from the target's global offset table entry,
+    /// `width` bytes relative to the place `from` bytes past the field's
+    /// start (`R_X86_64_REX_GOTPCRELX`): the entry holds the target's address.
+    GotPcRel { width: usize, from: usize },
     /// arm64: `Page21` of the target's GOT entry.
     GotPage21,
     /// arm64: the offset of the target's GOT entry in its page, in an 8-byte
@@ -87,7 +91,9 @@ impl Kind {
     /// Field bytes this kind patches.
     pub fn width(self) -> usize {
         match self {
-            Kind::Abs { width } | Kind::PcRel { width, .. } | Kind::Branch { width } => width,
+            Kind::Abs { width } | Kind::PcRel { width, .. } | Kind::GotPcRel { width, .. } | Kind::Branch { width } => {
+                width
+            }
             Kind::SectionIndex | Kind::SegmentBase => 2,
             Kind::SectionOffset { width } => width,
             Kind::FarPointer => 4,
@@ -98,7 +104,12 @@ impl Kind {
     pub fn relative(self) -> bool {
         matches!(
             self,
-            Kind::PcRel { .. } | Kind::Branch { .. } | Kind::Branch26 | Kind::Page21 | Kind::GotPage21
+            Kind::PcRel { .. }
+                | Kind::GotPcRel { .. }
+                | Kind::Branch { .. }
+                | Kind::Branch26
+                | Kind::Page21
+                | Kind::GotPage21
         )
     }
 }

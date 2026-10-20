@@ -60,6 +60,32 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 });
 
 impl llrm_target::Target for M64 {
+    fn dialect(&self) -> &'static llrm_instr::Dialect {
+        llrm_x86::instructions::dialect()
+    }
+
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> llrm_lir::registers::RegId {
+        llrm_x86::calling::register(name)
+    }
+
+    fn convention_results(
+        &self,
+        convention: &llrm_target::calling::Convention,
+        width: u32,
+    ) -> Vec<llrm_lir::registers::RegId> {
+        llrm_x86::calling::results(convention, width)
+    }
+
+    fn convention_callee_saved(
+        &self,
+        convention: &llrm_target::calling::Convention,
+    ) -> Vec<(llrm_lir::registers::RegId, llrm_lir::registers::RegId)> {
+        llrm_x86::calling::callee_saved(convention)
+    }
+
     fn registers(&self) -> &'static llrm_lir::registers::Info {
         &REGISTER_INFO
     }
@@ -172,10 +198,6 @@ impl llrm_target::Target for M64 {
 
     fn forms_text(&self) -> String {
         llrm_x86::instructions::joined(include_str!("instructions/x86.instr"))
-    }
-
-    fn dialect(&self) -> &'static llrm_instr::Dialect {
-        llrm_x86::instructions::dialect()
     }
 
     fn operand_bytes(&self) -> i64 {

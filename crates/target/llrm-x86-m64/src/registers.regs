@@ -85,3 +85,20 @@ ss    16 ss   0 segment,reserved,stack_segment  52 27
 ds    16 ds   0 segment,reserved,data_segment  53 28
 fs    16 fs   0 segment,reserved  54 29
 gs    16 gs   0 segment,reserved  55 30
+# SSE: xmm0-15, caller-saved in System V AMD64. A scalar float or double is the low 4 or 8 bytes. DWARF 17-32.
+xmm0  128 xmm0  0 xmm  17 154
+xmm1  128 xmm1  0 xmm  18 155
+xmm2  128 xmm2  0 xmm  19 156
+xmm3  128 xmm3  0 xmm  20 157
+xmm4  128 xmm4  0 xmm  21 158
+xmm5  128 xmm5  0 xmm  22 159
+xmm6  128 xmm6  0 xmm  23 160
+xmm7  128 xmm7  0 xmm  24 161
+xmm8  128 xmm8  0 xmm  25 162
+xmm9  128 xmm9  0 xmm  26 163
+xmm10 128 xmm10 0 xmm  27 164
+xmm11 128 xmm11 0 xmm  28 165
+xmm12 128 xmm12 0 xmm  29 166
+xmm13 128 xmm13 0 xmm  30 167
+xmm14 128 xmm14 0 xmm  31 168
+xmm15 128 xmm15 0 xmm  32 169

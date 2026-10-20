@@ -427,6 +427,7 @@ pub fn datum(item: &Datum) -> Vec<String> {
                 match bytes {
                     4 => "dd",
                     2 => "dw",
+                    8 => "dq",
                     other => panic!("a pointer of {other} bytes"),
                 },
                 _signed(*offset)
@@ -1428,7 +1429,7 @@ fn addressed_pass(
                         // Only `add sp, n` and `sub sp, n` are understood.
                         let amount = match (&what.dests[..], &what.sources[..]) {
                             ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Imm(ir::Imm { value, address: None, .. })])
-                                if dest.register == STACK && source.register == STACK =>
+                                if ir::root(dest.register) == ir::root(STACK) && ir::root(source.register) == ir::root(STACK) =>
                             {
                                 *value
                             }
@@ -1471,7 +1472,10 @@ fn width_of(place: &Loc) -> Option<i64> {
 }
 
 fn writes_stack_pointer(place: &Loc) -> bool {
-    matches!(place, Loc::Reg(one) if one.register == STACK)
+    matches!(
+        place,
+        Loc::Reg(one) if ir::root(one.register) == ir::root(STACK)
+    )
 }
 
 /// `place` with a frame cell addressed through the stack pointer; none where it
@@ -1731,10 +1735,17 @@ impl crate::analysis::facts::Fact for BodyRoots {
                     found.disturbed.insert(disturbed);
                 }
                 let Some(what) = &one.what else { continue };
-                // A move into the stack pointer (`stackrestore`) leaves it
-                // somewhere else, as an `alloca` does.
-                found.moves_stack |= what.op == Operation::Move
-                    && what.dests.iter().any(|to| matches!(to, Loc::Reg(reg) if ir::root(reg.register) == stack));
+                // An instruction that sets the stack pointer to something not
+                // known at compile time (a dynamic
+                // `alloca`, `stackrestore`); `add sp, n` and `sub sp, n`, the
+                // cleanup after a call, are the frame's own.
+                let known = matches!(
+                    (what.name.as_deref(), &what.dests[..], &what.sources[..]),
+                    (Some("add" | "sub"), [Loc::Reg(dest)], [Loc::Reg(source), Loc::Imm(_)])
+                        if root(dest.register) == stack && root(source.register) == stack
+                );
+                found.moves_stack |= !known
+                    && what.dests.iter().any(|place| matches!(place, Loc::Reg(reg) if root(reg.register) == stack));
                 for r#where in what.dests.iter().chain(&what.sources) {
                     if let Loc::Reg(ir::Reg { register, .. }) = r#where {
                         found.plain.insert(root(*register));
@@ -1823,7 +1834,7 @@ pub fn _instruction(
             }
         }
         Operation::Move | Operation::Address => vec![format!("{name} {}, {}", dests[0], sources[0])],
-        Operation::Binary => vec![format!("{name} {}, {}", dests[0], sources[1])],
+        Operation::Binary | Operation::Select => vec![format!("{name} {}, {}", dests[0], sources[1])],
         Operation::Unary => vec![format!("{name} {}", dests[0])],
         Operation::Compare if name.starts_with('f') => {
             let memory: Vec<&String> = sources
@@ -2450,6 +2461,7 @@ mod tests {
                 header: vec![".386".to_owned(), ".model flat".to_owned()],
                 dwarf_version: llrm_target::object::DEFAULT_DWARF_VERSION,
                 pc_relative: false,
+                got_external: false,
             },
             code: "T_TEXT".into(),
             names: no_names(),

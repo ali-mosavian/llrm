@@ -144,7 +144,7 @@ impl From<RegId> for Register {
 
 /// The classes a description may give a register, one bit each, in this order.
 /// A name not here is refused where the table is generated.
-pub const CLASSES: [&str; 20] = [
+pub const CLASSES: [&str; 21] = [
     "base",
     "byte",
     "code_segment",
@@ -165,6 +165,7 @@ pub const CLASSES: [&str; 20] = [
     "rfp",
     "fpr",
     "zero",
+    "xmm",
 ];
 
 /// The class bits.
@@ -198,6 +199,8 @@ pub mod class {
     pub const FPR: u32 = 1 << 18;
     /// A register that reads as zero and ignores writes.
     pub const ZERO: u32 = 1 << 19;
+    /// An SSE register: scalar `float` and `double` live in its low lanes.
+    pub const XMM: u32 = 1 << 20;
 }
 
 /// What LIR calls the frame register and the stack pointer, whatever the

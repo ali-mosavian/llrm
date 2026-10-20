@@ -83,6 +83,24 @@ impl Layout {
         self.expand.iter().any(|one| one == operation)
     }
 
+    /// Whether the machine lacks an instruction for `operation` on values of the type `ty` (`select.i8`), or on any
+    /// type (`select`).
+    pub fn expands_for(
+        &self,
+        operation: &str,
+        ty: &str,
+    ) -> bool {
+        self.expands(operation) || self.expand.iter().any(|one| one.strip_prefix(operation).is_some_and(|rest| rest.strip_prefix('.') == Some(ty)))
+    }
+
+    /// Whether any value type of `operation` is expanded.
+    pub fn expands_some(
+        &self,
+        operation: &str,
+    ) -> bool {
+        self.expand.iter().any(|one| one == operation || one.strip_prefix(operation).is_some_and(|rest| rest.starts_with('.')))
+    }
+
     /// Whether the machine would rather run `operation` at the native width
     /// (`promote` in the description).
     pub fn promotes(
@@ -174,13 +192,13 @@ impl Layout {
                 .and_then(|list| list.iter().map(|one| one.as_str().map(str::to_owned)).collect())
                 .ok_or("promote is not a list of operation names")?,
         };
-        let llvm_triple = value.get("llvm_triple").and_then(|one| one.as_str()).map(str::to_owned);
         let text = |name: &str| -> Result<Option<String>, String> {
             match value.get(name) {
                 None => Ok(None),
                 Some(one) => one.as_str().map(|one| Some(one.to_owned())).ok_or(format!("{name} is not a string")),
             }
         };
+        let llvm_triple = text("llvm_triple")?;
         Ok(Self {
             mode,
             datalayout,

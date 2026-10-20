@@ -147,7 +147,7 @@
 //! # See also
 //! `docs/machine/targets.md`; LLVM `SelectionDAGISel`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use llrm_analysis::cfg;
@@ -254,6 +254,24 @@ pub struct Convention {
     /// The registers its prologue may save: the convention's, but those its
     /// parameters arrive in.
     pub saved: Vec<(RegId, RegId)>,
+    /// Where the first stack argument the function does not name lies, by its
+    /// displacement from the frame register.
+    pub stack_arguments: i64,
+}
+
+/// A variadic function's `va_list` under `sysv-amd64`: what `va_start` writes.
+#[derive(Clone, Copy, Debug)]
+struct VaList {
+    /// The frame displacement of the register save area, one quadword for each
+    /// argument register.
+    save: i64,
+    /// The offset in the area of the first unnamed integer register.
+    gp_offset: i64,
+    /// The offset past the integer registers, where the vector registers' part
+    /// begins.
+    fp_offset: i64,
+    /// The frame displacement of the first unnamed stack argument.
+    overflow: i64,
 }
 
 /// How a calling convention pushes arguments and who pops them. C pushes
@@ -551,7 +569,7 @@ fn convention(
         0
     };
     let saved = saved(arch, described, &parameters, &returns);
-    Ok(Convention { parameters, returns, popped, saved })
+    Ok(Convention { parameters, returns, popped, saved, stack_arguments: cursor })
 }
 
 /// The stack bytes the address of a struct result takes where `entry` passes it
@@ -992,6 +1010,7 @@ pub fn selected_with<'c>(
     };
     let mut selector = Selector {
         pc_relative: arch.object().pc_relative,
+        got_external: arch.object().got_external,
         module,
         function,
         arch,
@@ -1045,6 +1064,7 @@ pub fn selected_with<'c>(
         pair_phi_inputs: IndexMap::default(),
         stand_ins: IndexMap::default(),
         current: None,
+        symbol_registers: BTreeMap::new(),
         far_globals: IndexMap::default(),
         materialized: Vec::new(),
         edges: IndexMap::default(),
@@ -1066,6 +1086,7 @@ pub fn selected_with<'c>(
         pool,
         unsealed: false,
         variadic: None,
+        va: None,
         variables: Vec::new(),
         homed: BTreeSet::new(),
         homes: IndexMap::default(),
@@ -1546,6 +1567,9 @@ pub struct Selector<'m, 'c, 'p> {
     /// Whether `arch` reaches a symbol from the instruction pointer (its object
     /// description, read once).
     pc_relative: bool,
+    /// Whether `arch` loads the address of a symbol defined elsewhere from a
+    /// table the linker fills.
+    got_external: bool,
     /// What the functions that take part leave different.
     callee_facts: &'c CalleeFacts,
     layout: DataLayout,
@@ -1639,6 +1663,8 @@ pub struct Selector<'m, 'c, 'p> {
     stand_ins: IndexMap<u32, u32>,
     /// The block being selected.
     current: Option<BlockId>,
+    /// A global's address register, and the block it was made in.
+    symbol_registers: BTreeMap<(Space, i64, i64), (Option<BlockId>, Held)>,
     /// Each far global's offset and selector, where a block made them.
     far_globals: IndexMap<(BlockId, GlobalId, i64), (Held, Held)>,
     /// What `global` made for the instruction being selected, placed before it.
@@ -1678,6 +1704,8 @@ pub struct Selector<'m, 'c, 'p> {
     /// Where the first variadic argument is, by its displacement from BP:
     /// past the last parameter's slot.
     variadic: Option<i64>,
+    /// The `va_list` of a function whose convention keeps a register save area.
+    va: Option<VaList>,
     /// `-g`'s frame variables, each with the function declaring it.
     variables: Vec<(String, DebugVariable)>,
     /// The arguments `-g` names that the debug format cannot say are in their
@@ -1743,8 +1771,9 @@ impl Selector<'_, '_, '_> {
         let mut align_of = IndexMap::<usize, i64>::default();
         for &block in layout {
             for inst in function.iter_block(block) {
-                if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
-                    let size = self.layout.alloc_size(self.types(), allocated) as i64;
+                if let (&Opcode::Alloca { allocated, .. }, Some(size)) =
+                    (&function.instruction(inst).opcode, self.alloca_bytes(inst))
+                {
                     let align = natural_align(&self.module.context.types, &self.layout, allocated)
                         .max(size & size.wrapping_neg())
                         .min(kept.max(i64::from(self.arch.stack_slot_bytes())))
@@ -1787,8 +1816,9 @@ impl Selector<'_, '_, '_> {
             for inst in function.iter_block(block) {
                 self.ats.insert(inst, at);
                 at += 1;
-                if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
-                    let size = self.layout.alloc_size(self.types(), allocated) as i64;
+                if let (Opcode::Alloca { .. }, Some(size)) =
+                    (&function.instruction(inst).opcode, self.alloca_bytes(inst))
+                {
                     let disp = homes[&group_of[&inst]];
                     let address = function.instruction(inst).result.expect("an address");
                     self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1, home: Some(disp) });
@@ -1972,6 +2002,42 @@ impl Selector<'_, '_, '_> {
             let held = Held { value: self.value(parameter), width };
             let what = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(frame(disp, width))]);
             prologue.push(insn(block_at[&entry], what));
+        }
+        let (_, _, is_variadic) = self.module.signature(function.ty);
+        let described = self::entry(self.arch, function.calling_convention, is_variadic);
+        if let Some(one) = described.filter(|one| is_variadic && one.va_list.as_deref() == Some("sysv-amd64")) {
+            // The unnamed argument registers are stored at entry in a register
+            // save area, one quadword each; the list `va_start`
+            // makes names the area and the first unnamed stack argument.
+            let named: usize = convention
+                .parameters
+                .iter()
+                .map(|place| if let Parameter::Registers(registers) = place { registers.len() } else { 0 })
+                .sum();
+            let slot_bytes = self.arch.stack_slot_bytes();
+            let Pointer::Frame { disp: save, .. } = self.temporary(slot_bytes * one.argument_registers.len() as i64)
+            else {
+                unreachable!("a temporary is a frame cell")
+            };
+            for (index, name) in one.argument_registers.iter().enumerate().skip(named) {
+                let held = self.fresh_held(slot_bytes as u32);
+                arrived.push((held, regs.named(llrm_x86::calling::register(name), slot_bytes)));
+                let what = semantics(
+                    Operation::Move,
+                    "mov",
+                    vec![Loc::Mem(frame(save + slot_bytes * index as i64, slot_bytes as u32))],
+                    vec![Loc::Held(held)],
+                );
+                prologue.push(Arc::new(Insn { volatile: true, ..(*insn(block_at[&entry], what)).clone() }));
+            }
+            let registers = slot_bytes * one.argument_registers.len() as i64;
+            self.va = Some(VaList {
+                save,
+                gp_offset: slot_bytes * named as i64,
+                fp_offset: registers,
+                overflow: convention.stack_arguments,
+            });
+            self.unsealed = true;
         }
         if !arrived.is_empty() {
             let at = block_at[&entry];
@@ -2266,6 +2332,16 @@ impl Selector<'_, '_, '_> {
             _ => return,
         }
         let result = instruction.result.expect("a comparison's value");
+        // A conditional move reads the flags where it stands: its comparison is made there.
+        if let Some(only) = function.users(result).only()
+            && function.instruction(only.user).opcode == Opcode::Select
+            && function.instruction(only.user).operands.first() == Some(&Operand::Value(result))
+            && function.parent(only.user) == Some(block)
+            && matches!(instruction.opcode, Opcode::ICmp(_))
+        {
+            self.fused.insert(inst);
+            return;
+        }
         if let Some(only) = function.users(result).only()
             && function.terminator(block) == Some(only.user)
             && function.instruction(only.user).opcode == Opcode::Br
@@ -2446,6 +2522,22 @@ impl Selector<'_, '_, '_> {
         Some(crate::backend::lifetimes::Marker { object, starts })
     }
 
+    /// The bytes an `alloca` reserves in the frame; none where its element
+    /// count is a value, which is the stack's to make room for when it runs
+    /// (`hook_dynamic_alloca`).
+    fn alloca_bytes(
+        &self,
+        inst: InstId,
+    ) -> Option<i64> {
+        let instruction = self.function.instruction(inst);
+        let Opcode::Alloca { allocated, .. } = instruction.opcode else { return None };
+        let element = self.layout.alloc_size(self.types(), allocated) as i64;
+        match instruction.operands.first() {
+            None => Some(element),
+            Some(&count) => self.constant(count, 8).map(|count| element * count.max(0)),
+        }
+    }
+
     /// Each alloca's frame slot, and each slot's bytes: locals never live
     /// together, by their lifetime markers, share one. A local with no markers
     /// has a slot of its own.
@@ -2470,10 +2562,7 @@ impl Selector<'_, '_, '_> {
         let allocas: Vec<(InstId, i64)> = positions
             .keys()
             .filter_map(|&inst| match function.instruction(inst).opcode {
-                Opcode::Alloca { allocated, .. } => {
-                    let size = self.layout.alloc_size(self.types(), allocated) as i64;
-                    Some((inst, size + size % 2))
-                }
+                Opcode::Alloca { .. } => self.alloca_bytes(inst).map(|size| (inst, size + size % 2)),
                 _ => None,
             })
             .collect();
@@ -3397,6 +3486,9 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
         let regs = self.regs();
+        if let Some(va) = self.va {
+            return self.va_start_with_save_area(va, arguments, at, out);
+        }
         let Some(disp) = self.variadic else {
             return refuse("va_start with no parameter before the variadic arguments");
         };
@@ -3417,31 +3509,6 @@ impl Selector<'_, '_, '_> {
         self.layout.pointer(self.spaces.data).bits / 8
     }
 
-    /// `llvm.va_copy`: the list read from the second argument's address
-    /// stored at the first's, as `TargetLowering::expandVACopy` does for a list
-    /// that is a pointer.
-    fn va_copy(
-        &mut self,
-        arguments: &[Operand],
-        at: i64,
-        out: &mut Vec<Arc<Insn>>,
-    ) -> Result<(), Unselected> {
-        let regs = self.regs();
-        let width = self.va_list_bytes();
-        let held = Held { value: self.fresh(), width };
-        let from = self.pointer(arguments[1])?;
-        out.push(insn(
-            at,
-            semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(Self::memory(regs, from, width))]),
-        ));
-        let to = self.pointer(arguments[0])?;
-        out.push(insn(
-            at,
-            semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(regs, to, width))], vec![Loc::Held(held)]),
-        ));
-        Ok(())
-    }
-
     /// `llvm.stacksave`: the stack pointer, a near data pointer.
     fn stack_save(
         &mut self,
@@ -3452,7 +3519,7 @@ impl Selector<'_, '_, '_> {
         let width = self.address_bytes();
         let value = self.function.instruction(inst).result.expect("a saved stack pointer");
         let saved = Held { value: self.value(value), width };
-        let sp = Loc::Reg(Reg { register: STACK, width });
+        let sp = Loc::Reg(Reg { register: self.arch.stack_pointer(), width });
         out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(saved)], vec![sp])));
         Ok(())
     }
@@ -3468,8 +3535,70 @@ impl Selector<'_, '_, '_> {
         let width = self.address_bytes();
         let ty = self.function.operand_type(&self.module.context, arguments[0]).expect("a typed pointer");
         let saved = self.held(arguments[0], ty, at, out)?;
-        let sp = Loc::Reg(Reg { register: STACK, width });
+        let sp = Loc::Reg(Reg { register: self.arch.stack_pointer(), width });
         out.push(insn(at, semantics(Operation::Move, "mov", vec![sp], vec![Loc::Held(saved)])));
+        Ok(())
+    }
+
+    /// `llvm.va_copy`: the whole list, the pointer it is or the structure of a
+    /// register save area, moved a slot at a time through a register.
+    fn va_copy(
+        &mut self,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let regs = self.regs();
+        let width = self.layout.pointer(self.spaces.data).bits / 8;
+        let slots = if self.va.is_some() { 3 } else { 1 };
+        let (to, from) = (self.pointer(arguments[0])?, self.pointer(arguments[1])?);
+        for slot in 0..slots {
+            let by = i64::from(width) * slot;
+            let held = Held { value: self.fresh(), width };
+            let load = semantics(
+                Operation::Move,
+                "mov",
+                vec![Loc::Held(held)],
+                vec![Loc::Mem(Self::memory(regs, from.moved(by), width))],
+            );
+            out.push(insn(at, load));
+            let store = semantics(
+                Operation::Move,
+                "mov",
+                vec![Loc::Mem(Self::memory(regs, to.moved(by), width))],
+                vec![Loc::Held(held)],
+            );
+            out.push(insn(at, store));
+        }
+        Ok(())
+    }
+
+    /// `llvm.va_start` of a list with a register save area: `{ i32 gp_offset,
+    /// i32 fp_offset, ptr overflow_arg_area, ptr reg_save_area }`, written
+    /// field by field as X86's `LowerVASTART` does.
+    fn va_start_with_save_area(
+        &mut self,
+        va: VaList,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let regs = self.regs();
+        let list = self.pointer(arguments[0])?;
+        let stored = |this: &mut Self, by: i64, width: u32, value: Loc, out: &mut Vec<Arc<Insn>>| {
+            let cell = Self::memory(regs, list.moved(by), width);
+            out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![value])));
+            let _ = this;
+        };
+        for (by, offset) in [(0, va.gp_offset), (4, va.fp_offset)] {
+            stored(self, by, 4, Loc::Imm(Imm { value: offset, width: 4, address: None }), out);
+        }
+        let width = self.layout.pointer(self.spaces.data).bits / 8;
+        for (by, disp) in [(8, va.overflow), (16, va.save)] {
+            let held = Held { value: self.fresh(), width };
+            out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1, home: None }, held)));
+            stored(self, by, width, Loc::Held(held), out);
+        }
         Ok(())
     }
 
@@ -3521,6 +3650,28 @@ impl Selector<'_, '_, '_> {
                 }
             }
         }
+    }
+
+    /// The register holding a global's address in this block: made by the
+    /// first access, shared by the rest.
+    fn symbol_register(
+        &mut self,
+        pointer: Pointer,
+        width: u32,
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Held {
+        let Pointer::Global { space, index, offset, .. } = pointer else { unreachable!("a global") };
+        let key = (space, index, offset);
+        if let Some(&(block, held)) = self.symbol_registers.get(&key)
+            && block == self.current
+        {
+            return held;
+        }
+        let held = Held { value: self.fresh(), width };
+        out.push(insn(at, self.address(pointer, held)));
+        self.symbol_registers.insert(key, (self.current, held));
+        held
     }
 
     /// Where a pointer operand points.
@@ -3640,6 +3791,19 @@ impl Selector<'_, '_, '_> {
         let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id)
             .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
         let space = crate::backend::globals::space(self.module, global);
+        // A symbol defined elsewhere is reached through the table the linker
+        // fills: its address is loaded, once in each block that reads
+        // it, and the access is through that register.
+        if space == Space::External && self.got_external {
+            let Some(block) = self.current else { return refuse("a global outside a block") };
+            let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
+            let width = self.address_bytes();
+            let base = self.fresh_held(width);
+            let address = Addr { index: i64::from(global.0), ..Addr::new(space, 0) };
+            let symbol = Loc::Imm(Imm { value: 0, width, address: Some(address) });
+            self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(base)], vec![symbol])));
+            return Ok(Pointer::Based { base, index: None, scale: 1, offset, segment: None });
+        }
         // A near global cast to a far pointer (`addrspacecast (ptr @g to ptr
         // addrspace(1))`) is its DGROUP selector and its offset, as the
         // cast instruction makes it.
@@ -4007,6 +4171,25 @@ impl Selector<'_, '_, '_> {
                 address,
                 Pointer::Based { base: both, index: Some(sum), scale: 1, offset: start + offset as i64, segment },
             );
+            return Ok(());
+        }
+        // From the instruction pointer a symbol's address is a register: one
+        // per block, and the sum an access reads is its index, `[sym+idx*s]`.
+        if self.pc_relative()
+            && let Pointer::Global { base: None, plus: None, .. } = pointer
+        {
+            if self.only_addressed(address) {
+                let Pointer::Global { space, index, offset: start, .. } = pointer else { unreachable!("a global") };
+                let symbol = Pointer::Global { space, index, offset: 0, base: None, scale: 1, plus: None };
+                let base = self.symbol_register(symbol, width, at, out);
+                let offset = start + offset as i64;
+                self.pointers.insert(address, Pointer::Based { base, index: Some(sum), scale: tail, offset, segment: None });
+                return Ok(());
+            }
+            let start = self.symbol_register(pointer.moved(offset as i64), width, at, out);
+            let result = Held { value: self.value(address), width };
+            let scaled = Loc::Held(sum);
+            out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(result)], vec![Loc::Held(start), scaled])));
             return Ok(());
         }
         let start = match pointer {
@@ -6425,7 +6608,7 @@ impl Selector<'_, '_, '_> {
                     .arch
                     .convention_callee_saved(entry)
                     .into_iter()
-                    .filter(|(full, pushed)| full != pushed)
+                    .filter(|(full, pushed)| self.regs().bytes(*pushed) < self.regs().bytes(*full))
                     .map(|(full, _)| full)
                     .collect(),
                 None => call_clobbered_high_keeping(&contract, self.segments, &self.cpu.general, &whole),

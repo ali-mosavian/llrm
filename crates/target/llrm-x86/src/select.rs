@@ -436,6 +436,17 @@ fn rip_operand() -> MemoryOperand {
     MemoryOperand::new(Register::RIP, Register::None, 1, 0, 8, false, Register::None)
 }
 
+/// `mov into, [rip + symbol@GOT]`: the address of a symbol defined elsewhere,
+/// which the linker puts in a table entry; the entry's offset is the field the
+/// relocation fills.
+pub fn got_symbol(
+    into: RegId,
+    at: At,
+) -> Option<Emitted> {
+    (width_of(into)? == 8).then_some(())?;
+    _assemble(&raised(create_reg_mem(Code::Mov_r64_rm64, into, rip_operand())), at, true)
+}
+
 /// `lea into, [rip + symbol]`: the address of a symbol as a value in long mode.
 pub fn lea_symbol(
     into: RegId,
@@ -2084,6 +2095,11 @@ pub fn emit_in(
             // `mov sreg,imm` the machine has no encoding for.
             (Loc::Reg(into), Loc::Imm(imm)) if seg(into.register) => load_segment(into.register, imm.value, at),
             (Loc::Reg(into), Loc::Reg(outof)) => r#move(into.register, outof.register, at),
+            (Loc::Reg(into), Loc::Imm(imm))
+                if at.bits == 64 && imm.address.is_some_and(|addr| addr.space == Space::External) =>
+            {
+                got_symbol(into.register, at)
+            }
             (Loc::Reg(into), Loc::Imm(imm)) if at.bits == 64 && imm.address.is_some() => lea_symbol(into.register, at),
             (Loc::Reg(into), Loc::Imm(imm)) => load(into.register, imm.value, at),
             (Loc::Reg(into), Loc::Mem(cell)) => move_from(into.register, cell, at),
@@ -2108,6 +2124,20 @@ pub fn emit_in(
             }
         }
         return None;
+    }
+    // A conditional move: the first source is the destination, the second replaces it when the condition holds.
+    if op == Operation::Select && dests.len() == 1 && sources.len() == 2 {
+        let into = reg_of(&dests[0])?;
+        let width = width_of(into)?;
+        let code = _code(&format!("{}_R{}_RM{}", name.to_uppercase(), width * 8, width * 8))?;
+        return match &sources[1] {
+            Loc::Reg(from) => _assemble(&raised(create_reg_reg(code, into, from.register)), at, true),
+            Loc::Mem(cell) => {
+                let (built, relocated) = operand_of(cell, at.bits)?;
+                _assemble(&raised(create_reg_mem(code, into, built)), at, relocated)
+            }
+            _ => None,
+        };
     }
     if op == Operation::Binary && SHIFTS.contains(&name) && dests.len() == 1 && sources.len() == 2 {
         let count = imm_of(&sources[1]);

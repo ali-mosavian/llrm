@@ -135,6 +135,12 @@ pub struct Convention {
     /// registers it passes arguments in (SysV AMD64's `al`); none where the
     /// convention has no such count.
     pub variadic_vector_register: Option<String>,
+    /// How a variadic function's `va_list` is made: absent, the arguments are
+    /// on the stack and the list points at the first; `sysv-amd64`, the
+    /// unnamed argument registers are saved in a register save area and the
+    /// list is the four-field structure that names it (X86ISelLowering's
+    /// `LowerVASTART`, `LowerFormalArguments`).
+    pub va_list: Option<String>,
     /// For an interrupt handler: what its frame pointer addresses, lowest
     /// address first, each slot's register and bytes. Empty for the rest.
     pub interrupt_frame: Vec<(String, i64)>,
@@ -221,6 +227,7 @@ const KEYS: &[&str] = &[
     "wide_slots",
     "variadic_float",
     "variadic_vector_register",
+    "va_list",
     "like",
     "interrupt_frame",
 ];
@@ -615,6 +622,7 @@ impl Convention {
                 .contains_key("variadic_vector_register")
                 .then(|| text("variadic_vector_register"))
                 .transpose()?,
+            va_list: table.contains_key("va_list").then(|| text("va_list")).transpose()?,
             interrupt_frame: match table.get("interrupt_frame") {
                 None => Vec::new(),
                 Some(rows) => rows

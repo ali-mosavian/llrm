@@ -22,3 +22,7 @@ movsd     copy       m,r,r,r/r,r,r      32         rep_movs     s0=cx,s1=si,s2=d
 
 # The sign extension of rax into rdx before a quadword divide.
 cqo       extend     r/r                64         cdq          s0=ax,d0=dx             -       -       -/-             Cqo
+
+# Every x86-64 has the conditional move (P6 and later): the second source replaces the first, which is tied to the
+# destination, when the condition holds.
+cmov{cc}  select     r/^0,rm            16,32,64   cmov         -                       -       -       cc/-            Cmov{cc}_r{w}_rm{w}
