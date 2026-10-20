@@ -236,7 +236,7 @@ impl<'a> Window<'a> {
             Some(Loc::Mem(_)) => Kind::Mem,
             Some(Loc::Imm(_)) => Kind::Imm,
             Some(Loc::Held(_)) => Kind::Held,
-            Some(Loc::Address(_)) => Kind::Other,
+            Some(Loc::Address(_) | Loc::Field(_)) => Kind::Other,
         }
     }
 
@@ -251,7 +251,7 @@ impl<'a> Window<'a> {
             Loc::Mem(one) => Some(one.width),
             Loc::Imm(one) => Some(one.width),
             Loc::Held(one) => Some(one.width),
-            Loc::Address(_) => None,
+            Loc::Address(_) | Loc::Field(_) => None,
         }
     }
 
@@ -424,6 +424,7 @@ pub struct Cx<'a> {
     /// The instructions walked.
     pub insns: &'a [Arc<Insn>],
     dead: OnceCell<DeadAfter>,
+    unread: OnceCell<DeadAfter>,
     places: OnceCell<HashMap<usize, usize>>,
 }
 
@@ -433,7 +434,7 @@ impl<'a> Cx<'a> {
         block: Option<&'a LirBlock>,
         insns: &'a [Arc<Insn>],
     ) -> Self {
-        Self { facts, block, insns, dead: OnceCell::new(), places: OnceCell::new() }
+        Self { facts, block, insns, dead: OnceCell::new(), unread: OnceCell::new(), places: OnceCell::new() }
     }
 
     /// The register file of the target the walked code is for.
@@ -443,6 +444,24 @@ impl<'a> Cx<'a> {
 
     fn block(&self) -> &'a LirBlock {
         self.block.expect("a group reading liveness walks a block")
+    }
+
+    /// The lanes no instruction after `one` reads, a call's possible clobber
+    /// of an upper half taken as no write.
+    pub fn unread_after(
+        &self,
+        regs: Regs,
+        one: &Arc<Insn>,
+    ) -> Lanes {
+        let unread = self
+            .unread
+            .get_or_init(
+                || {
+                    let exits = self.facts.exits.get_or_init(|| liveness::dead_at_exit(self.facts.body()));
+                    regthrash::_unread_after(regs, self.facts.bits, self.block(), exits[&self.block().at])
+                },
+            );
+        unread[&id(one)]
     }
 
     /// The register and flag lanes dead after `one`, an instruction of the

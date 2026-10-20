@@ -19,6 +19,7 @@ fn main() {
     llrm_core::support::debug::report_checks(&[("STALE", llrm_mir::passes::stale_checks_run())]);
     if llrm_core::support::debug::enabled("counts") {
         llrm_mir::counts::lines().iter().for_each(|line| eprintln!("{line}"));
+        llrm_transforms::parity::tally_lines().iter().for_each(|line| eprintln!("{line}"));
     }
     std::process::exit(code);
 }

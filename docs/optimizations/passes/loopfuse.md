@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopfuse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopfuse.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopfuse.rs sha256:3dccbf881d419e9acace3c76ce469182773e81730dd2113768e3388d32dd996f -->
+<!-- src: crates/opt/llrm-transforms/src/loopfuse.rs sha256:a4ca30326e10a87842047c953afb142439a473d60917ad289506a951eb9a63e8 -->
 
 # loopfuse
 
@@ -45,7 +45,7 @@ one trip:
 ```
 
 The setup between them moves ahead of the first loop. The copy is a
-candidate, as in [`crate::unswitch`](unswitch.md): [`crate::candidate`](candidate.md) runs the
+candidate, as in [`crate::loopversion`](loopversion.md): [`crate::candidate`](candidate.md) runs the
 pipeline over it and keeps it when it has fewer loops, no more operations
 and no larger price, spills included. At most `MAX_TRIALS` candidates are
 tried per body and the loops are at most `MAX_LOOP_OPS` operations

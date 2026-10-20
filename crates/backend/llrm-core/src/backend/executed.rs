@@ -24,7 +24,7 @@
 //! body with an irreducible loop has no finite estimate: the result is none.
 //!
 //! [`work`] is `instructions + memory`, the number the allocator and the
-//! route choice compare alternatives by (`allocate::_emitted`, and the cost of
+//! route choice compares alternatives by (the cost of
 //! a candidate in `assemble.rs`, in bytes at -Os). [`Executed::jump_cycles`]
 //! prices the branches and jumps on a CPU profile: taken branches, untaken
 //! branches and short jumps each at their form's cost.
@@ -196,7 +196,7 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
     if !loops::irreducible(graph, Some(body.entry)).is_empty() {
         return None;
     }
-    let frequency = Frequency::of(body);
+    let frequency = Frequency::counted(body);
     let x87 = |one: &Insn| one.what.as_ref().is_some_and(|what| what.op.is_x87());
     let slots: IndexSet<Addr> = body
         .blocks

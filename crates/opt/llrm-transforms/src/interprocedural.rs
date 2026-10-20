@@ -156,18 +156,18 @@
 //! LLVM's FunctionAttrs and IPSCCP; GCC's `ipa-inline.cc`, `ipa-cp.cc` and
 //! `ipa-modref.cc`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use llrm_analysis::alias::{self, Procedure, Summary};
+use llrm_analysis::aa::ModRefInfo;
+use llrm_analysis::alias::{self, Procedure};
 use llrm_analysis::cfg::Shape;
-use llrm_analysis::effects;
+use llrm_analysis::functionattrs;
 use llrm_analysis::interprocedural as facts;
 use llrm_analysis::manager::{Callbacks, GlobalsAA, ProgramSummaries, Summaries};
-use llrm_analysis::memory::{Identity, MemoryKind, Slice, Unit};
+use llrm_analysis::memory::{Identity, MemoryKind, Unit};
 use llrm_mir::callgraph::{CallGraph, CallGraphAnalysis, Defined};
 use llrm_mir::context::GlobalId;
 use llrm_mir::facts::{Fact, Facts};
-use llrm_mir::memory::Effects;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{CalleeEffects, Declarations, Declared, ModuleAnalyses, PreservedAnalyses};
@@ -209,7 +209,7 @@ fn reporting<T>(
 
 /// `reporting`, and where each body it changed was before: what a stage that
 /// vouches for its edit (`Settled::vouch`) says it from.
-fn reporting_marked<T>(
+pub(crate) fn reporting_marked<T>(
     module: &mut Module,
     modules: &mut ModuleAnalyses,
     edit: impl FnOnce(&mut Module) -> T,
@@ -233,7 +233,7 @@ fn reporting_marked<T>(
 /// The edits `bodies` had since `before` are ones the pipeline's passes need
 /// not look at again: each is a call that names another function that says the
 /// same, or one that takes fewer arguments (`Settled`).
-fn vouched(
+pub(crate) fn vouched(
     module: &Module,
     bodies: impl IntoIterator<Item = GlobalId>,
     before: &llrm_support::hash::IndexMap<GlobalId, llrm_mir::module::Mark>,
@@ -249,7 +249,7 @@ fn vouched(
 /// `module`'s declarations to declare into: the module's own `Declarations`,
 /// nothing scanned unless a pass declares. `LLRM_CHECK_CALLEES=1` compares them
 /// with a fresh listing.
-fn declared(
+pub(crate) fn declared(
     modules: &mut ModuleAnalyses,
     module: &Module,
 ) -> Declared {
@@ -265,7 +265,7 @@ fn declared(
 
 /// Places what `declared` made. The module has more functions than its
 /// `Declarations` say now.
-fn placed(
+pub(crate) fn placed(
     declared: &mut Declared,
     modules: &mut ModuleAnalyses,
     module: &mut Module,
@@ -304,8 +304,13 @@ pub struct Interprocedural {
     pub rate: Option<i64>,
     /// Runs the pipeline over a copy of a callee that is in no module, for the
     /// constants a site passes: what its copy there would come to.
-    pub specialise:
-        Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, llrm_mir::module::Function) -> llrm_mir::module::Function>,
+    pub specialise: Box<
+        dyn FnMut(
+            &mut Module,
+            &mut ModuleAnalyses,
+            llrm_mir::module::Function,
+        ) -> (llrm_mir::module::Function, Declared),
+    >,
     /// Whether what a body's callers pass is stated as a range on its
     /// parameters (gcc's `-fipa-vrp`, -O2 and up).
     pub ranges: bool,
@@ -425,7 +430,7 @@ fn defined(program: &Program) -> impl Iterator<Item = Defined> + '_ {
 }
 
 /// Defined procedures of module `at`, in module order.
-fn procedures(
+pub(crate) fn procedures(
     program: &Program,
     at: usize,
 ) -> Vec<GlobalId> {
@@ -507,6 +512,11 @@ fn bare(
     analyses: &mut ModuleAnalyses,
     id: GlobalId,
 ) {
+    assert!(
+        !llrm_support::debug::verifying() || reference_counts(module).get(&id).copied().unwrap_or(0) == 0,
+        "@{} is bared with a call to it standing",
+        module.global(id).name.as_deref().unwrap_or_default()
+    );
     let Some(mut stub) = module.global(id).function().map(llrm_mir::module::Function::declaration) else { return };
     let void = module.context.types.void();
     let entry = stub.create_block(None);
@@ -569,7 +579,7 @@ fn calls_of(
 
 /// Defined procedures no outside code calls: every caller is in the program,
 /// and a call through a pointer is not one, so none has its address taken.
-fn unexported(program: &Program) -> BTreeSet<Defined> {
+pub(crate) fn unexported(program: &Program) -> BTreeSet<Defined> {
     let addressed: BTreeSet<Defined> = program
         .modules
         .iter()
@@ -710,12 +720,13 @@ pub(crate) struct Specialisations {
 }
 
 /// Runs the pipeline over a function that is in no module, in `module`'s
-/// context: what a copy specialised for its constants comes to.
+/// context: what a copy specialised for its constants comes to, and the
+/// functions it declared, which the module does not have.
 pub(crate) type Specialiser<'a, E> = &'a mut dyn FnMut(
     &mut Module,
     &mut ModuleAnalyses,
     llrm_mir::module::Function,
-) -> Result<llrm_mir::module::Function, E>;
+) -> Result<(llrm_mir::module::Function, Declared), E>;
 
 impl Specialisations {
     /// `callee`'s bytes (priced by `costs`) with `constants` for its
@@ -740,8 +751,8 @@ impl Specialisations {
                 copy.replace_value(parameter, llrm_mir::module::Operand::Constant(*constant));
             }
         }
-        let copy = specialised(module, modules, copy)?;
-        let size = inline::size_of(module, &callees(modules, module), &copy, costs);
+        let (copy, declared) = specialised(module, modules, copy)?;
+        let size = inline::size_of(module, &callees(modules, module), &copy, Some(&declared), costs);
         self.sizes.insert(key, size);
         Ok(size)
     }
@@ -842,6 +853,7 @@ fn estimated_callees<E: From<String>>(
             layout,
             recursive: recursive.contains(&caller),
             base: bases.get(&caller).copied().unwrap_or(0),
+            limits: true,
         };
         let mut declared = declared(modules, module);
         let (context, function) = function_mut(module, caller);
@@ -914,6 +926,7 @@ fn estimated_sites<E: From<String>>(
         layout,
         recursive: recursive.contains(&caller),
         base: bases.get(&caller).copied().unwrap_or(0),
+        limits: true,
     };
     let mut declared = declared(modules, module);
     let (context, function) = function_mut(module, caller);
@@ -965,6 +978,7 @@ fn together_trial<E: From<String>>(
         layout,
         recursive: recursive.contains(&caller),
         base: bases.get(&caller).copied().unwrap_or(0),
+        limits: true,
     };
     let mut declared = declared(modules, module);
     let (context, function) = function_mut(module, caller);
@@ -1029,7 +1043,7 @@ fn together_trial<E: From<String>>(
 
 /// Module `at`'s procedures every caller of which is in the module: no
 /// outside code, and no other module, calls them.
-fn private(
+pub(crate) fn private(
     program: &Program,
     at: usize,
 ) -> BTreeSet<GlobalId> {
@@ -1169,23 +1183,26 @@ pub fn optimized_with<E: From<String>>(
             // `LLRM_EXP_INLINEDECIDE`: LLVM's decision per call site, in place
             // of the per-callee budget (inlinecost.rs).
             let llvm = llrm_support::env_flag!("LLRM_EXP_INLINEDECIDE");
-            let (available, more) = if llvm {
-                Default::default()
-            } else {
-                candidates(
-                    module,
-                    &callees(&mut modules[at], module),
-                    &program.layout,
-                    &counts,
-                    &private[at],
-                    costs,
-                    loose,
-                    reach,
-                    threshold,
-                    &recursive,
-                    &addressed,
-                )
+            let pick = |module: &Module, modules: &mut ModuleAnalyses, counts: &inline::Counter| {
+                if llvm {
+                    Default::default()
+                } else {
+                    candidates(
+                        module,
+                        &callees(modules, module),
+                        &program.layout,
+                        counts,
+                        &private[at],
+                        costs,
+                        loose,
+                        reach,
+                        threshold,
+                        &recursive,
+                        &addressed,
+                    )
+                }
             };
+            let (mut available, more) = pick(module, &mut modules[at], &counts);
             // What only the clocks admit of a callee stays where its copies,
             // as the pipeline over each alone leaves them, come to no more.
             if !llvm
@@ -1207,6 +1224,9 @@ pub fn optimized_with<E: From<String>>(
                 )?
             {
                 changed = true;
+                // The candidates hold the bodies as they were: a callee
+                // that took its own callees in is spliced as it is now.
+                available = pick(module, &mut modules[at], &inline::call_counts(module)).0;
             }
             // gcc's order (`inline_small_functions`): callers before callees,
             // the calls each leaves counted as they go, so that a
@@ -1236,6 +1256,9 @@ pub fn optimized_with<E: From<String>>(
                 }
                 let caller = module.global(id).function().expect("a procedure");
                 let constants = facts::current_call_constants(&module.context, caller);
+                // `LLRM_INLINE_REMARKS`: opt's remark per decided site, on
+                // stderr.
+                let mut decided = (llvm && llrm_support::env_flag!("LLRM_INLINE_REMARKS")).then(Vec::new);
                 let (constant, constant_more) = if llvm {
                     let params =
                         crate::inlinecost::InlineParams::from_level(if threshold.limit >= 250 { 3 } else { 2 });
@@ -1258,6 +1281,8 @@ pub fn optimized_with<E: From<String>>(
                             params,
                             size,
                             threshold.limit == 0,
+                            program.target.tti().as_deref(),
+                            decided.as_mut(),
                         ),
                         Default::default(),
                     )
@@ -1281,6 +1306,7 @@ pub fn optimized_with<E: From<String>>(
                     layout: &program.layout,
                     recursive: recursive.contains(&id),
                     base: bases[at].get(&id).copied().unwrap_or(0),
+                    limits: !llvm,
                 };
                 let was = calls_of(context, function);
                 let spliced_now =
@@ -1292,6 +1318,11 @@ pub fn optimized_with<E: From<String>>(
                     for (callee, count) in was {
                         *live.entry(callee).or_insert(0) -= count;
                     }
+                }
+                for (call, callee, cost) in decided.iter().flatten() {
+                    let name = |id: GlobalId| module.global(id).name.as_deref().unwrap_or("?");
+                    let spliced = module.global(id).function().is_some_and(|one| one.parent(*call).is_none());
+                    eprintln!("{}", crate::inlinecost::remark(name(id), name(*callee), cost, spliced));
                 }
                 placed(&mut declared, &mut modules[at], module)?;
                 if spliced_now {
@@ -1323,8 +1354,10 @@ pub fn optimized_with<E: From<String>>(
                         specialised,
                         reoptimised,
                     )?;
+                    // The copies it spliced in carry calls `live` has not seen.
                     if stayed {
                         changed = true;
+                        live = reference_counts(module);
                     } else {
                         let body = module.global(id).function().expect("a procedure");
                         for (_, inst) in body.walk() {
@@ -1350,6 +1383,7 @@ pub fn optimized_with<E: From<String>>(
                             reoptimised,
                         )? {
                             changed = true;
+                            live = reference_counts(module);
                         }
                     }
                 }
@@ -1472,6 +1506,10 @@ pub fn optimized_with<E: From<String>>(
                 bases[at].insert(id, size);
             }
             for &id in made.added.iter().chain(&made.edited) {
+                llrm_mir::memory::unsplit(
+                    &mut function_mut(&mut program.modules[at], id).1.attrs,
+                    llrm_mir::memory::Moved::OutOfArguments,
+                );
                 edited(&mut modules[at], &[id]);
                 reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-cp.")?;
                 cloned_now = true;
@@ -1546,6 +1584,7 @@ pub fn optimized_with<E: From<String>>(
                     layout: &program.layout,
                     recursive: recursive.contains(&id),
                     base: bases[at].get(&id).copied().unwrap_or(0),
+                    limits: true,
                 };
                 let spliced_now = inline::expanded(context, function, &by, &available, Some(&constant), &mut declared)?;
                 placed(&mut declared, &mut modules[at], module)?;
@@ -1794,45 +1833,38 @@ fn published(
     changed
 }
 
-/// Each body whose definition is exact stamped with what it is proved to
-/// do, as LLVM's FunctionAttrs states it, callees first so a caller sees
-/// what they state:
-/// - `memory(...)`: alias's summary through the pointer parameters and
-///   elsewhere, its own frame aside; volatile accesses and callees reach
-///   inaccessible memory. A stated one only narrows.
-/// - on each pointer parameter it keeps no copy of, `nocapture`, then
-///   `readnone`, `readonly` or `writeonly`, and `initializes`.
-/// - `willreturn` where every path returns without looping and every call
-///   states it, or where the language promises each loop ends (`mustprogress`
-///   on the function, `llvm.loop.mustprogress` on each loop) of a function that
-///   does nothing observable;
-/// - `norecurse` where nothing can enter it again while it runs; `nounwind`
-///   where every call states it and no access can fault
-///   (`interprocedural::cannot_fault`).
-///
-/// Any other attribute already stated stays. The bodies stamped; the
-/// caller drops `analyses` when there are any.
+/// Each body whose definition is exact stamped as LLVM's
+/// `deriveAttrsInPostOrder` does (`functionattrs::post_order`, callees first
+/// so a caller sees what they state), and `initializes` on each pointer
+/// parameter it keeps no copy of, from alias's summary (DEVIATE F6: it also
+/// states `nocapture` and `readnone`/`readonly`/`writeonly` where `post_order`
+/// did not, until bodies are simplified when they are stamped: the first run is
+/// on raw bodies, whose pointers are spilled). Any other attribute
+/// already stated stays. The bodies stamped; the caller drops `analyses` when
+/// there are any.
 pub fn stamped(
     module: &mut Module,
     analyses: &mut ModuleAnalyses,
 ) -> Result<Vec<GlobalId>, String> {
     let program = std::rc::Rc::clone(analyses.program());
     let layout = &program.layout;
+    let spaces = program.target.spaces();
     let known = analyses.get::<Summaries>(module);
     let known = Result::as_ref(&*known).map_err(String::clone)?;
     let globals = analyses.get::<GlobalsAA>(module);
     let globals = Result::as_ref(&*globals).map_err(String::clone)?;
     let callbacks = analyses.get::<Callbacks>(module);
     let callbacks = Result::as_ref(&*callbacks).map_err(String::clone)?;
-    let mut declarations = (*analyses.get::<Declarations>(module)).clone();
-    let mut changed = Vec::new();
     let graph = analyses.get::<CallGraphAnalysis>(module);
-    let callees = llrm_mir::memory::callees(module);
-    let never_reentered = graph.cannot_reenter(module);
-    let cycles: Vec<Vec<GlobalId>> =
-        graph.bottom_up_components().into_iter().filter(|(_, cyclic)| *cyclic).map(|(members, _)| members).collect();
-    let cycle: BTreeMap<GlobalId, usize> =
-        cycles.iter().enumerate().flat_map(|(at, members)| members.iter().map(move |&member| (member, at))).collect();
+    let mut changed: Vec<GlobalId> = Vec::new();
+    let mut seen: BTreeSet<GlobalId> = BTreeSet::new();
+    for (members, _) in graph.bottom_up_components() {
+        for id in functionattrs::post_order(module, layout, spaces, &members) {
+            if seen.insert(id) {
+                changed.push(id);
+            }
+        }
+    }
     for id in graph.bottom_up() {
         let global = module.global(id);
         let exact = matches!(
@@ -1847,9 +1879,7 @@ pub fn stamped(
         }
         let Some(summary) = known.get(name) else { continue };
         let shape = analyses.function::<Shape>(module, id);
-        let exposed = llrm_analysis::memory::exposed_frames(
-            &Unit::of(module, layout, function).with_spaces(program.target.spaces()),
-        );
+        let exposed = llrm_analysis::memory::exposed_frames(&Unit::of(module, layout, function).with_spaces(spaces));
         let procedure = Procedure::of(
             Unit { program: Some(&program), ..Unit::of(module, layout, function) }
                 .with_globals_aa(globals)
@@ -1858,74 +1888,6 @@ pub fn stamped(
                 .with_callbacks(callbacks),
         );
         let initialized = alias::initialized(&procedure, known)?;
-        let calls = function
-            .walk()
-            .map(|(_, inst)| inst)
-            .filter(|&inst| matches!(
-                function.instruction(inst).opcode,
-                Opcode::Call(_) | Opcode::Invoke(_)
-            ))
-            .collect::<Vec<_>>();
-        let states = |fact: Fact| {
-            calls.iter().all(|&inst| effects::states(&module.context, &declarations, function, inst, fact))
-        };
-        let volatile = function
-            .walk()
-            .any(
-                |(_, inst)| matches!(
-                    function.instruction(inst).opcode,
-                    Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
-                ),
-            );
-        let norecurse = never_reentered.contains(&id);
-        // The language's word that its loops end holds where nothing a loop
-        // that never ended could be seen by.
-        let unobserved = !volatile
-            && calls.iter().all(|&inst| !llrm_mir::memory::of(&module.context, &callees, function, inst).writes);
-        let promised = norecurse
-            && unobserved
-            && states(Fact::WillReturn)
-            && llrm_mir::loopinfo::ends_by_promise(
-                &module.metadata,
-                function,
-                Facts::of(&function.attrs).must_progress(),
-            );
-        let counted = || {
-            let shape = Shape::of(function);
-            // Found once for the function, not for each loop: the proofs of
-            // every loop ask the same.
-            let registers =
-                llrm_analysis::consts::known(&unit_of(module, layout, function).with_spaces(program.target.spaces()));
-            let proofs = |one| {
-                llrm_analysis::induction::counted(
-                    &unit_of(module, layout, function)
-                        .with_spaces(program.target.spaces())
-                        .with_registers(&registers)
-                        .with_shape(&shape),
-                    one,
-                    Some(&registers),
-                    false,
-                )
-            };
-            shape
-                .loops
-                .iter()
-                .all(
-                    |one| proofs(one).iter().any(|proof| {
-                        !proof.stops
-                            && (proof.count.is_some() || proof.step.magnitude() == llrm_analysis::num::Num::from(1_u8))
-                    }),
-                )
-        };
-        let returns = ((facts::returns_without_looping(function) || counted()) && states(Fact::WillReturn)) || promised;
-        let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, program.target.spaces(), function);
-        // A cycle of calls is stamped together, as LLVM's
-        // PostOrderFunctionAttrs takes an SCC: each member does what
-        // all of them do besides calling one another.
-        let members = cycle.get(&id).map_or_else(|| vec![id], |at| cycles[*at].clone());
-        let hidden = members
-            .iter()
-            .fold(Effects::NONE, |all, &member| _either(all, hidden_by(module, member, &declarations, &graph)));
         let pointers = function
             .parameters()
             .iter()
@@ -1935,18 +1897,15 @@ pub fn stamped(
             ))
             .collect::<Vec<_>>();
         let function = function_mut(module, id).1;
-        let before = (function.attrs.clone(), function.parameter_attrs.clone());
-        _narrowed(&mut function.attrs, summary, hidden);
-        for (fact, proved) in [(Fact::WillReturn, returns), (Fact::NoUnwind, nounwind), (Fact::NoRecurse, norecurse)] {
-            if proved && !Facts::of(&function.attrs).contains(fact) {
-                function.attrs.extend(fact.attribute());
-            }
-        }
+        let before = function.parameter_attrs.clone();
         for (index, attrs) in function.parameter_attrs.iter_mut().enumerate().filter(|(index, _)| pointers[*index]) {
             let identity = Some(Identity::Int(index as i64));
             if summary.captures.contains(&identity) {
                 continue;
             }
+            // DEVIATE F6: what alias's summary proves of the parameter where
+            // `post_order` did not, until it runs on simplified bodies: the
+            // first run is on raw bodies, whose pointers are spilled.
             if !Facts::of(attrs).no_capture() {
                 attrs.extend(Fact::NoCapture.attribute());
             }
@@ -1976,125 +1935,118 @@ pub fn stamped(
                 attrs.push(Attribute::Initializes(initialized[index].clone()));
             }
         }
-        if before != (function.attrs.clone(), function.parameter_attrs.clone()) {
-            declarations[id.0 as usize] = module.global(id).declaration();
+        if before != function.parameter_attrs && seen.insert(id) {
             changed.push(id);
         }
+    }
+    if llrm_support::env_flag!("LLRM_SHADOW_GMR") {
+        shadow_globalsmodref(module, known);
+        shadow_attributes(module, known);
     }
     Ok(changed)
 }
 
-/// What body `id` does to inaccessible memory itself or through the calls it
-/// makes outside the cycle it is in: a volatile access, or a call whose callee
-/// and site do not rule it out.
-fn hidden_by(
+/// Shadow of `globalsmodref::compute` against alias's summaries: for each
+/// body both describe and each tracked global, one line per disagreement, and
+/// the counts.
+fn shadow_globalsmodref(
     module: &Module,
-    id: GlobalId,
-    declarations: &[GlobalValue],
-    graph: &CallGraph,
-) -> Effects {
-    let Some(function) = module.global(id).function() else { return Effects::ANY };
-    let volatile = function
-        .walk()
-        .any(
-            |(_, inst)| matches!(
-                function.instruction(inst).opcode,
-                Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
-            ),
-        );
-    let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
-    for (_, inst) in function.walk() {
-        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { continue };
-        let callee = llrm_mir::memory::callee(&module.context, function, inst);
-        if callee.is_some_and(|one| graph.together(id, one)) {
-            continue;
-        }
-        let declared = callee
-            .and_then(|one| declarations.get(one.0 as usize))
-            .and_then(GlobalValue::function)
-            .map_or(Effects::ANY, |one| llrm_mir::memory::inaccessible(&one.attrs));
-        hidden = _either(hidden, _both(declared, llrm_mir::memory::inaccessible(&info.attrs)));
-    }
-    hidden
-}
-
-fn unit_of<'a>(
-    module: &'a Module,
-    layout: &'a llrm_mir::datalayout::DataLayout,
-    function: &'a llrm_mir::module::Function,
-) -> Unit<'a> {
-    Unit::of(module, layout, function)
-}
-
-fn _both(
-    one: Effects,
-    other: Effects,
-) -> Effects {
-    Effects { reads: one.reads && other.reads, writes: one.writes && other.writes }
-}
-
-fn _either(
-    one: Effects,
-    other: Effects,
-) -> Effects {
-    Effects { reads: one.reads || other.reads, writes: one.writes || other.writes }
-}
-
-/// `attrs`' `memory(...)` narrowed to what `summary` reads and writes
-/// through the pointer parameters and elsewhere, its own frame aside, and
-/// to `hidden` on inaccessible memory.
-fn _narrowed(
-    attrs: &mut Vec<Attribute>,
-    summary: &Summary,
-    hidden: Effects,
+    known: &llrm_support::hash::IndexMap<String, llrm_analysis::alias::Summary>,
 ) {
-    let local = |one: &Slice| matches!(one.object.kind, MemoryKind::Frame | MemoryKind::Stack);
-    let found = |slices: &llrm_analysis::sliceset::SliceSet, parameter: bool| {
-        slices.iter().filter(|one| !local(one)).any(|one| (one.object.kind == MemoryKind::Parameter) == parameter)
-    };
-    let (stated_arguments, stated_other) = llrm_mir::memory::located(attrs);
-    let arguments =
-        _both(stated_arguments, Effects { reads: found(&summary.reads, true), writes: found(&summary.writes, true) });
-    let other = _both(
-        stated_other,
-        Effects {
-            reads: found(&summary.reads, false) || summary.unknown_read,
-            writes: found(&summary.writes, false) || summary.unknown_write,
-        },
-    );
-    let hidden = _both(llrm_mir::memory::inaccessible(attrs), hidden);
-    if (arguments, hidden, other) == (stated_arguments, llrm_mir::memory::inaccessible(attrs), stated_other) {
-        return;
-    }
-    let access = |one: Effects| {
-        match (one.reads, one.writes) {
-            (true, true) => "readwrite",
-            (true, false) => "read",
-            (false, true) => "write",
-            (false, false) => "none",
+    use llrm_analysis::memory::{Key, MemoryKind};
+    let found = llrm_analysis::globalsmodref::compute(module);
+    let tracked: Vec<GlobalId> = (0..module.globals.len() as u32)
+        .map(GlobalId)
+        .filter(|&id| found.is_non_address_taken(id) && module.global(id).function().is_none())
+        .collect();
+    let (mut same, mut looser, mut tighter, mut compared) = (0_usize, 0_usize, 0_usize, 0_usize);
+    for (id, global, _) in module.functions() {
+        let Some(name) = global.name.as_ref() else { continue };
+        let (Some(info), Some(summary)) = (found.function_info(id), known.get(name)) else { continue };
+        compared += 1;
+        for &g in &tracked {
+            let touches = |slices: &llrm_analysis::sliceset::SliceSet| {
+                slices.iter().any(|one| one.object.kind == MemoryKind::Global && one.object.key == Key::Global(g.0))
+            };
+            // A tracked global is reached by name alone: unknown accesses
+            // do not count.
+            let (reads, writes) = (touches(&summary.reads), touches(&summary.writes));
+            let theirs = info.mod_ref_for_global(g);
+            let mine = match (reads, writes) {
+                (false, false) => ModRefInfo::NoModRef,
+                (true, false) => ModRefInfo::Ref,
+                (false, true) => ModRefInfo::Mod,
+                (true, true) => ModRefInfo::ModRef,
+            };
+            if theirs == mine {
+                same += 1;
+            } else if theirs.union(mine) == theirs {
+                looser += 1;
+            } else {
+                tighter += 1;
+                eprintln!(
+                    "shadow-gmr tighter @{name} {:?}: globalsmodref {theirs:?} summary {mine:?}",
+                    module.global(g).name
+                );
+            }
         }
-        .to_owned()
-    };
-    let named = [("argmem", arguments), ("inaccessiblemem", hidden)]
-        .into_iter()
-        .filter(|(_, one)| *one != other)
-        .map(|(location, one)| (Some(location.to_owned()), access(one)))
-        .collect::<Vec<_>>();
-    let mut locations = Vec::new();
-    if other != Effects::NONE || named.is_empty() {
-        locations.push((None, access(other)));
     }
-    locations.extend(named);
-    // What `readnone`, `readonly` or `writeonly` said, it now says.
-    attrs.retain(|one| match one {
-        Attribute::Memory(_) => false,
-        // Said again by the `memory` attribute that replaces them.
-        other => !matches!(
-            Fact::of_attribute(other),
-            Some(Fact::ReadNone | Fact::ReadOnly | Fact::WriteOnly)
-        ),
-    });
-    attrs.push(Attribute::Memory(locations));
+    eprintln!("shadow-gmr compared {compared} bodies: same {same} looser {looser} tighter {tighter}");
+}
+
+/// Shadow of the attributes' `memory(...)` against alias's summaries, per body:
+/// the whole-memory read and write, and whether the effect is argument memory
+/// alone. `tighter` is an attribute that states less than the summary found.
+fn shadow_attributes(
+    module: &Module,
+    known: &llrm_support::hash::IndexMap<String, llrm_analysis::alias::Summary>,
+) {
+    use llrm_analysis::aa::{IRMemLocation, MemoryEffects};
+    use llrm_analysis::memory::MemoryKind;
+    let (mut same, mut looser, mut tighter, mut compared) = (0_usize, 0_usize, 0_usize, 0_usize);
+    let (mut argmem_same, mut argmem_looser) = (0_usize, 0_usize);
+    for (_, global, function) in module.functions() {
+        let Some(name) = global.name.as_ref() else { continue };
+        let Some(summary) = known.get(name) else { continue };
+        compared += 1;
+        let me = MemoryEffects::of_attrs(&function.attrs);
+        let reads = !summary.reads.is_empty() || summary.unknown_read;
+        let writes = !summary.writes.is_empty() || summary.unknown_write;
+        let theirs = me.overall();
+        let mine = match (reads, writes) {
+            (false, false) => ModRefInfo::NoModRef,
+            (true, false) => ModRefInfo::Ref,
+            (false, true) => ModRefInfo::Mod,
+            (true, true) => ModRefInfo::ModRef,
+        };
+        if theirs == mine {
+            same += 1;
+        } else if theirs.union(mine) == theirs {
+            looser += 1;
+            eprintln!("shadow-attrs looser @{name}: attrs {theirs:?} summary {mine:?}");
+        } else {
+            tighter += 1;
+            eprintln!("shadow-attrs tighter @{name}: attrs {theirs:?} summary {mine:?}");
+        }
+        let only_arguments = |slices: &llrm_analysis::sliceset::SliceSet| {
+            slices.iter().all(|one| one.object.kind == MemoryKind::Parameter)
+        };
+        let summary_args = !summary.unknown_read
+            && !summary.unknown_write
+            && only_arguments(&summary.reads)
+            && only_arguments(&summary.writes);
+        let attrs_args = me.mod_ref(IRMemLocation::Other).is_no_mod_ref()
+            && me.mod_ref(IRMemLocation::InaccessibleMem).is_no_mod_ref();
+        if summary_args == attrs_args {
+            argmem_same += 1;
+        } else if summary_args {
+            argmem_looser += 1;
+            eprintln!("shadow-attrs argument-only looser @{name}: attrs {me:?}");
+        }
+    }
+    eprintln!(
+        "shadow-attrs compared {compared} bodies: overall same {same} looser {looser} tighter {tighter}; argument-only same {argmem_same} looser {argmem_looser}"
+    );
 }
 
 /// The procedure `id`, with the context its types and constants live in.

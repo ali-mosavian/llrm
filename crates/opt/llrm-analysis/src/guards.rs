@@ -72,7 +72,7 @@
 //!
 //! # Provides
 //! Guard facts and the implication queries above. Consumers: `decide`,
-//! `exitfold` and `jumpthread` in `llrm-transforms`, and
+//! `exitfold` and `jumpthreading` in `llrm-transforms`, and
 //! [`crate::induction`] (loop entry guards).
 //!
 //! # Needs
@@ -141,7 +141,7 @@ pub fn guards(
     let mut found = Vec::new();
     let mut reached = at;
     let mut climbed = 0;
-    while let Some(above) = shape.dominance.immediate(reached) {
+    while let Some(above) = shape.dominance.immediate(unit.function, reached) {
         climbed += 1;
         if climbed > MAX_DOMINATORS {
             break;
@@ -160,11 +160,11 @@ pub fn guards(
             && yes != no
         {
             let alone = |to: llrm_mir::module::BlockId| {
-                shape.dominance.dominates(cfg::id(to), at)
-                    && function
-                        .predecessors(to)
-                        .iter()
-                        .all(|&from| from == cfg::block(above) || shape.dominance.dominates(cfg::id(to), cfg::id(from)))
+                shape.dominance.dominates(unit.function, cfg::id(to), at)
+                    && function.predecessors(to).iter().all(|&from| {
+                        from == cfg::block(above)
+                            || shape.dominance.dominates(unit.function, cfg::id(to), cfg::id(from))
+                    })
             };
             if alone(yes) {
                 _proven(unit, condition, true, &mut found);
@@ -338,12 +338,12 @@ fn through_phi(
     // defined above the phi's block.
     let fixed = other.known().is_some()
         || other.unknowns().all(|value| match function.value(value).def {
-            ValueDef::Instruction(inst) => function
-                .parent(inst)
-                .is_some_and(|home| home != block && shape.dominance.dominates(cfg::id(home), cfg::id(block))),
+            ValueDef::Instruction(inst) => function.parent(inst).is_some_and(|home| {
+                home != block && shape.dominance.dominates(unit.function, cfg::id(home), cfg::id(block))
+            }),
             _ => true,
         });
-    if !fixed || !shape.dominance.dominates(cfg::id(block), at) {
+    if !fixed || !shape.dominance.dominates(unit.function, cfg::id(block), at) {
         return false;
     }
     let operands = function.instruction(phi).operands.clone();

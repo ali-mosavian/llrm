@@ -481,10 +481,12 @@ fn test_nested_integer_division_keeps_each_dividend() {
     let assembly = listing(&source);
     let scale = between(&assembly, "SCALE proc far\n", "SCALE endp\n");
 
-    assert!(scale.contains("mov eax, 80\n"));
-    assert!(scale.contains("mov eax, 30\n"));
-    assert_eq!(scale.matches("idiv e").count(), 2);
-    assert!(!scale.contains("idiv ax"));
+    // CVP narrows both quotients (80 \\ x fits 16 bits, then 8): two word
+    // divisions in place of two dword ones, each with its own dividend.
+    assert!(scale.contains("mov ax, 80\n"));
+    assert!(scale.contains("mov bx, 30\n"));
+    assert_eq!(scale.matches("idiv").count(), 2);
+    assert!(!scale.contains("idiv e"));
 }
 
 /// -2 ^ 3 printed 8: the exponent's parity sat in eax across `fnstsw ax`.
@@ -1309,7 +1311,9 @@ fn far_selectors_loaded(function: &str) -> Vec<bool> {
         .lines()
         .filter_map(|line| line.trim().strip_prefix("store volatile i8 "))
         .map(|store| {
-            let mut value = pointer.captures_iter(store).last().expect("the address")[1].to_owned();
+            // A constant address reloads nothing.
+            let Some(address) = pointer.captures_iter(store).last() else { return false };
+            let mut value = address[1].to_owned();
             while let Some(defined) = definition(function, &value) {
                 if defined.starts_with("load i16, ptr @b$seg") {
                     return true;
@@ -1430,7 +1434,9 @@ SUB b\r\nPOKE 5, PEEK(4)\r\nEND SUB\r\n";
     assert_eq!(loads, 0, "{optimized}");
     let kept =
         optimized.lines().filter(|line| line.trim().starts_with("store i16 ") && line.contains("ptr @b$seg")).count();
-    assert!(optimized.contains("ptrtoint ptr addrspace(2)") && (1..=2).contains(&kept), "{optimized}");
+    // VARSEG's selector is now a constant address, so a's first b$seg store is
+    // dead too (-1 store, -3 instructions).
+    assert!(optimized.contains("addrspacecast (ptr @\"ARR%\"") && kept == 1, "{optimized}");
 }
 
 #[test]
@@ -1459,8 +1465,10 @@ fn test_affine_addresses_of_one_counter_step_no_pointer_in_memory() {
 }
 
 /// cycleblobs computed each `f(x - xp(k))` index as `(x - xp(k)) * 2` per
-/// pixel: seven subtracts and seven multiplies of the counter, where one
-/// `x * 2` plus a hoisted `-2 * xp(k)` per term does.
+/// pixel: seven subtracts and seven multiplies of the counter, where the
+/// counter scaled once per term and a hoisted `-2 * xp(k)` base does, on the
+/// one counter (`opt -passes=loop-reduce`, LLVM 20: one phi, seven `shl x, 1`;
+/// the pin runs no IR CSE after LSR, SelectionDAG's merges them).
 #[test]
 fn test_affine_terms_of_one_counter_share_its_scaled_value() {
     let text = optimized_sub(SEVEN_TERMS, "T");
@@ -1947,7 +1955,14 @@ fn test_a_sum_read_after_its_loop_is_copied_out_where_the_loop_ends() {
     // segld's sum is printed after both loops, across a runtime call, so as
     // one value with the loop's it could only live in SI: the loop added into
     // SI and copied back to CX on a split back edge, `mov cx, si` and `jmp`.
-    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/segld.bas");
+    // The loops are too long to unroll: at segld's 5 by 20 they are folded
+    // away.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "SEGLD.BAS",
+        b"REM $DYNAMIC\nDEFINT A-Z\nDIM a(100)\nDIM i, j, t\nt = 0\nFOR j = 1 TO 2\n    FOR i = 1 TO 100\n        a(i) = i\n        t = t + a(i)\n    NEXT i\nNEXT j\nPRINT \"T=\"; t\nPRINT \"DONE\"\n",
+    );
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let body = backward_loop(&listing(&program));
     let copies = regex::Regex::new(r"mov [a-z]{2}, [a-z]{2}\n").unwrap();
@@ -2092,7 +2107,9 @@ fn test_a_loop_doubles_an_index_with_add_not_the_three_clock_shift() {
         .filter_map(|(at, end, label)| {
             text.find(&format!("{label}:\n")).filter(|begun| *begun < at).map(|begun| &text[begun..end])
         })
-        .find(|one| one.contains("S%"))
+        // The lookup loop is the last: its sum stays in a register, so `S%`
+        // no longer names it.
+        .last()
         .unwrap_or_else(|| panic!("{text}"));
     assert!(!regex::Regex::new(r"s[ah]l \w+, 1\n").unwrap().is_match(body), "{body}");
 }
@@ -2403,16 +2420,14 @@ fn the_pad_goes_to_the_handler_named_last() {
         .iter()
         .copied()
         .find(|&block| {
-            main.block(block)
-                .instructions()
-                .iter()
-                .any(|&one| matches!(
+            main.iter_block(block)
+                .any(|one| matches!(
                     main.instruction(one).opcode,
                     llrm_mir::Opcode::LandingPad { .. }
                 ))
         })
         .expect("the pad");
-    let last = *main.block(pad).instructions().last().expect("a terminator");
+    let last = main.block(pad).last().expect("a terminator");
     assert!(
         matches!(main.instruction(last).opcode, llrm_mir::Opcode::Switch),
         "{}",
@@ -2465,7 +2480,7 @@ fn a_subs_error_lands_on_its_own_pad_and_runs_the_module_handler() {
         .1
         .attrs
         .push(llrm_mir::Attribute::Flag("nounwind".to_owned()));
-    llrm_core::backend::ehprepare::prepared(&mut emitted.module, llrm_x86_m16::layout().spaces.far).expect("prepared");
+    llrm_core::backend::ehprepare::prepared(&mut emitted.module, &llrm_x86_m16::layout()).expect("prepared");
     let text = llrm_mir::print::module(&emitted.module);
     let handler = &text[text.find("@__main$handler(i16 %0").expect("the handler function")..];
     let handler = &handler[..handler.find("\n}\n").expect("its end")];
@@ -3076,12 +3091,15 @@ fn peek_and_poke_touch_memory_every_time() {
     let text = listing(&parsed_as(&path, "qb45", "qb45"));
     assert!(source.windows(5).any(|one| one == b"PEEK("), "the shape that was folded");
     // The loop re-reads: a label, a byte read of the tick (loaded, or compared
-    // in place), and a jump back to it.
-    let read = regex::Regex::new(r"(L\d+_\d+):\n\s+(?:movzx \w+, byte ptr es:\[108\]|cmp byte ptr es:\[108\], \w+)\n")
-        .unwrap();
+    // in place), and a jump back to it. The address is 108 or, hoisted into bx
+    // (a shorter encoding in the loop), `bx`.
+    let read = regex::Regex::new(
+        r"(L\d+_\d+):\n\s+(?:movzx \w+, byte ptr es:\[(?:108|bx)\]|cmp byte ptr es:\[(?:108|bx)\], \w+)\n",
+    )
+    .unwrap();
     let back = |label: &str| regex::Regex::new(&format!(r"\s+j\w+ {label}\n")).unwrap().is_match(&text);
     assert!(read.captures_iter(&text).any(|found| back(&found[1])), "{text}");
-    assert_eq!(text.matches("mov byte ptr es:[108],").count(), 2, "{text}");
+    assert_eq!(regex::Regex::new(r"mov byte ptr es:\[(?:108|bx)\],").unwrap().find_iter(&text).count(), 2, "{text}");
 }
 
 /// Every dynamic array shared one `allocation` tag, so a store to `a(i)` was

@@ -5,6 +5,7 @@
 
 use crate::Operand;
 use crate::context::{ConstantKind, Context, mask};
+use crate::intrinsic_attrs;
 use crate::module::Function;
 use crate::opcode::{Attribute, BinaryOp};
 use crate::types::{FloatKind, Type, TypeId, Types};
@@ -39,6 +40,15 @@ pub enum Intrinsic {
     /// fraction bits as the third argument says.
     Fixed {
         divide: bool,
+    },
+    /// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop`.
+    BitCount(BitCount),
+    /// `llvm.bswap`: the bytes of its argument in the opposite order.
+    ByteSwap,
+    /// `llvm.scmp` and `llvm.ucmp`: -1, 0 or 1 as the first argument is less
+    /// than, equal to or greater than the second, in the result's integer type.
+    Compare {
+        signed: bool,
     },
     FMulAdd,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
@@ -81,6 +91,17 @@ pub enum Intrinsic {
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
+    /// `llvm.va_end`: the list its argument points to is no longer read. It
+    /// does nothing where the list owns no resource.
+    VaEnd,
+    /// `llvm.va_copy`: the list the second argument points to, copied to the
+    /// first.
+    VaCopy,
+    /// `llvm.stacksave`: the stack pointer, to give back to `stackrestore`.
+    StackSave,
+    /// `llvm.stackrestore`: the stack pointer `stacksave` returned made the
+    /// stack pointer again, releasing what was allocated since.
+    StackRestore,
     /// Inline machine code, laid down where it is called: its name carries
     /// the bytes, and each argument is a frame place whose displacement it
     /// reads at a byte offset the name gives. It answers what it leaves in
@@ -139,9 +160,20 @@ pub fn code(name: &str) -> Option<(Vec<u8>, Vec<(usize, i64)>)> {
 }
 
 /// What names inline assembly with declared registers:
-/// `llrm.ia16.asm.<hex bytes>.<in>.<out>.<clobbers>.<m|n>`, each list its
-/// registers joined by `_` (`-` for none), `m` where it reaches memory.
+/// `llrm.ia16.asm.<hex bytes>.<in>.<out>.<clobbers>.<m|n>` and, per word naming
+/// a symbol, `.f<at>_<kind>_<addend>`; each list its registers joined by `_`
+/// (`-` for none), `m` where it reaches memory. The symbols' addresses are the
+/// call's first arguments, in order, before the registers'.
 const ASM: &str = "llrm.ia16.asm.";
+
+/// A word of an inline block that names a symbol: where, as what (`offset`,
+/// `segment`, `reloff`), and plus what.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AsmFixup {
+    pub at: usize,
+    pub kind: String,
+    pub addend: i64,
+}
 
 /// An inline assembly block: registers by their 16-bit names.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -151,13 +183,15 @@ pub struct AsmBlock {
     pub outputs: Vec<String>,
     pub clobbers: Vec<String>,
     pub memory: bool,
+    pub fixups: Vec<AsmFixup>,
 }
 
 pub fn asm_name(block: &AsmBlock) -> String {
     let hex: String = block.code.iter().map(|one| format!("{one:02x}")).collect();
     let list = |names: &[String]| if names.is_empty() { "-".to_owned() } else { names.join("_") };
+    let fixups: String = block.fixups.iter().map(|one| format!(".f{}_{}_{}", one.at, one.kind, one.addend)).collect();
     format!(
-        "{ASM}{hex}.{}.{}.{}.{}",
+        "{ASM}{hex}.{}.{}.{}.{}{fixups}",
         list(&block.inputs),
         list(&block.outputs),
         list(&block.clobbers),
@@ -166,9 +200,11 @@ pub fn asm_name(block: &AsmBlock) -> String {
 }
 
 pub fn asm(name: &str) -> Option<AsmBlock> {
-    let [hex, inputs, outputs, clobbers, memory] = name.strip_prefix(ASM)?.split('.').collect::<Vec<_>>()[..] else {
+    let parts = name.strip_prefix(ASM)?.split('.').collect::<Vec<_>>();
+    let [hex, inputs, outputs, clobbers, memory, fixups @ ..] = &parts[..] else {
         return None;
     };
+    let (hex, inputs, outputs, clobbers, memory) = (*hex, *inputs, *outputs, *clobbers, *memory);
     if hex.len() % 2 != 0 {
         return None;
     }
@@ -182,7 +218,47 @@ pub fn asm(name: &str) -> Option<AsmBlock> {
         "n" => false,
         _ => return None,
     };
-    Some(AsmBlock { code, inputs: list(inputs), outputs: list(outputs), clobbers: list(clobbers), memory })
+    let fixups = fixups
+        .iter()
+        .map(|one| {
+            let mut fields = one.strip_prefix('f')?.splitn(3, '_');
+            Some(AsmFixup {
+                at: fields.next()?.parse().ok()?,
+                kind: fields.next()?.to_owned(),
+                addend: fields.next()?.parse().ok()?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(AsmBlock { code, inputs: list(inputs), outputs: list(outputs), clobbers: list(clobbers), memory, fixups })
+}
+
+/// What `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop` count.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BitCount {
+    LeadingZeros,
+    TrailingZeros,
+    Population,
+}
+
+impl BitCount {
+    /// The count in the `width`-bit `bits`; a zero has `width` zeros.
+    pub fn apply(
+        self,
+        bits: u128,
+        width: u32,
+    ) -> u128 {
+        u128::from(match self {
+            Self::LeadingZeros => crate::apint::countl_zero(bits, width),
+            Self::TrailingZeros => crate::apint::countr_zero(bits, width),
+            Self::Population => bits.count_ones(),
+        })
+    }
+
+    /// Whether a zero argument is poison where the intrinsic's second
+    /// argument says so: the two zero counts have one, `ctpop` has none.
+    pub fn has_zero_poison_flag(self) -> bool {
+        self != Self::Population
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -238,9 +314,17 @@ struct Spec {
     intrinsic: Intrinsic,
     overloads: &'static [Kind],
     returns: Slot,
-    parameters: &'static [(Slot, &'static [&'static str])],
+    parameters: &'static [Slot],
+    /// What MIR states itself: `Intrinsics.td` has no entry for the name,
+    /// or MIR's signature is not its.
+    own: Option<Own>,
+}
+
+#[derive(Clone, Copy)]
+struct Own {
     attrs: &'static [&'static str],
     memory: &'static [(Option<&'static str>, &'static str)],
+    parameters: &'static [&'static [&'static str]],
 }
 
 const PURE: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "speculatable", "willreturn"];
@@ -249,20 +333,20 @@ const NO_MEMORY: &[(Option<&str>, &str)] = &[(None, "none")];
 /// narrows a call to one that cannot.
 const PORT_MEMORY: &[(Option<&str>, &str)] = &[(None, "readwrite")];
 const PORT_ATTRS: &[&str] = &["nocallback", "nofree", "nounwind", "willreturn"];
-const INTS: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[])];
+const INTS: &[Slot] = &[Slot::Any(0), Slot::Any(0)];
 
 const fn arithmetic(
     name: &'static str,
     intrinsic: Intrinsic,
     returns: Slot,
-    parameters: &'static [(Slot, &'static [&'static str])],
+    parameters: &'static [Slot],
     kind: Kind,
 ) -> Spec {
     let overloads: &[Kind] = match kind {
         Kind::Float => &[Kind::Float],
         _ => &[Kind::Int],
     };
-    Spec { name, intrinsic, overloads, returns, parameters, attrs: PURE, memory: NO_MEMORY }
+    Spec { name, intrinsic, overloads, returns, parameters, own: None }
 }
 
 const fn overflow(
@@ -273,7 +357,7 @@ const fn overflow(
     arithmetic(name, Intrinsic::WithOverflow { op, signed }, Slot::WithFlag(0), INTS, Kind::Int)
 }
 
-const FLOAT: &[(Slot, &[&str])] = &[(Slot::Any(0), &[])];
+const FLOAT: &[Slot] = &[Slot::Any(0)];
 
 const fn unary(
     name: &'static str,
@@ -290,12 +374,38 @@ const fn min_max(
     arithmetic(name, Intrinsic::MinMax { signed, max }, Slot::Any(0), INTS, Kind::Int)
 }
 
-const FIXED: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (Slot::Int(32), &["immarg"])];
+const fn bit_count(
+    name: &'static str,
+    count: BitCount,
+) -> Spec {
+    let parameters: &[Slot] =
+        if matches!(count, BitCount::Population) { &[Slot::Any(0)] } else { &[Slot::Any(0), Slot::Int(1)] };
+    arithmetic(name, Intrinsic::BitCount(count), Slot::Any(0), parameters, Kind::Int)
+}
 
-const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
+const UNARY: &[Slot] = &[Slot::Any(0)];
+
+const fn compare(
+    name: &'static str,
+    signed: bool,
+) -> Spec {
+    Spec {
+        name,
+        intrinsic: Intrinsic::Compare { signed },
+        overloads: &[Kind::Int, Kind::Int],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(1), Slot::Any(1)],
+        own: None,
+    }
+}
+
+const FIXED: &[Slot] = &[Slot::Any(0), Slot::Any(0), Slot::Int(32)];
+
+const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
+const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 35] = [
+const TABLE: [Spec; 45] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -306,22 +416,26 @@ const TABLE: [Spec; 35] = [
     min_max("llvm.smin", true, false),
     min_max("llvm.umax", false, true),
     min_max("llvm.umin", false, false),
+    bit_count("llvm.ctlz", BitCount::LeadingZeros),
+    bit_count("llvm.cttz", BitCount::TrailingZeros),
+    bit_count("llvm.ctpop", BitCount::Population),
+    arithmetic("llvm.bswap", Intrinsic::ByteSwap, Slot::Any(0), UNARY, Kind::Int),
+    compare("llvm.scmp", true),
+    compare("llvm.ucmp", false),
     arithmetic("llvm.smul.fix", Intrinsic::Fixed { divide: false }, Slot::Any(0), FIXED, Kind::Int),
-    // Not speculatable: a zero divisor is undefined.
     Spec {
         name: "llvm.sdiv.fix",
         intrinsic: Intrinsic::Fixed { divide: true },
         overloads: &[Kind::Int],
         returns: Slot::Any(0),
         parameters: FIXED,
-        attrs: &["nocallback", "nofree", "nosync", "nounwind", "willreturn"],
-        memory: NO_MEMORY,
+        own: None,
     },
     arithmetic(
         "llvm.fmuladd",
         Intrinsic::FMulAdd,
         Slot::Any(0),
-        &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (Slot::Any(0), &[])],
+        &[Slot::Any(0), Slot::Any(0), Slot::Any(0)],
         Kind::Float,
     ),
     unary("llvm.fabs", FloatFunction::Fabs),
@@ -337,92 +451,66 @@ const TABLE: [Spec; 35] = [
         intrinsic: Intrinsic::LRint,
         overloads: &[Kind::Int, Kind::Float],
         returns: Slot::Any(0),
-        parameters: &[(Slot::Any(1), &[])],
-        attrs: PURE,
-        memory: NO_MEMORY,
+        parameters: &[Slot::Any(1)],
+        own: None,
     },
     Spec {
         name: "llvm.memset",
         intrinsic: Intrinsic::MemSet,
         overloads: &[Kind::Pointer, Kind::Int],
         returns: Slot::Void,
-        parameters: &[
-            (Slot::Any(0), &["nocapture", "writeonly"]),
-            (Slot::Int(8), &[]),
-            (Slot::Any(1), &[]),
-            (Slot::Int(1), &["immarg"]),
-        ],
-        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
-        memory: &[(Some("argmem"), "write")],
+        parameters: &[Slot::Any(0), Slot::Int(8), Slot::Any(1), Slot::Int(1)],
+        own: None,
     },
     Spec {
         name: "llvm.experimental.memset.pattern",
         intrinsic: Intrinsic::MemSetPattern,
         overloads: &[Kind::Pointer, Kind::Int, Kind::Int],
         returns: Slot::Void,
-        parameters: &[
-            (Slot::Any(0), &["nocapture", "writeonly"]),
-            (Slot::Any(1), &[]),
-            (Slot::Any(2), &[]),
-            (Slot::Int(1), &["immarg"]),
-        ],
-        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
-        memory: &[(Some("argmem"), "write")],
+        parameters: &[Slot::Any(0), Slot::Any(1), Slot::Any(2), Slot::Int(1)],
+        own: None,
     },
     Spec {
         name: "llvm.memcpy",
         intrinsic: Intrinsic::MemCpy,
         overloads: &[Kind::Pointer, Kind::Pointer, Kind::Int],
         returns: Slot::Void,
-        parameters: &[
-            (Slot::Any(0), &["nocapture", "writeonly"]),
-            (Slot::Any(1), &["nocapture", "readonly"]),
-            (Slot::Any(2), &[]),
-            (Slot::Int(1), &["immarg"]),
-        ],
-        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
-        memory: &[(Some("argmem"), "readwrite")],
+        parameters: &[Slot::Any(0), Slot::Any(1), Slot::Any(2), Slot::Int(1)],
+        own: None,
     },
     Spec {
         name: "llvm.memmove",
         intrinsic: Intrinsic::MemMove,
         overloads: &[Kind::Pointer, Kind::Pointer, Kind::Int],
         returns: Slot::Void,
-        parameters: &[
-            (Slot::Any(0), &["nocapture", "writeonly"]),
-            (Slot::Any(1), &["nocapture", "readonly"]),
-            (Slot::Any(2), &[]),
-            (Slot::Int(1), &["immarg"]),
-        ],
-        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
-        memory: &[(Some("argmem"), "readwrite")],
+        parameters: &[Slot::Any(0), Slot::Any(1), Slot::Any(2), Slot::Int(1)],
+        own: None,
     },
     Spec {
         name: "llvm.assume",
         intrinsic: Intrinsic::Assume,
         overloads: &[],
         returns: Slot::Void,
-        parameters: &[(Slot::Int(1), &["noundef"])],
-        attrs: LIFETIME_ATTRS,
-        memory: &[(Some("inaccessiblemem"), "write")],
+        parameters: &[Slot::Int(1)],
+        own: None,
     },
     Spec {
         name: "llrm.noalias",
         intrinsic: Intrinsic::Restrict,
         overloads: &[Kind::Pointer],
         returns: Slot::Any(0),
-        parameters: &[(Slot::Any(0), &[])],
-        attrs: PURE,
-        memory: NO_MEMORY,
+        parameters: &[Slot::Any(0)],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
     },
+    // Own attributes: MIR's markers still take the size, which `Intrinsics.td`
+    // has dropped, so its parameter positions are not MIR's.
     Spec {
         name: "llvm.lifetime.start",
         intrinsic: Intrinsic::LifetimeStart,
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
         parameters: LIFETIME,
-        attrs: LIFETIME_ATTRS,
-        memory: &[(Some("argmem"), "write")],
+        own: Some(Own { attrs: LIFETIME_ATTRS, memory: &[(Some("argmem"), "write")], parameters: LIFETIME_PARAMETERS }),
     },
     Spec {
         name: "llvm.lifetime.end",
@@ -430,53 +518,79 @@ const TABLE: [Spec; 35] = [
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
         parameters: LIFETIME,
-        attrs: LIFETIME_ATTRS,
-        memory: &[(Some("argmem"), "write")],
+        own: Some(Own { attrs: LIFETIME_ATTRS, memory: &[(Some("argmem"), "write")], parameters: LIFETIME_PARAMETERS }),
     },
     Spec {
         name: "llrm.ia16.in",
         intrinsic: Intrinsic::PortIn,
         overloads: &[Kind::Int],
         returns: Slot::Any(0),
-        parameters: &[(Slot::Int(16), &[])],
-        attrs: PORT_ATTRS,
-        memory: PORT_MEMORY,
+        parameters: &[Slot::Int(16)],
+        own: Some(Own { attrs: PORT_ATTRS, memory: PORT_MEMORY, parameters: &[] }),
     },
     Spec {
         name: "llvm.va_start",
         intrinsic: Intrinsic::VaStart,
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
-        parameters: &[(Slot::Any(0), &[])],
-        attrs: &["nocallback", "nofree", "nosync", "nounwind", "willreturn"],
-        memory: &[(Some("argmem"), "readwrite")],
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.va_end",
+        intrinsic: Intrinsic::VaEnd,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.stacksave",
+        intrinsic: Intrinsic::StackSave,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.stackrestore",
+        intrinsic: Intrinsic::StackRestore,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.va_copy",
+        intrinsic: Intrinsic::VaCopy,
+        overloads: &[Kind::Pointer, Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0), Slot::Any(1)],
+        own: None,
     },
     Spec {
         name: "llrm.ia16.ptrdiff",
         intrinsic: Intrinsic::PtrDiff,
         overloads: &[Kind::Int, Kind::Pointer],
         returns: Slot::Any(0),
-        parameters: &[(Slot::Any(1), &[]), (Slot::Any(1), &[])],
-        attrs: PURE,
-        memory: NO_MEMORY,
+        parameters: &[Slot::Any(1), Slot::Any(1)],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
     },
     Spec {
         name: "llrm.ia16.window",
         intrinsic: Intrinsic::Window,
         overloads: &[Kind::Pointer, Kind::Pointer],
         returns: Slot::Any(0),
-        parameters: &[(Slot::Any(1), &[])],
-        attrs: PURE,
-        memory: NO_MEMORY,
+        parameters: &[Slot::Any(1)],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
     },
     Spec {
         name: "llrm.ia16.out",
         intrinsic: Intrinsic::PortOut,
         overloads: &[Kind::Int],
         returns: Slot::Void,
-        parameters: &[(Slot::Int(16), &[]), (Slot::Any(0), &[])],
-        attrs: PORT_ATTRS,
-        memory: PORT_MEMORY,
+        parameters: &[Slot::Int(16), Slot::Any(0)],
+        own: Some(Own { attrs: PORT_ATTRS, memory: PORT_MEMORY, parameters: &[] }),
     },
 ];
 
@@ -484,10 +598,12 @@ const TABLE: [Spec; 35] = [
 /// one; as in LLVM, whatever attributes it had are dropped.
 pub(crate) fn declare(
     function: &mut Function,
+    types: &Types,
     name: &str,
 ) {
-    let Some(intrinsic) = Intrinsic::named(name) else { return };
-    let (mut attrs, parameter_attrs) = intrinsic.attributes();
+    let Some((mut attrs, parameter_attrs)) = Intrinsic::named(name).and_then(Intrinsic::attributes) else {
+        return from_intrinsics_td(function, types, name);
+    };
     // Assembly that reaches no memory still has effects, kept in order with
     // the ports: its own state, as a port that reaches no memory has.
     if asm(name).is_some_and(|one| !one.memory) {
@@ -496,6 +612,60 @@ pub(crate) fn declare(
     function.attrs = attrs;
     for (slot, attrs) in function.parameter_attrs.iter_mut().zip(parameter_attrs) {
         *slot = attrs;
+    }
+}
+
+/// The attributes `Intrinsics.td` gives the intrinsic `name` names.
+fn from_intrinsics_td(
+    function: &mut Function,
+    types: &Types,
+    name: &str,
+) {
+    let Some(set) = table_set(name) else { return };
+    let Type::Function { returns, parameters, .. } = types.get(function.ty).clone() else { return };
+    function.attrs = set.function.iter().map(|one| Attribute::Flag((*one).to_owned())).collect();
+    if !set.memory.is_empty() {
+        function.attrs.push(Attribute::Memory(
+            set.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),
+        ));
+    }
+    function.return_attrs.clear();
+    function.parameter_attrs.iter_mut().for_each(Vec::clear);
+    for &(at, attrs) in set.arguments {
+        let ty = if at == 0 { Some(returns) } else { parameters.get(at as usize - 1).copied() };
+        let Some(ty) = ty else { continue };
+        let attrs = attrs.iter().filter_map(|attr| match *attr {
+            intrinsic_attrs::Attr::Flag(one) => Some(Attribute::Flag(one.to_owned())),
+            intrinsic_attrs::Attr::Int(one, value) => Some(Attribute::Int(one.to_owned(), value)),
+            // At the argument's own width; `lower == upper` is no range.
+            intrinsic_attrs::Attr::Range(lower, upper) => {
+                let bits = types.int_bits(ty)?;
+                let wrap = |one: i64| (one as i128 as u128) & (u128::MAX >> (128 - bits));
+                (wrap(lower) != wrap(upper)).then(|| Attribute::Range { ty, lower: wrap(lower), upper: wrap(upper) })
+            }
+        });
+        let slot =
+            if at == 0 { Some(&mut function.return_attrs) } else { function.parameter_attrs.get_mut(at as usize - 1) };
+        if let Some(slot) = slot {
+            slot.extend(attrs);
+        }
+    }
+}
+
+/// `Intrinsics.td`'s attributes of the intrinsic `name` names: the longest
+/// name in the table that `name` is, or extends by a type suffix where the
+/// intrinsic is overloaded.
+pub(crate) fn table_set(name: &str) -> Option<&'static intrinsic_attrs::Set> {
+    if !name.starts_with("llvm.") {
+        return None;
+    }
+    let mut end = name.len();
+    loop {
+        if let Ok(at) = intrinsic_attrs::NAMES.binary_search_by_key(&&name[..end], |&(one, ..)| one) {
+            let (_, set, overloaded) = intrinsic_attrs::NAMES[at];
+            return (overloaded || end == name.len()).then(|| &intrinsic_attrs::SETS[set as usize]);
+        }
+        end = name[..end].rfind('.')?;
     }
 }
 
@@ -566,18 +736,19 @@ impl Intrinsic {
             .map(|spec| spec.intrinsic)
     }
 
-    /// The function's attributes and each parameter's.
-    pub fn attributes(self) -> (Vec<Attribute>, Vec<Vec<Attribute>>) {
+    /// The function's attributes and each parameter's, where MIR states them;
+    /// none where `Intrinsics.td` does.
+    pub fn attributes(self) -> Option<(Vec<Attribute>, Vec<Vec<Attribute>>)> {
         if matches!(self, Intrinsic::Code | Intrinsic::Asm) {
-            return (vec![crate::facts::Fact::NoUnwind.carrier()], Vec::new());
+            return Some((vec![crate::facts::Fact::NoUnwind.carrier()], Vec::new()));
         }
-        let spec = self.spec();
+        let own = self.spec().own?;
         let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).to_owned())).collect::<Vec<_>>();
-        let mut attrs = flags(spec.attrs);
+        let mut attrs = flags(own.attrs);
         attrs.push(Attribute::Memory(
-            spec.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),
+            own.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),
         ));
-        (attrs, spec.parameters.iter().map(|(_, one)| flags(one)).collect())
+        Some((attrs, own.parameters.iter().map(|one| flags(one)).collect()))
     }
 
     /// Checks that `function_type` is this intrinsic's, overloaded as
@@ -609,7 +780,15 @@ impl Intrinsic {
             if !answers {
                 return Err("Intrinsic has incorrect return type!".to_owned());
             }
-            if *variadic || parameters.len() != block.inputs.len() || !parameters.iter().all(word) {
+            // The symbols a block names come first, as addresses, then the
+            // registers'.
+            let (symbols, registers) = parameters.split_at(block.fixups.len().min(parameters.len()));
+            if *variadic
+                || symbols.len() != block.fixups.len()
+                || registers.len() != block.inputs.len()
+                || !symbols.iter().all(|ty| matches!(types.get(*ty), Type::Pointer(_)))
+                || !registers.iter().all(word)
+            {
                 return Err("Intrinsic has incorrect argument type!".to_owned());
             }
             return Ok(());
@@ -661,7 +840,7 @@ impl Intrinsic {
         }
         if *variadic
             || parameters.len() != spec.parameters.len()
-            || !spec.parameters.iter().zip(parameters).all(|((slot, _), ty)| matches(*slot, *ty))
+            || !spec.parameters.iter().zip(parameters).all(|(slot, ty)| matches(*slot, *ty))
         {
             return Err("Intrinsic has incorrect argument type!".to_owned());
         }
@@ -677,6 +856,21 @@ impl Intrinsic {
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An enumerated `llvm.*` intrinsic with no entry would have no
+    /// attributes at all; only the ones MIR states itself have none.
+    #[test]
+    fn every_enumerated_intrinsic_has_attributes_from_one_place() {
+        for spec in TABLE.iter() {
+            let from_table = table_set(spec.name).is_some();
+            assert_ne!(from_table, spec.own.is_some(), "{}", spec.name);
+        }
+    }
+}
+
+#[cfg(test)]
 mod length_tests {
     use super::length;
     use crate::Operand;
@@ -687,7 +881,7 @@ mod length_tests {
     /// operand's own width.
     #[test]
     fn test_a_length_is_unsigned_at_the_width_of_its_type() {
-        let mut context = Context::new();
+        let context = Context::new();
         let (i16_, i32_) = (context.types.int(16), context.types.int(32));
         for (ty, value) in
             [(i16_, 32767), (i16_, 32768), (i16_, 40000), (i16_, 65535), (i32_, 65535), (i32_, 2_147_483_648)]

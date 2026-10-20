@@ -344,7 +344,8 @@ fn test_module_exit_rewrite_preserves_conditional_false_edges() {
     let listing = listing(&parsed(&source));
     let main = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
 
-    assert!(main.contains("cmp dword ptr $QB$FRAME, 42\n    je L"), "{main}");
+    // The OK arm falls through (`jne` to the other): same size, laid out so.
+    assert!(main.contains("cmp dword ptr $QB$FRAME, 42\n    jne L"), "{main}");
     assert_eq!(main.matches("call far ptr B$PESD").count(), 2, "{main}");
     // Each arm ends in its own exit: the jump to the shared `ret` is replaced
     // by a copy of it (gcc's `copy_bb_p`, `jumps::duplicated`), and

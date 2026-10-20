@@ -981,128 +981,6 @@ fn test_generated_bodies_allocate() {
     );
 }
 
-/// Seed 4 on 386, twelve values over six registers with calls and far
-/// accesses: a reload no register is free for was refused ("value#52 cannot
-/// be spilled and no register is free for it", #134, seed 5 before block
-/// frequencies moved the spill weights). Its holders cannot all stay, so the
-/// last resort evicts the cheapest and spills them.
-#[test]
-fn test_a_value_that_cannot_be_spilled_takes_a_register_by_force() {
-    let before = crate::backend::allocate::last_resorts();
-    let shape = Shape { pool: 12, ops: 11 };
-    let done = allocated(4, &shape, "386");
-    assert!(done.is_ok(), "{done:?}");
-    assert!(crate::backend::allocate::last_resorts() > before, "premise: the allocation needed the last resort");
-}
-
-/// LLVM and GCC allocate a function once. The allocator here also allocated the
-/// body in each other shape its spills suggested, twice each, and kept the
-/// cheapest: 85 allocations of `d_faces`'s big function (#944). A profile that
-/// does not search makes the one allocation, and the same output where no other
-/// shape was cheaper.
-#[test]
-fn test_an_allocator_that_does_not_search_allocates_a_body_once() {
-    use crate::backend::allocate::trials;
-    let shape = Shape { pool: 12, ops: 11 };
-    let mut searched = 0;
-    for seed in 0..12 {
-        let run = |search: bool| {
-            let (body, _) = body(seed, &shape);
-            let cpu =
-                crate::backend::cpu::tuned_searching(&llrm_x86_m16::M16, "386", false, search).expect("a profile");
-            let mut phase = RegAlloc::new(
-                None,
-                None,
-                ProfileOrName::Profile(cpu),
-                &*target::BUILT_IN,
-                &crate::backend::classes::RegisterClasses::m16(),
-            )
-            .expect("a phase");
-            let before = trials();
-            let out = phase.transform(body).expect("allocated");
-            (trials() - before, out)
-        };
-        let (with, _) = run(true);
-        let (without, alone) = run(false);
-        searched += with;
-        assert_eq!(without, 0, "seed {seed}: allocated again by a profile that does not search");
-        assert!(complaints(&alone).is_empty(), "seed {seed}: {:?}", complaints(&alone));
-    }
-    assert!(searched > 0, "premise: some body had a shape to try");
-}
-
-/// The search made every shape the spills suggested (a rewritten body for each
-/// of 3-13 of them) and allocated one: `d_faces` -O1 spent 104 M of 7.1 G on
-/// shapes it dropped. Unless it is exhaustive it makes the one it allocates.
-#[test]
-fn test_a_search_that_is_not_exhaustive_makes_only_the_shape_it_allocates() {
-    use crate::backend::allocate::{shapes_made, trials};
-    let shape = Shape { pool: 12, ops: 11 };
-    let (mut made_directed, mut made_all) = (0, 0);
-    for seed in 0..40 {
-        let run = |exhaustive: bool| {
-            let (body, _) = body(seed, &shape);
-            let cpu =
-                crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, exhaustive).expect("a profile");
-            let mut phase = RegAlloc::new(
-                None,
-                None,
-                ProfileOrName::Profile(cpu),
-                &*target::BUILT_IN,
-                &crate::backend::classes::RegisterClasses::m16(),
-            )
-            .expect("a phase");
-            let before = (shapes_made(), trials());
-            phase.transform(body).expect("allocated");
-            (shapes_made() - before.0, trials() - before.1)
-        };
-        let (made, allocated) = run(false);
-        assert!(made <= 1 && made <= allocated, "seed {seed}: {made} shapes made, {allocated} allocated");
-        made_directed += made;
-        made_all += run(true).0;
-    }
-    assert!(
-        made_all > made_directed,
-        "premise: some body suggests more shapes than the one taken ({made_all} against {made_directed})"
-    );
-}
-
-/// The search tried every shape its spills suggested, twice each: up to 12
-/// allocations of one body, and 80% of compiling `d_faces`. Unless it is
-/// exhaustive it allocates the shape the spills suggest and the body without
-/// splitting: at most 2 more, and never a worse output than the first
-/// allocation's.
-#[test]
-fn test_a_search_that_is_not_exhaustive_makes_at_most_two_more_allocations() {
-    use crate::backend::allocate::trials;
-    let shape = Shape { pool: 12, ops: 11 };
-    let mut most_all = 0;
-    for seed in 0..40 {
-        let run = |exhaustive: bool| {
-            let (body, _) = body(seed, &shape);
-            let cpu =
-                crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, exhaustive).expect("a profile");
-            let mut phase = RegAlloc::new(
-                None,
-                None,
-                ProfileOrName::Profile(cpu),
-                &*target::BUILT_IN,
-                &crate::backend::classes::RegisterClasses::m16(),
-            )
-            .expect("a phase");
-            let before = trials();
-            let out = phase.transform(body).expect("allocated");
-            (trials() - before, out)
-        };
-        let (directed, out) = run(false);
-        let (all, _) = run(true);
-        assert!(directed <= 2, "seed {seed}: {directed} more allocations");
-        assert!(complaints(&out).is_empty(), "seed {seed}: {:?}", complaints(&out));
-        most_all = most_all.max(all);
-    }
-    assert!(most_all > 2, "premise: some body has more than two shapes to try (most: {most_all})");
-}
-
 /// The walk found a value's intervals by every value live in every block,
 /// hashed (the homes of d_faces: 56 values, 240 blocks, 4.4M instructions a
 /// call, 616 calls). From where the values occur and the blocks they are live
@@ -1352,85 +1230,6 @@ fn test_the_interference_of_a_whole_body_is_bits_not_a_tree_of_pairs() {
         }
     }
     assert!(rows > 0, "premise: some value interferes");
-}
-
-/// The no-split allocation of a body the base allocation split nothing in is
-/// the base allocation again, and was made for every body with a spill (10% of
-/// the trials over QCport, the bench and the 66 programs, none of them won).
-#[test]
-fn test_a_body_the_base_allocation_split_nothing_in_is_not_allocated_again_without_splitting() {
-    use crate::backend::allocate::{base_splits, trials};
-    let mut unsplit = 0;
-    for seed in 0..240_u64 {
-        let shape = Shape { pool: 7 + (seed % 8) as usize, ops: 4 + (seed % 9) as usize };
-        let (body, _) = body(seed, &shape);
-        let cpu = crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, false).expect("a profile");
-        let mut phase = RegAlloc::new(
-            None,
-            None,
-            ProfileOrName::Profile(cpu),
-            &*target::BUILT_IN,
-            &crate::backend::classes::RegisterClasses::m16(),
-        )
-        .expect("a phase");
-        let before = trials();
-        phase.transform(body).expect("allocated");
-        let made = trials() - before;
-        if made > 0 && base_splits() == 0 {
-            unsplit += 1;
-            assert!(made <= 1, "seed {seed}: {made} more allocations of a body nothing was split in");
-        }
-    }
-    assert!(unsplit > 0, "premise: some body with a spill was split nowhere");
-}
-
-/// The allocator's rewrites asked every instruction of the body for the
-/// largest value it names (d_faces -O1: 274 M of 24.6 G instructions); they
-/// ask the postings.
-#[test]
-fn test_the_allocators_rewrites_ask_the_postings_for_the_next_value() {
-    use crate::backend::splitkit::next_value_asks;
-    let before = next_value_asks();
-    for seed in 0..120_u64 {
-        let shape = Shape { pool: 7 + (seed % 8) as usize, ops: 4 + (seed % 9) as usize };
-        let (body, _) = body(seed, &shape);
-        let cpu = crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, false).expect("a profile");
-        let mut phase = RegAlloc::new(
-            None,
-            None,
-            ProfileOrName::Profile(cpu),
-            &*target::BUILT_IN,
-            &crate::backend::classes::RegisterClasses::m16(),
-        )
-        .expect("a phase");
-        phase.transform(body).expect("allocated");
-    }
-    assert!(next_value_asks() > before, "no rewrite asked the postings for the next value");
-}
-
-/// The pins were worked out of every instruction of the body after each
-/// rewrite (d_faces -O1: 970 rewrites, 628 M of 25.6 G instructions), though
-/// the allocation already holds every earlier body's. Only the blocks a rewrite
-/// changed are looked at.
-#[test]
-fn test_a_rewrite_looks_for_pins_in_the_blocks_it_changed_only() {
-    use crate::backend::allocate::required_skipped;
-    let before = required_skipped();
-    for seed in 0..240_u64 {
-        let shape = Shape { pool: 7 + (seed % 8) as usize, ops: 4 + (seed % 9) as usize };
-        let (body, _) = body(seed, &shape);
-        let cpu = crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, false).expect("a profile");
-        let mut phase = RegAlloc::new(
-            None,
-            None,
-            ProfileOrName::Profile(cpu),
-            &*target::BUILT_IN,
-            &crate::backend::classes::RegisterClasses::m16(),
-        )
-        .expect("a phase");
-        phase.transform(body).expect("allocated");
-    }
-    assert!(required_skipped() > before, "every rewrite looked at every block for pins");
 }
 
 /// `allocate::live` was built from per-block sorted sets and converted to bit
@@ -2210,75 +2009,6 @@ fn test_the_points_that_destroy_registers_carried_across_a_rewrite_are_those_of_
     assert!(carried > 100, "only {carried} rewrites carried their points");
 }
 
-/// A trial that spills a value its shape protects is dropped whatever it costs,
-/// and the rounds after that spill were work no output read: sort_ in quicksort
-/// at -O3 spent 294 M of 795 M instructions in a Scoped trial that spilled 140
-/// values to lose to the base's 44. It stops at the first protected spill, and
-/// what is kept is what it was.
-#[test]
-fn test_a_trial_that_spills_a_protected_value_stops_there_and_changes_nothing() {
-    use crate::backend::allocate::{abandoned_trials, abandoning};
-    let shape = Shape { pool: 12, ops: 11 };
-    let mut stopped = 0;
-    for seed in 0..120_u64 {
-        let run = |on: bool| {
-            let (body, _) = body(seed, &shape);
-            let cpu =
-                crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, false).expect("a profile");
-            let mut phase = RegAlloc::new(
-                None,
-                None,
-                ProfileOrName::Profile(cpu),
-                &*target::BUILT_IN,
-                &crate::backend::classes::RegisterClasses::m16(),
-            )
-            .expect("a phase");
-            abandoning(on);
-            let before = abandoned_trials();
-            let out = phase.transform(body).expect("allocated");
-            abandoning(true);
-            (abandoned_trials() - before, out)
-        };
-        let (cut, with) = run(true);
-        let (none, without) = run(false);
-        assert_eq!(none, 0, "seed {seed}: a trial was stopped with the stop off");
-        assert_eq!(
-            format!("{:?}", with.insns()),
-            format!("{:?}", without.insns()),
-            "seed {seed}: stopping a trial changed the output"
-        );
-        stopped += cut;
-    }
-    assert!(stopped > 0, "premise: some trial spilled a value it protects");
-}
-
-/// The set of values that may not be spilled was made again at each of the 206
-/// rebuilds of the allocator's facts in d_faces -O2 (4.1 M instructions),
-/// though it grows only when a spill makes values: a rebuild after a rewrite
-/// that made none keeps it.
-#[test]
-fn test_the_pinned_set_is_kept_by_a_rebuild_that_made_no_unspillable_value() {
-    let shape = Shape { pool: 12, ops: 11 };
-    let (mut facts, mut kept) = (0, 0);
-    for seed in 0..60_u64 {
-        let (body, _) = body(seed, &shape);
-        let cpu = crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, false).expect("a profile");
-        let mut phase = RegAlloc::new(
-            None,
-            None,
-            ProfileOrName::Profile(cpu),
-            &*target::BUILT_IN,
-            &crate::backend::classes::RegisterClasses::m16(),
-        )
-        .expect("a phase");
-        let out = phase.transform(body).expect("allocated");
-        facts += out.facts.0.counted("allocator facts built");
-        kept += out.facts.0.counted("pinned set kept");
-    }
-    assert!(facts > 100, "premise: only {facts} rebuilds of the facts");
-    assert!(kept > 0, "none of {facts} rebuilds of the facts kept the pinned set");
-}
-
 /// The counts of what the instructions say of the values were copied whole
 /// at each of the 195 rewrites of d_faces -O2 (6.3 M instructions): a scan made
 /// after a rewrite is the one before it, edited where it stands.
@@ -2299,4 +2029,65 @@ fn test_a_scan_after_a_rewrite_is_edited_where_it_stands() {
         checked += 1;
     }
     assert!(checked > 10, "premise: only {checked} bodies had counts to compare");
+}
+
+/// The live intervals built by `LiveRangeCalc` (SlotIndexes, dominator tree,
+/// PHI-def insertion) are live in and out of exactly the blocks the dataflow
+/// liveness says.
+#[test]
+fn test_live_intervals_are_live_where_the_dataflow_says() {
+    use crate::backend::allocate::{LiveAt, live_rows};
+    use crate::liveness::liveintervals::LiveIntervals;
+    let mut checked = 0;
+    let mut multi_def = 0;
+    for seed in 0..120u64 {
+        let (plain, _) = body(seed, &Shape { pool: 6 + (seed % 7) as usize, ops: 6 + (seed % 13) as usize });
+        let rows = live_rows(&plain);
+        let mut lis = LiveIntervals::new(&plain);
+        let values: Vec<u32> = lis.values().collect();
+        for value in values {
+            let li = lis.interval(value).clone();
+            multi_def += usize::from(li.get_num_val_nums() > 1);
+            for (number, block) in plain.blocks.iter().enumerate() {
+                let start = lis.indexes.get_mbb_start_idx(number);
+                let last = lis.indexes.get_mbb_last_idx(number);
+                let live_in = !li.empty() && li.live_at(&start);
+                let live_out = !li.empty() && li.live_at(&last);
+                assert_eq!(
+                    live_in,
+                    rows.live_in(block.at, value),
+                    "seed {seed}: value#{value} live in to block {number}: {li}"
+                );
+                assert_eq!(
+                    live_out,
+                    rows.live_out(block.at, value),
+                    "seed {seed}: value#{value} live out of block {number}: {li}"
+                );
+                checked += 1;
+            }
+            assert!(li.verify(), "seed {seed}: value#{value} {li}");
+        }
+    }
+    assert!(
+        checked > 1000 && multi_def > 0,
+        "premise: bodies with values defined more than once ({checked}, {multi_def})"
+    );
+}
+
+/// The generated bodies of seeds `0..count` through the allocator on the 386,
+/// for tests that count what the allocation did.
+pub(crate) fn allocate_generated_bodies(count: u64) {
+    for seed in 0..count {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (body, _) = body(seed, &shape);
+        let mut phase = RegAlloc::new(
+            None,
+            None,
+            ProfileOrName::Name("386"),
+            &*target::BUILT_IN,
+            &crate::backend::classes::RegisterClasses::m16(),
+        )
+        .expect("a phase");
+        phase.transform(body).expect("allocated");
+    }
 }

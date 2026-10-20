@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ranges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:dc13702c5dfff08914df310b45eb200f5691191947123983ec8b97427915227d -->
+<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:54c707d0017e9846f4de1b1d4d627c914dff791d5ecccdb941067efcef7b46a7 -->
 
 # ranges
 
@@ -67,10 +67,6 @@ Queries. `scoped` is every block's intervals (loops narrowed by edges);
 `operand_at` is one operand's at one block without copying the rest.
 `covering` widens an indexed access into its own object to the byte interval
 it can touch; `inside_object` says that interval lies inside the object.
-`exact_offsets` finds index values whose every access sums, at any wider
-width, to the same bytes, because every partial sum is a non-negative
-integer below `2**index_bits`; it is used where the object's own address is
-the only root known to start at 0.
 
 ## Example
 `for i = 0 while i < 10: if i < 4: off = i * 2`:

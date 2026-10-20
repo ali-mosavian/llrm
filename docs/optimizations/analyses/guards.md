@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/guards.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/guards.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/guards.rs sha256:4f17ef5456a6f799ec6d49cc3dfdcae35148a1e9c634682d039f2e8bf105f327 -->
+<!-- src: crates/opt/llrm-analysis/src/guards.rs sha256:a317efaea867ae7d6243eb567fe381d1f619dc29ad19e8a95ff2d2771b74568e -->
 
 # guards
 
@@ -77,7 +77,7 @@ in `guards_tests.rs`.
 
 ## Provides
 Guard facts and the implication queries above. Consumers: `decide`,
-`exitfold` and `jumpthread` in `llrm-transforms`, and
+`exitfold` and `jumpthreading` in `llrm-transforms`, and
 [`crate::induction`](induction.md) (loop entry guards).
 
 ## Needs

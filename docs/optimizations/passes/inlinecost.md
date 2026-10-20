@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:53501a3abedfe11b6707bd7f648e0110a00ea8a12018f7f1763e7be07e0a07a6 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:266a6a66232d99ee5c47c69275e7a52b5a8ee63809dd0386f31e98e5690895fc -->
 
 # inlinecost
 
@@ -46,13 +46,16 @@ each site's cost and threshold beside the existing decision; with
 
 ## Deviations from LLVM (numbered, measured when the diff against
 `opt -passes=inline` has rows)
-- D1: block frequencies: LLVM's `BlockFrequencyInfo` decides a cold or hot
-  site; the caller passes the site's frequency relative to the caller's
-  entry (`Site::relative_frequency`), from `profit`'s.
+- D1: block frequencies: `BlockFrequencyInfo` over `BranchProbabilityInfo`,
+  both translated (`llrm_analysis::blockfreq`, `llrm_analysis::bpi`). The
+  caller passes the site's frequency relative to its entry
+  (`Site::relative_frequency`), a ratio where LLVM compares
+  `BlockFrequency`s.
 - D2: `TargetTransformInfo`: `getInstructionCost`, `isLoweredToCall`,
   `getFPOpCost`, `getEstimatedNumberOfCaseClusters` are the generic
   (BasicTTIImpl) answers with the x86 legal addressing modes, in
-  `free_instruction`, `lowered_to_call` and `case_clusters`.
+  `free_instruction`, `lowered_to_call` and `basic_case_clusters`
+  (`tti.rs`).
 - D3: constant folding is integer, float and `select`; vectors and constant
   expressions are not folded.
 - D4: no PGO, ThinLTO, ML advisor, `optnone`, `flatten`, coroutines, strict

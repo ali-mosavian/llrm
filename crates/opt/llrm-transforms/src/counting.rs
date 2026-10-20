@@ -66,10 +66,10 @@
 //! `counting_tests.rs`.
 //!
 //! # Used by
-//! [`crate::loopidioms`], [`crate::loopexit`], [`crate::window`] and
-//! [`crate::lsr`] build `Seeds` when they commit to replacing a loop's counter,
-//! and [`crate::exitfold`] and others take `constant` for operands. Not a pass:
-//! it runs only inside those.
+//! [`crate::loopidioms`], [`crate::window`] and
+//! [`crate::lsr_pass`] build `Seeds` when they commit to replacing a loop's
+//! counter, and `lftr` and others take `constant` for operands.
+//! Not a pass: it runs only inside those.
 //!
 //! # See also
 //! [`crate::expand`] for sums.
@@ -155,7 +155,7 @@ impl Seeds<'_> {
 
 /// `n` as a constant `width` bits wide.
 pub fn constant(
-    context: &mut Context,
+    context: &Context,
     n: &BigInt,
     width: u32,
 ) -> Operand {

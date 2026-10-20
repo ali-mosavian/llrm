@@ -36,10 +36,7 @@ facts clear all cells at a call.
  %b = load i16, ptr @g        (%a is 9; with @clobber readonly, %b too)
 ```
 
-Every edge fold found runs in the call, from the one set of facts (replacing an
-operation by a phi of its own numbers leaves the others' answers true; one per
-call took a pipeline round each, and every other pass ran again for it:
-`d_faces` -O1 4 rounds). At a block with two or more predecessors, a
+One edge fold runs per call. At a block with two or more predecessors, a
 pure `Binary` or `Cast` in the block (or in the single-predecessor chain
 below it) that reads one of its phis, and whose answer is a number on every
 incoming edge, becomes a phi of those numbers. An operation that also reads
