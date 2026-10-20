@@ -51,6 +51,7 @@ pub mod knownbits;
 pub mod knownfpclass;
 pub mod lazyvalueinfo;
 pub mod lexer;
+pub mod libfunc;
 pub mod lint;
 pub mod loopinfo;
 pub mod lowering;

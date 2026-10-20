@@ -129,3 +129,22 @@ fn a_compare_of_constants_folds() {
     check("  %r = fcmp true float %x, %y\n", Some("Int(1)"));
     check("  %r = fcmp olt float %x, %y\n", None);
 }
+
+/// `fcmp ole x, x` and the like stayed compares at run time: the fold of a
+/// value against itself, a NaN on the right, `nnan ord`/`uno`, and a constant
+/// on the left moving right were all missing. A NaN is unordered, so `x ord x`
+/// and `x oeq x` are not folded.
+#[test]
+fn a_compare_of_a_value_with_itself_or_a_nan_folds() {
+    check("  %r = fcmp ueq float %x, %x\n", Some("Int(1)"));
+    check("  %r = fcmp ule float %x, %x\n", Some("Int(1)"));
+    check("  %r = fcmp olt float %x, %x\n", Some("Int(0)"));
+    check("  %r = fcmp one float %x, %x\n", Some("Int(0)"));
+    check("  %r = fcmp oeq float %x, %x\n", None);
+    check("  %r = fcmp ord float %x, %x\n", None);
+    check("  %r = fcmp nnan ord float %x, %y\n", Some("Int(1)"));
+    check("  %r = fcmp nnan uno float %x, %y\n", Some("Int(0)"));
+    check("  %r = fcmp olt float %x, 0x7FF8000000000000\n", Some("Int(0)"));
+    check("  %r = fcmp ult float 0x7FF8000000000000, %x\n", Some("Int(1)"));
+    check("  %r = fcmp olt float 1.0, %x\n", None);
+}

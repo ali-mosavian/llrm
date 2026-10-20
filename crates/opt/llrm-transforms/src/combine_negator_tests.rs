@@ -17,7 +17,10 @@ fn visit(
         return Visit::None;
     }
     let (zero, x, nsw) = (instruction.operands[0], instruction.operands[1], instruction.flags.contains(Flags::NSW));
-    if !matches!(zero, Operand::Constant(k) if c.context.get(k).kind == llrm_mir::context::ConstantKind::Int(0)) {
+    if !matches!(
+        zero,
+        Operand::Constant(k) if c.context.get(k).kind == llrm_mir::context::ConstantKind::Int(0)
+    ) {
         return Visit::None;
     }
     match c.negate(true, nsw, x) {

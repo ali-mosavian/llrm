@@ -7,3 +7,5 @@ docs/examples/basic/*.BI text eol=crlf
 tests/target_facts.baseline merge=union
 # Golden data, one row per line; trailing spaces are part of the rows.
 crates/ir/llrm-mir/src/idf_golden.txt whitespace=-trailing-space
+# Expected program output: lines end with the space printf left, which the diff check must not flag.
+crates/target/llrm-arm64/tests/darwin/*.out whitespace=-trailing-space

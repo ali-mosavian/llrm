@@ -49,6 +49,8 @@ pub struct X86 {
     /// X86.td lists it); `branchfusion` is a Bulldozer-and-newer feature none
     /// of the profiles has.
     pub macro_fusion: bool,
+    /// Long mode: the integer registers are 64 bits wide (`is64Bit`).
+    pub quad: bool,
     /// What real mode's addressing and register file make of the hooks LSR
     /// reads (T6); none: the 32-bit mode's.
     pub real_mode: Option<RealMode>,
@@ -77,13 +79,21 @@ impl RealMode {
 }
 
 impl X86 {
+    /// The bits of the integer registers.
+    pub fn native(&self) -> u32 {
+        if self.quad { 64 } else { 32 }
+    }
+
     /// The profile of a `-march` llrm supports.
     pub fn of_cpu(cpu: &str) -> Option<X86> {
         match cpu {
             "i386" | "i486" | "pentium" | "pentiumpro" | "k5" | "k6" | "athlon" => {
-                Some(X86 { sse1: false, sse2: false, macro_fusion: false, real_mode: None })
+                Some(X86 { sse1: false, sse2: false, macro_fusion: false, quad: false, real_mode: None })
             }
-            "core2" => Some(X86 { sse1: true, sse2: true, macro_fusion: true, real_mode: None }),
+            "core2" => Some(X86 { sse1: true, sse2: true, macro_fusion: true, quad: false, real_mode: None }),
+            // `-march=x86-64`: the baseline of long mode, SSE2
+            // and `TuningMacroFusion` (X86.td `X86_64V1Tuning`).
+            "x86-64" => Some(X86 { sse1: true, sse2: true, macro_fusion: true, quad: true, real_mode: None }),
             _ => None,
         }
     }
@@ -109,16 +119,21 @@ impl X86 {
     }
 }
 
-/// `getTypeLegalizationCost` for the scalar types on a 32-bit target: how many
-/// operations of what type a value takes:
+/// `getTypeLegalizationCost` for the scalar types: how many operations of what
+/// type a value takes, the integer registers being `native` bits wide (32, or
+/// 64 in long mode):
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L1039
-fn legalized(ty: Ty) -> Option<(i64, Ty)> {
+fn legalized(
+    ty: Ty,
+    native: u32,
+) -> Option<(i64, Ty)> {
     match ty {
         Ty::Int(bits) if bits <= 8 => Some((1, Ty::Int(8))),
         Ty::Int(16) => Some((1, Ty::Int(16))),
         Ty::Int(bits) if bits <= 32 => Some((1, Ty::Int(32))),
-        Ty::Int(bits) => Some((i64::from(bits.div_ceil(32).next_power_of_two()), Ty::Int(32))),
-        Ty::Pointer => Some((1, Ty::Int(32))),
+        Ty::Int(bits) if native == 64 && bits <= 64 => Some((1, Ty::Int(64))),
+        Ty::Int(bits) => Some((i64::from(bits.div_ceil(native).next_power_of_two()), Ty::Int(native))),
+        Ty::Pointer => Some((1, Ty::Int(native))),
         other => Some((1, other)),
     }
 }
@@ -157,6 +172,20 @@ fn scalar_variable_divide(
         Ty::Int(16) => Some(all(17, 20, 2, 4)),
         Ty::Int(32) => Some(all(25, 22, 2, 4)),
         Ty::Int(64) => Some(all(41, 24, 2, 4)),
+        _ => None,
+    }
+}
+
+/// `X64CostTbl`, the 64-bit targets' rows:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L1868
+fn x64_table(
+    op: ArithOp,
+    ty: Ty,
+) -> Option<Row> {
+    use ArithOp::*;
+    match (op, ty) {
+        (Add | Sub, Ty::Int(64)) => Some(throughput(1)),
+        (Mul, Ty::Int(64)) => Some(all(2, 6, 1, 2)),
         _ => None,
     }
 }
@@ -246,7 +275,7 @@ fn generic_arithmetic(
     if kind != CostKind::RecipThroughput {
         return base_arithmetic(op, ty, kind);
     }
-    let Some((count, _)) = legalized(ty) else { return Cost::INVALID };
+    let Some((count, _)) = legalized(ty, profile.native()) else { return Cost::INVALID };
     let unit = if ty.is_float() { 2 } else { 1 };
     // X86's operation actions on the scalar types: the divisions and
     // remainders expand (onto DIVREM, which is custom), `frem` is a libcall,
@@ -322,22 +351,30 @@ fn generic_cast(
     };
     // TargetTransformInfoImplBase::getCastInstrCost: the free ones.
     let free = match op {
-        IntToPtr => matches!(src, Ty::Int(8 | 16 | 32)),
-        PtrToInt => matches!(dst, Ty::Int(32 | 64)) && matches!(dst, Ty::Int(32)),
+        IntToPtr => matches!(src, Ty::Int(8 | 16 | 32)) || (profile.quad && src == Ty::Int(64)),
+        PtrToInt => dst == Ty::Int(profile.native()),
         BitCast => dst == src,
-        Trunc => matches!(dst, Ty::Int(8 | 16 | 32)),
+        Trunc => matches!(dst, Ty::Int(8 | 16 | 32)) || (profile.quad && dst == Ty::Int(64)),
         _ => false,
     };
     if free {
         return Cost::FREE;
     }
-    let (Some((source_count, source)), Some((dest_count, dest))) = (legalized(src), legalized(dst)) else {
+    let (Some((source_count, source)), Some((dest_count, dest))) =
+        (legalized(src, profile.native()), legalized(dst, profile.native()))
+    else {
         return Cost::INVALID;
     };
+    // `X86TargetLowering::isZExtFree`: a 32-bit result is zero-extended into
+    // the quadword already.
+    if op == ZExt && profile.quad && source == Ty::Int(32) && dest == Ty::Int(64) {
+        return Cost::FREE;
+    }
     let is_integer = |ty: Ty| matches!(ty, Ty::Int(_) | Ty::Pointer);
     let bits = |ty: Ty| match ty {
         Ty::Int(bits) => bits,
-        Ty::Pointer | Ty::Float => 32,
+        Ty::Pointer => profile.native(),
+        Ty::Float => 32,
         Ty::Double => 64,
         Ty::X87 => 80,
     };
@@ -467,7 +504,7 @@ impl Tti for X86 {
         ty: Ty,
         kind: CostKind,
     ) -> Cost {
-        let Some((count, _)) = legalized(ty) else { return Cost::INVALID };
+        let Some((count, _)) = legalized(ty, self.native()) else { return Cost::INVALID };
         if let Some(each) = sse_cmp_sel(self, op, ty).and_then(|row| row[kind.index()]) {
             return Cost::of(count * each);
         }
@@ -496,7 +533,7 @@ impl Tti for X86 {
         if kind != CostKind::RecipThroughput {
             return Cost::BASIC;
         }
-        let Some((count, _)) = legalized(ty) else { return Cost::INVALID };
+        let Some((count, _)) = legalized(ty, self.native()) else { return Cost::INVALID };
         // A constant stored through a floating point register is loaded first.
         let extra = if op == MemoryOp::Store && stored_constant && ty.is_float() { count } else { 0 };
         Cost::of(extra + count)
@@ -608,7 +645,7 @@ impl Tti for X86 {
 
     /// `X86TargetLowering::isLegalAddressingMode`:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36621,
-    /// 32-bit, small code model, not position independent.
+    /// Small code model; position independent in long mode, not in 32-bit.
     fn is_legal_addressing_mode(
         &self,
         base_gv: bool,
@@ -624,6 +661,13 @@ impl Tti for X86 {
             return i16::try_from(base_offset).is_ok() && (scale == 0 || real.scale_cost(scale).is_some());
         }
         if i32::try_from(base_offset).is_err() || (base_gv && base_offset >= 16 * 1024 * 1024) {
+            return false;
+        }
+        // Long mode, position independent (the PIE a default clang makes): a
+        // symbol is `[rip + symbol]`, which takes no displacement
+        // beside it and no index (the `isPositionIndependent() && is64Bit()`
+        // rule).
+        if self.quad && base_gv && (base_offset != 0 || scale > 1) {
             return false;
         }
         match scale {
@@ -702,9 +746,9 @@ impl Tti for X86 {
     }
 
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L173
-    /// 32-bit: eight general registers.
+    /// Eight general registers, sixteen in long mode (`getNumberOfRegisters`).
     fn number_of_gpr_registers(&self) -> u32 {
-        self.real_mode.as_ref().map_or(8, |real| real.registers)
+        self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
     }
 
     /// `X86TTIImpl::getCastInstrCost`, scalars:
@@ -724,7 +768,9 @@ impl Tti for X86 {
                 return Cost::of(each);
             }
         }
-        let (Some((source_count, source)), Some((dest_count, dest))) = (legalized(src), legalized(dst)) else {
+        let (Some((source_count, source)), Some((dest_count, dest))) =
+            (legalized(src, self.native()), legalized(dst, self.native()))
+        else {
             return Cost::INVALID;
         };
         if op == Trunc && source == dest {
@@ -758,7 +804,7 @@ impl Tti for X86 {
         second: OperandInfo,
     ) -> Cost {
         use ArithOp::*;
-        let Some((count, legal)) = legalized(ty) else { return Cost::INVALID };
+        let Some((count, legal)) = legalized(ty, self.native()) else { return Cost::INVALID };
         let none = OperandInfo::ANY;
         // Multiply by a power of two (or its negation) is a shift:
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L334
@@ -807,8 +853,8 @@ impl Tti for X86 {
                 }
             }
         }
-        let tables: [(bool, fn(ArithOp, Ty) -> Option<Row>); 3] =
-            [(self.sse2, sse2_table), (self.sse1, sse1_table), (true, x86_table)];
+        let tables: [(bool, fn(ArithOp, Ty) -> Option<Row>); 4] =
+            [(self.sse2, sse2_table), (self.sse1, sse1_table), (self.quad, x64_table), (true, x86_table)];
         for (present, table) in tables {
             if present {
                 if let Some(each) = table(op, legal).and_then(|row| row[kind.index()]) {

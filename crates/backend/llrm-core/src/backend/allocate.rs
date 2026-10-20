@@ -50,20 +50,19 @@
 //! `RegAlloc::transform` first changes the body so that the greedy loop can
 //! treat every value alike, in this order:
 //!
-//! 1. `constrain::distinct_roles` and `distinct_classes` copy a value that
-//!    needs two incompatible register sets at once (a word that is both base
-//!    and index of one address, or both a byte and an index) into one value per
-//!    role.
+//! 1. `constrain::distinct_classes` copies a value that needs two incompatible
+//!    register sets at once (both a byte and an index) into one value per role;
+//!    isel already gives a word that is both base and index of one address two
+//!    values.
 //! 2. `explicit_selectors` reaches a far cell through ES where its selector is
 //!    also read as a number.
-//! 3. `narrowed` turns a call result nothing reads into a clobber.
-//! 4. A pin outside the value's class is dropped where an instruction delivers
+//! 3. A pin outside the value's class is dropped where an instruction delivers
 //!    the value in that register, else it is an error; a value both pinned and
 //!    required in two registers is an error.
-//! 5. `constrain::constrained` gives each register an instruction requires a
+//! 4. `constrain::constrained` gives each register an instruction requires a
 //!    value of its own, live across that one instruction and copied in and out,
 //!    and returns those pins; `required` adds the rest.
-//! 6. A value read once from a cell that holds, by an instruction that takes
+//! 5. A value read once from a cell that holds, by an instruction that takes
 //!    the cell, is not held at all: the read stays a memory operand.
 //!
 //! `unallocatable` then refuses a body no assignment can fit: a value no
@@ -1193,53 +1192,6 @@ pub fn live_reference(body: &LirBody) -> (Live, Live) {
         })
         .collect();
     (live_in, live_out)
-}
-
-/// A call's results that nothing reads, said as clobbers instead.
-pub fn narrowed(
-    body: &LirBody,
-    pinned: &IndexMap<u32, RegId>,
-) -> (LirBody, IndexMap<u32, RegId>) {
-    let mut read: BTreeSet<u32> =
-        body.blocks.iter().flat_map(|block| block.insns.iter().flat_map(|one| one.uses.iter().copied())).collect();
-    read.extend(body.blocks.iter().flat_map(|one| one.arrives()));
-    let mut dropped: IndexMap<u32, RegId> = IndexMap::default();
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut insns = Vec::new();
-        for one in &block.insns {
-            let dead: Vec<u32> = one
-                .defines
-                .iter()
-                .copied()
-                .filter(|value| !read.contains(value) && pinned.get(value).is_some())
-                .collect();
-            if one.what.as_ref().is_none_or(|what| what.op != Operation::Call) || dead.is_empty() {
-                insns.push(Arc::clone(one));
-                continue;
-            }
-            let gone: IndexMap<u32, RegId> = dead.iter().map(|value| (*value, pinned[value])).collect();
-            dropped.extend(gone.iter().map(|(value, register)| (*value, *register)));
-            let mut made = (**one).clone();
-            made.defines = one.defines.iter().copied().filter(|value| !gone.contains_key(value)).collect();
-            made.delivers =
-                one.delivers.iter().copied().filter(|(held, _register)| !gone.contains_key(&held.value)).collect();
-            made.clobbers.extend(gone.values().copied());
-            insns.push(Arc::new(made));
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    if dropped.is_empty() {
-        return (body.clone(), pinned.clone());
-    }
-    (
-        body.with_blocks(blocks),
-        pinned
-            .iter()
-            .filter(|(value, _where)| !dropped.contains_key(*value))
-            .map(|(value, register)| (*value, *register))
-            .collect(),
-    )
 }
 
 /// How far a range has got, and therefore what may still be tried on it.
@@ -4166,12 +4118,8 @@ impl RegAlloc {
             );
         }
         let floor = self.pinned.keys().copied().max().map_or(0, |one| one + 1);
-        let mut body =
-            constrain::distinct_classes(&constrain::distinct_roles(&body, floor), floor, &segments, &self.classes);
+        let mut body = constrain::distinct_classes(&body, floor, &segments, &self.classes);
         body = explicit_selectors(&body, Some(&self.pinned), &segments, &self.classes);
-        let (narrowed_body, narrower) = narrowed(&body, &self.pinned);
-        body = narrowed_body;
-        self.pinned = narrower;
         let confined = classes(&body, &BTreeSet::new(), &segments, &self.classes);
         let incompatible: BTreeSet<u32> = self
             .pinned
@@ -5723,32 +5671,6 @@ mod tests {
     }
 
     #[test]
-    fn test_a_call_result_nothing_reads_becomes_a_clobber() {
-        let mut call = Insn::new(
-            0x10,
-            Some((0x10, 0x15)),
-            Some(semantics(Operation::Call, "call", vec![], vec![])),
-            vec![11, 12],
-            vec![],
-        );
-        call.clobbers = BTreeSet::from([RegId::ESI]);
-        let read = Insn::new(
-            0x15,
-            Some((0x15, 0x17)),
-            Some(semantics(Operation::Move, "mov", vec![held(20, 2)], vec![held(12, 2)])),
-            vec![20],
-            vec![12],
-        );
-        let (got, pins) = narrowed(&_one_block(vec![call, read]), &pins(&[(11, RegId::EAX), (12, RegId::ECX)]));
-        let after = &got.blocks[0].insns[0];
-        assert_eq!(after.defines, vec![12], "the dead result survived: {:?}", after.defines);
-        assert!(!pins.contains_key(&11), "its pin survived: {pins:?}");
-        assert_eq!(pins.get(&12), Some(&RegId::ECX), "the read result lost its pin");
-        assert!(after.clobbers.contains(&RegId::EAX), "the register it destroyed was forgotten: {:?}", after.clobbers);
-        assert!(after.clobbers.contains(&RegId::ESI), "an existing clobber was dropped");
-    }
-
-    #[test]
     fn test_conflicting_hard_register_assignments_are_unplaceable_not_spills() {
         let body = _one_block(vec![_mov(1, 1, 0), _mov(2, 2, 2), _shl(1, 2, 4)]);
         let message = unplaced(allocated(&body, Some(&pins(&[(1, RegId::DX), (2, RegId::DX)]))));
@@ -6332,14 +6254,13 @@ mod tests {
         let mut call =
             Insn::new(0, Some((0, 3)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![1], vec![]);
         call.delivers = vec![(Held { value: 1, width: 2 }, RegId::AX)];
-        let (narrow, pinned) = narrowed(&body_of("dead result", 0, vec![call]), &pins(&[(1, RegId::EAX)]));
-        let (lowered, _fixed) =
-            constrain::constrained(&narrow, Some(&pinned), &crate::backend::classes::RegisterClasses::m16());
+        let (lowered, _fixed) = constrain::constrained(
+            &body_of("dead result", 0, vec![call]),
+            Some(&pins(&[(1, RegId::EAX)])),
+            &crate::backend::classes::RegisterClasses::m16(),
+        );
         let insns = lowered.insns();
-        assert_eq!(insns.len(), 1);
-        assert!(insns[0].defines.is_empty());
-        assert!(insns[0].delivers.is_empty());
-        assert!(insns[0].clobbers.contains(&RegId::EAX));
+        assert_eq!(insns.len(), 1, "a copy was made of a result nothing reads");
     }
 
     // --------------------------------------------- tests/test_lir_verify.py

@@ -19,7 +19,6 @@
 //!   |                         immediate, depths, frontiers, irreducible
 //!   +- loops: Vec<Loop>       from llrm_mir Loops, ids not BlockIds,
 //!   |                         inner loops first
-//!   +- reaching: Reaching     blocks with a path to a block, found on ask
 //!                             and cached
 //! ```
 //!
@@ -87,7 +86,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::domtree_updater::{DomTreeUpdater, UpdateStrategy};
 use llrm_mir::loopinfo::LoopInfo;
@@ -554,66 +552,6 @@ pub fn natural(
 pub struct Shape {
     pub dominance: Dominance,
     pub loops: Vec<Loop>,
-    pub reaching: Reaching,
-}
-
-/// Which blocks have a path to a given block, found for a block when asked and
-/// kept: a pass that asks of few blocks pays for few, and one that asks of
-/// every block for a closure over the graph once, in bits. The graph is read
-/// from the function at the first ask, so a shape nobody asks of pays nothing.
-#[derive(Clone, Debug, Default)]
-pub struct Reaching {
-    predecessors: std::cell::OnceCell<Rc<IdMap<BlockId, Vec<BlockId>>>>,
-    found: Rc<RefCell<IdMap<BlockId, Rc<IdSet<BlockId>>>>>,
-}
-
-/// What it holds is a cache of its function's graph, which the rest of the
-/// shape already says: two shapes of one function are equal whatever was asked.
-impl PartialEq for Reaching {
-    fn eq(
-        &self,
-        _: &Self,
-    ) -> bool {
-        true
-    }
-}
-
-impl Reaching {
-    /// The blocks of `function` with a path to `to`, itself included;
-    /// `function` is the one this shape is of.
-    pub fn to(
-        &self,
-        function: &Function,
-        to: BlockId,
-    ) -> Rc<IdSet<BlockId>> {
-        if let Some(found) = self.found.borrow().get(&to) {
-            return Rc::clone(found);
-        }
-        let predecessors = self
-            .predecessors
-            .get_or_init(
-                || {
-                    let mut predecessors = IdMap::<BlockId, Vec<BlockId>>::new();
-                    for &block in function.layout() {
-                        predecessors.insert(block, function.predecessors(block).into());
-                    }
-                    Rc::new(predecessors)
-                },
-            );
-        let mut reaching = IdSet::new();
-        reaching.insert(to);
-        let mut work = vec![to];
-        while let Some(at) = work.pop() {
-            for &parent in predecessors.get(&at).into_iter().flatten() {
-                if reaching.insert(parent) {
-                    work.push(parent);
-                }
-            }
-        }
-        let reaching = Rc::new(reaching);
-        self.found.borrow_mut().insert(to, Rc::clone(&reaching));
-        reaching
-    }
 }
 
 thread_local! {
@@ -626,6 +564,13 @@ pub fn shapes_derived() -> usize {
     DERIVED.with(std::cell::Cell::get)
 }
 
+/// The natural loops of `function`, outermost last: what a pass that reads only
+/// the loops asks, with no `Shape` to hold.
+pub fn loops_of(function: &Function) -> Vec<Loop> {
+    let dominance = Dominance::of(function);
+    natural(function, &LoopInfo::analyze(function, || dominance.tree(function)))
+}
+
 impl Shape {
     /// Of a body no manager holds.
     pub fn of(function: &Function) -> Self {
@@ -633,7 +578,7 @@ impl Shape {
         llrm_mir::counts::bump(llrm_mir::counts::Event::Shapes);
         let dominance = Dominance::of(function);
         let loops = natural(function, &LoopInfo::analyze(function, || dominance.tree(function)));
-        Self { dominance, loops, reaching: Reaching::default() }
+        Self { dominance, loops }
     }
 }
 
@@ -650,7 +595,7 @@ impl Analysis for Shape {
         DERIVED.with(|count| count.set(count.get() + 1));
         let dominance = Dominance::new(analyses.get::<Dominators>(context, layout, function));
         let loops = natural(function, &analyses.get::<Loops>(context, layout, function));
-        Shape { dominance, loops, reaching: Reaching::default() }
+        Shape { dominance, loops }
     }
 
     const READS_OUTER: bool = false;
@@ -854,23 +799,20 @@ dead:
         );
         let function = function(&module, "f");
         let shape = Shape::of(function);
+        let tree = shape.dominance.tree(function);
         let at = |name: &str| {
             function.layout().iter().copied().find(|&b| function.block(b).name.as_deref() == Some(name)).unwrap()
         };
-        let names = |reaching: &IdSet<BlockId>| {
+        let reaching = |to: &str| {
             function
                 .layout()
                 .iter()
-                .filter(|&&b| reaching.contains(&b))
+                .filter(|&&b| crate::reachability::is_potentially_reachable_blocks(function, b, at(to), Some(tree)))
                 .map(|&b| function.block(b).name.clone().unwrap())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(names(&shape.reaching.to(function, at("b1"))), ["b0", "b1"]);
-        assert_eq!(names(&shape.reaching.to(function, at("b3"))), ["b0", "b1", "b2", "b3"]);
-        assert_eq!(names(&shape.reaching.to(function, at("b4"))), ["b0", "b1", "b2", "b3", "b4", "dead"]);
-        assert!(
-            std::rc::Rc::ptr_eq(&shape.reaching.to(function, at("b3")), &shape.reaching.to(function, at("b3"))),
-            "asked twice, found once"
-        );
+        assert_eq!(reaching("b1"), ["b0", "b1"]);
+        assert_eq!(reaching("b3"), ["b0", "b1", "b2", "b3"]);
+        assert_eq!(reaching("b4"), ["b0", "b1", "b2", "b3", "b4", "dead"]);
     }
 }

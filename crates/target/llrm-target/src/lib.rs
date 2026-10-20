@@ -9,6 +9,7 @@ pub mod object;
 pub mod opcosts;
 pub mod os;
 pub mod registers;
+pub mod routines;
 pub mod runtime;
 pub mod timings;
 
@@ -348,6 +349,13 @@ pub trait Target {
         self.stack_slot_bytes()
     }
 
+    /// Whether every call finds the stack a multiple of `stack_alignment`
+    /// (`calling.toml`'s `aligned_calls`), not only those of a function
+    /// that holds a double.
+    fn aligned_calls(&self) -> bool {
+        false
+    }
+
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 
@@ -422,6 +430,34 @@ pub trait Target {
 
     /// The operand size an instruction has without a size prefix, in bytes.
     fn operand_bytes(&self) -> i64;
+
+    /// The inline routine that fills `cell`-byte cells through a huge pointer.
+    fn huge_fill_routine(
+        &self,
+        cell: u32,
+    ) -> Result<routines::HugeString, String>;
+
+    /// The inline routine that copies through huge pointers, upward or, `down`,
+    /// from the last byte.
+    fn huge_copy_routine(
+        &self,
+        down: bool,
+    ) -> Result<routines::HugeString, String>;
+
+    /// The inline 64-bit divide, signed or not, by a divisor of two dwords or
+    /// one.
+    fn divide_routine(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+    ) -> Result<routines::Divide, String>;
+
+    /// The width a float value of `bytes` bytes is held at: x87 holds every one
+    /// as its stack register, a vector file as its own size.
+    fn float_width(
+        &self,
+        bytes: u32,
+    ) -> u32;
 
     /// Bytes of a two-register operation on `width`-byte registers.
     fn register_op_bytes(
