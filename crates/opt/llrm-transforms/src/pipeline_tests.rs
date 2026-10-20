@@ -2502,6 +2502,7 @@ b3:
     .unwrap();
     let text = llrm_mir::print::module(&module);
     assert!(text.contains("llvm.memmove"), "{text}");
+}
 
 /// A four-trip loop with no closed form, through the LLVM order: its text, and
 /// whether a loop phi is left.
