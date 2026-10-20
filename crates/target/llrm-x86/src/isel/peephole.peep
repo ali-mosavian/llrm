@@ -76,7 +76,7 @@ rule unsigned_extensions
             anchor @1 {defines: [], uses: []}
 
 
-// `movzx r,m8` as `xor r,r; mov rl,m` where the target prices the pair lower (the 486: two clocks
+// Priced forms of a zero extension. `movzx r,m8` as `xor r,r; mov rl,m` where the target prices the pair lower (the 486: two clocks
 // for three). The xor sets the flags, so none may be live, and r must not be in the address.
 group zeroed_loads
     walk window
@@ -86,6 +86,23 @@ rule zeroed_load
     when    clears_before_byte_load(), free(@0, widening), width_in(src, [8]), byte_loadable(d, src),
             flags_dead(@0)
     rewrite @0: xor d, d, d ; @0: mov low_byte(d), src
+
+// `and r, 255` and `and r, 65535` with the flags dead are the zero extension of
+// the low byte or word, as X86's patterns select them (`(and GR32:$src1, 0xffff)`
+// and `0xff`, X86InstrCompiler.td L1772 and L1775 at d1106deb71cc; the GR16 `0xff`
+// pattern at L1778 is not translated): the combiner makes `zext(trunc x)` that
+// `and`. Where the code is not for size, only if the target prices the
+// extension no higher.
+rule byte_mask
+    match   and d:reg, d, #255
+    when    masks_by_extension(), width_in(d, [32]), flags_dead(@0), encodable($0)
+    rewrite @0: movzx d, low_byte(d)
+
+rule word_mask
+    match   and d:reg, d, #65535
+    when    masks_by_extension(), width_in(d, [32]), flags_dead(@0), encodable($0)
+    rewrite @0: movzx d, low_word(d)
+
 
 // Materialize a call's literal once when both stack and register need it.
 group pushed_constants
@@ -239,7 +256,6 @@ rule decrement_by_add
     match   add d:reg, d, #-1
     when    dead(@0, CF), no_longer(@0, $0)
     rewrite @0: dec d, d
-
 
 // A borrow spread to a mask: `0 - 0 - CF` is `r - r - CF`, flags and all,
 // and needs no zero. The mov between keeps the borrow.
