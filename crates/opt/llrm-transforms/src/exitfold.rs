@@ -902,6 +902,12 @@ fn _hoisted(
     found
 }
 
+/// Read once; `LLRM_NO_EXITFOLD` turns the whole step off (the translated
+/// `optimizeLoopExits` and `predicateLoopExits` stand in for it).
+pub fn enabled() -> bool {
+    !llrm_support::env_flag!("LLRM_NO_EXITFOLD")
+}
+
 /// Read once: the exits their counts decide are found by ScalarEvolution's
 /// exit counts (LLVM's `optimizeLoopExits`), not by `induction::exits`;
 /// `LLRM_NO_SCEV_EXITFOLD` turns that off.
