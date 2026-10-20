@@ -272,6 +272,10 @@ mod tests {
             // `widenWithVariantUse`) to extend its operands, and `copyIRFlags`
             // gives the wide clone the narrow flags it proved.
             "widen.rs",
+            // SimplifyIndVar.cpp's `strengthenOverflowingOperation` gives an
+            // add, sub or mul the `nuw`/`nsw` SCEV proves for it; it never
+            // drops one.
+            "simplifyindvar.rs",
             // ScalarEvolution.cpp's `getStrengthenedNoWrapFlagsFromBinOp`
             // reads the flags the operation has and adds the ones the
             // no-wrap proofs give (`willNotOverflow`); it never drops one.

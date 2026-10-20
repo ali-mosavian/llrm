@@ -1,6 +1,5 @@
-//! Data dependence distances over a two-deep loop nest, the outer unroll
-//! factor that unroll-and-jam may use for them, and whether two loops may be
-//! fused.
+//! Data dependence distances over a two-deep loop nest, and whether its two
+//! loops may swap.
 //!
 //! # How it works
 //! An `Access` is one memory reference of the nest body: an object, a list of
@@ -17,47 +16,11 @@
 //! `inner_trips` where known. A reference no subscript moves with in the inner
 //! loop repeats at `(x, 0)` and, for `x = 0`, `(0, 1)`.
 //!
-//! `factor(accesses, max_unroll, min_percent, inner_trips)` looks at every pair
-//! of accesses. Unrolling the outer loop by N turns `(x, y)` into `(x / N, y)`,
-//! so a vector bounds N when it would reorder the pair in the fused loop:
-//!
-//! ```text
-//!  for i                     for i step N
-//!    for j        ==>          for j
-//!      S(i, j)                   S(i,j) S(i+1,j) ... S(i+N-1,j)
-//!
-//!  vector (x, y) ok if x >= N, or y > 0; y = 0 with x < N needs two reads or
-//!  two accesses that both vary with j; else N is capped at x (y < 0).
-//! ```
-//!
-//! Two reads never order anything; an `Unknown` pair with a write gives
-//! `unroll = 0`. `profit` is one more than the largest outer distance at which
-//! a reference repeats at `y = 0` (copies that make it go away), `removed`
-//! counts such vectors, and the factor is refused (`profit = 1`) if
-//! `removed * 100 / accesses` is below `min_percent`. `min_percent = 0` applies
-//! always, with at least 2. The result is `min(unroll, profit, max_unroll)`.
-//!
-//! `fusable(first, second, trips)` asks it of two loops of the same trip
-//! count, `first` run before `second`: fused, iteration `i` of `second` runs
-//! before iteration `i + 1` of `first`, so a pair that touches the same bytes
-//! with the later loop's access at an earlier iteration than the earlier
-//! loop's is reordered. Both loops' accesses are `inner` subscripts. For a
-//! pair with one write, on one object, of one coefficient `c` and the same
-//! symbols, the accesses at `a + c * i` (width `w`) and `b + c * j` (width `v`)
-//! overlap where `b - a - w < c * (i - j) < b - a + v`; the pair prevents
-//! fusion when some `i - j` in `1..trips` does (`trips` unknown: any). A pair
-//! with other coefficients or symbols is `Unknown` and prevents it.
-//!
-//! `meetings(first, second, trips)` is the same question of two accesses of one
-//! body, `first` earlier in it: whether they meet with `first` at or before
-//! `second` (`forward`, `i - j` in `1 - trips..=0`) or after it (`backward`,
-//! `1..trips`). Loop distribution puts the two in one loop where both hold and
-//! in two, in body order, where only `forward` does.
-//!
-//! ```text
-//!   loop 0: a[i] = ..        loop 1: .. = a[i + 1]     i - j = 1: prevents
-//!   loop 0: a[i] = ..        loop 1: .. = a[i - 1]     i - j = -1: allows
-//! ```
+//! `interchangeable(accesses, outer_trips, inner_trips)` asks whether the loops
+//! may swap: a vector `(x, y)` with `x > 0` and `y < 0` becomes `(y, x)`, the
+//! later access first, so none may exist for a pair with a write. `walk_cost`
+//! prices a walk by the bytes an access steps in the loop that runs innermost,
+//! at most a cache line, none where it does not move.
 //!
 //! # Example
 //! The 100 passes of `px[j] = px[j] + vx[j]` (bench/particle). The nest has no
@@ -73,33 +36,14 @@
 //! | Query | Result |
 //! | --- | --- |
 //! | `distances(nest[0], nest[1], 4, Some(101))` | `Vectors([(0, 0), (1, 0)])` |
-//! | `factor(nest, 4, 1, Some(101))` | `unroll = 2`, `profit = 2` |
 //!
-//! The write of `px[j]` is read again by the next outer pass at `(1, 0)`, so
-//! two copies make a reference go away.
-//!
-//! From unit test
-//! `an_array_walked_again_by_each_outer_pass_allows_a_jam_by_two` in
-//! `dependence_tests.rs`.
-//!
-//! `interchangeable(accesses, outer_trips, inner_trips)` asks whether the loops
-//! may swap: a vector `(x, y)` with `x > 0` and `y < 0` becomes `(y, x)`, the
-//! later access first, so none may exist for a pair with a write. `walk_cost`
-//! prices a walk by the bytes an access steps in the loop that runs innermost,
-//! at most a cache line, none where it does not move.
+//! The write of `px[j]` is read again by the next outer pass at `(1, 0)`.
 //!
 //! # Provides
-//! `distances`, `factor`, `fusable`, `meetings`, `interchangeable`,
-//! `walk_cost`. Consumer: `loopinterchange`.
+//! `distances`, `interchangeable`, `walk_cost`. Consumer: `loopinterchange`.
 //!
 //! # See also
-//! gcc `tree-data-ref.cc` distance vectors read by `adjust_unroll_factor`
-//! ([`gimple-loop-jam.cc:403`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/gimple-loop-jam.cc#L403)),
-//! `tree_loop_unroll_and_jam`
-//! ([`gimple-loop-jam.cc:504`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/gimple-loop-jam.cc#L504));
-//! LLVM `DependenceAnalysis` and `LoopUnrollAndJam`; `fusable` is LLVM
-//! `LoopFuse`'s `dependencesAllowFusion`
-//! ([`LoopFuse.cpp:1178`](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/llvm/lib/Transforms/Scalar/LoopFuse.cpp#L1178)).
+//! gcc `tree-data-ref.cc` distance vectors; LLVM `DependenceAnalysis`.
 
 /// One subscript of an access, in elements or bytes: `constant + outer * i +
 /// inner * j`, `i` and `j` the iteration numbers of the outer and inner loop.
@@ -263,147 +207,6 @@ pub fn walk_cost(
             step.abs().min(line)
         })
         .sum()
-}
-
-/// What a nest allows of an outer unroll that fuses the inner copies.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Factor {
-    /// The most copies the dependences allow; below 2, none.
-    pub unroll: u32,
-    /// The copies that make a reference go away, 1 if none does.
-    pub profit: u32,
-    /// Pairs whose later access is the earlier one's repeat in the next outer
-    /// iterations.
-    pub removed: u32,
-}
-
-/// The outer unroll factor for `accesses`, all those of the nest: gcc's
-/// `tree_loop_unroll_and_jam` over `adjust_unroll_factor`
-/// ([`gimple-loop-jam.cc:504`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/gimple-loop-jam.cc#L504)),
-/// capped by `max_unroll` and refused where fewer than `min_percent` percent
-/// of the accesses go away (`min_percent` 0 applies it always, with 2).
-/// `inner_trips` bounds the inner distances where the inner loop's count is
-/// known.
-pub fn factor(
-    accesses: &[Access],
-    max_unroll: u32,
-    min_percent: u32,
-    inner_trips: Option<i64>,
-) -> Factor {
-    let mut unroll = u32::MAX;
-    let (mut profit, mut removed) = (1u32, 0u32);
-    for (at, one) in accesses.iter().enumerate() {
-        for other in &accesses[at + 1..] {
-            // Two reads never order anything.
-            let vectors = match distances(one, other, i64::from(max_unroll), inner_trips) {
-                Distances::Independent => continue,
-                Distances::Unknown if !one.write && !other.write => continue,
-                Distances::Unknown => return Factor { unroll: 0, profit, removed },
-                Distances::Vectors(vectors) => vectors,
-            };
-            for (x, y) in vectors {
-                let x = x as u32;
-                // `(x, y)` becomes `(x / N, y)` under an unroll by N: valid if
-                // x >= N, or y is positive, or y is zero and x is positive
-                // and nothing is invariant in the inner loop.
-                if x >= unroll {
-                } else if y == 0 {
-                    // (x, 0), x < N: the copies meet in one iteration of the
-                    // fused loop. Fine for two reads, and for two accesses
-                    // that both move with the inner loop; any other order of
-                    // them is not kept by the fusion.
-                    if !(!one.write && !other.write) && !(one.varies_inner() && other.varies_inner()) {
-                        unroll = x;
-                    }
-                } else if y > 0 {
-                } else {
-                    unroll = x;
-                }
-                if y == 0 {
-                    profit = profit.max(x + 1);
-                    removed += 1;
-                }
-            }
-        }
-    }
-    let profitable = if min_percent == 0 {
-        profit = profit.max(2);
-        true
-    } else {
-        removed * 100 / accesses.len().max(1) as u32 >= min_percent
-    };
-    if !profitable {
-        profit = 1;
-    }
-    Factor { unroll: unroll.min(profit).min(max_unroll), profit, removed }
-}
-
-/// Whether the loop of `second`, run after the loop of `first` and of the
-/// same `trips`, may run in the same iterations as it: no pair with a write
-/// touches bytes at an earlier iteration of `second` than of `first`.
-pub fn fusable(
-    first: &[Access],
-    second: &[Access],
-    trips: Option<i64>,
-) -> bool {
-    first
-        .iter()
-        .flat_map(|one| second.iter().map(move |other| (one, other)))
-        .filter(|(one, other)| one.write || other.write)
-        .all(|(one, other)| !meetings(one, other, trips).backward)
-}
-
-/// The ways two accesses of one loop's body meet.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Meetings {
-    /// Some trip of `first` is at or before a trip of `second` that touches
-    /// the same bytes: `first` must come before `second` where they are told
-    /// apart.
-    pub forward: bool,
-    /// Some trip of `first` is after a trip of `second` that touches the same
-    /// bytes: `second` must come before `first`.
-    pub backward: bool,
-}
-
-/// How `first`, earlier in the body, and `second`, later in it (or the same
-/// access of a loop run before the other's, as `fusable` asks), meet over the
-/// loop's `trips`. Both ways where they are on one object and not known
-/// apart, neither where they are on two. Told apart, a loop that runs them as
-/// two loops in this order is right only if no pair meets backward; one that
-/// runs `second` first, only if none meets forward.
-pub fn meetings(
-    first: &Access,
-    second: &Access,
-    trips: Option<i64>,
-) -> Meetings {
-    let (some, none) = (Meetings { forward: true, backward: true }, Meetings { forward: false, backward: false });
-    if first.object != second.object {
-        return none;
-    }
-    let ([one], [other]) = (&first.subscripts[..], &second.subscripts[..]) else { return some };
-    if first.symbols != second.symbols || one.inner != other.inner || one.outer != 0 || other.outer != 0 {
-        return some;
-    }
-    // `first` at trip `i` and `second` at `j` are `step * (i - j)` apart plus
-    // the constants' difference; the trips are `0..trips`.
-    let step = i128::from(one.inner);
-    let latest = trips.map_or(1 << 40, |trips| i128::from(trips) - 1);
-    let below = i128::from(other.constant) - i128::from(one.constant) - i128::from(first.width);
-    let above = i128::from(other.constant) - i128::from(one.constant) + i128::from(second.width);
-    let meet = |from: i128, to: i128| {
-        if from > to {
-            return false;
-        }
-        if step == 0 {
-            return below < 0 && 0 < above;
-        }
-        // `|step| * e` in `(below, above)` for the least `e` in range, where
-        // `e` is `i - j` (rising step) or `j - i` (falling).
-        let (size, low, high) = if step > 0 { (step, from, to) } else { (-step, -to, -from) };
-        let least = low.max(below.div_euclid(size) + 1);
-        least <= high && size * least < above
-    };
-    Meetings { forward: meet(-latest, 0), backward: meet(1, latest) }
 }
 
 #[cfg(test)]

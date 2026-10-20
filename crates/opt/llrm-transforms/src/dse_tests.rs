@@ -4,7 +4,7 @@
 use llrm_analysis::manager::Summaries;
 use llrm_mir::passes::PassManager;
 
-use super::Dse;
+use crate::deadstore::DeadStoreElimination as Dse;
 use crate::promote::Promote;
 use crate::testing::{parsed, printed, results};
 
@@ -157,18 +157,23 @@ fn test_dse_keeps_an_observed_store() {
 }
 
 /// Without `Summaries` required the pass runs, as an LLVM function pass
-/// does without a cached outer result: every call unknown, so less
-/// precise. It panicked.
+/// does without a cached outer result. It panicked. What a callee does is its
+/// stated `memory(...)`: with it the call leaves `@g` alone and the first store
+/// goes, without it the call is unknown and the store stays.
 #[test]
 fn a_bare_pass_manager_takes_every_call_for_unknown() {
-    let module = crate::testing::parsed(&format!(
-        "{}{}{}",
-        llrm_analysis::testing::DOS,
-        crate::testing::WRITES_ITS_ARGUMENT,
-        "define i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  call void @h(ptr @k)\n  store i16 %x, ptr @g\n  %v = load i16, ptr @g\n  ret i16 %v\n}\n"
-    ));
-    let precise = crate::testing::summarized(&module, Dse, true, &[&[0], &[5]]);
-    let bare = crate::testing::summarized(&module, Dse, false, &[&[0], &[5]]);
+    let text = |h: &str| {
+        format!(
+            "{}{}{}",
+            llrm_analysis::testing::DOS,
+            crate::testing::WRITES_ITS_ARGUMENT.replace("define void @h(ptr %s) {", h),
+            "define i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  call void @h(ptr @k)\n  store i16 %x, ptr @g\n  %v = load i16, ptr @g\n  ret i16 %v\n}\n"
+        )
+    };
+    let stated = crate::testing::parsed(&text("define void @h(ptr %s) memory(argmem: write) {"));
+    let unstated = crate::testing::parsed(&text("define void @h(ptr %s) {"));
+    let precise = crate::testing::summarized(&stated, Dse, true, &[&[0], &[5]]);
+    let bare = crate::testing::summarized(&unstated, Dse, false, &[&[0], &[5]]);
     assert!(precise.matches("store").count() == 1 && bare.matches("store").count() == 2, "{precise}\n{bare}");
 }
 
@@ -509,66 +514,55 @@ b0:
     assert!(after.contains("store i64"), "{after}");
 }
 
-/// Every cell a function stores to was compared with every other, two ways
-/// over: quadratic in the cells, 590 Minstr of GORILLA's `mir dse` at -O1.
-/// A cell is compared with the cells of the buckets it reaches: a slot nothing
-/// takes the address of is in its own.
+/// Forty slots stored twice: the first store of each goes, and the second with
+/// them (nothing reads a slot).
 #[test]
-fn a_cell_is_compared_with_the_cells_that_may_share_its_bytes_not_with_every_cell() {
+fn the_slots_stored_twice_are_all_dead() {
     let cells = 40;
     let slots: String = (0..cells).map(|i| format!("  %s{i} = alloca i16\n")).collect();
     let stores: String = (0..cells).map(|i| format!("  store i16 {i}, ptr %s{i}\n")).collect();
-    let before = llrm_analysis::avail::related_pairs();
     let after = dropped(&format!("define i16 @f() {{\nb0:\n{slots}{stores}{stores}  ret i16 0\n}}\n"));
-    let asked = llrm_analysis::avail::related_pairs() - before;
     assert_eq!(after.matches("store").count(), 0, "every slot is dead: {after}");
-    assert!(asked <= 4 * cells, "{asked} pairs asked for {cells} cells");
 }
 
-/// A block with many successors took each cell its first successor overwrites
-/// through every other successor's set, one by one: cells x successors (cubic
-/// on a `switch` of N cases, `cases` 512: `mir dse` 3685 Minstr). The cells a
-/// successor's set lacks are the ones asked.
+/// A slot stored in one arm of a `switch` and read nowhere is dead.
 #[test]
-fn a_switch_asks_only_the_cells_its_arms_differ_in() {
+fn the_slots_stored_in_the_arms_of_a_switch_are_all_dead() {
     let arms = 30;
     let slots: String = (0..arms).map(|i| format!("  %s{i} = alloca i16\n")).collect();
     let cases: String = (0..arms).map(|i| format!("    i16 {i}, label %a{i}\n")).collect();
     let bodies: String = (0..arms).map(|i| format!("a{i}:\n  store i16 {i}, ptr %s{i}\n  br label %j\n\n")).collect();
-    let before = llrm_analysis::avail::alike_asks();
     let after = dropped(&format!(
         "define i16 @f(i16 %x) {{\nb0:\n{slots}  switch i16 %x, label %j [\n{cases}  ]\n\n{bodies}j:\n  ret i16 0\n}}\n"
     ));
-    let asked = llrm_analysis::avail::alike_asks() - before;
     assert_eq!(after.matches("store").count(), 0, "every slot is dead: {after}");
-    assert!(asked <= 2 * arms, "{asked} asks for a switch of {arms} arms");
 }
 
 /// The cells of one array were compared in pairs, every cell with all of its
 /// object's: `joins` 256, `mir dse` 1,270 Minstr and 3.8x for twice the size. A
-/// cell at fixed bytes is compared with the cells whose bytes meet its own.
+/// walk now stops at `MemorySSAUpwardsStepLimit` (90, LLVM's), so the cost is
+/// linear; stores that far apart are not paired, as in LLVM.
 #[test]
-fn a_cell_of_an_array_is_compared_with_the_cells_that_meet_its_bytes_not_with_the_whole_array() {
-    let cells = 200;
-    let stores: String =
-        (0..cells).map(|i| format!("  store i16 {i}, ptr getelementptr (i8, ptr @arr, i16 {})\n", 2 * i)).collect();
-    let before = llrm_analysis::avail::related_pairs();
-    let after = dropped(&format!(
-        "@arr = global [400 x i8] zeroinitializer\n\ndefine i16 @f() {{\nb0:\n{stores}{stores}  ret i16 0\n}}\n"
-    ));
-    let asked = llrm_analysis::avail::related_pairs() - before;
-    assert_eq!(after.matches("store").count(), cells, "the first of each pair of stores is dead: {after}");
-    assert!(asked <= 8 * cells, "{asked} pairs asked for {cells} cells of one array");
+fn a_walk_over_the_cells_of_one_array_stops_at_the_step_limit() {
+    let stores = |cells: usize| -> String {
+        (0..cells).map(|i| format!("  store i16 {i}, ptr getelementptr (i8, ptr @arr, i16 {})\n", 2 * i)).collect()
+    };
+    let kept = |cells: usize| {
+        let after = promoted(&format!(
+            "@arr = global [400 x i8] zeroinitializer\n\ndefine i16 @f() {{\nb0:\n{}{}  ret i16 0\n}}\n",
+            stores(cells),
+            stores(cells)
+        ));
+        after.matches("store").count()
+    };
+    assert_eq!(kept(40), 40, "the first of each pair of stores is dead, 40 apart");
+    assert!(kept(200) > 200, "pairs 200 apart are past the step limit");
 }
 
-/// The cells of one array at variable indices (`a[i]`, `a[j]`, `a[hi]` of each
-/// of N unrolled partition loops) were compared in pairs, all with all, though
-/// two of them can only be related when `placed` places one against the other
-/// and no two share a base and a constant offset: `unrolled` 128, `mir dse`
-/// 28,484 Minstr and the slope 2.0. A cell is compared with the cells of its
-/// frame or base pointer whose bytes meet its own.
+/// Two stores through the same pointer at a variable index of one array: the
+/// first is dead, though no cell is placed against another.
 #[test]
-fn a_cell_at_a_variable_index_is_compared_with_no_cell_that_cannot_be_placed_against_it() {
+fn the_first_of_two_stores_at_a_variable_index_is_dead() {
     let cells = 40;
     let parameters: String = (0..cells).map(|i| format!("i32 %x{i}")).collect::<Vec<_>>().join(", ");
     let pointers: String =
@@ -578,16 +572,13 @@ fn a_cell_at_a_variable_index_is_compared_with_no_cell_that_cannot_be_placed_aga
         "@a = global [64 x i32] zeroinitializer\n\ndefine i32 @f({parameters}) {{\nb0:\n{pointers}{stores}{stores}  ret i32 0\n}}\n"
     );
     let mut module = parsed(&text);
-    let before = llrm_analysis::avail::related_pairs();
     let mut manager = PassManager::default();
     manager.verify_each = true;
     manager.require::<Summaries>();
     manager.add(Dse);
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let after = printed(&module);
-    let asked = llrm_analysis::avail::related_pairs() - before;
     assert_eq!(after.matches("store").count(), cells, "the first of each pair of stores is dead: {after}");
-    assert!(asked <= 4 * cells, "{asked} pairs asked for {cells} cells of one base at variable indices");
 }
 
 /// Only a store, or a call that fills bytes, can be dead: a body with neither
@@ -607,82 +598,6 @@ fn test_a_body_with_no_store_asks_nothing() {
     let asked: Vec<_> =
         counts.iter().filter(|(name, ..)| matches!(*name, "points-to" | "published" | "accesses")).collect();
     assert!(asked.is_empty(), "{asked:?}");
-}
-
-/// A store at each of N offsets of one array (past the cells a body is indexed
-/// at), and a load at another between them: each access was found to reach
-/// every one of the N cells, N^2 in all. On a ladder of 1,600 such statements
-/// `dse` took 1,898 M instructions, 3.9x for every doubling.
-#[test]
-fn a_pointer_access_reaches_only_the_cells_its_span_covers() {
-    let n = 300;
-    let mut text = String::from("define void @f(ptr %p, i32 %v) {\nb0:\n");
-    for i in 0..n {
-        text += &format!("  %s{i} = getelementptr inbounds i8, ptr %p, i32 {}\n  store i32 %v, ptr %s{i}\n", 4 * i);
-        text += &format!(
-            "  %l{i} = getelementptr inbounds i8, ptr %p, i32 {}\n  %x{i} = load i32, ptr %l{i}\n",
-            4 * ((i * 7 + 3) % n)
-        );
-    }
-    text += "  ret void\n}\n";
-    llrm_analysis::avail::count_reached_cells();
-    let before = llrm_analysis::avail::reached_cells();
-    crate::testing::managed(&mut parsed(&text), Dse);
-    let reached = llrm_analysis::avail::reached_cells() - before;
-    assert!(reached <= 3 * n as usize, "{n} stores and {n} loads reached {reached} cells in all");
-}
-
-/// N stores to one address, each through a pointer of its own: each store was a
-/// cell, and each cell was compared with the other N-1 for what covers it, N^2
-/// pairs. On a ladder of 1,600 statements `dse` took 818 M instructions, 4.0x
-/// for every doubling.
-#[test]
-fn the_stores_to_one_address_are_compared_as_one_cell() {
-    let n = 64;
-    let mut text = String::from("define void @f(ptr %p, i32 %v) {\nb0:\n");
-    for i in 0..n {
-        text += &format!("  %s{i} = getelementptr inbounds i8, ptr %p, i32 8\n  store i32 %v, ptr %s{i}\n");
-    }
-    text += "  ret void\n}\n";
-    let before = llrm_analysis::avail::related_pairs();
-    crate::testing::managed(&mut parsed(&text), Dse);
-    let asked = llrm_analysis::avail::related_pairs() - before;
-    assert!(asked <= 4 * n as usize, "{n} stores to one address asked {asked} pairs of cells");
-}
-
-/// A store to each of N distinct frame objects: N cells of one bucket each. The
-/// index of bytes built for them cost `dse` 7% on the `cases` shape at N=128
-/// (259 cells), where an access reaches one bucket and the pick finds it at
-/// once; it is for an object or frame of many buckets.
-#[test]
-fn a_body_of_many_small_objects_builds_no_index_of_bytes() {
-    let n = 300;
-    let mut text = String::from("define void @f(i32 %v) {\nb0:\n");
-    for i in 0..n {
-        text += &format!("  %p{i} = alloca i32\n  store i32 %v, ptr %p{i}\n");
-    }
-    text += "  ret void\n}\n";
-    let before = llrm_analysis::avail::indexed_solves();
-    crate::testing::managed(&mut parsed(&text), Dse);
-    assert_eq!(llrm_analysis::avail::indexed_solves() - before, 0, "{n} one-bucket cells were indexed");
-}
-
-/// 128 stores at distinct offsets of one array: the index of bytes built for
-/// them (at 64 cells) cost `dse` 6.5% on the `fjoins` ladder at N=128 (gate run
-/// 39071827031: "fjoins O2 mir dse" 62.513 M against 58.676 M), where the pick
-/// of buckets is 2 words a set; the index is for an object of hundreds of
-/// cells.
-#[test]
-fn an_array_of_128_cells_builds_no_index_of_bytes() {
-    let n = 128;
-    let mut text = String::from("define void @f(ptr %p, i32 %v) {\nb0:\n");
-    for i in 0..n {
-        text += &format!("  %s{i} = getelementptr inbounds i8, ptr %p, i32 {}\n  store i32 %v, ptr %s{i}\n", 4 * i);
-    }
-    text += "  ret void\n}\n";
-    let before = llrm_analysis::avail::indexed_solves();
-    crate::testing::managed(&mut parsed(&text), Dse);
-    assert_eq!(llrm_analysis::avail::indexed_solves() - before, 0, "{n} cells of one object were indexed");
 }
 
 /// A slot's address joined with a pointer no fact follows, then read through
@@ -718,4 +633,89 @@ b3:
 ",
     );
     assert!(after.contains("store i16 5, ptr %s"), "{after}");
+}
+
+/// `text` through Dse alone: @f printed. The interpreter does not run it.
+fn ran(text: &str) -> String {
+    let mut module = parsed(&format!(
+        "@g = global [64 x i8] zeroinitializer\ndeclare void @anything()\ndeclare void @setter() memory(write)\n\n{text}"
+    ));
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(Dse);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let after = printed(&module);
+    after[after.find("@f(").unwrap()..].to_owned()
+}
+
+const CELL: &str = "getelementptr (i8, ptr @g, i16 32)";
+const OTHER: &str = "getelementptr (i8, ptr @g, i16 48)";
+
+/// Which stores a later covering store makes dead, in one block: only one
+/// that nothing reads, that the later store covers whole.
+#[test]
+fn test_a_store_is_dead_only_when_overwritten_before_any_read() {
+    for (between, last, dead) in [
+        ("", "store i16 2, ptr CELL", true),
+        ("%x = load i16, ptr CELL", "store i16 2, ptr CELL", false),
+        ("%x = load i16, ptr %p", "store i16 2, ptr CELL", false),
+        ("", "store i32 2, ptr CELL", true),
+        // Merged into the later store: one `store i16 2`
+        // (LLVM `tryToMergePartialOverlappingStores`).
+        ("", "store i8 2, ptr CELL", true),
+        ("", "store i16 2, ptr getelementptr (i8, ptr @g, i16 33)", false),
+        // A volatile store writes only its own bytes.
+        ("store volatile i16 3, ptr OTHER", "store i16 2, ptr CELL", true),
+    ] {
+        let after = ran(&format!(
+            "define void @f(ptr %p) {{\nb0:\n  store i16 1, ptr CELL\n  {between}\n  {last}\n  ret void\n}}\n"
+        )
+        .replace("CELL", CELL)
+        .replace("OTHER", OTHER));
+        assert_eq!(!after.contains("store i16 1,"), dead, "{between} / {last}: {after}");
+    }
+}
+
+/// Across a branch the cell must be overwritten on every path.
+#[test]
+fn test_a_store_is_dead_across_a_branch_only_when_every_path_overwrites_it() {
+    for (right, dead) in [("store i16 3, ptr CELL", true), ("%y = load i16, ptr CELL", false), ("", false)] {
+        let after = ran(&format!(
+            "define void @f(i1 %c) {{\nb0:\n  store i16 1, ptr CELL\n  br i1 %c, label %b1, label %b2\n\nb1:\n  store i16 2, ptr CELL\n  ret void\n\nb2:\n  {right}\n  ret void\n}}\n"
+        )
+        .replace("CELL", CELL));
+        assert_eq!(!after.contains("store i16 1,"), dead, "{right}: {after}");
+    }
+}
+
+/// A store in a loop is read after the loop exits: never dead.
+#[test]
+fn test_a_loop_store_read_after_the_exit_is_live() {
+    let after = ran(&format!(
+        "define i16 @f(i1 %c, i16 %v) {{\nb0:\n  br label %b1\n\nb1:\n  store i16 %v, ptr {CELL}\n  br i1 %c, label %b1, label %b2\n\nb2:\n  %x = load i16, ptr {CELL}\n  ret i16 %x\n}}\n"
+    ));
+    assert!(after.contains("store i16 %v"), "{after}");
+}
+
+/// A call that may read keeps the store before it; a `memory(write)` call
+/// does not read it.
+#[test]
+fn test_a_reading_call_makes_a_prior_store_observable() {
+    for (callee, dead) in [("anything", false), ("setter", true)] {
+        let after = ran(&format!(
+            "define void @f(i16 %v) {{\nb0:\n  store i16 %v, ptr {CELL}\n  call void @{callee}()\n  store i16 %v, ptr {CELL}\n  ret void\n}}\n"
+        ));
+        assert_eq!(after.matches("store").count(), if dead { 1 } else { 2 }, "{callee}: {after}");
+    }
+}
+
+/// procs' TWICE kept two dead frame stores once its return read through an
+/// unknown pointer: a slot whose address is never taken is not read by it.
+#[test]
+fn test_an_unknown_pointer_does_not_observe_a_private_cell() {
+    let after = ran(
+        "define i16 @f(ptr %p) {\nb0:\n  %s = alloca i16\n  store i16 1, ptr %s\n  %x = load i16, ptr %p\n  ret i16 %x\n}\n",
+    );
+    assert!(!after.contains("store"), "{after}");
 }

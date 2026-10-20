@@ -72,7 +72,10 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("allocation-search", |options, on| options.search = on),
     ("allocation-routes", |options, on| options.routes = on),
     ("allocation-search-all", |options, on| options.exhaustive = on),
-    ("unroll-loops", |options, on| options.unroll = on),
+    ("unroll-loops", |options, on| {
+        options.unroll = on;
+        options.loop_unrolling = on;
+    }),
     ("peel-loops", |options, on| options.peel = on),
     ("inline-functions-called-once", |options, on| options.inline.last = on),
     ("inline-functions", |options, on| {

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:7ca2b5dcc91a15da4c6e26fdb137996bb5a6961325c3343e3bf8fa5851164529 -->
+<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:4ac137de4c0ff081e55fcf667bebc380f256ede770dffa47dc61f07c0f15a1e3 -->
 
 # machinesink
 
@@ -60,6 +60,16 @@ costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
 constant (195 bytes against 190 with the edge broken). Exit, decided
 2026-10-22 with jumps' block-by-block diff: a placement rule jumps names,
 or sinking with shrink-wrapping (lir-cleanup-port for the sinking half).
+
+DEVIATE M6 (no number): an instruction that reads or writes any physical
+register stays, where `FindSuccToSinkTo` lets a physical def marked dead
+through (and a use of a constant register). Effect: none seen, 0 sinks
+missed over d_faces and the 820-object corpus at -O2 (counted: no
+instruction that passes `safe_to_move` has a physical write and no read).
+The flags are the pin's rule in full: a def moves only if dead (read by no
+later instruction of its block and no successor), and not into a block that
+reads them (`SinkInstruction`'s zombie check).
+Exit: honor a dead implicit def when LIR marks one.
 
 DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
 (`SinkInstsIntoCycle`, off by default), no debug-value handling (an

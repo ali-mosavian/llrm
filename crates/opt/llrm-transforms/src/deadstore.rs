@@ -75,7 +75,7 @@
 //! ```
 //!
 //! # Runs
-//! In the slot of `dse@820` (LLVM's order); the older `dse.rs` runs elsewhere.
+//! In the slot of `dse@820` (LLVM's order); the legacy pipeline runs it too.
 //!
 //! # Needs
 //! MemorySSA (`mssa`), its alias query, dominators and post-dominators, the
@@ -1083,7 +1083,9 @@ impl<'a> Dse<'a> {
             let dead_block = self.mssa.access(maybe_dead_access).block;
             // Every path from the dead def to an exit goes through a killing
             // block.
-            let post_dominates = common.is_some_and(|block| self.pdt.dominates(block, dead_block));
+            // No common post-dominator is the virtual exit, which
+            // post-dominates every block.
+            let post_dominates = common.is_none_or(|block| self.pdt.dominates(block, dead_block));
             if !post_dominates {
                 if !self.any_unreachable_exit {
                     return None;
@@ -1721,3 +1723,7 @@ fn post_order_of(function: &Function) -> Vec<BlockId> {
 #[cfg(test)]
 #[path = "deadstore_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "dse_tests.rs"]
+mod dse_tests;
