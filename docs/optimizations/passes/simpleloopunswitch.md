@@ -1,11 +1,13 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simpleloopunswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simpleloopunswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simpleloopunswitch.rs sha256:23c2c011e82a71a3daf6357e05028fd17072292028979ad89b014f7c77001fb8 -->
+<!-- src: crates/opt/llrm-transforms/src/simpleloopunswitch.rs sha256:434bc29dc0775f1c8dca8c718252b7d6e50b610860fe8fcefe9477d6ca5b5e25 -->
 
 # simpleloopunswitch
 
-`SimpleLoopUnswitch<trivial>`: a branch or switch in a loop on a
-loop-invariant condition, one side of which leaves the loop, is decided
-before the loop instead of on every trip.
+`SimpleLoopUnswitch`: a branch or switch in a loop on a loop-invariant
+condition, one side of which leaves the loop, is decided before the loop
+instead of on every trip (trivial). With `non_trivial`, a condition whose
+sides both stay in the loop is decided there too, at the price of a copy of
+the loop for each way (`nontrivial.rs`, chosen by `candidates.rs`).
 
 ## How it works
 `unswitch_all_trivial_conditions` walks from the loop header along the

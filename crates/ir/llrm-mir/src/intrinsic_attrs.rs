@@ -65,7 +65,7 @@ pub static SETS: [Set; 20] = [
 ];
 
 /// Sorted by name: the set, and whether a type suffix may follow the name.
-pub static NAMES: [(&str, u16, bool); 103] = [
+pub static NAMES: [(&str, u16, bool); 105] = [
     ("llvm.aarch64.irg", 0, false),
     ("llvm.aarch64.tagp", 1, true),
     ("llvm.abs", 2, true),
@@ -166,6 +166,8 @@ pub static NAMES: [(&str, u16, bool); 103] = [
     ("llvm.ushl.sat", 3, true),
     ("llvm.usub.sat", 3, true),
     ("llvm.usub.with.overflow", 3, true),
+    ("llvm.va_copy", 0, true),
+    ("llvm.va_end", 0, true),
     ("llvm.va_start", 0, true),
     ("llvm.vscale", 3, true),
     ("llvm.x86.sse42.crc32.64.64", 5, false),
