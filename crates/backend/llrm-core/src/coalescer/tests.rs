@@ -518,7 +518,13 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
     ]);
     let env = TargetEnv { palettes: palettes.into(), pins: IndexMap::default(), size: false };
     let (base, index) = (copy(2, 1), copy(3, 1));
-    let was = body(&[(&[def(1), Arc::clone(&base), Arc::clone(&index), read(2), read(3)], &[])]);
+    // `v1` has two values to `v2`'s one, so the join keeps it as the surviving
+    // value (the larger interval is the destination) and its palette is the
+    // one that must narrow; the index copy reads its second value.
+    let was = body(&[(
+        &[def(1), Arc::clone(&base), read(2), def(1), Arc::clone(&index), read(3), read(1)],
+        &[],
+    )]);
     let mut lis = LiveIntervals::new(&was);
     for value in 1..=3 {
         lis.interval(value);
