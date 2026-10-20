@@ -240,6 +240,20 @@ rule decrement_by_add
     when    dead(@0, CF), no_longer(@0, $0)
     rewrite @0: dec d, d
 
+// `and r, 255` and `and r, 65535` with the flags dead are the zero extension of
+// the low byte or word, as X86's patterns select them (X86InstrCompiler.td
+// `(and GR32:$src, 0xff)` and `0xffff`): the combiner makes `zext(trunc x)`
+// that `and`.
+rule byte_mask
+    match   and d:reg, d, #255
+    when    width_in(d, [32]), flags_dead(@0), encodable($0)
+    rewrite @0: movzx d, low_byte(d)
+
+rule word_mask
+    match   and d:reg, d, #65535
+    when    width_in(d, [32]), flags_dead(@0), encodable($0)
+    rewrite @0: movzx d, low_word(d)
+
 
 // A borrow spread to a mask: `0 - 0 - CF` is `r - r - CF`, flags and all,
 // and needs no zero. The mov between keeps the borrow.
