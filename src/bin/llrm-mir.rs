@@ -49,6 +49,14 @@ fn main() -> ExitCode {
     if values {
         arguments.remove(0);
     }
+    let division = arguments.first().is_some_and(|one| one == "--scev-division");
+    if division {
+        arguments.remove(0);
+    }
+    let delinearize = arguments.first().is_some_and(|one| one == "--delinearize");
+    if delinearize {
+        arguments.remove(0);
+    }
     let counts = arguments.first().is_some_and(|one| one == "--scev-counts");
     if counts {
         arguments.remove(0);
@@ -306,6 +314,14 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
                 print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
+            }
+            if division {
+                print!("{}", llrm_analysis::scev::division::print_module_division(&module));
+                return ExitCode::SUCCESS;
+            }
+            if delinearize {
+                print!("{}", llrm_analysis::scev::delinearize::print_module_delinearization(&module));
                 return ExitCode::SUCCESS;
             }
             if counts {

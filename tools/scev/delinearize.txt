@@ -1,0 +1,61 @@
+@parametric3
+  AccessFunction: {{{0,+,(8 * %m * %o)}<%for.i>,+,(8 * %o)}<%for.j>,+,8}<%for.k>
+  Base offset: %A
+  ArrayDecl[UnknownSize][%m][%o] with elements of 8 bytes.
+  ArrayRef[{0,+,1}<nuw><nsw><%for.i>][{0,+,1}<nuw><nsw><%for.j>][{0,+,1}<nuw><nsw><%for.k>]
+  Delinearization validation: Failed
+@parametric2
+  AccessFunction: {{0,+,(4 * (sext i32 %m to i64))<nsw>}<%for.i>,+,4}<%for.j>
+  Base offset: %A
+  ArrayDecl[UnknownSize][(sext i32 %m to i64)] with elements of 4 bytes.
+  ArrayRef[{0,+,1}<%for.i>][{0,+,1}<%for.j>]
+  Delinearization validation: Failed
+  AccessFunction: {{0,+,(4 * (sext i32 %m to i64))<nsw>}<%for.i>,+,4}<%for.j>
+  Base offset: %A
+  ArrayDecl[UnknownSize][(sext i32 %m to i64)] with elements of 4 bytes.
+  ArrayRef[{0,+,1}<%for.i>][{0,+,1}<nuw><nsw><%for.j>]
+  Delinearization validation: Failed
+@fixed3
+  AccessFunction: {{{0,+,2048}<nuw><nsw><%for.i>,+,256}<nuw><nsw><%for.j>,+,8}<nuw><nsw><%for.k>
+  Base offset: %A
+  ArrayDecl[UnknownSize][8][32] with elements of 8 bytes.
+  ArrayRef[{0,+,1}<nuw><nsw><%for.i>][{0,+,1}<nuw><nsw><%for.j>][{0,+,1}<nuw><nsw><%for.k>]
+  Delinearization validation: Succeeded
+@fixed2
+  AccessFunction: {{0,+,200}<nuw><nsw><%for.i>,+,2}<nuw><nsw><%for.j>
+  Base offset: %A
+  ArrayDecl[UnknownSize][100] with elements of 2 bytes.
+  ArrayRef[{0,+,1}<%for.i>][{0,+,1}<%for.j>]
+  Delinearization validation: Succeeded
+@arraygep
+  AccessFunction: {{0,+,800}<nuw><nsw><%for.i>,+,4}<nuw><nsw><%for.j>
+  Base offset: %A
+  ArrayDecl[UnknownSize][200] with elements of 4 bytes.
+  ArrayRef[{0,+,1}<nuw><nsw><%for.i>][{0,+,1}<nuw><nsw><%for.j>]
+  Delinearization validation: Succeeded
+@notarray
+  AccessFunction: {0,+,12}<nuw><nsw><%for.i>
+  Base offset: %A
+  ArrayDecl[UnknownSize] with elements of 4 bytes.
+  ArrayRef[{0,+,3}<nuw><nsw><%for.i>]
+  Delinearization validation: Failed
+@offsets
+  AccessFunction: {{(4 + (4 * %m)),+,(4 * %m)}<%for.i>,+,4}<%for.j>
+  Base offset: %A
+  ArrayDecl[UnknownSize][%m] with elements of 4 bytes.
+  ArrayRef[{1,+,1}<nuw><nsw><%for.i>][{1,+,1}<nuw><nsw><%for.j>]
+  Delinearization validation: Failed
+  AccessFunction: {{(8 * %m),+,(4 * %m)}<%for.i>,+,4}<%for.j>
+  Base offset: %A
+  ArrayDecl[UnknownSize][%m] with elements of 4 bytes.
+  ArrayRef[{2,+,1}<nuw><nsw><%for.i>][{0,+,1}<nuw><nsw><%for.j>]
+  Delinearization validation: Failed
+@constants
+  AccessFunction: {5,+,8}<nuw><nsw><%for.i>
+  Base offset: %A
+  ArrayDecl[UnknownSize] with elements of 1 bytes.
+  ArrayRef[{5,+,8}<nuw><nsw><%for.i>]
+  Delinearization validation: Succeeded
+@badstep
+  AccessFunction: {0,+,6}<nuw><nsw><%for.i>
+  failed to delinearize

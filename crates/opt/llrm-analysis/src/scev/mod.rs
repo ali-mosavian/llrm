@@ -22,7 +22,13 @@ pub mod compare;
 pub mod create;
 pub mod create_addrec;
 pub mod create_phi;
+pub mod delinearize;
+#[cfg(test)]
+mod delinearize_tests;
 pub mod disposition;
+pub mod division;
+#[cfg(test)]
+mod division_tests;
 pub mod divrec;
 pub mod eval;
 pub mod evaluate;
