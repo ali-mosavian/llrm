@@ -19,7 +19,6 @@
 //!   |                         immediate, depths, frontiers, irreducible
 //!   +- loops: Vec<Loop>       from llrm_mir Loops, ids not BlockIds,
 //!   |                         inner loops first
-//!   +- reaching: Reaching     blocks with a path to a block, found on ask
 //!                             and cached
 //! ```
 //!
