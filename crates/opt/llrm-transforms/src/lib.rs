@@ -210,6 +210,7 @@ pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;
 pub mod loopnest;
+pub mod looppeel;
 pub mod looprotate;
 pub mod loopshape;
 pub mod loopsimplify;

@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 161 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 162 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -101,6 +101,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | loopidioms | Loop idiom recognition and store merging: a counted loop that fills or copies memory becomes one `llvm.memset`, `llvm.memcpy` or `llvm.memmove` (LLVM's LoopIdiomRecognize; gcc's loop distribution patterns), and straight-line adjacent stores become one memset or wider stores (LLVM's MemCpyOpt `tryMergingIntoMemset`, MergeConsecutiveStores; gcc's store merging). | Last in the function fixed point: `LoopIdioms`, then `Merge`, after `unroll` | [loopidioms](loopidioms.md) |
 | loopinterchange | Loop interchange: the two loops of a nest swap places, so the inner loop walks the memory the outer one did (gcc's `gimple-loop-interchange.cc`, LLVM's `LoopInterchange`). | Once per body, before `unroll-jam`; a swapped nest goes through `sroa` and | [loopinterchange](loopinterchange.md) |
 | loopnest | Where a loop holds exactly one other loop: the nest's blocks, and what may be asked of it (an inner loop that counts the same in every outer trip, the accesses of its body). | `Nest`, `nest_of`, `inner_is_invariant`, `accesses`. Consumers: `unroll_jam` | [loopnest](loopnest.md) |
+| looppeel | How many iterations of a loop to peel off its front, from `LoopPeel.cpp`'s `computePeelCount`: the iterations after which its header phis, or the compares in its body, are decided. | Inside [`crate::loopunrollpass`](loopunrollpass.md), in LLVM's order after full and bounded | [looppeel](looppeel.md) |
 | looprotate | `LoopRotate`: a loop with its exit test in the header becomes a loop with its exit test in the latch, behind a copy of the test that guards the entry. | The `loop-rotate` slot of the pipeline. | [looprotate](looprotate.md) |
 | loopshape | What loop fusion and loop distribution ask of a loop alike: that one counter's test is the loop's only exit, that its body only reads and writes memory and cannot trap, and that nothing it computes is read outside it. | `controls`, `quiet`, `header_quiet`, `read_outside`. | [loopshape](loopshape.md) |
 | loopsimplify | Loop canonical form: every reducible loop gets one preheader, one latch and dedicated exits, so the loop passes can assume them. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `tailrec` and before | [loopsimplify](loopsimplify.md) |
