@@ -890,7 +890,9 @@ pub fn assembled(
         };
         let (procedure, landing, statics) =
             llrm_support::debug::in_function(module.global(id).name.as_deref().unwrap_or_default(), || {
-                timed("procedure", || procedure(module, id, id == main, frame, &names, &abi, &pool, &target, runtime, segments.through))
+                timed("procedure", || {
+                    procedure(module, id, id == main, frame, &names, &abi, &pool, &target, runtime, segments.through)
+                })
             })?;
         main_frame += statics;
         for callee in procedure.callees.values() {
