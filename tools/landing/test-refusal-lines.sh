@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regression: land.sh printed `N: REFUSED: -` for every landing that succeeded (the batch summary line says `LANDED: #N  REFUSED: -`); owners read it as a refusal.
-here=$(cd "$here" && pwd)
+here=$(cd "$(dirname "$0")" && pwd)
 source "$here/refusal-lines.sh"
 d=$(mktemp -d)
 printf 'STAGE squash #7\nLANDED: #7  REFUSED: -\n' > $d/ok.log
