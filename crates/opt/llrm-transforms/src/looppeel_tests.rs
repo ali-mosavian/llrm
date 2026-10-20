@@ -162,3 +162,21 @@ out:
     let after = printed(&module);
     assert_eq!(after.matches("load i32, ptr %p").count(), 2, "{after}");
 }
+
+/// `opt` runs `simplifyLoopIVs` after a peel, which proves the steps `nuw nsw`
+/// and the exit test `samesign`; the residual loop's test of the peeled phi
+/// against the bound then folds. llrm left it (demo-deedlines `RGBLIGHTS`).
+#[test]
+fn the_residual_loop_after_a_peel_has_its_compare_of_the_peeled_phi_decided() {
+    // The bound is constant, so SCEV proves the step cannot wrap and the flags
+    // are its to write.
+    let text = guarded(0, 5)
+        .replace("add nsw i32 %i, 1", "add i32 %i, 1")
+        .replace("icmp sle i32 %next, %n", "icmp sle i32 %next, 1792");
+    let mut module = parsed(&text);
+    let before = results(&module, INPUTS);
+    assert!(unrolled(&mut module));
+    let after = printed(&module);
+    assert_eq!(results(&module, INPUTS), before, "{after}");
+    assert_eq!(compares(&after), 0, "the peeled trips fold theirs; the loop's is decided too: {after}");
+}

@@ -40,10 +40,6 @@
 //!   `shouldPeelLastIteration`) is not translated: no loop is peeled from the
 //!   end, and a count that would have been is dropped.
 //! - PL4 Profile-based peeling is not translated (no profile data).
-//! - PL5 `simplifyLoopIVs` is not run after a peel (`SimplifyIndvar` is the
-//!   indvars pass's `Edit`): the residual loop keeps the `nsw`/`nuw`/`samesign`
-//!   `opt` infers, so a compare of the peeled phi against the bound stays in it
-//!   (demo-deedlines `RGBLIGHTS`). Exit: `simplifyLoopIVs` for the unroller.
 //!
 //! # Example
 //! The loop of `bintree` (`for (i = 1; i <= 300; ++i) { t[3*i] = ...; if (i >
