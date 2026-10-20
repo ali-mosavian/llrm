@@ -38,7 +38,7 @@ fn inline_with(
     _threshold: Threshold,
 ) -> bool {
     let layout = DataLayout::default();
-    let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)) };
+    let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)), self_inlining: None, peeling: false };
     let mut changed = false;
     loop {
         let available = every_body(module, &layout);
@@ -70,6 +70,8 @@ fn every_body(
                     body: std::rc::Rc::new(function.clone()),
                     frame: grown(&module.context, layout, function),
                     moved: false,
+                    callee: None,
+                    self_calls: None,
                 },
             )
         })
@@ -517,4 +519,79 @@ fn test_a_callee_the_language_says_never_inline_stays_even_if_always_is_stated_t
     assert!(copyable(&always, &leaf(&always)), "premise: alwaysinline alone is copyable");
     let both = parsed(&text("alwaysinline noinline"));
     assert!(!copyable(&both, &leaf(&both)));
+}
+
+/// A function counting down by recursion, `ops` extra operations in its body.
+fn countdown(ops: usize) -> String {
+    let padding: String = (0..ops)
+        .map(|at| {
+            let before = if at == 0 { "%n".to_owned() } else { format!("%t{}", at - 1) };
+            format!("  %t{at} = mul i32 {before}, 12345\n")
+        })
+        .collect();
+    let last = if ops == 0 { "%n".to_owned() } else { format!("%t{}", ops - 1) };
+    format!(
+        "define i32 @down(i32 %n) {{
+b0:
+  %done = icmp eq i32 %n, 0
+  br i1 %done, label %out, label %again
+
+again:
+{padding}  %m = sub i32 {last}, 1
+  %r = call i32 @down(i32 %m)
+  %s = add i32 %r, 7
+  ret i32 %s
+
+out:
+  ret i32 0
+}}
+"
+    )
+}
+
+/// `down` with the copies of itself `expanded_all` makes, the `add` in the
+/// body one per copy and the original.
+fn self_inlined(ops: usize) -> (usize, i64) {
+    let mut module = parsed(&countdown(ops));
+    let layout = DataLayout::default();
+    let before = gcc_insns(module.function_mut("down").unwrap().1);
+    let name = id(&module, "down");
+    let itself = {
+        let (context, function) = module.function_mut("down").unwrap();
+        Candidate {
+            body: std::rc::Rc::new(function.clone()),
+            frame: grown(context, &layout, function),
+            moved: false,
+            callee: None,
+            self_calls: None,
+        }
+    };
+    let available = [(name, itself)].into_iter().collect();
+    let frequencies = SparseIdMap::default();
+    let by = Caller { layout: &layout, recursive: true, self_inlining: Some(&frequencies), peeling: false };
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("down").unwrap();
+    expanded_all(context, function, &by, &available, None, &mut declared).unwrap();
+    declared.place(&mut module).unwrap();
+    let text = printed(&module);
+    (text.matches("add i32").count(), before)
+}
+
+/// Copies of a function in itself stop at gcc's `max-inline-recursive-depth`
+/// (8): a small body gets 8 copies, 9 `add`s with the original. fib was
+/// refused outright (base) or, once allowed, copied until 75 calls stood.
+#[test]
+fn test_a_small_recursive_function_is_copied_into_itself_to_the_depth_limit() {
+    let (adds, _) = self_inlined(0);
+    assert_eq!(adds, 1 + MAX_INLINE_RECURSIVE_DEPTH, "copies of down in down");
+}
+
+/// A body too big for 8 copies stops at `max-inline-insns-recursive` (450
+/// `gcc_insns`): each copy adds its size less the call it replaces.
+#[test]
+fn test_copies_of_a_function_in_itself_stop_at_the_size_limit() {
+    let (adds, before) = self_inlined(60);
+    let copies = (MAX_INLINE_INSNS_RECURSIVE - before) / (before - 1);
+    assert!(copies < MAX_INLINE_RECURSIVE_DEPTH as i64, "premise: the size, not the depth, stops it ({copies})");
+    assert_eq!(adds as i64, 1 + copies, "copies of down in down, body of {before} insns");
 }

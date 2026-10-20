@@ -138,9 +138,24 @@ impl<T: Clone + Eq + Hash> EquivalenceClasses<T> {
         self.mapping.get(data).map(|&node| &self.nodes[self.find(node)].data)
     }
 
+    /// `eraseClass(V)`: every member of the class of `data` leaves the set.
+    /// (The nodes stay in the arena, out of the mapping.)
+    pub fn erase_class(
+        &mut self,
+        data: &T,
+    ) {
+        if !self.contains(data) {
+            return;
+        }
+        let members: Vec<T> = self.members(data).cloned().collect();
+        for member in members {
+            self.mapping.remove(&member);
+        }
+    }
+
     /// `getNumClasses`.
     pub fn classes(&self) -> usize {
-        self.nodes.iter().filter(|node| node.is_leader).count()
+        self.nodes.iter().enumerate().filter(|(at, node)| node.is_leader && self.mapping.get(&node.data) == Some(at)).count()
     }
 
     /// `empty`.

@@ -48,3 +48,20 @@ fn a_long_chain_of_unions_keeps_every_member_once() {
     }
     assert_eq!(members(&classes, 7).len(), 20_001);
 }
+
+/// `eraseClass` takes out every member of the class and no other: a value
+/// inserted again is a class of its own.
+#[test]
+fn erasing_a_class_removes_its_members_only() {
+    let mut classes = EquivalenceClasses::default();
+    classes.union_sets(&1, &2);
+    classes.union_sets(&2, &3);
+    classes.insert(&4);
+    classes.erase_class(&2);
+    assert!(!classes.contains(&1) && !classes.contains(&2) && !classes.contains(&3));
+    assert_eq!(classes.members(&4).copied().collect::<Vec<_>>(), [4]);
+    assert_eq!(classes.classes(), 1);
+    classes.insert(&2);
+    assert_eq!(classes.members(&2).copied().collect::<Vec<_>>(), [2]);
+    assert_eq!(classes.classes(), 2);
+}
