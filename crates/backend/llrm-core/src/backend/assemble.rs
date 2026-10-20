@@ -211,7 +211,7 @@ pub fn assembled_by(
             }
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
-                let Machined { body, reserve, calls, inline, far, pops, popped, registers, .. } =
+                let Machined { body, reserve, calls, inline, inline_symbols, far, pops, popped, registers, .. } =
                     done.shift_remove(&id).expect("every function with a body was machined");
                 let body = timed("masm cleaned returns", || {
                     masm::cleaned_returns(
@@ -223,15 +223,54 @@ pub fn assembled_by(
                 let mut callees = IndexMap::default();
                 for (at, callee) in &calls {
                     if let Some(code) = inline.get(at) {
-                        callees.insert(
-                            *at,
-                            masm::Callee {
-                                name: callee.clone(),
-                                far: false,
-                                pops: 0,
-                                code: vec![masm::InlinePart::Bytes(code.clone())],
-                            },
-                        );
+                        // The bytes between the words that name a symbol, and
+                        // each of those as a fixup.
+                        let mut parts = Vec::new();
+                        let mut from = 0;
+                        let mut symbols = inline_symbols.get(at).cloned().unwrap_or_default();
+                        symbols.sort_by_key(|one| one.at);
+                        for symbol in &symbols {
+                            if symbol.at > from {
+                                parts.push(masm::InlinePart::Bytes(code[from..symbol.at].to_vec()));
+                            }
+                            let name = names
+                                .get(&symbol.global)
+                                .cloned()
+                                .ok_or_else(|| format!("@{name}: inline code names a symbol with no name"))?;
+                            // A function it names is an external of the
+                            // distance it is reached at.
+                            if module.global(GlobalId(symbol.global.1 as u32)).function().is_some() {
+                                referenced.entry(name.clone()).or_insert(symbol.kind != "reloff");
+                            }
+                            if symbol.kind == "reloff" {
+                                // A near call or jump: its opcode goes with its
+                                // target.
+                                let opcode = match parts.pop() {
+                                    Some(masm::InlinePart::Bytes(mut bytes))
+                                        if matches!(bytes.last(), Some(0xE8 | 0xE9)) =>
+                                    {
+                                        let opcode = bytes.pop().expect("an opcode");
+                                        if !bytes.is_empty() {
+                                            parts.push(masm::InlinePart::Bytes(bytes));
+                                        }
+                                        opcode
+                                    }
+                                    _ => {
+                                        return Err(format!(
+                                            "@{name}: inline code names a symbol relative to a word no call or jump owns"
+                                        ));
+                                    }
+                                };
+                                parts.push(masm::InlinePart::Near(opcode, name));
+                            } else {
+                                parts.push(masm::InlinePart::Fixup(symbol.kind.clone(), name, symbol.addend));
+                            }
+                            from = symbol.at + 2;
+                        }
+                        if from < code.len() {
+                            parts.push(masm::InlinePart::Bytes(code[from..].to_vec()));
+                        }
+                        callees.insert(*at, masm::Callee { name: callee.clone(), far: false, pops: 0, code: parts });
                         continue;
                     }
                     // A global of this module is called by the name it is
@@ -297,22 +336,6 @@ pub fn assembled_by(
                     if let Some(error) = unprintable.take() {
                         return Err(error);
                     }
-                    let procedure = masm::Procedure { body, ..procedure };
-                    let enough = std::cell::OnceCell::new();
-                    let body = timed("lir shrink-wrap tails", || {
-                        crate::backend::shrinkwrap::tails_split(&procedure.body, &|candidate| {
-                            // Asked only once a tail could be copied.
-                            if !procedure.size
-                                && *enough.get_or_init(|| {
-                                    masm::pieces_to_set_up(&procedure) >= crate::backend::shrinkwrap::PIECES
-                                })
-                            {
-                                masm::wrapped_pieces(&procedure, candidate)
-                            } else {
-                                0
-                            }
-                        })
-                    });
                     masm::Procedure { body, ..procedure }
                 };
                 procedures.push(procedure);
@@ -356,6 +379,18 @@ pub fn assembled_by(
             referenced.entry(pointer.name.clone()).or_insert(pointer.far);
         }
     }
+    // A routine whose address code takes is as much an external as one it
+    // calls.
+    for (at, global) in module.globals.iter().enumerate() {
+        let (GlobalKind::Function(function), Some(name)) =
+            (&global.kind, names.get(&(globals::space(module, GlobalId(at as u32)), at as i64)))
+        else {
+            continue;
+        };
+        if function.is_declaration() && addressed_in_code(module, GlobalId(at as u32)) {
+            referenced.entry(name.clone()).or_insert(isel::far(global).unwrap_or(true));
+        }
+    }
     let defined: BTreeSet<&str> = procedures.iter().map(|one| one.name.as_str()).collect();
     let mut externs: Vec<(String, String)> = referenced
         .iter()
@@ -384,6 +419,58 @@ pub fn assembled_by(
         object: arch.object(),
         padding: masm::Padding { function: arch.pref_function_alignment(), nop: arch.max_nop_bytes() },
     })
+}
+
+/// Whether a function body of `module` takes `global`'s address: names it as an
+/// operand other than a call's callee.
+fn addressed_in_code(
+    module: &Module,
+    global: GlobalId,
+) -> bool {
+    use llrm_mir::module::Operand;
+    use llrm_mir::{ConstantKind, Opcode};
+    module
+        .globals
+        .iter()
+        .filter_map(|one| one.function())
+        .filter(|one| !one.is_declaration())
+        .any(
+            |function| {
+                function
+                    .layout()
+                    .iter()
+                    .any(
+                        |&block| {
+                            function
+                                .iter_block(block)
+                                .any(
+                                    |inst| {
+                                        let instruction = function.instruction(inst);
+                                        // A call's callee is its last operand
+                                        // (an invoke's, before its two
+                                        // targets).
+                                        let callee_at = match instruction.opcode {
+                                            Opcode::Call(_) => instruction.operands.len().checked_sub(1),
+                                            Opcode::Invoke(_) => instruction.operands.len().checked_sub(3),
+                                            _ => None,
+                                        };
+                                        instruction
+                                            .operands
+                                            .iter()
+                                            .enumerate()
+                                            .any(
+                                                |(at, operand)| Some(at) != callee_at
+                                                    && matches!(
+                                                        operand,
+                                                        Operand::Constant(id) if matches!(module.context.get(*id).kind, ConstantKind::Global(g) if g == global)
+                                                    ),
+                                            )
+                                    },
+                                )
+                        },
+                    )
+            },
+        )
 }
 
 /// What the machine a frontend compiles for is: its processor, its segment
@@ -421,6 +508,7 @@ pub struct Machined {
     /// Where the frame places the inline code names were patched in, by site:
     /// (byte, displacement, addend).
     pub inline_places: IndexMap<i64, Vec<(usize, i64, i64)>>,
+    pub inline_symbols: IndexMap<i64, Vec<isel::InlineSymbol>>,
     pub far: BTreeSet<i64>,
     /// The argument bytes each direct call's callee pops.
     pub pops: IndexMap<i64, i64>,
@@ -504,13 +592,11 @@ fn calls_known(
     facts: &calleefacts::CalleeFacts,
 ) -> bool {
     let Some(function) = module.named(name).and_then(|id| module.global(id).function()) else { return false };
-    function
-        .walk()
-        .any(
-            |(_, inst)| llrm_mir::memory::callee(&module.context, function, inst)
-                .and_then(|id| module.global(id).name.as_deref())
-                .is_some_and(|callee| facts.written(callee).is_some()),
-        )
+    function.walk().any(|(_, inst)| {
+        llrm_mir::memory::callee(&module.context, function, inst)
+            .and_then(|id| module.global(id).name.as_deref())
+            .is_some_and(|callee| facts.written(callee).is_some())
+    })
 }
 
 fn machined_once(
@@ -617,15 +703,12 @@ const SPILLER_TRAFFIC: f64 = 0.005;
 /// fixed displacement. An array's cell, indexed, reaches its whole object and
 /// is not the traffic the spiller removes.
 fn names_frame_cell(what: &Semantics) -> bool {
-    what.dests
-        .iter()
-        .chain(&what.sources)
-        .any(
-            |place| matches!(
-                place,
-                Loc::Mem(mem) if mem.index.is_none() && mem.addr.is_some_and(|addr| addr.space == Space::Frame)
-            ),
+    what.dests.iter().chain(&what.sources).any(|place| {
+        matches!(
+            place,
+            Loc::Mem(mem) if mem.index.is_none() && mem.addr.is_some_and(|addr| addr.space == Space::Frame)
         )
+    })
 }
 
 /// What `cheaper` does below -Omax (LLVM allocates once; GCC runs its reload
@@ -963,6 +1046,7 @@ struct Staged {
     calls: IndexMap<i64, String>,
     inline: IndexMap<i64, Vec<u8>>,
     inline_places: IndexMap<i64, Vec<(usize, i64, i64)>>,
+    inline_symbols: IndexMap<i64, Vec<isel::InlineSymbol>>,
     far: BTreeSet<i64>,
     pops: IndexMap<i64, i64>,
     landing: Option<i64>,
@@ -985,6 +1069,7 @@ impl Staged {
             && self.calls == other.calls
             && self.inline == other.inline
             && self.inline_places == other.inline_places
+            && self.inline_symbols == other.inline_symbols
             && self.far == other.far
             && self.pops == other.pops
             && self.landing == other.landing
@@ -1020,7 +1105,7 @@ fn staged(
             target.facts,
         )
     });
-    let Selected { body, convention, calls, inline, inline_places, far, pops, depth, extents, landing } =
+    let Selected { body, convention, calls, inline, inline_places, inline_symbols, far, pops, depth, extents, landing } =
         selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut registers =
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
@@ -1058,7 +1143,7 @@ fn staged(
         Rc::clone(target.classes)
     };
     let body = if llrm_support::debug::verifying() {
-        timed("lir verify", || flow::verified(body, "isel", true, &target.arch.layout().spaces.roles))
+        timed("lir verify", || flow::verified(body, "isel", true, None, &target.arch.layout().spaces.roles))
             .map_err(|error| error.0)?
     } else {
         body
@@ -1070,7 +1155,20 @@ fn staged(
     frame.hole = hole;
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;
-    Ok(Staged { body, frame, convention, calls, inline, inline_places, far, pops, landing, registers, classes })
+    Ok(Staged {
+        body,
+        frame,
+        convention,
+        calls,
+        inline,
+        inline_places,
+        inline_symbols,
+        far,
+        pops,
+        landing,
+        registers,
+        classes,
+    })
 }
 
 /// `phased`; or, where `until_changed`, none if the spiller left the body as it
@@ -1087,13 +1185,17 @@ fn phased_to(
 ) -> Result<Option<((Machined, frame::Frame), Rc<ssaspill::Run>)>, String> {
     PHASED.with(|count| count.set(count.get() + 1));
     let run = ssaspill::Run::new(admission);
-    let Staged { calls, inline, inline_places, far, pops, landing, registers, convention, classes, .. } =
-        staged.clone();
+    let Staged {
+        calls, inline, inline_places, inline_symbols, far, pops, landing, registers, convention, classes, ..
+    } = staged.clone();
     let classes = &classes;
     let mut body = staged.body.clone();
     let frame = Rc::new(RefCell::new(staged.frame.clone()));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
+    let preserved: std::collections::BTreeSet<RegId> =
+        registers.saved.iter().map(|(whole, _)| whole.full_register()).collect();
+    let mut allocated = false;
     for mut phase in flow::machine_with(
         &pinned,
         Some(Rc::clone(&frame)),
@@ -1115,12 +1217,22 @@ fn phased_to(
             in_ssa = false;
         }
         let kept = (!body.notes.is_empty()).then(|| body.clone());
-        body = flow::checked(body, phase.as_mut(), in_ssa, classes, target.segments, target.arch).map_err(|error| {
-            match error {
-                flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
-                flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
-            }
+        body = flow::checked(
+            body,
+            phase.as_mut(),
+            in_ssa,
+            allocated.then_some(&preserved),
+            classes,
+            target.segments,
+            target.arch,
+        )
+        .map_err(|error| match error {
+            flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
+            flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;
+        if phase.class_name() == "RegAlloc" {
+            allocated = true;
+        }
         if let Some(before) = &kept {
             body = body.with_notes_kept(before).with_defs_kept(before);
         }
@@ -1155,6 +1267,7 @@ fn phased_to(
                 calls,
                 inline,
                 inline_places,
+                inline_symbols,
                 far,
                 pops,
                 popped: convention.popped,

@@ -118,12 +118,12 @@ use std::sync::{Arc, LazyLock};
 use iced_x86::{FlowControl, RflagsBits};
 use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
-use llrm_x86::parse;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
+use crate::backend::intbits::{low_mask, wrap_to};
 pub use crate::backend::lanes::{Lane, Lanes};
 use crate::backend::needs::{self, gated};
 use crate::backend::peep::{self, walk::Facts};
@@ -2138,7 +2138,7 @@ fn _affine_address(
     };
     let z = full32(dest.register);
     let bits = i64::from(dest.width) * 8;
-    let wrapped = |value: i64| (value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1));
+    let wrapped = |value: i64| wrap_to(value, bits);
     let mut best: Option<(usize, AddressRef, i64, bool, Reg)> = None;
     for (at, one) in parts.iter().enumerate().skip(1) {
         let Some((written, step, cost)) = affine::step(regs, one, cpu) else {
@@ -2223,7 +2223,7 @@ fn _affine_address(
                 // By the register's width: 1 and -1 (0xFFFF in a word) are the
                 // unit.
                 let bits = i64::from(register.width) * 8;
-                let step = match (*value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1)) {
+                let step = match wrap_to(*value, bits) {
                     1 => Some(name == "add"),
                     -1 => Some(name != "add"),
                     _ => None,
@@ -2366,7 +2366,7 @@ static _BRANCH_READS: LazyLock<HashMap<String, u32>> = LazyLock::new(|| {
         .filter_map(|code| {
             let name = format!("{:?}", code.mnemonic()).to_lowercase();
             let condition = name.strip_prefix('j')?;
-            parse::CONDITIONS.contains(&condition).then_some(())?;
+            llrm_x86::instructions::dialect().conditions.iter().any(|(one, _)| one == condition).then_some(())?;
             Some((name, iced_x86::Instruction::with_branch(code, 0).ok()?.rflags_read()))
         })
         .collect()
@@ -3028,7 +3028,7 @@ pub fn constants(body: &LirBody) -> LirBody {
                     );
                     if emit(body.bits, &made).is_some() {
                         folded.insert(id(one), Arc::new(with_what(one, made)));
-                        candidate = Some((*dest, Known::Value(value & ((1i64 << (dest.width * 8)) - 1))));
+                        candidate = Some((*dest, Known::Value(value & low_mask(dest.width))));
                     }
                 }
             }
@@ -3043,8 +3043,7 @@ pub fn constants(body: &LirBody) -> LirBody {
                     if regs.integer(dest.register) && source_width == Some(dest.width) {
                         match source {
                             Loc::Imm(source) if source.address.is_none() => {
-                                candidate =
-                                    Some((*dest, Known::Value(source.value & ((1i64 << (dest.width * 8)) - 1))));
+                                candidate = Some((*dest, Known::Value(source.value & low_mask(dest.width))));
                             }
                             Loc::Reg(source) if regs.integer(source.register) => {
                                 let value = *held
@@ -3124,7 +3123,7 @@ fn extended_constant(
         .iter()
         .find(|(one, _)| full32(one.register) == full32(source.register) && one.width >= source.width)
         .and_then(|(_, known)| if let Known::Value(value) = known { Some(*value) } else { None })?;
-    let mask = (1i64 << (source.width * 8)) - 1;
+    let mask = low_mask(source.width);
     let low = value & mask;
     Some(if what.name.as_deref() == Some("movsx") && low >> (source.width * 8 - 1) & 1 == 1 {
         low | !mask

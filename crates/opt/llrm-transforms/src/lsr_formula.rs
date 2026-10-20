@@ -14,7 +14,7 @@
 //!
 //! # Runs
 //! Nothing runs it yet: stage 1 of the translation of LSR (the old pass in
-//! [`crate::lsr`] is gcc's ivopts and stays the default).
+//! [`crate::lsr_pass`] is the pass that runs them).
 //!
 //! # Limits
 //! DEVIATE: `Immediate` is fixed. LLVM's also holds a scalable quantity
@@ -166,6 +166,11 @@ impl UsedBy {
         index: usize,
     ) -> bool {
         self.0.get(index).copied().unwrap_or(false)
+    }
+
+    /// `set_bits`: the indices that are set, ascending.
+    pub fn set_bits(&self) -> impl Iterator<Item = usize> + '_ {
+        self.0.iter().enumerate().filter(|&(_, &one)| one).map(|(at, _)| at)
     }
 
     pub fn count(&self) -> usize {

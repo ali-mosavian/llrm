@@ -9,7 +9,7 @@ use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use crate::timings;
 
 /// The registers a value may be placed in.
-pub const GENERAL: [RegId; 6] = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI];
+pub const GENERAL: [RegId; 6] = [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX, RegId::ESI, RegId::EDI];
 
 /// The registers a 16-bit address is encoded with, `[bx+si]`: a base is BX or
 /// BP and an index SI or DI.

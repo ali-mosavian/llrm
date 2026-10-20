@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopversion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopversion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopversion.rs sha256:6611a4c890c0f7d029f314176ac6a94fa97d307b0eb48e401f60d572f4e91b23 -->
+<!-- src: crates/opt/llrm-transforms/src/loopversion.rs sha256:ccc4fd62693b2826ef954bdc1f2e4dbb3cd5ffaf2e1c6bd878b8b807412e69dc -->
 
 # loopversion
 
@@ -30,7 +30,7 @@ take the copy's values.
                                    else:      for i: a[i * s] = 0
 ```
 
-The copy is a candidate, as in [`crate::unswitch`](unswitch.md): [`crate::candidate`](candidate.md)
+The copy is a candidate, as in [`crate::loopfuse`](loopfuse.md): [`crate::candidate`](candidate.md)
 runs the pipeline over it, with the loop's header copied and what it loads
 unchanged hoisted ([`crate::pipeline::header_copied`](pipeline.md)) and the same done to
 the loop it is judged against, so what the assumption allows is done by

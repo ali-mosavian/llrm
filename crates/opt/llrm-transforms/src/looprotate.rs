@@ -954,6 +954,10 @@ impl FunctionPass for LoopRotate {
         "looprotate"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("loop-rotate")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,

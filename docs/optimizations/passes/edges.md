@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/edges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/edges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/edges.rs sha256:10d7a285dd83e49d952959d5476817d5c0feb6cd23a12c7a7cca67cef93e3cee -->
+<!-- src: crates/opt/llrm-transforms/src/edges.rs sha256:175e217f15ecb52643cac231117bb89e84969aa11bf1246a551d11fb0eaab276 -->
 
 # edges
 
@@ -71,4 +71,5 @@ From unit test `test_missing_conditional_edge_gets_its_own_load_block` in
 
 ## Runs
 Not a pass: a library. `split` is called by `rotate` and
-`unswitch`; `phis` and `retarget` by most of the CFG-rewriting passes.
+`simpleloopunswitch`; `phis` and `retarget` by most of the CFG-rewriting
+passes.

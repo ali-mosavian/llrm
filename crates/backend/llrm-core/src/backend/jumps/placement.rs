@@ -31,6 +31,25 @@ const TAIL_DUPLICATION_PENALTY: f64 = 0.02;
 /// `TriangleChainCount`.
 const TRIANGLE_CHAIN_COUNT: usize = 2;
 
+/// Frequencies are compared as `BlockFrequency` does, in fixed point: two that
+/// are equal in the odds (a loop of 31 in 32 leaves as often as it is entered)
+/// are equal here, not a rounding of `f64` apart.
+const FREQUENCY_TOLERANCE: f64 = 1e-9;
+
+fn at_least(
+    a: f64,
+    b: f64,
+) -> bool {
+    a >= b * (1.0 - FREQUENCY_TOLERANCE)
+}
+
+fn above(
+    a: f64,
+    b: f64,
+) -> bool {
+    a > b * (1.0 + FREQUENCY_TOLERANCE)
+}
+
 /// `StaticLikelyProb` (80): without a profile, the probability an edge needs
 /// to be placed over a block that other blocks also reach.
 const HOT: f64 = llrm_analysis::branchprob::LIKELY;
@@ -868,7 +887,11 @@ impl Placer {
                 }
                 let freq = self.freq[block] * self.chance[block][place];
                 // LLVM never raises `BestExitLoopDepth` above 0 (D8).
-                if exiting.is_none() || depth[to] > 0 || freq > best_freq || (block + 1 == to && freq >= best_freq) {
+                if exiting.is_none()
+                    || depth[to] > 0
+                    || above(freq, best_freq)
+                    || (block + 1 == to && at_least(freq, best_freq))
+                {
                     best_freq = freq;
                     exiting = Some(block);
                 }
@@ -926,7 +949,7 @@ impl Placer {
                     return;
                 }
             }
-            if self.top_fall_through(top) >= exit_freq {
+            if at_least(self.top_fall_through(top), exit_freq) {
                 return;
             }
         }

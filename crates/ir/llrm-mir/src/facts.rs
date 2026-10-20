@@ -233,6 +233,9 @@ facts! {
         // Touches no memory through the pointer, or at all, of a routine.
         ReadNone read_none "readnone" on [Param, Callable];
         NonNull non_null "nonnull" on [Param];
+        // The value is never `undef` or `poison` where the routine is called:
+        // clang's `noundef` of a scalar or an indirect parameter.
+        NoUndef no_undef "noundef" on [Param, Operand];
         NoCapture no_capture "nocapture" on [Param, Operand];
         // Of a pointer argument: the callee keeps neither it nor any pointer it
         // reads out of the memory it reaches, once it returns. `nocapture` says
