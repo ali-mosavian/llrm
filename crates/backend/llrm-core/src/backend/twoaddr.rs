@@ -22,7 +22,9 @@
 //!   second source dies, or when neither lives on and the second is less
 //!   blocked (by interference with the destination's copy neighbours) and
 //!   closer by copies. Interference is computed only among the values a swap
-//!   asks about.
+//!   asks about. Before those, a sum that ends in a register (`requires`) keeps
+//!   the operand delivered in it as the tied one (LLVM's physical-register rule
+//!   in `isProfitableToCommute`), so `a + b` returned in EAX is `add eax, edx`.
 //! - A memory destination whose cell is not the first source (`[m] := a + b`)
 //!   is computed in a fresh register: load, operate, store.
 //!
@@ -57,6 +59,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use llrm_lir::registers::RegId;
+
 use crate::analysis::intervals as ranges;
 use crate::backend::allocate::LiveAt;
 use crate::backend::{allocate, coalesce, spiller};
@@ -66,7 +70,7 @@ use crate::model::passes::LIRTransform;
 use crate::support::hash::{IndexMap, IndexSet};
 
 /// Operations that read their destination.
-pub const _TIED: [Operation; 3] = [Operation::Binary, Operation::Unary, Operation::Funnel];
+pub const _TIED: [Operation; 4] = [Operation::Binary, Operation::Unary, Operation::Funnel, Operation::Select];
 
 pub struct TwoAddress;
 
@@ -107,6 +111,7 @@ pub fn tied(body: &LirBody) -> LirBody {
     // value copied for each block was quadratic in the values live at once.
     let rows = allocate::live_rows(body);
     let copies = _copy_destinations(body);
+    let fixed = _fixed(body);
     // Of each swap's two sources, those live after it: all `_commuted` reads of
     // liveness.
     let lives: Vec<IndexMap<usize, BTreeSet<u32>>> = body
@@ -177,6 +182,7 @@ pub fn tied(body: &LirBody) -> LirBody {
                 live_after.get(&ranges::key(&one)).unwrap_or(&nothing),
                 Some(&copies),
                 Some(&interference),
+                &fixed,
             ) {
                 changed = true;
                 one = chosen;
@@ -367,6 +373,48 @@ fn _swappable_held(one: &Insn) -> Option<(&Held, &Held, &Held)> {
     Some((into, first, second))
 }
 
+/// The registers values are fixed to: those delivered in one (`from`) and
+/// those that must end in one (`to`), the latter followed back along the
+/// values that die into a sum (LLVM's `SrcRegMap` and `DstRegMap`).
+#[derive(Default)]
+struct Fixed {
+    from: IndexMap<u32, RegId>,
+    to: IndexMap<u32, RegId>,
+}
+
+fn _fixed(body: &LirBody) -> Fixed {
+    let mut fixed = Fixed::default();
+    let mut reads: IndexMap<u32, usize> = IndexMap::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for (held, register) in &one.delivers {
+            fixed.from.entry(held.value).or_insert(*register);
+        }
+        for (held, register) in &one.requires {
+            fixed.to.entry(held.value).or_insert(*register);
+        }
+        for value in &one.uses {
+            *reads.entry(*value).or_default() += 1;
+        }
+    }
+    // A value read once, by a sum that ends in a register, ends in it too: the
+    // sum's operand and its result share the register the pass ties. LLVM
+    // follows the chain forward from each value to a copy to the register
+    // (`scanUses`, at most `MaxDataFlowEdge` instructions); one backward walk
+    // over the body gives the same registers.
+    for block in &body.blocks {
+        for one in block.insns.iter().rev() {
+            let Some((into, first, second)) = _swappable(one) else { continue };
+            let Some(register) = fixed.to.get(&into).copied() else { continue };
+            for value in [first, second] {
+                if reads.get(&value) == Some(&1) {
+                    fixed.to.entry(value).or_insert(register);
+                }
+            }
+        }
+    }
+    fixed
+}
+
 /// The instruction with its commutative sources swapped, or None where it
 /// is returned as it was.
 fn _commuted(
@@ -374,6 +422,7 @@ fn _commuted(
     alive: &BTreeSet<u32>,
     copies: Option<&IndexMap<u32, BTreeSet<u32>>>,
     interference: Option<&coalesce::Graph>,
+    fixed: &Fixed,
 ) -> Option<Arc<Insn>> {
     let what = one.what.as_ref()?;
     let (into, first, second) = _swappable_held(one)?;
@@ -390,6 +439,32 @@ fn _commuted(
             + usize::from(found.is_some_and(|found| found.contains(&into.value)))
     };
 
+    // Where the sum ends in a register and one operand arrives in it, that
+    // one is the tied operand (`isProfitableToCommute`, the physical-register
+    // rule): the other dying here is all the swap needs.
+    if second.value != into.value
+        && !alive.contains(&second.value)
+        && let Some(to) = fixed.to.get(&into.value)
+    {
+        let fits = |value: u32| fixed.from.get(&value).map(|register| ir::root(*register) == ir::root(*to));
+        let (from_first, from_second) = (fits(first.value), fits(second.value));
+        let swap = matches!(
+            (from_first, from_second),
+            (None, Some(true)) | (Some(false), None | Some(true))
+        );
+        let keep = matches!(
+            (from_second, from_first),
+            (None, Some(true)) | (Some(false), None | Some(true))
+        );
+        if swap || keep {
+            if !swap {
+                return None;
+            }
+            let mut made = one.clone();
+            made.what = Some(Semantics { sources: vec![Loc::Held(*second), Loc::Held(*first)], ..what.clone() });
+            return Some(Arc::new(made));
+        }
+    }
     let reusable = !alive.contains(&first.value)
         && !alive.contains(&second.value)
         && _less(
@@ -552,7 +627,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use super::{_commuted, _untied, tied};
+    use super::{_commuted, _untied, Fixed, tied};
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
@@ -586,13 +661,70 @@ mod tests {
         pairs.iter().map(|(value, others)| (*value, others.iter().copied().collect())).collect()
     }
 
+    /// `six(a..f)` in registers: `a` arrives in EAX, `b` in EDX, the sum is
+    /// returned in EAX. The add took `b` for its tied operand and the sum
+    /// stayed in EDX: a `mov eax, edx` at the end (LLVM commutes it the other
+    /// way, `TwoAddressInstructionPass::isProfitableToCommute`).
+    #[test]
+    fn test_a_sum_returned_in_eax_is_tied_to_the_operand_that_arrives_there() {
+        use llrm_lir::registers::RegId;
+        let add = |at: i64, into: u32, first: u32, second: u32| {
+            let what = Semantics {
+                name: Some("add".to_owned()),
+                dests: vec![held(into, 4)],
+                sources: vec![held(first, 4), held(second, 4)],
+                ..Semantics::new(Operation::Binary)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![first, second]))
+        };
+        let nothing = |at: i64| {
+            let what = Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) };
+            Insn::new(at, Some((at, at)), Some(what), vec![], vec![])
+        };
+        let mut arrival = nothing(0);
+        arrival.delivers = vec![
+            (Held { value: 1, width: 4 }, RegId::EAX),
+            (Held { value: 2, width: 4 }, RegId::EDX),
+            (Held { value: 3, width: 4 }, RegId::EBX),
+        ];
+        let mut ret = nothing(3);
+        ret.requires = vec![(Held { value: 5, width: 4 }, RegId::EAX)];
+        ret.uses = vec![5];
+        let input = LirBody::new(
+            "six",
+            0,
+            vec![LirBlock::new(0, vec![Arc::new(arrival), add(1, 4, 2, 1), add(2, 5, 4, 3), Arc::new(ret)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let got = tied(&input);
+        let first = got
+            .insns()
+            .iter()
+            .find_map(
+                |one| {
+                    let what = one.what.as_ref()?;
+                    (what.name.as_deref() == Some("add")).then(|| what.clone())
+                },
+            );
+        let first = first.expect("an add");
+        let copied: Vec<_> = got
+            .insns()
+            .iter()
+            .filter_map(|one| one.what.as_ref())
+            .filter(|what| what.op == Operation::Move)
+            .map(|what| what.sources.clone())
+            .collect();
+        assert_eq!(copied[0], vec![held(1, 4)], "the first add copies the operand that arrives in EAX: {first:?}");
+    }
+
     /// LNGMXX copied its accumulator out and back each iteration to preserve
     /// the invariant addend.
     #[test]
     fn test_commutative_instruction_reuses_the_dying_operand() {
         for name in ["add", "and", "or", "xor"] {
             let one = addition(name);
-            let chosen = _commuted(&one, &BTreeSet::from([1, 3]), None, None).expect(name);
+            let chosen = _commuted(&one, &BTreeSet::from([1, 3]), None, None, &Fixed::default()).expect(name);
             assert_eq!(sources(&chosen), reversed(&one), "{name}");
             assert!(chosen.uses == one.uses && chosen.defines == one.defines, "{name}");
             assert_eq!(chosen.covers, one.covers, "{name}");
@@ -613,7 +745,7 @@ mod tests {
         let mut one = addition("imul");
         one.what.as_mut().unwrap().op = Operation::Multiply;
 
-        let chosen = _commuted(&one, &BTreeSet::from([1, 3]), None, None).expect("swapped");
+        let chosen = _commuted(&one, &BTreeSet::from([1, 3]), None, None, &Fixed::default()).expect("swapped");
 
         assert_eq!(sources(&chosen), reversed(&one));
     }
@@ -748,16 +880,16 @@ mod tests {
     fn test_noncommutative_or_implicit_arithmetic_is_not_swapped() {
         for name in ["sub", "adc", "sbb", "shl"] {
             let one = addition(name);
-            assert!(_commuted(&one, &BTreeSet::from([1, 3]), None, None).is_none(), "{name}");
+            assert!(_commuted(&one, &BTreeSet::from([1, 3]), None, None, &Fixed::default()).is_none(), "{name}");
         }
     }
 
     #[test]
     fn test_live_operands_and_grouped_operations_keep_their_order() {
         let one = addition("add");
-        assert!(_commuted(&one, &BTreeSet::from([1, 2, 3]), None, None).is_none());
+        assert!(_commuted(&one, &BTreeSet::from([1, 2, 3]), None, None, &Fixed::default()).is_none());
         let grouped = Insn { group: Some(1), ..one };
-        assert!(_commuted(&grouped, &BTreeSet::from([1, 3]), None, None).is_none());
+        assert!(_commuted(&grouped, &BTreeSet::from([1, 3]), None, None, &Fixed::default()).is_none());
     }
 
     /// LOCALP's backedge copy favors its accumulator only when its old value
@@ -767,7 +899,7 @@ mod tests {
         for (alive, swapped) in [(vec![3], true), (vec![2, 3], false), (vec![1, 2, 3], false)] {
             let one = addition("add");
             let copies = graph(&[(3, &[2])]);
-            let chosen = _commuted(&one, &alive.iter().copied().collect(), Some(&copies), None);
+            let chosen = _commuted(&one, &alive.iter().copied().collect(), Some(&copies), None, &Fixed::default());
             let got = chosen.map_or_else(|| sources(&one), |chosen| sources(&chosen));
             assert_eq!(got, if swapped { reversed(&one) } else { sources(&one) }, "{alive:?}");
         }
@@ -784,7 +916,8 @@ mod tests {
             .map(|(value, near)| (value, near.into_iter().collect()))
             .collect();
 
-        let chosen = _commuted(&one, &BTreeSet::from([3]), Some(&copies), Some(&interference)).expect("swapped");
+        let chosen = _commuted(&one, &BTreeSet::from([3]), Some(&copies), Some(&interference), &Fixed::default())
+            .expect("swapped");
 
         assert_eq!(sources(&chosen), reversed(&one));
     }
@@ -800,7 +933,8 @@ mod tests {
             .map(|(value, near)| (value, near.into_iter().collect()))
             .collect();
 
-        let chosen = _commuted(&one, &BTreeSet::new(), Some(&copies), Some(&interference)).expect("swapped");
+        let chosen =
+            _commuted(&one, &BTreeSet::new(), Some(&copies), Some(&interference), &Fixed::default()).expect("swapped");
 
         assert_eq!(sources(&chosen), reversed(&one));
     }

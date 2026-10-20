@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/expansion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/expansion.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/expansion.rs sha256:7e2f455e96ab2c8d53fafb1a73aa2f8695e976ba7e65434c93d35abd752b0cb4 -->
+<!-- src: crates/backend/llrm-core/src/backend/expansion.rs sha256:1259c4ba7cfec0e48d125f24a7f3f99df3615ff72f6e6d056eb763aa168f26a2 -->
 
 # expansion
 
@@ -11,6 +11,11 @@ instructions made before one.
 intrinsic the caller picks to a rewrite; an `Emitter` places the
 instructions the rewrite makes right before the call, in one integer type.
 The bit counts, `bswap` and the three-way compares are each a rewrite.
+
+## Example
+A `call i32 @llvm.bswap.i32(i32 %x)` is replaced, in front of the call, by
+the shifts and masks that move each byte, and the call's uses read the
+result.
 
 ## Runs
 Under [`crate::backend::bitcounts`](bitcounts.md), [`crate::backend::bytes`](bytes.md) and

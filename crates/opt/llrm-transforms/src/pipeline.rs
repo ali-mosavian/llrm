@@ -29,7 +29,6 @@
 //!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>simple-loop-unswitch,<br/>non-trivial</small>"]:::mid
 //!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     ver["<b>version (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
-//!     fuse["<b>fuse (-Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     swap["<b>interchange (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
 //!     jam["<b>unroll-jam (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
 //!     mrg["<b>merge (once)</b>"]:::mid
@@ -42,8 +41,7 @@
 //!   sroa --> rnd
 //!   rnd --> peel
 //!   peel --> unsw
-//!   unsw --> fuse
-//!   fuse --> dist
+//!   unsw --> dist
 //!   dist --> ver
 //!   ver --> swap
 //!   swap --> jam
@@ -116,10 +114,9 @@
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
-//! | `unswitch`, `split`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
+//! | `unswitch`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
 //! | `distribute` | `distribute` (off by default; on at -O3 and -Omax) |
 //! | `version` | `version` (off by default; on at -O3 and -Omax) |
-//! | `fuse` | `fuse` (off by default; on at -Omax) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
@@ -156,9 +153,9 @@ use crate::settled::{self, Settled};
 use crate::{
     adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
-    loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit, loopunrollpass,
-    loopversion, mem2reg, memcpyopt, peel, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
-    switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, window,
+    loopdistribute, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollpass, loopversion, mem2reg,
+    memcpyopt, peel, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
+    trivialunswitch, unroll, unroll_jam, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -207,13 +204,6 @@ pub struct Options {
     pub loopidioms: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
-    /// A loop with a test of its counter against an invariant becomes two,
-    /// one either side of where it flips (gcc's `-fsplit-loops`, -O3; -Omax
-    /// too).
-    pub split: bool,
-    /// Two adjacent loops of the same trips become one (LLVM's `LoopFuse`;
-    /// -Omax only, `-floop-fusion`).
-    pub fuse: bool,
     /// A loop whose stores do not need each other's trips becomes a loop
     /// for each (gcc's `-ftree-loop-distribution`, -O3; -Omax too).
     pub distribute: bool,
@@ -233,9 +223,8 @@ pub struct Options {
     /// turns it off.
     pub llvm_order: bool,
     /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
-    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; off by
-    /// default (it miscompiles, #2585), `LLRM_ROTATE` turns it on. Not run
-    /// where `unroll_jam` is (see [`Options::rotating`]).
+    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
+    /// in the pin. Not run where `unroll_jam` is (see [`Options::rotating`]).
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); on by default, `LLRM_NO_MEM2REG` turns it off.
@@ -287,7 +276,7 @@ impl Default for Options {
         Self {
             optimize: true,
             llvm_order: llvm_order_default(),
-            rotate_slot: rotate_default(),
+            rotate_slot: true,
             limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default(),
             lcssa: true,
@@ -313,8 +302,6 @@ impl Default for Options {
             loopidioms: true,
             sibcalls: true,
             unswitch: false,
-            split: false,
-            fuse: false,
             distribute: false,
             version: false,
             unroll_jam: false,
@@ -367,8 +354,6 @@ impl Options {
             sibcalls: false,
             peel: false,
             unswitch: false,
-            split: false,
-            fuse: false,
             distribute: false,
             version: false,
             expensive: false,
@@ -386,8 +371,6 @@ impl Options {
             limits: Limits { grows: false, ..Self::default().limits },
             peel: false,
             unswitch: false,
-            split: false,
-            fuse: false,
             distribute: false,
             version: false,
             ..Self::default()
@@ -408,8 +391,6 @@ impl Options {
         Self {
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
-            split: true,
-            fuse: false,
             distribute: true,
             version: true,
             unroll_jam: true,
@@ -428,8 +409,6 @@ impl Options {
             limits: Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() },
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
-            split: true,
-            fuse: true,
             distribute: true,
             version: true,
             unroll_jam: true,
@@ -606,7 +585,6 @@ fn translated() -> Vec<Box<dyn FunctionPass>> {
         Box::new(crate::jumpthreading::JumpThreading::from_env()),
         Box::new(crate::dfajumpthreading::DfaJumpThreading::from_env()),
         Box::new(crate::tailcallelim::TailCallElim),
-        Box::new(crate::trunc_inst_combine::TruncInstCombine),
     ]
 }
 
@@ -692,11 +670,6 @@ impl FunctionPass for Together {
         }
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
-}
-
-/// `LLRM_ROTATE`, read once: set, the rotate slot of [`llvm_order`] runs.
-fn rotate_default() -> bool {
-    llrm_support::env_flag!("LLRM_ROTATE")
 }
 
 /// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by
@@ -800,10 +773,13 @@ pub(crate) fn llvm_order(
         // L1438 form, no date.
         Phase::Late => vec![
             // The slots' options, with the pin's lines,
-            // are `simplifycfg::Options::{L1438, L2376}`.
+            // are `simplifycfg::Options::{L1438, L1682, L2376}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
+            // DivRemPairs, ExpandMemCmp and TailCallElim, between the two at
+            // the pin, are not slots.
+            simplify_cfg_with("simplifycfg@1682", simplifycfg::Options::L1682),
             simplify_cfg_with("simplifycfg@2376", simplifycfg::Options::L2376),
         ],
         Phase::Simplify => {
@@ -817,6 +793,7 @@ pub(crate) fn llvm_order(
                 combine("combine@677"),
                 fold("fold@677"),
                 dead("dead@677"),
+                slot("aggressive-instcombine@678", Box::new(crate::trunc_inst_combine::TruncInstCombine)),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L691:
                 // the option is read by `simplifySwitch`, untranslated.
@@ -1260,10 +1237,8 @@ pub struct Fixed {
     /// Once, after everything else.
     last: Vec<Box<dyn FunctionPass>>,
     unswitch: Option<simpleloopunswitch::SimpleLoopUnswitch>,
-    split: Option<loopsplit::Split>,
     distribute: Option<loopdistribute::Distribute>,
     version: Option<loopversion::Version>,
-    fuse: Option<loopfuse::Fuse>,
     interchange: Option<loopinterchange::Interchange>,
     jam: Option<unroll_jam::UnrollJam>,
     only: bool,
@@ -1278,8 +1253,6 @@ pub struct Fixed {
 fn without_candidates(options: &Options) -> Options {
     Options {
         unswitch: false,
-        split: false,
-        fuse: false,
         distribute: false,
         version: false,
         unroll_jam: false,
@@ -1331,7 +1304,6 @@ impl Fixed {
                     passes: std::iter::once(judged() as Box<dyn FunctionPass>).chain(header_copied(applied)).collect(),
                 },
             );
-        let fuse = applied.options.fuse.then(|| loopfuse::Fuse { passes: vec![judged()] });
         Self {
             boundary,
             passes,
@@ -1339,10 +1311,8 @@ impl Fixed {
             peelers,
             last,
             unswitch,
-            split: (applied.options.split && only.is_none()).then_some(loopsplit::Split),
             distribute: distribute.filter(|_| only.is_none()),
             version: version.filter(|_| only.is_none()),
-            fuse: fuse.filter(|_| only.is_none()),
             interchange: (applied.options.interchange && only.is_none()).then_some(loopinterchange::Interchange),
             jam: (applied.options.unroll_jam && only.is_none()).then(unroll_jam::UnrollJam::default),
             only: only.is_some(),
@@ -1408,10 +1378,8 @@ impl Fixed {
         linear.unswitch = None;
         if !matches!(phase, Phase::Simplify) {
             linear.peelers.clear();
-            linear.split = None;
             linear.distribute = None;
             linear.version = None;
-            linear.fuse = None;
             linear.interchange = None;
             linear.jam = None;
         }
@@ -1440,7 +1408,7 @@ impl Fixed {
         // Again while a peel leaves fewer loops, as LLVM's loop pass manager
         // revisits a parent once its child is gone: a loop whose inner loop
         // was peeled may then be peeled itself.
-        let loops = |unit: &Unit| cfg::Shape::of(unit.function).loops.len();
+        let loops = |unit: &Unit| cfg::loops_of(unit.function).len();
         let mut before = loops(unit);
         while !self.peelers.is_empty() && run.step(&mut *self.peelers[0], "peel", unit, analyses) {
             self.scalarized(unit, analyses, run, "peeled");
@@ -1454,23 +1422,6 @@ impl Fixed {
         if let Some(unswitch) = &mut self.unswitch {
             run.step(unswitch, "unswitch", unit, analyses);
         }
-        // After unswitching, before jamming, as gcc's pass order has it. Each
-        // half is cleaned as a peeled loop is.
-        if let Some(split) = &mut self.split {
-            if run.step(split, "split", unit, analyses) {
-                self.scalarized(unit, analyses, run, "split");
-                self.fixed(unit, analyses, run, "split-")?;
-            }
-        }
-        // Loops that follow one another and count alike, once unswitching and
-        // splitting have made what they are. A fused loop was cleaned by the
-        // pipeline that judged it.
-        if let Some(fuse) = &mut self.fuse {
-            run.step(fuse, "fuse", unit, analyses);
-        }
-        // After fusing: what is joined is no longer a loop to part, and a
-        // part is not the loops a fusion was after. The pipeline that judged a
-        // split has cleaned it.
         if let Some(distribute) = &mut self.distribute {
             run.step(distribute, "distribute", unit, analyses);
         }
@@ -1488,7 +1439,7 @@ impl Fixed {
             }
         }
         // After unswitching, as gcc's pass order has it: an invariant guard is
-        // out of the nest by then. The fused copies are cleaned as a peeled
+        // out of the nest by then. The copies are cleaned as a peeled
         // loop is.
         if let Some(jam) = &mut self.jam {
             if run.step(jam, "unroll-jam", unit, analyses) {

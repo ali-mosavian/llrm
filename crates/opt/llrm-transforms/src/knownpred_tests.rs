@@ -112,10 +112,9 @@ b5:
 b0:
   %m = alloca i16
   %c = icmp sgt i16 %x, 0
-  br i1 %c, label %b1, label %b5
-
-b1:
-  br i1 %a, label %b2, label %b3
+  %not = xor i1 %c, true
+  %or.cond = select i1 %not, i1 true, i1 %a
+  br i1 %or.cond, label %b2, label %b3
 
 b2:
   br i1 %c, label %b4, label %b5

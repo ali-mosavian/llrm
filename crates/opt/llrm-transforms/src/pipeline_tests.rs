@@ -1489,7 +1489,10 @@ fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translat
 fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
-    assert_eq!(late, ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@2376"]);
+    assert_eq!(
+        late,
+        ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
+    );
     let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
     assert_eq!(kind, Some(crate::parity::SlotKind::Translated));
 }
@@ -2219,16 +2222,14 @@ fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
     assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
 }
 
-/// LoopRotate is off by default (it miscompiled with the passes after it,
-/// #2585; `LLRM_ROTATE` turns it on), and off where unroll-and-jam runs, whose
-/// nests are the header-tested form (RJ1).
+/// LoopRotate is on, as in the pin (the `LLRM_NO_ROTATE` opt-out ran a path
+/// the pin has not: idioms.bas failed six with it), and off where
+/// unroll-and-jam runs, whose nests are the header-tested form (RJ1).
 #[test]
-fn test_the_rotate_slot_is_off_by_default_and_off_where_unroll_jam_is() {
-    // Off until #2585 is fixed (`LLRM_ROTATE` sets it); the option still gates
-    // the slot.
+fn test_the_rotate_slot_is_on_and_off_where_unroll_jam_is() {
     let on = pipeline::Options { rotate_slot: true, ..pipeline::Options::default() };
     assert!(on.rotating());
-    assert_eq!(pipeline::Options::default().rotating(), std::env::var_os("LLRM_ROTATE").is_some());
+    assert!(pipeline::Options::default().rotating());
     assert!(!pipeline::Options { unroll_jam: true, ..on }.rotating());
     assert!(!pipeline::Options::speed().rotating());
     assert!(!pipeline::Options::aggressive().rotating());
@@ -2257,12 +2258,15 @@ fn test_a_slot_of_the_order_can_be_run_alone_when_the_level_builds_it() {
 #[test]
 fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     let o2 = Applied::default();
-    for slot in ["simplifycfg@1438", "simplifycfg@2376"] {
+    for slot in ["simplifycfg@1438", "simplifycfg@1682", "simplifycfg@2376"] {
         assert!(pipeline::slot_built(&o2, slot), "{slot}");
     }
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
-    assert_eq!(late, ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@2376"]);
+    assert_eq!(
+        late,
+        ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
+    );
 }
 
 /// d_faces -O2 under the LLVM order ran `hoist` three times in its slots and

@@ -211,7 +211,9 @@ impl<'a> AliasQuery<'a> {
         let found = if writes.is_none() {
             self.unknown_call_mod_ref(def, loc).writes
         } else {
-            memoryssa::changes(&loc.effective, false, writes, |written| self.may_overlap(&loc.effective, written, Some(def)))
+            memoryssa::changes(&loc.effective, false, writes, |written| {
+                self.may_overlap(&loc.effective, written, Some(def))
+            })
         };
         self.cache.borrow_mut().insert(key, found);
         found
@@ -374,7 +376,25 @@ impl<'a> AliasQuery<'a> {
         if self.captured(alloca, at) {
             return false;
         }
-        other.pointer.is_some_and(|pointer| self.derived_from_elsewhere(pointer, alloca, 0))
+        match other.pointer {
+            Some(pointer) => self.derived_from_elsewhere(pointer, alloca, 0),
+            // Memory no pointer of the function names (a call's unknown or
+            // non-local reads): the alloca's address is not among what it
+            // is reached through.
+            None => other.provenance.as_ref().is_some_and(|provenance| {
+                provenance
+                    .slices
+                    .iter()
+                    .all(
+                        |slice| matches!(
+                            slice.object.kind,
+                            crate::memory::MemoryKind::Unknown
+                                | crate::memory::MemoryKind::Nonlocal
+                                | crate::memory::MemoryKind::External
+                        ),
+                    )
+            }),
+        }
     }
 
     /// `AliasAnalysis::alias` of two references, as far as the stand-in goes:
@@ -469,8 +489,9 @@ impl<'a> AliasQuery<'a> {
         inst: InstId,
         loc: &Location,
     ) -> ModRef {
-        let touches =
-            |list: Option<&[MemRef]>| list.map(|list| list.iter().any(|one| self.may_overlap(one, &loc.effective, Some(inst))));
+        let touches = |list: Option<&[MemRef]>| {
+            list.map(|list| list.iter().any(|one| self.may_overlap(one, &loc.effective, Some(inst))))
+        };
         let (reads, writes) = (touches(self.accesses.reads(inst)), touches(self.accesses.writes(inst)));
         if reads.is_some() && writes.is_some() {
             return ModRef { reads: reads.unwrap_or(false), writes: writes.unwrap_or(false) };
