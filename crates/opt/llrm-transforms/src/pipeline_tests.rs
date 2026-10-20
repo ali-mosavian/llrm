@@ -1489,7 +1489,7 @@ fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translat
 fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
-    assert_eq!(late, ["simplifycfg@1438", "instsimplify@1662", "simplifycfg@2376"]);
+    assert_eq!(late, ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@2376"]);
     let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
     assert_eq!(kind, Some(crate::parity::SlotKind::Translated));
 }
@@ -2262,7 +2262,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     }
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
-    assert_eq!(late, ["simplifycfg@1438", "instsimplify@1662", "simplifycfg@2376"]);
+    assert_eq!(late, ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@2376"]);
 }
 
 /// d_faces -O2 under the LLVM order ran `hoist` three times in its slots and

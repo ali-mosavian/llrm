@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:73a275d0aabb18273ab4c1b6752258d2be90de953268de87ccc7430d70c61d72 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:78967ed1818ffe7876e3a882284014395d874b6867362d4ce3b36a5b1ab735f3 -->
 
 # pipeline
 
@@ -41,7 +41,7 @@ flowchart TB
   end
   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>jumpthread hoist gepoffset<br/>addresssink sink</small>"]:::mid
+  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>addresssink sink</small>"]:::mid
   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
   a --> sroa
   sroa --> rnd
@@ -127,10 +127,8 @@ LLVM counterpart of each limit, is
 | `fuse` | `fuse` (off by default; on at -Omax) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 
-`pre` makes `gvn` insert on the path that lacks a value; `expensive`
-enables `jumpthread`'s state machines and `copy_headers` its correlated
-branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
-`lsr`, `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals`
+`pre` makes `gvn` insert on the path that lacks a value; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
+`lsr`, `window` and `calleepop` in bytes; `loop_intervals`
 lets alias and branch decisions use the intervals of counted loops. `limits`
 are the copy budgets of `unroll` and `peel`.
 
