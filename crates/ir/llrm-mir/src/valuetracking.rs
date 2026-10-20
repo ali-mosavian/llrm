@@ -613,9 +613,11 @@ pub fn alignment(
             },
             Operand::Constant(id) => match &context.get(id).kind {
                 ConstantKind::Global(global) => {
-                    let stated = match &globals[global.0 as usize].kind {
-                        GlobalKind::Variable(variable) => variable.align.unwrap_or(1),
-                        GlobalKind::Function(_) => 1,
+                    // A global declared by the running pass is not in the
+                    // module yet: no alignment is known of it.
+                    let stated = match globals.get(global.0 as usize).map(|one| &one.kind) {
+                        Some(GlobalKind::Variable(variable)) => variable.align.unwrap_or(1),
+                        Some(GlobalKind::Function(_)) | None => 1,
                     };
                     return _lesser(stated, added);
                 }
