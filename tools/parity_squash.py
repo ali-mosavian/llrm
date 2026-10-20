@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -380,6 +381,23 @@ def regenerate(conflicts: list[str], cwd: Path = ROOT) -> str:
     return "" if done.returncode == 0 else f"committing the regenerated merge failed: {done.stderr.strip()[:200]}"
 
 
+def update_generated_only(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> str:
+    """The sha of `head` with `base` merged into it, pushed to `branch` as a fast-forward, when the only conflicts are generated pages (regenerated); "" when not.
+    `gh pr merge` refuses a PR GitHub calls conflicting, so the local regeneration alone never landed it: six index-only PRs sat out the 03:02 batch."""
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp) / "w"
+        git("worktree", "add", "-q", "--detach", str(work), head, cwd=cwd)
+        try:
+            merged = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", base], cwd=work, capture_output=True, text=True)
+            if merged.returncode and regenerate(git("diff", "--name-only", "--diff-filter=U", cwd=work).split(), work):
+                return ""
+            sha = git("rev-parse", "HEAD", cwd=work).strip()
+            pushed = subprocess.run(["git", "push", "-q", "origin", f"{sha}:refs/heads/{branch}"], cwd=work, capture_output=True, text=True)
+            return sha if pushed.returncode == 0 else ""
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
+
+
 def merged_result(head: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str | None, str]:
     """(sha, "") of `head` with `base` merged into it, checked out detached in `cwd` and not pushed; (None, why) when `base` conflicts. When `head` already
     contains `base` the result is `head` itself. The squash lands on whatever feat/parity is at the call: the tests must run on this result, not on a head that
@@ -479,7 +497,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         raise SystemExit(f"merge-batch takes at most {MAX_BATCH} PRs per smoke, got {len(numbers)}: split the queue")
     infos = {}
     for number in numbers:
-        info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
+        info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,headRefName,title,body,baseRefName,mergeable"], capture_output=True, text=True, check=True).stdout)
         if info["baseRefName"] != "feat/parity":
             raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
         infos[number] = info
@@ -549,6 +567,12 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if number in left_out:
             refused.append(number)
             return
+        if FAST and infos[number]["mergeable"] == "CONFLICTING":
+            if not (fresh := update_generated_only(infos[number]["headRefOid"], infos[number]["headRefName"])):
+                refused.append(number)
+                return
+            infos[number]["headRefOid"] = fresh
+            time.sleep(5)  # GitHub recomputes the PR's mergeability after the push
         stage(f"squash #{number}")
         done = subprocess.run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", infos[number]["headRefOid"], "--subject", infos[number]["title"], "--body", known_red_line(known)])
         (landed if done.returncode == 0 else refused).append(number)
