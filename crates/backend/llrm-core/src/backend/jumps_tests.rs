@@ -1816,8 +1816,8 @@ fn test_the_blocks_on_a_cycle_are_found_without_a_scan_per_block() {
 }
 
 /// Loops nested three deep, the innermost one block that loops on itself; each
-/// level's header tests a rare base case (`e`) and otherwise enters the next, and
-/// both reach the level's latch `l`.
+/// level's header tests a rare base case (`e`) and otherwise enters the next,
+/// and both reach the level's latch `l`.
 fn loop_nest() -> LirBody {
     let (levels, done): (i64, i64) = (3, 9999);
     let (h, e, pre, l) = (|k: i64| 100 * k, |k: i64| 100 * k + 1, |k: i64| 100 * k + 2, |k: i64| 100 * k + 3);
@@ -1861,11 +1861,12 @@ fn loop_nest() -> LirBody {
 
 /// A loop whose exit test leaves exactly as often as its top is fallen into is
 /// not rotated (`rotateLoop`: `FallThrough2Top >= ExitFreq`). The two are equal
-/// in the odds of 31 in 32, and in `f64` the exit came out larger by a rounding:
-/// the innermost loop of a nest (bench/fib) was rotated, and the latches of the
-/// levels were left at the end after the inner loops, each base-case block
-/// ending in a jump to its latch (17 jumps, llc 9). Order checked with `llc -O2 -mtriple=i486` on the same
-/// nest as IR with branch weights: entry pre0 e1 l1 h1 pre1 e2 l2 h2 pre2 h3 pre3 s l3 e3 done.
+/// in the odds of 31 in 32, and in `f64` the exit came out larger by a
+/// rounding: the innermost loop of a nest (bench/fib) was rotated, and the
+/// latches of the levels were left at the end after the inner loops, each
+/// base-case block ending in a jump to its latch (17 jumps, llc 9). Order
+/// checked with `llc -O2 -mtriple=i486` on the same nest as IR with branch
+/// weights: entry pre0 e1 l1 h1 pre1 e2 l2 h2 pre2 h3 pre3 s l3 e3 done.
 #[test]
 fn test_a_loop_is_not_rotated_where_its_exit_only_ties_the_top_fall_through() {
     let made = optimized(&loop_nest(), cpu::profile("486").unwrap()).unwrap();

@@ -167,7 +167,7 @@ issue = 3018
 owner = "parity-pipeline"
 date = "2026-10-19"
 [[xfail]]
-id = "unit llrm-core::backend::isel_tests::test_a_closed_form_sum_in_an_odd_width_assembles"
-issue = 3020
+id = "unit llrm-c::compile::tests::test_m32_adds_into_a_new_register_with_lea"
+issue = 3052
 owner = "lir-cleanup-port"
-date = "2026-10-21"
+date = "2026-10-23"

@@ -197,13 +197,19 @@ def unit_failures(at: Path, name: str | None = None) -> tuple[set[str], str]:
     return unit_result(output, code), unit_summary(output)
 
 
+UNIT_SETS: dict[str, set[str]] = {}
+
+
 def probe(failure: str, sha: str) -> bool:
-    """Whether `failure` holds at `sha`."""
+    """Whether `failure` holds at `sha`. A unit failure is read from the whole workspace's failing set at that commit, run once and kept: the bisects of dozens of failures
+    share their probes (56 failures x 6 probes of 4 minutes was 22 hours; one set per commit is a few dozen probes)."""
     at = tree(sha)
     kind, _, name = failure.partition(" ")
     if kind == "run":
         return failure in run_groups(at, dist(at, sha), Path(name).stem)[0]
-    return failure in unit_failures(at, name.partition("::")[2])[0]
+    if sha not in UNIT_SETS:
+        UNIT_SETS[sha] = unit_failures(at)[0]
+    return failure in UNIT_SETS[sha]
 
 
 def smoke(at: Path, bins: Path, previous: str) -> tuple[set[str], str]:
@@ -254,7 +260,7 @@ def combine_premise(at: Path, bins: Path, built: Path) -> str:
         for off in (False, True):
             out = HOME / ("premise-off.obj" if off else "premise-on.obj")
             env = {**os.environ, **({"LLRM_NO_COMBINE": "1"} if off else {})}
-            done = subprocess.run([str(bins / "llrm-c"), "-m32", "-march=i486", "-O2", "-o", str(out), str(source)], env=env, capture_output=True)
+            done = subprocess.run([str(bins / "llrm-c"), "-O2", "-o", str(out), str(source)], env=env, capture_output=True)
             objects.append(digest(out) if done.returncode == 0 and out.exists() else None)
         if objects[0] and objects[1] and objects[0] != objects[1]:
             seen = f"{source.name} differs"
@@ -263,11 +269,11 @@ def combine_premise(at: Path, bins: Path, built: Path) -> str:
 
 
 def check(sha: str, previous: str, emit=lambda covered, raw: None) -> tuple[set[str], list[str]]:
-    """Every failure of the head and the COVERED SUITES lines: tests/run at m16+m32 first (written out at once), the workspace lib tests, parity_smoke's checks and budget."""
+    """Every failure of the head and the COVERED SUITES lines: tests/run at both widths first (written out at once), the workspace lib tests, parity_smoke's checks and budget."""
     at = tree(sha)
     bins = dist(at, sha)
     runs, run_line, reasons = run_groups(at, bins)
-    covered = [combine_premise(at, bins, HOME / "target-dist" / "dist"), f"tests/run m16+m32 (run_groups): {run_line}"]
+    covered = [combine_premise(at, bins, HOME / "target-dist" / "dist"), f"tests/run, both widths (run_groups): {run_line}"]
     raw = [f"{name}: {why}" for name, why in reasons.items()]
     emit(covered, raw)
     if runs:

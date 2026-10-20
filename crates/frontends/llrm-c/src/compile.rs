@@ -776,7 +776,10 @@ mod tests {
     fn test_restrict_reaches_mir_as_distinct_noalias_roots() {
         let text = emitted("tests/test_restrict_reaches_mir_as_distinct_noalias_roots");
         let define = text.lines().find(|line| line.starts_with("define ")).expect("a definition");
-        assert_eq!(define.matches("ptr noalias").count(), 3, "{text}");
+        // The attribute order is the printer's; each pointer is also `noundef`
+        // (CGCall.cpp `DetermineNoUndef`: a scalar parameter).
+        let on_pointers = |attribute: &str| define.split(", ").filter(|one| one.contains(attribute)).count();
+        assert_eq!((on_pointers("noalias"), on_pointers("noundef")), (3, 3), "{text}");
     }
 
     /// `ls_animate(&ls, 0.05f)` pushes the single's four bytes; CGFloat was
@@ -2512,11 +2515,12 @@ mod tests {
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
         let calls: Vec<usize> =
             body.iter().enumerate().filter(|(_, one)| **one == "call far ptr _animate").map(|(at, _)| at).collect();
-        // `s`, by the address passed to `animate`: `lea ax, [bp-N]`.
+        // `s`, by the address passed to `animate`: `lea r, [bp-N]`, made once
+        // for both calls.
         let base: i64 = body[..calls[1]]
             .iter()
             .rev()
-            .find_map(|one| one.strip_prefix("lea ax, [bp-")?.strip_suffix(']')?.parse().ok())
+            .find_map(|one| one.strip_prefix("lea ")?.split_once(", [bp-")?.1.strip_suffix(']')?.parse().ok())
             .expect("&s");
         // Every byte the stores between the calls write, by frame offset.
         let mut written = std::collections::BTreeSet::new();
@@ -2551,6 +2555,9 @@ mod tests {
         let built = super::selected(&text, "indexread", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_test proc").expect("_test");
+        if std::env::var_os("SHOWASM").is_some() {
+            eprintln!("{}", &asm[from..]);
+        }
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
         let stored: Vec<&&str> = body
             .iter()

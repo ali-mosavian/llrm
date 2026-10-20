@@ -22,8 +22,6 @@
 //! | D2 | No branch weights; `!unpredictable` is kept. |
 //! | D3 | `!llvm.loop` of the old branch is not copied, as `IRBuilder::CreateCondBr` does not. |
 
-use std::collections::HashSet;
-
 use llrm_analysis::occurrence::{arms, from_arms};
 use llrm_mir::constantrange::ConstantRange;
 use llrm_mir::context::{Constant, ConstantKind, Context};
@@ -32,6 +30,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef_or_poison;
 use llrm_mir::valuetracking::{Query, pattern};
+use llrm_support::hash::HashSet;
 
 use crate::edges;
 use crate::simplifycfg::condition_deleted;
@@ -210,7 +209,7 @@ impl<'q, 'a> Gatherer<'q, 'a> {
             return;
         }
         let mut stack = vec![op0, op1];
-        let mut visited: HashSet<Operand> = HashSet::from([v, op0, op1]);
+        let mut visited: HashSet<Operand> = [v, op0, op1].into_iter().collect();
         while let Some(v) = stack.pop() {
             if self.q.instruction_of(v).is_some() {
                 let pair = if self.is_eq { pattern::logical_or(self.q, v) } else { pattern::logical_and(self.q, v) };

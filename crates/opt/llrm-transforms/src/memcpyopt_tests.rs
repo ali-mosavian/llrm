@@ -217,3 +217,63 @@ fn test_a_loaded_scalar_stored_stays() {
     let text = after(before);
     assert!(text.contains("load i32") && text.contains("store i32"), "{text}");
 }
+
+const SLOT_DECLARES: &str = "declare void @f(ptr nocapture) nounwind willreturn memory(argmem: write)
+declare void @use(ptr)
+";
+
+/// The call, its alloca `%tmp` and the copy of it to `%dst`, after the pass.
+fn slot(body: &str) -> String {
+    let mut module = parsed(&format!("{DECLARES}{SLOT_DECLARES}\n{body}"));
+    managed(&mut module, MemCpyOpt)
+}
+
+/// A call that fills a fresh alloca, copied to another: the call fills the
+/// destination and the copy is gone (`opt -passes=memcpyopt` `@a`).
+#[test]
+fn test_a_call_slot_is_the_copys_destination() {
+    let text = slot(
+        "define void @f2() {\nb0:\n  %dst = alloca [16 x i8]\n  %tmp = alloca [16 x i8]\n  call void @f(ptr nocapture %tmp)\n  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %tmp, i64 16, i1 false)\n  call void @use(ptr %dst)\n  ret void\n}\n",
+    );
+    assert!(
+        text.contains("call void @f(ptr nocapture %dst)") && !text.contains("@llvm.memcpy.p0.p0.i64(ptr %dst"),
+        "{text}"
+    );
+}
+
+/// The same through a load and a store of a scalar (`@scalar`).
+#[test]
+fn test_a_call_slot_through_a_loaded_scalar_stored() {
+    let text = slot(
+        "define void @f2() {\nb0:\n  %dst = alloca i32\n  %tmp = alloca i32\n  call void @f(ptr nocapture %tmp)\n  %v = load i32, ptr %tmp\n  store i32 %v, ptr %dst\n  call void @use(ptr %dst)\n  ret void\n}\n",
+    );
+    assert!(
+        text.contains("call void @f(ptr nocapture %dst)") && !text.contains("load") && !text.contains("store"),
+        "{text}"
+    );
+}
+
+/// The destination is used between the call and the copy: the call may not
+/// write it early (`@between`).
+#[test]
+fn test_a_call_slot_is_not_taken_when_the_destination_is_used_between() {
+    let text = slot(
+        "define void @f2() {\nb0:\n  %dst = alloca [16 x i8]\n  %tmp = alloca [16 x i8]\n  call void @f(ptr nocapture %tmp)\n  call void @use(ptr %dst)\n  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %tmp, i64 16, i1 false)\n  call void @use(ptr %dst)\n  ret void\n}\n",
+    );
+    assert!(
+        text.contains("call void @f(ptr nocapture %tmp)") && text.contains("@llvm.memcpy.p0.p0.i64(ptr %dst"),
+        "{text}"
+    );
+}
+
+/// The source is read elsewhere (`@other`): it holds more than the call wrote.
+#[test]
+fn test_a_call_slot_is_not_taken_when_the_source_is_read_elsewhere() {
+    let text = slot(
+        "define void @f2() {\nb0:\n  %dst = alloca [16 x i8]\n  %tmp = alloca [16 x i8]\n  call void @f(ptr nocapture %tmp)\n  %x = load i8, ptr %tmp\n  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %tmp, i64 16, i1 false)\n  call void @use(ptr %dst)\n  ret void\n}\n",
+    );
+    assert!(
+        text.contains("call void @f(ptr nocapture %tmp)") && text.contains("@llvm.memcpy.p0.p0.i64(ptr %dst"),
+        "{text}"
+    );
+}

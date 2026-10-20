@@ -2800,6 +2800,37 @@ impl DomTree {
         function.comes_before(def, user)
     }
 
+    /// `findNearestCommonDominator(Instruction *, Instruction *)`: the earlier
+    /// of two in one block, the one in the other's dominating block, else the
+    /// terminator of the blocks' nearest common dominator.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L309>
+    pub fn find_nearest_common_dominator_inst(
+        &self,
+        function: &Function,
+        i1: InstId,
+        i2: InstId,
+    ) -> InstId {
+        let (bb1, bb2) = (function.parent(i1).expect("placed"), function.parent(i2).expect("placed"));
+        if bb1 == bb2 {
+            return if function.comes_before(i1, i2) { i1 } else { i2 };
+        }
+        if !self.is_reachable(bb2) {
+            return i1;
+        }
+        if !self.is_reachable(bb1) {
+            return i2;
+        }
+        let dom = self.find_nearest_common_dominator(function, bb1, bb2).expect("a forward tree has a block");
+        if bb1 == dom {
+            i1
+        } else if bb2 == dom {
+            i2
+        } else {
+            function.terminator(dom).expect("a block ends in a terminator")
+        }
+    }
+
     /// `instruction_dominates`, where `position` is each instruction's index in
     /// its block (`Function::positions`): no scan of the block for two in
     /// the same one.
