@@ -383,7 +383,7 @@ fn special_prototype(func: LibFunc) -> bool {
 
 thread_local! {
     /// `buildIndexMap`: the standard names, to the functions.
-    static INDEX: std::collections::HashMap<&'static str, LibFunc> =
+    static INDEX: crate::hash::HashMap<&'static str, LibFunc> =
         ALL.iter().map(|&func| (func.standard_name(), func)).collect();
 }
 
