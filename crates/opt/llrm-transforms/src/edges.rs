@@ -66,7 +66,8 @@
 //!
 //! # Runs
 //! Not a pass: a library. `split` is called by `rotate` and
-//! `unswitch`; `phis` and `retarget` by most of the CFG-rewriting passes.
+//! `simpleloopunswitch`; `phis` and `retarget` by most of the CFG-rewriting
+//! passes.
 
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;

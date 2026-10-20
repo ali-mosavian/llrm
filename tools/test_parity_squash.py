@@ -549,3 +549,125 @@ def test_a_stray_untracked_page_does_not_turn_a_pr_that_adds_it_into_a_conflict(
     ps.clean_checkout("main", cwd=repo)
     merge = subprocess.run(["git", "merge", "--no-edit", "-q", "pr"], cwd=repo, capture_output=True, text=True)
     assert merge.returncode == 0 and (repo / "page.md").read_text() == "from the pr\n", merge.stderr
+def test_fast_mode_lets_a_refactor_delete_lines_but_not_a_file(tmp_path, monkeypatch):
+    """#2855, #2856, #2881, #2942, #2958, #3010 and #3028 sat out a 02:37 batch: each deleted 21-76 lines of its own file, and nothing landed for 27 minutes."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sh(repo, "init", "-q", "-b", "main")
+    commit(repo, "a.rs", "".join(f"fn f{i}() {{}}\n" for i in range(60)), "base")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "a.rs").write_text("fn f0() {}\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "refactor(a): shrink")
+    head = sh(repo, "rev-parse", "HEAD")
+    monkeypatch.delenv("LAND_FAST", raising=False)
+    assert ps.refusals(head, "", base="main", cwd=repo)
+    monkeypatch.setenv("LAND_FAST", "1")
+    assert ps.refusals(head, "", base="main", cwd=repo) == []
+    (tmp_path / "s").mkdir()
+    stale, stale_head = squash_of_a_stale_tree(tmp_path / "s")
+    assert ps.refusals(stale_head, "", base="main", cwd=stale)
+
+
+def test_a_pr_whose_only_conflict_is_a_generated_page_is_brought_up_to_date_on_its_branch(tmp_path, monkeypatch):
+    """#2878, #2872, #2941, #2943, #2949 and #2951 conflicted only in an index readme: regenerated locally, but `gh pr merge` refused them as unmergeable at 03:02, so none landed."""
+    origin = tmp_path / "origin.git"
+    sh(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    work = tmp_path / "w"
+    sh(tmp_path, "clone", "-q", str(origin), str(work))
+    commit(work, "index.md", "a\n", "base")
+    sh(work, "push", "-q", "origin", "HEAD:main")
+    sh(work, "checkout", "-q", "-b", "pr")
+    head = commit(work, "index.md", "a\npr\n", "pr adds a page")
+    sh(work, "push", "-q", "origin", "pr")
+    sh(work, "checkout", "-q", "main")
+    commit(work, "index.md", "a\nmain\n", "main adds a page")
+    sh(work, "push", "-q", "origin", "main")
+
+    def regenerate(conflicts, cwd):
+        sh(cwd, "checkout", "--ours", "--", *conflicts)
+        sh(cwd, "add", "-A")
+        sh(cwd, "commit", "-q", "--no-edit")
+        return ""
+
+    monkeypatch.setattr(ps, "regenerate", regenerate)
+    fresh = ps.update_generated_only(head, "pr", base="origin/main", cwd=work)
+    assert fresh and fresh != head
+    sh(work, "fetch", "-q", "origin")
+    assert sh(work, "rev-parse", "origin/pr") == fresh
+    sh(work, "merge-base", "--is-ancestor", "origin/main", fresh)
+
+
+def test_a_pr_with_a_real_conflict_is_not_pushed_to(tmp_path, monkeypatch):
+    origin = tmp_path / "origin.git"
+    sh(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    work = tmp_path / "w"
+    sh(tmp_path, "clone", "-q", str(origin), str(work))
+    commit(work, "code.rs", "a\n", "base")
+    sh(work, "push", "-q", "origin", "HEAD:main")
+    sh(work, "checkout", "-q", "-b", "pr")
+    head = commit(work, "code.rs", "a\npr\n", "pr")
+    sh(work, "push", "-q", "origin", "pr")
+    sh(work, "checkout", "-q", "main")
+    commit(work, "code.rs", "a\nmain\n", "main")
+    sh(work, "push", "-q", "origin", "main")
+    monkeypatch.setattr(ps, "regenerate", lambda conflicts, cwd: "conflicts in files nothing generates: " + ", ".join(conflicts))
+    assert ps.update_generated_only(head, "pr", base="origin/main", cwd=work) == ""
+    sh(work, "fetch", "-q", "origin")
+    assert sh(work, "rev-parse", "origin/pr") == head
+
+
+def test_a_generated_only_conflict_pr_is_not_refused_at_the_squash(monkeypatch):
+    """The 03:02 symptom: six PRs the runner had regenerated were refused at `gh pr merge` (GitHub: not mergeable) because their branches never got the merge."""
+    monkeypatch.setattr(ps, "FAST", True)
+    calls = []
+
+    def run(cmd, **_):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "pr", "merge"]:
+            return subprocess.CompletedProcess(cmd, 0 if cmd[cmd.index("--match-head-commit") + 1] == "newsha" else 1)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    info = {"headRefOid": "oldsha", "headRefName": "pr", "title": "t", "mergeable": "CONFLICTING"}
+    assert ps.squash("2878", info, "", run=run, update=lambda head, branch: "newsha", settle=0)
+    comment = next(c for c in calls if c[:3] == ["gh", "pr", "comment"])
+    assert "never force" in comment[-1] and "newsha"[:9] in comment[-1]
+    assert not ps.squash("2872", info, "", run=run, update=lambda head, branch: "", settle=0)
+
+
+def named_assistant():
+    return "Co-Authored-By: " + "Clau" + "de <noreply@example.com>"
+
+
+def sub(tmp_path, name):
+    path = tmp_path / name
+    path.mkdir()
+    return path
+
+
+def pr_over_main(tmp_path, file_text="fn a() {}\n", message="feat: a"):
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sh(repo, "init", "-q", "-b", "main")
+    commit(repo, "a.rs", "fn base() {}\n", "base")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    head = commit(repo, "a.rs", file_text, message)
+    return repo, head
+
+
+def test_a_pr_that_names_the_assistant_is_refused_wherever_it_does(tmp_path):
+    """The user's rule: nothing in the repository, its PRs or its history names the assistant. The runner had no check; #3080's description did."""
+    repo, head = pr_over_main(tmp_path)
+    assert ps.refusals(head, "", base="main", cwd=repo, title="feat: a") == []
+    assert any("title" in w for w in ps.refusals(head, "", base="main", cwd=repo, title="feat: " + "Clau" + "de did it"))
+    assert any("description" in w for w in ps.refusals(head, "🤖 Generated with " + "Clau" + "de Code", base="main", cwd=repo))
+    repo2, head2 = pr_over_main(sub(tmp_path, "m"), message="feat: a\n\n" + named_assistant())
+    assert any("commit" in w for w in ps.refusals(head2, "", base="main", cwd=repo2))
+    repo3, head3 = pr_over_main(sub(tmp_path, "l"), file_text="// written by " + "Clau" + "de\nfn a() {}\n")
+    assert any("added line" in w for w in ps.refusals(head3, "", base="main", cwd=repo3))
+
+
+def test_the_word_clause_does_not_name_the_assistant(tmp_path):
+    """A loose pattern would refuse every PR with a where clause or an if clause."""
+    repo, head = pr_over_main(tmp_path, file_text="// the where clause and the if clause\nfn a() {}\n", message="docs: a clause")
+    assert ps.refusals(head, "the clause", base="main", cwd=repo, title="feat: clause") == []

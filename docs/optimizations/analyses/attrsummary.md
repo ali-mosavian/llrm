@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/attrsummary.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/attrsummary.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/attrsummary.rs sha256:414c5e8d02880cf1c5a4caa6a16062360bb9de6ac93015c033fff29c1d4b1918 -->
+<!-- src: crates/opt/llrm-analysis/src/attrsummary.rs sha256:bd4c2c0c3591e7697ffb039e50976b4aa690008de21d7e61dac6361c0c3b559a -->
 
 # attrsummary
 
@@ -30,6 +30,7 @@ b0:
 From unit test `a_readonly_parameter_is_read_not_written` in
 `attrsummary_tests.rs`.
 
-DEVIATE A1: no slices of tracked globals. `GlobalsModRef` answers those per
-global; here they are the unknown access. Checked by
-`the_unknown_access_stands_for_globals`.
+A tracked global (`GlobalsModRef::is_non_address_taken`) of a function that
+has a `FunctionInfo` is a whole-object slice in `reads` or `writes` as
+`mod_ref_for_global` says, and `globals_listed` keeps the unknown access
+from reaching it. Without a `FunctionInfo` the unknown access reaches it.

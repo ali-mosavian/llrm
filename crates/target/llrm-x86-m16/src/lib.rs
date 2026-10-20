@@ -239,6 +239,28 @@ impl llrm_target::Target for M16 {
         llrm_x86::calling::callee_saved(CALLING.native())
     }
 
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId {
+        llrm_x86::calling::register(name)
+    }
+
+    fn convention_results(
+        &self,
+        convention: &llrm_target::calling::Convention,
+        width: u32,
+    ) -> Vec<RegId> {
+        llrm_x86::calling::results(convention, width)
+    }
+
+    fn convention_callee_saved(
+        &self,
+        convention: &llrm_target::calling::Convention,
+    ) -> Vec<(RegId, RegId)> {
+        llrm_x86::calling::callee_saved(convention)
+    }
+
     /// Where a routine with no convention of its own answers (BASIC's, the
     /// runtime's): the stack convention's, cdecl16's. A function with a
     /// convention answers as its description says.

@@ -170,6 +170,7 @@ pub mod globals;
 pub mod hintwalk;
 pub mod inline_asm;
 pub mod isel;
+pub mod valuefacts;
 
 /// Every target's peephole rules, as its definition directory is named.
 pub mod targets {

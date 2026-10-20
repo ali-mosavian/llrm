@@ -1444,10 +1444,8 @@ fn test_bases_past_the_registers_are_not_stepped_as_pointers() {
     // CYCLEBLOBS stepped one pointer per term; five spilled, each an
     // `add [bp-N],2` per pixel where its invariant base cost nothing.
     let text = optimized_sub(SEVEN_TERMS, "T");
-    // Two: the one scaled index every term shares, and the counter that counts
-    // to zero for the exit and the POKE address; none per term.
     let steps = poke_block(&text).lines().filter(|line| line.contains(" = phi ")).count();
-    assert!(steps <= 2, "{steps} pointer steps\n{text}");
+    assert!(steps <= 1, "{steps} pointer steps\n{text}");
 }
 
 const SEVEN_TERMS: &str = "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED sp(8000), f(700), xp(7), yy(7), cd(2000)\r\nt\r\nSUB t\r\n\
@@ -1475,21 +1473,15 @@ fn test_affine_addresses_of_one_counter_step_no_pointer_in_memory() {
 fn test_affine_terms_of_one_counter_share_its_scaled_value() {
     let text = optimized_sub(SEVEN_TERMS, "T");
     let body = poke_block(&text);
-    // The shared scaled value is itself a phi now (stepped by 2), so no phi is
-    // shifted or multiplied per trip, where there were seven.
-    let counters: Vec<String> = regex::Regex::new(r"(%[\w.]+) = phi ")
-        .expect("a pattern")
-        .captures_iter(body)
-        .map(|found| found[1].to_owned())
-        .collect();
-    assert!(!counters.is_empty(), "{text}");
+    let counter =
+        regex::Regex::new(r"(%[\w.]+) = phi ").expect("a pattern").captures(body).unwrap_or_else(|| panic!("{text}"))
+            [1]
+        .to_owned();
     let scaled = body
         .lines()
-        .filter(|line| line.contains(" = shl ") || line.contains(" = mul "))
-        .filter(|line| counters.iter().any(|counter| line.contains(&format!("{counter},"))))
+        .filter(|line| (line.contains(" = shl ") || line.contains(" = mul ")) && line.contains(&format!("{counter},")))
         .count();
-    assert_eq!(scaled, 7, "{text}");
-    assert_eq!(body.matches(" = phi ").count(), 1, "{text}");
+    assert_eq!(scaled, 1, "{text}");
 }
 
 /// A POKE into VGA memory counted as reaching a local array's descriptor, so

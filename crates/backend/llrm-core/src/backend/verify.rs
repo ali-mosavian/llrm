@@ -404,6 +404,13 @@ fn _operands(body: &LirBody) -> Vec<String> {
                 continue;
             };
             for r#where in what.dests.iter().chain(&what.sources) {
+                // Only a segment register can be the segment of an address: a
+                // dword register there is `byte ptr ecx:[bx]`, a miscompile.
+                if let Some(segment) = r#where.address().and_then(|one| one.addr).map(|addr| addr.segment) {
+                    if segment != iced_x86::Register::None && !RegId::from(segment).is_segment_register() {
+                        out.push(format!("{:#06x} takes {segment:?} as the segment of an address", one.at));
+                    }
+                }
                 let Loc::Reg(reg) = r#where else {
                     continue;
                 };
@@ -652,6 +659,30 @@ mod tests {
             let said = verify_for(&body, false, &flat);
             assert!(said.iter().any(|complaint| complaint.contains(says)), "{said:?}");
         }
+    }
+
+    /// `ecx:[bx]`, a call's dword register as the segment of an address, was
+    /// emitted by QCport's `copyrows` and ran; only a segment register can be
+    /// one.
+    #[test]
+    fn test_only_a_segment_register_is_the_segment_of_an_address() {
+        let cell =
+            |segment| Loc::Mem(ir::Mem::new(Some(ir::Addr { segment, ..ir::Addr::new(ir::Space::Segment, 0) }), 1));
+        let load = |segment| {
+            let what = semantics(
+                Operation::Move,
+                "mov",
+                vec![Loc::Reg(ir::Reg { register: RegId::AL, width: 1 })],
+                vec![cell(segment)],
+            );
+            body(
+                "segment",
+                vec![LirBlock::new(1, vec![Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![], vec![]))]).into()],
+            )
+        };
+        let said = verify(&load(iced_x86::Register::ECX), false);
+        assert!(said.iter().any(|complaint| complaint.contains("ECX as the segment of an address")), "{said:?}");
+        assert_eq!(verify(&load(iced_x86::Register::ES), false), Vec::<String>::new());
     }
 
     /// Under RFP an x87 operand is `FP0`..`FP6` after allocation;
