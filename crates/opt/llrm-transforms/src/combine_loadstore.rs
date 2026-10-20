@@ -365,10 +365,19 @@ impl Combiner<'_> {
     /// the users of `alloca` and of the casts and GEPs of it, in the order they
     /// were reached, when all of them are non-volatile stores to it.
     ///
-    /// DEVIATE 7: loads (folded to undef where the allocation's initial value
-    /// is known), `icmp`s, `memset`/`memcpy`/`memmove`, `lifetime` and `assume`
-    /// users are not translated: an alloca with one stays. Exit: the next
-    /// slice of this file.
+    /// DEVIATE 7: the pin also removes an alloca with these users, and here one
+    /// with any of them stays: loads (an alloca's initial value is undef, so
+    /// an alloca nothing writes goes with its loads, replaced by undef), `icmp`
+    /// equalities (folded to false/true), `memset`/`memcpy`/`memmove` into it
+    /// (or out of it, for an alloca nothing writes), `lifetime.start`/`end` and
+    /// `assume`. What it costs: an alloca written only by a `memset` or marked
+    /// by lifetimes lives on past InstCombine, until dead-store elimination
+    /// (a `memset` into a local nothing reads) or `dead` (the markers) takes
+    /// it; one only read, or compared, is not removed. None of these shows
+    /// in the corpus: with the entry wired, 568 vsgcc objects at m32/m16 x
+    /// O1..Os came out byte for byte the same. Exit: the next slice of this
+    /// file (the users `llvm.*` calls need `Combiner` to ask the callee's
+    /// intrinsic).
     fn alloc_site_removable(
         &self,
         alloca: InstId,
