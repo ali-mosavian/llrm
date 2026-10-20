@@ -110,15 +110,16 @@ use crate::dead;
 /// computed from its trips (`exitvalues`), final updates sunk to
 /// the exits (`exitsink`). Which counters the loop keeps is `lsr`'s.
 pub struct IndVars {
-    /// Whether LFTR runs: opt-in, `LLRM_LFTR` (D22).
+    /// Whether LFTR runs: on in the pipeline, `LLRM_NO_LFTR` turns it off.
     pub lftr: bool,
 }
 
-/// `LLRM_LFTR`, read once: LFTR runs in the pipeline (D22). Off by default:
-/// the old `lsr` does not reduce the counter LFTR leaves, and every counted
-/// loop got a few bytes larger (+0.4% bytes of m32 code, rows pair on #2752).
+/// `LLRM_NO_LFTR`, read once: LFTR runs in the pipeline, as the pin's
+/// IndVarSimplify does. The exit test becomes `eq`/`ne` for the translated LSR
+/// to take against zero (it was opt-in while the old `lsr` could not reduce
+/// the counter LFTR leaves, D22).
 pub fn lftr_default() -> bool {
-    llrm_support::env_flag!("LLRM_LFTR")
+    !llrm_support::env_flag!("LLRM_NO_LFTR")
 }
 
 impl FunctionPass for IndVars {

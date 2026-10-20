@@ -2572,3 +2572,38 @@ fn test_the_loop_header_is_copied_at_os_and_not_at_oz() {
     assert!(rotated_under(pipeline::Options::size()), "-Os rotates");
     assert!(!rotated_under(pipeline::Options::min_size()), "-Oz copies no header");
 }
+
+/// A counted loop's exit test is `eq` after the pipeline, as the pin's
+/// IndVarSimplify (LFTR) leaves it: only an `eq`/`ne` test can be taken
+/// against zero by LSR. It stayed `ult` (bench ring: 6 instructions a trip in
+/// the fill loop where the pin has 4).
+#[test]
+fn a_counted_loop_exits_on_an_equality_test() {
+    let mut module = llrm_analysis::testing::parsed(&format!(
+        "{}define void @f(ptr %buf) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b1 ]
+  %p = getelementptr inbounds i16, ptr %buf, i16 %i
+  store i16 %i, ptr %p
+  %n = add nuw nsw i16 %i, 1
+  %go = icmp ult i16 %n, 1024
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret void
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let text = llrm_mir::print::module(&module);
+    assert!(text.contains("icmp eq") || text.contains("icmp ne"), "{text}");
+}
