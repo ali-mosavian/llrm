@@ -23,6 +23,11 @@ use llrm_mir::{
 pub const PERSONALITY: &str = "llrm.qb.personality";
 pub const ONERROR: &str = "llrm.qb.onerror";
 pub const ONLOCALERROR: &str = "llrm.qb.onlocalerror";
+/// The flag on a declaration whose effect belongs to the frame that runs the
+/// call (the runtime keeps the registration of that frame), so a body that
+/// makes the call is not copied into another frame: like `returns_twice` for
+/// `setjmp`, which `CallAnalyzer::visitCallBase` and `isInlineViable` read.
+pub const FRAME_BOUND: &str = "frame_bound";
 /// ERR outside the handler: the runtime's error number.
 pub const ERR: &str = "llrm.qb.B$FERR";
 
@@ -69,7 +74,14 @@ pub fn handled(
     let pad = types.intern(Type::Struct { fields: vec![ptr, i32], packed: false });
     let personality = declared(module, far, PERSONALITY, personality_type, 0, &[])?;
     let onerror =
-        declared(module, far, if local { ONLOCALERROR } else { ONERROR }, onerror_type, BASIC, &["nounwind"])?;
+        declared(
+        module,
+        far,
+        if local { ONLOCALERROR } else { ONERROR },
+        onerror_type,
+        BASIC,
+        &["nounwind", FRAME_BOUND],
+    )?;
     let GlobalKind::Function(handled) = &mut module.globals[function.0 as usize].kind else {
         return Err("a handler outside a function".to_owned());
     };

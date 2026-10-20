@@ -259,6 +259,14 @@ fn has_flag(
     attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == name))
 }
 
+/// Whether the function `id` is declared `frame_bound`.
+fn frame_bound(
+    module: &Module,
+    id: GlobalId,
+) -> bool {
+    module.global(id).function().is_some_and(|function| has_flag(&function.attrs, "frame_bound"))
+}
+
 fn call_info(
     function: &Function,
     inst: InstId,
@@ -324,8 +332,8 @@ pub fn inline_viable(
                 if name == "llvm.localescape" {
                     return Err("disallowed inlining of @llvm.localescape".into());
                 }
-                if name == "llrm.qb.onerror" || name == "llrm.qb.onlocalerror" {
-                    return Err("disallowed inlining of an error-handler registration".into());
+                if target.is_some_and(|one| frame_bound(module, one)) {
+                    return Err("disallowed inlining of a frame-bound call".into());
                 }
                 if name == "llvm.va_start" {
                     return Err("contains VarArgs initialized with va_start".into());
@@ -1380,9 +1388,11 @@ impl<'a> Analyzer<'a> {
         };
         // simplifyCallSite: D3, no library folding.
         let name = self.site.module.global(target).name.clone();
-        // DEVIATE: the QB runtime keeps the error handler of the frame that
-        // registers it; a copy in another frame registers that one.
-        if matches!(name.as_deref(), Some("llrm.qb.onerror" | "llrm.qb.onlocalerror")) {
+        // A declaration flagged `frame_bound` (the QB error-handler
+        // registration): its effect belongs to the frame that runs it, so the
+        // callee is not copied into another frame (the `returns_twice` rule of
+        // `visitCallBase`, InlineCost.cpp:2473).
+        if frame_bound(self.site.module, target) {
             self.has_uninlineable_intrinsic = true;
             return false;
         }
