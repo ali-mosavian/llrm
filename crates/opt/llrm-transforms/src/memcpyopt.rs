@@ -20,6 +20,8 @@
 //! - a call that fills a fresh alloca, copied to another place, fills that
 //!   place instead and the copy is gone (`performCallSlotOptzn`, from a memcpy
 //!   or a load and store of the alloca);
+//! - a copy of a whole stack slot to another that never conflict with it makes
+//!   the two one slot (`performStackMoveOptzn`);
 //! - a memmove whose ranges cannot meet is a memcpy (`processMemMove`);
 //! - an aggregate loaded and stored right after is a memcpy, or a memmove where
 //!   the store may write what the load reads (`processStoreOfLoad`), the store
@@ -43,8 +45,7 @@
 //!    false.
 //! 3. No debug-info assignment IDs (`mergeDIAssignID`), no `combineAAMetadata`
 //!    (the formed calls carry no `!tbaa`, as in `loopidiom`).
-//! 4. Done later (stages): `performStackMoveOptzn`, `processByValArgument` and
-//!    `processImmutArgument`.
+//! 4. Done later (stages): `processByValArgument` and `processImmutArgument`.
 //! 5. MIR holds no constant expression in code: where the builder folds
 //!    `getelementptr (i8, @g, 16)` the pass makes the instruction. A forced
 //!    inline copy (`llvm.memcpy.inline`) is not forwarded, as the builder's
@@ -596,6 +597,15 @@ impl State<'_> {
                 self.erase_instruction(m.inst);
                 return true;
             }
+        }
+        // A copy of one stack slot to another may merge the two.
+        if let Some(size) = self.constant_length(m.length)
+            && self.perform_stack_move_optzn(m.inst, m.inst, m.dest, m.other, size)
+        {
+            // Do not invalidate the iterator.
+            *bbi = self.function.next_in_block(m.inst);
+            self.erase_instruction(m.inst);
+            return true;
         }
         false
     }
@@ -1400,6 +1410,344 @@ impl State<'_> {
         result.with_ret != llrm_analysis::capturetracking::CaptureComponents::NONE
     }
 
+    /// `performStackMoveOptzn`: a copy of a whole alloca to another, where the
+    /// two never conflict, is the one alloca: the destination's uses move to
+    /// the source and the copy goes (the caller erases it). `load` and `store`
+    /// are the copy: one memcpy, or a load and its store.
+    fn perform_stack_move_optzn(
+        &mut self,
+        load: InstId,
+        store: InstId,
+        dest_ptr: Operand,
+        src_ptr: Operand,
+        size: u64,
+    ) -> bool {
+        let alloca_of = |this: &Self, ptr: Operand| -> Option<InstId> {
+            let Operand::Value(value) = get_underlying_object(&this.query(), ptr, 0) else { return None };
+            match this.function.value(value).def {
+                llrm_mir::module::ValueDef::Instruction(inst)
+                    if matches!(this.function.instruction(inst).opcode, Opcode::Alloca { .. }) =>
+                {
+                    Some(inst)
+                }
+                _ => None,
+            }
+        };
+        let (Some(dest_alloca), Some(src_alloca)) = (alloca_of(self, dest_ptr), alloca_of(self, src_ptr)) else {
+            return false;
+        };
+        // A partial copy within one alloca would fail the dominance check.
+        if src_alloca == dest_alloca {
+            return false;
+        }
+        let (
+            Opcode::Alloca { allocated: src_ty, align: src_align, address_space: src_space },
+            Opcode::Alloca { allocated: dest_ty, align: dest_align, address_space: dest_space },
+        ) = (
+            self.function.instruction(src_alloca).opcode.clone(),
+            self.function.instruction(dest_alloca).opcode.clone(),
+        )
+        else {
+            return false;
+        };
+        if src_space != dest_space {
+            return false;
+        }
+        // Static allocas: a constant count, in the entry block.
+        let entry = self.function.layout().first().copied();
+        let is_static = |this: &Self, alloca: InstId| {
+            this.function.instruction(alloca).operands.first().is_none_or(|count| matches!(count, Operand::Constant(_)))
+                && this.function.parent(alloca) == entry
+        };
+        if !is_static(self, src_alloca) || !is_static(self, dest_alloca) {
+            return false;
+        }
+        let (src_value, dest_value) = (
+            Operand::Value(self.function.instruction(src_alloca).result.expect("an alloca has a value")),
+            Operand::Value(self.function.instruction(dest_alloca).result.expect("an alloca has a value")),
+        );
+        let (dest_offset, src_offset) = {
+            let q = self.query();
+            (get_pointer_offset_from(&q, dest_ptr, dest_value), get_pointer_offset_from(&q, src_ptr, src_value))
+        };
+        let (Some(dest_offset), Some(src_offset)) = (dest_offset, src_offset) else { return false };
+        if src_offset < dest_offset || src_offset < 0 {
+            return false;
+        }
+        let dest_align_bytes = dest_align.unwrap_or_else(|| self.layout.align(&self.context.types, dest_ty));
+        let src_align_bytes = src_align.unwrap_or_else(|| self.layout.align(&self.context.types, src_ty));
+        // The offset difference must preserve the destination's alignment.
+        if (src_offset - dest_offset) as u64 % dest_align_bytes != 0 {
+            return false;
+        }
+        let count = |this: &Self, alloca: InstId| -> Option<u64> {
+            match this.function.instruction(alloca).operands.first() {
+                None => Some(1),
+                Some(&count) => this.query().int_constant(count).map(|(bits, _)| bits as u64),
+            }
+        };
+        let (Some(src_count), Some(dest_count)) = (count(self, src_alloca), count(self, dest_alloca)) else {
+            return false;
+        };
+        let src_size = self.layout.alloc_size(&self.context.types, src_ty) * src_count;
+        let dest_size = self.layout.alloc_size(&self.context.types, dest_ty) * dest_count;
+        // The copy covers the whole destination, inside the source.
+        if size != dest_size || dest_offset != 0 || src_offset as u64 + size > src_size {
+            return false;
+        }
+        // Resizing the source needs the destination's count operand shaped like
+        // it.
+        if src_size != dest_size
+            && self.function.instruction(src_alloca).operands.len()
+                != self.function.instruction(dest_alloca).operands.len()
+        {
+            return false;
+        }
+        // Combining must not break dominance.
+        let move_src = !self.dt.instruction_dominates(self.function, src_alloca, dest_alloca);
+        if move_src && !self.dt.instruction_dominates(self.function, dest_alloca, src_alloca) {
+            return false;
+        }
+
+        // Neither alloca may be captured or escape; the lifetime markers go,
+        // and instructions with alias metadata lose it.
+        let mut lifetime_markers = Vec::new();
+        let mut alias_metadata: Vec<InstId> = Vec::new();
+        let (mut dest_mod, mut dest_ref) = (false, false);
+        let mut reachability: Vec<llrm_mir::module::BlockId> = Vec::new();
+        let store_block = self.function.parent(store).expect("a placed store");
+        let view = self.view();
+        let aa = AliasQuery::new(&view, &self.accesses);
+        let dest_loc = aa.location_for(&self.reference_at(aa.unit(), dest_value, dest_size as u32), false);
+        let src_loc = aa.location_for(&self.reference_at(aa.unit(), src_ptr, size as u32), false);
+
+        let mut dest_address_captured = false;
+        if !self.track_captures(
+            dest_alloca,
+            &mut lifetime_markers,
+            &mut alias_metadata,
+            &mut dest_address_captured,
+            &mut |this, user| {
+                // The copy itself does not count.
+                if user == store {
+                    return true;
+                }
+                let result = aa.get_mod_ref_info(user, &dest_loc);
+                dest_mod |= result.is_mod();
+                dest_ref |= result.is_ref();
+                if result.is_mod_or_ref() {
+                    let block = this.function.parent(user).expect("a placed user");
+                    if block == store_block {
+                        // Before the copy in its block: reachable.
+                        if this.function.comes_before(user, store) {
+                            return false;
+                        }
+                        if this.function.entry() == Some(block) {
+                            return true;
+                        }
+                        reachability.extend(this.function.successors(block).iter().copied());
+                    } else {
+                        reachability.push(block);
+                    }
+                }
+                true
+            },
+        ) {
+            return false;
+        }
+        // Any mod/ref of the destination before the copy ends it.
+        if !reachability.is_empty()
+            && llrm_analysis::reachability::is_potentially_reachable_from_many(
+                self.function,
+                std::mem::take(&mut reachability),
+                store_block,
+                Some(&self.dt),
+            )
+        {
+            return false;
+        }
+
+        // From after the load to the end of the block: a destination written
+        // leaves the source unread, a destination read leaves it unwritten.
+        let mut post_dominators = llrm_mir::domtree::PostDomTree::new();
+        post_dominators.recalculate(&*self.function);
+        let post_dominates = |this: &Self, a: InstId, b: InstId| -> bool {
+            let (block_a, block_b) =
+                (this.function.parent(a).expect("placed"), this.function.parent(b).expect("placed"));
+            if block_a != block_b {
+                return post_dominators.dominates(block_a, block_b);
+            }
+            this.function.comes_before(b, a)
+        };
+        let mut src_address_captured = false;
+        let mut ignored_markers = Vec::new();
+        let mut ignored_metadata = Vec::new();
+        if !self.track_captures(
+            src_alloca,
+            &mut ignored_markers,
+            &mut ignored_metadata,
+            &mut src_address_captured,
+            &mut |this, user| {
+                // Anything the load post-dominates, and the copy, do not
+                // matter.
+                if user == load || user == store || post_dominates(this, load, user) {
+                    return true;
+                }
+                let result = aa.get_mod_ref_info(user, &src_loc);
+                !((dest_mod && result.is_ref()) || (dest_ref && result.is_mod()))
+            },
+        ) {
+            return false;
+        }
+        lifetime_markers.extend(ignored_markers);
+        alias_metadata.extend(ignored_metadata);
+        // With both addresses captured, being one object could be seen.
+        if dest_address_captured && src_address_captured {
+            return false;
+        }
+
+        // The transformation. First the source moves up if it was after the
+        // destination.
+        if move_src {
+            self.function
+                .move_to(src_alloca, llrm_mir::edit::Position::Before(dest_alloca))
+                .unwrap_or_else(|error| panic!("memcpyopt: {error}"));
+        }
+        // Align and size the merged alloca.
+        let merged_align = src_align_bytes.max(dest_align_bytes);
+        let (merged_ty, merged_count) = if dest_size > src_size {
+            (dest_ty, self.function.instruction(dest_alloca).operands.first().copied())
+        } else {
+            (src_ty, None)
+        };
+        self.function.set_opcode(
+            src_alloca,
+            Opcode::Alloca { allocated: merged_ty, align: Some(merged_align), address_space: src_space },
+        );
+        if let Some(count) = merged_count
+            && !self.function.instruction(src_alloca).operands.is_empty()
+        {
+            self.function.set_operand(src_alloca, 0, count);
+        }
+        // Merge: the destination's uses go to the source, offset if need be.
+        let new_dest = if src_offset != dest_offset {
+            let bits = self.layout.pointer(src_space).bits;
+            let index =
+                Operand::Constant(self.context.int(self.context.types.int(bits), i128::from(src_offset - dest_offset)));
+            let i8 = self.context.types.int(8);
+            self.insert_before(
+                dest_alloca,
+                Opcode::GetElementPtr { source: i8 },
+                self.function.value(self.operand_value(src_value)).ty,
+                vec![src_value, index],
+                Flags::INBOUNDS,
+            )
+        } else {
+            src_value
+        };
+        self.function.replace_all_uses_with(self.operand_value(dest_value), new_dest);
+        self.erase_instruction(dest_alloca);
+        // The merged alloca keeps only its debug metadata.
+        let kept: Vec<_> = self
+            .function
+            .instruction(src_alloca)
+            .metadata
+            .iter()
+            .filter(|(kind, _)| kind.starts_with("dbg"))
+            .cloned()
+            .collect();
+        for kind in
+            self.function.instruction(src_alloca).metadata.iter().map(|(kind, _)| kind.clone()).collect::<Vec<_>>()
+        {
+            if !kept.iter().any(|(one, _)| *one == kind) {
+                self.function.set_metadata(src_alloca, &kind, None);
+            }
+        }
+        for marker in lifetime_markers {
+            if !self.function.is_erased(marker) {
+                self.erase_instruction(marker);
+            }
+        }
+        // Accesses that did not alias now may: their alias metadata goes.
+        for inst in alias_metadata {
+            if self.function.is_erased(inst) {
+                continue;
+            }
+            for kind in ["alias.scope", "noalias", "tbaa", "tbaa_struct"] {
+                self.function.set_metadata(inst, kind, None);
+            }
+        }
+        true
+    }
+
+    /// `CaptureTrackingWithModRef`: follows the uses of `alloca` through what
+    /// keeps its result; false where one captures its provenance, where
+    /// `mod_ref` says false of an instruction that touches memory, or where
+    /// there are too many uses to see. The lifetime markers and the other
+    /// memory-touching users are collected.
+    fn track_captures(
+        &self,
+        alloca: InstId,
+        lifetime_markers: &mut Vec<InstId>,
+        alias_metadata: &mut Vec<InstId>,
+        address_captured: &mut bool,
+        mod_ref: &mut dyn FnMut(&Self, InstId) -> bool,
+    ) -> bool {
+        use llrm_analysis::capturetracking::{CaptureComponents, DEFAULT_MAX_USES_TO_EXPLORE};
+        let base = self.function.instruction(alloca).result.expect("an alloca has a value");
+        let mut worklist = vec![base];
+        let mut visited: llrm_support::hash::HashSet<(InstId, u32)> = Default::default();
+        while let Some(value) = worklist.pop() {
+            for &used in self.function.users(value) {
+                if visited.len() >= DEFAULT_MAX_USES_TO_EXPLORE {
+                    return false;
+                }
+                if !visited.insert((used.user, used.index)) {
+                    continue;
+                }
+                let info = llrm_analysis::capturetracking::determine_use_capture_kind(
+                    self.function,
+                    &self.outer.globals,
+                    self.context,
+                    used,
+                    base,
+                );
+                if info.use_cc.intersect(CaptureComponents::PROVENANCE).captures_anything() {
+                    return false;
+                }
+                *address_captured |= info.use_cc.intersect(CaptureComponents::ADDRESS).captures_anything();
+                if self.mssa.get_memory_access(used.user).is_some() {
+                    if matches!(
+                        self.intrinsic_of(used.user),
+                        Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd)
+                    ) {
+                        lifetime_markers.push(used.user);
+                        continue;
+                    }
+                    alias_metadata.push(used.user);
+                    if !mod_ref(self, used.user) {
+                        return false;
+                    }
+                }
+                if info.result_cc.captures_anything()
+                    && let Some(result) = self.function.instruction(used.user).result
+                {
+                    worklist.push(result);
+                }
+            }
+        }
+        true
+    }
+
+    /// The value an operand names.
+    fn operand_value(
+        &self,
+        operand: Operand,
+    ) -> llrm_mir::module::ValueId {
+        let Operand::Value(value) = operand else { panic!("memcpyopt: a value") };
+        value
+    }
+
     /// `processStore`, its `processStoreOfLoad` arm: the store of a loaded
     /// value. The memset arms are stage 1's (`crate::memcpyoptimizer`).
     fn process_store(
@@ -1483,6 +1831,15 @@ impl State<'_> {
             matches!(this.function.instruction(inst).opcode, Opcode::Call(_)).then_some(inst)
         };
         if self.perform_call_slot_optzn(li, si, dest, source, size, store_align.min(load_align), get_c) {
+            self.erase_instruction(si);
+            self.erase_instruction(li);
+            return true;
+        }
+        // A load-store pair from one stack slot to another.
+        let (store_ptr, load_ptr) =
+            (self.function.instruction(si).operands[1], self.function.instruction(li).operands[0]);
+        if self.perform_stack_move_optzn(li, si, store_ptr, load_ptr, size) {
+            *bbi = self.function.next_in_block(si);
             self.erase_instruction(si);
             self.erase_instruction(li);
             return true;
