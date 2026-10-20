@@ -188,8 +188,13 @@ b0:
   %f = mul i32 %e, %a
   %g = add i32 %f, %c
   %h = mul i32 %g, %d
-  store i32 %h, ptr @g
-  ret i32 %h
+  %i = add i32 %h, %a
+  %j = mul i32 %i, %x
+  %k = add i32 %j, %c
+  %l = mul i32 %k, %b
+  %m = add i32 %l, %e
+  store i32 %m, ptr @g
+  ret i32 %m
 }}
 
 define i32 @f(i32 %y) {{
