@@ -717,34 +717,37 @@ mod tests {
             .collect()
     }
 
-    /// `dot` indexes `a[i]` and `b[i]`: before strength waited for the other
-    /// passes to settle, it kept two pointers and a counter, three steps
-    /// per iteration.
+    /// `dot` indexes `a[i]` and `b[i]`: both arrays share one stepped offset
+    /// beside the counter, as `opt -passes=loop-reduce` + `llc -mcpu=i486`
+    /// list it (`inc; add 2; cmp`), not a pointer per array.
     #[test]
     fn test_addresses_differing_by_base_share_one_stepped_offset() {
-        assert_eq!(loop_counting("dot"), ["add bx, 2"]);
+        assert_eq!(loop_counting("dot"), ["inc dx", "cmp dx, cx"]);
     }
 
     /// `bytes` indexes by `i` itself, with a bound only known at run time: the
-    /// counter never counted to zero, so each iteration compared it with `n` in
-    /// memory.
+    /// counter is the offset and is compared with `n`, as llc lists it
+    /// (`inc; cmp`).
     #[test]
     fn test_a_counter_read_only_as_offsets_counts_to_zero() {
-        assert_eq!(loop_counting("bytes"), ["inc bx"]);
+        assert_eq!(loop_counting("bytes"), ["inc bx", "cmp bx, cx"]);
     }
 
-    /// `from1` reads `a[i]` and `b[i - 1]`: `(i - 1) * 2` was a second root
-    /// beside `i * 2`, so each array stepped its own pointer beside a
-    /// counter.
+    /// `from1` reads `a[i]` and `b[i - 1]`: `(i - 1) * 2` folds into the
+    /// displacement (`[bx+di-2]`), so both arrays index off `i * 2` beside
+    /// one counter, as `opt` + `llc -mcpu=i486` list it.
     #[test]
     fn test_subscripts_of_one_stride_share_one_offset() {
-        assert_eq!(loop_counting("from1"), ["add bx, 2"]);
+        assert_eq!(loop_counting("from1"), ["inc dx", "cmp dx, cx"]);
         let loop_ = innermost("from1");
         let two_registers = |one: &String| {
             let inside = one.split_once("ptr [").map_or("", |(_, inside)| inside).as_bytes();
             inside.len() > 4 && inside[2] == b'+' && inside[3].is_ascii_alphabetic()
         };
-        assert!(loop_.iter().filter(|one| one.contains("ptr [")).all(two_registers), "{loop_:#?}");
+        assert!(
+            loop_.iter().filter(|one| one.starts_with("movsx") && one.contains("ptr [")).all(two_registers),
+            "{loop_:#?}"
+        );
     }
 
     /// tests/fixtures/c/`path`.cgs's MIR as the front end emits it.
@@ -3247,15 +3250,16 @@ mod tests {
             .take_while(|line| *line != "sum_ endp")
             .map(String::as_str)
             .collect();
-        // The load is the add's operand, and the add of the stride sets the
-        // flags the branch reads.
+        // The load is the add's operand, indexed `[base+index*4]`; the counter
+        // steps by one and the compare ends the loop, as llc lists it.
+        let at = body
+            .iter()
+            .position(|line| line.starts_with("add e") && line.contains("dword ptr [e") && line.contains("*4]"));
+        let at = at.unwrap_or_else(|| panic!("{body:#?}"));
         assert!(
-            body.iter().any(|line| line.starts_with("add e") && line.contains("dword ptr [e") && line.contains("+e")),
+            body[at + 1].starts_with("inc e") && body[at + 2].starts_with("cmp e") && body[at + 3].starts_with("jl "),
             "{body:#?}"
         );
-        assert!(body.iter().any(|line| line.starts_with("add e") && line.ends_with(", 4")), "{body:#?}");
-        let jump = body.iter().position(|line| line.starts_with("jne ")).expect("the loop ends on jne");
-        assert!(body[jump - 1].starts_with("add e") && body[jump - 1].ends_with(", 4"), "{body:#?}");
         assert!(
             body.iter().all(|line| !line.contains(" bp")
                 && !line.contains("[bx")
