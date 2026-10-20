@@ -382,6 +382,27 @@ pub trait Target {
     /// a value in: each by its full register and by the one a prologue pushes.
     fn callee_saved(&self) -> Vec<(RegId, RegId)>;
 
+    /// The register `calling.toml` or a description names `name` (`ebx`,
+    /// `st0`, `x19`), as the family spells it.
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId;
+
+    /// The registers a result `width` bytes wide leaves in under `convention`.
+    fn convention_results(
+        &self,
+        convention: &calling::Convention,
+        width: u32,
+    ) -> Vec<RegId>;
+
+    /// What `convention` keeps for its caller: each register by its full
+    /// register and the one pushed.
+    fn convention_callee_saved(
+        &self,
+        convention: &calling::Convention,
+    ) -> Vec<(RegId, RegId)>;
+
     /// One CPU's timings (a column of the target's `timings.times`), if the
     /// target prices it.
     fn cpu_table(

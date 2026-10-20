@@ -49,98 +49,23 @@
 //! %r = add i32 %a, %n   ; %r = sub i32 %x, %y
 //! ```
 
-use llrm_mir::constantfolding;
 use llrm_mir::context::{mask, signed};
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
-use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::valuetracking::range::{
     OverflowResult, compute_overflow_for_signed_add, compute_overflow_for_signed_sub,
 };
 use llrm_mir::valuetracking::{Query, known, nonzero, pattern};
 
 use crate::combine::{Combiner, Visit};
-use crate::combine_shared::{query, simplify_associative_or_commutative};
-
-/// `m_BinOp(op, a, b)`: the operands and flags of `v` if it is that operation.
-fn binop(
-    q: &Query,
-    v: Operand,
-    op: BinaryOp,
-) -> Option<(Operand, Operand, Flags)> {
-    pattern::binary(q, v, op).map(|(_, instruction, a, b)| (a, b, instruction.flags))
-}
-
-/// `m_c_BinOp(op, P, m_Value(Other))`: `v` is `op a, b` where `a` or `b`
-/// satisfies `first`; the one that does, and the other. `a` is tried first.
-fn commutative(
-    q: &Query,
-    v: Operand,
-    op: BinaryOp,
-    first: impl Fn(Operand) -> bool,
-) -> Option<(Operand, Operand)> {
-    let (a, b, _) = binop(q, v, op)?;
-    if first(a) {
-        Some((a, b))
-    } else if first(b) {
-        Some((b, a))
-    } else {
-        None
-    }
-}
-
-/// `m_SpecificInt(n)`: an integer constant equal to `n`.
-fn specific_int(
-    q: &Query,
-    v: Operand,
-    n: u128,
-) -> bool {
-    pattern::apint(q, v).is_some_and(|(bits, _)| bits == n)
-}
-
-/// `m_OneUse`: `v` is read once.
-fn one_use(
-    c: &Combiner,
-    v: Operand,
-) -> bool {
-    matches!(
-        v,
-        Operand::Value(value) if c.function.users(value).has_one_use()
-    )
-}
-
-/// The visited instruction's operands, flags and result width.
-fn parts(
-    c: &Combiner,
-    inst: InstId,
-) -> (Operand, Operand, Flags) {
-    let instruction = c.function.instruction(inst);
-    (instruction.operands[0], instruction.operands[1], instruction.flags)
-}
-
-/// The width of the integer `v` (a scalar: MIR has no vectors).
-fn width(
-    c: &Combiner,
-    v: Operand,
-) -> u32 {
-    c.context.types.int_bits(c.type_of(v)).expect("an integer")
-}
-
-/// `ConstantExpr::getAdd` and the like of two constants: the folded constant
-/// (DEVIATE 4: none where it would stay an expression).
-fn fold_constants(
-    c: &Combiner,
-    op: BinaryOp,
-    a: Operand,
-    b: Operand,
-) -> Option<Operand> {
-    let (Operand::Constant(x), Operand::Constant(y)) = (a, b) else { return None };
-    let env = constantfolding::Env { globals: c.env.globals, layout: c.env.layout };
-    constantfolding::constant_fold_binary_op_operands(c.context, env, op, x, y).map(Operand::Constant)
-}
+use crate::combine_add_idioms::fold_add_rest;
+use crate::combine_shared::{
+    binop, commutative, fold_constants, has_one_use, inst_def, parts, query, simplify_associative_or_commutative,
+    simplify_visited, specific_int, width, wrap_of,
+};
 
 /// `InstCombiner::AddOne` and `SubOne` of a constant.
-fn add_to(
+pub fn add_to(
     c: &Combiner,
     v: Operand,
     delta: i128,
@@ -160,7 +85,7 @@ fn will_not_overflow_signed_add(
 }
 
 /// `willNotOverflowSignedSub(l, r, I)`.
-fn will_not_overflow_signed_sub(
+pub fn will_not_overflow_signed_sub(
     c: &Combiner,
     cxt: InstId,
     l: Operand,
@@ -204,16 +129,12 @@ fn fold_box_multiply(
                 .filter(|&(_, amount, _)| specific_int(&q, amount, half as u128))
                 .map(|(a, ..)| a)
         };
-        let product = |v: Operand| if one_use(c, v) { binop(&q, v, BinaryOp::Mul) } else { None };
-        let (cross_sum, y_lo, x_lo) = [(lhs, rhs), (rhs, lhs)]
-            .into_iter()
-            .find_map(
-                |(a, b)| {
-                    let cross_sum = shifted(a)?;
-                    let (y_lo, x_lo, _) = product(b)?;
-                    Some((cross_sum, y_lo, x_lo))
-                },
-            )?;
+        let product = |v: Operand| if has_one_use(c, v) { binop(&q, v, BinaryOp::Mul) } else { None };
+        let (cross_sum, y_lo, x_lo) = [(lhs, rhs), (rhs, lhs)].into_iter().find_map(|(a, b)| {
+            let cross_sum = shifted(a)?;
+            let (y_lo, x_lo, _) = product(b)?;
+            Some((cross_sum, y_lo, x_lo))
+        })?;
         // XLo = X & HalfMask, YLo = Y & HalfMask.
         let masked = |v: Operand| {
             let (x, m, _) = binop(&q, v, BinaryOp::And)?;
@@ -251,7 +172,7 @@ pub fn factorize_math_with_shl_ops(
         let (x, shamt, f0) = binop(&q, lhs, BinaryOp::Shl)?;
         let (y, shamt1, f1) = binop(&q, rhs, BinaryOp::Shl)?;
         // Both are BinaryOperators with at least one used once.
-        if shamt != shamt1 || !(one_use(c, lhs) || one_use(c, rhs)) {
+        if shamt != shamt1 || !(has_one_use(c, lhs) || has_one_use(c, rhs)) {
             return None;
         }
         // No-wrap propagates only when all ops have no-wrap.
@@ -291,11 +212,11 @@ fn combine_add_sub_with_shl_add_sub(
         // m_c_Add(m_OneUse(m_Shl(m_OneUse(m_Neg(m_Value(B))), m_Value(Cnt))),
         // m_Value(A))
         let shl_of_neg = |v: Operand| {
-            if !one_use(c, v) {
+            if !has_one_use(c, v) {
                 return None;
             }
             let (neg, count, _) = binop(&q, v, BinaryOp::Shl)?;
-            if !one_use(c, neg) {
+            if !has_one_use(c, neg) {
                 return None;
             }
             let (_, b, _) = pattern::neg(&q, neg)?;
@@ -343,7 +264,7 @@ fn fold_no_wrap_add(
             }
             // Otherwise only do this if the existing zero extend will be
             // removed.
-            if one_use(c, op0) {
+            if has_one_use(c, op0) {
                 let nc = c.int(c.type_of(x), new_c);
                 let sum = c.create_binop(inst, BinaryOp::Add, x, nc, Flags::NUW);
                 return Some(c.replace_with_new(inst, Opcode::Cast(CastOp::ZExt), ty, vec![sum], Flags::default()));
@@ -355,7 +276,7 @@ fn fold_no_wrap_add(
     // or (zext nneg (X +nsw NarrowC)) + C --> (sext X) + (sext(NarrowC) + C)
     let wide = |c: &Combiner, extend: bool| -> Option<(Operand, Operand)> {
         let q = query(c, Some(inst));
-        if !one_use(c, op0) {
+        if !has_one_use(c, op0) {
             return None;
         }
         let inner = if extend {
@@ -376,17 +297,6 @@ fn fold_no_wrap_add(
         }
     }
     None
-}
-
-/// The `nsw` and `nuw` of `flags`.
-fn wrap_of(flags: Flags) -> Flags {
-    let mut wrap = Flags::default();
-    for flag in [Flags::NSW, Flags::NUW] {
-        if flags.contains(flag) {
-            wrap.insert(flag);
-        }
-    }
-    wrap
 }
 
 /// The value the instruction `inst` makes.
@@ -432,7 +342,7 @@ pub fn fold_add_with_constant(
     // add (sub X, Y), -1 --> add (not Y), X
     let minus_one = {
         let q = query(c, Some(inst));
-        if one_use(c, op0) && pattern::all_ones(&q, op1) { binop(&q, op0, BinaryOp::Sub) } else { None }
+        if has_one_use(c, op0) && pattern::all_ones(&q, op1) { binop(&q, op0, BinaryOp::Sub) } else { None }
     };
     if let Some((x, y, _)) = minus_one {
         let not_y = c.create_not(inst, y);
@@ -474,7 +384,7 @@ pub fn fold_add_with_constant(
     // (iN X s>> (N - 1)) + 1 --> zext (X > -1)
     let sign_shift = {
         let q = query(c, Some(inst));
-        if one_use(c, op0) && pattern::one(&q, op1) {
+        if has_one_use(c, op0) && pattern::one(&q, op1) {
             binop(&q, op0, BinaryOp::AShr).filter(|&(_, amount, _)| specific_int(&q, amount, (bits - 1) as u128))
         } else {
             None
@@ -570,7 +480,7 @@ pub fn fold_add_with_constant(
         // a value with cleared high bits. Convert that into a pair of shifts:
         // add (xor X, 0x80), 0xF..F80 --> (X << ShAmtC) >>s ShAmtC
         // add (xor X, 0xF..F80), 0x80 --> (X << ShAmtC) >>s ShAmtC
-        if one_use(c, op0) && c2 == c_value.wrapping_neg() & mask(bits) {
+        if has_one_use(c, op0) && c2 == c_value.wrapping_neg() & mask(bits) {
             let shamt = if c_value.is_power_of_two() {
                 bits - c_value.trailing_zeros() - 1
             } else if c2.is_power_of_two() {
@@ -589,7 +499,7 @@ pub fn fold_add_with_constant(
         }
     }
 
-    if c_value == 1 && one_use(c, op0) {
+    if c_value == 1 && has_one_use(c, op0) {
         // add (sext i1 X), 1 --> zext (not X)
         let boolean = {
             let q = query(c, Some(inst));
@@ -709,7 +619,7 @@ fn fold_add_like_commutative(
     if let Some((a, b, c1)) = or_pair {
         // Replacing one add with {or, add}. Avoid growth if both sides are
         // shared.
-        if !one_use(c, lhs) && !one_use(c, rhs) {
+        if !has_one_use(c, lhs) && !has_one_use(c, rhs) {
             return None;
         }
         let left_flags = c.function.instruction(inst_def(c, lhs)?).flags;
@@ -727,32 +637,14 @@ fn fold_add_like_commutative(
     None
 }
 
-/// The instruction that defines the value `v`.
-fn inst_def(
-    c: &Combiner,
-    v: Operand,
-) -> Option<InstId> {
-    let Operand::Value(value) = v else { return None };
-    match c.function.value(value).def {
-        llrm_mir::module::ValueDef::Instruction(inst) => Some(inst),
-        _ => None,
-    }
-}
-
 /// `InstCombinerImpl::visitAdd` (:1604).
 pub fn visit_add(
     c: &mut Combiner,
     inst: InstId,
 ) -> Visit {
     // simplifyAddInst
-    {
-        let env = c.env;
-        if let Some(found) =
-            simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst)
-            && Some(found) != c.function.instruction(inst).result.map(Operand::Value)
-        {
-            return Visit::Replace(found);
-        }
+    if let Some(found) = simplify_visited(c, inst) {
+        return found;
     }
     if simplify_associative_or_commutative(c, inst) {
         return Visit::Changed;
@@ -796,7 +688,7 @@ pub fn visit_add(
         let one = c.int(ty, 1);
         return c.replace_with_binop(inst, BinaryOp::Shl, lhs, one, wrap_of(flags));
     }
-    Visit::None
+    fold_add_rest(c, inst)
 }
 
 #[cfg(test)]
