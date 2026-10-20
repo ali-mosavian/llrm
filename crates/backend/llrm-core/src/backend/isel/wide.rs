@@ -85,7 +85,7 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
-use llrm_mir::valuetracking::sign_bits;
+use llrm_mir::valuetracking::{Query, signbits::compute_num_sign_bits};
 use llrm_mir::{BinaryOp, CastOp, IntPredicate};
 
 use super::expand::{Half, expand_wide};
@@ -107,12 +107,20 @@ impl Selector<'_, '_, '_> {
         self.types().int_bits(ty) == Some(64) && self.layout.largest_legal_integer() < 64
     }
 
+    /// `ComputeNumSignBits` of `operand`.
+    pub(super) fn sign_bits(
+        &self,
+        operand: Operand,
+    ) -> u32 {
+        compute_num_sign_bits(&Query::bare(&self.module.context, self.function, &self.layout), operand, 0)
+    }
+
     /// Whether `operand` is an i32 sign-extended.
     fn narrow(
         &self,
         operand: Operand,
     ) -> bool {
-        sign_bits(&self.module.context, self.function, operand) > 32
+        self.sign_bits(operand) > 32
     }
 
     fn put(
@@ -771,7 +779,7 @@ impl Selector<'_, '_, '_> {
         }
         // Under 2^31 in magnitude, the dividend over any nonzero dword
         // leaves a quotient that fits one: idiv cannot overflow.
-        if signed && self.narrow(right) && sign_bits(&self.module.context, self.function, left) > 33 {
+        if signed && self.narrow(right) && self.sign_bits(left) > 33 {
             let ((low, high), divisor) = (self.wide(left, at, out)?, self.wide(right, at, out)?.0);
             let (quotients, remainders) = (self.half(), self.half());
             let what = semantics(
