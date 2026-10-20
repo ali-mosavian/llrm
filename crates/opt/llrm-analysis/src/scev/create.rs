@@ -8,7 +8,7 @@
 //! `rewriters`.
 //!
 //! # DEVIATE 9 (MIR lacks the construct)
-//! * `llvm.abs`, `llvm.usub.sat`, `llvm.uadd.sat`,
+//! * `llvm.usub.sat`, `llvm.uadd.sat`,
 //!   `llvm.start.loop.iterations`, `llvm.annotation`, `llvm.ptr.annotation`,
 //!   `llvm.vscale` and `llvm.loop.decrement.reg` are not MIR intrinsics
 //!   (`Intrinsic::named` is none for them, tested), so a call to one is an
@@ -532,10 +532,13 @@ impl ScalarEvolution {
                     return None;
                 }
 
-                if let Some(Intrinsic::MinMax { .. }) = cx.query(None).intrinsic(inst) {
-                    ops.push(instruction.operands[0]);
-                    ops.push(instruction.operands[1]);
-                    return None;
+                match cx.query(None).intrinsic(inst) {
+                    Some(Intrinsic::MinMax { .. }) => {
+                        ops.push(instruction.operands[0]);
+                        ops.push(instruction.operands[1]);
+                    }
+                    Some(Intrinsic::Abs) => ops.push(instruction.operands[0]),
+                    _ => {}
                 }
                 None
             }
@@ -851,6 +854,15 @@ impl ScalarEvolution {
                     return self.get_scev(cx, rv);
                 }
 
+                if let Some(Intrinsic::Abs) = cx.query(None).intrinsic(inst) {
+                    let arg = self.get_scev(cx, instruction.operands[0]);
+                    // `cast<ConstantInt>(II->getArgOperand(1))->isOne()`.
+                    let is_nsw = matches!(
+                        instruction.operands[1],
+                        Operand::Constant(id) if matches!(cx.context.get(id).kind, ConstantKind::Int(1))
+                    );
+                    return self.get_abs_expr(cx, arg, is_nsw);
+                }
                 if let Some(Intrinsic::MinMax { signed, max }) = cx.query(None).intrinsic(inst) {
                     let lhs = self.get_scev(cx, instruction.operands[0]);
                     let rhs = self.get_scev(cx, instruction.operands[1]);
