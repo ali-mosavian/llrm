@@ -21,7 +21,7 @@ macro_rules! cases {
     };
 }
 
-cases!(ops, intrinsics, context);
+cases!(ops, intrinsics, context, bitcast);
 
 #[test]
 fn llvm_and_llrm_know_the_same_classes_but_the_listed_values() {
