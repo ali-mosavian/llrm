@@ -7,7 +7,7 @@ PRIORITY=${PRIORITY:-$HERE/priority.txt}; WAITS=${WAITS:-$HERE/waits.txt}
 nums() { sed 's/#.*//' "$1" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$'; }
 ready=$(gh pr list --repo "$R" --state open --base feat/parity --limit 1000 --json number,isDraft,mergeable,body -q '.[]|select(.isDraft==false)|"\(.number) \(.mergeable) \((.body // "")|capture("(^|\n)Owner: *(?<o>[A-Za-z0-9_.-]+)")?.o // "-")"') || exit 1
 # GitHub's mergeable flag is against the base: a PR that conflicts with feat/parity cannot land, alone or in a batch
-echo "$ready" | awk '$2=="CONFLICTING"{printf "%s: REFUSED: conflicts with feat/parity (GitHub mergeable=CONFLICTING); owner %s merges fresh feat/parity\n", $1, $3}' >&2
+echo "$ready" | awk '$2=="CONFLICTING"{printf "%s: REFUSED: conflicts with feat/parity (GitHub mergeable=CONFLICTING); owner %s merges fresh feat/parity (push rejected? git pull --no-rebase, then push; never force)\n", $1, $3}' >&2
 # Owner: <session> in the PR body names who to tell; a PR without it is refused (REQUIRE_OWNER= switches the rule off)
 REQUIRE_OWNER=${REQUIRE_OWNER-1}
 [ -n "$REQUIRE_OWNER" ] && echo "$ready" | awk '$2!="CONFLICTING" && $3=="-"{printf "%s: REFUSED: no `Owner: <session>` line in the description\n", $1}' >&2

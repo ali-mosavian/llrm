@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -95,6 +96,7 @@ def losses(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, int, int, 
     """(path, deleted lines, test functions removed, whole file gone) for each file of the net diff base..head that loses more than LIMIT lines, loses a test or goes.
     Own commits or not: #2443's own commit deleted scev/expand_iv.rs (855 lines) from a stale tree, and 'outside its own commits' let it through."""
     out = []
+    limit = 10**9 if os.environ.get("LAND_FAST") == "1" else LIMIT  # fast mode merges onto the head: a net line loss is the PR's own refactor; whole files and tests still count
     for line in git("diff", "--numstat", base, head, cwd=cwd).splitlines():
         added, gone, path = line.split("\t", 2)
         if gone == "-" or is_generated(base, path, cwd):
@@ -102,7 +104,7 @@ def losses(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, int, int, 
         diff = git("diff", base, head, "--", path, cwd=cwd)
         tests = len(removed_tests(diff))
         whole = bool(re.search(r"^deleted file mode", diff, re.M))
-        if int(gone) > LIMIT or tests or whole:
+        if int(gone) > limit or tests or whole:
             out.append((path, int(gone), tests, whole))
     return out
 
@@ -113,7 +115,30 @@ def acknowledged(description: str, path: str) -> bool:
     return any(any(n in line for n in names) for line in description.splitlines() if re.match(r"^(Reverts|Deletes):", line))
 
 
-def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT) -> list[str]:
+# The user's rule: nothing in the repository, its PRs or its history names the assistant that wrote it. Spelled in two halves so this file does not match itself.
+ASSISTANT_NAME = re.compile(r"\b(?:clau" + "de|anthro" + r"pic)\b", re.I)
+
+
+def assistant_mentions(title: str, description: str, base: str, head: str, cwd: Path = ROOT) -> list[str]:
+    """Where the PR names the assistant: its title, its body, a commit message of base..head, or a line the squash adds."""
+    why = []
+    for where, text in (("title", title), ("description", description)):
+        if ASSISTANT_NAME.search(text or ""):
+            why.append(f"the {where} names the assistant; remove it")
+    for sha, message in (line.split("\t", 1) for line in git("log", "--format=%h\t%s%n%b%x00", f"{base}..{head}", cwd=cwd).split("\0") if "\t" in line):
+        if ASSISTANT_NAME.search(message):
+            why.append(f"commit {sha.strip()} names the assistant in its message; amend it out")
+    path = ""
+    for line in git("diff", "-U0", base, head, cwd=cwd).splitlines():
+        if line.startswith("+++ "):
+            path = line[6:]
+        elif line.startswith("+") and ASSISTANT_NAME.search(line):
+            why.append(f"{path}: an added line names the assistant: {line[1:80].strip()}")
+            break
+    return why
+
+
+def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, title: str = "") -> list[str]:
     """Why this head may not be squashed into `base`; empty if it may."""
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
         return [f"the PR head does not contain {base}: merge it in first (a stale head squashes other PRs' work away)"]
@@ -124,7 +149,7 @@ def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT) ->
             what = "deletes the whole file" if whole else f"deletes {gone} line(s)"
             why.append(f"{path}: the squash {what}{f' and {tests} test function(s)' if tests else ''}{' (no commit of this PR touched it)' if path in outside else ''}; "
                        "name the path in a `Deletes:` or `Reverts:` line of the description if that is meant")
-    return why
+    return why + assistant_mentions(title, description, base, head, cwd)
 
 
 PRECHECK_CACHE = LANDED_LOG.parent / "precheck-cache.json"  # (PR head sha, feat/parity sha) -> the verdict line, and the head's own check failures per sha: ~40 candidates per cycle must not rebuild the dev checkout each
@@ -209,7 +234,7 @@ def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHE
     """`N: PASS`, or `N: REFUSED: <names>` after merging PR N's head with feat/parity in the dev checkout and running the cheap static checks (ratchets, fmt, docs, the
     deletion rule) there: seconds, no dist build. #2836 cost a batch 26 minutes of halving for a failure these checks name. Only items NEW against feat/parity's own
     failures refuse (by check AND file/page): a red head file refused every PR, the fixes included. The verdict is cached per (PR head sha, feat/parity sha)."""
-    info = info or json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
+    info = info or json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
     if info["baseRefName"] != "feat/parity":
         return f"{number}: REFUSED: targets {info['baseRefName']}, not feat/parity"
     base_sha = base_sha or git("rev-parse", BASE).strip()
@@ -379,6 +404,36 @@ def regenerate(conflicts: list[str], cwd: Path = ROOT) -> str:
     return "" if done.returncode == 0 else f"committing the regenerated merge failed: {done.stderr.strip()[:200]}"
 
 
+def update_generated_only(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> str:
+    """The sha of `head` with `base` merged into it, pushed to `branch` as a fast-forward, when the only conflicts are generated pages (regenerated); "" when not.
+    `gh pr merge` refuses a PR GitHub calls conflicting, so the local regeneration alone never landed it: six index-only PRs sat out the 03:02 batch."""
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp) / "w"
+        git("worktree", "add", "-q", "--detach", str(work), head, cwd=cwd)
+        try:
+            merged = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", base], cwd=work, capture_output=True, text=True)
+            if merged.returncode and regenerate(git("diff", "--name-only", "--diff-filter=U", cwd=work).split(), work):
+                return ""
+            sha = git("rev-parse", "HEAD", cwd=work).strip()
+            pushed = subprocess.run(["git", "push", "-q", "origin", f"{sha}:refs/heads/{branch}"], cwd=work, capture_output=True, text=True)
+            return sha if pushed.returncode == 0 else ""
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
+
+
+def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5) -> bool:
+    """Squash PR `number` into feat/parity. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
+    if FAST and info["mergeable"] == "CONFLICTING":
+        if not (fresh := update(info["headRefOid"], info["headRefName"])):
+            return False
+        note = f"The landing runner merged feat/parity into this branch ({fresh[:9]}; generated pages regenerated). If your push is rejected: git pull --no-rebase, then push; never force."
+        run(["gh", "pr", "comment", number, "--body", note])
+        info = {**info, "headRefOid": fresh}
+        time.sleep(settle)  # GitHub recomputes the PR's mergeability after the push
+    stage(f"squash #{number}")
+    return run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", body]).returncode == 0
+
+
 def merged_result(head: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str | None, str]:
     """(sha, "") of `head` with `base` merged into it, checked out detached in `cwd` and not pushed; (None, why) when `base` conflicts. When `head` already
     contains `base` the result is `head` itself. The squash lands on whatever feat/parity is at the call: the tests must run on this result, not on a head that
@@ -478,7 +533,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         raise SystemExit(f"merge-batch takes at most {MAX_BATCH} PRs per smoke, got {len(numbers)}: split the queue")
     infos = {}
     for number in numbers:
-        info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, check=True).stdout)
+        info = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid,headRefName,title,body,baseRefName,mergeable"], capture_output=True, text=True, check=True).stdout)
         if info["baseRefName"] != "feat/parity":
             raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
         infos[number] = info
@@ -499,7 +554,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             if merge.returncode:
                 subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
                 return "conflicts with an earlier PR of the batch or with feat/parity: its owner merges fresh feat/parity"
-            if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or "", base=before):
+            if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or "", base=before, title=infos[number]["title"]):
                 git("reset", "-q", "--hard", before)
                 return "; ".join(why)
             return ""
@@ -531,7 +586,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 print(f"#{number}: does not merge with the others: {merge.stdout.strip()[:120] or merge.stderr.strip()[:120]}")
                 return False
         for number in group:
-            if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or ""):
+            if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or "", title=infos[number]["title"]):
                 print(f"#{number}: " + "; ".join(why))
                 return False
         if stale := ensure_bins():
@@ -548,10 +603,9 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if number in left_out:
             refused.append(number)
             return
-        stage(f"squash #{number}")
-        done = subprocess.run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", infos[number]["headRefOid"], "--subject", infos[number]["title"], "--body", known_red_line(known)])
-        (landed if done.returncode == 0 else refused).append(number)
-        if done.returncode == 0:
+        landed_ok = squash(number, infos[number], known_red_line(known))
+        (landed if landed_ok else refused).append(number)
+        if landed_ok:
             git("fetch", "-q", "origin", "feat/parity")
             log_landed(git("rev-parse", BASE).strip(), number, "gate-ok")
 
@@ -708,7 +762,7 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     if merged is None:
         print(f"REFUSED: {why}")
         return 1
-    if why := refusals(merged, info["body"] or ""):
+    if why := refusals(merged, info["body"] or "", title=info.get("title", "")):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
     if stale := ensure_bins():
