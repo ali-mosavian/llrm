@@ -1218,6 +1218,7 @@ thread_local! {
 /// isel puts its CopyToReg/CopyFromReg for fixed registers.
 pub struct Constrain {
     pub pinned: IndexMap<u32, RegId>,
+    pub segments: crate::backend::target::Segments,
     pub classes: std::rc::Rc<RegisterClasses>,
 }
 
@@ -1239,6 +1240,7 @@ impl crate::model::passes::LIRTransform for Constrain {
         }
         let mut pinned = self.pinned.clone();
         pinned.extend(body.pins.iter().map(|(value, register)| (*value, *register)));
+        let body = crate::backend::allocate::explicit_selectors(&body, Some(&pinned), &self.segments, &self.classes);
         let (mut made, fixed) = constrained(&body, Some(&pinned), &self.classes);
         FIXED.with(|all| all.borrow_mut().insert(body.name.clone(), fixed.keys().copied().collect()));
         made.pins.extend(fixed);
