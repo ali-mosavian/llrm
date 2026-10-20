@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:a24808deaf6c9359c168b515c703824fe6666f0bd15126b213682f570bc0ea71 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:b49fc9fb50d5170d912da80e9cc15317b456d8d7dd4adaa087c263a3eb29be57 -->
 
 # pipeline
 
@@ -56,9 +56,8 @@ flowchart TB
 *The mir pipeline, stages A to F*
 
 The order of B is the `every` list of [`pipeline`](pipeline.md); `passes` returns it
-as names. `Fixed` takes four passes out of it: `sroa` runs at structural
-boundaries, `unroll` and `peel` run at the places drawn above, `merge`
-once at the end. A pass that is off is not in the list.
+as names. `Fixed` takes two passes out of it: `sroa` runs at structural
+boundaries, `merge` once at the end. A pass that is off is not in the list.
 
 A round runs the remaining passes in order. The body is at a fixed point
 when a round changes nothing; a pass reports a change by preserving less
@@ -76,7 +75,7 @@ off.
 
 In E, `lsr` is after the interprocedural step because nothing after it may
 choose a loop's counters again; `rotate{proven}` is last of the loop
-passes because `unroll` and `peel` refuse a rotated loop; `hoist`
+passes; `hoist`
 runs again to lift what a rotated loop (run at least once) may now leave;
 `gepoffset` follows it because it would move a constant `gep` out of its
 loop; `addresssink` follows the last `gvn`, which makes the phis it sinks;
@@ -109,7 +108,6 @@ LLVM counterpart of each limit, is
 | `sink` | `sink` |
 | `promote` | `sroa`, `promote` |
 | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
-| `unroll`, `peel` | the pass of that name |
 | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
 | `ipa_ranges` | argument ranges in the interprocedural step |
@@ -119,8 +117,8 @@ LLVM counterpart of each limit, is
 `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
 `hoist`, `algebraic`, `loopidioms`, `lsr`, `window` and
 `calleepop` in bytes; `loop_intervals` lets alias and branch decisions use
-the intervals of counted loops. `limits` are the copy budgets of `unroll`
-and `peel`.
+the intervals of counted loops. `limits` are the copy budgets of the
+unroller.
 
 ## Needs
 `Summaries`, `GlobalsAA`, `Callbacks` and `ProgramSummaries` are required
