@@ -26,10 +26,12 @@
 //!   IEEE (`DenormalMode::getIEEE`), as `getDenormalMode` answers for a
 //!   function with no attribute.
 //! - DEVIATE 4: no `nofpclass` on an argument, a call result or a load's
-//!   `!nofpclass`; no `amdgcn` intrinsic. An `x86_fp80` constant is held as the
-//!   nearest double, so it is unknown. The intrinsics other than `fabs`,
-//!   `copysign` and `floor` (read by `isAbsoluteValueULEOne`) are the next
-//!   slice, and so are `bitcast` and the `fma` recurrence of a phi.
+//!   `!nofpclass`; an `x86_fp80` constant is held as the nearest double, so it
+//!   is unknown. `bitcast` and the `fma` recurrence of a phi are the next
+//!   slices.
+//! - DEVIATE 5: no `experimental.constrained.*`, `amdgcn.*`, `vector.reduce.*`,
+//!   `vector.reverse` or `convert.from.arbitrary.fp`, and no `ppc_fp128`
+//!   (`isMultiUnitFPType` is false): MIR has none of them.
 //!
 //! # Example
 //! `uitofp i32 %x to float` is never a NaN, a negative or a subnormal.
@@ -39,14 +41,17 @@
 
 use super::pattern::{self, IntrinsicId};
 use super::query::Query;
-use super::{MAX_ANALYSIS_RECURSION_DEPTH, context, guarantee, known};
+use super::{MAX_ANALYSIS_RECURSION_DEPTH, context, guarantee, known, range};
 use crate::apfloat::{ApFloat, IEEE_DOUBLE, IEEE_SINGLE, Sem, semantics_of};
+use crate::constantrange::ConstantRange;
 use crate::context::ConstantKind;
+use crate::context::signed;
 use crate::fpclass::{
-    DenormalMode, FC_ALL_FLAGS, FC_INF, FC_NAN, FC_NEG_NORMAL, FC_NEG_SUBNORMAL, FC_NEG_ZERO, FC_NEGATIVE, FC_NONE,
-    FC_NORMAL, FC_POS_NORMAL, FC_POS_SUBNORMAL, FC_POS_ZERO, FC_POSITIVE, FC_SUBNORMAL, FC_ZERO, FpClassTest,
+    DenormalMode, FC_ALL_FLAGS, FC_FINITE, FC_INF, FC_NAN, FC_NEG_FINITE, FC_NEG_INF, FC_NEG_NORMAL, FC_NEG_SUBNORMAL,
+    FC_NEG_ZERO, FC_NEGATIVE, FC_NONE, FC_NORMAL, FC_POS_FINITE, FC_POS_INF, FC_POS_NORMAL, FC_POS_SUBNORMAL,
+    FC_POS_ZERO, FC_POSITIVE, FC_SUBNORMAL, FC_ZERO, FpClassTest,
 };
-use crate::knownfpclass::KnownFpClass;
+use crate::knownfpclass::{KnownFpClass, MinMaxKind};
 use crate::module::{InstId, Instruction, Operand};
 use crate::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use crate::types::{FloatKind, Type};
@@ -158,7 +163,7 @@ fn compute_into(
 
     // All recursive calls that increase depth must come after this.
     if depth < MAX_ANALYSIS_RECURSION_DEPTH {
-        of_operator(q, inst, instruction, kind, interested, known, depth);
+        of_operator(q, inst, instruction, kind, interested, not_from_flags, known, depth);
     }
     known.known_not(not_from_flags);
 }
@@ -170,6 +175,7 @@ fn of_operator(
     op: &Instruction,
     kind: FloatKind,
     interested: FpClassTest,
+    not_from_flags: FpClassTest,
     known: &mut KnownFpClass,
     depth: u32,
 ) {
@@ -184,7 +190,7 @@ fn of_operator(
         Opcode::Select => {
             *known = again(op.operands[1], interested).intersect_with(&again(op.operands[2], interested));
         }
-        Opcode::Call(_) => of_call(q, inst, op, interested, known, depth),
+        Opcode::Call(_) => of_call(q, inst, op, kind, interested, not_from_flags, known, depth),
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub) => fadd_fsub(q, op, interested, known, depth),
         Opcode::Binary(BinaryOp::FMul) => fmul(q, op, known, depth),
         Opcode::Binary(BinaryOp::FDiv) => fdiv(q, op, interested, known, depth),
@@ -194,13 +200,8 @@ fn of_operator(
             let (Some(dst_sem), Some(src_sem)) = (Some(semantics_of(kind)), sem_of(q, op.operands[0])) else { return };
             *known = KnownFpClass::fpext(&src, dst_sem, src_sem);
         }
-        // L6176, `computeKnownFPClassForFPTrunc`.
-        Opcode::Cast(CastOp::FPTrunc) => {
-            if (interested & (KnownFpClass::ORDERED_LESS_THAN_ZERO_MASK | FC_NAN)) == FC_NONE {
-                return;
-            }
-            *known = KnownFpClass::fptrunc(&again(op.operands[0], interested));
-        }
+        // L6176
+        Opcode::Cast(CastOp::FPTrunc) => fptrunc(q, op, interested, known, depth),
         Opcode::Cast(cast @ (CastOp::SIToFP | CastOp::UIToFP)) => {
             int_to_fp(q, op, *cast == CastOp::SIToFP, kind, interested, known, depth);
         }
@@ -209,21 +210,59 @@ fn of_operator(
     }
 }
 
-/// `fabs` and `copysign`, the intrinsics `isAbsoluteValueULEOne`'s neighbours
-/// need first.
-fn of_call(
+/// `computeKnownFPClassForFPTrunc`
+/// ([L5162](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L5162)).
+fn fptrunc(
     q: &Query,
-    inst: InstId,
     op: &Instruction,
     interested: FpClassTest,
     known: &mut KnownFpClass,
     depth: u32,
 ) {
+    if (interested & (KnownFpClass::ORDERED_LESS_THAN_ZERO_MASK | FC_NAN)) == FC_NONE {
+        return;
+    }
+    *known = KnownFpClass::fptrunc(&compute_known_fp_class(q, op.operands[0], interested, depth + 1));
+}
+
+/// `getMinMaxKind`
+/// ([L5178](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L5178)).
+fn min_max_kind(id: IntrinsicId) -> Option<MinMaxKind> {
+    Some(match id {
+        IntrinsicId::Minimum => MinMaxKind::Minimum,
+        IntrinsicId::Maximum => MinMaxKind::Maximum,
+        IntrinsicId::Minimumnum => MinMaxKind::Minimumnum,
+        IntrinsicId::Maximumnum => MinMaxKind::Maximumnum,
+        IntrinsicId::Minnum => MinMaxKind::Minnum,
+        IntrinsicId::Maxnum => MinMaxKind::Maxnum,
+        _ => return None,
+    })
+}
+
+/// The intrinsics of `case Instruction::Call`
+/// ([L5300](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L5300)).
+/// DEVIATE 5: no `experimental.constrained.*`, `amdgcn.*`, `vector.reduce.*`,
+/// `vector.reverse` or `convert.from.arbitrary.fp`: MIR has none of them.
+#[allow(clippy::too_many_arguments)]
+fn of_call(
+    q: &Query,
+    inst: InstId,
+    op: &Instruction,
+    kind: FloatKind,
+    interested: FpClassTest,
+    not_from_flags: FpClassTest,
+    known: &mut KnownFpClass,
+    depth: u32,
+) {
     let again = |operand: Operand, classes: FpClassTest| compute_known_fp_class(q, operand, classes, depth + 1);
     let arguments = pattern::call_arguments(op);
-    match pattern::call_intrinsic(q, inst) {
+    let Some(id) = pattern::call_intrinsic(q, inst) else { return };
+    let mode = denormal_mode();
+    // `computeKnownFPClass(Arg0, InterestedClasses)` then `f(KnownSrc)`.
+    let unary = |f: fn(&KnownFpClass) -> KnownFpClass| f(&again(arguments[0], interested));
+    match id {
         // L5393
-        Some(IntrinsicId::Fabs) => {
+        IntrinsicId::Fabs => {
             if (interested & (FC_NAN | FC_POSITIVE)) != FC_NONE {
                 // If we only care about the sign bit we don't need to inspect
                 // the operand.
@@ -232,11 +271,238 @@ fn of_call(
             known.fabs();
         }
         // L5403
-        Some(IntrinsicId::Copysign) => {
+        IntrinsicId::Copysign => {
             *known = again(arguments[0], interested);
             let sign = again(arguments[1], interested);
             known.copysign(&sign);
         }
+        // L5413
+        IntrinsicId::Fma | IntrinsicId::Fmuladd => {
+            if (interested & FC_NEGATIVE) == FC_NONE {
+                return;
+            }
+            // FIXME (as in the pin): this should check
+            // isGuaranteedNotToBeUndef.
+            if arguments[0] == arguments[1] {
+                let mut src = again(arguments[0], interested);
+                let mut addend = again(arguments[2], interested);
+                if (not_from_flags & FC_NAN) != FC_NONE {
+                    src.known_not(FC_NAN);
+                    addend.known_not(FC_NAN);
+                }
+                if (not_from_flags & FC_INF) != FC_NONE {
+                    src.known_not(FC_INF);
+                    addend.known_not(FC_INF);
+                }
+                *known = KnownFpClass::fma_square(&src, &addend, mode);
+                return;
+            }
+            let mut srcs = [KnownFpClass::default(); 3];
+            for (at, src) in srcs.iter_mut().enumerate() {
+                *src = again(arguments[at], interested);
+                if src.is_unknown() {
+                    return;
+                }
+                if (not_from_flags & FC_NAN) != FC_NONE {
+                    src.known_not(FC_NAN);
+                }
+                if (not_from_flags & FC_INF) != FC_NONE {
+                    src.known_not(FC_INF);
+                }
+            }
+            *known = KnownFpClass::fma(&srcs[0], &srcs[1], &srcs[2], mode);
+        }
+        // L5457
+        IntrinsicId::Sqrt => {
+            let mut interested_srcs = interested;
+            if (interested & FC_NAN) != FC_NONE {
+                interested_srcs |= KnownFpClass::ORDERED_LESS_THAN_ZERO_MASK;
+            }
+            let src = again(arguments[0], interested_srcs);
+            let has_nsz = op.flags.contains(Flags::NSZ);
+            // `DenormalMode::getDynamic()` where the call has `nsz`.
+            let mode = if has_nsz { DenormalMode::get_dynamic() } else { mode };
+            *known = KnownFpClass::sqrt(&src, mode);
+            if has_nsz {
+                known.known_not(FC_NEG_ZERO);
+            }
+        }
+        IntrinsicId::Sin => *known = unary(KnownFpClass::sin),
+        IntrinsicId::Cos => *known = unary(KnownFpClass::cos),
+        IntrinsicId::Tan => *known = unary(KnownFpClass::tan),
+        IntrinsicId::Sinh => *known = unary(KnownFpClass::sinh),
+        IntrinsicId::Cosh => *known = unary(KnownFpClass::cosh),
+        IntrinsicId::Tanh => *known = unary(KnownFpClass::tanh),
+        IntrinsicId::Asin => *known = unary(KnownFpClass::asin),
+        IntrinsicId::Acos => *known = unary(KnownFpClass::acos),
+        IntrinsicId::Atan => *known = unary(KnownFpClass::atan),
+        // L5546
+        IntrinsicId::Atan2 => {
+            let mut interested_y = interested;
+            let mut interested_x = interested;
+            // We can rule out negative values if y cannot have a negative
+            // value.
+            if (interested & FC_NEG_FINITE) != FC_NONE {
+                interested_y |= FC_NEGATIVE;
+            }
+            // We can rule out positive values if y cannot have a positive
+            // value.
+            if (interested & FC_POS_FINITE) != FC_NONE {
+                interested_y |= FC_POSITIVE | FC_NEG_SUBNORMAL;
+            }
+            // We can rule out zero and subnormal if x cannot have a positive
+            // value.
+            if (interested & (FC_ZERO | FC_SUBNORMAL)) != FC_NONE {
+                interested_x |= FC_POSITIVE | FC_NEG_SUBNORMAL;
+            }
+            let known_y = again(arguments[0], interested_y);
+            let known_x = again(arguments[1], interested_x);
+            *known = KnownFpClass::atan2(&known_y, &known_x, mode);
+        }
+        // L5576
+        IntrinsicId::Maxnum
+        | IntrinsicId::Minnum
+        | IntrinsicId::Minimum
+        | IntrinsicId::Maximum
+        | IntrinsicId::Minimumnum
+        | IntrinsicId::Maximumnum => {
+            let known_lhs = again(arguments[0], interested);
+            let known_rhs = again(arguments[1], interested);
+            let kind = min_max_kind(id).expect("a min/max");
+            *known = KnownFpClass::min_max_like(&known_lhs, &known_rhs, kind, mode);
+        }
+        // L5599
+        IntrinsicId::Canonicalize => {
+            let src = again(arguments[0], interested);
+            *known = KnownFpClass::canonicalize(&src, mode);
+        }
+        // L5633
+        IntrinsicId::Trunc
+        | IntrinsicId::Floor
+        | IntrinsicId::Ceil
+        | IntrinsicId::Rint
+        | IntrinsicId::Nearbyint
+        | IntrinsicId::Round
+        | IntrinsicId::Roundeven => {
+            let mut interested_srcs = interested;
+            if (interested_srcs & FC_POS_FINITE) != FC_NONE {
+                interested_srcs |= FC_POS_FINITE;
+            }
+            if (interested_srcs & FC_NEG_FINITE) != FC_NONE {
+                interested_srcs |= FC_NEG_FINITE;
+            }
+            let src = again(arguments[0], interested_srcs);
+            // No `ppc_fp128`: no scalar type of MIR is a multi-unit float.
+            *known = KnownFpClass::round_to_integral(&src, id == IntrinsicId::Trunc, false);
+        }
+        // L5654
+        IntrinsicId::Exp | IntrinsicId::Exp2 | IntrinsicId::Exp10 => *known = unary(KnownFpClass::exp),
+        // L5670
+        IntrinsicId::FptruncRound => fptrunc(q, op, interested, known, depth),
+        // L5675
+        IntrinsicId::Log | IntrinsicId::Log10 | IntrinsicId::Log2 => {
+            let mut interested_srcs = FC_NONE;
+            // log(negative) produces NaN.
+            if (interested & FC_NAN) != FC_NONE {
+                interested_srcs |= FC_NAN | FC_NEGATIVE;
+            }
+            // log(logical-zero) produces negative infinity.
+            if (interested & FC_NEG_INF) != FC_NONE {
+                interested_srcs |= FC_ZERO | FC_SUBNORMAL;
+            }
+            // log(x) < -0.0 if x < +1.0
+            if (interested & FC_NEG_NORMAL) != FC_NONE {
+                interested_srcs |= FC_POS_SUBNORMAL | FC_POS_NORMAL;
+            }
+            // log(x) >= +0.0 if x >= +1.0
+            if (interested & (FC_POS_ZERO | FC_POS_NORMAL)) != FC_NONE {
+                interested_srcs |= FC_POS_NORMAL;
+            }
+            // log(x) is positive infinity iff x is positive infinity.
+            if (interested & FC_POS_INF) != FC_NONE {
+                interested_srcs |= FC_POS_INF;
+            }
+            let src =
+                if interested_srcs != FC_NONE { again(arguments[0], interested_srcs) } else { KnownFpClass::default() };
+            *known = KnownFpClass::log(&src, mode);
+        }
+        // L5716
+        IntrinsicId::Pow => {
+            let want_nan = (interested & FC_NAN) != FC_NONE;
+            let want_negative = (interested & FC_NEGATIVE) != FC_NONE;
+            if !want_nan && !want_negative {
+                return;
+            }
+            let mut interested_lhs = FC_NONE;
+            let mut interested_rhs = FC_NONE;
+            if want_nan {
+                // pow may return NaN if one of the arguments is NaN. NaN may
+                // also be produced from a negative, non-zero finite base and a
+                // non-integer exponent.
+                interested_lhs |= FC_NAN | FC_NEG_NORMAL | FC_NEG_SUBNORMAL;
+                interested_rhs |= FC_NAN;
+            }
+            if want_negative {
+                // A negative value is returned when a negative base is raised
+                // to an odd integer power. Only normal values can be odd
+                // integers.
+                interested_lhs |= FC_NEGATIVE;
+                interested_rhs |= FC_NORMAL;
+            }
+            let known_lhs = again(arguments[0], interested_lhs);
+            // If the LHS is unknown, then querying the RHS is only useful for
+            // rare edge cases.
+            if known_lhs.is_unknown() {
+                return;
+            }
+            let known_rhs = again(arguments[1], interested_rhs);
+            *known = KnownFpClass::pow(&known_lhs, &known_rhs);
+        }
+        // L5753
+        IntrinsicId::Powi => {
+            if (interested & (FC_NAN | FC_INF | FC_NEGATIVE)) == FC_NONE {
+                return;
+            }
+            // The exponent is always a scalar, even when raising a vector to a
+            // power.
+            let exponent = known::compute_known_bits(q, arguments[1], depth + 1);
+            let mut interested_srcs = FC_NONE;
+            if (interested & FC_NAN) != FC_NONE {
+                interested_srcs |= FC_NAN;
+            }
+            if !exponent.is_zero() {
+                if (interested & FC_INF) != FC_NONE {
+                    interested_srcs |= FC_FINITE | FC_INF;
+                }
+                if (interested & FC_NEGATIVE) != FC_NONE && !exponent.is_even() {
+                    interested_srcs |= FC_NEGATIVE;
+                }
+            }
+            let src =
+                if interested_srcs != FC_NONE { again(arguments[0], interested_srcs) } else { KnownFpClass::default() };
+            *known = KnownFpClass::powi(&src, &exponent);
+        }
+        // L5781
+        IntrinsicId::Ldexp => {
+            let src = again(arguments[0], interested);
+            // Can refine inf/zero handling based on the exponent operand.
+            let exp_info_mask = FC_ZERO | FC_SUBNORMAL | FC_INF;
+            let exp_width = q.scalar_bits(arguments[1]);
+            let exp_range = if (src.get_known_fp_classes() & exp_info_mask) != FC_NONE {
+                range::compute_constant_range(q, arguments[1], true, depth + 1)
+            } else {
+                ConstantRange::full(exp_width)
+            };
+            *known = KnownFpClass::ldexp(
+                &src,
+                signed(exp_range.get_signed_min(), exp_width),
+                signed(exp_range.get_signed_max(), exp_width),
+                semantics_of(kind),
+                mode,
+            );
+        }
+        // L5806
+        IntrinsicId::ArithmeticFence => *known = again(arguments[0], interested),
         _ => {}
     }
 }
@@ -311,7 +577,7 @@ fn fmul(
         *known = KnownFpClass::square(&src, mode);
         return;
     }
-    let mut known_lhs = KnownFpClass::default();
+    let known_lhs;
     let mut known_rhs = KnownFpClass::default();
     if let Some(crhs) = constant_value(q, rhs) {
         known_lhs = compute_known_fp_class(q, lhs, FC_ALL_FLAGS, depth + 1);

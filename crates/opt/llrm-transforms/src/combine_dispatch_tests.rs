@@ -142,3 +142,15 @@ fn visit_and_moves_a_mask_through_an_xor() {
         &["xor i32 %x, 12"],
     );
 }
+
+#[test]
+fn visit_xor_hoists_a_constant_out_of_the_inner_xor() {
+    check(
+        "xor",
+        "i32",
+        "i32 %x, i32 %y",
+        "  %e = xor i32 %x, 77\n  %r = xor i32 %e, %y\n  ret i32 %r\n",
+        &["xor i32 %x, %y", ", 77"],
+        &[],
+    );
+}

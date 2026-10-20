@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_collect.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_collect.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_collect.rs sha256:40a9177b83974e2b6a6f4fa9ddd0a0c1991791ad9fb4bc0f53b4dc1027e3d15f -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_collect.rs sha256:b13b00aa8a16495eb3faf4349a6154224876e270e566f19eaa25de39cd47e95d -->
 
 # lsr_collect
 
@@ -28,9 +28,17 @@ compare use of `{(-1 + %n),+,-1}`; factors 4, -4 and -1.
 Nothing runs it yet: stage 3 of the translation of LSR.
 
 ## Limits
-DEVIATE: no IV chains (`CollectChains`, `isHighCostExpansion`'s chain
-users), `OptimizeShadowIV` and `OptimizeLoopTermCond` yet; the later stages
-of stage 3. No atomic accesses, funclet pads, scalable immediates or target
-memory intrinsics (MIR has none). `canSaveCmp` is false on x86. The swap
-of a compare's operands (`setOperand`) is recorded in `swapped_compares`
-for the caller to make: the analyses hold the function shared.
+DEVIATE:
+1. No IV chains (`CollectChains`, `isHighCostExpansion`'s chain users),
+   `OptimizeShadowIV` and `OptimizeLoopTermCond` yet; the later stages of
+   stage 3. No atomic accesses, funclet pads, scalable immediates or target
+   memory intrinsics (MIR has none). `canSaveCmp` is false on x86. The swap
+   of a compare's operands (`setOperand`) is recorded in `swapped_compares`
+   for the caller to make: the analyses hold the function shared.
+2. A callee is named from the module's globals the pass was handed, not the
+   live module: a function declared during the compile (`runtime.nib` cut to
+   a program, #3140) has no name there, so an `llvm.lifetime` call declared
+   that way is not skipped by `collect_loop_invariant_fixups_and_formulae`
+   and stays a use (worse code at most; the pin reads the callee's intrinsic
+   id). Exit: the snapshot sees declarations added during the compile.
+   Boundary: `a_call_to_a_global_the_outer_snapshot_lacks_is_no_intrinsic`.

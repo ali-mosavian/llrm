@@ -21,7 +21,7 @@
 //!
 //! # Example
 //! None: a library. [`crate::loopversion`] judges a specialised loop by work
-//! alone and [`crate::loopdistribute`] a split one by its price alone.
+//! alone.
 //!
 //! # Provides
 //! `adopted`, `priced`, `priced_at`, `frequencies`, `Pricing`, `Gain`,

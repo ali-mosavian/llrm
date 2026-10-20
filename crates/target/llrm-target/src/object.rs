@@ -61,7 +61,58 @@ pub struct ObjectFormat {
 /// What `-gdwarf` writes where the target does not say.
 pub const DEFAULT_DWARF_VERSION: u16 = 5;
 
+/// How code is addressed: what the encoder, the relocations and the object's
+/// machine depend on.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum CodeModel {
+    /// 16-bit segmented code, a near offset a word.
+    Segmented16,
+    /// 32-bit flat code, an offset a dword.
+    Flat32,
+    /// 64-bit flat code, reached from the instruction pointer.
+    Flat64,
+}
+
+impl CodeModel {
+    /// The model of code `bits` bits wide.
+    pub fn of(bits: u32) -> Self {
+        match bits {
+            16 => Self::Segmented16,
+            32 => Self::Flat32,
+            64 => Self::Flat64,
+            _ => panic!("no code model of {bits} bits"),
+        }
+    }
+
+    /// The width of the mode instructions are encoded in.
+    pub fn bits(self) -> u32 {
+        match self {
+            Self::Segmented16 => 16,
+            Self::Flat32 => 32,
+            Self::Flat64 => 64,
+        }
+    }
+
+    pub fn segmented(self) -> bool {
+        self == Self::Segmented16
+    }
+
+    pub fn flat(self) -> bool {
+        !self.segmented()
+    }
+
+    /// The bytes of a near call's or jump's displacement.
+    pub fn displacement_bytes(self) -> usize {
+        if self.segmented() { 2 } else { 4 }
+    }
+}
+
 impl ObjectFormat {
+    /// The model of the code this format holds.
+    pub fn code_model(&self) -> CodeModel {
+        CodeModel::of(self.bitness)
+    }
+
     /// `text`, an `object.toml`: `formats`, `default`, `bitness`, `header` and,
     /// optionally, `dwarf_version`.
     pub fn parse(text: &str) -> Result<Self, String> {

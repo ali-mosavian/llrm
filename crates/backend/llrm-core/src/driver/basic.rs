@@ -482,7 +482,7 @@ fn written_basic_inner(
     let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
     for (name, items) in &module.data {
         let index = segments.iter().position(|one| &one.name == name).expect("every data segment was made");
-        objbuild::_data(&mut segments[index], index, items, &mut symbols, module.object.bitness);
+        objbuild::_data(&mut segments[index], index, items, &mut symbols, module.object.code_model());
     }
     if module.stack > 0 {
         let mut stack = objbuild::Segment::new("STACK", Role::Stack, true);

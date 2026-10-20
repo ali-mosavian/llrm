@@ -19,7 +19,7 @@
 //!     s1["<b>sroa (+ splitcopy)</b><br/><small>at boundaries</small>"]:::mid
 //!     s2["<b>cleanup: fold decide dead</b><br/><small>algebraic dse gvn<br/>promote inferspace<br/>calls: tailrec<br/>loops: loopsimplify lcssa<br/>licm<br/>trivialunswitch indvars<br/>floatloop fill</small>"]:::mid
 //!     s3["<b>after each round: unroll</b>"]:::mid
-//!     s4["<b>after it settles: peel,</b><br/><small>unswitch, distribute, unroll-jam, merge</small>"]:::mid
+//!     s4["<b>after it settles: peel,</b><br/><small>unswitch, merge</small>"]:::mid
 //!   end
 //!   ipa["<b>interprocedural: inline,</b><br/><small>ipacp, argpromotion,<br/>deadargs, narrowspace</small>"]:::mid
 //!   dce["<b>globaldce</b><br/><small>availableexternally<br/>calleepop</small>"]:::mid
@@ -51,9 +51,9 @@
 //! `gepoffset`, `addresssink`, `fixednarrow`, `ports`.
 //!
 //! Loops: `loopsimplify`, `lcssa` (with `lcssamerges`), `hoist`, `loopmotion`,
-//! `trivialunswitch`, `unswitch`, `loopdistribute`
+//! `trivialunswitch`, `unswitch`
 //! (with `loopshape`), `indvars` (with `exitvalues`, `exitsink`),
-//! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`, `unroll_jam`,
+//! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`,
 //! `loopidioms`, `floatloop`, `tailcallelim`.
 //!
 //! Whole program: `globalopt`, `globaldce`, `availableexternally`, `inline`,
@@ -127,6 +127,7 @@ pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
 pub mod combine_sub;
+pub mod combine_xor;
 pub mod combine_visit_select;
 pub mod condstores;
 pub mod condtocond;
@@ -205,7 +206,6 @@ pub mod local;
 mod local_tests;
 pub mod loopclone;
 pub mod loopdeletion;
-pub mod loopdistribute;
 pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;
@@ -291,7 +291,6 @@ pub mod twoentryphi;
 pub mod uncondicmp;
 pub mod undefpred;
 pub mod unroll;
-pub mod unroll_jam;
 pub mod versionalias;
 pub mod versionstride;
 pub mod vncoercion;
