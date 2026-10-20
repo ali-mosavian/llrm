@@ -215,7 +215,7 @@ pub fn folded(
         if inst == cond || inst == branch {
             continue;
         }
-        if !crate::licm::hoist::is_safe_to_speculatively_execute_in(context, spec.layout, function, spec.outer, inst) {
+        if !crate::licm::hoist::is_safe_to_speculatively_execute_for_cfg(context, spec.layout, function, spec.outer, inst) {
             return false;
         }
         let instruction = function.instruction(inst);
