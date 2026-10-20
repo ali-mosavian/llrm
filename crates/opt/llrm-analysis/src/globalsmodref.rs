@@ -50,6 +50,17 @@
 //! - G4: no `TargetLibraryInfo`: a call to `free` is not recognised, so a
 //!   global passed to it is not tracked.
 //! - G5: `hasOptNone` is `noipa` (`llrm_mir::facts::opaque`).
+//! - G6: `escaping_among` (GlobalsAA's use) does not count a global named in an
+//!   initializer as escaped; GlobalsAA reads an initializer only through its
+//!   holder (`globalsaa::held`). QB's `REDIM` descriptor held every array's
+//!   address in a constant nothing read: deedlines +128 memory operands without
+//!   it
+//!   (test
+//!   `a_private_initializer_nothing_names_does_not_leak_the_address_it_holds`).
+//!   Exit: the pin's rule, once a rows pair shows no row worse.
+//! - G7: `llrm.ia16.window` and `llrm.ia16.restrict` return their operand's
+//!   bytes, so the scan follows the call's result as it follows a `gep`, as the
+//!   pin follows `threadlocal.address`.
 //! - G6: a declaration needs `nocallback` only, not `nosync` as well
 //!   (`MaySyncOrCallIntoModule`): MIR has no `nosync` and the targets no
 //!   threads.
@@ -210,6 +221,9 @@ impl Sites {
 struct Analysis<'a> {
     module: &'a Module,
     sites: Sites,
+    /// A global in an initializer escapes (the pin's `isConstantUsed` rule).
+    /// GlobalsAA turns it off and reads initializers through their holders.
+    initializers_escape: bool,
 }
 
 impl Analysis<'_> {
@@ -239,6 +253,7 @@ impl Analysis<'_> {
         writers: &mut Option<&mut BTreeSet<GlobalId>>,
     ) -> bool {
         if let Root::Global(g) = root
+            && self.initializers_escape
             && self.sites.in_initializer.contains(&g)
         {
             return true;
@@ -276,6 +291,20 @@ impl Analysis<'_> {
                     }
                     let callee = llrm_mir::memory::callee(self.context(), function, inst);
                     let Some(callee) = callee else { return true };
+                    // What these return is the operand's bytes: followed as
+                    // the pin follows `threadlocal.address`.
+                    if at == 0
+                        && matches!(
+                            self.module.global(callee).name.as_deref().and_then(llrm_mir::intrinsics::Intrinsic::named),
+                            Some(llrm_mir::intrinsics::Intrinsic::Window | llrm_mir::intrinsics::Intrinsic::Restrict)
+                        )
+                    {
+                        let Some(result) = op.result else { return true };
+                        if self.escapes(Root::Value(f, result), readers, writers) {
+                            return true;
+                        }
+                        continue;
+                    }
                     let callee_function = self.module.global(callee).function();
                     let Some(callee_function) = callee_function.filter(|one| one.is_declaration()) else {
                         return true;
@@ -312,6 +341,18 @@ impl Analysis<'_> {
     }
 }
 
+/// The globals among `candidates` whose address escapes (`AnalyzeUsesOfPointer`
+/// at each, true meaning escaped): the use scan of `AnalyzeGlobals`, asked of
+/// any global and not only the internal ones, with one pass over the module's
+/// uses.
+pub fn escaping_among(
+    module: &Module,
+    candidates: &BTreeSet<GlobalId>,
+) -> BTreeSet<GlobalId> {
+    let analysis = Analysis { module, sites: Sites::of(module), initializers_escape: false };
+    candidates.iter().copied().filter(|&id| analysis.escapes(Root::Global(id), &mut None, &mut None)).collect()
+}
+
 /// `GlobalsAAResult::analyzeModule`.
 /// What a call to the declaration `function` does, from its attributes alone
 /// (the `F->isDeclaration()` arm of `AnalyzeCallGraph`); None where it may
@@ -342,7 +383,7 @@ fn declaration_info(function: &Function) -> Option<FunctionInfo> {
 }
 
 pub fn compute(module: &Module) -> GlobalsModRef {
-    let analysis = Analysis { module, sites: Sites::of(module) };
+    let analysis = Analysis { module, sites: Sites::of(module), initializers_escape: true };
     let mut result = GlobalsModRef::default();
     let mut tracked_functions: BTreeSet<GlobalId> = BTreeSet::new();
     let mut infos: BTreeMap<GlobalId, FunctionInfo> = BTreeMap::new();

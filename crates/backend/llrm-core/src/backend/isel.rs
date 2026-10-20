@@ -3447,7 +3447,7 @@ impl Selector<'_, '_, '_> {
                 self.module.context.get(id).kind.clone()
             && let Type::Pointer(space) = self.types().get(self.module.context.get(value).ty).clone()
             && self.spaces.is_segment(Some(space))
-            && width == 2
+            && matches!(width, 2 | 4)
         {
             let (global, _) = crate::backend::globals::target(self.module, &self.layout, value)
                 .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
@@ -3456,10 +3456,16 @@ impl Selector<'_, '_, '_> {
             } else {
                 (Space::Group, crate::backend::globals::segment_of(global))
             };
-            let held = Held { value: self.fresh(), width };
-            let symbol = Loc::Imm(Imm { value: 0, width, address: Some(Addr { index, ..Addr::new(space, 0) }) });
-            out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![symbol])));
-            return Ok(held);
+            let word = Held { value: self.fresh(), width: 2 };
+            let symbol = Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) });
+            out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(word)], vec![symbol])));
+            if width == 2 {
+                return Ok(word);
+            }
+            // The integer is wider than the segment word: zero-extended.
+            let wide = Held { value: self.fresh(), width };
+            out.push(insn(at, semantics(Operation::Extend, "movzx", vec![Loc::Held(wide)], vec![Loc::Held(word)])));
+            return Ok(wide);
         }
         let operand = self.through_ptrtoint(operand);
         let pointer = match operand {

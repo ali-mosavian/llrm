@@ -252,8 +252,8 @@ fn test_a_pointer_parameter_is_a_base_register() {
 }
 
 /// A word address reads its base and index from disjoint register sets, so
-/// one value in both roles reaches the allocator as two: isel copies it, as
-/// regalloc's `distinct_roles` once did.
+/// isel gives one value in both roles a copy (regalloc's `distinct_roles`
+/// copies again where the coalescer joined them).
 #[test]
 fn test_a_value_used_as_base_and_index_is_two_registers() {
     let text = "define i8 @g(i16 %i) addrspace(1) {
@@ -6171,6 +6171,22 @@ define i32 @f() addrspace(1) {
 ";
     let got = listing(text, "f");
     assert!(got.iter().any(|line| line.starts_with("mov ") && line.contains("DGROUP")), "{got:?}");
+}
+
+/// A segment word as a dword: zero-extended, where the word alone had no
+/// reading and the function was refused ("an address of no global").
+#[test]
+fn test_ptrtoint_of_a_segment_space_global_to_a_dword_is_the_zero_extended_word() {
+    let text = "@g = internal global [8 x i8] zeroinitializer
+define i32 @f() addrspace(1) {
+  ret i32 ptrtoint (ptr addrspace(2) addrspacecast (ptr @g to ptr addrspace(2)) to i32)
+}
+";
+    let got = listing(text, "f");
+    assert!(
+        got.iter().any(|line| line.contains("DGROUP")) && got.iter().any(|line| line.starts_with("movzx ")),
+        "{got:?}"
+    );
 }
 
 /// Constant expressions as operands, the shapes `simplifyCastInst` and the GEP
