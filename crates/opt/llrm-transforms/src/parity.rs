@@ -263,7 +263,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // pipeline, and llrm has neither a profile nor a vectorizer.
     // l.1400: after `infer-alignment`; LoopLoadElimination at the target's
     // vector width (no vector registers on llrm's targets).
-    entry("loop-load-elim@1400", Late, "loop-load-elim", Translated, ""),
+    partial(
+        "loop-load-elim@1400",
+        Late,
+        "loop-load-elim",
+        "translated LoopLoadElimination (looploadelim.rs) runs here, output equal to opt's on its tests; criterion: x_prefix clocks at or below main at -O1/-O2/-O3/-Os (-O2: 47985 against 44454 clocks, 395 against 174 bytes; base was 50377 before the slot); exit: the assembly of the three x_prefix loops against main's tells which pass differs (laa-runtime-checks-loadelim, 2026-11-06)",
+    ),
     partial(
         "simplifycfg@1438",
         Late,
