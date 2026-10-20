@@ -1,0 +1,14 @@
+[run]
+# tests/run programs by name (run_tests.py selects by name): the six C programs at -O2 for the 16-bit target that caught the trySplit miscompile on 14220782f
+# (bintree 5736113 -> 165553, ...), ~1.4 s of CPU together, and two small cases.
+cases = [
+  "arith",
+  "bitfield_long_long",
+  "byval_initializes",
+  "bintree/bintree.c [-O2 -march=i486]",
+  "algebra/algebra.c [-O2 -march=i486]",
+  "loop/loop.c [-O2 -march=i486]",
+  "branch/branch.c [-O2 -march=i486]",
+  "memory/memory.c [-O2 -march=i486]",
+  "recpow/recpow.c [-O2 -march=i486]",
+]

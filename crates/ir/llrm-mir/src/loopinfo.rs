@@ -10,7 +10,7 @@
 //! with repeats, as `children<BasicBlock *>` gives them; predecessors are one
 //! per edge, as `inverse_children` gives them.
 
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::module::{BlockId, Function, MetadataNode, MetadataOperand, Operand};
 use crate::opcode::Opcode;
 
@@ -135,7 +135,7 @@ fn tag_loop_header(
 impl LoopInfo {
     /// `LoopInfoBase::analyze`, with `dom_tree` asked for only if a loop is
     /// entered other than through its header.
-    pub fn analyze<D: std::borrow::Borrow<DominatorTree>>(
+    pub fn analyze<D: std::borrow::Borrow<DomTree>>(
         function: &Function,
         dom_tree: impl FnOnce() -> D,
     ) -> Self {
@@ -146,7 +146,7 @@ impl LoopInfo {
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericLoopInfoImpl.h#L488
-    fn analyze_impl<D: std::borrow::Borrow<DominatorTree>>(
+    fn analyze_impl<D: std::borrow::Borrow<DomTree>>(
         &mut self,
         function: &Function,
         dom_tree: impl FnOnce() -> D,
@@ -391,6 +391,95 @@ impl LoopInfo {
         block: BlockId,
     ) -> u32 {
         self.get_loop_for(block).map_or(0, |one| one.get_loop_depth())
+    }
+
+    /// `Loop::addBasicBlockToLoop`
+    /// ([L283](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericLoopInfoImpl.h#L283)),
+    /// for `new_blocks` at once: each is a new member of `loop_id`, and so of
+    /// every loop around it; `getLoopFor` names `loop_id`. A block already in a
+    /// loop, or the header, is not valid here.
+    ///
+    /// The blocks go at the end of the slice of `loop_id` in the block layout,
+    /// which lies inside the slices of its parents. The pin pushes onto each
+    /// parent's block vector (O(depth)); a slice of one flat layout needs a
+    /// splice, so the cost is the layout plus the loops, once per call, not per
+    /// block: pass all the blocks of one loop together.
+    pub fn add_basic_blocks_to_loop(
+        &mut self,
+        loop_id: LoopId,
+        new_blocks: &[BlockId],
+    ) {
+        if new_blocks.is_empty() {
+            return;
+        }
+        let count = new_blocks.len() as u32;
+        let highest = new_blocks.iter().map(|one| one.0 as usize).max().expect("a block");
+        if highest >= self.bb_map.len() {
+            self.bb_map.resize(highest + 1, NONE);
+        }
+        for block in new_blocks {
+            debug_assert_eq!(self.bb_map[block.0 as usize], NONE, "a block already in a loop");
+            self.bb_map[block.0 as usize] = loop_id.0;
+        }
+        let data = &self.loops[loop_id.0 as usize];
+        let at = data.start + data.len;
+        self.layout.splice(at as usize..at as usize, new_blocks.iter().copied());
+        // The loops that hold `at` are `loop_id` and its parents, which grow;
+        // a loop that starts at or after it moves. Sub-loops of `loop_id` end
+        // at or before `at` and keep their slice.
+        let mut around = vec![false; self.loops.len()];
+        let mut walk = Some(loop_id);
+        while let Some(one) = walk {
+            around[one.0 as usize] = true;
+            self.loops[one.0 as usize].len += count;
+            walk = self.loops[one.0 as usize].parent;
+        }
+        for (index, one) in self.loops.iter_mut().enumerate() {
+            if !around[index] && one.start >= at {
+                one.start += count;
+            }
+        }
+    }
+
+    /// `Loop::addBasicBlockToLoop` for one block.
+    pub fn add_basic_block_to_loop(
+        &mut self,
+        loop_id: LoopId,
+        new_block: BlockId,
+    ) {
+        self.add_basic_blocks_to_loop(loop_id, &[new_block]);
+    }
+
+    /// Whether `self` and `other` hold the same loops of `function`: the same
+    /// innermost loop per block, and per loop the same header, blocks, parent
+    /// and sub-loops. The order of the blocks in a loop is not compared: an
+    /// update appends, an analysis orders by postorder. For a check of an
+    /// updated `LoopInfo` against one made afresh (`LoopInfoBase::verify`).
+    pub fn equivalent(
+        &self,
+        other: &LoopInfo,
+        function: &Function,
+    ) -> bool {
+        let header_of = |info: &LoopInfo, block| info.get_loop_for(block).map(|one| one.get_header());
+        if function.layout().iter().any(|&block| header_of(self, block) != header_of(other, block)) {
+            return false;
+        }
+        let summary = |info: &LoopInfo| {
+            let mut loops: Vec<_> = info
+                .get_loops_in_preorder()
+                .iter()
+                .map(|one| {
+                    let mut blocks = one.get_blocks().to_vec();
+                    blocks.sort();
+                    let mut subs: Vec<_> = one.get_sub_loops().map(|sub| sub.get_header()).collect();
+                    subs.sort();
+                    (one.get_header(), blocks, one.get_parent_loop().map(|parent| parent.get_header()), subs)
+                })
+                .collect();
+            loops.sort();
+            loops
+        };
+        summary(self) == summary(other)
     }
 
     /// `isLoopHeader`.
@@ -651,6 +740,24 @@ impl<'a> Loop<'a> {
         function.parent(inst).is_some_and(|block| self.contains(block))
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopInfo.cpp#L67
+    /// `isLoopInvariant(const Value *)`: an instruction outside the loop, or
+    /// anything that is not an instruction.
+    pub fn is_loop_invariant(
+        &self,
+        function: &Function,
+        value: crate::module::Operand,
+    ) -> bool {
+        use crate::module::{Operand, ValueDef};
+        match value {
+            Operand::Value(value) => match function.value(value).def {
+                ValueDef::Instruction(inst) => !self.contains_instruction(function, inst),
+                ValueDef::Argument(_) => true,
+            },
+            _ => true,
+        }
+    }
+
     /// `isLoopExiting`.
     pub fn is_loop_exiting(
         &self,
@@ -867,7 +974,7 @@ pub fn print_loops(module: &crate::module::Module) -> String {
         if function.layout().is_empty() {
             continue;
         }
-        let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+        let info = LoopInfo::analyze(function, || DomTree::of(function));
         let labels = crate::print::block_labels(function);
         out += &info.print(function, global.name.as_deref().unwrap_or("?"), &|block| {
             labels.get(&block).cloned().unwrap_or_default()
@@ -912,7 +1019,7 @@ pub fn ends_by_promise(
     function: &Function,
     whole: bool,
 ) -> bool {
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     info.get_loops_in_preorder()
         .iter()
         .all(

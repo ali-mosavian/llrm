@@ -223,7 +223,8 @@ fn sides(
     }
     // Where an empty block of one jump, reached from `block` alone, leads.
     let empty = |side: BlockId| {
-        let [only] = function.block(side).instructions()[..] else { return None };
+        let mut body = function.iter_block(side);
+        let (Some(only), None) = (body.next(), body.next()) else { return None };
         let jump = function.instruction(only);
         let [Operand::Block(to)] = jump.operands[..] else { return None };
         (jump.opcode == Opcode::Br && function.predecessors(side) == [block]).then_some(to)
@@ -247,7 +248,7 @@ fn sides(
 }
 
 fn planned(
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     costs: &OperationCosts,
     scaled: Option<&dyn Machine>,
@@ -279,7 +280,7 @@ fn planned(
 /// `phi`, whose constants from `yes` and `no` are known, as the cheapest form,
 /// and what it costs.
 fn rewritten(
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     costs: &OperationCosts,
     scaled: Option<&dyn Machine>,
@@ -324,7 +325,7 @@ fn rewritten(
 }
 
 fn applied(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     plan: Plan,
 ) {
@@ -332,7 +333,7 @@ fn applied(
     let void = function.instruction(last).ty;
     let at = Position::Before(last);
     for Rewrite { phi, ty, otherwise, form } in plan.rewrites {
-        let mut number = |function: &mut Function, op: BinaryOp, left: Operand, right: i128| {
+        let number = |function: &mut Function, op: BinaryOp, left: Operand, right: i128| {
             let right = Operand::Constant(context.int(ty, right));
             placed(function, Opcode::Binary(op), ty, vec![left, right], at)
         };

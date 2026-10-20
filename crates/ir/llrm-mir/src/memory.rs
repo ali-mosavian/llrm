@@ -206,6 +206,7 @@ pub fn argument_memory_only(attrs: &[Attribute]) -> bool {
 }
 
 /// The function `inst` calls directly, if it is a call.
+#[inline]
 pub fn callee(
     context: &Context,
     function: &Function,
@@ -220,6 +221,24 @@ pub fn callee(
         },
         _ => None,
     }
+}
+
+/// `isNoAliasCall`: whether the call `inst` returns `noalias`, as the call
+/// site or its callee states it (`CallBase::hasRetAttr` reads both).
+pub fn returns_noalias(
+    context: &Context,
+    globals: &[GlobalValue],
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
+    Facts::of(&info.return_attrs).no_alias()
+        || callee(context, function, inst).and_then(|global| globals.get(global.0 as usize)).is_some_and(|global| {
+            match &global.kind {
+                GlobalKind::Function(callee) => Facts::of(&callee.return_attrs).no_alias(),
+                GlobalKind::Variable(_) => false,
+            }
+        })
 }
 
 /// Whether `inst`'s only effect is its value, so that if nothing needs the
@@ -312,6 +331,59 @@ pub fn stated_at(
 /// keeps them per location. `inaccessiblemem` is neither.
 pub fn located(attrs: &[Attribute]) -> (Effects, Effects) {
     (at(attrs, Some("argmem")), at(attrs, None))
+}
+
+/// Where a rewrite moved a function's accesses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Moved {
+    /// Memory reached through a loaded pointer is now reached through a
+    /// parameter (argument promotion).
+    IntoArguments,
+    /// Memory reached through a parameter is now reached otherwise (a
+    /// parameter replaced by a constant address, a far pointer by an offset).
+    OutOfArguments,
+}
+
+/// `attrs`' `memory(...)` after a rewrite that moved accesses between argument
+/// memory and every other location: the destination is allowed what the source
+/// was, since the split the attribute stated no longer says where the body
+/// reads and writes.
+pub fn unsplit(
+    attrs: &mut Vec<Attribute>,
+    moved: Moved,
+) {
+    let (arguments, other) = located(attrs);
+    if !attrs.iter().any(|one| matches!(one, Attribute::Memory(_))) {
+        return;
+    }
+    let join = |one: Effects, two: Effects| Effects { reads: one.reads || two.reads, writes: one.writes || two.writes };
+    let (arguments, other) = match moved {
+        Moved::IntoArguments => (join(arguments, other), other),
+        Moved::OutOfArguments => (arguments, join(arguments, other)),
+    };
+    let (kept_arguments, kept_other) = located(attrs);
+    if (arguments, other) == (kept_arguments, kept_other) {
+        return;
+    }
+    let access = |one: Effects| {
+        match (one.reads, one.writes) {
+            (true, true) => "readwrite",
+            (true, false) => "read",
+            (false, true) => "write",
+            (false, false) => "none",
+        }
+        .to_owned()
+    };
+    let hidden = inaccessible(attrs);
+    let mut locations = vec![(None, access(other))];
+    if arguments != other {
+        locations.push((Some("argmem".to_owned()), access(arguments)));
+    }
+    if hidden != other {
+        locations.push((Some("inaccessiblemem".to_owned()), access(hidden)));
+    }
+    attrs.retain(|one| !matches!(one, Attribute::Memory(_)));
+    attrs.push(Attribute::Memory(locations));
 }
 
 /// What `attrs` allow on memory no pointer of the module reaches:

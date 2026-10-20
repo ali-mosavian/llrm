@@ -4,7 +4,7 @@
 use super::AssumptionCache;
 use super::Query;
 use crate::datalayout::DataLayout;
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::module::{GlobalKind, Operand};
 use crate::parse;
 
@@ -17,9 +17,9 @@ fn dump(text: &str) -> String {
         if function.is_declaration() {
             continue;
         }
-        let dt = DominatorTree::new(function);
+        let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(&module, function);
-        let entry_first = function.block(function.entry().expect("an entry")).instructions().first().copied();
+        let entry_first = function.block(function.entry().expect("an entry")).first();
         let mut values: Vec<_> = function.parameters().iter().map(|p| (Operand::Value(*p), entry_first)).collect();
         for (_, inst) in function.walk() {
             if let Some(result) = function.instruction(inst).result {

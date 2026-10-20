@@ -712,6 +712,12 @@ pub struct LirBlock {
     /// Laid out after the hot code: every path from it ends in `unreachable`,
     /// isel finds.
     pub cold: bool,
+    /// The code of the block starts at a multiple of `1 << align` bytes
+    /// (`MachineBasicBlock::setAlignment`); 0: any address.
+    pub align: u8,
+    /// Where padding it would take more bytes than this, none
+    /// (`MaxBytesForAlignment`); 0: no limit.
+    pub max_skip: u8,
 }
 
 /// A block's instructions, shared: a copy of the block is the same
@@ -902,6 +908,8 @@ impl Clone for LirBlock {
             succ: self.succ.clone(),
             phis: self.phis.clone(),
             cold: self.cold,
+            align: self.align,
+            max_skip: self.max_skip,
         }
     }
 }
@@ -912,7 +920,15 @@ impl LirBlock {
         at: i64,
         insns: Vec<Arc<Insn>>,
     ) -> Self {
-        Self { at, insns: insns.into(), succ: Shared::default(), phis: Shared::default(), cold: false }
+        Self {
+            at,
+            insns: insns.into(),
+            succ: Shared::default(),
+            phis: Shared::default(),
+            cold: false,
+            align: 0,
+            max_skip: 0,
+        }
     }
 
     /// Python's `replace(block, insns=insns)`: the old insns are never copied.
@@ -921,8 +937,16 @@ impl LirBlock {
         &self,
         insns: Vec<Arc<Insn>>,
     ) -> Block {
-        Self { at: self.at, insns: insns.into(), succ: self.succ.clone(), phis: self.phis.clone(), cold: self.cold }
-            .into()
+        Self {
+            at: self.at,
+            insns: insns.into(),
+            succ: self.succ.clone(),
+            phis: self.phis.clone(),
+            cold: self.cold,
+            align: self.align,
+            max_skip: self.max_skip,
+        }
+        .into()
     }
 
     /// Python `LirBlock.arrives`.
@@ -1083,6 +1107,14 @@ thread_local! {
     pub(crate) static ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// `succ`'s blocks, each once, in ascending order.
+pub fn distinct(succ: &[i64]) -> Vec<i64> {
+    let mut out = succ.to_vec();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 impl BlockOdds {
     pub const CERTAIN: f64 = 2147483648.0;
 
@@ -1105,7 +1137,7 @@ impl BlockOdds {
         succ: &[i64],
         to: i64,
     ) -> f64 {
-        let succ: BTreeSet<i64> = succ.iter().copied().collect();
+        let succ = distinct(succ);
         if !succ.contains(&to) {
             return 0.0;
         }
@@ -1128,9 +1160,9 @@ impl BlockOdds {
         from: i64,
         succ: &[i64],
     ) -> Vec<(i64, f64)> {
-        let succ: BTreeSet<i64> = succ.iter().copied().collect();
+        let succ = distinct(succ);
         if succ.len() == 1 {
-            return succ.into_iter().map(|to| (to, 1.0)).collect();
+            return vec![(succ[0], 1.0)];
         }
         let stated: Vec<(i64, Option<f64>)> = succ.iter().map(|&to| (to, self.probability(from, to))).collect();
         let known: f64 = stated.iter().filter_map(|(_, one)| *one).sum();

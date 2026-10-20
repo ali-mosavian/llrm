@@ -1,0 +1,219 @@
+val ext 0 cr=i8:full-set cst=- pn=-
+val ext 1 cr=i1:full-set cst=- pn=-
+val ext 2 cr=i32:[0,100) cst=- pn=-
+val ext 3 cr=i32:[0,100) cst=- pn=-
+val ext 4 cr=i32:[0,199) cst=- pn=-
+val ext 5 cr=i32:[-128,128) cst=- pn=-
+rval ext 5 cr=i32:[-128,128)
+rval ext 4 cr=i32:[0,199)
+rval ext 3 cr=i32:[0,100)
+rval ext 2 cr=i32:[0,100)
+rval ext 1 cr=i1:full-set
+edge ext 0 1 0 cr=i8:[0,100)
+edge ext 0 2 0 cr=i8:[100,0)
+pred ext 0 a=- b=-
+epred ext 0 0 0 T
+epred ext 0 1 0 F
+use ext 0 0 cr=i8:full-set
+use ext 1 0 cr=i1:full-set
+use ext 2 0 cr=i8:[0,100)
+use ext 3 0 cr=i8:[0,100)
+use ext 4 0 cr=i32:[0,100)
+use ext 4 1 cr=i32:[0,100)
+use ext 5 0 cr=i32:[0,199)
+use ext 6 0 cr=i8:[100,0)
+use ext 7 0 cr=i32:[-128,128)
+lat ext arg0 bb0 overdefined
+lat ext arg0 bb1 constantrange<0, 100>
+lat ext arg0 bb2 constantrange<100, 0>
+lat ext i0 bb0 overdefined
+lat ext i0 bb1 constantrange<-1, 0>
+lat ext i0 bb2 constantrange<0, -1>
+lat ext i1 bb0 overdefined
+lat ext i1 bb1 overdefined
+lat ext i1 bb2 overdefined
+lat ext i2 bb1 constantrange<0, 100>
+lat ext i3 bb1 constantrange<0, 100>
+lat ext i4 bb1 constantrange<0, 199>
+lat ext i5 bb1 overdefined
+lat ext i6 bb2 constantrange<-128, 128>
+lat ext i7 bb2 overdefined
+val trunc_range 0 cr=i32:full-set cst=- pn=-
+val trunc_range 1 cr=i1:full-set cst=- pn=-
+val trunc_range 2 cr=i8:[0,100) cst=- pn=-
+val trunc_range 3 cr=i8:[0,100) cst=- pn=-
+val trunc_range 4 cr=i8:[0,100) cst=- pn=-
+val trunc_range 5 cr=i8:[0,-57) cst=- pn=-
+val trunc_range 6 cr=i8:full-set cst=- pn=-
+rval trunc_range 6 cr=i8:full-set
+rval trunc_range 5 cr=i8:[0,-57)
+rval trunc_range 4 cr=i8:[0,100)
+rval trunc_range 3 cr=i8:[0,100)
+rval trunc_range 2 cr=i8:[0,100)
+rval trunc_range 1 cr=i1:full-set
+edge trunc_range 0 1 0 cr=i32:[0,100)
+pred trunc_range 0 a=- b=-
+epred trunc_range 0 0 0 T
+epred trunc_range 0 1 0 F
+use trunc_range 0 0 cr=i32:full-set
+use trunc_range 1 0 cr=i1:full-set
+use trunc_range 2 0 cr=i32:[0,100)
+use trunc_range 3 0 cr=i32:[0,100)
+use trunc_range 4 0 cr=i32:[0,100)
+use trunc_range 5 0 cr=i8:[0,100)
+use trunc_range 5 1 cr=i8:[0,100)
+use trunc_range 6 0 cr=i8:[0,-57)
+use trunc_range 6 1 cr=i8:[0,100)
+use trunc_range 7 0 cr=i8:full-set
+lat trunc_range arg0 bb0 overdefined
+lat trunc_range arg0 bb1 constantrange<0, 100>
+lat trunc_range arg0 bb2 constantrange<100, 0>
+lat trunc_range i0 bb0 overdefined
+lat trunc_range i0 bb1 constantrange<-1, 0>
+lat trunc_range i0 bb2 constantrange<0, -1>
+lat trunc_range i1 bb0 overdefined
+lat trunc_range i1 bb1 overdefined
+lat trunc_range i1 bb2 overdefined
+lat trunc_range i2 bb1 constantrange<0, 100>
+lat trunc_range i3 bb1 constantrange<0, 100>
+lat trunc_range i4 bb1 constantrange<0, 100>
+lat trunc_range i5 bb1 constantrange<0, -57>
+lat trunc_range i6 bb1 overdefined
+lat trunc_range i7 bb1 overdefined
+lat trunc_range i8 bb2 overdefined
+val ptrint 0 cr=- cst=- pn=-
+val ptrint 1 cr=i64:full-set cst=- pn=-
+val ptrint 2 cr=i32:full-set cst=- pn=-
+rval ptrint 2 cr=i32:full-set
+rval ptrint 1 cr=i64:full-set
+use ptrint 1 0 cr=i64:full-set
+use ptrint 2 0 cr=i32:full-set
+lat ptrint arg0 bb0 overdefined
+lat ptrint i0 bb0 overdefined
+lat ptrint i1 bb0 overdefined
+lat ptrint i2 bb0 overdefined
+val shifts 0 cr=i32:full-set cst=- pn=-
+val shifts 1 cr=i1:full-set cst=- pn=-
+val shifts 2 cr=i32:[0,125) cst=- pn=-
+val shifts 3 cr=i32:[0,3997) cst=- pn=-
+val shifts 4 cr=i32:[0,500) cst=- pn=-
+val shifts 5 cr=i32:[0,13) cst=- pn=-
+val shifts 6 cr=i32:[1,1000) cst=- pn=-
+val shifts 7 cr=i32:[0,1024) cst=- pn=-
+val shifts 8 cr=i32:[0,10) cst=- pn=-
+val shifts 9 cr=i32:[0,143) cst=- pn=-
+val shifts 10 cr=i32:[0,4121) cst=- pn=-
+rval shifts 10 cr=i32:[0,4121)
+rval shifts 9 cr=i32:[0,143)
+rval shifts 8 cr=i32:[0,10)
+rval shifts 7 cr=i32:[0,1024)
+rval shifts 6 cr=i32:[1,1000)
+rval shifts 5 cr=i32:[0,13)
+rval shifts 4 cr=i32:[0,500)
+rval shifts 3 cr=i32:[0,3997)
+rval shifts 2 cr=i32:[0,125)
+rval shifts 1 cr=i1:full-set
+edge shifts 0 1 0 cr=i32:[0,1000)
+pred shifts 0 a=- b=-
+epred shifts 0 0 0 T
+epred shifts 0 1 0 F
+use shifts 0 0 cr=i32:full-set
+use shifts 1 0 cr=i1:full-set
+use shifts 2 0 cr=i32:[0,1000)
+use shifts 3 0 cr=i32:[0,1000)
+use shifts 4 0 cr=i32:[0,1000)
+use shifts 5 0 cr=i32:[0,1000)
+use shifts 6 0 cr=i32:[0,1000)
+use shifts 7 0 cr=i32:[0,1000)
+use shifts 8 0 cr=i32:[0,1000)
+use shifts 9 0 cr=i32:[0,1000)
+use shifts 10 0 cr=i32:[0,125)
+use shifts 10 1 cr=i32:[0,3997)
+use shifts 11 0 cr=i32:[0,4121)
+lat shifts arg0 bb0 overdefined
+lat shifts arg0 bb1 constantrange<0, 1000>
+lat shifts arg0 bb2 constantrange<1000, 0>
+lat shifts i0 bb0 overdefined
+lat shifts i0 bb1 constantrange<-1, 0>
+lat shifts i0 bb2 constantrange<0, -1>
+lat shifts i1 bb0 overdefined
+lat shifts i1 bb1 overdefined
+lat shifts i1 bb2 overdefined
+lat shifts i10 bb1 constantrange<0, 4121>
+lat shifts i11 bb1 overdefined
+lat shifts i12 bb2 overdefined
+lat shifts i2 bb1 constantrange<0, 125>
+lat shifts i3 bb1 constantrange<0, 3997>
+lat shifts i4 bb1 constantrange<0, 500>
+lat shifts i5 bb1 constantrange<0, 13>
+lat shifts i6 bb1 constantrange<1, 1000>
+lat shifts i7 bb1 constantrange<0, 1024>
+lat shifts i8 bb1 constantrange<0, 10>
+lat shifts i9 bb1 constantrange<0, 143>
+val flags 0 cr=i32:full-set cst=- pn=-
+val flags 1 cr=i32:full-set cst=- pn=-
+val flags 2 cr=i1:full-set cst=- pn=-
+val flags 3 cr=i1:full-set cst=- pn=-
+val flags 4 cr=i1:full-set cst=- pn=-
+val flags 5 cr=i32:[0,9802) cst=- pn=-
+val flags 6 cr=i32:[0,9802) cst=- pn=-
+val flags 7 cr=i32:[0,199) cst=- pn=-
+val flags 8 cr=i32:[0,100) cst=- pn=-
+val flags 9 cr=i32:[0,128) cst=- pn=-
+val flags 10 cr=i32:full-set cst=- pn=-
+rval flags 10 cr=i32:full-set
+rval flags 9 cr=i32:[0,128)
+rval flags 8 cr=i32:[0,100)
+rval flags 7 cr=i32:[0,199)
+rval flags 6 cr=i32:[0,9802)
+rval flags 5 cr=i32:[0,9802)
+rval flags 4 cr=i1:full-set
+rval flags 3 cr=i1:full-set
+rval flags 2 cr=i1:full-set
+edge flags 0 1 0 cr=i32:[0,100)
+edge flags 0 1 1 cr=i32:[0,100)
+pred flags 0 a=- b=-
+pred flags 1 a=- b=-
+use flags 0 0 cr=i32:full-set
+use flags 1 0 cr=i32:full-set
+use flags 2 0 cr=i1:full-set
+use flags 2 1 cr=i1:full-set
+use flags 3 0 cr=i1:full-set
+use flags 4 0 cr=i32:[0,100)
+use flags 4 1 cr=i32:[0,100)
+use flags 5 0 cr=i32:[0,100)
+use flags 5 1 cr=i32:[0,100)
+use flags 6 0 cr=i32:[0,100)
+use flags 6 1 cr=i32:[0,100)
+use flags 7 0 cr=i32:[0,100)
+use flags 7 1 cr=i32:[0,100)
+use flags 8 0 cr=i32:[0,100)
+use flags 8 1 cr=i32:[0,100)
+use flags 9 0 cr=i32:[0,100)
+use flags 10 0 cr=i32:[0,9802)
+lat flags arg0 bb0 overdefined
+lat flags arg0 bb1 constantrange<0, 100>
+lat flags arg0 bb2 overdefined
+lat flags arg1 bb0 overdefined
+lat flags arg1 bb1 constantrange<0, 100>
+lat flags arg1 bb2 overdefined
+lat flags i0 bb0 overdefined
+lat flags i0 bb1 overdefined
+lat flags i0 bb2 overdefined
+lat flags i1 bb0 overdefined
+lat flags i1 bb1 overdefined
+lat flags i1 bb2 overdefined
+lat flags i10 bb1 overdefined
+lat flags i11 bb2 overdefined
+lat flags i2 bb0 overdefined
+lat flags i2 bb1 constantrange<-1, 0>
+lat flags i2 bb2 constantrange<0, -1>
+lat flags i3 bb0 overdefined
+lat flags i3 bb1 overdefined
+lat flags i3 bb2 overdefined
+lat flags i4 bb1 constantrange<0, 9802>
+lat flags i5 bb1 constantrange<0, 9802>
+lat flags i6 bb1 constantrange<0, 199>
+lat flags i7 bb1 constantrange<0, 100>
+lat flags i8 bb1 constantrange<0, 128>
+lat flags i9 bb1 overdefined

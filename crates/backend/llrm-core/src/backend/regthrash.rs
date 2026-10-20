@@ -131,6 +131,18 @@ pub fn _dead_after(
     block.insns.iter().zip(by_position).map(|(one, dead)| (id(one), dead)).collect()
 }
 
+/// `_dead_after`, but a call's possible clobber of an upper half
+/// (`clobbers_high`) is no write: the lanes no instruction after reads.
+pub fn _unread_after(
+    regs: Regs,
+    bits: u32,
+    block: &LirBlock,
+    dead: Lanes,
+) -> DeadAfter {
+    let by_position = _dead_after_in(regs, bits, &block.insns, dead, true);
+    block.insns.iter().zip(by_position).map(|(one, dead)| (id(one), dead)).collect()
+}
+
 /// `_dead_after` by position.
 fn _dead_after_by(
     regs: Regs,
@@ -138,12 +150,24 @@ fn _dead_after_by(
     insns: &[Arc<Insn>],
     dead: Lanes,
 ) -> Vec<Lanes> {
+    _dead_after_in(regs, bits, insns, dead, false)
+}
+
+fn _dead_after_in(
+    regs: Regs,
+    bits: u32,
+    insns: &[Arc<Insn>],
+    dead: Lanes,
+    keeping_high: bool,
+) -> Vec<Lanes> {
     let mut dead = dead;
     let mut out = vec![Lanes::new(); insns.len()];
     for (position, one) in insns.iter().enumerate().rev() {
         out[position] = dead;
         dead = liveness::with_effect(regs, bits, one, |effect| {
-            effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead))
+            effect.map_or_else(Lanes::new, |effect| {
+                if keeping_high { effect.keeping_high(regs, one).dead_before(&dead) } else { effect.dead_before(&dead) }
+            })
         });
     }
     out

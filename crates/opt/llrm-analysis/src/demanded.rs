@@ -1,5 +1,9 @@
 //! Which bits of each integer value anything reads: LLVM's `DemandedBits`.
 //!
+//! Exit: deleted, with `algebraic::_unread_bits` (its only reader), by the
+//! InstCombine `SimplifyDemandedBits` translation (instcombine-port); BDCE
+//! (`demandedbits`) does not replace it.
+//!
 //! # How it works
 //! A backward fixed point over the use-def graph, the dual of
 //! `valuetracking::known_zero`. A bit no user reads can be anything, so a mask

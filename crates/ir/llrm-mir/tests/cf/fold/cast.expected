@@ -1,0 +1,23 @@
+c 0 ptrtoint i64 ptrtoint (ptr @g)
+c 1 ptrtoint i64 4660
+c 2 ptrtoint i64 4660
+c 3 ptrtoint i16 4660
+c 4 inttoptr ptr @g
+c 5 inttoptr ptr inttoptr (i32 ptrtoint (ptr @g))
+c 6 inttoptr ptr @g
+c 7 ptrtoint i64 16
+c 8 ptrtoint i32 12
+c 9 ptrtoint i64 ptrtoint (ptr gep[inbounds,nuw] i8 (ptr @g, i64 4))
+c 10 bitcast ptr @g
+c 11 addrspacecast ptr addrspacecast (ptr addrspace(1) @g1)
+c 12 addrspacecast ptr addrspace(1) @g1
+c 13 trunc i32 ptrtoint (ptr @g)
+c 14 zext i64 4660
+c 15 sext i128 340282366920938463463374607431768211453
+c 16 bitcast float 0x40490FDB
+c 17 bitcast i64 4614253070214989087
+c 18 bitcast double 0xFFFFFFFFFFFFFFFF
+c 19 ptrtoint i64 ptrtoint (ptr gep[] i8 (ptr @g, i64 8))
+c 20 inttoptr ptr null
+c 21 ptrtoint i64 0
+c 22 trunc i8 12

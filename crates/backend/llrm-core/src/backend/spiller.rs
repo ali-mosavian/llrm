@@ -271,6 +271,12 @@ fn planned_with(
     Ok(Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow })
 }
 
+// `spilled_from` asked, for a test that greedy's spills write no plan of it.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PLANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `spilled`, numbering the values it makes from `floor` at least: an
 /// allocation in progress still knows values the body no longer names.
 pub fn spilled_from(
@@ -280,6 +286,8 @@ pub fn spilled_from(
     floor: u32,
     classes: &RegisterClasses,
 ) -> Result<(LirBody, BTreeSet<u32>), Error> {
+    #[cfg(test)]
+    PLANS.with(|one| one.set(one.get() + 1));
     if values.is_empty() {
         return Ok((body.clone(), BTreeSet::new()));
     }
@@ -294,6 +302,49 @@ pub fn spilled_from(
     let plan = planned(body, values, frame)?;
     let (body, made, merged) = materialized(body, &plan, frame, floor, classes, &BTreeSet::new())?;
     Ok((body, made.union(&merged).copied().collect()))
+}
+
+thread_local! {
+    /// The instructions `materialized` made of the ones it was given, when a
+    /// caller asks to know them (`recording_cores`).
+    static CORES: std::cell::RefCell<Option<Vec<u64>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn core_made(one: &Insn) {
+    CORES.with(|cores| {
+        if let Some(list) = cores.borrow_mut().as_mut() {
+            list.push(one.id());
+        }
+    });
+}
+
+/// `work`, and the ids of the instructions it wrote in place of the ones it
+/// was given, as opposed to the reloads, stores and loads it put beside them
+/// (a spiller that edits a function it keeps needs to tell them apart).
+pub fn recording_cores<R>(work: impl FnOnce() -> R) -> (R, Vec<u64>) {
+    CORES.with(|cores| *cores.borrow_mut() = Some(Vec::new()));
+    let result = work();
+    let ids = CORES.with(|cores| cores.borrow_mut().take()).unwrap_or_default();
+    (result, ids)
+}
+
+/// The values of `body` the spiller makes again where they are read rather
+/// than storing them: literals, frame and symbol addresses, and loads of a cell
+/// nothing writes while the value lives. What `TargetInstrInfo::
+/// isTriviallyReMaterializable` answers for the translated allocator.
+pub fn remade_values(body: &LirBody) -> BTreeSet<u32> {
+    postings::following(body, |postings| {
+        let values: BTreeSet<u32> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .flat_map(|one| one.defines.iter().copied())
+            .collect();
+        let mut out: BTreeSet<u32> = _literals_by(body, &values, false, postings).keys().copied().collect();
+        out.extend(_addresses_by(body, &values, postings).keys().copied());
+        out.extend(_stable_loads_by(body, &values, &IndexMap::default(), postings).keys().copied());
+        out
+    })
 }
 
 /// `spilled_from`, with `plain` kept out of the merging of updates into one
@@ -453,7 +504,15 @@ pub fn materialized(
                 continue;
             }
             // A word index held only for one final memory access.
-            if let Some((add, rewritten)) = _indexed_source(&one, &stored, frame, &r#final)? {
+            // A base made again where it is read would shed the add.
+            let remade_base = |value: u32| {
+                constants.contains_key(&value)
+                    || narrow.contains_key(&value)
+                    || addresses.contains_key(&value)
+                    || extensions.contains_key(&value)
+                    || frame_loads.contains_key(&value)
+            };
+            if let Some((add, rewritten)) = _indexed_source(&one, &stored, frame, &r#final, &remade_base)? {
                 insns.push(add);
                 one = rewritten;
             }
@@ -552,6 +611,7 @@ pub fn materialized(
                 None => _tied(body.bits, &one, &stored, frame, classes)?,
             };
             if let Some(direct) = direct {
+                core_made(&direct);
                 insns.push(direct);
                 continue;
             }
@@ -564,6 +624,7 @@ pub fn materialized(
                 insns.extend(reloads);
                 insns.push(if renamed.is_empty() { read } else { _renamed(&read, &renamed) });
                 if let Some(direct) = _tied(body.bits, &one, &stored, frame, classes)? {
+                    core_made(&direct);
                     insns.push(direct);
                     continue;
                 }
@@ -584,6 +645,7 @@ pub fn materialized(
             }
             insns.extend(before);
             let rewritten = if rename.is_empty() { Arc::clone(&one) } else { _renamed(&one, &rename) };
+            core_made(&rewritten);
             insns.push(Arc::clone(&rewritten));
             if one.defines.iter().any(|value| frame_loads.contains_key(value)) {
                 marked.insert(block_index);
@@ -1609,6 +1671,10 @@ fn _cell_move(
     let (held, cell) = if load { (&what.dests[0], &what.sources[0]) } else { (&what.sources[0], &what.dests[0]) };
     let (Loc::Held(held), Loc::Mem(cell)) = (held, cell) else { return None };
     let addr = cell.addr.filter(|addr| addr.space == Space::Frame)?;
+    // An element of an array is no slot: the index says which cell it is.
+    if cell.index.is_some() || cell.index_through != RegId::None {
+        return None;
+    }
     (held.width == cell.width).then_some((held.value, (addr.disp, cell.width)))
 }
 
@@ -1905,6 +1971,8 @@ fn homes_by_sparse_body(
             succ: block.succ.clone(),
             phis: block.phis.clone(),
             cold: block.cold,
+            align: block.align,
+            max_skip: block.max_skip,
         })
         .collect();
     let mut sparse_insns: Vec<Vec<Arc<Insn>>> = vec![Vec::new(); body.blocks.len()];
@@ -2685,6 +2753,12 @@ thread_local! {
     static FOLDED_READ_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many values `_stable_loads_from` has been asked about.
+    static STABLE_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// How many bodies `_folded_reads` has read on this thread.
 pub fn folded_read_scans() -> usize {
     FOLDED_READ_SCANS.with(std::cell::Cell::get)
@@ -2701,6 +2775,23 @@ pub fn _folded_reads(
     values: &BTreeSet<u32>,
 ) -> BTreeSet<u32> {
     FOLDED_READ_SCANS.with(|count| count.set(count.get() + 1));
+    // Only a value one instruction reads and a `mov` from memory defines can
+    // qualify: the stable-load search, which reads every occurrence of what it
+    // is asked, runs on those alone.
+    let mut reads: IndexMap<u32, usize> = IndexMap::default();
+    let mut loaded: BTreeSet<u32> = BTreeSet::new();
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        for value in one.uses.iter().filter(|value| values.contains(*value)) {
+            *reads.entry(*value).or_default() += 1;
+        }
+        if let Some(what) = &one.what {
+            if what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Mem(_)]) {
+                loaded.extend(one.defines.iter().filter(|value| values.contains(*value)));
+            }
+        }
+    }
+    let values: BTreeSet<u32> = loaded.into_iter().filter(|value| reads.get(value) == Some(&1)).collect();
+    let values = &values;
     let stable = _stable_loads(body, values);
     if stable.is_empty() {
         return BTreeSet::new();
@@ -2809,6 +2900,8 @@ fn _stable_loads_from(
     copies: &IndexMap<u32, u32>,
     postings: Option<&Postings>,
 ) -> IndexMap<u32, Mem> {
+    #[cfg(test)]
+    STABLE_ASKED.with(|count| count.set(count.get() + values.len()));
     if values.is_empty() {
         return IndexMap::default();
     }
@@ -4032,10 +4125,14 @@ fn _indexed_source(
     values: &BTreeSet<u32>,
     frame: &mut Frame,
     r#final: &FinalUses<'_>,
+    remade: &dyn Fn(u32) -> bool,
 ) -> Result<Option<(Arc<Insn>, Arc<Insn>)>, Error> {
     let Some((base, index, _cells)) = _indexed_pattern(one, values, r#final) else {
         return Ok(None);
     };
+    if remade(base.value) {
+        return Ok(None);
+    }
     let slot = frame.cell(index.value, index.width)?;
     let (add, rewritten) = _unfolded_index(one, base, index);
     let add = _with(&add, |made| {
@@ -4838,7 +4935,7 @@ pub fn _renamed(
 
 /// One move of a parallel copy, with its spilled end read or written where it
 /// lives.
-fn _in_place(
+pub(crate) fn _in_place(
     one: &Insn,
     values: &BTreeSet<u32>,
     frame: &mut Frame,
@@ -4928,7 +5025,16 @@ fn _memory_source_read_first(
                 .collect(),
             ..what.clone()
         });
-        made.uses = one.uses.iter().copied().chain([fresh]).collect();
+        // The cell's registers went to the load with it; what else the
+        // instruction names is read here still.
+        let rest = what
+            .sources
+            .iter()
+            .filter(|x| !matches!(x, Loc::Mem(_)))
+            .chain(what.dests.iter().filter(|x| matches!(x, Loc::Mem(_))));
+        let read: BTreeSet<u32> =
+            rest.flat_map(|place| ir::values(place)).map(|held| held.value).chain([fresh]).collect();
+        made.uses = one.uses.iter().copied().filter(|value| read.contains(value)).chain([fresh]).collect();
     });
     Some((load, rewritten))
 }
@@ -4995,7 +5101,7 @@ fn _tied(
 }
 
 /// Whether this form exists, asked of the one place that knows.
-fn _encodable(
+pub(crate) fn _encodable(
     bits: u32,
     what: &Semantics,
     classes: &RegisterClasses,
@@ -6148,6 +6254,25 @@ mod tests {
         ]
     }
 
+    /// A load of one element of a frame array stored to another (`a[i] = a[j]`)
+    /// is not a slot copied to itself: sharing slots dropped both as an
+    /// identity, and quicksort -O3 left half of its swap out.
+    #[test]
+    fn test_a_copy_between_elements_of_a_frame_array_is_not_a_slot_identity() {
+        let element = |index: u32| {
+            Loc::Mem(Mem {
+                index: Some(Held { value: index, width: 4 }),
+                scale: 4,
+                ..mem(Addr::new(Space::Frame, -256), 4, RegId::BP, 0, 2)
+            })
+        };
+        let load = insn(0, (0, 0), semantics(Operation::Move, "mov", vec![held(1, 4)], vec![element(10)]), &[1], &[10]);
+        let store =
+            insn(1, (1, 1), semantics(Operation::Move, "mov", vec![element(11)], vec![held(1, 4)]), &[], &[1, 11]);
+        let body = _body(vec![load, store]);
+        assert_eq!(super::_identities_dropped(&body).insns().len(), 2);
+    }
+
     #[test]
     fn test_later_narrow_spill_reuses_a_dead_wider_slot() {
         let mut frame = Frame::new(0);
@@ -6509,6 +6634,32 @@ mod tests {
         let asked = super::KEEPS.with(std::cell::Cell::get) - before;
         assert_eq!(stable.len(), 1, "the load of a cell nothing writes is stable");
         assert!(asked <= 2 * 43, "{asked} questions of `_keeps` for a body of 43 instructions");
+    }
+
+    /// `_folded_reads` asked the stable-load search about every value of the
+    /// body, though only a load with one reader can fold: 2.9 M of 1959 M
+    /// instructions on d_faces.
+    #[test]
+    fn test_folded_reads_ask_only_about_loads_read_once() {
+        let cell = Loc::Mem(mem(Addr::new(Space::Frame, -2), 2, RegId::BP, -2, 1));
+        let load = insn(0, (0, 1), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![cell]), &[1], &[]);
+        let mut insns = vec![Arc::new(load)];
+        for at in 1..=40_u32 {
+            let what =
+                semantics(Operation::Binary, "add", vec![held(100 + at, 2)], vec![held(100 + at - 1, 2), imm(1, 2)]);
+            insns.push(Arc::new(insn(i64::from(at) * 10, (0, 1), what, &[100 + at], &[100 + at - 1])));
+        }
+        let used = insn(1000, (1000, 1001), semantics(Operation::Push, "push", vec![], vec![held(1, 2)]), &[], &[1]);
+        insns.push(Arc::new(used));
+        let blocks = vec![LirBlock::new(0, insns)];
+        let body =
+            LirBody::new("chain", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
+        let values: BTreeSet<u32> = std::iter::once(1).chain(100..=140).collect();
+        let before = super::STABLE_ASKED.with(std::cell::Cell::get);
+        let folded = super::_folded_reads(&body, &values);
+        let asked = super::STABLE_ASKED.with(std::cell::Cell::get) - before;
+        assert_eq!(folded, set(&[1]), "premise: the pushed load folds");
+        assert_eq!(asked, 1, "the stable-load search was asked about {asked} values");
     }
 
     /// A function with n values loaded from the frame asked of every
@@ -7303,6 +7454,33 @@ mod tests {
                 && Arc::ptr_eq(&spilt.blocks[2].insns[1], &body.blocks[2].insns[1]),
             "the blocks that name nothing are as they were"
         );
+    }
+
+    /// The fold added the spilled index to a base that is a literal, then the
+    /// literal was made again at the read: the read lost its index (lru -O2
+    /// m16 printed 43 for 60).
+    #[test]
+    fn test_a_spilled_word_index_is_not_folded_into_a_literal_base() {
+        let base = insn(0, (0, 3), semantics(Operation::Move, "mov", vec![held(5, 2)], vec![imm(20, 2)]), &[5], &[]);
+        let read = _read(0x102, 4, _far(0, Some(1)), &[5, 1]);
+        let result = _out(&_body(vec![base, _add(1, 2, 0x100), read]), &[1, 5]);
+        let read = result.iter().rev().find(|one| matches!(&what(one).sources[0], Loc::Mem(_))).unwrap();
+        let cell = as_mem(&what(read).sources[0]);
+        let rebuilt =
+            cell.base.is_some_and(|base| result.iter().any(|one| one.defines == [base.value] && one.rematerialized));
+        assert!(cell.index.is_some() || !rebuilt, "{result:?}");
+    }
+
+    /// `v1 := mov [v5 + v1]` with v1 spilled became `v77 := mov [v5 + v1]` and
+    /// `v1 := mov v77`, the second still listing v5 and v1 as read: v5 had
+    /// no definition left to its name once it was spilled in turn (fuzz
+    /// seed 32, `unique value` in `LiveRangeCalc::extend`).
+    #[test]
+    fn test_the_move_after_a_split_off_load_reads_only_the_loaded_value() {
+        let read = _read(0x102, 1, _far(0, Some(1)), &[5, 1]);
+        let (load, rewritten) = super::_memory_source_read_first(&read, &BTreeSet::from([1]), 77).expect("a tied load");
+        assert_eq!(load.defines, [77]);
+        assert_eq!(rewritten.uses, [77], "{rewritten:?}");
     }
 
     /// The index fold may not move a second access through the same base.

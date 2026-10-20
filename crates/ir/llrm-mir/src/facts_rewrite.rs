@@ -20,8 +20,8 @@
 //! `!dereferenceable` on a load) would not, and answers `false` below. Checked
 //! when this was written, on the passes `llrm_transforms::pipeline` runs:
 //! `hoist`, `loopmotion`, `lsr` (induction steps), `exitsink` (through
-//! `indvars`), `gvn::joined` (insertion on an edge) and `loadjoins` (a load
-//! cloned into predecessors) move or insert an instruction with its flags, and
+//! `indvars`), `gvn::joined` (insertion on an edge) and GVN's load PRE (a load
+//! made in a predecessor) move or insert an instruction with its flags, and
 //! are sound by the argument above; `algebraic` reassociation changes operands
 //! and already clears the flags (`set_flags(.., Flags::default())`). The
 //! optimiser passes `llrm-mir` once had were never run by the compile route
@@ -45,6 +45,8 @@
 //! the operands of the instruction it simplifies, as LLVM's
 //! `InstructionSimplify` does (`(X <<nuw Y) >> Y` is `X`): each is an operand,
 //! so it ran wherever the user does, and the answer replaces that user only.
+//! `constantfolding` reads the flags of the GEP it folds to flag the constant
+//! that replaces that GEP, in its place and for its users only.
 //! `ranges`, `guards` and `consts` read no flag. Value tracking
 //! (`valuetracking/`: `context`, `guarantee`, `known`, `nonzero`, `power2`,
 //! `range`, and the matchers in `pattern`) reads a promise of the instruction
@@ -105,6 +107,17 @@ impl Fact {
         }
     }
 
+    /// Whether the fact states what makes an instruction undefined where it
+    /// should not run: what `dropUBImplyingAttrsAndMetadata` takes from a
+    /// call that is moved to where it may not run (`noundef`, `nonnull`,
+    /// `dereferenceable`, `align` and a range).
+    pub fn implies_ub(self) -> bool {
+        matches!(
+            self,
+            Fact::NoUndef | Fact::NonNull | Fact::Dereferenceable(_) | Fact::Align(_) | Fact::Range(_)
+        )
+    }
+
     /// Whether the fact still holds of an instruction run where it did not
     /// run. Every variant answers; see the module documentation.
     pub fn survives_speculation(self) -> bool {
@@ -113,6 +126,7 @@ impl Fact {
             | Fact::ReadOnly
             | Fact::ReadNone
             | Fact::NonNull
+            | Fact::NoUndef
             | Fact::NoCapture
             | Fact::NoRetain
             | Fact::Releases
@@ -210,7 +224,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 19] = [
+        const CHECKED: &[&str] = &[
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -227,15 +241,161 @@ mod tests {
             "pattern.rs",
             "power2.rs",
             "range.rs",
+            // ConstantFolding.cpp reads a GEP's `inbounds`, `nusw` and `nuw`
+            // to flag the constant that replaces it.
+            "constantfolding.rs",
             // InlineCost.cpp reads a GEP's `inbounds` where LLVM does
             // (`stripAndAccumulateInBoundsConstantOffsets`,
             // `visitGetElementPtr`).
             "inlinecost.rs",
+            // ScalarEvolution.cpp reads them in `createSCEV`
+            // and `MatchBinaryOp`
+            // (`getNoWrapFlagsFromUB`, `getNoWrapFlagsForGEP`); a pass that
+            // drops one forgets the value, as LLVM's do (`forgetValue`).
+            "create.rs",
+            "create_phi.rs",
+            "create_addrec.rs",
+            // ScalarEvolutionExpander.cpp's `InsertBinop` reuses a nearby
+            // binop only if its `nsw`/`nuw` equal the requested ones
+            // (`canGenerateIncompatiblePoison`).
+            "expand.rs",
+            // `getAddRecExprPHILiterally` sets `nuw`/`nsw` on the increment
+            // `IsIncrementNUW`/`NSW` prove.
+            "expand_iv.rs",
             // Local.cpp's `andIRFlags` and `dropPoisonGeneratingFlags`, and
             // GVN.cpp's `m_NUWTrunc` in `propagateEquality`, read them where
             // LLVM does.
             "local.rs",
             "pass.rs",
+            // SimplifyIndVar.cpp's `WidenIV` reads an add's/sub's/mul's
+            // `nsw`/`nuw` (`matchBinaryOp`, `getExtendedOperandRecurrence`,
+            // `widenWithVariantUse`) to extend its operands, and `copyIRFlags`
+            // gives the wide clone the narrow flags it proved.
+            "widen.rs",
+            // ScalarEvolution.cpp's `getStrengthenedNoWrapFlagsFromBinOp`
+            // reads the flags the operation has and adds the ones the
+            // no-wrap proofs give (`willNotOverflow`); it never drops one.
+            "how_many.rs",
+            // IndVarSimplify.cpp's `linearFunctionTestReplace` clears the
+            // increment's `nuw`/`nsw` that SCEV did not prove for its
+            // post-inc add recurrence; it never adds one.
+            "lftr.rs",
+            // PHITransAddr.cpp's `translateSubExpr` reads an add's
+            // `nsw`/`nuw` for `simplifyAddInst`, and `insertTranslatedSubExpr`
+            // copies a GEP's no-wrap flags to the GEP it makes.
+            "phitrans.rs",
+            // LazyValueInfo.cpp's `binaryOp(BO)`, `Trunc->getNoWrapKind()`,
+            // `m_NUWMul` and `m_AddLike`, and `stripInBoundsOffsets`, read
+            // them where LLVM does.
+            "lazyvalueinfo.rs",
+            // ConstraintElimination.cpp reads nuw/inbounds/nsw where LLVM
+            // does (`decompose`, `getFlagsFor...`).
+            "constraintelim.rs",
+            // BasicAliasAnalysis.cpp's `DecomposeGEPExpression` reads a GEP's
+            // `inbounds` and `nuw` where LLVM does; `aliasGEP` takes NoAlias
+            // from them only as LLVM's rules do.
+            "basicaa.rs",
+            // SROA.cpp's use of `Value::stripInBoundsOffsets`: it walks a
+            // GEP only when it is `inbounds`, where LLVM does.
+            "sroa.rs",
+            // LoopUnroll.cpp's `simplifyLoopAfterUnroll` folds
+            // `(x + c1) + c2` and keeps `nuw`/`nsw` only if both adds had
+            // them, and `c1 + c2` did not overflow.
+            "loopunrollpass.rs",
+            // DemandedBits.cpp's `determineLiveOperandBits` reads an
+            // add's/sub's/mul's `nsw`/`nuw` to see one more high bit live;
+            // it never drops one.
+            "demandedbits.rs",
+            // SCCPSolver.cpp's `refineInstruction` reads the wrap flags it is
+            // about to add (`nuw`, `nsw`, `nneg`, a GEP's `nuw`) and never
+            // drops one.
+            "sccp.rs",
+            // `visitGetElementPtrInst` reads a GEP's `nuw`/`inbounds` for
+            // not-null, and `visitCastInst` a `trunc`'s no-wrap kind for the
+            // result range, where LLVM does.
+            "sccpsolver.rs",
+            // InstCombineCompares.cpp's `foldICmpWithZero` reads a multiply's
+            // `nuw`/`nsw` (`BO0->hasNoUnsignedWrap()`) to drop it from an
+            // equality with zero; it never drops one.
+            "combine_compares.rs",
+            // PredicateInfo.cpp's `m_NUWTrunc(m_Value(Op0))` in
+            // `processBranch`, `processAssume` and `getConstraint`.
+            "predicateinfo.rs",
+            // InstructionCombining.cpp's `SimplifyAssociativeOrCommutative`
+            // reads `nuw`/`nsw` (`hasNoUnsignedWrap`, `maintainNoSignedWrap`)
+            // to set them on the reassociated operation only when both
+            // operations had them, and drops the rest.
+            "combine_shared.rs",
+            // InstCombineAddSub.cpp's `visitAdd` and its helpers read an add's
+            // and a sub's `nsw`/`nuw` where LLVM does, to give the
+            // replacement the flags the operands prove.
+            "combine_addsub.rs",
+            // InstructionCombining.cpp's `foldBinopWithRecurrence` merges the
+            // `nuw`/`nsw` of the three adds (`OverflowTracking`) so the new add
+            // has them only if all had them, and drops the rest.
+            "combine_phi.rs",
+            // InstructionCombining.cpp's `visitGetElementPtrInst` and
+            // `emitGEPOffset` read a GEP's `inbounds`/`nusw`/`nuw` to give the
+            // replacement GEPs and the offset arithmetic the flags the GEP had.
+            "combine_gep.rs",
+            "combine_gep_index.rs",
+            "combine_gep_merge.rs",
+            "combine_gep_phi.rs",
+            // InstCombineShifts.cpp reads a shift's `nuw`/`nsw`/`exact` and the
+            // flags of the add, sub and mul it looks through (`visitShl`,
+            // `visitLShr`, `visitAShr`, `setShiftFlags`) to give the
+            // replacement the flags the operands prove; `getShiftedValue`
+            // drops an add's flags when it shifts the add left.
+            "combine_shifts.rs",
+            // InstCombineMulDivRem.cpp's `visitMul` and its helpers read the
+            // `nuw`/`nsw` of a multiply and of the add, sub and shift it looks
+            // through (`hasNoUnsignedWrap`, `hasNoSignedWrap`, `foldMulOp...`)
+            // to give the replacement the flags the operands prove, and drop
+            // the rest.
+            "combine_muldivrem.rs",
+            // InstCombineCasts.cpp's `visitTrunc`, `visitZExt` and `visitSExt`
+            // read a trunc's, a zext's and a sext's `nuw`/`nsw`/`nneg`
+            // (`hasNoUnsignedWrap`, `hasNoSignedWrap`, `hasNonNeg`) and give
+            // the replacement the flags the narrower or wider operation
+            // proves; `narrowBinOp` keeps an add's or sub's flags only where
+            // they still hold.
+            "combine_casts.rs",
+            // Reassociate.cpp's `OverflowTracking` (`mergeFlags`, `applyFlags`)
+            // merges the `nuw`/`nsw` of the nodes of a tree so the rewritten
+            // tree keeps them only if all had them; `ConvertShiftToMul` and
+            // `NegateValue` read a shift's and an add's, and clear or give
+            // them where LLVM does.
+            "reassociate_forms.rs",
+            "reassociate_negate.rs",
+            "reassociate_tree.rs",
+            // MemCpyOptimizer.cpp's `CreateInBoundsPtrAdd` makes an inbounds
+            // GEP; it reads no flag.
+            "memcpyopt.rs",
+            // SimplifyCFG.cpp's `passingValueIsAlwaysUndefined` reads the
+            // `inbounds` of the `getelementptr` that is the first witnessing
+            // use of a phi, in the phi's block with nothing in between that may
+            // not come back, so it runs wherever the phi's value does; it
+            // concludes only about the value that flows in.
+            "alwaysundef.rs",
+            // InstCombineSimplifyDemanded.cpp reads the `nuw`/`nsw` of the
+            // instruction it simplifies (`SimplifyDemandedUseBits`, the
+            // known bits of an add, a sub and a shift) to conclude about that
+            // instruction's result, and drops them
+            // (`dropPoisonGeneratingFlags`) when an operand it changed no
+            // longer licenses them;
+            // `simplifyShrShlDemandedBits` gives the new shift the flags its
+            // `shl` had.
+            "combine_demanded.rs",
+            // SimplifyCFG.cpp's `ConstantComparesGatherer::matchInstruction`
+            // reads a `trunc nuw` (`m_NUWTrunc`, L646) of the chain it turns
+            // into a switch: the trunc is an operand of the branch condition,
+            // so it ran wherever the branch does, and a value the flag makes
+            // poison made the branch undefined before.
+            "icmpchain.rs",
+            // LICM.cpp's `hoistGEP` makes the swapped GEPs `inbounds` when both
+            // were and no index is negative (L2373); `apply` gives the GEP it
+            // builds the flag `hoist` decided.
+            "apply.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

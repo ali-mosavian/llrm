@@ -1,4 +1,4 @@
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::loopinfo::{LoopInfo, print_loops};
 use crate::module::{BlockId, Function, Module};
 use crate::parse;
@@ -48,7 +48,7 @@ fn test_exit_blocks_keep_repeats_and_unique_exit_does_not() {
     let module = load("shapes.ll");
     let (_, _, function) =
         module.functions().find(|(_, global, _)| global.name.as_deref() == Some("switch_exits")).unwrap();
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let one = info.get_loop_for(block(function, "h")).expect("loop");
     let exit = block(function, "exit");
     assert_eq!(one.get_exit_blocks(function), vec![exit, exit]);
@@ -64,7 +64,7 @@ fn test_latch_predecessor_and_preheader() {
     let module = load("shapes.ll");
     let find = |name: &str| module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).unwrap().2;
     let function = find("two_latches");
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let one = info.get_loop_for(block(function, "h")).expect("loop");
     assert_eq!(one.get_loop_latch(function), None, "two latches");
     assert_eq!(names(function, one.get_loop_latches(function)), ["a", "b"]);
@@ -73,7 +73,7 @@ fn test_latch_predecessor_and_preheader() {
     assert_eq!(one.get_loop_preheader(function), Some(block(function, "entry")));
 
     let function = find("self");
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let one = info.get_loop_for(block(function, "l")).expect("loop");
     assert_eq!(one.get_loop_latch(function), Some(block(function, "l")));
     assert_eq!(info.get_unique_latch_exit_block(function, one), Some(block(function, "exit")));
@@ -83,7 +83,7 @@ fn test_latch_predecessor_and_preheader() {
 fn test_nesting_preorder_depth_and_common_loop() {
     let module = load("shapes.ll");
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("nest")).unwrap();
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let headers: Vec<_> =
         info.get_loops_in_preorder().iter().map(|one| function.block(one.get_header()).name.clone().unwrap()).collect();
     assert_eq!(headers, ["o", "i", "j", "k"], "program order, outer first");
@@ -137,4 +137,104 @@ fn test_loops_are_found_once_while_the_cfg_is_kept() {
     let found = analyses.get::<Loops>(&module.context, &layout, function);
     assert_eq!(get(Event::Forests) - before, 2, "control: the CFG changed, found again");
     assert!(!found.is_loop_header(block(function, "i")));
+}
+
+/// `Loop::isLoopInvariant(const Value *)`: an argument, a constant and an
+/// instruction before the loop are invariant; the loop's own are not.
+#[test]
+fn test_loop_invariance_of_a_value_is_where_its_instruction_is() {
+    let module = parse::module(
+        "define i32 @f(i32 %n) {
+entry:
+  %pre = add i32 %n, 1
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i2, %h ]
+  %i2 = add i32 %i, %pre
+  %c = icmp slt i32 %i2, %n
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret i32 %i2
+}
+",
+    )
+    .expect("a module");
+    let function = module.functions().next().expect("a function").2;
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
+    let one = info.get_loop_for(block(function, "h")).expect("loop");
+    let results: Vec<_> = function.walk().filter_map(|(_, inst)| function.instruction(inst).result).collect();
+    let [pre, i, i2, c] = results[..] else { panic!("four results") };
+    use crate::module::Operand::Value;
+    assert!(one.is_loop_invariant(function, Value(function.parameters()[0])), "an argument");
+    assert!(one.is_loop_invariant(function, Value(pre)), "defined before the loop");
+    assert!(!one.is_loop_invariant(function, Value(i)), "a phi of the loop");
+    assert!(!one.is_loop_invariant(function, Value(i2)));
+    assert!(!one.is_loop_invariant(function, Value(c)));
+}
+
+/// Splices a new block `new` between `from` and its successor `to`: `from`'s
+/// edge to `to` goes to `new`, which jumps to `to`.
+fn splice_block(
+    module: &mut Module,
+    function: &str,
+    from: &str,
+    to: &str,
+    new: &str,
+) -> BlockId {
+    use crate::module::Operand;
+    use crate::opcode::{Flags, Opcode};
+    let (_, f) = module.function_mut(function).expect("function");
+    let (from, to) = (block(f, from), block(f, to));
+    let created = f.create_block(Some(new));
+    f.insert_block_before(created, to).expect("a new block");
+    let void = f.instruction(f.terminator(from).expect("terminated")).ty;
+    let jump = f.create_instruction(Opcode::Br, void, vec![Operand::Block(to)], Flags::default(), None);
+    f.insert(jump, crate::edit::Position::End(created)).expect("placed");
+    let term = f.terminator(from).expect("terminated");
+    let operands = f
+        .instruction(term)
+        .operands
+        .iter()
+        .map(|&one| if one == Operand::Block(to) { Operand::Block(created) } else { one })
+        .collect();
+    f.set_operands(term, operands);
+    created
+}
+
+/// A block added to a loop by `add_basic_block_to_loop` is in it and in every
+/// loop around it, and the loops equal those of an analysis made afresh. The
+/// loops after it in the block layout move, so their blocks must stay theirs.
+/// The first version of the pass rebuilt the whole `LoopInfo` instead.
+#[test]
+fn test_a_block_added_to_a_loop_is_in_it_and_in_every_loop_around_it() {
+    for (from, to, new, owner) in [("i", "i", "n_inner", "i"), ("ol", "o", "n_outer", "o"), ("jl", "j", "n_back", "j")]
+    {
+        let mut module = load("shapes.ll");
+        let mut info = {
+            let (_, _, function) =
+                module.functions().find(|(_, global, _)| global.name.as_deref() == Some("nest")).unwrap();
+            LoopInfo::analyze(function, || DomTree::of(function))
+        };
+        let created = splice_block(&mut module, "nest", from, to, new);
+        let (_, _, function) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("nest")).unwrap();
+        let fresh = LoopInfo::analyze(function, || DomTree::of(function));
+        assert!(fresh.get_loop_for(created).is_some(), "premise: {new} is in a loop");
+        let owner_loop = info.get_loop_for(block(function, owner)).expect("the owner is in a loop").id();
+        info.add_basic_block_to_loop(owner_loop, created);
+        let label = |one: BlockId| function.block(one).name.clone().unwrap_or_default();
+        assert!(
+            info.equivalent(&fresh, function),
+            "{new}:\n{}fresh:\n{}",
+            info.print(function, "nest", &label),
+            fresh.print(function, "nest", &label)
+        );
+        assert_eq!(
+            info.get_loop_for(created).map(|one| one.get_header()),
+            fresh.get_loop_for(created).map(|one| one.get_header()),
+            "{new}"
+        );
+    }
 }

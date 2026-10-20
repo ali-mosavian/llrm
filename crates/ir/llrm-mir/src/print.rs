@@ -99,6 +99,7 @@ pub fn body(
 /// cycle, and a printed body (formatted a line at a time, then held and
 /// compared) was 1.4% of a d_faces compile.
 pub fn fingerprint(function: &Function) -> u128 {
+    crate::counts::bump(crate::counts::Event::Fingerprints);
     use std::hash::{Hash, Hasher};
 
     /// Two multiply-and-rotate hashes (rustc's Fx) with different salts and
@@ -179,8 +180,8 @@ pub fn fingerprint(function: &Function) -> u128 {
         values.insert(parameter, slot(&mut next, &function.value(parameter).name));
     }
     for &block in &function.layout {
-        blocks.insert(block, slot(&mut next, &function.block(block).name));
-        for &inst in &function.block(block).instructions {
+        blocks.insert(block, slot(&mut next, &function.blocks[block.0 as usize].name));
+        for inst in function.iter_block(block) {
             if let Some(result) = function.instruction(inst).result {
                 values.insert(result, slot(&mut next, &function.value(result).name));
             }
@@ -210,7 +211,7 @@ pub fn fingerprint(function: &Function) -> u128 {
         if index > 0 || function.block(block).name.is_some() {
             shown(blocks.get(&block), block.0).hash(&mut digest);
         }
-        for &inst in &function.block(block).instructions {
+        for inst in function.iter_block(block) {
             for record in records.get(&inst).into_iter().flatten() {
                 record.variable.hash(&mut digest);
                 match record.what {
@@ -370,6 +371,16 @@ struct Slots {
     blocks: HashMap<BlockId, String>,
 }
 
+/// The label each parameter and result is written with, `%` left off: its
+/// name, else its slot.
+pub fn value_labels(function: &Function) -> crate::dense::IdMap<ValueId, String> {
+    let mut labels = crate::dense::IdMap::new();
+    for (value, label) in Slots::new(function).values {
+        labels.insert(value, label);
+    }
+    labels
+}
+
 /// The label each placed block is written with, `%` left off: its name, else
 /// its slot.
 pub fn block_labels(function: &Function) -> crate::dense::IdMap<BlockId, String> {
@@ -397,7 +408,7 @@ impl Slots {
         }
         for &block in &function.layout {
             blocks.insert(block, name(&function.block(block).name));
-            for &inst in &function.block(block).instructions {
+            for inst in function.iter_block(block) {
                 if let Some(result) = function.instruction(inst).result {
                     values.insert(result, name(&function.value(result).name));
                 }
@@ -459,6 +470,9 @@ impl Printer<'_> {
         let mut words: Vec<String> =
             [linkage, Self::unnamed_addr(global.unnamed_addr)].into_iter().flatten().map(str::to_owned).collect();
         words.extend(Self::address_space(global.address_space));
+        if variable.externally_initialized {
+            words.push("externally_initialized".to_owned());
+        }
         words.push((if variable.constant { "constant" } else { "global" }).to_owned());
         words.push(self.ty(variable.ty));
         words.extend(variable.initializer.map(|one| self.constant(one)));
@@ -536,7 +550,7 @@ impl Printer<'_> {
             if index > 0 || function.block(block).name.is_some() {
                 let _ = writeln!(out, "{}:", slots.blocks[&block]);
             }
-            for &inst in &function.block(block).instructions {
+            for inst in function.iter_block(block) {
                 for record in function.debug_records().iter().filter(|one| one.before == inst) {
                     let _ = match record.what {
                         DebugWhat::Declare(at) => {
@@ -771,6 +785,7 @@ impl Printer<'_> {
             },
             ConstantKind::Null => "null".to_owned(),
             ConstantKind::Poison => "poison".to_owned(),
+            ConstantKind::Undef => "undef".to_owned(),
             ConstantKind::Zero => "zeroinitializer".to_owned(),
             ConstantKind::Bytes(bytes) => format!("c{}", string(bytes)),
             ConstantKind::Global(global) => {
@@ -783,11 +798,11 @@ impl Printer<'_> {
                 _ if ids.is_empty() => "{}".to_owned(),
                 _ => format!("{{ {} }}", members(ids)),
             },
-            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands }) => {
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nusw, nuw, operands }) => {
                 let rest: Vec<String> = operands.iter().map(|&one| self.typed_constant(one)).collect();
                 format!(
                     "getelementptr {}({}, {})",
-                    if *inbounds { "inbounds " } else { "" },
+                    gep_flag_words(*inbounds, *nusw, *nuw),
                     self.ty(*source),
                     rest.join(", ")
                 )
@@ -813,4 +828,22 @@ impl Printer<'_> {
             .collect::<Vec<_>>()
             .join(", ")
     }
+}
+
+/// The flag words of a constant GEP, each followed by a space.
+pub(crate) fn gep_flag_words(
+    inbounds: bool,
+    nusw: bool,
+    nuw: bool,
+) -> String {
+    let mut words = String::new();
+    if inbounds {
+        words.push_str("inbounds ");
+    } else if nusw {
+        words.push_str("nusw ");
+    }
+    if nuw {
+        words.push_str("nuw ");
+    }
+    words
 }
