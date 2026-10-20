@@ -11,7 +11,7 @@ for n in "$@"; do
   [ "$st" = OPEN ] || { echo "$n: $st"; continue; }
   [ "$base" = feat/parity ] || { gh pr edit $n --repo $R --base feat/parity >/dev/null && echo "$n: retargeted from $base"; }
   [ "$dr" = true ] && { gh pr ready $n --repo $R >/dev/null && echo "$n: marked ready"; }
-  ( flock -x 9; cd $W && git fetch -q origin && git reset -q --hard && git checkout -q --detach origin/feat/parity \
+  ( flock -n 9 || { echo "waiting for the landing lock (another landing holds the checkout)" >&2; flock -x 9; }; cd $W && git fetch -q origin && git reset -q --hard && git checkout -q --detach origin/feat/parity \
     && PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 uv run --project tools python tools/parity_squash.py merge-batch $n > ${LAND_TMP:-/tmp/landing}/sq-$n.log 2>&1 ) 9>"$W.checkout.lock"
   echo "$n: $(refusal_lines ${LAND_TMP:-/tmp/landing}/sq-$n.log)"
   [ "$(gh pr view $n --repo $R --json state -q .state)" = MERGED ] && echo "$n: MERGED  $title"

@@ -21,13 +21,13 @@ macro_rules! cases {
     };
 }
 
-cases!(ops, intrinsics);
+cases!(ops, intrinsics, context);
 
 #[test]
 fn llvm_and_llrm_know_the_same_classes_but_the_listed_values() {
     for (name, text, expected, deviates) in CASES {
         let module = parse::module(text).expect("parses");
-        let ours = dump(&module);
+        let ours = dump(&module, true);
         let (ours, expected): (Vec<_>, Vec<_>) = (ours.lines().collect(), expected.lines().collect());
         assert_eq!(ours.len(), expected.len(), "{name}: values");
         let key = |line: &str| line.split(' ').take(2).collect::<Vec<_>>().join(" ");

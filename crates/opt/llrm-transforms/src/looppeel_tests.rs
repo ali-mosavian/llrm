@@ -74,6 +74,18 @@ fn a_compare_false_on_the_first_trip_only_is_decided_by_peeling_one_trip() {
     assert_eq!(compares(&text), 0, "the test is still in a loop: {text}");
 }
 
+/// The copies share the loop's exits, so the residual loop's exit had
+/// predecessors outside it: the loop was not in simplified form, and the
+/// unroller refused it on its next visit ("not in loop-simplify form"). The
+/// pin's `peelLoop` ends in `simplifyLoop`.
+#[test]
+fn the_residual_loop_after_a_peel_is_in_simplified_form() {
+    let mut module = parsed(&guarded(1, 1));
+    assert!(unrolled(&mut module));
+    let function = module.function_mut("f").expect("@f").1;
+    assert!(!crate::loopsimplify::simplified(function), "{}", printed(&module));
+}
+
 /// Peeling stops at `unroll-peel-max-count` (7): ten trips would decide the
 /// test and are not peeled.
 #[test]
@@ -114,4 +126,39 @@ out:
     let after = printed(&module);
     assert_eq!(results(&module, INPUTS), before, "{after}");
     assert!(!after.contains("%a = phi i32 [ 0, %b0 ], [ 5"), "{after}");
+}
+
+/// An invariant load in a loop that also leaves through an `unreachable`
+/// exit (a bounds check) is not known dereferenceable until a trip has run:
+/// the pin peels one trip so the rest can hoist it. nib's `Level.leaf` was
+/// peeled by `opt` and kept by llrm.
+#[test]
+fn an_invariant_load_that_feeds_the_exit_is_peeled_one_trip() {
+    let text = "define i32 @f(ptr %p, i32 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i32 [ 0, %b0 ], [ %next, %body ]
+  %in = icmp slt i32 %i, %n
+  br i1 %in, label %body, label %bad
+
+body:
+  %v = load i32, ptr %p
+  %next = add i32 %i, 1
+  %same = icmp eq i32 %v, %next
+  br i1 %same, label %out, label %head
+
+bad:
+  unreachable
+
+out:
+  %r = phi i32 [ %v, %body ]
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    assert!(unrolled(&mut module));
+    let after = printed(&module);
+    assert_eq!(after.matches("load i32, ptr %p").count(), 2, "{after}");
 }
