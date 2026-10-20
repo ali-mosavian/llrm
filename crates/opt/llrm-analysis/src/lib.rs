@@ -18,7 +18,7 @@
 //!   [`assumptions`].
 //! - Loops: [`induction`] (counters, trip counts, recurrences), [`peelsize`]
 //!   (is a full copy worth it), [`access`] (affine access functions),
-//!   [`dependence`] (distances for unroll-and-jam and loop fusion).
+//!   [`dependence`] (distances for loop distribution and interchange).
 //! - Memory: [`memory`] (objects, slices, `MemRef`, `Unit`), [`pointerfacts`],
 //!   [`regions`], [`alias`] (points-to, summaries), [`effects`],
 //!   [`frameescape`], [`globalsaa`], [`sliceset`] and [`cellmap`] (containers),

@@ -207,6 +207,8 @@ enum Merged {
 
 fn sunk(function: &mut Function) -> bool {
     let mut changed = false;
+    // Blocks and edges stay as they are: found once, for every phi.
+    let dominance = cfg::Dominance::of(function);
     for (block, phi) in
         function.walk().filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Phi).collect::<Vec<_>>()
     {
@@ -216,8 +218,7 @@ fn sunk(function: &mut Function) -> bool {
         {
             continue;
         }
-        let shape = cfg::Shape::of(function);
-        let Some(plan) = merged(function, &shape, block, &arms, 3) else { continue };
+        let Some(plan) = merged(function, &dominance, block, &arms, 3) else { continue };
         let at = function
             .iter_block(block)
             .find(|&one| function.instruction(one).opcode != Opcode::Phi)
@@ -398,16 +399,16 @@ fn masks_sunk(
 /// `join`.
 fn merged(
     function: &Function,
-    shape: &cfg::Shape,
+    dominance: &cfg::Dominance,
     join: BlockId,
     arms: &[Operand],
     depth: u32,
 ) -> Option<Merged> {
     let reaches = |operand: Operand| match operand {
         Operand::Value(value) => match function.value(value).def {
-            ValueDef::Instruction(def) => function
-                .parent(def)
-                .is_some_and(|block| shape.dominance.dominates(function, cfg::id(block), cfg::id(join))),
+            ValueDef::Instruction(def) => {
+                function.parent(def).is_some_and(|block| dominance.dominates(function, cfg::id(block), cfg::id(join)))
+            }
             ValueDef::Argument(_) => true,
         },
         _ => true,
@@ -454,7 +455,7 @@ fn merged(
         .map(|at| {
             merged(
                 function,
-                shape,
+                dominance,
                 join,
                 &made.iter().map(|&one| function.instruction(one).operands[at]).collect::<Vec<_>>(),
                 depth - 1,

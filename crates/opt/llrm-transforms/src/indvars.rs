@@ -160,8 +160,9 @@ impl FunctionPass for IndVars {
         let tested = self.lftr
             && crate::lftr::enabled()
             && crate::lftr::replaced(unit.context, unit.layout, unit.function, unit.declared, &outer);
-        let shape = cfg::Shape::of(unit.function);
-        let sunk = crate::exitsink::sunk(unit.function, &shape);
+        let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
+        let loops = cfg::natural(unit.function, &found);
+        let sunk = crate::exitsink::sunk(unit.function, &loops);
         let dead = (compared || rewrote || canonical || optimized || predicated || tested || sunk || merged)
             && dead::dead(unit.context, outer.callees(), unit.function);
         if compared || rewrote || canonical || optimized || predicated || tested || sunk || merged || dead {

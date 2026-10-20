@@ -88,7 +88,8 @@ fn assume_calls(
         .flat_map(|&block| function.iter_block(block))
         .filter(|&inst| {
             llrm_mir::memory::callee(context, function, inst)
-                .is_some_and(|callee| outer.globals[callee.0 as usize].name.as_deref() == Some("llvm.assume"))
+                .and_then(|callee| outer.globals.get(callee.0 as usize))
+                .is_some_and(|global| global.name.as_deref() == Some("llvm.assume"))
         })
         .collect()
 }

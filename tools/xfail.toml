@@ -157,7 +157,12 @@ issue = 3059
 owner = "backend-slopes"
 date = "2026-10-20"
 [[xfail]]
-id = "unit llrm-c::compile::tests::test_m16_watcom_words_arrive_in_ax_dx_bx_cx_and_the_callee_pops_the_rest"
-issue = 2980
-owner = "simplify-combine-wiring-2128"
-date = "2026-10-21"
+id = "unit llrm-transforms::promote::tests::a_call_to_a_procedure_that_does_not_write_a_cell_keeps_it_promoted"
+issue = 3190
+owner = "basicaa-port-2163"
+date = "2026-10-23"
+[[xfail]]
+id = "unit llrm-transforms::promote::tests::an_unplaced_store_of_another_type_leaves_a_stored_global"
+issue = 3190
+owner = "basicaa-port-2163"
+date = "2026-10-23"

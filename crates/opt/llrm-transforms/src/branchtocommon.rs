@@ -59,7 +59,7 @@ const BONUS_THRESHOLD: usize = 1;
 const VECTOR_MULTIPLIER: usize = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Join {
+pub(crate) enum Join {
     And,
     Or,
 }
@@ -305,7 +305,7 @@ fn inverted(
 
 /// `createLogicalOp`: `lhs` joined to `rhs`, by the operation where `rhs`
 /// being poison implies `lhs` is, by a select otherwise.
-fn logical_op(
+pub(crate) fn logical_op(
     context: &Context,
     spec: &Speculation,
     function: &mut Function,

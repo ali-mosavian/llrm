@@ -56,6 +56,13 @@
 //! 2026-10-22 with jumps' block-by-block diff: a placement rule jumps names,
 //! or sinking with shrink-wrapping (lir-cleanup-port for the sinking half).
 //!
+//! DEVIATE M6 (no number): an instruction that reads or writes any physical
+//! register stays, where `FindSuccToSinkTo` lets a physical def marked dead
+//! through (and a use of a constant register). Effect: none seen, 0 sinks
+//! missed over d_faces and the 820-object corpus at -O2 (counted: no
+//! instruction that passes `safe_to_move` has a physical write and no read).
+//! Exit: honor a dead implicit def when LIR marks one.
+//!
 //! DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
 //! (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
 //! instruction has none).
@@ -194,6 +201,9 @@ struct Sinker {
     frequency: Arc<Frequency>,
     /// `CEBCandidates` and `CEMergeCandidates`.
     considered: HashSet<(usize, usize)>,
+    /// `GetAllSortedSuccessors` of each block, made once: it asks nothing of
+    /// the instruction.
+    sorted: Vec<Vec<usize>>,
     merged: HashMap<(u32, usize), usize>,
     /// `ToSplit`.
     to_split: Vec<(usize, usize)>,
@@ -233,16 +243,17 @@ impl Sinker {
             body.blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();
         let natural = loops::loops(&body.blocks, Some(body.entry));
         let hard = loops::irreducible(&body.blocks, Some(body.entry));
-        let cycle = body
-            .blocks
-            .iter()
-            .map(|block| {
-                natural
-                    .iter()
-                    .find(|one| one.body.contains(&block.at))
-                    .and_then(|one| position.get(&one.header).copied())
-            })
-            .collect();
+        // The first loop of the list that holds a block is its cycle; made by
+        // walking each loop's body once, not asking every loop of every block.
+        let mut cycle: Vec<Option<usize>> = vec![None; body.blocks.len()];
+        for one in &natural {
+            let header = position.get(&one.header).copied();
+            for at in one.body.iter() {
+                if let Some(&number) = position.get(at) {
+                    cycle[number] = cycle[number].or(header);
+                }
+            }
+        }
         let depths = crate::analysis::intervals::depths_shared(body);
         let mut owner = HashMap::default();
         let mut uses: HashMap<u32, Vec<Use>> = HashMap::default();
@@ -259,7 +270,7 @@ impl Sinker {
                 }
             }
         }
-        Self {
+        let mut sinker = Self {
             size,
             insns: body.blocks.iter().map(|block| block.insns.to_vec()).collect(),
             at: body.blocks.iter().map(|block| block.at).collect(),
@@ -274,12 +285,15 @@ impl Sinker {
             uses,
             cycle,
             considered: HashSet::default(),
+            sorted: Vec::new(),
             merged: HashMap::default(),
             to_split: Vec::new(),
             changed: false,
             regs: body.regs(),
             bits: body.bits,
-        }
+        };
+        sinker.sort_successors();
+        sinker
     }
 
     /// The block a use reads its value in: a phi reads it at the end of the
@@ -339,10 +353,39 @@ impl Sinker {
         let physical = |lanes: &crate::backend::lanes::Lanes| {
             lanes.iter().any(|&(register, _)| register != llrm_lir::registers::RegId::None)
         };
-        // A flag it writes is dead here (nothing reads flags across blocks);
-        // one it reads is set by an instruction it must stay behind.
+        // A flag it writes is dead past its block (nothing reads flags across
+        // blocks; `flags_read_after` covers the rest of its own); one it reads
+        // is set by an instruction it must stay behind.
         let reads_flags = effect.all_reads().iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None);
         physical(&effect.all_reads()) || physical(&effect.writes) || reads_flags
+    }
+
+    /// Whether a flag the instruction at `index` writes is read by a later one
+    /// of its block before another writes it: `FindSuccToSinkTo` moves an
+    /// instruction whose physical defs are dead only. An unknown effect reads
+    /// them.
+    fn flags_read_after(
+        &self,
+        block: usize,
+        index: usize,
+    ) -> bool {
+        let flags = |lanes: &crate::backend::lanes::Lanes| {
+            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+        };
+        let Some(effect) = liveness::effect(self.regs, self.bits, &self.insns[block][index]) else { return true };
+        if !flags(&effect.writes) {
+            return false;
+        }
+        for later in &self.insns[block][index + 1..] {
+            let Some(effect) = liveness::effect(self.regs, self.bits, later) else { return true };
+            if flags(&effect.all_reads()) {
+                return true;
+            }
+            if flags(&effect.writes) {
+                return false;
+            }
+        }
+        false
     }
 
     /// `GetAllSortedSuccessors`: the successors of `block`, and the blocks it
@@ -351,23 +394,43 @@ impl Sinker {
     fn sorted_successors(
         &self,
         block: usize,
-    ) -> Vec<usize> {
-        let mut all = self.cfg.succs[block].clone();
-        for child in 0..self.cfg.len() {
-            if self.dom.idom(child) == Some(block) && child != block && !all.contains(&child) {
-                all.push(child);
+    ) -> &[usize] {
+        &self.sorted[block]
+    }
+
+    /// `sorted_successors` of every block: the dominator tree's children are
+    /// gathered in one pass, not asked of each block among all of them.
+    fn sort_successors(&mut self) {
+        let n = self.cfg.len();
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for child in 0..n {
+            if let Some(parent) = self.dom.idom(child) {
+                if parent != child {
+                    children[parent].push(child);
+                }
             }
         }
         let busy = |one: usize| self.frequency.block(self.at[one]);
-        let unknown = all.iter().all(|&one| busy(one) == 0.0);
-        all.sort_by(|&left, &right| {
-            if self.size || unknown {
-                self.depth[left].cmp(&self.depth[right])
-            } else {
-                busy(left).total_cmp(&busy(right))
-            }
-        });
-        all
+        let sorted = (0..n)
+            .map(|block| {
+                let mut all = self.cfg.succs[block].clone();
+                for &child in &children[block] {
+                    if !all.contains(&child) {
+                        all.push(child);
+                    }
+                }
+                let unknown = all.iter().all(|&one| busy(one) == 0.0);
+                all.sort_by(|&left, &right| {
+                    if self.size || unknown {
+                        self.depth[left].cmp(&self.depth[right])
+                    } else {
+                        busy(left).total_cmp(&busy(right))
+                    }
+                });
+                all
+            })
+            .collect();
+        self.sorted = sorted;
     }
 
     /// `FindSuccToSinkTo`.
@@ -390,7 +453,7 @@ impl Sinker {
                 }
                 continue;
             }
-            for succ in self.sorted_successors(block) {
+            for &succ in self.sorted_successors(block) {
                 let mut local = false;
                 if self.all_uses_dominated_by(value, succ, block, break_phi_edge, &mut local) {
                     sink_to = Some(succ);
@@ -561,6 +624,9 @@ impl Sinker {
         if !safe_to_move(&one, saw_store) {
             return false;
         }
+        if self.flags_read_after(block, index) {
+            return false;
+        }
         let mut break_phi_edge = false;
         let Some(sink_to) = self.find_succ_to_sink_to(&one, block, &mut break_phi_edge) else { return false };
         if self.size && !one.uses.is_empty() {
@@ -656,5 +722,80 @@ pub fn sunk(
         if !broke && !sinker.changed {
             return body;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::model::ir::{Held, Semantics};
+    use crate::model::lir::{Insn, LirBlock};
+    use crate::support::hash::IndexMap;
+
+    fn held(value: u32) -> Loc {
+        Loc::Held(Held { value, width: 4 })
+    }
+
+    fn insn(
+        at: i64,
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+        defines: Vec<u32>,
+        uses: Vec<u32>,
+    ) -> Arc<Insn> {
+        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+    }
+
+    /// `if (n == 0)` on a long in a register pair tests `or v9, v2` and
+    /// branches on its flags; the value v9 is read by nothing, so the `or` was
+    /// sunk into a successor and the `je` read the flags of whatever ran last
+    /// (tests/run/c/register_upper_half.c -mabi=watcom printed 1382385 for 9).
+    #[test]
+    fn test_an_instruction_whose_flags_the_branch_reads_stays_before_it() {
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Move, "mov", vec![held(8)], vec![held(1)], vec![8], vec![1]),
+                    insn(1, Operation::Binary, "or", vec![held(9)], vec![held(8), held(2)], vec![9], vec![8, 2]),
+                    insn(2, Operation::Branch, "je", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let rest = |at: i64| {
+            LirBlock::new(
+                at,
+                vec![
+                    insn(
+                        at,
+                        Operation::Move,
+                        "mov",
+                        vec![held(20 + at as u32)],
+                        vec![held(1)],
+                        vec![20 + at as u32],
+                        vec![1],
+                    ),
+                    insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let mut body = LirBody::new(
+            "flags",
+            0,
+            vec![entry.into(), rest(1).into(), rest(2).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let names: Vec<_> =
+            sunk(&body, false).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+        assert_eq!(names, ["mov", "or", "je"], "the flag-setting or stays in its block");
     }
 }
