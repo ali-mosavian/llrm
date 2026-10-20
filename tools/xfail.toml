@@ -2,16 +2,6 @@
 # ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
 
 [[xfail]]
-id = "unit llrm-c::callconv_tests::test_llrm_lowers_each_call_boundary_as_bcc_does"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-c::compile::tests::test_a_volatile_far_store_to_video_memory_leaves_the_loop_its_cells"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
 id = "unit llrm-c::compile::tests::test_m16_regparm3_a_small_struct_argument_is_on_the_stack"
 issue = 2848
 owner = "unassigned"
