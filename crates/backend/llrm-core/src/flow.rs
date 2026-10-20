@@ -62,7 +62,8 @@ const UNOPTIMIZED: [&str; 7] =
     ["Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink", "MachineSink", "MachineCSE"];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 20] = [
+const SLOTS: [(&str, &str); 21] = [
+    ("Constrain", "twoaddr@9"),
     ("FarIndirectCalls", "farcall@1"),
     ("SharedConstants", "phiconst@2"),
     ("SsaSpill", "ssaspill@3"),
@@ -148,6 +149,7 @@ pub fn machine_with<'a>(
             Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target })
         },
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
+        Box::new(crate::backend::constrain::Constrain { pinned: pinned.clone(), classes: Rc::clone(classes) }),
         Box::new(twoaddr::TwoAddress),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
         Box::new(allocate::RegAlloc::new(

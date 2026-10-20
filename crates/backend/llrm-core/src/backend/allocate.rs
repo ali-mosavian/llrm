@@ -4117,9 +4117,16 @@ impl RegAlloc {
                 found.len() - crowded
             );
         }
+        self.pinned.extend(body.pins.iter().map(|(value, register)| (*value, *register)));
+        let poc_fixed: BTreeSet<u32> =
+            crate::backend::constrain::FIXED.with(|all| all.borrow().get(&body.name).cloned().unwrap_or_default());
         let floor = self.pinned.keys().copied().max().map_or(0, |one| one + 1);
+        let poc_first = handoff_key_poc(&body);
         let mut body = constrain::distinct_classes(&body, floor, &segments, &self.classes);
+        if std::env::var_os("LLRM_POC_HITS").is_some() && poc_first != handoff_key_poc(&body) { eprintln!("pocchange {} distinct_classes", body.name); }
+        let poc_before = handoff_key_poc(&body);
         body = explicit_selectors(&body, Some(&self.pinned), &segments, &self.classes);
+        if std::env::var_os("LLRM_POC_HITS").is_some() && poc_before != handoff_key_poc(&body) { eprintln!("pocchange {} explicit_selectors", body.name); }
         let confined = classes(&body, &BTreeSet::new(), &segments, &self.classes);
         let incompatible: BTreeSet<u32> = self
             .pinned
@@ -4149,8 +4156,23 @@ impl RegAlloc {
         }
         let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
         self.pinned.retain(|value, register| !(regs.is_segment(*register) && confined.get(value) == Some(&selectors)));
-        let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
+        if std::env::var_os("LLRM_POC_WHAT").is_some() && !poc_fixed.is_empty() {
+            let (again, more) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
+            let old: std::collections::HashSet<*const Insn> = body.insns().iter().map(|one| Arc::as_ptr(one)).collect();
+            for one in again.insns().iter().filter(|one| !old.contains(&Arc::as_ptr(one))) {
+                eprintln!("pocadd {} {:?} d{:?} u{:?} req{:?} del{:?}", body.name, one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources)), one.defines, one.uses, one.requires, one.delivers);
+            }
+            eprintln!("pocfixed {} {:?}", body.name, more);
+        }
+        let poc_skip = std::env::var_os("LLRM_POC_SKIP_PREP").is_some() && !poc_fixed.is_empty();
+        let (constrained_body, fixed) = if poc_skip {
+            (body.clone(), IndexMap::default())
+        } else {
+            constrain::constrained(&body, Some(&self.pinned), &self.classes)
+        };
+        let poc_before = handoff_key_poc(&body);
         body = constrained_body;
+        if std::env::var_os("LLRM_POC_HITS").is_some() && poc_before != handoff_key_poc(&body) { eprintln!("pocchange {} constrained", body.name); }
         let clash: BTreeSet<u32> = fixed
             .keys()
             .copied()
@@ -4161,7 +4183,8 @@ impl RegAlloc {
         }
         let mut prefer = self.pinned.clone();
         prefer.extend(fixed.iter().map(|(value, register)| (*value, *register)));
-        let reloads: BTreeSet<u32> = fixed.keys().copied().collect();
+        let mut reloads: BTreeSet<u32> = fixed.keys().copied().collect();
+        reloads.extend(poc_fixed.iter().copied());
         let abandoned: BTreeSet<usize> = body
             .blocks
             .iter()
@@ -4169,7 +4192,11 @@ impl RegAlloc {
             .filter(|one| _unread_move(one))
             .map(ranges::key)
             .collect();
-        body = spiller::_remove_abandoned(&body, &abandoned);
+        let poc_before = handoff_key_poc(&body);
+        if !poc_skip {
+            body = spiller::_remove_abandoned(&body, &abandoned);
+        }
+        if std::env::var_os("LLRM_POC_HITS").is_some() && poc_before != handoff_key_poc(&body) { eprintln!("pocchange {} remove_abandoned", body.name); }
         self.pinned = prefer.clone();
         self.pinned.extend(constrain::required(&body, &self.classes));
         let frame = Rc::clone(self.frame.as_ref().expect("made above"));
@@ -4194,7 +4221,9 @@ impl RegAlloc {
                 let floor = splitkit::_next_value(&body);
                 let (moved, made) =
                     spiller::spilled_from(&body, &read_at_use, Some(&mut frame.borrow_mut()), floor, &self.classes)?;
+                let poc_before = handoff_key_poc(&body);
                 body = moved;
+                if std::env::var_os("LLRM_POC_HITS").is_some() && poc_before != handoff_key_poc(&body) { eprintln!("pocchange {} folded_reads", body.name); }
                 reloads.extend(made);
             }
         }
@@ -4230,6 +4259,10 @@ impl RegAlloc {
         );
         let colored =
             llrm_support::debug::timed("spill slots shared", || spiller::slots_colored(&out, &mut frame.borrow_mut()));
+        if std::env::var_os("LLRM_POC_HITS").is_some() {
+            let (hit, miss) = crate::coalescer::env::HANDOFF_HITS.with(std::cell::Cell::get);
+            eprintln!("pochits {} hit={hit} miss={miss}", body.name);
+        }
         let _apply = llrm_support::debug::span("regalloc apply");
         applied(&colored, &got, &self.classes).map(|placed| datagroup::restored(&placed, data_free, &segments))
     }
@@ -6420,4 +6453,8 @@ mod tests {
         assert_eq!(what.dests, vec![Loc::Reg(Reg { register: RFP[3], width: 10 })]);
         assert!(placed.defines.is_empty(), "{:?}", placed.defines);
     }
+}
+
+fn handoff_key_poc(body: &LirBody) -> Vec<*const Insn> {
+    body.blocks.iter().flat_map(|block| block.insns.iter().map(Arc::as_ptr)).collect()
 }

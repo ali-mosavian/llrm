@@ -662,7 +662,7 @@ pub fn decide_with_split(
             }
         }
     }
-    let lis = LiveIntervals::new(body);
+    let lis = crate::coalescer::env::handed_or_new(body);
     // The environment: orders, frequencies, loop exits.
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq: Vec<f32> =

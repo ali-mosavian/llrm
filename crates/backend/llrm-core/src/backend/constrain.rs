@@ -1208,3 +1208,40 @@ mod tests {
         assert!(insns[1].defines.len() == 1 && insns[1].uses == [1], "the copy reads the index");
     }
 }
+
+thread_local! {
+    /// POC: the values `Constrain` made, which the allocator must not spill.
+    pub static FIXED: std::cell::RefCell<IndexMap<String, BTreeSet<u32>>> = std::cell::RefCell::new(IndexMap::default());
+}
+
+/// POC: `constrained` before TwoAddress and the coalescer, where the pin's
+/// isel puts its CopyToReg/CopyFromReg for fixed registers.
+pub struct Constrain {
+    pub pinned: IndexMap<u32, RegId>,
+    pub classes: std::rc::Rc<RegisterClasses>,
+}
+
+impl crate::model::passes::LIRTransform for Constrain {
+    fn class_name(&self) -> &'static str {
+        "Constrain"
+    }
+
+    fn name(&self) -> &str {
+        "constrain"
+    }
+
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
+        if body.blocks.iter().any(|block| !block.phis.is_empty()) {
+            return Ok(body);
+        }
+        let mut pinned = self.pinned.clone();
+        pinned.extend(body.pins.iter().map(|(value, register)| (*value, *register)));
+        let (mut made, fixed) = constrained(&body, Some(&pinned), &self.classes);
+        FIXED.with(|all| all.borrow_mut().insert(body.name.clone(), fixed.keys().copied().collect()));
+        made.pins.extend(fixed);
+        Ok(made)
+    }
+}

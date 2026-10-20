@@ -37,6 +37,9 @@ pub struct TargetEnv {
     pub palettes: IndexMap<u32, BTreeSet<RegId>>,
     pub pins: IndexMap<u32, RegId>,
     pub size: bool,
+    /// POC: `Constrain`'s copies, which stay copies (the pin joins no
+    /// non-reserved physical register).
+    pub fixed: BTreeSet<u32>,
 }
 
 impl CoalescerEnv for TargetEnv {
@@ -49,6 +52,9 @@ impl CoalescerEnv for TargetEnv {
         a: u32,
         b: u32,
     ) -> bool {
+        if self.fixed.contains(&a) || self.fixed.contains(&b) {
+            return false;
+        }
         if let (Some(x), Some(y)) = (self.pins.get(&a), self.pins.get(&b)) {
             if x != y {
                 return false;
@@ -75,5 +81,37 @@ pub fn joined(
         let compared = lis.assert_intervals_cover_afresh(&after);
         assert!(compared > 0, "{}: the check compared no interval", body.name);
     }
+    if !llrm_support::env_flag!("LLRM_POC_NO_HANDOFF") {
+        let keys = handoff_keys(&after);
+        HANDOFF.with(|one| *one.borrow_mut() = Some((keys, lis)));
+    }
     after
+}
+
+thread_local! {
+    /// POC: the coalescer's intervals, for the allocator of the same body
+    /// (the pin's LiveIntervals, preserved from RegisterCoalescer to RAGreedy).
+    static HANDOFF: std::cell::RefCell<Option<(Vec<*const crate::model::lir::Insn>, LiveIntervals)>> =
+        const { std::cell::RefCell::new(None) };
+    pub static HANDOFF_HITS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+fn handoff_keys(body: &LirBody) -> Vec<*const crate::model::lir::Insn> {
+    body.blocks.iter().flat_map(|block| block.insns.iter().map(std::sync::Arc::as_ptr)).collect()
+}
+
+/// POC: the coalescer's intervals where `body` is the one it left, else new.
+pub fn handed_or_new(body: &LirBody) -> LiveIntervals {
+    let keys = handoff_keys(body);
+    let taken = HANDOFF.with(|one| one.borrow_mut().take());
+    match taken {
+        Some((held, lis)) if held == keys => {
+            HANDOFF_HITS.with(|n| n.set((n.get().0 + 1, n.get().1)));
+            lis
+        }
+        _ => {
+            HANDOFF_HITS.with(|n| n.set((n.get().0, n.get().1 + 1)));
+            LiveIntervals::new(body)
+        }
+    }
 }

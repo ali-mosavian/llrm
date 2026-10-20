@@ -249,6 +249,25 @@ impl LiveIntervals {
         let empty = Vec::new();
         let operands = self.operands.get(&reg).unwrap_or(&empty);
         self.calc.calculate(&mut li, operands, &ctx);
+        let defs = operands.iter().filter(|one| one.is_def).count();
+        if std::env::var_os("LLRM_LI_PROBE").is_some() && (defs >= 2 || self.inputs.contains(&reg)) {
+            let blocks = (0..self.cfg.len())
+                .filter(|block| {
+                    let (start, end) = *self.indexes.get_mbb_range(*block);
+                    li.segments.iter().any(|seg| seg.start < end && start < seg.end)
+                })
+                .count();
+            eprintln!("liblocks reg={reg} blocks={blocks} of={}", self.cfg.len());
+            if blocks >= 150 {
+                for one in operands {
+                    let at = self.indexes.get_instruction_index(one.instr);
+                    let block = self.indexes.get_mbb_from_index(&at);
+                    let text = self.insns.get(&one.instr).map(|insn| format!("{:?}", insn.what.as_ref().map(|w| (&w.op, &w.name, &w.dests, &w.sources)))).unwrap_or_default();
+                    eprintln!("liop reg={reg} def={} block={block} preds={} succs={} {text}", one.is_def, self.cfg.preds[block].len(), self.cfg.succs[block].len());
+                }
+            }
+            eprintln!("liprobe reg={reg} input={} defs={defs} uses={} segs={} vnis={}", self.inputs.contains(&reg), operands.len() - defs, li.segments.len(), li.valnos.len());
+        }
         li
     }
 
