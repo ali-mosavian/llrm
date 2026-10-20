@@ -4,7 +4,7 @@ architecture-order: 335
 ---
 # The analysis-manager model
 
-TL;DR: one compile of d_faces `-O2` asks the manager 365 (pass, analysis) miss rows and builds a dominator tree 684 times, 516 of them outside it. The five `fold@N` slots hold 131 M of analyses beneath them, 124 M of it attributed to 18 analyses by miss share. The pin keeps what a pass leaves true; we drop what a pass does not name, and 26 of our pass files return `none()` on change. This page fixes one set of invalidation rules and the order of the per-analysis PRs. "Measured" is a counter or a profile run; "inferred" is arithmetic on those.
+TL;DR: one compile of d_faces `-O2` asks the manager 365 (pass, analysis) miss rows and builds a dominator tree 684 times, 516 of them outside it. The five `fold@N` slots show about 116 M of analyses beneath them, which is nested billing (an analysis is charged to its first asker), not waste. The waste is the equal-result rebuilds counted by basicaa-port-2163: 35 of 82 `call-effects` builds, 33 of 90 `annotated`, 7 of 10 `globals-aa`, and 0 of 48 `through-memory`. The pin keeps what a pass leaves true; we drop what a pass does not name, and 26 of our pass files return `none()` on change. This page fixes one set of invalidation rules and the order of the per-analysis PRs. "Measured" is a counter or a profile run; "inferred" is arithmetic on those.
 
 Context: [LLVM's analysis manager against llrm's `Analyses`](../comparison/llvm/analysis-manager.md) measures the cost of the drop step; this page is the rules and the plan.
 
@@ -65,7 +65,7 @@ Where we deviate (by grep and reading; counts are measured in section 3):
 
 One run of `llrm-c -m32 -mabi=sysv -march=i486 -O2` on `d_faces`, `21aadae64`, release. `LLRM_DEBUG=counts` for asks and misses (11 bodies per slot), `LLRM_DEBUG=time` for own M (instructions, the same run's profile of the process). The glue figures are from the callgrind glue table of `8e278bbf2`.
 
-Open factor, not resolved here: our pipeline compiles 89 function shapes where clang's IR for the same file has 11 defines (asked of cycles-queue-quiet-host). Any per-body comparison with the pin below must carry it.
+Open factor, resolved (measured, cycles-queue-quiet-host, `feat/parity` 13a6a6ade, d_faces `-O2`): the 89 is not a count of compiled bodies. Ours has 11 defines entering the pipeline and 7 after globaldce; the pin (`opt default<O2>`, same flags) goes 11 to 6. Per-pass runs (`LLRM_DEBUG=runs`, 11 bodies): combine 55, fold 55, simplifycfg 33, licm 33, sroa 33, gvn 11; the pin runs InstCombine 73 times and SimplifyCFG 78. So there is no 8x factor: 89 counted analysis shapes, and the step lines' in=21/out=21 are defines plus declarations. The only extra define at `-O2` is `clip_w_` (inline refused, a decision gap). Our `-O1` inlined nothing (the pin's goes 11 to 6); a fix is in progress (draft, 2026-10-21). Per-body figures below divide by 11.
 
 | analysis | asks (hit+miss) | misses | per body | own M (runs) | misses by asking pass (measured) | pin |
 |---|---|---|---|---|---|---|
@@ -83,41 +83,45 @@ Open factor, not resolved here: our pipeline compiles 89 function shapes where c
 | through-memory | 79 | 48 | 4 | 28.6 (48) | fold 48 | MemDep per load |
 | float-facts | 22 | 17 | 2 | 23.7 (17) | fold 17 | none stored |
 | globals-aa (module) | 77 | 10 | - | 44.4 (10) | outside a pass 6, interprocedural 2, stamp 1, walk 1 | built once, kept until abandoned |
-| summaries (module) | 64 | 16 | - | 7.1 (16) | walk 7, outside a pass 6, interprocedural 2, stamp 1 | FunctionAttrs on the call graph |
+| summaries (module), stale: measured before #3139, now `attrsummary::summaries` (12 runs, 3.1 M own, 9.3 total; funcattrs-port) | 64 | 16 | - | 7.1 (16) | walk 7, outside a pass 6, interprocedural 2, stamp 1 | FunctionAttrs on the call graph |
 
 Built outside the manager (measured counters, whole run): dominator trees 684 against 168 manager misses; loop forests 633 against 161; `Shape` 250 against 161; exposed-frames scans 217 against 115; known-constant solves 50 (no manager analysis). The differences (516, 472, 89, 102) are builds no manager holds (inferred: the counter sits in `DomTree::of`, `LoopInfo::analyze`, `cfg.rs`, `memory::exposed_frames`, `consts::known`). At the manager's mean cost per build the 516 trees are about 19 M (inferred).
 
-Glue table (callgrind, measured, M): `alias::initialized` reached by `stamped` 14.7, `stamped` 6.6, `globalsaa::found_with` 5.7, `calls_annotated` 4.4; `MemRef::of` 19.2 self (146,893 calls, 30,026 misses; the thread-local scan 13.3); `Summaries` 18.9 inclusive, `functionattrs::post_order` 20.7 inclusive with 13.0 in `consts::known_from`.
+Glue table (callgrind, measured, M, `8e278bbf2`; several rows are stale): `stamped` 6.6 (now 4.6: `post_order` per SCC plus the F6 fallback), `globalsaa::found_with` 5.7, `calls_annotated` 4.4; `MemRef::of` 19.2 self (146,893 calls, 30,026 misses; the thread-local scan 13.3); `functionattrs::post_order` 20.7 inclusive with 13.0 in `consts::known_from`. `alias::initialized` is gone (#3226: `inferInitializes` is a use walk, no points-to), and `Summaries` (18.9) is stale: it is no longer a fixpoint. `post_order` also runs per SCC in the walk (#3087), so `known_from` (13 M) is the sharing target (estimate, funcattrs-port with basicaa-port-2163, 2026-10-27). Matched d_faces `-O2` builds, funcattrs-port's measurement: total 1301.5 to 1240.7 Minstr, mir stamp 42.1 to 4.6, interprocedural 45.0 to 21.2. bench-instruments-2206 fixed the glue instrument: the parse row is re-rooted at `selected_checking` (19.0 M), compile main (rest) 40.5 to 21.4 M, glue 185.6 to about 166.6 M; its new guard names three more silent zero roots (HIR to MIR emit, emission masm text/listing/frame, pass manager (managed ...)).
 
 ### Billed inside `fold@N`
 
-Under the five `fold@N` slots: 162.8 M total, 31.6 M own, so **131.2 M of analyses** (measured, `time`). Nested billing: an analysis a pass asks is charged to that pass, and the ones it asks in turn too, so `annotated` shows 102.9 M with its asks and 25.9 M own. Own M avoids the double count. The apportionment below is own M of each analysis times the share of its misses asked from `fold@N` (inferred, assumes equal cost per build; an earlier page found the average overstates cheap builds):
+Under the five `fold@N` slots, recomputed (measured by simplify-combine-wiring-2128, `LLRM_DEBUG=time LLRM_TIME_TOP=400`, release at parity d2b6377b2): 128.8 M inclusive, 12.6 M own (1242 2.33, 677 2.60, 768 2.57, 801 2.59, 837 2.54), so about 116 M beneath. The first version of this page said 162.8 M total, 31.6 M own, 131.2 M beneath, from `21aadae64`. Its raw output sums correctly (own 12.3 + 10.9 + 2.9 + 2.8 + 2.8), but `fold@677` and `fold@1242` own are about 4x their three siblings, in ms as well as instructions, while the same slots own 2.3 to 2.6 M in the later run. The cause is not found, so the later figure is used and the inferred M below were scaled by 116/131.2.
 
-| analysis | fold misses / all | M under fold (inferred) |
+**This 116 M is nested billing, not waste.** An analysis a pass asks is charged to that pass, and the ones it asks in turn too, so `annotated` shows 102.9 M with its asks and 25.9 M own. Most of it is first computes that some pass has to pay for. The apportionment is own M of each analysis times the share of its misses asked from `fold@N` (inferred, scaled by 0.886, assumes equal cost per build; an earlier page found the average overstates cheap builds); it says who is billed, not what can be saved:
+
+| analysis | fold misses / all | M billed under fold (inferred) |
 |---|---|---|
-| through-memory | 41 / 48 | 24.4 |
-| float-facts | 15 / 17 | 20.9 |
-| call-effects | 27 / 82 | 18.0 |
-| bounded | 33 / 96 | 13.6 |
-| annotated | 33 / 90 | 9.5 |
-| pointer-values | 33 / 90 | 7.9 |
-| counted | 33 / 96 | 7.3 |
-| plain-accesses | 33 / 79 | 6.9 |
-| registers | 33 / 115 | 6.3 |
-| exposed-frames | 33 / 115 | 3.2 |
-| eight others (followers, assumptions, dominated-edges, writes, dominators, loops, shape, table-loads) | | 6.0 |
-| total | | 124.0 (of 131.2 measured) |
+| through-memory | 41 / 48 | 21.6 |
+| float-facts | 15 / 17 | 18.5 |
+| call-effects | 27 / 82 | 15.9 |
+| bounded | 33 / 96 | 12.0 |
+| annotated | 33 / 90 | 8.4 |
+| pointer-values | 33 / 90 | 7.0 |
+| counted | 33 / 96 | 6.5 |
+| plain-accesses | 33 / 79 | 6.1 |
+| registers | 33 / 115 | 5.6 |
+| exposed-frames | 33 / 115 | 2.8 |
+| eight others (followers, assumptions, dominated-edges, writes, dominators, loops, shape, table-loads) | | 5.3 |
+| total | | 109.7 (of about 116 measured) |
 
-What is waste is the rebuild that came out equal, not the first compute. `LLRM_WHY` of one compile, measured by basicaa-port-2163 (its slots are named `combine@N` there; the build counts 10, 48, 82, 90 equal ours above):
+What is waste is the rebuild that came out equal, not the first compute. Size the wins by these counts. `LLRM_WHY` of one compile, measured by basicaa-port-2163 (basicaa-port-2163's `LLRM_WHY` aggregate of one d_faces `-O2` compile at cb2ce8f3e, raw output kept by the owner; its slots are named `combine@N` there; the build counts 10, 48, 82, 90 equal ours above). Its aggregate is counts and wall ms (`globals-aa` 4.9 ms own for 10 runs, `through-memory` 2.6 ms for 48), not M instructions; the M column is parity-pipeline's (own M times equal share, inferred, our method, upper bound).
 
-| analysis | builds | equal result | equal share | first computes | M at that share (inferred, upper bound) |
+| analysis | builds | equal result | equal share | first computes | M at that share (inferred) |
 |---|---|---|---|---|---|
 | globals-aa | 10 | 7 | 70% | 1 | 31.1 |
 | call-effects | 82 | 35 | 43% | 42 | 23.3 |
 | annotated | 90 | 33 | 37% | 42 | 9.5 |
 | through-memory | 48 | 0 | 0% | 48 | 0 (first computes only; billed to whoever asks first) |
 
-So the win for `through-memory` is not caching but asking less or computing less on the first ask. The others are won by keeping what a pass left true.
+`globals-aa`: 10 builds are 1 first, 7 equal result and 2 changed. "Equal result" is not "unchanged IR": module analyses carry no body mark, so the unchanged-mark class is not recorded for them. Rebuilt after: pipeline x3, simplifycfg@1438 x2, sccp, decide@1244, rotate. The pin runs GlobalsAA once for this source (`opt` 24.0.0git `default<O2>`, `-debug-pass-manager`: one "Running analysis: GlobalsAA", one `RecomputeGlobalsAAPass`), so the target is one run, kept until a module pass abandons it.
+
+So the win for `through-memory` is not caching but asking less or computing less on the first ask. The pin's counterpart is MemorySSA (25 runs) plus BasicAA (47 runs) over 11 functions; do not compare run counts with ours: our 89 shapes are analysis shapes, not bodies (resolved above), and the pin's counts are over 11 functions. The others are won by keeping what a pass left true.
 
 ## 4. The design
 
@@ -158,7 +162,7 @@ By file, from the return expressions (inferred). Pin lines in parentheses (llvm/
 |---|---|
 | `sroa`, `promote`, `mem2reg` | `CFGAnalyses` and `DominatorTree` (Scalar/SROA.cpp#L6498, Utils/Mem2Reg.cpp#L67) |
 | `memcpyoptimizer`, `deadstore` | `CFGAnalyses`, `MemorySSA` (Scalar/MemCpyOptimizer.cpp#L2247, Scalar/DeadStoreElimination.cpp#L2842) |
-| `combine` (keeps only `LastRunTracking`), `fold` | `CFGAnalyses`, `LastRunTracking` (InstCombine/InstructionCombining.cpp#L6287) |
+| `combine` (keeps only `LastRunTracking`), `fold` | `CFGAnalyses`, `LastRunTracking` (InstCombine/InstructionCombining.cpp#L6287). For `combine` this is a wiring gap, not deliberate: it edits no block or edge, so `setPreservesCFG` applies. Fix by 10-21 (wiring), with a test, in `combine_pass.rs`; PR 1 need not wait (estimate, simplify-combine-wiring-2128) |
 | `jumpthreading` | `LazyValueInfo`, `DominatorTree`, `BranchProbability`, `BlockFrequency` (Scalar/JumpThreading.cpp#L3227) |
 | `simplifycfg`, `decide`, `switchlower` | `DominatorTree` (Scalar/SimplifyCFGPass.cpp#L389) when the pass asked for it |
 | `looprotate`, `loopunrollpass`, `simpleloopunswitch`, `loopdeletion`, `loopinterchange`, `trivialunswitch`, `loopsimplify`, `loopidioms`, `window` | `DominatorTree`, `LoopInfo`, `ScalarEvolution`, `MemorySSA` (llvm/lib/Analysis/LoopAnalysisManager.cpp#L141) |
@@ -183,11 +187,11 @@ One PR per analysis, each with a computes-per-body counting test written to fail
 |---|---|---|---|---|
 | 0 | this note | parity-pipeline | rules and table | 2026-10-20 (estimate, parity-pipeline) |
 | 1 | pass audit: `preserve_cfg()` for the passes in the table above, `abandon`, `cfg_only`; test: dominators computed per body in a combine-only pipeline | parity-pipeline | mechanical, unblocks every CFG reader; ceiling 12.8 M of dominators, loops and shape (inferred) | 2026-10-23 (estimate, parity-pipeline) |
-| 2 | GlobalsModRef once per module, kept until a module pass abandons it | basicaa-port-2163 | 7 of 10 builds equal, 31.1 M (inferred) | table with the `LLRM_WHY` classes 2026-10-22 (estimate, basicaa-port-2163) |
-| 2b | `through-memory`: ask less or compute less on the first ask (no rebuild waste: 0 of 48 equal) | basicaa-port-2163 | 28.6 M own, all first computes | none stated |
-| 3 | call-effects, annotated, Summaries, `stamped` out of the manager's blind spot | funcattrs-port | 35 of 82 and 33 of 90 equal, 32.8 M (inferred) | plan 2026-10-24 to 2026-10-28 (estimate, funcattrs-port) |
-| 4 | InstCombine/`fold@N` analyses: what `fold` asks on each slot | simplify-combine-wiring-2128 | 131.2 M under the slots; most of it is rows 2 and 3 | none stated |
-| 5 | interprocedural: `stamped_all` through the held results | cycles-queue-quiet-host | 105.6 M inclusive in the glue table; also answers 89 against 11 | reply 2026-10-22 (estimate, cycles-queue-quiet-host) |
+| 2 | GlobalsModRef once per module (the pin runs it once), kept until a module pass abandons it. The use scan once per module in place of the per-body solve is built and tested, waiting on a rows pair; keeping it across passes that add no memory operation is a second PR | basicaa-port-2163 | 7 of 10 builds equal result (31.1 M is parity-pipeline's inferred figure) | table with the `LLRM_WHY` classes 2026-10-22; second PR ceiling 2026-10-28 (estimates, basicaa-port-2163) |
+| 2b | `through-memory`: ask less or compute less on the first ask (no rebuild waste: 0 of 48 equal) | basicaa-port-2163 | 48 builds, all first computes (28.6 M own, parity-pipeline) | none stated |
+| 3 | call-effects as a per-call attribute query (memoryssa/dse 10-24, gvn/fold 10-26, table deleted 10-28); `annotated`'s readers are basicaa-port-2163 / mssa-green-2127, not this row's owner | funcattrs-port | 35 of 82 equal for call-effects (inferred); `Summaries` dropped (nothing left to cache), `stamped` is 4.6 M | estimates, funcattrs-port |
+| 4 | InstCombine/`fold@N` analyses: what `fold` asks on each slot | simplify-combine-wiring-2128 | about 116 M nested billing under the slots (not waste); sized by rows 2 and 3 equal-result counts | 2026-10-30, after the idle-slot per-visit work (estimate, simplify-combine-wiring-2128) |
+| 5 | interprocedural: `stamped_all` through the held results | cycles-queue-quiet-host | 105.6 M inclusive in the glue table | reply 2026-10-22 (estimate, cycles-queue-quiet-host) |
 | 6 | scev: held across the loop passes that keep `Loops` | scev-createscev-2239 | 9 builds; small | none stated |
 | 7 | direct `DomTree::of` and `LoopInfo::analyze` callers take the held result | parity-pipeline | 516 trees outside the manager, about 19 M (inferred) | none stated |
 
