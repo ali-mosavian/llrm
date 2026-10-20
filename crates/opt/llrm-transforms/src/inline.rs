@@ -665,6 +665,8 @@ struct Plan<'a, 'c> {
     own: i64,
     /// The caller's size in `gcc_insns`, kept only to bound self-inlining.
     insns: i64,
+    /// What peeled copies have added, in `gcc_insns`.
+    peeled: i64,
     frame: u64,
     seq: usize,
 }
@@ -720,17 +722,25 @@ impl<'a> Plan<'a, '_> {
             // so a tree (fib: 1, bintree: 1.25) is not peeled, which doubles
             // a copy at each level (bintree -O2 +0.13% clocks, 988 to 1276 B).
             let level = depth - 1;
-            let recursing = parent.and_then(|one| one.self_calls).unwrap_or(1.0);
+            // The edge's frequency in the caller, over that of the call that
+            // made the outermost copy: the calls to itself per call, to the
+            // power of the copies it is deep.
+            let reached = parent.and_then(|one| one.self_calls).unwrap_or(1.0).powi(level as i32);
             let mut limit = 1.0 - 1.0 / MAX_INLINE_RECURSIVE_DEPTH_GCC as f64;
             for _ in 1..level {
                 limit *= limit;
             }
+            let grown = gcc_insns(callee) - 1;
+            // DEVIATE: the copies a call peels add at most what a function
+            // may grow by copies of itself (recpow -O1: 32 copies, 8203 bytes).
             if level > MAX_INLINE_RECURSIVE_DEPTH_GCC
-                || recursing >= limit
-                || gcc_insns(callee) - 1 > MAX_INLINE_INSNS_AUTO
+                || reached >= limit
+                || grown > MAX_INLINE_INSNS_AUTO
+                || self.peeled + grown > MAX_INLINE_INSNS_RECURSIVE
             {
                 return None;
             }
+            self.peeled += grown;
         }
         self.seq += 1;
         let seq = self.seq;
@@ -1014,6 +1024,7 @@ pub fn expanded_all(
         available,
         own: start.0,
         insns: gcc_insns(function),
+        peeled: 0,
         frame: start.1,
         seq: 0,
     };
@@ -1029,6 +1040,7 @@ pub fn expanded_all(
             None => seen.last().and_then(|one| one.callee).and_then(|name| available.get(&name)),
         };
         let Some(target) = target else { continue };
+        plan.peeled = 0;
         if let Some((planned, result)) = plan.inline(info.function_type, &seen, target, call, 1, None) {
             if instruction.result.is_some() {
                 results.insert(call, result);
