@@ -66,3 +66,14 @@ def test_a_pair_of_one_build_relinked_is_void(tmp_path):
     assert voidpair.void(str(a), str(c)) == ""
     done = subprocess.run([sys.executable, str(HERE / "objsweep.py"), str(a), str(b), "--src", str(tmp_path)], capture_output=True, text=True)
     assert done.returncode == 2 and "VOID PAIR" in done.stdout
+
+
+def test_runpinned_stops_when_the_dist_lacks_the_linker(tmp_path):
+    """A VM without jwasm/jwlink/dosbox-x in the dist ran no test and the pair's run diff was empty, read as 'no new failure'."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "llrm-c").write_text("")
+    repo = HERE.parents[1]
+    done = subprocess.run(["bash", str(HERE / "runpinned.sh"), "0" * 9, str(dist), str(tmp_path / "out.txt")], capture_output=True, text=True, env={"PIN_TREES": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(tmp_path)}, cwd=repo)
+    assert done.returncode == 2 and "is missing" in done.stderr, done.stderr
+    assert not (tmp_path / "out.txt").exists()
