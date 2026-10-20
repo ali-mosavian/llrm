@@ -49,8 +49,8 @@ use llrm_analysis::loads::{
     Available, DEF_MAX_INSTS_TO_SCAN, ModRefOracle, find_available_loaded_value, find_available_ptr_load_store,
 };
 use llrm_mir::context::{Constant, ConstantKind};
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
-use llrm_mir::hash::{HashMap, HashSet};
 use llrm_mir::module::{BlockId, InstId, MetadataId, Operand};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::types::Type;
@@ -149,9 +149,9 @@ impl State<'_, '_> {
             // Multiple unavailable predecessors, or a critical edge from the
             // one.
             _ if scan.scanned != scan.available.len() => {
-                let available_set: HashSet<BlockId> = scan.available.iter().map(|&(pred, _)| pred).collect();
+                let available_set: IdSet<BlockId> = scan.available.iter().map(|&(pred, _)| pred).collect();
                 let mut to_split = Vec::new();
-                let mut seen = HashSet::default();
+                let mut seen = IdSet::new();
                 for pred in self.pred_edges(load_bb) {
                     if !available_set.contains(&pred) {
                         if !can_speculate_into(self) {
@@ -168,7 +168,7 @@ impl State<'_, '_> {
         }
 
         // Insert a load on the edge the value isn't available on.
-        let mut available: HashMap<BlockId, Operand> = scan.available.into_iter().collect();
+        let mut available: IdMap<BlockId, Operand> = scan.available.into_iter().collect();
         if let Some(pred) = unavailable_pred {
             let new = self.insert_reload(load, align, load_bb, pred);
             available.insert(pred, new);
@@ -224,7 +224,7 @@ impl State<'_, '_> {
         self.with_alias_analysis(|unit, aa| {
             let mut scan =
                 PredecessorScan { available: Vec::new(), scanned: 0, one_unavailable: None, cse_loads: vec![] };
-            let mut preds_scanned = HashSet::default();
+            let mut preds_scanned = IdSet::new();
             for pred in self.pred_edges(load_bb) {
                 // If we already scanned this predecessor, skip it.
                 if !preds_scanned.insert(pred) {

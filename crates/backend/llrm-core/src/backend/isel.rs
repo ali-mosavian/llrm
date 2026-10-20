@@ -156,6 +156,7 @@ use llrm_analysis::memory::Unit;
 use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::types::Types;
@@ -1629,7 +1630,7 @@ pub struct Selector<'m, 'c, 'p> {
     /// Which segment registers the machine's program model leaves free.
     segments: &'c Segments,
     /// Index values every access names exactly at any wider width.
-    exact: BTreeSet<ValueId>,
+    exact: IdSet<ValueId>,
     /// What is known of the function without memory: found once, for the body
     /// as selected.
     registers: IndexMap<ValueId, llrm_analysis::consts::Known>,
