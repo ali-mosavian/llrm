@@ -132,7 +132,7 @@
 //! peeled once where the test peels twice.
 //!
 //! # Runs
-//! Called by [`crate::peel`] and [`crate::loopsplit`] (`peeled`),
+//! Called by [`crate::peel`] (`peeled`),
 //! [`crate::unroll_jam`] (`chained`) and [`crate::loopdistribute`] (`copied`);
 //! not a pass.
 //!
