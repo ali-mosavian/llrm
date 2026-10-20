@@ -200,7 +200,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         llvm: "loop-unroll-full",
         kind: Translated,
         replaced_by: "",
-        note: "ROW planets -Os: the 4-trip f32 sum over four constant stores to a frame slot (examples/planets.nib, `for r in readings: total += r`) is not fully unrolled at -Os (nor at -O1, where the pin keeps it too); the pin folds it at -O2 and -Os (clang d1106 -m32 -march=i486: `ret float 0x41209999`). First bad 21aadae64 (LFTR on), good 30a1f4f8b, found 2026-10-20 by w-6; the loop at the stage before unrolling: iv phi, acc phi, gep [4 x i8] ptr %frame iv, load float, fadd, iv+1, icmp ne iv+1 4. Suspect: the saving the unroll cost sees through stored-then-loaded constants at the OptSize threshold, or the IV form after LFTR; owner loopidioms-rename-unroll-2238 with w-5 on LFTR, 2026-10-30; criterion: llrm-nib -Os of the sum has no loop and the example's mean prints 10.037499 un-rounded",
+        note: "CLOSED row planets -Os (found 2026-10-20 by w-6, withdrawn the same day): the pin's -Os (O2 plus the optsize attribute) keeps the 4-trip f32 sum over four constant stores to a frame slot, as head does (opt -passes='default<O2>' on that IR with optsize keeps the loop, without it folds); clang folded a C array literal only because its frontend initializes the array from a constant global by memcpy, which the unroll cost reads as a large saving. A frontend-shape difference (Nib/C array literal), not the unroll cost or LFTR (21aadae64 only stopped the -O1 fold, where the pin keeps the loop too)",
     },
     entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
     entry("inferspace@787", Simplify, "infer-address-spaces (target)", Old, ""),
