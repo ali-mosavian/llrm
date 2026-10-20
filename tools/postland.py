@@ -197,25 +197,19 @@ def unit_failures(at: Path, name: str | None = None) -> tuple[set[str], str]:
     return unit_result(output, code), unit_summary(output)
 
 
+UNIT_SETS: dict[str, set[str]] = {}
+
+
 def probe(failure: str, sha: str) -> bool:
-    """Whether `failure` holds at `sha`."""
+    """Whether `failure` holds at `sha`. A unit failure is read from the whole workspace's failing set at that commit, run once and kept: the bisects of dozens of failures
+    share their probes (56 failures x 6 probes of 4 minutes was 22 hours; one set per commit is a few dozen probes)."""
     at = tree(sha)
     kind, _, name = failure.partition(" ")
     if kind == "run":
         return failure in run_groups(at, dist(at, sha), Path(name).stem)[0]
-    return failure in unit_failures(at, name.partition("::")[2])[0]
-
-
-def smoke(at: Path, bins: Path, previous: str) -> tuple[set[str], str]:
-    """parity_smoke's own checks on the pinned tree (workspace check, ratchets, docs, warnings, the instruction budget): (`smoke <name>` per failing step, its result line)."""
-    env = {**os.environ, "CARGO_TARGET_DIR": str(HOME / "target-test"), "CARGO_INCREMENTAL": "0"}
-    env.pop("RUSTFLAGS", None)
-    output, _ = merged([*LOW, sys.executable, "tools/parity_smoke.py", "--bin", str(bins), "--base", previous], at, env)
-    named = re.search(r"^FAILING: (.*)$", output, re.M)
-    last = (output.strip().splitlines() or ["no output"])[-1][:300]
-    if not named:
-        return {"smoke nothing-printed"}, f"NOT RUN or unparsed: {last}"
-    return {f"smoke {one}" for one in named[1].split(",") if one}, last
+    if sha not in UNIT_SETS:
+        UNIT_SETS[sha] = unit_failures(at)[0]
+    return failure in UNIT_SETS[sha]
 
 
 def partial(sha: str, previous: str, covered: list[str], raw: list[str]) -> str:
