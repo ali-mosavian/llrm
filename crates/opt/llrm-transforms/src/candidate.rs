@@ -158,7 +158,7 @@ pub fn adopted(
     });
 
     let size = |state: &Function| occurrence::operations(state).count();
-    let count = |state: &Function| cfg::Shape::of(state).loops.len();
+    let count = |state: &Function| cfg::loops_of(state).len();
     let price = |state: &Function| priced(unit, outer, costs, state, pricing);
     let body = kept.as_ref().unwrap_or(&*unit.function);
     let prices = (price(body), price(&candidate));

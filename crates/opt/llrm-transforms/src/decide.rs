@@ -470,7 +470,7 @@ pub(crate) fn loop_form_blocks(function: &Function) -> BTreeSet<i64> {
     let known = graph.iter().map(|block| (block.at, &block.succ)).collect::<BTreeMap<_, _>>();
     let none: &[i64] = &[];
     let mut loop_edges = BTreeSet::new();
-    for loop_ in cfg::Shape::of(function).loops {
+    for loop_ in cfg::loops_of(function) {
         let outside = predecessors
             .get(&loop_.header)
             .unwrap_or(none)

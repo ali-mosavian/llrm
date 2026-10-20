@@ -564,6 +564,13 @@ pub fn shapes_derived() -> usize {
     DERIVED.with(std::cell::Cell::get)
 }
 
+/// The natural loops of `function`, outermost last: what a pass that reads only
+/// the loops asks, with no `Shape` to hold.
+pub fn loops_of(function: &Function) -> Vec<Loop> {
+    let dominance = Dominance::of(function);
+    natural(function, &LoopInfo::analyze(function, || dominance.tree(function)))
+}
+
 impl Shape {
     /// Of a body no manager holds.
     pub fn of(function: &Function) -> Self {

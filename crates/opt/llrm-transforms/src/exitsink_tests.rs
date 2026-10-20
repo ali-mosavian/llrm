@@ -1,7 +1,6 @@
 //! `sunk` over loops the interpreter runs before and after, over trip
 //! counts 0, 1 and more.
 
-use llrm_analysis::cfg::Shape;
 use llrm_mir::module::Function;
 
 use super::sunk as sunk_with;
@@ -32,10 +31,10 @@ b2:
     )
 }
 
-/// `function` sunk, its shape found for it.
+/// `function` sunk, its loops found for it.
 fn sunk(function: &mut Function) -> bool {
-    let shape = Shape::of(function);
-    sunk_with(function, &shape)
+    let loops = llrm_analysis::cfg::loops_of(function);
+    sunk_with(function, &loops)
 }
 
 /// `text` sunk, printed, where it computes what it did.
