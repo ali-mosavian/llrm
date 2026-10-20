@@ -346,10 +346,39 @@ impl Sinker {
         let physical = |lanes: &crate::backend::lanes::Lanes| {
             lanes.iter().any(|&(register, _)| register != llrm_lir::registers::RegId::None)
         };
-        // A flag it writes is dead here (nothing reads flags across blocks);
-        // one it reads is set by an instruction it must stay behind.
+        // A flag it writes is dead past its block (nothing reads flags across
+        // blocks; `flags_read_after` covers the rest of its own); one it reads
+        // is set by an instruction it must stay behind.
         let reads_flags = effect.all_reads().iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None);
         physical(&effect.all_reads()) || physical(&effect.writes) || reads_flags
+    }
+
+    /// Whether a flag the instruction at `index` writes is read by a later one
+    /// of its block before another writes it: `FindSuccToSinkTo` moves an
+    /// instruction whose physical defs are dead only. An unknown effect reads
+    /// them.
+    fn flags_read_after(
+        &self,
+        block: usize,
+        index: usize,
+    ) -> bool {
+        let flags = |lanes: &crate::backend::lanes::Lanes| {
+            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+        };
+        let Some(effect) = liveness::effect(self.regs, self.bits, &self.insns[block][index]) else { return true };
+        if !flags(&effect.writes) {
+            return false;
+        }
+        for later in &self.insns[block][index + 1..] {
+            let Some(effect) = liveness::effect(self.regs, self.bits, later) else { return true };
+            if flags(&effect.all_reads()) {
+                return true;
+            }
+            if flags(&effect.writes) {
+                return false;
+            }
+        }
+        false
     }
 
     /// `GetAllSortedSuccessors`: the successors of `block`, and the blocks it
@@ -588,12 +617,7 @@ impl Sinker {
         if !safe_to_move(&one, saw_store) {
             return false;
         }
-        // The flags it sets are read below it in its block (a `sub` and the
-        // `sbb` after it): moving it away leaves that reader with another's.
-        let writes_flags = liveness::effect(self.regs, self.bits, &one).is_none_or(|effect| {
-            effect.writes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-        });
-        if writes_flags && crate::backend::precse::flags_read_in(self.regs, self.bits, &self.insns[block][index + 1..]) {
+        if self.flags_read_after(block, index) {
             return false;
         }
         let mut break_phi_edge = false;
@@ -691,5 +715,80 @@ pub fn sunk(
         if !broke && !sinker.changed {
             return body;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::model::ir::{Held, Semantics};
+    use crate::model::lir::{Insn, LirBlock};
+    use crate::support::hash::IndexMap;
+
+    fn held(value: u32) -> Loc {
+        Loc::Held(Held { value, width: 4 })
+    }
+
+    fn insn(
+        at: i64,
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+        defines: Vec<u32>,
+        uses: Vec<u32>,
+    ) -> Arc<Insn> {
+        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+    }
+
+    /// `if (n == 0)` on a long in a register pair tests `or v9, v2` and
+    /// branches on its flags; the value v9 is read by nothing, so the `or` was
+    /// sunk into a successor and the `je` read the flags of whatever ran last
+    /// (tests/run/c/register_upper_half.c -mabi=watcom printed 1382385 for 9).
+    #[test]
+    fn test_an_instruction_whose_flags_the_branch_reads_stays_before_it() {
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Move, "mov", vec![held(8)], vec![held(1)], vec![8], vec![1]),
+                    insn(1, Operation::Binary, "or", vec![held(9)], vec![held(8), held(2)], vec![9], vec![8, 2]),
+                    insn(2, Operation::Branch, "je", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let rest = |at: i64| {
+            LirBlock::new(
+                at,
+                vec![
+                    insn(
+                        at,
+                        Operation::Move,
+                        "mov",
+                        vec![held(20 + at as u32)],
+                        vec![held(1)],
+                        vec![20 + at as u32],
+                        vec![1],
+                    ),
+                    insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let mut body = LirBody::new(
+            "flags",
+            0,
+            vec![entry.into(), rest(1).into(), rest(2).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let names: Vec<_> =
+            sunk(&body, false).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+        assert_eq!(names, ["mov", "or", "je"], "the flag-setting or stays in its block");
     }
 }

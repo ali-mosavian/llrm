@@ -254,7 +254,26 @@ impl Walk<'_> {
         block: usize,
         index: usize,
     ) -> bool {
-        flags_read_in(self.regs, self.body.bits, &self.body.blocks[block].insns[index + 1..])
+        for later in &self.body.blocks[block].insns[index + 1..] {
+            let Some(effect) = liveness::effect(self.regs, self.body.bits, later) else {
+                // A load through virtual address registers has no effect
+                // table yet; a move leaves the flags alone.
+                if later.what.as_ref().is_some_and(|what| what.op == Operation::Move) {
+                    continue;
+                }
+                return true;
+            };
+            let flags = |lanes: &crate::backend::lanes::Lanes| {
+                lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+            };
+            if flags(&effect.all_reads()) {
+                return true;
+            }
+            if flags(&effect.writes) {
+                return false;
+            }
+        }
+        false
     }
 }
 
@@ -380,33 +399,4 @@ pub fn shared(
         })
         .collect();
     body.with_blocks(blocks)
-}
-
-/// Whether the flags are read by `later` before an instruction of it sets them
-/// again.
-pub(crate) fn flags_read_in(
-    regs: llrm_lir::registers::Regs,
-    bits: u32,
-    later: &[Arc<Insn>],
-) -> bool {
-    for one in later {
-        let Some(effect) = liveness::effect(regs, bits, one) else {
-            // A load through virtual address registers has no effect table
-            // yet; a move leaves the flags alone.
-            if one.what.as_ref().is_some_and(|what| what.op == Operation::Move) {
-                continue;
-            }
-            return true;
-        };
-        let flags = |lanes: &crate::backend::lanes::Lanes| {
-            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-        };
-        if flags(&effect.all_reads()) {
-            return true;
-        }
-        if flags(&effect.writes) {
-            return false;
-        }
-    }
-    false
 }
