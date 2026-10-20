@@ -1,0 +1,11 @@
+Printing analysis 'Loop Access Analysis' for function 'f':
+  loop:
+    Report: instruction cannot be vectorized
+    Dependences:
+    Run-time memory checks:
+    Grouped accesses:
+
+    Non vectorizable stores to invariant address were not found in loop.
+    SCEV assumptions:
+
+    Expressions re-written:

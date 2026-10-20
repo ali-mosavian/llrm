@@ -443,3 +443,14 @@ fn the_time_grows_with_the_arms_not_with_their_square() {
     let (small, large) = (least(150), least(600));
     assert!(large < small * 6.0, "150 arms {small:.4} s, 600 arms {large:.4} s: a ratio of {:.1}", large / small);
 }
+
+/// A function marked `DEFERRED` keeps its call: D10 copies a tree recursion
+/// into itself first. gcd was looped before the copies were made.
+#[test]
+fn a_function_whose_elimination_is_deferred_keeps_its_call() {
+    let mut module = parsed(&format!("{DOS}{GCD}"));
+    module.function_mut("f").expect("@f").1.attrs.push(llrm_mir::opcode::Attribute::Flag(super::DEFERRED.to_owned()));
+    let after = managed(&mut module, TailCallElim);
+    assert_eq!(calls(&after), 1, "{after}");
+    assert!(!after.contains("tailrecurse"), "{after}");
+}
