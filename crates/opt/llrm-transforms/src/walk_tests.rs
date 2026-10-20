@@ -185,3 +185,47 @@ fn test_a_loop_around_a_call_is_unrolled_only_after_the_call_is_inlined() {
     let multiplies = top.matches("mul i16").count();
     assert!(multiplies == 30 && !top.contains("@eq"), "top has {multiplies} multiplies:\n{top}");
 }
+
+/// fib at -O2 was inlined into itself eight levels deep (802 bytes of text
+/// against clang's 100, tests/llc/fib.c): LLVM never inlines a recursive
+/// callee into itself.
+#[test]
+fn test_a_directly_recursive_function_is_not_inlined_into_itself() {
+    let mut module = parsed(
+        "define i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @main() {
+b0:
+  %r = call i32 @fib(i32 30)
+  ret i32 %r
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    let calls = text.matches("call i32 @fib").count();
+    assert!(calls <= 3, "fib was copied into itself, {calls} calls of it:\n{text}");
+}
