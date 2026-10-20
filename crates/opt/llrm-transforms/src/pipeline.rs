@@ -232,6 +232,10 @@ pub struct Options {
     /// complete copy of a loop may grow the code is `limits.grows`, which
     /// gcc lets only -O3 do.)
     pub for_size: bool,
+    /// `Function::hasMinSize`: -Oz. The only level where `LoopRotate` copies no
+    /// header
+    /// ([LoopRotation.cpp#L80](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/LoopRotation.cpp#L80)).
+    pub has_min_size: bool,
     /// gcc's `-fexpensive-optimizations` (-O2 and up): the passes it gates.
     pub expensive: bool,
     /// The allocator tries other shapes of a body and keeps the cheapest
@@ -294,6 +298,7 @@ impl Default for Options {
             licm: !llrm_support::env_flag!("LLRM_NO_LICM"),
             copy_headers: true,
             for_size: false,
+            has_min_size: false,
             expensive: true,
             switch_conversion: true,
             jump_tables: true,
@@ -430,7 +435,7 @@ impl Options {
 
     /// -Oz: no loop is copied.
     pub fn min_size() -> Self {
-        Self { unroll: false, peel: false, ..Self::size() }
+        Self { unroll: false, peel: false, has_min_size: true, ..Self::size() }
     }
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
@@ -766,16 +771,16 @@ pub(crate) fn llvm_order(
                 // licm<allowspeculation> L730. The first hoists only what the
                 // loop certainly runs; the rotate puts a guard before a loop
                 // not proven to run, so that the second hoists into a preheader
-                // behind it (#2194). llrm skips the header copy at -Os, as
-                // gcc's -ftree-ch.
+                // behind it (#2194).
                 licm("licm@724", !rotating),
             ]);
             if rotating {
-                // DEVIATE (D10 R7): the pin duplicates headers at -Os; `size`
-                // is -Os and -Oz.
+                // The header is copied at every level but -Oz (`hasMinSize`).
                 list.push(slot(
                     "rotate@728",
-                    Box::new(looprotate::LoopRotate { duplicate_headers: applied.options.copy_headers && !size }),
+                    Box::new(looprotate::LoopRotate {
+                        duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
+                    }),
                 ));
                 list.extend(canonical("loopsimplify@728", "lcssa@728"));
             }

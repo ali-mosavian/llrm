@@ -2485,3 +2485,43 @@ fn test_the_full_unroll_takes_a_loop_only_below_o2_when_asked() {
     assert!(four_trips_under(pipeline::Options::size()), "-Os kept the loop");
     assert!(!four_trips_under(pipeline::Options::standard()), "-O2 unrolls it");
 }
+
+/// A loop of a runtime trip count over a `u16` counter, through the LLVM order:
+/// whether its body is entered by a guard and leaves by its own back edge (a
+/// rotated loop), as opposed to a header that tests first.
+fn rotated_under(options: pipeline::Options) -> bool {
+    let text = "define i32 @f(i16 %n, ptr %p) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp ult i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %k = zext i16 %i to i32\n  %a = getelementptr i32, ptr %p, i32 %k\n  store i32 %k, ptr %a\n  %j = add i16 %i, 1\n  br label %h\nx:\n  ret i32 0\n}\n";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap_or_else(|error| panic!("{error}"));
+    let printed = llrm_mir::print::module(&module);
+    // A block that branches back to itself on a condition.
+    let mut block = "";
+    printed
+        .lines()
+        .any(
+            |line| {
+                if let Some(name) = line.strip_suffix(':') {
+                    block = name;
+                    return false;
+                }
+                !block.is_empty() && line.trim_start().starts_with("br i1") && line.contains(&format!("label %{block}"))
+            },
+        )
+}
+
+/// matmul at -Os was 362 bytes before the LLVM order and 473 after: the loops
+/// stayed unrotated (a `jmp` back to a top test, `and ebx,65535; cmp; jae` on
+/// the `u16` counters) because the header copy was off at -Os. The pin copies
+/// the header of every loop but at -Oz (`hasMinSize`; threshold 16).
+#[test]
+fn test_the_loop_header_is_copied_at_os_and_not_at_oz() {
+    assert!(rotated_under(pipeline::Options::standard()), "-O2 rotates");
+    assert!(rotated_under(pipeline::Options::size()), "-Os rotates");
+    assert!(!rotated_under(pipeline::Options::min_size()), "-Oz copies no header");
+}
