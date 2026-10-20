@@ -279,23 +279,25 @@ fn fold_reassociated_sub(
     // (X + Z) - (Y + Z) --> (X - Y)
     let shared = {
         let q = query(c, Some(inst));
-        pattern::add_like(&q, op0, Flags::default()).zip(pattern::add_like(&q, op1, Flags::default())).map(
-            |((w, x), (y, z))| {
-                let wrap = |v: Operand, flag: Flags| pattern::add_like(&q, v, flag).is_some();
-                let kept = if w == y {
-                    Some((x, z))
-                } else if w == z {
-                    Some((x, y))
-                } else if x == y {
-                    Some((w, z))
-                } else if x == z {
-                    Some((w, y))
-                } else {
-                    None
-                };
-                (kept, wrap(op0, Flags::NSW) && wrap(op1, Flags::NSW), wrap(op1, Flags::NUW))
-            },
-        )
+        pattern::add_like(&q, op0, Flags::default())
+            .zip(pattern::add_like(&q, op1, Flags::default()))
+            .map(
+                |((w, x), (y, z))| {
+                    let wrap = |v: Operand, flag: Flags| pattern::add_like(&q, v, flag).is_some();
+                    let kept = if w == y {
+                        Some((x, z))
+                    } else if w == z {
+                        Some((x, y))
+                    } else if x == y {
+                        Some((w, z))
+                    } else if x == z {
+                        Some((w, y))
+                    } else {
+                        None
+                    };
+                    (kept, wrap(op0, Flags::NSW) && wrap(op1, Flags::NSW), wrap(op1, Flags::NUW))
+                },
+            )
     };
     if let Some((Some((a, b)), both_nsw, op1_nuw)) = shared {
         let mut wrap = Flags::default();
