@@ -2912,12 +2912,10 @@ pub fn zeroes(body: &LirBody) -> LirBody {
                             && regs.integer(dest.register)
                             && one.symbol != Some(true)
                         {
-                            // A quadword zero is the dword `xor`: it clears the upper half too.
-                            let dest = if *width == 8 {
-                                Reg { register: regs.root(dest.register), width: 4 }
-                            } else {
-                                *dest
-                            };
+                            // A quadword zero is the dword `xor`: it clears the
+                            // upper half too.
+                            let dest =
+                                if *width == 8 { Reg { register: regs.root(dest.register), width: 4 } } else { *dest };
                             one = Arc::new(with_what(
                                 &one,
                                 semantics(

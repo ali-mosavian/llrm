@@ -153,8 +153,8 @@ use std::sync::Arc;
 use llrm_analysis::aa::MemoryLocation;
 use llrm_analysis::cfg;
 use llrm_analysis::memory::Unit;
+use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
-use llrm_lir::registers::{RegId, STACK};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
@@ -2333,7 +2333,8 @@ impl Selector<'_, '_, '_> {
             _ => return,
         }
         let result = instruction.result.expect("a comparison's value");
-        // A conditional move reads the flags where it stands: its comparison is made there.
+        // A conditional move reads the flags where it stands: its comparison is
+        // made there.
         if let Some(only) = function.users(result).only()
             && function.instruction(only.user).opcode == Opcode::Select
             && function.instruction(only.user).operands.first() == Some(&Operand::Value(result))
@@ -3031,9 +3032,13 @@ impl Selector<'_, '_, '_> {
         match merge {
             Merge::Leaf(compare) => {
                 let (mut insns, phis) = first.take().unwrap_or_default();
+                let start = insns.len();
                 let Test::One(code) = self.compare(*compare, at, &mut insns)? else {
                     unreachable!("an integer compare is one condition")
                 };
+                // An address the compare reads is made in the leaf's block, before it: left in
+                // `materialized` it would land after the branch, in the next block.
+                insns.splice(start..start, std::mem::take(&mut self.materialized));
                 insns.push(insn(
                     at,
                     Semantics { target: Some(taken), ..semantics(Operation::Branch, code, vec![], vec![]) },
@@ -4184,13 +4189,17 @@ impl Selector<'_, '_, '_> {
                 let symbol = Pointer::Global { space, index, offset: 0, base: None, scale: 1, plus: None };
                 let base = self.symbol_register(symbol, width, at, out);
                 let offset = start + offset as i64;
-                self.pointers.insert(address, Pointer::Based { base, index: Some(sum), scale: tail, offset, segment: None });
+                self.pointers
+                    .insert(address, Pointer::Based { base, index: Some(sum), scale: tail, offset, segment: None });
                 return Ok(());
             }
             let start = self.symbol_register(pointer.moved(offset as i64), width, at, out);
             let result = Held { value: self.value(address), width };
             let scaled = Loc::Held(sum);
-            out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(result)], vec![Loc::Held(start), scaled])));
+            out.push(insn(
+                at,
+                semantics(Operation::Binary, "add", vec![Loc::Held(result)], vec![Loc::Held(start), scaled]),
+            ));
             return Ok(());
         }
         let start = match pointer {

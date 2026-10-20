@@ -558,10 +558,19 @@ thread_local! {
     static DERIVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many shapes this thread has derived, for a test that a pass asks for its
-/// body's once.
+/// How many shapes (or loop sets, `loops_of`) this thread has derived, for a test
+/// that a pass asks for its body's once.
 pub fn shapes_derived() -> usize {
     DERIVED.with(std::cell::Cell::get)
+}
+
+/// The natural loops of `function`, outermost last: what a pass that reads only
+/// the loops asks, with no `Shape` to hold.
+pub fn loops_of(function: &Function) -> Vec<Loop> {
+    DERIVED.with(|count| count.set(count.get() + 1));
+    llrm_mir::counts::bump(llrm_mir::counts::Event::Shapes);
+    let dominance = Dominance::of(function);
+    natural(function, &LoopInfo::analyze(function, || dominance.tree(function)))
 }
 
 impl Shape {

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/dependence.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/dependence.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/dependence.rs sha256:f3bcdfd10f9c10bba858be7068dcb377354a3bd3e6e34aecbfa1efeb6113ca55 -->
+<!-- src: crates/opt/llrm-analysis/src/dependence.rs sha256:a72928fc56af6578660012ab3dcb3abebf20a75d5db3536ecd7fdb0706550ebd -->
 
 # dependence
 
@@ -95,8 +95,7 @@ at most a cache line, none where it does not move.
 
 ## Provides
 `distances`, `factor`, `fusable`, `meetings`, `interchangeable`,
-`walk_cost`. Consumers: `unroll_jam` (`crates/opt/llrm-transforms/src/
-unroll_jam.rs`) and `loopdistribute`
+`walk_cost`. Consumers: `loopdistribute`
 (`crates/opt/llrm-transforms/src/loopdistribute. rs`) and `loopinterchange`.
 
 ## See also

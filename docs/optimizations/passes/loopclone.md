@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopclone.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopclone.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:38f2378c8101967ca0b280bc6b80aaedc308e4bb43760743c303c647bc1bdb84 -->
+<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:7245d57578f6fb60b4b8a7a96da44ef961d203f7446c44d8c1a4f7548011396b -->
 
 # loopclone
 
@@ -8,7 +8,7 @@ loop: `peeled` copies whole iterations ahead of a loop, `chained` copies
 bodies inside it, keeping the loop and every exit.
 
 ## How it works
-This is the mechanism for peeling, unswitching and unroll-and-jam; it makes
+This is the mechanism for peeling and unswitching; it makes
 no profitability decision. Both functions return each copy's map from an
 original block to its clone, or `None` having changed nothing when the loop
 is not one they can clone. Both need
@@ -137,8 +137,8 @@ From the fixture of unit test
 peeled once where the test peels twice.
 
 ## Runs
-Called by [`crate::peel`](peel.md) and [`crate::loopsplit`](loopsplit.md) (`peeled`),
-[`crate::unroll_jam`](unroll_jam.md) (`chained`) and [`crate::loopdistribute`](loopdistribute.md) (`copied`);
+Called by [`crate::peel`](peel.md) (`peeled`),
+[`crate::loopdistribute`](loopdistribute.md) (`copied`);
 not a pass.
 
 ## Needs

@@ -90,8 +90,7 @@
 //!
 //! # Provides
 //! `distances`, `factor`, `fusable`, `meetings`, `interchangeable`,
-//! `walk_cost`. Consumers: `unroll_jam` (`crates/opt/llrm-transforms/src/
-//! unroll_jam.rs`) and `loopdistribute`
+//! `walk_cost`. Consumers: `loopdistribute`
 //! (`crates/opt/llrm-transforms/src/loopdistribute. rs`) and `loopinterchange`.
 //!
 //! # See also

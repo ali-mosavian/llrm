@@ -1479,9 +1479,10 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    /// `select c, a, b` as a conditional move: the flags of `c`, made here, then `cmov` of `a` over `b` into the
-    /// result (X86's `CMOV`; the compare of a comparison nothing else reads is its flags, and any other condition is
-    /// tested).
+    /// `select c, a, b` as a conditional move: the flags of `c`, made here,
+    /// then `cmov` of `a` over `b` into the result (X86's `CMOV`; the
+    /// compare of a comparison nothing else reads is its flags, and any other
+    /// condition is tested).
     pub fn hook_select(
         &mut self,
         m: &Match,

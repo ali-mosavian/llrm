@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopdistribute.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopdistribute.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopdistribute.rs sha256:c889a87e57fbfd2943d245b13b295aae2a9b6617e05a5c9657f72913b0fcf2e7 -->
+<!-- src: crates/opt/llrm-transforms/src/loopdistribute.rs sha256:e96295d097442ac80d496ec2856ffcd17926191ecbf14dd25dd4cc78dca9babb -->
 
 # loopdistribute
 
@@ -93,7 +93,7 @@ From unit test `two_independent_stores_become_two_loops` in
 `loopdistribute_tests.rs`.
 
 ## Runs
-Once per body, after `unswitch` and `split`, at -O3 and -Omax
+Once per body, after `unswitch`, at -O3 and -Omax
 (`-ftree-loop-distribution`). Not run where one pass is selected by name.
 
 ## Needs
