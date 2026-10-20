@@ -109,8 +109,12 @@ struct Fold {
     users: Vec<(usize, Arc<Insn>, Roots)>,
 }
 
-fn full32(register: RegId) -> RegId {
-    ir::root(register)
+/// The root `register` is a view of, in the target's register file.
+fn full32(
+    regs: Regs,
+    register: RegId,
+) -> RegId {
+    regs.root(register)
 }
 
 /// The lanes `one` reads and writes, or None when unknown.
@@ -169,7 +173,10 @@ fn add(
 
 /// The one exact cell `one` addresses, where `one` reads its registers
 /// nowhere else.
-pub(crate) fn cell_of(one: &Insn) -> Option<&Mem> {
+pub(crate) fn cell_of(
+    regs: Regs,
+    one: &Insn,
+) -> Option<&Mem> {
     let what = one.what.as_ref()?;
     let mut cells = what
         .dests
@@ -184,12 +191,12 @@ pub(crate) fn cell_of(one: &Insn) -> Option<&Mem> {
     let (Some(cell), None) = (cells.next(), cells.next()) else {
         return None;
     };
-    let roots = [cell.through, cell.index_through].map(full32);
+    let roots = [cell.through, cell.index_through].map(|register| full32(regs, register));
     let elsewhere = what.dests.iter().chain(&what.sources).any(|operand| matches!(operand, Loc::Address(_)))
         || what.sources.iter().any(|operand| {
             matches!(
                 operand,
-                Loc::Reg(read) if read.register != RegId::None && roots.contains(&full32(read.register))
+                Loc::Reg(read) if read.register != RegId::None && roots.contains(&full32(regs, read.register))
             )
         });
     let space = cell.addr?.space;
@@ -236,7 +243,10 @@ fn sum_of(
     registers
         .iter()
         .zip(values)
-        .try_fold(Vec::new(), |sum, ((register, multiple), value)| add(sum, (full32(*register), *multiple, value)))
+        .try_fold(
+            Vec::new(),
+            |sum, ((register, multiple), value)| add(sum, (full32(regs, *register), *multiple, value)),
+        )
 }
 
 /// The roots of `cell`'s offset: every register of a symbol's cell or of a
@@ -269,12 +279,12 @@ fn readers(
     dead_after: &DeadAfter,
 ) -> Option<Vec<usize>> {
     let lanes = _lanes(regs, register);
-    let root = full32(register);
+    let root = full32(regs, register);
     let mut found = Vec::new();
     for (at, one) in block.insns.iter().enumerate().skip(first) {
         let (reads, writes) = effects(regs, bits, one)?;
         if !reads.and(&lanes).is_empty() {
-            let cell = cell_of(one)?;
+            let cell = cell_of(regs, one)?;
             let sum = sum_of(regs, bits, &block.insns, at, cell)?;
             if !offsets(cell, &sum).contains(&root) {
                 return None;
@@ -304,7 +314,7 @@ fn stages(
     dead_after: &DeadAfter,
     cpu: &Profile,
 ) -> Vec<Stage> {
-    let root = full32(register.register);
+    let root = full32(regs, register.register);
     let lanes = _lanes(regs, register.register);
     let flags = _flag_lanes(0xFFFF_FFFF);
     let mut found = Vec::new();
@@ -350,17 +360,17 @@ fn stages(
         let (before, leaf) = match (step, uses.as_slice()) {
             (Step::Add(_) | Step::Scale(_), [before]) => (Some(*before), None),
             (Step::Copy(source), [value])
-                if full32(source.register) != root && untouched(regs, bits, later, source.register) =>
+                if full32(regs, source.register) != root && untouched(regs, bits, later, source.register) =>
             {
                 (None, Some((source, *value)))
             }
             (Step::AddRegister(other), [value])
-                if full32(other.register) != root && untouched(regs, bits, later, other.register) =>
+                if full32(regs, other.register) != root && untouched(regs, bits, later, other.register) =>
             {
                 (Some(*value), Some((other, *value)))
             }
             (Step::AddRegister(other), [one_value, another])
-                if full32(other.register) != root && untouched(regs, bits, later, other.register) =>
+                if full32(regs, other.register) != root && untouched(regs, bits, later, other.register) =>
             {
                 // Which use is the added register's: the reaching writes say.
                 let mine = |value: u32| {
@@ -391,7 +401,7 @@ fn stages(
             _ => {}
         }
         if let Some((source, value)) = leaf {
-            let Some(summed) = add(sum, (full32(source.register), multiple, value)) else {
+            let Some(summed) = add(sum, (full32(regs, source.register), multiple, value)) else {
                 return found;
             };
             sum = summed;
@@ -419,7 +429,7 @@ fn rewritten(
     cpu: &Profile,
 ) -> Option<(Arc<Insn>, Roots, i64)> {
     let one = &insns[at];
-    let cell = cell_of(one)?;
+    let cell = cell_of(regs, one)?;
     let addr = cell.addr?;
     let before = sum_of(regs, bits, insns, at, cell)?;
     let multiple = before.iter().find(|term| term.0 == root)?.1;
@@ -491,7 +501,8 @@ fn fold(
     let insns = &block.insns;
     let register = Reg { register: regs.named(root, 2), width: 2 };
     let users = readers(regs, bits, block, first, register.register, dead_after)?;
-    let value = sum_of(regs, bits, insns, first, cell_of(&insns[first])?)?.into_iter().find(|term| term.0 == root)?.2;
+    let value =
+        sum_of(regs, bits, insns, first, cell_of(regs, &insns[first])?)?.into_iter().find(|term| term.0 == root)?.2;
     let mut best: Option<(i64, Fold)> = None;
     let last = *users.last()?;
     for stage in stages(regs, bits, insns, first, register, value, dead_after, cpu) {
@@ -567,7 +578,7 @@ fn folds(
         let outside = live_out.get(&block.at).cloned().unwrap_or_default();
         let mut claimed: HashSet<usize> = HashSet::default();
         for (at, one) in block.insns.iter().enumerate() {
-            let Some(sum) = cell_of(one)
+            let Some(sum) = cell_of(regs, one)
                 .and_then(|cell| sum_of(regs, body.bits, &block.insns, at, cell).map(|sum| offsets(cell, &sum)))
             else {
                 continue;

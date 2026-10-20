@@ -284,7 +284,7 @@ pub fn _partial_merge_delay(
         .dests
         .iter()
         .filter_map(|r#where| match r#where {
-            Loc::Reg(reg) if reg.width < 4 && _general(regs, reg.register) => Some(reg.register.full_register32()),
+            Loc::Reg(reg) if reg.width < 4 && _general(regs, reg.register) => Some(regs.root(reg.register)),
             _ => None,
         })
         .collect();
@@ -292,8 +292,8 @@ pub fn _partial_merge_delay(
         .sources
         .iter()
         .filter_map(|r#where| match r#where {
-            Loc::Reg(reg) if reg.width == 4 && partial.contains(&reg.register.full_register32()) => {
-                Some(reg.register.full_register32())
+            Loc::Reg(reg) if reg.width == 4 && partial.contains(&regs.root(reg.register)) => {
+                Some(regs.root(reg.register))
             }
             _ => None,
         })
@@ -306,7 +306,7 @@ pub fn _partial_merge_delay(
             if what.dests.iter().any(|r#where| {
                 matches!(
                     r#where,
-                    Loc::Reg(reg) if reg.width == 4 && wide.contains(&reg.register.full_register32())
+                    Loc::Reg(reg) if reg.width == 4 && wide.contains(&regs.root(reg.register))
                 )
             }) {
                 return 0;

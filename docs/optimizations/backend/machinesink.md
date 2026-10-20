@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:3dd7b82c131ffea7189801c817fcb8bfab1ef586d351a260838385ebf48f512d -->
+<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:7ca2b5dcc91a15da4c6e26fdb137996bb5a6961325c3343e3bf8fa5851164529 -->
 
 # machinesink
 
@@ -53,9 +53,13 @@ Otherwise (-O1 to -O3) every safe instruction moves; `bench/quicksort`
 greedy allocator with SplitKit as the default allocator (target 2026-11-05).
 
 DEVIATE M5 (#2903): in a build for size no edge is broken. The block
-costs a jump (`bench/recpow` -Os +5 bytes with the edge split) and nothing
-in a size build pays it back. Exit: block placement that falls through
-every split edge.
+costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
+834-object sweep at head 1b78847ae, breaking it at -Os is 37 objects larger,
++228 bytes, and 26 smaller, -106 bytes). `bench/hanoi` -Os m32 keeps the
+`xor` and a copy before its test, and a frame, where the pin sinks the
+constant (195 bytes against 190 with the edge broken). Exit, decided
+2026-10-22 with jumps' block-by-block diff: a placement rule jumps names,
+or sinking with shrink-wrapping (lir-cleanup-port for the sinking half).
 
 DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
 (`SinkInstsIntoCycle`, off by default), no debug-value handling (an

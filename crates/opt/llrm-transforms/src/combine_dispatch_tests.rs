@@ -130,3 +130,15 @@ fn visit_sext_of_a_zext_is_a_zext() {
         &["sext", "i16"],
     );
 }
+
+#[test]
+fn visit_and_moves_a_mask_through_an_xor() {
+    check(
+        "and",
+        "i32",
+        "i32 %x",
+        "  %e = xor i32 %x, 12\n  %r = and i32 %e, 10\n  ret i32 %r\n",
+        &["and i32 %x, 10", "xor i32 %", ", 8"],
+        &["xor i32 %x, 12"],
+    );
+}

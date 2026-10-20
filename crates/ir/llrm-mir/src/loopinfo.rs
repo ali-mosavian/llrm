@@ -532,7 +532,6 @@ impl<B: BlockNumber> LoopInfo<B> {
     ) -> u32 {
         self.get_loop_for(block).map_or(0, |one| one.get_loop_depth())
     }
-
 }
 
 impl LoopInfo<BlockId> {
@@ -624,7 +623,6 @@ impl LoopInfo<BlockId> {
         };
         summary(self) == summary(other)
     }
-
 }
 
 impl<B: BlockNumber> LoopInfo<B> {
