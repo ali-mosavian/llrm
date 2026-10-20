@@ -452,9 +452,10 @@ impl<'a> InlineSpiller<'a> {
 impl InlineSpiller<'_> {
     /// `spill_unit` for an x87 value: a register made from `reg`, an `fld`
     /// of its cell before where the unit reads it and an `fstp` after where it
-    /// writes it. DEVIATE D-RFP1: the cell is a qword, floatassign's spill
-    /// format, not the class width (`RFP80` would be m80). Exit: the class
-    /// width once floatassign is gone and the rows are compared.
+    /// writes it. DEVIATE D-RFP1: the cell is the value's float type
+    /// (4, 8 or 10 bytes, `float_precisions`), as the pin's RFP32/RFP64/RFP80
+    /// spill rounds, not one class width. Exit: the class width once the
+    /// classes are split.
     ///
     /// DEVIATE D-RFP2 (#TBD, RFP-4): an arithmetic instruction that only reads
     /// the value reads the cell as its memory operand (`fadd qword ptr [m]`),
@@ -545,7 +546,7 @@ pub fn float_precisions(body: &LirBody) -> HashMap<u32, u32> {
         top
     }
     let mut parent: HashMap<u32, u32> = HashMap::default();
-    let mut join = |parent: &mut HashMap<u32, u32>, one: u32, other: u32| {
+    let join = |parent: &mut HashMap<u32, u32>, one: u32, other: u32| {
         let (one, other) = (root(parent, one), root(parent, other));
         parent.insert(one, other);
     };
@@ -575,12 +576,51 @@ pub fn float_precisions(body: &LirBody) -> HashMap<u32, u32> {
         let widest = bytes.entry(top).or_insert(0);
         *widest = (*widest).max(size);
     }
+    // A value a pass made after selection is in no table: it is as wide as
+    // what it is computed from, down to the memory a `fld` reads.
+    loop {
+        let mut changed = false;
+        for block in &body.blocks {
+            for one in &block.insns {
+                let Some(what) = &one.what else { continue };
+                // `fild` reads an integer: its width says nothing of the float.
+                if what.name.as_deref().is_some_and(|name| name.starts_with("fild"))
+                    || !matches!(what.op, Operation::FloatLoad | Operation::FloatArith | Operation::FloatUnary)
+                {
+                    continue;
+                }
+                let Some(Loc::Held(dest)) = what.dests.first().filter(|dest| floating(dest).is_some()) else {
+                    continue;
+                };
+                let mut known = 0;
+                for source in &what.sources {
+                    known = known.max(match source {
+                        Loc::Held(held) if held.width == 10 => {
+                            let top = root(&mut parent, held.value);
+                            bytes.get(&top).copied().unwrap_or(0)
+                        }
+                        Loc::Mem(cell) if matches!(cell.width, 4 | 8 | 10) => cell.width,
+                        _ => 0,
+                    });
+                }
+                let top = root(&mut parent, dest.value);
+                let widest = bytes.entry(top).or_insert(0);
+                if known > *widest {
+                    *widest = known;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
     let members: Vec<u32> = parent.keys().copied().collect();
     members
         .into_iter()
         .filter_map(|value| {
             let top = root(&mut parent, value);
-            bytes.get(&top).map(|&size| (value, size))
+            bytes.get(&top).filter(|&&size| size > 0).map(|&size| (value, size))
         })
         .collect()
 }
