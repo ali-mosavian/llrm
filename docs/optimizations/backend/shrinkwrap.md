@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/shrinkwrap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/shrinkwrap.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/shrinkwrap.rs sha256:0afd7cf844aa40a5509120889020ee8351346b11770ec3b3af1d7b4a6dcafafa -->
+<!-- src: crates/backend/llrm-core/src/backend/shrinkwrap.rs sha256:dbb07dba7fb3c8f752c922bd12136f3b51c338f84fdc7b0941b092b37ae1e904 -->
 
 # shrinkwrap
 
@@ -46,9 +46,10 @@ A wrap is refused where the placement cannot be used as it is:
   entered at two stack depths.
 
 Where the entry uses the frame, the registers alone are saved late (the
-frame stays at the entry, before them). No register is set up above the frame, since the frame's cells sit just
-below the arguments and a push before the reserve would cover them: the
-frame comes first at Save and last back at Restore.
+frame stays at the entry, before them). No register is set up above the
+frame, since the frame's cells sit just below the arguments and a push
+before the reserve would cover them: the frame comes first at Save and last
+back at Restore.
 
 ## Example
 The pass places pieces while masm builds the procedure, after LIR is
