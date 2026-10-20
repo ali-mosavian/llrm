@@ -298,3 +298,29 @@ b0:
         assert!(out.contains("alloca i16") && out.contains("store i16 %x, ptr %a"), "{user}:\n{out}");
     }
 }
+
+/// `visitAllocaInst` was translated but never reached: `visitors` had no entry
+/// for an alloca, so the combine driver left a box written twice and never
+/// read. GORILLA m32 -Os 49,860 bytes against main's 47,769; with the entry
+/// 47,025.
+#[test]
+fn the_combine_driver_visits_an_alloca() {
+    let mut module = parsed(
+        "define void @f(i16 %x) {
+b0:
+  %a = alloca [2 x i16]
+  %g0 = getelementptr [2 x i16], ptr %a, i16 0, i16 0
+  %g1 = getelementptr [2 x i16], ptr %a, i16 0, i16 1
+  store i16 0, ptr %g0
+  store i16 %x, ptr %g1
+  ret void
+}
+",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, crate::combine::visit);
+    let out = printed(&module);
+    assert!(!out.contains("alloca") && !out.contains("store"), "{out}");
+}
