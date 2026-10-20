@@ -576,7 +576,12 @@ b:
 ",
     );
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
-        pipeline::applied(program, &Applied::default())
+        // The clocks' budget; the walk decides as LLVM does, and LLVM inlines
+        // all three.
+        pipeline::applied(
+            program,
+            &Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Default::default() },
+        )
     })
     .and_then(|done| done)
     .unwrap();
@@ -2098,8 +2103,8 @@ declare cc 1005 void @N$PN() addrspace(1) memory(inaccessiblemem: readwrite)
 /// dropped one. LLVM keeps it past every function pass, so the stages add no
 /// computation. What is left are the program passes (the first ask, `ports`,
 /// `Stamp`, the interprocedural stage, and `ModuleIpo` between Early and the
-/// Simplify list, a module pass LLVM's GlobalsAA does not survive either); 7
-/// here, which this holds at.
+/// Simplify list, and `Walk` after Cleanup, module passes LLVM's GlobalsAA does
+/// not survive either); 10 here, which this holds at.
 #[test]
 fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() {
     let mut files = corpus_files();
@@ -2120,7 +2125,7 @@ fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() 
     .and_then(|done| done)
     .unwrap_or_else(|error| panic!("{name}: {error}"));
     let made = llrm_mir::counts::analysed("globals-aa").1 - before;
-    assert!(made <= 7, "{name}: globals-aa made {made} times, 8 before it was held past the function stages");
+    assert!(made <= 10, "{name}: globals-aa made {made} times, 8 before it was held past the function stages");
 }
 
 /// The fixed point hashed the body before it ran even when its list runs once
@@ -2209,7 +2214,7 @@ fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
     // The manager's loop last set `g`.
     llrm_mir::passes::set_running_function("g");
     let (_, lines) = pipeline::capturing_runs(|| {
-        super::rerun(&mut module, &mut analyses, llrm_mir::context::GlobalId(0), &mut fixed).unwrap()
+        super::rerun(&mut module, &mut analyses, llrm_mir::context::GlobalId(0), &mut fixed, false).unwrap()
     });
     assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
 }

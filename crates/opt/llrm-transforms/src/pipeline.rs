@@ -1031,8 +1031,27 @@ pub fn recorded(
     if applied.options.llvm_order {
         manager.hold::<GlobalsAA>();
     }
+    let walked = |dump: &str| Applied { dump: applied.dump.as_ref().map(|one| one.join(dump)), ..applied.clone() };
     for (at, stage) in function_stages(applied).into_iter().enumerate() {
-        manager.add(stage);
+        // The walk simplifies each body: not a module-wide stage.
+        if at != 2 || !applied.options.llvm_order {
+            manager.add(stage);
+        }
+        // LLVM's CGSCC walk: each body inlined into, then simplified, callees
+        // first. `Phase::Simplify` runs there and not module-wide.
+        if at == 1 && applied.options.llvm_order {
+            let mut simplify = Fixed::linear(&walked("walk"), Phase::Simplify);
+            manager.add_program(crate::walk::Walk {
+                inline: applied.options.inline,
+                simplify: Box::new(move |module, analyses, id, stage| {
+                    TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
+                    rerun(module, analyses, id, &mut simplify, true)
+                        .unwrap_or_else(|error| panic!("pipeline: {error}"));
+                    TRIGGER.with(|trigger| trigger.borrow_mut().clear());
+                }),
+            });
+            manager.hold::<GlobalsAA>();
+        }
         // LLVM's IPSCCP and DeadArgumentElimination run after the early
         // function pipeline, before the Simplify list.
         if at == 0 && applied.options.llvm_order {
@@ -1060,7 +1079,8 @@ pub fn recorded(
     manager.add_program(Interprocedural {
         pipeline: Box::new(move |module, analyses, id, stage| {
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
-            let done = rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"));
+            let done =
+                rerun(module, analyses, id, &mut again, false).unwrap_or_else(|error| panic!("pipeline: {error}"));
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
@@ -1231,6 +1251,7 @@ fn rerun(
     analyses: &mut ModuleAnalyses,
     id: GlobalId,
     fixed: &mut Fixed,
+    globals_aa_held: bool,
 ) -> Result<(), String> {
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
@@ -1241,10 +1262,17 @@ fn rerun(
         return Err(format!("@{}: not a function", id.0));
     };
     let mut unit = Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared };
-    let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
+    let mut preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
+    if globals_aa_held {
+        preserved = preserved.preserve_module::<GlobalsAA>();
+    }
     analyses.body_edited(id, &preserved);
     if declared.place(module)? > 0 {
-        analyses.invalidate(&PreservedAnalyses::none());
+        let mut dropped = PreservedAnalyses::none();
+        if globals_aa_held {
+            dropped = dropped.preserve_module::<GlobalsAA>();
+        }
+        analyses.invalidate(&dropped);
     }
     Ok(())
 }
