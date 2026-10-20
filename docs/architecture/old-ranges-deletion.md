@@ -69,4 +69,4 @@ About 2026-11-20 (estimate, basicaa-port-2163: `alias.rs` and the final MemRef d
 
 ## Fork instructions
 
-A fork never touches a worktree it did not create. It works in its own worktree under a private path (`~/scratch/wt-<task>`) with a private target directory, deleted after.
+A fork never touches a worktree it did not create. It works in its own worktree under a private path (`wt-<task>` under the scratch directory) with a private target directory, deleted after.
