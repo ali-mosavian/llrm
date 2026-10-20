@@ -100,6 +100,8 @@ pub mod combine_casts;
 mod combine_casts_tests;
 pub mod combine_compares;
 pub mod combine_demanded;
+#[cfg(test)]
+mod combine_dispatch_tests;
 pub mod combine_gep;
 pub mod combine_gep_index;
 pub mod combine_gep_merge;
