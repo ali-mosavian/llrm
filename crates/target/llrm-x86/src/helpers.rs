@@ -4,25 +4,9 @@
 //! routine's description states.
 
 use llrm_lir::registers::RegId;
+pub use llrm_target::routines::{Divide, HugeString};
 
 use crate::asm::{self, Mode, Refusal};
-
-/// A 64-bit divide: its code and where its operands are.
-#[derive(Clone, Debug)]
-pub struct Divide {
-    pub name: &'static str,
-    pub code: Vec<u8>,
-    /// The registers it reads: the dividend's low and high dwords, the
-    /// divisor's low and, where the divisor is wider than a dword, high.
-    pub dividend: [RegId; 2],
-    pub divisor: [RegId; 2],
-    pub wide_divisor: bool,
-    /// Where the quotient's and the remainder's low and high dwords are left.
-    pub quotient: [RegId; 2],
-    pub remainder: [RegId; 2],
-    /// The registers it uses, and what it changes: those and the flags.
-    pub clobbers: [RegId; 4],
-}
 
 const CHECK: &str = include_str!("helpers/check.asm");
 const NARROW: &str = include_str!("helpers/narrow.asm");
@@ -68,21 +52,6 @@ pub fn divide(
         remainder: [RegId::EBX, RegId::ECX],
         clobbers: [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX],
     })
-}
-
-/// A fill or copy through huge pointers (real mode): its code and the registers
-/// it takes. A huge pointer's run ends where its 16-bit offset wraps, so the
-/// routine walks the runs, `rep`ing each and stepping the selector.
-#[derive(Clone, Debug)]
-pub struct HugeString {
-    pub name: &'static str,
-    pub code: Vec<u8>,
-    /// The registers it reads: the byte or the source's selector, the count
-    /// (`ECX`), the destination's selector and offset, and a copy's source
-    /// offset.
-    pub reads: Vec<RegId>,
-    /// What it changes besides the flags (the data segment is kept).
-    pub clobbers: Vec<RegId>,
 }
 
 const REAL: Mode = Mode { bits: 16, segmented: true, address_bytes: 2, wide: true };

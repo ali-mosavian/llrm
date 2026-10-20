@@ -118,8 +118,8 @@ impl Selector<'_, '_, '_> {
                 out.push(insn(at, semantics(operation, into, vec![Loc::Held(pattern)], vec![Loc::Held(held)])));
             }
         }
-        let routine = llrm_x86::helpers::huge_fill(cell)
-            .map_err(|refused| Unselected(format!("a huge fill: {}", refused.message)))?;
+        let routine =
+            self.arch.huge_fill_routine(cell).map_err(|refused| Unselected(format!("a huge fill: {refused}")))?;
         self.huge_call(routine, vec![pattern, count, selector, offset], at, out);
         Ok(())
     }
@@ -138,8 +138,8 @@ impl Selector<'_, '_, '_> {
         let (to_offset, to_selector) = self.offset_and_selector(destination, at, out)?;
         let (from_offset, from_selector) = self.offset_and_selector(source, at, out)?;
         let count = self.dword_count(length, at, out)?;
-        let routine = llrm_x86::helpers::huge_copy(backward)
-            .map_err(|refused| Unselected(format!("a huge copy: {}", refused.message)))?;
+        let routine =
+            self.arch.huge_copy_routine(backward).map_err(|refused| Unselected(format!("a huge copy: {refused}")))?;
         self.huge_call(routine, vec![count, from_selector, from_offset, to_selector, to_offset], at, out);
         Ok(())
     }
@@ -148,7 +148,7 @@ impl Selector<'_, '_, '_> {
     /// and written, and nothing delivered.
     fn huge_call(
         &mut self,
-        routine: llrm_x86::helpers::HugeString,
+        routine: llrm_target::routines::HugeString,
         operands: Vec<Held>,
         at: i64,
         out: &mut Vec<Arc<Insn>>,
