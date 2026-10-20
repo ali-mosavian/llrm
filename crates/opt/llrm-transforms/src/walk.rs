@@ -71,7 +71,8 @@ use llrm_mir::passes::PreservedAnalyses;
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 
 use crate::interprocedural::{
-    declared, function_mut, managers, private, procedures, reporting_marked, unexported, vouched,
+    Liveness, calls_of, declared, function_mut, managers, private, procedures, reporting_marked, roots, roots_here,
+    unexported, vouched,
 };
 
 /// What the interprocedural step does to a body before the Simplify list:
@@ -185,6 +186,7 @@ impl ProgramPass for Walk {
         analyses: &mut ProgramAnalyses,
     ) -> Result<(), String> {
         let mut modules = managers(program, analyses);
+        let roots = roots(program);
         let params = crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 });
         let size = if self.inline.single {
             crate::inlinecost::CallerSize::OptSize
@@ -193,10 +195,15 @@ impl ProgramPass for Walk {
         };
         for at in 0..program.modules.len() {
             let wanted: BTreeSet<GlobalId> = procedures(program, at).into_iter().collect();
+            let private = private(program, at);
             let module = &mut program.modules[at];
             let recursive = crate::inline::recursive(module);
             let addressed = llrm_mir::callgraph::addressed(module);
-            let counts = crate::inline::call_counts(module);
+            // The calls to each function as the splices leave them, as LLVM's
+            // use lists do (`isSoleCallToLocalFunction`), and a callee with
+            // none left is deleted there, as `removeDeadFunctions` does after
+            // the inliner.
+            let mut live = Liveness::new(module, private, &addressed, &roots_here(&roots, at));
             let components: Vec<Vec<GlobalId>> = llrm_mir::callgraph::CallGraph::new(module)
                 .bottom_up_components()
                 .into_iter()
@@ -225,7 +232,7 @@ impl ProgramPass for Walk {
                             module,
                             &program.layout,
                             id,
-                            &counts,
+                            live.references(),
                             &addressed,
                             &recursive,
                             params,
@@ -237,6 +244,7 @@ impl ProgramPass for Walk {
                     };
                     let mut declared = declared(&mut modules[at], module);
                     let (context, function) = function_mut(module, id);
+                    let was = calls_of(context, function);
                     let by = crate::inline::Caller { layout: &program.layout, recursive: recursive.contains(&id) };
                     let spliced = crate::inline::expanded_all(
                         context,
@@ -255,8 +263,10 @@ impl ProgramPass for Walk {
                         modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
                     if spliced {
+                        let now = calls_of(&module.context, module.global(id).function().expect("a procedure"));
                         modules[at].changed(id);
                         modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                        live.spliced(module, &mut modules[at], was, now);
                     }
                     (self.simplify)(module, &mut modules[at], id, "walk.");
                 }
