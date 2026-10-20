@@ -2174,7 +2174,7 @@ impl State<'_, '_> {
         if callee.0 as usize == self.globals.len() {
             let function = function_declaration(self.unit.context, &name, info.function_type).expect("a function type");
             let declaration = GlobalValue {
-                name: Some(name),
+                name: name.into(),
                 linkage: Linkage::External,
                 unnamed_addr: Default::default(),
                 address_space: 0,

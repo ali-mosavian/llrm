@@ -4,6 +4,8 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
+use llrm_mir::GlobalId;
+use llrm_mir::module::Module;
 use llrm_mir::passes::{Analyses, ModuleAnalyses, Outer};
 use llrm_mir::program::{Exports, Program, ProgramAnalyses};
 use llrm_mir::target::Neutral;
@@ -38,7 +40,7 @@ fn kept_under(
     call: &str,
     summarized: bool,
 ) -> Option<Known> {
-    let module = parsed(&format!(
+    let mut module = parsed(&format!(
         "{DOS}{globals}
 define i16 @f() {{
 b0:
@@ -50,6 +52,9 @@ b0:
 "
     ));
     let layout = layout(&module);
+    if summarized {
+        attributed(&mut module);
+    }
     let program =
         Program::new(vec![module], Rc::new(Neutral)).unwrap().with_runtime(parsed(&format!("{DOS}{runtime}"))).unwrap();
     let module = &program.modules[0];
@@ -68,6 +73,12 @@ b0:
     }
     let known = Analyses::new(outer).get::<ThroughMemory>(&module.context, &layout, f);
     Result::as_ref(&*known).unwrap().get(&value(f, "r")).cloned()
+}
+
+/// What the pipeline's `FunctionAttrs` has stated of `module`.
+fn attributed(module: &mut Module) {
+    let layout = layout(module);
+    crate::functionattrs::infer_module(module, &layout, llrm_mir::target::Machine::spaces(&Neutral));
 }
 
 fn seven() -> Option<Known> {
@@ -279,9 +290,23 @@ fn kept_in(
     let second = format!(
         "{DOS}{globals}\ndefine i16 @f() {{\nb0:\n  store i16 7, ptr @g\n  {call}\n  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
     );
-    let program = Program::new(vec![parsed(&format!("{DOS}{first}")), parsed(&second)], Rc::new(Neutral))
-        .unwrap()
-        .exporting(exports);
+    let (mut first, mut second) = (parsed(&format!("{DOS}{first}")), parsed(&second));
+    attributed(&mut first);
+    attributed(&mut second);
+    let mut program = Program::new(vec![first, second], Rc::new(Neutral)).unwrap().exporting(exports);
+    // Each body's attributes on the other module's declaration of it, as the
+    // pipeline's `published` does.
+    for at in 0..2 {
+        let defined: Vec<_> = program.modules[at].functions().map(|(id, _, _)| id).collect();
+        for id in defined {
+            let other = 1 - at;
+            for one in (0..program.modules[other].globals.len() as u32).map(GlobalId) {
+                if program.definition(other, one) == Some((at, id)) {
+                    program.restate(at, id, other, one);
+                }
+            }
+        }
+    }
     let mut analyses = ProgramAnalyses::default();
     analyses.get::<ProgramSummaries>(&program);
     let module = &program.modules[1];
@@ -385,4 +410,125 @@ fn the_window_of_a_private_global_keeps_it_private_and_is_it() {
     let window = "%w = call ptr @llrm.ia16.window.p0.p0(ptr @g)";
     assert_eq!(kept(&globals, &format!("{window}\n  call void @outside(ptr null)")), seven());
     assert_ne!(kept(&globals, &format!("{window}\n  store i16 9, ptr %w\n  call void @outside(ptr null)")), seven());
+}
+
+/// Where `globalsaa`'s tracked set (each body's pointer solve) and
+/// `GlobalsModRef`'s `AnalyzeGlobals` (a use scan per global) disagree, over
+/// every corpus module as a one-module program, asked of the internal global
+/// variables. The scan never tracks what GlobalsAA does not. GlobalsAA tracks
+/// more, and each extra global is one the pin's rule calls escaped for a
+/// reason this test names: its address is in the initializer of another
+/// internal global (GlobalsAA reads an initializer only through its holder),
+/// stored as a value, or a `phi` input. A global escaping for any other reason
+/// is a difference nobody has explained.
+#[test]
+fn globals_aa_tracks_what_the_globals_mod_ref_scan_tracks_and_the_extras_are_explained() {
+    use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, GlobalId};
+    use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Operand, ValueId};
+    use llrm_mir::opcode::{CastOp, Opcode};
+    let (mut compared, mut extras, mut explained) = (0usize, 0usize, 0usize);
+    let mut unexplained = Vec::new();
+    for (name, module) in crate::testing::corpus() {
+        let Ok(program) = Program::new(vec![module], Rc::new(Neutral)) else { continue };
+        let module = &program.modules[0];
+        let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
+        // `require` only keeps an analysis; `get` computes it.
+        let old = modules.get::<GlobalsAA>(module);
+        let old = Result::as_ref(&*old).expect("GlobalsAA of a corpus module");
+        let scan = crate::globalsmodref::compute(module);
+        let names = |root: ConstantId, id: GlobalId| {
+            let mut work = vec![root];
+            while let Some(c) = work.pop() {
+                match &module.context.get(c).kind {
+                    ConstantKind::Global(g) if *g == id => return true,
+                    ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => {
+                        work.extend(operands.iter().copied())
+                    }
+                    ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => work.push(*value),
+                    ConstantKind::Aggregate(members) => work.extend(members.iter().copied()),
+                    _ => {}
+                }
+            }
+            false
+        };
+        for (at, global) in module.globals.iter().enumerate() {
+            let id = GlobalId(at as u32);
+            if !matches!(global.kind, GlobalKind::Variable(_))
+                || !matches!(global.linkage, Linkage::Internal | Linkage::Private)
+            {
+                continue;
+            }
+            compared += 1;
+            let label = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
+            let (tracked, scanned) = (old.tracked(id), scan.is_non_address_taken(id));
+            if scanned && !tracked {
+                unexplained.push(format!("{label}: only the scan tracks it"));
+            }
+            if !tracked || scanned {
+                continue;
+            }
+            extras += 1;
+            // The reasons, found by looking at the uses the scan stops at.
+            let in_initializer = module
+                .globals
+                .iter()
+                .any(
+                    |holder| match &holder.kind {
+                        GlobalKind::Variable(v) => v.initializer.is_some_and(|init| names(init, id)),
+                        GlobalKind::Function(_) => false,
+                    },
+                );
+            let mut other = false;
+            let mut visit = |f: &Function, inst: InstId, index: usize| -> Option<ValueId> {
+                let op = f.instruction(inst);
+                match &op.opcode {
+                    Opcode::Load { .. } => None,
+                    Opcode::Store { .. } if index == 1 => None,
+                    Opcode::Store { .. } | Opcode::Phi => None,
+                    Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => op.result,
+                    _ => {
+                        other = true;
+                        None
+                    }
+                }
+            };
+            let mut by_use = false;
+            for (_, _, f) in module.functions().filter(|(_, _, f)| !f.is_declaration()) {
+                for (_, inst) in f.walk() {
+                    for (index, operand) in f.instruction(inst).operands.iter().enumerate() {
+                        let Operand::Constant(c) = operand else { continue };
+                        if !names(*c, id) {
+                            continue;
+                        }
+                        let mut work = Vec::new();
+                        work.extend(visit(f, inst, index));
+                        while let Some(v) = work.pop() {
+                            for user in f.users(v) {
+                                let kind = &f.instruction(user.user).opcode;
+                                by_use |= matches!(kind, Opcode::Store { .. } if user.index != 1)
+                                    || matches!(kind, Opcode::Phi);
+                                work.extend(visit(f, user.user, user.index as usize));
+                            }
+                        }
+                    }
+                }
+            }
+            if (in_initializer || by_use) && !other {
+                explained += 1;
+            } else {
+                unexplained
+                    .push(format!("{label}: initializer {in_initializer}, stored or phi {by_use}, other use {other}"));
+            }
+        }
+    }
+    // Premise: the corpus has internal globals, and GlobalsAA tracks some the
+    // scan does not.
+    assert!(compared > 0 && extras > 0, "{compared} compared, {extras} extra");
+    assert!(
+        unexplained.is_empty(),
+        "{} of {extras} unexplained: {:#?}",
+        unexplained.len(),
+        &unexplained[..unexplained.len().min(8)]
+    );
+    assert_eq!(explained, extras);
 }
