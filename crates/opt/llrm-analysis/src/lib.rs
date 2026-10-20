@@ -154,6 +154,7 @@ pub mod ranges;
 pub mod reachability;
 pub mod references;
 pub mod regions;
+pub mod runtimecheck;
 pub mod scev;
 pub mod sliceset;
 pub mod slotstores;

@@ -183,7 +183,7 @@ impl ScalarEvolution {
     }
 
     /// `Value::printAsOperand(OS, false)`.
-    fn print_value(
+    pub(crate) fn print_value(
         &self,
         cx: &Cx,
         labels: &Labels,
