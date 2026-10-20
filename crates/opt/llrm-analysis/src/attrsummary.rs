@@ -25,12 +25,15 @@
 //! From unit test `a_readonly_parameter_is_read_not_written` in
 //! `attrsummary_tests.rs`.
 //!
-//! DEVIATE A1: no slices of tracked globals. `GlobalsModRef` answers those per
-//! global; here they are the unknown access. Checked by
-//! `the_unknown_access_stands_for_globals`.
+//! A tracked global (`GlobalsModRef::is_non_address_taken`) of a function that
+//! has a `FunctionInfo` is a whole-object slice in `reads` or `writes` as
+//! `mod_ref_for_global` says, and `globals_listed` keeps the unknown access
+//! from reaching it. Without a `FunctionInfo` the unknown access reaches it.
 
 use llrm_mir::facts::Facts;
-use llrm_mir::module::Module;
+use llrm_mir::GlobalId;
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::module::{GlobalKind, Module};
 use llrm_mir::types::Type;
 use llrm_support::hash::IndexMap;
 
@@ -39,10 +42,20 @@ use crate::alias::Summary;
 use crate::memory::{Identity, Key, MemoryKind, MemoryObject, ObjectInterner, Slice};
 
 /// The summaries of the defined functions of `module`, by name.
-pub fn summaries(module: &Module) -> IndexMap<String, Summary> {
+///
+/// `tracked` are the globals alias's queries treat as uncaptured (`GlobalsAA`);
+/// the slices of one are the object alias makes of it, so the unknown access is
+/// held off them only where `GlobalsModRef` tracks every one.
+pub fn summaries(
+    module: &Module,
+    layout: &DataLayout,
+    tracked: &std::collections::BTreeSet<GlobalId>,
+) -> IndexMap<String, Summary> {
     let objects = ObjectInterner::of(&module.context);
+    let found = crate::globalsmodref::compute(module);
+    let listable = tracked.iter().all(|&id| found.is_non_address_taken(id));
     let mut out = IndexMap::default();
-    for (_, global, function) in module.functions() {
+    for (id, global, function) in module.functions() {
         let Some(name) = global.name.as_ref() else { continue };
         let me = MemoryEffects::of_attrs(&function.attrs);
         let elsewhere = [IRMemLocation::Other, IRMemLocation::InaccessibleMem, IRMemLocation::ErrnoMem]
@@ -54,6 +67,26 @@ pub fn summaries(module: &Module) -> IndexMap<String, Summary> {
             unknown_write: elsewhere.is_mod_set(),
             ..Summary::default()
         };
+        if let Some(info) = found.function_info(id).filter(|_| listable) {
+            summary.globals_listed = true;
+            for &global in tracked {
+                let access = info.mod_ref_for_global(global);
+                let GlobalKind::Variable(variable) = &module.global(global).kind else { continue };
+                let object = objects.intern(MemoryObject {
+                    identity: Some(Identity::Global(global.0)),
+                    extent: Some(layout.alloc_size(&module.context.types, variable.ty) as i64),
+                    captured: false,
+                    constant: variable.constant,
+                    ..MemoryObject::new(MemoryKind::Global)
+                });
+                if access.is_ref_set() {
+                    summary.reads.insert(Slice::whole(object));
+                }
+                if access.is_mod_set() {
+                    summary.writes.insert(Slice::whole(object));
+                }
+            }
+        }
         for (index, &value) in function.parameters().iter().enumerate() {
             let pointer = function
                 .operand_type(&module.context, llrm_mir::module::Operand::Value(value))
