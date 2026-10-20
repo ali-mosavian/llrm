@@ -20,10 +20,9 @@
 //! In the pipeline's strength slot, after `fixednarrow`.
 //!
 //! # Limits
-//! DEVIATE: not yet ported: IV chains, `OptimizeShadowIV`,
-//! `OptimizeLoopTermCond`, `replaceCongruentIVs`, `DeleteDeadPHIs` after the
-//! rewrite (what the later `dead` pass removes stays until it), and the debug
-//! value salvage. A loop of more than 200 IV users is left (`MaxIVUsers`).
+//! DEVIATE: not yet ported: `replaceCongruentIVs` (waits on the expander's
+//! #2773) and the debug value salvage. `DeleteDeadPHIs` reads the header's
+//! phis only. A loop of more than 200 IV users is left (`MaxIVUsers`).
 
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::analysis::ScevSession;
