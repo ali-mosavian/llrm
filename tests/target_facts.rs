@@ -74,7 +74,7 @@ fn facts() -> Regex {
     // the x86 decoder (the target-facts audit).
     let shapes = [
         r"(?-i:\bRegId::[A-Z][A-Z0-9_]*\b)",
-        r"(?-i:\.bits\s*(?:==|!=)\s*(?:16|32)\b)",
+        r"(?-i:\bbits\s*(?:==|!=|>=|<=|<|>)\s*(?:16|32|64)\b)",
         r"(?-i:\bRegisterClasses::m(?:16|32)\()",
         r"(?-i:\biced_x86\b)",
     ];
@@ -437,12 +437,14 @@ fn the_search_is_built_from_the_descriptions() {
         "RegId::BP",
         "if body.bits == 32 {",
         "procedure.body.bits != 16",
+        "if bits >= 32 {",
+        "bits == 64",
         "RegisterClasses::m16()",
         "use iced_x86::Decoder;",
     ] {
         assert!(facts.is_match(sample), "{sample} is a target fact and is not found");
     }
-    for sample in ["let x = 4;", "\"ordinary\"", "65537", "RegId::None", "bits == 64", "bits >= 8"] {
+    for sample in ["let x = 4;", "\"ordinary\"", "65537", "RegId::None", "bits >= 8"] {
         assert!(!facts.is_match(sample), "{sample} is not a target fact");
     }
 }
