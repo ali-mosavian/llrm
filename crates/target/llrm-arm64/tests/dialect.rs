@@ -38,3 +38,29 @@ fn the_arm64_patterns_generate_against_the_arm64_forms() {
     .unwrap_or_else(|why| panic!("{why}"));
     assert!(generated.code.contains("fn arm64_holds("), "{}", &generated.code[..200.min(generated.code.len())]);
 }
+
+#[test]
+fn the_calling_description_parses_and_names_aapcs64() {
+    let calling = llrm_target::calling::Calling::parse(include_str!("../src/machines/calling.toml"))
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(calling.names(), ["aapcs64"]);
+    assert_eq!(calling.native().slot_bytes, 8);
+    assert_eq!(calling.native().stack_alignment, Some(16));
+}
+
+#[test]
+fn the_platform_descriptions_parse_and_agree_with_the_platform() {
+    use llrm_arm64::machine::Platform;
+    for (platform, layout, object) in [
+        (Platform::Linux, include_str!("../src/machines/datalayout.toml"), include_str!("../src/machines/object.toml")),
+        (
+            Platform::Darwin,
+            include_str!("../src/machines/datalayout-darwin.toml"),
+            include_str!("../src/machines/object-darwin.toml"),
+        ),
+    ] {
+        let layout = llrm_target::layout::Layout::parse(layout).unwrap_or_else(|why| panic!("{why}"));
+        assert_eq!((layout.mode, layout.datalayout.as_str()), (64, platform.datalayout()), "{platform:?}");
+        llrm_target::object::ObjectFormat::parse(object).unwrap_or_else(|why| panic!("{why}"));
+    }
+}
