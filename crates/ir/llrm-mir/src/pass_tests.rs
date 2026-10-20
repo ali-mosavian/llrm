@@ -385,8 +385,10 @@ const TWO_EDGES: &str = "define i16 @p(i1 %c) {\nentry:\n  br i1 %c, label %b, l
 
 /// Drops one of the two inputs of the phi that two edges feed: the body
 /// `SsaUpdaterBulk` left (#3016), which made SCEV and liveness allocate 3 GB.
+#[cfg(debug_assertions)]
 struct ShortPhi;
 
+#[cfg(debug_assertions)]
 impl FunctionPass for ShortPhi {
     fn name(&self) -> &'static str {
         "short-phi"

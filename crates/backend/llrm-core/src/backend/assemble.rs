@@ -397,6 +397,13 @@ pub fn assembled_by(
         .filter(|(name, _)| !defined.contains(name.as_str()))
         .map(|(name, &far)| (name.clone(), if far { "far" } else { "near" }.to_owned()))
         .collect();
+    // A variable declared and not defined is data the linker finds; the object
+    // lists only those code reaches.
+    externs.extend(module.globals.iter().enumerate().filter_map(|(at, global)| {
+        let GlobalKind::Variable(variable) = &global.kind else { return None };
+        let name = names.get(&(globals::space(module, GlobalId(at as u32)), at as i64))?;
+        (variable.initializer.is_none() && !defined.contains(name.as_str())).then(|| (name.clone(), "byte".to_owned()))
+    }));
     externs.extend(masm::stack_externs(&procedures, &mut names));
     externs.sort();
     externs.dedup();
@@ -578,8 +585,9 @@ pub fn machined(
 /// convention keeps that its body writes or a call in it disturbs.
 fn saves(made: &Machined) -> usize {
     let mut used = masm::_roots(&made.body);
+    let regs = made.body.regs();
     for one in made.body.insns() {
-        used.extend(one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(crate::model::ir::root)));
+        used.extend(one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(|register| regs.root(register))));
     }
     made.registers.saved.iter().filter(|(whole, _)| used.contains(whole)).count()
 }
@@ -1142,7 +1150,9 @@ fn staged(
             target.cpu.size,
         ) {
         registers.free = true;
-        registers.saved.push((registers.pointer, registers.pointer));
+        // Saved as any kept register is: its root, and the register a prologue
+        // pushes.
+        registers.saved.push((body.regs().root(registers.pointer), registers.pointer));
         Rc::new(target.classes.with_frame_free())
     } else {
         Rc::clone(target.classes)

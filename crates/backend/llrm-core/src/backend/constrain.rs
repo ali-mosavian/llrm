@@ -112,7 +112,7 @@ fn _same_register(
     if regs.width_of(other) == Some(width) {
         return other == regs.named(one, width);
     }
-    ir::root(one) == ir::root(other)
+    regs.root(one) == regs.root(other)
 }
 
 /// Whether this value is pinned to the register the instruction wants.
@@ -126,7 +126,7 @@ fn _already_there(
     let Some(had) = pinned.get(&value) else {
         return false;
     };
-    if ir::root(*had) != ir::root(register) {
+    if regs.root(*had) != regs.root(register) {
         return false;
     }
     regs.width_of(register) == Some(i64::from(width))
@@ -223,7 +223,7 @@ pub fn constrained(
                 .collect();
             if wanted.is_empty() && given.is_empty() {
                 for one in insns[start..].iter().map(|one| &**one).chain([&*one]) {
-                    carried.retain(|(value, root), kept| !_disturbs(one, *value, kept, *root, &pins));
+                    carried.retain(|(value, root), kept| !_disturbs(regs, one, *value, kept, *root, &pins));
                 }
                 insns.push(one);
                 continue;
@@ -244,7 +244,7 @@ pub fn constrained(
             for Wanted { value, register, places } in ordered {
                 let held = Held { value: fresh, width: _declared(&widths, &one, value) };
                 let read_only = places.iter().all(|(side, _)| *side == "source");
-                let key = (value, ir::root(register));
+                let key = (value, regs.root(register));
                 if let Some(kept) = carried.get(&key).copied().filter(|kept| read_only && kept.width == held.width) {
                     for (_side, index) in &places {
                         sources[*index] = Loc::Held(kept);
@@ -356,11 +356,11 @@ pub fn constrained(
             // The copies in front of it, this one's own among them, can
             // displace an older one.
             for one in &insns[start..] {
-                carried.retain(|(value, root), kept| !_disturbs(one, *value, kept, *root, &pins));
+                carried.retain(|(value, root), kept| !_disturbs(regs, one, *value, kept, *root, &pins));
             }
             carried.extend(added);
             for one in std::iter::once(&made).chain(after.iter().map(|one| &**one)) {
-                carried.retain(|(value, root), kept| !_disturbs(one, *value, kept, *root, &pins));
+                carried.retain(|(value, root), kept| !_disturbs(regs, one, *value, kept, *root, &pins));
             }
             insns.push(Arc::new(made));
             insns.extend(after);
@@ -373,13 +373,14 @@ pub fn constrained(
 /// Whether `one` redefines `value` or its copy `kept` in `root`, or puts
 /// anything else in `root`.
 fn _disturbs(
+    regs: Regs,
     one: &Insn,
     value: u32,
     kept: &Held,
     root: RegId,
     pins: &IndexMap<u32, RegId>,
 ) -> bool {
-    let in_root = |register: &RegId| ir::root(*register) == root;
+    let in_root = |register: &RegId| regs.root(*register) == root;
     one.defines.iter().any(|defined| {
         *defined == value || *defined == kept.value || pins.get(defined).is_some_and(|register| in_root(register))
     }) || one.clobbers.iter().any(in_root)

@@ -1,0 +1,13 @@
+[package]
+name = "llrm-elf-arm64"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "llrm's ELF64 relocatable object writer, for arm64 (AArch64)"
+
+[dependencies]
+llrm-elf = { workspace = true }
+llrm-object = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

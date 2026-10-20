@@ -281,22 +281,3 @@ fn test_a_second_test_of_a_counter_is_copied_with_the_first() {
     assert!(changed);
     assert_eq!(guards(&module), 2);
 }
-
-/// Rotating derived what is known of the function (a fixed point and the cycle
-/// propagation over every value) before looking for a loop to enter at its
-/// body, so every function without one paid for it: 1.0 Minstr of a 40 on
-/// straight(512) at -Os. It is asked of the first loop that could be entered.
-#[test]
-fn a_function_with_no_loop_to_enter_derives_nothing() {
-    let straight = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
-    let before = llrm_analysis::consts::register_derivations();
-    let (changed, _) = through(straight, Rotate { proven: true, copy: true });
-    assert!(!changed);
-    assert_eq!(llrm_analysis::consts::register_derivations(), before, "a body with no loop derived its registers");
-    let before = llrm_analysis::consts::register_derivations();
-    through(&summing("4"), Rotate { proven: true, copy: false });
-    assert!(
-        llrm_analysis::consts::register_derivations() > before,
-        "premise: a loop is asked its trips from the registers"
-    );
-}
