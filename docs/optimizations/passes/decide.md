@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/decide.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/decide.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:fbdfadac23be0134c18945edd808268821340e2be998bd19f862e93bc2e2689d -->
+<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:affa89cb0194c780d56953100e8b1674f936d9c164f5f88adbdfc09a205ed12e -->
 
 # decide
 
@@ -90,5 +90,5 @@ Blocks and edges change: every analysis is invalidated when anything was
 decided or merged.
 
 ## See also
-[`crate::cfg`](../analyses/cfg.md), [`crate::fold`](fold.md), [`crate::jumpthreading`](jumpthreading.md); LLVM JumpThreading,
-SimplifyCFG.
+[`crate::cfg`](../analyses/cfg.md), [`crate::fold`](fold.md), [`crate::jumpthreading`](jumpthreading.md); LLVM
+JumpThreading, SimplifyCFG.

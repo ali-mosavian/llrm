@@ -307,11 +307,11 @@ fn test_an_early_return_through_a_spilled_sum_sets_up_nothing() {
     assert!(early, "{text}");
 }
 
-/// Behind the copy the old `JumpThread` cleaned the function with `Algebraic` after
-/// LSR, and `icmp ne (x + 1), 2` became `icmp ne x, 1` for the counter's own
-/// next value: `lea eax,[ecx+1]; add edi,24; cmp ecx,1; mov ecx,eax; jne`, the
-/// counter in two registers (x_life +5% clocks). The step is tested where it
-/// is made: `inc ecx; add edi,24; cmp ecx,2; jne`, or, with the counter
+/// Behind the copy the old `JumpThread` cleaned the function with `Algebraic`
+/// after LSR, and `icmp ne (x + 1), 2` became `icmp ne x, 1` for the counter's
+/// own next value: `lea eax,[ecx+1]; add edi,24; cmp ecx,1; mov ecx,eax; jne`,
+/// the counter in two registers (x_life +5% clocks). The step is tested where
+/// it is made: `inc ecx; add edi,24; cmp ecx,2; jne`, or, with the counter
 /// started at -3, `add edi,24; inc ecx; jne` (the compare gone: lsr's
 /// candidates take the address constants as displacements, so the exit-tested
 /// one is no longer crowded out).
