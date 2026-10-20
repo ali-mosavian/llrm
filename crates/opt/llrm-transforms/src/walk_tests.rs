@@ -712,9 +712,9 @@ b0:
     assert_eq!(copies, 1, "{copies} copies of down in top:\n{top}");
 }
 
-/// What the copies a call peels add is capped: two calls in exclusive
-/// branches (recpow's shape) double the copies at each level, 32 copies and
-/// 8203 bytes at -O1 before the cap.
+/// What the copies a call peels add is capped at gcc's recursive growth
+/// limit: two calls in exclusive branches (recpow's shape) double the copies
+/// at each level, 32 copies and 8203 bytes at -O1 before the cap, 20 after.
 #[test]
 fn test_the_copies_a_call_peels_add_at_most_a_functions_growth() {
     let top = walked_top(
@@ -752,5 +752,5 @@ b0:
 ",
     );
     let copies = top.matches("urem i32 %x").count();
-    assert!(copies <= 12, "{copies} copies of down in top:\n{top}");
+    assert!(copies <= 24, "{copies} copies of down in top:\n{top}");
 }

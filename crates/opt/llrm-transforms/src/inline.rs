@@ -259,6 +259,10 @@ pub const MAX_INLINE_RECURSIVE_DEPTH: usize = 3;
 /// gcc 13.3's depth (params.opt:573), which peeling keeps.
 const MAX_INLINE_RECURSIVE_DEPTH_GCC: usize = 8;
 
+/// gcc 13.3's `max-inline-insns-recursive-auto` (params.opt:553), which caps
+/// what the copies of one peeled call add.
+const MAX_INLINE_INSNS_RECURSIVE_GCC: i64 = 450;
+
 /// DEVIATE (recursion), gcc 13.3's `--param max-inline-insns-recursive-auto`
 /// is 450 (params.opt:553, `recursive_inlining`, ipa-inline.cc:1645); 150 here,
 /// in `gcc_insns`: the size the function may reach by copies of itself. The
@@ -731,12 +735,14 @@ impl<'a> Plan<'a, '_> {
                 limit *= limit;
             }
             let grown = gcc_insns(callee) - 1;
-            // DEVIATE: the copies a call peels add at most what a function
-            // may grow by copies of itself (recpow -O1: 32 copies, 8203 bytes).
+            // DEVIATE: gcc has no cap on peeling; the copies of one call add at
+            // most what gcc lets a function grow by recursive inlining, 450
+            // (recpow -O1: uncapped 32 copies and 8203 bytes; 150 left it at
+            // 486966 clocks against 475701 before; 450 is 454246 / 5547).
             if level > MAX_INLINE_RECURSIVE_DEPTH_GCC
                 || reached >= limit
                 || grown > MAX_INLINE_INSNS_AUTO
-                || self.peeled + grown > MAX_INLINE_INSNS_RECURSIVE
+                || self.peeled + grown > MAX_INLINE_INSNS_RECURSIVE_GCC
             {
                 return None;
             }
