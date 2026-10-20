@@ -149,7 +149,7 @@ fn safe_to_move(
 }
 
 /// `TII->isAsCheapAsAMove`: a copy or a move of a constant.
-fn as_cheap_as_a_move(one: &Insn) -> bool {
+pub(crate) fn as_cheap_as_a_move(one: &Insn) -> bool {
     one.what
         .as_ref()
         .is_some_and(

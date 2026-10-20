@@ -798,3 +798,46 @@ b0:
     assert!(aa.get_mod_ref_info(call, &loc).is_mod_or_ref());
     assert!(aa.mod_set_loc(call, &loc), "the call may write the slot it was handed");
 }
+
+/// A call that names no location cannot touch a local that only a later call
+/// captures: the whole-function capture answer made it reach the slot, so a
+/// store before the escape stayed live across the unknown call.
+#[test]
+fn test_a_call_before_the_escape_does_not_reach_the_local() {
+    use super::alias::AliasQuery;
+    let parsed = Parsed::new(
+        "declare void @keep(ptr)
+define i16 @f() {
+b0:
+  %a = alloca i16
+  store i16 1, ptr %a
+  call void @anything()
+  call void @keep(ptr %a)
+  ret i16 0
+}
+",
+    );
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let insts: Vec<_> = unit.function.walk().map(|(_, inst)| inst).collect();
+    let is_call = |&&inst: &&llrm_mir::module::InstId| {
+        matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Call(_)
+        )
+    };
+    let calls: Vec<_> = insts.iter().filter(is_call).copied().collect();
+    let store = *insts
+        .iter()
+        .find(|&&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ))
+        .expect("the store");
+    let loc = aa.location_of(store).expect("a location");
+    // Premise: both calls are unknown to the access lists.
+    assert!(calls.iter().all(|&call| accesses.writes(call).is_none()), "{calls:?}");
+    assert!(!aa.get_mod_ref_info(calls[0], &loc).is_mod_or_ref(), "before the escape");
+    assert!(aa.get_mod_ref_info(calls[1], &loc).is_mod_or_ref(), "the escape itself reaches it");
+}

@@ -61,3 +61,23 @@ fn test_the_stores_before_the_loop_do_not_reload_the_offset_from_a_slot() {
         "{reloads} reloads from the frame (2 allowed; 15 before a split takes its own class)\n{text}"
     );
 }
+
+/// The loop calls a function between the uses of the pointer, so it cannot stay
+/// in `bx`: split across the call it is fetched once before and once after it.
+/// Every gap of the block was a regmask gap (the instructions that read `es`
+/// without naming it counted as regmasks), no split was possible and the
+/// pointer was fetched before each use: 6 `les` in this function.
+#[test]
+fn test_a_pointer_live_across_a_call_is_fetched_once_on_each_side_of_it() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-Os", "-S", "-o", "a.s", "a.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let loads = text.lines().filter(|line| line.trim_start().starts_with("les ")).count();
+    assert!(loads <= 3, "{loads} `les` (3 allowed; 6 when every gap is a regmask gap)\n{text}");
+}

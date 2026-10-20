@@ -534,3 +534,18 @@ def test_the_precheck_formats_only_the_prs_own_rust_files(tmp_path, monkeypatch)
 
     ps.precheck_items(tmp_path, checks_with_only(), only=["a.rs"])
     assert seen == [["a.rs"]], seen
+
+
+def test_a_stray_untracked_page_does_not_turn_a_pr_that_adds_it_into_a_conflict(tmp_path):
+    """combine_demanded.md, reassociate.md and reassociate_fneg.md sat untracked in the gate checkout after a docs regeneration; every PR adding them was refused as a 'conflict' for hours."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sh(repo, "init", "-q", "-b", "main")
+    commit(repo, "a.rs", "fn a() {}\n", "base")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    commit(repo, "page.md", "from the pr\n", "pr adds the page")
+    sh(repo, "checkout", "-q", "main")
+    (repo / "page.md").write_text("left by a regeneration\n")  # untracked, the file the PR adds
+    ps.clean_checkout("main", cwd=repo)
+    merge = subprocess.run(["git", "merge", "--no-edit", "-q", "pr"], cwd=repo, capture_output=True, text=True)
+    assert merge.returncode == 0 and (repo / "page.md").read_text() == "from the pr\n", merge.stderr

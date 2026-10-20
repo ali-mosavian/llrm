@@ -149,6 +149,16 @@ pub fn lowered(
             let found =
                 function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).opcode == Opcode::Select);
             let Some(select) = found else { break };
+            // Arithmetic on the condition where the constants allow it, as the
+            // DAG combiner makes it before any conditional move.
+            if crate::backend::selectconstants::folded(
+                context,
+                function,
+                select,
+                pricing.tti.convert_select_of_constants_to_math(),
+            )? {
+                continue;
+            }
             let sink =
                 |function: &Function, operand: Operand| sunk(context, pricing, &outer, function, select, operand);
             let (yes, no) = (

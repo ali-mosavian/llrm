@@ -349,6 +349,7 @@ dependencies = [
  "iced-x86",
  "llrm-core",
  "llrm-lir",
+ "llrm-mir",
  "llrm-target",
  "llrm-x86",
  "llrm-x86-m16",
