@@ -36,7 +36,7 @@ fn dump(
             if !(1..=128).contains(&query.scalar_bits(value)) {
                 continue;
             }
-            let mut line = format!("{} {n}", global.name.clone().unwrap_or_default());
+            let mut line = format!("{} {n}", global.name.owned().unwrap_or_default());
             n += 1;
             for col in cols {
                 line.push_str(&column(&query, value, col));

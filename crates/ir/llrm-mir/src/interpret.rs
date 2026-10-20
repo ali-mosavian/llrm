@@ -370,7 +370,7 @@ impl<'m> Machine<'m> {
         arguments: Vec<Val>,
     ) -> Run<Val> {
         let global = self.module.global(id);
-        let name = global.name.clone().unwrap_or_default();
+        let name = global.name.owned().unwrap_or_default();
         let GlobalKind::Function(function) = &global.kind else {
             return undefined(format!("a call to the variable @{name}"));
         };

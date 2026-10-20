@@ -578,6 +578,16 @@ pub fn commutative(
     }
 }
 
+/// `m_c_<op>(m_Specific(x), m_Value(Y))`: `Y`.
+pub fn other_of(
+    q: &Query,
+    v: Operand,
+    op: BinaryOp,
+    x: Operand,
+) -> Option<Operand> {
+    commutative(q, v, op, |s| s == x).map(|(_, other)| other)
+}
+
 /// `m_SpecificInt(n)`: an integer constant equal to `n`.
 pub fn specific_int(
     q: &Query,

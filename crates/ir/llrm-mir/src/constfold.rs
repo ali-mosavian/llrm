@@ -898,7 +898,7 @@ mod relation_tests {
         ty: TypeId,
     ) -> GlobalValue {
         GlobalValue {
-            name: None,
+            name: Default::default(),
             linkage,
             unnamed_addr: UnnamedAddr::None,
             address_space: 0,

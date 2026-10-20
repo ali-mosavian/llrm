@@ -214,7 +214,7 @@ fn intrinsic(
 ) -> Option<Intrinsic> {
     let callee = memory::callee(environment.context, function, inst)?;
     let global = environment.globals.get(callee.0 as usize)?;
-    global.name.as_deref().and_then(Intrinsic::named)
+    global.intrinsic()
 }
 
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/DemandedBits.cpp#L52>

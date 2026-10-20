@@ -120,7 +120,7 @@ fn may_have_recursive_callee(
                     if callee == id {
                         return true;
                     }
-                    let named = module.global(callee).name.as_deref().and_then(Intrinsic::named);
+                    let named = module.global(callee).intrinsic();
                     // DEVIATE F1: an intrinsic carries `norecurse` in LLVM's
                     // attribute tables; llrm's carry none, so the name says it.
                     if named.is_some_and(|one| !matches!(one, Intrinsic::Code | Intrinsic::Asm)) {
@@ -630,6 +630,7 @@ pub fn post_order(
     let list: Vec<GlobalId> = set.iter().copied().collect();
     let mut changed: BTreeSet<GlobalId> = stamp_memory(module, &list).into_iter().collect();
     changed.extend(crate::argumentattrs::add_argument_attrs(module, &set));
+    changed.extend(crate::initializes::add_initializes(module, layout, &set));
     changed.extend(stamp_flags(module, layout, spaces, &list));
     changed.into_iter().collect()
 }

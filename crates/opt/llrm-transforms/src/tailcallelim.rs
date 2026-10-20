@@ -471,8 +471,8 @@ fn can_move_above_call(
     inst: InstId,
     call: InstId,
 ) -> bool {
-    let intrinsic = memory::callee(context, function, inst)
-        .and_then(|one| Intrinsic::named(outer.globals.get(one.0 as usize)?.name.as_deref()?));
+    let intrinsic =
+        memory::callee(context, function, inst).and_then(|one| outer.globals.get(one.0 as usize)?.intrinsic());
     if intrinsic == Some(Intrinsic::LifetimeEnd) {
         return true;
     }

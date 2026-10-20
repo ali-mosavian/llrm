@@ -93,14 +93,23 @@ pub fn _RUNTIME_FRAME_HEADER(
 /// its own, and the runtime takes BP there for its own: framed by B$ENRA,
 /// QB 4.5 read the frame's missing return address as the error's, and
 /// reported a fatal error in "line 49152 of module $ p".
+///
+/// A cell stays on the stack segment (`through`) where the stack lives in
+/// the data group: allocation may hold a selector in the data segment
+/// register, and a cell with no segment of its own reads through it.
 pub fn _static_frame(
     body: &lir::LirBody,
     size: i64,
+    through: Option<RegId>,
 ) -> lir::LirBody {
     let regs = body.regs();
     let moved = |addr: &Addr| -> Addr {
-        let segment =
-            if regs.is_stack_segment(RegId::from(addr.segment)) { RegId::None } else { RegId::from(addr.segment) };
+        let own = RegId::from(addr.segment);
+        let segment = if own == RegId::None || regs.is_stack_segment(own) {
+            through.unwrap_or(RegId::None)
+        } else {
+            RegId::from(addr.segment)
+        };
         Addr { space: Space::Segment, index: MAIN_FRAME_ID, disp: size + addr.disp, segment: segment.iced(), ..*addr }
     };
     let variables = body
@@ -115,14 +124,14 @@ pub fn _static_frame(
         })
         .collect();
     // Through BP no longer: the data object's own address.
-    let through = |register: RegId| if regs.is_frame(register) { RegId::None } else { register };
+    let unframed = |register: RegId| if regs.is_frame(register) { RegId::None } else { register };
     let operand = |r#where: &Loc| -> Loc {
         if !r#where.in_frame() {
             return r#where.clone();
         }
         r#where.map_address(|at| ir::AddressRef {
             addr: at.addr.map(|addr| moved(&addr)),
-            through: through(at.through),
+            through: unframed(at.through),
             ..at
         })
     };
@@ -724,7 +733,7 @@ pub fn compiled(
 ) -> Result<masm::Module, String> {
     let (mut mir, data) = super::emitted(program, options)?;
     let [(module, data)] = [(&mir.modules[0], &data[0])];
-    let global = |id: &i64| data.get(id).and_then(|&global| module.global(global).name.clone());
+    let global = |id: &i64| data.get(id).and_then(|&global| module.global(global).name.owned());
     let mut resolved = Object {
         segments: Vec::new(),
         symbols: object.symbols.clone(),
@@ -881,7 +890,9 @@ pub fn assembled(
         };
         let (procedure, landing, statics) =
             llrm_support::debug::in_function(module.global(id).name.as_deref().unwrap_or_default(), || {
-                timed("procedure", || procedure(module, id, id == main, frame, &names, &abi, &pool, &target, runtime))
+                timed("procedure", || {
+                    procedure(module, id, id == main, frame, &names, &abi, &pool, &target, runtime, segments.through)
+                })
             })?;
         main_frame += statics;
         for callee in procedure.callees.values() {
@@ -1029,6 +1040,7 @@ fn procedure(
     pool: &Rc<RefCell<Pool>>,
     target: &Target<'_>,
     runtime: model::RuntimeProfile,
+    through: Option<RegId>,
 ) -> Result<(masm::Procedure, Option<i64>, i64), String> {
     let global = module.global(id);
     let machined = assemble::machined(module, global.name.as_deref().unwrap_or_default(), abi, pool, target)?;
@@ -1050,7 +1062,7 @@ fn procedure(
         (finalized.body, IndexMap::default())
     } else if main {
         statics = machined.reserve + (machined.reserve & 1);
-        (_static_frame(&finalized.body, statics), IndexMap::default())
+        (_static_frame(&finalized.body, statics, through), IndexMap::default())
     } else {
         match frame {
             Frame::Runtime { strings } => {

@@ -183,7 +183,7 @@ pub fn prepared(
     }
     let mut pads = Vec::new();
     for &id in &handled {
-        let name = module.global(id).name.clone().unwrap_or_default();
+        let name = module.global(id).name.owned().unwrap_or_default();
         let why = |what: String| format!("@{name}: {what}");
         let function = module.global(id).function().expect("a function");
         if function.walk().any(|(_, inst)| function.instruction(inst).opcode == Opcode::Resume) {

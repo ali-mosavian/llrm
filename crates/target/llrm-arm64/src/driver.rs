@@ -117,7 +117,7 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
         if function.is_declaration() {
             continue;
         }
-        let name = global.name.clone().ok_or("an unnamed function")?;
+        let name = global.name.owned().ok_or("an unnamed function")?;
         let mut machine =
             crate::isel::select(module, id, &program.layout, platform).map_err(|why| format!("@{name}: {why}"))?;
         crate::prepass::run(&mut machine);
