@@ -94,8 +94,8 @@ pub mod canonical;
 pub mod cfg;
 pub mod combine;
 pub mod combine_add_idioms;
-pub mod combine_and;
 pub mod combine_addsub;
+pub mod combine_and;
 pub mod combine_build;
 pub mod combine_casts;
 #[cfg(test)]
@@ -128,6 +128,7 @@ mod combine_sink_tests;
 pub mod combine_sub;
 pub mod combine_visit_select;
 pub mod condstores;
+pub mod condtocond;
 pub mod congruentiv;
 pub mod constraintelim;
 #[cfg(test)]
