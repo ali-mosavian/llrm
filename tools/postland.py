@@ -212,6 +212,18 @@ def probe(failure: str, sha: str) -> bool:
     return failure in UNIT_SETS[sha]
 
 
+def smoke(at: Path, bins: Path, previous: str) -> tuple[set[str], str]:
+    """parity_smoke's own checks on the pinned tree (workspace check, ratchets, docs, warnings, the instruction budget): (`smoke <name>` per failing step, its result line)."""
+    env = {**os.environ, "CARGO_TARGET_DIR": str(HOME / "target-test"), "CARGO_INCREMENTAL": "0"}
+    env.pop("RUSTFLAGS", None)
+    output, _ = merged([*LOW, sys.executable, "tools/parity_smoke.py", "--bin", str(bins), "--base", previous], at, env)
+    named = re.search(r"^FAILING: (.*)$", output, re.M)
+    last = (output.strip().splitlines() or ["no output"])[-1][:300]
+    if not named:
+        return {"smoke nothing-printed"}, f"NOT RUN or unparsed: {last}"
+    return {f"smoke {one}" for one in named[1].split(",") if one}, last
+
+
 def partial(sha: str, previous: str, covered: list[str], raw: list[str]) -> str:
     """The report so far: what ran, and every failure line as the suite printed it (program [config]: want/got), before any bisect."""
     lines = [f"# {sha[:9]} (previous {previous[:9]}) PARTIAL", "", "## COVERED SUITES (so far)", "", *(f"- {one}" for one in covered), "", "## Raw failures, bisect pending", ""]

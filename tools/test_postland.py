@@ -130,3 +130,14 @@ def test_many_unit_failures_share_one_workspace_run_per_commit(monkeypatch):
     commits = list("abcdef")
     found = [postland.culprit(commits, lambda sha, one=one: postland.probe(one, sha)) for one in ("unit a::t1", "unit a::t2")]
     assert found == ["c", "c"] and len(runs) == len(set(runs)) <= 4
+
+
+def test_every_function_check_calls_exists():
+    """A slice edit dropped `smoke` and the run died after its tests/run, libs and 40 minutes with NameError."""
+    import ast
+
+    tree = ast.parse((Path(postland.__file__)).read_text())
+    defined = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    called = {node.func.id for fn in tree.body if isinstance(fn, ast.FunctionDef) and fn.name in ("check", "once", "probe") for node in ast.walk(fn) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    builtins_ = set(dir(__builtins__)) | {"set", "sorted", "len", "dict", "str", "int", "isinstance"}
+    assert not {name for name in called - defined - builtins_ if name[0].islower() and name not in ("emit",)}, called - defined
