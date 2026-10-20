@@ -661,7 +661,9 @@ fn test_a_store_is_dead_only_when_overwritten_before_any_read() {
         ("%x = load i16, ptr CELL", "store i16 2, ptr CELL", false),
         ("%x = load i16, ptr %p", "store i16 2, ptr CELL", false),
         ("", "store i32 2, ptr CELL", true),
-        ("", "store i8 2, ptr CELL", false),
+        // Merged into the later store: one `store i16 2`
+        // (LLVM `tryToMergePartialOverlappingStores`).
+        ("", "store i8 2, ptr CELL", true),
         ("", "store i16 2, ptr getelementptr (i8, ptr @g, i16 33)", false),
         // A volatile store writes only its own bytes.
         ("store volatile i16 3, ptr OTHER", "store i16 2, ptr CELL", true),

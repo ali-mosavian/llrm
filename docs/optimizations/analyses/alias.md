@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/alias.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/alias.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/alias.rs sha256:44884d435595655b94b4e0e299767b7ba76b2682bbcbca211daf360168324e65 -->
+<!-- src: crates/opt/llrm-analysis/src/alias.rs sha256:7d5c23ca1cc62d2680c0d666768ef8b5f166e7e389b6481875cdc6f5d231fe26 -->
 
 # alias
 
@@ -125,7 +125,7 @@ From unit test `test_points_to_flows_through_memory_and_a_phi` in
 `PointValues`, `Annotated`, `CallEffects`, `Summaries`. Consumers:
 [`crate::memory`](memory.md) (a `Unit`'s lazily built `annotated` and `points_to`),
 [`crate::memoryssa`](memoryssa.md) (`calls_annotated`), [`crate::avail`](avail.md)
-(`EscapedBefore`), [`crate::observers`](observers.md), [`crate::induction`](induction.md)
+(`EscapedBefore`), [`crate::induction`](induction.md)
 (`congruences`), [`crate::globalsaa`](globalsaa.md), [`crate::interprocedural`](interprocedural.md), and
 `gvn`, `promote`, `loadjoins` and `decide` in `llrm-transforms`.
 
