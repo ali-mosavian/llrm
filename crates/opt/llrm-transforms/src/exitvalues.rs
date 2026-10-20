@@ -116,17 +116,9 @@ pub fn rewritten_in(
         if !simple {
             continue;
         }
-        changed |= rewrite_loop_exit_values(
-            context,
-            layout,
-            function,
-            declared,
-            outer,
-            session,
-            &mut rewriter,
-            &tti,
-            header,
-        ) > 0;
+        changed |=
+            rewrite_loop_exit_values(context, layout, function, declared, outer, session, &mut rewriter, &tti, header)
+                > 0;
     }
     changed
 }

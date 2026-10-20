@@ -639,7 +639,10 @@ pub trait Tti {
         &self,
         ty: Ty,
     ) -> bool {
-        matches!(ty, Ty::Int(8 | 16 | 32) | Ty::Float | Ty::Double | Ty::Pointer)
+        matches!(
+            ty,
+            Ty::Int(8 | 16 | 32) | Ty::Float | Ty::Double | Ty::Pointer
+        )
     }
 
     /// `shouldBuildLookupTables`: whether the target jumps through a table

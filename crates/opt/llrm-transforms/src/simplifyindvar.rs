@@ -215,7 +215,8 @@ pub fn simplified_and_extended(
     simplified_and_extended_in(&mut session, context, layout, function, declared, outer)
 }
 
-/// [`simplified_and_extended`] over `session`, whose expressions are valid for `function`.
+/// [`simplified_and_extended`] over `session`, whose expressions are valid for
+/// `function`.
 pub fn simplified_and_extended_in(
     session: &mut ScevSession,
     context: &mut Context,

@@ -55,7 +55,8 @@ pub fn canonicalized(
     canonicalized_in(&mut session, context, layout, function, outer)
 }
 
-/// [`canonicalized`] over `session`, whose expressions are valid for `function`.
+/// [`canonicalized`] over `session`, whose expressions are valid for
+/// `function`.
 pub fn canonicalized_in(
     session: &mut ScevSession,
     context: &mut Context,

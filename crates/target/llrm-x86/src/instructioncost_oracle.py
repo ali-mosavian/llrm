@@ -48,7 +48,19 @@ fn("casts", "i16 %a, i32 %w, double %d, float %f, ptr %p, ptr %q, ptr addrspace(
   %k2 = load i8, ptr %q
   %c16 = uitofp i8 %k2 to double
   %k3 = load i32, ptr %q
-  %c17 = sitofp i32 %k3 to double""")
+  %c17 = sitofp i32 %k3 to double
+  %l1 = load i16, ptr %q
+  %c18 = sext i16 %l1 to i32
+  %l2 = load i16, ptr %q
+  %c19 = zext i16 %l2 to i32
+  %l3 = load i8, ptr %q
+  %c20 = sext i8 %l3 to i16
+  %l4 = load i8, ptr %q
+  %c21 = zext i8 %l4 to i32
+  %l5 = load i32, ptr %q
+  %c22 = zext i32 %l5 to i64
+  %l6 = load i16, ptr %q
+  %c23 = sext i16 %l6 to i64""")
 fn("cmpsel", "i16 %a, i16 %b, i1 %c, i1 %e, double %d",
    """  %m1 = icmp slt i16 %a, %b
   %m2 = icmp eq i16 %a, 0

@@ -99,10 +99,14 @@ pub fn folded(
         }
         // Phis that use the case constants indirectly.
         if let Some((phi, index)) = phi_for_forwarding(function, case, dest) {
-            let at = *found.entry(phi).or_insert_with(|| {
-                forwarding.push((phi, Vec::new()));
-                forwarding.len() - 1
-            });
+            let at = *found
+                .entry(phi)
+                .or_insert_with(
+                    || {
+                        forwarding.push((phi, Vec::new()));
+                        forwarding.len() - 1
+                    },
+                );
             forwarding[at].1.push(index);
         }
     }

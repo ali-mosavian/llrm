@@ -22,8 +22,9 @@
 //! computes from the condition (`case_results`). A table of the results is
 //! sized (`condition_is_index`, the offset of the lowest case), priced
 //! (`should_build_lookup_table`) and, per phi, found to be one value, linear
-//! in the index, a bit map in a register or cells of an array global. The phis then take the arithmetic, behind a range
-//! check or, for holes with a default that is not a constant, a bit mask.
+//! in the index, a bit map in a register or cells of an array global. The phis
+//! then take the arithmetic, behind a range check or, for holes with a default
+//! that is not a constant, a bit mask.
 //!
 //! # Example
 //! ```text
@@ -85,7 +86,10 @@ fn is_null(
     context: &Context,
     constant: ConstantId,
 ) -> bool {
-    matches!(context.get(constant).kind, ConstantKind::Int(0) | ConstantKind::Null | ConstantKind::Zero)
+    matches!(
+        context.get(constant).kind,
+        ConstantKind::Int(0) | ConstantKind::Null | ConstantKind::Zero
+    )
 }
 
 fn is_all_ones(
@@ -93,7 +97,10 @@ fn is_all_ones(
     constant: ConstantId,
 ) -> bool {
     let Constant { ty, kind } = context.get(constant);
-    matches!((kind, context.types.int_bits(*ty)), (ConstantKind::Int(bits), Some(width)) if *bits == mask(width))
+    matches!(
+        (kind, context.types.int_bits(*ty)),
+        (ConstantKind::Int(bits), Some(width)) if *bits == mask(width)
+    )
 }
 
 fn is_poison(
@@ -108,7 +115,10 @@ fn is_undef_or_poison(
     context: &Context,
     constant: ConstantId,
 ) -> bool {
-    matches!(context.get(constant).kind, ConstantKind::Undef | ConstantKind::Poison)
+    matches!(
+        context.get(constant).kind,
+        ConstantKind::Undef | ConstantKind::Poison
+    )
 }
 
 /// `validLookupTableConstant`
@@ -587,10 +597,14 @@ impl Plan {
                 max_case = value;
             }
             for (phi, result) in case_results(context, spec, function, switch, Some(value), dest, &mut common_dest)? {
-                let at = *listed.entry(phi).or_insert_with(|| {
-                    lists.push((phi, Vec::new()));
-                    lists.len() - 1
-                });
+                let at = *listed
+                    .entry(phi)
+                    .or_insert_with(
+                        || {
+                            lists.push((phi, Vec::new()));
+                            lists.len() - 1
+                        },
+                    );
                 lists[at].1.push((value, result));
             }
         }
@@ -674,9 +688,15 @@ impl Plan {
         // A few conditions prevent the generation of lookup tables: the target
         // does not support them, or the function says "no-jump-tables". Other
         // replacements, like the bit map, are not stopped by them.
-        let no_jump_tables = function.attrs.iter().any(
-            |attr| matches!(attr, Attribute::Str(name, Some(value)) if name == "no-jump-tables" && value == "true"),
-        );
+        let no_jump_tables = function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    Attribute::Str(name, Some(value)) if name == "no-jump-tables" && value == "true"
+                ),
+            );
         if any_tables && (!spec.tti.should_build_lookup_tables() || no_jump_tables) {
             return None;
         }
@@ -873,7 +893,8 @@ impl Plan {
                     let index_ty = context.types.int(index_bits);
                     let old = self.width;
                     // The index is below the table size: a zext of it is
-                    // non-negative where the table fits the type's positive half.
+                    // non-negative where the table fits the type's positive
+                    // half.
                     let flags = if index_bits > old && (cells.len() as u128 - 1) < (1u128 << (old - 1)) {
                         Flags::NNEG
                     } else {
