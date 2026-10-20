@@ -8,11 +8,11 @@
 //! turns them into frequencies (`propagated`).
 //!
 //! DEVIATE 1: `counted`, the executed-work estimate `executed` makes and the
-//! allocator's `_emitted` reads, lets a loop's proven trips
+//! route choice reads, lets a loop's proven trips
 //! (`loop_trip_counts`) replace the heuristic's 31 in 32; LLVM has no such
 //! estimate. `of`, which every translated pass reads, has no trips (a bench
-//! pair measured nothing for them, #2731). Exit: remove when `_emitted`'s use
-//! is replaced by a concept of the pin.
+//! pair measured nothing for them, #2731). Exit: remove when the route choice's
+//! use is replaced by a concept of the pin.
 
 use std::sync::Arc;
 

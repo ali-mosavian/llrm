@@ -28,10 +28,6 @@
 //!   (`dropUBImplyingAttrsAndMetadata`) and loses the rest; there are no debug
 //!   records to drop.
 //!
-//! # See also
-//! [`phiopt`](crate::phiopt), which prices a constant-only phi in the
-//! target's units and runs at its own slot.
-//!
 //! # Example
 //! The phi that a branch chooses between becomes a select in the branch's
 //! block:

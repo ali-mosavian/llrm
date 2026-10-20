@@ -24,7 +24,7 @@
 //!   a["<b>A  once, whole module</b><br/><small>globalopt, ports (every body),<br/>stamp</small>"]:::mid
 //!   subgraph g_b["B  EACH BODY, TO A FIXED POINT (FIXED, MIR PIPELINE)"]
 //!     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
-//!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
+//!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
 //!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>simple-loop-unswitch,<br/>non-trivial</small>"]:::mid
 //!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
@@ -36,7 +36,7 @@
 //!   end
 //!   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
 //!   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>jumpthread hoist gepoffset<br/>addresssink sink</small>"]:::mid
+//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>addresssink sink</small>"]:::mid
 //!   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
 //!   a --> sroa
 //!   sroa --> rnd
@@ -122,12 +122,11 @@
 //! | `fuse` | `fuse` (off by default; on at -Omax) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
-//! `pre` makes `gvn` insert on the path that lacks a value; `expensive`
-//! enables `jumpthread`'s state machines and `copy_headers` its correlated
-//! branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
-//! `lsr`, `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals`
-//! lets alias and branch decisions use the intervals of counted loops. `limits`
-//! are the copy budgets of `unroll` and `peel`.
+//! `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
+//! `hoist`, `algebraic`, `loopidioms`, `lsr`, `window` and
+//! `calleepop` in bytes; `loop_intervals` lets alias and branch decisions use
+//! the intervals of counted loops. `limits` are the copy budgets of `unroll`
+//! and `peel`.
 //!
 //! # Needs
 //! `Summaries`, `GlobalsAA`, `Callbacks` and `ProgramSummaries` are required
@@ -156,10 +155,10 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
-    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, jumpthread, lcssa,
-    loopdeletion, loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit,
-    loopunrollpass, loopversion, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp, simpleloopunswitch,
-    simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, window,
+    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
+    loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit, loopunrollpass,
+    loopversion, mem2reg, memcpyopt, peel, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
+    switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -200,6 +199,9 @@ pub struct Options {
     pub sink: bool,
     pub promote: bool,
     pub strength: bool,
+    /// The translated `LoopStrengthReduce` slot (LLVM's `-disable-lsr` turns it
+    /// off); `strength` turns it off with the other address passes.
+    pub lsr: bool,
     pub unroll: bool,
     pub peel: bool,
     pub loopidioms: bool,
@@ -305,6 +307,7 @@ impl Default for Options {
             sink: true,
             promote: true,
             strength: true,
+            lsr: true,
             unroll: true,
             peel: true,
             loopidioms: true,
@@ -503,7 +506,8 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
+            "lsr" => self.strength && self.lsr,
+            "indvars" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
             "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
@@ -549,9 +553,6 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // body's values are.
         Box::new(simplifycfg::SimplifyCfg::default()),
         Box::new(decide::Decide),
-        // gcc runs phiopt at -O1 and above (opts.cc:609); it is priced in bytes
-        // at -Os.
-        Box::new(phiopt::PhiOpt { size: applied.options.prefers_size() }),
         // Once the arguments are values rather than frame cells; the loop it
         // makes goes to the loop passes below.
         // Before a call is made a loop: two equal calls are one first, as
@@ -715,25 +716,26 @@ pub(crate) fn llvm_order(
     let decide = |name| slot(name, Box::new(decide::Decide));
     let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
     let simplify_cfg_with = |name, options| slot(name, Box::new(simplifycfg::SimplifyCfg { options }));
-    let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
     let fold = |name| slot(name, Box::new(fold::Fold));
     let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
     let translated = applied.options.sroa;
+    // DEVIATE, -O1 and -Og only (no GVN `pre`): the write-through `Promote`
+    // after PromoteMemToReg forwards a store of a global to the load after it,
+    // which LLVM's InstCombine does in `visitLoadInst`
+    // (FindAvailableLoadedValue, not translated); GVN does it at the other
+    // levels. Exit: that translation.
+    let write_through = || -> Vec<Box<dyn FunctionPass>> {
+        if applied.options.pre { Vec::new() } else { vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)] }
+    };
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
         let parts: Vec<Box<dyn FunctionPass>> = if translated {
-            // DEVIATE: PromoteMemToReg promotes allocas only; the write-through
-            // `Promote` after it still promotes the cells it declines (an
-            // internal global only `main` uses: LLVM localizes it to an alloca
-            // in GlobalOpt, which llrm's does not yet).
-            vec![
-                Box::new(crate::sroa::Sroa),
-                Box::new(crate::mem2reg::Mem2Reg),
-                Box::new(promote::Promote),
-                Box::new(promote::DeadSlots),
-            ]
+            let mut parts: Vec<Box<dyn FunctionPass>> =
+                vec![Box::new(crate::sroa::Sroa), Box::new(crate::mem2reg::Mem2Reg)];
+            parts.extend(write_through());
+            parts
         } else {
             vec![Box::new(promote::Sroa), Box::new(promote::Promote), Box::new(promote::DeadSlots)]
         };
@@ -760,15 +762,16 @@ pub(crate) fn llvm_order(
             // EarlyFPM's `SimplifyCFGPass()` (PassBuilderPipelines.cpp#L1178),
             // at the default options. The slot keeps the name
             // `decide@1178`.
-            vec![simplify_cfg("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
+            vec![simplify_cfg("decide@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
         }
         Phase::Cleanup => vec![
             Box::new(Together {
                 name: "promote@1241",
-                // DEVIATE as in the SROA slot: `Promote` keeps promoting the
-                // cells (globals) PromoteMemToReg does not.
+                // DEVIATE as in the SROA slot.
                 parts: if applied.options.mem2reg {
-                    vec![Box::new(mem2reg::Mem2Reg), Box::new(promote::Promote), Box::new(promote::DeadSlots)]
+                    let mut parts: Vec<Box<dyn FunctionPass>> = vec![Box::new(mem2reg::Mem2Reg)];
+                    parts.extend(write_through());
+                    parts
                 } else {
                     vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)]
                 },
@@ -780,17 +783,17 @@ pub(crate) fn llvm_order(
             // (PassBuilderPipelines.cpp#L1245): the option is read by
             // `simplifySwitch`, not translated yet, so these are the defaults.
             simplify_cfg("decide@1244"),
-            phiopt("phiopt@1244"),
         ],
         // The Late stage follows the Simplify list and its unroll-and-jam:
-        // L1438, InstSimplifyPass (PassBuilderPipelines.cpp#L1662, the last
-        // function pass of `OptimizePM`, after LoopSink) and L2376.
-        // DEVIATE LS1: the jam is not in the pin's default pipeline
-        // (`enable-unroll-and-jam` is false, L222); at the pin, if enabled,
-        // L1438 comes first, then the jam at L1474. llrm runs the jam first
-        // because its matcher needs the pre-L1438 nest: `needCanonicalLoops
-        // (false)` merges the blocks it matches (a testing outer header, a
-        // chain `pre` and `post`; hoist and sink alone leave them), and
+        // L1438, Float2IntPass (L1594), InstSimplifyPass
+        // (PassBuilderPipelines.cpp#L1662, the last function pass
+        // of `OptimizePM`, after LoopSink) and L2376. DEVIATE LS1: the jam is
+        // not in the pin's default pipeline (`enable-unroll-and-jam` is false,
+        // L222); at the pin, if enabled, L1438 comes first, then the jam at
+        // L1474. llrm runs the jam first because its matcher needs the
+        // pre-L1438 nest: `needCanonicalLoops (false)` merges the blocks it
+        // matches (a testing outer header, a chain `pre` and `post`; hoist and
+        // sink alone leave them), and
         // `only_o3_jams_a_nest_that_sweeps_the_same_cells` fails with the slot
         // at the end of the Simplify list. Exit: the matcher accepts the
         // L1438 form, no date.
@@ -798,6 +801,7 @@ pub(crate) fn llvm_order(
             // The slots' options, with the pin's lines,
             // are `simplifycfg::Options::{L1438, L2376}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
+            slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             simplify_cfg_with("simplifycfg@2376", simplifycfg::Options::L2376),
         ],
@@ -809,7 +813,6 @@ pub(crate) fn llvm_order(
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L675:
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@675"),
-                phiopt("phiopt@675"),
                 combine("combine@677"),
                 fold("fold@677"),
                 dead("dead@677"),
@@ -817,7 +820,6 @@ pub(crate) fn llvm_order(
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L691:
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@690"),
-                phiopt("phiopt@690"),
                 slot("reassociate@696", Box::new(crate::reassociate::Reassociate)),
                 slot("algebraic@696", Box::new(algebraic::Algebraic { size, llvm: true })),
             ]);
@@ -857,7 +859,6 @@ pub(crate) fn llvm_order(
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L766:
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
-                phiopt("phiopt@766"),
                 combine("combine@768"),
                 fold("fold@768"),
                 dead("dead@768"),
@@ -911,7 +912,6 @@ pub(crate) fn llvm_order(
                     "decide@832",
                     simplifycfg::Options { hoist_common_insts: true, sink_common_insts: true, ..Default::default() },
                 ),
-                phiopt("phiopt@832"),
                 combine("combine@837"),
                 fold("fold@837"),
                 dead("dead@837"),
@@ -1159,15 +1159,6 @@ pub fn recorded(
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
     manager.add(rotate::Rotate { proven: true, copy: false });
-    // After the loop passes: the cycles it makes between the cases are no
-    // natural loop. LLVM's DFAJumpThreading, gcc's FSM threader.
-    if applied.options.wanted("jumpthread") {
-        manager.add(jumpthread::JumpThread {
-            size: applied.options.prefers_size(),
-            correlated: applied.options.copy_headers,
-            states: applied.options.expensive,
-        });
-    }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if !guarded && applied.options.wanted("hoist") && !llvm_motion(applied) {
