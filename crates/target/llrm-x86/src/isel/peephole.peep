@@ -88,9 +88,10 @@ rule zeroed_load
     rewrite @0: xor d, d, d ; @0: mov low_byte(d), src
 
 // `and r, 255` and `and r, 65535` with the flags dead are the zero extension of
-// the low byte or word, as X86's patterns select them (X86InstrCompiler.td
-// `(and GR32:$src, 0xff)` and `0xffff`): the combiner makes `zext(trunc x)`
-// that `and`. Where the code is not for size, only if the target prices the
+// the low byte or word, as X86's patterns select them (`(and GR32:$src1, 0xffff)`
+// and `0xff`, X86InstrCompiler.td L1772 and L1775 at d1106deb71cc; the GR16 `0xff`
+// pattern at L1778 is not translated): the combiner makes `zext(trunc x)` that
+// `and`. Where the code is not for size, only if the target prices the
 // extension no higher.
 rule byte_mask
     match   and d:reg, d, #255
