@@ -376,6 +376,12 @@ mod tests {
         ) -> Result<llrm_target::routines::Divide, String> {
             self.0.divide_routine(signed, wide_divisor)
         }
+        fn float_width(
+            &self,
+            bytes: u32,
+        ) -> u32 {
+            self.0.float_width(bytes)
+        }
         fn register_op_bytes(
             &self,
             width: i64,

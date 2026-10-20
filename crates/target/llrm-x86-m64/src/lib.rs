@@ -64,6 +64,14 @@ impl llrm_target::Target for M64 {
         llrm_x86::instructions::dialect()
     }
 
+    /// SSE holds a float at its own size.
+    fn float_width(
+        &self,
+        bytes: u32,
+    ) -> u32 {
+        bytes
+    }
+
     fn register_op_bytes(
         &self,
         width: i64,

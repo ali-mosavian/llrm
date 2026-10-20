@@ -253,6 +253,13 @@ impl llrm_target::Target for M32 {
         llrm_x86::helpers::divide(signed, wide_divisor, 32).map_err(|refused| refused.message)
     }
 
+    fn float_width(
+        &self,
+        _: u32,
+    ) -> u32 {
+        llrm_x86::X87_WIDTH
+    }
+
     fn register_op_bytes(
         &self,
         width: i64,

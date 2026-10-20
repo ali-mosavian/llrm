@@ -39,7 +39,10 @@
 //! The graph above is one `add i8`; see `trunc_inst_combine_tests.rs`.
 //!
 //! # Runs
-//! Not in the pipeline yet.
+//! As `aggressive-instcombine@678`, after `instcombine` and before `tailrec`
+//! (`PassBuilderPipelines.cpp#L678`); not at -O1, whose simplification pipeline
+//! has none. The folds of `foldUnusualPatterns` are not translated yet: the
+//! slot is Partial.
 //!
 //! # Needs
 //! The dominator tree, to leave unreachable blocks alone.

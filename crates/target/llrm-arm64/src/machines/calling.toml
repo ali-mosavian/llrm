@@ -1,0 +1,54 @@
+# The arm64 ABI a program has without -mabi=: AAPCS64 (Darwin's variant differs in variadic arguments, which go
+# on the stack, and in packing small stack arguments; both are the platform's, not the register convention's).
+default = "aapcs64"
+private = "aapcs64"
+
+[abi.aapcs64]
+convention = "aapcs64"
+
+# aapcs64: AArch64CallingConvention.td's CC_AArch64_AAPCS and RetCC_AArch64_AAPCS. Integer and pointer arguments
+# take x0-x7, floating point v0-v7, then the stack in 8-byte slots, pushed in order and removed by the caller;
+# the stack is 16-byte aligned at every call. x19-x28 and x29 (the frame) are kept, and d8-d15 (low halves).
+# A result is in x0 (x0:x1 for 16 bytes) or v0. A large aggregate is returned through the pointer in x8.
+[aapcs64]
+cc = "cdecl"
+slot_bytes = 8
+stack_alignment = 16
+aligned_calls = true
+order = "left-to-right"
+cleanup = "caller"
+argument_registers = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]
+sized_arguments = true
+skip_memory = true
+backfill = false
+return_address_bytes = 0
+first_argument_offset = 16
+frame = "x29"
+frame_optional = false
+stack = "sp"
+preserved = [["x19", "x19"], ["x20", "x20"], ["x21", "x21"], ["x22", "x22"], ["x23", "x23"], ["x24", "x24"],
+             ["x25", "x25"], ["x26", "x26"], ["x27", "x27"], ["x28", "x28"], ["x29", "x29"]]
+clobbered = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
+             "x16", "x17", "flags"]
+entry_state = []
+aggregate = "hidden-pointer"
+aggregate_in_register_bytes = []
+aggregate_pointer = "register"
+aggregate_pointer_register = "x8"
+aggregate_pointer_returned = "x0"
+aggregate_pointer_popped_by = "caller"
+promotion = "slot"
+wide_slots = 1
+variadic_float = "double"
+
+[aapcs64.symbol]
+elf = "*"
+macho = "_*"
+
+[aapcs64.result]
+1 = ["x0"]
+2 = ["x0"]
+4 = ["x0"]
+8 = ["x0"]
+16 = ["x0", "x1"]
+pointer = ["x0"]
