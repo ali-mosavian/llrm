@@ -6156,6 +6156,23 @@ fn test_an_escaped_local_read_past_its_end_shares_no_slot() {
     assert_eq!(frame_bytes(&text), frame_bytes(&unmarked));
 }
 
+/// oimad failed to compile at -O1 and -O2 ("@__main: an address of no global:
+/// Expr(Cast { op: PtrToInt ... })"): the casts of a global's address into the
+/// segment space and back to an integer are one constant expression since
+/// #2890, and `ptrtoint` of a segment-space pointer is the global's segment
+/// word.
+#[test]
+fn test_ptrtoint_of_a_segment_space_global_is_its_segment_word() {
+    let text = "@g = internal global [8 x i8] zeroinitializer
+define i32 @f() addrspace(1) {
+  %a = sext i16 ptrtoint (ptr addrspace(2) addrspacecast (ptr @g to ptr addrspace(2)) to i16) to i32
+  ret i32 %a
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("mov ") && line.contains("DGROUP")), "{got:?}");
+}
+
 /// Constant expressions as operands, the shapes `simplifyCastInst` and the GEP
 /// fold make since #2614/#2610: each was refused, "an address of no global".
 /// `ptrtoint` of a global (and of a GEP off one) is its link-time address; a

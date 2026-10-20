@@ -3439,6 +3439,28 @@ impl Selector<'_, '_, '_> {
                 return Ok(joined);
             }
         }
+        // `ptrtoint` of a segment-space pointer constant: the segment word of
+        // the global it addresses, a link-time address (the data initializer's
+        // `SegmentWord`). A near global's segment is DGROUP.
+        if let Operand::Constant(id) = operand
+            && let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::PtrToInt, value }) =
+                self.module.context.get(id).kind.clone()
+            && let Type::Pointer(space) = self.types().get(self.module.context.get(value).ty).clone()
+            && self.spaces.is_segment(Some(space))
+            && width == 2
+        {
+            let (global, _) = crate::backend::globals::target(self.module, &self.layout, value)
+                .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
+            let (space, index) = if self.module.global(global).address_space == self.spaces.near {
+                crate::hir::symbols::DGROUP
+            } else {
+                (Space::Group, crate::backend::globals::segment_of(global))
+            };
+            let held = Held { value: self.fresh(), width };
+            let symbol = Loc::Imm(Imm { value: 0, width, address: Some(Addr { index, ..Addr::new(space, 0) }) });
+            out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![symbol])));
+            return Ok(held);
+        }
         let operand = self.through_ptrtoint(operand);
         let pointer = match operand {
             Operand::Value(value) => self.folded(value)?,
