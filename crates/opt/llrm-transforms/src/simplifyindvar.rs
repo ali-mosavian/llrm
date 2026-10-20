@@ -167,6 +167,34 @@ fn nearest_common_dominator(
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp#L703
+/// `simplifyLoopIVs(L, ...)` (`SimplifyIndVar.cpp:2020`) for the loop headed by
+/// `header`: the users of each of its header phis simplified, without widening;
+/// whether any was. What the unroller runs after a peel, where the residual
+/// loop's steps and exit test get the no-wrap flags SCEV proves.
+pub fn simplified_loop_ivs(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    outer: &Outer,
+    header: BlockId,
+) -> bool {
+    let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
+    let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
+    let mut rewriter = llrm_analysis::scev::expander::Expander::new("indvars");
+    rewriter.set_canonical_mode(false);
+    let mut dead: Vec<InstId> = Vec::new();
+    let mut e = Edit { context, layout, function, declared, outer, se, env, rewriter: &mut rewriter, dead: &mut dead };
+    let phis: Vec<InstId> =
+        e.function.iter_block(header).take_while(|inst| e.function.instruction(*inst).opcode == Opcode::Phi).collect();
+    let mut changed = false;
+    for phi in phis {
+        let mut info = WideIvInfo { narrow_iv: phi, widest_native_type: None, is_signed: false };
+        changed |= simplify_users_of_iv(&mut e, header, phi, &mut info);
+    }
+    changed
+}
+
 /// `IndVarSimplify::simplifyAndExtend` over every loop of `function`, the
 /// innermost first, with the IV widening (`WidenIV`) interleaved with the
 /// simplification; whether anything changed. Instructions left dead are

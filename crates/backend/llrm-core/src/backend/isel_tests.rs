@@ -6173,6 +6173,22 @@ define i32 @f() addrspace(1) {
     assert!(got.iter().any(|line| line.starts_with("mov ") && line.contains("DGROUP")), "{got:?}");
 }
 
+/// A segment word as a dword: zero-extended, where the word alone had no
+/// reading and the function was refused ("an address of no global").
+#[test]
+fn test_ptrtoint_of_a_segment_space_global_to_a_dword_is_the_zero_extended_word() {
+    let text = "@g = internal global [8 x i8] zeroinitializer
+define i32 @f() addrspace(1) {
+  ret i32 ptrtoint (ptr addrspace(2) addrspacecast (ptr @g to ptr addrspace(2)) to i32)
+}
+";
+    let got = listing(text, "f");
+    assert!(
+        got.iter().any(|line| line.contains("DGROUP")) && got.iter().any(|line| line.starts_with("movzx ")),
+        "{got:?}"
+    );
+}
+
 /// Constant expressions as operands, the shapes `simplifyCastInst` and the GEP
 /// fold make since #2614/#2610: each was refused, "an address of no global".
 /// `ptrtoint` of a global (and of a GEP off one) is its link-time address; a

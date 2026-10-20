@@ -87,7 +87,10 @@ e:
 
 /// A way into the join that is not a jump stays out of it: the jumps get a
 /// block of their own to sink into, when what is sunk cannot run
-/// speculatively (a store).
+/// speculatively (a store). The two ways then fold into one branch
+/// (`SimplifyCondBranchToCondBranch`) and the sunk block's phi of one input is
+/// gone, as `opt -passes='simplifycfg<sink-common-insts>'` has it: `%brmerge`
+/// select, `%p.mux` select, `store i16 1, ptr %p.mux` in `end.sink.split`.
 #[test]
 fn test_a_conditional_way_in_makes_the_jumps_a_block_to_sink_into() {
     check(
@@ -112,17 +115,15 @@ end:
 ",
         "define void @f(ptr %p, ptr %q, i1 %c, i1 %d) {
 b0:
-  br i1 %c, label %0, label %b2
-
-b2:
-  br i1 %d, label %0, label %end
+  %or.cond = select i1 %c, i1 true, i1 %d
+  %mux = select i1 %c, ptr %p, ptr %q
+  br i1 %or.cond, label %0, label %end
 
 end:
   ret void
 
 0:
-  %sink = phi ptr [ %p, %b0 ], [ %q, %b2 ]
-  store i16 1, ptr %sink
+  store i16 1, ptr %mux
   br label %end
 }
 ",
