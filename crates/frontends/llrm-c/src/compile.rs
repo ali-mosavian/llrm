@@ -2877,6 +2877,8 @@ mod tests {
         assert_eq!(super::main(&argv), 0);
         let asm = std::fs::read_to_string(out).unwrap();
         assert!(asm.lines().any(|line| line.trim().starts_with("movzx e")), "{asm}");
+    }
+
     /// Ten floats live across a loop spill x87 values. Every spill cell was a
     /// qword, so a float reloaded from it kept double precision and nbody_single
     /// printed 86015, the pin 86016. The cell is the float's own dword, as the
