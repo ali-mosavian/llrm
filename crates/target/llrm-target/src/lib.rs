@@ -9,6 +9,7 @@ pub mod object;
 pub mod opcosts;
 pub mod os;
 pub mod registers;
+pub mod routines;
 pub mod runtime;
 pub mod timings;
 
@@ -422,6 +423,48 @@ pub trait Target {
 
     /// The operand size an instruction has without a size prefix, in bytes.
     fn operand_bytes(&self) -> i64;
+
+    /// The inline routine that fills `cell`-byte cells through a huge pointer.
+    fn huge_fill_routine(
+        &self,
+        cell: u32,
+    ) -> Result<routines::HugeString, String>;
+
+    /// The inline routine that copies through huge pointers, upward or, `down`,
+    /// from the last byte.
+    fn huge_copy_routine(
+        &self,
+        down: bool,
+    ) -> Result<routines::HugeString, String>;
+
+    /// The inline 64-bit divide, signed or not, by a divisor of two dwords or
+    /// one.
+    fn divide_routine(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+    ) -> Result<routines::Divide, String>;
+
+    /// Bytes of a two-register operation on `width`-byte registers.
+    fn register_op_bytes(
+        &self,
+        width: i64,
+    ) -> i64;
+
+    /// Bytes of a shift of a `width`-byte register by `count`.
+    fn shift_op_bytes(
+        &self,
+        count: i64,
+        width: i64,
+    ) -> i64;
+
+    /// Bytes of a multiply of a `width`-byte register by the immediate
+    /// `number`.
+    fn multiply_immediate_bytes(
+        &self,
+        number: i64,
+        width: i64,
+    ) -> i64;
 
     /// The CPU a compile is priced for where none is asked.
     fn default_cpu(&self) -> &'static str;

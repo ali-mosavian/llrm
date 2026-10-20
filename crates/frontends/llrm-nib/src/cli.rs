@@ -357,6 +357,45 @@ mod tests {
         fn operand_bytes(&self) -> i64 {
             self.0.operand_bytes()
         }
+        fn huge_fill_routine(
+            &self,
+            cell: u32,
+        ) -> Result<llrm_target::routines::HugeString, String> {
+            self.0.huge_fill_routine(cell)
+        }
+        fn huge_copy_routine(
+            &self,
+            down: bool,
+        ) -> Result<llrm_target::routines::HugeString, String> {
+            self.0.huge_copy_routine(down)
+        }
+        fn divide_routine(
+            &self,
+            signed: bool,
+            wide_divisor: bool,
+        ) -> Result<llrm_target::routines::Divide, String> {
+            self.0.divide_routine(signed, wide_divisor)
+        }
+        fn register_op_bytes(
+            &self,
+            width: i64,
+        ) -> i64 {
+            self.0.register_op_bytes(width)
+        }
+        fn shift_op_bytes(
+            &self,
+            count: i64,
+            width: i64,
+        ) -> i64 {
+            self.0.shift_op_bytes(count, width)
+        }
+        fn multiply_immediate_bytes(
+            &self,
+            number: i64,
+            width: i64,
+        ) -> i64 {
+            self.0.multiply_immediate_bytes(number, width)
+        }
         fn default_cpu(&self) -> &'static str {
             self.0.default_cpu()
         }

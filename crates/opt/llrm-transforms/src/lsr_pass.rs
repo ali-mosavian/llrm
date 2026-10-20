@@ -260,6 +260,7 @@ pub fn reduced_with(
     };
     let mut changed = false;
     for header in headers {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LsrLoops);
         // The first look may find exit tests to edit, and the plan may split
         // edges: each is followed by an analysis of the loop as it is then.
         let mut marked: Option<Vec<InstId>> = None;
@@ -283,16 +284,21 @@ pub fn reduced_with(
                 ) {
                     Outcome::Planned(None) => break,
                     Outcome::Edit(edits) => {
+                        llrm_mir::counts::bump(llrm_mir::counts::Event::LsrPrepared);
                         marked = Some(lsr_prepare::apply(function, &context.types, header, &edits));
                         changed = true;
                         continue;
                     }
                     Outcome::Shadow(edit) => {
+                        llrm_mir::counts::bump(llrm_mir::counts::Event::LsrPrepared);
                         lsr_prepare::apply_shadow(function, context, &edit);
                         changed = true;
                         continue;
                     }
-                    Outcome::Planned(Some(plan)) => plan,
+                    Outcome::Planned(Some(plan)) => {
+                        llrm_mir::counts::bump(llrm_mir::counts::Event::LsrSolutions);
+                        plan
+                    }
                 };
                 let mut lp_blocks = llrm_mir::dense::IdSet::<BlockId>::new();
                 if let Some(lp) = env.loops.get_loop_for(header) {
@@ -327,6 +333,9 @@ pub fn reduced_with(
                     let mut dead = std::mem::take(&mut run.dead);
                     run.move_increments();
                     changed |= run.changed;
+                    if run.changed {
+                        llrm_mir::counts::bump(llrm_mir::counts::Event::LsrRewritten);
+                    }
                     // `DeleteDeadPHIs`: the phis nothing reads any more, those
                     // of a cycle included.
                     dead.extend(
