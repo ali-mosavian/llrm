@@ -1175,3 +1175,23 @@ fn a_globals_intrinsic_follows_its_name_through_renames_and_copies() {
     module.globals[id.0 as usize].name = GlobalName::default();
     assert_eq!(intrinsic(&module), None);
 }
+
+/// LLVM's `+inf`, `-qnan`, `+nan(0x..)` and `snan(0x..)` spellings were
+/// refused (`unexpected character +`): 84 of the 619 floating-point test files
+/// of Transforms/InstSimplify and Transforms/InstCombine stopped at the first
+/// (#3180). Each reads as the double it names.
+#[test]
+fn the_special_floating_point_spellings_read_as_their_doubles() {
+    let text = "define double @f(double %x) {\nentry:\n  %a = fadd double %x, +inf\n  %b = fadd double %a, -inf\n  %c = fadd double %b, +qnan\n  %d = fadd double %c, -qnan\n  %e = fadd double %d, +nan(0x1)\n  %f = fadd double %e, +snan(0x1)\n  ret double %f\n}\n";
+    let printed = round(text);
+    for bits in [
+        "0x7FF0000000000000",
+        "0xFFF0000000000000",
+        "0x7FF8000000000000",
+        "0xFFF8000000000000",
+        "0x7FF8000000000001",
+        "0x7FF0000000000001",
+    ] {
+        assert!(printed.contains(bits), "{bits} is not in\n{printed}");
+    }
+}
