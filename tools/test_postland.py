@@ -141,3 +141,17 @@ def test_every_function_check_calls_exists():
     called = {node.func.id for fn in tree.body if isinstance(fn, ast.FunctionDef) and fn.name in ("check", "once", "probe") for node in ast.walk(fn) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
     builtins_ = set(dir(__builtins__)) | {"set", "sorted", "len", "dict", "str", "int", "isinstance"}
     assert not {name for name in called - defined - builtins_ if name[0].islower() and name not in ("emit",)}, called - defined
+
+
+def test_check_runs_smoke_once_and_names_its_result_in_the_covered_block(monkeypatch, tmp_path):
+    """A slice edit dropped the smoke step; the run lost it silently. check() with stubbed phases must call smoke() once and report its line."""
+    calls = []
+    monkeypatch.setattr(postland, "tree", lambda sha: tmp_path)
+    monkeypatch.setattr(postland, "dist", lambda at, sha: tmp_path)
+    monkeypatch.setattr(postland, "combine_premise", lambda *args: "premise: ok")
+    monkeypatch.setattr(postland, "run_groups", lambda at, bins, only=None: (set(), "57 groups, 863 programs, 0 failing", {}))
+    monkeypatch.setattr(postland, "unit_failures", lambda at, name=None: (set(), "llrm-c 173/0"))
+    monkeypatch.setattr(postland, "smoke", lambda at, bins, previous: (calls.append(previous) or {"smoke ratchet:x"}, "SMOKE LINE"))
+    failing, covered = postland.check("f" * 40, "e" * 40)
+    assert calls == ["e" * 40] and "smoke ratchet:x" in failing
+    assert any("SMOKE LINE" in line for line in covered)
