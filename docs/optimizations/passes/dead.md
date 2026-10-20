@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dead.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dead.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dead.rs sha256:488db39456df3adf28397e7763bd38cdf671bd305ddaac9f52a44dd6d3829aa2 -->
+<!-- src: crates/opt/llrm-transforms/src/dead.rs sha256:9436127bd215427cf3bfc144209f1079bc684b729ad6b7fd58a0fedfd7ad85a3 -->
 
 # dead
 
@@ -68,5 +68,5 @@ off the pass only, not those calls; nothing runs at -O0.
 Blocks and edges are unchanged: dominators and loops are preserved.
 
 ## See also
-[`crate::dse`](dse.md) removes dead stores; [`crate::promote`](promote.md) makes the loads that
+[`crate::deadstore`](deadstore.md) removes dead stores; [`crate::promote`](promote.md) makes the loads that
 make a store dead; `crate::loopmotion` sinks stores out of loops.
