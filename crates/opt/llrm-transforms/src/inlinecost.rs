@@ -72,11 +72,19 @@
 //! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
 //!   address of a stack slot the caller stored a constant to and whose callee
 //!   loads through that parameter, is inlined if the caller, simplified again
-//!   with the call inlined, is smaller by the target's size cost (`walk.rs`,
-//!   callers of at most 300 instructions; the sites of a private callee that
-//!   dies with its last call are tried together, its body credited). The pin's
-//!   cost does not follow a load through a pointer argument, so it never sees
-//!   the loop or the arithmetic fold.
+//!   with the call inlined, is smaller by the target's size cost (`walk.rs`).
+//!   The pin's cost does not follow a load through a pointer argument, so it
+//!   never sees the loop or the arithmetic fold. The gate is no shape rule: it
+//!   selects the one thing the trial can exploit (a constant reaching the
+//!   callee through memory, which the cost walk cannot follow; a constant
+//!   argument it folds itself) and the trial decides by the size it measures,
+//!   not by the shape. The sites of a private callee that dies with its last
+//!   call are tried together, its body credited. The cap of 300 caller
+//!   instructions is the compile-time bound: a trial is one more Simplify list
+//!   over the caller (QCport -Os: +4.9 to +13.5 Minstr per trial that finds
+//!   nothing); without the cap and the slot test the first cut cost +24.8% of
+//!   the corpus, with the slot test alone +5.0%, with both +0.32%; the callers
+//!   that gained are 1 to 231 instructions.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
