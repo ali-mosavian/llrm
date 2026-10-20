@@ -1,0 +1,55 @@
+# arm64 instruction selection: a MIR shape => the arm64 forms it is. Same
+# grammar as llrm-x86's family.isel; forms are in instructions/arm64.instr.
+# The gaps these close are measured in docs/architecture/arm64-patterns.md.
+
+# add(mul(a, b), c) is one madd; sub(c, mul(a, b)) one msub.
+pattern madd
+  match add.i32|i64(m=mul(a, b), c)
+  when only_reader(m)
+  cover m
+  emit madd result <- held(a), held(b), held(c)
+end
+
+pattern madd_commuted
+  match add.i32|i64(c, m=mul(a, b))
+  when only_reader(m)
+  cover m
+  emit madd result <- held(a), held(b), held(c)
+end
+
+pattern msub
+  match sub.i32|i64(c, m=mul(a, b))
+  when only_reader(m)
+  cover m
+  emit msub result <- held(a), held(b), held(c)
+end
+
+# A shifted operand folds into the arithmetic: add(a, shl(b, k:int)).
+pattern add_shifted
+  match add.i32|i64(a, s=shl(b, k:int))
+  when only_reader(s), shift_amount(k)
+  cover s
+  emit add result <- held(a), held(b), shift(0, k)
+end
+
+pattern sub_shifted
+  match sub.i32|i64(a, s=shl(b, k:int))
+  when only_reader(s), shift_amount(k)
+  cover s
+  emit sub result <- held(a), held(b), shift(0, k)
+end
+
+# Float multiply-add and negate-multiply.
+pattern fmadd
+  match fadd.float(m=fmul(a, b), c)
+  when only_reader(m), contract
+  cover m
+  emit fmadd result <- held(a), held(b), held(c)
+end
+
+pattern fnmul
+  match fneg.float(m=fmul(a, b))
+  when only_reader(m)
+  cover m
+  emit fnmul result <- held(a), held(b)
+end

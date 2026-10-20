@@ -36,7 +36,7 @@ pub fn root(
     name: &str,
     bits: u32,
 ) -> RegId {
-    let wide = bits == 32;
+    let wide = bits >= 32;
     match (name, wide) {
         ("ax", true) => RegId::EAX,
         ("bx", true) => RegId::EBX,
