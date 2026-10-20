@@ -94,6 +94,17 @@ b0:
 
 ";
 
+/// What the pipeline's `FunctionAttrs` has stated of `module`'s functions, as
+/// `Summaries` reads them.
+pub fn attributed(module: &mut Module) {
+    let layout = llrm_analysis::testing::layout(module);
+    llrm_analysis::functionattrs::infer_module(
+        module,
+        &layout,
+        llrm_mir::target::Machine::spaces(&llrm_mir::target::Neutral),
+    );
+}
+
 /// `module` through `pass` under a pass manager that requires `Summaries`
 /// where `summaries`, as LLVM's `RequireAnalysisPass`, or a bare one;
 /// printed. @f computes what it did on `inputs`.
@@ -104,6 +115,9 @@ pub fn summarized(
     inputs: &[&[i128]],
 ) -> String {
     let mut after = module.clone();
+    if summaries {
+        attributed(&mut after);
+    }
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.verify_each = true;
     if summaries {

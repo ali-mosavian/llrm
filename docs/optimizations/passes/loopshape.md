@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopshape.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopshape.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopshape.rs sha256:a2b52b3824116e378430c4d66e4d278a58129e32242034b3655914dc388b6024 -->
+<!-- src: crates/opt/llrm-transforms/src/loopshape.rs sha256:f0cf3dd6b40cc94544346b2b79f8bc59455107a5665c75c086b0a6cf518a9691 -->
 
 # loopshape
 
@@ -21,7 +21,7 @@ nothing: no memory access, as far as a header's own work goes.
 an instruction outside it.
 
 ## Example
-None: a library. [`crate::loopdistribute`](loopdistribute.md) asks all four of its one loop.
+None: a library. [`crate::versionalias`](versionalias.md) asks all four of its one loop.
 
 ## Provides
 `controls`, `quiet`, `header_quiet`, `read_outside`.
