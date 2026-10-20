@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/indvars.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/indvars.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:6d71bfac897fe12338fa83d268c1ba130ec9106e97da0f970bbf811e0d2022a1 -->
+<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:b5eff7fabcd56269f2c17d367b2e89da1b2fd6439c410627e4efb9bd8274a0bb -->
 
 # indvars
 
@@ -17,21 +17,11 @@ changed the body.
    of the loop's count where the loop is left (`rewriteLoopExitValues`,
    ScalarEvolution's exit values, from every exit of the loop, a rotated
    loop's latch included); `LLRM_NO_SCEV_EXITVALUES` turns it off.
-1. `widened`: a counter read through `zext` (or, where it is signed and
-   tested by `slt`, `sext`) to the address's index width, where `induction`
-   proves its values never pass its own (`rises_unsigned`, `rises_signed`),
-   becomes a counter of that width. C's `unsigned short i` reads `a[zext
-   i]`, and `short k` reads `a[sext k]`: a conversion per trip (`inc cx;
-   movsx esi,cx; cmp cx,bx`), which hides the loop from idioms and strength
-   reduction. A signed counter of a loop of at most `unroll`'s trip limit
-   (`IndVars::unrolls`) is left for `unroll` until the run with
-   `exit_values`: one operation fewer in the rolled loop made a loop that
-   `unroll` took whole no longer fit its own size. The wide counter ends the
-   loop against the bound extended once in the preheader; an unsigned or
-   equality compare of the narrow one with a value the loop leaves alone
-   compares the wide one with that value extended
-   (`WidenIV::widenLoopCompare`); other readers of the narrow one read its
-   low part.
+1. `simplifyindvar::simplified_and_extended` (`simplifyAndExtend`): the IV
+   users simplified and a counter read through `zext` or `sext` at a wider
+   index becomes a counter of that width (`WidenIV`). C's `unsigned short i`
+   reads `a[zext i]`: a conversion per trip, which hides the loop from
+   idioms and strength reduction.
 2. `congruentiv::replaced` (`SCEVExpander::replaceCongruentIVs`; the older
    `congruent` under `LLRM_NO_SCEV_CONGRUENT`): header phis SCEV proves
    equal, a narrow one a truncation of a wide one included, are one, and
@@ -129,13 +119,13 @@ From unit test `a_counter_extended_to_the_index_width_is_that_wide` in
 `indvars_tests.rs`.
 
 ## Runs
-In the body pipeline after `promote`, with `exit_values: false`. With
-`-ftree-ch` (not at -Os) it runs again with `exit_values: true` after the
-loop-header copy, where the copy made a counted exit's test the one that
-leaves (a number is a `mov` where the counter's register already holds it).
+In the body pipeline after `promote`. With `-ftree-ch` (not at -Os) it runs
+again after the loop-header copy, where the copy made a counted exit's test
+the one that leaves (a number is a `mov` where the counter's register
+already holds it).
 
 ## Needs
-`Registers`, `Bounded` (for a `sext` counter), `induction`, `liveness`,
+`Registers`, `induction`, `liveness`,
 [`crate::exitvalues`](exitvalues.md), [`crate::exitfold`](exitfold.md), [`crate::exitsink`](exitsink.md),
 [`crate::profit`](profit.md).
 
