@@ -1232,12 +1232,12 @@ fn test_a_body_run_again_after_a_call_is_sent_to_an_equal_copy_starts_no_pass() 
     assert_eq!(retargeted(true), (2, 1), "the copy writes nothing, which the pass that read callees asked");
 }
 
-/// -O1 inlined small functions called more than once, searched allocations and
-/// made the spiller's second route: 34% of d_faces' -O1 compile (5,643 -> 3,718
-/// Minstr). clang's -O1 runs the always-inliner alone
-/// (`OnlyAlwaysInlining`), so a function called once stays a call too.
+/// -O1 gave small functions called more than once no inline (gcc's -O1) where
+/// the pin's -O1 inlines them as -O2 does (d_faces: 11 defines in, 6 out; ours
+/// 11), and searched allocations and made the spiller's second route (34% of
+/// d_faces' -O1 compile).
 #[test]
-fn o1_inlines_nothing_and_has_no_allocation_search_or_second_route() {
+fn o1_inlines_as_the_pin_does_and_has_no_allocation_search_or_second_route() {
     let text = "
 define internal i16 @twice(i16 %x) {
 entry:
@@ -1264,14 +1264,10 @@ entry:
     let o2 = pipeline::Options::standard();
     let (kept, _) = pipelined(text, o1);
     let kept = crate::testing::printed(&kept);
-    assert_eq!(
-        kept.lines().filter(|line| line.contains("call ") && line.contains("@twice")).count(),
-        2,
-        "-O1 inlined a function called twice:\n{kept}"
-    );
-    assert!(kept.contains("@once"), "@once is inlined at -O1, which clang's always-inliner does not:\n{kept}");
     let (gone, _) = pipelined(text, o2);
-    assert!(!crate::testing::printed(&gone).contains("@twice"), "premise: -O2 inlines it");
+    let defines = |text: &str| text.lines().filter(|line| line.starts_with("define ")).count();
+    assert_eq!(defines(&kept), defines(&crate::testing::printed(&gone)), "-O1 keeps what -O2 inlines:\n{kept}");
+    assert_eq!(defines(&kept), 1, "-O1 leaves {} defines, the pin's -O1 only @main:\n{kept}", defines(&kept));
 }
 
 /// tile.c's inner sum is 40 trips of one load and one add. LLVM's full unroll
