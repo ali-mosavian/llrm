@@ -47,7 +47,7 @@ fn main() {
                     llrm_mir::module::Operand::Value(value) => function.value(*value).name.clone().unwrap_or_default(),
                     llrm_mir::module::Operand::Constant(constant) => match module.context.get(*constant).kind {
                         llrm_mir::context::ConstantKind::Global(g) => {
-                            module.globals[g.0 as usize].name.clone().unwrap_or_default()
+                            module.globals[g.0 as usize].name.owned().unwrap_or_default()
                         }
                         _ => "constant".to_owned(),
                     },

@@ -254,7 +254,7 @@ impl State<'_> {
         let callee = llrm_mir::memory::callee(self.context, self.function, inst)?;
         let global = self.outer.globals.get(callee.0 as usize)?;
         let name = global.name.as_deref()?;
-        let kind = match Intrinsic::named(name)? {
+        let kind = match global.intrinsic()? {
             Intrinsic::MemSet => Kind3::Set,
             Intrinsic::MemCpy => Kind3::Copy,
             Intrinsic::MemMove => Kind3::Move,
@@ -468,8 +468,7 @@ impl State<'_> {
         inst: InstId,
     ) -> Option<Intrinsic> {
         let callee = llrm_mir::memory::callee(self.context, self.function, inst)?;
-        let name = self.outer.globals.get(callee.0 as usize)?.name.as_deref()?;
-        Intrinsic::named(name)
+        self.outer.globals.get(callee.0 as usize)?.intrinsic()
     }
 
     /// `overreadUndefContents`: whether the bytes `memcpy` reads past what
@@ -1056,7 +1055,7 @@ impl State<'_> {
         // Optimizing memmove -> memcpy: the call names the memcpy intrinsic.
         let Opcode::Call(info) = self.function.instruction(m.inst).opcode.clone() else { return false };
         let Some(callee) = llrm_mir::memory::callee(self.context, self.function, m.inst) else { return false };
-        let name = self.outer.globals[callee.0 as usize].name.clone().unwrap_or_default();
+        let name = self.outer.globals[callee.0 as usize].name.owned().unwrap_or_default();
         let renamed = name.replacen("llvm.memmove.", "llvm.memcpy.", 1);
         let function_type = info.function_type;
         let id = self.declared.declare(&renamed, function_type);

@@ -37,7 +37,7 @@ fn cst(
         Some(c) if c.is_null_value() => "null".to_owned(),
         Some(LatticeConstant::Other { kind: ConstantKind::Global(global), .. }) => {
             let _ = context;
-            format!("@{}", globals[global.0 as usize].name.clone().unwrap_or_default())
+            format!("@{}", globals[global.0 as usize].name.owned().unwrap_or_default())
         }
         Some(_) => "?".to_owned(),
     }
@@ -56,7 +56,7 @@ pub fn dump(text: &str) -> Result<String, String> {
             if function.is_declaration() {
                 continue;
             }
-            let name = module.globals[at].name.clone().unwrap_or_default();
+            let name = module.globals[at].name.owned().unwrap_or_default();
             let dt = DomTree::of(function);
             let assumptions = AssumptionCache::new(&module, function);
             let mut lvi = LazyValueInfo::new();

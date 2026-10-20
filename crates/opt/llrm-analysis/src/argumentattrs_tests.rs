@@ -13,7 +13,7 @@ fn stated(
     let mut module = parsed(text);
     let members: BTreeSet<GlobalId> = names.iter().map(|one| module.named(one).expect("a global")).collect();
     let changed = add_argument_attrs(&mut module, &members);
-    let names = changed.into_iter().map(|id| module.global(id).name.clone().expect("a name")).collect();
+    let names = changed.into_iter().map(|id| module.global(id).name.owned().expect("a name")).collect();
     (module, names)
 }
 
