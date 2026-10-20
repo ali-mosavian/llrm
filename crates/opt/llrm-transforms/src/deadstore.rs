@@ -1721,3 +1721,7 @@ fn post_order_of(function: &Function) -> Vec<BlockId> {
 #[cfg(test)]
 #[path = "deadstore_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "dse_tests.rs"]
+mod dse_tests;
