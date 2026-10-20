@@ -725,3 +725,22 @@ fn a_loop_nothing_changes_has_its_trip_count_worked_out_once_in_a_run() {
     // Four times the loops, four times the counts (the 1x/4x slope).
     assert_eq!(computed_counts(16), 16);
 }
+
+/// The scans for a loop's simplify form made while `indvars` runs over `loops`
+/// loops that none of its steps changes.
+fn simplify_form_scans(loops: usize) -> usize {
+    let mut module = parsed(&counted_loops(loops));
+    let before = llrm_mir::loopinfo::simplify_form_scans();
+    managed(&mut module, IndVars { lftr: true });
+    llrm_mir::loopinfo::simplify_form_scans() - before
+}
+
+/// Each of the seven steps looked at each loop's preheader, latch and exits
+/// again: the walk of the loop's blocks for the exits was 426 K of d_faces
+/// -O2's 10.3 M for `indvars`, 126 walks for 18 loops where the pin's 54 cost
+/// 69 K. The form is worked out once for a loop now, whatever the steps.
+#[test]
+fn a_loops_simplify_form_is_worked_out_once_in_a_run() {
+    assert_eq!(simplify_form_scans(4), 4);
+    assert_eq!(simplify_form_scans(16), 16);
+}

@@ -116,3 +116,19 @@ fn test_a_constant_exit_value_is_zero_trips_or_infinite() {
         assert_eq!(limit.exact_not_taken, se.get_could_not_compute(), "a constant other than zero loops forever");
     });
 }
+
+/// `howFarToZero` took the guards of the loop once for the whole query, as the
+/// pin does (`LoopGuards Guards = LoopGuards::collect(L, *this)`), and applied
+/// them to each expression. Ours collected them again for each of the five
+/// expressions: 226 collections over d_faces -O2's LSR, 9 M of its 40 M
+/// instructions, where the pin's whole `howFarToZero` costs 0.6 M.
+#[test]
+fn test_how_far_to_zero_collects_the_loop_guards_once() {
+    with_loop(|se, cx, header| {
+        let v = chain(se, cx, header, &[7, 3]);
+        let before = super::guards::collections();
+        let limit = se.how_far_to_zero(cx, v, header, true);
+        assert_ne!(limit.exact_not_taken, se.get_could_not_compute(), "the query reaches the guards");
+        assert_eq!(super::guards::collections() - before, 1);
+    });
+}
