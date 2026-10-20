@@ -230,6 +230,7 @@ impl FunctionPass for JumpThread {
         if !threaded(unit.context, unit.layout, unit.function, &outer, self.size, self.correlated, self.states) {
             return PreservedAnalyses::all();
         }
+        llrm_mir::passes::check_phi_arity("jumpthread (threading)", unit.function);
         // What the copies know of their state: a product by a constant, a
         // compare of one. Only where something was copied.
         analyses.invalidate(unit.function, &PreservedAnalyses::none());
@@ -239,7 +240,7 @@ impl FunctionPass for JumpThread {
             &mut crate::decide::Decide,
             &mut crate::dead::Dead,
         ] {
-            let kept = pass.run(unit, analyses);
+            let kept = llrm_mir::passes::run_checked(pass, unit, analyses);
             analyses.invalidate(unit.function, &kept);
         }
         PreservedAnalyses::none()

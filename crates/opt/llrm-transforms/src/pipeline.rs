@@ -576,11 +576,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // `LLRM_NO_MEM2REG` keeps the write-through stand-in instead of the
         // translated PromoteMemToReg.
         if applied.options.mem2reg { Box::new(mem2reg::Mem2Reg) } else { Box::new(promote::Promote) },
-        Box::new(indvars::IndVars {
-            exit_values: false,
-            unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
-            lftr: indvars::lftr_default(),
-        }),
+        Box::new(indvars::IndVars { lftr: indvars::lftr_default() }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size(), llvm: false }),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
@@ -686,7 +682,7 @@ impl FunctionPass for Together {
     ) -> PreservedAnalyses {
         let mut changed = false;
         for part in &mut self.parts {
-            let preserved = part.run(unit, analyses);
+            let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
             if !preserved.are_all_preserved() {
                 changed = true;
                 analyses.invalidate(unit.function, &preserved);
@@ -870,14 +866,7 @@ pub(crate) fn llvm_order(
             list.extend([
                 slot("loopidiom@737", Box::new(crate::loopidiom::pass::LoopIdiom::new())),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
-                slot(
-                    "indvars@738",
-                    Box::new(indvars::IndVars {
-                        exit_values: false,
-                        unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
-                        lftr: indvars::lftr_default(),
-                    }),
-                ),
+                slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default() })),
                 slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
                 slot(
                     "unroll@753",
@@ -1221,7 +1210,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(algebraic::Algebraic { size: false, llvm: false }));
     // A counted exit's values are numbers where the copy made its test the one
     // that leaves.
-    passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None, lftr: indvars::lftr_default() }));
+    passes.push(Box::new(indvars::IndVars { lftr: indvars::lftr_default() }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
         passes.push(Box::new(crate::licm::Licm { apply: true, speculate: true }));
@@ -1918,7 +1907,8 @@ impl Run {
             (llrm_support::debug::work(), llrm_support::debug::analysed_work(), placed_instructions(unit.function))
         });
         let running = llrm_mir::counts::pass_run_over(pass.name(), unit.function);
-        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses));
+        let preserved =
+            llrm_mir::passes::spanned(pass.name(), || llrm_mir::passes::run_checked(&mut *pass, unit, analyses));
         drop(running);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
@@ -2061,8 +2051,12 @@ impl Run {
 #[path = "pipeline_tests.rs"]
 mod pipeline_tests;
 
-/// The seed of `LLRM_CHECK_ORDER`, where it is a number.
+/// The seed of `LLRM_CHECK_ORDER`, where it is on and a number.
 fn order_seed() -> Option<u64> {
     static SEED: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
-    *SEED.get_or_init(|| std::env::var("LLRM_CHECK_ORDER").ok().and_then(|value| value.parse().ok()))
+    *SEED.get_or_init(|| {
+        llrm_support::env_set("LLRM_CHECK_ORDER")
+            .then(|| std::env::var("LLRM_CHECK_ORDER").ok().and_then(|value| value.parse().ok()))
+            .flatten()
+    })
 }

@@ -14,6 +14,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import envflag  # noqa: E402
+
 
 class SourceTests(unittest.TestCase):
     def test_a_source_for_bc_ends_its_lines_with_cr_lf(self):
@@ -98,7 +101,7 @@ class NibCutTests(unittest.TestCase):
         not a skip."""
         missing = [name for name in ("jwlink", "llrm-nib") if not (dosbatch.BIN / name).exists()]
         if missing:
-            self.assertFalse(os.environ.get("LLRM_REQUIRE_JWLINK"), f"LLRM_REQUIRE_JWLINK is set and {missing} is missing")
+            self.assertFalse(envflag.flag("LLRM_REQUIRE_JWLINK"), f"LLRM_REQUIRE_JWLINK is set and {missing} is missing")
             print(f"SKIPPED: needs {missing}", file=sys.stderr)
             self.skipTest(f"needs {missing}")
         with tempfile.TemporaryDirectory() as work:

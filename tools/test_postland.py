@@ -141,3 +141,69 @@ def test_every_function_check_calls_exists():
     called = {node.func.id for fn in tree.body if isinstance(fn, ast.FunctionDef) and fn.name in ("check", "once", "probe") for node in ast.walk(fn) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
     builtins_ = set(dir(__builtins__)) | {"set", "sorted", "len", "dict", "str", "int", "isinstance"}
     assert not {name for name in called - defined - builtins_ if name[0].islower() and name not in ("emit",)}, called - defined
+
+
+def test_check_runs_smoke_once_and_names_its_result_in_the_covered_block(monkeypatch, tmp_path):
+    """A slice edit dropped the smoke step; the run lost it silently. check() with stubbed phases must call smoke() once and report its line."""
+    calls = []
+    monkeypatch.setattr(postland, "tree", lambda sha: tmp_path)
+    monkeypatch.setattr(postland, "dist", lambda at, sha: tmp_path)
+    monkeypatch.setattr(postland, "combine_premise", lambda *args: "premise: ok")
+    monkeypatch.setattr(postland, "run_groups", lambda at, bins, only=None: (set(), "57 groups, 863 programs, 0 failing", {}))
+    monkeypatch.setattr(postland, "unit_failures", lambda at, name=None: (set(), "llrm-c 173/0"))
+    monkeypatch.setattr(postland, "smoke", lambda at, bins, previous: (calls.append(previous) or {"smoke ratchet:x"}, "SMOKE LINE"))
+    failing, covered = postland.check("f" * 40, "e" * 40)
+    assert calls == ["e" * 40] and "smoke ratchet:x" in failing
+    assert any("SMOKE LINE" in line for line in covered)
+
+
+def test_a_culprit_naming_an_open_pr_is_rejected_and_a_merged_one_stands():
+    """watcom_words was blamed on #2892, an open unmerged PR: its change is not on the head, so the bisect was wrong."""
+    assert postland.verified_pr(2892, lambda pr: "OPEN") == (None, "#2892 is OPEN, not merged: rejected")
+    assert postland.verified_pr(3026, lambda pr: "MERGED") == (3026, "")
+    assert postland.verified_pr(None)[0] is None
+
+
+def test_a_probe_commit_that_does_not_build_stops_the_bisect_instead_of_reading_as_passing(monkeypatch, tmp_path):
+    monkeypatch.setattr(postland, "tree", lambda sha: tmp_path)
+    monkeypatch.setattr(postland, "unit_failures", lambda at, name=None: ({postland.NAMELESS}, ""))
+    postland.UNIT_SETS.clear()
+    import pytest
+
+    with pytest.raises(postland.Inconclusive):
+        postland.probe("unit a::t", "c" * 40)
+
+
+def test_a_smoke_failure_has_an_honest_repro_and_is_not_bisected_as_a_cargo_package():
+    """The ratchet rows read `cargo test -p ratchet:facts_rewrite`, a command that cannot run."""
+    assert "parity_smoke" in postland.repro("smoke ratchet:facts_rewrite") and "-p ratchet" not in postland.repro("smoke ratchet:facts_rewrite")
+    import pytest
+
+    with pytest.raises(postland.Inconclusive):
+        postland.probe("smoke ratchet:x", "c" * 40)
+
+
+def test_a_nameless_failure_is_retried_once_before_a_commit_is_called_unbuildable(monkeypatch, tmp_path):
+    """The first workspace run at 2abaf530f failed nameless under load, its rerun named 62 failures; 55 bisects read 'does not build'."""
+    answers = iter([({postland.NAMELESS}, ""), ({"unit a::t"}, "")])
+    monkeypatch.setattr(postland, "tree", lambda sha: tmp_path)
+    monkeypatch.setattr(postland, "unit_failures", lambda at, name=None: next(answers))
+    postland.UNIT_SETS.clear()
+    assert postland.probe("unit a::t", "c" * 40) is True
+
+
+def test_a_nameless_run_leaves_its_output_tail_and_the_load_in_a_log(monkeypatch, tmp_path):
+    """The retry hid why the first run failed; the tail of its output and the load average are kept."""
+    monkeypatch.setattr(postland, "HOME", tmp_path)
+    monkeypatch.setattr(postland, "tree", lambda sha: tmp_path)
+    answers = iter([({postland.NAMELESS}, ""), (set(), "")])
+
+    def fake(at, name=None):
+        postland.LAST_OUTPUT["text"] = "error: killed by signal 9"
+        return next(answers)
+
+    monkeypatch.setattr(postland, "unit_failures", fake)
+    postland.UNIT_SETS.clear()
+    postland.probe("unit a::t", "d" * 40)
+    log = (tmp_path / ("nameless-" + "d" * 9 + ".log")).read_text()
+    assert "load" in log and "killed by signal 9" in log

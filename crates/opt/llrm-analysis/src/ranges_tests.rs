@@ -1292,7 +1292,7 @@ fn test_an_edge_sets_the_intervals_it_narrows_and_copies_none_of_the_rest() {
 #[test]
 fn test_the_edges_above_a_loop_are_narrowed_once_not_per_block_scoped() {
     // The check works the edges out again to compare, and is counted.
-    if std::env::var_os("LLRM_CHECK_SCOPES").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_SCOPES") {
         return;
     }
     let loops = 60;
@@ -1324,7 +1324,7 @@ fn test_the_edges_above_a_loop_are_narrowed_once_not_per_block_scoped() {
 #[test]
 fn test_a_block_works_out_only_the_operations_its_edges_reach() {
     // The check works every sweep out again to compare, and is counted.
-    if std::env::var_os("LLRM_CHECK_SCOPES").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_SCOPES") {
         return;
     }
     let blocks = 40;
@@ -1357,7 +1357,7 @@ fn test_a_block_works_out_only_the_operations_its_edges_reach() {
 #[test]
 fn test_a_block_works_out_only_the_edge_past_the_prefix_it_shares() {
     // The check works every edge out again to compare, and is counted.
-    if std::env::var_os("LLRM_CHECK_SCOPES").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_SCOPES") {
         return;
     }
     let blocks = 40;
