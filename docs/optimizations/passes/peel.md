@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/peel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/peel.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/peel.rs sha256:478c9477b20f262eae6a41b9ca611c53855814e00f43462cfb5b8fce02b10d24 -->
+<!-- src: crates/opt/llrm-transforms/src/peel.rs sha256:c7b5d94a043413da9930add441ff39a8d4bec7b4af3dbe2572bc5b34bb05958d -->
 
 # peel
 
@@ -11,8 +11,7 @@ and Dead prove the residual loop unreachable.
 Peeling is the CFG counterpart of full straight-line unrolling. For each
 loop of a copy of the body, closed to LCSSA (`lcssa::closed`), the pass
 - takes the trip count (ScalarEvolution's `getSmallConstantTripCount`, else
-  `getSmallConstantMaxTripCount`; `LLRM_NO_SCEV_TRIPS` asks
-  `induction::trip_count`, else `trip_bound`) and
+  `getSmallConstantMaxTripCount`) and
   skips the loop below two trips; with neither, the most backedges the
   objects its `inbounds` accesses walk allow (`induction::object_backedges`,
   GCC's `infer_loop_bounds_from_array`), after which the residual loop's

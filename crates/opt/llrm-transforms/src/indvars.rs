@@ -24,8 +24,8 @@
 //! 3. `canonexit::canonicalized` (`canonicalizeExitCondition`;
 //!    `LLRM_NO_SCEV_CANONEXIT`), `exitopt::optimized` (`optimizeLoopExits`;
 //!    `LLRM_NO_SCEV_EXITOPT`), `exitpredicate::predicated`
-//!    (`predicateLoopExits`; `LLRM_NO_SCEV_PREDICATE`), then
-//!    `exitfold::folded`: exits their counts decide are folded.
+//!    (`predicateLoopExits`; `LLRM_NO_SCEV_PREDICATE`), then `exitfold::folded`
+//!    (`LLRM_NO_EXITFOLD`): exits their counts decide are folded.
 //! 4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
 //!    exit tests a counter against the value it has at the last trip.
 //! 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
@@ -248,7 +248,8 @@ impl FunctionPass for IndVars {
         if predicated {
             standing.changed();
         }
-        let folded = crate::exitfold::folded_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        let folded = crate::exitfold::enabled()
+            && crate::exitfold::folded_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
         if folded {
             standing.reshaped();
         }
