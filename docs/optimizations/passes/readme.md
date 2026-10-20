@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 157 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 158 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -62,6 +62,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | exitvalues | A value a loop computes and the code after it reads becomes an expression of the loop's trip count, written where the loop is left. | [`crate::indvars`](indvars.md), first of its steps. It replaced indvars' own | [exitvalues](exitvalues.md) |
 | expand | Values placed from their sums (LLVM's `SCEVExpander`): a `Scev` is built from its terms, each scaled and added once, before one instruction. | [`crate::lsr_pass`](lsr_pass.md) and [`crate::exitfold`](exitfold.md), while they rewrite a loop, and | [expand](expand.md) |
 | fixednarrow | A 32-bit fixed-point product whose operands' product fits 32 bits is a `mul` and an `ashr`. | Once, after the loop-header copy and before `lsr`, which would hide such a | [fixednarrow](fixednarrow.md) |
+| float2int | Floating-point arithmetic that only ever meets integers is done on integers, as LLVM's `Float2Int`. | Not in the pipeline yet. | [float2int](float2int.md) |
 | floatfold | Replaces floating values [`llrm_analysis::floatfacts`] proves exact by their constants, and applies the algebraic freedoms an operation's fast-math flags give. | Inside [`crate::fold`](fold.md), every time fold runs, which is the pass list's | [floatfold](floatfold.md) |
 | floatloop | Runs a counted loop of exact float work in memory as its last trip alone, from the memory the earlier trips leave, which [`llrm_analysis::floatfacts`] proves. | Per-body pipeline, after `lcssa` and before `hoist`: LICM may move an | [floatloop](floatloop.md) |
 | fold | Replaces every integer value [`llrm_analysis::consts`] knows by its constant, folds a pure operation on each edge of a join, and puts compares and identities in canonical form. | Second in the per-body pipeline, after `sroa`, and again after the header | [fold](fold.md) |
