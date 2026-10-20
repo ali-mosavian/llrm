@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 64 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 66 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -19,6 +19,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 64 documented, 0 undoc
 | blockfreq | `BlockFrequencyInfo` of a MIR function: LLVM's `BlockFrequencyInfoImpl` (`llrm_mir::blockfrequency`) over `BranchProbabilityInfo` (`crate::bpi`), as `BlockFrequencyInfoWrapperPass` runs it. | `inlinecost` (cold and hot call sites, D1), `profit`. | [blockfreq](blockfreq.md) |
 | bpi | `BranchProbabilityInfo` of a MIR function: LLVM's static branch probabilities, translated from llvm/lib/Analysis/BranchProbabilityInfo.cpp at d1106deb71cc. | `blockfreq` (`BlockFrequencyInfo`'s edge probabilities, once its callers | [bpi](bpi.md) |
 | branchprob | Static branch probabilities and block frequencies, as LLVM's `BranchProbabilityInfo` and `BlockFrequencyInfo` estimate them when no profile says otherwise. | `Odds { taken, frequency, by }` from `estimated`, `propagated` and | [branchprob](branchprob.md) |
+| captureanalysis | `CaptureAnalysis` of `AliasAnalysis.h` at d1106deb71cc: how an object may be captured before an instruction, with the two providers `BasicAliasAnalysis.cpp` has. | `CaptureAnalysis`, `SimpleCaptureAnalysis`, `EarliestEscapeAnalysis`. | [captureanalysis](captureanalysis.md) |
 | capturecheck | # How it works `LLRM_CHECK_CAPTURES`: the frame objects the pointer facts say never escape, checked against LLVM's capture tracking read straight off the uses, with no fact followed: a pointer is captured when any use of it, or of what is made of it by a gep, a cast, a phi or a select (every arm), stores it, returns it, turns it into an integer or passes it where the callee keeps no copy is not promised. | The check behind `LLRM_CHECK_CAPTURES`. | [capturecheck](capturecheck.md) |
 | capturetracking | `CaptureTracking.cpp` at d1106deb71cc: which components of a pointer a use of it keeps (`DetermineUseCaptureKind`), and the walk over the uses of a value that asks a tracker about each (`PointerMayBeCaptured`). | `CaptureComponents`, `UseCaptureInfo`, `CaptureTracker`, | [capturetracking](capturetracking.md) |
 | cellmap | A map from memory cell to fact, indexed by the object each cell lies in, so a write is tested only against the cells it can reach. | The container. Consumers: [`crate::alias`](alias.md), [`crate::consts`](consts.md), | [cellmap](cellmap.md) |
@@ -62,6 +63,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 64 documented, 0 undoc
 | pointerfacts | Finds constant byte offsets between pointer values, and so whether two accesses off one base overlap, without any alias reasoning. | `Offsets` (made by `offsets`), `Location`. Consumers: [`crate::memoryssa`](memoryssa.md), | [pointerfacts](pointerfacts.md) |
 | ranger | The bounds the branch edges give a value at a block, worked out when asked and kept by (value, block), in place of a table of every value at every block (`ranges::edges_solved`). | `EdgeRanger::at`, `LoopView::at`. | [ranger](ranger.md) |
 | ranges | Bounds each integer value in each block by a non-wrapping interval, from the branch edges that dominate the block and the counted loops that hold it. | The interval facts above. In the manager they are `DominatedEdges` and | [ranges](ranges.md) |
+| reachability | `isPotentiallyReachable` of `CFG.cpp` at d1106deb71cc: whether a path may lead from one instruction or block to another. | `is_potentially_reachable`, `is_potentially_reachable_blocks`, | [reachability](reachability.md) |
 | references | The base reference of each load and store, decomposed once and shared. | `of` (what `MemRef::of` reads through), `built` (decompositions made on this | [references](references.md) |
 | regions | Decides whether a write through one memory reference can land on another (`may_alias`, `overlapping`), and indexes cells so a write checks only those that might meet it instead of every pair. | `may_alias`, `overlapping`, `typed_apart`, `foreign_provenance`, | [regions](regions.md) |
 | sliceset | An ordered set of memory slices that holds most of itself as a run shared with other sets, so the callback effects every call summary repeats are built, compared and listed once. | `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`](alias.md) (call | [sliceset](sliceset.md) |
